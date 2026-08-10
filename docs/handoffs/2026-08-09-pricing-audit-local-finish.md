@@ -53,8 +53,8 @@ gh pr merge 350 --squash                     # no --auto
 ### 2. Apply the two migrations, in this order
 
 ```
-supabase/migrations/20260808170100_snapshot_cost_reporting.sql
-supabase/migrations/20260808170200_quote_items_cost_at_quote_snapshot.sql
+supabase/migrations/20260810135537_snapshot_cost_reporting.sql
+supabase/migrations/20260810135538_quote_items_cost_at_quote_snapshot.sql
 ```
 
 First refresh the applied-migration snapshot (a fresh checkout never has it, and the ordering guard
@@ -69,7 +69,7 @@ node scripts/refresh-applied-migrations.mjs < rows.json
 The full ledger is ~946 rows and exceeds the MCP result limit — request it as a single `json_agg`
 and pipe the saved tool-result file rather than paging it through the session.
 
-**`20260808170200` is broader than when it was first reviewed.** Besides the quote cost snapshot it
+**`20260810135538` is broader than when it was first reviewed.** Besides the quote cost snapshot it
 now also:
 - re-emits `duplicate_quote` (costs a duplicated quote on today's basis instead of copying the
   source's, so a copy no longer carries two conflicting cost bases), and
@@ -89,7 +89,7 @@ node scripts/db-invariant-sweeps/run-sweeps.mjs   # then run each printed query;
 
 ### 4. Follow-up PR: wire the Profitability tabs
 
-`20260808170100` rewrites `get_profitability_report`, **but nothing calls it** — `Reports.tsx` still
+`20260810135537` rewrites `get_profitability_report`, **but nothing calls it** — `Reports.tsx` still
 computes the customer/product/monthly Profitability tabs from direct queries over
 `orders.total_profit` / `order_items.profit`. Until this lands, **those tabs still show the stale
 margins the migration exists to replace**, whatever the changelog says.

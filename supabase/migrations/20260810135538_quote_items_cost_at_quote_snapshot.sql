@@ -1,4 +1,4 @@
--- 20260808170200 — quote_items.cost_at_quote_cents snapshot (quote-time cost drift)
+-- 20260810135538 — quote_items.cost_at_quote_cents snapshot (quote-time cost drift)
 --
 -- Defect: a quote's line cost drifts after the quote is written. save_quote's
 -- recompute CTE priced cc from LIVE products.current_cost on EVERY save, and the

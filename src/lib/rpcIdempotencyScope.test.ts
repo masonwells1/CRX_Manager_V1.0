@@ -246,7 +246,7 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // via _bind_completed_lifecycle_idempotency. Giving this layer its own
   // operation namespace would create an unreachable cache and let a replay
   // slip past the shared one. Shape is pre-existing and unchanged; it entered
-  // this test's scope when migration 20260808150200 re-emitted the function to
+  // this test's scope when migration 20260809170600 re-emitted the function to
   // zero quantity_remaining on cancel.
   _cancel_order_split_provenance_impl_20260719: ['cancel_order'],
   // Direct EXECUTE is revoked. This delegate is the implementation half of

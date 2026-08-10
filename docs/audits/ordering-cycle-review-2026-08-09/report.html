@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ordering Cycle Review — CRX Manager</title>
+<style>
+  :root {
+    --ground: #FCFCFA;
+    --surface: #FFFFFF;
+    --surface-2: #F4F6F3;
+    --ink: #171D1A;
+    --ink-2: #3D4744;
+    --muted: #5C6862;
+    --rule: #E1E5E0;
+    --rule-strong: #C9D0CA;
+    --accent: #2C6A4C;
+    --high: #A62D1F;
+    --high-bg: #F7E9E6;
+    --med: #8A5D10;
+    --med-bg: #F7F0E1;
+    --low: #55635C;
+    --low-bg: #EDF0EE;
+    --shadow: 0 1px 2px rgba(23,29,26,.05), 0 8px 24px -16px rgba(23,29,26,.28);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0F1312;
+      --surface: #161C1A;
+      --surface-2: #1C2321;
+      --ink: #E7ECE9;
+      --ink-2: #C2CBC6;
+      --muted: #97A29C;
+      --rule: #262E2B;
+      --rule-strong: #37413D;
+      --accent: #63BE92;
+      --high: #E8836F;
+      --high-bg: #2C1D19;
+      --med: #D9A64A;
+      --med-bg: #2A2318;
+      --low: #9AA7A0;
+      --low-bg: #1E2523;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0F1312;
+    --surface: #161C1A;
+    --surface-2: #1C2321;
+    --ink: #E7ECE9;
+    --ink-2: #C2CBC6;
+    --muted: #97A29C;
+    --rule: #262E2B;
+    --rule-strong: #37413D;
+    --accent: #63BE92;
+    --high: #E8836F;
+    --high-bg: #2C1D19;
+    --med: #D9A64A;
+    --med-bg: #2A2318;
+    --low: #9AA7A0;
+    --low-bg: #1E2523;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    font-size: 17px;
+    line-height: 1.6;
+    margin: 0;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 60rem; margin: 0 auto; padding: 3.5rem 1.5rem 6rem; display: flex; flex-direction: column; gap: 3rem; }
+
+  .eyebrow {
+    font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+    font-size: .72rem; font-weight: 600; letter-spacing: .13em; text-transform: uppercase;
+    color: var(--accent); margin: 0;
+  }
+  h1 { font-size: clamp(2rem, 4.4vw, 2.9rem); line-height: 1.12; margin: .5rem 0 0; text-wrap: balance; letter-spacing: -.015em; }
+  h2 { font-size: 1.6rem; margin: 0 0 .35rem; letter-spacing: -.01em; text-wrap: balance; }
+  h3 { font-size: 1.22rem; margin: 0; letter-spacing: -.005em; text-wrap: balance; }
+  h4 { margin: 0; }
+  p { margin: 0 0 .9rem; max-width: 68ch; }
+  p:last-child { margin-bottom: 0; }
+  code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: .82em; color: var(--ink-2); }
+  a { color: var(--accent); }
+
+  header.masthead { border-bottom: 2px solid var(--rule-strong); padding-bottom: 1.75rem; }
+  .sub { color: var(--muted); font-size: 1.06rem; margin-top: .85rem; max-width: 62ch; }
+  .dateline {
+    font-family: ui-sans-serif, system-ui, sans-serif; font-size: .8rem; color: var(--muted);
+    margin-top: 1.1rem; display: flex; flex-wrap: wrap; gap: .5rem 1.25rem;
+  }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; }
+  .stat { background: var(--surface); padding: 1.05rem 1.15rem; display: flex; flex-direction: column; gap: .15rem; }
+  .stat-n { font-size: 2rem; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+  .stat-l { font-family: ui-sans-serif, system-ui, sans-serif; font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .stat-high .stat-n { color: var(--high); }
+  .stat-med .stat-n { color: var(--med); }
+
+  section.block { display: flex; flex-direction: column; gap: .75rem; }
+  .callout {
+    border-left: 3px solid var(--accent); background: var(--surface-2);
+    padding: 1.1rem 1.25rem; border-radius: 0 3px 3px 0;
+  }
+  .callout p { font-size: .97rem; }
+
+  .theme { display: flex; flex-direction: column; gap: 1rem; margin-top: 1.5rem; }
+  .theme-h { display: flex; align-items: baseline; gap: .7rem; padding-bottom: .5rem; border-bottom: 1px solid var(--rule-strong); }
+  .theme-count {
+    font-family: ui-sans-serif, system-ui, sans-serif; font-size: .74rem; font-weight: 600;
+    color: var(--muted); border: 1px solid var(--rule-strong); border-radius: 99px; padding: .05rem .5rem;
+  }
+  .theme-lede { color: var(--muted); font-size: .97rem; }
+
+  .finding {
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 3px;
+    padding: 1.25rem 1.35rem; box-shadow: var(--shadow);
+    display: flex; flex-direction: column; gap: .7rem;
+  }
+  .finding-head { display: flex; align-items: center; gap: .6rem; }
+  .finding-src { font-family: ui-monospace, Menlo, monospace; font-size: .74rem; color: var(--muted); }
+  .finding-t { font-size: 1.12rem; line-height: 1.35; text-wrap: balance; }
+  .finding-why { color: var(--ink-2); font-size: .97rem; margin: 0; }
+  .finding-meta {
+    display: grid; grid-template-columns: max-content 1fr; gap: .3rem 1rem;
+    margin: 0; padding-top: .7rem; border-top: 1px solid var(--rule);
+    font-family: ui-sans-serif, system-ui, sans-serif; font-size: .82rem;
+  }
+  .finding-meta dt { color: var(--muted); letter-spacing: .02em; }
+  .finding-meta dd { margin: 0; color: var(--ink-2); }
+  .finding-meta dd.tech { color: var(--muted); }
+
+  .chip {
+    font-family: ui-sans-serif, system-ui, sans-serif; font-size: .68rem; font-weight: 650;
+    letter-spacing: .07em; text-transform: uppercase; padding: .12rem .45rem; border-radius: 2px; white-space: nowrap;
+  }
+  .chip-high { background: var(--high-bg); color: var(--high); }
+  .chip-med { background: var(--med-bg); color: var(--med); }
+  .chip-low { background: var(--low-bg); color: var(--low); }
+
+  ol.waves { list-style: none; counter-reset: w; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 1rem; }
+  ol.waves > li {
+    counter-increment: w; display: grid; grid-template-columns: 2rem 1fr; gap: .1rem 1rem;
+    border-top: 1px solid var(--rule); padding-top: 1rem;
+  }
+  ol.waves > li::before {
+    content: counter(w); font-variant-numeric: tabular-nums; color: var(--accent);
+    font-family: ui-sans-serif, system-ui, sans-serif; font-weight: 650; font-size: .95rem; padding-top: .18rem;
+  }
+  .wave-t { font-size: 1.05rem; margin: 0 0 .3rem; }
+  ol.waves p { font-size: .95rem; color: var(--ink-2); margin: 0; }
+
+  .phase { display: flex; flex-direction: column; gap: 1.25rem; margin-top: 2rem; }
+  .phase-head { display: flex; flex-direction: column; gap: .3rem; border-bottom: 1px solid var(--rule-strong); padding-bottom: .7rem; }
+  .phase-lede { color: var(--muted); font-size: .93rem; margin: 0; }
+  .phase-count { font-family: ui-sans-serif, system-ui, sans-serif; font-size: .76rem; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); margin: 0; }
+  .finder-block { display: flex; flex-direction: column; gap: .55rem; }
+  .finder-h { font-family: ui-monospace, Menlo, monospace; font-size: .8rem; font-weight: 500; color: var(--muted); letter-spacing: .02em; }
+  ul.rowlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 3px; overflow: hidden; }
+  .row {
+    background: var(--surface); padding: .7rem .9rem;
+    display: grid; grid-template-columns: 3.4rem 1fr; gap: .15rem .8rem; align-items: start;
+  }
+  .row-t { font-size: .95rem; line-height: 1.45; }
+  .row-loc { grid-column: 2; font-size: .76rem; color: var(--muted); overflow-wrap: anywhere; }
+  .row-fix { display: block; margin-top: .3rem; font-size: .84rem; color: var(--high); font-style: normal; }
+  .row-blocker, .row-high { box-shadow: inset 3px 0 0 var(--high); }
+  .row-med { box-shadow: inset 3px 0 0 var(--med); }
+  .row-low { box-shadow: inset 3px 0 0 var(--rule-strong); }
+
+  footer { border-top: 2px solid var(--rule-strong); padding-top: 1.5rem; color: var(--muted); font-size: .9rem; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <p class="eyebrow">CRX Manager · Read-only review</p>
+    <h1>The ordering cycle, end to end</h1>
+    <p class="sub">Quote → planned booking → order → delivery → invoice, and everything that touches it: inventory holds, commissions, permissions and the reports that read from all of it.</p>
+    <p class="dateline"><span>9 August 2026</span><span>112 agents · 3 phases</span><span>No code was changed</span></p>
+  </header>
+
+  <section class="stats">
+    <div class="stat"><span class="stat-n">77</span><span class="stat-l">Confirmed</span></div>
+    
+    <div class="stat stat-high"><span class="stat-n">10</span><span class="stat-l">High</span></div>
+    <div class="stat stat-med"><span class="stat-n">36</span><span class="stat-l">Medium</span></div>
+    <div class="stat"><span class="stat-n">31</span><span class="stat-l">Low</span></div>
+    <div class="stat"><span class="stat-n">26</span><span class="stat-l">Refuted</span></div>
+  </section>
+
+  <section class="block">
+    <h2>How to read this</h2>
+    <p>Nine reviewers went through the ordering cycle from three angles. Every single thing they reported was then handed to a separate reviewer whose only job was to prove it wrong, using the actual migration files and source. <strong>26 claims were disproven and thrown out.</strong> The 77 below are what survived that.</p>
+    <p>The reviewers worked independently and were not reconciled against each other, so a defect two of them found is counted twice. Known overlaps collapse 8 of these, putting the real backlog at about <strong>69 distinct defects</strong> — count the work by fix, not by finding. The duplicates are listed in the audit README.</p>
+    <div class="callout">
+      <p><strong>One caveat that matters.</strong> Nothing here was checked against the live database. Every reviewer worked from committed files — the migration history, and for the permissions work a disaster-recovery snapshot taken on 27 July. If anything was ever changed directly in Supabase without a migration, that change is invisible to this review. The delivery-completion problem appearing twice is two offline sources agreeing, not a live confirmation. Confirm the live function bodies and grants before fixing anything.</p>
+    </div>
+  </section>
+
+  <section class="block">
+    <h2>The 10 that matter</h2>
+    <p>They fall into 3 groups, and the largest is really one problem wearing several hats.</p>
+    
+<section class="theme">
+  <h3 class="theme-h">The rules live in the app, not the database <span class="theme-count">6</span></h3>
+  <p class="theme-lede">6 of the 10. Your safety logic sits inside the database functions the app calls — but the underlying tables are still directly writable by the same people. Anyone who talks to the API instead of clicking the button walks straight past it.</p>
+  <article class="finding">
+      <div class="finding-head">
+        <span class="chip chip-high">High</span>
+        <span class="finding-src">state-machines</span>
+      </div>
+      <h4 class="finding-t">A quote that has already been converted into an order can be pushed back to “sent” with a single direct API call — no admin approval, no reason recorded, nothing written to the audit log.</h4>
+      <p class="finding-why">You built a proper reopen path in July that is admin-only, demands a reason, refuses if a live order exists, resets the booking draws and rebuilds the inventory holds. None of that runs here. The quote and its order drift apart permanently and the booking maths is left corrupt.</p>
+      <dl class="finding-meta">
+        <dt>Who can do it</dt><dd>Any admin, or the sales rep who owns the quote.</dd>
+        <dt>Where</dt><dd><code>20260706030000_closed_short_booking_closure.sql:103</code></dd>
+        <dt>Technical title</dt><dd class="tech">Quote transition trigger leaves accepted→sent open to direct table updates, bypassing every revert_quote_status reopen guard</dd>
+        
+      </dl>
+    </article>
+<article class="finding">
+      <div class="finding-head">
+        <span class="chip chip-high">High</span>
+        <span class="finding-src">state-machines</span>
+      </div>
+      <h4 class="finding-t">A delivery can be marked “completed” directly, skipping the function that actually does the work.</h4>
+      <p class="finding-why">No stock leaves inventory, the order never advances toward fulfilled, and no invoice is generated. The delivery looks done, the customer is never billed, and your Net Position keeps counting the product as still committed.</p>
+      <dl class="finding-meta">
+        <dt>Who can do it</dt><dd>Any sales rep, or the assigned driver.</dd>
+        <dt>Where</dt><dd><code>20260228300000_critical_prelaunch_fixes.sql:394-415</code></dd>
+        <dt>Technical title</dt><dd class="tech">Deliveries can be walked scheduled→in_progress→completed by direct table UPDATE, skipping all complete_delivery effects (inventory, order rollup)</dd>
+        
+      </dl>
+    </article>
+<article class="finding">
+      <div class="finding-head">
+        <span class="chip chip-high">High</span>
+        <span class="finding-src">state-machines</span>
+      </div>
+      <h4 class="finding-t">Deleting a planned booking leaves its inventory holds active forever.</h4>
+      <p class="finding-why">The hold-release trigger only fires on a status change, and deleting a quote does not change its status. The quote vanishes from every screen while its holds keep shrinking your available stock, with nothing left pointing at an owner. No cleanup job ever reclaims them.</p>
+      <dl class="finding-meta">
+        <dt>Who can do it</dt><dd>Anyone who can delete a quote — including bulk-select in the Quotes list.</dd>
+        <dt>Where</dt><dd><code>src/pages/Quotes.tsx:32,323,376-417</code></dd>
+        <dt>Technical title</dt><dd class="tech">Quote soft delete has no DB guard: deleting a planned booking leaks its active inventory holds permanently; any-status quotes deletable via API</dd>
+        
+      </dl>
+    </article>
+<article class="finding">
+      <div class="finding-head">
+        <span class="chip chip-high">High</span>
+        <span class="finding-src">planned-holds</span>
+      </div>
+      <h4 class="finding-t">Same leak, confirmed independently on the crop-program hold path.</h4>
+      <p class="finding-why">A 500-gallon program hold stays active indefinitely. The dispatch board shows you short, the inventory page overstates committed stock, and the low-stock warning fires on product that is actually free.</p>
+      <dl class="finding-meta">
+        <dt>Who can do it</dt><dd>Office staff doing routine cleanup of stale quotes.</dd>
+        <dt>Where</dt><dd><code>src/pages/Quotes.tsx:376-411</code></dd>
+        <dt>Technical title</dt><dd class="tech">Soft-deleting a planned quote orphans its active crop_program holds - no release on the delete exit path</dd>
+        
+      </dl>
+    </article>
+<article class="finding">
+      <div class="finding-head">
+        <span class="chip chip-high">High</span>
+        <span class="finding-src">rls-security</span>
+      </div>
+      <h4 class="finding-t">Found a second time, from a different source: the driver’s own permissions are enough to mark a delivery complete directly.</h4>
+      <p class="finding-why">Same consequence as above — no inventory movement, no fulfilment, no invoice, no audit row. This one was traced through the recorded permissions snapshot rather than the migration history, so two independent readings of your own files agree on it. Both are still offline readings.</p>
+      <dl class="finding-meta">
+        <dt>Who can do it</dt><dd>The assigned driver, using their own login.</dd>
+        <dt>Where</dt><dd><code>20260511060000_perf_consolidate_permissive_policies.sql:83-93</code></dd>
+        <dt>Technical title</dt><dd class="tech">Assigned driver can complete a delivery by direct table UPDATE, bypassing complete_delivery's inventory, order-fulfillment, and invoice effects</dd>
+        
+      </dl>
+    </article>
+<article class="finding">
+      <div class="finding-head">
+        <span class="chip chip-high">High</span>
+        <span class="finding-src">rls-security</span>
+      </div>
+      <h4 class="finding-t">A sales rep can insert an order directly — including one already marked “fulfilled”.</h4>
+      <p class="finding-why">No inventory reserved or consumed, no commission row, no activity record: the same impossible state you eliminated from bulk import. They can also add lines to another rep’s already-invoiced order, which silently rewrites that order’s totals.</p>
+      <dl class="finding-meta">
+        <dt>Who can do it</dt><dd>Any active sales rep.</dd>
+        <dt>Where</dt><dd><code>20260210_fix_rls_critical_issues.sql:12-24</code></dd>
+        <dt>Technical title</dt><dd class="tech">Sales reps can create orders and order lines by direct PostgREST insert, bypassing every canonical order-creation effect and the confirmed-only status rule</dd>
+        
+      </dl>
+    </article>
+</section>
+
+<section class="theme">
+  <h3 class="theme-h">Money that comes out wrong on its own <span class="theme-count">3</span></h3>
+  <p class="theme-lede">3 of the 10. These need no misuse at all — they are ordinary workflows that produce the wrong number.</p>
+  <article class="finding">
+      <div class="finding-head">
+        <span class="chip chip-high">High</span>
+        <span class="finding-src">conversion-seams</span>
+      </div>
+      <h4 class="finding-t">On direct order entry, the cost figure that decides commission comes from the caller and is never re-checked.</h4>
+      <p class="finding-why">This is the exact hole you closed on Bulk Order Import. Enter a zero or understated cost in the new-order screen and the system mints commission rows from the inflated profit — overstating commission liability, margin reporting and the audit-log totals. The finding’s title also names quote conversion, but that half was disproven: saving a quote recomputes every line’s cost from the product record first, so conversion already passes a server-computed figure. Direct order entry is the one exposed path.</p>
+      <dl class="finding-meta">
+        <dt>Who can do it</dt><dd>Any active sales rep, through the ordinary new-order screen.</dd>
+        <dt>Where</dt><dd><code>20260730235031_quote_customer_row_version_guard.sql:317-346</code></dd>
+        <dt>Technical title</dt><dd class="tech">Caller-controlled cost/profit still drives commission basis on convert_quote_to_order and create_direct_order — the exact class hardened out of bulk_import_order remains open on the two main order-creation seams</dd>
+        <dt>Scope correction</dt><dd class="tech">Scope narrowed by this finding's own verifier: the convert_quote_to_order half is REFUTED. save_quote overwrites every line's current_cost and profit from products.current_cost before conversion, so the commission basis convert_quote_to_order passes is already server-computed. create_direct_order is the only exposed seam. Title and verdict left as originally recorded.</dd>
+      </dl>
+    </article>
+<article class="finding">
+      <div class="finding-head">
+        <span class="chip chip-high">High</span>
+        <span class="finding-src">conversion-seams</span>
+      </div>
+      <h4 class="finding-t">A quick delivery invoiced up front and then only partly completed bills the customer twice for the shortfall.</h4>
+      <p class="finding-why">Invoice 100 units in the morning, driver delivers 60, the posted invoice is never adjusted. The 40-unit remainder spawns a follow-up delivery which auto-invoices those 40 again. The customer is billed for 140. An admin warning that used to catch this was dropped at some point.</p>
+      <dl class="finding-meta">
+        <dt>Who can do it</dt><dd>Normal office workflow — no misuse required.</dd>
+        <dt>Where</dt><dd><code>20260716120104_gauntlet_access_boundaries.sql:267-296</code></dd>
+        <dt>Technical title</dt><dd class="tech">Quick-delivery invoice posted before completion is never adjusted on partial completion, and the follow-up delivery auto-invoice then bills the shortfall a second time; the 2026-03 admin 'posted invoice may need adjustment' notification was silently dropped</dd>
+        
+      </dl>
+    </article>
+<article class="finding">
+      <div class="finding-head">
+        <span class="chip chip-high">High</span>
+        <span class="finding-src">commissions</span>
+      </div>
+      <h4 class="finding-t">Voiding an invoice cancels the order’s commissions, and re-invoicing never brings them back.</h4>
+      <p class="finding-why">Admin voids an invoice to fix a wrong price, recreates it, customer pays in full — and the rep’s commissions stay “cancelled” forever. They do not appear in the payout picker or the balance report. The rep is silently never paid unless someone hand-edits the table.</p>
+      <dl class="finding-meta">
+        <dt>Who can do it</dt><dd>Normal admin correction workflow — no misuse required.</dd>
+        <dt>Where</dt><dd><code>20260718221505_preserve_voided_payment_allocation_history.sql:250-256</code></dd>
+        <dt>Technical title</dt><dd class="tech">Void→rebill of an order invoice permanently cancels the order's pending commissions — no path ever re-mints them</dd>
+        
+      </dl>
+    </article>
+</section>
+
+<section class="theme">
+  <h3 class="theme-h">Data readable by the wrong people <span class="theme-count">1</span></h3>
+  <p class="theme-lede">1 of the 10. Plus several medium-severity siblings in the appendix.</p>
+  <article class="finding">
+      <div class="finding-head">
+        <span class="chip chip-high">High</span>
+        <span class="finding-src">rls-security</span>
+      </div>
+      <h4 class="finding-t">Any logged-in user can pull a full financial history for any customer.</h4>
+      <p class="finding-why">Email, phone, billing address, payment terms, total invoiced and paid, outstanding balance, every invoice with its balance, and per-product spend — for customers they have no business seeing. The invoice permissions that would normally block this are bypassed because the function runs with elevated rights and never checks who is calling.</p>
+      <dl class="finding-meta">
+        <dt>Who can do it</dt><dd>Any authenticated user, including drivers and applicators.</dd>
+        <dt>Where</dt><dd><code>20260228200000_season_calendar_oct_sep.sql:843-873</code></dd>
+        <dt>Technical title</dt><dd class="tech">get_customer_year_end_summary is an ungated SECURITY DEFINER RPC granted to authenticated — any role reads any customer's full financial history</dd>
+        
+      </dl>
+    </article>
+</section>
+  </section>
+
+  <section class="block">
+    <h2>Order of work</h2>
+    <p>Outline only — <code>REMEDIATION-PLAN.md</code> in the same folder is authoritative for sequencing and scope, and nothing here is approved for implementation until its evidence and triage gates are done.</p>
+    <ol class="waves">
+      <li>
+        <h3 class="wave-t">Confirm the backups are fresh</h3>
+        <p>Two automated weekly backups run — an encrypted off-site dump to the private <code>CRX_Backups</code> repo, and an in-database <code>pg_cron</code> snapshot. Neither is point-in-time, so check both are recent before touching any of this; the off-site copy is the one that survives a database-level disaster.</p>
+      </li>
+      <li>
+        <h3 class="wave-t">Close the evidence gap, then triage</h3>
+        <p>Check the live function bodies, grants and policies against the database catalog — nothing here was read from the live database — then run the independent Codex triage. Its reconciled list is the thing to approve, not the raw findings.</p>
+      </li>
+      <li>
+        <h3 class="wave-t">Fix the three money bugs</h3>
+        <p>Double-billing on partial quick deliveries, commissions permanently cancelled by a void-and-rebill, and caller-supplied cost driving the commission basis on direct order entry. These need no misuse — they are ordinary workflows producing wrong numbers today, so they are quietly costing you money or trust. Each is a self-contained fix, which makes them good ground to build confidence on.</p>
+      </li>
+      <li>
+        <h3 class="wave-t">Close the direct-write lane</h3>
+        <p>Most of the top-severity findings, and a good share of the mediums, come from the same root: the tables accept writes that skip the functions holding your safety logic. Tightening the transition triggers and the table-level permissions on quotes, orders and deliveries retires most of this group in one piece of work. It is also the change most likely to break something in normal use, so it wants care and a real test pass.</p>
+      </li>
+      <li>
+        <h3 class="wave-t">Gate the ungated read functions</h3>
+        <p>The year-end summary, credit-limit check, customer summary and global search all run with elevated rights and never check who is asking. Adding a role check to each is small, low-risk work.</p>
+      </li>
+      <li>
+        <h3 class="wave-t">Work the medium list as maintenance</h3>
+        <p>36 findings, no single emergency among them, but several are cheap: the missing <code>deleted_at</code> filters that let a soft-deleted draft invoice permanently hide the Create Invoice button, the reused idempotency keys on the Quotes and Deliveries screens, the reports that each compute AR a different way.</p>
+      </li>
+    </ol>
+  </section>
+
+  <section class="block">
+    <h2>Everything found</h2>
+    <p>All 77 confirmed findings, grouped by review phase and by the reviewer that found them. Full evidence, failure scenarios and verifier reasoning for each are in <code>FINDINGS.md</code> and <code>findings.json</code> alongside this report.</p>
+    
+<section class="phase">
+  <header class="phase-head">
+    <h3>Lifecycle &amp; holds</h3>
+    <p class="phase-lede">Quote, order, delivery and invoice status rules; planned bookings and the inventory holds they create.</p>
+    <p class="phase-count">29 findings — 6 high · 13 med · 10 low</p>
+  </header>
+  <div class="finder-block">
+      <h4 class="finder-h">state-machines</h4>
+      <ul class="rowlist">
+        <li class="row row-high">
+          <span class="chip chip-high">High</span>
+          <span class="row-t">Quote transition trigger leaves accepted→sent open to direct table updates, bypassing every revert_quote_status reopen guard</span>
+          <code class="row-loc">20260706030000_closed_short_booking_closure.sql:103</code>
+        </li>
+<li class="row row-high">
+          <span class="chip chip-high">High</span>
+          <span class="row-t">Deliveries can be walked scheduled→in_progress→completed by direct table UPDATE, skipping all complete_delivery effects (inventory, order rollup)</span>
+          <code class="row-loc">20260228300000_critical_prelaunch_fixes.sql:394-415</code>
+        </li>
+<li class="row row-high">
+          <span class="chip chip-high">High</span>
+          <span class="row-t">Quote soft delete has no DB guard: deleting a planned booking leaks its active inventory holds permanently; any-status quotes deletable via API</span>
+          <code class="row-loc">src/pages/Quotes.tsx:32,323,376-417</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">restore_quote_version reopens terminal/accepted quotes to 'revised' for sales reps, bypassing the reopen history guards entirely</span>
+          <code class="row-loc">20260703130000_layer2_channel_separation_reserve_fixes.sql:239-252</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">Order forward-fulfillment edges (confirmed→partially_fulfilled/fulfilled) are open to direct admin updates with no delivery lineage</span>
+          <code class="row-loc">20260228300000_critical_prelaunch_fixes.sql:369-391</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">cancel_delivery reverses a completed delivery without flagging 'paid' or 'overdue' invoices (only 'posted' is flagged)</span>
+          <code class="row-loc">20260620130000_commission_batch_freeze_guard.sql:774-785</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">Completed-delivery reversal role asymmetry: void_delivery is admin-only with mandatory reason, but cancel_delivery lets any sales_rep reverse a completed delivery</span>
+          <code class="row-loc">20260620130000_commission_batch_freeze_guard.sql:673-674</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">Jobs: sales_rep direct-update lane allows completed→invoiced with no invoice, permanently stranding the job unbillable</span>
+          <code class="row-loc">20260620150000_job_cancel_gate.sql:27-44</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">save_quote allows full content rewrite of a quote in ANY status (sent, accepted, cancelled, expired, closed_*) as long as status is unchanged — edit lock is React-only</span>
+          <code class="row-loc">20260730235031_quote_customer_row_version_guard.sql:241-248</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">Lifecycle tables accept arbitrary creation status on direct INSERT — only invoices have a draft-on-insert trigger</span>
+          <code class="row-loc">20260302200000_business_logic_enhancements.sql:30-48</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">delivery_remainders has no transition enforcement — pending→fulfilled settable by direct update without a follow-up delivery</span>
+          <code class="row-loc">20260225200000_delivery_system_enhancements.sql:127-135</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">update_order_items status guard names nonexistent order status 'pending' (stale literal vs CHECK constraint)</span>
+          <code class="row-loc">20260617123503_refresh_item_profit_on_sameproduct_order_edit.sql:71-72</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">OrderDetail manual status-change fallback is dead code that would raise a raw trigger error if ever reached</span>
+          <code class="row-loc">src/pages/OrderDetail.tsx:622-641</code>
+        </li>
+      </ul>
+    </div>
+<div class="finder-block">
+      <h4 class="finder-h">planned-holds</h4>
+      <ul class="rowlist">
+        <li class="row row-high">
+          <span class="chip chip-high">High</span>
+          <span class="row-t">Soft-deleting a planned quote orphans its active crop_program holds - no release on the delete exit path</span>
+          <code class="row-loc">src/pages/Quotes.tsx:376-411</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">get_inventory_position planned_quotes CTE and get_expiring_planned_holds do not filter soft-deleted quotes</span>
+          <code class="row-loc">20260716120120_gauntlet_inventory_accuracy.sql:80-84</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">Planned holds with no needed_by_date get NULL expires_at: invisible to the forecast and expiring-holds alerts, and never expire</span>
+          <code class="row-loc">20260702171000_layer2_sync_planned_holds_job_aware.sql:101</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">rollover_quote_to_season creates the new planned booking with zero holds and drops needed_by_date; old booking's holds stay active, double-counting demand</span>
+          <code class="row-loc">20260702180000_layer2_rollover_settlement_job_aware.sql:391-407,483-490</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">duplicate_quote silently drops is_planned and needed_by_date from the copy</span>
+          <code class="row-loc">20260526151856_execute_full_codebase_ultra_review.sql:1017-1049</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">Crop-program holds are unchecked soft holds: creation never checks stock, nothing blocks overselling, and excess surfaces only on the Forecast tab</span>
+          <code class="row-loc">20260702171000_layer2_sync_planned_holds_job_aware.sql:89-104</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">tests/e2e/holds-cleanup-paths.spec.ts covers only 2 of the hold exit paths and carries a stale trigger-behavior comment</span>
+          <code class="row-loc">tests/e2e/holds-cleanup-paths.spec.ts:9-31,176-227</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">Quotes-list delete guard misses planned quotes with active zero-draw scheduled jobs</span>
+          <code class="row-loc">src/pages/Quotes.tsx:387-400</code>
+        </li>
+      </ul>
+    </div>
+<div class="finder-block">
+      <h4 class="finder-h">conversion-seams</h4>
+      <ul class="rowlist">
+        <li class="row row-high">
+          <span class="chip chip-high">High</span>
+          <span class="row-t">Caller-controlled cost/profit still drives commission basis on convert_quote_to_order and create_direct_order — the exact class hardened out of bulk_import_order remains open on the two main order-creation seams <em class="row-fix">Scope narrowed by this finding's own verifier: the convert_quote_to_order half is REFUTED. save_quote overwrites every line's current_cost and profit from products.current_cost before conversion, so the commission basis convert_quote_to_order passes is already server-computed. create_direct_order is the only exposed seam. Title and verdict left as originally recorded.</em></span>
+          <code class="row-loc">20260730235031_quote_customer_row_version_guard.sql:317-346</code>
+        </li>
+<li class="row row-high">
+          <span class="chip chip-high">High</span>
+          <span class="row-t">Quick-delivery invoice posted before completion is never adjusted on partial completion, and the follow-up delivery auto-invoice then bills the shortfall a second time; the 2026-03 admin 'posted invoice may need adjustment' notification was silently dropped</span>
+          <code class="row-loc">20260716120104_gauntlet_access_boundaries.sql:267-296</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">save_quote and create_direct_order accept NaN/Infinity in money and quantity fields — bulk import rejects them, these seams poison orders that later fail at invoice time</span>
+          <code class="row-loc">20260730235031_quote_customer_row_version_guard.sql:317-346</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">Soft-deleted invoices (deleted_at set, status unchanged) permanently block create_invoice_from_order and create_split_invoices_from_order, and silently suppress complete_delivery's auto-invoice — the 20260712170000 deleted_at fix covered only the backfill creator</span>
+          <code class="row-loc">20260620190000_invoice_creator_provenance_totals.sql:60-66</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">create_direct_order skips the customer-active check that quick delivery enforces</span>
+          <code class="row-loc">20260614142939_create_direct_order_customer_po_param.sql:90-91</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">convert_quote_to_order copies live quote rows, never the sent/accepted quote_versions snapshot — a quote edited after send ('revised', or a DB-level sent→sent item rewrite) converts at prices the customer never saw</span>
+          <code class="row-loc">20260702172500_layer2_convert_quote_to_order_job_aware.sql:120,167-179</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">Quick delivery drops unit_size on order_items and invoice_items, unlike every other seam</span>
+          <code class="row-loc">20260706130000_stock_policy_warn_not_block.sql:203-226</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">Cent-rounding formula differs across the three invoice-line paths for the same delivered quantity</span>
+          <code class="row-loc">20260716120104_gauntlet_access_boundaries.sql:273,406,417</code>
+        </li>
+      </ul>
+    </div>
+</section>
+
+<section class="phase">
+  <header class="phase-head">
+    <h3>Money &amp; commissions</h3>
+    <p class="phase-lede">Cent maths and rounding, commission minting and cancellation, duplicate-submission and race protection.</p>
+    <p class="phase-count">19 findings — 1 high · 9 med · 9 low</p>
+  </header>
+  <div class="finder-block">
+      <h4 class="finder-h">money-math</h4>
+      <ul class="rowlist">
+        <li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">OrderDetail invoice query omits deleted_at filter — soft-deleted drafts inflate AR tiles, permanently hide Create Invoice, and are targeted by Post All Drafts</span>
+          <code class="row-loc">src/pages/OrderDetail.tsx:240-245, 903-905, 931, 1100-1107, 1169, 1195</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">Non-finite numeric rejection exists only on the bulk-import path — create_direct_order and save_quote accept 'NaN'/'Infinity' quantities and prices via direct API and store them into money and inventory columns</span>
+          <code class="row-loc">20260614142939_create_direct_order_customer_po_param.sql:118-125, 147-188</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">quotes.total_cost is stored unrounded and quote vs order use different profit formulas — total_price − total_cost ≠ total_profit, and quote→order conversion changes the commission basis by cents on first item touch</span>
+          <code class="row-loc">20260730235031_quote_customer_row_version_guard.sql:466-472, 497-499</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">create_direct_order performs no cent rounding anywhere — fractional-cent money stored in order_items/orders and commissions minted from the unrounded profit accumulator</span>
+          <code class="row-loc">20260614142939_create_direct_order_customer_po_param.sql:118-131, 158-171, 190-193</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">QuoteBuilder client totals use a different rounding formula than the server-canonical save_quote recompute — displayed money can differ by cents from what is stored</span>
+          <code class="row-loc">src/pages/QuoteBuilder.tsx:1116-1144, 1323-1341</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">allocate_payment computes allocation_sets version with unlocked MAX(version)+1 — concurrent payments for the same customer collide on the UNIQUE constraint with a raw error</span>
+          <code class="row-loc">20260713060300_harden_allocate_payment_idempotency.sql:139-152</code>
+        </li>
+      </ul>
+    </div>
+<div class="finder-block">
+      <h4 class="finder-h">commissions</h4>
+      <ul class="rowlist">
+        <li class="row row-high">
+          <span class="chip chip-high">High</span>
+          <span class="row-t">Void→rebill of an order invoice permanently cancels the order's pending commissions — no path ever re-mints them</span>
+          <code class="row-loc">20260718221505_preserve_voided_payment_allocation_history.sql:250-256</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">Reports quick-pay deterministic idempotency key silently replays a voided payment batch for 24 hours</span>
+          <code class="row-loc">src/pages/Reports.tsx:483-487</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">jobs.commission_split is directly writable by any admin/sales_rep with no validation, no audit, and no lock — the job channel's money-routing window is unguarded between scheduling and invoicing</span>
+          <code class="row-loc">20260430180000_field_app_workflow_phase5.sql:28-32</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">void_invoice's order-channel commission cancel is missing every sibling protection: no batch-freeze guard, amount not zeroed, no paid-commission review notification</span>
+          <code class="row-loc">20260718221505_preserve_voided_payment_allocation_history.sql:250-256 vs 258-281</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">Mint-time last-row penny reconciliation can compute a negative commission for tiny-profit multi-way splits, violating chk_commission_amount and aborting the whole order conversion / invoice save</span>
+          <code class="row-loc">20260722174029_commission_split_recipient_ids.sql:452-461</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">customers.default_commission_split (internal pay attribution) is readable by drivers, applicators, and location-dispatchees through the row-level customers_select policies</span>
+          <code class="row-loc">20260510070000_tighten_customer_profile_rls.sql:52-79</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">CommissionPayments payout picker and payment list are hard-capped (500/200 rows) with no pagination or truncation warning</span>
+          <code class="row-loc">src/pages/CommissionPayments.tsx:91, 164-165</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">Void-payment modal copy omits the job-channel close-out rule — admin is told dead-ORDER rows close out, not dead-minting-INVOICE rows</span>
+          <code class="row-loc">src/pages/CommissionPayments.tsx:666-670</code>
+        </li>
+      </ul>
+    </div>
+<div class="finder-block">
+      <h4 class="finder-h">idempotency-concurrency</h4>
+      <ul class="rowlist">
+        <li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">update_order_items idempotent replay is not payload-bound — edited items silently reported as saved on retry after a lost response</span>
+          <code class="row-loc">20260714221000_order_and_cycle_count_concurrency_guards.sql:37-40</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">Orders and invoices have no row-version stale-write guard — quotes/customers equivalents were never extended; two office users get last-write-wins</span>
+          <code class="row-loc">20260730235031_quote_customer_row_version_guard.sql:10-13,63-71</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">allocate_payment allocation_sets version assignment is check-then-act — concurrent payments for one customer abort with a raw unique-constraint error</span>
+          <code class="row-loc">20260713060300_harden_allocate_payment_idempotency.sql:139-152</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">tests/e2e/concurrent-operations.spec.ts contains no concurrent execution and none of its claimed idempotency/race coverage; test 1's premise contradicts create_direct_order's warnings-only design</span>
+          <code class="row-loc">tests/e2e/concurrent-operations.spec.ts:7-14,92-146,232,263-352</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">QuoteBuilder failed-convert recovery writes quotes.status directly; the DB transition enforcer allows accepted→sent unconditionally, so a convert race can flip a converted quote back to 'sent'</span>
+          <code class="row-loc">src/pages/QuoteBuilder.tsx:2625-2701</code>
+        </li>
+      </ul>
+    </div>
+</section>
+
+<section class="phase">
+  <header class="phase-head">
+    <h3>Permissions, screens &amp; reporting</h3>
+    <p class="phase-lede">Who can read and write what, frontend adherence to the project rules, and whether reports agree with each other.</p>
+    <p class="phase-count">29 findings — 3 high · 14 med · 12 low</p>
+  </header>
+  <div class="finder-block">
+      <h4 class="finder-h">rls-security</h4>
+      <ul class="rowlist">
+        <li class="row row-high">
+          <span class="chip chip-high">High</span>
+          <span class="row-t">Assigned driver can complete a delivery by direct table UPDATE, bypassing complete_delivery's inventory, order-fulfillment, and invoice effects</span>
+          <code class="row-loc">20260511060000_perf_consolidate_permissive_policies.sql:83-93</code>
+        </li>
+<li class="row row-high">
+          <span class="chip chip-high">High</span>
+          <span class="row-t">get_customer_year_end_summary is an ungated SECURITY DEFINER RPC granted to authenticated — any role reads any customer's full financial history</span>
+          <code class="row-loc">20260228200000_season_calendar_oct_sep.sql:843-873</code>
+        </li>
+<li class="row row-high">
+          <span class="chip chip-high">High</span>
+          <span class="row-t">Sales reps can create orders and order lines by direct PostgREST insert, bypassing every canonical order-creation effect and the confirmed-only status rule</span>
+          <code class="row-loc">20260210_fix_rls_critical_issues.sql:12-24</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">check_customer_credit_limit and get_customer_summary are ungated SECURITY DEFINER readers of AR — any authenticated role reads any customer's outstanding balance and credit limit</span>
+          <code class="row-loc">20260712130000_credit_limit_count_unposted.sql:4-48</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">create_invoice_from_order / create_split_invoices_from_order accept an unvalidated caller-supplied p_salesman_id that is itself an RLS read-grant key</span>
+          <code class="row-loc">baseline public_schema.sql lines 20575</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">release_expired_quote_holds() is an ungated authenticated-callable SECURITY DEFINER mutator with no idempotency key, and the standing ungated-secdef-mutators predicate cannot see it</span>
+          <code class="row-loc">20260302200000_business_logic_enhancements.sql:1515</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">Direct UPDATE of quotes.is_planned is unguarded — planned inventory holds desynchronise because holds are only reconciled on a status change</span>
+          <code class="row-loc">20260206174345_fix_security_and_performance_issues.sql:369</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">global_search is an ungated SECURITY DEFINER reader that enumerates order, invoice and delivery numbers with customer names to every authenticated role</span>
+          <code class="row-loc">20260404080000_fix_global_search_ilike_escape.sql:4</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">Sales reps can insert deliveries directly, including in a terminal status, bypassing create_delivery_with_items' order-status, quantity and address-ownership validation</span>
+          <code class="row-loc">20260210_fix_rls_critical_issues.sql:27-30</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">generate_order_number() and generate_quote_number() remain EXECUTE-able by anon and call nextval() — a logged-out visitor can burn the order and quote number sequences</span>
+          <code class="row-loc">20260727174805_acl_lockdown.sql:1026-1031, 1650-1655</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">invoices_select / invoice_items_select ownership arms carry no role and no is_active predicate, and both policies are granted to PUBLIC rather than authenticated</span>
+          <code class="row-loc">20260213100000_phase2_billing_architecture.sql:254-285</code>
+        </li>
+      </ul>
+    </div>
+<div class="finder-block">
+      <h4 class="finder-h">frontend-compliance</h4>
+      <ul class="rowlist">
+        <li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">Quotes list bulk-delete leaks inventory holds: soft-delete changes no status, so the hold-release trigger never fires and the reserved units stay counted forever</span>
+          <code class="row-loc">src/pages/Quotes.tsx:376-421</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">QuoteBuilder reuses one page-scoped idempotency key across different quote sections (Schedule Job) and across draw attempts (Partial Order), both on key-only RPCs</span>
+          <code class="row-loc">src/pages/QuoteBuilder.tsx:253-254</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">Deliveries page reuses page-scoped idempotency keys across different deliveries (driver Take) and across changed batch-cancel selections</span>
+          <code class="row-loc">src/pages/Deliveries.tsx:113 + 593-624</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">Orders list fetches EVERY invoice in the database for the Invoiced % column — unscoped by order_id and unfiltered by deleted_at</span>
+          <code class="row-loc">src/pages/Orders.tsx:106-109</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">Order detail loads invoices and deliveries without a deleted_at filter, so a soft-deleted draft invoice permanently hides Create Invoice and is fed to Post All Drafts</span>
+          <code class="row-loc">src/pages/OrderDetail.tsx:236-241</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">Quotes list Duplicate reuses a stale, page-scoped idempotency key across different quotes — a lost response silently re-opens the previous quote's copy instead of duplicating the one clicked</span>
+          <code class="row-loc">src/pages/Quotes.tsx:50, 108-128</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">Voided orders still offer Edit Order, Create Invoice and Schedule Delivery — the UI gates test 'fulfilled'/'cancelled' but never 'voided'</span>
+          <code class="row-loc">src/pages/OrderDetail.tsx:149</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">NewDelivery deep-links load an order's items without re-checking its status, then fail at save with a bare 'Order not found'</span>
+          <code class="row-loc">src/pages/NewDelivery.tsx:116-119</code>
+        </li>
+      </ul>
+    </div>
+<div class="finder-block">
+      <h4 class="finder-h">reporting-drift</h4>
+      <ul class="rowlist">
+        <li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">Integrity/reconciliation report runs unpaginated PostgREST reads — silently truncated at the ~1000-row API cap, producing both false PASS and false discrepancies</span>
+          <code class="row-loc">src/lib/reconciliation.ts:653-658, :688-693, :728-735, :780-781, :808-813, :843-847, :888-892, :922-923, :950-951</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">Three mutually inconsistent AR derivations across the three pages that report a customer's AR</span>
+          <code class="row-loc">20260404040200_get_customer_summary_rpc.sql:31-35</code>
+        </li>
+<li class="row row-med">
+          <span class="chip chip-med">Med</span>
+          <span class="row-t">Quote-Hold Parity integrity check is one-directional and blind to soft-deleted quotes, while Quotes.tsx soft-delete leaves planned holds active</span>
+          <code class="row-loc">src/lib/reconciliation.ts:414, :431-443, :808-811, :824-827</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">&quot;Unused Prepay&quot; is read from two different sources on two panels of the same page</span>
+          <code class="row-loc">src/pages/AccountsReceivable.tsx:52-54 vs supabase/migrations/20260805151605_fix_historical_ar_report_cutoffs.sql:228</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">The point-of-sale credit-limit guardrail and the Financial Dashboard's &quot;customers over credit&quot; count use different invoice sets</span>
+          <code class="row-loc">src/hooks/useGuardrails.ts:44-53 vs supabase/migrations/20260714223000_remaining_money_inventory_hardening.sql:378-389</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">Quote soft-delete writes no activity_feed record — the only quote lifecycle event with no audit trail</span>
+          <code class="row-loc">src/pages/Quotes.tsx:406-412</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">docs/workflows/QUOTE_TO_DELIVERY.md documents 7 of the 9 live quote statuses and omits every quote lifecycle RPC added since mid-2026</span>
+          <code class="row-loc">docs/workflows/QUOTE_TO_DELIVERY.md:29-38</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">QUOTE_TO_DELIVERY.md names a prepay_credits column that does not exist</span>
+          <code class="row-loc">docs/workflows/QUOTE_TO_DELIVERY.md:199</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">financial_dashboard_summary quote counts include soft-deleted quotes and the pipeline value silently drops every 'revised' quote</span>
+          <code class="row-loc">20260714223000_remaining_money_inventory_hardening.sql:336-342</code>
+        </li>
+<li class="row row-low">
+          <span class="chip chip-low">Low</span>
+          <span class="row-t">AR aging bucket boundaries disagree between the AR Aging report and the Financial Dashboard, and the note saying so lives only in a migration comment</span>
+          <code class="row-loc">20260805151605_fix_historical_ar_report_cutoffs.sql:210-214 vs supabase/migrations/20260714223000_remaining_money_inventory_hardening.sql:391-396</code>
+        </li>
+      </ul>
+    </div>
+</section>
+  </section>
+
+  <footer>
+    <p>Read-only review — no application code, schema, migration, deployment or live data was changed; the only files produced are the audit record this report comes from. Fixes are a separate job, to be scoped and approved after you have read this.</p>
+  </footer>
+
+</div>
+</body>
+</html>
