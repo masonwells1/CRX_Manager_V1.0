@@ -480,6 +480,11 @@ export default function Reports() {
     // refusal on the third recipient leaves the first two genuinely paid. The
     // catch below has to be able to say so instead of claiming nothing happened.
     let totalBatched = 0;
+    // Counted BEFORE each call, not after. `totalBatched` only rises once a
+    // response comes back, so a recipient whose payment commits but whose
+    // response is lost leaves it at zero — and on a single-recipient click that
+    // makes a committed batch indistinguishable from nothing having happened.
+    let attempted = 0;
     try {
       // Group by recipient — RPC requires all commissions per call belong to same recipient
       const byRecipient = new Map<string, string[]>();
@@ -497,6 +502,7 @@ export default function Reports() {
       // reached. Keeping A's key lets the retry replay A's receipt and carry on
       // to B, which is the whole point of retaining a key.
       const scopesThisClick: string[] = [];
+      const createdPaymentIds: string[] = [];
       for (const [, ids] of byRecipient) {
         // Sorted and de-duplicated to match the server-side fingerprint, so
         // re-selecting the same commissions in a different order is the same
@@ -508,6 +514,7 @@ export default function Reports() {
           markPaidKeys.current.set(scope, key);
         }
         scopesThisClick.push(scope);
+        attempted += 1;
         const { data, error } = await supabase.rpc('create_commission_payment', {
           p_commission_ids: ids,
           p_payment_method: 'other',
@@ -518,20 +525,39 @@ export default function Reports() {
           p_idempotency_key: key,
         });
         if (error) throw new Error(error.message);
-        assertRpcResult<string>(data, 'create_commission_payment');
+        createdPaymentIds.push(assertRpcResult<string>(data, 'create_commission_payment'));
         totalBatched += ids.length;
       }
 
       // Every recipient landed, so the click is finished and its keys are spent.
-      // Retiring them here — not mid-loop — means that if this payment is later
-      // VOIDED and the same commissions are marked paid again, the next click is
-      // a genuinely new request rather than a replay of the voided payment's
-      // receipt reporting success for a batch that no longer exists.
+      // Retiring them here — not mid-loop — closes the void-then-repay window for
+      // a click that SUCCEEDED: the next click on the same commissions is then a
+      // genuinely new request rather than a replay. It does nothing for a click
+      // that FAILED, whose keys deliberately survive so the retry can replay
+      // them; that case is what the live-batch check immediately below is for.
       for (const done of scopesThisClick) markPaidKeys.current.delete(done);
 
-      toast('success', `${totalBatched} commission(s) added to ${byRecipient.size} unposted payment batch${byRecipient.size > 1 ? 'es' : ''}. Review and post ${byRecipient.size > 1 ? 'them' : 'it'} in Commission Payments.`);
-      if (profile) logActivity({ event: 'commission_payment_batch_created', description: `${totalBatched} commission(s) added to unposted payment batches via Reports`, performedBy: profile.id });
-      fetchCommissions();
+      // A retained key does not create anything on a retry — it replays the
+      // ORIGINAL outcome. So a success here is not proof that a live batch
+      // exists: if the first attempt's response was lost and someone then VOIDED
+      // that payment, this click replays a receipt pointing at a batch that no
+      // longer holds these commissions. Confirm every returned payment is still
+      // live before saying the work landed; a row that is voided or missing
+      // means those commissions are still unpaid.
+      const { data: statusRows, error: statusError } = await supabase
+        .from('commission_payments')
+        .select('id,status')
+        .in('id', createdPaymentIds);
+      if (statusError) throw new Error(statusError.message);
+      const liveCount = (statusRows || []).filter((r) => (r as { status: string }).status !== 'voided').length;
+
+      await fetchCommissions();
+      if (liveCount < createdPaymentIds.length) {
+        toast('warning', `${createdPaymentIds.length - liveCount} of ${createdPaymentIds.length} payment batch(es) this retry pointed at have been voided, so those commissions are still unpaid. Check Commission Payments, then mark them paid again.`);
+      } else {
+        toast('success', `${totalBatched} commission(s) added to ${byRecipient.size} unposted payment batch${byRecipient.size > 1 ? 'es' : ''}. Review and post ${byRecipient.size > 1 ? 'them' : 'it'} in Commission Payments.`);
+        if (profile) logActivity({ event: 'commission_payment_batch_created', description: `${totalBatched} commission(s) added to unposted payment batches via Reports`, performedBy: profile.id });
+      }
     } catch (err: unknown) {
       // Backstop only. The scoping above should make a binding refusal
       // unreachable from this page, so if one arrives the scope and the server
@@ -557,9 +583,19 @@ export default function Reports() {
         // click are deliberately NOT retired here: retrying replays them.
         await fetchCommissions();
         const detail = err instanceof Error ? err.message : 'Failed to update commissions';
+        // Three different situations, and only the third may say nothing
+        // happened. `totalBatched` counts CONFIRMED recipients, so the recipient
+        // this stopped on is unaccounted for either way — a lost response on a
+        // committed payment looks exactly like a failure. Refreshing does not
+        // settle it: a new batch leaves the commissions 'pending', so this list
+        // looks the same whether or not one was created. Commission Payments is
+        // the only place that answers the question, so send the admin there
+        // whenever a call actually went out.
         toast('error', totalBatched > 0
-          ? `${detail} — ${totalBatched} commission(s) were already added to a payment batch before it stopped. Check Commission Payments before trying again.`
-          : detail);
+          ? `${detail} — ${totalBatched} commission(s) were already added to a payment batch before it stopped, and the one it stopped on may have been added too. Check Commission Payments before trying again.`
+          : attempted > 0
+            ? `${detail} — a payment batch may still have been created. Check Commission Payments before trying again.`
+            : detail);
       }
     }
     setMarkingPaid(false);

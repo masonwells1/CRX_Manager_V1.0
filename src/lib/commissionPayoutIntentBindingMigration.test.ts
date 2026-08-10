@@ -211,6 +211,32 @@ describe('commission payout intent-binding migration', () => {
     );
   });
 
+  it.each(PAYOUT_RPCS)('$name refuses to rename its own wrapper onto the implementation', (rpc) => {
+    // The dangerous replay is not "everything is already installed" — that one
+    // is handled by the re-runnability check above. It is the half-state: the
+    // implementation has been dropped but the wrapper survived. Renaming the
+    // wrapper onto the implementation name then gives it a body that calls
+    // itself, and every postcondition in this migration (the name exists, one
+    // overload, grants correct) still passes while every payout call recurses
+    // until the stack blows. The rename must fail closed instead.
+    const block = migration.slice(
+      migration.indexOf(`IF to_regprocedure('public.${rpc.impl}(${rpc.signature})') IS NULL THEN`),
+    );
+    const rename = block.indexOf(`RENAME TO ${rpc.impl};`);
+    expect(rename, `${rpc.name} rename block not found`).toBeGreaterThan(0);
+    const beforeRename = block.slice(0, rename);
+    // Read the stored body straight out of pg_proc. pg_get_functiondef() would
+    // read more naturally here but is banned in migrations by the SQL commit
+    // guard, and prosrc holds the body — which is where the call to the
+    // implementation appears — so it answers the same question.
+    const probe = `WHERE p.oid = to_regprocedure('public.${rpc.name}(${rpc.signature})'))`;
+    expect(beforeRename).toContain(probe);
+    const guard = beforeRename.slice(beforeRename.indexOf(probe));
+    expect(guard).toContain(`LIKE '%${rpc.impl}%' THEN`);
+    // …and the guard has to ABORT, not warn.
+    expect(guard).toContain('RAISE EXCEPTION');
+  });
+
   it.each(PAYOUT_RPCS)('$name keeps its renamed implementation out of the browser', (rpc) => {
     expect(migration).toContain(
       `REVOKE ALL ON FUNCTION public.${rpc.impl}(${rpc.signature})\n  FROM PUBLIC, anon, authenticated, service_role;`,
@@ -430,10 +456,23 @@ describe('Reports quick-pay idempotency scope', () => {
     expect(markPaid).toContain('getIdempotencyBindingRejection(err)');
   });
 
+  // Anchored on the catch block, not on the first `toast('warning'` in the whole
+  // handler: the success path now carries a warning of its own (the voided-batch
+  // replay), and slicing from the first match silently pointed these assertions
+  // at the SUCCESS path, where they passed no matter what the failure branches
+  // did. A mutation that deleted the failure refresh went unnoticed.
+  const catchBlock = markPaid.slice(markPaid.indexOf('} catch (err: unknown) {'));
+  const refusalBranch = catchBlock.slice(
+    catchBlock.indexOf('if (rejection) {'),
+    catchBlock.indexOf('\n      } else {'),
+  );
+  const genericBranch = catchBlock.slice(catchBlock.indexOf('\n      } else {'));
+
   it('refreshes before the refusal toast and never overstates what was skipped', () => {
-    const refreshAt = markPaid.indexOf('await fetchCommissions();');
+    expect(refusalBranch, 'the refusal branch is missing').toContain("toast('warning'");
+    const refreshAt = refusalBranch.indexOf('await fetchCommissions();');
     expect(refreshAt, 'the refusal branch does not await a refresh').toBeGreaterThan(-1);
-    expect(refreshAt).toBeLessThan(markPaid.indexOf("toast('warning'"));
+    expect(refreshAt).toBeLessThan(refusalBranch.indexOf("toast('warning'"));
     // One click makes one call per recipient. Recipients processed before the
     // refusal really were paid, so the message must be conditional on how many
     // actually landed — a flat "no payment batch was created" invites a
@@ -447,11 +486,48 @@ describe('Reports quick-pay idempotency scope', () => {
     // third recipient, and that lands in the generic branch — which used to show
     // a bare error over a stale list, reading as "nothing happened" to an admin
     // who had in fact just paid two people.
-    const generic = markPaid.slice(markPaid.indexOf('} else {', markPaid.indexOf("toast('warning'")));
-    expect(generic, 'the generic failure branch is missing').toContain("toast('error'");
-    const refreshAt = generic.indexOf('await fetchCommissions();');
+    expect(genericBranch, 'the generic failure branch is missing').toContain("toast('error'");
+    const refreshAt = genericBranch.indexOf('await fetchCommissions();');
     expect(refreshAt, 'the generic failure branch does not await a refresh').toBeGreaterThan(-1);
-    expect(refreshAt).toBeLessThan(generic.indexOf("toast('error'"));
-    expect(generic.replace(/\s+/g, ' ')).toContain("toast('error', totalBatched > 0");
+    expect(refreshAt).toBeLessThan(genericBranch.indexOf("toast('error'"));
+    expect(genericBranch.replace(/\s+/g, ' ')).toContain("toast('error', totalBatched > 0");
+  });
+
+  it('counts an attempted recipient BEFORE the call, not after it returns', () => {
+    // `totalBatched` only rises once a response comes back. On a single-recipient
+    // click whose payment commits but whose response is lost, it stays at zero —
+    // so a counter read after the fact cannot tell "a batch may exist" from
+    // "nothing happened", and the admin is told the latter.
+    const loopStart = markPaid.indexOf('for (const [, ids] of byRecipient) {');
+    const loopBody = markPaid.slice(loopStart, markPaid.indexOf('\n      }', loopStart));
+    const counted = loopBody.indexOf('attempted += 1;');
+    expect(counted, 'nothing counts the attempt before the RPC').toBeGreaterThan(-1);
+    expect(counted, 'the attempt is counted after the call, which proves nothing')
+      .toBeLessThan(loopBody.indexOf("await supabase.rpc('create_commission_payment'"));
+    expect(markPaid).toContain('let attempted = 0;');
+    // …and the failure wording has to use it, otherwise counting is decoration.
+    expect(genericBranch.replace(/\s+/g, ' ')).toContain(': attempted > 0');
+  });
+
+  it('confirms every batch it created is still live before claiming success', () => {
+    // A retained key does not create anything on a retry — it replays the
+    // ORIGINAL outcome. If that payment was voided in between, an unchecked
+    // success message reports a batch that no longer holds the commissions.
+    expect(markPaid).toContain("createdPaymentIds.push(assertRpcResult<string>(data, 'create_commission_payment'));");
+    const check = markPaid.indexOf(".in('id', createdPaymentIds)");
+    expect(check, 'nothing re-reads the payment rows this click points at').toBeGreaterThan(-1);
+    expect(markPaid).toContain("from('commission_payments')");
+    expect(markPaid).toContain("(r as { status: string }).status !== 'voided'");
+    // A failed status read must not be swallowed into a false success.
+    expect(markPaid).toContain('if (statusError) throw new Error(statusError.message);');
+
+    const successToast = markPaid.indexOf("toast('success'");
+    expect(successToast, 'the success toast is missing').toBeGreaterThan(check);
+    const guard = markPaid.indexOf('if (liveCount < createdPaymentIds.length) {');
+    expect(guard, 'the voided-batch guard is missing').toBeGreaterThan(check);
+    expect(guard).toBeLessThan(successToast);
+    // The activity-feed entry has to sit on the same side of the guard as the
+    // success toast, or a voided replay writes a "batch created" event anyway.
+    expect(markPaid.indexOf("event: 'commission_payment_batch_created'")).toBeGreaterThan(guard);
   });
 });

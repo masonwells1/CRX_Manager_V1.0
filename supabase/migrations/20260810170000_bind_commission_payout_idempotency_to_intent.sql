@@ -175,12 +175,21 @@ GRANT EXECUTE ON FUNCTION public.check_idempotency_intent(text, text, uuid, text
 -- aborts on a replay (the target name already exists), which would strand a
 -- recovery that re-runs this file after a lost ledger write. Fail closed if the
 -- public function is missing entirely rather than installing a wrapper over
--- nothing.
+-- nothing. Also fail closed when the impl is gone but the PUBLIC function is
+-- already this migration's wrapper: renaming that onto the impl name would give
+-- the wrapper a body that calls itself, and every postcondition below (name
+-- present, one overload, grants correct) would still pass while every payout
+-- call recursed until the stack blew.
 DO $rename_create$
 BEGIN
   IF to_regprocedure('public._create_commission_payment_intent_impl_20260809(uuid[], text, text, date, text, uuid, text)') IS NULL THEN
     IF to_regprocedure('public.create_commission_payment(uuid[], text, text, date, text, uuid, text)') IS NULL THEN
       RAISE EXCEPTION 'create_commission_payment(uuid[], text, text, date, text, uuid, text) not found; refusing to install the intent-binding wrapper';
+    END IF;
+    IF (SELECT p.prosrc FROM pg_proc p
+        WHERE p.oid = to_regprocedure('public.create_commission_payment(uuid[], text, text, date, text, uuid, text)'))
+        LIKE '%_create_commission_payment_intent_impl_20260809%' THEN
+      RAISE EXCEPTION 'public.create_commission_payment is already the intent-binding wrapper but its implementation _create_commission_payment_intent_impl_20260809 is missing; refusing to rename the wrapper onto itself';
     END IF;
     ALTER FUNCTION public.create_commission_payment(uuid[], text, text, date, text, uuid, text)
       RENAME TO _create_commission_payment_intent_impl_20260809;
@@ -321,6 +330,11 @@ BEGIN
     IF to_regprocedure('public.post_commission_payment(uuid, uuid, text)') IS NULL THEN
       RAISE EXCEPTION 'post_commission_payment(uuid, uuid, text) not found; refusing to install the intent-binding wrapper';
     END IF;
+    IF (SELECT p.prosrc FROM pg_proc p
+        WHERE p.oid = to_regprocedure('public.post_commission_payment(uuid, uuid, text)'))
+        LIKE '%_post_commission_payment_intent_impl_20260809%' THEN
+      RAISE EXCEPTION 'public.post_commission_payment is already the intent-binding wrapper but its implementation _post_commission_payment_intent_impl_20260809 is missing; refusing to rename the wrapper onto itself';
+    END IF;
     ALTER FUNCTION public.post_commission_payment(uuid, uuid, text)
       RENAME TO _post_commission_payment_intent_impl_20260809;
   END IF;
@@ -421,6 +435,11 @@ BEGIN
   IF to_regprocedure('public._void_commission_payment_intent_impl_20260809(uuid, text, uuid, text)') IS NULL THEN
     IF to_regprocedure('public.void_commission_payment(uuid, text, uuid, text)') IS NULL THEN
       RAISE EXCEPTION 'void_commission_payment(uuid, text, uuid, text) not found; refusing to install the intent-binding wrapper';
+    END IF;
+    IF (SELECT p.prosrc FROM pg_proc p
+        WHERE p.oid = to_regprocedure('public.void_commission_payment(uuid, text, uuid, text)'))
+        LIKE '%_void_commission_payment_intent_impl_20260809%' THEN
+      RAISE EXCEPTION 'public.void_commission_payment is already the intent-binding wrapper but its implementation _void_commission_payment_intent_impl_20260809 is missing; refusing to rename the wrapper onto itself';
     END IF;
     ALTER FUNCTION public.void_commission_payment(uuid, text, uuid, text)
       RENAME TO _void_commission_payment_intent_impl_20260809;

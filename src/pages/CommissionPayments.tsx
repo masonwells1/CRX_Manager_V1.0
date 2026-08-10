@@ -54,7 +54,6 @@ interface UnpaidCommission {
 export default function CommissionPayments() {
   const { profile } = useAuth();
   const { toast } = useToast();
-  const createPaymentIdem = useIdempotencyKey('create_commission_payment', profile?.id || '');
 
   const [tab, setTab] = useState<'unposted' | 'posted' | 'voided'>('unposted');
   const [payments, setPayments] = useState<CommissionPaymentRow[]>([]);
@@ -89,6 +88,17 @@ export default function CommissionPayments() {
   const [payDate, setPayDate] = useState(localToday());
   const [payNotes, setPayNotes] = useState('');
   const [creating, setCreating] = useState(false);
+
+  // Scoped to the exact set of commissions being paid, sorted so the same
+  // selection always produces the same scope regardless of click order. Closing
+  // and reopening the Create dialog after an uncertain response used to call
+  // resetKey() and destroy the only key that could replay that request; the
+  // server then treated the retry as a brand-new payment. Scoping on the
+  // selection replaces that reset — reopening with the same commissions replays
+  // the same key, and changing the selection at all is a genuinely different
+  // request that mints a fresh one.
+  const selectionScope = [...selectedCommissions].sort().join(',');
+  const createPaymentIdem = useIdempotencyKey('create_commission_payment', profile?.id || '', selectionScope);
 
   const fetchPayments = useCallback(async () => {
     setLoading(true);
@@ -243,8 +253,12 @@ export default function CommissionPayments() {
   };
 
   const openCreate = async () => {
-    // Codex P2 fix (PR #59, 2026-05-16): reset page-scoped key on each open.
-    createPaymentIdem.resetKey();
+    // No resetKey() here. PR #59 (2026-05-16) reset the page-scoped key on every
+    // open so that a second, genuinely-different payment was not refused as a
+    // replay. The selection scope above does that job now, and does it without
+    // the harm: an admin whose create timed out, who closes the dialog and
+    // reopens it to look again, keeps the key that can replay the uncertain
+    // request instead of throwing it away.
     await fetchUnpaid();
     setSelectedRecipient('');
     setSelectedCommissions(new Set());
@@ -272,7 +286,7 @@ export default function CommissionPayments() {
     const [paymentResult, itemResult] = await Promise.all([
       supabase
         .from('commission_payments')
-        .select('payment_number,total_amount')
+        .select('payment_number,total_amount,status')
         .eq('id', paymentId)
         .maybeSingle(),
       supabase
@@ -289,6 +303,7 @@ export default function CommissionPayments() {
       paymentNumber: paymentResult.data.payment_number || '',
       totalAmount: Number(paymentResult.data.total_amount || 0),
       itemCount: itemResult.count || 0,
+      status: String((paymentResult.data as { status?: string | null }).status || ''),
     };
   };
 
@@ -329,9 +344,16 @@ export default function CommissionPayments() {
       const paymentId = assertRpcResult<string>(data, 'create_commission_payment');
       createPaymentIdem.resetKey();
       const createdSummary = await fetchCreatedPaymentSummary(paymentId);
+      // A retained key does not create anything on a retry — it replays the
+      // ORIGINAL outcome. So a success here is not proof that a live payment
+      // exists: if the first attempt's response was lost and someone then VOIDED
+      // that payment, this attempt replays a receipt pointing at a payment that
+      // no longer holds these commissions. Only claim the payment was created
+      // once the row is confirmed to still be live.
+      const wasVoided = createdSummary?.status === 'voided';
       // Audit #11: surface commission events in the activity feed (DB side
       // already writes financial_audit_log; activity_feed is the user-facing one).
-      if (profile) {
+      if (profile && !wasVoided) {
         await logActivity({
           event: 'commission_payment_created',
           description: createdSummary
@@ -342,11 +364,15 @@ export default function CommissionPayments() {
           entityId: paymentId,
         });
       }
-      toast('success', createdSummary
-        ? `Commission payment ${createdSummary.paymentNumber} created: ${fmt(createdSummary.totalAmount)}`
-        : 'Commission payment created');
       setShowCreate(false);
-      fetchPayments();
+      await fetchPayments();
+      if (wasVoided) {
+        toast('warning', `${createdSummary?.paymentNumber ? `Commission payment ${createdSummary.paymentNumber}` : 'That commission payment'} was already created by an earlier attempt and has since been voided, so those commissions are still unpaid. Create the payment again.`);
+      } else {
+        toast('success', createdSummary
+          ? `Commission payment ${createdSummary.paymentNumber} created: ${fmt(createdSummary.totalAmount)}`
+          : 'Commission payment created');
+      }
     } catch (err: unknown) {
       // The retry key is bound to one actor and one exact request. When the
       // database refuses it, no payment was created for THIS request, so the
@@ -380,7 +406,12 @@ export default function CommissionPayments() {
             : 'This retry was already used by an earlier commission payment, so nothing new was created. Check the payment list below before creating another.');
       } else {
         Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'create_commission_payment' } });
-        toast('error', err instanceof Error ? err.message : 'Failed to create payment');
+        // The call went out, so this is genuinely uncertain: a payment that
+        // committed but lost its response looks exactly like one that never ran.
+        // The dialog stays open with the same commissions selected, which keeps
+        // the retry key alive, so pressing Create again replays the original
+        // request rather than making a second payment.
+        toast('error', `${err instanceof Error ? err.message : 'Failed to create payment'} — a payment may still have been created. Close this and check the payment list before creating another; pressing Create again with the same commissions selected is safe.`);
       }
     }
     setCreating(false);

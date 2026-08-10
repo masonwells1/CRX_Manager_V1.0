@@ -101,12 +101,33 @@ describe('commission payout gauntlet guards', { timeout: 60_000 }, () => {
       { rpc: 'void_commission_payment', impl: '_void_commission_payment_intent_impl_20260809' },
     ];
 
-    const bodyOf = (sql: string, rpc: string): string => {
-      const start = sql.indexOf(`CREATE OR REPLACE FUNCTION public.${rpc}(`);
-      if (start === -1) return '';
-      const end = sql.indexOf('$function$;', start);
-      expect(end, `${rpc} definition is unterminated`).toBeGreaterThan(start);
-      return sql.slice(start, end);
+    // Deliberately NOT an indexOf on one exact literal. That form matched only
+    // the FIRST definition in a file, only the exact spelling
+    // `CREATE OR REPLACE FUNCTION public.rpc(`, and only the `$function$` body
+    // tag — so a later migration that wrapped its signature across lines, wrote
+    // `CREATE FUNCTION`, quoted the identifiers, used a different dollar-quote
+    // tag, or redefined the RPC a second time further down would be skipped in
+    // silence and the guard below would pass while intent binding was gone.
+    // Every definition is returned, and an unparseable one fails the test rather
+    // than being dropped.
+    const definitionsOf = (sql: string, rpc: string): string[] => {
+      const header = new RegExp(
+        String.raw`CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public|"public")\s*\.\s*(?:${rpc}|"${rpc}")\s*\(`,
+        'gi',
+      );
+      const bodies: string[] = [];
+      let match: RegExpExecArray | null;
+      while ((match = header.exec(sql)) !== null) {
+        const rest = sql.slice(match.index);
+        const opener = /\$([A-Za-z_]\w*)?\$/.exec(rest);
+        expect(opener, `${rpc} definition has no dollar-quoted body`).not.toBeNull();
+        const tag = opener![0];
+        const closeAt = rest.indexOf(tag, opener!.index + tag.length);
+        expect(closeAt, `${rpc} definition is unterminated`).toBeGreaterThan(opener!.index);
+        bodies.push(rest.slice(0, closeAt));
+        header.lastIndex = match.index + closeAt;
+      }
+      return bodies;
     };
 
     const rename = migrationFiles().find((f) => f.name === PAYOUT_RENAME_MIGRATION);
@@ -115,10 +136,14 @@ describe('commission payout gauntlet guards', { timeout: 60_000 }, () => {
 
     for (const { rpc, impl } of bound) {
       expect(renameSql, `${rpc} is never renamed out of the way`).toContain(`RENAME TO ${impl};`);
-      expect(
-        bodyOf(renameSql, rpc),
-        `the ${rpc} wrapper does not delegate to ${impl}`,
-      ).toContain(`public.${impl}(`);
+      const wrappers = definitionsOf(renameSql, rpc);
+      expect(wrappers.length, `${PAYOUT_RENAME_MIGRATION} does not define public.${rpc}`).toBeGreaterThan(0);
+      for (const wrapper of wrappers) {
+        expect(
+          wrapper,
+          `the ${rpc} wrapper does not delegate to ${impl}`,
+        ).toContain(`public.${impl}(`);
+      }
     }
 
     // And nothing since has quietly reinstated a self-contained public body. A
@@ -129,12 +154,12 @@ describe('commission payout gauntlet guards', { timeout: 60_000 }, () => {
       if (file.name <= PAYOUT_RENAME_MIGRATION) continue;
       const sql = file.content.replace(/\r\n/g, '\n');
       for (const { rpc, impl } of bound) {
-        const body = bodyOf(sql, rpc);
-        if (!body) continue;
-        expect(
-          body,
-          `${file.name} redefines public.${rpc} without delegating to the intent-bound implementation`,
-        ).toContain(`public.${impl}(`);
+        for (const body of definitionsOf(sql, rpc)) {
+          expect(
+            body,
+            `${file.name} redefines public.${rpc} without delegating to the intent-bound implementation`,
+          ).toContain(`public.${impl}(`);
+        }
       }
     }
   });

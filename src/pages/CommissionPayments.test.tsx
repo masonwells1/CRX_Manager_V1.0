@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
-const { mockFrom, mockRpc, mockToast, mockCaptureException, mockResetKey } = vi.hoisted(() => ({
+const { mockFrom, mockRpc, mockToast, mockCaptureException, mockResetKey, mockLogActivity } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
   mockRpc: vi.fn(),
   mockToast: vi.fn(),
   mockCaptureException: vi.fn(),
   mockResetKey: vi.fn(),
+  mockLogActivity: vi.fn(),
 }));
 
 function buildChain(result: { data?: unknown; error?: unknown; count?: number | null }): Record<string, unknown> {
@@ -56,7 +57,7 @@ vi.mock('../lib/sentry', () => ({
   Sentry: { captureException: mockCaptureException },
 }));
 
-vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn() }));
+vi.mock('../lib/activityLogger', () => ({ logActivity: mockLogActivity }));
 
 import CommissionPayments from './CommissionPayments';
 
@@ -283,6 +284,213 @@ describe('CommissionPayments uncertain-response retry', () => {
     await waitFor(() => expect(postKeys()).toHaveLength(2));
 
     const [first, second] = postKeys();
+    expect(second).not.toBe(first);
+  });
+
+  it('replays the first payment\'s key when the admin comes BACK to it', async () => {
+    // The A -> B -> A round trip. One retained key looks identical to per-target
+    // keys on the two tests above and only diverges here — the moment the admin
+    // returns to the payment whose outcome they are unsure about. A third key
+    // for CP-0001 makes the server treat an already-posted payment as new work.
+    mockRpc.mockResolvedValue({ data: null, error: { message: 'Network request timed out' } });
+    render(<CommissionPayments />);
+
+    await clickPost('CP-0001');
+    await waitFor(() => expect(postKeys()).toHaveLength(1));
+    await clickPost('CP-0002');
+    await waitFor(() => expect(postKeys()).toHaveLength(2));
+    await clickPost('CP-0001');
+    await waitFor(() => expect(postKeys()).toHaveLength(3));
+
+    const [first, second, third] = postKeys();
+    expect(second).not.toBe(first);
+    expect(third).toBe(first);
+  });
+
+  async function clickVoid(paymentNumber: string) {
+    // A failed void leaves its modal open, and that modal also prints the
+    // payment number — so back out of it first, both to keep the row lookup
+    // unambiguous and because backing out and returning is what an admin
+    // actually does when they are unsure whether the void landed.
+    const goBack = screen.queryByRole('button', { name: 'Go Back' });
+    if (goBack) fireEvent.click(goBack);
+    await screen.findByText(paymentNumber);
+    const row = screen.getAllByText(paymentNumber).map((el) => el.closest('tr')).find(Boolean);
+    fireEvent.click(within(row!).getByRole('button', { name: 'Void' }));
+    const reason = await screen.findByPlaceholderText(/Enter reason for voiding/);
+    fireEvent.change(reason, { target: { value: 'entered in error' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Void Payment' }));
+  }
+
+  const voidKeys = () =>
+    mockRpc.mock.calls
+      .filter((call) => call[0] === 'void_commission_payment')
+      .map((call) => (call[1] as { p_idempotency_key: string }).p_idempotency_key);
+
+  it('voids the same payment with the same key and switches keys per payment', async () => {
+    // Void closes its own modal before the RPC answers, exactly like post, so a
+    // retry after an uncertain response also comes back through the row button.
+    mockRpc.mockResolvedValue({ data: null, error: { message: 'Network request timed out' } });
+    render(<CommissionPayments />);
+
+    await clickVoid('CP-0001');
+    await waitFor(() => expect(voidKeys()).toHaveLength(1));
+    await clickVoid('CP-0001');
+    await waitFor(() => expect(voidKeys()).toHaveLength(2));
+    await clickVoid('CP-0002');
+    await waitFor(() => expect(voidKeys()).toHaveLength(3));
+    await clickVoid('CP-0001');
+    await waitFor(() => expect(voidKeys()).toHaveLength(4));
+
+    const [first, retry, other, back] = voidKeys();
+    expect(retry).toBe(first);
+    expect(other).not.toBe(first);
+    expect(back).toBe(first);
+  });
+});
+
+describe('CommissionPayments create-payment key scoping', () => {
+  const commissionBase = {
+    order_id: null,
+    job_id: null,
+    customer_id: null,
+    order_date: '2026-07-01',
+    recipient_user_id: 'recipient-1',
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'commission_payments') {
+        return buildChain({ data: [], error: null });
+      }
+      if (table === 'commissions') {
+        return buildChain({
+          data: [
+            { ...commissionBase, id: 'commission-a', commission_amount: 100 },
+            { ...commissionBase, id: 'commission-b', commission_amount: 200 },
+          ],
+          error: null,
+        });
+      }
+      if (table === 'profile_public_view') {
+        return buildChain({ data: [{ id: 'recipient-1', full_name: 'Test Recipient' }], error: null });
+      }
+      return buildChain({ data: [], error: null, count: 0 });
+    });
+  });
+
+  const createKeys = () =>
+    mockRpc.mock.calls
+      .filter((call) => call[0] === 'create_commission_payment')
+      .map((call) => (call[1] as { p_idempotency_key: string }).p_idempotency_key);
+
+  async function openDialogAndSelect(indexes: number[]) {
+    fireEvent.click(screen.getByRole('button', { name: /New Payment/ }));
+    const recipient = await screen.findByRole('combobox');
+    fireEvent.change(recipient, { target: { value: 'recipient-1' } });
+    const boxes = await screen.findAllByRole('checkbox');
+    for (const i of indexes) fireEvent.click(boxes[i]);
+    fireEvent.click(screen.getByRole('button', { name: /Create Payment/ }));
+  }
+
+  it('replays the same key when the dialog is reopened on the SAME commissions', async () => {
+    // openCreate used to call resetKey(). An admin whose create timed out, who
+    // closed the dialog to check the list and then reopened it, lost the only
+    // key that could replay the uncertain request — so the retry was a brand-new
+    // payment and could pay the same commissions twice.
+    mockRpc.mockResolvedValue({ data: null, error: { message: 'Network request timed out' } });
+    render(<CommissionPayments />);
+
+    await openDialogAndSelect([0]);
+    await waitFor(() => expect(createKeys()).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await openDialogAndSelect([0]);
+    await waitFor(() => expect(createKeys()).toHaveLength(2));
+
+    const [first, retry] = createKeys();
+    expect(first).toBeTruthy();
+    expect(retry).toBe(first);
+  });
+
+  it('treats the same commissions picked in a different ORDER as the same request', async () => {
+    // The scope is sorted for the same reason the server fingerprint is: ticking
+    // two boxes bottom-up is the same payment as ticking them top-down, and an
+    // unsorted scope would mint a second key for it and pay them twice.
+    mockRpc.mockResolvedValue({ data: null, error: { message: 'Network request timed out' } });
+    render(<CommissionPayments />);
+
+    await openDialogAndSelect([0, 1]);
+    await waitFor(() => expect(createKeys()).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await openDialogAndSelect([1, 0]);
+    await waitFor(() => expect(createKeys()).toHaveLength(2));
+
+    const [first, retry] = createKeys();
+    expect(retry).toBe(first);
+  });
+
+  it('does not report success when the replayed payment has since been voided', async () => {
+    // The uncertain-response case taken to its end: the first attempt committed,
+    // its response was lost, someone voided the payment, and this attempt replays
+    // the ORIGINAL receipt. The RPC "succeeds" and hands back a payment id that
+    // no longer holds the commissions.
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'commission_payments') {
+        const self: Record<string, unknown> = {};
+        const method = (..._args: unknown[]) => self;
+        for (const name of ['select', 'eq', 'in', 'order', 'limit']) self[name] = method;
+        self.maybeSingle = () => Promise.resolve({
+          data: { payment_number: 'CP-9001', total_amount: 100, status: 'voided' },
+          error: null,
+        });
+        const list = Promise.resolve({ data: [], error: null });
+        self.then = list.then.bind(list);
+        self.catch = list.catch.bind(list);
+        self.finally = list.finally.bind(list);
+        return self;
+      }
+      if (table === 'commissions') {
+        return buildChain({
+          data: [{ ...commissionBase, id: 'commission-a', commission_amount: 100 }],
+          error: null,
+        });
+      }
+      if (table === 'profile_public_view') {
+        return buildChain({ data: [{ id: 'recipient-1', full_name: 'Test Recipient' }], error: null });
+      }
+      return buildChain({ data: [], error: null, count: 1 });
+    });
+    mockRpc.mockResolvedValue({ data: 'payment-voided', error: null });
+    render(<CommissionPayments />);
+
+    await openDialogAndSelect([0]);
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalled());
+    const [level, message] = mockToast.mock.calls[mockToast.mock.calls.length - 1];
+    expect(level).toBe('warning');
+    expect(message).toContain('has since been voided');
+    expect(message).toContain('still unpaid');
+    // And nothing may record a creation that this click did not perform.
+    expect(mockLogActivity).not.toHaveBeenCalled();
+  });
+
+  it('mints a fresh key when the selected commissions change', async () => {
+    // The other half of what the removed reset was doing: a genuinely different
+    // payment must not be swallowed as a replay of the first one.
+    mockRpc.mockResolvedValue({ data: null, error: { message: 'Network request timed out' } });
+    render(<CommissionPayments />);
+
+    await openDialogAndSelect([0]);
+    await waitFor(() => expect(createKeys()).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await openDialogAndSelect([1]);
+    await waitFor(() => expect(createKeys()).toHaveLength(2));
+
+    const [first, second] = createKeys();
     expect(second).not.toBe(first);
   });
 });
