@@ -43,11 +43,233 @@ to specific messages. The checkbox is disabled with an explanatory tooltip for v
 are not the creator, assignee, or an admin. Notification deep-links now route team notes to
 the board, and the deep-link fetch no longer waits on a populated list before resolving.
 
-**Not done.** The registered chain `scripts/smoke/smoke-complete-team-note-chain.sql` still
-needs its external `SMOKE_PASS_ROLLBACK` terminal; it is a manual `npm run smoke` spec, not
-CI. `.claude/schema-registry.json` is stale at `20260809130108` because of another session's
-six migrations — deliberately not refreshed here, since these changes touch only a policy
-predicate and a function body, neither of which that file tracks.
+**Post-apply closeout.** The full registered chain
+`scripts/smoke/smoke-complete-team-note-chain.sql` ran against live and reached exact
+`SMOKE_PASS_ROLLBACK`, proving the business path and fixture rollback. The schema registry
+was genuinely regenerated from live introspection through high-water `20260810025159`, and
+the generated TypeScript types match live.
+
+## 2026-08-09 — Settled the canonical-profit question and applied the fix live
+
+Settled the canonical-profit question and applied the fix to production. Live measurement showed the order-vs-lines profit disagreement is a stale-cache bug, not a rounding artefact: orders.total_profit is trigger-recomputed and correct, while order_items.profit is a stored snapshot nothing refreshes, leaving 37 of 288 line rows stale across 17 orders. Mason decided the order header is canonical and line profit is derived from it, rounding each line's revenue and cost to whole cents before subtracting so the lines sum to the header exactly. Migration 20260809230500_single_canonical_line_profit.sql implements that, is forward-only, and both migration reviewers returned zero blockers. It was **applied live on 2026-08-09** (Supabase ledger version 20260810000427) after Mason's explicit approval. A post-apply live read confirmed both function bodies changed as written, the trigger now fires on all four money columns, and the SECURITY DEFINER flag and search_path are unchanged.
+
+That the apply moved no live money rests on the migration's own contents, not on an observation window: every executable statement in the file is DDL or a REVOKE -- `CREATE OR REPLACE FUNCTION`, `DROP`/`CREATE TRIGGER`, `REVOKE` -- and it contains no top-level INSERT, UPDATE, DELETE or TRUNCATE. The only UPDATE in the file sits inside the `trg_recalc_order_totals` body, where it runs on future trigger firings rather than at apply time, and creating a BEFORE trigger does not rewrite existing rows. Two live observations are consistent with that and were recorded as corroboration, not as the proof: every row count matched the pre-apply measurement, and zero order rows were written in the surrounding fifteen minutes. The optional repair that would restate the already-stale line rows is deliberately left commented out and has NOT been run, so the previously-disagreeing orders still disagree; they converge the next time one of their lines is written. Also caught and scrubbed live per-order dollar figures from the new file before commit -- this repository is public.
+
+- **CodeRabbit review, disposition.** Three findings. The two on this changelog were real and are
+  fixed above: the entry listed only a commit whose subject said `NOT applied` while claiming a live
+  apply, and it called a fifteen-minute zero-write window "the proof" of no money movement, which
+  overclaims what an observation window can establish. The third -- *"use bigint cents for the
+  canonical profit path"*, raised against the migration itself -- is **not actioned, deliberately**.
+  `orders.total_profit` and `order_items.profit` have been `numeric` since the original schema
+  (`20260206172436`); converting them to bigint cents is a breaking schema change reaching types,
+  reports, invoicing and commissions, which CodeRabbit itself labels a heavy lift. It is a
+  pre-existing property of the schema, not something this PR introduced, and this migration moves
+  toward whole-cent discipline rather than away from it. PostgreSQL `numeric` is exact decimal
+  arithmetic, so the hard rule this cites -- never use floating-point math for money -- is not
+  violated. The migration is also already applied live and must not be edited. Filed as follow-up
+  work, not a blocker for this PR.
+- **Status transition.** `77a6460c` below is the **pre-apply** state -- it authored the migration
+  and its subject line says so. The live apply happened afterwards and is recorded in two places:
+  Supabase ledger version `20260810000427`, and commit `a6c78f2e`, which updated
+  `docs/reference/migration-history.md`, `KNOWN_ISSUES.md` and `DECISION_LOG.md` to APPLIED LIVE.
+  No commit subject below should be read as the current state of the migration.
+- **Commits this session** (git log origin/main..HEAD):
+  - `a6c78f2e docs: record the canonical-profit migration as applied live and verified`
+  - `77a6460c feat(db): make the order header the single canonical profit -- migration written, NOT applied` *(pre-apply)*
+  - `c8bac913 Merge origin/main into claude/phone-to-local-sessions-dmqc57`
+  - `3219db58 docs: resolve CodeRabbit review on PR #354 -- correct three inaccurate claims`
+  - `40b8d9ea docs: record that all five re-issued migrations applied live, including the blocked one`
+  - `a6a3f1fe fix(hooks): the migration ordering guard was escapable by renaming`
+  - `b9ef776a Merge branch 'main' into claude/phone-to-local-sessions-dmqc57`
+  - `1f023a06 Merge remote-tracking branch 'origin/main' into claude/phone-to-local-sessions-dmqc57`
+  - `0b9cbb82 fix(migrations): apply RLS + drift reviewer findings to the five re-issued migrations`
+  - `aaa4c727 fix(migrations): correct the provenance header on the re-issued profit migration`
+  - `13e2e65a Merge remote-tracking branch 'origin/main' into claude/phone-to-local-sessions-dmqc57`
+  - `11afbb12 fix(migrations): re-issue the five foundation-review migrations above the live high-water`
+  - `fce9baa4 Merge remote-tracking branch 'origin/main' into claude/phone-to-local-sessions-dmqc57`
+  - `1028208d docs: handoff for Codex to apply the five migrations and land PR #354`
+  - `01e2f50d fix: name the apply's own project in the snapshot recapture instructions`
+  - `ed36c5f4 docs: file the ordering-guard concurrent-checkout gap as an OPEN known issue`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260808150200_cancel_order_zeroes_quantity_remaining.sql`
+  - `supabase/migrations/20260809170500_restore_batch_apply_prepayments_actor_guard.sql`
+  - `supabase/migrations/20260809170600_cancel_order_zeroes_quantity_remaining.sql`
+  - `supabase/migrations/20260809170700_revoke_inventory_truncate_and_mark_payments_dead.sql`
+  - `supabase/migrations/20260809170800_round_money_to_whole_cents.sql`
+  - `supabase/migrations/20260809170900_round_line_profit_with_revenue.sql`
+  - `supabase/migrations/20260809230500_single_canonical_line_profit.sql`
+
+## 2026-08-09 — PR #354 local takeover: backup, Codex BLOCK, and the five migrations re-issued forward
+
+The cloud session that opened #354 wrote itself a handoff. A local session executed it, and the
+adversarial gate blocked on the handoff itself.
+
+- **Off-site backup taken first.** `backups/2026-08-09/` — 156 tables, 9,927 rows, 27.7 MB, verified
+  table-by-table against live row counts (OK 156 / MISMATCH 0 / MISSING 0) with full numeric precision
+  intact in the raw text. Supabase Free has no PITR, so this is the only recovery path for the applies
+  that follow. An earlier parallel-subagent attempt was discarded entirely: agents self-reported 41
+  tables written successfully while having truncated 12 of them and writing `[]` for another after a
+  failed fetch — 19 of 156 files were wrong, caught only by deterministic count comparison. Everything
+  was re-dumped through one deterministic script. **Agent self-reports are not verification.**
+- **Codex adversarial review returned BLOCKING on the handoff document**, with three P1 findings, all
+  independently verified as real: a stale head SHA, a snapshot-refresh command that bypassed the
+  wrapper that owns the proof, and Mason's per-migration approval sequenced *after* the apply. A P2
+  noted all five migrations sat below the live applied high-water.
+- **The ordering block was genuine, and was not gamed.** Live ledger row
+  `20260809130108_team_note_completion_rpc_and_assignment_notify` applied at 13:01 UTC on 2026-08-09
+  from a concurrent session — and has **no file anywhere in this repository** (not on disk, not in
+  `origin/main`, not in `git log --all`). It lifted the high-water above all five `20260808*` files
+  and `migration-ordering-lib.mjs` correctly refused them. The obvious escape hatches were checked and
+  declined: `migration-apply-guard.mjs` deliberately re-attaches `<version>_<name>` so a name-mapping
+  gap cannot drop the timestamp, and neither a stale snapshot nor the `intentional-replay` marker was
+  used — these are first-time applies, not replays.
+- **Remedy: re-issued forward, not forced through.** All five renamed with `git mv` to
+  `20260809170500`–`20260809170900`, relative order preserved, executable SQL byte-identical *at the
+  moment of the rename*, a
+  provenance header added, and the stale `20260808*` files deleted in the same commit so a clean
+  rebuild cannot apply the same change twice. Same remedy as `migration-history.md` row 808 → live
+  row 811. Indexed as history rows 857–861. **Three of the five did not stay byte-identical** — later
+  in the same review cycle `170600` gained an `already_cancelled` status gate and `170600`/`170800`/
+  `170900` each gained a closing `REVOKE`, as recorded further down this entry. Read each file's own
+  provenance header for its delta list rather than assuming the SQL still matches the reviewed
+  original.
+- **Every migration premise re-verified against live** instead of trusted from the handoff: the actor
+  guard is genuinely missing, `authenticated` genuinely holds TRUNCATE on `inventory`, `payments`
+  genuinely holds zero rows, the rounding function and triggers genuinely do not exist, `cancel_order`
+  genuinely leaves `quantity_remaining` stranded, and `_cancel_order_impl_20260714` exists. Both
+  `CREATE OR REPLACE` migrations reproduce the current live bodies, so no live logic is clobbered.
+- **All 27 live invariant predicates ran:** 26 CLEAN, one violation — `fin-money-whole-cents` at
+  exactly 49 rows (3 `commissions` + 46 `order_items`), matching the documented, deliberately
+  unrepaired set. The repair statement stays commented out; restating live money, including a
+  $5,245.195 pending payout, is its own separate decision.
+- Docs brought back in sync: `migration-history.md` rows 857–861 plus a re-issue note and an
+  undocumented-live-row note, `applied-snapshot-invalidate.mjs` documented in `agent-guardrails.md`,
+  and `CURRENT_STATE.md`/`KNOWN_ISSUES.md` re-read against live and re-stamped. `check:docs` clean.
+- **Second Codex pass on the re-issued branch returned CLEAN** (head `13e2e65a`, base `16ca5070`,
+  proof minted by `scripts/write-codex-push-proof.mjs`): no blockers, no CHECK or timestamp
+  collisions, no destructive statements, no unsafe grants, no actor-forgery paths; the four unchanged
+  migrations confirmed byte-identical. It raised one low-severity accuracy issue, since fixed: the
+  header on `20260809170900` claimed its original was merged to `main`, but that original
+  (`20260808170000`, added in `76a6bee4`) only ever existed on this branch — `git ls-tree origin/main`
+  confirms the other four were merged and it was not.
+- **Worktree `node_modules` was missing**, so `verify-deps.mjs` blocked the commit with a
+  not-installed mismatch even though the full vitest suite had just passed moments earlier in the same
+  hook run (Node resolves upward to the main tree; `verify-deps` joins a literal path). Fixed with a
+  directory junction to `C:\CRX_Manager\node_modules` after confirming the three checked versions
+  match this worktree's own lockfile — not with a duplicate `npm ci`.
+- **Two content fixes that the byte-identical re-issue could not have caught**, each raised
+  independently by both the RLS reviewer and the drift reviewer, and each verified against the live
+  function bodies before being written:
+  - `20260809170600` zeroed `order_items.quantity_remaining` on *every* return from
+    `_cancel_order_impl_20260714`, including the `already_cancelled` early return. Re-cancelling an
+    already-cancelled order (a double-click, or an offline replay with a fresh idempotency key) would
+    therefore have reached that UPDATE and silently zeroed the historical remainders the migration
+    explicitly promises not to touch, ORD-2026-0330 among them. The UPDATE is now gated on the impl
+    having actually cancelled something.
+  - `20260809170800`/`20260809170900` created `_round_money_to_whole_cents()` with no `REVOKE`. This
+    database carries `ALTER DEFAULT PRIVILEGES` granting `anon` EXECUTE on every new public function,
+    and PostgreSQL grants `PUBLIC` EXECUTE by default, so a bare `CREATE FUNCTION` would have added a
+    21st anon-executable trigger function to exactly the class `20260728231350` was written to revoke.
+    Both files now `REVOKE ALL ... FROM PUBLIC, anon, authenticated, service_role`, mirroring
+    `_guard_order_item_delivery_lineage()` whose live ACL is `postgres=X/postgres` — proof that a
+    trigger still fires for ordinary writers with EXECUTE revoked from every API role.
+- `fin-money-whole-cents.sql` still pointed at the deleted `20260808150400` in two places; retargeted
+  to `20260809170800`, with an explicit note that `order_items.profit` is deliberately **not** covered
+  yet — adding it would report a second, larger set of historical rows before the repair of the first
+  set has been authorised.
+- **The "it's just a rename" claim was itself wrong, and was the reviewers' highest-priority shared
+  finding.** All three edited files still carried the header "The executable SQL below is UNCHANGED
+  from the reviewed original" *after* the gate and the REVOKEs were added — a header that tells the
+  next reviewer to skip the diff, on a money path. Each now carries an explicit numbered delta list
+  instead, and the same correction was pushed into `migration-history.md`'s re-issue note, which
+  claimed "no executable SQL changed".
+- **A safety argument that was wrong in my favour, caught by both reviewers and then verified live.**
+  The original `20260809170600` justified its UPDATE by claiming `_cancel_order_impl_20260714`'s
+  `SET LOCAL app.admin_override` was still in effect on return. It is not: that function carries a
+  `SET search_path` clause, so PostgreSQL brackets it in its own GUC nest level and discards every
+  `SET LOCAL` it made at function exit. There is also no `order_items` immutability guard to bypass —
+  live triggers on the table are exactly three, and a `quantity_remaining`-only UPDATE trips none of
+  them. The UPDATE does succeed, for a different reason than stated; the status gate is the only real
+  protection, and that is now what the file says.
+- **Newly documented side effect of the same UPDATE:** `after_order_items_change` is `AFTER INSERT OR
+  UPDATE OR DELETE` with no column scope, so zeroing `quantity_remaining` now fires
+  `trg_recalc_order_totals` on a full cancel, which `_cancel_order_impl_20260714` never did. The
+  recalc derives the header from line prices and costs — inputs this UPDATE does not touch — so it is
+  value-preserving on any order whose header already agreed with its lines, and forward-only means no
+  already-cancelled order is restated by applying it.
+- **`20260809170900`'s trigger widening narrows the "forward-looking only" promise**, now stated in
+  the file. Scoping the trigger to `UPDATE OF total_price, profit` means a profit-only write on a
+  historical row also rounds that row's fractional `total_price` as a side effect — one of the 46 rows
+  the repair statement is deliberately holding back. Accepted: the value it lands on is the one Mason
+  already decided, and the alternative (two triggers with disjoint column scopes) reintroduces the
+  second rounding point `20260809170800` exists to remove. `commissions` is unaffected —
+  `trg_commissions_round_money` stays scoped to `UPDATE OF commission_amount`, so an ordinary
+  `status='paid'` write will **not** restate the pending $5,245.195 payout.
+- `20260809170900`'s REVOKE no longer claims to make the file standalone-correct. It does not: applied
+  without `20260809170800`, it would create the function and the `order_items` trigger but not
+  `trg_commissions_round_money`, leaving `commissions.commission_amount` unrounded. Apply them in
+  order.
+- Stale `20260808*` filenames retargeted in `DECISION_LOG.md`, `rpcContracts.test.ts`,
+  `rpcIdempotencyScope.test.ts`, and the remediation handoff (which now leads with a rename table and
+  a warning that the SQL is not byte-identical). Hook and script test fixtures that use `20260808*` as
+  synthetic data are deliberately left alone. `fin-money-whole-cents.sql`'s SCHEMA FACTS block was
+  stale in its own right — stamped 2026-08-08, listing five columns while claiming "all four", and
+  omitting `profit` entirely; re-verified live against `information_schema.columns` and rewritten.
+
+## 2026-08-08 — PR #354 review round: snapshot input validation + honest scope on the rounding claim
+
+Three CodeRabbit findings and two Codex findings on `84c7776a`, plus a changelog merge with `main`.
+
+- **CodeRabbit Major — `looksLikeLedgerRows` accepted any array of strings.** `["note",
+  "20260808170000"]` satisfied the predicate AND the has-a-timestamp check, so `findRows` could adopt
+  an unrelated array and write it out as applied-migration evidence. Strings must now match a
+  migration-name shape and objects must carry a 14-digit `version` (or a migration-shaped `name`).
+  New `scripts/refresh-applied-migrations.test.mjs` — 9 assertions covering both the rejections and
+  the real ledger shapes that must keep working — wired into `test:correction-guards`.
+- **CodeRabbit Major — the handoff still listed four migrations.** An operator following it would have
+  left `20260808170000` out of the backup, approval, and apply sequence. Now five, with the ordering
+  note that it must follow `150400`.
+- **CodeRabbit Minor + Codex P2 — the rounding claim was too strong.** `trg_recalc_order_totals`
+  derives the header from unrounded per-line cost, so rounding stored line profit narrows the
+  header-vs-lines drift without closing it. The migration now says only what is true, and the residual
+  is filed as an OPEN entry in `docs/manual/KNOWN_ISSUES.md`. Closing it moves live money on
+  `orders.total_profit` and is Mason's decision, deliberately not bundled into a rounding migration.
+- **Codex P2 — the recapture instructions printed a placeholder.** The guard's "refresh the snapshot
+  first" message read the target from `SUPABASE_PROJECT_REF`, which neither the Claude nor the Codex
+  manifest exports — so every real block printed a literal `<your project ref>`, and a stray env value
+  could have aimed an operator at another project's ledger (which the snapshot format cannot detect).
+  It now takes the target from the apply call's own `project_id`, falling back to env and then the
+  production ref. Two assertions added; apply-guard suite now 81.
+- **Codex P1 — snapshot invalidation only covers the active checkout.** Accurate: a concurrent
+  worktree or another machine leaves a stale-but-"fresh" snapshot. The sound fix is querying the live
+  ledger at apply time instead of reading a cached file. Answered on the PR and left as the follow-up
+  rather than shipping a fourth revision of the mechanism mid-review.
+
+## 2026-08-08 — Post-merge follow-up: ordering-guard hardening + line-profit rounding
+
+PR #348 merged at `18943730`, one commit BEFORE the timestamp-less-snapshot fix. This entry covers
+that fix (rebased onto the new `main`) plus the two Codex findings raised against the merged commit.
+
+- **Codex P1 — the 24h freshness window was unsound.** Elapsed time cannot establish that no
+  migration ran in between: capture a snapshot, apply `20260808150400`, then attempt `20260808150100`
+  an hour later and the snapshot is still "fresh" while silently omitting the migration that would
+  reject it. Added `.claude/hooks/applied-snapshot-invalidate.mjs`, a PostToolUse hook that deletes
+  the snapshot after EVERY `apply_migration` call, so the next apply blocks on missing evidence until
+  a fresh capture is taken. The clock is now only a backstop for the case where that hook never ran.
+- **Codex P2 — the rounding trigger rounded revenue but not profit.** Two lines with raw totals of
+  10.005 and costs of 5 gave $20.02 revenue and $10.02 header profit while the stored line profits
+  summed to 10.010, which `get_sales_detail_report` renders as $10.01 — a one-cent disagreement
+  between a header and the sum of its own lines, generated silently. Migration `20260808170000` rounds
+  `order_items.profit` alongside `total_price` and widens the trigger to fire on `profit` changes.
+  `net_margin` is a percentage, not money, and is deliberately left alone. Written as a NEW migration
+  rather than an edit to `20260808150400`, which is already merged. Forward-looking only — it does not
+  repair existing fractional rows.
+- **CodeRabbit — a timestamp-less snapshot passed every gate.** Present, fresh and non-empty but with
+  no parseable timestamps, it satisfied presence and freshness, the ordering check then had nothing to
+  compare, abstained, and returned `ok`. Both halves fixed: the writer refuses to emit such a snapshot,
+  and the guard blocks both that shape and any abstained verdict on a timestamped candidate.
+
+Coverage: apply-guard 79 assertions, ordering-lib 18, `agent-manifest-parity` clean.
 
 ## 2026-08-09 — Line-profit precision repair (live), dependency updates, and a public-repo disclosure guard
 
@@ -271,6 +493,20 @@ delete the unattended-run flag is a guard-bypass risk.
 
 `migration-apply-guard.test.mjs` gained fixtures for the missing- and stale-snapshot blocks (74
 assertions); `migration-ordering-lib.test.mjs` covers the version-prefixed shape (17 assertions).
+
+**Third review round (CodeRabbit).** One real hole, closed. A snapshot could be present, fresh and
+non-empty yet contain **no parseable timestamps at all** — it satisfied every presence and freshness
+check, the ordering comparison then had nothing to compare, abstained, and returned `ok`. The apply
+sailed through a gate that looked satisfied. Both halves are now fixed: the writer refuses to emit a
+snapshot in which no row carries a timestamp, and the guard blocks both that snapshot shape and any
+abstained verdict on a timestamped candidate — an unknown verdict is not a pass. Also aligned the
+guard's row mapping with the writer's (a `{version, name}` row was losing its timestamp on the read
+path), stopped `findRows` from adopting an unrelated array as ledger rows, and replaced a hardcoded
+project ref with an env lookup. Coverage: apply-guard 79 assertions, ordering-lib 18, including every
+fail-closed branch. Doc fixes: the handoff now lists all four SQL migration paths (`150300` was
+undercounted), and the cancellation verification names the correct field per path —
+`quantity_prebooked` decrements for undelivered order units, `quantity_available` increments only for
+active quote holds.
 
 Skipped with reason: the `next_po_number` zero-caller entry in `.claude/caller-graph.json` is a
 pre-existing limitation of the generator's directory scope (it does not scan `.sql`), not something

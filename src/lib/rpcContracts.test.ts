@@ -1646,7 +1646,7 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // The terminal-provenance wrapper binds actor + order before issuing exact
   // governed cancellation claims and invoking the private implementation.
   cancel_order: 'delegated',
-  // The restored actor guard (migration 20260808150100) authorizes —
+  // The restored actor guard (migration 20260809170500) authorizes —
   // AUTH_REQUIRED, ACTOR_MISMATCH, is_admin() — and then delegates to
   // _batch_apply_prepayments_impl, which owns the canonical
   // check_idempotency/save_idempotency pair. The wrapper deliberately holds no
@@ -2155,10 +2155,11 @@ function registryMigrationHighWater(): string {
 
 // Intentional bookkeeping gate: update this set when Section 9 applies or a
 // new current pending migration is added; otherwise the inventory fails closed.
-// Both Team Board delegation migrations applied live 2026-08-09 under
-// server-assigned ledger versions 20260809130108 and 20260810010308, so
-// nothing in this checkout is pending. Keep this set aligned with rows
-// explicitly marked PENDING APPLY in docs/reference/migration-history.md.
+// Keep this set aligned with rows explicitly marked PENDING APPLY in
+// docs/reference/migration-history.md.
+//
+// Empty as of 2026-08-10: the Team Board delegation migrations and the
+// foundation-review migrations are all applied live and documented below.
 const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([]);
 
 /**
@@ -2263,8 +2264,6 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   check_remainder_reminders: 'maintenance reminder sweep uses persisted sent markers to deduplicate',
   check_unpriced_orders: 'cron reminder sweep uses persisted reminder and escalation sent markers',
   mark_overdue_invoices: 'service-role maintenance updates only invoices currently eligible as overdue',
-  notify_team_note_assignment:
-    'trigger-only assignment notifier; parent team_notes INSERT/UPDATE owns the transaction, direct application-role EXECUTE is revoked, and the active-actor guard fails closed before privileged notification DML',
   recompute_job_applied_acres: 'trigger-only derived-total recomputation; direct client EXECUTE is revoked',
   reconcile_prepay_balances: 'convergent repair sets balances to recomputed ledger truth',
   refresh_watchdog_flags: 'convergent watchdog rebuild deduplicates flags by persisted natural key',
