@@ -500,19 +500,43 @@ eq(proseTimestamp.state, "unknown", "prose filename/timestamp is not accepted as
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const migrationDir = path.join(repoRoot, "supabase", "migrations");
 const repoMigrationPaths = readdirSync(migrationDir).filter((name) => name.endsWith(".sql")).map((name) => `supabase/migrations/${name}`);
-const readHeadBlob = (repoPath) => execFileSync("git", ["show", `HEAD:${repoPath}`], {
-  cwd: repoRoot,
-  encoding: "utf8",
-  maxBuffer: 4 * 1024 * 1024,
-});
+// Read the canonical LF blob, not the working copy: `core.autocrlf=true` hands
+// Windows a CRLF file whose sha256 can never match a migration-history pin.
+// Read the INDEX (`git show :path`) rather than `HEAD:path` — the index is what
+// this commit will contain, so the guard still sees incoming migrations during a
+// merge or a commit that adds one, where HEAD does not have the file yet. Falls
+// back to HEAD, then to an LF-normalized disk read, so an untracked candidate is
+// still hashed instead of exploding.
+const readCanonicalBlob = (repoPath) => {
+  for (const rev of [`:${repoPath}`, `HEAD:${repoPath}`]) {
+    try {
+      return execFileSync("git", ["show", rev], { cwd: repoRoot, encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
+    } catch {
+      // fall through to the next source
+    }
+  }
+  return readFileSync(path.join(repoRoot, ...repoPath.split("/")), "utf8").replace(/\r\n/g, "\n");
+};
 const currentCrossReference = validateParkedMigrationCrossReferences(
   repoMigrationPaths,
   readFileSync(path.join(repoRoot, "docs", "reference", "migration-history.md"), "utf8"),
-  readHeadBlob,
+  readCanonicalBlob,
   sha256Text,
 );
 eq(currentCrossReference.state, "known", "repository correction guard proves every current parked header is either this exact candidate or an exact applied/retired history row");
-eq(currentCrossReference.paths.size, 4, "repository correction guard keeps all four hash-pinned local candidates visible");
+// Independent count, deliberately not the lib's parser: how many distinct
+// migration files does the history file itself mark LOCAL CANDIDATE right now?
+// Hard-coding a number goes stale the moment a candidate is applied live (all
+// four 20260808* candidates were re-issued and applied on 2026-08-09, taking
+// this from 4 to 0), and a stale number turns a real guard into a red build.
+const historyText = readFileSync(path.join(repoRoot, "docs", "reference", "migration-history.md"), "utf8");
+const independentCandidateCount = new Set(
+  historyText
+    .split(/\r?\n/)
+    .filter((line) => /LOCAL CANDIDATE/i.test(line))
+    .flatMap((line) => [...line.matchAll(/`(\d{14}_[a-z0-9_]+\.sql)`/gi)].map((m) => m[1].toLowerCase())),
+).size;
+eq(currentCrossReference.paths.size, independentCandidateCount, "repository correction guard keeps every hash-pinned local candidate visible");
 const periodCloseMatches = repoMigrationPaths.filter((p) => p.endsWith("_vendor_bill_period_close_lock.sql"));
 eq(periodCloseMatches.length, 1, "period-close migration has one stable-suffix match");
 const periodCloseCandidate = readFileSync(path.join(repoRoot, ...periodCloseMatches[0].split("/")), "utf8");
