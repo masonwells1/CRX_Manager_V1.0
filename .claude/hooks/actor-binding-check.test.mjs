@@ -438,6 +438,33 @@ r = runHook(`SELECT U&"\\0063ron".schedule(
 );`);
 ok(isDeny(r), "a Unicode-escaped cron schema cannot hide scheduled actor DDL");
 
+r = runHook(`${STAGED_DDL}
+SET search_path = cron, public;
+SELECT U&"\\0061lter_job"(42,
+  command => (SELECT command FROM staged_cron_sql LIMIT 1));`);
+ok(isDeny(r), "an unqualified Unicode API name cannot receive a staged command");
+
+r = runHook(`${STAGED_DDL}
+SELECT cron.alter_job(42,
+  U&"\\0063ommand" => (SELECT command FROM staged_cron_sql LIMIT 1));`);
+ok(isDeny(r), "a Unicode named argument cannot hide a staged command");
+
+r = runHook(`${STAGED_DDL}
+SELECT cron.alter_job(42,
+  U&"!0063ommand" UESCAPE '!' => (SELECT command FROM staged_cron_sql LIMIT 1));`);
+ok(isDeny(r), "a custom-UESCAPE named argument cannot hide staged SQL");
+
+r = runHook(`${STAGED_DDL}
+SET search_path = cron, public;
+SELECT U&"!0061lter_job" UESCAPE '!'(42,
+  command => (SELECT command FROM staged_cron_sql LIMIT 1));`);
+ok(isDeny(r), "a custom-UESCAPE Unicode API name cannot receive staged SQL");
+
+r = runHook(`SET search_path = cron, public;
+SELECT U&"\\0073chedule"('unicode-safe-job', '0 6 * * *',
+  $job$SELECT public.existing_safe_job()$job$);`);
+ok(!isDeny(r), "an unqualified Unicode API call with only direct safe literals remains allowed");
+
 r = runHook(`UPDATE U&"\\0063ron".job
 SET command = $job$${UNBOUND_DDL}$job$
 WHERE jobname = 'unicode-existing-job';`);

@@ -293,12 +293,14 @@ function pgCronCallSites(rawStmt) {
   const raw = String(rawStmt || "");
   const callableSql = maskSqlForCallNames(raw);
   if (callableSql === null) return [];
-  const identifier = '(?:U&\\s*"(?:[^"]|"")*"|"(?:[^"]|"")*"|[A-Za-z_][\\w$]*)';
-  const unicodeIdentifier = 'U&\\s*"(?:[^"]|"")*"';
+  const unicodeIdentifier =
+    'U&\\s*"(?:[^"]|"")*"(?:\\s+UESCAPE\\s*\'(?:[^\']|\'\')*\')?';
+  const identifier = `(?:${unicodeIdentifier}|"(?:[^"]|"")*"|[A-Za-z_][\\w$]*)`;
   const currentApi = '(?:"(?:schedule|schedule_in_database|alter_job)"|(?:schedule|schedule_in_database|alter_job))';
   const patterns = [
     new RegExp(`(?:^|[^\\w$])(?:"cron"|cron|${unicodeIdentifier})\\s*\\.\\s*(${identifier})\\s*\\(`, "gi"),
     new RegExp(`(?:^|[^\\w$.\"])(` + currentApi + `)\\s*\\(`, "gi"),
+    new RegExp(`(?:^|[^\\w$.\"])(` + unicodeIdentifier + `)\\s*\\(`, "gi"),
   ];
   const sites = [];
   const seen = new Set();
@@ -334,6 +336,12 @@ function namedArgumentValue(argument, name) {
   return match ? String(argument).slice(match[0].length) : null;
 }
 
+function hasUnicodeNamedArgument(argument) {
+  const masked = maskSqlForCallNames(String(argument || ""));
+  if (masked === null) return true;
+  return /^\s*U&\s*"(?:[^"]|"")*"(?:\s+UESCAPE\s*'(?:[^']|'')*')?\s*(?:=>|:=)/i.test(masked);
+}
+
 /** pg_cron persists command text beyond the migration. If that command arrives
  * through a variable, subquery, DEFAULT, concatenation, or another expression,
  * this lexical guard cannot inspect the eventual SQL and must fail closed. */
@@ -342,6 +350,7 @@ function hasOpaquePgCronCallCommand(rawStmt) {
   for (const site of pgCronCallSites(rawStmt)) {
     if (site.args === null) return true;
     const args = site.args;
+    if (args.some(hasUnicodeNamedArgument)) return true;
     const namedCommand = args.map((arg) => namedArgumentValue(arg, "command"))
       .find((value) => value !== null);
     if (namedCommand !== undefined) {
@@ -501,7 +510,9 @@ function hasOpaquePgCronCommandWrite(rawStmt) {
 function isPgCronCall(rawStmt) {
   const callableSql = maskSqlForCallNames(String(rawStmt || ""));
   if (callableSql === null) return false;
-  const identifier = '(?:"(?:[^"]|"")*"|[A-Za-z_][\\w$]*)';
+  const unicodeIdentifier =
+    'U&\\s*"(?:[^"]|"")*"(?:\\s+UESCAPE\\s*\'(?:[^\']|\'\')*\')?';
+  const identifier = `(?:${unicodeIdentifier}|"(?:[^"]|"")*"|[A-Za-z_][\\w$]*)`;
   const qualified = new RegExp(
     `(?:^|[^\\w$])(?:"cron"|cron)\\s*\\.\\s*${identifier}\\s*\\(`,
     "i"
@@ -515,7 +526,6 @@ function isPgCronCall(rawStmt) {
   // PostgreSQL decodes U&"..." identifiers before name resolution. Decoding
   // every custom UESCAPE form here would be brittle, so any executable call
   // involving a Unicode identifier is conservatively treated as a SQL sink.
-  const unicodeIdentifier = 'U&\\s*"(?:[^"]|"")*"';
   const unicodeCall = new RegExp(
     `(?:${unicodeIdentifier}(?:\\s*\\.\\s*(?:${identifier}|${unicodeIdentifier}))?` +
     `|${identifier}\\s*\\.\\s*${unicodeIdentifier})\\s*\\(`,

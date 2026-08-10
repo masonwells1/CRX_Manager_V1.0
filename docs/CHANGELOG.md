@@ -58,8 +58,15 @@ exemption/manual-review path. Named direct literals remain allowed,
 `cron.unschedule` remains recognized as non-command-bearing, and `COPY` into
 `cron.job` conservatively requires manual review.
 
-The focused actor-binding suite grew from 115 to 176 assertions while the
-idempotency reference suite remained at 86. Forty-five continuation decisions were
+The following exact-SHA review found the matching Unicode data-flow gap:
+unqualified Unicode-escaped API names and Unicode-escaped `command` argument
+names reached the broad sink detector but not the command-input extractor. The
+extractor now conservatively registers every Unicode call recognized by the
+sink detector, including custom `UESCAPE` syntax. Direct safe literals remain
+allowed; opaque Unicode API or argument forms require manual review.
+
+The focused actor-binding suite grew from 115 to 181 assertions while the
+idempotency reference suite remained at 86. Forty-nine continuation decisions were
 weakened or removed one at a time; every mutation made the real hook-process
 suite fail before restoration. Separate real-process probes allowed ordinary
 trigger/event-trigger declarations, direct-literal `USING`/`INTO`, and harmless
