@@ -31,6 +31,18 @@ to a **digest of the sorted approved record ids plus the material before-values*
 stored cents), asserted before the write. Row counts, order counts and similar cardinalities may
 accompany that digest but may never be the only thing standing between an approval and a write.
 
+**Enforcement (hard, not prose).** `scripts/validate-sql-migrations.sh` now fails any migration
+stamped `20260811000000` or later that contains a top-level `UPDATE`/`DELETE` against a business-row
+table unless the file either (a) carries `-- APPROVED_SET_DIGEST: <64 hex>` *and* asserts that same
+hex in executable SQL before the write, or (b) explicitly waives it with
+`-- APPROVED_SET_DIGEST: NOT-REQUIRED - <reason>` for the case where there is no before-value to
+protect (backfilling a column the same migration just added). Rewrites inside a function body are
+runtime logic and are not checked. The gate is scoped by **date, not an allowlist**, so it needs no
+maintenance and leaves zero headroom for the next migration written; every migration before the
+cutoff is history, including the already-applied `20260810025159_backfill_stale_line_profit.sql`,
+which `AGENTS.md` forbids editing. This is the deterministic replay/baseline guard Codex asked for
+in place of editing applied SQL.
+
 **Also settled here.** The permission entry `Read(//c/CRX_Manager/**)` was removed from the tracked
 `.claude/settings.local.json` (Codex finding 2). It had been added by an auto-approved prompt during
 the backfill work. Because it is recursive, standing, and *tracked*, it silently granted every future

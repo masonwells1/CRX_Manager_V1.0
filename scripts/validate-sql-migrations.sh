@@ -49,6 +49,27 @@ for arg in "$@"; do
   esac
 done
 
+# ---------------------------------------------------------------------------
+# APPROVED-SET BINDING (added 2026-08-10, DECISION_LOG 2026-08-10)
+# ---------------------------------------------------------------------------
+# A one-shot migration that rewrites EXISTING business rows must bind its
+# authorization to the identity of the approved records, not to how many of
+# them there are. Cardinality is not identity: a different population that
+# happens to share the same counts satisfies a count-only guard and the
+# migration rewrites rows nobody approved.
+#
+# Only migrations stamped on or after the cutoff are held to this. Everything
+# before it is history — including 20260810025159_backfill_stale_line_profit.sql,
+# which is already APPLIED LIVE and therefore cannot be edited (AGENTS.md).
+# The cutoff is a date, not an allowlist, so it needs no maintenance and closes
+# with zero headroom for the next migration written.
+APPROVED_SET_CUTOFF=20260811000000
+
+# Tables whose rows carry money, inventory, or customer-visible state. A
+# top-level rewrite of these is what needs binding; rewrites inside a function
+# body are runtime logic, not a one-shot data migration, and are not checked.
+BUSINESS_ROW_TABLES='orders|order_items|quotes|quote_items|invoices|invoice_items|payments|commissions|commission_payments|deliveries|delivery_items|purchase_orders|purchase_order_items|returns|return_items|inventory_transactions|products|customers|jobs|write_offs|prepay_applications|finance_charges'
+
 # Tables that do NOT have an updated_at column
 TABLES_WITHOUT_UPDATED_AT=(
   commissions
@@ -300,6 +321,55 @@ for file in $ALL_SQL; do
     echo "  Has SECURITY DEFINER without SET search_path."
     echo ""
     WARNINGS=$((WARNINGS + 1))
+  fi
+
+  # ================================================================
+  # APPROVED-SET BINDING for one-shot business-row rewrites
+  # See APPROVED_SET_CUTOFF above for why this is date-scoped.
+  # ================================================================
+  MIG_BASENAME=$(basename "$file")
+  MIG_STAMP="${MIG_BASENAME%%_*}"
+  if [[ "$MIG_STAMP" =~ ^[0-9]{14}$ ]] && [ "$MIG_STAMP" -ge "$APPROVED_SET_CUTOFF" ]; then
+    # Find UPDATE/DELETE against a business table that is NOT inside a function
+    # body. A DO $$ ... $$ block is deliberately NOT treated as a function body:
+    # that is exactly where one-shot backfills live.
+    TOP_LEVEL_REWRITE=$(awk -v tables="$BUSINESS_ROW_TABLES" '
+      {
+        line = tolower($0)
+        if (line ~ /create[ \t]+(or[ \t]+replace[ \t]+)?function/) { infn = 1 }
+        else if (infn && line ~ /language[ \t]+(plpgsql|sql)/) { infn = 0; next }
+        if (infn) next
+        if (line ~ ("^[ \t]*(update|delete[ \t]+from)[ \t]+(public\\.)?(" tables ")([ \t]|$|;)")) {
+          printf "    line %d: %s\n", FNR, $0
+        }
+      }
+    ' "$file")
+
+    if [ -n "$TOP_LEVEL_REWRITE" ]; then
+      # Accept either a real digest binding (hex must also appear in executable
+      # code, so it is actually compared at runtime and not merely documented),
+      # or an explicit, reasoned opt-out for cases with no meaningful
+      # before-value — e.g. backfilling a column added by this same migration.
+      DIGEST_HEX=$(grep -oiE 'APPROVED_SET_DIGEST:[[:space:]]*[0-9a-f]{64}' "$file" \
+                     | grep -oiE '[0-9a-f]{64}' | head -1 || true)
+      OPT_OUT=$(grep -oiE 'APPROVED_SET_DIGEST:[[:space:]]*NOT-REQUIRED[[:space:]]*[-—][[:space:]]*.{20,}' "$file" || true)
+
+      if [ -n "$OPT_OUT" ]; then
+        : # explicitly and specifically waived by the migration's author
+      elif [ -n "$DIGEST_HEX" ] && echo "$CODE_ONLY" | grep -qiF "$DIGEST_HEX"; then
+        : # bound to an approved-set digest that is asserted at runtime
+      else
+        echo "VIOLATION: $file"
+        echo "  Rewrites existing business rows without binding to the approved set:"
+        echo "$TOP_LEVEL_REWRITE"
+        echo "  Counts are not identity. Add to the migration EITHER:"
+        echo "    -- APPROVED_SET_DIGEST: <sha256 of the sorted approved ids + before-values>"
+        echo "    (and assert that same hex at runtime before the write), OR"
+        echo "    -- APPROVED_SET_DIGEST: NOT-REQUIRED - <why there is no before-value to protect>"
+        echo ""
+        VIOLATIONS=$((VIOLATIONS + 1))
+      fi
+    fi
   fi
 
   # customer_name reference
