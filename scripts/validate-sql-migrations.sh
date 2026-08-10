@@ -333,39 +333,125 @@ for file in $ALL_SQL; do
     # Find UPDATE/DELETE against a business table that is NOT inside a function
     # body. A DO $$ ... $$ block is deliberately NOT treated as a function body:
     # that is exactly where one-shot backfills live.
-    TOP_LEVEL_REWRITE=$(awk -v tables="$BUSINESS_ROW_TABLES" '
+    #
+    # Detection is TOKEN-based, not line-based. SQL is free-form: `UPDATE`, the
+    # optional `ONLY`, and the table name may sit on three different lines, and
+    # the table may be quoted ("public"."orders"). A line-anchored regex misses
+    # all of that, so the non-function-body text is flattened into a token
+    # stream and scanned for `UPDATE [ONLY] <tbl>` / `DELETE FROM [ONLY] <tbl>`.
+    # Quoted string literals are dropped first so prose inside a RAISE NOTICE
+    # cannot fabricate a match. Output is TAB-separated: line, table, text.
+    REWRITES=$(awk -v tables="$BUSINESS_ROW_TABLES" '
       {
+        raw[FNR] = $0
         line = tolower($0)
+        sub(/--.*/, "", line)
+        gsub(/'"'"'[^'"'"']*'"'"'/, " ", line)
+        # Drop quoting BEFORE normalizing, so "public"."orders" survives as one
+        # dotted token instead of splitting into public . orders.
+        gsub(/"/, "", line)
         if (line ~ /create[ \t]+(or[ \t]+replace[ \t]+)?function/) { infn = 1 }
         else if (infn && line ~ /language[ \t]+(plpgsql|sql)/) { infn = 0; next }
         if (infn) next
-        if (line ~ ("^[ \t]*(update|delete[ \t]+from)[ \t]+(public\\.)?(" tables ")([ \t]|$|;)")) {
-          printf "    line %d: %s\n", FNR, $0
+        # Normalize every non-identifier character to a space. This also strips
+        # quotes, so "public"."orders" collapses to the token public.orders.
+        gsub(/[^a-z0-9_.]+/, " ", line)
+        n = split(line, t, / +/)
+        for (i = 1; i <= n; i++) {
+          if (t[i] != "") { ntok++; tok[ntok] = t[i]; tokln[ntok] = FNR }
+        }
+      }
+      END {
+        for (i = 1; i <= ntok; i++) {
+          target = ""
+          if (tok[i] == "update") {
+            j = i + 1
+            if (tok[j] == "only") j++
+            target = tok[j]
+          } else if (tok[i] == "delete" && tok[i + 1] == "from") {
+            j = i + 2
+            if (tok[j] == "only") j++
+            target = tok[j]
+          }
+          if (target == "") continue
+          sub(/^public\./, "", target)
+          if (target ~ ("^(" tables ")$")) {
+            printf "%d\t%s\t%s\n", tokln[i], target, raw[tokln[i]]
+          }
         }
       }
     ' "$file")
 
-    if [ -n "$TOP_LEVEL_REWRITE" ]; then
-      # Accept either a real digest binding (hex must also appear in executable
-      # code, so it is actually compared at runtime and not merely documented),
-      # or an explicit, reasoned opt-out for cases with no meaningful
-      # before-value — e.g. backfilling a column added by this same migration.
-      DIGEST_HEX=$(grep -oiE 'APPROVED_SET_DIGEST:[[:space:]]*[0-9a-f]{64}' "$file" \
-                     | grep -oiE '[0-9a-f]{64}' | head -1 || true)
-      OPT_OUT=$(grep -oiE 'APPROVED_SET_DIGEST:[[:space:]]*NOT-REQUIRED[[:space:]]*[-—][[:space:]]*.{20,}' "$file" || true)
+    if [ -n "$REWRITES" ]; then
+      FIRST_REWRITE_LINE=$(printf '%s\n' "$REWRITES" | head -1 | cut -f1)
+      REWRITE_TABLES=$(printf '%s\n' "$REWRITES" | cut -f2 | sort -u)
 
-      if [ -n "$OPT_OUT" ]; then
-        : # explicitly and specifically waived by the migration's author
-      elif [ -n "$DIGEST_HEX" ] && echo "$CODE_ONLY" | grep -qiF "$DIGEST_HEX"; then
-        : # bound to an approved-set digest that is asserted at runtime
+      # The declared digest, from a comment marker.
+      DIGEST_HEX=$(grep -oiE 'APPROVED_SET_DIGEST:[[:space:]]*[0-9a-f]{64}' "$file" \
+                     | grep -oiE '[0-9a-f]{64}' | head -1 | tr '[:upper:]' '[:lower:]' || true)
+
+      # An opt-out must NAME every business table it waives, so it cannot be a
+      # blanket wave-through, and it is never silent — see the WARNING below.
+      OPT_OUT=$(grep -iE 'APPROVED_SET_DIGEST:[[:space:]]*NOT-REQUIRED' "$file" | head -1 || true)
+
+      DIGEST_BOUND=0
+      DIGEST_WHY=""
+      if [ -n "$DIGEST_HEX" ]; then
+        # Where does that hex first appear in EXECUTABLE sql (comments stripped)?
+        DIGEST_EXEC_LINE=$(awk -v hex="$DIGEST_HEX" '
+          { l = tolower($0); sub(/--.*/, "", l); if (index(l, hex) > 0) { print FNR; exit } }
+        ' "$file")
+        if [ -z "$DIGEST_EXEC_LINE" ]; then
+          DIGEST_WHY="the digest appears only in a comment — it is documented, never compared"
+        elif [ "$DIGEST_EXEC_LINE" -ge "$FIRST_REWRITE_LINE" ]; then
+          DIGEST_WHY="the digest is compared at line $DIGEST_EXEC_LINE, AFTER the first write at line $FIRST_REWRITE_LINE"
+        else
+          # Fail-closed: a mismatch must abort. Require a RAISE EXCEPTION in the
+          # statement region around the comparison.
+          RAISE_NEAR=$(awk -v dl="$DIGEST_EXEC_LINE" '
+            FNR >= dl - 6 && FNR <= dl + 12 { l = $0; sub(/--.*/, "", l); print l }
+          ' "$file" | grep -ciE 'raise[[:space:]]+exception' || true)
+          if [ "$RAISE_NEAR" -gt 0 ]; then
+            DIGEST_BOUND=1
+          else
+            DIGEST_WHY="the digest comparison at line $DIGEST_EXEC_LINE does not RAISE EXCEPTION on mismatch — it is not fail-closed"
+          fi
+        fi
+      fi
+
+      if [ "$DIGEST_BOUND" -eq 1 ]; then
+        : # bound to an approved-set digest, asserted fail-closed before the write
+      elif [ -n "$OPT_OUT" ]; then
+        MISSING_TBL=""
+        while IFS= read -r t; do
+          [ -z "$t" ] && continue
+          echo "$OPT_OUT" | grep -qiE "(^|[^a-z0-9_])${t}([^a-z0-9_]|$)" || MISSING_TBL="$MISSING_TBL $t"
+        done <<< "$REWRITE_TABLES"
+        if [ -n "$MISSING_TBL" ]; then
+          echo "VIOLATION: $file"
+          echo "  APPROVED_SET_DIGEST: NOT-REQUIRED does not name every table it waives."
+          echo "  Unnamed:$MISSING_TBL"
+          echo "  A waiver must list each business table it covers, so it cannot be a blanket pass."
+          echo ""
+          VIOLATIONS=$((VIOLATIONS + 1))
+        else
+          # Accepted, but never silently: a waived money/inventory rewrite is
+          # exactly the thing a reviewer must see in the CI log.
+          echo "WARNING: $file"
+          echo "  Business-row rewrite WAIVED out of approved-set binding by its author:"
+          echo "  $OPT_OUT"
+          echo ""
+          WARNINGS=$((WARNINGS + 1))
+        fi
       else
         echo "VIOLATION: $file"
         echo "  Rewrites existing business rows without binding to the approved set:"
-        echo "$TOP_LEVEL_REWRITE"
+        printf '%s\n' "$REWRITES" | awk -F'\t' '{ printf "    line %s: %s\n", $1, $3 }'
+        [ -n "$DIGEST_WHY" ] && echo "  Digest present but not enforced: $DIGEST_WHY"
         echo "  Counts are not identity. Add to the migration EITHER:"
         echo "    -- APPROVED_SET_DIGEST: <sha256 of the sorted approved ids + before-values>"
-        echo "    (and assert that same hex at runtime before the write), OR"
-        echo "    -- APPROVED_SET_DIGEST: NOT-REQUIRED - <why there is no before-value to protect>"
+        echo "    and, BEFORE the first write, recompute it and RAISE EXCEPTION on mismatch; OR"
+        echo "    -- APPROVED_SET_DIGEST: NOT-REQUIRED (<tables>) - <why there is no before-value>"
         echo ""
         VIOLATIONS=$((VIOLATIONS + 1))
       fi
