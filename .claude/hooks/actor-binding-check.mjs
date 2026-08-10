@@ -117,7 +117,16 @@ if (/--\s*actor-binding-check:\s*exempt/i.test(content)) {
 // parameter list contains parens — numeric(12,2), varchar(50), timestamp(3).
 // A naive capture stops at the first inner ')' and silently truncates the list,
 // which would hide an actor parameter declared after a parenthesised type.
-const fnHeadRe = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+([\w.]+)\s*\(/gi;
+const SQL_UNICODE_IDENTIFIER_PATTERN =
+  'U&\\s*"(?:[^"]|"")*"(?:\\s+UESCAPE\\s*\'(?:[^\']|\'\')*\')?';
+const SQL_IDENTIFIER_PATTERN =
+  `(?:${SQL_UNICODE_IDENTIFIER_PATTERN}|"(?:[^"]|"")*"|[A-Za-z_][\\w$]*)`;
+const SQL_QUALIFIED_IDENTIFIER_PATTERN =
+  `${SQL_IDENTIFIER_PATTERN}(?:\\s*\\.\\s*${SQL_IDENTIFIER_PATTERN})*`;
+const fnHeadRe = new RegExp(
+  `CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+(${SQL_QUALIFIED_IDENTIFIER_PATTERN})\\s*\\(`,
+  "gi"
+);
 
 /** From the index of an opening ' or ", return the index just past the closing
  * quote, or -1 if unterminated. Handles doubled quotes ('' / "") and
@@ -708,7 +717,10 @@ function inExecuteStatement(out, text, afterIdx) {
   );
 }
 
-const CREATE_FN_HEAD_RE = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+[\w."]+\s*\(/i;
+const CREATE_FN_HEAD_RE = new RegExp(
+  `CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+${SQL_QUALIFIED_IDENTIFIER_PATTERN}\\s*\\(`,
+  "i"
+);
 
 /** Blank comments length-preservingly without touching string literals. */
 function blankComments(s) {

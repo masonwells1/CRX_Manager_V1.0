@@ -79,8 +79,15 @@ data. The reader now recursively inspects direct function-bearing SQL supplied
 to that exact executor and refuses staged/opaque executor expressions. Direct
 harmless queries and unrelated callables receiving documentation remain allowed.
 
-The focused actor-binding suite grew from 115 to 189 assertions while the
-idempotency reference suite remained at 86. Fifty-six continuation decisions were
+The following exact-SHA review found that the actor scanner's function-name
+grammar still accepted only unquoted names. A direct EXECUTE could therefore
+create a valid quoted qualified function without reaching actor inspection.
+Both the recursive function-header detector and final actor scanner now share a
+qualified-identifier grammar covering quoted, doubled-quote, whitespace-around-
+dot, and Unicode/UESCAPE forms. A bound quoted function remains allowed.
+
+The focused actor-binding suite grew from 115 to 194 assertions while the
+idempotency reference suite remained at 86. Sixty continuation decisions were
 weakened or removed one at a time; every mutation made the real hook-process
 suite fail before restoration. Separate real-process probes allowed ordinary
 trigger/event-trigger declarations, direct-literal `USING`/`INTO`, and harmless

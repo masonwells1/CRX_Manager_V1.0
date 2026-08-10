@@ -225,8 +225,34 @@ const BOUND_DDL =
   "RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $fn$ BEGIN " +
   "IF p_performed_by IS DISTINCT FROM auth.uid() THEN RAISE EXCEPTION ''ACTOR_MISMATCH''; END IF; " +
   "UPDATE invoices SET created_by = auth.uid(); END $fn$;";
+const QUOTED_UNBOUND_DDL = UNBOUND_DDL.replace(
+  "public.dynamic_actor",
+  '"public" . "dynamic_actor"'
+);
+const UNICODE_UNBOUND_DDL = UNBOUND_DDL.replace(
+  "public.dynamic_actor",
+  'U&"\\0070ublic".U&"\\0064ynamic_actor"'
+);
 const STAGED_DDL = `CREATE TEMP TABLE staged_cron_sql (command text);
 INSERT INTO staged_cron_sql (command) VALUES ($staged$${UNBOUND_DDL}$staged$);`;
+
+r = runHook(`DO $do$ BEGIN EXECUTE $ddl$${QUOTED_UNBOUND_DDL}$ddl$; END $do$;`);
+ok(isDeny(r), "direct EXECUTE cannot hide an unsafe quoted qualified function name");
+
+r = runHook(`DO $do$ BEGIN EXECUTE $ddl$${UNICODE_UNBOUND_DDL}$ddl$; END $do$;`);
+ok(isDeny(r), "direct EXECUTE cannot hide an unsafe Unicode-qualified function name");
+
+r = runHook(`DO $do$ BEGIN EXECUTE $ddl$${UNBOUND_DDL.replace(
+  "public.dynamic_actor",
+  '"public"."dynamic""actor"'
+)}$ddl$; END $do$;`);
+ok(isDeny(r), "a doubled quote inside a function identifier remains inspectable");
+
+r = runHook(`DO $do$ BEGIN EXECUTE $ddl$${BOUND_DDL.replace(
+  "public.dynamic_bound",
+  '"public"."dynamic_bound"'
+)}$ddl$; END $do$;`);
+ok(!isDeny(r), "a bound direct function with a quoted qualified name remains allowed");
 
 r = runHook(`SELECT cron.schedule(
   'delayed-actor-ddl',
@@ -254,6 +280,12 @@ r = runHook(`SELECT public.execute_sql_readonly($outer$
     $job$${UNBOUND_DDL}$job$)
 $outer$);`);
 ok(isDeny(r), "execute_sql_readonly cannot hide a nested pg_cron actor-DDL call");
+
+r = runHook(`SELECT public.execute_sql_readonly($outer$
+  SELECT cron.schedule('nested-quoted-actor-ddl', '* * * * *',
+    $job$${QUOTED_UNBOUND_DDL}$job$)
+$outer$);`);
+ok(isDeny(r), "the legacy executor recognizes quoted function DDL recursively");
 
 r = runHook(`SELECT public.execute_sql_readonly($query$SELECT 1 AS safe_value$query$);`);
 ok(!isDeny(r), "execute_sql_readonly with a direct harmless query remains allowed");
