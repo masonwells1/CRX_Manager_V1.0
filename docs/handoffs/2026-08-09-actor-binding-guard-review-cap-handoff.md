@@ -22,7 +22,7 @@ PR workflow.
 
 ## PROVEN
 
-- The actor-binding suite passes at 144 assertions; the idempotency reference
+- The actor-binding suite passes at 152 assertions; the idempotency reference
   suite remains green at 86 assertions.
 - Fifty-four parser and decision clauses were each removed alone and made the
   suite fail before restoration.
@@ -39,6 +39,10 @@ PR workflow.
   corresponding search-path regression before restoration: unqualified API
   recognition, quoted unqualified recognition, `schedule_in_database`, and
   `alter_job`.
+- Nine direct `cron.job.command` decisions were independently removed and each
+  exposed its exact regression before restoration: runtime-boundary registration,
+  UPDATE, INSERT, direct assignment, tuple assignment, quoted table identifiers,
+  quoted `command`, `ONLY`, and unqualified search-path-resolved `job`.
 - Ordinary and event trigger declarations are allowed only when their
   executable clause is a complete `EXECUTE FUNCTION|PROCEDURE name(...)` call.
 - Direct PL/pgSQL command literals may use `INTO [STRICT]` and `USING` without
@@ -57,6 +61,10 @@ PR workflow.
   `SET search_path = cron, public; SELECT schedule(...)` and its
   `schedule_in_database`/`alter_job` equivalents. Ordinary calls and cron-looking
   text inside data strings/comments remain allowed.
+- Direct `UPDATE` and `INSERT` writes to `cron.job.command` are runtime-SQL
+  boundaries too, including quoted identifiers, `ONLY`/alias and tuple UPDATEs,
+  and search-path-resolved `job` INSERTs. Harmless command strings and ordinary
+  non-cron documentation writes remain allowed.
 - Real hook-process probes denied indirect variable execution, doubled-quote
   comment hiding, post-body actor forgery, and scheduled actor-function DDL. A
   complete bound function supplied directly as one dollar-quoted literal was allowed.
@@ -78,6 +86,15 @@ PR workflow.
   323 Vitest files, 4,304 passing tests, 123 intentional skips, 144 actor-binding
   assertions, containment, lint, type-check, build, workflow/guard suites,
   documentation drift, dependency integrity, schema baseline, and map generation.
+- The exact-SHA review of `f4da59bff52c1d6ee1cc4adfe28a1fd8b25a892b`
+  found that direct writes to `cron.job.command` remained an executable sink. Its
+  snapshot probe proved the approved base denied the UPDATE while the candidate
+  allowed it. The real hook now denies that exact actor-DDL write and allows the
+  same UPDATE when its command contains no function DDL.
+- Direct-write fix commit `b4ae07bf` passed the complete barrier. Its first
+  attempt had one unrelated five-second pricing-workbook timeout after 4,303
+  tests passed; that exact file passed alone in 2.47 seconds, and the unchanged
+  full retry passed all 323 files, 4,304 tests, and 152 actor-binding assertions.
 
 ## GOVERNED STATUS
 
@@ -92,6 +109,9 @@ PR workflow.
 - The review of `5cb6e4d7` returned one HIGH blocker for unqualified pg_cron APIs
   resolved through `search_path`. That finding was reproduced and fixed in
   `61ef9090`; its BLOCKERS verdict likewise does not approve the new HEAD.
+- The review of `f4da59bf` returned one HIGH blocker for direct writes to
+  `cron.job.command`. That finding was reproduced and fixed in `b4ae07bf`; its
+  BLOCKERS verdict likewise does not approve the new HEAD.
 
 ## REMAINING LANDING WORK
 
@@ -108,9 +128,9 @@ outward-action approval into a receiving task. No database action is needed.
 ## GATES AND BLOCKERS
 
 - The prior `/ship` review cycle reached its three-round cap. Its blocker and the
-  later `8620ad17` and `5cb6e4d7` pg_cron blockers have now been addressed
-  locally, but the branch remains unpublished until a new exact-SHA governed
-  review independently returns CLEAN.
+  later `8620ad17`, `5cb6e4d7`, and `f4da59bf` pg_cron blockers have now been
+  addressed locally, but the branch remains unpublished until a new exact-SHA
+  governed review independently returns CLEAN.
 - Historical blocker evidence:
   `C:\Users\mason\.codex\worktrees\phase3c-new-branch-cap\CRX_Manager\.claude\session-state\codex-review-latest.txt`.
 - The shared `C:\CRX_Manager` checkout contains unrelated gauntlet changes owned
