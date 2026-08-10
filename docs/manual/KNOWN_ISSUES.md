@@ -9,6 +9,52 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN — the Codex `read_only=true` guard may not describe the connection Codex actually uses
+
+**Found 2026-08-10.** Does not affect production. It affects how much assurance
+the read-only guard is entitled to claim.
+
+`check-agent-workflows.mjs:92` and `check-agent-guidance.mjs:121` both assert
+that `.codex/config.toml` contains `read_only=true`, and that assertion is the
+stated guarantee that Codex cannot write to the live database. The guard checks
+that a **string is present in a file**. It does not check that the connection
+that string configures is the one serving Codex's Supabase traffic.
+
+On 2026-08-10 those two were observed to be different things:
+
+- The `[mcp_servers.supabase]` entry in `.codex/config.toml` **fails to
+  authenticate on every run** — `failed to refresh OAuth tokens for server
+  supabase` / `invalid_grant: Grant not found`. Its OAuth grant is dead, exactly
+  like the Sentry entry removed the same day.
+- Meanwhile the Supabase calls that actually succeed are served by
+  **`codex_apps/supabase`** — a separate built-in Codex App with its own
+  independent authentication. Observed tool line:
+  `mcp: codex_apps/supabase.list_migrations (completed)`, returning correct live
+  data (`20260810022500_backfill_stale_line_profit`) verified against the live
+  ledger from the Claude side.
+
+So the read-only assurance is asserted against a config entry that appears never
+to have authenticated, while real traffic flows through a channel whose
+permissions are **not verified by any guard in this repository**. Removing the
+dead entry was attempted and reverted precisely because the guard failed — the
+declared intent is worth keeping, but it should not be read as proof.
+
+**What is NOT known, and was deliberately not tested:** whether
+`codex_apps/supabase` is itself read-only. Establishing that empirically means
+attempting a write against the production database, which is not an acceptable
+test. A capability probe (asking Codex to list its Supabase tool names without
+calling them) was attempted twice and produced no usable output.
+
+**Owed to Mason (owner decision):** confirm in the Codex app's own connector
+settings whether the Supabase App is scoped read-only. If it is not, Codex has
+had unverified write capability against production for as long as the App has
+been serving traffic, and the guard has been reporting green throughout.
+
+**Do not** "fix" this by deleting the `read_only=true` line or by relaxing either
+check — both guards correctly refused the change that prompted this entry.
+
+---
+
 ## OPEN — agent tooling breaks in remote (Claude Code on the web) sessions
 
 **Found 2026-08-04**, extended 2026-08-05. Three problems, two sharing one root
