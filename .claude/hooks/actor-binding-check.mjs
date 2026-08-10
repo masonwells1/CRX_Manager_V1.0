@@ -287,7 +287,17 @@ function isPgCronCall(rawStmt) {
     `(?:^|[^\\w$.\"])${currentUnqualifiedApi}\\s*\\(`,
     "i"
   );
-  return qualified.test(callableSql) || unqualified.test(callableSql);
+  // PostgreSQL decodes U&"..." identifiers before name resolution. Decoding
+  // every custom UESCAPE form here would be brittle, so any executable call
+  // involving a Unicode identifier is conservatively treated as a SQL sink.
+  const unicodeIdentifier = 'U&\\s*"(?:[^"]|"")*"';
+  const unicodeCall = new RegExp(
+    `(?:${unicodeIdentifier}(?:\\s*\\.\\s*(?:${identifier}|${unicodeIdentifier}))?` +
+    `|${identifier}\\s*\\.\\s*${unicodeIdentifier})\\s*\\(`,
+    "i"
+  );
+  return qualified.test(callableSql) || unqualified.test(callableSql) ||
+    unicodeCall.test(callableSql);
 }
 
 /** cron.job.command is the table-level equivalent of cron.alter_job(command):
@@ -300,12 +310,28 @@ function isPgCronCommandWrite(rawStmt) {
   if (callableSql === null) return false;
   const jobTable = '(?:(?:"cron"|cron)\\s*\\.\\s*)?(?:"job"|job)';
   const target = `(?:ONLY\\s+)?${jobTable}(?:\\s*\\*)?(?=\\s|\\(|$)`;
+  // A bare `job` target may resolve through search_path, but it must not match
+  // the suffix of an explicitly different schema such as public.job.
+  const writeBoundary = '(?:^|[^\\w$.\"])';
 
-  if (new RegExp(`^\\s*INSERT\\s+INTO\\s+${target}`, "i").test(callableSql)) {
+  // An escaped schema/table identifier can decode to cron.job. Any write using
+  // such an identifier is opaque enough to require the runtime-DDL boundary.
+  if (/\b(?:UPDATE|INSERT\s+INTO|MERGE\s+INTO)\b[\s\S]*U&\s*"/i.test(callableSql)) {
     return true;
   }
 
-  const updateHead = new RegExp(`^\\s*UPDATE\\s+${target}`, "i").exec(callableSql);
+  if (new RegExp(`${writeBoundary}INSERT\\s+INTO\\s+${target}`, "i").test(callableSql)) {
+    return true;
+  }
+
+  // MERGE can both insert a complete cron.job row and update command in WHEN
+  // branches. Treat the target as a sink without trying to prove which branch
+  // receives which literal.
+  if (new RegExp(`${writeBoundary}MERGE\\s+INTO\\s+${target}`, "i").test(callableSql)) {
+    return true;
+  }
+
+  const updateHead = new RegExp(`${writeBoundary}UPDATE\\s+${target}`, "i").exec(callableSql);
   if (!updateHead) return false;
   const tail = callableSql.slice(updateHead[0].length);
   const command = '(?:"command"|command)';

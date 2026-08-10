@@ -38,15 +38,25 @@ writes to that sink as runtime-SQL boundaries, including quoted identifiers,
 `ONLY`/alias and tuple-assignment UPDATEs, and search-path-resolved `job` INSERTs.
 Harmless cron commands and ordinary non-cron documentation writes remain allowed.
 
-The focused actor-binding suite grew from 115 to 152 assertions while the
-idempotency reference suite remained at 86. Twenty-eight continuation decisions were
+The next exact-SHA review found three legal SQL variants around that table/API
+boundary: a CTE can prefix `UPDATE cron.job`, `MERGE INTO cron.job` can replace
+the command, and PostgreSQL Unicode identifiers such as `U&"\\0063ron"` decode
+before name resolution. The reader now finds cron command-table writes after a
+CTE, treats `MERGE` as the same executable sink, and conservatively routes
+executable calls or writes containing Unicode identifiers through the runtime
+SQL boundary. Unicode-looking text inside comments or data literals remains
+ignored.
+
+The focused actor-binding suite grew from 115 to 162 assertions while the
+idempotency reference suite remained at 86. Thirty-two continuation decisions were
 weakened or removed one at a time; every mutation made the real hook-process
 suite fail before restoration. Separate real-process probes allowed ordinary
 trigger/event-trigger declarations, direct-literal `USING`/`INTO`, and harmless
 quoted cron calls, while denying variable, concatenated, formatted,
 second-`EXECUTE`, quoted scheduled-DDL, cross-database scheduled-DDL, cron
 command-replacement, unqualified search-path scheduling, and direct
-`cron.job.command` actor-DDL controls. The exact-SHA independent review remains an
+`cron.job.command` actor-DDL controls, including CTE, `MERGE`, and Unicode-escaped
+forms. The exact-SHA independent review remains an
 external governed proof and must match the final branch HEAD before publication;
 this entry does not self-certify it.
 

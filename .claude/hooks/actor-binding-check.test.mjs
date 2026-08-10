@@ -330,6 +330,59 @@ r = runHook(`INSERT INTO cron.job (schedule, command, nodename, nodeport, databa
 VALUES ('0 6 * * *', $job$SELECT public.existing_safe_job()$job$, 'localhost', 5432, 'postgres', 'postgres', true, 'safe-inserted-job');`);
 ok(!isDeny(r), "INSERT INTO cron.job without function DDL remains allowed");
 
+r = runHook(`UPDATE public.job SET command = $job$${UNBOUND_DDL}$job$ WHERE jobid = 42;`);
+ok(!isDeny(r), "an explicitly non-cron schema.job UPDATE is not a cron sink");
+
+r = runHook(`INSERT INTO public.job (command) VALUES ($job$${UNBOUND_DDL}$job$);`);
+ok(!isDeny(r), "an explicitly non-cron schema.job INSERT is not a cron sink");
+
+r = runHook(`MERGE INTO public.job AS target USING (VALUES (42)) AS source(jobid)
+ON target.jobid = source.jobid WHEN MATCHED THEN UPDATE SET command = $job$${UNBOUND_DDL}$job$;`);
+ok(!isDeny(r), "an explicitly non-cron schema.job MERGE is not a cron sink");
+
+r = runHook(`WITH target_job AS (
+  SELECT jobid FROM cron.job WHERE jobname = 'cte-existing-job'
+)
+UPDATE cron.job
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid IN (SELECT jobid FROM target_job);`);
+ok(isDeny(r), "a CTE prefix cannot hide UPDATE cron.job.command actor DDL");
+
+r = runHook(`WITH target_job AS (
+  SELECT jobid FROM cron.job WHERE jobname = 'cte-safe-job'
+)
+UPDATE cron.job
+SET command = $job$SELECT public.existing_safe_job()$job$
+WHERE jobid IN (SELECT jobid FROM target_job);`);
+ok(!isDeny(r), "a CTE-prefixed cron.job UPDATE without function DDL remains allowed");
+
+r = runHook(`MERGE INTO cron.job AS target
+USING (VALUES (42)) AS source(jobid)
+ON target.jobid = source.jobid
+WHEN MATCHED THEN UPDATE SET command = $job$${UNBOUND_DDL}$job$;`);
+ok(isDeny(r), "MERGE UPDATE cannot store cron.job.command actor DDL");
+
+r = runHook(`MERGE INTO cron.job AS target
+USING (VALUES (42)) AS source(jobid)
+ON target.jobid = source.jobid
+WHEN MATCHED THEN UPDATE SET command = $job$SELECT public.existing_safe_job()$job$;`);
+ok(!isDeny(r), "MERGE without function DDL remains allowed");
+
+r = runHook(`SELECT U&"\\0063ron".schedule(
+  'unicode-delayed-actor-ddl',
+  '* * * * *',
+  $job$${UNBOUND_DDL}$job$
+);`);
+ok(isDeny(r), "a Unicode-escaped cron schema cannot hide scheduled actor DDL");
+
+r = runHook(`UPDATE U&"\\0063ron".job
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobname = 'unicode-existing-job';`);
+ok(isDeny(r), "a Unicode-escaped cron schema cannot hide a command-table write");
+
+r = runHook(`SELECT $note$U&"\\0063ron".schedule('ignored', 'CREATE FUNCTION public.not_executable()')$note$;`);
+ok(!isDeny(r), "Unicode pg_cron-looking text inside a data literal remains ignored");
+
 r = runHook(`SELECT cron.schedule_in_database(
   'cross-db-actor-ddl',
   '* * * * *',
