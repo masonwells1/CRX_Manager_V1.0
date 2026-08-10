@@ -82,19 +82,44 @@ describe('commission payout gauntlet guards', { timeout: 60_000 }, () => {
   });
 
   it('the guarded payout body is still what every live call reaches', () => {
-    // Half of the assertion above is only meaningful if the renamed body is
-    // still on the call path. If the wrapper ever stopped delegating to it, the
-    // stale-selection guards would be dead code and the test above would be
+    // The assertion above is only meaningful if the renamed body is still on the
+    // call path. If any definition of the public RPC stopped delegating to it,
+    // the stale-selection guards would be dead code and that test would be
     // asserting against a function nothing invokes.
+    //
+    // Scoped to the wrapper's own body, not to end-of-file: the ACL post-
+    // conditions at the bottom of the rename migration name the implementation
+    // too, so a slice that ran to EOF would pass on that mention alone even if
+    // the wrapper never called it.
+    const bodyOf = (sql: string): string => {
+      const start = sql.indexOf('CREATE OR REPLACE FUNCTION public.create_commission_payment(');
+      if (start === -1) return '';
+      const end = sql.indexOf('$function$;', start);
+      expect(end, 'create_commission_payment definition is unterminated').toBeGreaterThan(start);
+      return sql.slice(start, end);
+    };
+
     const rename = migrationFiles().find((f) => f.name === PAYOUT_RENAME_MIGRATION);
     expect(rename, `${PAYOUT_RENAME_MIGRATION} is missing`).toBeDefined();
-    const sql = rename!.content.replace(/\r\n/g, '\n');
-
-    expect(sql).toContain('RENAME TO _create_commission_payment_intent_impl_20260809;');
-    const wrapper = sql.slice(
-      sql.indexOf('CREATE OR REPLACE FUNCTION public.create_commission_payment('),
+    const renameSql = rename!.content.replace(/\r\n/g, '\n');
+    expect(renameSql).toContain('RENAME TO _create_commission_payment_intent_impl_20260809;');
+    expect(bodyOf(renameSql)).toContain(
+      'public._create_commission_payment_intent_impl_20260809(',
     );
-    expect(wrapper).toContain('public._create_commission_payment_intent_impl_20260809(');
+
+    // And nothing since has quietly reinstated a self-contained public body. A
+    // later migration re-creating create_commission_payment with the old
+    // operation-only idempotency logic would leave every migration-specific test
+    // above green while removing intent binding from production.
+    for (const file of migrationFiles()) {
+      if (file.name <= PAYOUT_RENAME_MIGRATION) continue;
+      const body = bodyOf(file.content.replace(/\r\n/g, '\n'));
+      if (!body) continue;
+      expect(
+        body,
+        `${file.name} redefines public.create_commission_payment without delegating to the intent-bound implementation`,
+      ).toContain('public._create_commission_payment_intent_impl_20260809(');
+    }
   });
 
   it('commission payment tables expose no direct authenticated write policies', () => {

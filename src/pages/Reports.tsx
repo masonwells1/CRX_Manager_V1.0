@@ -1,4 +1,4 @@
-import { useEffect, useState , useCallback } from 'react';
+import { useEffect, useState , useCallback, useRef } from 'react';
 import { Download, CheckCircle2, FileText, Sprout } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import Card from '../components/ui/Card';
@@ -10,6 +10,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { hasPageAccess } from '../lib/pagePermissions';
 import { supabase, assertRpcResult } from '../lib/db';
+import { generateIdempotencyKey, getIdempotencyBindingRejection } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import LogbookReport from '../components/reports/LogbookReport';
@@ -124,6 +125,18 @@ export default function Reports() {
   const [revenueData, setRevenueData] = useState<RevenueSummary[]>([]);
   const [selectedCommissions, setSelectedCommissions] = useState<Set<string>>(new Set());
   const [markingPaid, setMarkingPaid] = useState(false);
+  // One retained idempotency key per (admin, date, commission selection) — the
+  // same scope the server now fingerprints. A retry of the SAME click reuses its
+  // key, so a network timeout cannot create a second payment; anything the server
+  // would see as a different request gets a different scope and therefore a
+  // different key, so an intent/actor refusal is unreachable from this page.
+  //
+  // The key is random rather than derived from the ids: after a batch succeeds
+  // its scope is cleared, so if that payment is later VOIDED and the same
+  // commissions are marked paid again, the next click is a genuinely new request
+  // instead of replaying the voided payment's receipt and reporting success for
+  // a batch that was never created.
+  const markPaidKeys = useRef(new Map<string, string>());
 
   // ─── FINANCIAL data ─────────────────────────────────────────
   const [pnlData, setPnlData] = useState<PnLRow[]>([]);
@@ -463,6 +476,10 @@ export default function Reports() {
     }
     setMarkingPaid(true);
     const today = localToday();
+    // Hoisted out of the try: one click makes one call PER RECIPIENT, so a
+    // refusal on the third recipient leaves the first two genuinely paid. The
+    // catch below has to be able to say so instead of claiming nothing happened.
+    let totalBatched = 0;
     try {
       // Group by recipient — RPC requires all commissions per call belong to same recipient
       const byRecipient = new Map<string, string[]>();
@@ -472,8 +489,16 @@ export default function Reports() {
         byRecipient.get(rid)!.push(c.id);
       }
 
-      let totalBatched = 0;
       for (const [, ids] of byRecipient) {
+        // Sorted and de-duplicated to match the server-side fingerprint, so
+        // re-selecting the same commissions in a different order is the same
+        // scope here as it is there.
+        const scope = `${profile!.id}|${today}|${[...new Set(ids)].sort().join('-')}`;
+        let key = markPaidKeys.current.get(scope);
+        if (!key) {
+          key = generateIdempotencyKey('create_commission_payment', profile!.id);
+          markPaidKeys.current.set(scope, key);
+        }
         const { data, error } = await supabase.rpc('create_commission_payment', {
           p_commission_ids: ids,
           p_payment_method: 'other',
@@ -481,13 +506,14 @@ export default function Reports() {
           p_payment_date: today,
           p_notes: 'Quick pay from Reports page',
           p_performed_by: profile!.id,
-          // Deterministic key (no Date.now()) so a retried batch dedupes instead of
-          // creating duplicate commission payments. These commission ids transition
-          // to 'paid' on success, so the key can't collide with a future payment.
-          p_idempotency_key: `reports-commission-pay-${ids.join('-')}`,
+          p_idempotency_key: key,
         });
         if (error) throw new Error(error.message);
         assertRpcResult<string>(data, 'create_commission_payment');
+        // Retire only this recipient's key. A batch spanning several recipients
+        // makes one call each, and a later call failing must not re-run an
+        // earlier recipient's payment under a fresh key on the next attempt.
+        markPaidKeys.current.delete(scope);
         totalBatched += ids.length;
       }
 
@@ -495,8 +521,25 @@ export default function Reports() {
       if (profile) logActivity({ event: 'commission_payment_batch_created', description: `${totalBatched} commission(s) added to unposted payment batches via Reports`, performedBy: profile.id });
       fetchCommissions();
     } catch (err: unknown) {
-      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'mark_commissions_paid' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to update commissions');
+      // Backstop only. The scoping above should make a binding refusal
+      // unreachable from this page, so if one arrives the scope and the server
+      // fingerprint have drifted apart — clear every retained key so the admin is
+      // not locked out of quick-pay, and say plainly that nothing was created.
+      const rejection = getIdempotencyBindingRejection(err);
+      if (rejection) {
+        markPaidKeys.current.clear();
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: `mark_commissions_paid_${rejection}_mismatch` } });
+        await fetchCommissions();
+        // Never claim "nothing was created" outright — recipients processed
+        // before the refusal really were paid, and telling the admin otherwise
+        // invites a duplicate batch.
+        toast('warning', totalBatched > 0
+          ? `That retry could not be matched to this request. ${totalBatched} commission(s) were already added to a payment batch before it stopped — check Commission Payments before trying again.`
+          : 'That retry could not be matched to this request, so no payment batch was created. Check Commission Payments before trying again.');
+      } else {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'mark_commissions_paid' } });
+        toast('error', err instanceof Error ? err.message : 'Failed to update commissions');
+      }
     }
     setMarkingPaid(false);
   };

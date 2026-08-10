@@ -1,9 +1,9 @@
 # CRX Live Foundation Gauntlet — Section 7 Refresh
 
-Date: 2026-08-09  
-Section: Commissions, commission splits, entity recipients, payout batches, cancellations, and voids  
-Verdict: **REMEDIATION REQUIRED**  
-Findings: **0 BLOCKER / 2 HIGH / 0 MED / 0 LOW**
+- Date: 2026-08-09
+- Section: Commissions, commission splits, entity recipients, payout batches, cancellations, and voids
+- Verdict: **REMEDIATION REQUIRED**
+- Findings: **0 BLOCKER / 2 HIGH / 0 MED / 0 LOW**
 
 ## Executive Summary
 

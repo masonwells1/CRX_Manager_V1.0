@@ -121,7 +121,7 @@ BEGIN
   END IF;
 END
 $gate$;
-SELECT public.create_commission_payment(
+SELECT 'PAYMENT_ID=' || public.create_commission_payment(
   ARRAY['${commissionId}'::uuid], 'check', 'REF-CONC', DATE '2026-08-09',
   'concurrent', '${ACTOR_A}', '${key}'
 );
@@ -134,8 +134,17 @@ TRUNCATE public.proof_effects, public.commission_payments, public.idempotency_ke
          public.race_gate;
 `;
 
+/**
+ * Only the ids the payout function actually returned. A bare UUID scan would
+ * also match the actor uuid that `SELECT set_config('request.jwt.claims', ...)`
+ * echoes on the FIRST line of stdout — and since both sessions use the same
+ * actor, comparing those would make the identical-intent assertion below pass no
+ * matter what the payout returned.
+ */
 function createdIds(run) {
-  return (run.stdout.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g) || []);
+  return [...run.stdout.matchAll(
+    /PAYMENT_ID=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/g,
+  )].map((m) => m[1]);
 }
 
 /**

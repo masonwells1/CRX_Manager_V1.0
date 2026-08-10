@@ -19,6 +19,7 @@ const MIGRATION_PATH =
 
 const migration = readFileSync(MIGRATION_PATH, 'utf8').replace(/\r\n/g, '\n');
 const page = readFileSync('src/pages/CommissionPayments.tsx', 'utf8').replace(/\r\n/g, '\n');
+const reports = readFileSync('src/pages/Reports.tsx', 'utf8').replace(/\r\n/g, '\n');
 
 const PAYOUT_RPCS = [
   {
@@ -287,9 +288,17 @@ describe('commission payout intent-binding callers', () => {
     expect(catchBlock).toContain('getIdempotencyBindingRejection(err)');
     expect(catchBlock).toContain(`${idemHandle}.resetKey();`);
     expect(catchBlock).toContain("toast('warning'");
-    // Awaited: the toast tells the admin to check the list below it, so the
-    // refresh has to have finished before that claim is true.
-    expect(catchBlock).toContain('await fetchPayments();');
+    // Awaited AND ordered: the toast tells the admin to check the list below it,
+    // so the refresh has to have finished before that claim is true. Asserting
+    // only that `await fetchPayments()` appears would still pass if the refresh
+    // were moved below the toast, which is the bug this guards.
+    const refreshAt = catchBlock.indexOf('await fetchPayments();');
+    expect(refreshAt, 'refusal branch does not await a refresh').toBeGreaterThan(-1);
+    const warnAt = catchBlock.indexOf("toast('warning'");
+    expect(
+      refreshAt,
+      'the refusal toast points the admin at the list, so the refresh must finish first',
+    ).toBeLessThan(warnAt);
     // All three refusal kinds must reach the admin with their OWN wording. The
     // unusable-receipt case is the one that would otherwise trap them in a dead
     // retry, and telling them "another user owns this" instead would be false.
@@ -300,7 +309,7 @@ describe('commission payout intent-binding callers', () => {
       "toast('warning', rejection === 'actor'"
       + ` ? 'That retry belongs to another user, so ${nothingHappened}. Reload the page and try again.'`
       + " : rejection === 'receipt'"
-      + ` ? 'The database could not read the record of what this retry already did, so ${nothingHappened} now.`,
+      + ` ? 'The database could not confirm the outcome of the earlier attempt, so ${nothingHappened} now.`,
     );
     // The admin must never be shown the raw database code.
     expect(catchBlock).not.toContain('IDEMPOTENCY_INTENT_MISMATCH');
@@ -315,8 +324,70 @@ describe('commission payout intent-binding callers', () => {
     // earlier request DIFFERED. Wording that asserts a difference would be a
     // statement the database cannot back up.
     expect(page).not.toContain('a different payment');
+    // A 'receipt' refusal covers BOTH an unreadable stored result and no stored
+    // result at all, so the wording must not assert the retry did anything —
+    // only that its outcome cannot be confirmed.
+    expect(page).not.toContain('what this retry already did');
     expect(page).toContain('already used by an earlier commission payment');
     expect(page).toContain('already used by an earlier posting');
     expect(page).toContain('already used by an earlier void');
+  });
+});
+
+/**
+ * Reports has its OWN quick-pay path into create_commission_payment, and it is
+ * the harder one: a single click loops once per recipient, so it cannot use the
+ * shared useIdempotencyKey hook (one key would collide with itself across
+ * recipients). It keeps a Map of retained keys instead, and these assertions
+ * pin the three properties that make that safe.
+ */
+describe('Reports quick-pay idempotency scope', () => {
+  const markPaid = (() => {
+    const start = reports.indexOf('const handleMarkPaid = async () => {');
+    expect(start, 'handleMarkPaid is missing from Reports').toBeGreaterThan(-1);
+    const end = reports.indexOf('\n  };', start);
+    expect(end).toBeGreaterThan(start);
+    return reports.slice(start, end);
+  })();
+
+  it('does not derive the key from the commission ids alone', () => {
+    // The original bug: `reports-commission-pay-${ids.join('-')}` is a pure
+    // function of the selection, so the SAME key returns after a void reopens
+    // those commissions — replaying the voided payment's receipt and reporting
+    // success for a batch that was never created.
+    expect(reports).not.toContain('reports-commission-pay-');
+    expect(markPaid).toContain("generateIdempotencyKey('create_commission_payment'");
+  });
+
+  it('scopes the retained key to actor, date and the sorted selection', () => {
+    // The scope has to match what the server fingerprints. If it were narrower
+    // than the fingerprint, a changed field would reuse the key and the server
+    // would hard-refuse a retry the admin cannot escape.
+    expect(markPaid).toContain('const scope = `${profile!.id}|${today}|${[...new Set(ids)].sort().join(\'-\')}`');
+    expect(markPaid).toContain('markPaidKeys.current.get(scope)');
+    expect(markPaid).toContain('markPaidKeys.current.set(scope, key)');
+  });
+
+  it('retires only the recipient that succeeded, and every key on a refusal', () => {
+    // Per-recipient retirement: clearing the whole Map on success would hand the
+    // next recipient in the SAME click a fresh key mid-loop.
+    expect(markPaid).toContain('markPaidKeys.current.delete(scope);');
+    const succeeded = markPaid.indexOf('markPaidKeys.current.delete(scope);');
+    const cleared = markPaid.indexOf('markPaidKeys.current.clear();');
+    expect(cleared, 'a binding refusal must clear every retained key').toBeGreaterThan(-1);
+    expect(succeeded).toBeLessThan(cleared);
+    expect(markPaid).toContain('getIdempotencyBindingRejection(err)');
+  });
+
+  it('refreshes before the refusal toast and never overstates what was skipped', () => {
+    const refreshAt = markPaid.indexOf('await fetchCommissions();');
+    expect(refreshAt, 'the refusal branch does not await a refresh').toBeGreaterThan(-1);
+    expect(refreshAt).toBeLessThan(markPaid.indexOf("toast('warning'"));
+    // One click makes one call per recipient. Recipients processed before the
+    // refusal really were paid, so the message must be conditional on how many
+    // actually landed — a flat "no payment batch was created" invites a
+    // duplicate batch.
+    expect(markPaid.replace(/\s+/g, ' ')).toContain("toast('warning', totalBatched > 0");
+    expect(markPaid).toContain('were already added to a payment batch before it stopped');
   });
 });
