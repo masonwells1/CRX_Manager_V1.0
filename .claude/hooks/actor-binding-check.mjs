@@ -266,15 +266,27 @@ function maskSqlForCallNames(text) {
 
 /** pg_cron stores executable command text through multiple APIs (currently
  * schedule, schedule_in_database, and alter_job). Treat any direct call in the
- * cron schema as a runtime-SQL boundary so a new overload/API cannot silently
- * reopen this reader. Ordinary calls stay allowed because only literals that
- * actually carry a CREATE FUNCTION header are exposed for actor inspection. */
+ * cron schema as a runtime-SQL boundary so a new qualified overload/API cannot
+ * silently reopen this reader. Also recognize the current APIs when unqualified:
+ * PostgreSQL can resolve `schedule(...)` to `cron.schedule(...)` through
+ * search_path (or a wrapper), so requiring the literal `cron.` prefix would be
+ * fail-open. Ordinary calls stay allowed because only literals that actually
+ * carry a CREATE FUNCTION header are exposed for actor inspection. */
 function isPgCronCall(rawStmt) {
   const callableSql = maskSqlForCallNames(String(rawStmt || ""));
   if (callableSql === null) return false;
   const identifier = '(?:"(?:[^"]|"")*"|[A-Za-z_][\\w$]*)';
-  return new RegExp(`(?:^|[^\\w$])(?:"cron"|cron)\\s*\\.\\s*${identifier}\\s*\\(`, "i")
-    .test(callableSql);
+  const qualified = new RegExp(
+    `(?:^|[^\\w$])(?:"cron"|cron)\\s*\\.\\s*${identifier}\\s*\\(`,
+    "i"
+  );
+  const currentUnqualifiedApi =
+    '(?:"(?:schedule|schedule_in_database|alter_job)"|(?:schedule|schedule_in_database|alter_job))';
+  const unqualified = new RegExp(
+    `(?:^|[^\\w$.\"])${currentUnqualifiedApi}\\s*\\(`,
+    "i"
+  );
+  return qualified.test(callableSql) || unqualified.test(callableSql);
 }
 
 // EXECUTE is also a PostgreSQL privilege keyword. These two complete statement

@@ -255,6 +255,43 @@ r = runHook(`SELECT "cron"."schedule"(
 );`);
 ok(!isDeny(r), "quoted cron.schedule without function DDL remains allowed");
 
+r = runHook(`SET search_path = cron, public;
+SELECT schedule(
+  'search-path-delayed-actor-ddl',
+  '* * * * *',
+  $job$${UNBOUND_DDL}$job$
+);`);
+ok(isDeny(r), "search_path cannot hide an unqualified cron.schedule actor-DDL call");
+
+r = runHook(`SET LOCAL search_path TO "cron", public;
+SELECT "schedule"(
+  'quoted-search-path-delayed-actor-ddl',
+  '* * * * *',
+  $job$${UNBOUND_DDL}$job$
+);`);
+ok(isDeny(r), "quoted unqualified cron.schedule remains fail-closed through search_path");
+
+r = runHook(`SET search_path = cron, public;
+SELECT schedule_in_database(
+  'unqualified-cross-db-actor-ddl',
+  '* * * * *',
+  $job$${UNBOUND_DDL}$job$,
+  'postgres'
+);`);
+ok(isDeny(r), "search_path cannot hide unqualified cron.schedule_in_database actor DDL");
+
+r = runHook(`SET search_path = cron, public;
+SELECT alter_job(42, command := $job$${UNBOUND_DDL}$job$);`);
+ok(isDeny(r), "search_path cannot hide an unqualified cron.alter_job command replacement");
+
+r = runHook(`SET search_path = cron, public;
+SELECT schedule(
+  'search-path-safe-job',
+  '0 6 * * *',
+  $job$SELECT public.existing_safe_job()$job$
+);`);
+ok(!isDeny(r), "unqualified cron.schedule without function DDL remains allowed");
+
 r = runHook(`SELECT cron.schedule_in_database(
   'cross-db-actor-ddl',
   '* * * * *',
@@ -285,6 +322,9 @@ ok(!isDeny(r), "cron-looking text inside a data literal is not treated as an API
 
 r = runHook(`SELECT ' "cron"."schedule"(''ignored'', ''CREATE FUNCTION public.not_executable()'')';`);
 ok(!isDeny(r), "cron-looking text inside a single-quoted data literal is ignored");
+
+r = runHook(`SELECT $note$schedule('ignored', 'CREATE FUNCTION public.not_executable()')$note$;`);
+ok(!isDeny(r), "unqualified pg_cron-looking text inside a data literal remains ignored");
 
 r = runHook(`-- "cron"."schedule"('ignored', 'CREATE FUNCTION public.not_executable()')
 SELECT $note$CREATE FUNCTION public.not_executable()$note$;`);
