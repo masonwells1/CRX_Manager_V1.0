@@ -2237,6 +2237,15 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
  * Every exemption needs a concrete mechanism/reason. This is intentionally
  * separate from the missing-key backlog: an ordinary business mutator belongs
  * in MUTATING_RPCS_MISSING_IDEMPOTENCY and must eventually be fixed.
+ *
+ * Trigger-only functions that never reach the generated types enter the
+ * inventory only while their migration is newer than the registry high-water,
+ * so their entries here are pre-apply-window entries and the
+ * "exemptions are current" test below requires pruning them once the migration
+ * is applied and the high-water moves past it. `notify_team_note_assignment`
+ * (20260810010308) and `trg_recalc_order_totals` (20260809230500) were pruned
+ * on 2026-08-10 for exactly that reason — both are live; neither is exempt from
+ * anything, they are simply no longer discovered.
  */
 const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   _close_undelivered_order_remainder_20260718:
