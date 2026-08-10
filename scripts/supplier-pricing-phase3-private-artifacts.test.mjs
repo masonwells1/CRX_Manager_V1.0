@@ -966,6 +966,27 @@ git() { return 0; }
     await checkPrivateArtifactContainment({ root: worktreeHost, execute: skewedListingCasingExecute });
     assert(listingCasingSkews >= 1, 'the casing-skew harness must actually rewrite the ignored listing path, or this assertion proves nothing');
   }
+  // Case folding decides which registry key a candidate matches, so it must
+  // never be the ONLY thing granting the exemption. A Windows directory with
+  // per-directory case sensitivity enabled can hold `session` and `SESSION` at
+  // once: two different directories that fold to one key. A foreign repository
+  // parked at the colliding name must still fail closed, which it does only
+  // because the pointer file is re-verified on the candidate directory itself.
+  const collisionHost = fixtureRepo('containment-case-folded-worktree-collision'); writeFileSync(path.join(collisionHost, '.gitignore'), '.claude/worktrees/\n'); git(collisionHost, ['add', '.gitignore']); git(collisionHost, ['commit', '--quiet', '-m', 'ignore session worktrees']);
+  const collisionWorktrees = path.join(collisionHost, '.claude', 'worktrees'); mkdirSync(collisionWorktrees, { recursive: true });
+  if (process.platform === 'win32') spawnSync('fsutil', ['file', 'setCaseSensitiveInfo', collisionWorktrees, 'enable'], { encoding: 'utf8' });
+  // Probe rather than assume: this is per-directory on Windows, filesystem-wide
+  // elsewhere, and unavailable on a case-insensitive macOS volume.
+  let caseDistinctNames = false;
+  try { mkdirSync(path.join(collisionWorktrees, 'probe')); mkdirSync(path.join(collisionWorktrees, 'PROBE')); caseDistinctNames = readdirSync(collisionWorktrees).filter(name => name.toLowerCase() === 'probe').length === 2; } catch { caseDistinctNames = false; }
+  for (const probe of readdirSync(collisionWorktrees)) rmSync(path.join(collisionWorktrees, probe), { recursive: true, force: true });
+  if (caseDistinctNames) {
+    git(collisionHost, ['worktree', 'add', '--quiet', '-b', 'collision-session', path.join(collisionWorktrees, 'session')]);
+    await fixtureContainment(collisionHost);
+    const collidingForeign = path.join(collisionWorktrees, 'SESSION'); git(collisionHost, ['init', '--quiet', collidingForeign]); writeFileSync(path.join(collidingForeign, 'private-packet.json'), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
+    assert.equal(readdirSync(collisionWorktrees).filter(name => name.toLowerCase() === 'session').length, 2, 'the collision fixture must hold two case-distinct worktree directories, or this assertion proves nothing');
+    await assert.rejects(() => fixtureContainment(collisionHost), /SESSION\/? \(embedded Git repository\)/);
+  }
   const bareRepoHost = fixtureRepo('containment-bare-repository'); const bareRepoBase = git(bareRepoHost, ['rev-parse', 'HEAD']).trim(); const bareRepoPath = path.join(bareRepoHost, 'catalog.git'); git(bareRepoHost, ['init', '--bare', '--quiet', bareRepoPath]); execFileSync('git', ['--git-dir', bareRepoPath, 'hash-object', '-w', '--stdin'], { input: JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }), encoding: 'utf8', env: sanitizedFixtureGitEnv() }); mkdirSync(path.join(bareRepoPath, 'objects', 'info'), { recursive: true }); writeFileSync(path.join(bareRepoPath, 'objects', 'info', 'alternates'), '../alternate-objects\n');
   await assert.rejects(() => fixtureContainment(bareRepoHost), /catalog\.git \(bare Git repository\)/);
   git(bareRepoHost, ['add', 'catalog.git']); git(bareRepoHost, ['commit', '--quiet', '-m', 'synthetic bare repository']); git(bareRepoHost, ['rm', '--quiet', '-r', 'catalog.git']); git(bareRepoHost, ['commit', '--quiet', '-m', 'delete synthetic bare repository']); const bareRepoHead = git(bareRepoHost, ['rev-parse', 'HEAD']).trim();

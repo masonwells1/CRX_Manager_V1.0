@@ -1593,6 +1593,10 @@ export function ownWorktreeMarker(absolute, worktreesDirectory) {
  * cannot be committed from here, and that worktree runs this same guard on its
  * own push. Both signals are required, and any failure to obtain Git's own
  * answer exempts nothing.
+ *
+ * Returns the registry alongside this repository's worktree administration
+ * directory, because the caller must re-verify the pointer on the candidate
+ * directory it is actually about to exempt.
  */
 function registeredWorktreeDirectories(root, execute) {
   const registered = new Set();
@@ -1602,9 +1606,9 @@ function registeredWorktreeDirectories(root, execute) {
   try {
     records = gitLines(['worktree', 'list', '--porcelain'], root, execute);
     const [commonDirLine] = gitLines(['rev-parse', '--git-common-dir'], root, execute);
-    if (!commonDirLine) return registered;
+    if (!commonDirLine) return { paths: registered, worktreesDirectory: null };
     commonDirectory = path.resolve(lexicalRoot, commonDirLine);
-  } catch { return registered; }
+  } catch { return { paths: registered, worktreesDirectory: null }; }
   const worktreesDirectory = path.join(commonDirectory, 'worktrees');
   for (const record of records) {
     if (!record.startsWith('worktree ')) continue;
@@ -1615,10 +1619,10 @@ function registeredWorktreeDirectories(root, execute) {
     // hinge on the casing `git worktree list --porcelain` happened to print.
     registered.add(containmentPathKey(path.relative(lexicalRoot, absolute).split(path.sep).join('/')));
   }
-  return registered;
+  return { paths: registered, worktreesDirectory };
 }
 
-function worktreeEntryKind(root, repoPath, ownWorktrees = new Set()) {
+function worktreeEntryKind(root, repoPath, ownWorktrees = { paths: new Set(), worktreesDirectory: null }) {
   const lexicalRoot = path.resolve(root);
   const lexicalPath = path.resolve(lexicalRoot, repoPath);
   if (!lexicalPath.startsWith(`${lexicalRoot}${path.sep}`)) throw new Error('private Phase 3C worktree candidate escapes the repository');
@@ -1638,8 +1642,17 @@ function worktreeEntryKind(root, repoPath, ownWorktrees = new Set()) {
     else if (entry.isDirectory()) {
       try {
         lstatSync(path.join(current, '.git'));
-        // This checkout seen twice, not a foreign repository inside it.
-        if (ownWorktrees.has(containmentPathKey(segments.slice(0, index + 1).join('/')))) return 'own-worktree';
+        // This checkout seen twice, not a foreign repository inside it. Both
+        // signals are re-verified against THIS directory: Git lists it as a
+        // worktree of this repository, and the directory itself carries a
+        // pointer file into this repository's worktree registry. A registry key
+        // match alone is not enough — on a Windows directory with per-directory
+        // case sensitivity enabled, `session` and `SESSION` are two different
+        // directories that fold to one key, and a foreign repository parked at
+        // the colliding name would otherwise inherit the exemption.
+        if (ownWorktrees.paths.has(containmentPathKey(segments.slice(0, index + 1).join('/')))
+          && ownWorktrees.worktreesDirectory
+          && ownWorktreeMarker(current, ownWorktrees.worktreesDirectory)) return 'own-worktree';
         return 'embedded-repository';
       } catch (error) {
         if (error?.code !== 'ENOENT') throw error;
