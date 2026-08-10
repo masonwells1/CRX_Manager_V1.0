@@ -126,6 +126,11 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'jsdom',
+    // Mason routinely runs several CRX worktrees at once. Letting every local
+    // pre-commit use the host-wide worker default starves fixed-timeout file and
+    // decompression tests; the same suite is stable with bounded concurrency.
+    // GitHub CI owns its own isolated runner, so retain Vitest's CI default there.
+    maxWorkers: process.env.CI ? undefined : 2,
     include: ['src/**/*.test.{ts,tsx}'],
     setupFiles: ['src/setupTests.ts'],
     env: liveSchemaTests
