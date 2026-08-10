@@ -22,7 +22,7 @@ PR workflow.
 
 ## PROVEN
 
-- The actor-binding suite passes at 189 assertions; the idempotency reference
+- The actor-binding suite passes at 194 assertions; the idempotency reference
   suite remains green at 86 assertions.
 - Fifty-four parser and decision clauses were each removed alone and made the
   suite fail before restoration.
@@ -66,6 +66,9 @@ PR workflow.
   each exposed its exact regression or safe-control failure: direct recursive
   recognition, narrow callable scoping, named `sql_query` recognition, opaque
   executor-expression refusal, and direct-safe-literal allowance.
+- Four function-name grammar decisions were independently weakened and each
+  exposed its matching regression: quoted names, Unicode identifiers,
+  whitespace around qualification dots, and recursive quoted-header detection.
 - Ordinary and event trigger declarations are allowed only when their
   executable clause is a complete `EXECUTE FUNCTION|PROCEDURE name(...)` call.
 - Direct PL/pgSQL command literals may use `INTO [STRICT]` and `USING` without
@@ -185,6 +188,18 @@ PR workflow.
   direct nested and staged unsafe SQL while allowing a direct harmless query
   and an unrelated documentation callable, and the commit completed the full
   pre-commit barrier without a hook bypass.
+- The exact-SHA review of `fee382774295cb7634c5bf8997f300f7d51e38d8`
+  found that direct EXECUTE accepted a quoted qualified function definition but
+  the final actor scanner recognized only unquoted names. Its real probe created
+  an unsafe mutating SECURITY DEFINER function with a quoted name and proved the
+  candidate hook allowed it.
+- Fix commit `0b5c896ab115c69afefc06dea31e713ddac5858b` gives the
+  recursive header detector and final actor scanner one shared identifier
+  grammar for quoted, doubled-quote, whitespace-around-dot, and Unicode forms.
+  The restored actor suite passed 194 assertions, idempotency remained green at
+  86, real subprocess probes denied unsafe quoted direct/nested definitions and
+  allowed the bound quoted control, and the commit completed the full
+  pre-commit barrier without a hook bypass.
 
 ## GOVERNED STATUS
 
@@ -220,6 +235,9 @@ PR workflow.
   passed through `execute_sql_readonly`. It was reproduced and fixed in
   `04bc67f8`; its BLOCKERS verdict likewise does not approve the final
   documentation HEAD.
+- The review of `fee38277` returned one HIGH blocker for quoted function names.
+  It was reproduced and fixed in `0b5c896a`; its BLOCKERS verdict likewise does
+  not approve the final documentation HEAD.
 
 ## REMAINING LANDING WORK
 
@@ -236,7 +254,7 @@ outward-action approval into a receiving task. No database action is needed.
 ## GATES AND BLOCKERS
 
 - The prior `/ship` review cycle reached its three-round cap. Its blocker and the
-  later `8620ad17`, `5cb6e4d7`, `f4da59bf`, `3c0f8e75`, `9c2552ca`, `f221c283`, `7e7c67c6`, and `eb958374` blockers have now been
+  later `8620ad17`, `5cb6e4d7`, `f4da59bf`, `3c0f8e75`, `9c2552ca`, `f221c283`, `7e7c67c6`, `eb958374`, and `fee38277` blockers have now been
   addressed locally, but the branch remains unpublished until a new exact-SHA
   governed review independently returns CLEAN.
 - Historical blocker evidence:
