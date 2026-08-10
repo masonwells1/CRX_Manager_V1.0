@@ -46,6 +46,18 @@ replay applied all three migrations, both pricing smokes passed, all three const
 validated with both scale and finite-value clauses, and zero smoke residue remained. A replacement
 exact-SHA review is still required before publication.
 
+**Exact-SHA review follow-up 5 (still local).** Review of `04a739a4` found three remaining
+fail-closed gaps. Every order-report revenue input now settles the stored line total with
+`ROUND(oi.total_price, 2)` before aggregation so legacy sub-cent rows cannot make panels disagree.
+The browser no longer retries an older lifecycle RPC signature after `PGRST202`; the database
+migration must land before the frontend bundle, and a missing governed signature now stops the
+write. Finally, `save_quote` defers its private transient line INSERT and enforces only the final
+Product-recomputed UPDATE, so one below-cost line writes exactly one approval audit. The Quote
+lifecycle rollback smoke now requires exactly one audit for save, duplicate, restore, convert, and
+draw-down. A fresh current-production-schema replay applied all three migrations transactionally;
+both pricing rollback smokes passed, all three cent-scale constraints were validated, and no smoke
+fixture or approval residue remained. A replacement exact-SHA review is still required.
+
 **Exact-SHA review follow-up (still local).** The review of `b5f949fa` correctly found that the
 first server-wall draft still left direct PostgREST line writes available, ran after the canonical
 rounding trigger and could overwrite its whole-cent result, and could parse an older approval

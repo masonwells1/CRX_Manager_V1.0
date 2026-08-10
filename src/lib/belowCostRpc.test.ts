@@ -22,25 +22,23 @@ describe('belowCostLinesFromRpcError', () => {
 });
 
 describe('callBelowCostAwareRpc', () => {
-  it('falls back only when PostgREST reports the new signature is absent', async () => {
+  it('fails closed when PostgREST reports the governed signature is absent', async () => {
     const rpc = vi.mocked(supabaseUntyped.rpc);
-    rpc
-      .mockResolvedValueOnce({
-        data: null,
-        error: {
-          code: 'PGRST202',
-          message: 'public.draw_down_quote(p_below_cost_reason) not found',
-        },
-      } as never)
-      .mockResolvedValueOnce({ data: { status: 'created' }, error: null } as never);
+    rpc.mockResolvedValueOnce({
+      data: null,
+      error: {
+        code: 'PGRST202',
+        message: 'public.draw_down_quote(p_below_cost_reason) not found',
+      },
+    } as never);
 
     const result = await callBelowCostAwareRpc('draw_down_quote', { p_quote_id: 'q' }, 'approved');
 
-    expect(result.error).toBeNull();
-    expect(rpc).toHaveBeenNthCalledWith(1, 'draw_down_quote', {
+    expect(result.error?.code).toBe('PGRST202');
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(rpc).toHaveBeenCalledWith('draw_down_quote', {
       p_quote_id: 'q',
       p_below_cost_reason: 'approved',
     });
-    expect(rpc).toHaveBeenNthCalledWith(2, 'draw_down_quote', { p_quote_id: 'q' });
   });
 });

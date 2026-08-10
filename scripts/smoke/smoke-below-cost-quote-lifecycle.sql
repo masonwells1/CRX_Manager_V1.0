@@ -153,6 +153,41 @@ BEGIN
   -- must deny a blank reason, then atomically approve and audit an admin retry.
   UPDATE public.products SET current_cost = 12 WHERE id = v_product;
 
+  -- save_quote has a transient INSERT followed by one authoritative UPDATE.
+  -- The final settled line must be governed while producing exactly one audit
+  -- row, never one for each internal write phase.
+  v_sections := jsonb_set(
+    v_sections,
+    '{0,items,0,below_cost_reason}',
+    to_jsonb('save quote final state approval'::text),
+    true
+  );
+  SELECT row_version INTO v_row_version
+  FROM public.quotes WHERE id = v_quote_restore;
+  v_result := public.save_quote(
+    v_quote_restore,
+    jsonb_build_object(
+      'quote_number', '[SMOKE] Q-restore-' || v_sfx,
+      'customer_id', v_customer,
+      'status', 'sent',
+      'tier', 1,
+      'row_version_expected', v_row_version
+    ),
+    v_sections,
+    v_admin,
+    'smoke-q-below-save-' || v_sfx
+  );
+  SELECT count(*) INTO v_audit_count
+  FROM public.below_cost_approvals
+  WHERE operation = 'save_quote'
+    AND entity_id = v_quote_restore
+    AND actor_user_id = v_admin;
+  IF v_audit_count <> 1 THEN
+    RAISE EXCEPTION
+      'SMOKE_FAIL: save_quote wrote % approval audits instead of exactly one',
+      v_audit_count;
+  END IF;
+
   -- Simulate one pre-migration legacy quote whose historical basis was unknown.
   -- Current writes cannot create this row because the snapshot trigger rejects
   -- it, so bracket only the fixture insert. Conversion itself must still refuse
@@ -299,8 +334,10 @@ BEGIN
     FROM public.below_cost_approvals
     WHERE operation = v_operation
       AND actor_user_id = v_admin;
-    IF v_audit_count < 1 THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: % wrote no atomic approval audit', v_operation;
+    IF v_audit_count <> 1 THEN
+      RAISE EXCEPTION
+        'SMOKE_FAIL: % wrote % approval audits instead of exactly one',
+        v_operation, v_audit_count;
     END IF;
   END LOOP;
 

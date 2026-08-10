@@ -164,13 +164,13 @@ BEGIN
     oi.total_units_needed AS quantity,
     oi.unit_size AS unit,
     oi.price_per_unit AS unit_price,
-    oi.total_price,
+    ROUND(oi.total_price, 2) AS total_price,
     ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2) AS cost,
-    oi.total_price - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2) AS profit,
+    ROUND(oi.total_price, 2) - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2) AS profit,
     CASE
-      WHEN oi.total_price > 0 THEN ROUND(
-        ((oi.total_price - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))
-          / oi.total_price) * 100, 1)
+      WHEN ROUND(oi.total_price, 2) > 0 THEN ROUND(
+        ((ROUND(oi.total_price, 2) - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))
+          / ROUND(oi.total_price, 2)) * 100, 1)
       ELSE 0::numeric
     END AS margin_pct,
     COALESCE(rep.full_name, 'Unassigned') AS sales_rep_name,
@@ -259,9 +259,9 @@ BEGIN
       o.order_date,
       o.id AS order_id,
       oi.total_units_needed AS quantity,
-      oi.total_price AS revenue,
+      ROUND(oi.total_price, 2) AS revenue,
       ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2) AS cost,
-      oi.total_price - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2) AS profit
+      ROUND(oi.total_price, 2) - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2) AS profit
     FROM public.order_items oi
     JOIN public.orders o ON o.id = oi.order_id
     JOIN public.customers c ON c.id = o.customer_id
@@ -358,13 +358,13 @@ BEGIN
     RETURN QUERY
     SELECT
       oi.product_name,
-      ROUND(SUM(oi.total_price)::numeric, 2),
+      ROUND(SUM(ROUND(oi.total_price, 2))::numeric, 2),
       ROUND(SUM(ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))::numeric, 2),
-      ROUND(SUM(oi.total_price - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))::numeric, 2),
+      ROUND(SUM(ROUND(oi.total_price, 2) - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))::numeric, 2),
       CASE
-        WHEN SUM(oi.total_price) > 0
-          THEN ROUND((SUM(oi.total_price - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))
-                      / SUM(oi.total_price) * 100)::numeric, 1)
+        WHEN SUM(ROUND(oi.total_price, 2)) > 0
+          THEN ROUND((SUM(ROUND(oi.total_price, 2) - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))
+                      / SUM(ROUND(oi.total_price, 2)) * 100)::numeric, 1)
         ELSE 0
       END,
       ROUND(SUM(oi.total_units_needed)::numeric, 2),
@@ -377,18 +377,18 @@ BEGIN
       AND o.status NOT IN ('cancelled', 'voided')
     AND COALESCE(oi.pricing_pending, false) = false -- see UNPRICED RUSH LINES
     GROUP BY oi.product_name
-    ORDER BY SUM(oi.total_price) DESC;
+    ORDER BY SUM(ROUND(oi.total_price, 2)) DESC;
   ELSIF p_group_by = 'customer' THEN
     RETURN QUERY
     SELECT
       c.farm_name,
-      ROUND(SUM(oi.total_price)::numeric, 2),
+      ROUND(SUM(ROUND(oi.total_price, 2))::numeric, 2),
       ROUND(SUM(ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))::numeric, 2),
-      ROUND(SUM(oi.total_price - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))::numeric, 2),
+      ROUND(SUM(ROUND(oi.total_price, 2) - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))::numeric, 2),
       CASE
-        WHEN SUM(oi.total_price) > 0
-          THEN ROUND((SUM(oi.total_price - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))
-                      / SUM(oi.total_price) * 100)::numeric, 1)
+        WHEN SUM(ROUND(oi.total_price, 2)) > 0
+          THEN ROUND((SUM(ROUND(oi.total_price, 2) - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))
+                      / SUM(ROUND(oi.total_price, 2)) * 100)::numeric, 1)
         ELSE 0
       END,
       ROUND(SUM(oi.total_units_needed)::numeric, 2),
@@ -402,18 +402,18 @@ BEGIN
       AND o.status NOT IN ('cancelled', 'voided')
     AND COALESCE(oi.pricing_pending, false) = false -- see UNPRICED RUSH LINES
     GROUP BY c.farm_name
-    ORDER BY SUM(oi.total_price) DESC;
+    ORDER BY SUM(ROUND(oi.total_price, 2)) DESC;
   ELSE
     RETURN QUERY
     SELECT
       COALESCE(p.full_name, 'Unassigned'),
-      ROUND(SUM(oi.total_price)::numeric, 2),
+      ROUND(SUM(ROUND(oi.total_price, 2))::numeric, 2),
       ROUND(SUM(ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))::numeric, 2),
-      ROUND(SUM(oi.total_price - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))::numeric, 2),
+      ROUND(SUM(ROUND(oi.total_price, 2) - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))::numeric, 2),
       CASE
-        WHEN SUM(oi.total_price) > 0
-          THEN ROUND((SUM(oi.total_price - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))
-                      / SUM(oi.total_price) * 100)::numeric, 1)
+        WHEN SUM(ROUND(oi.total_price, 2)) > 0
+          THEN ROUND((SUM(ROUND(oi.total_price, 2) - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))
+                      / SUM(ROUND(oi.total_price, 2)) * 100)::numeric, 1)
         ELSE 0
       END,
       ROUND(SUM(oi.total_units_needed)::numeric, 2),
@@ -427,7 +427,7 @@ BEGIN
       AND o.status NOT IN ('cancelled', 'voided')
     AND COALESCE(oi.pricing_pending, false) = false -- see UNPRICED RUSH LINES
     GROUP BY p.full_name
-    ORDER BY SUM(oi.total_price) DESC;
+    ORDER BY SUM(ROUND(oi.total_price, 2)) DESC;
   END IF;
 END;
 $function$;
@@ -466,9 +466,9 @@ BEGIN
   -- and the emitted JSON keys are unchanged.
   order_agg AS (
     SELECT
-      COALESCE(SUM(oi.total_price), 0) AS total_revenue,
+      COALESCE(SUM(ROUND(oi.total_price, 2)), 0) AS total_revenue,
       COALESCE(SUM(
-        oi.total_price
+        ROUND(oi.total_price, 2)
         - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2)
       ), 0) AS total_profit
     FROM public.order_items oi
@@ -494,9 +494,9 @@ BEGIN
     FROM (
       SELECT
         TO_CHAR(COALESCE(o.order_date, o.created_at::date), 'YYYY-MM') AS month,
-        COALESCE(SUM(oi.total_price), 0) AS revenue,
+        COALESCE(SUM(ROUND(oi.total_price, 2)), 0) AS revenue,
         COALESCE(SUM(
-          oi.total_price
+          ROUND(oi.total_price, 2)
           - ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2)
         ), 0) AS profit
       FROM public.order_items oi
@@ -515,7 +515,7 @@ BEGIN
       -- Item-level revenue, matching order_agg and monthly above. Reading
       -- orders.total_price here would let the top-customers panel disagree with
       -- the headline and the trend in this same payload.
-      SELECT c.farm_name, COALESCE(SUM(oi.total_price), 0) AS total
+      SELECT c.farm_name, COALESCE(SUM(ROUND(oi.total_price, 2)), 0) AS total
       FROM public.order_items oi
       JOIN public.orders o ON o.id = oi.order_id
       JOIN public.customers c ON c.id = o.customer_id
@@ -627,19 +627,20 @@ BEGIN
     FROM (
       SELECT
         p.product_name,
-        -- oi.total_price, not quantity * price. Every other section of this RPC
-        -- sums the stored line total, which is already settled to cents;
-        -- recomputing it here re-derives sub-cent extended prices and makes the
+        -- ROUND(oi.total_price, 2), not quantity * price. Older rows can retain
+        -- a sub-cent stored line total, so settle that stored value at the
+        -- reporting boundary; recomputing quantity * price would independently
+        -- re-derive sub-cent extended prices and make the
         -- product ranking, its margin and the headline disagree. One revenue
         -- basis, as with cost. (Codex round 25.)
-        COALESCE(SUM(oi.total_price), 0) AS total_revenue,
+        COALESCE(SUM(ROUND(oi.total_price, 2)), 0) AS total_revenue,
         COALESCE(SUM(ROUND(oi.total_units_needed * COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0), 2)), 0) AS total_cost,
         ROUND(
           CASE
-            WHEN SUM(oi.total_price) > 0 THEN
-              ((SUM(oi.total_price) -
+            WHEN SUM(ROUND(oi.total_price, 2)) > 0 THEN
+              ((SUM(ROUND(oi.total_price, 2)) -
                 SUM(ROUND(oi.total_units_needed * COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0), 2))) /
-                NULLIF(SUM(oi.total_price), 0)) * 100
+                NULLIF(SUM(ROUND(oi.total_price, 2)), 0)) * 100
             ELSE 0
           END,
           1
@@ -654,7 +655,7 @@ BEGIN
         AND public.compute_season(COALESCE(o.order_date, o.created_at::date)) =
             public.compute_season(CURRENT_DATE)
       GROUP BY p.id, p.product_name
-      HAVING SUM(oi.total_price) > 0
+      HAVING SUM(ROUND(oi.total_price, 2)) > 0
       ORDER BY margin_pct ASC
       LIMIT 10
     ) bp
@@ -664,14 +665,14 @@ BEGIN
     FROM (
       SELECT
         c.farm_name,
-        COALESCE(SUM(oi.total_price), 0) AS total_revenue,
+        COALESCE(SUM(ROUND(oi.total_price, 2)), 0) AS total_revenue,
         COALESCE(SUM(ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2)), 0) AS total_cost,
         ROUND(
           CASE
-            WHEN SUM(oi.total_price) > 0 THEN
-              ((SUM(oi.total_price) -
+            WHEN SUM(ROUND(oi.total_price, 2)) > 0 THEN
+              ((SUM(ROUND(oi.total_price, 2)) -
                 SUM(ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))) /
-                NULLIF(SUM(oi.total_price), 0)) * 100
+                NULLIF(SUM(ROUND(oi.total_price, 2)), 0)) * 100
             ELSE 0
           END,
           1
@@ -686,7 +687,7 @@ BEGIN
         AND public.compute_season(COALESCE(o.order_date, o.created_at::date)) =
             public.compute_season(CURRENT_DATE)
       GROUP BY c.id, c.farm_name
-      HAVING SUM(oi.total_price) > 0
+      HAVING SUM(ROUND(oi.total_price, 2)) > 0
       ORDER BY margin_pct ASC
       LIMIT 10
     ) bc
@@ -696,14 +697,14 @@ BEGIN
     FROM (
       SELECT
         TO_CHAR(COALESCE(o.order_date, o.created_at::date), 'YYYY-MM') AS month,
-        COALESCE(SUM(oi.total_price), 0) AS revenue,
+        COALESCE(SUM(ROUND(oi.total_price, 2)), 0) AS revenue,
         COALESCE(SUM(ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2)), 0) AS cost,
         ROUND(
           CASE
-            WHEN SUM(oi.total_price) > 0 THEN
-              ((SUM(oi.total_price) -
+            WHEN SUM(ROUND(oi.total_price, 2)) > 0 THEN
+              ((SUM(ROUND(oi.total_price, 2)) -
                 SUM(ROUND(COALESCE(oi.cost_at_time_cents / 100.0, oi.cost_per_unit, 0) * oi.total_units_needed, 2))) /
-                NULLIF(SUM(oi.total_price), 0)) * 100
+                NULLIF(SUM(ROUND(oi.total_price, 2)), 0)) * 100
             ELSE 0
           END,
           1
@@ -827,7 +828,7 @@ BEGIN
       END AS grp,
       o.id AS order_id,
       oi.total_units_needed AS quantity,
-      oi.total_price AS revenue,
+      ROUND(oi.total_price, 2) AS revenue,
       -- Round each LINE to whole cents before aggregating, matching
       -- get_sales_detail_report and get_sales_summary_report. Summing unrounded
       -- line costs and rounding only the group total lets a fractional quantity

@@ -14,18 +14,11 @@ function errorText(error: unknown): string {
   return '';
 }
 
-function isMissingReasonSignature(error: unknown, functionName: string): boolean {
-  const candidate = error as RpcErrorShape | null;
-  return candidate?.code === 'PGRST202'
-    && errorText(error).includes(`public.${functionName}`)
-    && errorText(error).includes('p_below_cost_reason');
-}
-
 /**
- * Call a lifecycle RPC with the new approval parameter while remaining safe
- * during the brief frontend-first rollout window before its migration is live.
- * A PGRST202 means PostgreSQL never entered the function, so retrying the old
- * signature cannot duplicate a committed mutation.
+ * Call a lifecycle RPC through the database-enforced approval boundary.
+ * Missing-signature PGRST202 errors deliberately fail closed: retrying the old
+ * overload would execute the mutation without the active-admin/reason wall.
+ * The database migration must therefore land before this browser bundle.
  */
 export async function callBelowCostAwareRpc(
   functionName: string,
@@ -36,11 +29,7 @@ export async function callBelowCostAwareRpc(
     ...args,
     p_below_cost_reason: belowCostReason,
   };
-  const current = await supabaseUntyped.rpc(functionName, currentArgs);
-  if (!current.error || !isMissingReasonSignature(current.error, functionName)) {
-    return current;
-  }
-  return supabaseUntyped.rpc(functionName, args);
+  return supabaseUntyped.rpc(functionName, currentArgs);
 }
 
 /** Parse the database's locked live-price/cost detail for the approval modal. */

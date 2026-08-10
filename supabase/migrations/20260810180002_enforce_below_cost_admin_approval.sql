@@ -373,6 +373,14 @@ BEGIN
     v_price_cents := NEW.unit_price_cents;
     v_quantity := NEW.quantity;
   ELSIF TG_TABLE_NAME = 'quote_items' THEN
+    -- save_quote first inserts the client shape and then, in the same
+    -- transaction, recomputes every line from the locked Product row. App
+    -- roles cannot insert quote_items directly. Defer this private transient
+    -- INSERT so the authoritative UPDATE below is the single enforcement and
+    -- approval-audit point; any failure there rolls the entire save back.
+    IF TG_OP = 'INSERT' AND v_operation = 'save_quote' THEN
+      RETURN NEW;
+    END IF;
     IF TG_OP = 'UPDATE'
        AND COALESCE(v_operation, '') = ''
        AND NEW.product_id IS NOT DISTINCT FROM OLD.product_id
