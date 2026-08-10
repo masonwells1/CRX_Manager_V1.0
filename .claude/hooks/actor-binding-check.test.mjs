@@ -431,6 +431,16 @@ ON target.jobid = source.jobid
 WHEN MATCHED THEN UPDATE SET command = source.command;`);
 ok(isDeny(r), "MERGE cannot stage actor DDL into cron.job.command");
 
+r = runHook(`${STAGED_DDL}
+MERGE INTO cron.job AS target
+USING (SELECT 'mixed-branch-job'::text AS jobname, command FROM staged_cron_sql) AS source
+ON target.jobname = source.jobname
+WHEN MATCHED THEN UPDATE SET command = $safe$SELECT public.existing_safe_job()$safe$
+WHEN NOT MATCHED THEN
+  INSERT (schedule, command, nodename, nodeport, database, username, active, jobname)
+  VALUES ('0 6 * * *', source.command, 'localhost', 5432, current_database(), current_user, true, source.jobname);`);
+ok(isDeny(r), "a direct safe MERGE update cannot hide an opaque insert branch");
+
 r = runHook(`SELECT U&"\\0063ron".schedule(
   'unicode-delayed-actor-ddl',
   '* * * * *',

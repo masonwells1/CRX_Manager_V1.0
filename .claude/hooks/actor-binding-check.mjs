@@ -493,6 +493,9 @@ function hasOpaquePgCronCommandWrite(rawStmt) {
   if (directAssignment === false || directTuple === false) return true;
   const hasDirectCommand = directAssignment === true || directTuple === true;
   const isMerge = /\bMERGE\s+INTO\b/i.test(callableSql);
+  // INSERT branches have an independent column/value mapping. A safe direct
+  // UPDATE command cannot make an opaque WHEN NOT MATCHED branch inspectable.
+  if (isMerge && /\bWHEN\s+NOT\s+MATCHED\b[\s\S]*\bINSERT\s*\(/i.test(callableSql)) return true;
   if (isMerge && !hasDirectCommand) return true;
   if (!isMerge && /\bUPDATE\b/i.test(callableSql) &&
       insertDirect === null && !hasDirectCommand) return true;

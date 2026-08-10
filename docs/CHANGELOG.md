@@ -65,8 +65,14 @@ extractor now conservatively registers every Unicode call recognized by the
 sink detector, including custom `UESCAPE` syntax. Direct safe literals remain
 allowed; opaque Unicode API or argument forms require manual review.
 
-The focused actor-binding suite grew from 115 to 181 assertions while the
-idempotency reference suite remained at 86. Forty-nine continuation decisions were
+The next exact-SHA review found a mixed-branch MERGE gap: a safe direct command
+in `WHEN MATCHED ... UPDATE` made the statement appear inspectable even when
+`WHEN NOT MATCHED ... INSERT` stored an opaque staged command. Any pg_cron job
+MERGE with an INSERT branch now requires the manual-review path; update-only
+MERGE remains allowed when every command assignment is directly inspectable.
+
+The focused actor-binding suite grew from 115 to 182 assertions while the
+idempotency reference suite remained at 86. Fifty continuation decisions were
 weakened or removed one at a time; every mutation made the real hook-process
 suite fail before restoration. Separate real-process probes allowed ordinary
 trigger/event-trigger declarations, direct-literal `USING`/`INTO`, and harmless
