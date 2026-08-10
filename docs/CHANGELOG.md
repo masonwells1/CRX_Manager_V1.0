@@ -2,6 +2,14 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-10 — Record the exact-whole-cent compatibility policy
+
+Recorded Mason's financial storage decision independently of the pricing implementation: new money
+storage uses bigint cents, while established PostgreSQL numeric-dollar columns may remain when their
+math stays exact and their values are constrained to finite whole cents once clean. Browser money
+math must first convert decimal operands to integer cents and may not rely on binary floating-point
+rounding. This is policy and documentation only; it changes no schema, data, or production behavior.
+
 ## 2026-08-09 — Settled the canonical-profit question and applied the fix live
 
 Settled the canonical-profit question and applied the fix to production. Live measurement showed the order-vs-lines profit disagreement is a stale-cache bug, not a rounding artefact: orders.total_profit is trigger-recomputed and correct, while order_items.profit is a stored snapshot nothing refreshes, leaving 37 of 288 line rows stale across 17 orders. Mason decided the order header is canonical and line profit is derived from it, rounding each line's revenue and cost to whole cents before subtracting so the lines sum to the header exactly. Migration 20260809230500_single_canonical_line_profit.sql implements that, is forward-only, and both migration reviewers returned zero blockers. It was **applied live on 2026-08-09** (Supabase ledger version 20260810000427) after Mason's explicit approval. A post-apply live read confirmed both function bodies changed as written, the trigger now fires on all four money columns, and the SECURITY DEFINER flag and search_path are unchanged.

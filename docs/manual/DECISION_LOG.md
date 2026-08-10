@@ -1,11 +1,32 @@
 # Decision Log
 
-Last verified: 2026-08-09
+Last verified: 2026-08-10
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-08-10 — Exact whole cents is the invariant; legacy numeric-dollar columns are a compatibility exception
+
+**Source:** Mason's explicit 2026-08-10 project instruction, following the bigint-cents evaluation
+recorded in the 2026-08-09 changelog entry for canonical profit.
+
+**Decision.** New money storage remains bigint cents, but established PostgreSQL `numeric` dollar
+columns are not converted merely to satisfy the storage preference. PostgreSQL `numeric` is exact
+decimal; converting an established cluster is a coordinated unit change across database functions
+and UI readers, where one missed call site creates a 100x error. The accepted compatibility path is
+exact numeric-dollar storage plus validated finite whole-cent CHECKs on clean columns. Dirty legacy
+columns are not widened or rewritten without Mason's separate approval.
+
+**Operative rule.** The invariant is exact whole cents, not a blind type conversion. New database
+money columns use bigint cents. A legacy numeric-dollar column may remain only under this documented
+exception, must use exact PostgreSQL `numeric` arithmetic, and should receive a finite whole-cent
+CHECK once its existing rows are clean. Authoritative TypeScript money math must convert decimal
+operands to integer cents before multiplying, dividing, rounding, or aggregating; binary
+floating-point rounding is not permitted. The server remains authoritative for persisted values.
 
 ---
 
