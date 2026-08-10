@@ -1646,7 +1646,7 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // The terminal-provenance wrapper binds actor + order before issuing exact
   // governed cancellation claims and invoking the private implementation.
   cancel_order: 'delegated',
-  // The restored actor guard (migration 20260808150100) authorizes —
+  // The restored actor guard (migration 20260809170500) authorizes —
   // AUTH_REQUIRED, ACTOR_MISMATCH, is_admin() — and then delegates to
   // _batch_apply_prepayments_impl, which owns the canonical
   // check_idempotency/save_idempotency pair. The wrapper deliberately holds no
@@ -2155,11 +2155,13 @@ function registryMigrationHighWater(): string {
 
 // Intentional bookkeeping gate: update this set when Section 9 applies or a
 // new current pending migration is added; otherwise the inventory fails closed.
-// The latest approved migration in this checkout applied live 2026-07-29
-// under server-assigned ledger version 20260729222311; it is not pending.
 // Keep this set aligned with rows explicitly marked PENDING APPLY in
 // docs/reference/migration-history.md.
-const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>();
+//
+// Empty as of 2026-08-09: history rows 857-861 (the 2026-08-08 foundation ultra
+// review migrations, re-issued forward as 20260809170500-170900) applied live on
+// 2026-08-09 and their rows now read APPLIED LIVE, so nothing is pending.
+const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([]);
 
 /**
  * Explicitly pending migrations remain part of the contract inventory even
@@ -2275,6 +2277,8 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   save_idempotency: 'idempotency infrastructure helper that stores the parent operation result',
   set_primary_customer_contact: 'convergent primary-contact promotion; replays settle to the same single-primary state; SECURITY INVOKER under customer RLS',
   settle_applied_record_acres: 'trigger-only derived-acre recomputation; direct client EXECUTE is revoked',
+  trg_recalc_order_totals:
+    'RETURNS trigger, so PostgreSQL refuses any direct call and it can only run from its order_items trigger inside the parent transaction; convergent recomputation of the order header from the current lines, so a replay settles on the same totals',
 };
 
 

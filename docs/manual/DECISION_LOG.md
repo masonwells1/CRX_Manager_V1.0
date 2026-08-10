@@ -56,6 +56,49 @@ carried on `invoices.balance_cents`, which nothing in this path writes.
    The repository-replay gap this leaves is recorded in `docs/reference/migration-history.md`; it
    is closed by #354 and must not be papered over by re-emitting the same function in a second
    pending migration.
+## 2026-08-09 — The order header is the canonical profit; line profit is derived to match it
+
+**Source:** live measurement during the PR #354 takeover session, recorded in
+`docs/manual/KNOWN_ISSUES.md` ("DECIDED 2026-08-09 — order header profit vs the sum of its own
+lines") and history row 862. Mason answered the open question from the 2026-08-08 entry below.
+
+**The question was** which stored copy of profit is canonical — `orders.total_profit`, or the sum of
+`order_items.profit` — and which single rounding rule every writer uses.
+
+**What measuring changed.** The disagreement is not a rounding artefact. `orders.total_profit` is
+recomputed by a trigger on every write and is correct. `order_items.profit` is a **stored cache that
+nothing refreshes**: change a product's cost or a line's quantity and the line keeps its old profit
+indefinitely. 37 of 288 live line rows across 17 orders are stale, and most of the resulting gaps are
+orders of magnitude larger than any rounding rule could produce. Exact figures are in the
+access-controlled session record, not here — this repository is public.
+
+**Decision.** The **order header is canonical.** Line profit is derived from the same inputs, using
+one rule everywhere: round each line's revenue and each line's cost to whole cents, then subtract.
+Rounding **per line** rather than rounding the sum is deliberate — it makes
+`SUM(line profit) = header total_profit` hold *exactly*, by algebra rather than by coincidence.
+
+**Operative rules:**
+- `order_items.profit` is **derived, never authored.** No writer may set it independently; the
+  canonical trigger owns it. A future writer that computes profit itself is a bug.
+- Any writer that touches line revenue, cost, or quantity must let the profit derivation re-run.
+  The trigger is scoped `BEFORE INSERT OR UPDATE OF total_price, profit, cost_per_unit,
+  total_units_needed` for exactly this reason; narrowing that column list re-opens the stale cache.
+- The header must sum **per-line rounded** revenue and cost. This supersedes the 2026-08-08 concern
+  that per-line profit rounding could *widen* the header-vs-lines gap: it could, but only while the
+  header still subtracted unrounded cost. It no longer does.
+- `net_margin` stays a percentage and is deliberately excluded from whole-cent rounding.
+
+**Implementation:** `20260809230500_single_canonical_line_profit.sql`, written and reviewed
+2026-08-09 (both migration reviewers returned zero blockers) and **applied live 2026-08-09** as
+Supabase ledger version `20260810000427`, with a post-apply live read confirming both function
+bodies, the widened trigger, and unchanged row counts. **Forward-only — applying it moved no
+live money.** Repairing the 37 already-stale lines is a **separate** decision that has NOT been
+taken; its statement is deliberately commented out, because writing those rows would also round 11
+of the 46 fractional-cent `order_items` rows that `20260809170800` is intentionally holding back.
+
+**Explicitly still open, not covered by this decision:** `_update_order_items_impl`
+(`20260617123503`) overwrites `orders.total_price` with the raw un-rounded line sum. The exactness
+guarantee above is scoped to `total_profit` only.
 
 ## 2026-08-08 — Four foundation-ultra-review owner decisions settled
 
@@ -63,8 +106,8 @@ carried on `invoices.balance_cents`, which nothing in this path writes.
 
 1. **Payment visibility (M1) — leave as is.** `payments_select` stays company-wide; it is not
    scoped down to the invoices a rep can already see. Do not re-open without a new business reason.
-2. **Canonical rounding (M3) — round to two decimals (whole cents), half-up.** The pending
-   $5,245.195 commission resolves to $5,245.20. `order_items.total_price` and
+2. **Canonical rounding (M3) — round to two decimals (whole cents), half-up.** The largest pending
+   commission resolves half-up to the nearest cent. `order_items.total_price` and
    `commissions.commission_amount` both round at this point, and a live invariant predicate should
    assert whole cents on both.
 3. **`cancel_order` semantics (M4) — cancelling releases stock.** Mason's intent: a cancelled order
@@ -72,7 +115,8 @@ carried on `invoices.balance_cents`, which nothing in this path writes.
    audit overstated this.** Full cancel ALREADY releases prebooked stock and writes its `released`
    `inventory_transactions` row (confirmed live on ORD-2026-0330), and the `partially_fulfilled` path
    already handled both halves. Only `order_items.quantity_remaining` was genuinely stranded, and
-   migration `20260808150200` zeroes exactly that. **Do NOT add a second stock-release path** — it
+   migration `20260809170600` zeroes exactly that (written as `20260808150200`; re-issued forward on
+   2026-08-09 to clear the applied high-water mark). **Do NOT add a second stock-release path** — it
    would double-release inventory. The residual `quantity_prebooked = 36` on that product is March
    2026 historical drift (audit L2), not a cancellation defect.
 4. **Negative inventory (L3) — the existing decision stands.** Keep the 19 negative
