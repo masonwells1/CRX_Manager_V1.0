@@ -34,6 +34,18 @@ still fails closed. Both pricing smokes passed again on a fresh current-live sch
 residue. The reviewer also identified the applied stale-profit source missing from this branch;
 that exact already-live migration is being restored before the replacement review.
 
+**Exact-SHA review follow-up 4 (still local).** Review of `5d6220da` demonstrated a
+fractional-cent authorization bypass: a unit price such as `9.999` and cost `10.00` both rounded
+to 1,000 cents for the guard even though a large quantity could still create a material loss.
+Live read-only measurement found zero fractional-cent values in Product current cost, Order unit
+price, or Quote unit price. Migration `20260810180002` now adds validated finite whole-cent CHECKs
+to all three columns, rejects fractional/non-finite unit prices before comparison, and fails closed
+if the locked Product cost is not cent-representable. The rollback smoke mutation-tests a
+fractional price denial before the valid whole-cent approval path. A fresh current-live-schema
+replay applied all three migrations, both pricing smokes passed, all three constraints were
+validated with both scale and finite-value clauses, and zero smoke residue remained. A replacement
+exact-SHA review is still required before publication.
+
 **Exact-SHA review follow-up (still local).** The review of `b5f949fa` correctly found that the
 first server-wall draft still left direct PostgREST line writes available, ran after the canonical
 rounding trigger and could overwrite its whole-cent result, and could parse an older approval

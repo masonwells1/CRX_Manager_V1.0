@@ -166,6 +166,32 @@ BEGIN
     END IF;
   END;
 
+  -- A fractional-cent unit price must fail before cent comparison. Otherwise
+  -- 9.999 and a 10.00 cost both round to 1000 cents while a large quantity can
+  -- still create a material unapproved loss.
+  BEGIN
+    PERFORM public.update_order_items(
+      p_order_id := v_order_id,
+      p_items := jsonb_build_array(jsonb_build_object(
+        'id', v_order_item_id,
+        'product_id', v_product_b,
+        'product_name', '[SMOKE] Below Cost B ' || v_sfx,
+        'price_per_unit', 11.111,
+        'cost_per_unit', 0.01,
+        'total_units_needed', 2.345,
+        'unit_size', 'gal',
+        'below_cost_reason', 'fractional price must still be rejected'
+      )),
+      p_performed_by := v_admin,
+      p_idempotency_key := 'smoke-below-fractional-' || v_sfx
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: fractional-cent unit price committed';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM <> 'INVALID_UNIT_PRICE_CENTS' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: expected fractional-cent denial, got %', SQLERRM;
+    END IF;
+  END;
+
   -- update_order_items must resolve a product swap cost on the server and use
   -- that one locked value for snapshot and profit math.
   SELECT public.update_order_items(
@@ -174,7 +200,7 @@ BEGIN
       'id', v_order_item_id,
       'product_id', v_product_b,
       'product_name', '[SMOKE] Below Cost B ' || v_sfx,
-      'price_per_unit', 11.111,
+      'price_per_unit', 11.11,
       'cost_per_unit', 0.01,
       'total_units_needed', 2.345,
       'unit_size', 'gal',
@@ -186,7 +212,7 @@ BEGIN
   SELECT cost_per_unit, cost_at_time_cents, total_price, profit
     INTO v_cost, v_cost_cents, v_total, v_profit
   FROM public.order_items WHERE id = v_order_item_id;
-  IF v_cost <> 12 OR v_cost_cents <> 1200 OR v_total <> 26.06 OR v_profit <> -2.08 THEN
+  IF v_cost <> 12 OR v_cost_cents <> 1200 OR v_total <> 26.05 OR v_profit <> -2.09 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: product swap cents disagreed (cost %, cents %, total %, profit %)',
       v_cost, v_cost_cents, v_total, v_profit;
   END IF;

@@ -91,6 +91,35 @@ REVOKE INSERT, UPDATE, DELETE
   ON TABLE public.order_items, public.invoice_items, public.quote_items
   FROM PUBLIC, anon, authenticated, service_role;
 
+-- The authorization comparison is cent-exact only if both inputs are cent-
+-- representable. Production was measured clean (zero fractional-cent values in
+-- all three columns) immediately before this migration was reviewed. Make that
+-- a database invariant so no privileged or future writer can round a below-cost
+-- unit price up to the same comparison cent as its cost.
+ALTER TABLE public.products
+  ADD CONSTRAINT products_current_cost_cent_scale_chk
+  CHECK (current_cost IS NULL OR (
+    current_cost = round(current_cost, 2)
+    AND current_cost > '-Infinity'::numeric
+    AND current_cost < 'Infinity'::numeric
+  ));
+
+ALTER TABLE public.order_items
+  ADD CONSTRAINT order_items_price_per_unit_cent_scale_chk
+  CHECK (price_per_unit IS NULL OR (
+    price_per_unit = round(price_per_unit, 2)
+    AND price_per_unit > '-Infinity'::numeric
+    AND price_per_unit < 'Infinity'::numeric
+  ));
+
+ALTER TABLE public.quote_items
+  ADD CONSTRAINT quote_items_price_per_unit_cent_scale_chk
+  CHECK (price_per_unit IS NULL OR (
+    price_per_unit = round(price_per_unit, 2)
+    AND price_per_unit > '-Infinity'::numeric
+    AND price_per_unit < 'Infinity'::numeric
+  ));
+
 CREATE OR REPLACE FUNCTION public._guard_below_cost_approval_immutable()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -290,6 +319,11 @@ BEGIN
     IF NEW.pricing_pending = true AND NEW.price_per_unit = 0 THEN
       RETURN NEW;
     END IF;
+    IF NEW.price_per_unit IS NULL
+       OR NEW.price_per_unit::text IN ('NaN', 'Infinity', '-Infinity')
+       OR NEW.price_per_unit <> round(NEW.price_per_unit, 2) THEN
+      RAISE EXCEPTION 'INVALID_UNIT_PRICE_CENTS';
+    END IF;
     v_entity_type := 'order';
     v_entity_id := NEW.order_id;
     v_line_id := NEW.id;
@@ -347,6 +381,11 @@ BEGIN
            <= COALESCE(OLD.total_units_needed, 0) THEN
       RETURN NEW;
     END IF;
+    IF NEW.price_per_unit IS NULL
+       OR NEW.price_per_unit::text IN ('NaN', 'Infinity', '-Infinity')
+       OR NEW.price_per_unit <> round(NEW.price_per_unit, 2) THEN
+      RAISE EXCEPTION 'INVALID_UNIT_PRICE_CENTS';
+    END IF;
     v_entity_type := 'quote';
     v_entity_id := NEW.quote_id;
     v_line_id := NEW.id;
@@ -372,6 +411,9 @@ BEGIN
      OR v_cost::text IN ('NaN', 'Infinity', '-Infinity')
      OR v_cost <= 0 THEN
     RAISE EXCEPTION 'COST_BASIS_REQUIRED:%', v_product_id;
+  END IF;
+  IF v_cost <> round(v_cost, 2) THEN
+    RAISE EXCEPTION 'COST_BASIS_CENTS_REQUIRED:%', v_product_id;
   END IF;
 
   v_cost_cents := round(v_cost * 100)::bigint;
@@ -812,6 +854,26 @@ BEGIN
   IF (SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgname LIKE 'zz_crx_below_cost_%') <> 3 THEN
     RAISE EXCEPTION 'verify failed: expected three below-cost line triggers';
   END IF;
+
+  FOREACH v_name IN ARRAY ARRAY[
+    'products_current_cost_cent_scale_chk',
+    'order_items_price_per_unit_cent_scale_chk',
+    'quote_items_price_per_unit_cent_scale_chk'
+  ]
+  LOOP
+    IF NOT EXISTS (
+      SELECT 1
+      FROM pg_constraint c
+      WHERE c.conname = v_name
+        AND c.contype = 'c'
+        AND c.convalidated = true
+        AND position('round(' in lower(pg_get_constraintdef(c.oid))) > 0
+        AND position('''-infinity''' in lower(pg_get_constraintdef(c.oid))) > 0
+        AND position('''infinity''' in lower(pg_get_constraintdef(c.oid))) > 0
+    ) THEN
+      RAISE EXCEPTION 'verify failed: % cent-scale constraint missing or incomplete', v_name;
+    END IF;
+  END LOOP;
 
   FOREACH v_role IN ARRAY ARRAY['anon', 'authenticated', 'service_role']
   LOOP
