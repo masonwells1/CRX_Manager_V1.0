@@ -68,7 +68,7 @@ APPROVED_SET_CUTOFF=20260811000000
 # Tables whose rows carry money, inventory, or customer-visible state. A
 # top-level rewrite of these is what needs binding; rewrites inside a function
 # body are runtime logic, not a one-shot data migration, and are not checked.
-BUSINESS_ROW_TABLES='orders|order_items|quotes|quote_items|invoices|invoice_items|payments|commissions|commission_payments|deliveries|delivery_items|purchase_orders|purchase_order_items|returns|return_items|inventory_transactions|products|customers|jobs|write_offs|prepay_applications|finance_charges'
+BUSINESS_ROW_TABLES='orders|order_items|order_shares|order_line_allocations|order_item_field_allocations|quotes|quote_items|quote_versions|quote_product_draws|invoices|invoice_items|invoice_shares|invoice_line_shares|invoice_line_allocations|payments|commissions|commission_payments|commission_payment_items|deliveries|delivery_items|delivery_remainders|purchase_orders|purchase_order_items|returns|return_items|inventory|inventory_holds|inventory_transactions|cycle_counts|cycle_count_items|receiving_records|products|product_cost_basis|cost_history|customers|jobs|job_product_draws|write_offs|prepay_applications|prepay_credits|credit_memo_applications|finance_charges|vendors|vendor_bills|vendor_payments|rebate_claims|accounting_periods|financial_audit_log|application_records|blend_tickets|blend_ticket_products|rup_sales_records|profiles'
 
 # Tables that do NOT have an updated_at column
 TABLES_WITHOUT_UPDATED_AT=(
@@ -397,24 +397,57 @@ for file in $ALL_SQL; do
       DIGEST_BOUND=0
       DIGEST_WHY=""
       if [ -n "$DIGEST_HEX" ]; then
-        # Where does that hex first appear in EXECUTABLE sql (comments stripped)?
+        # Where is that hex first COMPARED in executable sql (comments stripped)?
+        # Mentioning it — selecting it into a variable, logging it — is not a
+        # comparison, so those lines are skipped rather than accepted.
         DIGEST_EXEC_LINE=$(awk -v hex="$DIGEST_HEX" '
+          {
+            l = tolower($0); sub(/--.*/, "", l)
+            if (index(l, hex) == 0) next
+            if (l ~ /(<>|!=|=|is[[:space:]]+distinct[[:space:]]+from)/) { print FNR; exit }
+          }
+        ' "$file")
+        DIGEST_MENTION_LINE=$(awk -v hex="$DIGEST_HEX" '
           { l = tolower($0); sub(/--.*/, "", l); if (index(l, hex) > 0) { print FNR; exit } }
         ' "$file")
-        if [ -z "$DIGEST_EXEC_LINE" ]; then
+        if [ -z "$DIGEST_EXEC_LINE" ] && [ -n "$DIGEST_MENTION_LINE" ]; then
+          DIGEST_WHY="the digest is mentioned at line $DIGEST_MENTION_LINE but never compared — no comparison operator on that line"
+        elif [ -z "$DIGEST_EXEC_LINE" ]; then
           DIGEST_WHY="the digest appears only in a comment — it is documented, never compared"
         elif [ "$DIGEST_EXEC_LINE" -ge "$FIRST_REWRITE_LINE" ]; then
           DIGEST_WHY="the digest is compared at line $DIGEST_EXEC_LINE, AFTER the first write at line $FIRST_REWRITE_LINE"
         else
-          # Fail-closed: a mismatch must abort. Require a RAISE EXCEPTION in the
-          # statement region around the comparison.
-          RAISE_NEAR=$(awk -v dl="$DIGEST_EXEC_LINE" '
-            FNR >= dl - 6 && FNR <= dl + 12 { l = $0; sub(/--.*/, "", l); print l }
-          ' "$file" | grep -ciE 'raise[[:space:]]+exception' || true)
-          if [ "$RAISE_NEAR" -gt 0 ]; then
-            DIGEST_BOUND=1
+          # The hex must be compared against something the migration COMPUTED,
+          # not against another literal. A hash call over the approved set has
+          # to appear somewhere before the write.
+          COMPUTED=$(awk -v fl="$FIRST_REWRITE_LINE" '
+            FNR < fl { l = tolower($0); sub(/--.*/, "", l); print l }
+          ' "$file" | grep -cE '(md5|sha256|sha512|digest|encode)[[:space:]]*\(' || true)
+
+          # Fail-closed: the mismatch branch must abort. Require the RAISE to sit
+          # inside the SAME IF block as the comparison — a RAISE that merely
+          # happens to be nearby, in an unrelated or unreachable branch, is not
+          # the guard it looks like. Walk forward from the comparison, tracking
+          # IF depth, and stop at the END IF that closes it.
+          RAISE_IN_BRANCH=$(awk -v dl="$DIGEST_EXEC_LINE" '
+            FNR < dl { next }
+            {
+              l = tolower($0); sub(/--.*/, "", l)
+              if (FNR == dl) { depth = 1 }
+              else {
+                if (l ~ /(^|[^a-z0-9_])if([^a-z0-9_]|$)/ && l !~ /end[[:space:]]+if/) depth++
+                if (l ~ /end[[:space:]]+if/) { depth--; if (depth <= 0) exit }
+              }
+              if (l ~ /raise[[:space:]]+exception/) { print "yes"; exit }
+            }
+          ' "$file" | grep -c yes || true)
+
+          if [ "$COMPUTED" -eq 0 ]; then
+            DIGEST_WHY="the digest is compared against another literal — nothing before line $FIRST_REWRITE_LINE computes a hash (md5/sha256/digest/encode) over the approved set"
+          elif [ "$RAISE_IN_BRANCH" -eq 0 ]; then
+            DIGEST_WHY="the comparison at line $DIGEST_EXEC_LINE does not RAISE EXCEPTION inside its own IF block — a mismatch would not abort"
           else
-            DIGEST_WHY="the digest comparison at line $DIGEST_EXEC_LINE does not RAISE EXCEPTION on mismatch — it is not fail-closed"
+            DIGEST_BOUND=1
           fi
         fi
       fi

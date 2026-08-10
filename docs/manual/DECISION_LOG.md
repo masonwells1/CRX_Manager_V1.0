@@ -51,19 +51,28 @@ and a round-3 Codex review (`CRX-GUARD-001`) was right to say so. Three bypasses
    those walked straight past the check. Detection is now **token-based** over the flattened
    non-function-body text, with quoted identifiers and string literals stripped first — so prose
    inside a `RAISE NOTICE` cannot fabricate a match either.
-2. **The digest was decorative.** It passed by appearing anywhere in executable SQL. It must now
-   appear **before the first write** *and* sit next to a `RAISE EXCEPTION`, so a drifted approved set
-   **aborts** instead of proceeding. A digest that is only in a comment, or only compared after the
-   write, or compared without raising, is now a violation with a message saying which of the three
-   it is.
+2. **The digest was decorative.** It passed by appearing anywhere in executable SQL. Four things are
+   now required together, and the failure message names which one is missing: the digest must be
+   **compared** (a comparison operator on that line — mentioning or `SELECT … INTO` is not a check);
+   the value it is compared against must be **computed** (a hash call over the approved set before
+   the write, so it is not one literal compared to another); the comparison must sit **before the
+   first write**; and a `RAISE EXCEPTION` must sit **inside that comparison's own `IF` block**, so a
+   drifted set aborts. A `RAISE` that merely happens to be nearby, in an unrelated or unreachable
+   branch, no longer counts.
 3. **The opt-out was a silent blanket pass.** It must now **name every business table it waives**,
    and it emits a `WARNING` — a waived money rewrite belongs in the CI log where a reviewer sees it,
    not passing quietly.
 
-Mutation-tested with 12 fixtures before being trusted: seven bypass attempts fail, the correct
-fail-closed shape passes, and in-function rewrites, pre-cutoff migrations, and the word "update"
-inside a string literal stay silent. Per the standing rule that an untested guard is decoration,
-the fixtures are the evidence — not the reading of the diff.
+The protected-table list was also too narrow: it covered the ordering and invoicing tables but not
+`inventory`, `vendor_bills`, `vendor_payments`, `cost_history`, `prepay_credits`, and the rest of the
+financial state. It now covers all of them.
+
+**The guard has committed tests.** `scripts/validate-sql-migrations-approved-set.test.mjs` writes 18
+synthetic migrations — twelve real bypass attempts, one waiver, and five shapes that must stay
+silent — runs the actual script over them, and asserts what it printed for each. It runs in
+`npm run test:correction-guards`. The test was itself verified by breaking the guard on purpose and
+watching eight cases go red, then restoring it and watching them go green. Per the standing rule that
+an untested guard is decoration, that red-then-green run is the evidence, not a reading of the diff.
 
 **Also settled here.** The permission entry `Read(//c/CRX_Manager/**)` was removed from the tracked
 `.claude/settings.local.json` (Codex finding 2). It had been added by an auto-approved prompt during
