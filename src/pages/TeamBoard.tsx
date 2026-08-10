@@ -12,10 +12,11 @@ import Input from '../components/ui/Input';
 import { useToast } from '../components/ui/Toast';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { parseLocalDate } from '../lib/dateUtils';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useRealtimeNotes } from '../hooks/useRealtimeSubscription';
 import TeamBoardFilters, { FilterState } from '../components/team/TeamBoardFilters';
 import CommentsSection from '../components/team/CommentsSection';
@@ -104,6 +105,8 @@ export default function TeamBoard() {
   });
 
   const isAdmin = role === 'admin';
+  const completeIdem = useIdempotencyKey('complete_team_note', profile?.id || '');
+  const [completingNote, setCompletingNote] = useState<string | null>(null);
 
   useRealtimeNotes(() => {
     fetchNotes();
@@ -283,12 +286,18 @@ export default function TeamBoard() {
     if (!note) {
       // PR-07 follow-up: dropped creator + assignee FK embeds; resolve via
       // profile_public_view post-fetch.
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('team_notes')
         .select('*')
         .eq('id', noteId)
         .is('deleted_at', null)
         .maybeSingle();
+
+      if (error) {
+        Sentry.captureException(error, { tags: { source: 'fetch', action: 'open_team_note_detail' } });
+        toast('error', 'Unable to open that note right now. Please try again.');
+        return;
+      }
 
       if (data) {
         const ids = [data.created_by, data.assigned_to].filter(Boolean) as string[];
@@ -310,12 +319,21 @@ export default function TeamBoard() {
       }
     }
 
+    // `replace: true` on both arms: a plain setSearchParams PUSHES a clean
+    // /team-board entry, so Back restores ?note=… , this effect re-opens the
+    // note and pushes again — the user can never get back to Notifications.
+    // Replacing consumes the deep link in place (Codex P2 on PR #351).
     if (note) {
       setSelectedNote(note);
       setDetailModalOpen(true);
-      setSearchParams({});
+      setSearchParams({}, { replace: true });
+    } else {
+      // Deleted or inaccessible note behind a stale ?note= link: say so and
+      // clear the param instead of silently doing nothing.
+      toast('error', 'That note no longer exists — it may have been deleted.');
+      setSearchParams({}, { replace: true });
     }
-  }, [notes, setSearchParams]);
+  }, [notes, setSearchParams, toast]);
 
   // Initial load — fetch notes and profiles once on mount
   useEffect(() => {
@@ -324,14 +342,19 @@ export default function TeamBoard() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Deep-link: open a note when ?note=<id> is in the URL
+  // Deep-link: open a note when ?note=<id> is in the URL. Waits for the
+  // initial fetch (loading) instead of notes.length — the old guard skipped
+  // the lone mount-time run on a cold load (notes not fetched yet) and never
+  // re-fired, so notification links landed on the board without opening the
+  // note. openNoteDetail falls back to fetching by id, so an empty board or
+  // a note missing from local state still resolves.
   useEffect(() => {
     const noteId = searchParams.get('note');
-    if (noteId && notes.length > 0) {
+    if (noteId && !loading) {
       openNoteDetail(noteId);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
+  }, [searchParams, loading]);
 
   useEffect(() => {
     if (viewTab === 'activity') {
@@ -473,22 +496,43 @@ export default function TeamBoard() {
       toast('error', 'Please wait for profile to load');
       return;
     }
+    // One completion at a time: the idempotency key is page-scoped, so a
+    // second click before the first resolves would reuse the in-flight key
+    // for a different payload and trip the server's replay-mismatch guard.
+    if (completingNote) return;
+    setCompletingNote(note.id);
 
     try {
-      const result = await supabase
-        .from('team_notes')
-        .update({
-          is_completed: !note.is_completed,
-          completed_by: !note.is_completed ? profile.id : null,
-          completed_at: !note.is_completed ? new Date().toISOString() : null,
-        })
-        .eq('id', note.id)
-        .select();
-      checkMutationResult(result, 'Toggle note completion');
+      // Completion goes through the complete_team_note RPC (not a direct
+      // table update) so the ASSIGNEE can complete tasks delegated to them —
+      // tnotes_update RLS only allows the creator or an admin.
+      const { data, error } = await supabase.rpc('complete_team_note', {
+        p_note_id: note.id,
+        p_completed: !note.is_completed,
+        p_idempotency_key: completeIdem.getKey(),
+      });
+      if (error) throw error;
+      assertRpcResult(data, 'complete_team_note');
+      completeIdem.resetKey();
       fetchNotes();
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'toggle_note_completion' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to update note');
+      if (hasRpcCode(err, RpcErrorCodes.NOT_AUTHORIZED_TO_COMPLETE)) {
+        toast('error', 'Only the person who created this note, the person it is assigned to, or an admin can check it off.');
+      } else if (hasRpcCode(err, RpcErrorCodes.NOTE_NOT_FOUND)) {
+        toast('error', 'This note was deleted by someone else. Refreshing the board.');
+        fetchNotes();
+      } else if (hasRpcCode(err, RpcErrorCodes.COMPLETE_REPLAY_PAYLOAD_MISMATCH)) {
+        // A previous call committed but its response was lost, leaving a
+        // stale key behind. Discard it so the next click works.
+        completeIdem.resetKey();
+        toast('error', 'That last change already went through. Please try again.');
+        fetchNotes();
+      } else {
+        toast('error', err instanceof Error ? err.message : 'Failed to update note');
+      }
+    } finally {
+      setCompletingNote(null);
     }
   };
 
@@ -508,6 +552,11 @@ export default function TeamBoard() {
   };
 
   const canEdit = (note: TeamNote) => isAdmin || note.created_by === profile?.id;
+
+  // Mirrors complete_team_note's authorization so the checkbox only shows to
+  // people whose click can actually succeed (creator, assignee, or admin).
+  const canComplete = (note: TeamNote) =>
+    isAdmin || note.created_by === profile?.id || note.assigned_to === profile?.id;
 
   // ── Filtering ──
   const applyFilters = (notesList: ExtendedTeamNote[]): ExtendedTeamNote[] => {
@@ -827,6 +876,7 @@ export default function TeamBoard() {
                       key={n.id}
                       note={n}
                       showCheckbox={true}
+                      canComplete={canComplete(n)}
                       canEdit={canEdit(n)}
                       onToggleComplete={toggleComplete}
                       onTogglePin={togglePin}
@@ -917,7 +967,7 @@ export default function TeamBoard() {
                   {notesByType('todo').length === 0 && (
                     <p className="text-sm text-secondary py-4 text-center">No to-dos</p>
                   )}
-                  {notesByType('todo').map((n) => <NoteCard key={n.id} note={n} showCheckbox showCompletionDetails canEdit={canEdit(n)} onToggleComplete={toggleComplete} onTogglePin={togglePin} onEdit={openEditModal} onDelete={handleDeleteNote} onClick={handleNoteClick} />)}
+                  {notesByType('todo').map((n) => <NoteCard key={n.id} note={n} showCheckbox canComplete={canComplete(n)} showCompletionDetails canEdit={canEdit(n)} onToggleComplete={toggleComplete} onTogglePin={togglePin} onEdit={openEditModal} onDelete={handleDeleteNote} onClick={handleNoteClick} />)}
                 </div>
               </div>
             </Card>
@@ -957,7 +1007,7 @@ export default function TeamBoard() {
           {myTasks.length > 0 && (
             <Card padding={false}>
               <div className="p-5 space-y-3">
-                {myTasks.map(n => <NoteCard key={n.id} note={n} showCheckbox showCompletionDetails={false} canEdit={canEdit(n)} onToggleComplete={toggleComplete} onTogglePin={togglePin} onEdit={openEditModal} onDelete={handleDeleteNote} onClick={handleNoteClick} />)}
+                {myTasks.map(n => <NoteCard key={n.id} note={n} showCheckbox canComplete={canComplete(n)} showCompletionDetails={false} canEdit={canEdit(n)} onToggleComplete={toggleComplete} onTogglePin={togglePin} onEdit={openEditModal} onDelete={handleDeleteNote} onClick={handleNoteClick} />)}
               </div>
             </Card>
           )}
@@ -976,7 +1026,7 @@ export default function TeamBoard() {
                 <div className="p-5">
                   <CardHeader title="My Recently" accent="Completed" />
                   <div className="space-y-3 mt-3">
-                    {myCompleted.map(n => <NoteCard key={n.id} note={n} showCheckbox showCompletionDetails canEdit={canEdit(n)} onToggleComplete={toggleComplete} onTogglePin={togglePin} onEdit={openEditModal} onDelete={handleDeleteNote} onClick={handleNoteClick} />)}
+                    {myCompleted.map(n => <NoteCard key={n.id} note={n} showCheckbox canComplete={canComplete(n)} showCompletionDetails canEdit={canEdit(n)} onToggleComplete={toggleComplete} onTogglePin={togglePin} onEdit={openEditModal} onDelete={handleDeleteNote} onClick={handleNoteClick} />)}
                   </div>
                 </div>
               </Card>
