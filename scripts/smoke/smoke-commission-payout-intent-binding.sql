@@ -248,16 +248,29 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: JSON-null receipt re-ran the payout (% effects)', v_count;
   END IF;
 
-  -- NULL key still performs the work and writes no receipt.
-  SELECT count(*) INTO v_count FROM public.idempotency_keys;
+  -- A NULL key is REFUSED, and the refused call pays out nothing. Omitting the
+  -- key used to run the payout with no receipt and therefore no intent binding
+  -- at all; that unbound door is closed.
+  SELECT count(*) INTO v_count FROM public.proof_effects
+   WHERE operation = 'create_commission_payment';
+  BEGIN
+    PERFORM public.create_commission_payment(
+      ARRAY[v_c3], 'check', 'REF-2', DATE '2026-08-09', 'no key', v_actor_a, NULL
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: a NULL idempotency key was accepted by create';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%IDEMPOTENCY_KEY_REQUIRED%' THEN RAISE; END IF;
+  END;
+  IF (SELECT count(*) FROM public.proof_effects
+       WHERE operation = 'create_commission_payment') <> v_count THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: the refused NULL-key create still paid out';
+  END IF;
+
   v_p2 := public.create_commission_payment(
-    ARRAY[v_c3], 'check', 'REF-2', DATE '2026-08-09', 'no key', v_actor_a, NULL
+    ARRAY[v_c3], 'check', 'REF-2', DATE '2026-08-09', 'keyed', v_actor_a, 'key-create-2'
   );
   IF v_p2 IS NULL THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: NULL-key create did not perform the work';
-  END IF;
-  IF (SELECT count(*) FROM public.idempotency_keys) <> v_count THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: NULL-key create wrote a receipt';
+    RAISE EXCEPTION 'SMOKE_FAIL: keyed create did not perform the work';
   END IF;
 
   ----------------------------------------------------------------------------
@@ -338,18 +351,24 @@ BEGIN
     IF SQLERRM NOT LIKE '%p_performed_by does not match authenticated user%' THEN RAISE; END IF;
   END;
 
-  -- NULL key still performs the work and writes no receipt.
+  -- Post refuses a NULL key too, and the refused call posts nothing.
   v_p4 := public.create_commission_payment(
-    ARRAY[v_c2], 'check', 'REF-4', DATE '2026-08-09', 'nokey post', v_actor_a, NULL
+    ARRAY[v_c2], 'check', 'REF-4', DATE '2026-08-09', 'keyed post', v_actor_a, 'key-create-4'
   );
-  SELECT count(*) INTO v_count FROM public.idempotency_keys;
-  PERFORM public.post_commission_payment(v_p4, v_actor_a, NULL);
-  IF (SELECT count(*) FROM public.idempotency_keys) <> v_count THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: NULL-key post wrote a receipt';
+  BEGIN
+    PERFORM public.post_commission_payment(v_p4, v_actor_a, NULL);
+    RAISE EXCEPTION 'SMOKE_FAIL: a NULL idempotency key was accepted by post';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%IDEMPOTENCY_KEY_REQUIRED%' THEN RAISE; END IF;
+  END;
+  IF (SELECT count(*) FROM public.proof_effects
+       WHERE operation = 'post_commission_payment' AND entity_id = v_p4) <> 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: the refused NULL-key post still posted';
   END IF;
+  PERFORM public.post_commission_payment(v_p4, v_actor_a, 'key-post-4');
   IF (SELECT count(*) FROM public.proof_effects
        WHERE operation = 'post_commission_payment' AND entity_id = v_p4) <> 1 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: NULL-key post did not perform the work';
+    RAISE EXCEPTION 'SMOKE_FAIL: keyed post did not perform the work';
   END IF;
 
   ----------------------------------------------------------------------------
@@ -433,15 +452,21 @@ BEGIN
     IF SQLERRM <> 'ACTOR_MISMATCH' THEN RAISE; END IF;
   END;
 
-  -- NULL key still performs the work and writes no receipt.
-  SELECT count(*) INTO v_count FROM public.idempotency_keys;
-  PERFORM public.void_commission_payment(v_p4, 'no key void', v_actor_a, NULL);
-  IF (SELECT count(*) FROM public.idempotency_keys) <> v_count THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: NULL-key void wrote a receipt';
+  -- Void refuses a NULL key too, and the refused call voids nothing.
+  BEGIN
+    PERFORM public.void_commission_payment(v_p4, 'no key void', v_actor_a, NULL);
+    RAISE EXCEPTION 'SMOKE_FAIL: a NULL idempotency key was accepted by void';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%IDEMPOTENCY_KEY_REQUIRED%' THEN RAISE; END IF;
+  END;
+  IF (SELECT count(*) FROM public.proof_effects
+       WHERE operation = 'void_commission_payment' AND entity_id = v_p4) <> 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: the refused NULL-key void still voided';
   END IF;
+  PERFORM public.void_commission_payment(v_p4, 'keyed void', v_actor_a, 'key-void-4');
   IF (SELECT count(*) FROM public.proof_effects
        WHERE operation = 'void_commission_payment' AND entity_id = v_p4) <> 1 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: NULL-key void did not perform the work';
+    RAISE EXCEPTION 'SMOKE_FAIL: keyed void did not perform the work';
   END IF;
 
   ----------------------------------------------------------------------------

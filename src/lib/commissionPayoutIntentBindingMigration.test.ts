@@ -70,10 +70,10 @@ function fingerprintBlock(body: string): string {
   return body.slice(start, end);
 }
 
-/** The branch taken when the caller sent no idempotency key at all. */
-function noKeyBranch(body: string): string {
-  const start = body.indexOf('IF p_idempotency_key IS NULL THEN');
-  expect(start, 'wrapper has no un-keyed delegation branch').toBeGreaterThan(-1);
+/** The guard that refuses a caller who sent no usable idempotency key. */
+function missingKeyGuard(body: string): string {
+  const start = body.indexOf('IF p_idempotency_key IS NULL');
+  expect(start, 'wrapper does not check for a missing idempotency key').toBeGreaterThan(-1);
   return body.slice(start, body.indexOf('END IF;', start));
 }
 
@@ -141,8 +141,8 @@ describe('commission payout intent-binding migration', () => {
     if (rpc.normalized.length === 0) return;
     const body = wrapperBody(rpc.name);
     const hash = fingerprintBlock(body);
-    // The implementation call that does the real work is the LAST one — the
-    // first is the un-keyed delegation branch above it.
+    // lastIndexOf, not indexOf: earlier mentions of the implementation name are
+    // prose in the comments, and only the real call persists anything.
     const call = body.slice(body.lastIndexOf(`public.${rpc.impl}(`));
 
     for (const local of rpc.normalized) {
@@ -152,19 +152,30 @@ describe('commission payout intent-binding migration', () => {
       expect(hash, `${rpc.name} hashes a value it did not normalize`).toContain(local);
       expect(call, `${rpc.name} persists a value it did not hash`).toContain(local);
     }
-    // The un-keyed path must normalize too, or the same input would be stored
-    // differently depending on whether a retry key was present.
-    for (const local of rpc.normalized) {
-      expect(noKeyBranch(body)).toContain(local);
-    }
   });
 
-  it.each(PAYOUT_RPCS)('$name still delegates when no idempotency key was sent', (rpc) => {
-    const branch = noKeyBranch(wrapperBody(rpc.name));
-    expect(branch).toContain(`RETURN public.${rpc.impl}(`);
-    // NULL, not the key: passing a key here would write a receipt the wrapper
-    // never binds, recreating the unbound-receipt hole on the un-keyed path.
-    expect(branch).toContain('NULL\n    );');
+  it.each(PAYOUT_RPCS)('$name refuses a caller who sent no idempotency key', (rpc) => {
+    const body = wrapperBody(rpc.name);
+    const guard = missingKeyGuard(body);
+
+    // A missing key used to delegate straight to the implementation, which ran
+    // the payout with no receipt and therefore no intent binding at all — an
+    // authenticated admin calling the RPC directly (PostgREST lets a defaulted
+    // argument be omitted) reached the money path unbound. It must now RAISE.
+    expect(guard, `${rpc.name} does not reject a whitespace-only key`).toContain(
+      "p_idempotency_key !~ '[^[:space:]]'",
+    );
+    expect(guard).toContain(`RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: ${rpc.name}`);
+    // And it must refuse rather than fall through to the payout.
+    expect(guard, `${rpc.name} still delegates on a missing key`).not.toContain(
+      `public.${rpc.impl}(`,
+    );
+
+    // The guard has to run BEFORE the implementation is ever called, or an
+    // un-keyed request would pay out and only then be told it was invalid.
+    expect(body.indexOf('IF p_idempotency_key IS NULL')).toBeLessThan(
+      body.indexOf(`public.${rpc.impl}(`),
+    );
   });
 
   it.each(PAYOUT_RPCS)('$name replays the committed receipt instead of re-running the payout', (rpc) => {
@@ -229,12 +240,21 @@ describe('commission payout intent-binding migration', () => {
     // read more naturally here but is banned in migrations by the SQL commit
     // guard, and prosrc holds the body — which is where the call to the
     // implementation appears — so it answers the same question.
-    const probe = `WHERE p.oid = to_regprocedure('public.${rpc.name}(${rpc.signature})'))`;
+    const probe = `WHERE p.oid = to_regprocedure('public.${rpc.name}(${rpc.signature})');`;
     expect(beforeRename).toContain(probe);
     const guard = beforeRename.slice(beforeRename.indexOf(probe));
     expect(guard).toContain(`LIKE '%${rpc.impl}%' THEN`);
     // …and the guard has to ABORT, not warn.
     expect(guard).toContain('RAISE EXCEPTION');
+
+    // Absence of the wrapper marker is not proof of identity: a public function
+    // of the same name that is NOT this payout body would sail past that check
+    // and be renamed into the implementation slot, so the guard also demands the
+    // two contract markers the wrapper actually depends on.
+    expect(guard, `${rpc.name} renames on absence alone, without an identity check`).toContain(
+      "v_src NOT LIKE '%check_idempotency(%'",
+    );
+    expect(guard).toContain("v_src NOT LIKE '%commission_payment_items%'");
   });
 
   it.each(PAYOUT_RPCS)('$name keeps its renamed implementation out of the browser', (rpc) => {

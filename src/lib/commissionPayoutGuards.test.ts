@@ -26,17 +26,47 @@ function migrationFiles() {
 const PAYOUT_RENAME_MIGRATION =
   '20260810170000_bind_commission_payout_idempotency_to_intent.sql';
 
+/**
+ * Every definition of public.<rpc> in one migration file, in file order.
+ *
+ * This deliberately does NOT use String.match(): a non-global match returns only
+ * the FIRST definition in the file, so a migration that defines the same RPC
+ * twice — keeping the guards in the first and dropping them from the second,
+ * effective one — would leave the assertions below green while production ran
+ * the unguarded body. It also accepts bare `CREATE FUNCTION`, quoted
+ * identifiers, whitespace around the schema qualifier and any dollar-quote tag,
+ * so a definition written in a slightly different style is caught rather than
+ * silently skipped. An unterminated or non-dollar-quoted definition fails the
+ * test instead of being dropped.
+ */
+function functionDefinitions(sql: string, functionName: string): string[] {
+  const header = new RegExp(
+    String.raw`CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public|"public")\s*\.\s*(?:${functionName}|"${functionName}")\s*\(`,
+    'gi',
+  );
+  const bodies: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = header.exec(sql)) !== null) {
+    const rest = sql.slice(match.index);
+    const opener = /\$([A-Za-z_]\w*)?\$/.exec(rest);
+    expect(opener, `${functionName} definition has no dollar-quoted body`).not.toBeNull();
+    const tag = opener![0];
+    const closeAt = rest.indexOf(tag, opener!.index + tag.length);
+    expect(closeAt, `${functionName} definition is unterminated`).toBeGreaterThan(opener!.index);
+    bodies.push(rest.slice(0, closeAt));
+    header.lastIndex = match.index + closeAt;
+  }
+  return bodies;
+}
+
 function latestFunctionDefinition(functionName: string, stopBefore?: string): string {
   let latest = '';
-  const fnPattern = new RegExp(
-    `CREATE\\s+OR\\s+REPLACE\\s+FUNCTION\\s+public\\.${functionName}\\b[\\s\\S]*?\\$function\\$;`,
-    'i',
-  );
 
   for (const file of migrationFiles()) {
     if (stopBefore && file.name >= stopBefore) break;
-    const match = file.content.match(fnPattern);
-    if (match) latest = match[0];
+    // Last definition in the file wins — that is the one Postgres ends up with.
+    const definitions = functionDefinitions(file.content.replace(/\r\n/g, '\n'), functionName);
+    if (definitions.length > 0) latest = definitions[definitions.length - 1];
   }
 
   return latest;
@@ -101,42 +131,16 @@ describe('commission payout gauntlet guards', { timeout: 60_000 }, () => {
       { rpc: 'void_commission_payment', impl: '_void_commission_payment_intent_impl_20260809' },
     ];
 
-    // Deliberately NOT an indexOf on one exact literal. That form matched only
-    // the FIRST definition in a file, only the exact spelling
-    // `CREATE OR REPLACE FUNCTION public.rpc(`, and only the `$function$` body
-    // tag — so a later migration that wrapped its signature across lines, wrote
-    // `CREATE FUNCTION`, quoted the identifiers, used a different dollar-quote
-    // tag, or redefined the RPC a second time further down would be skipped in
-    // silence and the guard below would pass while intent binding was gone.
-    // Every definition is returned, and an unparseable one fails the test rather
-    // than being dropped.
-    const definitionsOf = (sql: string, rpc: string): string[] => {
-      const header = new RegExp(
-        String.raw`CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public|"public")\s*\.\s*(?:${rpc}|"${rpc}")\s*\(`,
-        'gi',
-      );
-      const bodies: string[] = [];
-      let match: RegExpExecArray | null;
-      while ((match = header.exec(sql)) !== null) {
-        const rest = sql.slice(match.index);
-        const opener = /\$([A-Za-z_]\w*)?\$/.exec(rest);
-        expect(opener, `${rpc} definition has no dollar-quoted body`).not.toBeNull();
-        const tag = opener![0];
-        const closeAt = rest.indexOf(tag, opener!.index + tag.length);
-        expect(closeAt, `${rpc} definition is unterminated`).toBeGreaterThan(opener!.index);
-        bodies.push(rest.slice(0, closeAt));
-        header.lastIndex = match.index + closeAt;
-      }
-      return bodies;
-    };
-
+    // functionDefinitions() at the top of this file is deliberately NOT an
+    // indexOf on one exact literal, and is shared with the stale-selection test
+    // above so both scan the same way.
     const rename = migrationFiles().find((f) => f.name === PAYOUT_RENAME_MIGRATION);
     expect(rename, `${PAYOUT_RENAME_MIGRATION} is missing`).toBeDefined();
     const renameSql = rename!.content.replace(/\r\n/g, '\n');
 
     for (const { rpc, impl } of bound) {
       expect(renameSql, `${rpc} is never renamed out of the way`).toContain(`RENAME TO ${impl};`);
-      const wrappers = definitionsOf(renameSql, rpc);
+      const wrappers = functionDefinitions(renameSql, rpc);
       expect(wrappers.length, `${PAYOUT_RENAME_MIGRATION} does not define public.${rpc}`).toBeGreaterThan(0);
       for (const wrapper of wrappers) {
         expect(
@@ -154,7 +158,7 @@ describe('commission payout gauntlet guards', { timeout: 60_000 }, () => {
       if (file.name <= PAYOUT_RENAME_MIGRATION) continue;
       const sql = file.content.replace(/\r\n/g, '\n');
       for (const { rpc, impl } of bound) {
-        for (const body of definitionsOf(sql, rpc)) {
+        for (const body of functionDefinitions(sql, rpc)) {
           expect(
             body,
             `${file.name} redefines public.${rpc} without delegating to the intent-bound implementation`,

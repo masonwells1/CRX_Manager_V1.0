@@ -181,15 +181,27 @@ GRANT EXECUTE ON FUNCTION public.check_idempotency_intent(text, text, uuid, text
 -- present, one overload, grants correct) would still pass while every payout
 -- call recursed until the stack blew.
 DO $rename_create$
+DECLARE
+  v_src text;
 BEGIN
   IF to_regprocedure('public._create_commission_payment_intent_impl_20260809(uuid[], text, text, date, text, uuid, text)') IS NULL THEN
     IF to_regprocedure('public.create_commission_payment(uuid[], text, text, date, text, uuid, text)') IS NULL THEN
       RAISE EXCEPTION 'create_commission_payment(uuid[], text, text, date, text, uuid, text) not found; refusing to install the intent-binding wrapper';
     END IF;
-    IF (SELECT p.prosrc FROM pg_proc p
-        WHERE p.oid = to_regprocedure('public.create_commission_payment(uuid[], text, text, date, text, uuid, text)'))
-        LIKE '%_create_commission_payment_intent_impl_20260809%' THEN
+    SELECT p.prosrc INTO v_src FROM pg_proc p
+      WHERE p.oid = to_regprocedure('public.create_commission_payment(uuid[], text, text, date, text, uuid, text)');
+    IF v_src LIKE '%_create_commission_payment_intent_impl_20260809%' THEN
       RAISE EXCEPTION 'public.create_commission_payment is already the intent-binding wrapper but its implementation _create_commission_payment_intent_impl_20260809 is missing; refusing to rename the wrapper onto itself';
+    END IF;
+    -- Absence of the wrapper marker is not proof this is the body we mean to
+    -- wrap. Require the two contract markers the wrapper actually depends on:
+    -- the implementation must write an idempotency receipt via
+    -- check_idempotency() — the wrapper stamps that receipt afterwards and
+    -- raises IDEMPOTENCY_RECEIPT_MISSING if it is absent — and it must touch
+    -- commission_payment_items, which no thin wrapper does. Fail closed rather
+    -- than rename an unrelated body into the implementation slot.
+    IF v_src NOT LIKE '%check_idempotency(%' OR v_src NOT LIKE '%commission_payment_items%' THEN
+      RAISE EXCEPTION 'public.create_commission_payment does not look like the payout implementation this migration wraps (it must call check_idempotency() and touch commission_payment_items); refusing to rename it';
     END IF;
     ALTER FUNCTION public.create_commission_payment(uuid[], text, text, date, text, uuid, text)
       RENAME TO _create_commission_payment_intent_impl_20260809;
@@ -241,11 +253,14 @@ BEGIN
     RAISE EXCEPTION 'Admin access required to create a commission payment';
   END IF;
 
-  IF p_idempotency_key IS NULL THEN
-    RETURN public._create_commission_payment_intent_impl_20260809(
-      p_commission_ids, v_payment_method, v_reference,
-      p_payment_date, v_notes, p_performed_by, NULL
-    );
+  -- A key is REQUIRED. It used to be optional, and omitting it ran the payout
+  -- with no receipt and therefore no intent binding at all — an authenticated
+  -- admin calling the RPC directly (PostgREST lets a defaulted argument be
+  -- omitted) reached the money path unbound, which is the exact hole this
+  -- migration exists to close. Every caller in this repository already sends
+  -- one, so refusing here costs nothing and leaves no unbound door.
+  IF p_idempotency_key IS NULL OR p_idempotency_key !~ '[^[:space:]]' THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: create_commission_payment requires p_idempotency_key';
   END IF;
 
   -- Intent = the actor plus the sorted, de-duplicated commission selection and
@@ -325,15 +340,21 @@ GRANT EXECUTE ON FUNCTION public.create_commission_payment(uuid[], text, text, d
 -- ---------------------------------------------------------------------------
 -- See create_commission_payment: rename only on first application.
 DO $rename_post$
+DECLARE
+  v_src text;
 BEGIN
   IF to_regprocedure('public._post_commission_payment_intent_impl_20260809(uuid, uuid, text)') IS NULL THEN
     IF to_regprocedure('public.post_commission_payment(uuid, uuid, text)') IS NULL THEN
       RAISE EXCEPTION 'post_commission_payment(uuid, uuid, text) not found; refusing to install the intent-binding wrapper';
     END IF;
-    IF (SELECT p.prosrc FROM pg_proc p
-        WHERE p.oid = to_regprocedure('public.post_commission_payment(uuid, uuid, text)'))
-        LIKE '%_post_commission_payment_intent_impl_20260809%' THEN
+    SELECT p.prosrc INTO v_src FROM pg_proc p
+      WHERE p.oid = to_regprocedure('public.post_commission_payment(uuid, uuid, text)');
+    IF v_src LIKE '%_post_commission_payment_intent_impl_20260809%' THEN
       RAISE EXCEPTION 'public.post_commission_payment is already the intent-binding wrapper but its implementation _post_commission_payment_intent_impl_20260809 is missing; refusing to rename the wrapper onto itself';
+    END IF;
+    -- See create: absence of the wrapper marker is not proof of identity.
+    IF v_src NOT LIKE '%check_idempotency(%' OR v_src NOT LIKE '%commission_payment_items%' THEN
+      RAISE EXCEPTION 'public.post_commission_payment does not look like the payout implementation this migration wraps (it must call check_idempotency() and touch commission_payment_items); refusing to rename it';
     END IF;
     ALTER FUNCTION public.post_commission_payment(uuid, uuid, text)
       RENAME TO _post_commission_payment_intent_impl_20260809;
@@ -372,10 +393,9 @@ BEGIN
     RAISE EXCEPTION 'Admin access required to post a commission payment';
   END IF;
 
-  IF p_idempotency_key IS NULL THEN
-    RETURN public._post_commission_payment_intent_impl_20260809(
-      p_payment_id, p_performed_by, NULL
-    );
+  -- See create: a key is REQUIRED, so no caller reaches the money path unbound.
+  IF p_idempotency_key IS NULL OR p_idempotency_key !~ '[^[:space:]]' THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: post_commission_payment requires p_idempotency_key';
   END IF;
 
   -- Intent = the actor plus which payment is being posted.
@@ -431,15 +451,21 @@ GRANT EXECUTE ON FUNCTION public.post_commission_payment(uuid, uuid, text)
 -- ---------------------------------------------------------------------------
 -- See create_commission_payment: rename only on first application.
 DO $rename_void$
+DECLARE
+  v_src text;
 BEGIN
   IF to_regprocedure('public._void_commission_payment_intent_impl_20260809(uuid, text, uuid, text)') IS NULL THEN
     IF to_regprocedure('public.void_commission_payment(uuid, text, uuid, text)') IS NULL THEN
       RAISE EXCEPTION 'void_commission_payment(uuid, text, uuid, text) not found; refusing to install the intent-binding wrapper';
     END IF;
-    IF (SELECT p.prosrc FROM pg_proc p
-        WHERE p.oid = to_regprocedure('public.void_commission_payment(uuid, text, uuid, text)'))
-        LIKE '%_void_commission_payment_intent_impl_20260809%' THEN
+    SELECT p.prosrc INTO v_src FROM pg_proc p
+      WHERE p.oid = to_regprocedure('public.void_commission_payment(uuid, text, uuid, text)');
+    IF v_src LIKE '%_void_commission_payment_intent_impl_20260809%' THEN
       RAISE EXCEPTION 'public.void_commission_payment is already the intent-binding wrapper but its implementation _void_commission_payment_intent_impl_20260809 is missing; refusing to rename the wrapper onto itself';
+    END IF;
+    -- See create: absence of the wrapper marker is not proof of identity.
+    IF v_src NOT LIKE '%check_idempotency(%' OR v_src NOT LIKE '%commission_payment_items%' THEN
+      RAISE EXCEPTION 'public.void_commission_payment does not look like the payout implementation this migration wraps (it must call check_idempotency() and touch commission_payment_items); refusing to rename it';
     END IF;
     ALTER FUNCTION public.void_commission_payment(uuid, text, uuid, text)
       RENAME TO _void_commission_payment_intent_impl_20260809;
@@ -481,10 +507,9 @@ BEGIN
   -- keep that ordering so the error surface is unchanged.
   IF p_reason IS NULL OR btrim(p_reason) = '' THEN RAISE EXCEPTION 'REASON_REQUIRED'; END IF;
 
-  IF p_idempotency_key IS NULL THEN
-    RETURN public._void_commission_payment_intent_impl_20260809(
-      p_payment_id, v_reason, p_performed_by, NULL
-    );
+  -- See create: a key is REQUIRED, so no caller reaches the money path unbound.
+  IF p_idempotency_key IS NULL OR p_idempotency_key !~ '[^[:space:]]' THEN
+    RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: void_commission_payment requires p_idempotency_key';
   END IF;
 
   -- Intent = the actor, which payment is being voided, and the reason text

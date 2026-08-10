@@ -89,15 +89,27 @@ export default function CommissionPayments() {
   const [payNotes, setPayNotes] = useState('');
   const [creating, setCreating] = useState(false);
 
-  // Scoped to the exact set of commissions being paid, sorted so the same
-  // selection always produces the same scope regardless of click order. Closing
-  // and reopening the Create dialog after an uncertain response used to call
-  // resetKey() and destroy the only key that could replay that request; the
-  // server then treated the retry as a brand-new payment. Scoping on the
-  // selection replaces that reset — reopening with the same commissions replays
-  // the same key, and changing the selection at all is a genuinely different
-  // request that mints a fresh one.
-  const selectionScope = [...selectedCommissions].sort().join(',');
+  // Scoped to the WHOLE request, not just the commissions: the server
+  // fingerprints the selection AND every payment field the admin can edit, so a
+  // scope built from the ids alone is narrower than the server's and lets a
+  // reused key arrive carrying different payment details — exactly the
+  // IDEMPOTENCY_INTENT_MISMATCH this page claims is unreachable. openCreate()
+  // resets method, reference, date and notes, so reopening after a timeout with
+  // a non-default reference would have hit that. Mirroring the fingerprint here
+  // means a reopen that reproduces the same request replays it, and a reopen
+  // that does not is a genuinely different request with its own key.
+  //
+  // Sorted and de-duplicated, and each text field trimmed, to match the server
+  // side exactly: it sorts and DISTINCTs the ids and applies
+  // NULLIF(btrim(...),'') to the text, so blank and whitespace-only collapse
+  // together there and must collapse together here too.
+  const selectionScope = JSON.stringify([
+    [...new Set(selectedCommissions)].sort(),
+    payMethod.trim(),
+    payRef.trim(),
+    payDate,
+    payNotes.trim(),
+  ]);
   const createPaymentIdem = useIdempotencyKey('create_commission_payment', profile?.id || '', selectionScope);
 
   const fetchPayments = useCallback(async () => {
@@ -349,7 +361,10 @@ export default function CommissionPayments() {
       // exists: if the first attempt's response was lost and someone then VOIDED
       // that payment, this attempt replays a receipt pointing at a payment that
       // no longer holds these commissions. Only claim the payment was created
-      // once the row is confirmed to still be live.
+      // once the row is confirmed to still be live. The read and the message are
+      // not one atomic step — a void landing between them still slips past — so
+      // this narrows the window rather than closing it, and the refreshed list
+      // below, not the toast, is the authority on what the payment is now.
       const wasVoided = createdSummary?.status === 'voided';
       // Audit #11: surface commission events in the activity feed (DB side
       // already writes financial_audit_log; activity_feed is the user-facing one).
@@ -430,8 +445,23 @@ export default function CommissionPayments() {
       if (error) throw error;
       assertRpcResult(data, 'post_commission_payment');
       postPaymentIdem.resetKey();
+      // A retained key does not post anything on a retry — it replays the
+      // ORIGINAL outcome. So a success here is not proof the payment is still
+      // posted: if the first attempt's response was lost and another admin
+      // voided the payment in between, this reply describes a payment that no
+      // longer holds its commissions. Re-read the row before saying the posting
+      // stands. This read and the message below are not one atomic step — a void
+      // landing between them still slips past — so the refreshed list, not the
+      // toast, is the authority on what the payment is now.
+      const { data: postedRow, error: postedError } = await supabase
+        .from('commission_payments')
+        .select('status')
+        .eq('id', paymentId)
+        .maybeSingle();
+      if (postedError) throw new Error(postedError.message);
+      const postWasVoided = !postedRow || (postedRow as { status?: string | null }).status === 'voided';
       // Audit #11: surface in activity feed.
-      if (profile) {
+      if (profile && !postWasVoided) {
         await logActivity({
           event: 'commission_payment_posted',
           description: `Commission payment posted`,
@@ -440,8 +470,12 @@ export default function CommissionPayments() {
           entityId: paymentId,
         });
       }
-      toast('success', 'Commission payment posted');
-      fetchPayments();
+      await fetchPayments();
+      if (postWasVoided) {
+        toast('warning', 'That payment was already posted by an earlier attempt and has since been voided, so its commissions are still unpaid. Check the payment list below.');
+      } else {
+        toast('success', 'Commission payment posted');
+      }
     } catch (err: unknown) {
       // See handleCreate: a refused retry key means this posting did not run.
       const rejection = getIdempotencyBindingRejection(err);
@@ -459,7 +493,12 @@ export default function CommissionPayments() {
             : 'This retry was already used by an earlier posting, so nothing was posted now. Check the payment list below before posting again.');
       } else {
         Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'post_commission_payment' } });
-        toast('error', err instanceof Error ? err.message : 'Failed to post');
+        // The call went out, so this is genuinely uncertain: a posting that
+        // committed but lost its response looks exactly like one that never ran.
+        // The key for this payment is deliberately retained, so pressing Post
+        // again on the SAME row replays the original request instead of posting
+        // a second time.
+        toast('error', `${err instanceof Error ? err.message : 'Failed to post'} — this payment may still have been posted. Check the payment list below before posting again; pressing Post again on the same payment is safe.`);
       }
     }
     setPosting(null);

@@ -130,8 +130,8 @@ SELECT 'PAYMENT_ID=' || public.create_commission_payment(
 
 const RESET_CONCURRENCY_FIXTURE = `
 CREATE TABLE IF NOT EXISTS public.race_gate (session_tag text);
-TRUNCATE public.proof_effects, public.commission_payments, public.idempotency_keys,
-         public.race_gate;
+TRUNCATE public.proof_effects, public.commission_payments, public.commission_payment_items,
+         public.idempotency_keys, public.race_gate;
 `;
 
 /**
@@ -210,6 +210,9 @@ function assertInputs() {
     "RAISE EXCEPTION 'IDEMPOTENCY_ACTOR_MISMATCH'",
     "RAISE EXCEPTION 'IDEMPOTENCY_INTENT_MISMATCH'",
     "RAISE EXCEPTION 'IDEMPOTENCY_RESULT_INVALID'",
+    "RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: create_commission_payment",
+    "RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: post_commission_payment",
+    "RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: void_commission_payment",
     'extensions.digest(',
   ]) {
     assert.ok(migration.includes(marker), `migration marker missing: ${marker}`);
@@ -231,8 +234,12 @@ function assertInputs() {
     'cross-op message lost its detail',
     'forged p_performed_by was accepted on the post replay path',
     'forged p_performed_by was accepted on the void replay path',
-    'NULL-key post wrote a receipt',
-    'NULL-key void wrote a receipt',
+    'a NULL idempotency key was accepted by create',
+    'a NULL idempotency key was accepted by post',
+    'a NULL idempotency key was accepted by void',
+    'the refused NULL-key create still paid out',
+    'the refused NULL-key post still posted',
+    'the refused NULL-key void still voided',
   ]) {
     assert.ok(smoke.includes(marker), `smoke marker missing: ${marker}`);
   }
@@ -291,6 +298,15 @@ CREATE TABLE public.idempotency_keys (
 
 CREATE TABLE public.commission_payments (
   id uuid PRIMARY KEY, payment_number text NOT NULL, status text NOT NULL
+);
+
+-- The migration's rename guard refuses to rename a public function that does not
+-- look like the payout body it means to wrap, and one of the two markers it
+-- requires is a touch of commission_payment_items. The live bodies all touch it;
+-- the reduced bodies below must too, or this proof would exercise a wrapper
+-- installed over something the real migration would have refused.
+CREATE TABLE public.commission_payment_items (
+  id bigserial PRIMARY KEY, payment_id uuid NOT NULL, commission_id uuid NOT NULL
 );
 
 -- Every business effect the payout implementations perform is recorded here so
@@ -393,6 +409,8 @@ BEGIN
   v_payment_id := gen_random_uuid();
   INSERT INTO public.commission_payments (id, payment_number, status)
   VALUES (v_payment_id, 'CP-' || left(v_payment_id::text, 8), 'unposted');
+  INSERT INTO public.commission_payment_items (payment_id, commission_id)
+  SELECT DISTINCT v_payment_id, id FROM unnest(p_commission_ids) AS t(id);
   INSERT INTO public.proof_effects (operation, entity_id, actor_id)
   VALUES ('create_commission_payment', v_payment_id, v_actor);
   IF p_idempotency_key IS NOT NULL THEN
@@ -429,7 +447,10 @@ BEGIN
   VALUES ('post_commission_payment', p_payment_id, v_actor);
   v_result := jsonb_build_object(
     'success', true, 'payment_id', p_payment_id,
-    'payment_number', v_payment.payment_number, 'commissions_paid', 2
+    'payment_number', v_payment.payment_number,
+    'commissions_paid', (
+      SELECT count(*) FROM public.commission_payment_items WHERE payment_id = p_payment_id
+    )
   );
   IF p_idempotency_key IS NOT NULL THEN
     PERFORM save_idempotency(p_idempotency_key, 'post_commission_payment', v_result);
@@ -465,7 +486,10 @@ BEGIN
   v_result := jsonb_build_object(
     'success', true, 'payment_id', p_payment_id,
     'payment_number', v_payment.payment_number,
-    'commissions_reset', 2, 'commissions_cancelled_dead_order', 0
+    'commissions_reset', (
+      SELECT count(*) FROM public.commission_payment_items WHERE payment_id = p_payment_id
+    ),
+    'commissions_cancelled_dead_order', 0
   );
   IF p_idempotency_key IS NOT NULL THEN
     PERFORM save_idempotency(p_idempotency_key, 'void_commission_payment', v_result);

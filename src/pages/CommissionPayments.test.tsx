@@ -204,7 +204,12 @@ describe('CommissionPayments idempotency intent-binding refusals', () => {
     );
   });
 
-  it('still surfaces an unrelated failure as an error', async () => {
+  it('still surfaces an unrelated failure as an error, without claiming nothing happened', async () => {
+    // Round-5 review finding: a failed RESPONSE is not proof of a failed POST.
+    // The request may have committed and the reply been lost, so telling the
+    // admin a flat "Failed to post" invites them to treat a posted payment as
+    // unposted. The message has to admit the uncertainty and say the retry is
+    // safe — the key is retained precisely so pressing Post again replays it.
     mockRpc.mockResolvedValue({ data: null, error: { message: 'Admin access required to post a commission payment' } });
     render(<CommissionPayments />);
 
@@ -213,8 +218,59 @@ describe('CommissionPayments idempotency intent-binding refusals', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Post Payments' }));
 
     await waitFor(() => {
-      expect(mockToast).toHaveBeenCalledWith('error', 'Failed to post');
+      expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('Failed to post'));
     });
+    const message = mockToast.mock.calls.find((call) => call[0] === 'error')![1] as string;
+    expect(message).toContain('may still have been posted');
+    expect(message).toContain('Check the payment list below');
+    expect(message).toContain('safe');
+  });
+
+  it('does not report a posting as done when the payment has since been voided', async () => {
+    // Round-5 review finding, post side. A retained key does not re-post on a
+    // retry — it replays the ORIGINAL outcome. If the first attempt committed,
+    // its reply was lost, and another admin voided the payment in between, this
+    // "success" describes a payment that no longer holds its commissions.
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'commission_payments') {
+        const self: Record<string, unknown> = {};
+        const method = (..._args: unknown[]) => self;
+        for (const name of ['select', 'eq', 'in', 'order', 'limit']) self[name] = method;
+        // The post handler's re-read of the row it just posted.
+        self.maybeSingle = () => Promise.resolve({ data: { status: 'voided' }, error: null });
+        const list = Promise.resolve({
+          data: [{ ...paymentBase, id: 'payment-1', payment_number: 'CP-0001' }],
+          error: null,
+        });
+        self.then = list.then.bind(list);
+        self.catch = list.catch.bind(list);
+        self.finally = list.finally.bind(list);
+        return self;
+      }
+      if (table === 'profile_public_view') {
+        return buildChain({ data: [{ id: 'recipient-1', full_name: 'Test Recipient' }], error: null });
+      }
+      if (table === 'commission_payment_items') {
+        return buildChain({ count: 2, error: null });
+      }
+      return buildChain({ data: [], error: null });
+    });
+    mockRpc.mockResolvedValue({ data: { success: true, payment_id: 'payment-1' }, error: null });
+    render(<CommissionPayments />);
+
+    const row = (await screen.findByText('CP-0001')).closest('tr');
+    fireEvent.click(within(row!).getByRole('button', { name: 'Post' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Post Payments' }));
+
+    await waitFor(() => {
+      expect(mockToast).toHaveBeenCalledWith('warning', expect.any(String));
+    });
+    const message = mockToast.mock.calls.find((call) => call[0] === 'warning')![1] as string;
+    expect(message).toContain('has since been voided');
+    expect(message).toContain('still unpaid');
+    expect(mockToast).not.toHaveBeenCalledWith('success', expect.anything());
+    // And nothing may record a posting this click did not actually leave standing.
+    expect(mockLogActivity).not.toHaveBeenCalled();
   });
 });
 
@@ -491,6 +547,29 @@ describe('CommissionPayments create-payment key scoping', () => {
     await waitFor(() => expect(createKeys()).toHaveLength(2));
 
     const [first, second] = createKeys();
+    expect(second).not.toBe(first);
+  });
+
+  it('mints a fresh key when a payment DETAIL changes on the same commissions', async () => {
+    // The commissions are only half of what makes a payment. Correcting the
+    // check number (or the method, date or note) and pressing Create again is a
+    // different payment, and if the key did not move with those fields the
+    // server would replay the first receipt and hand back the payment carrying
+    // the WRONG check number — silently, as a success.
+    mockRpc.mockResolvedValue({ data: null, error: { message: 'Network request timed out' } });
+    render(<CommissionPayments />);
+
+    await openDialogAndSelect([0]);
+    await waitFor(() => expect(createKeys()).toHaveLength(1));
+
+    fireEvent.change(screen.getByPlaceholderText('Check #, transaction ID...'), {
+      target: { value: 'CHK-1042' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Create Payment/ }));
+    await waitFor(() => expect(createKeys()).toHaveLength(2));
+
+    const [first, second] = createKeys();
+    expect(first).toBeTruthy();
     expect(second).not.toBe(first);
   });
 });

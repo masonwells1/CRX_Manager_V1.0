@@ -543,7 +543,10 @@ export default function Reports() {
       // that payment, this click replays a receipt pointing at a batch that no
       // longer holds these commissions. Confirm every returned payment is still
       // live before saying the work landed; a row that is voided or missing
-      // means those commissions are still unpaid.
+      // means those commissions are still unpaid. This read and the message are
+      // not one atomic step — a void landing between them still slips past — so
+      // it narrows the window rather than closing it, and the refreshed list,
+      // not the toast, is the authority on what those batches are now.
       const { data: statusRows, error: statusError } = await supabase
         .from('commission_payments')
         .select('id,status')
