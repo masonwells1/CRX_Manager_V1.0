@@ -143,7 +143,14 @@ export default function CommissionPayments() {
   // on this page ends by pointing the admin at that list, so a refresh that
   // failed has to be reported: "check the list below" over stale financial data
   // is how a duplicate payment gets made.
-  const fetchPayments = useCallback(async (): Promise<boolean> => {
+  //
+  // `quiet` suppresses this function's own failure toast. A recovery path that
+  // already reports the failed refresh in its own message — every catch block
+  // below appends STALE_LIST_NOTE, or tells the admin outright to reload — would
+  // otherwise stack two toasts saying the same thing, and the generic
+  // "Failed to load" one reads like the action itself failed. The return value
+  // is unchanged, so a quiet caller still knows the list is stale.
+  const fetchPayments = useCallback(async ({ quiet = false } = {}): Promise<boolean> => {
     setLoading(true);
     // PR-07 follow-up: dropped recipient FK embed; resolve via profile_public_view.
     const { data, error } = await supabase
@@ -153,7 +160,7 @@ export default function CommissionPayments() {
       .limit(200);
 
     if (error) {
-      toast('error', 'Failed to load commission payments');
+      if (!quiet) toast('error', 'Failed to load commission payments');
       setLoading(false);
       return false;
     }
@@ -457,7 +464,7 @@ export default function CommissionPayments() {
         // below it, so the list must already show post-refusal state when they
         // read that. Toasting first points them at stale financial data.
         setShowCreate(false);
-        const listIsCurrent = await fetchPayments();
+        const listIsCurrent = await fetchPayments({ quiet: true });
         // Wording notes: on a pre-migration receipt the database cannot prove the
         // earlier request DIFFERED from this one, only that the key is already
         // spent — so the text says "already used" and claims no difference. And
@@ -481,11 +488,15 @@ export default function CommissionPayments() {
         // request rather than making a second payment. Refresh the list behind
         // the dialog anyway — the message sends them there, and reopening a
         // dialog does not change the selection or the key.
-        const uncertainListIsCurrent = await fetchPayments();
+        const uncertainListIsCurrent = await fetchPayments({ quiet: true });
         toast('error', `${err instanceof Error ? err.message : 'Failed to create payment'} — a payment may still have been created. Close this and check the payment list before creating another; pressing Create again with the same commissions selected is safe.${uncertainListIsCurrent ? '' : STALE_LIST_NOTE}`);
       }
+    } finally {
+      // In a finally, not after the catch: every recovery path above awaits
+      // fetchPayments() and toast(), and a throw from either would otherwise
+      // leave this flag set and the button disabled until a reload.
+      setCreating(false);
     }
-    setCreating(false);
   };
 
   const handlePost = async (paymentId: string) => {
@@ -554,7 +565,7 @@ export default function CommissionPayments() {
           Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: `post_commission_payment_${rejection}_mismatch` } });
         }
         // See handleCreate: refresh before the toast that points at the list.
-        const refusalListIsCurrent = await fetchPayments();
+        const refusalListIsCurrent = await fetchPayments({ quiet: true });
         toast('warning', rejection === 'actor'
           ? 'That retry belongs to another user, so nothing was posted. Reload the page and try again.'
           : rejection === 'receipt'
@@ -567,11 +578,15 @@ export default function CommissionPayments() {
         // The key for this payment is deliberately retained, so pressing Post
         // again on the SAME row replays the original request instead of posting
         // a second time.
-        const uncertainListIsCurrent = await fetchPayments();
+        const uncertainListIsCurrent = await fetchPayments({ quiet: true });
         toast('error', `${err instanceof Error ? err.message : 'Failed to post'} — this payment may still have been posted. Check the payment list below before posting again; pressing Post again on the same payment is safe.${uncertainListIsCurrent ? '' : STALE_LIST_NOTE}`);
       }
+    } finally {
+      // In a finally, not after the catch: every recovery path above awaits
+      // fetchPayments() and toast(), and a throw from either would otherwise
+      // leave this flag set and the button disabled until a reload.
+      setPosting(null);
     }
-    setPosting(null);
   };
 
   const handleVoidPayment = async () => {
@@ -625,7 +640,7 @@ export default function CommissionPayments() {
         setShowVoid(false);
         setVoidReason('');
         setVoidTarget(null);
-        const voidListIsCurrent = await fetchPayments();
+        const voidListIsCurrent = await fetchPayments({ quiet: true });
         toast('warning', rejection === 'actor'
           ? 'That retry belongs to another user, so nothing was voided. Reload the page and try again.'
           : rejection === 'receipt'
@@ -646,12 +661,16 @@ export default function CommissionPayments() {
         // The key is deliberately NOT retired here. Retrying the same void with
         // the same reason replays the original outcome instead of starting a
         // second one, which is what makes "try again" safe.
-        const voidFailListIsCurrent = await fetchPayments();
+        const voidFailListIsCurrent = await fetchPayments({ quiet: true });
         const detail = err instanceof Error ? err.message : 'Failed to void payment';
         toast('error', `${detail} — the void may still have gone through. Check the payment list below before trying again.${voidFailListIsCurrent ? '' : STALE_LIST_NOTE}`);
       }
+    } finally {
+      // In a finally, not after the catch: every recovery path above awaits
+      // fetchPayments() and toast(), and a throw from either would otherwise
+      // leave this flag set and the button disabled until a reload.
+      setVoiding(false);
     }
-    setVoiding(false);
   };
 
   const filtered = payments.filter((p) => p.status === tab);

@@ -169,6 +169,159 @@ GRANT EXECUTE ON FUNCTION public.check_idempotency_intent(text, text, uuid, text
   TO postgres;
 
 -- ---------------------------------------------------------------------------
+-- Identity-check helper: reduce a routine body to CODE ONLY
+-- ---------------------------------------------------------------------------
+-- pg_proc.prosrc keeps comments AND every literal, so the marker checks below
+-- must run over code only. Regex-stripping the constructs in sequence is not
+-- sound: dollar-quoted literals ($msg$...$msg$) are invisible to a '...' regex,
+-- a '--' inside a literal deletes that literal's closing quote and strands the
+-- rest, E'...\'...' breaks quote pairing, and block comments NEST while a
+-- non-greedy /\*.*?\*/ stops at the first close (which can FABRICATE a marker
+-- out of fully-commented text). Each of those gets a body renamed that should
+-- not be — the unsafe direction.
+--
+-- So do it properly: one left-to-right pass that knows each construct's real
+-- terminator, blanks it, and RAISES on anything unterminated. Anything the pass
+-- cannot read confidently is a refusal, never a pass. Quoted "identifiers" are
+-- blanked too — a column may legally be named "commission_payment_items", and
+-- refusing a body written that way is the safe direction.
+--
+-- Dropped at the end of this migration; it exists only for the three renames.
+CREATE OR REPLACE FUNCTION public._crx_payout_code_only_20260809(p_src text, p_what text)
+RETURNS text
+LANGUAGE plpgsql
+IMMUTABLE
+SET search_path TO pg_catalog, pg_temp
+AS $code_only$
+DECLARE
+  i        int  := 1;
+  j        int;
+  n        int  := length(p_src);
+  c        text;
+  c2       text;
+  prev     text;
+  depth    int;
+  tag      text;
+  tag_len  int;
+  closed   boolean;
+  is_e     boolean;
+  out_text text := '';
+BEGIN
+  WHILE i <= n LOOP
+    c  := substr(p_src, i, 1);
+    c2 := substr(p_src, i, 2);
+
+    IF c2 = '--' THEN
+      -- Line comment: runs to the newline, which stays as code.
+      j := position(E'\n' IN substr(p_src, i));
+      IF j = 0 THEN
+        i := n + 1;
+      ELSE
+        i := i + j - 1;
+      END IF;
+      out_text := out_text || ' ';
+
+    ELSIF c2 = '/*' THEN
+      -- Block comment: NESTS in Postgres, so count depth rather than
+      -- stopping at the first '*/'.
+      depth := 1;
+      j := i + 2;
+      WHILE j <= n AND depth > 0 LOOP
+        IF substr(p_src, j, 2) = '/*' THEN
+          depth := depth + 1;
+          j := j + 2;
+        ELSIF substr(p_src, j, 2) = '*/' THEN
+          depth := depth - 1;
+          j := j + 2;
+        ELSE
+          j := j + 1;
+        END IF;
+      END LOOP;
+      IF depth > 0 THEN
+        RAISE EXCEPTION '% has an unterminated block comment, so its source cannot be read reliably; refusing to rename it', p_what;
+      END IF;
+      i := j;
+      out_text := out_text || ' ';
+
+    ELSIF c = '''' THEN
+      -- String literal. An E-prefix (and only an E-prefix) makes backslash an
+      -- escape character, which changes where the literal ends.
+      prev := CASE WHEN i > 1 THEN substr(p_src, i - 1, 1) ELSE '' END;
+      is_e := upper(prev) = 'E'
+              AND (i < 3 OR substr(p_src, i - 2, 1) !~ '[A-Za-z0-9_$]');
+      j := i + 1;
+      closed := false;
+      WHILE j <= n LOOP
+        IF is_e AND substr(p_src, j, 1) = '\' THEN
+          j := j + 2;
+        ELSIF substr(p_src, j, 2) = '''''' THEN
+          j := j + 2;
+        ELSIF substr(p_src, j, 1) = '''' THEN
+          j := j + 1;
+          closed := true;
+          EXIT;
+        ELSE
+          j := j + 1;
+        END IF;
+      END LOOP;
+      IF NOT closed THEN
+        RAISE EXCEPTION '% has an unterminated string literal, so its source cannot be read reliably; refusing to rename it', p_what;
+      END IF;
+      i := j;
+      out_text := out_text || ' ';
+
+    ELSIF c = '$' THEN
+      -- Dollar-quoted literal, or a bare '$' (a $1 parameter reference).
+      -- No capture group, so substring() returns the whole opening tag.
+      tag := substring(substr(p_src, i, 256) FROM '^[$][$]|^[$][A-Za-z_][A-Za-z0-9_]*[$]');
+      IF tag IS NULL THEN
+        out_text := out_text || c;
+        i := i + 1;
+      ELSE
+        tag_len := length(tag);
+        j := position(tag IN substr(p_src, i + tag_len));
+        IF j = 0 THEN
+          RAISE EXCEPTION '% has an unterminated dollar-quoted string, so its source cannot be read reliably; refusing to rename it', p_what;
+        END IF;
+        i := i + tag_len + j - 1 + tag_len;
+        out_text := out_text || ' ';
+      END IF;
+
+    ELSIF c = '"' THEN
+      -- Quoted identifier.
+      j := i + 1;
+      closed := false;
+      WHILE j <= n LOOP
+        IF substr(p_src, j, 2) = '""' THEN
+          j := j + 2;
+        ELSIF substr(p_src, j, 1) = '"' THEN
+          j := j + 1;
+          closed := true;
+          EXIT;
+        ELSE
+          j := j + 1;
+        END IF;
+      END LOOP;
+      IF NOT closed THEN
+        RAISE EXCEPTION '% has an unterminated quoted identifier, so its source cannot be read reliably; refusing to rename it', p_what;
+      END IF;
+      i := j;
+      out_text := out_text || ' ';
+
+    ELSE
+      out_text := out_text || c;
+      i := i + 1;
+    END IF;
+  END LOOP;
+
+  RETURN out_text;
+END
+$code_only$;
+
+REVOKE ALL ON FUNCTION public._crx_payout_code_only_20260809(text, text)
+  FROM PUBLIC, anon, authenticated, service_role;
+
+-- ---------------------------------------------------------------------------
 -- create_commission_payment
 -- ---------------------------------------------------------------------------
 -- Re-runnable: rename only on the first application. A bare ALTER ... RENAME
@@ -201,32 +354,16 @@ BEGIN
     -- raises IDEMPOTENCY_RECEIPT_MISSING if it is absent — and it must touch
     -- commission_payment_items, which no thin wrapper does. Fail closed rather
     -- than rename an unrelated body into the implementation slot.
-    -- prosrc keeps the comments AND the string literals, so a body that merely
+    -- prosrc keeps the comments AND every literal, so a body that merely
     -- MENTIONS check_idempotency() in a comment — or raises it inside a
     -- RAISE NOTICE — would satisfy a plain LIKE while doing nothing of the
-    -- kind. Strip block comments, then line comments, then single-quoted
-    -- literals, and match only the code that is left. Every strip can only
-    -- REMOVE text, so each way this goes wrong deletes a marker and refuses
-    -- loudly; none of them can invent one.
-    --
-    -- One case is not delete-only and so is handled separately: Postgres block
-    -- comments NEST, and the non-greedy regex stops at the first '*/'. For
-    -- '/* a /* b */ marker */' it removes through the inner close and leaves
-    -- 'marker */' looking like live code that Postgres considers commented out.
-    -- That residue always ends in a stray '*/' (or an unterminated '/*'), so
-    -- refusing on either one closes the only direction that could fabricate a
-    -- marker.
+    -- kind. _crx_payout_code_only_20260809 reduces the body to code, and
+    -- refuses outright on any construct it cannot terminate.
     --
     -- Deliberately asymmetric with the wrapper-marker check above, which reads
     -- the RAW source: there, ANY mention — comment included — should stop us,
     -- because renaming the wrapper onto itself is the unrecoverable outcome.
-    v_code := regexp_replace(
-                regexp_replace(v_src, '/\*.*?\*/', ' ', 'gs'),
-                '--[^\n]*', ' ', 'g');
-    IF v_code LIKE '%/*%' OR v_code LIKE '%*/%' THEN
-      RAISE EXCEPTION 'public.create_commission_payment has a nested or unterminated block comment, so its source cannot be read reliably; refusing to rename it';
-    END IF;
-    v_code := regexp_replace(v_code, '''[^'']*''', ' ', 'g');
+    v_code := public._crx_payout_code_only_20260809(v_src, 'public.create_commission_payment');
     IF v_code NOT LIKE '%check_idempotency(%' OR v_code NOT LIKE '%commission_payment_items%' THEN
       RAISE EXCEPTION 'public.create_commission_payment does not look like the payout implementation this migration wraps (it must call check_idempotency() and touch commission_payment_items); refusing to rename it';
     END IF;
@@ -400,32 +537,16 @@ BEGIN
       RAISE EXCEPTION 'public.post_commission_payment is already the intent-binding wrapper but its implementation _post_commission_payment_intent_impl_20260809 is missing; refusing to rename the wrapper onto itself';
     END IF;
     -- See create: absence of the wrapper marker is not proof of identity.
-    -- prosrc keeps the comments AND the string literals, so a body that merely
+    -- prosrc keeps the comments AND every literal, so a body that merely
     -- MENTIONS check_idempotency() in a comment — or raises it inside a
     -- RAISE NOTICE — would satisfy a plain LIKE while doing nothing of the
-    -- kind. Strip block comments, then line comments, then single-quoted
-    -- literals, and match only the code that is left. Every strip can only
-    -- REMOVE text, so each way this goes wrong deletes a marker and refuses
-    -- loudly; none of them can invent one.
-    --
-    -- One case is not delete-only and so is handled separately: Postgres block
-    -- comments NEST, and the non-greedy regex stops at the first '*/'. For
-    -- '/* a /* b */ marker */' it removes through the inner close and leaves
-    -- 'marker */' looking like live code that Postgres considers commented out.
-    -- That residue always ends in a stray '*/' (or an unterminated '/*'), so
-    -- refusing on either one closes the only direction that could fabricate a
-    -- marker.
+    -- kind. _crx_payout_code_only_20260809 reduces the body to code, and
+    -- refuses outright on any construct it cannot terminate.
     --
     -- Deliberately asymmetric with the wrapper-marker check above, which reads
     -- the RAW source: there, ANY mention — comment included — should stop us,
     -- because renaming the wrapper onto itself is the unrecoverable outcome.
-    v_code := regexp_replace(
-                regexp_replace(v_src, '/\*.*?\*/', ' ', 'gs'),
-                '--[^\n]*', ' ', 'g');
-    IF v_code LIKE '%/*%' OR v_code LIKE '%*/%' THEN
-      RAISE EXCEPTION 'public.post_commission_payment has a nested or unterminated block comment, so its source cannot be read reliably; refusing to rename it';
-    END IF;
-    v_code := regexp_replace(v_code, '''[^'']*''', ' ', 'g');
+    v_code := public._crx_payout_code_only_20260809(v_src, 'public.post_commission_payment');
     IF v_code NOT LIKE '%check_idempotency(%' OR v_code NOT LIKE '%commission_payment_items%' THEN
       RAISE EXCEPTION 'public.post_commission_payment does not look like the payout implementation this migration wraps (it must call check_idempotency() and touch commission_payment_items); refusing to rename it';
     END IF;
@@ -555,32 +676,16 @@ BEGIN
       RAISE EXCEPTION 'public.void_commission_payment is already the intent-binding wrapper but its implementation _void_commission_payment_intent_impl_20260809 is missing; refusing to rename the wrapper onto itself';
     END IF;
     -- See create: absence of the wrapper marker is not proof of identity.
-    -- prosrc keeps the comments AND the string literals, so a body that merely
+    -- prosrc keeps the comments AND every literal, so a body that merely
     -- MENTIONS check_idempotency() in a comment — or raises it inside a
     -- RAISE NOTICE — would satisfy a plain LIKE while doing nothing of the
-    -- kind. Strip block comments, then line comments, then single-quoted
-    -- literals, and match only the code that is left. Every strip can only
-    -- REMOVE text, so each way this goes wrong deletes a marker and refuses
-    -- loudly; none of them can invent one.
-    --
-    -- One case is not delete-only and so is handled separately: Postgres block
-    -- comments NEST, and the non-greedy regex stops at the first '*/'. For
-    -- '/* a /* b */ marker */' it removes through the inner close and leaves
-    -- 'marker */' looking like live code that Postgres considers commented out.
-    -- That residue always ends in a stray '*/' (or an unterminated '/*'), so
-    -- refusing on either one closes the only direction that could fabricate a
-    -- marker.
+    -- kind. _crx_payout_code_only_20260809 reduces the body to code, and
+    -- refuses outright on any construct it cannot terminate.
     --
     -- Deliberately asymmetric with the wrapper-marker check above, which reads
     -- the RAW source: there, ANY mention — comment included — should stop us,
     -- because renaming the wrapper onto itself is the unrecoverable outcome.
-    v_code := regexp_replace(
-                regexp_replace(v_src, '/\*.*?\*/', ' ', 'gs'),
-                '--[^\n]*', ' ', 'g');
-    IF v_code LIKE '%/*%' OR v_code LIKE '%*/%' THEN
-      RAISE EXCEPTION 'public.void_commission_payment has a nested or unterminated block comment, so its source cannot be read reliably; refusing to rename it';
-    END IF;
-    v_code := regexp_replace(v_code, '''[^'']*''', ' ', 'g');
+    v_code := public._crx_payout_code_only_20260809(v_src, 'public.void_commission_payment');
     IF v_code NOT LIKE '%check_idempotency(%' OR v_code NOT LIKE '%commission_payment_items%' THEN
       RAISE EXCEPTION 'public.void_commission_payment does not look like the payout implementation this migration wraps (it must call check_idempotency() and touch commission_payment_items); refusing to rename it';
     END IF;
@@ -697,6 +802,11 @@ GRANT EXECUTE ON FUNCTION public.void_commission_payment(uuid, text, uuid, text)
   TO authenticated, service_role;
 
 -- ---------------------------------------------------------------------------
+-- The identity-check helper exists only for the three renames above. Drop it so
+-- the migration leaves no extra function behind for a later caller to reach.
+DROP FUNCTION IF EXISTS public._crx_payout_code_only_20260809(text, text);
+
+-- ---------------------------------------------------------------------------
 -- Post-conditions
 -- ---------------------------------------------------------------------------
 DO $verify$
@@ -723,6 +833,10 @@ DECLARE
     'public._void_commission_payment_intent_impl_20260809(uuid,text,uuid,text)'
   ];
 BEGIN
+  IF to_regprocedure('public._crx_payout_code_only_20260809(text, text)') IS NOT NULL THEN
+    RAISE EXCEPTION 'the identity-check helper _crx_payout_code_only_20260809 was left behind';
+  END IF;
+
   FOREACH v_name IN ARRAY ARRAY[
     'create_commission_payment',
     'post_commission_payment',

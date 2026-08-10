@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { codeOnly, functionHeaderPattern, lexed, lexSql } from './sqlSourceLexer';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const migrationsDir = join(repoRoot, 'supabase', 'migrations');
@@ -26,146 +27,6 @@ function migrationFiles() {
 const PAYOUT_RENAME_MIGRATION =
   '20260810170000_bind_commission_payout_idempotency_to_intent.sql';
 
-type Span = { start: number; end: number; kind: 'body' | 'string' };
-/** A "quoted identifier" run. Not blanked — see lexSql. */
-type Ident = { start: number; end: number };
-
-/** The dollar-quote tag opening at `i`, or null. `$1` is a parameter, not a tag. */
-function dollarTagAt(sql: string, i: number): string | null {
-  if (sql[i] !== '$') return null;
-  let j = i + 1;
-  if (j < sql.length && /[A-Za-z_]/.test(sql[j])) {
-    j += 1;
-    while (j < sql.length && /[A-Za-z0-9_]/.test(sql[j])) j += 1;
-  }
-  return sql[j] === '$' ? sql.slice(i, j + 1) : null;
-}
-
-/**
- * Lexes the file once so the scan below reads SQL rather than text.
- *
- * Returns a MASK the same length as the input — every offset found in the mask
- * indexes straight back into the original — with two substitutions:
- *
- *  - Comments become spaces, everywhere. Postgres treats a comment exactly as
- *    whitespace, so a block comment sitting between CREATE and OR REPLACE still
- *    leaves a real definition that a whitespace-only regex walks straight past;
- *    and, in the other direction, a commented-out copy of a guarded definition
- *    must not be able to stand in as the file's "last definition" while the live
- *    one below it dropped the guard.
- *  - Single-quoted literals OUTSIDE a function body become spaces, so a string
- *    containing the text of a definition cannot impersonate one. Literals INSIDE
- *    a body are kept: the guards under test raise their error codes as string
- *    literals, and blanking those would blind the assertions.
- *
- * `spans` records where the dollar-quoted bodies and the blanked top-level
- * literals are, so a definition's body can be bounded to its own statement.
- *
- * `idents` records double-quoted identifiers OUTSIDE a body. They are recorded
- * rather than blanked, because blanking them would hide a real definition
- * written as `CREATE FUNCTION "post_commission_payment"(...)` — the unsafe
- * direction. Recording them lets the scan below refuse to read SQL keywords out
- * of them: `"as"` is a perfectly legal column name, and a `\bAS\b` that matched
- * inside one would anchor the body on whatever literal came next instead of on
- * the real body, reporting a guard that the live function does not have.
- */
-function lexSql(sql: string): { masked: string; spans: Span[]; idents: Ident[] } {
-  const out = sql.split('');
-  const spans: Span[] = [];
-  const idents: Ident[] = [];
-  const blank = (from: number, to: number) => {
-    for (let i = from; i < to && i < out.length; i += 1) {
-      if (out[i] !== '\n') out[i] = ' ';
-    }
-  };
-
-  const openTags: string[] = [];
-  const bodyStarts: number[] = [];
-  let i = 0;
-  while (i < sql.length) {
-    const inBody = openTags.length > 0;
-
-    if (sql[i] === '-' && sql[i + 1] === '-') {
-      let end = sql.indexOf('\n', i);
-      if (end === -1) end = sql.length;
-      blank(i, end);
-      i = end;
-      continue;
-    }
-
-    if (sql[i] === '/' && sql[i + 1] === '*') {
-      // Postgres block comments nest, unlike C's.
-      let depth = 1;
-      let j = i + 2;
-      while (j < sql.length && depth > 0) {
-        if (sql[j] === '/' && sql[j + 1] === '*') { depth += 1; j += 2; } else if (sql[j] === '*' && sql[j + 1] === '/') { depth -= 1; j += 2; } else j += 1;
-      }
-      blank(i, j);
-      i = j;
-      continue;
-    }
-
-    if (sql[i] === "'") {
-      const escaped = i > 0 && /[Ee]/.test(sql[i - 1]) && !/\w/.test(sql[i - 2] ?? ' ');
-      let j = i + 1;
-      while (j < sql.length) {
-        if (escaped && sql[j] === '\\') { j += 2; continue; }
-        if (sql[j] === "'" && sql[j + 1] === "'") { j += 2; continue; }
-        if (sql[j] === "'") { j += 1; break; }
-        j += 1;
-      }
-      if (!inBody) {
-        spans.push({ start: i, end: j, kind: 'string' });
-        blank(i, j);
-      }
-      i = j;
-      continue;
-    }
-
-    if (sql[i] === '"' && !inBody) {
-      let j = i + 1;
-      while (j < sql.length) {
-        if (sql[j] === '"' && sql[j + 1] === '"') { j += 2; continue; }
-        if (sql[j] === '"') { j += 1; break; }
-        j += 1;
-      }
-      idents.push({ start: i, end: j });
-      i = j;
-      continue;
-    }
-
-    const tag = dollarTagAt(sql, i);
-    if (tag) {
-      if (inBody && openTags[openTags.length - 1] === tag) {
-        openTags.pop();
-        spans.push({ start: bodyStarts.pop()!, end: i + tag.length, kind: 'body' });
-      } else {
-        openTags.push(tag);
-        bodyStarts.push(i);
-      }
-      i += tag.length;
-      continue;
-    }
-
-    i += 1;
-  }
-
-  spans.sort((a, b) => a.start - b.start);
-  idents.sort((a, b) => a.start - b.start);
-  return { masked: out.join(''), spans, idents };
-}
-
-// ~900 migration files are rescanned once per protected RPC per test; lexing
-// each file once instead of nine times keeps the suite inside its timeout.
-const lexCache = new Map<string, { masked: string; spans: Span[]; idents: Ident[] }>();
-function lexed(sql: string) {
-  let hit = lexCache.get(sql);
-  if (!hit) {
-    hit = lexSql(sql);
-    lexCache.set(sql, hit);
-  }
-  return hit;
-}
 
 /**
  * Every definition of <rpc> in one migration file, in file order.
@@ -211,10 +72,7 @@ function functionDefinitions(sql: string, functionName: string): string[] {
     }
   }
 
-  const header = new RegExp(
-    String.raw`CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:(?:public|"public")\s*\.\s*)?(?:${functionName}|"${functionName}")\s*\(`,
-    'gi',
-  );
+  const header = functionHeaderPattern(functionName);
   const bodies: string[] = [];
   let match: RegExpExecArray | null;
   while ((match = header.exec(masked)) !== null) {
@@ -266,11 +124,30 @@ function functionDefinitions(sql: string, functionName: string): string[] {
     // unguarded. Decode it the way Postgres does ('' is one quote) and lex the
     // result, wrapped in a dollar tag so the sub-lex treats it as body text and
     // keeps the error-code literals the assertions look for.
-    bodies.push(span!.kind === 'body'
-      ? masked.slice(match.index, span!.end)
-      : masked.slice(match.index, span!.start)
-        + lexSql(`$crx_decoded$${sql.slice(span!.start + 1, span!.end - 1).replace(/''/g, "'")}$crx_decoded$`)
-          .masked.slice(13, -13)); // 13 = '$crx_decoded$'.length
+    if (span!.kind === 'body') {
+      bodies.push(masked.slice(match.index, span!.end));
+    } else {
+      // A prefix changes how the literal decodes: E'…' makes backslash an
+      // escape, U&'…' adds \0041 unicode escapes. Decoding either with the
+      // plain ''-is-one-quote rule would mis-read the body — and a mis-read
+      // body can invent guard text as easily as it can lose it. Refuse.
+      const prefix = sql.slice(Math.max(0, span!.start - 2), span!.start);
+      expect(
+        /(?:^|[^\w$])[EeUu]&?$/.test(prefix),
+        `${functionName} has a prefixed (E''/U&'') function body, which this scan cannot decode`,
+      ).toBe(false);
+
+      const raw = sql.slice(span!.start + 1, span!.end - 1).replace(/''/g, "'");
+      // The wrapper tag must not occur in the decoded text. A body containing
+      // the tag would close the wrapper early, and everything after it would
+      // then be lexed as TOP-LEVEL text — which turns that body's literals into
+      // code, so `RAISE NOTICE $crx_decoded$FOR UPDATE$crx_decoded$` could
+      // satisfy an assertion the live function does not.
+      let tag = '$crx_decoded$';
+      for (let n = 0; raw.includes(tag); n += 1) tag = `$crx_decoded_${n}$`;
+      bodies.push(masked.slice(match.index, span!.start)
+        + lexSql(`${tag}${raw}${tag}`).masked.slice(tag.length, -tag.length));
+    }
     header.lastIndex = span!.end;
   }
   return bodies;
@@ -390,6 +267,75 @@ describe('migration scanner', () => {
     expect(found[0]).toContain("'KEPT_LITERAL'");
   });
 
+  it('does not let a single-quoted body collide with the decoder tag', () => {
+    // The decode wraps the body in a dollar tag so the sub-lex treats it as body
+    // text. A body carrying that exact tag CLOSES the wrapper early, and
+    // everything after it is then lexed as TOP-LEVEL SQL — where the rules are
+    // inverted: literals get blanked and dollar-quoted text stops being a
+    // literal. Both directions are wrong. Here the error code the real
+    // assertions look for silently disappears; a body could equally use it to
+    // promote printed text into apparent code.
+    const sql = [
+      `CREATE OR REPLACE FUNCTION public.pay(p_id uuid) RETURNS void LANGUAGE plpgsql AS`,
+      `'BEGIN`,
+      // The error code sits BETWEEN the colliding tags, which is the only place
+      // the collision is observable: valid SQL always spells the tag in pairs,
+      // so the text after the pair lands back inside the wrapper either way —
+      // but the text between them is lexed top-level, where literals are blanked.
+      `  RAISE NOTICE $crx_decoded$ ''KEPT_LITERAL'' $crx_decoded$;`,
+      `END';`,
+    ].join('\n');
+    const found = functionDefinitions(sql, 'pay');
+    expect(found).toHaveLength(1);
+    expect(
+      found[0],
+      'the decoder tag collided with the body and the rest was lexed top-level',
+    ).toContain("'KEPT_LITERAL'");
+  });
+
+  it('reads a dollar-quoted literal inside a body as text, not as code', () => {
+    const sql = [
+      `CREATE OR REPLACE FUNCTION public.pay(p_id uuid) RETURNS void LANGUAGE plpgsql AS $fn$`,
+      `BEGIN`,
+      `  RAISE NOTICE $msg$GUARD_PRESENT$msg$;`,
+      `END;`,
+      `$fn$;`,
+    ].join('\n');
+    const [definition] = functionDefinitions(sql, 'pay');
+    expect(definition, 'the raw body keeps what it prints').toContain('GUARD_PRESENT');
+    expect(
+      codeOnly(definition),
+      'a dollar-quoted RAISE argument was read as executable SQL',
+    ).not.toContain('GUARD_PRESENT');
+  });
+
+  it('refuses a prefixed E-string body instead of mis-decoding it', () => {
+    // E'…' makes backslash an escape, so the ''-is-one-quote rule reads the body
+    // wrong — and a wrongly-decoded body can invent guard text as easily as lose
+    // it. Nothing in supabase/migrations/ uses this form; refusing is the only
+    // answer that cannot be silently wrong.
+    const sql = [
+      `CREATE OR REPLACE FUNCTION public.pay(p_id uuid) RETURNS void LANGUAGE plpgsql AS`,
+      `E'BEGIN RAISE EXCEPTION \\'GUARD_PRESENT\\'; END';`,
+    ].join('\n');
+    expect(() => functionDefinitions(sql, 'pay')).toThrow(/E''\/U&''/);
+  });
+
+  it('codeOnly() strips the literals a dollar-quoted body keeps', () => {
+    const sql = [
+      `CREATE OR REPLACE FUNCTION public.pay(p_id uuid) RETURNS void LANGUAGE plpgsql AS $fn$`,
+      `BEGIN`,
+      `  RAISE NOTICE 'FOR UPDATE OF c';`,
+      `  PERFORM 1 FROM c FOR UPDATE OF c;`,
+      `END;`,
+      `$fn$;`,
+    ].join('\n');
+    const [definition] = functionDefinitions(sql, 'pay');
+    expect(definition, 'the raw body keeps its literals').toContain("'FOR UPDATE OF c'");
+    // One occurrence left — the real lock, not the RAISE NOTICE.
+    expect(codeOnly(definition).match(/FOR UPDATE OF c/g)).toHaveLength(1);
+  });
+
   it('refuses to guess the schema of an unqualified definition after a session SET search_path', () => {
     // An unqualified CREATE FUNCTION is read as public, which is true only while
     // search_path still points there. A statement-level `SET search_path` puts a
@@ -447,13 +393,17 @@ describe('commission payout gauntlet guards', { timeout: 60_000 }, () => {
       PAYOUT_RENAME_MIGRATION,
     );
 
-    expect(definition).toContain('v_locked_count <> v_selected_count');
-    expect(definition).toContain('v_non_pending_count > 0');
-    expect(definition).toContain('GET DIAGNOSTICS v_item_count = ROW_COUNT');
-    expect(definition).toContain('v_item_count <> v_selected_count');
+    // Executable SQL is asserted against the literal-free view, so none of
+    // these can be satisfied by a `RAISE NOTICE 'FOR UPDATE OF c'`.
+    const code = codeOnly(definition);
+    expect(code).toContain('v_locked_count <> v_selected_count');
+    expect(code).toContain('v_non_pending_count > 0');
+    expect(code).toContain('GET DIAGNOSTICS v_item_count = ROW_COUNT');
+    expect(code).toContain('v_item_count <> v_selected_count');
+    expect(code).toMatch(/SELECT DISTINCT id\s+FROM unnest\(p_commission_ids\)/i);
+    expect(code).toMatch(/FOR UPDATE OF c/i);
+    // The error code IS a literal, so it is asserted against the full body.
     expect(definition).toContain('COMMISSION_PAYMENT_SELECTION_STALE');
-    expect(definition).toMatch(/SELECT DISTINCT id\s+FROM unnest\(p_commission_ids\)/i);
-    expect(definition).toMatch(/FOR UPDATE OF c/i);
   });
 
   it('the guarded payout body is still what every live call reaches', () => {

@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { getIdempotencyBindingRejection } from './idempotency';
+import { functionHeaderPattern, lexed } from './sqlSourceLexer';
 
 /**
  * Source guard for the Section 07 gauntlet HIGH finding: the commission payout
@@ -52,10 +53,6 @@ const PAYOUT_RPCS = [
 ] as const;
 
 function wrapperBody(name: string): string {
-  // CREATE OR REPLACE, not CREATE: the migration has to be re-runnable, so the
-  // wrappers replace themselves rather than aborting on a second application.
-  const header = `CREATE OR REPLACE FUNCTION public.${name}(`;
-
   // Every definition, not the first one. Reading the first was unsound in the
   // one direction that matters: a SECOND definition of the same signature later
   // in this file is the one Postgres keeps, so a copy that dropped the binding
@@ -66,16 +63,26 @@ function wrapperBody(name: string): string {
   // there is no legitimate reason for this migration to define a wrapper twice,
   // so a second one should stop the suite and be looked at, not be silently
   // preferred.
+  //
+  // Found through the shared lexer rather than a literal string search. A plain
+  // `indexOf('CREATE OR REPLACE FUNCTION public.<name>(')` sees only one of the
+  // several spellings Postgres treats identically: a bare `CREATE FUNCTION`, an
+  // unqualified name, `public."<name>"`, or a comment sitting between the
+  // keywords all define the same live function and all slipped past it — so a
+  // second definition written any of those ways left this "exactly once" check
+  // green. It also could not tell a real definition from one quoted inside a
+  // string literal.
+  const { masked, spans } = lexed(migration);
+  const header = functionHeaderPattern(name);
   const starts: number[] = [];
-  for (let at = migration.indexOf(header); at > -1; at = migration.indexOf(header, at + 1)) {
-    starts.push(at);
-  }
+  for (let m = header.exec(masked); m; m = header.exec(masked)) starts.push(m.index);
+
   expect(starts.length, `${name} wrapper is defined ${starts.length} times, expected exactly once`)
     .toBe(1);
   const start = starts[0];
-  const end = migration.indexOf('$function$;', start);
-  expect(end, `${name} wrapper is unterminated`).toBeGreaterThan(start);
-  return migration.slice(start, end);
+  const body = spans.find((s) => s.kind === 'body' && s.start > start);
+  expect(body, `${name} wrapper is unterminated`).toBeDefined();
+  return migration.slice(start, body!.end);
 }
 
 /** The jsonb_build_object that feeds the SHA-256 digest, and nothing else. */
@@ -283,36 +290,83 @@ describe('commission payout intent-binding migration', () => {
     );
     expect(guard).toContain("v_code NOT LIKE '%commission_payment_items%'");
 
-    // …and the markers are matched against the body with its comments removed.
-    // prosrc keeps comments, so matching v_src directly would let a body that
-    // only NAMES check_idempotency() in a comment pose as the payout
-    // implementation. Stripping is one-directional — it can delete a real
-    // marker and cause a loud refusal, never manufacture a missing one.
-    const strip = guard.slice(0, guard.indexOf("v_code NOT LIKE"));
-    expect(strip, `${rpc.name} matches the identity markers against commented source`).toContain(
-      "regexp_replace(v_src, '/\\*.*?\\*/', ' ', 'gs')",
+    // …and the markers are matched against the body reduced to CODE, not
+    // against raw prosrc. prosrc keeps the comments AND every literal, so a body
+    // that only NAMES check_idempotency() in a comment — or raises it inside a
+    // RAISE NOTICE — would satisfy a plain LIKE while doing nothing of the kind.
+    //
+    // Round-8 finding: this used to be a chain of regexp_replace() strips, and a
+    // regex chain is unsound in the UNSAFE direction. A dollar-quoted literal is
+    // invisible to a '…' pattern; a '--' inside a literal deletes that literal's
+    // closing quote and strands the rest; and because Postgres block comments
+    // NEST while a non-greedy /\*.*?\*/ stops at the first close, a fully
+    // commented body could FABRICATE a marker. The reduction is now a
+    // character-loop lexer that knows each construct's real terminator and
+    // RAISEs on anything it cannot terminate, so a body it cannot read
+    // confidently is a refusal rather than a pass.
+    const strip = guard.slice(0, guard.indexOf('v_code NOT LIKE'));
+    expect(strip, `${rpc.name} matches the identity markers against raw source`).toContain(
+      `v_code := public._crx_payout_code_only_20260809(v_src, 'public.${rpc.name}');`,
     );
-    expect(strip).toContain("'--[^\\n]*', ' ', 'g')");
-    // Round-7 finding, part one: prosrc keeps the STRING LITERALS too, so a body
-    // whose only mention of the markers is inside a RAISE NOTICE satisfied both
-    // checks while doing nothing of the kind. Literals are stripped as well, and
-    // stripping stays one-directional.
-    expect(strip, `${rpc.name} matches the identity markers inside string literals`).toContain(
-      `regexp_replace(v_code, '''[^'']*''', ' ', 'g')`,
-    );
-    // Round-7 finding, part two: Postgres block comments NEST and the non-greedy
-    // regex stops at the first '*/', so '/* a /* b */ marker */' leaves 'marker
-    // */' looking like live code. That is the one direction stripping can
-    // FABRICATE a marker, and it always leaves a stray '*/' (or an unterminated
-    // '/*') behind, so the guard refuses on either.
-    expect(strip, `${rpc.name} accepts a marker hidden in a nested block comment`).toContain(
-      "IF v_code LIKE '%/*%' OR v_code LIKE '%*/%' THEN",
-    );
-    expect(strip).toContain(`RAISE EXCEPTION 'public.${rpc.name} has a nested or unterminated block comment`);
     // The wrapper-marker check above stays on the RAW source on purpose: there,
     // any mention at all — comment included — must stop the rename, because
     // renaming the wrapper onto itself is the unrecoverable outcome.
     expect(guard.slice(0, guard.indexOf(`LIKE '%${rpc.impl}%' THEN`))).not.toContain('v_code');
+  });
+
+  it('reduces a candidate body to code with a lexer that fails closed', () => {
+    const create = migration.indexOf(
+      'CREATE OR REPLACE FUNCTION public._crx_payout_code_only_20260809(p_src text, p_what text)',
+    );
+    expect(create, 'the identity-check helper is not defined').toBeGreaterThan(-1);
+    const helper = migration.slice(create, migration.indexOf('$code_only$;', create));
+
+    // The whole point of replacing the regex chain: every construct that can
+    // hide a marker has to be recognised by its own real terminator, and an
+    // unterminated one has to ABORT rather than be silently tolerated.
+    for (const unterminated of [
+      'unterminated block comment',
+      'unterminated string literal',
+      'unterminated dollar-quoted string',
+      'unterminated quoted identifier',
+    ]) {
+      expect(helper, `the lexer does not refuse an ${unterminated}`).toContain(
+        `RAISE EXCEPTION '% has an ${unterminated}, so its source cannot be read reliably; refusing to rename it', p_what`,
+      );
+    }
+    // Nesting is the direction that could fabricate a marker, so the block
+    // comment scan has to count depth rather than stop at the first close.
+    expect(helper, 'the lexer does not count nested block comments').toContain(
+      'depth := depth + 1',
+    );
+    // A body may be prefixed E'…\'…', where a backslash escapes the quote.
+    expect(helper, 'the lexer ignores E-string backslash escapes').toContain('is_e');
+
+    // It runs before the first rename that uses it, and it is not reachable
+    // from the browser while it exists.
+    expect(create).toBeLessThan(
+      migration.indexOf("DO $rename_create$"),
+    );
+    expect(migration).toContain(
+      'REVOKE ALL ON FUNCTION public._crx_payout_code_only_20260809(text, text)\n  FROM PUBLIC, anon, authenticated, service_role;',
+    );
+
+    // …and it does not outlive the migration: a leftover SECURITY INVOKER
+    // helper is one more public function for a later caller to reach, so it is
+    // dropped and the post-conditions refuse to pass if it survived.
+    const drop = migration.indexOf(
+      'DROP FUNCTION IF EXISTS public._crx_payout_code_only_20260809(text, text);',
+    );
+    expect(drop, 'the identity-check helper is left behind').toBeGreaterThan(
+      migration.lastIndexOf('v_code := public._crx_payout_code_only_20260809('),
+    );
+    const verify = migration.slice(migration.indexOf('DO $verify$'));
+    expect(verify).toContain(
+      "IF to_regprocedure('public._crx_payout_code_only_20260809(text, text)') IS NOT NULL THEN",
+    );
+    expect(verify).toContain(
+      "RAISE EXCEPTION 'the identity-check helper _crx_payout_code_only_20260809 was left behind'",
+    );
   });
 
   it.each(PAYOUT_RPCS)('$name keeps its renamed implementation out of the browser', (rpc) => {
@@ -396,8 +450,13 @@ describe('commission payout intent-binding callers', () => {
     // so the refresh has to have finished before that claim is true. Asserting
     // only that `await fetchPayments()` appears would still pass if the refresh
     // were moved below the toast, which is the bug this guards.
-    const refreshAt = catchBlock.indexOf('await fetchPayments();');
-    expect(refreshAt, 'refusal branch does not await a refresh').toBeGreaterThan(-1);
+    //
+    // Quietly, too: fetchPayments() raises its own 'Failed to load commission
+    // payments' toast, and stacking that on top of a message that ALREADY
+    // reports the stale list gives the admin two toasts for one event, the
+    // generic one reading as though the payout itself failed.
+    const refreshAt = catchBlock.indexOf('await fetchPayments({ quiet: true });');
+    expect(refreshAt, 'refusal branch does not await a quiet refresh').toBeGreaterThan(-1);
     const warnAt = catchBlock.indexOf("toast('warning'");
     expect(
       refreshAt,
@@ -523,7 +582,7 @@ describe('commission payout intent-binding callers', () => {
     const generic = page.slice(start, end);
 
     expect(generic, 'the ordinary void failure must refresh before it reports')
-      .toContain('const voidFailListIsCurrent = await fetchPayments();');
+      .toContain('const voidFailListIsCurrent = await fetchPayments({ quiet: true });');
     expect(generic, 'the ordinary void failure must not claim the void did not happen')
       .toContain('the void may still have gone through');
     // And it must admit when even that refresh failed, rather than pointing the
@@ -534,6 +593,59 @@ describe('commission payout intent-binding callers', () => {
     // same void, get the same outcome") into a second, brand-new void request.
     expect(generic, 'an ordinary void failure must keep the key that makes a retry a replay')
       .not.toContain('voidPaymentIdem.resetKey();');
+  });
+
+  it('never leaves a payout button disabled after a failed recovery', () => {
+    // Round-8 finding. Each handler cleared its busy flag on the line AFTER the
+    // try/catch, so the flag was only cleared if the catch block itself ran to
+    // completion. Every catch block on this page awaits fetchPayments() and
+    // toast(), and a throw from either — a network error inside the refresh is
+    // the obvious one — skipped the clear and left the button disabled until the
+    // admin reloaded, on the exact path where they most need to retry.
+    for (const clear of ['setCreating(false);', 'setPosting(null);', 'setVoiding(false);']) {
+      const at = page.indexOf(clear);
+      expect(at, `${clear} is missing`).toBeGreaterThan(-1);
+      expect(page.indexOf(clear, at + 1), `${clear} appears more than once`).toBe(-1);
+      const before = page.slice(0, at);
+      expect(
+        before.slice(before.lastIndexOf('} catch (err: unknown) {')),
+        `${clear} runs after the catch instead of in a finally`,
+      ).toContain('} finally {');
+    }
+  });
+
+  it('reports a failed recovery refresh once, not twice', () => {
+    // Round-8 finding. fetchPayments() raises its own generic 'Failed to load
+    // commission payments' toast, and every recovery path here already reports
+    // the same failure in its own wording — either by appending STALE_LIST_NOTE
+    // or by telling the admin outright to reload. Two toasts for one event is
+    // noise, and the generic one reads as though the payout itself failed.
+    const fetchStart = page.indexOf('const fetchPayments = useCallback(');
+    expect(fetchStart).toBeGreaterThan(-1);
+    const fetchFn = page.slice(fetchStart, page.indexOf('}, [', fetchStart));
+    expect(fetchFn).toContain('async ({ quiet = false } = {})');
+    expect(fetchFn, 'the load-failure toast is not suppressible').toContain(
+      "if (!quiet) toast('error', 'Failed to load commission payments');",
+    );
+    // The suppression must not cost the caller the fact itself: the refusal
+    // wording is driven by the RETURN value, so quiet still has to report false.
+    expect(fetchFn.slice(fetchFn.indexOf('if (!quiet)'))).toContain('return false;');
+
+    // And every recovery path uses it. A catch block that refreshes loudly is
+    // the double toast this fixes.
+    for (const [from, to] of [
+      ["const rejection = getIdempotencyBindingRejection(err);", '\n  };'],
+    ]) {
+      let at = page.indexOf(from);
+      while (at > -1) {
+        const block = page.slice(at, page.indexOf(to, at));
+        expect(
+          block,
+          'a recovery path refreshes loudly, stacking a second toast on its own message',
+        ).not.toContain('await fetchPayments();');
+        at = page.indexOf(from, at + 1);
+      }
+    }
   });
 });
 
@@ -819,11 +931,18 @@ describe('every payout call site supplies an idempotency key', () => {
 
   const callSites = sources.flatMap(({ path, code }) => {
     return KEYED_RPCS.flatMap((rpc) => {
-      // Was the exact text `.rpc('name', {`, which four separate rewrites of the
+      // Was the exact text `.rpc('name', {`, which five separate rewrites of the
       // same call would have slipped past: double quotes, a backtick, a newline
-      // between the arguments, or extra spacing. Any of those made a new caller
-      // invisible to this scan and therefore silently exempt from it.
-      const open = new RegExp(String.raw`\.rpc\(\s*(['"\x60])${rpc}\1\s*,\s*\{`, 'g');
+      // between the arguments, extra spacing, or a `as never` cast on the name
+      // (which real call sites in this repo do carry — see FieldProfitability).
+      // Any of those made a new caller invisible to this scan and therefore
+      // silently exempt from it. The cast form allowed here is exactly the one
+      // the literal-name test below allows, so a name spelled any other way
+      // turns that test red rather than quietly dropping out of this one.
+      const open = new RegExp(
+        String.raw`\.rpc\(\s*(['"\x60])${rpc}\1\s*(?:as\s+[A-Za-z_][A-Za-z0-9_]*\s*)?,\s*\{`,
+        'g',
+      );
       const found: { path: string; rpc: string; args: string }[] = [];
       let match: RegExpExecArray | null;
       while ((match = open.exec(code)) !== null) {
@@ -864,14 +983,50 @@ describe('every payout call site supplies an idempotency key', () => {
     // already the house rule (assertRpcCoverage.test.ts depends on it too), so
     // pin it here as well: this scan is only as good as the guarantee that a
     // payout call cannot hide behind a computed name.
+    // Round-8 finding: this used to look at the single character after `.rpc(`
+    // and accept anything that opened a quote. `supabase.rpc('create_' + suffix,
+    // args)` opens a quote, so it passed here — while being invisible to the
+    // payout scan above, which needs the WHOLE name spelled out. The name has to
+    // be a complete literal that ENDS the argument, so read to the closing quote
+    // and require a ',' or ')' next.
     const computed: string[] = [];
     for (const { path, code } of sources) {
       const call = /\.rpc\(\s*/g;
       let match: RegExpExecArray | null;
       while ((match = call.exec(code)) !== null) {
-        const next = code[match.index + match[0].length];
-        if (next !== "'" && next !== '"' && next !== '`') {
-          computed.push(`${path}:${code.slice(0, match.index).split('\n').length}`);
+        const open = match.index + match[0].length;
+        const line = code.slice(0, match.index).split('\n').length;
+        const reject = (why: string) => computed.push(`${path}:${line} (${why})`);
+        const quote = code[open];
+        if (quote !== "'" && quote !== '"' && quote !== '`') {
+          reject('name is not a string literal');
+          continue;
+        }
+        let j = open + 1;
+        let closed = false;
+        for (; j < code.length; j += 1) {
+          if (code[j] === '\\') { j += 1; continue; }
+          // `${…}` makes a backtick literal a computed name however it ends.
+          if (quote === '`' && code[j] === '$' && code[j + 1] === '{') break;
+          if (code[j] === quote) { closed = true; break; }
+        }
+        if (!closed) {
+          reject('name is not a complete string literal');
+          continue;
+        }
+        if (!/^[A-Za-z0-9_]+$/.test(code.slice(open + 1, j))) {
+          reject('name is not a plain identifier');
+          continue;
+        }
+        // A bare `as never` cast is allowed — the generated RPC types do not
+        // know about migrations that have not shipped yet, so real call sites
+        // carry one — but only in the exact form the payout scan above also
+        // accepts. Anything else here (`+`, `.concat(`, a ternary, a generic
+        // cast) means the literal is only PART of the name, or is spelled in a
+        // way the payout scan cannot see, and both are the unsafe direction.
+        const after = code.slice(j + 1);
+        if (!/^\s*(?:as\s+[A-Za-z_][A-Za-z0-9_]*\s*)?[,)]/.test(after)) {
+          reject('name is built from an expression');
         }
       }
     }

@@ -520,22 +520,125 @@ INSERT INTO public.profiles (id, role, is_active) VALUES
  * expected failure aborts it, and the real migration below still starts from an
  * untouched baseline.
  */
+/**
+ * The lexer that reduces a candidate body to code, exercised directly.
+ *
+ * The migration drops _crx_payout_code_only_20260809 when it finishes, so this
+ * lifts the CREATE statement straight out of the migration file and runs it in
+ * a throwaway transaction. Direct calls are the only way to reach the
+ * "unterminated X" refusals: a body Postgres itself could not parse never
+ * reaches pg_proc, so those branches are unreachable through a real rename.
+ * They are the fail-closed floor under every marker check, and an untested
+ * guard is decoration.
+ */
+function proveCodeOnlyLexer() {
+  const migration = readFileSync(MIGRATION, 'utf8');
+  const start = migration.indexOf('CREATE OR REPLACE FUNCTION public._crx_payout_code_only_20260809');
+  assert.notEqual(start, -1, 'the identity-check lexer is missing from the migration');
+  const end = migration.indexOf('$code_only$;', start);
+  assert.notEqual(end, -1, 'the identity-check lexer is not closed with $code_only$;');
+  const create = migration.slice(start, end + '$code_only$;'.length);
+
+  // Every case runs in its own transaction so a raise cannot poison the next.
+  const call = (input, { allowFailure = false } = {}) => psql(
+    `BEGIN;\n${create}\n`
+    + `SELECT public._crx_payout_code_only_20260809($crx_in$${input}$crx_in$, 'the body');\n`
+    + 'ROLLBACK;\n',
+    { allowFailure },
+  );
+
+  // KEPT — these are code and must survive, or the guard would refuse the real
+  // implementations and the migration could never apply at all.
+  for (const [label, input, needle] of [
+    ['a plain call', 'BEGIN PERFORM check_idempotency( x ); END;', 'check_idempotency('],
+    ['a table reference', 'INSERT INTO commission_payment_items VALUES (1);', 'commission_payment_items'],
+    ['a $1 parameter reference', 'SELECT f($1) FROM commission_payment_items;', '$1'],
+  ]) {
+    const out = call(input);
+    assert.ok(
+      out.stdout.includes(needle),
+      `the lexer ate ${label}, which would refuse the real implementation:\n${out.stdout}`,
+    );
+  }
+
+  // BLANKED — each is a construct whose contents Postgres never executes. If
+  // any survives, a body that only MENTIONS the markers gets renamed.
+  for (const [label, input] of [
+    ['a single-quoted literal', "RAISE NOTICE 'commission_payment_items';"],
+    ['a dollar-quoted literal', 'RAISE NOTICE $msg$commission_payment_items$msg$;'],
+    ['an empty-tag dollar-quoted literal', 'RAISE NOTICE $$commission_payment_items$$;'],
+    ['an E-string with an escaped quote', "RAISE NOTICE E'commission_payment_items \\' still inside';"],
+    ['a literal holding a -- comment opener', "RAISE NOTICE 'commission_payment_items -- x';"],
+    ['a literal holding a */ comment closer', "RAISE NOTICE 'commission_payment_items */ x';"],
+    ['a doubled quote inside a literal', "RAISE NOTICE 'commission_payment_items '' x';"],
+    ['a line comment', '-- commission_payment_items'],
+    ['a nested block comment', '/* outer /* inner */ commission_payment_items */'],
+    ['a quoted identifier', 'SELECT 1 FROM "commission_payment_items";'],
+  ]) {
+    const out = call(input);
+    assert.ok(
+      !out.stdout.includes('commission_payment_items'),
+      `the lexer left the marker readable inside ${label}:\n${out.stdout}`,
+    );
+  }
+
+  // REFUSED — anything the lexer cannot terminate is a hard stop, never a pass.
+  for (const [label, input, expected] of [
+    ['an unterminated block comment', 'x /* y', /unterminated block comment/],
+    ['an unterminated string literal', "x 'y", /unterminated string literal/],
+    ['an unterminated dollar-quoted string', 'x $t$ y', /unterminated dollar-quoted string/],
+    ['an unterminated quoted identifier', 'x "y', /unterminated quoted identifier/],
+    ['a block comment closed only once', '/* a /* b */', /unterminated block comment/],
+  ]) {
+    const out = call(input, { allowFailure: true });
+    const text = `${out.stdout || ''}\n${out.stderr || ''}`;
+    assert.notEqual(out.status, 0, `the lexer accepted ${label}:\n${text}`);
+    assert.match(text, expected, `wrong refusal for ${label}:\n${text}`);
+  }
+}
+
 function proveIdentityGuard() {
   const migration = readFileSync(MIGRATION, 'utf8');
   const SIGNATURE = 'public.create_commission_payment(uuid[], text, text, date, text, uuid, text)';
+  // Each decoy is a body Postgres accepts and that a human would read as "this
+  // is not the payout implementation", carrying both markers in a place that
+  // never executes. One per way a regex strip used to be defeated.
+  const REFUSED = /does not look like the payout implementation/;
   const DECOYS = [
-    // prosrc keeps string literals. A body that merely NAMES both markers
-    // inside a RAISE NOTICE satisfies a plain LIKE while calling nothing.
     ['markers that exist only inside a string literal',
       "BEGIN\n  RAISE NOTICE 'check_idempotency( commission_payment_items';\n  RETURN NULL;\nEND;",
-      /does not look like the payout implementation/],
+      REFUSED],
     // Postgres block comments NEST. Everything here is commented out, but a
-    // non-greedy strip stops at the inner '*/' and leaves the markers looking
-    // like live code — the one direction in which stripping can FABRICATE a
-    // marker rather than remove one.
+    // non-greedy /\*.*?\*/ strip stops at the inner '*/' and leaves the markers
+    // looking like live code — the one direction in which a strip can
+    // FABRICATE a marker rather than remove one.
     ['markers that survive only as nested-comment residue',
       'BEGIN\n  /* outer /* inner */ check_idempotency( commission_payment_items */\n  RETURN NULL;\nEND;',
-      /nested or unterminated block comment/],
+      REFUSED],
+    // A '...' regex cannot see a dollar-quoted literal at all.
+    ['markers inside a dollar-quoted diagnostic',
+      'BEGIN\n  RAISE NOTICE $msg$check_idempotency( commission_payment_items$msg$;\n  RETURN NULL;\nEND;',
+      REFUSED],
+    // Stripping comments BEFORE literals deletes this literal's closing quote,
+    // after which no '...' regex can match the now-unterminated remainder and
+    // both markers survive into the LIKE.
+    ['markers in a literal whose closing quote a -- strip would eat',
+      "BEGIN\n  RAISE NOTICE 'check_idempotency( commission_payment_items -- diagnostic';\n  RETURN NULL;\nEND;",
+      REFUSED],
+    // Backslash-escaped quotes break naive quote pairing, so the literal looks
+    // like it ends early and its tail reads as code.
+    ['markers in an E-string with an escaped quote',
+      "BEGIN\n  RAISE NOTICE E'a \\' check_idempotency( commission_payment_items';\n  RETURN NULL;\nEND;",
+      REFUSED],
+    // A '*/' inside a literal is not a comment terminator, but a comment-first
+    // strip treats it as one.
+    ['markers in a literal holding a comment terminator',
+      "BEGIN\n  RAISE NOTICE 'x /* y'; RAISE NOTICE 'check_idempotency( commission_payment_items */';\n  RETURN NULL;\nEND;",
+      REFUSED],
+    // Legal identifiers, so this body parses — but it calls nothing.
+    ['markers that are only quoted identifiers',
+      'BEGIN\n  PERFORM 1 FROM "commission_payment_items" WHERE "check_idempotency(" IS NULL;\n  RETURN NULL;\nEND;',
+      REFUSED],
   ];
 
   for (const [label, body, expected] of DECOYS) {
@@ -555,7 +658,7 @@ function proveIdentityGuard() {
     assert.match(output, expected, `wrong refusal for ${label}:\n${output}`);
   }
 
-  // Both decoys must be gone, or the migration applied next would be wrapping a
+  // Every decoy must be gone, or the migration applied next would be wrapping a
   // fake body and every assertion after it would be meaningless. (That the
   // guard is not simply refusing everything is proven by the next step: the
   // genuine baseline body goes through it and the migration applies clean.)
@@ -569,6 +672,7 @@ try {
   assertInputs();
   startContainer();
   installBaseline();
+  proveCodeOnlyLexer();
   proveIdentityGuard();
   psql(readFileSync(MIGRATION, 'utf8'));
 
