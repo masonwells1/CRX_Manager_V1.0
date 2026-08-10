@@ -501,6 +501,10 @@ export default function Reports() {
     // response is lost leaves it at zero — and on a single-recipient click that
     // makes a committed batch indistinguishable from nothing having happened.
     let attempted = 0;
+    // The scope whose call is in flight right now. A binding refusal poisons
+    // exactly this one key and no other, so the catch block needs to know which
+    // it was. Declared out here because the catch cannot see the try's scope.
+    let scopeInFlight: string | null = null;
     try {
       // Group by recipient — RPC requires all commissions per call belong to same recipient
       const byRecipient = new Map<string, string[]>();
@@ -533,6 +537,7 @@ export default function Reports() {
           markPaidKeys.current.set(scope, entry);
         }
         scopesThisClick.push(scope);
+        scopeInFlight = scope;
         attempted += 1;
         const { data, error } = await supabase.rpc('create_commission_payment', {
           p_commission_ids: ids,
@@ -603,19 +608,33 @@ export default function Reports() {
     } catch (err: unknown) {
       // Backstop only. The scoping above should make a binding refusal
       // unreachable from this page, so if one arrives the scope and the server
-      // fingerprint have drifted apart — clear every retained key so the admin is
-      // not locked out of quick-pay, and report exactly how far the loop got.
+      // fingerprint have drifted apart — drop the one key that was refused so
+      // the admin is not locked out of quick-pay, and report how far the loop
+      // got.
+      //
+      // Only that one. Clearing the whole map also threw away the keys of
+      // recipients this same click had ALREADY paid, which is the exact partial
+      // batch the design above exists to protect: recipient A lands, recipient B
+      // is refused, and a cleared map sends A a NEW key on the retry, which the
+      // server refuses because A's commissions already sit in a live payment —
+      // so the loop dies before it ever reaches B and the admin cannot finish
+      // the action without editing the selection by hand. It also discarded keys
+      // belonging to entirely unrelated earlier clicks.
       const rejection = getIdempotencyBindingRejection(err);
       if (rejection) {
-        markPaidKeys.current.clear();
+        if (scopeInFlight) markPaidKeys.current.delete(scopeInFlight);
         Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: `mark_commissions_paid_${rejection}_mismatch` } });
         const refusalListIsCurrent = await fetchCommissions();
         // Never claim "nothing was created" outright — recipients processed
         // before the refusal really were paid, and telling the admin otherwise
-        // invites a duplicate batch.
+        // invites a duplicate batch. Even with totalBatched at zero the database
+        // only proved that THIS attempt did no new work: the refusal means a
+        // receipt already existed under this key, and that receipt can point at
+        // a batch an earlier attempt committed. So the zero case says "nothing
+        // new", never "no batch exists", and still sends the admin to look.
         toast('warning', totalBatched > 0
           ? `That retry could not be matched to this request. ${totalBatched} commission(s) were already added to a payment batch before it stopped — check Commission Payments before trying again.${refusalListIsCurrent ? '' : STALE_COMMISSION_LIST_NOTE}`
-          : `That retry could not be matched to this request, so no payment batch was created. Check Commission Payments before trying again.${refusalListIsCurrent ? '' : STALE_COMMISSION_LIST_NOTE}`);
+          : `That retry could not be matched to this request, so nothing new was created by this attempt — but an earlier attempt may already have created a batch. Check Commission Payments before trying again.${refusalListIsCurrent ? '' : STALE_COMMISSION_LIST_NOTE}`);
       } else {
         Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'mark_commissions_paid' } });
         // Ordinary failure (timeout, network, a server guard). Earlier recipients

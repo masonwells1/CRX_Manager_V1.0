@@ -633,7 +633,22 @@ export default function CommissionPayments() {
             : `This retry was already used by an earlier void, so nothing was voided now. Check the payment list below before voiding again.${voidListIsCurrent ? '' : STALE_LIST_NOTE}`);
       } else {
         Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'void_commission_payment' } });
-        toast('error', err instanceof Error ? err.message : 'Failed to void payment');
+        // Ordinary failure (timeout, network, a server guard) — and it does NOT
+        // prove the void did not happen. The call may have committed and lost
+        // its response, and everything after the RPC (the activity-log write,
+        // which can throw) lands here too with the void already done. Saying
+        // "Failed to void payment" over a list that was never refreshed shows
+        // the payment still posted when it may already be voided, and an admin
+        // reading a flat failure reasonably tries something else. Refresh first,
+        // then say what is actually known: this attempt did not complete, and
+        // the list is the authority on whether the void landed.
+        //
+        // The key is deliberately NOT retired here. Retrying the same void with
+        // the same reason replays the original outcome instead of starting a
+        // second one, which is what makes "try again" safe.
+        const voidFailListIsCurrent = await fetchPayments();
+        const detail = err instanceof Error ? err.message : 'Failed to void payment';
+        toast('error', `${detail} — the void may still have gone through. Check the payment list below before trying again.${voidFailListIsCurrent ? '' : STALE_LIST_NOTE}`);
       }
     }
     setVoiding(false);

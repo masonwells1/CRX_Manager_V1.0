@@ -27,6 +27,8 @@ const PAYOUT_RENAME_MIGRATION =
   '20260810170000_bind_commission_payout_idempotency_to_intent.sql';
 
 type Span = { start: number; end: number; kind: 'body' | 'string' };
+/** A "quoted identifier" run. Not blanked — see lexSql. */
+type Ident = { start: number; end: number };
 
 /** The dollar-quote tag opening at `i`, or null. `$1` is a parameter, not a tag. */
 function dollarTagAt(sql: string, i: number): string | null {
@@ -58,10 +60,19 @@ function dollarTagAt(sql: string, i: number): string | null {
  *
  * `spans` records where the dollar-quoted bodies and the blanked top-level
  * literals are, so a definition's body can be bounded to its own statement.
+ *
+ * `idents` records double-quoted identifiers OUTSIDE a body. They are recorded
+ * rather than blanked, because blanking them would hide a real definition
+ * written as `CREATE FUNCTION "post_commission_payment"(...)` — the unsafe
+ * direction. Recording them lets the scan below refuse to read SQL keywords out
+ * of them: `"as"` is a perfectly legal column name, and a `\bAS\b` that matched
+ * inside one would anchor the body on whatever literal came next instead of on
+ * the real body, reporting a guard that the live function does not have.
  */
-function lexSql(sql: string): { masked: string; spans: Span[] } {
+function lexSql(sql: string): { masked: string; spans: Span[]; idents: Ident[] } {
   const out = sql.split('');
   const spans: Span[] = [];
+  const idents: Ident[] = [];
   const blank = (from: number, to: number) => {
     for (let i = from; i < to && i < out.length; i += 1) {
       if (out[i] !== '\n') out[i] = ' ';
@@ -111,6 +122,18 @@ function lexSql(sql: string): { masked: string; spans: Span[] } {
       continue;
     }
 
+    if (sql[i] === '"' && !inBody) {
+      let j = i + 1;
+      while (j < sql.length) {
+        if (sql[j] === '"' && sql[j + 1] === '"') { j += 2; continue; }
+        if (sql[j] === '"') { j += 1; break; }
+        j += 1;
+      }
+      idents.push({ start: i, end: j });
+      i = j;
+      continue;
+    }
+
     const tag = dollarTagAt(sql, i);
     if (tag) {
       if (inBody && openTags[openTags.length - 1] === tag) {
@@ -128,12 +151,13 @@ function lexSql(sql: string): { masked: string; spans: Span[] } {
   }
 
   spans.sort((a, b) => a.start - b.start);
-  return { masked: out.join(''), spans };
+  idents.sort((a, b) => a.start - b.start);
+  return { masked: out.join(''), spans, idents };
 }
 
 // ~900 migration files are rescanned once per protected RPC per test; lexing
 // each file once instead of nine times keeps the suite inside its timeout.
-const lexCache = new Map<string, { masked: string; spans: Span[] }>();
+const lexCache = new Map<string, { masked: string; spans: Span[]; idents: Ident[] }>();
 function lexed(sql: string) {
   let hit = lexCache.get(sql);
   if (!hit) {
@@ -161,7 +185,32 @@ function lexed(sql: string) {
  * LATER statement can no longer be adopted as this definition's body.
  */
 function functionDefinitions(sql: string, functionName: string): string[] {
-  const { masked, spans } = lexed(sql);
+  const { masked, spans, idents } = lexed(sql);
+  const inIdent = (at: number) => idents.some((d) => at > d.start && at < d.end);
+
+  // An unqualified definition resolves through search_path, and this scan reads
+  // it as public. That is only true while nothing in the file has repointed
+  // search_path at the session level — `SET search_path = private, public;` as
+  // a statement of its own would make a later unqualified definition land in
+  // `private`, and this scan would then report ITS guards while the live public
+  // function kept whatever it had. A routine-level `SET search_path` inside a
+  // CREATE FUNCTION is a different thing entirely and must not trip this, so a
+  // hit only counts when the statement it sits in is not a CREATE FUNCTION.
+  const topLevelSearchPath: number[] = [];
+  const setSearchPath = /\bSET\s+search_path\b/gi;
+  for (let m = setSearchPath.exec(masked); m; m = setSearchPath.exec(masked)) {
+    if (inIdent(m.index) || spans.some((s) => m!.index > s.start && m!.index < s.end)) continue;
+    let stmtStart = 0;
+    for (let at = masked.lastIndexOf(';', m.index); at !== -1; at = masked.lastIndexOf(';', at - 1)) {
+      if (inIdent(at) || spans.some((s) => at > s.start && at < s.end)) continue;
+      stmtStart = at;
+      break;
+    }
+    if (!/\bCREATE\b[\s\S]*\bFUNCTION\b/i.test(masked.slice(stmtStart, m.index))) {
+      topLevelSearchPath.push(m.index);
+    }
+  }
+
   const header = new RegExp(
     String.raw`CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:(?:public|"public")\s*\.\s*)?(?:${functionName}|"${functionName}")\s*\(`,
     'gi',
@@ -171,22 +220,33 @@ function functionDefinitions(sql: string, functionName: string): string[] {
   while ((match = header.exec(masked)) !== null) {
     const after = header.lastIndex;
 
+    expect(
+      topLevelSearchPath.every((at) => at > match!.index) || /\bpublic\b/i.test(match[0]),
+      `${functionName} is defined unqualified after a top-level SET search_path, so which schema it lands in cannot be read from this file`,
+    ).toBe(true);
+
     // The statement ends at the first semicolon that is not swallowed by a body
     // or a literal. A body that opens after it belongs to some later statement.
     let stmtEnd = -1;
     for (let at = masked.indexOf(';', after); at !== -1; at = masked.indexOf(';', at + 1)) {
-      if (spans.some((s) => at > s.start && at < s.end)) continue;
+      if (spans.some((s) => at > s.start && at < s.end) || inIdent(at)) continue;
       stmtEnd = at;
       break;
     }
 
     // Anchored on this definition's own AS. Taking the next quoted run outright
     // would grab a routine-level literal instead — `SET search_path = ''` and a
-    // `DEFAULT ''` argument both sit between the header and the body.
+    // `DEFAULT ''` argument both sit between the header and the body. Quoted
+    // identifiers are skipped: `"as"` is a legal argument name, and matching it
+    // would anchor the body on the next literal after it — which, for an
+    // argument like `"as" text DEFAULT 'GUARD_PRESENT'`, is a string the author
+    // chose, so the scan would read guards out of a default value while the
+    // real body ran unguarded.
     const asToken = /\bAS\b/gi;
     asToken.lastIndex = after;
-    const as = asToken.exec(masked);
-    const span = as ? spans.find((s) => s.start >= as.index) : undefined;
+    let as = asToken.exec(masked);
+    while (as && inIdent(as.index)) as = asToken.exec(masked);
+    const span = as ? spans.find((s) => s.start >= as!.index) : undefined;
 
     expect(as, `${functionName} definition has no AS clause`).not.toBeNull();
     expect(span, `${functionName} definition has no body`).toBeDefined();
@@ -197,11 +257,20 @@ function functionDefinitions(sql: string, functionName: string): string[] {
 
     // A dollar-quoted body is read from the mask, which keeps its code and its
     // error-code literals but has already dropped its comments — so no assertion
-    // below can be satisfied by a commented-out guard. A single-quoted body is
-    // blanked in the mask, so it is read from the source instead.
+    // below can be satisfied by a commented-out guard.
+    //
+    // A single-quoted body is blanked in the mask, and reading it from the raw
+    // source instead put the comments straight back: a body could comment out
+    // `FOR UPDATE` and the stale-selection count check, and every assertion
+    // below still found the text and passed while the live function was
+    // unguarded. Decode it the way Postgres does ('' is one quote) and lex the
+    // result, wrapped in a dollar tag so the sub-lex treats it as body text and
+    // keeps the error-code literals the assertions look for.
     bodies.push(span!.kind === 'body'
       ? masked.slice(match.index, span!.end)
-      : sql.slice(match.index, span!.end));
+      : masked.slice(match.index, span!.start)
+        + lexSql(`$crx_decoded$${sql.slice(span!.start + 1, span!.end - 1).replace(/''/g, "'")}$crx_decoded$`)
+          .masked.slice(13, -13)); // 13 = '$crx_decoded$'.length
     header.lastIndex = span!.end;
   }
   return bodies;
@@ -297,8 +366,62 @@ describe('migration scanner', () => {
     ].join('\n');
     const found = functionDefinitions(sql, 'pay');
     expect(found).toHaveLength(1);
-    expect(found[0]).toContain("'SELECT 1'");
+    // Decoded, so the body reads as the SQL it is rather than as the literal
+    // that carried it — the outer quotes are gone.
+    expect(found[0]).toContain('SELECT 1');
     expect(found[0], 'the body swallowed the next statement').not.toContain('$do$');
+  });
+
+  it('reads a single-quoted body as CODE, not as raw text', () => {
+    // `AS '…'` bodies used to be returned straight from the source, comments and
+    // all, so a body could comment its guard out and still satisfy a
+    // .toContain() check while the live function ran unguarded. Postgres decodes
+    // '' to one quote inside such a body, so decode it the same way and lex it.
+    const sql = [
+      `CREATE OR REPLACE FUNCTION public.pay(p_id uuid) RETURNS void LANGUAGE plpgsql AS`,
+      `'BEGIN -- GUARD_PRESENT`,
+      `  RAISE EXCEPTION ''KEPT_LITERAL'';`,
+      `END';`,
+    ].join('\n');
+    const found = functionDefinitions(sql, 'pay');
+    expect(found).toHaveLength(1);
+    expect(found[0], 'a commented-out guard was read as live code').not.toContain('GUARD_PRESENT');
+    // …while the error-code literals the real assertions look for survive.
+    expect(found[0]).toContain("'KEPT_LITERAL'");
+  });
+
+  it('refuses to guess the schema of an unqualified definition after a session SET search_path', () => {
+    // An unqualified CREATE FUNCTION is read as public, which is true only while
+    // search_path still points there. A statement-level `SET search_path` puts a
+    // later unqualified definition somewhere else entirely, and this scan would
+    // then report ITS guards while the live public function kept whatever it
+    // had. Refuse rather than guess.
+    const sql = [
+      `SET search_path = private, public;`,
+      `CREATE OR REPLACE FUNCTION pay(p_id uuid) RETURNS void LANGUAGE plpgsql AS ${guarded()};`,
+    ].join('\n');
+    expect(() => functionDefinitions(sql, 'pay')).toThrow(/top-level SET search_path/);
+  });
+
+  it('is not tripped by a ROUTINE-level SET search_path', () => {
+    // The clause every SECURITY DEFINER function in this repo carries. It is
+    // part of the CREATE FUNCTION statement, not a session setting, so it must
+    // not make the scan refuse a perfectly ordinary migration.
+    const sql = `CREATE OR REPLACE FUNCTION pay(p_id uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS ${guarded()};`;
+    const found = functionDefinitions(sql, 'pay');
+    expect(found).toHaveLength(1);
+    expect(found[0]).toContain('GUARD_PRESENT');
+  });
+
+  it('does not read a SQL keyword out of a quoted identifier', () => {
+    // `"as"` is a legal argument name. Matching it as the AS clause anchored the
+    // body on the next literal — here a DEFAULT the author picked — so the scan
+    // reported a guard the real body does not have.
+    const sql = `CREATE OR REPLACE FUNCTION public.pay("as" text DEFAULT 'GUARD_PRESENT')\nRETURNS void LANGUAGE plpgsql AS $fn$ BEGIN NULL; END $fn$;`;
+    const found = functionDefinitions(sql, 'pay');
+    expect(found).toHaveLength(1);
+    expect(found[0], 'a DEFAULT literal was read as the body').not.toContain('GUARD_PRESENT');
+    expect(found[0]).toContain('BEGIN NULL; END');
   });
 
   it('still returns EVERY definition in file order', () => {

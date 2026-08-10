@@ -511,10 +511,65 @@ INSERT INTO public.profiles (id, role, is_active) VALUES
 `);
 }
 
+/**
+ * The rename step decides, from source text alone, whether the function it is
+ * about to move into the private implementation slot really is the payout body.
+ * Scanning text for markers is exactly the kind of check that reads fine and
+ * does nothing, so prove it by handing it two bodies that LOOK right and must
+ * still be refused. Each runs in its own transaction that never commits: the
+ * expected failure aborts it, and the real migration below still starts from an
+ * untouched baseline.
+ */
+function proveIdentityGuard() {
+  const migration = readFileSync(MIGRATION, 'utf8');
+  const SIGNATURE = 'public.create_commission_payment(uuid[], text, text, date, text, uuid, text)';
+  const DECOYS = [
+    // prosrc keeps string literals. A body that merely NAMES both markers
+    // inside a RAISE NOTICE satisfies a plain LIKE while calling nothing.
+    ['markers that exist only inside a string literal',
+      "BEGIN\n  RAISE NOTICE 'check_idempotency( commission_payment_items';\n  RETURN NULL;\nEND;",
+      /does not look like the payout implementation/],
+    // Postgres block comments NEST. Everything here is commented out, but a
+    // non-greedy strip stops at the inner '*/' and leaves the markers looking
+    // like live code — the one direction in which stripping can FABRICATE a
+    // marker rather than remove one.
+    ['markers that survive only as nested-comment residue',
+      'BEGIN\n  /* outer /* inner */ check_idempotency( commission_payment_items */\n  RETURN NULL;\nEND;',
+      /nested or unterminated block comment/],
+  ];
+
+  for (const [label, body, expected] of DECOYS) {
+    const run = psql(
+      `BEGIN;\nDROP FUNCTION ${SIGNATURE};\n`
+      + 'CREATE FUNCTION public.create_commission_payment(\n'
+      + '  p_commission_ids uuid[], p_payment_method text, p_reference text,\n'
+      + '  p_payment_date date, p_notes text,\n'
+      + '  p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text\n'
+      + ') RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path TO public, pg_temp\n'
+      + `AS $decoy$\n${body}\n$decoy$;\n`
+      + `${migration}\nROLLBACK;\n`,
+      { allowFailure: true },
+    );
+    const output = `${run.stdout || ''}\n${run.stderr || ''}`;
+    assert.notEqual(run.status, 0, `the rename adopted a body with ${label}:\n${output}`);
+    assert.match(output, expected, `wrong refusal for ${label}:\n${output}`);
+  }
+
+  // Both decoys must be gone, or the migration applied next would be wrapping a
+  // fake body and every assertion after it would be meaningless. (That the
+  // guard is not simply refusing everything is proven by the next step: the
+  // genuine baseline body goes through it and the migration applies clean.)
+  assert.equal(
+    psqlValue(`SELECT to_regprocedure('${SIGNATURE}') IS NOT NULL;`), 't',
+    'the decoy transactions did not roll back',
+  );
+}
+
 try {
   assertInputs();
   startContainer();
   installBaseline();
+  proveIdentityGuard();
   psql(readFileSync(MIGRATION, 'utf8'));
 
   const smoke = psql(readFileSync(SMOKE, 'utf8'), { allowFailure: true });

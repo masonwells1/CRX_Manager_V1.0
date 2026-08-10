@@ -201,12 +201,21 @@ BEGIN
     -- raises IDEMPOTENCY_RECEIPT_MISSING if it is absent — and it must touch
     -- commission_payment_items, which no thin wrapper does. Fail closed rather
     -- than rename an unrelated body into the implementation slot.
-    -- prosrc keeps the comments, so a body that merely MENTIONS
-    -- check_idempotency() in a comment would satisfy a plain LIKE while doing
-    -- nothing of the kind. Strip block comments then line comments and match
-    -- the code that is left. Stripping can only remove text, so every way this
-    -- goes wrong (a '--' inside a string literal, a nested block comment)
-    -- deletes a marker and refuses loudly; it can never invent one.
+    -- prosrc keeps the comments AND the string literals, so a body that merely
+    -- MENTIONS check_idempotency() in a comment — or raises it inside a
+    -- RAISE NOTICE — would satisfy a plain LIKE while doing nothing of the
+    -- kind. Strip block comments, then line comments, then single-quoted
+    -- literals, and match only the code that is left. Every strip can only
+    -- REMOVE text, so each way this goes wrong deletes a marker and refuses
+    -- loudly; none of them can invent one.
+    --
+    -- One case is not delete-only and so is handled separately: Postgres block
+    -- comments NEST, and the non-greedy regex stops at the first '*/'. For
+    -- '/* a /* b */ marker */' it removes through the inner close and leaves
+    -- 'marker */' looking like live code that Postgres considers commented out.
+    -- That residue always ends in a stray '*/' (or an unterminated '/*'), so
+    -- refusing on either one closes the only direction that could fabricate a
+    -- marker.
     --
     -- Deliberately asymmetric with the wrapper-marker check above, which reads
     -- the RAW source: there, ANY mention — comment included — should stop us,
@@ -214,6 +223,10 @@ BEGIN
     v_code := regexp_replace(
                 regexp_replace(v_src, '/\*.*?\*/', ' ', 'gs'),
                 '--[^\n]*', ' ', 'g');
+    IF v_code LIKE '%/*%' OR v_code LIKE '%*/%' THEN
+      RAISE EXCEPTION 'public.create_commission_payment has a nested or unterminated block comment, so its source cannot be read reliably; refusing to rename it';
+    END IF;
+    v_code := regexp_replace(v_code, '''[^'']*''', ' ', 'g');
     IF v_code NOT LIKE '%check_idempotency(%' OR v_code NOT LIKE '%commission_payment_items%' THEN
       RAISE EXCEPTION 'public.create_commission_payment does not look like the payout implementation this migration wraps (it must call check_idempotency() and touch commission_payment_items); refusing to rename it';
     END IF;
@@ -277,14 +290,22 @@ BEGIN
   -- same change, so refusing here leaves no unbound door.
   -- Two predicates, deliberately. The first is the house rule already live in
   -- 20260721145936 across every money/lifecycle RPC, kept so this path does not
-  -- drift from the rest. The second is locale-independent: [[:space:]] follows
-  -- the database collation, so whether NBSP or an em-space counts as blank is
-  -- not the same answer on every cluster, and a key made only of those would be
-  -- accepted somewhere. Every key this application generates is ASCII, so
-  -- demanding one printable ASCII character costs no real caller anything.
+  -- drift from the rest. The second demands one printable ASCII character:
+  -- [[:space:]] follows the database collation, so whether NBSP or an em-space
+  -- counts as blank is not the same answer on every cluster, and a key made
+  -- only of those would be accepted somewhere. Every key this application
+  -- generates is ASCII, so this costs no real caller anything.
+  --
+  -- COLLATE "C" is what makes the second predicate locale-independent, and it
+  -- is not decoration: Postgres resolves a bracket RANGE like [!-~] through the
+  -- active collating sequence, so under a non-C collation a non-ASCII character
+  -- can sort inside the range and satisfy it. Both predicates would then be
+  -- locale-dependent and a key with no printable ASCII could be accepted after
+  -- all. "C" is built in and always present, so pinning it here has no
+  -- deployment cost.
   IF p_idempotency_key IS NULL
      OR p_idempotency_key !~ '[^[:space:]]'
-     OR p_idempotency_key !~ '[!-~]' THEN
+     OR p_idempotency_key COLLATE "C" !~ '[!-~]' THEN
     RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: create_commission_payment requires p_idempotency_key';
   END IF;
 
@@ -379,12 +400,21 @@ BEGIN
       RAISE EXCEPTION 'public.post_commission_payment is already the intent-binding wrapper but its implementation _post_commission_payment_intent_impl_20260809 is missing; refusing to rename the wrapper onto itself';
     END IF;
     -- See create: absence of the wrapper marker is not proof of identity.
-    -- prosrc keeps the comments, so a body that merely MENTIONS
-    -- check_idempotency() in a comment would satisfy a plain LIKE while doing
-    -- nothing of the kind. Strip block comments then line comments and match
-    -- the code that is left. Stripping can only remove text, so every way this
-    -- goes wrong (a '--' inside a string literal, a nested block comment)
-    -- deletes a marker and refuses loudly; it can never invent one.
+    -- prosrc keeps the comments AND the string literals, so a body that merely
+    -- MENTIONS check_idempotency() in a comment — or raises it inside a
+    -- RAISE NOTICE — would satisfy a plain LIKE while doing nothing of the
+    -- kind. Strip block comments, then line comments, then single-quoted
+    -- literals, and match only the code that is left. Every strip can only
+    -- REMOVE text, so each way this goes wrong deletes a marker and refuses
+    -- loudly; none of them can invent one.
+    --
+    -- One case is not delete-only and so is handled separately: Postgres block
+    -- comments NEST, and the non-greedy regex stops at the first '*/'. For
+    -- '/* a /* b */ marker */' it removes through the inner close and leaves
+    -- 'marker */' looking like live code that Postgres considers commented out.
+    -- That residue always ends in a stray '*/' (or an unterminated '/*'), so
+    -- refusing on either one closes the only direction that could fabricate a
+    -- marker.
     --
     -- Deliberately asymmetric with the wrapper-marker check above, which reads
     -- the RAW source: there, ANY mention — comment included — should stop us,
@@ -392,6 +422,10 @@ BEGIN
     v_code := regexp_replace(
                 regexp_replace(v_src, '/\*.*?\*/', ' ', 'gs'),
                 '--[^\n]*', ' ', 'g');
+    IF v_code LIKE '%/*%' OR v_code LIKE '%*/%' THEN
+      RAISE EXCEPTION 'public.post_commission_payment has a nested or unterminated block comment, so its source cannot be read reliably; refusing to rename it';
+    END IF;
+    v_code := regexp_replace(v_code, '''[^'']*''', ' ', 'g');
     IF v_code NOT LIKE '%check_idempotency(%' OR v_code NOT LIKE '%commission_payment_items%' THEN
       RAISE EXCEPTION 'public.post_commission_payment does not look like the payout implementation this migration wraps (it must call check_idempotency() and touch commission_payment_items); refusing to rename it';
     END IF;
@@ -435,14 +469,22 @@ BEGIN
   -- See create: a key is REQUIRED, so no caller reaches the money path unbound.
   -- Two predicates, deliberately. The first is the house rule already live in
   -- 20260721145936 across every money/lifecycle RPC, kept so this path does not
-  -- drift from the rest. The second is locale-independent: [[:space:]] follows
-  -- the database collation, so whether NBSP or an em-space counts as blank is
-  -- not the same answer on every cluster, and a key made only of those would be
-  -- accepted somewhere. Every key this application generates is ASCII, so
-  -- demanding one printable ASCII character costs no real caller anything.
+  -- drift from the rest. The second demands one printable ASCII character:
+  -- [[:space:]] follows the database collation, so whether NBSP or an em-space
+  -- counts as blank is not the same answer on every cluster, and a key made
+  -- only of those would be accepted somewhere. Every key this application
+  -- generates is ASCII, so this costs no real caller anything.
+  --
+  -- COLLATE "C" is what makes the second predicate locale-independent, and it
+  -- is not decoration: Postgres resolves a bracket RANGE like [!-~] through the
+  -- active collating sequence, so under a non-C collation a non-ASCII character
+  -- can sort inside the range and satisfy it. Both predicates would then be
+  -- locale-dependent and a key with no printable ASCII could be accepted after
+  -- all. "C" is built in and always present, so pinning it here has no
+  -- deployment cost.
   IF p_idempotency_key IS NULL
      OR p_idempotency_key !~ '[^[:space:]]'
-     OR p_idempotency_key !~ '[!-~]' THEN
+     OR p_idempotency_key COLLATE "C" !~ '[!-~]' THEN
     RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: post_commission_payment requires p_idempotency_key';
   END IF;
 
@@ -513,12 +555,21 @@ BEGIN
       RAISE EXCEPTION 'public.void_commission_payment is already the intent-binding wrapper but its implementation _void_commission_payment_intent_impl_20260809 is missing; refusing to rename the wrapper onto itself';
     END IF;
     -- See create: absence of the wrapper marker is not proof of identity.
-    -- prosrc keeps the comments, so a body that merely MENTIONS
-    -- check_idempotency() in a comment would satisfy a plain LIKE while doing
-    -- nothing of the kind. Strip block comments then line comments and match
-    -- the code that is left. Stripping can only remove text, so every way this
-    -- goes wrong (a '--' inside a string literal, a nested block comment)
-    -- deletes a marker and refuses loudly; it can never invent one.
+    -- prosrc keeps the comments AND the string literals, so a body that merely
+    -- MENTIONS check_idempotency() in a comment — or raises it inside a
+    -- RAISE NOTICE — would satisfy a plain LIKE while doing nothing of the
+    -- kind. Strip block comments, then line comments, then single-quoted
+    -- literals, and match only the code that is left. Every strip can only
+    -- REMOVE text, so each way this goes wrong deletes a marker and refuses
+    -- loudly; none of them can invent one.
+    --
+    -- One case is not delete-only and so is handled separately: Postgres block
+    -- comments NEST, and the non-greedy regex stops at the first '*/'. For
+    -- '/* a /* b */ marker */' it removes through the inner close and leaves
+    -- 'marker */' looking like live code that Postgres considers commented out.
+    -- That residue always ends in a stray '*/' (or an unterminated '/*'), so
+    -- refusing on either one closes the only direction that could fabricate a
+    -- marker.
     --
     -- Deliberately asymmetric with the wrapper-marker check above, which reads
     -- the RAW source: there, ANY mention — comment included — should stop us,
@@ -526,6 +577,10 @@ BEGIN
     v_code := regexp_replace(
                 regexp_replace(v_src, '/\*.*?\*/', ' ', 'gs'),
                 '--[^\n]*', ' ', 'g');
+    IF v_code LIKE '%/*%' OR v_code LIKE '%*/%' THEN
+      RAISE EXCEPTION 'public.void_commission_payment has a nested or unterminated block comment, so its source cannot be read reliably; refusing to rename it';
+    END IF;
+    v_code := regexp_replace(v_code, '''[^'']*''', ' ', 'g');
     IF v_code NOT LIKE '%check_idempotency(%' OR v_code NOT LIKE '%commission_payment_items%' THEN
       RAISE EXCEPTION 'public.void_commission_payment does not look like the payout implementation this migration wraps (it must call check_idempotency() and touch commission_payment_items); refusing to rename it';
     END IF;
@@ -572,14 +627,22 @@ BEGIN
   -- See create: a key is REQUIRED, so no caller reaches the money path unbound.
   -- Two predicates, deliberately. The first is the house rule already live in
   -- 20260721145936 across every money/lifecycle RPC, kept so this path does not
-  -- drift from the rest. The second is locale-independent: [[:space:]] follows
-  -- the database collation, so whether NBSP or an em-space counts as blank is
-  -- not the same answer on every cluster, and a key made only of those would be
-  -- accepted somewhere. Every key this application generates is ASCII, so
-  -- demanding one printable ASCII character costs no real caller anything.
+  -- drift from the rest. The second demands one printable ASCII character:
+  -- [[:space:]] follows the database collation, so whether NBSP or an em-space
+  -- counts as blank is not the same answer on every cluster, and a key made
+  -- only of those would be accepted somewhere. Every key this application
+  -- generates is ASCII, so this costs no real caller anything.
+  --
+  -- COLLATE "C" is what makes the second predicate locale-independent, and it
+  -- is not decoration: Postgres resolves a bracket RANGE like [!-~] through the
+  -- active collating sequence, so under a non-C collation a non-ASCII character
+  -- can sort inside the range and satisfy it. Both predicates would then be
+  -- locale-dependent and a key with no printable ASCII could be accepted after
+  -- all. "C" is built in and always present, so pinning it here has no
+  -- deployment cost.
   IF p_idempotency_key IS NULL
      OR p_idempotency_key !~ '[^[:space:]]'
-     OR p_idempotency_key !~ '[!-~]' THEN
+     OR p_idempotency_key COLLATE "C" !~ '[!-~]' THEN
     RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: void_commission_payment requires p_idempotency_key';
   END IF;
 

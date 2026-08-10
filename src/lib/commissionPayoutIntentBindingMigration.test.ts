@@ -54,8 +54,25 @@ const PAYOUT_RPCS = [
 function wrapperBody(name: string): string {
   // CREATE OR REPLACE, not CREATE: the migration has to be re-runnable, so the
   // wrappers replace themselves rather than aborting on a second application.
-  const start = migration.indexOf(`CREATE OR REPLACE FUNCTION public.${name}(`);
-  expect(start, `${name} wrapper is missing`).toBeGreaterThan(-1);
+  const header = `CREATE OR REPLACE FUNCTION public.${name}(`;
+
+  // Every definition, not the first one. Reading the first was unsound in the
+  // one direction that matters: a SECOND definition of the same signature later
+  // in this file is the one Postgres keeps, so a copy that dropped the binding
+  // check and delegated straight to the private implementation would run in
+  // production while every assertion below still read the intact first copy —
+  // and the overload count would still be one, so that test would not catch it
+  // either. Requiring exactly one definition is stronger than reading the last:
+  // there is no legitimate reason for this migration to define a wrapper twice,
+  // so a second one should stop the suite and be looked at, not be silently
+  // preferred.
+  const starts: number[] = [];
+  for (let at = migration.indexOf(header); at > -1; at = migration.indexOf(header, at + 1)) {
+    starts.push(at);
+  }
+  expect(starts.length, `${name} wrapper is defined ${starts.length} times, expected exactly once`)
+    .toBe(1);
+  const start = starts[0];
   const end = migration.indexOf('$function$;', start);
   expect(end, `${name} wrapper is unterminated`).toBeGreaterThan(start);
   return migration.slice(start, end);
@@ -167,9 +184,13 @@ describe('commission payout intent-binding migration', () => {
     );
     // [[:space:]] follows the database collation, so whether NBSP counts as
     // blank is not the same answer on every cluster. Demanding one printable
-    // ASCII character makes the refusal deterministic wherever it runs.
+    // ASCII character makes the refusal deterministic wherever it runs — but
+    // only with COLLATE "C" on it. Round-7 finding: Postgres resolves a bracket
+    // RANGE through the active collating sequence too, so without the collation
+    // pin [!-~] is exactly as locale-dependent as the predicate it was added to
+    // backstop, and both could pass for a key with no printable ASCII at all.
     expect(guard, `${rpc.name} accepts a key with no printable ASCII character`).toContain(
-      "p_idempotency_key !~ '[!-~]'",
+      `p_idempotency_key COLLATE "C" !~ '[!-~]'`,
     );
     expect(guard).toContain(`RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED: ${rpc.name}`);
     // And it must refuse rather than fall through to the payout.
@@ -272,6 +293,22 @@ describe('commission payout intent-binding migration', () => {
       "regexp_replace(v_src, '/\\*.*?\\*/', ' ', 'gs')",
     );
     expect(strip).toContain("'--[^\\n]*', ' ', 'g')");
+    // Round-7 finding, part one: prosrc keeps the STRING LITERALS too, so a body
+    // whose only mention of the markers is inside a RAISE NOTICE satisfied both
+    // checks while doing nothing of the kind. Literals are stripped as well, and
+    // stripping stays one-directional.
+    expect(strip, `${rpc.name} matches the identity markers inside string literals`).toContain(
+      `regexp_replace(v_code, '''[^'']*''', ' ', 'g')`,
+    );
+    // Round-7 finding, part two: Postgres block comments NEST and the non-greedy
+    // regex stops at the first '*/', so '/* a /* b */ marker */' leaves 'marker
+    // */' looking like live code. That is the one direction stripping can
+    // FABRICATE a marker, and it always leaves a stray '*/' (or an unterminated
+    // '/*') behind, so the guard refuses on either.
+    expect(strip, `${rpc.name} accepts a marker hidden in a nested block comment`).toContain(
+      "IF v_code LIKE '%/*%' OR v_code LIKE '%*/%' THEN",
+    );
+    expect(strip).toContain(`RAISE EXCEPTION 'public.${rpc.name} has a nested or unterminated block comment`);
     // The wrapper-marker check above stays on the RAW source on purpose: there,
     // any mention at all — comment included — must stop the rename, because
     // renaming the wrapper onto itself is the unrecoverable outcome.
@@ -470,6 +507,34 @@ describe('commission payout intent-binding callers', () => {
       }
     }
   });
+
+  it('never reports an ordinary void failure over a list it did not refresh', () => {
+    // Round-7 finding. Only the BINDING refusals refreshed the list; every other
+    // way a void can fail fell through to a flat "Failed to void payment" over
+    // whatever the page happened to be showing. That is the dangerous case: the
+    // RPC may have committed and lost its reply, and the activity-log write that
+    // runs after it can throw on its own with the void already done. An admin
+    // reading a flat failure over a list that still shows the payment as posted
+    // reasonably reaches for something else.
+    const start = page.indexOf("context: 'void_commission_payment'");
+    expect(start, 'the generic void failure branch is missing').toBeGreaterThan(-1);
+    const end = page.indexOf('setVoiding(false);', start);
+    expect(end).toBeGreaterThan(start);
+    const generic = page.slice(start, end);
+
+    expect(generic, 'the ordinary void failure must refresh before it reports')
+      .toContain('const voidFailListIsCurrent = await fetchPayments();');
+    expect(generic, 'the ordinary void failure must not claim the void did not happen')
+      .toContain('the void may still have gone through');
+    // And it must admit when even that refresh failed, rather than pointing the
+    // admin at a list that is itself stale.
+    expect(generic).toContain("${voidFailListIsCurrent ? '' : STALE_LIST_NOTE}");
+
+    // The key stays. Retiring it here would turn the safe replay ("retry the
+    // same void, get the same outcome") into a second, brand-new void request.
+    expect(generic, 'an ordinary void failure must keep the key that makes a retry a replay')
+      .not.toContain('voidPaymentIdem.resetKey();');
+  });
 });
 
 /**
@@ -543,10 +608,22 @@ describe('Reports quick-pay idempotency scope', () => {
     expect(retire, 'keys are retired before the status read-back that can throw')
       .toBeGreaterThan(readBack);
 
-    // And a binding refusal still clears everything, so a scope/fingerprint
-    // drift cannot lock the admin out of quick-pay permanently.
-    const cleared = markPaid.indexOf('markPaidKeys.current.clear();');
-    expect(cleared, 'a binding refusal must clear every retained key').toBeGreaterThan(-1);
+    // Round-7 finding: a binding refusal used to clear the WHOLE map, which
+    // undid the partial-batch protection above. Recipient A lands, recipient B
+    // is refused, and clearing throws away A's key too — so the retry sends A a
+    // new key, the server refuses A because its commissions are already in a
+    // live payment, and the loop dies before it ever reaches B. Drop only the
+    // key that was actually refused: that unblocks the admin (a poisoned key is
+    // never reused) without discarding the receipts that make a retry safe, and
+    // without touching keys from unrelated earlier clicks.
+    expect(markPaid, 'a binding refusal must not clear every retained key')
+      .not.toContain('markPaidKeys.current.clear();');
+    expect(markPaid, 'a binding refusal must drop the key it refused')
+      .toContain('if (scopeInFlight) markPaidKeys.current.delete(scopeInFlight);');
+    // The refused scope has to be recorded before the call, or the catch has
+    // nothing to drop.
+    expect(markPaid.indexOf('scopeInFlight = scope;'))
+      .toBeLessThan(markPaid.indexOf(".rpc('create_commission_payment'"));
     expect(markPaid).toContain('getIdempotencyBindingRejection(err)');
   });
 
@@ -692,27 +769,78 @@ describe('every payout call site supplies an idempotency key', () => {
     'void_commission_payment',
   ];
 
-  const callSites = sourceFiles(sourceRoot).flatMap((path) => {
-    const source = readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
+  /**
+   * Blanks comments so a commented-out `p_idempotency_key:` cannot satisfy the
+   * assertions below, and so a commented-out `.rpc(` cannot pose as a call site.
+   *
+   * Quote-aware, because a naive stripper eats the rest of the line at the `//`
+   * inside a URL literal. Every failure mode here DELETES text, and deleting
+   * text can only make a required marker vanish or a call site disappear — both
+   * of which turn the pinned-call-site list below red rather than green.
+   */
+  function blankComments(source: string): string {
+    const out = source.split('');
+    const blank = (from: number, to: number) => {
+      for (let i = from; i < to && i < out.length; i += 1) if (out[i] !== '\n') out[i] = ' ';
+    };
+    let i = 0;
+    while (i < source.length) {
+      const c = source[i];
+      if (c === '/' && source[i + 1] === '/') {
+        let end = source.indexOf('\n', i);
+        if (end === -1) end = source.length;
+        blank(i, end);
+        i = end;
+      } else if (c === '/' && source[i + 1] === '*') {
+        let end = source.indexOf('*/', i + 2);
+        end = end === -1 ? source.length : end + 2;
+        blank(i, end);
+        i = end;
+      } else if (c === "'" || c === '"' || c === '`') {
+        let j = i + 1;
+        while (j < source.length) {
+          if (source[j] === '\\') { j += 2; continue; }
+          if (source[j] === c) { j += 1; break; }
+          if (c !== '`' && source[j] === '\n') break;
+          j += 1;
+        }
+        i = j;
+      } else {
+        i += 1;
+      }
+    }
+    return out.join('');
+  }
+
+  const sources = sourceFiles(sourceRoot).map((path) => ({
+    path,
+    code: blankComments(readFileSync(path, 'utf8').replace(/\r\n/g, '\n')),
+  }));
+
+  const callSites = sources.flatMap(({ path, code }) => {
     return KEYED_RPCS.flatMap((rpc) => {
-      const open = `.rpc('${rpc}', {`;
+      // Was the exact text `.rpc('name', {`, which four separate rewrites of the
+      // same call would have slipped past: double quotes, a backtick, a newline
+      // between the arguments, or extra spacing. Any of those made a new caller
+      // invisible to this scan and therefore silently exempt from it.
+      const open = new RegExp(String.raw`\.rpc\(\s*(['"\x60])${rpc}\1\s*,\s*\{`, 'g');
       const found: { path: string; rpc: string; args: string }[] = [];
-      let at = source.indexOf(open);
-      while (at > -1) {
+      let match: RegExpExecArray | null;
+      while ((match = open.exec(code)) !== null) {
         // Brace-matched rather than regexed to the next '}': the argument object
         // contains nested template literals and objects, and stopping at the
         // first '}' would truncate the very argument being looked for.
         let depth = 0;
-        let i = at + open.length - 1;
-        for (; i < source.length; i += 1) {
-          if (source[i] === '{') depth += 1;
-          else if (source[i] === '}') {
+        let i = match.index + match[0].length - 1;
+        for (; i < code.length; i += 1) {
+          if (code[i] === '{') depth += 1;
+          else if (code[i] === '}') {
             depth -= 1;
             if (depth === 0) break;
           }
         }
-        found.push({ path, rpc, args: source.slice(at, i + 1) });
-        at = source.indexOf(open, i);
+        found.push({ path, rpc, args: code.slice(match.index, i + 1) });
+        open.lastIndex = i;
       }
       return found;
     });
@@ -730,6 +858,26 @@ describe('every payout call site supplies an idempotency key', () => {
     ]);
   });
 
+  it('every .rpc() call in src names its RPC with a string literal', () => {
+    // The remaining way past the scan above is to stop naming the RPC where a
+    // scanner can see it — `supabase.rpc(name, args)` behind a helper. That is
+    // already the house rule (assertRpcCoverage.test.ts depends on it too), so
+    // pin it here as well: this scan is only as good as the guarantee that a
+    // payout call cannot hide behind a computed name.
+    const computed: string[] = [];
+    for (const { path, code } of sources) {
+      const call = /\.rpc\(\s*/g;
+      let match: RegExpExecArray | null;
+      while ((match = call.exec(code)) !== null) {
+        const next = code[match.index + match[0].length];
+        if (next !== "'" && next !== '"' && next !== '`') {
+          computed.push(`${path}:${code.slice(0, match.index).split('\n').length}`);
+        }
+      }
+    }
+    expect(computed, 'an RPC named by a variable cannot be checked by this scan').toEqual([]);
+  });
+
   it.each(KEYED_RPCS)('%s is never called without p_idempotency_key', (rpc) => {
     const sites = callSites.filter((c) => c.rpc === rpc);
     expect(sites.length, `no call sites found for ${rpc}`).toBeGreaterThan(0);
@@ -740,6 +888,29 @@ describe('every payout call site supplies an idempotency key', () => {
       // …and not with a literal null/undefined, which the wrapper refuses just
       // as hard as an omitted argument.
       expect(site.args).not.toMatch(/p_idempotency_key:\s*(null|undefined)\b/);
+    }
+  });
+
+  it('passes a key expression that is known to produce one', () => {
+    // `not null/undefined` is all a text scan can prove on its own, and it does
+    // not prove the value is USABLE: a variable that happens to be undefined at
+    // runtime reads exactly like a good one here, and the generated types call
+    // the argument optional so the compiler will not object either. So pin the
+    // expressions themselves. Every one of these is a key minted by
+    // generateIdempotencyKey (directly, or through useIdempotencyKey.getKey()),
+    // and changing any of them has to come back through this list.
+    const KEY_EXPRESSIONS = new Set([
+      'createKey',
+      'postKey',
+      'voidKey',
+      'entry.key',
+    ]);
+    for (const site of callSites) {
+      const value = /p_idempotency_key:\s*([^,\n}]+)/.exec(site.args)?.[1]?.trim();
+      expect(
+        value && KEY_EXPRESSIONS.has(value),
+        `${site.path} passes an unrecognised idempotency-key expression to ${site.rpc}: ${value}`,
+      ).toBe(true);
     }
   });
 });
