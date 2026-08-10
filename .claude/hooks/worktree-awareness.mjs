@@ -13,6 +13,7 @@
 
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   parseWorktreePorcelain, siblingsOf, normPath,
@@ -153,6 +154,13 @@ const ownDraftPaths = createOwnDraftPathsReader({
   readText: (wtPath, rel) => {
     try { return readFileSync(path.join(wtPath, ...rel.split("/")), "utf8"); } catch { return ""; }
   },
+  readHistory: (wtPath) => {
+    try { return readFileSync(path.join(wtPath, "docs", "reference", "migration-history.md"), "utf8"); } catch { return null; }
+  },
+  // Git's default text clean-filter stores LF blobs even when a Windows checkout
+  // materializes CRLF. Hash the bytes the candidate will have in Git, matching the
+  // immutable origin/main verification path.
+  sha256Text: (text) => createHash("sha256").update(text.replace(/\r\n/g, "\n"), "utf8").digest("hex"),
   run: (args, cwd) => {
     const r = spawnSync("git", args, { encoding: "utf8", timeout: 5000, cwd });
     return r.status === 0 ? String(r.stdout || "").split("\n") : null;
@@ -176,7 +184,13 @@ function mainlineParkedDiscovery() {
       parkedPrefilter.paths,
       historyCandidates.state === "known" ? historyCandidates.paths : [],
     ));
-    return parkedMainlineDiscoveryFrom(mainlinePaths, history, (p) => blobs?.get(normRepoPath(p)) ?? null, parkedPrefilter.paths);
+    return parkedMainlineDiscoveryFrom(
+      mainlinePaths,
+      history,
+      (p) => blobs?.get(normRepoPath(p)) ?? null,
+      parkedPrefilter.paths,
+      (text) => createHash("sha256").update(text, "utf8").digest("hex"),
+    );
   } catch {
     return { state: "unknown", paths: new Set(), reason: "origin/main parked-state metadata is unreadable" };
   }
@@ -212,6 +226,7 @@ try {
     const own = ownDraftPaths(e);
     if (own) {
       for (const key of own.keys()) parkedPaths.add(key);
+      if (own.unknownReason) fallbackUnknownReasons.add(`${e.path}: ${own.unknownReason}`);
       continue;
     }
     let fallbackChangedPaths = null;
