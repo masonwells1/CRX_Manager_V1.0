@@ -272,16 +272,50 @@ export function isParkedFallbackFile(repoRelPath, name, loadText = () => "") {
 //
 // Returns a Map of normalized path → the path as git spelled it, so the count dedupes
 // case-insensitively while /fleet still shows Mason the real filename.
-export function parkedDraftPathsFrom(changedPaths, existsOnDisk = () => true, readText = () => "") {
+export function parkedDraftPathsFrom(
+  changedPaths,
+  existsOnDisk = () => true,
+  readText = () => "",
+  historyText = null,
+  sha256Text = null,
+) {
   const out = new Map();
+  const history = historyText === null ? null : localCandidateMigrationPathsFromHistory(historyText);
+  let unknownReason = "";
   for (const raw of changedPaths || []) {
     const p = String(raw || "").trim();
     if (!existsOnDisk(p)) continue;
     const normalized = normRepoPath(p);
-    if (!isParkedDraftPath(p, normalized.startsWith("supabase/migrations/") ? readText(p) : "")) continue;
+    const isForwardMigration = normalized.startsWith("supabase/migrations/");
+    const sqlText = isForwardMigration ? readText(p) : "";
+    let isParked = isParkedDraftPath(p, sqlText);
+
+    // A branch can deliberately park an ordinary forward migration without adding a
+    // comment-only SQL diff. In that case its own migration-history row is the second
+    // signal, exactly as it is after the branch lands on origin/main. Verify the pin
+    // before surfacing it; an unreadable or mismatched candidate makes the branch state
+    // UNKNOWN instead of silently disappearing from /fleet.
+    if (isForwardMigration && historyText !== null) {
+      if (history?.state !== "known") {
+        unknownReason ||= history?.reason || "worktree migration history is unreadable";
+      } else if (history.paths.has(normalized)) {
+        const expectedSha256 = history.sha256ByPath?.get(normalized);
+        if (!expectedSha256 && !isParked) {
+          unknownReason ||= "branch-owned LOCAL CANDIDATE SQL lacks an explicit parked status header or SQL sha256 pin";
+        } else if (expectedSha256 && typeof sha256Text !== "function") {
+          unknownReason ||= "branch-owned LOCAL CANDIDATE SQL sha256 pin cannot be verified";
+        } else if (expectedSha256 && sha256Text(sqlText) !== expectedSha256) {
+          unknownReason ||= "branch-owned LOCAL CANDIDATE SQL sha256 does not match migration history";
+        } else if (expectedSha256) {
+          isParked = true;
+        }
+      }
+    }
+    if (!isParked) continue;
     const key = normRepoPath(p);
     if (!out.has(key)) out.set(key, p);
   }
+  Object.defineProperty(out, "unknownReason", { value: unknownReason, enumerable: false });
   return out;
 }
 
@@ -352,14 +386,17 @@ export function parkedMainlinePathsFrom(paths) {
 // `migration-history.md` is the canonical B7 state record after a migration has
 // landed. A parked forward migration on origin/main therefore needs two facts from
 // the SAME immutable tree: an exact LOCAL CANDIDATE / NOT APPLIED history row and
-// an explicit leading status header in that exact SQL blob. Parsing the timestamp
-// column and a full backticked basename avoids fuzzy prose/timestamp matches.
+// either an explicit leading status header or a matching SQL sha256 pin in that row.
+// The hash form classifies an already-reviewed candidate without creating a
+// comment-only migration diff. Parsing the timestamp column and a full backticked
+// basename avoids fuzzy prose/timestamp matches.
 export function localCandidateMigrationPathsFromHistory(historyText) {
   if (typeof historyText !== "string" || !historyText.trim()) {
     return { state: "unknown", paths: new Set(), reason: "migration history is unreadable" };
   }
 
   const paths = new Set();
+  const sha256ByPath = new Map();
   for (const raw of historyText.split("\n")) {
     const line = raw.replace(/\r/g, "").trim();
     if (!/^\|/.test(line)) continue;
@@ -380,9 +417,15 @@ export function localCandidateMigrationPathsFromHistory(historyText) {
     if (paths.has(repoPath)) {
       return { state: "unknown", paths: new Set(), reason: "duplicate LOCAL CANDIDATE history rows name the same migration" };
     }
+    const sha256Pins = [...detail.matchAll(/\bSQL\s+sha256\s*:?\s*`([a-f0-9]{64})`/gi)]
+      .map((match) => match[1].toLowerCase());
+    if (sha256Pins.length > 1) {
+      return { state: "unknown", paths: new Set(), reason: "LOCAL CANDIDATE history row has multiple SQL sha256 pins" };
+    }
     paths.add(repoPath);
+    if (sha256Pins.length === 1) sha256ByPath.set(repoPath, sha256Pins[0]);
   }
-  return { state: "known", paths, reason: "" };
+  return { state: "known", paths, sha256ByPath, reason: "" };
 }
 
 function historyRowsByMigrationBasename(historyText) {
@@ -410,7 +453,13 @@ function historyRowsByMigrationBasename(historyText) {
 // makes an orphaned explicit parked header fail loud without opening every migration.
 // A stale header with an exact APPLIED/RETIRED/SUPERSEDED history row still self-clears;
 // staging/audit name-based drafts remain visible in every partial result.
-export function parkedMainlineDiscoveryFrom(paths, historyText, loadText = () => null, possibleParkedMigrationPaths = null) {
+export function parkedMainlineDiscoveryFrom(
+  paths,
+  historyText,
+  loadText = () => null,
+  possibleParkedMigrationPaths = null,
+  sha256Text = null,
+) {
   const mainlinePaths = [...(paths || [])].map((p) => String(p || "").trim()).filter(Boolean);
   const discovered = parkedMainlinePathsFrom(mainlinePaths);
   const history = localCandidateMigrationPathsFromHistory(historyText);
@@ -432,8 +481,16 @@ export function parkedMainlineDiscoveryFrom(paths, historyText, loadText = () =>
     if (typeof sqlText !== "string") {
       return { state: "unknown", paths: new Set(discovered), reason: "LOCAL CANDIDATE SQL blob is unreadable from origin/main" };
     }
-    if (!hasExplicitParkedMigrationHeader(sqlText)) {
-      return { state: "unknown", paths: new Set(discovered), reason: "LOCAL CANDIDATE SQL lacks an explicit parked status header" };
+    const expectedSha256 = history.sha256ByPath?.get(candidate);
+    if (expectedSha256) {
+      if (typeof sha256Text !== "function") {
+        return { state: "unknown", paths: new Set(discovered), reason: "LOCAL CANDIDATE SQL sha256 pin cannot be verified" };
+      }
+      if (sha256Text(sqlText) !== expectedSha256) {
+        return { state: "unknown", paths: new Set(discovered), reason: "LOCAL CANDIDATE SQL sha256 does not match migration history" };
+      }
+    } else if (!hasExplicitParkedMigrationHeader(sqlText)) {
+      return { state: "unknown", paths: new Set(discovered), reason: "LOCAL CANDIDATE SQL lacks an explicit parked status header or SQL sha256 pin" };
     }
     discovered.push(matches[0]);
   }
@@ -474,30 +531,41 @@ export function parkedMainlineDiscoveryFrom(paths, historyText, loadText = () =>
 // candidate registry is one-to-one in both directions. Runtime deliberately avoids
 // that broad blob scan so 76 historical headers cannot become a latency or false-list
 // regression.
-export function validateParkedMigrationCrossReferences(paths, historyText, loadText = () => null) {
+export function validateParkedMigrationCrossReferences(paths, historyText, loadText = () => null, sha256Text = null) {
   const history = localCandidateMigrationPathsFromHistory(historyText);
   if (history.state !== "known") return history;
   const historyRowsByBasename = historyRowsByMigrationBasename(historyText);
-  const headers = new Set();
+  const verifiedCandidates = new Set();
   for (const raw of paths || []) {
     const p = String(raw || "").trim();
     const normalized = normRepoPath(p);
     if (!normalized.startsWith("supabase/migrations/") || !isParkedMigrationFile(p.slice(p.lastIndexOf("/") + 1))) continue;
     const sqlText = loadText(p);
     if (typeof sqlText !== "string") return { state: "unknown", paths: new Set(), reason: "forward migration SQL blob is unreadable" };
-    if (!hasExplicitParkedMigrationHeader(sqlText)) continue;
     if (history.paths.has(normalized)) {
-      headers.add(normalized);
+      const expectedSha256 = history.sha256ByPath?.get(normalized);
+      if (expectedSha256) {
+        if (typeof sha256Text !== "function") {
+          return { state: "unknown", paths: new Set(), reason: "LOCAL CANDIDATE SQL sha256 pin cannot be verified" };
+        }
+        if (sha256Text(sqlText) !== expectedSha256) {
+          return { state: "unknown", paths: new Set(), reason: "LOCAL CANDIDATE SQL sha256 does not match migration history" };
+        }
+        verifiedCandidates.add(normalized);
+      } else if (hasExplicitParkedMigrationHeader(sqlText)) {
+        verifiedCandidates.add(normalized);
+      }
       continue;
     }
+    if (!hasExplicitParkedMigrationHeader(sqlText)) continue;
     const basename = p.slice(p.lastIndexOf("/") + 1).toLowerCase();
     const rows = historyRowsByBasename.get(basename) || [];
     if (!rows.some((row) => /\b(?:APPLIED\s+LIVE|RETIRED\s+CODE-ONLY\s+ARTIFACT|SUPERSEDED)\b/i.test(row))) {
       return { state: "unknown", paths: new Set(), reason: "parked header has no applied/retired history record for its migration version" };
     }
   }
-  if (headers.size !== history.paths.size || [...headers].some((p) => !history.paths.has(p))) {
-    return { state: "unknown", paths: new Set(), reason: "parked header and LOCAL CANDIDATE history registry are not one-to-one" };
+  if (verifiedCandidates.size !== history.paths.size || [...verifiedCandidates].some((p) => !history.paths.has(p))) {
+    return { state: "unknown", paths: new Set(), reason: "parked marker and LOCAL CANDIDATE history registry are not one-to-one" };
   }
   return { state: "known", paths: history.paths, reason: "" };
 }
@@ -519,7 +587,16 @@ export function validateParkedMigrationCrossReferences(paths, historyText, loadT
 // `supersededPaths` Map for the fleet's ignored-draft diagnostic. null means "I don't know",
 // and every caller must then scan the whole checkout rather than report nothing —
 // under-reporting hides real pending work.
-export function createOwnDraftPathsReader({ run, repoRoot, dirtyCount, exists, readText = () => "", hasOriginMain = true }) {
+export function createOwnDraftPathsReader({
+  run,
+  repoRoot,
+  dirtyCount,
+  exists,
+  readText = () => "",
+  readHistory = () => null,
+  sha256Text = null,
+  hasOriginMain = true,
+}) {
   // Where a worktree's branch left origin/main. Cached by HEAD sha — the ~30 frozen
   // snapshots share a handful of shas between them.
   const baseCache = new Map(); // sha → base sha | null
@@ -535,8 +612,8 @@ export function createOwnDraftPathsReader({ run, repoRoot, dirtyCount, exists, r
 
   const cleanCache = new Map(); // head sha → changed paths | null
 
-  function resultFrom(changed, onDisk, textOnDisk) {
-    const parked = parkedDraftPathsFrom(changed, onDisk, textOnDisk);
+  function resultFrom(changed, onDisk, textOnDisk, historyText) {
+    const parked = parkedDraftPathsFrom(changed, onDisk, textOnDisk, historyText, sha256Text);
     Object.defineProperty(parked, "supersededPaths", {
       value: supersededDraftPathsFrom(changed, onDisk),
       enumerable: false,
@@ -550,6 +627,7 @@ export function createOwnDraftPathsReader({ run, repoRoot, dirtyCount, exists, r
     const spec = draftPathspec();
     const onDisk = (p) => exists(entry.path, p);
     const textOnDisk = (p) => readText(entry.path, p);
+    const historyText = readHistory(entry.path);
 
     // A CLEAN checkout holds nothing but its commits, so its pending set is fully
     // determined by base..HEAD — computable once per sha in the MAIN repo instead of
@@ -559,13 +637,13 @@ export function createOwnDraftPathsReader({ run, repoRoot, dirtyCount, exists, r
         cleanCache.set(entry.head, run(["diff", "--name-only", base, entry.head, "--", ...spec], repoRoot));
       }
       const changed = cleanCache.get(entry.head);
-      return changed === null ? null : resultFrom(changed, onDisk, textOnDisk);
+      return changed === null ? null : resultFrom(changed, onDisk, textOnDisk, historyText);
     }
 
     const changed = run(["diff", "--name-only", base, "--", ...spec], entry.path);
     const untracked = run(["ls-files", "--others", "--exclude-standard", "--", ...spec], entry.path);
     if (changed === null || untracked === null) return null;
-    return resultFrom([...changed, ...untracked], onDisk, textOnDisk);
+    return resultFrom([...changed, ...untracked], onDisk, textOnDisk, historyText);
   };
 }
 

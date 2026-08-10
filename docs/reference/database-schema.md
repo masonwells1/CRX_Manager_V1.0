@@ -1,6 +1,6 @@
-# Database Schema Reference (136 Tables + 2 views)
+# Database Schema Reference (156 tables + 2 views)
 
-> Count as of 2026-07-17, verified live against Supabase project `rhyzpcqhnizqbxphqdkr` (`SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'` / `'VIEW'`). The per-table sections below are a curated tour, not an exhaustive enumeration of all 135 tables; **`.claude/schema-registry.json`** (refreshed from live introspection through ledger `20260717045420`) is the machine-readable source of truth for current columns, constraints, and enum values — prefer it over this prose doc when a fact is load-bearing.
+> Count as of 2026-08-09, verified live against Supabase project `rhyzpcqhnizqbxphqdkr` (`SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'` / `'VIEW'`). The per-table sections below are a curated tour, not an exhaustive enumeration of all 156 tables; **`.claude/schema-registry.json`** is the machine-readable source of truth for current columns, constraints, and enum values — prefer it over this prose doc when a fact is load-bearing.
 
 ## Core Business
 - `profiles` - Users (id refs auth.users, email, full_name, role, phone, is_active, applicator_license_number, faa_certificate_number)
