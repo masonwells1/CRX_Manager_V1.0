@@ -233,12 +233,44 @@ export function isParkedDraftPath(repoRelPath, sqlText = "") {
 }
 
 // Full-disk fallback scans encounter many ordinary files. Reject non-SQL names
-// before reading them, then use the same explicit-header rule as the normal
-// branch-owned reader. Both /fleet and SessionStart call this helper.
-export function isParkedFallbackFile(repoRelPath, name, loadText = () => "") {
-  if (!/\.sql$/i.test(String(name || ""))) return false;
+// before reading them, then use the same explicit-header or verified history-pin
+// rule as the normal branch-owned reader. Both /fleet and SessionStart call this.
+export function parkedFallbackFileDiscovery(
+  repoRelPath,
+  name,
+  loadText = () => "",
+  historyText = null,
+  sha256Text = null,
+) {
+  if (!/\.sql$/i.test(String(name || ""))) {
+    return { state: "known", parked: false, reason: "" };
+  }
   const p = normRepoPath(repoRelPath);
-  return isParkedDraftPath(p, p.startsWith("supabase/migrations/") ? loadText() : "");
+  if (!p.startsWith("supabase/migrations/")) {
+    return { state: "known", parked: isParkedDraftPath(p), reason: "" };
+  }
+  const parked = parkedDraftPathsFrom(
+    [p],
+    () => true,
+    () => loadText(),
+    historyText,
+    sha256Text,
+  );
+  return {
+    state: parked.unknownReason ? "unknown" : "known",
+    parked: parked.has(p),
+    reason: parked.unknownReason || "",
+  };
+}
+
+export function isParkedFallbackFile(
+  repoRelPath,
+  name,
+  loadText = () => "",
+  historyText = null,
+  sha256Text = null,
+) {
+  return parkedFallbackFileDiscovery(repoRelPath, name, loadText, historyText, sha256Text).parked;
 }
 
 // Which of the paths a worktree CHANGED since its branch point are parked drafts?
@@ -280,7 +312,7 @@ export function parkedDraftPathsFrom(
   sha256Text = null,
 ) {
   const out = new Map();
-  const history = historyText === null ? null : localCandidateMigrationPathsFromHistory(historyText);
+  const history = localCandidateMigrationPathsFromHistory(historyText);
   let unknownReason = "";
   for (const raw of changedPaths || []) {
     const p = String(raw || "").trim();
@@ -295,7 +327,7 @@ export function parkedDraftPathsFrom(
     // signal, exactly as it is after the branch lands on origin/main. Verify the pin
     // before surfacing it; an unreadable or mismatched candidate makes the branch state
     // UNKNOWN instead of silently disappearing from /fleet.
-    if (isForwardMigration && historyText !== null) {
+    if (isForwardMigration) {
       if (history?.state !== "known") {
         unknownReason ||= history?.reason || "worktree migration history is unreadable";
       } else if (history.paths.has(normalized)) {

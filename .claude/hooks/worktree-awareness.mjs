@@ -17,7 +17,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   parseWorktreePorcelain, siblingsOf, normPath,
-  mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, isParkedFallbackFile, fleetSummaryLine,
+  mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, parkedFallbackFileDiscovery, fleetSummaryLine,
   draftPathspec, normRepoPath, createOwnDraftPathsReader, originMainDraftPathSet,
   fallbackPathsAgainstOrigin, parkedMainlineDiscoveryFrom, localCandidateMigrationPathsFromHistory,
   ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, originMainParkedMigrationPrefilter,
@@ -230,6 +230,10 @@ try {
       continue;
     }
     let fallbackChangedPaths = null;
+    let fallbackHistory = null;
+    try {
+      fallbackHistory = readFileSync(path.join(e.path, "docs", "reference", "migration-history.md"), "utf8");
+    } catch { /* discovery below reports the unreadable history as unknown */ }
     if (originMainDraftPaths) {
       try {
         fallbackChangedPaths = git(["diff", "--name-only", "origin/main", "--", ...draftPathspec()], e.path).split("\n");
@@ -240,9 +244,21 @@ try {
     const scans = [
       { root: "scripts/.staging-migrations/", filter: isParkedMigrationFile },
       { root: "docs/audits/", filter: isDraftSqlName },
-      { root: "supabase/migrations/", filter: (name, rel) => isParkedFallbackFile(rel, name, () => {
-        try { return readFileSync(path.join(e.path, ...rel.split("/")), "utf8"); } catch { return ""; }
-      }) },
+      { root: "supabase/migrations/", filter: (name, rel) => {
+        const discovery = parkedFallbackFileDiscovery(
+          rel,
+          name,
+          () => {
+            try { return readFileSync(path.join(e.path, ...rel.split("/")), "utf8"); } catch { return ""; }
+          },
+          fallbackHistory,
+          (text) => createHash("sha256").update(text.replace(/\r\n/g, "\n"), "utf8").digest("hex"),
+        );
+        if (discovery.state === "unknown") {
+          fallbackUnknownReasons.add(`${e.path}: ${discovery.reason}`);
+        }
+        return discovery.parked;
+      } },
     ];
     for (const { root, filter } of scans) {
       for (const d of listDraftsRecursive(path.join(e.path, ...root.split("/").filter(Boolean)), root)) {
