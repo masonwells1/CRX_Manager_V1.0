@@ -22,7 +22,7 @@ PR workflow.
 
 ## PROVEN
 
-- The actor-binding suite passes at 138 assertions; the idempotency reference
+- The actor-binding suite passes at 144 assertions; the idempotency reference
   suite remains green at 86 assertions.
 - Fifty-four parser and decision clauses were each removed alone and made the
   suite fail before restoration.
@@ -35,6 +35,10 @@ PR workflow.
   and each made the real hook-process suite fail before restoration: quoted
   schema recognition, `schedule_in_database`, `alter_job`, dollar-quoted data,
   single-quoted data, line-comment masking, and nested block-comment masking.
+- Four final `pg_cron` decisions were independently removed and each exposed its
+  corresponding search-path regression before restoration: unqualified API
+  recognition, quoted unqualified recognition, `schedule_in_database`, and
+  `alter_job`.
 - Ordinary and event trigger declarations are allowed only when their
   executable clause is a complete `EXECUTE FUNCTION|PROCEDURE name(...)` call.
 - Direct PL/pgSQL command literals may use `INTO [STRICT]` and `USING` without
@@ -48,9 +52,11 @@ PR workflow.
   function statement terminator. A missing terminator fails closed, and a later
   statement cannot contaminate the attributes of an earlier function.
 - Direct calls to any API in the `cron` schema are treated as runtime-SQL
-  boundaries when a literal contains `CREATE FUNCTION`. This covers quoted
-  `"cron"."schedule"`, `schedule_in_database`, and `alter_job`, while ordinary
-  cron calls and cron-looking text inside data strings/comments remain allowed.
+  boundaries when a literal contains `CREATE FUNCTION`. The current command APIs
+  are also recognized when unqualified or quoted-unqualified, closing
+  `SET search_path = cron, public; SELECT schedule(...)` and its
+  `schedule_in_database`/`alter_job` equivalents. Ordinary calls and cron-looking
+  text inside data strings/comments remain allowed.
 - Real hook-process probes denied indirect variable execution, doubled-quote
   comment hiding, post-body actor forgery, and scheduled actor-function DDL. A
   complete bound function supplied directly as one dollar-quoted literal was allowed.
@@ -63,6 +69,15 @@ PR workflow.
 - The current-main integration commit passed the full pre-commit barrier. The
   similarly named shared checkout contains separate commission/containment work
   and was not modified.
+- The exact-SHA review of `5cb6e4d74481b72408663dcf3f4cb48355e96bfe`
+  found the unqualified search-path bypass. Its snapshot probe proved the
+  approved base denied that SQL while the candidate allowed it. The real hook
+  now denies that exact actor-DDL probe and allows the same unqualified schedule
+  call when its command contains no function DDL.
+- Blocker-fix commit `61ef9090` passed the complete barrier on current main: all
+  323 Vitest files, 4,304 passing tests, 123 intentional skips, 144 actor-binding
+  assertions, containment, lint, type-check, build, workflow/guard suites,
+  documentation drift, dependency integrity, schema baseline, and map generation.
 
 ## GOVERNED STATUS
 
@@ -74,11 +89,13 @@ PR workflow.
 - The review of `8620ad17` returned one HIGH blocker for quoted and alternate
   pg_cron command APIs. That finding was reproduced and fixed locally, so its
   BLOCKERS verdict is evidence for the fix, not approval of the new HEAD.
+- The review of `5cb6e4d7` returned one HIGH blocker for unqualified pg_cron APIs
+  resolved through `search_path`. That finding was reproduced and fixed in
+  `61ef9090`; its BLOCKERS verdict likewise does not approve the new HEAD.
 
 ## REMAINING LANDING WORK
 
-- Confirm the full pre-commit barrier on the final tree and run the fresh
-  governed exact-SHA review cycle.
+- Run the fresh governed exact-SHA review cycle on the final documentation commit.
 - Only with a HEAD-matching CLEAN proof: push the branch, open the PR, wait for
   required checks and Vercel, resolve CodeRabbit, merge, and verify remote
   `main`. Publishing is outside this handoff's approval state.
@@ -91,14 +108,11 @@ outward-action approval into a receiving task. No database action is needed.
 ## GATES AND BLOCKERS
 
 - The prior `/ship` review cycle reached its three-round cap. Its blocker and the
-  later `8620ad17` pg_cron blocker have now been addressed locally, but the
-  branch remains unpublished until a new exact-SHA governed review independently
-  returns CLEAN.
+  later `8620ad17` and `5cb6e4d7` pg_cron blockers have now been addressed
+  locally, but the branch remains unpublished until a new exact-SHA governed
+  review independently returns CLEAN.
 - Historical blocker evidence:
   `C:\Users\mason\.codex\worktrees\phase3c-new-branch-cap\CRX_Manager\.claude\session-state\codex-review-latest.txt`.
-- Unrelated nonblocking repo drift remains: four 2026-08-08 migrations are
-  missing from the migration index, and two manual docs have 2026-08-07
-  freshness stamps. Do not widen the hook fix into that work.
 - The shared `C:\CRX_Manager` checkout contains unrelated gauntlet changes owned
   by another session. Preserve them.
 
