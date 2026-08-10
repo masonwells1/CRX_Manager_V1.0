@@ -11,11 +11,11 @@ stored unit stays dollars and therefore no reader or writer changes at all.
 
 Separately: two CodeRabbit **P1** comments filed on the same file *after* the PR #354
 disposition was written describe a real money defect that a type conversion would not fix.
-The defect is confirmed from live function source, and 10 of 35 order commissions carry a
+The defect is confirmed from live function source, and 12 of 35 order commissions carry a
 basis that disagrees with the order header they were minted from — **but see §5 before
-treating that count as urgent.** 9 of the 10 are a known one-cent backfill residual on
-`pending` rows and the only material one is `cancelled`. Worth fixing to stop future drift;
-not a live money emergency.
+treating that count as urgent.** 11 of the 12 are penny-or-smaller residue on `pending` rows
+and the only material one is `cancelled`. Worth fixing to stop future drift; not a live
+money emergency.
 
 ---
 
@@ -141,15 +141,18 @@ describing. `convert_quote_to_order` (`20260702172500:207-210`) passes the cache
 unrounded accumulator — in both cases *after* the item triggers have already rewritten the
 canonical header.
 
-**Live mismatch count, correctly characterized.** 10 of 35 order commissions carry
-`order_profit ≠ orders.total_profit`, but an earlier draft presented that number as evidence
-of live urgency, which it is not. The breakdown: **9 rows are `pending` with a gap of exactly
-$0.01**, and those are the already-disclosed backfill residual from the sibling session on
+**Live mismatch count, correctly characterized** (re-measured live 2026-08-10 with an exact
+`IS DISTINCT FROM` predicate; an earlier pass in this session used a cent-rounded comparison
+and reported 10, which hid the three sub-cent rows). **12 of 35** order commissions carry
+`order_profit ≠ orders.total_profit`, but that number is not evidence of live urgency. The
+breakdown: **8 `pending` rows differ by exactly $0.01** and **3 `pending` rows differ by less
+than a cent** — together the already-disclosed backfill residual from the sibling session on
 branch `claude/session-orchestration-setup-d73e6c` (commit `a0a69a62`; its KNOWN_ISSUES entry
 records that rewriting commission rows was not approved, so they were left alone). **1 row has
-a material materially larger gap, and it is on a `cancelled` row (figure withheld — this repo is public).** So: the code defect is real, confirmed from
-live function source, and worth fixing to stop future drift — but it is not currently costing
-money, and no live commission row needs an emergency rewrite.
+a materially larger gap, and it is on a `cancelled` row** (figure withheld — this repo is
+public). So: the code defect is real, confirmed from live function source, and worth fixing to
+stop future drift — but it is not currently costing money, and no live commission row needs an
+emergency rewrite.
 `bulk_import_order` already does this correctly (`20260806004644:327-345`); copy that pattern
 to the two primary creation paths. This closes FINDINGS line 547 as well.
 
