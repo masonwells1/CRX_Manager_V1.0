@@ -176,10 +176,12 @@ cost bases.
 **Fix written 2026-08-10:** `20260810144144_enforce_below_cost_admin_approval.sql` routes
 `update_order_items` through the shared server wall. Its trigger locks `products.current_cost`,
 replaces the browser value, and derives `cost_per_unit`, `cost_at_time_cents`, line profit and
-margin from that one value before the existing header/commission recomputation. The same migration
-closes the direct-RPC below-cost bypass and makes approval active-admin-only with an immutable
-same-transaction audit. This remains an open production risk until the migration is reviewed and
-applied live.
+margin from that one value before the existing header/commission recomputation. The exact-SHA
+review then closed two further gaps: app roles lose direct write privileges on all three sell-side
+line tables, and the late guard repeats the canonical whole-cent settlement after replacing cost.
+The same migration closes the direct-RPC below-cost bypass and makes approval active-admin-only
+with an immutable same-transaction audit. This remains an open production risk until the replacement
+exact-SHA review is clean and the migration is applied live.
 
 ## OPEN — per-unit cost columns cannot carry an exact extended cost
 

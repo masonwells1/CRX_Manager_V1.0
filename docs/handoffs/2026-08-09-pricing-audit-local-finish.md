@@ -15,6 +15,14 @@ Read this file, then `docs/manual/KNOWN_ISSUES.md` (five new entries at the top 
 > pushed, merged, or applied live at the time of this note. Do not run the old two-migration apply
 > list without reconciling this update and a fresh live ledger.
 
+> **Second exact-SHA checkpoint — 2026-08-10.** Review of merged candidate `b5f949fa` found three
+> additional gaps: app-role direct line writes bypassed the RPC context, the late guard could undo
+> whole-cent rounding, and repeat approvals could retain an older reason. The local branch now
+> revokes those direct writes, settles cents inside the final trigger, and replaces old markers
+> before appending the fresh reason. All three migrations replayed cleanly on a fresh production-
+> schema clone and the expanded rollback smoke passed with zero residue. A new exact-SHA review is
+> still mandatory; this note is proof of remediation, not push/apply authorization.
+
 ---
 
 ## Why a handoff file instead of resuming the session

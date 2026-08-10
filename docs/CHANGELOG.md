@@ -14,6 +14,17 @@ existing JSON payload, so public RPC signatures remain rollout-compatible. Exact
 supplier-adoption and margin figures were also removed from the public audit document. This work
 is local and has not been pushed, merged, or applied live yet.
 
+**Exact-SHA review follow-up (still local).** The review of `b5f949fa` correctly found that the
+first server-wall draft still left direct PostgREST line writes available, ran after the canonical
+rounding trigger and could overwrite its whole-cent result, and could parse an older approval
+marker on repeat saves. The migration now revokes direct INSERT/UPDATE/DELETE on `order_items`,
+`invoice_items`, and `quote_items` from every app role; its late trigger settles line revenue and
+profit to whole cents after replacing cost; and `appendBelowCostApproval` removes prior markers
+before writing the fresh reason. A production-schema disposable replay applied all three pricing
+migrations cleanly, and the expanded rollback smoke proved fractional-quantity cent settlement,
+all 27 table-privilege denials, the governed role paths, zero residue, and trigger restoration.
+The replacement exact-SHA review is still required before push.
+
 Pricing audit follow-through. The two settled migrations — snapshot-cost report unification and the
 quote-time cost snapshot — went through roughly 41 Codex rounds to green on PR #350, which is now
 mergeable. The return-credit COGS reversal was split to its own parked PR #361 at Mason's direction:

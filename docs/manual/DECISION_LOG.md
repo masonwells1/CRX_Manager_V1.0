@@ -50,7 +50,10 @@ wall — enforce it server-side — but admins can still sell under cost.**
 `20260810144144_enforce_below_cost_admin_approval.sql` adds the shared PostgreSQL wall, immutable
 same-transaction approval audit, active-admin exception, and authoritative cost handling for
 `update_order_items` / `price_order`. The browser still provides the early explanation and reason
-prompt, but sales reps can no longer approve. Until that migration is applied, production retains
+prompt, but sales reps can no longer approve. Direct app-role INSERT/UPDATE/DELETE on the three
+sell-side line tables is revoked so PostgREST cannot walk around the RPC wall; owner-run SECURITY
+DEFINER workflows retain their governed write paths. The late cost guard also re-settles extended
+revenue and profit to whole cents so it cannot undo the canonical rounding trigger. Until that migration is applied, production retains
 the prior UI-only behavior; do not describe the server wall as live from source alone.
 
 The operative rule is: the money-write RPCs must reject a below-cost line unless an

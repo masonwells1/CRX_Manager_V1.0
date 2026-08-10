@@ -78,6 +78,15 @@ CREATE POLICY below_cost_approvals_admin_read
 REVOKE ALL ON TABLE public.below_cost_approvals FROM PUBLIC, anon, authenticated;
 GRANT SELECT ON TABLE public.below_cost_approvals TO authenticated;
 
+-- Line collections are RPC-owned. RLS alone is not an authorization boundary
+-- when a permissive policy still exists, so remove the table-write privilege
+-- that would let PostgREST callers bypass the governed money RPCs. Existing
+-- browser paths only SELECT these tables; SECURITY DEFINER RPCs execute as the
+-- owner and retain their write path.
+REVOKE INSERT, UPDATE, DELETE
+  ON TABLE public.order_items, public.invoice_items, public.quote_items
+  FROM PUBLIC, anon, authenticated, service_role;
+
 CREATE OR REPLACE FUNCTION public._guard_below_cost_approval_immutable()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -256,6 +265,8 @@ DECLARE
   v_product_id uuid;
   v_detail jsonb;
 BEGIN
+  -- Context-free writes can only arrive from owner-run internal RPCs/triggers:
+  -- direct app-role writes are denied at the table privilege boundary above.
   IF v_operation IS NULL OR v_operation = '' THEN
     RETURN NEW;
   END IF;
@@ -323,8 +334,11 @@ BEGIN
      ) THEN
     NEW.cost_per_unit := v_cost_cents::numeric / 100;
     NEW.cost_at_time_cents := v_cost_cents;
-    NEW.total_price := NEW.price_per_unit * NEW.total_units_needed;
-    NEW.profit := (NEW.price_per_unit - NEW.cost_per_unit) * NEW.total_units_needed;
+    -- This trigger sorts after trg_order_items_round_money, so it must preserve
+    -- that canonical whole-cent invariant after replacing caller/stale cost.
+    NEW.total_price := round(NEW.price_per_unit * NEW.total_units_needed, 2);
+    NEW.profit := NEW.total_price
+                  - round(NEW.cost_per_unit * NEW.total_units_needed, 2);
     NEW.net_margin := CASE
       WHEN NEW.price_per_unit > 0
         THEN round(((NEW.price_per_unit - NEW.cost_per_unit) / NEW.price_per_unit) * 100, 2)
@@ -590,6 +604,9 @@ GRANT EXECUTE ON FUNCTION public.save_quote(uuid, jsonb, jsonb, uuid, text) TO a
 DO $verify$
 DECLARE
   v_name text;
+  v_role text;
+  v_table text;
+  v_privilege text;
 BEGIN
   FOREACH v_name IN ARRAY ARRAY[
     'create_direct_order', 'create_rush_order', 'bulk_import_order',
@@ -614,5 +631,19 @@ BEGIN
   IF (SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgname LIKE 'zz_crx_below_cost_%') <> 3 THEN
     RAISE EXCEPTION 'verify failed: expected three below-cost line triggers';
   END IF;
+
+  FOREACH v_role IN ARRAY ARRAY['anon', 'authenticated', 'service_role']
+  LOOP
+    FOREACH v_table IN ARRAY ARRAY['order_items', 'invoice_items', 'quote_items']
+    LOOP
+      FOREACH v_privilege IN ARRAY ARRAY['INSERT', 'UPDATE', 'DELETE']
+      LOOP
+        IF has_table_privilege(v_role, 'public.' || v_table, v_privilege) THEN
+          RAISE EXCEPTION 'verify failed: %.% retains % for %',
+            'public', v_table, v_privilege, v_role;
+        END IF;
+      END LOOP;
+    END LOOP;
+  END LOOP;
 END;
 $verify$;

@@ -24,9 +24,13 @@ DECLARE
   v_result jsonb;
   v_cost numeric;
   v_cost_cents bigint;
+  v_total numeric;
   v_profit numeric;
   v_audit_count integer;
   v_name text;
+  v_role text;
+  v_table text;
+  v_privilege text;
 BEGIN
   SELECT id INTO v_admin FROM public.profiles
   WHERE role = 'admin' AND is_active = true ORDER BY id LIMIT 1;
@@ -163,20 +167,21 @@ BEGIN
       'id', v_order_item_id,
       'product_id', v_product_b,
       'product_name', '[SMOKE] Below Cost B ' || v_sfx,
-      'price_per_unit', 11,
+      'price_per_unit', 11.111,
       'cost_per_unit', 0.01,
-      'total_units_needed', 2,
+      'total_units_needed', 2.345,
       'unit_size', 'gal',
       'below_cost_reason', 'product swap rollback approval'
     )),
     p_performed_by := v_admin,
     p_idempotency_key := 'smoke-below-update-' || v_sfx
   ) INTO v_result;
-  SELECT cost_per_unit, cost_at_time_cents, profit
-    INTO v_cost, v_cost_cents, v_profit
+  SELECT cost_per_unit, cost_at_time_cents, total_price, profit
+    INTO v_cost, v_cost_cents, v_total, v_profit
   FROM public.order_items WHERE id = v_order_item_id;
-  IF v_cost <> 12 OR v_cost_cents <> 1200 OR v_profit <> -2 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: product swap cost/profit disagreed (cost %, cents %, profit %)', v_cost, v_cost_cents, v_profit;
+  IF v_cost <> 12 OR v_cost_cents <> 1200 OR v_total <> 26.06 OR v_profit <> -2.08 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: product swap cents disagreed (cost %, cents %, total %, profit %)',
+      v_cost, v_cost_cents, v_total, v_profit;
   END IF;
   SELECT count(*) INTO v_audit_count
   FROM public.below_cost_approvals
@@ -246,6 +251,22 @@ BEGIN
     ) THEN
       RAISE EXCEPTION 'SMOKE_FAIL: % does not route through the server wall', v_name;
     END IF;
+  END LOOP;
+
+  -- The server wall is only complete if PostgREST callers cannot skip every
+  -- governed RPC and write the line collections directly.
+  FOREACH v_role IN ARRAY ARRAY['anon', 'authenticated', 'service_role']
+  LOOP
+    FOREACH v_table IN ARRAY ARRAY['order_items', 'invoice_items', 'quote_items']
+    LOOP
+      FOREACH v_privilege IN ARRAY ARRAY['INSERT', 'UPDATE', 'DELETE']
+      LOOP
+        IF has_table_privilege(v_role, 'public.' || v_table, v_privilege) THEN
+          RAISE EXCEPTION 'SMOKE_FAIL: %.% retains % for %',
+            'public', v_table, v_privilege, v_role;
+        END IF;
+      END LOOP;
+    END LOOP;
   END LOOP;
 
   RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';

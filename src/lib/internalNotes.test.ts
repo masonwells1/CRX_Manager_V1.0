@@ -20,6 +20,13 @@ describe('appendBelowCostApproval', () => {
   it('uses the shared prefix so the stripper cannot drift', () => {
     expect(appendBelowCostApproval(null, 'x').startsWith(BELOW_COST_APPROVAL_PREFIX)).toBe(true);
   });
+
+  it('replaces a prior approval reason while preserving notes on both sides', () => {
+    const prior = `Gate code 4412\n${BELOW_COST_APPROVAL_PREFIX} old clearance\nDeliver Tuesday`;
+    expect(appendBelowCostApproval(prior, 'fresh price match')).toBe(
+      `Gate code 4412\nDeliver Tuesday\n${BELOW_COST_APPROVAL_PREFIX} fresh price match`
+    );
+  });
 });
 
 describe('stripInternalNotes', () => {

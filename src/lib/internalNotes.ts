@@ -28,7 +28,10 @@ const INTERNAL_PREFIXES = [BELOW_COST_APPROVAL_PREFIX];
  * Kept here so the separator and prefix match what the stripper expects.
  */
 export function appendBelowCostApproval(notes: string | null | undefined, reason: string): string {
-  const base = notes?.trim();
+  // A fresh approval replaces every prior internal marker. Leaving an older
+  // marker in the raw notes makes the database parser select the stale reason
+  // for its immutable audit row on a later save.
+  const base = stripInternalNotes(notes);
   // The reason is collapsed to ONE line, and that is what makes line-scoped
   // stripping safe. It is free-form textarea input, so an operator can press
   // Enter inside it; if the marker could span lines, the stripper would have to
