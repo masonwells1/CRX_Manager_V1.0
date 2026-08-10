@@ -1,6 +1,6 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-08-10 UTC, post-apply.** Live ledger high-water is `20260810025159` (`20260810022500_backfill_stale_line_profit`), an unrelated money-workstream migration applied after the Team Board work. Both Team Board migrations are live and now represented on disk: `20260809130108` added the governed `complete_team_note` RPC and assignment-notification trigger, and `20260810010308` closed the inactive-actor path in the insert policy and trigger. The full rollback-only business chain reached exact `SMOKE_PASS_ROLLBACK`; the compatible frontend is pushed to PR #351 and awaits merge.
+**Last verified: 2026-08-10 UTC, post-apply.** Live ledger high-water is `20260810025159` (`20260810022500_backfill_stale_line_profit`), an unrelated money-workstream migration applied after the Team Board work. Both Team Board migrations are live and now represented on disk: `20260809130108` added the governed `complete_team_note` RPC and assignment-notification trigger, and `20260810010308` closed the inactive-actor path in the insert policy and trigger. The full rollback-only business chain reached exact `SMOKE_PASS_ROLLBACK`; the compatible frontend is carried by PR #351, whose merge and Vercel deployment determine the current browser rollout state.
 
 **2026-08-09 historical baseline.** The live re-read then covered the ledger, `CURRENT_STATE.md` counts, and all 27 invariant predicates: 26 CLEAN and the documented `fin-money-whole-cents` historical-data violation. The five foundation-ultra-review migrations applied later that day as ledger versions `20260809203222` through `20260809205423`. The formerly missing Team Board migration file and history row are now reconciled on PR #351.
 
@@ -11,13 +11,13 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## RESOLVED LIVE 2026-08-10 — Team Board delegated completion and assignment notifications (frontend awaits merge)
+## RESOLVED LIVE 2026-08-10 — Team Board delegated completion and assignment notifications
 
 Both migrations are applied live. `20260809130108_team_note_completion_rpc_and_assignment_notify` added the governed `complete_team_note` RPC and the assignment-notification trigger without widening the existing `tnotes_update` policy; live structure, grants, and the 26 standing invariant predicates passed. The HIGH that review then raised — an inactive profile with a still-valid JWT could satisfy the legacy `tnotes_insert` creator check and make the owner-run trigger notify an active teammate — is closed by `20260810010308_active_team_note_assignment_actor` (authored as `20260809154649`), which requires an active profile in the INSERT policy *and* independently in the trigger, leaving `tnotes_update` unchanged.
 
 Proven live by rollback-only probes rather than by tests alone: an active non-admin **assignee completed a note they did not create** with `completed_by` stamped from `auth.uid()`; an unrelated active employee was refused with `NOT_AUTHORIZED_TO_COMPLETE`; a real deactivated profile with a valid token was refused at the RLS layer (42501); with RLS deliberately bypassed and the token subject set to that deactivated profile, the trigger's own guard raised `PROFILE_INACTIVE` (42501); and the normal path still filed exactly one `task_assigned` notification.
 
-Remaining: the browser changes that call the RPC and open assignment notifications are pushed on `claude/todo-list-audit-hoxpl5` in PR #351 and await merge. The registered chain `scripts/smoke/smoke-complete-team-note-chain.sql` passed live with exact terminal `SMOKE_PASS_ROLLBACK` and rolled every synthetic fixture back.
+Delivery: the browser changes that call the RPC and open assignment notifications are contained in PR #351; check that PR's merge and Vercel deployment for current rollout state. The registered chain `scripts/smoke/smoke-complete-team-note-chain.sql` passed live with exact terminal `SMOKE_PASS_ROLLBACK` and rolled every synthetic fixture back.
 
 ---
 

@@ -332,8 +332,17 @@ publishing live order identifiers and exact per-order financial figures into a p
 repository. That was a real disclosure risk and the entry was rewritten. Treat
 `docs/CHANGELOG.md` as public: describe what changed and why, not the production values.
 
+**Test change (the one executable change authored here).** `src/lib/productPricingWorkbook.test.ts`
+and `src/lib/supplierPricingWorkbook.test.ts` each received an explicit 20s per-test timeout. Both
+tests generate a real `.xlsx` and re-parse it; standalone they finish in ~1.3s, but under full-suite
+parallel load they repeatedly crossed vitest's 5s default and failed the pre-commit gate. 20s matches
+the existing per-test idiom already used by `moneyInventoryGauntletFixes.test.ts` and
+`rpcFixtureLiveDiff.test.ts`, and still leaves the timeout able to catch a genuine hang. (The
+originating commit message cited `pages-render.test.tsx` for that idiom; that file is at 10s.)
+
 - **Commits this session** (git log origin/main..HEAD):
-  - documentation only — the work landed via GitHub PR merges and one live database statement
+  - documentation plus the two test-timeout changes above; all other work landed via GitHub PR merges
+    and one live database statement
 - **Migrations touched** (git diff --name-only origin/main...HEAD):
   - none
 
