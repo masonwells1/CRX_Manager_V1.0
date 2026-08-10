@@ -6,7 +6,9 @@
 - Isolated checkout: `C:\Users\mason\.codex\worktrees\phase3c-new-branch-cap\CRX_Manager`
 - Branch: `codex/harden-actor-binding-sql-reader`
 - Prior blocked security-review SHA: `824119a526e1bb3370e064bcc094fc5e3d12dd54`
-- Rebased onto verified remote `main` on 2026-08-10: `0b85b5e4ed018c4abc93439ae48e7b3b00cc5d29`
+- Originally rebased onto verified remote `main` at `0b85b5e447381261f53629f031ce5e703c6cab5d`,
+  then integrated current `origin/main` `8dcb82fb2570b693478abd5d0adb8643bddce614`
+  through local merge commit `c50cfbcfef236ad747623ebead5c8e6d023f933d` on 2026-08-10.
 - No remote branch and no pull request exist.
 - Supabase project `rhyzpcqhnizqbxphqdkr` is context only; no database work occurred.
 
@@ -52,14 +54,15 @@ PR workflow.
 - Real hook-process probes denied indirect variable execution, doubled-quote
   comment hiding, post-body actor forgery, and scheduled actor-function DDL. A
   complete bound function supplied directly as one dollar-quoted literal was allowed.
-- One full pre-commit barrier passed before the `pg_cron` follow-up: containment,
-  lint, type-check, build, all Vitest tests, workflow/guard suites, dependency
-  integrity, and map generation. Two later amend attempts hit different random
-  test timeouts; every timed-out test passed immediately in isolation. The full
-  barrier must run again on the final `pg_cron` tree before closeout.
-- The branch was rebased onto current `origin/main` at `0b85b5e4`; the similarly
-  named shared checkout contains separate commission/containment work and was
-  not modified.
+- The final `pg_cron` tree passed the full pre-commit barrier: containment, lint,
+  type-check, build, all 323 Vitest files (4,304 passing tests and 123 intentional
+  skips), workflow/guard suites, dependency integrity, documentation drift, and
+  map generation. The first final-tree attempt hit two unrelated five-second
+  migration-scan timeouts; those exact files passed 107/107 in isolation in
+  2.23 seconds, then the unchanged full retry passed.
+- The current-main integration commit passed the full pre-commit barrier. The
+  similarly named shared checkout contains separate commission/containment work
+  and was not modified.
 
 ## GOVERNED STATUS
 
