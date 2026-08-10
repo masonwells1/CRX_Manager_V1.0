@@ -292,6 +292,44 @@ SELECT schedule(
 );`);
 ok(!isDeny(r), "unqualified cron.schedule without function DDL remains allowed");
 
+r = runHook(`UPDATE cron.job
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobname = 'existing-job';`);
+ok(isDeny(r), "UPDATE cron.job.command cannot store delayed unbound actor DDL");
+
+r = runHook(`UPDATE "cron"."job" AS existing
+SET "command" = $job$${UNBOUND_DDL}$job$
+WHERE existing.jobname = 'quoted-existing-job';`);
+ok(isDeny(r), "quoted UPDATE of cron.job.command remains fail-closed");
+
+r = runHook(`UPDATE ONLY cron.job AS existing
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE existing.jobname = 'only-existing-job';`);
+ok(isDeny(r), "UPDATE ONLY/alias of cron.job.command remains fail-closed");
+
+r = runHook(`UPDATE cron.job
+SET (command, active) = ($job$${UNBOUND_DDL}$job$, true)
+WHERE jobid = 42;`);
+ok(isDeny(r), "tuple UPDATE of cron.job.command remains fail-closed");
+
+r = runHook(`UPDATE cron.job
+SET command = $job$SELECT public.existing_safe_job()$job$
+WHERE jobname = 'safe-existing-job';`);
+ok(!isDeny(r), "UPDATE cron.job.command without function DDL remains allowed");
+
+r = runHook(`INSERT INTO cron.job (schedule, command, nodename, nodeport, database, username, active, jobname)
+VALUES ('* * * * *', $job$${UNBOUND_DDL}$job$, 'localhost', 5432, 'postgres', 'postgres', true, 'inserted-actor-ddl');`);
+ok(isDeny(r), "INSERT INTO cron.job cannot create a delayed unbound actor-DDL job");
+
+r = runHook(`SET search_path = cron, public;
+INSERT INTO "job" (schedule, "command", nodename, nodeport, database, username, active, jobname)
+VALUES ('0 6 * * *', $job$${UNBOUND_DDL}$job$, 'localhost', 5432, 'postgres', 'postgres', true, 'unqualified-inserted-actor-ddl');`);
+ok(isDeny(r), "search_path cannot hide an unqualified quoted cron.job INSERT");
+
+r = runHook(`INSERT INTO cron.job (schedule, command, nodename, nodeport, database, username, active, jobname)
+VALUES ('0 6 * * *', $job$SELECT public.existing_safe_job()$job$, 'localhost', 5432, 'postgres', 'postgres', true, 'safe-inserted-job');`);
+ok(!isDeny(r), "INSERT INTO cron.job without function DDL remains allowed");
+
 r = runHook(`SELECT cron.schedule_in_database(
   'cross-db-actor-ddl',
   '* * * * *',

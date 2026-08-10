@@ -31,15 +31,22 @@ The reader now recognizes pg_cron's current command-bearing APIs when called
 unqualified or through quoted unqualified identifiers; ordinary calls without
 function DDL and pg_cron-looking text inside data strings remain allowed.
 
-The focused actor-binding suite grew from 115 to 144 assertions while the
-idempotency reference suite remained at 86. Nineteen continuation decisions were
+The following exact-SHA review found the table-level equivalent: direct writes
+to `cron.job.command` can replace or create delayed executable commands without
+calling a pg_cron function. The reader now treats direct `UPDATE` and `INSERT`
+writes to that sink as runtime-SQL boundaries, including quoted identifiers,
+`ONLY`/alias and tuple-assignment UPDATEs, and search-path-resolved `job` INSERTs.
+Harmless cron commands and ordinary non-cron documentation writes remain allowed.
+
+The focused actor-binding suite grew from 115 to 152 assertions while the
+idempotency reference suite remained at 86. Twenty-eight continuation decisions were
 weakened or removed one at a time; every mutation made the real hook-process
 suite fail before restoration. Separate real-process probes allowed ordinary
 trigger/event-trigger declarations, direct-literal `USING`/`INTO`, and harmless
 quoted cron calls, while denying variable, concatenated, formatted,
 second-`EXECUTE`, quoted scheduled-DDL, cross-database scheduled-DDL, cron
-command-replacement, and unqualified search-path scheduling controls. The
-exact-SHA independent review remains an
+command-replacement, unqualified search-path scheduling, and direct
+`cron.job.command` actor-DDL controls. The exact-SHA independent review remains an
 external governed proof and must match the final branch HEAD before publication;
 this entry does not self-certify it.
 

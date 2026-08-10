@@ -202,7 +202,8 @@ function isDynamicSqlStatement(stmt, rawStmt = stmt) {
     DECLARATION_INIT_RE.test(stmt) ||
     /\bSELECT\b[\s\S]*\bINTO\b/i.test(stmt) ||
     /\bVALUES\b[\s\S]*\bINTO\b/i.test(stmt) ||
-    isPgCronCall(rawStmt);
+    isPgCronCall(rawStmt) ||
+    isPgCronCommandWrite(rawStmt);
 }
 
 /** Mask data strings and comments but retain quoted identifiers. The main SQL
@@ -287,6 +288,36 @@ function isPgCronCall(rawStmt) {
     "i"
   );
   return qualified.test(callableSql) || unqualified.test(callableSql);
+}
+
+/** cron.job.command is the table-level equivalent of cron.alter_job(command):
+ * INSERT can create an executable job and UPDATE can replace its executable
+ * command. Recognize schema-qualified, quoted, ONLY/alias, tuple-assignment, and
+ * search_path-resolved `job` forms. This remains narrow: ordinary table writes
+ * are data, and this boundary matters only when a literal carries function DDL. */
+function isPgCronCommandWrite(rawStmt) {
+  const callableSql = maskSqlForCallNames(String(rawStmt || ""));
+  if (callableSql === null) return false;
+  const jobTable = '(?:(?:"cron"|cron)\\s*\\.\\s*)?(?:"job"|job)';
+  const target = `(?:ONLY\\s+)?${jobTable}(?:\\s*\\*)?(?=\\s|\\(|$)`;
+
+  if (new RegExp(`^\\s*INSERT\\s+INTO\\s+${target}`, "i").test(callableSql)) {
+    return true;
+  }
+
+  const updateHead = new RegExp(`^\\s*UPDATE\\s+${target}`, "i").exec(callableSql);
+  if (!updateHead) return false;
+  const tail = callableSql.slice(updateHead[0].length);
+  const command = '(?:"command"|command)';
+  const directAssignment = new RegExp(`(?:\\bSET\\b|,)\\s*${command}\\s*=`, "i");
+  const tupleAssignment = new RegExp(
+    `(?:\\bSET\\b|,)\\s*\\([^)]*(?:"command"|\\bcommand\\b)[^)]*\\)\\s*=`,
+    "i"
+  );
+  // The optional target alias is deliberately left in `tail`; both expressions
+  // search from SET/comma boundaries, so alias spelling cannot impersonate a
+  // command-column assignment.
+  return directAssignment.test(tail) || tupleAssignment.test(tail);
 }
 
 // EXECUTE is also a PostgreSQL privilege keyword. These two complete statement
