@@ -515,6 +515,13 @@ BEGIN
 END;
 $function$;
 
+-- Belt-and-braces (rls-security-reviewer CHECK 2, 2026-08-10): live proacl is
+-- already {postgres,authenticated,service_role} with no anon and no PUBLIC, and
+-- CREATE OR REPLACE on an unchanged signature preserves it -- but a SECURITY
+-- DEFINER function that performs DML must state the revoke explicitly rather
+-- than rely on an inherited ACL. This is a no-op against current live grants.
+REVOKE EXECUTE ON FUNCTION public.save_quote(uuid, jsonb, jsonb, uuid, text) FROM anon, PUBLIC;
+
 DO $$
 BEGIN
   IF (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
