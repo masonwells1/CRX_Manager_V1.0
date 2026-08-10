@@ -18,7 +18,8 @@ notification path is hardened.
   replay, and the function reports the row's actual state so a no-op cannot rewrite
   `completed_by`. Also adds the assignment trigger that files one `task_assigned`
   notification, staying silent on self-assignment and unchanged assignees. Revoked from
-  PUBLIC and anon; granted to authenticated only.
+  PUBLIC and anon; granted to authenticated and the default `service_role` grant, while
+  runtime authorization still requires an active `auth.uid()` actor.
 - `20260810010308_active_team_note_assignment_actor` (authored as `20260809154649`) —
   closes the gap review found afterwards: a deactivated profile whose token had not yet
   expired could satisfy the legacy creator-only insert policy and make the owner-run
@@ -38,8 +39,8 @@ and with that layer deliberately bypassed, the trigger's own guard raised `PROFI
 The normal assignment and completion path was re-checked afterwards and was unaffected.
 
 **Frontend (pushed to PR #351, not yet merged — users do not have it).** Team Board calls the
-RPC instead of writing the table, guards against double-submit, and maps six new error codes
-to specific messages. The checkbox is disabled with an explanatory tooltip for viewers who
+RPC instead of writing the table, guards against double-submit, and maps the actionable runtime
+errors to specific messages. The checkbox is disabled with an explanatory tooltip for viewers who
 are not the creator, assignee, or an admin. Notification deep-links now route team notes to
 the board, and the deep-link fetch no longer waits on a populated list before resolving.
 
