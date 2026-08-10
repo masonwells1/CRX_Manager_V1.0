@@ -319,15 +319,19 @@ export default function TeamBoard() {
       }
     }
 
+    // `replace: true` on both arms: a plain setSearchParams PUSHES a clean
+    // /team-board entry, so Back restores ?note=… , this effect re-opens the
+    // note and pushes again — the user can never get back to Notifications.
+    // Replacing consumes the deep link in place (Codex P2 on PR #351).
     if (note) {
       setSelectedNote(note);
       setDetailModalOpen(true);
-      setSearchParams({});
+      setSearchParams({}, { replace: true });
     } else {
       // Deleted or inaccessible note behind a stale ?note= link: say so and
       // clear the param instead of silently doing nothing.
       toast('error', 'That note no longer exists — it may have been deleted.');
-      setSearchParams({});
+      setSearchParams({}, { replace: true });
     }
   }, [notes, setSearchParams, toast]);
 
