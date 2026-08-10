@@ -2,24 +2,36 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-10 — Actor-binding SQL reader recognizes safe EXECUTE statement shapes
+## 2026-08-10 — Actor-binding SQL reader recognizes safe EXECUTE shapes without reopening delayed SQL
 
 Continued the parked actor-binding guard hardening on an isolated branch rebased
-onto `origin/main` at `e2abf0a5`. The SQL reader now distinguishes declarative
+onto `origin/main` at `0b85b5e4`. The SQL reader now distinguishes declarative
 `CREATE [EVENT] TRIGGER ... EXECUTE FUNCTION ...` syntax from runtime dynamic
 SQL, and accepts a PL/pgSQL `EXECUTE` command only when the command itself is one
 direct string literal with optional `INTO [STRICT]` followed by optional
 `USING`. Variable, concatenated, `format(...)`-built, malformed clause-order,
 trailing-syntax, and second-`EXECUTE` shapes remain fail-closed.
 
-The focused actor-binding suite grew from 115 to 128 assertions while the
-idempotency reference suite remained at 86. Eight new decision clauses were
+The first exact-SHA review of that continuation found a real high-severity
+boundary error: the runtime-SQL classifier recognized only unquoted
+`cron.schedule(...)`, even though quoted identifiers and pg_cron's
+`schedule_in_database(...)` and `alter_job(...)` APIs can also store executable
+command text. The reader now recognizes any direct call in the `cron` schema,
+including quoted identifiers, but still ignores cron-looking text inside data
+strings and comments. This is deliberately future-proof and fail-closed: an
+ordinary cron call remains allowed, while any cron API receiving a literal that
+contains `CREATE FUNCTION` requires the explicit exemption/manual-review path.
+
+The focused actor-binding suite grew from 115 to 138 assertions while the
+idempotency reference suite remained at 86. Fifteen continuation decisions were
 weakened or removed one at a time; every mutation made the real hook-process
 suite fail before restoration. Separate real-process probes allowed ordinary
-trigger/event-trigger declarations and direct-literal `USING`/`INTO`, while
-denying variable, concatenated, formatted, and second-`EXECUTE` controls. The
-exact-SHA independent review remains an external governed proof and must match
-the branch HEAD before publication; this entry does not self-certify it.
+trigger/event-trigger declarations, direct-literal `USING`/`INTO`, and harmless
+quoted cron calls, while denying variable, concatenated, formatted,
+second-`EXECUTE`, quoted scheduled-DDL, cross-database scheduled-DDL, and cron
+command-replacement controls. The exact-SHA independent review remains an
+external governed proof and must match the final branch HEAD before publication;
+this entry does not self-certify it.
 
 ## 2026-08-09 — Settled the canonical-profit question and applied the fix live
 

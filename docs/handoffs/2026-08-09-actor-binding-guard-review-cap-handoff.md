@@ -6,19 +6,21 @@
 - Isolated checkout: `C:\Users\mason\.codex\worktrees\phase3c-new-branch-cap\CRX_Manager`
 - Branch: `codex/harden-actor-binding-sql-reader`
 - Prior blocked security-review SHA: `824119a526e1bb3370e064bcc094fc5e3d12dd54`
-- Rebased onto verified remote `main` on 2026-08-10: `e2abf0a5a656b5fd3ea83571ac0e3604a1e978c7`
+- Rebased onto verified remote `main` on 2026-08-10: `0b85b5e4ed018c4abc93439ae48e7b3b00cc5d29`
 - No remote branch and no pull request exist.
 - Supabase project `rhyzpcqhnizqbxphqdkr` is context only; no database work occurred.
 
 ## GOAL
 
-Port the hardened, fail-closed SQL reader into the actor-binding hook. Done
-requires mutation proof for every guard clause, real-process deny evidence, a
-terminal `CODEX_PROOF_VERDICT: CLEAN`, and landing through a green protected PR.
+Port the hardened, fail-closed SQL reader into the actor-binding hook. This
+unpublished continuation is ready only with mutation proof for every new guard
+clause, real-process deny evidence, and a terminal exact-HEAD
+`CODEX_PROOF_VERDICT: CLEAN`. Landing remains a separately authorized protected
+PR workflow.
 
 ## PROVEN
 
-- The actor-binding suite passes at 128 assertions; the idempotency reference
+- The actor-binding suite passes at 138 assertions; the idempotency reference
   suite remains green at 86 assertions.
 - Fifty-four parser and decision clauses were each removed alone and made the
   suite fail before restoration.
@@ -27,6 +29,10 @@ terminal `CODEX_PROOF_VERDICT: CLEAN`, and landing through a green protected PR.
   exception, complete trigger-call tail, direct-literal `USING`, direct-literal
   `INTO`, command-literal position, expression-tail refusal, clause ordering,
   and second-`EXECUTE` refusal.
+- Seven follow-up `pg_cron` decisions were independently weakened or removed
+  and each made the real hook-process suite fail before restoration: quoted
+  schema recognition, `schedule_in_database`, `alter_job`, dollar-quoted data,
+  single-quoted data, line-comment masking, and nested block-comment masking.
 - Ordinary and event trigger declarations are allowed only when their
   executable clause is a complete `EXECUTE FUNCTION|PROCEDURE name(...)` call.
 - Direct PL/pgSQL command literals may use `INTO [STRICT]` and `USING` without
@@ -39,16 +45,19 @@ terminal `CODEX_PROOF_VERDICT: CLEAN`, and landing through a green protected PR.
 - Post-body `LANGUAGE ... SECURITY DEFINER` attributes are inspected through the
   function statement terminator. A missing terminator fails closed, and a later
   statement cannot contaminate the attributes of an earlier function.
-- Top-level `SELECT cron.schedule(...)` function DDL now fails closed while
-  ordinary scheduled calls without function DDL remain allowed.
+- Direct calls to any API in the `cron` schema are treated as runtime-SQL
+  boundaries when a literal contains `CREATE FUNCTION`. This covers quoted
+  `"cron"."schedule"`, `schedule_in_database`, and `alter_job`, while ordinary
+  cron calls and cron-looking text inside data strings/comments remain allowed.
 - Real hook-process probes denied indirect variable execution, doubled-quote
   comment hiding, post-body actor forgery, and scheduled actor-function DDL. A
   complete bound function supplied directly as one dollar-quoted literal was allowed.
-- The full pre-commit barrier passed repeatedly: containment, lint, type-check,
-  build, all Vitest tests, workflow/guard suites, dependency integrity, and map
-  generation. Intermittent workbook timeouts passed immediately in isolation
-  and the successful reruns completed the full suite.
-- The branch was rebased onto current `origin/main` at `e2abf0a5`; the similarly
+- One full pre-commit barrier passed before the `pg_cron` follow-up: containment,
+  lint, type-check, build, all Vitest tests, workflow/guard suites, dependency
+  integrity, and map generation. Two later amend attempts hit different random
+  test timeouts; every timed-out test passed immediately in isolation. The full
+  barrier must run again on the final `pg_cron` tree before closeout.
+- The branch was rebased onto current `origin/main` at `0b85b5e4`; the similarly
   named shared checkout contains separate commission/containment work and was
   not modified.
 
@@ -59,6 +68,9 @@ terminal `CODEX_PROOF_VERDICT: CLEAN`, and landing through a green protected PR.
   match that exact HEAD and end in `CODEX_PROOF_VERDICT: CLEAN`.
 - The old review capture is historical blocker evidence for `824119a5`; it
   cannot approve the continuation commit.
+- The review of `8620ad17` returned one HIGH blocker for quoted and alternate
+  pg_cron command APIs. That finding was reproduced and fixed locally, so its
+  BLOCKERS verdict is evidence for the fix, not approval of the new HEAD.
 
 ## REMAINING LANDING WORK
 
@@ -75,9 +87,10 @@ outward-action approval into a receiving task. No database action is needed.
 
 ## GATES AND BLOCKERS
 
-- The prior `/ship` review cycle reached its three-round cap. Its blocker has
-  now been addressed locally, but the branch remains unpublished until a new
-  exact-SHA governed review independently returns CLEAN.
+- The prior `/ship` review cycle reached its three-round cap. Its blocker and the
+  later `8620ad17` pg_cron blocker have now been addressed locally, but the
+  branch remains unpublished until a new exact-SHA governed review independently
+  returns CLEAN.
 - Historical blocker evidence:
   `C:\Users\mason\.codex\worktrees\phase3c-new-branch-cap\CRX_Manager\.claude\session-state\codex-review-latest.txt`.
 - Unrelated nonblocking repo drift remains: four 2026-08-08 migrations are

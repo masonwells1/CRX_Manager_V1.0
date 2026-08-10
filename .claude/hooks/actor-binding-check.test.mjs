@@ -241,6 +241,59 @@ r = runHook(`SELECT cron.schedule(
 );`);
 ok(!isDeny(r), "a normal top-level cron.schedule call without function DDL remains allowed");
 
+r = runHook(`SELECT "cron"."schedule"(
+  'quoted-delayed-actor-ddl',
+  '* * * * *',
+  $job$${UNBOUND_DDL}$job$
+);`);
+ok(isDeny(r), "quoted cron.schedule identifiers cannot hide delayed actor DDL");
+
+r = runHook(`SELECT "cron"."schedule"(
+  'quoted-safe-job',
+  '0 6 * * *',
+  $job$SELECT public.existing_safe_job()$job$
+);`);
+ok(!isDeny(r), "quoted cron.schedule without function DDL remains allowed");
+
+r = runHook(`SELECT cron.schedule_in_database(
+  'cross-db-actor-ddl',
+  '* * * * *',
+  $job$${UNBOUND_DDL}$job$,
+  'postgres'
+);`);
+ok(isDeny(r), "cron.schedule_in_database cannot hide delayed actor DDL");
+
+r = runHook(`SELECT cron.schedule_in_database(
+  'cross-db-safe-job',
+  '0 6 * * *',
+  $job$SELECT public.existing_safe_job()$job$,
+  'postgres'
+);`);
+ok(!isDeny(r), "cron.schedule_in_database without function DDL remains allowed");
+
+r = runHook(`SELECT cron.alter_job(
+  42,
+  command := $job$${UNBOUND_DDL}$job$
+);`);
+ok(isDeny(r), "cron.alter_job cannot replace a command with hidden actor DDL");
+
+r = runHook(`SELECT cron.alter_job(42, active := false);`);
+ok(!isDeny(r), "cron.alter_job without function DDL remains allowed");
+
+r = runHook(`SELECT $note$ "cron"."schedule"('ignored', 'CREATE FUNCTION public.not_executable()')$note$;`);
+ok(!isDeny(r), "cron-looking text inside a data literal is not treated as an API call");
+
+r = runHook(`SELECT ' "cron"."schedule"(''ignored'', ''CREATE FUNCTION public.not_executable()'')';`);
+ok(!isDeny(r), "cron-looking text inside a single-quoted data literal is ignored");
+
+r = runHook(`-- "cron"."schedule"('ignored', 'CREATE FUNCTION public.not_executable()')
+SELECT $note$CREATE FUNCTION public.not_executable()$note$;`);
+ok(!isDeny(r), "cron-looking text inside a line comment is ignored");
+
+r = runHook(`/* outer /* nested */ "cron"."schedule"('ignored', 'CREATE FUNCTION public.not_executable()') */
+SELECT $note$CREATE FUNCTION public.not_executable()$note$;`);
+ok(!isDeny(r), "cron-looking text inside a nested block comment is ignored");
+
 r = runHook(`SELECT cron.schedule(
   'split-actor-ddl',
   '* * * * *',

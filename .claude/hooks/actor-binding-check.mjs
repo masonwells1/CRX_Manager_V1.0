@@ -196,17 +196,85 @@ const ASSIGN_RE =
 // normal UPDATE of documentation text is not reclassified as runtime DDL.
 const DECLARATION_INIT_RE =
   /(?:^|\bDECLARE\b)\s*(?:"[^"]+"|[A-Za-z_]\w*)\s+(?:CONSTANT\s+)?(?:"[^"]+"|[\w.]+(?:%(?:TYPE|ROWTYPE))?)(?:\s+(?:WITH(?:OUT)?\s+TIME\s+ZONE|DOUBLE\s+PRECISION|CHARACTER\s+VARYING|BIT\s+VARYING))?(?:\s*\([^;]*?\))?(?:\s*\[\s*\])?(?:\s+COLLATE\s+(?:"[^"]+"|[\w.]+))?(?:\s+NOT\s+NULL)?\s*(?::=|=(?!=)|DEFAULT\b)/i;
-function isDynamicSqlStatement(stmt) {
+function isDynamicSqlStatement(stmt, rawStmt = stmt) {
   return /\bEXECUTE\b/i.test(stmt) ||
     ASSIGN_RE.test(stmt) ||
     DECLARATION_INIT_RE.test(stmt) ||
     /\bSELECT\b[\s\S]*\bINTO\b/i.test(stmt) ||
     /\bVALUES\b[\s\S]*\bINTO\b/i.test(stmt) ||
-    // pg_cron stores its command argument for later execution. Treat a
-    // function-bearing command like every other runtime DDL builder; the
-    // surrounding name/schedule literals mean it is not one direct DDL literal,
-    // so fail closed and use the explicit exemption/manual-review path.
-    /\bcron\s*\.\s*schedule\s*\(/i.test(stmt);
+    isPgCronCall(rawStmt);
+}
+
+/** Mask data strings and comments but retain quoted identifiers. The main SQL
+ * mask deliberately blanks quoted identifiers so a name such as "EXECUTE"
+ * cannot impersonate syntax. pg_cron's schema/API identity is the one place we
+ * need the original identifier spelling, including "cron"."schedule". */
+function maskSqlForCallNames(text) {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === "-" && text[i + 1] === "-") {
+      const nl = text.indexOf("\n", i + 2);
+      const end = nl === -1 ? text.length : nl;
+      out += " ".repeat(end - i);
+      i = end;
+      continue;
+    }
+    if (text[i] === "/" && text[i + 1] === "*") {
+      let depth = 1;
+      let j = i + 2;
+      while (j < text.length && depth > 0) {
+        if (text[j] === "/" && text[j + 1] === "*") { depth++; j += 2; continue; }
+        if (text[j] === "*" && text[j + 1] === "/") { depth--; j += 2; continue; }
+        j++;
+      }
+      if (depth > 0) return null;
+      out += " ".repeat(j - i);
+      i = j;
+      continue;
+    }
+    if (text[i] === "'") {
+      const end = scanQuoted(text, i);
+      if (end === -1) return null;
+      out += "'" + " ".repeat(end - i - 2) + "'";
+      i = end;
+      continue;
+    }
+    if (text[i] === '"') {
+      const end = scanQuoted(text, i);
+      if (end === -1) return null;
+      out += text.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (text[i] === "$") {
+      const tag = dollarTagAt(text, i);
+      if (tag) {
+        const close = text.indexOf(tag, i + tag.length);
+        if (close === -1) return null;
+        const end = close + tag.length;
+        out += tag + " ".repeat(end - i - (2 * tag.length)) + tag;
+        i = end;
+        continue;
+      }
+    }
+    out += text[i];
+    i++;
+  }
+  return out;
+}
+
+/** pg_cron stores executable command text through multiple APIs (currently
+ * schedule, schedule_in_database, and alter_job). Treat any direct call in the
+ * cron schema as a runtime-SQL boundary so a new overload/API cannot silently
+ * reopen this reader. Ordinary calls stay allowed because only literals that
+ * actually carry a CREATE FUNCTION header are exposed for actor inspection. */
+function isPgCronCall(rawStmt) {
+  const callableSql = maskSqlForCallNames(String(rawStmt || ""));
+  if (callableSql === null) return false;
+  const identifier = '(?:"(?:[^"]|"")*"|[A-Za-z_][\\w$]*)';
+  return new RegExp(`(?:^|[^\\w$])(?:"cron"|cron)\\s*\\.\\s*${identifier}\\s*\\(`, "i")
+    .test(callableSql);
 }
 
 // EXECUTE is also a PostgreSQL privilege keyword. These two complete statement
@@ -292,10 +360,13 @@ function directExecuteLiteralShape(masked, stmtStart, stmtEnd, lits) {
 }
 
 function inExecuteStatement(out, text, afterIdx) {
-  const before = out.slice(out.lastIndexOf(";") + 1);
+  const stmtStart = out.lastIndexOf(";") + 1;
+  const before = out.slice(stmtStart);
   const semi = firstTopLevelSemicolon(text, afterIdx);
+  const stmtEnd = semi === -1 ? text.length : semi;
   return isDynamicSqlStatement(
-    before + " " + text.slice(afterIdx, semi === -1 ? text.length : semi)
+    before + " " + text.slice(afterIdx, stmtEnd),
+    text.slice(stmtStart, stmtEnd)
   );
 }
 
@@ -607,7 +678,7 @@ try {
         return true;
       }
       if (lits.length === 0) return false;
-      if (!isDynamicSqlStatement(stmt)) return false;
+      if (!isDynamicSqlStatement(stmt, content.slice(stmtStart, stmtEnd))) return false;
       const ddlLiterals = directExecuteLiteral ? [directExecuteLiteral.literal] : lits;
       if (!carriesFnHeader(ddlLiterals.map((l) => l.payload).join(""))) return false;
 
