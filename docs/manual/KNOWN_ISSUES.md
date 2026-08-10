@@ -418,6 +418,41 @@ to `total_profit` only, and `total_price` can still sit a fraction of a cent off
 its own lines until that RPC is fixed. Recorded so nobody reads the new
 guarantee as broader than it is.
 
+### Two more header writers do the same thing — verified live 2026-08-10
+
+`_update_order_items_impl` is not the only one. Every RPC that creates or
+rewrites an order builds the header from **its own running total in PL/pgSQL**
+and then writes that number onto `orders`, instead of re-reading what the
+`order_items` rows actually hold after the `_round_money_to_whole_cents` BEFORE
+trigger has rewritten them. The trigger is the canonical rule; an accumulator
+that ran before it is a second, competing definition.
+
+Both were read out of `pg_proc` on the live database on 2026-08-10, not inferred
+from a migration file:
+
+- **`draw_down_quote`** — this is the one that can actually drift. It sums line
+  totals as `numeric` **dollars** (`v_total_price := v_total_price + v_line_total`,
+  body line 219) and writes `orders.total_price / total_cost / total_profit /
+  total_margin_pct` straight from those accumulators (body lines 234–235). Each
+  stored line, meanwhile, was rounded to whole cents on insert. So a quote whose
+  prices carry sub-cent precision produces a header that is up to half a cent per
+  line away from the sum of its own lines — which is exactly the shape of the one
+  fulfilled order left disagreeing after the 2026-08-09 backfill.
+- **`_create_quick_delivery_intent_impl_20260802`** — same structure, materially
+  safer. It accumulates in **integer cents** (`safe_cents_qty`, body lines 166–167)
+  and writes the header at body lines 205–207, so it cannot produce a fractional
+  residual of its own. It is still an independent accumulator rather than a
+  re-read of the stored lines, so it stays on this list; it is second priority.
+
+**Not fixed here, and not urgent.** The correct fix is structural — every header
+writer stops accumulating and instead re-reads the stored lines (or defers to
+`trg_recalc_order_totals`, which already does), so there is one definition of the
+header instead of four. That touches three money RPCs at once and rewrites live
+header values on the next write to each affected order, so it is a planned change
+with its own review and Codex gate, not a drive-by. Until it happens, the exactness
+guarantee above holds for `total_profit` written **through the trigger** and does
+not extend to a header these RPCs wrote directly.
+
 ## RESOLVED LIVE — Quote and Customer whole-record saves reject stale editors
 
 **Applied live 2026-07-30.** The frontend-first bundle landed through PR #290, then the governed migration was submitted as `20260730201230_quote_customer_row_version_guard` and Supabase assigned ledger/disk version `20260730235031`. Trigger-maintained `row_version` columns now close the known last-write-wins exposure for whole-record `save_quote` and `save_customer` updates. Immediate catalog, trigger, overload, owner, search-path, grant, and child-table ACL checks passed. The primary Quote/Customer rollback chain plus planned-hold, restore/version, and drawn-booking companion chains all reached exact `SMOKE_PASS_ROLLBACK`; zero fixture rows remained. All 21 standing live invariant predicates returned zero unallowlisted findings. The schema registry was refreshed again through the later live high-water `20260731001654` and retains the assigned row-version migration name and both columns. Cached pre-migration bundles fail closed and must refresh; the already-deployed compatible bundle avoids an all-user outage. No rollout toggle is required.
