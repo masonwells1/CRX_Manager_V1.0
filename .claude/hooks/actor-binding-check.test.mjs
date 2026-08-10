@@ -249,6 +249,40 @@ SELECT cron.schedule('staged-actor-ddl', '* * * * *',
 ok(isDeny(r), "a subquery cannot stage actor DDL into cron.schedule");
 ok(r.stdout.includes("stores a pg_cron command"), "opaque scheduled-command denial explains the manual-review boundary");
 
+r = runHook(`SELECT public.execute_sql_readonly($outer$
+  SELECT cron.schedule('nested-delayed-actor-ddl', '* * * * *',
+    $job$${UNBOUND_DDL}$job$)
+$outer$);`);
+ok(isDeny(r), "execute_sql_readonly cannot hide a nested pg_cron actor-DDL call");
+
+r = runHook(`SELECT public.execute_sql_readonly($query$SELECT 1 AS safe_value$query$);`);
+ok(!isDeny(r), "execute_sql_readonly with a direct harmless query remains allowed");
+
+r = runHook(`SELECT public.execute_sql_readonly(sql_query => $outer$
+  SELECT cron.schedule('named-nested-actor-ddl', '* * * * *',
+    $job$${UNBOUND_DDL}$job$)
+$outer$);`);
+ok(isDeny(r), "a named execute_sql_readonly argument cannot hide scheduled actor DDL");
+
+r = runHook(`CREATE TEMP TABLE staged_executor_sql (query text);
+INSERT INTO staged_executor_sql (query) VALUES ($outer$
+  SELECT cron.schedule('staged-executor-actor-ddl', '* * * * *',
+    $job$${UNBOUND_DDL}$job$)
+$outer$);
+SELECT public.execute_sql_readonly(
+  (SELECT query FROM staged_executor_sql LIMIT 1)
+);`);
+ok(isDeny(r), "execute_sql_readonly rejects a staged SQL expression");
+
+r = runHook(`SELECT public.store_documentation($doc$${UNBOUND_DDL}$doc$);`);
+ok(!isDeny(r), "an unrelated callable receiving function documentation remains ordinary data");
+
+r = runHook(`SELECT U&"\\0065xecute_sql_readonly"($outer$
+  SELECT cron.schedule('unicode-executor-actor-ddl', '* * * * *',
+    $job$${UNBOUND_DDL}$job$)
+$outer$);`);
+ok(isDeny(r), "a Unicode executor name cannot hide nested scheduled actor DDL");
+
 r = runHook(`SELECT cron.schedule(
   job_name => 'named-safe-job',
   schedule => '0 6 * * *',

@@ -71,8 +71,16 @@ in `WHEN MATCHED ... UPDATE` made the statement appear inspectable even when
 MERGE with an INSERT branch now requires the manual-review path; update-only
 MERGE remains allowed when every command assignment is directly inspectable.
 
-The focused actor-binding suite grew from 115 to 183 assertions while the
-idempotency reference suite remained at 86. Fifty-one continuation decisions were
+The next exact-SHA review identified CRX's legacy
+`public.execute_sql_readonly(text)` as another delayed execution boundary. It
+accepts SELECT/WITH text and dynamically executes it as the function owner, so
+a nested `cron.schedule(...)` literal could otherwise be masked as ordinary
+data. The reader now recursively inspects direct function-bearing SQL supplied
+to that exact executor and refuses staged/opaque executor expressions. Direct
+harmless queries and unrelated callables receiving documentation remain allowed.
+
+The focused actor-binding suite grew from 115 to 189 assertions while the
+idempotency reference suite remained at 86. Fifty-six continuation decisions were
 weakened or removed one at a time; every mutation made the real hook-process
 suite fail before restoration. Separate real-process probes allowed ordinary
 trigger/event-trigger declarations, direct-literal `USING`/`INTO`, and harmless

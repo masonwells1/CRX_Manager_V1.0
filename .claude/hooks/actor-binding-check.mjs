@@ -342,6 +342,34 @@ function hasUnicodeNamedArgument(argument) {
   return /^\s*U&\s*"(?:[^"]|"")*"(?:\s+UESCAPE\s*'(?:[^']|'')*')?\s*(?:=>|:=)/i.test(masked);
 }
 
+/** The legacy SECURITY DEFINER executor accepts exactly one SQL expression.
+ * Anything except one direct literal is opaque and requires manual review. */
+function hasOpaqueExecuteSqlReadonlyCall(rawStmt) {
+  const raw = String(rawStmt || "");
+  const callableSql = maskSqlForCallNames(raw);
+  if (callableSql === null) return true;
+  const executor = '(?:"execute_sql_readonly"|execute_sql_readonly)';
+  const patterns = [
+    new RegExp(`(?:^|[^\\w$])(?:"public"|public)\\s*\\.\\s*${executor}\\s*\\(`, "gi"),
+    new RegExp(`(?:^|[^\\w$.\"])${executor}\\s*\\(`, "gi"),
+  ];
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(callableSql)) !== null) {
+      const open = match.index + match[0].lastIndexOf("(");
+      const parsed = readBalancedParens(callableSql, open);
+      if (!parsed) return true;
+      const args = splitTopLevelArgs(parsed.params, raw.slice(open + 1, parsed.end - 1));
+      if (args.length !== 1) return true;
+      const named = namedArgumentValue(args[0], "sql_query");
+      const value = named === null ? args[0] : named;
+      if (/(?:=>|:=)/.test(maskSqlForCallNames(args[0]) || "") && named === null) return true;
+      if (!isDirectSqlStringLiteral(value)) return true;
+    }
+  }
+  return false;
+}
+
 /** pg_cron persists command text beyond the migration. If that command arrives
  * through a variable, subquery, DEFAULT, concatenation, or another expression,
  * this lexical guard cannot inspect the eventual SQL and must fail closed. */
@@ -793,6 +821,27 @@ function hasAdjacentNewlineString(text, from) {
   return sawNewline && /^(?:[eEnN]|[uU]&)?'/.test(text.slice(i));
 }
 
+/** CRX's legacy execute_sql_readonly(text) function validates only the first
+ * keyword, then dynamically EXECUTEs the supplied SELECT/WITH as its owner.
+ * Treat a function-bearing literal in that argument as executable SQL. Unicode
+ * identifiers are opaque, so matching ones conservatively take the same path. */
+function isExecuteSqlReadonlyLiteralPrefix(prefix) {
+  const unicodeIdentifier =
+    'U&\\s*"(?:[^"]|"")*"(?:\\s+UESCAPE\\s*\'(?:[^\']|\'\')*\')?';
+  const publicSchema = `(?:"public"|public|${unicodeIdentifier})`;
+  const executor = `(?:"execute_sql_readonly"|execute_sql_readonly|${unicodeIdentifier})`;
+  const sqlArg = `(?:(?:"sql_query"|sql_query|${unicodeIdentifier})\\s*(?:=>|:=)\\s*)?`;
+  const qualified = new RegExp(
+    `(?:^|[^\\w$.\"])(?:${publicSchema})\\s*\\.\\s*${executor}\\s*\\(\\s*${sqlArg}$`,
+    "i"
+  );
+  const unqualified = new RegExp(
+    `(?:^|[^\\w$.\"])(?:${executor})\\s*\\(\\s*${sqlArg}$`,
+    "i"
+  );
+  return qualified.test(prefix) || unqualified.test(prefix);
+}
+
 /** Replace comments and quoted-string contents with spaces, while recursively
  * retaining executable SQL held inside procedural bodies and dynamic DDL.
  * Length-preserving so structural indexes map back to the original content.
@@ -829,7 +878,10 @@ function maskSqlNoise(text, inProceduralCode = false) {
         if (close === -1) return null;
         const payload = text.slice(i + tag.length, close);
         const isProceduralContainer = isProceduralContainerPrefix(out);
+        const isKnownSqlExecutor = carriesFnHeader(payload) &&
+          isExecuteSqlReadonlyLiteralPrefix(out);
         const isExecutable = isProceduralContainer || /\bEXECUTE\s+$/i.test(out) ||
+          isKnownSqlExecutor ||
           (inProceduralCode && carriesFnHeader(payload)) ||
           (inExecuteStatement(out, text, close + tag.length) && carriesFnHeader(payload));
         const inner = isExecutable
@@ -855,7 +907,9 @@ function maskSqlNoise(text, inProceduralCode = false) {
       // literal. Recognize all of them, then fail closed.
       if (isProceduralContainer && proceduralStringKind !== "plain") return null;
       if (isProceduralContainer && hasAdjacentNewlineString(text, end) !== false) return null;
-      const isDynamicSql = ch === "'" && (isProceduralContainer ||
+      const isKnownSqlExecutor = ch === "'" && carriesFnHeader(payload) &&
+        isExecuteSqlReadonlyLiteralPrefix(out);
+      const isDynamicSql = ch === "'" && (isProceduralContainer || isKnownSqlExecutor ||
         (carriesFnHeader(payload) && (inProceduralCode || inExecuteStatement(out, text, end))));
       if (isDynamicSql) {
         // Recursing into the raw payload is safe only when it needs no SQL
@@ -865,7 +919,10 @@ function maskSqlNoise(text, inProceduralCode = false) {
         // Preserve exact source indexes by refusing this fancy valid form and
         // directing it to the explicit exemption/human-review path.
         if (payload.includes("''")) return null;
-        const inner = maskSqlNoise(payload, inProceduralCode || isProceduralContainer);
+        const inner = maskSqlNoise(
+          payload,
+          inProceduralCode || isProceduralContainer || isKnownSqlExecutor
+        );
         if (inner === null) return null;
         out += ch + inner + ch;
       } else {
@@ -989,10 +1046,12 @@ try {
       }
       const rawStmt = content.slice(stmtStart, stmtEnd);
       if (!hasProceduralContainer &&
-          (hasOpaquePgCronCallCommand(rawStmt) || hasOpaquePgCronCommandWrite(rawStmt))) {
+          (hasOpaquePgCronCallCommand(rawStmt) || hasOpaquePgCronCommandWrite(rawStmt) ||
+           hasOpaqueExecuteSqlReadonlyCall(rawStmt))) {
         violations.push(
-          "This migration stores a pg_cron command through a variable, subquery, DEFAULT, " +
-          "concatenation, or another expression that the actor-binding guard cannot inspect. " +
+          "This migration stores a pg_cron command or passes SQL through execute_sql_readonly " +
+          "using a variable, subquery, DEFAULT, concatenation, or another expression that the " +
+          "actor-binding guard cannot inspect. " +
           "Supply the complete command directly as one plain or dollar-quoted string literal, " +
           "or add the file-level exempt marker (-- actor-binding-check: exempt) and get a manual review."
         );
