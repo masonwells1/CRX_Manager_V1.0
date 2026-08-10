@@ -22,7 +22,7 @@ PR workflow.
 
 ## PROVEN
 
-- The actor-binding suite passes at 176 assertions; the idempotency reference
+- The actor-binding suite passes at 181 assertions; the idempotency reference
   suite remains green at 86 assertions.
 - Fifty-four parser and decision clauses were each removed alone and made the
   suite fail before restoration.
@@ -54,6 +54,10 @@ PR workflow.
   `unschedule` allowance, direct and tuple assignment checks, `INSERT ... SELECT`,
   MERGE, direct VALUES allowance, omitted `alter_job` command allowance,
   INSERT-table/function-call disambiguation, opaque upsert handling, and COPY.
+- Four Unicode extractor decisions were independently weakened or removed and
+  each exposed its matching regression or safe-control failure: unqualified
+  Unicode API registration, Unicode named-argument refusal, optional UESCAPE
+  parsing, and direct-safe-literal allowance for an otherwise opaque API name.
 - Ordinary and event trigger declarations are allowed only when their
   executable clause is a complete `EXECUTE FUNCTION|PROCEDURE name(...)` call.
 - Direct PL/pgSQL command literals may use `INTO [STRICT]` and `USING` without
@@ -134,6 +138,17 @@ PR workflow.
   passed 86, real subprocess probes denied staged schedule/update/insert/MERGE
   controls and allowed direct safe commands, and the commit completed the full
   pre-commit barrier without a hook bypass.
+- The exact-SHA review of `f221c2839b070d7062d81e051b043fe1d7193a43`
+  found two Unicode extractor gaps: unqualified Unicode API names and Unicode
+  `command` argument names could carry staged SQL even though the broader sink
+  detector recognized the calls. Snapshot probes proved the approved base
+  denied both packets while that candidate allowed them.
+- Fix commit `572d31aa9843f28532d6652d3522a183f83f7308` aligns the
+  extractor with the sink detector, including custom UESCAPE syntax. The
+  restored actor suite passed 181 assertions, the idempotency reference suite
+  passed 86, exact real-process Unicode probes denied staged SQL and allowed a
+  direct safe command, and the commit completed the full pre-commit barrier
+  without a hook bypass.
 
 ## GOVERNED STATUS
 
@@ -159,6 +174,9 @@ PR workflow.
   supplied through subqueries or variables. It was reproduced and fixed in
   `49e41d7a`; its BLOCKERS verdict likewise does not approve the final
   documentation HEAD.
+- The review of `f221c283` returned one HIGH blocker covering Unicode API and
+  argument names. It was reproduced and fixed in `572d31aa`; its BLOCKERS
+  verdict likewise does not approve the final documentation HEAD.
 
 ## REMAINING LANDING WORK
 
@@ -175,7 +193,7 @@ outward-action approval into a receiving task. No database action is needed.
 ## GATES AND BLOCKERS
 
 - The prior `/ship` review cycle reached its three-round cap. Its blocker and the
-  later `8620ad17`, `5cb6e4d7`, `f4da59bf`, `3c0f8e75`, and `9c2552ca` pg_cron blockers have now been
+  later `8620ad17`, `5cb6e4d7`, `f4da59bf`, `3c0f8e75`, `9c2552ca`, and `f221c283` pg_cron blockers have now been
   addressed locally, but the branch remains unpublished until a new exact-SHA
   governed review independently returns CLEAN.
 - Historical blocker evidence:
