@@ -1,13 +1,15 @@
-# RPC Functions Reference (356 callable overloads across 348 names + 89 trigger functions — live DB as of 2026-07-17)
+# RPC Functions Reference (440 callable overloads across 432 names + 128 trigger functions — live DB as of 2026-08-09)
 
-> Function inventory verified live against Supabase project `rhyzpcqhnizqbxphqdkr` (`pg_proc` joined to `pg_namespace` where `nspname='public'`, split by `prorettype = 'trigger'::regtype`): **356 callable overloads across 348 distinct names**, **89 trigger function overloads/names**, **437 total public function names**. This supersedes the earlier 2026-06-29 branch-HEAD snapshot (270 + 56), which was measured against a local throwaway DB before the field-app parity migrations and subsequent sprints shipped live.
+> Function inventory verified live against Supabase project `rhyzpcqhnizqbxphqdkr` (`pg_proc` joined to `pg_namespace` where `nspname='public'`, split by trigger return type): **440 callable overloads across 432 distinct names**, **128 trigger function overloads/names**, **560 total public function names**.
 >
 > **2026-07-13 note:** the section-by-section inventory below (Atomic Save/Delete, Order & Delivery, Invoice & Payments, …) is a **curated snapshot last verified 2026-06-29** and has not been re-audited function-by-function against the live count above — treat the live DB (or `.claude/schema-registry.json` for structural facts) as authoritative if a specific function's existence, signature, or behavior is load-bearing. The detailed sections below document the notable functions, not an exhaustive per-function enumeration.
-
+>
 > **Prior baselines:** 2026-06-23 live: 228 callable RPCs + 51 trigger functions. 2026-06-29 branch HEAD (local, pre-live-merge): 270 callable RPCs + 56 trigger functions.
-
+>
+> **2026-08-09 candidate warning:** the function and trigger changes in local migrations `20260808150100`, `20260808150200`, and `20260808150400` are not included as live behavior. Production still has the older batch-prepayment/cancellation bodies and no whole-cent rounding trigger function.
+>
 > **IMPORTANT:** As of migration 20260331600000, all mutating RPCs have exactly ONE overload with `p_idempotency_key text DEFAULT NULL`. Never create function overloads — see SAFE_DEVELOPMENT_RULES.md.
-
+>
 > **Audit (2026-03-16):** Round 3 idempotency fix applied via migration 20260332700000. All public functions verified to use correct `idempotency_keys` columns (`idempotency_key`, `operation`, `result`). Pre-commit hook now blocks wrong patterns.
 
 ---
