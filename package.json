@@ -83,9 +83,12 @@
     "signature_pad": "^5.1.4"
   },
   "overrides": {
-    "brace-expansion": "5.0.8",
+    "brace-expansion": "5.0.9",
     "minimatch": ">=10.0.1",
-    "uuid": "11.1.1"
+    "uuid": "11.1.1",
+    "@mapbox/mapbox-gl-draw": {
+      "nanoid": "^5.1.16"
+    }
   },
   "devDependencies": {
     "@eslint/js": "^9.9.1",
