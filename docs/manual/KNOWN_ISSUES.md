@@ -1,6 +1,6 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-08-10 UTC (2026-08-09 evening America/Chicago), post-apply.** Live ledger high-water at the last read on this branch was `20260810010308` (`active_team_note_assignment_actor`) — ledger versions are UTC, which is why the stamp reads a day ahead of the local session date. Two independent lines of work applied live on 2026-08-09 and are reconciled below. Everything past this header carries its 2026-08-07 verification unless dated otherwise.
+**Last verified: 2026-08-10 UTC (2026-08-09 evening America/Chicago), post-apply.** Live ledger high-water at the last read on this branch was `20260810155629` (`20260810151000_whole_cent_money_check_constraints`), re-read 2026-08-10 — ledger versions are UTC, which is why the stamp reads a day ahead of the local session date. The 2026-08-09 post-apply verification that the rest of this header describes ended at `20260810010308` (`active_team_note_assignment_actor`); the four ledger entries past it were applied live by separate 2026-08-10 sessions and are not described below. Two independent lines of work applied live on 2026-08-09 and are reconciled below. Everything past this header carries its 2026-08-07 verification unless dated otherwise.
 
 **Team Board delegation — both halves live.** `20260809130108` added the governed `complete_team_note` RPC and the assignment-notification trigger, and `20260810010308` closed the inactive-actor notification path in both the `tnotes_insert` policy and the trigger itself. Both were verified live after apply, and the delegated-completion and inactive-actor behaviors were proven by rollback-only probes against live. The compatible frontend ships with PR #351, so delegated completion is live in the database but not reachable from the browser until that PR merges and deploys. An earlier 2026-08-09 read recorded `20260809130108` as having no file in this repository; PR #351 lands that file and its follow-up, closing the gap (see `docs/reference/migration-history.md` rows 863 and 864).
 
@@ -35,8 +35,11 @@ On 2026-08-10 those two were observed to be different things:
   **`codex_apps/supabase`** — a separate built-in Codex App with its own
   independent authentication. Observed tool line:
   `mcp: codex_apps/supabase.list_migrations (completed)`, returning correct live
-  data (`20260810022500_backfill_stale_line_profit`) verified against the live
-  ledger from the Claude side.
+  data — migration name `20260810022500_backfill_stale_line_profit`, live ledger
+  version `20260810025159` — verified against the live ledger from the Claude
+  side. The two stamps differ because a migration's filename prefix records when
+  it was written and its ledger version records when it was applied; they are
+  different numbers for the same migration.
 
 So the read-only assurance is asserted against a config entry that appears never
 to have authenticated, while real traffic flows through a channel whose
