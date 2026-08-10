@@ -45,6 +45,15 @@ carried on `invoices.balance_cents`, which nothing in this path writes.
    delivery, or whether profit should be computed only on invoices, given that orders are edited
    before delivery and goods are returned after it. That is an unscoped accounting change and is
    **not** decided by this entry.
+5. **Verify the trigger in `pg_proc`, never in the repo.** Two reviewers read the tracked
+   `20260808150400_round_money_to_whole_cents.sql`, saw no `NEW.profit` assignment, and concluded
+   the backfill was a no-op. Live disagrees: the trigger does assign profit, zero rows remain
+   stale, and the deriving body arrived via `20260809230500_single_canonical_line_profit` (ledger
+   version `20260810000427`), a file that is applied live but reaches `main` only with PR #354. A
+   `CREATE OR REPLACE` body applied under a re-stamped version is invisible to filename analysis.
+   The repository-replay gap this leaves is recorded in `docs/reference/migration-history.md`; it
+   is closed by #354 and must not be papered over by re-emitting the same function in a second
+   pending migration.
 
 ## 2026-08-08 — Four foundation-ultra-review owner decisions settled
 
