@@ -57,6 +57,12 @@ export default function Notifications() {
       }
     }
     if (notification.related_entity_type && notification.related_entity_id) {
+      // Team notes live on the board behind a query param, not a /:id route
+      // (mirrors NotificationsPanel — covers 'mention' and 'task_assigned').
+      if (notification.related_entity_type === 'team_note') {
+        navigate(`/team-board?note=${notification.related_entity_id}`);
+        return;
+      }
       const routes: Record<string, string> = {
         quote: '/quotes',
         order: '/orders',

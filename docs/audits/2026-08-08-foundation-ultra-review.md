@@ -2,6 +2,8 @@
 
 **Verdict: SOLID-WITH-FOLLOWUPS**
 
+> **Status reconciliation — 2026-08-09:** four follow-up migration files now exist as local candidates (`20260808150100`–`20260808150400`), but none is applied live. Production now ends at `20260809130108`; the candidates are below that high-water and must be restamped and re-reviewed before any future apply. Any statement below that a finding is "fixed by" one of those files means fixed in the candidate SQL only; the production finding remains until the reviewed migration is approved, applied, and verified.
+
 No BLOCKER. No HIGH survived adversarial verification. The foundation is sound enough to build the next stretch of features on. The most valuable finding of this run is not a bug — it is a **process gap in how migrations reach production**, described in §2.
 
 Read-only run. Nothing was changed in the database, no migration was applied, no function deployed. The only file written is this report.
@@ -83,7 +85,7 @@ END IF;
 
 **M4 — `cancel_order` leaves `quantity_remaining` non-zero.** One cancelled order line carries `quantity_remaining = 247`. 1 of 117 inventory rows; the other 116 tie exactly.
 
-> **CORRECTION (2026-08-08, post-report).** This finding originally also claimed the stock stays prebooked. That half is WRONG. Tracing the live chain shows `_cancel_order_impl_20260714` already releases prebooked stock and writes a `released` ledger row — ORD-2026-0330 HAS that row — and the `partially_fulfilled` path already zeroed both. Only `quantity_remaining` was stranded. The product's residual `quantity_prebooked = 36` is March 2026 historical drift (L2 below), not a cancellation defect. Fixed by migration `20260808150200`, which zeroes `quantity_remaining` and nothing else — a second release path would double-release inventory.
+> **CORRECTION (2026-08-08, post-report; live status rechecked 2026-08-09).** This finding originally also claimed the stock stays prebooked. That half is WRONG. Tracing the live chain shows `_cancel_order_impl_20260714` already releases prebooked stock and writes a `released` ledger row — ORD-2026-0330 HAS that row — and the `partially_fulfilled` path already zeroed both. Only `quantity_remaining` was stranded. The product's residual `quantity_prebooked = 36` is March 2026 historical drift (L2 below), not a cancellation defect. Local candidate migration `20260808150200` zeroes `quantity_remaining` and nothing else, but it is not applied live; a second release path would double-release inventory.
 
 **M5 — The go-live prebook check produces a false discrepancy.** `checkPrebookedInventory()` (`tests/e2e/golive/utils/reconciliation-checks.ts:355-372`) sums `order_items.quantity_remaining` with no order-status awareness; its caller (`tests/e2e/golive/stream0-db-integrity.spec.ts:237`) fetches `order_items?select=product_id,quantity_remaining&quantity_remaining=gt.0` with no join to `orders`. Confirmed live: exactly one `cancelled` order line carries 247 units. Capped at MED because the check only `console.log`s rather than failing the build — it produces a misleading go-live report, not a red build.
 
@@ -145,9 +147,9 @@ All four were answered by Mason in chat on 2026-08-08. Canonical record:
    **ANSWERED: leave as is.** Payments stay visible company-wide.
 2. **Canonical rounding point (M3).** Where should `order_items.total_price` and `commissions.commission_amount` be rounded to whole cents? A $5,245.195 commission is currently pending payout. Once decided, a live invariant predicate should assert whole cents on both.
    **ANSWERED: round to two decimals (whole cents).** The pending commission resolves to $5,245.20.
-   Needs a forward migration — not yet written.
-3. **`cancel_order` semantics (M4).** Should cancelling an order zero `quantity_remaining` on its lines and release the prebooked stock? Current behavior leaves both stranded.
-   **ANSWERED: yes, cancelling releases stock.** Current behavior is a bug. Needs a forward migration — not yet written.
+   Forward migration `20260808150400` is written locally but not applied live; it is forward-looking and does not repair the 46 + 3 historical rows.
+3. **`cancel_order` semantics (M4).** Should cancelling an order zero `quantity_remaining` on its lines while preserving the existing stock-release path?
+   **ANSWERED: yes.** Stock already releases; only the non-zero remaining quantity is a bug. Forward migration `20260808150200` is written locally but not applied live.
 4. **Negative inventory (L3).** The recorded decision is "reconcile only from physical counts". Still 19 rows. Confirm it stands, or schedule the re-base.
    **ANSWERED: it stands.** No re-base scheduled; reconcile only from physical counts.
 

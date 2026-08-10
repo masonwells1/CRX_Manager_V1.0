@@ -2158,9 +2158,12 @@ function registryMigrationHighWater(): string {
 // Keep this set aligned with rows explicitly marked PENDING APPLY in
 // docs/reference/migration-history.md.
 //
-// Empty as of 2026-08-09: history rows 857-861 (the 2026-08-08 foundation ultra
-// review migrations, re-issued forward as 20260809170500-170900) applied live on
-// 2026-08-09 and their rows now read APPLIED LIVE, so nothing is pending.
+// Empty as of 2026-08-10, from two independent lines of work that both landed:
+// history rows 857-861 (the 2026-08-08 foundation ultra review migrations,
+// re-issued forward as 20260809170500-170900) applied live on 2026-08-09 and now
+// read APPLIED LIVE; and both Team Board delegation migrations applied live
+// 2026-08-09 under server-assigned ledger versions 20260809130108 and
+// 20260810010308. Nothing in this checkout is pending.
 const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([]);
 
 /**
@@ -2238,6 +2241,15 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
  * Every exemption needs a concrete mechanism/reason. This is intentionally
  * separate from the missing-key backlog: an ordinary business mutator belongs
  * in MUTATING_RPCS_MISSING_IDEMPOTENCY and must eventually be fixed.
+ *
+ * Trigger-only functions that never reach the generated types enter the
+ * inventory only while their migration is newer than the registry high-water,
+ * so their entries here are pre-apply-window entries and the
+ * "exemptions are current" test below requires pruning them once the migration
+ * is applied and the high-water moves past it. `notify_team_note_assignment`
+ * (20260810010308) and `trg_recalc_order_totals` (20260809230500) were pruned
+ * on 2026-08-10 for exactly that reason — both are live; neither is exempt from
+ * anything, they are simply no longer discovered.
  */
 const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   _close_undelivered_order_remainder_20260718:

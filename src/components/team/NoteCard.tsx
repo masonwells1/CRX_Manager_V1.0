@@ -51,6 +51,11 @@ interface NoteCardProps {
   showCheckbox: boolean;
   showCompletionDetails?: boolean;
   canEdit: boolean;
+  /** Whether the current user may complete/reopen this note (creator,
+   * assignee, or admin — mirrors complete_team_note's authorization).
+   * When false the checkbox still renders (state stays visible, alignment
+   * holds) but is disabled. Defaults to true. */
+  canComplete?: boolean;
   onToggleComplete: (note: TeamNote) => void;
   onTogglePin: (note: TeamNote) => void;
   onEdit: (note: TeamNote) => void;
@@ -65,6 +70,7 @@ export default function NoteCard({
   showCheckbox,
   showCompletionDetails = false,
   canEdit,
+  canComplete = true,
   onToggleComplete,
   onTogglePin,
   onEdit,
@@ -88,8 +94,10 @@ export default function NoteCard({
       <div className="flex items-start gap-3">
         {showCheckbox && (
           <button
-            onClick={(e) => { e.stopPropagation(); onToggleComplete(note); }}
-            className="mt-0.5 text-secondary hover:text-crx-green"
+            onClick={(e) => { e.stopPropagation(); if (canComplete) onToggleComplete(note); }}
+            disabled={!canComplete}
+            title={canComplete ? undefined : 'Only the creator, the assignee, or an admin can check this off'}
+            className={`mt-0.5 ${canComplete ? 'text-secondary hover:text-crx-green' : 'text-gray-300 cursor-not-allowed'}`}
           >
             {note.is_completed ? <CheckSquare className="w-5 h-5 text-crx-green" /> : <Square className="w-5 h-5" />}
           </button>
