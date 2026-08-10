@@ -159,6 +159,18 @@ check("abstains when the applied ledger is unknown", () => {
   }
 });
 
+check("abstains when applied rows carry no parseable timestamp", () => {
+  // The library abstains; the APPLY GUARD is what turns this into a block. Pinned
+  // here so the two halves of that contract stay honest about which is which.
+  const res = checkMigrationOrdering({
+    name: "20260101000000_anything",
+    sql: "SELECT 1;",
+    appliedNames: ["deactivation_revokes_auth_access", "initial_schema"],
+  });
+  assert.equal(res.ok, true);
+  assert.equal(res.abstained, true);
+});
+
 check("abstains on a name with no timestamp", () => {
   const res = checkMigrationOrdering({
     name: "ad_hoc",

@@ -144,11 +144,44 @@ function armAutopilot(stateDir, hoursFromNow) {
     let r = runHook(call(BENIGN_SQL), tmp);
     ok(isDeny(r), "no applied-migration snapshot → apply denied");
     ok(r.stdout.includes("MIGRATION ORDERING GUARD"), "missing-snapshot deny names the ordering guard");
+    // The recapture instructions must name the project THIS apply targets.
+    // Reading it from the environment printed a literal placeholder in every
+    // normal hook run, and a stray env value could aim the operator at another
+    // project's ledger. (Codex P2, PR #354.)
+    ok(
+      r.stdout.includes("execute_sql on x"),
+      "recapture instructions name the apply's own project_id",
+    );
+    ok(
+      !r.stdout.includes("<your project ref>"),
+      "recapture instructions never print a placeholder ref",
+    );
 
     writeAppliedSnapshot(stateDir, { ageHours: 48 });
     r = runHook(call(BENIGN_SQL), tmp);
     ok(isDeny(r), "stale (48h) snapshot → apply denied");
     ok(r.stdout.includes("MIGRATION ORDERING GUARD"), "stale-snapshot deny names the ordering guard");
+
+    // Every remaining fail-closed branch. A regression in any of these opens the
+    // guard silently, which is worse than it never having existed.
+    writeAppliedSnapshot(stateDir, { applied: [] });
+    r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r), "empty snapshot → apply denied");
+
+    writeFileSync(path.join(stateDir, "applied-migrations.json"), JSON.stringify({ applied: ["20260808150400_x"] }));
+    r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r), "snapshot with no captured_at → apply denied");
+
+    writeFileSync(path.join(stateDir, "applied-migrations.json"), "{not json");
+    r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r), "unparseable snapshot → apply denied");
+
+    // The subtle one: present, fresh, non-empty — but nothing is timestamped, so
+    // no ordering verdict is possible. That must not read as a pass.
+    writeAppliedSnapshot(stateDir, { applied: ["deactivation_revokes_auth_access", "initial_schema"] });
+    r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r), "fresh snapshot with no parseable timestamps → apply denied");
+    ok(r.stdout.includes("MIGRATION ORDERING GUARD"), "timestamp-less snapshot deny names the ordering guard");
 
     // A fresh snapshot from here on: MIG is dated 20990101000000, so it is
     // newer than everything applied and the ordering check passes cleanly.
@@ -415,6 +448,61 @@ function armAutopilot(stateDir, hoursFromNow) {
     rmSync(path.join(primaryState, "AUTOPILOT.on"));
 
     git(["worktree", "remove", "--force", linked], primary);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// The ordering guard must not be escapable by RENAMING the candidate.
+// `apply_migration`'s `name` is caller-controlled, and the ordering check
+// abstains on a name it cannot timestamp. The guard used to convert an
+// abstention into a block only when the name carried a 14-digit timestamp —
+// exactly backwards, since the untimestamped case is the one the snapshot
+// checks cannot catch. Stripping the timestamp therefore bought an
+// unconditional pass for an out-of-order replay: the same class of hole that
+// removed the prepayment actor guard. (Codex High, PR #354.)
+//
+// Full-hook, both directions: the timestamped replay must still be denied (so
+// the fixture genuinely IS out of order), and the renamed one must be denied
+// too (so the fix is what is doing the work).
+{
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "mig-apply-guard-rename-"));
+  const stateDir = path.join(tmp, ".claude", "session-state");
+  mkdirSync(stateDir, { recursive: true });
+  try {
+    // Everything in the ledger is dated 2099, so any 2026-dated apply is a replay.
+    writeAppliedSnapshot(stateDir, { applied: ["20990101000000_already_applied"] });
+
+    const attempt = (name) => {
+      // A full, valid, hash-matching review proof for this exact name — so the
+      // ONLY thing that can stop the apply is the ordering guard.
+      writeFileSync(path.join(stateDir, `migration-review-${name}.json`), JSON.stringify({
+        migration: name,
+        timestamp: new Date().toISOString(),
+        reviewers: ["rls-security-reviewer", "migration-drift-reviewer"],
+        findings: "clean",
+        queryHash: sha(BENIGN_SQL),
+      }));
+      return runHook({
+        tool_name: "mcp__supabase__apply_migration",
+        tool_input: { project_id: "x", name, query: BENIGN_SQL },
+      }, tmp);
+    };
+
+    let r = attempt("20260101000000_old_mig");
+    ok(isDeny(r), "out-of-order migration under its real timestamped name → denied");
+    ok(r.stdout.includes("MIGRATION ORDERING GUARD"), "the timestamped replay is denied BY the ordering guard");
+
+    r = attempt("old_mig");
+    ok(isDeny(r), "the same out-of-order SQL with the timestamp stripped from the name → still denied");
+    ok(
+      r.stdout.includes("MIGRATION ORDERING GUARD"),
+      "the renamed replay is denied by the ordering guard, not incidentally by some other gate",
+    );
+    ok(
+      /no 14-digit timestamp/.test(r.stdout),
+      "the deny explains that an untimestamped, caller-supplied name cannot skip the ordering comparison",
+    );
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

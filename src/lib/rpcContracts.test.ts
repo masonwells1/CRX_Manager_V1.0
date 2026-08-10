@@ -1646,7 +1646,7 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // The terminal-provenance wrapper binds actor + order before issuing exact
   // governed cancellation claims and invoking the private implementation.
   cancel_order: 'delegated',
-  // The restored actor guard (migration 20260808150100) authorizes —
+  // The restored actor guard (migration 20260809170500) authorizes —
   // AUTH_REQUIRED, ACTOR_MISMATCH, is_admin() — and then delegates to
   // _batch_apply_prepayments_impl, which owns the canonical
   // check_idempotency/save_idempotency pair. The wrapper deliberately holds no
@@ -2155,10 +2155,15 @@ function registryMigrationHighWater(): string {
 
 // Intentional bookkeeping gate: update this set when Section 9 applies or a
 // new current pending migration is added; otherwise the inventory fails closed.
-// Both Team Board delegation migrations applied live 2026-08-09 under
-// server-assigned ledger versions 20260809130108 and 20260810010308, so
-// nothing in this checkout is pending. Keep this set aligned with rows
-// explicitly marked PENDING APPLY in docs/reference/migration-history.md.
+// Keep this set aligned with rows explicitly marked PENDING APPLY in
+// docs/reference/migration-history.md.
+//
+// Empty as of 2026-08-10, from two independent lines of work that both landed:
+// history rows 857-861 (the 2026-08-08 foundation ultra review migrations,
+// re-issued forward as 20260809170500-170900) applied live on 2026-08-09 and now
+// read APPLIED LIVE; and both Team Board delegation migrations applied live
+// 2026-08-09 under server-assigned ledger versions 20260809130108 and
+// 20260810010308. Nothing in this checkout is pending.
 const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([]);
 
 /**
@@ -2236,6 +2241,15 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
  * Every exemption needs a concrete mechanism/reason. This is intentionally
  * separate from the missing-key backlog: an ordinary business mutator belongs
  * in MUTATING_RPCS_MISSING_IDEMPOTENCY and must eventually be fixed.
+ *
+ * Trigger-only functions that never reach the generated types enter the
+ * inventory only while their migration is newer than the registry high-water,
+ * so their entries here are pre-apply-window entries and the
+ * "exemptions are current" test below requires pruning them once the migration
+ * is applied and the high-water moves past it. `notify_team_note_assignment`
+ * (20260810010308) and `trg_recalc_order_totals` (20260809230500) were pruned
+ * on 2026-08-10 for exactly that reason — both are live; neither is exempt from
+ * anything, they are simply no longer discovered.
  */
 const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   _close_undelivered_order_remainder_20260718:
@@ -2263,8 +2277,6 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   check_remainder_reminders: 'maintenance reminder sweep uses persisted sent markers to deduplicate',
   check_unpriced_orders: 'cron reminder sweep uses persisted reminder and escalation sent markers',
   mark_overdue_invoices: 'service-role maintenance updates only invoices currently eligible as overdue',
-  notify_team_note_assignment:
-    'trigger-only assignment notifier; parent team_notes INSERT/UPDATE owns the transaction, direct application-role EXECUTE is revoked, and the active-actor guard fails closed before privileged notification DML',
   recompute_job_applied_acres: 'trigger-only derived-total recomputation; direct client EXECUTE is revoked',
   reconcile_prepay_balances: 'convergent repair sets balances to recomputed ledger truth',
   refresh_watchdog_flags: 'convergent watchdog rebuild deduplicates flags by persisted natural key',

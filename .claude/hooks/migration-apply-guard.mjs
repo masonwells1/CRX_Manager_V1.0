@@ -120,9 +120,20 @@ const safeName = migName.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80) || "unkno
 const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 {
   const snapPath = path.join(stateDir, "applied-migrations.json");
+  // The recapture target must be the project THIS apply is aimed at. Reading it
+  // from the environment printed a literal `<your project ref>` in every normal
+  // hook run — neither manifest exports SUPABASE_PROJECT_REF — and a stray env
+  // value could have pointed the operator at a different project's ledger, which
+  // the snapshot format cannot detect. The apply call itself is authoritative.
+  // (Codex P2, PR #354.)
+  const CRX_PRODUCTION_REF = "rhyzpcqhnizqbxphqdkr";
+  const targetRef =
+    (input.project_id || "").toString().trim() ||
+    (process.env.SUPABASE_PROJECT_REF || "").toString().trim() ||
+    CRX_PRODUCTION_REF;
   const howTo =
     `Refresh it first (read-only):\n` +
-    `  1. Via Supabase MCP execute_sql on ${'rhyzpcqhnizqbxphqdkr'}:\n` +
+    `  1. Via Supabase MCP execute_sql on ${targetRef}:\n` +
     `       select version, name from supabase_migrations.schema_migrations order by version;\n` +
     `  2. Pipe that JSON into: node scripts/refresh-applied-migrations.mjs\n` +
     `The snapshot is gitignored and per-checkout, so a fresh clone or a newer apply elsewhere ` +
@@ -145,9 +156,33 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
         `An empty snapshot is indistinguishable from "nothing has ever been applied" and would ` +
         `silently disable this check. Refusing the apply.\n\n${howTo}`);
     }
+    // Same mapping rule as scripts/refresh-applied-migrations.mjs. Preferring
+    // `name` alone drops the timestamp for the many ledger rows whose name has
+    // none (e.g. version 20260727174805 / name deactivation_revokes_auth_access),
+    // and a row that cannot be timestamped cannot constrain ordering.
     appliedNames = rows
-      .map((r) => (typeof r === "string" ? r : (r?.name ?? r?.version ?? "")))
+      .map((r) => {
+        if (typeof r === "string") return r;
+        const name = (r?.name ?? "").toString().trim();
+        const version = (r?.version ?? "").toString().trim();
+        if (name && /\d{14}/.test(name)) return name;
+        if (version && name) return `${version}_${name}`;
+        return version || name || "";
+      })
       .filter(Boolean);
+
+    // A snapshot can be present, fresh and non-empty yet contain not one
+    // parseable timestamp — in which case the ordering check has nothing to
+    // compare against and abstains, and the apply would sail through a gate
+    // that looks satisfied. Refuse instead: this is the silent gap the whole
+    // mechanism exists to close (CodeRabbit, PR #348).
+    if (!appliedNames.some((n) => /\d{14}/.test(n))) {
+      out("block",
+        `MIGRATION ORDERING GUARD: the applied-migration snapshot at ${snapPath} has ` +
+        `${appliedNames.length} row(s) but not one carries a 14-digit migration timestamp, so no ` +
+        `ordering comparison is possible. A snapshot that cannot answer the question must not be ` +
+        `treated as answering it. Refusing the apply.\n\n${howTo}`);
+    }
 
     const capturedAt = Date.parse(parsed?.captured_at ?? "");
     if (Number.isFinite(capturedAt)) {
@@ -175,6 +210,33 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
   try {
     const ordering = checkMigrationOrdering({ name: migName, sql: migQuery, appliedNames });
     if (!ordering.ok) out("block", ordering.reason);
+    // Belt-and-braces: an abstention is "no verdict", and `ok: true` there means
+    // "unknown", not "fine".
+    //
+    // This used to fire only when `migName` carried a 14-digit timestamp, which
+    // was exactly backwards: `apply_migration`'s name is CALLER-CONTROLLED, and
+    // an untimestamped name is the one abstention cause the snapshot checks
+    // above cannot catch (they constrain the ledger, not the candidate). So
+    // stripping the timestamp off an out-of-order migration bought an
+    // unconditional pass through this guard — the same replay class that
+    // removed the prepayment actor guard. Verified by probe: identical SQL,
+    // "20260101000000_old_mig" denied, "old_mig" allowed. (Codex High, PR #354.)
+    //
+    // Every repository migration is timestamped, so refusing an untimestamped
+    // candidate costs nothing real and closes the hole. Deny on ANY abstention.
+    if (ordering.abstained) {
+      const untimestamped = !/\d{14}/.test(migName || "");
+      out("block",
+        `MIGRATION ORDERING GUARD: the ordering check reached no verdict for "${safeName}", so ` +
+        `whether this is an out-of-order replay is UNKNOWN` +
+        (untimestamped
+          ? `, because the migration name carries no 14-digit timestamp to compare against the ` +
+            `applied-migration snapshot. Every repository migration is timestamped, and this name ` +
+            `is caller-supplied, so an untimestamped name must not skip the ordering comparison. ` +
+            `Re-issue the migration under its real timestamped name.`
+          : `.`) +
+        ` An unknown verdict is not a pass. Refusing the apply.\n\n${howTo}`);
+    }
   } catch (err) {
     // A crash in the ordering check must not silently wave a migration through.
     out("block",
