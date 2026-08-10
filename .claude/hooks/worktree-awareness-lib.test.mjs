@@ -14,7 +14,8 @@ import {
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName,
   lastNonEmptyLine, firstCommentLine, fleetSummaryLine,
   isParkedDraftPath, parkedDraftPathsFrom, draftPathspec, normRepoPath,
-  hasExplicitParkedMigrationHeader, isParkedFallbackFile, originMainDraftPathSet,
+  hasExplicitParkedMigrationHeader, isParkedFallbackFile, parkedFallbackFileDiscovery,
+  createParkedFallbackClassifier, originMainDraftPathSet,
   fallbackPathsAgainstOrigin, parkedMainlinePathsFrom, parkedMainlineDiscoveryFrom,
   localCandidateMigrationPathsFromHistory, validateParkedMigrationCrossReferences,
   ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, originMainParkedMigrationPrefilter,
@@ -170,6 +171,15 @@ eq(parkedDraftPathsFrom([DISPATCH], () => false).size, 0, "a draft the branch de
 eq(parkedDraftPathsFrom([DISPATCH], (p) => p === DISPATCH).size, 1, "the existence check sees the raw path, not the lower-cased key");
 eq(parkedDraftPathsFrom([PARKED_FORWARD], () => true, () => PARKED_FORWARD_HEADER).size, 1, "an explicitly parked forward migration is retained");
 eq(parkedDraftPathsFrom([PARKED_FORWARD], () => true, () => "-- ordinary migration\nSELECT 1;").size, 0, "a forward migration without the header is excluded");
+const unreadableBranchHistory = parkedDraftPathsFrom(
+  ["supabase/migrations/20260101000000_real.sql"],
+  () => true,
+  () => "-- ordinary migration\nSELECT 1;\n",
+  null,
+  sha256Text,
+);
+eq(unreadableBranchHistory.size, 0, "unreadable history does not invent a parked candidate");
+ok(unreadableBranchHistory.unknownReason.includes("history is unreadable"), "unreadable branch history fails closed instead of returning a clean zero");
 
 // The pathspec covers the two draft folders plus explicitly marked forward migrations.
 eq(draftPathspec(), ["scripts/.staging-migrations", "docs/audits", "supabase/migrations"], "git includes only draft folders plus explicitly marked forward migrations");
@@ -585,6 +595,46 @@ const DRAFT_B = "docs/audits/hunt/PARKED-b.sql";
 const SUPERSEDED_A = "scripts/.staging-migrations/SUPERSEDED-a.sql";
 const BRANCH_CANDIDATE_SQL = "-- ordinary reviewed candidate\nSELECT 42;\n";
 const BRANCH_CANDIDATE_HISTORY = `| Entry | 20260101000000 | **LOCAL CANDIDATE — NOT APPLIED.** File: \`20260101000000_real.sql\`. SQL sha256: \`${sha256Text(BRANCH_CANDIDATE_SQL)}\`. |`;
+const hashPinnedFallback = parkedFallbackFileDiscovery(
+  "supabase/migrations/20260101000000_real.sql",
+  "20260101000000_real.sql",
+  () => BRANCH_CANDIDATE_SQL,
+  BRANCH_CANDIDATE_HISTORY,
+  sha256Text,
+);
+eq(hashPinnedFallback.state, "known", "degraded fallback verifies readable migration history");
+eq(hashPinnedFallback.parked, true, "degraded fallback discovers a matching SHA-pinned candidate without an SQL status header");
+const unreadableFallbackHistory = parkedFallbackFileDiscovery(
+  "supabase/migrations/20260101000000_real.sql",
+  "20260101000000_real.sql",
+  () => BRANCH_CANDIDATE_SQL,
+  null,
+  sha256Text,
+);
+eq(unreadableFallbackHistory.state, "unknown", "degraded fallback reports unreadable migration history as unknown");
+eq(unreadableFallbackHistory.parked, false, "unreadable fallback history cannot self-certify a SHA-pinned candidate");
+const timeoutScaleHistory = `${BRANCH_CANDIDATE_HISTORY}\n${"| 1 | 20260101000001 | APPLIED migration fixture. |\n".repeat(14000)}`;
+let timeoutScaleHistoryParses = 0;
+const timeoutScaleStarted = performance.now();
+const timeoutScaleClassifier = createParkedFallbackClassifier(
+  timeoutScaleHistory,
+  sha256Text,
+  (text) => {
+    timeoutScaleHistoryParses++;
+    return localCandidateMigrationPathsFromHistory(text);
+  },
+);
+let timeoutScaleDiscovery = null;
+for (let i = 0; i < 867; i++) {
+  timeoutScaleDiscovery = timeoutScaleClassifier(
+    "supabase/migrations/20260101000000_real.sql",
+    "20260101000000_real.sql",
+    () => BRANCH_CANDIDATE_SQL,
+  );
+}
+eq(timeoutScaleHistoryParses, 1, "degraded fallback parses migration history once per worktree, not once per SQL file");
+eq(timeoutScaleDiscovery?.parked, true, "timeout-scale fallback retains SHA-pinned discovery across 867 classifications");
+ok(performance.now() - timeoutScaleStarted < 10_000, "867 fallback classifications complete within the SessionStart hook budget");
 
 // Builds a reader over a fake git. `responses` maps a git subcommand to its output lines;
 // a value of null means that git call failed. Records every call for assertions.

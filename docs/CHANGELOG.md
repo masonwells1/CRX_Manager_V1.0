@@ -438,6 +438,22 @@ Final exact-head review hardening makes an explicit parked SQL header unable to 
 history pin, and makes every linked worktree prefer the shared canonical backup marker over any
 conflicting local copy. This keeps both migration and backup status fail-closed and fleet-wide.
 
+**2026-08-10 merge reconciliation:** the four audit-time candidates were subsequently re-issued
+above the live high-water and applied through the governed migration pipeline on 2026-08-09. The
+SHA-pin coverage now uses repository fixtures; it no longer describes those applied files as parked.
+The final exact-SHA adversarial review also found and drove a fail-closed correction: unreadable
+worktree migration history now marks parked state unknown, and degraded disk discovery recognizes
+a matching history SHA pin instead of requiring an SQL status header. Shared regressions cover both
+paths, and the real fleet and SessionStart consumers still report zero parked migrations.
+After three normal pre-commit attempts exposed unrelated 5–15 second test timeouts under concurrent
+CRX worktree load, local Vitest concurrency was capped at two workers (CI keeps its isolated-runner
+default). The complete suite then passed all 323 files and 4,304 active tests without relaxing any
+individual timeout or skipping any test.
+The follow-up exact-SHA review then caught a timeout-scale regression in degraded migration discovery:
+the 600+ KiB history file was reparsed for every SQL file. Fallback classification now parses history
+once per worktree and reuses the structured result; a 867-file regression proves one parse and
+completion inside the SessionStart hook's 10-second budget.
+
 ## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
 
 PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in bash-safety and live-testdata guards (variant git spellings, redirect terminators, plumbing push commands, DELETE catch-all, setval/nextval and RPC-via-SELECT rules), added regression tests, resolved the changelog merge conflict with main.
