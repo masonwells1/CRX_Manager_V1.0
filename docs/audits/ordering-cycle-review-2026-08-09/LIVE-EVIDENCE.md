@@ -2,7 +2,9 @@
 
 **Step 1 of `REMEDIATION-PLAN.md`. Read-only. Nothing was changed, applied, or deployed.**
 
-Date pulled: 2026-08-09 · Project: `rhyzpcqhnizqbxphqdkr` (production) · Branch base: `origin/main` @ `37c4bca6`
+Date pulled: 2026-08-09 · Corrected and extended: 2026-08-10 · Project: `rhyzpcqhnizqbxphqdkr` (production) · Branch base: `origin/main` @ `37c4bca6`
+
+> **Correction pass, 2026-08-10.** Review feedback on PR #362 challenged two claims in the first draft. Both challenges were right. The `_is_admin_override()` safety claim was **false as stated** and has been rewritten with the actual reason (§C). Findings #6 and #7 were labelled live-confirmed on the strength of chains that do not contain the code those findings run through; the missing fifteen functions have now been fingerprinted against production (§D). Three further errors — a miscount, a wrong migration list, and an unverified `MAINTAIN` claim — were found and fixed in the same pass. **No verdict changed. Every correction is marked in place rather than silently overwritten.**
 
 ---
 
@@ -16,8 +18,9 @@ This document closes that gap. It compares what is actually running in the produ
 
 - **Live / production database** — the real database the app uses, holding real customer and money data.
 - **Function body** — the stored recipe the database runs when the app asks it to do something (e.g. "complete this delivery"). Bodies live *inside* the database; the repo only holds the instructions that put them there.
-- **`md5` fingerprint** — a short code computed from a piece of text. Two texts with the same fingerprint are byte-for-byte identical. This is how "matches the repo" is proven here rather than eyeballed.
-- **Migration** — one numbered file that changes the database. They are applied in order and never edited afterwards.
+- **`md5` fingerprint** — a short code computed from a piece of text. Two texts with the same fingerprint are byte-for-byte identical. This is how "matches the repo" is proven here rather than eyeballed. Where this document says two bodies match, it means their fingerprints agree after the line-ending normalisation described in "A note on line endings" below — never a looser comparison than that.
+- **Line ending (`LF` / `CRLF`)** — the invisible character(s) that end each line of text. Windows editors write two (`CRLF`); everything else writes one (`LF`). They change the bytes of a file without changing a single instruction in it.
+- **Migration** — one numbered file that changes the database. They are applied in order and never edited afterward.
 - **RLS (Row Level Security)** — per-row permission rules. They decide which rows a given user is allowed to see or change, on top of ordinary table permissions.
 - **Grant** — a table- or function-level permission (SELECT, INSERT, UPDATE, EXECUTE…) held by a role such as `authenticated` (any signed-in user) or `anon` (anyone not signed in).
 - **Trigger** — a rule the database runs automatically whenever a row is inserted, updated, or deleted. Triggers are the safety net that still applies when someone writes to a table directly instead of going through the app's proper function.
@@ -27,21 +30,21 @@ This document closes that gap. It compares what is actually running in the produ
 
 ## Bottom line
 
-**Production matches the repository. The review's picture of production was accurate.** All twelve function bodies examined are byte-identical to the repo, or differ only by stripped comments with no behavioural change. All sixteen RLS policies and all table grants on `quotes` / `orders` / `deliveries` / `order_items` match the committed 2026-07-27 baseline exactly.
+**Production matches the repository. The review's picture of production was accurate.** All fourteen function bodies in the core table survey are identical to the repo, or differ only by stripped comments or line endings — in no case by a single instruction. A further fifteen function bodies making up the full `complete_delivery`, `post_invoice`, `create_invoice_from_order` and `void_invoice` chains were checked the same way and also match. All sixteen RLS policies and all table grants on `quotes` / `orders` / `deliveries` / `order_items` match the committed 2026-07-27 baseline exactly.
 
 **Consequence: none of the ten HIGH findings dissolve on contact with live.** Eight are confirmed as-written. Two are confirmed but need their wording tightened before they become work. Zero are already fixed. Zero are worse than described.
 
 Three things the review could not have known, which live introspection surfaced:
 
 1. The 2026-07-27 baseline file the review leaned on for its permissions findings **contains no RLS policies at all** — it is grants-only. Any finding phrased as "derived from the grants baseline" about *policies* was inferred, not read. Those inferences turned out to be correct, but they were unverified until now.
-2. Production is **four migrations ahead of `origin/main`**, two of which touch money rounding. Sibling-session work applied live but not yet merged. One of those adds a rounding trigger that partially mitigates a LOW finding.
+2. Production is **three migrations ahead of `origin/main`**, one of which repaired stored profit figures on live money rows. Sibling-session work applied live but not yet merged. See "New observations" below — this list changed between the first draft of this document and its correction pass, and the corrected list is the one to trust.
 3. `authenticated` holds **TRUNCATE** on all four tables, and TRUNCATE is not subject to RLS. Not in the review. See "New observations" below.
 
 ---
 
 ## A. Function bodies — live vs repo
 
-Each function's stored body was read directly out of the live database (`pg_proc.prosrc`, the verbatim text Postgres holds) and fingerprinted. The same fingerprint was computed from the body text in the last repo migration that defines that function. Same fingerprint = identical, to the byte.
+Each function's stored body was read directly out of the live database (`pg_proc.prosrc`, the verbatim text Postgres holds) and fingerprinted. The same fingerprint was computed from the body text in the last repo migration that defines that function. Same fingerprint = identical, to the byte, once both sides are compared under the same line-ending convention (see "A note on line endings" below).
 
 | Function | Verdict | Live fingerprint | Bytes | Repo source of that body |
 |---|---|---|---|---|
@@ -66,13 +69,13 @@ Both are **comment stripping only**. Not a single line of logic differs. Neither
 
 **`global_search`** — live is 62 bytes shorter than the repo. Those 62 bytes are exactly one comment line that is present in the repo and absent live:
 
-```
+```sql
   -- Escape ILIKE metacharacters before wrapping in wildcards
 ```
 
 The line it describes — the escape fix that stops a user typing `%` from matching every row in every table — is present and identical live. The safety fix is in production; only its explanatory note was dropped.
 
-**`get_customer_summary`** — live is 184 bytes shorter. Those 184 bytes are exactly five comment lines: `-- Current season: Oct 1 to Sep 30`, `-- AR Balance (sum of unpaid invoice balances)`, `-- Orders this season`, `-- Completed deliveries this season`, `-- Credit tier`, `-- Last activity`. Every calculation is identical.
+**`get_customer_summary`** — live is 184 bytes shorter. Those 184 bytes are exactly six comment lines: `-- Current season: Oct 1 to Sep 30`, `-- AR Balance (sum of unpaid invoice balances)`, `-- Orders this season`, `-- Completed deliveries this season`, `-- Credit tier`, `-- Last activity`. Every calculation is identical.
 
 **Most likely cause:** both are from early April 2026 and were almost certainly applied through a path that normalised the SQL before storing it, rather than an editing difference. **No action needed, and no finding changes because of them.**
 
@@ -81,16 +84,40 @@ The line it describes — the escape fix that stops a user typing `%` from match
 - **All fourteen** use `SET search_path = public, pg_temp` (the project's hard rule against search-path hijacking).
 - **All are `SECURITY DEFINER` except `_enforce_quote_status_transition`**, which correctly is not — it is a trigger and should run as the caller.
 - **No duplicate overloads exist** for any of them. (A stale second copy of a function with slightly different arguments is a known failure mode in this repo; there are none here.)
-- All live bodies are LF-only — no Windows line-ending contamination.
+
+### A note on line endings
+
+**Live bodies are a mix of LF and CRLF, and this had to be handled before any comparison could be trusted.** Postgres stores whatever bytes the migration file contained. CRX migration files are inconsistently saved — some LF, some CRLF — so a function defined in a CRLF-saved file is stored with CRLF inside the database, forever.
+
+Three practical consequences, all of which shaped how the checks above were run:
+
+1. A fingerprint comparison that normalises only one side reports a false mismatch. Every comparison here was run **both ways** — raw, and with carriage returns stripped from both sides — and is reported as a match only if one of the two agrees exactly.
+2. Two functions in the invoice chain (`_post_invoice_idem_impl_20260721`, `_create_invoice_from_order_idem_impl_20260721`) match **only** in raw CRLF form. Both originate from the CRLF-saved file `20260721014858_…govern_invoice_order_money_lifecycle.sql`.
+3. One function is stored with **mixed** line endings — see below. That is the single genuine byte-level difference found anywhere in this audit.
+
+**`_void_invoice_split_provenance_impl_20260719` — the one real difference, and it is cosmetic.** Live is 19,052 bytes; the repo's CRLF source body is 19,059. The 7-byte gap was narrowed by binary search on prefix fingerprints to characters 6,951–6,960, and then read directly from both sides. The text is identical; live simply switches from CRLF to LF part-way through the same comment block, losing seven carriage returns:
+
+```text
+live: …are unaffected.\r\n  IF v_inv.paid_amount_cents > 0\r\n     OR EXISTS (\n       SELECT 1\n…
+repo: …are unaffected.\r\n  IF v_inv.paid_amount_cents > 0\r\n     OR EXISTS (\r\n       SELECT 1\r\n…
+```
+
+Strip carriage returns from both and they are identical: `d5ac51bf7ae432e9c8360bc75247c087`, 18,748 characters on each side. **Not one instruction differs. No finding is affected.** It is recorded because a future audit running a naive fingerprint check will hit this and should not treat it as drift.
 
 ### A note on layered functions
 
-Three of these are not single functions but chains, because this project hardens functions by renaming the old body to `_..._impl` and wrapping a new one around it:
+Several of these are not single functions but chains, because this project hardens functions by renaming the old body to `_..._impl_<date>` and wrapping a new one around it. **Every layer was verified, not just the outer one** — a check of only the outer wrapper would have proved almost nothing, since the wrapper is usually a few hundred bytes of delegation and all the real behaviour lives underneath.
 
-- `complete_delivery` → `_complete_delivery_period_preflight_impl` → `_complete_delivery_aggregate_impl`
-- `void_invoice` → `_void_invoice_group_guard_impl_20260720`
+| Chain | Layers verified live |
+|---|---|
+| `complete_delivery` | `_complete_delivery_period_preflight_impl`, `_complete_delivery_aggregate_impl` |
+| `void_invoice` | `_void_invoice_group_guard_impl_20260720`, `_void_invoice_split_provenance_impl_20260719`, `_delete_invoices_split_provenance_impl_20260719`, `_post_deleted_delivery_recovery_invoice_20260719` |
+| `create_quick_delivery` | `_create_quick_delivery_intent_impl_20260802` |
+| `post_invoice` | `_post_invoice_impl_20260714`, `_post_invoice_public_impl_20260718`, `_post_invoice_customer_scope_impl`, `_post_invoice_idem_impl_20260721` |
+| `create_invoice_from_order` | `_create_invoice_from_order_impl_20260718`, `_create_invoice_from_order_idem_impl_20260721` |
+| commission minting | `_insert_commissions_for_order`, `_insert_commissions_for_job` |
 
-**Every layer was verified, not just the outer one.** This matters: a naive check of only the outer function would have proved almost nothing. The `void_invoice` implementation additionally matches the fingerprint that the repo's own migration `20260721014858` hard-codes as its expected value — the repo's own self-check agrees with live.
+The `void_invoice` group guard additionally matches the fingerprint that the repo's own migration `20260721014858` hard-codes as its expected value — the repo's own self-check agrees with live.
 
 ---
 
@@ -117,7 +144,9 @@ Identical on all four tables (`quotes`, `orders`, `deliveries`, `order_items`):
 | `metabase_ro` | SELECT |
 | `postgres`, `service_role` | full |
 
-This matches the baseline exactly. The baseline additionally lists `MAINTAIN`; that privilege is not reported by the standard `information_schema` view on PostgreSQL 17, so its absence from the live readout is a reporting artifact, **not drift**.
+This matches the baseline exactly. The baseline additionally lists `MAINTAIN` (a PostgreSQL 17 privilege covering maintenance commands such as `VACUUM` and `REINDEX`), which the standard `information_schema` view does not report at all — so its absence from a normal grants readout proves nothing either way.
+
+Rather than assume, it was queried directly with `has_table_privilege`, which does report it. On all four tables, `MAINTAIN` is **held** by `anon`, `authenticated`, and `service_role`, and **not held** by `metabase_ro`. That is exactly what the baseline says. The earlier reading of this as a "reporting artifact" was a guess; it is now a measurement. Server version: PostgreSQL 17.6.
 
 ### RLS policies — MATCHES BASELINE, all 16, exactly
 
@@ -174,7 +203,16 @@ HIGH #1 is confirmed by direct quotation from production.
 
 **`release_holds_on_quote_status_change`** — releases a quote's inventory holds **only** when its `status` moves into a terminal value (`accepted`, `declined`, `expired`, `cancelled`, `closed_by_application`, `closed_short`) from a non-terminal one. It does not look at `deleted_at` at all.
 
-**`_is_admin_override()`** — reads `current_setting('app.admin_override', true) = 'true'`. **Checked and clean:** every function that *sets* that flag is `SECURITY DEFINER` and executable only by `postgres` / `service_role`, so a signed-in user cannot set it from the app. The override is not a client-reachable bypass.
+**`_is_admin_override()`** — reads `current_setting('app.admin_override', true) = 'true'`. This is the escape hatch that lets the transition triggers above be bypassed, so who can set it matters a great deal.
+
+**Correction to an earlier draft of this document, which got the reason wrong.** That draft claimed no `authenticated`-executable function sets the flag. **That is false.** Seven functions granted `EXECUTE` to `authenticated` do set it: `assign_job_applicator`, `cancel_delivery`, `cancel_return`, `revert_quote_status`, `unapply_credit_memo`, `unpost_invoice`, `void_delivery`.
+
+**The conclusion still holds, but for two different reasons, both verified live:**
+
+1. **The flag is transaction-local.** Every one of the seven calls `set_config('app.admin_override', 'true', true)`. That third argument, `true`, means *local to the current transaction* — the setting cannot survive into a later statement or leak onto a pooled connection reused by another user. Each is also paired with an explicit reset to `'false'`.
+2. **Every one of the seven authorises the caller before it ever reaches the override.** Each raises `AUTH_REQUIRED`, `ACTOR_MISMATCH`, `INSUFFICIENT_ROLE`, or an explicit role check first. Measured as character offsets into each live body, the first authorisation check always precedes the first `set_config` — by 906 characters in the closest case (`assign_job_applicator`, check at 146, override at 1052) and by 5,758 in the widest (`revert_quote_status`, 322 vs 6,080).
+
+So the override is still **not a client-reachable bypass** — but the safety comes from in-function authorisation and transaction scoping, not from the grants. Anyone hardening these functions must preserve *both* properties; removing the early authorisation check would open the bypass even though the grant list is unchanged.
 
 ---
 
@@ -207,7 +245,12 @@ Summary: **10 confirmed, 0 already fixed, 0 worse. Two need their wording tighte
 
 **#5 — confirmed.** `create_direct_order`'s live body is byte-identical to the repo, so the review's reading of the caller-supplied cost path applies to production unchanged. Note the partial mitigation under "New observations" below — it is real but does not close this finding.
 
-**#6 and #7 — confirmed by identity.** These are behavioural findings about `complete_delivery` and `void_invoice`. Every layer of both chains is byte-identical to the repo, so the review's file-based analysis describes production exactly. Live introspection found nothing that contradicts either. (This is confirmation that the *code* is as described; the *behaviour* was not re-derived from scratch here — see "What was not verified".)
+**#6 and #7 — confirmed by identity, across the full dependency chains.** These are behavioural findings, and an earlier draft of this document rested them on the `complete_delivery` and `void_invoice` chains alone. That was not enough: finding #6 is about a *quick-delivery invoice* and finding #7 is about *commission minting*, and neither of those code paths sits inside the two chains that had been checked. The gap has been closed — the functions those findings actually depend on were fingerprinted against production too:
+
+- **#6 (quick-delivery double-billing):** `create_quick_delivery`, `_create_quick_delivery_intent_impl_20260802`, `post_invoice`, `_post_invoice_impl_20260714`, `_post_invoice_public_impl_20260718`, `_post_invoice_customer_scope_impl`, `_post_invoice_idem_impl_20260721`.
+- **#7 (commission cancellation with no re-mint):** `create_invoice_from_order`, `_create_invoice_from_order_impl_20260718`, `_create_invoice_from_order_idem_impl_20260721`, `_insert_commissions_for_order`, `_insert_commissions_for_job`, plus the deeper void layers `_void_invoice_split_provenance_impl_20260719`, `_delete_invoices_split_provenance_impl_20260719`, `_post_deleted_delivery_recovery_invoice_20260719`.
+
+**All match production.** The review's file-based analysis therefore describes production exactly, for the code each finding actually runs through — not merely for the two chains nearest to it. (This confirms the *code* is as described; the *behaviour* was not re-executed — see "What was not verified".)
 
 **#8 — confirmed, narrower than described.** The `del_update` policy admits the assigned driver only when the delivery's existing status is `in_progress` or `completed`. So the driver **cannot** start the walk — they cannot move a `scheduled` delivery to `in_progress`. They *can* perform the final `in_progress → completed` hop, which is precisely the state a delivery is in while a driver is working it. The finding holds; the fix must account for the driver needing legitimate write access to `in_progress` rows.
 
@@ -221,16 +264,23 @@ Summary: **10 confirmed, 0 already fixed, 0 worse. Two need their wording tighte
 
 These are recorded, not acted on. Per the plan's own rule: record rather than widen.
 
-**1. `authenticated` holds TRUNCATE on all four tables.** TRUNCATE empties a table wholesale and **is not subject to RLS** — row-level policies cannot restrain it. Ordinary DELETE by a sales rep is blocked by the `*_delete` policies requiring `is_admin()`; TRUNCATE steps around that entirely. This appears to be inherited from a broad grant rather than a deliberate decision. It is not in the 77 findings. **Worth a one-line `REVOKE TRUNCATE` in Wave B**, where the direct-write lockdown is already being done.
+**1. `authenticated` holds TRUNCATE on all four tables.** TRUNCATE empties a table wholesale and **is not subject to RLS** — row-level policies cannot restrain it. Ordinary DELETE by a sales rep is blocked by the `*_delete` policies requiring `is_admin()`; TRUNCATE steps around that entirely. Re-confirmed live on the corrected pass: `authenticated` holds it on all four tables; `anon` and `metabase_ro` do not. This appears inherited from a broad grant rather than a deliberate decision, and it is not in the 77 findings.
 
-**2. Production is four migrations ahead of `origin/main`.** 953 migrations live vs 863 on disk overall (older ones were applied under different timestamps, which accounts for most of the gap). Restricting to versions ≥ 20260720 and matching by name, exactly four live migrations have no counterpart in `origin/main`:
+**No exploit path is claimed.** PostgREST — the layer the app talks to — does not expose TRUNCATE, so this is defence-in-depth, not an open door. It is still worth closing, and there is now a direct precedent: a sibling session shipped `20260809170700_revoke_inventory_truncate_and_mark_payments_dead.sql` (live, and merged to `origin/main`) doing exactly this one-line revoke for the `inventory` table, with the same reasoning. **Worth the same one-line `REVOKE TRUNCATE` for these four tables in Wave B**, where the direct-write lockdown is already being done.
 
-- `20260809130108` team_note_completion_rpc_and_assignment_notify
-- `20260809205423` round_line_profit_with_revenue
-- `20260810000427` single_canonical_line_profit
-- `20260809154649` active_team_note_assignment_actor
+**2. Production is three migrations ahead of `origin/main` — and this list is a correction.** An earlier draft of this document listed four, including `20260809205423 round_line_profit_with_revenue` and `20260810000427 single_canonical_line_profit`. **Both of those are in fact present on `origin/main`**, as `20260809170900_round_line_profit_with_revenue.sql` and `20260809230500_single_canonical_line_profit.sql`. The confusion is a known and recurring trap in this repo: **a migration's version number in the live ledger is the timestamp at which it was applied, not the timestamp in its filename.** Matching the two by number alone produces phantom gaps. These two are documented as re-issued-forward in `docs/reference/migration-history.md`.
 
-Two of these touch money rounding. **The review read a repo that was four migrations behind production.** That did not affect any of the ten HIGH verdicts above — all the relevant bodies still match — but it is a live/repo gap that should be closed before Wave A starts, or Wave A will be built on a stale picture of the money path.
+Matching by *name* instead, three live migrations genuinely have no counterpart in `origin/main`:
+
+| Live version | Name | Where the file lives |
+|---|---|---|
+| `20260809130108` | `team_note_completion_rpc_and_assignment_notify` | branch `claude/todo-list-audit-hoxpl5`, PR #351 |
+| `20260810010308` | `20260809154649_active_team_note_assignment_actor` | same branch, PR #351 |
+| `20260810025159` | `20260810022500_backfill_stale_line_profit` | branch `claude/session-orchestration-setup-d73e6c`, PR #364 |
+
+**The third one is new since this document's evidence was first gathered** — it applied to production at 02:51 UTC on 2026-08-10, while this audit was being written. It is a backfill: it repaired stored profit figures on existing money rows. So live money *data*, not just live code, moved underneath this document.
+
+None of this changes any of the ten HIGH verdicts — every body relevant to them still matches. The corrected takeaway is narrower but sharper: **the two money-rounding migrations are no longer a gap, and the remaining money-related item is a data backfill that has already run.** The repo/live gap should still be closed before Wave A, but the reason is now "two unmerged PRs exist", not "the money path on disk is stale".
 
 **3. Two money triggers exist live on `order_items` that the review's on-disk sources do not describe.**
 
@@ -258,7 +308,8 @@ Stated plainly so nobody over-reads this document:
 Live reads via the Supabase MCP `execute_sql` tool against project `rhyzpcqhnizqbxphqdkr`, one statement at a time (the tool returns only the last statement's result, so batching would have silently discarded evidence).
 
 - Function bodies: `pg_proc.prosrc` — the verbatim stored text. `pg_get_functiondef()` was deliberately **not** used for diffing: it re-renders and normalises the definition, which would have masked real differences.
-- Repo-side fingerprints: the last `CREATE [OR REPLACE] FUNCTION` for each name across `supabase/migrations` in filename order, body sliced between its dollar-quote markers, line endings normalised to LF, then md5. Two functions (`_complete_delivery_*_impl`) are created by `ALTER FUNCTION … RENAME TO` rather than `CREATE`, so their expected bodies were taken from the migration that created them under their original name.
+- Repo-side fingerprints: rather than scanning for the last `CREATE [OR REPLACE] FUNCTION` per name (which misses renamed bodies entirely), the whole migration directory is **replayed** in filename order, maintaining a map of function name → current body and honouring `CREATE OR REPLACE`, `ALTER FUNCTION … RENAME TO`, and `DROP FUNCTION`, with statements applied in their within-file order. This is what makes the `_..._impl_<date>` layers checkable at all: those functions exist only because an older body was renamed under them, so no `CREATE` statement for them exists anywhere. The replay was validated by reproducing ten already-confirmed fingerprints exactly before being trusted for the rest.
+- Every fingerprint was computed **twice** — once on the raw file bytes and once with `\r\n` normalised to `\n` — and a function is reported as matching only if one of the two agrees exactly with live. Comparing under a single convention produces false mismatches on this repo (see "A note on line endings").
 - Grants: `information_schema.role_table_grants`. Function permissions: `pg_proc.proacl`.
 - Policies: `pg_policies` (`qual`, `with_check`, `roles`, `cmd`); RLS state from `pg_class.relrowsecurity` / `relforcerowsecurity`.
 - Triggers: reconstructed from `pg_trigger` catalog columns (`tgname`, `tgenabled`, `tgtype` bitmask, joined to `pg_proc`). `pg_get_triggerdef()` is blocked by a local safety hook, so the catalog was read directly.
@@ -269,6 +320,6 @@ Live reads via the Supabase MCP `execute_sql` tool against project `rhyzpcqhnizq
 
 ## Recommended next step
 
-**Proceed to Step 2 — the Codex triage — with this document attached, and add one item to it: close the four-migration gap between production and `origin/main` before Wave A begins.**
+**Proceed to Step 2 — the Codex triage — with this document attached, and add one item to it: land PRs #351 and #364 so `origin/main` and production agree before Wave A begins.**
 
-The evidence gap is closed and the review survived it intact: all ten HIGH findings stand, so the remediation plan's shape does not need to change. The one thing that *should* change before any money work starts is that repo/live gap — Wave A is the money wave, and two of the four unmerged migrations are money-rounding changes. Building a money fix against a repo that does not contain them risks writing a fix that conflicts with what production already does.
+The evidence gap is closed and the review survived it intact: all ten HIGH findings stand, so the remediation plan's shape does not need to change. The remaining repo/live gap is three unmerged migrations sitting on two open PRs, one of which already changed live money data. Wave A is the money wave; starting it while production contains changes the repo does not is how a fix ends up conflicting with what production already does.
