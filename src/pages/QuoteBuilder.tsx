@@ -75,6 +75,7 @@ import GuardrailBanner from '../components/ui/GuardrailBanner';
 import { ProductOptionDetails } from '../components/products/ProductOptionPresentation';
 import { ProductSearchResultRow } from '../components/products/ProductSearchResultRow';
 import { appendBelowCostApproval, stripInternalNotes } from '../lib/internalNotes';
+import { belowCostLinesFromRpcError, callBelowCostAwareRpc } from '../lib/belowCostRpc';
 import type {
   Quote,
   QuoteSection,
@@ -1471,21 +1472,26 @@ export default function QuoteBuilder() {
 
     // Below-cost guardrail (non-field-staff only): a line whose effective price
     // (recalcItem already folded any override into price_per_unit) is strictly
-    // under the line's stored quote-time cost needs an explicit reason before
-    // the quote can be saved — consistent with what the margin display shows.
+    // under the live catalog cost needs an explicit reason before the quote can
+    // be saved. The database locks this same live basis, so a catalog increase
+    // cannot surprise an admin with a server-only reason-required error.
     const isFieldStaff = profile.role === 'driver' || profile.role === 'applicator';
     let belowCostReason: string | null = null;
     if (!isFieldStaff) {
       const belowCostItems = sections
         .flatMap((sec) => sec.items)
-        .filter((item) => item.product_id && item.current_cost > 0 && item.price_per_unit < item.current_cost);
-      const belowCostLines: BelowCostLine[] = belowCostItems.map((item) => ({
+        .map((item) => ({
+          item,
+          cost: products.find((p) => p.id === item.product_id)?.current_cost ?? item.current_cost,
+        }))
+        .filter(({ item, cost }) => item.product_id && cost > 0 && item.price_per_unit < cost);
+      const belowCostLines: BelowCostLine[] = belowCostItems.map(({ item, cost }) => ({
         productName:
           item.product?.product_name
           || products.find((p) => p.id === item.product_id)?.product_name
           || 'Unknown product',
         price: item.price_per_unit,
-        cost: item.current_cost,
+        cost,
       }));
       if (belowCostLines.length > 0) {
         if (!isAdmin) {
@@ -1503,8 +1509,8 @@ export default function QuoteBuilder() {
         // (Codex rounds 32 and 34.)
         const approvedTerms = JSON.stringify(
           belowCostItems
-            .map((item) =>
-              `${item.product_id}|${item.price_per_unit}|${item.current_cost}|${item.total_units_needed}`)
+            .map(({ item, cost }) =>
+              `${item.product_id}|${item.price_per_unit}|${cost}|${item.total_units_needed}`)
             .sort()
         );
         if (belowCostReasonRef.current?.terms === approvedTerms) {
@@ -1560,7 +1566,9 @@ export default function QuoteBuilder() {
       for (const sec of sections) {
         for (const item of sec.items) {
           if (!item.product_id) continue;
-          const cost = item.current_cost ?? 0;
+          const cost = products.find((p) => p.id === item.product_id)?.current_cost
+            ?? item.current_cost
+            ?? 0;
           if (cost > 0 && item.price_per_unit < cost) {
             annotatedNotes.set(item._key, appendBelowCostApproval(item.notes, belowCostReason));
           }
@@ -2400,13 +2408,29 @@ export default function QuoteBuilder() {
       return;
     }
     const restoreAttempt = getRestoreVersionAttempt(versionId);
-    const { data, error } = await restoreQuoteVersionWithRowVersion({
+    let restoreResponse = await restoreQuoteVersionWithRowVersion({
       p_quote_id: quoteId,
       p_version_id: versionId,
       p_performed_by: profile.id,
       p_idempotency_key: restoreAttempt.key,
       p_expected_row_version: restoreAttempt.expectedRowVersion,
     });
+    const approvalLines = belowCostLinesFromRpcError(restoreResponse.error);
+    if (approvalLines && isAdmin) {
+      const reason = await new Promise<string | null>((resolve) =>
+        setBelowCostPrompt({ lines: approvalLines, resolve })
+      );
+      if (reason === null) return;
+      restoreResponse = await restoreQuoteVersionWithRowVersion({
+        p_quote_id: quoteId,
+        p_version_id: versionId,
+        p_performed_by: profile.id,
+        p_idempotency_key: restoreAttempt.key,
+        p_expected_row_version: restoreAttempt.expectedRowVersion,
+        p_below_cost_reason: reason,
+      });
+    }
+    const { data, error } = restoreResponse;
     if (error) {
       // Drawn-version guard (Codex r2 MED): the server blocks restoring a
       // snapshot that would drop a drawn product or fall below its drawn
@@ -2566,12 +2590,25 @@ export default function QuoteBuilder() {
     }
     setDrawing(true);
     try {
-      const { data, error } = await supabase.rpc('draw_down_quote', {
+      const drawArgs = {
         p_quote_id: id,
         p_draws: draws.map((d) => ({ product_id: d.product_id, quantity: d.quantity })),
         p_performed_by: profile!.id,
         p_idempotency_key: drawDownIdem.getKey(),
-      });
+      };
+      let drawResponse = await callBelowCostAwareRpc('draw_down_quote', drawArgs);
+      const approvalLines = belowCostLinesFromRpcError(drawResponse.error);
+      if (approvalLines && isAdmin) {
+        const reason = await new Promise<string | null>((resolve) =>
+          setBelowCostPrompt({ lines: approvalLines, resolve })
+        );
+        if (reason === null) {
+          setDrawing(false);
+          return;
+        }
+        drawResponse = await callBelowCostAwareRpc('draw_down_quote', drawArgs, reason);
+      }
+      const { data, error } = drawResponse;
       if (error) throw error;
       drawDownIdem.resetKey();
       const result = assertRpcResult<{ status: string; order_id?: string; order_number?: string; warnings?: string[]; fully_drawn?: boolean }>(data, 'draw_down_quote');
@@ -2711,12 +2748,28 @@ export default function QuoteBuilder() {
       // Atomic RPC: order creation + items + inventory prebooking + commissions
       const idemKey = convertQuoteIdem.getKey();
       const expectedRowVersion = quoteRowVersionRef.current;
-      const { data, error } = await convertQuoteToOrderWithRowVersion({
+      const convertArgs = {
         p_quote_id: savedId,
         p_performed_by: profile!.id,
         p_idempotency_key: idemKey,
         p_expected_row_version: expectedRowVersion,
-      });
+      };
+      let convertResponse = await convertQuoteToOrderWithRowVersion(convertArgs);
+      const approvalLines = belowCostLinesFromRpcError(convertResponse.error);
+      if (approvalLines && isAdmin) {
+        const reason = await new Promise<string | null>((resolve) =>
+          setBelowCostPrompt({ lines: approvalLines, resolve })
+        );
+        if (reason === null) {
+          setConverting(false);
+          return;
+        }
+        convertResponse = await convertQuoteToOrderWithRowVersion({
+          ...convertArgs,
+          p_below_cost_reason: reason,
+        });
+      }
+      const { data, error } = convertResponse;
 
       if (error) throw error;
 

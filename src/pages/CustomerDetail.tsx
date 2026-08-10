@@ -8,6 +8,7 @@ import CommissionSplitEditor from '../components/ui/CommissionSplitEditor';
 import ApplicationServicePicker from '../components/field-app/ApplicationServicePicker';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import RecordVersionConflictDialog from '../components/ui/RecordVersionConflictDialog';
+import BelowCostConfirmModal, { type BelowCostLine } from '../components/ui/BelowCostConfirmModal';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -23,6 +24,7 @@ import type { Json } from '../types/supabase';
 import { Sentry } from '../lib/sentry';
 import { parseDollarsToCents } from '../lib/parseCents';
 import { formatUSD as fmt } from '../lib/money';
+import { belowCostLinesFromRpcError, callBelowCostAwareRpc } from '../lib/belowCostRpc';
 import { buildCommissionSplitPatch, nextLoadedSplitSnapshot } from '../lib/commissionSplitConcurrency';
 import {
   buildRowVersionPatch,
@@ -120,6 +122,10 @@ export default function CustomerDetail() {
   // Narrow local structural state: generated types are refreshed only after apply.
   const customerRowVersionRef = useRef<number | null>(null);
   const [staleSaveOpen, setStaleSaveOpen] = useState(false);
+  const [belowCostPrompt, setBelowCostPrompt] = useState<{
+    lines: BelowCostLine[];
+    resolve: (reason: string | null) => void;
+  } | null>(null);
   const [tab, setTab] = useState<'info' | 'contacts' | 'knowledge' | 'documents' | 'timeline' | 'fields' | 'quotes' | 'orders' | 'deliveries' | 'financials' | 'history'>('info');
   const [timeline, setTimeline] = useState<ActivityFeedItem[]>([]);
   const [timelineLoading, setTimelineLoading] = useState(false);
@@ -1415,11 +1421,21 @@ export default function CustomerDetail() {
                       onClick={async () => {
                         const lastQuote = quotes[0];
                         const idemKey = duplicateQuoteIdem.getKey();
-                        const { data, error } = await supabase.rpc('duplicate_quote', {
+                        const duplicateArgs = {
                           p_source_quote_id: lastQuote.id,
                           p_performed_by: profile?.id as string,
                           p_idempotency_key: idemKey,
-                        });
+                        };
+                        let duplicateResponse = await callBelowCostAwareRpc('duplicate_quote', duplicateArgs);
+                        const approvalLines = belowCostLinesFromRpcError(duplicateResponse.error);
+                        if (approvalLines && profile?.role === 'admin') {
+                          const reason = await new Promise<string | null>((resolve) =>
+                            setBelowCostPrompt({ lines: approvalLines, resolve })
+                          );
+                          if (reason === null) return;
+                          duplicateResponse = await callBelowCostAwareRpc('duplicate_quote', duplicateArgs, reason);
+                        }
+                        const { data, error } = duplicateResponse;
                         if (error) { toast('error', 'Failed to duplicate quote'); return; }
                         const result = assertRpcResult<{ quote_id: string }>(data, 'duplicate_quote');
                         duplicateQuoteIdem.resetKey();
@@ -1921,6 +1937,19 @@ export default function CustomerDetail() {
         onGenerate={handleGenerateSummary}
         loading={summaryLoading}
         customerName={customer.farm_name || ''}
+      />
+
+      <BelowCostConfirmModal
+        open={belowCostPrompt !== null}
+        lines={belowCostPrompt?.lines ?? []}
+        onClose={() => {
+          belowCostPrompt?.resolve(null);
+          setBelowCostPrompt(null);
+        }}
+        onConfirm={(reason) => {
+          belowCostPrompt?.resolve(reason);
+          setBelowCostPrompt(null);
+        }}
       />
 
       <UnsavedChangesModal

@@ -47,7 +47,7 @@ increase mid-transaction can defeat (Codex round 4, PR #350). **The policy is se
 wall — enforce it server-side — but admins can still sell under cost.**
 
 **Status: IMPLEMENTED LOCALLY ON THE PR #350 FINISH BRANCH; NOT LIVE UNTIL MIGRATION APPLY.**
-`20260810144144_enforce_below_cost_admin_approval.sql` adds the shared PostgreSQL wall, immutable
+`20260810180002_enforce_below_cost_admin_approval.sql` adds the shared PostgreSQL wall, immutable
 same-transaction approval audit, active-admin exception, and authoritative cost handling for
 `update_order_items` / `price_order`. The browser still provides the early explanation and reason
 prompt, but sales reps can no longer approve. Direct app-role INSERT/UPDATE/DELETE on the three
@@ -59,9 +59,12 @@ the prior UI-only behavior; do not describe the server wall as live from source 
 The operative rule is: the money-write RPCs must reject a below-cost line unless an
 approval reason is supplied, with the check performed against the locked product cost inside the
 same transaction, and the admin role retains the ability to proceed. It must land across the whole
-money-write surface at once rather than being patched into one RPC. The RPCs that actually exist and
-would need it: `create_direct_order`, `create_rush_order`, `bulk_import_order`, `update_order_items`,
-`price_order`, `save_invoice`, and `save_quote`. (An earlier draft of this entry listed a
+  money-write surface at once rather than being patched into one RPC. The RPCs that actually exist and
+  need direct approval context are `create_direct_order`, `create_rush_order`, `bulk_import_order`,
+  `update_order_items`, `price_order`, `save_invoice`, `save_quote`, `convert_quote_to_order`,
+  `draw_down_quote`, `restore_quote_version`, and `duplicate_quote`. Any other line-writing workflow
+  may proceed without context only when the locked current cost is not above the sale price; an
+  unrecognized below-cost path fails closed. (An earlier draft of this entry listed a
 `save_order` RPC — no such function exists; that was an error.)
 
 **Design settled during PR #350 review (Codex, 2026-08-09) — do not re-litigate:**

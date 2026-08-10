@@ -11,7 +11,7 @@ Read this file, then `docs/manual/KNOWN_ISSUES.md` (five new entries at the top 
 > the intentionally deferred server-side below-cost wall, the related `update_order_items` cost
 > trust, and exact commercial metrics in the public audit. Those blockers are now being repaired
 > on `codex/finish-pricing-audit-20260810`, including new local migration
-> `20260810144144_enforce_below_cost_admin_approval.sql`. Nothing from this takeover has been
+> `20260810180002_enforce_below_cost_admin_approval.sql`. Nothing from this takeover has been
 > pushed, merged, or applied live at the time of this note. Do not run the old two-migration apply
 > list without reconciling this update and a fresh live ledger.
 
@@ -22,6 +22,16 @@ Read this file, then `docs/manual/KNOWN_ISSUES.md` (five new entries at the top 
 > before appending the fresh reason. All three migrations replayed cleanly on a fresh production-
 > schema clone and the expanded rollback smoke passed with zero residue. A new exact-SHA review is
 > still mandatory; this note is proof of remediation, not push/apply authorization.
+
+> **Third exact-SHA checkpoint — 2026-08-10.** Review of `fdfd782d` found two more real money
+> blockers: Quote conversion/draw-down/restore/duplication could write line items without guard
+> context, and legacy unknown Quote cost could become a zero-cost Order basis. The local branch now
+> fails closed for every context-free below-cost line write, wraps all four Quote lifecycle RPCs
+> with a rollout-compatible optional admin reason, and rejects missing/non-positive historical cost
+> instead of coercing it to zero. Quote screens retry from the server's locked live-cost detail. A
+> fresh production-schema clone applied all three migrations; both rollback suites passed, including
+> real calls through all four lifecycle RPCs and a synthetic legacy unknown-cost conversion, with
+> zero residue. Another exact-SHA review is still mandatory before push.
 
 ---
 
@@ -71,8 +81,8 @@ gh pr merge 350 --squash                     # no --auto
 ### 2. Apply the two migrations, in this order
 
 ```
-supabase/migrations/20260810135537_snapshot_cost_reporting.sql
-supabase/migrations/20260810135538_quote_items_cost_at_quote_snapshot.sql
+supabase/migrations/20260810180000_snapshot_cost_reporting.sql
+supabase/migrations/20260810180001_quote_items_cost_at_quote_snapshot.sql
 ```
 
 First refresh the applied-migration snapshot (a fresh checkout never has it, and the ordering guard
@@ -87,7 +97,7 @@ node scripts/refresh-applied-migrations.mjs < rows.json
 The full ledger is ~946 rows and exceeds the MCP result limit — request it as a single `json_agg`
 and pipe the saved tool-result file rather than paging it through the session.
 
-**`20260810135538` is broader than when it was first reviewed.** Besides the quote cost snapshot it
+**`20260810180001` is broader than when it was first reviewed.** Besides the quote cost snapshot it
 now also:
 - re-emits `duplicate_quote` (costs a duplicated quote on today's basis instead of copying the
   source's, so a copy no longer carries two conflicting cost bases), and
@@ -107,7 +117,7 @@ node scripts/db-invariant-sweeps/run-sweeps.mjs   # then run each printed query;
 
 ### 4. Follow-up PR: wire the Profitability tabs
 
-`20260810135537` rewrites `get_profitability_report`, **but nothing calls it** — `Reports.tsx` still
+`20260810180000` rewrites `get_profitability_report`, **but nothing calls it** — `Reports.tsx` still
 computes the customer/product/monthly Profitability tabs from direct queries over
 `orders.total_profit` / `order_items.profit`. Until this lands, **those tabs still show the stale
 margins the migration exists to replace**, whatever the changelog says.

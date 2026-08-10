@@ -13,6 +13,12 @@
       "covers": ["create_direct_order", "create_rush_order", "bulk_import_order", "update_order_items", "price_order", "save_invoice", "save_quote", "below_cost_approvals"],
       "area": ["billing", "pricing", "security", "idempotency", "regression"]
     },
+    "below_cost_quote_lifecycle": {
+      "chain": "smoke-below-cost-quote-lifecycle.sql",
+      "description": "Quote lifecycle below-cost wall: real duplicate, restore-version, whole-conversion, and partial-draw RPCs first reject a blank reason after live Product cost rises above the locked Quote price, then accept an active-admin reason and write an atomic approval audit. A synthetic legacy Quote with an unknown historical cost is refused before it can become a zero-cost Order. Terminal rollback and zero residue.",
+      "covers": ["duplicate_quote", "restore_quote_version", "convert_quote_to_order", "draw_down_quote", "below_cost_approvals"],
+      "area": ["billing", "inventory", "lifecycle", "pricing", "security", "idempotency", "regression"]
+    },
     "complete_team_note": {
       "chain": "smoke-complete-team-note-chain.sql",
       "description": "Team Board delegation chain (migrations 20260809130108 + 20260810010308): INSERT-with-assignee fires exactly one task_assigned notification; a rollback-only synthetic inactive auth/profile fixture proves inactive actors are rejected and inactive assignees stay silent without touching a real teammate's auth state; no-auth and anon calls raise AUTH_REQUIRED; an authenticated outsider (not creator/assignee/admin) is rejected; the non-admin ASSIGNEE completes a note they did not create with completed_by stamped from auth.uid(); exact idempotent replay returns the saved result without double activity logging; same-key different-payload raises COMPLETE_REPLAY_PAYLOAD_MISMATCH; the creator reopens; reassignment notifies only the new assignee; self-assignment and unchanged-assignee updates stay silent; a soft-deleted note raises NOTE_NOT_FOUND; anon EXECUTE is denied on the RPC and client roles cannot EXECUTE the trigger function. Terminal rollback.",

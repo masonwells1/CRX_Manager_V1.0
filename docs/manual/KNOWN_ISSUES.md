@@ -121,7 +121,7 @@ these.
 
 ## OPEN — the Profitability tabs still read stored profit; wire them AFTER the migration applies
 
-**Found 2026-08-09** (Codex, PR #350 round 39). `20260810135537` rewrites
+**Found 2026-08-09** (Codex, PR #350 round 39). `20260810180000` rewrites
 `get_profitability_report` onto the `cost_at_time_cents` basis, but nothing calls it:
 `Reports.tsx` still computes the customer, product and monthly Profitability tabs from direct
 queries over `orders.total_profit` / `order_items.profit` (`fetchCustomerProfitability` and
@@ -133,7 +133,7 @@ applied. Wired first, the tabs would call an RPC the live database does not have
 outright. That is why the switch was cut from #350 — a PR that ships the migration PARKED cannot
 also ship its caller.
 
-**Do this once `20260810135537` is applied live** (one small follow-up PR):
+**Do this once `20260810180000` is applied live** (one small follow-up PR):
 1. Switch the three Profitability sub-fetchers in `Reports.tsx` to `get_profitability_report`.
 2. Re-add its `QUEUED_MIGRATION_FUNCTIONS` entry (removed for the same reason) and the
    `rpcFixtureLiveDiff.test.ts` fixture — that test file currently carries an empty list with a
@@ -173,14 +173,17 @@ from it — while the re-snapshot trigger independently stamps the *current* cat
 `cost_at_time_cents`, which is what the rewritten reports read. The edit commits two conflicting
 cost bases.
 
-**Fix written 2026-08-10:** `20260810144144_enforce_below_cost_admin_approval.sql` routes
+**Fix written 2026-08-10:** `20260810180002_enforce_below_cost_admin_approval.sql` routes
 `update_order_items` through the shared server wall. Its trigger locks `products.current_cost`,
 replaces the browser value, and derives `cost_per_unit`, `cost_at_time_cents`, line profit and
 margin from that one value before the existing header/commission recomputation. The exact-SHA
 review then closed two further gaps: app roles lose direct write privileges on all three sell-side
 line tables, and the late guard repeats the canonical whole-cent settlement after replacing cost.
 The same migration closes the direct-RPC below-cost bypass and makes approval active-admin-only
-with an immutable same-transaction audit. This remains an open production risk until the replacement
+with an immutable same-transaction audit. A later exact-SHA review expanded the wall to Quote
+conversion, partial draw-down, version restore, and duplication; context-free below-cost line
+writes now fail closed, and unknown historical cost is rejected rather than converted to zero.
+This remains an open production risk until the replacement
 exact-SHA review is clean and the migration is applied live.
 
 ## OPEN — per-unit cost columns cannot carry an exact extended cost

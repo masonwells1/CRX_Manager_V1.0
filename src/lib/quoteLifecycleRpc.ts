@@ -1,4 +1,5 @@
 import { assertRpcResult, supabaseUntyped } from './db';
+import { callBelowCostAwareRpc } from './belowCostRpc';
 
 type RpcErrorShape = {
   code?: unknown;
@@ -78,9 +79,13 @@ export async function convertQuoteToOrderWithRowVersion(args: {
   p_performed_by: string;
   p_idempotency_key: string;
   p_expected_row_version: number | null;
+  p_below_cost_reason?: string | null;
 }) {
-  const { p_expected_row_version: _expectedRowVersion, ...legacyArgs } = args;
-  const { data, error } = await supabaseUntyped.rpc('convert_quote_to_order', args);
+  const { p_below_cost_reason = null, ...rowVersionArgs } = args;
+  const { p_expected_row_version: _expectedRowVersion, ...legacyArgs } = rowVersionArgs;
+  const { data, error } = await callBelowCostAwareRpc(
+    'convert_quote_to_order', rowVersionArgs, p_below_cost_reason,
+  );
   if (!error) {
     return {
       data: assertRpcResult<ConvertQuoteToOrderResult>(data, 'convert_quote_to_order'),
@@ -108,9 +113,13 @@ export async function restoreQuoteVersionWithRowVersion(args: {
   p_performed_by: string;
   p_idempotency_key: string;
   p_expected_row_version: number | null;
+  p_below_cost_reason?: string | null;
 }) {
-  const { p_expected_row_version: _expectedRowVersion, ...legacyArgs } = args;
-  const { data, error } = await supabaseUntyped.rpc('restore_quote_version', args);
+  const { p_below_cost_reason = null, ...rowVersionArgs } = args;
+  const { p_expected_row_version: _expectedRowVersion, ...legacyArgs } = rowVersionArgs;
+  const { data, error } = await callBelowCostAwareRpc(
+    'restore_quote_version', rowVersionArgs, p_below_cost_reason,
+  );
   if (!error) {
     return {
       data: assertRpcResult<RestoreQuoteVersionResult>(data, 'restore_quote_version'),

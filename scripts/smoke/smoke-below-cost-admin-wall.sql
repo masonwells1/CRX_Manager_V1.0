@@ -1,4 +1,4 @@
--- Full rollback-only proof for 20260810144144_enforce_below_cost_admin_approval.
+-- Full rollback-only proof for 20260810180002_enforce_below_cost_admin_approval.
 -- Run only after that migration exists in the current transaction/database.
 -- The common trigger is reached through real create_direct_order,
 -- update_order_items, create_rush_order, and price_order calls; catalog checks

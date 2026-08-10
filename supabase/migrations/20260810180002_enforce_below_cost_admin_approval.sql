@@ -32,7 +32,11 @@ CREATE TABLE IF NOT EXISTS public.below_cost_approvals (
     'update_order_items',
     'price_order',
     'save_invoice',
-    'save_quote'
+    'save_quote',
+    'convert_quote_to_order',
+    'draw_down_quote',
+    'restore_quote_version',
+    'duplicate_quote'
   )),
   entity_type text NOT NULL CHECK (entity_type IN ('order', 'invoice', 'quote')),
   entity_id uuid NOT NULL,
@@ -214,7 +218,9 @@ DECLARE
 BEGIN
   IF p_operation NOT IN (
     'create_direct_order', 'create_rush_order', 'bulk_import_order',
-    'update_order_items', 'price_order', 'save_invoice', 'save_quote'
+    'update_order_items', 'price_order', 'save_invoice', 'save_quote',
+    'convert_quote_to_order', 'draw_down_quote',
+    'restore_quote_version', 'duplicate_quote'
   ) THEN
     RAISE EXCEPTION 'BELOW_COST_OPERATION_INVALID';
   END IF;
@@ -265,12 +271,6 @@ DECLARE
   v_product_id uuid;
   v_detail jsonb;
 BEGIN
-  -- Context-free writes can only arrive from owner-run internal RPCs/triggers:
-  -- direct app-role writes are denied at the table privilege boundary above.
-  IF v_operation IS NULL OR v_operation = '' THEN
-    RETURN NEW;
-  END IF;
-
   IF TG_TABLE_NAME = 'order_items' THEN
     -- Rush orders intentionally carry zero prices until price_order. They are
     -- not sales decisions yet, so defer the wall to the pricing RPC.
@@ -350,11 +350,6 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  SELECT p.role INTO v_actor_role
-  FROM public.profiles p
-  WHERE p.id = v_actor
-    AND p.is_active = true;
-
   v_detail := jsonb_build_object(
     'operation', v_operation,
     'entity_type', v_entity_type,
@@ -365,6 +360,21 @@ BEGIN
     'unit_price_cents', v_price_cents,
     'locked_unit_cost_cents', v_cost_cents
   );
+
+  -- There are many owner-run RPCs and triggers that can write these shared line
+  -- tables. A missing context may proceed above cost, but it can never create a
+  -- below-cost sale. Known customer-facing paths declare context through thin
+  -- wrappers below; any missed future path fails closed here automatically.
+  IF v_operation IS NULL OR v_operation = '' THEN
+    RAISE EXCEPTION USING
+      ERRCODE = 'P0001',
+      MESSAGE = 'BELOW_COST_CONTEXT_REQUIRED:' || v_detail::text;
+  END IF;
+
+  SELECT p.role INTO v_actor_role
+  FROM public.profiles p
+  WHERE p.id = v_actor
+    AND p.is_active = true;
 
   IF v_actor_role IS DISTINCT FROM 'admin' THEN
     RAISE EXCEPTION USING
@@ -601,6 +611,120 @@ GRANT EXECUTE ON FUNCTION public.price_order(uuid, jsonb, uuid, text) TO authent
 GRANT EXECUTE ON FUNCTION public.save_invoice(jsonb, jsonb, text) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.save_quote(uuid, jsonb, jsonb, uuid, text) TO authenticated, service_role;
 
+-- Quote lifecycle writes use the same hard wall. Keep the existing, heavily
+-- reviewed implementations private and add one trailing optional reason so old
+-- browser bundles remain compatible while the current bundle can retry an
+-- admin-approved below-cost operation using the server's locked live cost.
+ALTER FUNCTION public.convert_quote_to_order(uuid, uuid, text, bigint)
+  RENAME TO _convert_quote_to_order_below_cost_impl_20260810;
+ALTER FUNCTION public.draw_down_quote(uuid, jsonb, uuid, text)
+  RENAME TO _draw_down_quote_below_cost_impl_20260810;
+ALTER FUNCTION public.restore_quote_version(uuid, uuid, uuid, text, bigint)
+  RENAME TO _restore_quote_version_below_cost_impl_20260810;
+ALTER FUNCTION public.duplicate_quote(uuid, uuid, text)
+  RENAME TO _duplicate_quote_below_cost_impl_20260810;
+
+REVOKE ALL ON FUNCTION public._convert_quote_to_order_below_cost_impl_20260810(uuid, uuid, text, bigint) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public._draw_down_quote_below_cost_impl_20260810(uuid, jsonb, uuid, text) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public._restore_quote_version_below_cost_impl_20260810(uuid, uuid, uuid, text, bigint) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public._duplicate_quote_below_cost_impl_20260810(uuid, uuid, text) FROM PUBLIC, anon, authenticated, service_role;
+
+GRANT EXECUTE ON FUNCTION public._convert_quote_to_order_below_cost_impl_20260810(uuid, uuid, text, bigint) TO postgres;
+GRANT EXECUTE ON FUNCTION public._draw_down_quote_below_cost_impl_20260810(uuid, jsonb, uuid, text) TO postgres;
+GRANT EXECUTE ON FUNCTION public._restore_quote_version_below_cost_impl_20260810(uuid, uuid, uuid, text, bigint) TO postgres;
+GRANT EXECUTE ON FUNCTION public._duplicate_quote_below_cost_impl_20260810(uuid, uuid, text) TO postgres;
+
+CREATE FUNCTION public.convert_quote_to_order(
+  p_quote_id uuid,
+  p_performed_by uuid DEFAULT NULL,
+  p_idempotency_key text DEFAULT NULL,
+  p_expected_row_version bigint DEFAULT NULL,
+  p_below_cost_reason text DEFAULT NULL
+)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+AS $function$
+BEGIN
+  PERFORM public._begin_below_cost_money_write(
+    'convert_quote_to_order', p_performed_by,
+    jsonb_build_object('below_cost_reason', p_below_cost_reason)
+  );
+  RETURN public._convert_quote_to_order_below_cost_impl_20260810(
+    p_quote_id, p_performed_by, p_idempotency_key, p_expected_row_version
+  );
+END;
+$function$;
+
+CREATE FUNCTION public.draw_down_quote(
+  p_quote_id uuid,
+  p_draws jsonb,
+  p_performed_by uuid DEFAULT NULL,
+  p_idempotency_key text DEFAULT NULL,
+  p_below_cost_reason text DEFAULT NULL
+)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+AS $function$
+BEGIN
+  PERFORM public._begin_below_cost_money_write(
+    'draw_down_quote', p_performed_by,
+    jsonb_build_object('below_cost_reason', p_below_cost_reason)
+  );
+  RETURN public._draw_down_quote_below_cost_impl_20260810(
+    p_quote_id, p_draws, p_performed_by, p_idempotency_key
+  );
+END;
+$function$;
+
+CREATE FUNCTION public.restore_quote_version(
+  p_quote_id uuid,
+  p_version_id uuid,
+  p_performed_by uuid,
+  p_idempotency_key text DEFAULT NULL,
+  p_expected_row_version bigint DEFAULT NULL,
+  p_below_cost_reason text DEFAULT NULL
+)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+AS $function$
+BEGIN
+  PERFORM public._begin_below_cost_money_write(
+    'restore_quote_version', p_performed_by,
+    jsonb_build_object('below_cost_reason', p_below_cost_reason)
+  );
+  RETURN public._restore_quote_version_below_cost_impl_20260810(
+    p_quote_id, p_version_id, p_performed_by, p_idempotency_key,
+    p_expected_row_version
+  );
+END;
+$function$;
+
+CREATE FUNCTION public.duplicate_quote(
+  p_source_quote_id uuid,
+  p_performed_by uuid,
+  p_idempotency_key text DEFAULT NULL,
+  p_below_cost_reason text DEFAULT NULL
+)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+AS $function$
+BEGIN
+  PERFORM public._begin_below_cost_money_write(
+    'duplicate_quote', p_performed_by,
+    jsonb_build_object('below_cost_reason', p_below_cost_reason)
+  );
+  RETURN public._duplicate_quote_below_cost_impl_20260810(
+    p_source_quote_id, p_performed_by, p_idempotency_key
+  );
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.convert_quote_to_order(uuid, uuid, text, bigint, text) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.draw_down_quote(uuid, jsonb, uuid, text, text) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.restore_quote_version(uuid, uuid, uuid, text, bigint, text) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.duplicate_quote(uuid, uuid, text, text) FROM PUBLIC, anon;
+
+GRANT EXECUTE ON FUNCTION public.convert_quote_to_order(uuid, uuid, text, bigint, text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.draw_down_quote(uuid, jsonb, uuid, text, text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.restore_quote_version(uuid, uuid, uuid, text, bigint, text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.duplicate_quote(uuid, uuid, text, text) TO authenticated, service_role;
+
 DO $verify$
 DECLARE
   v_name text;
@@ -610,7 +734,9 @@ DECLARE
 BEGIN
   FOREACH v_name IN ARRAY ARRAY[
     'create_direct_order', 'create_rush_order', 'bulk_import_order',
-    'update_order_items', 'price_order', 'save_invoice', 'save_quote'
+    'update_order_items', 'price_order', 'save_invoice', 'save_quote',
+    'convert_quote_to_order', 'draw_down_quote',
+    'restore_quote_version', 'duplicate_quote'
   ]
   LOOP
     IF (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = v_name) <> 1 THEN

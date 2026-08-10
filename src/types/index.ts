@@ -723,7 +723,7 @@ export interface QuoteItem {
    * moment this line was first quoted. Preserved across save_quote's
    * delete+reinsert; NULL only when the product's current_cost is NULL at
    * stamp time. Populated by trg_snapshot_quote_item_cost trigger.
-   * See migration 20260810135538 (mirrors order_items.cost_at_time_cents).
+   * See migration 20260810180001 (mirrors order_items.cost_at_time_cents).
    */
   cost_at_quote_cents: number | null;
   suggested_rate: string | null;

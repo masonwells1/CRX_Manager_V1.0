@@ -1,4 +1,4 @@
--- 20260810135538 — quote_items.cost_at_quote_cents snapshot (quote-time cost drift)
+-- 20260810180001 — quote_items.cost_at_quote_cents snapshot (quote-time cost drift)
 --
 -- Defect: a quote's line cost drifts after the quote is written. save_quote's
 -- recompute CTE priced cc from LIVE products.current_cost on EVERY save, and the
@@ -95,7 +95,7 @@ ALTER TABLE public.quote_items
   ADD COLUMN IF NOT EXISTS cost_at_quote_cents bigint;
 
 COMMENT ON COLUMN public.quote_items.cost_at_quote_cents IS
-  'Immutable snapshot of products.current_cost (in cents, rounded) at the moment this line was first quoted. Preserved across save_quote''s delete+reinsert; NULL only when the product''s current_cost is NULL at stamp time. Populated automatically by trg_snapshot_quote_item_cost.';
+  'Immutable positive snapshot of products.current_cost (in cents, rounded) at the moment this line was first quoted. Preserved across save_quote''s delete+reinsert; a missing or non-positive basis is rejected. Populated automatically by trg_snapshot_quote_item_cost.';
 
 CREATE OR REPLACE FUNCTION public._snapshot_quote_item_cost()
 RETURNS trigger
@@ -112,14 +112,20 @@ BEGIN
   -- transaction with the txn-local setting crx.quote_cost_snapshot_passthrough
   -- = '1' (set_config(..., true)) before reinserting lines; PostgREST callers
   -- have no way to set a transaction-local GUC, so only the RPC's preserved
-  -- quote-time values pass through. NULL remains only when
-  -- products.current_cost is NULL at stamp time.
+  -- quote-time values pass through. Unknown/non-positive money is never
+  -- converted into a real zero-cost basis.
   IF current_setting('crx.quote_cost_snapshot_passthrough', true) = '1'
      AND NEW.cost_at_quote_cents IS NOT NULL THEN
+    IF NEW.cost_at_quote_cents <= 0 THEN
+      RAISE EXCEPTION 'COST_BASIS_REQUIRED:%', NEW.product_id;
+    END IF;
     RETURN NEW;
   END IF;
   SELECT ROUND(current_cost * 100)::bigint INTO NEW.cost_at_quote_cents
   FROM public.products WHERE id = NEW.product_id;
+  IF NEW.cost_at_quote_cents IS NULL OR NEW.cost_at_quote_cents <= 0 THEN
+    RAISE EXCEPTION 'COST_BASIS_REQUIRED:%', NEW.product_id;
+  END IF;
   RETURN NEW;
 END;
 $$;
@@ -557,14 +563,10 @@ BEGIN
         IF v_prior_item_costs ? v_payload_item_id
            AND v_prior_item_costs->v_payload_item_id->>'p' = v_item->>'product_id' THEN
           v_reuse_item_id := v_payload_item_id::uuid;
-          -- COALESCE to 0: a prior line created while its product had no cost
-          -- carries a JSON-null 'c'. Passing that through as NULL lets the
-          -- INSERT trigger stamp today's catalog cost, so an ordinary save made
-          -- after the product finally gets a price would silently replace an
-          -- unknown historical basis with a current one -- exactly the drift
-          -- this migration exists to stop, and inconsistent with the restore
-          -- and conversion paths, which both record this state as zero.
-          v_preserved_cost := COALESCE((v_prior_item_costs->v_payload_item_id->>'c')::bigint, 0);
+          -- A legacy NULL is not a monetary basis. Leave it NULL so the trusted
+          -- INSERT trigger must establish a fresh, positive catalog basis (or
+          -- reject the save) instead of manufacturing zero cost and profit.
+          v_preserved_cost := (v_prior_item_costs->v_payload_item_id->>'c')::bigint;
         END IF;
       END IF;
 
@@ -630,7 +632,7 @@ BEGIN
 
         IF v_fallback_prior_id IS NOT NULL THEN
           v_reuse_item_id := v_fallback_prior_id::uuid;
-          v_preserved_cost := COALESCE((v_prior_item_costs->v_fallback_prior_id->>'c')::bigint, 0);
+          v_preserved_cost := (v_prior_item_costs->v_fallback_prior_id->>'c')::bigint;
           v_consumed_prior_ids := v_consumed_prior_ids || jsonb_build_object(v_fallback_prior_id, true);
           v_fallback_prior_id := NULL;
         END IF;
@@ -709,7 +711,7 @@ BEGIN
       -- SNAPSHOT<<< was: COALESCE(p.current_cost, 0). Price cost from the
       -- immutable quote-time snapshot; live catalog cost only for a row the
       -- trigger could not snapshot (product missing a cost).
-      COALESCE(qi.cost_at_quote_cents / 100.0, p.current_cost, 0) AS cc,
+      (qi.cost_at_quote_cents / 100.0) AS cc,
       -- >>>SNAPSHOT
       COALESCE(rate_conv.factor_oz, 1) AS rate_oz,
       COALESCE(inv_conv.factor_oz, 1) AS inv_oz
@@ -1029,6 +1031,10 @@ BEGIN
 
     FOR v_item IN SELECT * FROM jsonb_array_elements(v_section->'items')
     LOOP
+      IF NULLIF(v_item->>'current_cost', '') IS NULL
+         OR (v_item->>'current_cost')::numeric <= 0 THEN
+        RAISE EXCEPTION 'COST_BASIS_REQUIRED:%', v_item->>'product_id';
+      END IF;
       INSERT INTO quote_items (
         quote_id, section_id, product_id, sort_order, notes,
         price_per_unit, current_cost, suggested_rate, actual_rate, rate_unit,
@@ -1061,12 +1067,9 @@ BEGIN
         -- the next ordinary save preserves that stamp and recomputes the line
         -- from it, silently repricing the restored version.
         --
-        -- COALESCE to 0: a version whose item carries a missing or JSON-null
-        -- current_cost would otherwise insert NULL here, the trigger would fall
-        -- through to todays catalog cost, and the restore would reprice after
-        -- all. An explicit zero is the honest record for a line the version
-        -- itself had no cost for, and unlike NULL it is preserved by later saves.
-        COALESCE(ROUND((v_item->>'current_cost')::numeric * 100)::bigint, 0)
+        -- A version without a positive historical basis is rejected above.
+        -- Unknown money must not become a real zero-cost quote line.
+        ROUND((v_item->>'current_cost')::numeric * 100)::bigint
       );
     END LOOP;
   END LOOP;
@@ -1252,6 +1255,17 @@ BEGIN
     RAISE EXCEPTION 'BOOKING_CLOSED: cannot convert a % quote', v_quote.status;
   END IF;
 
+  IF EXISTS (
+    SELECT 1
+    FROM quote_items qi
+    WHERE qi.quote_id = p_quote_id
+      AND qi.product_id IS NOT NULL
+      AND COALESCE(qi.total_units_needed, 0) > 0
+      AND (qi.cost_at_quote_cents IS NULL OR qi.cost_at_quote_cents <= 0)
+  ) THEN
+    RAISE EXCEPTION 'COST_BASIS_REQUIRED: every converted quote line needs a validated positive quote-time cost';
+  END IF;
+
   SELECT * INTO v_customer FROM customers WHERE id = v_quote.customer_id;
 
   FOR v_item IN
@@ -1302,7 +1316,7 @@ BEGIN
     cost_at_time_cents -- SNAPSHOT
     )
   SELECT v_order_id, qi.product_id, qi.id, qs.section_name, p.product_name,
-    qi.price_per_unit, qi.current_cost, qi.actual_rate, qi.rate_unit, qi.acres,
+    qi.price_per_unit, qi.cost_at_quote_cents::numeric / 100, qi.actual_rate, qi.rate_unit, qi.acres,
     COALESCE(qi.total_units_needed, 0), qi.unit_size,
     qi.total_price, qi.profit, qi.net_margin,
     0, COALESCE(qi.total_units_needed, 0), qi.notes,
@@ -1314,13 +1328,7 @@ BEGIN
     -- commissions -- all of which follow qi.current_cost. Supplying the value
     -- is honored because that trigger only fills when the caller left it NULL.
     --
-    -- COALESCE to 0 for the same reason the restore path does: a quote line
-    -- created while its product had a NULL current_cost carries a NULL
-    -- snapshot, and passing that NULL through would let the order trigger
-    -- stamp whatever the catalog says at conversion time -- a cost that did
-    -- not exist when the quote was written. An explicit zero preserves the
-    -- honest "no quote-time cost" state instead of inventing one.
-    COALESCE(qi.cost_at_quote_cents, 0)
+    qi.cost_at_quote_cents
   FROM quote_items qi
   JOIN quote_sections qs ON qs.id = qi.section_id
   JOIN products p ON p.id = qi.product_id
@@ -1517,6 +1525,17 @@ BEGIN
     v_qty := COALESCE((v_draw->>'quantity')::numeric, 0);
     IF v_product_id IS NULL OR v_qty <= 0 THEN CONTINUE; END IF;
 
+    IF EXISTS (
+      SELECT 1
+      FROM quote_items qi
+      WHERE qi.quote_id = p_quote_id
+        AND qi.product_id = v_product_id
+        AND COALESCE(qi.total_units_needed, 0) > 0
+        AND (qi.cost_at_quote_cents IS NULL OR qi.cost_at_quote_cents <= 0)
+    ) THEN
+      RAISE EXCEPTION 'COST_BASIS_REQUIRED:%', v_product_id;
+    END IF;
+
     -- Per-product booking balance (locked quote => stable within this txn)
     SELECT
       SUM(COALESCE(qi.total_units_needed, 0)),
@@ -1524,7 +1543,7 @@ BEGIN
         THEN SUM(qi.price_per_unit * COALESCE(qi.total_units_needed, 0)) / SUM(COALESCE(qi.total_units_needed, 0))
         ELSE 0 END,
       CASE WHEN SUM(COALESCE(qi.total_units_needed, 0)) > 0
-        THEN SUM(qi.current_cost * COALESCE(qi.total_units_needed, 0)) / SUM(COALESCE(qi.total_units_needed, 0))
+        THEN SUM((qi.cost_at_quote_cents::numeric / 100) * COALESCE(qi.total_units_needed, 0)) / SUM(COALESCE(qi.total_units_needed, 0))
         ELSE 0 END,
       SUM(COALESCE(qi.acres, 0)),
       MIN(qi.unit_size)
@@ -1539,7 +1558,7 @@ BEGIN
     -- commissions on the unrounded figure and the reports on the rounded one --
     -- e.g. two units backed equally by $1.00 and $1.01 record $2.01 in the
     -- header but report $2.02. One basis, fixed at the source.
-    v_wavg_cost := ROUND(COALESCE(v_wavg_cost, 0), 2);
+    v_wavg_cost := ROUND(v_wavg_cost, 2);
     -- >>>SNAPSHOT
 
     SELECT product_name INTO v_product_name FROM products WHERE id = v_product_id;
@@ -1588,9 +1607,9 @@ BEGIN
       -- figure and this stamp share one value. Without the stamp the row inserts
       -- with a NULL cost_at_time_cents and trg_snapshot_order_item_cost writes
       -- TODAY's catalog cost, splitting the reports from the order totals, line
-      -- profit and commissions. COALESCE to 0 for the same reason the whole-quote
-      -- conversion does: an unknown historical cost stays unknown.
-      COALESCE(ROUND(v_wavg_cost * 100)::bigint, 0));
+      -- profit and commissions. Unknown historical cost is rejected above; it
+      -- must never be converted into a real zero-cost order line.
+      ROUND(v_wavg_cost * 100)::bigint);
 
     -- Inventory: warn (never block) on net position, then prebook the draw
     SELECT * INTO v_inv FROM inventory
@@ -1801,6 +1820,16 @@ BEGIN
   SELECT * INTO v_orig FROM quotes WHERE id = p_source_quote_id;
   IF NOT FOUND THEN RAISE EXCEPTION 'QUOTE_NOT_FOUND'; END IF;
 
+  IF EXISTS (
+    SELECT 1
+    FROM quote_items qi
+    JOIN products p ON p.id = qi.product_id
+    WHERE qi.quote_id = p_source_quote_id
+      AND (p.current_cost IS NULL OR p.current_cost <= 0)
+  ) THEN
+    RAISE EXCEPTION 'COST_BASIS_REQUIRED: every duplicated quote line needs a validated positive current product cost';
+  END IF;
+
   SELECT generate_quote_number() INTO v_new_quote_number;
 
   -- Header totals are written as 0 and settled from the copied lines below,
@@ -1852,19 +1881,19 @@ BEGIN
       v_new_section_id,
       qi.product_id, qi.sort_order, qi.notes,
       qi.price_per_unit, qi.price_override,
-      COALESCE(p.current_cost, 0),
+      p.current_cost,
       qi.suggested_rate, qi.actual_rate,
       qi.rate_unit, qi.oz_per_acre, qi.price_per_acre, qi.acres,
       qi.total_units_needed, qi.unit_size,
       -- Same boundary as save_quote: the copied (already settled) line total
       -- minus the settled extended cost, so a duplicate reconciles with the
       -- reports and with what save_quote would write. (Codex round 33.)
-      COALESCE(qi.total_price, 0) - ROUND(COALESCE(p.current_cost, 0) * COALESCE(qi.total_units_needed, 0), 2),
+      COALESCE(qi.total_price, 0) - ROUND(p.current_cost * COALESCE(qi.total_units_needed, 0), 2),
       qi.total_price,
       CASE
         WHEN COALESCE(qi.total_price, 0) > 0
           THEN ROUND((COALESCE(qi.total_price, 0)
-                      - ROUND(COALESCE(p.current_cost, 0) * COALESCE(qi.total_units_needed, 0), 2))
+                      - ROUND(p.current_cost * COALESCE(qi.total_units_needed, 0), 2))
                      / qi.total_price * 100, 2)
         ELSE 0
       END,

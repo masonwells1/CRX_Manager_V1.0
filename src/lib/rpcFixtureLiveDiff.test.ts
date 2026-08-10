@@ -59,7 +59,7 @@ const LIVE_FUNCTIONS = new Set(LIVE_PG_PROC_NAMES_CSV.split(','));
 // live and the pg_proc snapshot has been regenerated.
 const QUEUED_MIGRATION_FUNCTIONS: Record<string, string> = {
   // (empty — the Reports.tsx switch to get_profitability_report is deferred
-  // until migration 20260810135537 is applied live from Mason's machine; the
+  // until migration 20260810180000 is applied live from Mason's machine; the
   // caller and this bridge entry land together in that follow-up.)
 };
 const QUEUED_FUNCTIONS = new Set(Object.keys(QUEUED_MIGRATION_FUNCTIONS));

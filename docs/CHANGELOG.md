@@ -6,7 +6,7 @@ All significant development milestones, in reverse chronological order.
 
 **Local takeover update (not live yet).** The fresh exact-SHA review correctly refused the old
 handoff's plan to defer server-side below-cost enforcement. The branch now includes
-`20260810144144_enforce_below_cost_admin_approval.sql`: one shared PostgreSQL wall for all seven
+`20260810180002_enforce_below_cost_admin_approval.sql`: one shared PostgreSQL wall for all eleven
 sell-side write RPCs, active-admin-only overrides, locked current Product cost, an immutable
 same-transaction approval audit, and authoritative product-swap / price-order cost math. The UI
 now denies sales-rep approval and carries the fresh order-edit / price-order reason inside the
@@ -25,6 +25,17 @@ migrations cleanly, and the expanded rollback smoke proved fractional-quantity c
 all 27 table-privilege denials, the governed role paths, zero residue, and trigger restoration.
 The replacement exact-SHA review is still required before push.
 
+**Exact-SHA review follow-up 2 (still local).** Review of `fdfd782d` found that four
+authenticated Quote lifecycle RPCs could still write line items without declaring guard context,
+and that a missing historical Quote cost could become a real zero-cost Order basis. The server
+wall now fails closed on every context-free below-cost line write and wraps conversion, partial
+draw-down, version restore, and duplication with a trailing rollout-compatible approval reason.
+Unknown/non-positive cost is rejected rather than coerced to zero. Quote screens use live catalog
+cost for the early prompt and retry these RPCs only after an admin approves the server-locked
+price/cost detail. A fresh production-schema clone applied all three migrations cleanly; rollback
+smokes exercised all four lifecycle RPCs plus a synthetic legacy unknown-cost conversion and left
+zero residue. A new exact-SHA review remains required before push.
+
 Pricing audit follow-through. The two settled migrations — snapshot-cost report unification and the
 quote-time cost snapshot — went through roughly 41 Codex rounds to green on PR #350, which is now
 mergeable. The return-credit COGS reversal was split to its own parked PR #361 at Mason's direction:
@@ -34,7 +45,7 @@ database — a web session cannot mint the Codex proof the apply and merge guard
 now recorded in `KNOWN_ISSUES.md` along with four other deferred items. `docs/handoffs/2026-08-09-
 pricing-audit-local-finish.md` carries the ordered steps for finishing from a machine with the CLI.
 
-**Read before applying:** `20260810135538` is broader than at first review — it also re-emits
+**Read before applying:** `20260810180001` is broader than at first review — it also re-emits
 `duplicate_quote` and drops the three rep-facing write policies on `quote_items` (approved
 2026-08-09). And merging #350 does **not** change the Profitability tabs: `get_profitability_report`
 has no caller until the deferred `Reports.tsx` switch lands after the migration applies.
@@ -56,9 +67,9 @@ has no caller until the deferred `Reports.tsx` switch lands after the migration 
   - `5b875690d Record that remote sessions cannot apply live migrations`
   - `6f21070a5 Include quantity in the retained below-cost approval terms`
 - **Migrations touched** (git diff --name-only origin/main...HEAD):
-  - `supabase/migrations/20260810135537_snapshot_cost_reporting.sql`
-  - `supabase/migrations/20260810135538_quote_items_cost_at_quote_snapshot.sql`
-  - `supabase/migrations/20260810144144_enforce_below_cost_admin_approval.sql`
+  - `supabase/migrations/20260810180000_snapshot_cost_reporting.sql`
+  - `supabase/migrations/20260810180001_quote_items_cost_at_quote_snapshot.sql`
+  - `supabase/migrations/20260810180002_enforce_below_cost_admin_approval.sql`
 
 ## 2026-08-09 — Returns migration split out; quote profit settled on the report boundary
 
@@ -668,8 +679,8 @@ this container (no trusted Codex CLI binary), so Mason applies them from his own
 RLS re-review returned zero findings across all ten checks on the id-reuse change.
 
 - **Migrations touched**:
-  - `supabase/migrations/20260810135537_snapshot_cost_reporting.sql`
-  - `supabase/migrations/20260810135538_quote_items_cost_at_quote_snapshot.sql`
+  - `supabase/migrations/20260810180000_snapshot_cost_reporting.sql`
+  - `supabase/migrations/20260810180001_quote_items_cost_at_quote_snapshot.sql`
 
 ## 2026-08-08 — Pricing audit + Phase B/C: full pricing audit doc; gotchas entry for…
 
@@ -684,8 +695,8 @@ Pricing audit + Phase B/C: full pricing audit doc; gotchas entry for margin/mark
   - `54b4aa949 Add full product pricing audit and strategy (2026-08-08)`
 - **Migrations touched** (git diff --name-only origin/main...HEAD):
   - `supabase/migrations/20260808170000_return_credit_cogs_reversal.sql`
-  - `supabase/migrations/20260810135537_snapshot_cost_reporting.sql`
-  - `supabase/migrations/20260810135538_quote_items_cost_at_quote_snapshot.sql`
+  - `supabase/migrations/20260810180000_snapshot_cost_reporting.sql`
+  - `supabase/migrations/20260810180001_quote_items_cost_at_quote_snapshot.sql`
 
 ## 2026-08-08 — Read-only product pricing audit: added…
 
