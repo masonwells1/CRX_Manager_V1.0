@@ -312,6 +312,58 @@ ok(!isDeny(r), "GRANT EXECUTE privilege syntax is not mistaken for runtime dynam
 r = runHook("REVOKE EXECUTE ON FUNCTION public.bound_actor(uuid) FROM PUBLIC, anon;");
 ok(!isDeny(r), "REVOKE EXECUTE privilege syntax is not mistaken for runtime dynamic SQL");
 
+r = runHook(`CREATE TRIGGER trg_recalc_order_totals
+AFTER INSERT OR UPDATE ON public.order_items
+FOR EACH ROW EXECUTE FUNCTION public.recalc_order_totals();`);
+ok(!isDeny(r), "CREATE TRIGGER EXECUTE FUNCTION is declarative syntax, not runtime SQL");
+
+r = runHook(`CREATE EVENT TRIGGER audit_ddl
+ON ddl_command_end
+WHEN TAG IN ('CREATE FUNCTION')
+EXECUTE FUNCTION public.audit_ddl();`);
+ok(!isDeny(r), "CREATE EVENT TRIGGER EXECUTE FUNCTION is declarative syntax, not runtime SQL");
+
+r = runHook(`CREATE TRIGGER trg_safe AFTER UPDATE ON public.orders
+FOR EACH ROW EXECUTE FUNCTION public.safe_trigger() EXECUTE v_ddl;`);
+ok(isDeny(r), "a trigger-shaped statement with a second EXECUTE token still fails closed");
+
+r = runHook(`CREATE TRIGGER trg_safe AFTER UPDATE ON public.orders
+FOR EACH ROW EXECUTE FUNCTION public.safe_trigger() USING v_ddl;`);
+ok(isDeny(r), "a trigger-shaped statement with trailing non-call syntax still fails closed");
+
+r = runHook(`DO $do$ BEGIN
+  EXECUTE 'SELECT id FROM invoices WHERE id = $1' USING p_invoice_id;
+END $do$;`);
+ok(!isDeny(r), "a direct command literal may bind parameters with USING");
+
+r = runHook(`DO $do$ DECLARE v_id uuid; BEGIN
+  EXECUTE 'SELECT id FROM invoices LIMIT 1' INTO v_id;
+END $do$;`);
+ok(!isDeny(r), "a direct command literal may capture a result with INTO");
+
+r = runHook(`DO $do$ DECLARE v_id uuid; BEGIN
+  EXECUTE ('SELECT id FROM invoices WHERE note = $1') INTO STRICT v_id USING 'safe data';
+END $do$;`);
+ok(!isDeny(r), "a parenthesized direct literal may use INTO STRICT and literal USING data");
+
+r = runHook(`DO $do$ BEGIN EXECUTE v_sql USING p_invoice_id; END $do$;`);
+ok(isDeny(r), "USING does not make a variable command readable");
+
+r = runHook(`DO $do$ BEGIN EXECUTE v_sql USING 'safe data'; END $do$;`);
+ok(isDeny(r), "a USING data literal is not mistaken for the command literal");
+
+r = runHook(`DO $do$ BEGIN EXECUTE 'SELECT ' || '1' USING p_invoice_id; END $do$;`);
+ok(isDeny(r), "USING does not allow a concatenated command");
+
+r = runHook(`DO $do$ BEGIN EXECUTE format('%s', 'SELECT 1') USING p_invoice_id; END $do$;`);
+ok(isDeny(r), "USING does not allow a format-built command");
+
+r = runHook(`DO $do$ BEGIN EXECUTE 'SELECT 1' USING p_invoice_id EXECUTE v_sql; END $do$;`);
+ok(isDeny(r), "a direct literal with a second EXECUTE token still fails closed");
+
+r = runHook(`DO $do$ DECLARE v_id int; BEGIN EXECUTE 'SELECT 1' USING p_invoice_id INTO v_id; END $do$;`);
+ok(isDeny(r), "USING before INTO is not accepted as a supported direct-literal shape");
+
 const SECURE_GRANTED_FUNCTION = `CREATE OR REPLACE FUNCTION public.bound_actor(p_performed_by uuid)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public, pg_temp

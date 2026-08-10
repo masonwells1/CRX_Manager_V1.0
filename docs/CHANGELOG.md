@@ -2,6 +2,25 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-10 — Actor-binding SQL reader recognizes safe EXECUTE statement shapes
+
+Continued the parked actor-binding guard hardening on an isolated branch rebased
+onto `origin/main` at `e2abf0a5`. The SQL reader now distinguishes declarative
+`CREATE [EVENT] TRIGGER ... EXECUTE FUNCTION ...` syntax from runtime dynamic
+SQL, and accepts a PL/pgSQL `EXECUTE` command only when the command itself is one
+direct string literal with optional `INTO [STRICT]` followed by optional
+`USING`. Variable, concatenated, `format(...)`-built, malformed clause-order,
+trailing-syntax, and second-`EXECUTE` shapes remain fail-closed.
+
+The focused actor-binding suite grew from 115 to 128 assertions while the
+idempotency reference suite remained at 86. Eight new decision clauses were
+weakened or removed one at a time; every mutation made the real hook-process
+suite fail before restoration. Separate real-process probes allowed ordinary
+trigger/event-trigger declarations and direct-literal `USING`/`INTO`, while
+denying variable, concatenated, formatted, and second-`EXECUTE` controls. The
+exact-SHA independent review remains an external governed proof and must match
+the branch HEAD before publication; this entry does not self-certify it.
+
 ## 2026-08-09 — Settled the canonical-profit question and applied the fix live
 
 Settled the canonical-profit question and applied the fix to production. Live measurement showed the order-vs-lines profit disagreement is a stale-cache bug, not a rounding artefact: orders.total_profit is trigger-recomputed and correct, while order_items.profit is a stored snapshot nothing refreshes, leaving 37 of 288 line rows stale across 17 orders. Mason decided the order header is canonical and line profit is derived from it, rounding each line's revenue and cost to whole cents before subtracting so the lines sum to the header exactly. Migration 20260809230500_single_canonical_line_profit.sql implements that, is forward-only, and both migration reviewers returned zero blockers. It was **applied live on 2026-08-09** (Supabase ledger version 20260810000427) after Mason's explicit approval. A post-apply live read confirmed both function bodies changed as written, the trigger now fires on all four money columns, and the SECURITY DEFINER flag and search_path are unchanged.

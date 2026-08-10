@@ -1,12 +1,12 @@
-# Actor-binding SQL reader — parked review-cap handoff
+# Actor-binding SQL reader — review-cap continuation handoff
 
 ## WHERE
 
 - Repository: `C:\CRX_Manager` / `masonwells1/CRX_Manager_V1.0`
 - Isolated checkout: `C:\Users\mason\.codex\worktrees\phase3c-new-branch-cap\CRX_Manager`
 - Branch: `codex/harden-actor-binding-sql-reader`
-- Last security-reviewed code SHA: `824119a526e1bb3370e064bcc094fc5e3d12dd54`
-- Verified remote `main` on 2026-08-09: `122d9b6602ba230469de512bf2a82bc5c3f9ee2c`
+- Prior blocked security-review SHA: `824119a526e1bb3370e064bcc094fc5e3d12dd54`
+- Rebased onto verified remote `main` on 2026-08-10: `e2abf0a5a656b5fd3ea83571ac0e3604a1e978c7`
 - No remote branch and no pull request exist.
 - Supabase project `rhyzpcqhnizqbxphqdkr` is context only; no database work occurred.
 
@@ -18,10 +18,22 @@ terminal `CODEX_PROOF_VERDICT: CLEAN`, and landing through a green protected PR.
 
 ## PROVEN
 
-- The actor-binding suite passes at 115 assertions; the idempotency reference
+- The actor-binding suite passes at 128 assertions; the idempotency reference
   suite remains green at 86 assertions.
 - Fifty-four parser and decision clauses were each removed alone and made the
   suite fail before restoration.
+- Eight continuation decisions were independently weakened or removed and each
+  made the real hook-process suite fail before restoration: the trigger
+  exception, complete trigger-call tail, direct-literal `USING`, direct-literal
+  `INTO`, command-literal position, expression-tail refusal, clause ordering,
+  and second-`EXECUTE` refusal.
+- Ordinary and event trigger declarations are allowed only when their
+  executable clause is a complete `EXECUTE FUNCTION|PROCEDURE name(...)` call.
+- Direct PL/pgSQL command literals may use `INTO [STRICT]` and `USING` without
+  treating their data expressions as command builders.
+- Real hook-process continuation probes allowed trigger, event-trigger,
+  direct-literal `USING`, and direct-literal `INTO` controls. They denied
+  variable, concatenated, `format(...)`-built, and second-`EXECUTE` controls.
 - Ordinary `GRANT EXECUTE` and `REVOKE EXECUTE` function privileges are now
   accepted without weakening the indirect runtime-`EXECUTE` refusal.
 - Post-body `LANGUAGE ... SECURITY DEFINER` attributes are inspected through the
@@ -36,28 +48,25 @@ terminal `CODEX_PROOF_VERDICT: CLEAN`, and landing through a green protected PR.
   build, all Vitest tests, workflow/guard suites, dependency integrity, and map
   generation. Intermittent workbook timeouts passed immediately in isolation
   and the successful reruns completed the full suite.
-- The branch was rebased onto the current upstream dependency correction, so the
-  unrelated `undici` change is not part of this branch's diff.
+- The branch was rebased onto current `origin/main` at `e2abf0a5`; the similarly
+  named shared checkout contains separate commission/containment work and was
+  not modified.
 
-## WRITTEN, NOT PROVEN
+## GOVERNED STATUS
 
-- The currently implemented hardening is committed locally through `824119a5`.
-- It does not have a CLEAN exact-SHA push proof. The final mandatory review
-  returned `CODEX_PROOF_VERDICT: BLOCKERS`, so no proof file was minted.
+- This document deliberately does not self-certify a review verdict. Resolve the
+  current branch HEAD, then require the sanctioned review wrapper's output to
+  match that exact HEAD and end in `CODEX_PROOF_VERDICT: CLEAN`.
+- The old review capture is historical blocker evidence for `824119a5`; it
+  cannot approve the continuation commit.
 
-## NOT STARTED
+## REMAINING LANDING WORK
 
-- Distinguish runtime dynamic SQL from ordinary trigger syntax:
-  `CREATE [EVENT] TRIGGER ... EXECUTE FUNCTION ...`.
-- Support safe direct-literal PL/pgSQL `EXECUTE '...' USING ...` and
-  `EXECUTE '...' INTO ...` forms without allowing variable, concatenated, or
-  `format(...)`-built SQL.
-- Add exact allow regressions for trigger creation and both parameterized direct
-  literal forms, retain the hostile runtime-builder denies, and mutation-test
-  each distinction independently.
-- Run the full barrier and start a fresh governed exact-SHA review cycle.
-- Only after CLEAN: push the branch, open the PR, wait for required checks and
-  Vercel, resolve CodeRabbit, merge, and verify remote `main`.
+- Confirm the full pre-commit barrier on the final tree and run the fresh
+  governed exact-SHA review cycle.
+- Only with a HEAD-matching CLEAN proof: push the branch, open the PR, wait for
+  required checks and Vercel, resolve CodeRabbit, merge, and verify remote
+  `main`. Publishing is outside this handoff's approval state.
 
 ## APPROVAL STATE
 
@@ -66,16 +75,10 @@ outward-action approval into a receiving task. No database action is needed.
 
 ## GATES AND BLOCKERS
 
-- `/ship` reached its hard cap of three fix/re-review rounds. The branch must
-  remain parked and unpublished from this task.
-- Final blocker: `.claude/hooks/actor-binding-check.mjs` still treats every
-  remaining visible `EXECUTE` token as opaque runtime SQL. It therefore wrongly
-  denies ordinary `CREATE [EVENT] TRIGGER ... EXECUTE FUNCTION ...` statements,
-  including a current CRX migration pattern, and direct parameterized
-  PL/pgSQL `EXECUTE '...' USING ...` / `EXECUTE '...' INTO ...` forms. The
-  file-level exemption is not an acceptable default because it disables actor
-  protection for the whole migration.
-- Exact evidence:
+- The prior `/ship` review cycle reached its three-round cap. Its blocker has
+  now been addressed locally, but the branch remains unpublished until a new
+  exact-SHA governed review independently returns CLEAN.
+- Historical blocker evidence:
   `C:\Users\mason\.codex\worktrees\phase3c-new-branch-cap\CRX_Manager\.claude\session-state\codex-review-latest.txt`.
 - Unrelated nonblocking repo drift remains: four 2026-08-08 migrations are
   missing from the migration index, and two manual docs have 2026-08-07
@@ -85,10 +88,9 @@ outward-action approval into a receiving task. No database action is needed.
 
 ## FIRST ACTION
 
-From the isolated checkout, verify GitHub `main` again, then add the smallest
-statement-shape distinction for `CREATE [EVENT] TRIGGER ... EXECUTE FUNCTION`.
-Add exact trigger allow and hostile second-`EXECUTE` deny controls before
-handling the direct-literal `USING`/`INTO` forms. Mutation-test every decision,
-run the full barrier, and start a fresh governed exact-SHA review cycle.
+From the isolated checkout, verify the clean final HEAD, full barrier output,
+and HEAD-bound Codex proof. If any of those are absent, stale, or non-CLEAN,
+keep the branch parked. If all are current and CLEAN, the next separate action
+is the protected branch/PR landing flow after confirming publication authority.
 
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.

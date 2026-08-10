@@ -222,6 +222,75 @@ function isExecutePrivilegeStatement(stmt) {
   return (sql.match(/\bEXECUTE\b/gi) || []).length === 1;
 }
 
+// CREATE TRIGGER uses EXECUTE as declarative syntax, not as a dynamic-SQL
+// operator. Accept only a complete trigger statement whose sole EXECUTE token
+// directly invokes one named function/procedure. Any second EXECUTE token or
+// trailing expression remains opaque and is refused by the runtime-SQL gate.
+function isCreateTriggerStatement(stmt) {
+  const sql = String(stmt || "").trim();
+  if (!/^CREATE\s+(?:(?:OR\s+REPLACE\s+)?(?:CONSTRAINT\s+)?TRIGGER|EVENT\s+TRIGGER)\b/i.test(sql)) {
+    return false;
+  }
+  const executeToken = /\bEXECUTE\b/i.exec(sql);
+  if (!executeToken) return false;
+
+  const tail = sql.slice(executeToken.index);
+  const identifier = '(?:"(?:[^"]|"")*"|[A-Za-z_][\\w$]*)';
+  const callHead = new RegExp(
+    `^EXECUTE\\s+(?:FUNCTION|PROCEDURE)\\s+${identifier}(?:\\s*\\.\\s*${identifier})*\\s*`,
+    "i"
+  ).exec(tail);
+  if (!callHead || tail[callHead[0].length] !== "(") return false;
+  const args = readBalancedParens(tail, callHead[0].length);
+  return args !== null && tail.slice(args.end).trim() === "";
+}
+
+// Return the command literal when a PL/pgSQL EXECUTE statement uses exactly
+// one direct command string. INTO/USING affect only result/parameter binding;
+// they cannot rewrite the command text. Their payloads may contain additional
+// data literals, so identify the first literal structurally instead of merely
+// counting every literal in the statement.
+function directExecuteLiteralShape(masked, stmtStart, stmtEnd, lits) {
+  if (lits.length === 0) return null;
+  const commandLiteral = lits[0];
+  const prefix = masked.slice(stmtStart, commandLiteral.start).trim();
+  const parenthesized = /^(?:BEGIN\s+)?EXECUTE\s*\(\s*$/i.test(prefix);
+  if (!parenthesized && !/^(?:BEGIN\s+)?EXECUTE\s*$/i.test(prefix)) return null;
+
+  let tail = masked.slice(commandLiteral.end, stmtEnd).trim();
+  if (parenthesized) {
+    if (!tail.startsWith(")")) return null;
+    tail = tail.slice(1).trim();
+  } else if (tail.startsWith(")")) {
+    return null;
+  }
+  if (/\bEXECUTE\b/i.test(tail)) return null;
+  if (tail === "") return { literal: commandLiteral };
+
+  const usingHead = /^USING\b/i.exec(tail);
+  if (usingHead) {
+    const params = tail.slice(usingHead[0].length);
+    return params.trim() !== "" &&
+      !/\b(?:INTO|USING)\b/i.test(params)
+      ? { literal: commandLiteral }
+      : null;
+  }
+
+  const intoHead = /^INTO\b/i.exec(tail);
+  if (!intoHead) return null;
+  let intoTail = tail.slice(intoHead[0].length).trim();
+  const strictHead = /^STRICT\b/i.exec(intoTail);
+  if (strictHead) intoTail = intoTail.slice(strictHead[0].length).trim();
+  if (intoTail === "") return null;
+
+  const using = /\bUSING\b/i.exec(intoTail);
+  if (!using) return { literal: commandLiteral };
+  const target = intoTail.slice(0, using.index).trim();
+  const params = intoTail.slice(using.index + using[0].length).trim();
+  if (target === "" || params === "" || /\bUSING\b/i.test(params)) return null;
+  return { literal: commandLiteral };
+}
+
 function inExecuteStatement(out, text, afterIdx) {
   const before = out.slice(out.lastIndexOf(";") + 1);
   const semi = firstTopLevelSemicolon(text, afterIdx);
@@ -524,10 +593,11 @@ try {
       const singleLiteralSkeleton = lits.length === 1
         ? (masked.slice(stmtStart, lits[0].start) + marker + masked.slice(lits[0].end, stmtEnd)).trim()
         : null;
-      const directExecute = singleLiteralSkeleton !== null &&
-        /^(?:BEGIN\s+)?EXECUTE\s*\(?\s*__ACTOR_DDL_LITERAL__\s*\)?$/i.test(singleLiteralSkeleton);
+      const directExecuteLiteral = directExecuteLiteralShape(masked, stmtStart, stmtEnd, lits);
+      const directExecute = directExecuteLiteral !== null;
       if (!hasProceduralContainer && /\bEXECUTE\b/i.test(stmt) &&
-          !directExecute && !isExecutePrivilegeStatement(stmt)) {
+          !directExecute && !isExecutePrivilegeStatement(stmt) &&
+          !isCreateTriggerStatement(stmt)) {
         violations.push(
           "This migration executes SQL assembled through variables or multiple statements, and the " +
           "actor-binding guard cannot read it as one complete literal supplied directly to EXECUTE. Put the complete " +
@@ -538,7 +608,8 @@ try {
       }
       if (lits.length === 0) return false;
       if (!isDynamicSqlStatement(stmt)) return false;
-      if (!carriesFnHeader(lits.map((l) => l.payload).join(""))) return false;
+      const ddlLiterals = directExecuteLiteral ? [directExecuteLiteral.literal] : lits;
+      if (!carriesFnHeader(ddlLiterals.map((l) => l.payload).join(""))) return false;
 
       // "One literal" is safe only when the dynamic-SQL expression is exactly
       // that literal. A format()/concat()/CASE template can keep the header in
@@ -550,8 +621,9 @@ try {
         const skeleton = singleLiteralSkeleton;
         const directAssign = /^(?:BEGIN\s+)?(?:"[^"]+"|[\w.]+)\s*(?::=|=(?!=))\s*__ACTOR_DDL_LITERAL__$/i.test(skeleton);
         const directSelectInto = /^(?:BEGIN\s+)?SELECT\s+__ACTOR_DDL_LITERAL__\s+INTO\s+(?:"[^"]+"|[\w.]+)$/i.test(skeleton);
-        if (directExecute || directAssign || directSelectInto) return false;
+        if (directAssign || directSelectInto) return false;
       }
+      if (directExecuteLiteral && carriesFnHeader(directExecuteLiteral.literal.payload)) return false;
       violations.push(
         "This migration builds a CREATE FUNCTION statement at runtime, and the actor-binding guard " +
         "cannot read it as one complete literal — the definition is split across fragments, transformed " +
