@@ -53,8 +53,11 @@ profit-deriving body reached live through migration
 `supabase_migrations.schema_migrations`. That file is *not yet on `main`*: it
 lands with PR #354, which is green and already applied live. Until #354 merges,
 a from-scratch replay of `main` alone cannot reproduce the trigger this backfill
-relies on; it would abort loudly on `BACKFILL_INCOMPLETE` rather than write
-anything wrong. The prerequisite is deliberately **not** duplicated here — two
+relies on; it aborts fail-closed rather than writing anything wrong. Which guard
+stops it depends on the replayed data: a replay whose population differs from the
+approved measurement stops earlier, at `APPROVED_SET_DRIFTED` or
+`CAPTURE_INCOMPLETE`; only a replay that reproduces the approved capture and then
+runs against the old trigger reaches `BACKFILL_INCOMPLETE`. The prerequisite is deliberately **not** duplicated here — two
 pending migrations re-emitting one function is the known overlap-clobber
 failure mode. Disaster recovery for this project is a `pg_dump` restore, not a
 migration replay, so the exposure is a repository-completeness gap that #354
