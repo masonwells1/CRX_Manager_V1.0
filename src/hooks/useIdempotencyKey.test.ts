@@ -69,6 +69,54 @@ describe('useIdempotencyKey', () => {
     expect(secondKey!).toMatch(/^submit_purchase_order:user-5:po-b:/);
   });
 
+  it('replays the original key when the target returns to a row it already touched', () => {
+    // The A -> B -> A round trip. A single retained key is indistinguishable
+    // from per-target keys on A -> A and on A -> B; it only diverges here, on
+    // the way back, which is exactly when an admin returns to the row whose
+    // outcome they are unsure about. A third key sent for row A makes the
+    // server treat an already-committed payout as a brand-new request.
+    const { result, rerender } = renderHook(
+      ({ target }) => useIdempotencyKey('post_commission_payment', 'admin-1', target),
+      { initialProps: { target: 'payment-a' } },
+    );
+
+    let keyA1: string;
+    act(() => { keyA1 = result.current.getKey(); });
+
+    rerender({ target: 'payment-b' });
+    let keyB: string;
+    act(() => { keyB = result.current.getKey(); });
+
+    rerender({ target: 'payment-a' });
+    let keyA2: string;
+    act(() => { keyA2 = result.current.getKey(); });
+
+    expect(keyB!).not.toBe(keyA1!);
+    expect(keyA2!).toBe(keyA1!);
+  });
+
+  it('retires only the current target when resetKey is called', () => {
+    // Clearing every retained key on success would discard the replay key of
+    // any other row the admin still has an unresolved retry on.
+    const { result, rerender } = renderHook(
+      ({ target }) => useIdempotencyKey('void_commission_payment', 'admin-1', target),
+      { initialProps: { target: 'payment-a' } },
+    );
+
+    let keyA1: string;
+    act(() => { keyA1 = result.current.getKey(); });
+
+    rerender({ target: 'payment-b' });
+    act(() => { result.current.getKey(); });
+    act(() => { result.current.resetKey(); });
+
+    rerender({ target: 'payment-a' });
+    let keyA2: string;
+    act(() => { keyA2 = result.current.getKey(); });
+
+    expect(keyA2!).toBe(keyA1!);
+  });
+
   it('simulates retry scenario: error keeps same key, success resets', () => {
     const { result } = renderHook(() => useIdempotencyKey('complete_delivery', 'driver-3'));
 
