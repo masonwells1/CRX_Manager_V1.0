@@ -2,6 +2,23 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-11 — Require enforced legacy actor-refusal guards
+
+Closed the final exact-SHA actor-binding review blocker. The compatibility path
+for older CRX functions no longer accepts the message
+`<actor parameter> does not match authenticated user` as free-standing text.
+It now requires that exact declared actor parameter to be compared against
+`auth.uid()` inside a simple mismatch `IF` (directly or through one stable,
+non-reassigned local binding) and requires the matching branch to execute a real
+`RAISE EXCEPTION`. The hook therefore denies the phrase when it appears in
+`RAISE NOTICE`, an assignment, unrelated data, an unconditional exception, an
+always-false condition, a comparison for another parameter, or behind a local
+identity variable that was overwritten. A nested unreachable exception cannot
+stand in for the direct refusal either. Existing direct, quoted-parameter, and
+current-August `v_actor := auth.uid()` refusal forms remain compatible. The
+focused real-hook suite passes 300 assertions, and nine isolated mutations each
+failed on its owning regression before the production clause was restored.
+
 ## 2026-08-11 — Close executable cross-migration cron.job view aliases
 
 Hardened the actor-binding SQL reader against persistent updatable aliases that

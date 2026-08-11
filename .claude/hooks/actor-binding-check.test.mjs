@@ -1735,12 +1735,138 @@ r = runHook(fn(`
 `));
 ok(!isDeny(r), "the current-main actor-specific authenticated-user refusal remains compatible");
 
+r = runHook(fn(`
+  DECLARE
+    v_actor uuid := auth.uid();
+  BEGIN
+    IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    ${MUTATION}
+  END
+`));
+ok(!isDeny(r), "the current-August stable v_actor refusal remains compatible");
+
 r = runHook(fn(
-  "RAISE EXCEPTION 'p_actor[ does not match authenticated user';\n" +
+  'IF "p_actor[" IS DISTINCT FROM auth.uid() THEN\n' +
+    "  RAISE EXCEPTION 'p_actor[ does not match authenticated user';\n" +
+    "END IF;\n" +
     'INSERT INTO financial_audit_log (actor_user_id) VALUES ("p_actor[");',
   '"p_actor[" uuid'
 ));
-ok(!isDeny(r), "a metacharacter actor name can use its exact authenticated-user refusal");
+ok(!isDeny(r), "a metacharacter actor name can use an enforced authenticated-user refusal");
+
+r = runHook(fn(`
+  IF p_performed_by IS DISTINCT FROM auth.uid() THEN
+    RAISE NOTICE 'p_performed_by does not match authenticated user';
+  END IF;
+  ${MUTATION}
+`));
+ok(isDeny(r), "a legacy refusal emitted only as RAISE NOTICE does not count");
+
+r = runHook(fn(`
+  IF p_performed_by IS DISTINCT FROM auth.uid() THEN
+    v_message := 'p_performed_by does not match authenticated user';
+  END IF;
+  ${MUTATION}
+`));
+ok(isDeny(r), "a legacy refusal assigned as data does not count");
+
+r = runHook(fn(`
+  PERFORM 'p_performed_by does not match authenticated user';
+  ${MUTATION}
+`));
+ok(isDeny(r), "an unrelated legacy-refusal string does not count");
+
+r = runHook(fn(
+  "RAISE EXCEPTION 'p_performed_by does not match authenticated user';\n" + MUTATION
+));
+ok(isDeny(r), "an unconditional legacy RAISE EXCEPTION does not prove actor binding");
+
+r = runHook(fn(`
+  IF p_invoice_id IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+  END IF;
+  ${MUTATION}
+`, "p_performed_by uuid, p_invoice_id uuid"));
+ok(isDeny(r), "a comparison involving a different parameter does not bind the actor");
+
+r = runHook(fn(`
+  IF p_performed_by IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'p_created_by does not match authenticated user';
+  END IF;
+  ${MUTATION}
+`));
+ok(isDeny(r), "a legacy exception naming a different parameter does not bind the actor");
+
+r = runHook(fn(`
+  IF false AND p_performed_by IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+  END IF;
+  ${MUTATION}
+`));
+ok(isDeny(r), "an always-false condition cannot disguise a legacy refusal");
+
+r = runHook(fn(`
+  IF p_performed_by IS DISTINCT FROM auth.uid() THEN
+    IF false THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+  END IF;
+  ${MUTATION}
+`));
+ok(isDeny(r), "a legacy exception hidden behind a nested false branch does not count");
+
+r = runHook(fn(`
+  DECLARE
+    v_actor uuid := auth.uid();
+  BEGIN
+    v_actor := p_performed_by;
+    IF p_performed_by IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    ${MUTATION}
+  END
+`));
+ok(isDeny(r), "a reassigned auth.uid local cannot satisfy the legacy guard");
+
+r = runHook(fn(`
+  DECLARE
+    v_actor uuid := auth.uid();
+  BEGIN
+    v_actor = p_performed_by;
+    IF p_performed_by IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    ${MUTATION}
+  END
+`));
+ok(isDeny(r), "a local reassigned with legacy equals syntax cannot satisfy the guard");
+
+r = runHook(fn(`
+  DECLARE
+    v_actor uuid := auth.uid();
+  BEGIN
+    SELECT p_performed_by INTO v_actor;
+    IF p_performed_by IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    ${MUTATION}
+  END
+`));
+ok(isDeny(r), "a local overwritten through SELECT INTO cannot satisfy the guard");
+
+r = runHook(fn(`
+  DECLARE
+    v_actor uuid := p_performed_by;
+  BEGIN
+    IF p_performed_by IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    ${MUTATION}
+  END
+`));
+ok(isDeny(r), "a local not initialized from auth.uid cannot satisfy the legacy guard");
 
 r = runHook(fn(
   "-- p_performed_by does not match authenticated user\n" + MUTATION

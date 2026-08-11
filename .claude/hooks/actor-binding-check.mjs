@@ -43,11 +43,10 @@
 //   * Non-mutating functions are never flagged (a reporting function taking
 //     p_user_id as a filter is not an attribution risk).
 //   * SECURITY INVOKER functions are never flagged (RLS still applies to them).
-//   * The check is satisfied by the ACTOR_MISMATCH token, or by the legacy-main
-//     refusal `<actual actor parameter> does not match authenticated user`,
-//     anywhere in the body. It does not attempt to verify the guard is correct.
-//     That deeper verification is the sweeps' job; this hook only stops the
-//     no-guard-at-all case, which is the one that actually shipped.
+//   * The canonical ACTOR_MISMATCH token remains the preferred guard. Legacy-main
+//     refusals using `<actual actor parameter> does not match authenticated user`
+//     count only when a real RAISE EXCEPTION is controlled by that parameter's
+//     mismatch against auth.uid() (directly or through one stable local binding).
 
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -1204,6 +1203,111 @@ function blankComments(s) {
   return out;
 }
 
+function identifierReferencePattern(name) {
+  const value = String(name || "");
+  const quoted = `"${value.replace(/"/g, '""')}"`;
+  const quotedPattern = escapedRegexLiteral(quoted);
+  if (!/^[A-Za-z_][\w$]*$/.test(value)) return quotedPattern;
+  return `(?:(?<![\\w$])${escapedRegexLiteral(value)}(?![\\w$])|${quotedPattern})`;
+}
+
+/** A legacy guard may compare the actor parameter to a local v_actor-style
+ * binding, but only when that local is initialized from auth.uid() exactly once
+ * and is not overwritten through assignment or SELECT ... INTO. */
+function stableAuthUidBindings(structuralBody, beforeIndex) {
+  const prefix = structuralBody.slice(0, beforeIndex);
+  const bindings = new Set();
+  const bindingRe = new RegExp(
+    `(?:^|[;\\n]|\\bDECLARE\\b)\\s*(?!DECLARE\\b)([A-Za-z_][\\w$]*)` +
+      `(?:\\s+[^;\\n:=]+?)?\\s*:=\\s*auth\\s*\\.\\s*uid\\s*\\(\\s*\\)`,
+    "gi"
+  );
+  let match;
+  while ((match = bindingRe.exec(prefix)) !== null) {
+    const name = match[1];
+    const ref = escapedRegexLiteral(name);
+    const assignmentRe = new RegExp(
+      `(?:^|[;\\n]|\\bDECLARE\\b)\\s*${ref}` +
+        `(?:\\s+[^;\\n:=]+?)?\\s*:=`,
+      "gi"
+    );
+    const assignments = structuralBody.match(assignmentRe) || [];
+    const equalsAssignmentRe = new RegExp(
+      `(?:^|[;\\n]|\\bBEGIN\\b|\\bTHEN\\b|\\bELSE\\b|\\bLOOP\\b)\\s*${ref}\\s*=(?!=)`,
+      "i"
+    );
+    const intoRe = new RegExp(`\\bINTO\\s+(?:STRICT\\s+)?${ref}(?![\\w$])`, "i");
+    if (assignments.length === 1 &&
+        !equalsAssignmentRe.test(structuralBody) &&
+        !intoRe.test(structuralBody)) {
+      bindings.add(name);
+    }
+  }
+  return bindings;
+}
+
+function hasExactLegacyMismatchCondition(condition, actorParam, identityBindings) {
+  const actor = identifierReferencePattern(actorParam);
+  const operator = "(?:IS\\s+DISTINCT\\s+FROM|<>|!=)";
+  const identities = [
+    "auth\\s*\\.\\s*uid\\s*\\(\\s*\\)",
+    ...Array.from(identityBindings, identifierReferencePattern),
+  ];
+  return identities.some((identity) => {
+    const mismatch = `(?:${actor}\\s*${operator}\\s*${identity}|` +
+      `${identity}\\s*${operator}\\s*${actor})`;
+    return new RegExp(
+      `^\\s*(?:${actor}\\s+IS\\s+NOT\\s+NULL\\s+AND\\s+)?${mismatch}\\s*$`,
+      "i"
+    ).test(condition);
+  });
+}
+
+function hasLegacyRaiseException(rawAction, structuralAction, actorParam) {
+  const phrase = new RegExp(
+    `(?:^|[^\\w$])${escapedRegexLiteral(actorParam)}` +
+      `\\s+does\\s+not\\s+match\\s+authenticated\\s+user\\b`,
+    "i"
+  );
+  const raiseRe = /\bRAISE\s+EXCEPTION\b/gi;
+  let raise;
+  while ((raise = raiseRe.exec(structuralAction)) !== null) {
+    const statementEnd = structuralAction.indexOf(";", raise.index);
+    if (statementEnd === -1) continue;
+    if (structuralAction.slice(0, raise.index).trim() !== "" ||
+        structuralAction.slice(statementEnd + 1).trim() !== "") continue;
+    const rawStatement = blankComments(rawAction.slice(raise.index, statementEnd));
+    if (phrase.test(rawStatement)) return true;
+  }
+  return false;
+}
+
+/** Preserve compatibility with the established CRX refusal message without
+ * accepting the message as inert NOTICE/data text. This intentionally accepts
+ * only the simple, reviewable IF mismatch THEN RAISE EXCEPTION shape. */
+function hasEnforcedLegacyActorRefusal(body, actorParam) {
+  const structuralBody = maskSqlForCallNames(body);
+  if (structuralBody === null) return false;
+  const ifRe = /\bIF\b[\s\S]*?\bTHEN\b[\s\S]*?\bEND\s+IF\b/gi;
+  let block;
+  while ((block = ifRe.exec(structuralBody)) !== null) {
+    const then = /\bTHEN\b/i.exec(block[0]);
+    const endIf = /\bEND\s+IF\b/i.exec(block[0]);
+    if (!then || !endIf || endIf.index <= then.index) continue;
+    const condition = block[0].slice(2, then.index);
+    const actionStart = block.index + then.index + then[0].length;
+    const actionEnd = block.index + endIf.index;
+    const bindings = stableAuthUidBindings(structuralBody, block.index);
+    if (!hasExactLegacyMismatchCondition(condition, actorParam, bindings)) continue;
+    if (hasLegacyRaiseException(
+      body.slice(actionStart, actionEnd),
+      structuralBody.slice(actionStart, actionEnd),
+      actorParam
+    )) return true;
+  }
+  return false;
+}
+
 function carriesFnHeader(payload) {
   return CREATE_FN_HEAD_RE.test(payload) ||
     CREATE_FN_HEAD_RE.test(blankComments(payload));
@@ -1887,10 +1991,7 @@ try {
     if (actorParams.length === 0) continue;
 
     const hasRecognizedActorRefusal = /ACTOR_MISMATCH/i.test(commentBlankedBody) ||
-      actorParams.some((actorParam) => new RegExp(
-        `\\b${escapedRegexLiteral(actorParam)}\\s+does\\s+not\\s+match\\s+authenticated\\s+user\\b`,
-        "i"
-      ).test(commentBlankedBody));
+      actorParams.some((actorParam) => hasEnforcedLegacyActorRefusal(body, actorParam));
     if (hasRecognizedActorRefusal) continue;
 
     violations.push(
