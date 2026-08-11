@@ -17,6 +17,7 @@ First remediation wave from the 2026-08-09 ordering-cycle review (triage: 75 of 
 - **Reviewer findings actioned.** `rls-security-reviewer` and `migration-drift-reviewer` both ran and both returned zero blockers. Their substantive shared finding was that this migration had dropped proof scaffolding its predecessor carried, so it was restored: an overload-uniqueness assertion (a bare `SELECT … INTO` over multiple rows takes an arbitrary row without erroring, which would have silently validated the wrong function), the anon/PUBLIC/authenticated EXECUTE assertions, an assertion that the fix itself actually landed in the body, and a pre-apply `md5(prosrc)` pin against the live baseline so a concurrent session's change cannot be silently clobbered.
 - **Baseline dependency.** The live body of `create_direct_order` is *not* what an `origin/main` checkout rebuilds — three migrations applied to production on 2026-08-10 are still unmerged, on PR #371. This branch merges that work so the migration sits on its real baseline and a from-scratch rebuild is correct; Wave A therefore lands after #371.
 - **Schema registry** refreshed from live introspection (high-water `20260810155629`), which also cleared the REGISTRY-STALE block across the worktree fleet.
+
 ## 2026-08-10 — Declined the bigint-cents conversion and applied three whole-cent migrations live
 
 Evaluated CodeRabbit's bigint-cents request on the canonical profit path and declined the conversion, drafting three migrations that fix the underlying cent-scale defects instead. PostgreSQL numeric is exact decimal, not floating point, so the AGENTS.md money rule was never violated; converting orders.total_profit, orders.total_cost, order_items.profit and order_items.net_margin to bigint cents would reach src/types/index.ts, reporting, invoicing and commissions for no correctness gain. The real defects, confirmed from live function source, are that commission rows mint their basis from a stale pre-trigger profit value rather than the canonical order header, and that several creation paths store sub-cent money. Three migrations were written and then, on Mason's explicit in-chat approval, APPLIED LIVE to production on 2026-08-10 in order: 20260810150000 rebases the commission basis on the rounded order header and rounds create_direct_order money (ledger version 20260810152935); 20260810150500 rounds save_quote total_cost and quote_items money (20260810154721); 20260810151000 adds whole-cent CHECK constraints to seven already-clean money columns, five more deferred behind a legacy backfill (20260810155629). All three ran end to end against a throwaway postgres:17-alpine first and every post-condition was mutation-tested to fail closed; each apply then passed the full proof gate, with both reviewer charters run as real gpt-5.6-sol high-effort Codex reviews returning CLEAN against the exact on-disk file hash. Post-apply live reads confirm every function body changed as written with SECURITY DEFINER, search_path and grants unchanged, and exactly the intended seven CHECK constraints present and validated with the five deferred columns still unconstrained. No live row was modified. The schema registry was rebuilt from live introspection afterwards. Nothing has been pushed, merged, or deployed. Deferred: the _update_order_items_impl total_price clobber is blocked on live-vs-disk function drift, and the quote-versus-order profit formula divergence is an owner decision.
@@ -28,6 +29,80 @@ Evaluated CodeRabbit's bigint-cents request on the canonical profit path and dec
   - `supabase/migrations/20260810150000_commission_basis_from_canonical_order_header.sql`
   - `supabase/migrations/20260810150500_save_quote_whole_cent_total_cost.sql`
   - `supabase/migrations/20260810151000_whole_cent_money_check_constraints.sql`
+
+## 2026-08-10 — Review fixes on the harness guards (PR #369)
+
+Six findings from the Codex and CodeRabbit reviews of PR #369, all in the pre-commit harness. Five are
+code fixes, each mutation-proved (break the fix, watch the new assertion go red):
+
+1. **A registry row the diff never mentions no longer reads as "nothing pending."** Every check in
+   `parkedDraftPathsFrom` ran inside the loop over changed paths, so a branch that registers pending SQL
+   in `migration-history.md` but never touches that SQL in the diff got a confident zero over a registry
+   the code had not read. The registry is now reconciled against the diff outside the loop; an
+   unaccounted row answers UNKNOWN, which sends the caller to a full scan.
+2. **An unreadable migration history over an empty diff is UNKNOWN too** — same loop, same blind spot.
+3. **Migration enumeration is index-scoped, not a directory listing.** The guard describes the commit
+   being created, so it must not see untracked or unstaged `.sql` files. Proved by planting an untracked
+   migration and confirming only a directory listing finds it.
+4. **The backup-staleness check no longer guesses at the main checkout.** It derived the checkout from
+   `dirname(<git-common-dir>)`, which under `--separate-git-dir` or in a bare repo lands on an unrelated
+   folder that could hold some other project's `backups/LATEST-OK.json`. It now asks Git, and rejects
+   layouts it cannot resolve rather than reporting a different database's backup as this one's.
+5. **Canonical blobs come from the index only** — no HEAD fallback (which would validate history the
+   commit deletes) and no working-tree fallback (which would certify bytes the commit omits).
+6. **Doc fix:** `docs/audits/2026-08-08-foundation-ultra-review.md` still read as if its five follow-up
+   migrations were unapplied and its §2 fixes were future work. All of it is live since 2026-08-09, and a
+   reader following the old text could have replayed or restamped shipped work. The stale passages are
+   now labelled SUPERSEDED with the live status verified by direct introspection. The one genuinely open
+   item — the historical fractional-cent repair, whose statement is commented out on purpose — is called
+   out as Mason's decision and was **not** run.
+
+Hook suites: `worktree-awareness-lib` 185 assertions, `session-staleness` 23 assertions, both green.
+
+## 2026-08-10 — Harness guards now validate the commit being created (PR #357)
+
+Resolved the review findings on the abandoned harness-permissions branch. The headline defect: the
+migration cross-reference guard hashed the **staged** SQL blob but parsed the **unstaged**
+`migration-history.md`, so a commit whose staged history carried an all-zero sha256 pin passed all 176
+assertions while the correct pin sat unstaged on disk — the guard blessed a commit it had never
+actually inspected. Both artifacts now come from one index-first reader. Mutation-proved in a
+throwaway setup: staged-wrong/disk-right is RED, staged-right/disk-wrong is GREEN, history restored
+byte-identical.
+
+Two further guard fixes, each proved against the pre-fix code rather than asserted:
+
+- **Backup-freshness false alarm.** `session-staleness.mjs` always preferred the canonical checkout's
+  `backups/LATEST-OK.json`, but `/backup-db` stamps that marker in whichever checkout it ran from. A
+  backup taken inside a worktree was therefore invisible, and every later session warned that the only
+  copy of production data was missing or stale — training the reader to ignore the one warning that
+  matters. Now newest-wins, which keeps the original protection (a stale worktree marker still loses
+  to a newer canonical one) without the false alarm. Before/after in a throwaway repo: canonical-old
+  plus worktree-fresh warned "2414 days old" before and is silent after; both-old still warns;
+  neither-present still warns. This deliberately **reverses a previously-asserted rule** — the FIX 3
+  case in `session-staleness.test.mjs` asserted "shared canonical marker wins over a conflicting
+  worktree-local marker". That assertion is replaced, not deleted: the suite now pins both halves of
+  newest-wins (a fresher worktree marker is not masked, and a stale worktree marker cannot fake a
+  stale backup when the canonical one is fresh). Mutation-proved — restoring canonical-always-wins
+  turns the suite RED.
+- **Dangling candidate registry.** `parkedDraftPathsFrom()` skipped a vanished path before consulting
+  history, so a LOCAL CANDIDATE pin naming SQL that is not on disk produced a confident zero with no
+  `unknownReason`. It now reports UNKNOWN for exactly that case; a retired `SUPERSEDED-` draft, which
+  is not in the registry, stays silent as before. The pre-commit cross-reference guard already caught
+  this at commit time, so nothing dangling could reach `main` — the gap was that `/fleet` and
+  SessionStart under-reported until someone tried to commit.
+
+One reported finding is **not actioned because it does not reproduce**: exercised against this head, a
+headerless branch candidate registered only by a matching sha256 pin *is* surfaced, and a mismatched
+pin sets `unknownReason`.
+
+Also retired two stale documentation claims. `docs/audits/2026-08-08-foundation-ultra-review.md` and
+`docs/reference/rpc-functions.md` still said the foundation-ultra-review migrations were unapplied
+candidates and instructed agents to restamp them. They are **applied live** — re-issued forward as
+`20260809170500`–`20260809170900`, ledger versions `20260809203222`, `20260809204044`, `20260809204435`,
+`20260809204855`, `20260809205423`, with per-migration proof in `migration-history.md` rows 857–861.
+The one deliberate exception is unchanged: the historical money repair inside `20260809170800` stays
+commented out, so the 49 pre-existing fractional-cent rows are untouched and restating them remains
+Mason's decision.
 
 ## 2026-08-09 — Settled the canonical-profit question and applied the fix live
 
@@ -464,6 +539,22 @@ marks parked state unknown instead of silently reporting a clean zero.
 Final exact-head review hardening makes an explicit parked SQL header unable to bypass a stale
 history pin, and makes every linked worktree prefer the shared canonical backup marker over any
 conflicting local copy. This keeps both migration and backup status fail-closed and fleet-wide.
+
+**2026-08-10 merge reconciliation:** the four audit-time candidates were subsequently re-issued
+above the live high-water and applied through the governed migration pipeline on 2026-08-09. The
+SHA-pin coverage now uses repository fixtures; it no longer describes those applied files as parked.
+The final exact-SHA adversarial review also found and drove a fail-closed correction: unreadable
+worktree migration history now marks parked state unknown, and degraded disk discovery recognizes
+a matching history SHA pin instead of requiring an SQL status header. Shared regressions cover both
+paths, and the real fleet and SessionStart consumers still report zero parked migrations.
+After three normal pre-commit attempts exposed unrelated 5–15 second test timeouts under concurrent
+CRX worktree load, local Vitest concurrency was capped at two workers (CI keeps its isolated-runner
+default). The complete suite then passed all 323 files and 4,304 active tests without relaxing any
+individual timeout or skipping any test.
+The follow-up exact-SHA review then caught a timeout-scale regression in degraded migration discovery:
+the 600+ KiB history file was reparsed for every SQL file. Fallback classification now parses history
+once per worktree and reuses the structured result; a 867-file regression proves one parse and
+completion inside the SessionStart hook's 10-second budget.
 
 ## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
 
