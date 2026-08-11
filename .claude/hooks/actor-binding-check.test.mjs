@@ -379,6 +379,13 @@ ok(!isDeny(r), "cron.unschedule remains allowed because it does not store comman
 r = runHook(`SELECT cron.unschedule(42);`);
 ok(!isDeny(r), "numeric cron.unschedule remains allowed because it has no command input");
 
+r = runHook(`${STAGED_DDL}
+SELECT cron."UnScHeDuLe"(command) FROM staged_cron_sql;`);
+ok(isDeny(r), "a quoted mixed-case cron API cannot inherit the unschedule exemption");
+
+r = runHook(`SELECT cron."unschedule"(42);`);
+ok(!isDeny(r), "the exact quoted cron.unschedule name remains allowed");
+
 r = runHook(`SELECT "cron"."schedule"(
   'quoted-delayed-actor-ddl',
   '* * * * *',

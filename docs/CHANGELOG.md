@@ -131,8 +131,14 @@ function-header detection at unproven callable boundaries; named-only
 payloads are reconstructed against the current file so the guard inspects the
 result rather than an isolated replacement fragment.
 
-The focused actor-binding suite grew from 115 to 213 assertions while the
-idempotency reference suite remained at 86. Sixty continuation decisions were
+The final capped review reproduced a quoted-identifier exemption collision:
+PostgreSQL preserves the spelling of `cron."UnScHeDuLe"`, but the reader lowered
+it to the safe built-in `unschedule`. Quoted API names now preserve their decoded
+case, so custom mixed-case sinks remain unknown and fail closed while exact
+quoted and case-folded unquoted calls to the real built-in remain allowed.
+
+The focused actor-binding suite grew from 115 to 215 assertions while the
+idempotency reference suite remained at 86. Sixty-one continuation decisions were
 weakened or removed one at a time; every mutation made the real hook-process
 suite fail before restoration. Separate real-process probes allowed ordinary
 trigger/event-trigger declarations, direct-literal `USING`/`INTO`, and harmless

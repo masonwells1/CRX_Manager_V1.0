@@ -324,7 +324,7 @@ function normalizedIdentifier(identifier) {
   const value = String(identifier || "").trim();
   if (/^U&/i.test(value)) return null;
   if (value.startsWith('"') && value.endsWith('"')) {
-    return value.slice(1, -1).replace(/""/g, '"').toLowerCase();
+    return value.slice(1, -1).replace(/""/g, '"');
   }
   return value.toLowerCase();
 }
