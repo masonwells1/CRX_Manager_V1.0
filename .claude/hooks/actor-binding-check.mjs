@@ -1141,6 +1141,14 @@ function callableNameBeforeOpen(prefix, open) {
   return name;
 }
 
+function isNonCallableSqlParenContext(prefix, open) {
+  const beforeOpen = prefix.slice(0, open);
+  const match = new RegExp(`(${SQL_QUALIFIED_IDENTIFIER_PATTERN})\\s*$`, "i").exec(beforeOpen);
+  if (!match) return false;
+  return /\b(?:INTO|TABLE|VIEW|FUNCTION|PROCEDURE|AGGREGATE|TYPE|INDEX|TRIGGER|CONSTRAINT|WITH)\s*$/i
+    .test(beforeOpen.slice(0, match.index));
+}
+
 function isKnownSqlExecutorName(name) {
   const normalized = normalizedQualifiedIdentifier(name);
   return new Set([
@@ -1172,38 +1180,6 @@ function hasUnprovenCallableContext(callablePrefix, structuralPrefix, fullText, 
   return false;
 }
 
-function hasStringLiteral(expression) {
-  const text = String(expression || "");
-  for (let i = 0; i < text.length;) {
-    if (text[i] === "-" && text[i + 1] === "-") {
-      const newline = text.indexOf("\n", i + 2);
-      i = newline === -1 ? text.length : newline;
-      continue;
-    }
-    if (text[i] === "/" && text[i + 1] === "*") {
-      let depth = 1;
-      i += 2;
-      while (i < text.length && depth > 0) {
-        if (text[i] === "/" && text[i + 1] === "*") { depth++; i += 2; continue; }
-        if (text[i] === "*" && text[i + 1] === "/") { depth--; i += 2; continue; }
-        i++;
-      }
-      continue;
-    }
-    if (text[i] === "'") return scanQuoted(text, i) !== -1;
-    if (text[i] === '"') {
-      const end = scanQuoted(text, i);
-      if (end === -1) return false;
-      i = end;
-      continue;
-    }
-    const tag = text[i] === "$" ? dollarTagAt(text, i) : null;
-    if (tag) return text.indexOf(tag, i + tag.length) !== -1;
-    i++;
-  }
-  return false;
-}
-
 /** A callable not proven data-only may execute or store any string argument.
  * If that argument is an expression rather than one inspectable literal, the
  * reader cannot prove that chr()/concat()/format() did not obscure SQL tokens. */
@@ -1220,14 +1196,29 @@ function hasOpaqueUnprovenSqlCallableArgument(rawStmt) {
   for (let open = 0; open < structural.length; open++) {
     if (structural[open] !== "(") continue;
     const name = callableNameBeforeOpen(structural, open);
-    if (name === null || isKnownSqlExecutorName(name) || !isPotentialSqlTextSinkName(name)) continue;
+    if (name === null || isNonCallableSqlParenContext(structural, open) ||
+        isKnownSqlExecutorName(name) || !isPotentialSqlTextSinkName(name)) continue;
     const parsed = readBalancedParens(structural, open);
     if (!parsed) return true;
     const args = splitTopLevelArgs(
       parsed.params,
       rawStmt.slice(open + 1, parsed.end - 1)
     );
-    if (args.some((arg) => hasStringLiteral(arg) && !isDirectSqlStringLiteral(arg))) {
+    if (args.some((arg) => {
+      const maskedArg = maskSqlForCallNames(arg);
+      if (maskedArg === null) return true;
+      const named = /^\s*(?:"(?:[^"]|"")*"|[A-Za-z_]\w*)\s*(?:=>|:=)\s*/.exec(maskedArg);
+      const value = named ? arg.slice(named[0].length) : arg;
+      if (isDirectSqlStringLiteral(value)) return false;
+
+      // Known scalar literals are visibly not SQL text. Every other indirect
+      // value (column, variable, subquery, builder, cast, or Unicode form) is
+      // opaque at an unproven SQL-text sink and requires manual review.
+      const maskedValue = maskSqlForCallNames(value);
+      if (maskedValue === null) return true;
+      return !/^\s*(?:true|false|[-+]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:e[-+]?\d+)?)\s*$/i
+        .test(maskedValue);
+    })) {
       return true;
     }
   }
@@ -1519,9 +1510,9 @@ try {
       }
       if (!hasProceduralContainer && hasOpaqueUnprovenSqlCallableArgument(rawStmt)) {
         violations.push(
-          "This migration passes a dynamically assembled string to a callable that is not " +
+          "This migration passes indirect or dynamically assembled SQL text to a callable that is not " +
           "allowlisted as a data-only sink. The callable may execute or store SQL whose tokens " +
-          "are obscured by concatenation or helper functions. Supply one complete direct literal, " +
+          "are hidden in a column, variable, subquery, concatenation, or helper function. Supply one complete direct literal, " +
           "or add the file-level exempt marker (-- actor-binding-check: exempt) and get a manual review."
         );
         return true;

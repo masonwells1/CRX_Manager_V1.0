@@ -181,9 +181,17 @@ command target is treated as a possible cron alias instead of being allowed.
 Multi-file real-process regressions deny direct and staged unsafe commands
 through an earlier view while allowing direct harmless commands.
 
-The focused actor-binding suite grew from 115 to 235 assertions while the
-idempotency reference suite remained at 86. Seventy continuation decisions were
-weakened or removed one at a time; every mutation made the real hook-process
+The following fresh exact-head review found that a CTE could pass a previously
+stored SQL column to an unproven executor such as `dblink_exec` without any
+literal remaining in the executor statement. Unproven SQL-text sinks now accept
+only complete direct string literals plus obvious non-string scalar options;
+columns, variables, subqueries, builders, casts, and Unicode forms require the
+existing exemption/manual-review path even when their current staged value looks
+harmless.
+
+The focused actor-binding suite grew from 115 to 238 assertions while the
+idempotency reference suite remained at 86. Seventy-four continuation decisions
+were weakened or removed one at a time; every mutation made the real hook-process
 suite fail before restoration. Separate real-process probes allowed ordinary
 trigger/event-trigger declarations, direct-literal `USING`/`INTO`, and harmless
 quoted cron calls, while denying variable, concatenated, formatted,

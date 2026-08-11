@@ -347,6 +347,18 @@ r = runHook(`SELECT dblink_exec(
 );`);
 ok(isDeny(r), "Unicode-encoded function DDL cannot cross an unproven callable boundary");
 
+r = runHook(`CREATE TEMP TABLE staged_dblink_sql (sql_text text);
+INSERT INTO staged_dblink_sql (sql_text) VALUES ($outer$${UNBOUND_DDL}$outer$);
+WITH staged AS (SELECT sql_text FROM staged_dblink_sql)
+SELECT dblink_exec('connection-name', sql_text) FROM staged;`);
+ok(isDeny(r), "a CTE column cannot stage actor-forgery DDL for an unproven SQL executor");
+
+r = runHook(`CREATE TEMP TABLE staged_harmless_dblink_sql (sql_text text);
+INSERT INTO staged_harmless_dblink_sql (sql_text) VALUES ('SELECT 1');
+WITH staged AS (SELECT sql_text FROM staged_harmless_dblink_sql)
+SELECT dblink_exec('connection-name', sql_text) FROM staged;`);
+ok(isDeny(r), "indirect SQL text stays fail-closed even when its staged value looks harmless");
+
 r = runHook(`SELECT query_to_xml(
   'SEL' || chr(69) || 'CT cron.schedule(''delayed-actor-ddl'', ''* * * * *'', ''CRE'' || chr(65) || ''TE OR REPLACE FUNCTION public.dynamic_actor(p_performed_by uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $fn$ BEGIN UPDATE invoices SET created_by = p_performed_by; END $fn$;'')',
   true,
@@ -357,6 +369,11 @@ ok(isDeny(r), "an unproven callable cannot receive dynamically obscured SQL");
 
 r = runHook(`SELECT query_to_xml('SELECT 1', true, false, '');`);
 ok(!isDeny(r), "an unproven callable may receive one direct harmless SQL literal");
+
+r = runHook(`SELECT query_to_xml(
+  query => 'SELECT 1', nulls => true, tableforest => false, targetns => ''
+);`);
+ok(!isDeny(r), "named direct SQL and obvious scalar options remain inspectable");
 
 r = runHook(`CREATE OR REPLACE FUNCTION public.safe_search(p_query text)
 RETURNS TABLE(label text)
