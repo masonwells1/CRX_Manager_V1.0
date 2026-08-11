@@ -1,6 +1,6 @@
-# RPC Functions Reference (440 callable overloads across 432 names + 128 trigger functions — live DB as of 2026-08-09)
+# RPC Functions Reference (440 callable overloads across 432 names + 129 trigger functions — live DB as of 2026-08-11)
 
-> Function inventory verified live against Supabase project `rhyzpcqhnizqbxphqdkr` (`pg_proc` joined to `pg_namespace` where `nspname='public'`, split by trigger return type): **440 callable overloads across 432 distinct names**, **128 trigger function overloads/names**, **560 total public function names**.
+> Function inventory verified live against Supabase project `rhyzpcqhnizqbxphqdkr` (`pg_proc` joined to `pg_namespace` where `nspname='public'`, split by trigger return type): **440 callable overloads across 432 distinct names**, **129 trigger function overloads/names**, **561 total public function names**.
 >
 > **2026-07-13 note:** the section-by-section inventory below (Atomic Save/Delete, Order & Delivery, Invoice & Payments, …) is a **curated snapshot last verified 2026-06-29** and has not been re-audited function-by-function against the live count above — treat the live DB (or `.claude/schema-registry.json` for structural facts) as authoritative if a specific function's existence, signature, or behavior is load-bearing. The detailed sections below document the notable functions, not an exhaustive per-function enumeration.
 >
