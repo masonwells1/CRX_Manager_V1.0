@@ -437,13 +437,24 @@ describe('commission payout intent-binding migration', () => {
     // WHITELIST of the ASCII characters that may legally abut a call or a table
     // reference, so any character the list does not name — any letter, digit,
     // underscore, dollar, or byte above ASCII — fails closed.
-    expect(assert, 'the identifier boundary is a blacklist, not a whitelist').toContain(
-      "v_bnd    constant text := '[[:space:](),;:=+*/<>|&~!@#%^?\\[\\]{}.''-]';",
+    //
+    // Round-11 finding. Two checkers read that boundary now, so it lives in one
+    // function rather than a constant copied into each: a boundary set that
+    // drifts between them is a boundary set that is wrong in one of them. The
+    // backtick joined it in the same round — Postgres names it as an operator
+    // character, so a body invoking a custom prefix operator immediately before
+    // the call was refused although the call is real.
+    expect(migration, 'the boundary set is not a single shared definition').toContain(
+      "AS $bnd$ SELECT '[[:space:](),;:=+*/<>|&~!@#%^?`\\[\\]{}.''-]'::text $bnd$;",
+    );
+    expect(assert, 'the impl checker does not read the shared boundary set').toContain(
+      'v_bnd    constant text := public._crx_payout_bnd_20260809();',
     );
     // …and the blacklist is gone from the executable text. Comment lines are
-    // stripped first: the DECLARE block explains WHY the blacklist was wrong and
-    // has to be able to name it.
-    const assertCode = assert.split('\n').filter((line) => !line.trim().startsWith('--')).join('\n');
+    // stripped first: the comments explain WHY the blacklist was wrong and have
+    // to be able to name it.
+    const codeOf = (sql: string) => sql.split('\n').filter((line) => !line.trim().startsWith('--')).join('\n');
+    const assertCode = codeOf(assert);
     expect(assertCode, 'the boundary blacklist is still in use').not.toContain('[^A-Za-z0-9_$]');
     expect(assert, 'check_idempotency is matched as a bare substring').toContain(
       "IF v_code !~ ('(^|' || v_bnd || ')check_idempotency[[:space:]]*\\(')",
@@ -541,14 +552,39 @@ describe('commission payout intent-binding migration', () => {
     expect(assert, 'the interrupted-apply state is not allowed through').toContain(
       'IF v_oid IS NULL THEN\n    RETURN;',
     );
-    // Deliberately the RAW source, not the lexed code: any mention at all,
-    // comment included, is enough to believe the public function is already the
-    // wrapper, and the conservative direction here is to believe it LESS
-    // readily rather than more.
-    expect(assert, 'the wrapper check reads lexed code instead of raw source').toContain(
-      "IF strpos(coalesce(v_src, ''), p_impl_name) = 0 THEN",
+    // Round-11 finding. This read the RAW source and accepted ANY mention of the
+    // implementation name — so a COMMENT naming it, in a public function that
+    // was never wrapped, was enough to conclude "already applied" and hand the
+    // migration an arbitrary implementation to adopt. What makes a body the
+    // wrapper is what it EXECUTES, so both predicates run against lexed code:
+    // it calls the implementation, and it calls check_idempotency_intent(),
+    // which this migration introduced and which no implementation contains.
+    const assertCode = assert.split('\n').filter((line) => !line.trim().startsWith('--')).join('\n');
+    expect(assertCode, 'the wrapper check still reads the raw source').not.toContain(
+      "strpos(coalesce(v_src, ''), p_impl_name)",
     );
-    expect(assert).toContain('RAISE EXCEPTION');
+    expect(assert, 'the public function is not lexed before it is believed').toContain(
+      'v_code := public._crx_payout_code_only_20260809(v_src, p_public_sig);',
+    );
+    expect(assert, 'the wrapper is not required to call the implementation').toContain(
+      "IF v_code !~ ('(^|' || v_bnd || ')' || v_needle || '[[:space:]]*\\(') THEN",
+    );
+    expect(assert, 'a bare passthrough passes as this migration\'s wrapper').toContain(
+      "IF v_code !~ ('(^|' || v_bnd || ')check_idempotency_intent[[:space:]]*\\(') THEN",
+    );
+    // The implementation name reaches a regex, so it is escaped rather than
+    // trusted as a literal pattern.
+    expect(assert, 'the implementation name reaches the regex engine unescaped').toContain(
+      "v_needle := regexp_replace(p_impl_name, '([^A-Za-z0-9_])', '\\\\\\1', 'g');",
+    );
+    // Reading prosrc at all presumes a language whose prosrc is source.
+    expect(assert, 'the public function is read without checking its language').toContain(
+      "IF v_lang IS DISTINCT FROM 'plpgsql'::name OR coalesce(btrim(v_src), '') = '' THEN",
+    );
+    expect(assert, 'the replay check does not read the shared boundary set').toContain(
+      'v_bnd    constant text := public._crx_payout_bnd_20260809();',
+    );
+    expect(assert.match(/RAISE EXCEPTION/g) ?? []).toHaveLength(3);
 
     // Same lifecycle as the other two helpers: created before first use,
     // unreachable from the browser while it exists, dropped afterwards, and the
@@ -570,6 +606,37 @@ describe('commission payout intent-binding migration', () => {
     );
     expect(verify).toContain(
       "RAISE EXCEPTION 'the identity-check helper _crx_payout_assert_replay_20260809 was left behind'",
+    );
+  });
+
+  it('gives the shared boundary set the same lifecycle as the other helpers', () => {
+    const create = migration.indexOf('CREATE OR REPLACE FUNCTION public._crx_payout_bnd_20260809()');
+    expect(create, 'the shared boundary set is not defined').toBeGreaterThan(-1);
+    // Both readers are defined after it, or the migration would not parse.
+    expect(create).toBeLessThan(
+      migration.indexOf('CREATE OR REPLACE FUNCTION public._crx_payout_assert_impl_20260809('),
+    );
+    expect(create).toBeLessThan(
+      migration.indexOf('CREATE OR REPLACE FUNCTION public._crx_payout_assert_replay_20260809('),
+    );
+    expect(migration).toContain(
+      'REVOKE ALL ON FUNCTION public._crx_payout_bnd_20260809()\n'
+      + '  FROM PUBLIC, anon, authenticated, service_role;',
+    );
+    const drop = migration.indexOf('DROP FUNCTION IF EXISTS public._crx_payout_bnd_20260809();');
+    expect(drop, 'the shared boundary set is left behind').toBeGreaterThan(
+      migration.lastIndexOf('PERFORM public._crx_payout_assert_replay_20260809('),
+    );
+    // Dropped last of the four: the two checkers that read it go first.
+    expect(drop).toBeGreaterThan(
+      migration.indexOf('DROP FUNCTION IF EXISTS public._crx_payout_code_only_20260809(text, text);'),
+    );
+    const verify = migration.slice(migration.indexOf('DO $verify$'));
+    expect(verify).toContain(
+      "IF to_regprocedure('public._crx_payout_bnd_20260809()') IS NOT NULL THEN",
+    );
+    expect(verify).toContain(
+      "RAISE EXCEPTION 'the identity-check helper _crx_payout_bnd_20260809 was left behind'",
     );
   });
 

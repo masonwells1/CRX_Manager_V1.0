@@ -794,6 +794,107 @@ function proveReplayIdentityGuard() {
     't',
     'the swapped-implementation transaction did not roll back',
   );
+
+  // C. Round-11 finding. The state check used to read the public function's RAW
+  //    source, so a COMMENT naming the implementation was enough to conclude
+  //    "already applied". Both halves of the attack are built here: the public
+  //    function is an unwrapped stand-in carrying that comment and nothing else,
+  //    and the planted implementation puts both contract markers in EXECUTABLE
+  //    text so the marker check cannot be the thing that saves us. Under the old
+  //    rule the migration adopted this body and every payout went through it.
+  const COMMENT_ONLY_PUBLIC =
+    `CREATE OR REPLACE FUNCTION public.create_commission_payment(\n${HEADER}`
+    + `AS $stub$\nBEGIN\n  -- ${IMPL}\n  RETURN NULL;\nEND;\n$stub$;\n`;
+  const REACHABLE_MARKER_IMPL =
+    'AS $planted$\nBEGIN\n  IF false THEN\n'
+    + '    PERFORM check_idempotency(NULL);\n'
+    + '    INSERT INTO commission_payment_items VALUES (1);\n'
+    + '  END IF;\n  RETURN NULL;\nEND;\n$planted$;\n';
+  const commentOnly = psql(
+    `BEGIN;\n${COMMENT_ONLY_PUBLIC}`
+    + `CREATE FUNCTION public.${IMPL}(\n${HEADER}${REACHABLE_MARKER_IMPL}`
+    + `${migration}\nROLLBACK;\n`,
+    { allowFailure: true },
+  );
+  const commentOnlyOut = `${commentOnly.stdout || ''}\n${commentOnly.stderr || ''}`;
+  assert.notEqual(
+    commentOnly.status,
+    0,
+    `a comment naming the implementation was accepted as proof of a completed apply:\n${commentOnlyOut}`,
+  );
+  // The refusal must come from the STATE check. The planted body passes the
+  // marker check by construction, so a "does not look like the payout
+  // implementation" refusal here would mean the markers were what stopped it and
+  // the comment hole is still open.
+  assert.match(
+    commentOnlyOut,
+    new RegExp(`public\\.${IMPL} already exists while public\\.create_commission_payment[^\\n]*does not call it`),
+    `wrong refusal for a comment-only wrapper marker:\n${commentOnlyOut}`,
+  );
+
+  // D. The other half of the same rule: a public function that DOES call the
+  //    implementation but is not this migration's wrapper — no
+  //    check_idempotency_intent() — is a state this migration never produced
+  //    either. Calling the implementation is what any hand-written passthrough
+  //    would do; it is the intent check that makes a body the wrapper.
+  const PASSTHROUGH_PUBLIC =
+    `CREATE OR REPLACE FUNCTION public.create_commission_payment(\n${HEADER}`
+    + `AS $stub$\nBEGIN\n  RETURN public.${IMPL}(\n`
+    + '    p_commission_ids, p_payment_method, p_reference,\n'
+    + '    p_payment_date, p_notes, p_performed_by, p_idempotency_key\n'
+    + '  );\nEND;\n$stub$;\n';
+  const passthrough = psql(
+    `BEGIN;\nCREATE FUNCTION public.${IMPL}(\n${HEADER}${REACHABLE_MARKER_IMPL}`
+    + `${PASSTHROUGH_PUBLIC}${migration}\nROLLBACK;\n`,
+    { allowFailure: true },
+  );
+  const passthroughOut = `${passthrough.stdout || ''}\n${passthrough.stderr || ''}`;
+  assert.notEqual(
+    passthrough.status,
+    0,
+    `an unbound passthrough was accepted as this migration's wrapper:\n${passthroughOut}`,
+  );
+  assert.match(
+    passthroughOut,
+    new RegExp(`public\\.${IMPL} already exists while public\\.create_commission_payment[^\\n]*is not this migration's wrapper`),
+    `wrong refusal for a passthrough that is not the wrapper:\n${passthroughOut}`,
+  );
+
+  // E. Both code predicates above read prosrc, which is only source for the
+  //    language the lexer parses. A LANGUAGE sql stub whose text happens to
+  //    satisfy both would otherwise pass as this migration's wrapper — and this
+  //    migration's wrapper is always plpgsql, so the language alone settles it.
+  //    check_function_bodies is off because the stub names functions the
+  //    migration has not created yet.
+  const SQL_HEADER =
+    '  p_commission_ids uuid[], p_payment_method text, p_reference text,\n'
+    + '  p_payment_date date, p_notes text,\n'
+    + '  p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text\n'
+    + ') RETURNS uuid LANGUAGE sql SECURITY DEFINER SET search_path TO public, pg_temp\n';
+  const wrongLanguage = psql(
+    'BEGIN;\nSET LOCAL check_function_bodies = off;\n'
+    + `CREATE OR REPLACE FUNCTION public.create_commission_payment(\n${SQL_HEADER}`
+    + `AS $stub$\n  SELECT CASE WHEN public.check_idempotency_intent(\n`
+    + "         p_idempotency_key, 'create_commission_payment', p_performed_by, '') IS NULL\n"
+    + `    THEN public.${IMPL}(\n`
+    + '           p_commission_ids, p_payment_method, p_reference,\n'
+    + '           p_payment_date, p_notes, p_performed_by, p_idempotency_key)\n'
+    + '    ELSE NULL::uuid END\n$stub$;\n'
+    + `CREATE FUNCTION public.${IMPL}(\n${HEADER}${REACHABLE_MARKER_IMPL}`
+    + `${migration}\nROLLBACK;\n`,
+    { allowFailure: true },
+  );
+  const wrongLanguageOut = `${wrongLanguage.stdout || ''}\n${wrongLanguage.stderr || ''}`;
+  assert.notEqual(
+    wrongLanguage.status,
+    0,
+    `a LANGUAGE sql stub passed as this migration's plpgsql wrapper:\n${wrongLanguageOut}`,
+  );
+  assert.match(
+    wrongLanguageOut,
+    new RegExp(`public\\.${IMPL} already exists while public\\.create_commission_payment[^\\n]*is not a readable plpgsql function \\(language sql\\)`),
+    `wrong refusal for a non-plpgsql public function:\n${wrongLanguageOut}`,
+  );
 }
 
 try {

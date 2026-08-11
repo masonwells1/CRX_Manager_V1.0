@@ -335,6 +335,34 @@ $code_only$;
 REVOKE ALL ON FUNCTION public._crx_payout_code_only_20260809(text, text)
   FROM PUBLIC, anon, authenticated, service_role;
 
+-- Identifier boundary, as a WHITELIST of the ASCII characters that may legally
+-- abut a call or a table reference. A blacklist cannot be written correctly
+-- here: Postgres allows letters with diacriticals and non-Latin letters in
+-- unquoted identifiers, so '[^A-Za-z0-9_$]' treats the 'é' in
+-- fakeécheck_idempotency() as a boundary and accepts a body that calls an
+-- entirely different function. Anything outside this list — any letter, digit,
+-- underscore, dollar, or byte above ASCII — is NOT a boundary, so an unfamiliar
+-- character fails closed.
+--
+-- The set is the operator characters Postgres names in its lexical rules,
+-- backtick included, plus the punctuation that separates tokens. Backtick is
+-- legal in an operator name, so a body invoking a custom prefix operator
+-- immediately before the call would otherwise be refused although the call is
+-- real — a false refusal, not a bypass, but a needless one.
+--
+-- One function rather than a constant copied into each checker: two checkers
+-- read this, and a boundary set that drifts between them is a boundary set that
+-- is wrong in one of them.
+CREATE OR REPLACE FUNCTION public._crx_payout_bnd_20260809()
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+SET search_path TO pg_catalog, pg_temp
+AS $bnd$ SELECT '[[:space:](),;:=+*/<>|&~!@#%^?`\[\]{}.''-]'::text $bnd$;
+
+REVOKE ALL ON FUNCTION public._crx_payout_bnd_20260809()
+  FROM PUBLIC, anon, authenticated, service_role;
+
 -- The identity check itself. Absence of the wrapper marker is not proof a body
 -- is the one we mean to wrap, so require the two contract markers the wrapper
 -- actually depends on: the implementation must write an idempotency receipt via
@@ -364,15 +392,7 @@ STABLE
 SET search_path TO pg_catalog, pg_temp
 AS $assert_impl$
 DECLARE
-  -- Identifier boundary, as a WHITELIST of the ASCII characters that may
-  -- legally abut a call or a table reference. A blacklist cannot be written
-  -- correctly here: Postgres allows letters with diacriticals and non-Latin
-  -- letters in unquoted identifiers, so '[^A-Za-z0-9_$]' treats the 'é' in
-  -- fakeécheck_idempotency() as a boundary and accepts a body that calls an
-  -- entirely different function. Anything outside this list — any letter,
-  -- digit, underscore, dollar, or byte above ASCII — is NOT a boundary, so an
-  -- unfamiliar character fails closed.
-  v_bnd    constant text := '[[:space:](),;:=+*/<>|&~!@#%^?\[\]{}.''-]';
+  v_bnd    constant text := public._crx_payout_bnd_20260809();
   v_src    text;
   v_config text[];
   v_lang   name;
@@ -427,8 +447,9 @@ REVOKE ALL ON FUNCTION public._crx_payout_assert_impl_20260809(regprocedure, tex
 -- the private implementation name is already occupied:
 --
 --   * a completed prior application — the public function exists and is this
---     migration's wrapper, because the wrapper is what CREATE OR REPLACE left
---     behind after the rename; or
+--     migration's wrapper, proven from its EXECUTABLE text: it calls the
+--     implementation, and it calls check_idempotency_intent(), which this
+--     migration introduced and which no implementation contains; or
 --   * an application interrupted between the rename and the wrapper — the
 --     public function does not exist at all, because the rename took it away.
 --
@@ -445,8 +466,12 @@ STABLE
 SET search_path TO pg_catalog, pg_temp
 AS $assert_replay$
 DECLARE
-  v_oid oid;
-  v_src text;
+  v_bnd    constant text := public._crx_payout_bnd_20260809();
+  v_oid    oid;
+  v_src    text;
+  v_lang   name;
+  v_code   text;
+  v_needle text;
 BEGIN
   v_oid := to_regprocedure(p_public_sig);
   -- Interrupted between the rename and the wrapper. The implementation is the
@@ -455,12 +480,43 @@ BEGIN
   IF v_oid IS NULL THEN
     RETURN;
   END IF;
-  SELECT p.prosrc INTO v_src FROM pg_proc p WHERE p.oid = v_oid;
-  -- Raw source, not lexed: ANY mention, comment included, is enough to believe
-  -- the public function is already the wrapper, and the conservative direction
-  -- here is to believe it less readily, not more.
-  IF strpos(coalesce(v_src, ''), p_impl_name) = 0 THEN
-    RAISE EXCEPTION '% already exists while % is still unwrapped, so this migration did not create it; refusing to adopt an implementation it never renamed',
+
+  SELECT p.prosrc, l.lanname INTO v_src, v_lang
+    FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
+   WHERE p.oid = v_oid;
+
+  -- The wrapper this migration installs is plpgsql. Anything else occupying the
+  -- public signature is not it, and prosrc for another language is not source
+  -- the lexer below can read anyway.
+  IF v_lang IS DISTINCT FROM 'plpgsql'::name OR coalesce(btrim(v_src), '') = '' THEN
+    RAISE EXCEPTION '% already exists while % is not a readable plpgsql function (language %), so this migration did not create it; refusing to adopt an implementation it never renamed',
+      p_what, p_public_sig, coalesce(v_lang::text, '<missing>');
+  END IF;
+
+  -- Lexed, not raw. Round 11: reading the raw source let a COMMENT naming the
+  -- implementation stand as proof the public function was already the wrapper,
+  -- which is no proof at all — a hand-repaired database carrying that comment
+  -- over an unwrapped body would have handed this migration an arbitrary
+  -- implementation to adopt. What the wrapper actually does is executable, so
+  -- require it in executable text: it CALLS the implementation, and it calls
+  -- check_idempotency_intent(), which this migration introduced and which no
+  -- payout implementation contains — the implementations call the older
+  -- check_idempotency() instead, so the two cannot be confused.
+  v_code := public._crx_payout_code_only_20260809(v_src, p_public_sig);
+
+  -- The implementation name is generated by this migration and is [a-z0-9_]
+  -- only, but escape it anyway rather than let a caller's text reach the regex
+  -- engine as a pattern. Backslash before a non-alphanumeric is a literal in
+  -- Postgres AREs; alphanumerics are left alone, since '\d' is a class.
+  v_needle := regexp_replace(p_impl_name, '([^A-Za-z0-9_])', '\\\1', 'g');
+
+  IF v_code !~ ('(^|' || v_bnd || ')' || v_needle || '[[:space:]]*\(') THEN
+    RAISE EXCEPTION '% already exists while % does not call it, so this migration did not create it; refusing to adopt an implementation it never renamed',
+      p_what, p_public_sig;
+  END IF;
+
+  IF v_code !~ ('(^|' || v_bnd || ')check_idempotency_intent[[:space:]]*\(') THEN
+    RAISE EXCEPTION '% already exists while % is not this migration''s wrapper (it does not call check_idempotency_intent()), so this migration did not create it; refusing to adopt an implementation it never renamed',
       p_what, p_public_sig;
   END IF;
 END
@@ -954,10 +1010,11 @@ GRANT EXECUTE ON FUNCTION public.void_commission_payment(uuid, text, uuid, text)
 -- ---------------------------------------------------------------------------
 -- The identity-check helpers exist only for the three renames above. Drop them
 -- so the migration leaves no extra function behind for a later caller to reach.
--- Order matters: the assert helper calls the lexer.
+-- Order matters: both assert helpers call the lexer and the boundary set.
 DROP FUNCTION IF EXISTS public._crx_payout_assert_replay_20260809(text, text, text);
 DROP FUNCTION IF EXISTS public._crx_payout_assert_impl_20260809(regprocedure, text);
 DROP FUNCTION IF EXISTS public._crx_payout_code_only_20260809(text, text);
+DROP FUNCTION IF EXISTS public._crx_payout_bnd_20260809();
 
 -- ---------------------------------------------------------------------------
 -- Post-conditions
@@ -991,6 +1048,9 @@ BEGIN
   END IF;
   IF to_regprocedure('public._crx_payout_assert_replay_20260809(text, text, text)') IS NOT NULL THEN
     RAISE EXCEPTION 'the identity-check helper _crx_payout_assert_replay_20260809 was left behind';
+  END IF;
+  IF to_regprocedure('public._crx_payout_bnd_20260809()') IS NOT NULL THEN
+    RAISE EXCEPTION 'the identity-check helper _crx_payout_bnd_20260809 was left behind';
   END IF;
   IF to_regprocedure('public._crx_payout_assert_impl_20260809(regprocedure, text)') IS NOT NULL THEN
     RAISE EXCEPTION 'the identity-check helper _crx_payout_assert_impl_20260809 was left behind';
