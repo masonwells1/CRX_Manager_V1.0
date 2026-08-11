@@ -18,7 +18,9 @@ production behavior. Latest-head review also aligned the compliance/PDF reviewer
 scaffolds, money hook message, inventory checklist, and required gotchas reference so none can
 override the documented legacy-column exception. A final current-head review also made the
 compliance reviewer reject raw use of the legacy cent parsers on inputs with more than two
-fractional digits unless an explicit exact rounding rule has been approved.
+fractional digits unless an explicit exact rounding rule has been approved; the deterministic
+money-safety hook now gives the same qualified remediation instead of recommending the truncating
+helper by itself.
 
 ## 2026-08-10 — Agent toolchain refresh; removed the dead Codex Sentry connector
 
