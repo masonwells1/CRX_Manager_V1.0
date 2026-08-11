@@ -123,7 +123,15 @@ for both pg_cron APIs, and function headers are reconstructed across the literal
 fragments enclosed by an unproven callable before the reader decides the text is
 ordinary data.
 
-The focused actor-binding suite grew from 115 to 209 assertions while the
+The next exact-head round found two more fail-open variants and two false-denial
+edges. Every `cron.job` INSERT in a multi-CTE statement is now validated instead
+of trusting the first safe insert; Unicode-escaped string SQL is decoded for
+function-header detection at unproven callable boundaries; named-only
+`alter_job` options no longer impersonate positional command three; and Edit
+payloads are reconstructed against the current file so the guard inspects the
+result rather than an isolated replacement fragment.
+
+The focused actor-binding suite grew from 115 to 213 assertions while the
 idempotency reference suite remained at 86. Sixty continuation decisions were
 weakened or removed one at a time; every mutation made the real hook-process
 suite fail before restoration. Separate real-process probes allowed ordinary

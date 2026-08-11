@@ -6,7 +6,9 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import os from "node:os";
 import path from "node:path";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -339,6 +341,12 @@ r = runHook(`SELECT dblink_exec(
 );`);
 ok(isDeny(r), "dblink_exec cannot assemble actor-forgery DDL from harmless-looking fragments");
 
+r = runHook(`SELECT dblink_exec(
+  'connection-name',
+  U&'\\0043REATE OR REPLACE FUNCTION public.encoded_actor(p_performed_by uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS \\0024fn\\0024 BEGIN UPDATE invoices SET created_by = p_performed_by; END \\0024fn\\0024;'
+);`);
+ok(isDeny(r), "Unicode-encoded function DDL cannot cross an unproven callable boundary");
+
 r = runHook(`ALTER FUNCTION public.execute_sql_readonly(text) RENAME TO actor_sql_alias;`);
 ok(isDeny(r), "the known SQL executor cannot be renamed past the name-bound reader");
 ok(r.stdout.includes("renames or moves execute_sql_readonly"),
@@ -471,6 +479,20 @@ ok(isDeny(r), "search_path cannot hide an unqualified quoted cron.job INSERT");
 r = runHook(`INSERT INTO cron.job (schedule, command, nodename, nodeport, database, username, active, jobname)
 VALUES ('0 6 * * *', $job$SELECT public.existing_safe_job()$job$, 'localhost', 5432, 'postgres', 'postgres', true, 'safe-inserted-job');`);
 ok(!isDeny(r), "INSERT INTO cron.job without function DDL remains allowed");
+
+r = runHook(`${STAGED_DDL}
+WITH safe_job AS (
+  INSERT INTO cron.job (schedule, command, nodename, nodeport, database, username, active, jobname)
+  VALUES ('0 6 * * *', $job$SELECT public.existing_safe_job()$job$, 'localhost', 5432, 'postgres', 'postgres', true, 'safe-cte-job')
+  RETURNING jobid
+), staged_job AS (
+  INSERT INTO cron.job (schedule, command, nodename, nodeport, database, username, active, jobname)
+  SELECT '* * * * *', command, 'localhost', 5432, 'postgres', 'postgres', true, 'staged-cte-job'
+  FROM staged_cron_sql
+  RETURNING jobid
+)
+SELECT count(*) FROM safe_job, staged_job;`);
+ok(isDeny(r), "a safe first CTE insert cannot hide a later staged cron.job command");
 
 r = runHook(`${STAGED_DDL}
 INSERT INTO cron.job (schedule, command, nodename, nodeport, database, username, active, jobname)
@@ -678,6 +700,9 @@ ok(!isDeny(r), "a harmless positional cron.alter_job command remains allowed wit
 
 r = runHook(`SELECT cron.alter_job(42, active := false);`);
 ok(!isDeny(r), "cron.alter_job without function DDL remains allowed");
+
+r = runHook(`SELECT cron.alter_job(42, schedule := '0 0 * * *', active := false);`);
+ok(!isDeny(r), "named alter_job options do not impersonate positional command three");
 
 r = runHook(`SELECT $note$ "cron"."schedule"('ignored', 'CREATE FUNCTION public.not_executable()')$note$;`);
 ok(!isDeny(r), "cron-looking text inside a data literal is not treated as an API call");
@@ -1073,6 +1098,24 @@ r = spawnSync(process.execPath, [path.join(__dirname, "actor-binding-check.mjs")
   encoding: "utf8",
 });
 ok(isDeny(r), "Edit-tool new_string payload is checked the same as Write content");
+
+const editRoot = mkdtempSync(path.join(os.tmpdir(), "actor-binding-edit-"));
+const editMigration = path.join(editRoot, "supabase", "migrations", "20260807000001_edit.sql");
+mkdirSync(path.dirname(editMigration), { recursive: true });
+const safeEditFile = fn(BOUND);
+writeFileSync(editMigration, safeEditFile);
+r = spawnSync(process.execPath, [path.join(__dirname, "actor-binding-check.mjs")], {
+  input: JSON.stringify({
+    tool_input: {
+      file_path: editMigration,
+      old_string: "$function$;",
+      new_string: "$function$;\n",
+    },
+  }),
+  encoding: "utf8",
+});
+ok(!isDeny(r), "Edit fragments are reconstructed into the complete resulting migration");
+rmSync(editRoot, { recursive: true, force: true });
 
 // malformed JSON on stdin must fail OPEN, not crash the session
 r = spawnSync(process.execPath, [path.join(__dirname, "actor-binding-check.mjs")], { input: "not json", encoding: "utf8" });

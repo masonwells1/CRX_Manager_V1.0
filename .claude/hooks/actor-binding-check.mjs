@@ -108,7 +108,38 @@ if (!filePath || !filePath.endsWith(".sql") || !filePath.includes("supabase/migr
   out("allow");
 }
 
-const content = payload?.tool_input?.content || payload?.tool_input?.new_string || "";
+function proposedFileContent(toolInput, targetPath) {
+  if (typeof toolInput?.content === "string") return { content: toolInput.content };
+  if (typeof toolInput?.new_string !== "string") return { content: "" };
+  if (typeof toolInput?.old_string !== "string") return { content: toolInput.new_string };
+
+  let current;
+  try {
+    current = readFileSync(targetPath, "utf8");
+  } catch {
+    return { error: "the current migration file could not be read" };
+  }
+  const oldString = toolInput.old_string;
+  const first = current.indexOf(oldString);
+  if (first === -1) return { error: "old_string was not found in the current migration file" };
+  if (toolInput.replace_all === true) {
+    return { content: current.split(oldString).join(toolInput.new_string) };
+  }
+  if (current.indexOf(oldString, first + oldString.length) !== -1) {
+    return { error: "old_string matched more than once in the current migration file" };
+  }
+  return {
+    content: current.slice(0, first) + toolInput.new_string + current.slice(first + oldString.length),
+  };
+}
+
+const proposed = proposedFileContent(payload?.tool_input, filePath);
+if (proposed.error) {
+  out("block", "ACTOR BINDING VIOLATION: This Edit could not be reconstructed against the current " +
+    `migration (${proposed.error}), so the guard cannot inspect the resulting file. Refresh the edit ` +
+    "against the current bytes and retry.");
+}
+const content = proposed.content;
 if (!content) out("allow");
 
 if (/--\s*actor-binding-check:\s*exempt/i.test(content)) {
@@ -400,7 +431,10 @@ function hasOpaquePgCronCallCommand(rawStmt) {
 
     const hasNamedArgs = args.some((arg) => /(?:=>|:=)/.test(maskSqlForCallNames(arg) || ""));
     if (site.api === "alter_job") {
-      if (args.length < 3) continue; // command was not changed
+      const thirdIsNamed = args.length >= 3 &&
+        /^\s*(?:"(?:[^"]|"")*"|[A-Za-z_]\w*)\s*(?:=>|:=)/
+          .test(maskSqlForCallNames(args[2]) || "");
+      if (args.length < 3 || thirdIsNamed) continue; // command was not changed
       if (!isDirectSqlStringLiteral(args[2])) return true;
       continue;
     }
@@ -485,37 +519,46 @@ function tupleCommandAssignmentsAreDirect(rawStmt, callableSql) {
 
 function insertCommandValuesAreDirect(rawStmt, callableSql) {
   const jobTable = '(?:(?:"cron"|cron)\\s*\\.\\s*)?(?:"job"|job)';
-  const head = new RegExp(`(?:^|[^\\w$.\"])(?:INSERT\\s+INTO)\\s+${jobTable}\\s*`, "i").exec(callableSql);
-  if (!head) return null;
-  const columnsOpen = head.index + head[0].length;
-  if (callableSql[columnsOpen] !== "(") return false;
-  const columns = readBalancedParens(callableSql, columnsOpen);
-  if (!columns) return false;
-  const names = splitTopLevelArgs(columns.params).map(normalizedIdentifier);
-  const commandIndex = names.indexOf("command");
-  if (commandIndex === -1) return false;
-  const valuesHead = /^\s*VALUES\s*/i.exec(callableSql.slice(columns.end));
-  if (!valuesHead) return false;
-  let cursor = columns.end + valuesHead[0].length;
-  let rows = 0;
-  while (callableSql[cursor] === "(") {
-    const values = readBalancedParens(callableSql, cursor);
-    if (!values) return false;
-    const sourceValues = splitTopLevelArgs(
-      values.params,
-      rawStmt.slice(cursor + 1, values.end - 1)
-    );
-    if (sourceValues.length !== names.length || !isDirectSqlStringLiteral(sourceValues[commandIndex])) {
-      return false;
+  const heads = new RegExp(
+    `(?:^|[^\\w$.\"])(?:INSERT\\s+INTO)\\s+${jobTable}\\s*`,
+    "gi"
+  );
+  let found = false;
+  let head;
+  while ((head = heads.exec(callableSql)) !== null) {
+    found = true;
+    const columnsOpen = head.index + head[0].length;
+    if (callableSql[columnsOpen] !== "(") return false;
+    const columns = readBalancedParens(callableSql, columnsOpen);
+    if (!columns) return false;
+    const names = splitTopLevelArgs(columns.params).map(normalizedIdentifier);
+    const commandIndex = names.indexOf("command");
+    if (commandIndex === -1) return false;
+    const valuesHead = /^\s*VALUES\s*/i.exec(callableSql.slice(columns.end));
+    if (!valuesHead) return false;
+    let cursor = columns.end + valuesHead[0].length;
+    let rows = 0;
+    while (callableSql[cursor] === "(") {
+      const values = readBalancedParens(callableSql, cursor);
+      if (!values) return false;
+      const sourceValues = splitTopLevelArgs(
+        values.params,
+        rawStmt.slice(cursor + 1, values.end - 1)
+      );
+      if (sourceValues.length !== names.length || !isDirectSqlStringLiteral(sourceValues[commandIndex])) {
+        return false;
+      }
+      rows++;
+      cursor = values.end;
+      while (/\s/.test(callableSql[cursor] || "")) cursor++;
+      if (callableSql[cursor] !== ",") break;
+      cursor++;
+      while (/\s/.test(callableSql[cursor] || "")) cursor++;
     }
-    rows++;
-    cursor = values.end;
-    while (/\s/.test(callableSql[cursor] || "")) cursor++;
-    if (callableSql[cursor] !== ",") break;
-    cursor++;
-    while (/\s/.test(callableSql[cursor] || "")) cursor++;
+    if (rows === 0) return false;
+    heads.lastIndex = cursor;
   }
-  return rows > 0;
+  return found ? true : null;
 }
 
 function hasOpaquePgCronCommandWrite(rawStmt) {
@@ -778,6 +821,38 @@ function carriesFnHeader(payload) {
     CREATE_FN_HEAD_RE.test(blankComments(payload));
 }
 
+/** Decode PostgreSQL U&'...' string escapes only for header detection. The
+ * original source remains untouched for length-preserving structural scans. */
+function unicodeStringForHeaderDetection(text, open, end, payload) {
+  if (text.slice(Math.max(0, open - 2), open).toUpperCase() !== "U&" ||
+      /[\w$]/.test(text[open - 3] || "")) return null;
+  let escape = "\\";
+  const custom = /^\s+UESCAPE\s+'([^'])'/i.exec(text.slice(end));
+  if (custom) escape = custom[1];
+  if (/[0-9A-Fa-f+'"\s]/.test(escape)) return { error: true };
+
+  let decoded = "";
+  for (let i = 0; i < payload.length; i++) {
+    if (payload[i] !== escape) {
+      decoded += payload[i];
+      continue;
+    }
+    if (payload[i + 1] === escape) {
+      decoded += escape;
+      i++;
+      continue;
+    }
+    const plus = payload[i + 1] === "+";
+    const digits = plus ? payload.slice(i + 2, i + 8) : payload.slice(i + 1, i + 5);
+    if (!new RegExp(`^[0-9A-Fa-f]{${plus ? 6 : 4}}$`).test(digits)) return { error: true };
+    const codePoint = Number.parseInt(digits, 16);
+    if (codePoint > 0x10ffff) return { error: true };
+    decoded += String.fromCodePoint(codePoint);
+    i += plus ? 7 : 4;
+  }
+  return { payload: decoded };
+}
+
 /** True when the current literal is executable procedural code rather than
  * data. PostgreSQL permits DO [LANGUAGE name] code, with code written as a
  * dollar-quoted or single-quoted string. AS bodies use the same literal forms. */
@@ -1020,7 +1095,11 @@ function maskSqlNoise(text, inProceduralCode = false) {
       // literal. Recognize all of them, then fail closed.
       if (isProceduralContainer && proceduralStringKind !== "plain") return null;
       if (isProceduralContainer && hasAdjacentNewlineString(text, end) !== false) return null;
-      const hasFunctionHeader = carriesFnHeader(payload);
+      const unicodePayload = ch === "'"
+        ? unicodeStringForHeaderDetection(text, i, end, payload)
+        : null;
+      if (unicodePayload?.error) return null;
+      const hasFunctionHeader = carriesFnHeader(unicodePayload?.payload ?? payload);
       const isKnownSqlExecutor = ch === "'" && hasFunctionHeader &&
         isExecuteSqlReadonlyLiteralPrefix(out);
       const callablePrefix = ch === "'" && hasFunctionHeader
