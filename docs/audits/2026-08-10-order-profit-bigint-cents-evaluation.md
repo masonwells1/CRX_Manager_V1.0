@@ -253,3 +253,38 @@ full migration-apply proof gate. They replace function bodies and add CHECK cons
 **no live row was modified.** `.claude/schema-registry.json` was rebuilt from live
 introspection in the same change (high-water now `20260810155629`). No application code has
 been pushed, merged, or deployed — that is still separate.
+
+### `restore_quote_version` — the one residual path, measured against live 2026-08-11
+
+`20260810151000`'s header flags `restore_quote_version` as the only writer that can set a
+now-constrained quote money column without rounding: it replays `quote_versions.snapshot_data`
+verbatim into `quotes.total_price` / `total_profit` and `quote_items.total_price` / `profit`.
+Adversarial review correctly asked for bound database evidence that no stored snapshot can
+therefore make a restore abort. That evidence, gathered live read-only on 2026-08-11:
+
+A recursive `jsonb` walk over **every** numeric leaf of **all 3 live `quote_versions` rows** —
+not just the keys the restore path happens to read — evaluated the exact constraint predicate
+`n = ROUND(n,2) AND n > '-Infinity' AND n < 'Infinity'`:
+
+| measure | result |
+| --- | --- |
+| numeric leaves across all snapshots | 70 |
+| leaves failing the predicate | **0** |
+| money-named leaves (`cost` / `price` / `profit`) | 40 |
+| money leaves failing the predicate | **0** |
+
+Note the two snapshot shapes are not identical — one stores a `quote` object with
+`total_price` / `total_cost` / `total_profit`, the other a `totals` object with camelCase keys —
+which is exactly why the check walks all leaves rather than a fixed key list.
+
+**No restore can fail today.** Going forward the risk is structurally bounded rather than
+merely observed: a snapshot is taken from a quote row, and the source columns
+`quotes.total_price`, `quotes.total_profit`, `quote_items.total_price` and `quote_items.profit`
+now each carry a validated `*_whole_cents_chk`, so no future snapshot can capture a value the
+restore path would be unable to write back. `quotes.total_cost` is deliberately *not*
+constrained (it is one of the 5 deferred columns), so a sub-cent `total_cost` in a snapshot
+still restores without error — it cannot abort anything.
+
+**Still worth fixing, tracked not done:** add `ROUND(..., 2)` inside `restore_quote_version`
+so the guarantee holds by construction instead of by inventory. That rewrites a live function
+and needs its own approval and migration; it is deliberately not bundled here.
