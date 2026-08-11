@@ -200,10 +200,15 @@ that same row **errored**, while the identical edit on a clean row succeeded. Sh
 a latent trap, not a safe intermediate step.
 
 What shipped instead: constrain only the columns already measured 100% clean (7 of 12), and
-have the migration itself assert that the 5 dirty columns are **not** constrained, so nobody
-can quietly widen it. Repairing those 5 columns' 43 non-conforming rows rewrites stored money
-and is a separate migration needing Mason's explicit OK on its own; the constraints follow it
-as `VALID` from the start.
+have the migration itself assert that the 5 deferred columns are **not** constrained, so nobody
+can quietly widen it. Those 5 columns are deferred for two different reasons. **Four hold the
+43 non-conforming rows** and need a data repair first: `order_items.total_price` (35/288),
+`quotes.total_cost` (2/4), `commissions.commission_amount` and `commissions.order_profit`
+(3/35 each). **`orders.total_price` is currently clean** and is deferred for a behavioural
+reason instead: `_update_order_items_impl` overwrites it with the raw un-rounded line sum, so
+constraining it would start rejecting ordinary edits until that writer is corrected. Repairing
+the 43 rows rewrites stored money and is a separate migration needing Mason's explicit OK on
+its own; the constraints follow it as `VALID` from the start.
 
 ### Tier 3 — if cents are still wanted later
 
@@ -224,7 +229,7 @@ on a database with no PITR and no backup.*
 ## Verification status
 
 Verified live, read-only, against `rhyzpcqhnizqbxphqdkr` on 2026-08-10: all column types,
-all row and sub-cent counts, the additivity results, the 10/35 commission-basis mismatch
+all row and sub-cent counts, the additivity results, the 12/35 commission-basis mismatch
 (with the `pending`/`cancelled` breakdown in §5), and the 46 / 101 function counts.
 
 **Verified by execution** in a throwaway PostgreSQL 17 container on 2026-08-10 — this
@@ -241,6 +246,10 @@ supersedes the earlier "not verified" note about NaN:
    EXECUTE, and tampering the pinned `_insert_commissions_for_order` helper each made the
    migration abort as designed.
 
-**Three migrations have been drafted and proven in a throwaway database (Mason approved
-drafting on 2026-08-10). Nothing has been applied to live; no live data was changed; nothing
-pushed or merged.** Applying them requires Mason's separate explicit OK.
+**All three migrations were applied to live production on 2026-08-10**, in the order
+`20260810150000` → `20260810150500` → `20260810151000` (ledger versions `20260810152935`,
+`20260810154721`, `20260810155629`), on Mason's explicit in-chat approval and each through the
+full migration-apply proof gate. They replace function bodies and add CHECK constraints only:
+**no live row was modified.** `.claude/schema-registry.json` was rebuilt from live
+introspection in the same change (high-water now `20260810155629`). No application code has
+been pushed, merged, or deployed — that is still separate.

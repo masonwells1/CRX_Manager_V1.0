@@ -19,6 +19,18 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-08-10 — blend-ticket order creation can be rejected by the new whole-cent CHECKs
+
+**Severity: latent, not currently firing.** `create_order_from_blend_ticket` accumulates `v_total_price` and `v_total_cost` as raw `price * converted_quantity` products and writes them, plus `total_price - total_cost`, straight to `orders` with **no rounding** (live body confirmed 2026-08-10; `orders` has no BEFORE-UPDATE rounding trigger — only status/lineage/commission-stamp triggers). History row 867 added `orders_total_cost_whole_cents_chk` and `orders_total_profit_whole_cents_chk`, both live and `convalidated`. A blend ticket whose unit conversion yields a fractional quantity therefore produces a sub-cent total and the final write is **rejected**, rolling back the whole RPC and failing order creation from `BlendTicketDetail` with a raw constraint error.
+
+**Why it is not firing:** production holds **0 `blend_tickets` and 0 `blend_ticket_products`** (read-only count, 2026-08-10), so the path has never been exercised. All existing `orders` rows are whole-cent, which is why the constraints validated cleanly.
+
+**Found by:** Codex P1 on PR #371, verified independently against live `pg_proc`, `pg_trigger` and `pg_constraint` rather than taken on trust.
+
+**Fix:** round the two accumulators at the write, matching what `trg_recalc_order_totals` already does on every other order path. Tracked in the Wave A ordering-cycle branch; until it lands, do not create the first blend ticket.
+
+---
+
 ## RESOLVED LIVE 2026-08-09 — Team Board delegated completion and assignment notifications (frontend awaits push)
 
 Both migrations are applied live. `20260809130108_team_note_completion_rpc_and_assignment_notify` added the governed `complete_team_note` RPC and the assignment-notification trigger without widening the existing `tnotes_update` policy; live structure, grants, and the 26 standing invariant predicates passed. The HIGH that review then raised — an inactive profile with a still-valid JWT could satisfy the legacy `tnotes_insert` creator check and make the owner-run trigger notify an active teammate — is closed by `20260810010308_active_team_note_assignment_actor` (authored as `20260809154649`), which requires an active profile in the INSERT policy *and* independently in the trigger, leaving `tnotes_update` unchanged.
