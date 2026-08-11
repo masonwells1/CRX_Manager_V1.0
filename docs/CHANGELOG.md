@@ -22,6 +22,17 @@ fractional digits unless an explicit exact rounding rule has been approved; the 
 money-safety hook now gives the same qualified remediation instead of recommending the truncating
 helper by itself.
 
+## 2026-08-10 — Graphify-first agent navigation policy
+
+Made Graphify the explicit first-pass navigator for architecture, multi-file, workflow/migration,
+difficult-debugging, structural-audit, and PR-impact work. `AGENTS.md` now defines the shared routing,
+authority, and evidence boundaries; `CLAUDE.md` explicitly routes Claude through that policy. The shared
+Graphify skill carries the tool procedure: check graph freshness, query the smallest useful subgraph,
+use the generated report/visual index, minimize source reads, and preserve useful or corrected outcomes
+with `save-result`/`reflect`. Focused source and live read-only evidence remain mandatory for safe edits
+and material proof; Graphify is navigation, not authority. When Graphify is unavailable or its wrapper
+reports a supported skip, agents continue with focused source inspection and disclose the limitation.
+
 ## 2026-08-10 — Agent toolchain refresh; removed the dead Codex Sentry connector
 
 Verified the Codex side of the harness end-to-end from a Claude Code desktop session and brought the local agent toolchain current. All three Codex model tiers were confirmed live by running each one (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`); `codex-review`, `codex-gauntlet` and `codex-build.mjs` pin model and reasoning effort explicitly and correctly. Codex CLI (0.147.0) and Claude Code (2.1.226) were already at the newest published versions; six other global CLIs were updated (npm 11→12, vercel 55→58, google-workspace-mcp 2→4, filesystem MCP server, sentry, @sentry/cli), after which a live `codex exec` run confirmed the major npm jump broke nothing.
