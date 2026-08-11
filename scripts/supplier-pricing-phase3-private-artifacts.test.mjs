@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { chmodSync, closeSync, existsSync, ftruncateSync, linkSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, copyFileSync, existsSync, ftruncateSync, linkSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -888,8 +888,21 @@ git() { return 0; }
     symlinkSync(ignoredLinkTarget, path.join(ignoredLinkRepo, 'ordinary-tool-link.ignored'), 'file');
     mkdirSync(path.join(ignoredLinkRepo, 'ordinary-bin')); symlinkSync(ignoredLinkTarget, path.join(ignoredLinkRepo, 'ordinary-bin', 'tool'), 'file');
     await fixtureContainment(ignoredLinkRepo);
-    symlinkSync(ignoredLinkTarget, path.join(ignoredLinkRepo, 'private-artifacts'), 'junction');
-    await assert.rejects(() => fixtureContainment(ignoredLinkRepo), error => error.message === 'private Phase 3C artifact containment failure: private-artifacts (private-artifacts directory)');
+  } catch (error) { if (!['EPERM', 'EACCES', 'UNKNOWN'].includes(error?.code)) throw error; }
+  // The forbidden-name rule fires before any reparse point is dereferenced.
+  // This assertion stands apart from the tool-link block above because creating
+  // a Windows file symlink needs a privilege an ordinary account lacks: folded
+  // into that block, its EPERM skipped this case on every Windows machine
+  // except an elevated CI runner. A junction is a directory-only reparse point,
+  // so the target must be a directory for Git to enumerate the entry at all —
+  // aimed at a file it is a broken junction Git cannot open. The target holds
+  // only ordinary content, so the rejection is attributable to the
+  // `private-artifacts` name alone. Git reports the link itself on POSIX and
+  // the walked-through path on win32; both must fail closed.
+  const forbiddenLinkTarget = path.join(temp, 'ordinary-forbidden-link-target'); mkdirSync(forbiddenLinkTarget, { recursive: true }); writeFileSync(path.join(forbiddenLinkTarget, 'ordinary-content.txt'), 'ordinary target\n');
+  try {
+    symlinkSync(forbiddenLinkTarget, path.join(ignoredLinkRepo, 'private-artifacts'), 'junction');
+    await assert.rejects(() => fixtureContainment(ignoredLinkRepo), error => /^private Phase 3C artifact containment failure: private-artifacts(\/ordinary-content\.txt)? \(private-artifacts directory\)$/.test(error.message));
   } catch (error) { if (!['EPERM', 'EACCES', 'UNKNOWN'].includes(error?.code)) throw error; }
   const embeddedRepo = fixtureRepo('containment-ignored-embedded-repository'); writeFileSync(path.join(embeddedRepo, '.gitignore'), 'nested/\n'); git(embeddedRepo, ['add', '.gitignore']); git(embeddedRepo, ['commit', '--quiet', '-m', 'ignore nested repository']); const nestedRepo = path.join(embeddedRepo, 'nested'); git(embeddedRepo, ['init', '--quiet', nestedRepo]); writeFileSync(path.join(nestedRepo, 'private-packet.json'), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
   await assert.rejects(() => fixtureContainment(embeddedRepo), /nested\/? \(embedded Git repository\)/);
@@ -930,6 +943,100 @@ git() { return 0; }
   rmSync(path.join(strayPointer, '.git'), { force: true }); mkdirSync(path.join(strayPointer, '.git'), { recursive: true });
   assert.equal(ownWorktreeMarker(strayPointer, hostWorktreesDirectory), false);
   rmSync(strayPointer, { recursive: true, force: true });
+  // A pointer file that genuinely IS this repository's, copied out of a real
+  // worktree, must not carry the exemption with it. The pointer is only a
+  // claim; the administration directory it names holds a `gitdir` backlink
+  // naming the one directory that claim is true of. Hard-linking the pointer
+  // preserves the FILE's identity, which is why the backlink is compared
+  // against the candidate DIRECTORY — NTFS cannot hard-link a directory.
+  const clonedPointer = path.join(worktreeHost, '.claude', 'worktrees', 'cloned'); mkdirSync(clonedPointer, { recursive: true });
+  copyFileSync(path.join(ownLinkedWorktree, '.git'), path.join(clonedPointer, '.git'));
+  assert.equal(ownWorktreeMarker(clonedPointer, hostWorktreesDirectory), false);
+  rmSync(path.join(clonedPointer, '.git'), { force: true });
+  linkSync(path.join(ownLinkedWorktree, '.git'), path.join(clonedPointer, '.git'));
+  assert.equal(ownWorktreeMarker(clonedPointer, hostWorktreesDirectory), false);
+  rmSync(clonedPointer, { recursive: true, force: true });
+  // A worktree whose backlink Git can no longer resolve fails closed instead of
+  // being waved through as this checkout seen twice.
+  const sessionBacklink = path.join(hostWorktreesDirectory, 'session', 'gitdir');
+  renameSync(sessionBacklink, `${sessionBacklink}.parked`);
+  assert.equal(ownWorktreeMarker(ownLinkedWorktree, hostWorktreesDirectory), false);
+  renameSync(`${sessionBacklink}.parked`, sessionBacklink);
+  assert.equal(ownWorktreeMarker(ownLinkedWorktree, hostWorktreesDirectory), true);
+  // The own-worktree registry is keyed by a path string, so membership must be
+  // compared through the same case normalization every other containment
+  // decision uses. Git prints the registered path with whatever casing it
+  // recorded at `worktree add` time, while the ignored-directory listing
+  // reports the casing on disk. When those disagree the lookup missed and a
+  // legitimate linked worktree of THIS repository was classified as an
+  // embedded repository — the same push block this exemption exists to remove.
+  let worktreeCasingSkews = 0;
+  const skewedWorktreeCasingExecute = (command, args, options) => {
+    const output = fixtureGitExecute(command, args, options);
+    if (args[0] !== 'worktree' || args[1] !== 'list') return output;
+    return String(output).replace(/^(worktree .*)session$/gm, (_record, prefix) => { worktreeCasingSkews += 1; return `${prefix}SESSION`; });
+  };
+  const skewedWorktreeCasingContainment = () => checkPrivateArtifactContainment({ root: worktreeHost, execute: skewedWorktreeCasingExecute });
+  // On a case-sensitive filesystem the two casings really are two different
+  // directories, so the registered path is genuinely absent and failing closed
+  // is correct. Only Windows compares paths case-insensitively.
+  if (process.platform === 'win32') await skewedWorktreeCasingContainment();
+  else await assert.rejects(skewedWorktreeCasingContainment, /session\/? \(embedded Git repository\)/);
+  assert(worktreeCasingSkews >= 1, 'the casing-skew harness must actually rewrite the registered worktree path, or this assertion proves nothing');
+  // The same disagreement from the other side: the registry keeps the casing it
+  // recorded while the ignored listing reports a differently cased directory.
+  // This direction is meaningful only on Windows — elsewhere the skewed path
+  // names a directory that does not exist.
+  if (process.platform === 'win32') {
+    let listingCasingSkews = 0;
+    const skewedListingCasingExecute = (command, args, options) => {
+      const output = fixtureGitExecute(command, args, options);
+      if (args[0] !== 'ls-files' || !args.includes('--ignored')) return output;
+      // NUL-separated raw path bytes: round-trip through latin1 so the rewrite
+      // cannot disturb any byte outside the segment being recased.
+      return Buffer.from(output.toString('latin1').replace(/\.claude\/worktrees\/session\//g, () => { listingCasingSkews += 1; return '.claude/worktrees/SESSION/'; }), 'latin1');
+    };
+    await checkPrivateArtifactContainment({ root: worktreeHost, execute: skewedListingCasingExecute });
+    assert(listingCasingSkews >= 1, 'the casing-skew harness must actually rewrite the ignored listing path, or this assertion proves nothing');
+  }
+  // Case folding decides which registry key a candidate matches, so it must
+  // never be the ONLY thing granting the exemption. A Windows directory with
+  // per-directory case sensitivity enabled can hold `session` and `SESSION` at
+  // once: two different directories that fold to one key. A foreign repository
+  // parked at the colliding name must still fail closed, which it does only
+  // because the pointer file is re-verified on the candidate directory itself.
+  const collisionHost = fixtureRepo('containment-case-folded-worktree-collision'); writeFileSync(path.join(collisionHost, '.gitignore'), '.claude/worktrees/\n'); git(collisionHost, ['add', '.gitignore']); git(collisionHost, ['commit', '--quiet', '-m', 'ignore session worktrees']);
+  const collisionWorktrees = path.join(collisionHost, '.claude', 'worktrees'); mkdirSync(collisionWorktrees, { recursive: true });
+  if (process.platform === 'win32') spawnSync('fsutil', ['file', 'setCaseSensitiveInfo', collisionWorktrees, 'enable'], { encoding: 'utf8' });
+  // Probe rather than assume: this is per-directory on Windows, filesystem-wide
+  // elsewhere, and unavailable on a case-insensitive macOS volume.
+  let caseDistinctNames = false;
+  try { mkdirSync(path.join(collisionWorktrees, 'probe')); mkdirSync(path.join(collisionWorktrees, 'PROBE')); caseDistinctNames = readdirSync(collisionWorktrees).filter(name => name.toLowerCase() === 'probe').length === 2; } catch { caseDistinctNames = false; }
+  for (const probe of readdirSync(collisionWorktrees)) rmSync(path.join(collisionWorktrees, probe), { recursive: true, force: true });
+  // Windows is the only platform where the case-folded key can collide, so it
+  // is the only platform where skipping this would hide the bug it covers.
+  // Fail loudly rather than reporting a pass that never ran.
+  assert(caseDistinctNames || process.platform !== 'win32', 'case-distinct worktree directory names are unavailable on this Windows filesystem, so the case-folded collision assertions cannot run');
+  if (caseDistinctNames) {
+    git(collisionHost, ['worktree', 'add', '--quiet', '-b', 'collision-session', path.join(collisionWorktrees, 'session')]);
+    await fixtureContainment(collisionHost);
+    const collidingForeign = path.join(collisionWorktrees, 'SESSION'); git(collisionHost, ['init', '--quiet', collidingForeign]); writeFileSync(path.join(collidingForeign, 'private-packet.json'), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
+    assert.equal(readdirSync(collisionWorktrees).filter(name => name.toLowerCase() === 'session').length, 2, 'the collision fixture must hold two case-distinct worktree directories, or this assertion proves nothing');
+    await assert.rejects(() => fixtureContainment(collisionHost), /SESSION\/? \(embedded Git repository\)/);
+    // The same collision carrying a COPY of the real worktree's own pointer
+    // file: case folding lands it on the registered key and the pointer aims
+    // inside this repository's administration directory, so only the backlink
+    // check on the candidate itself keeps its private contents from being
+    // skipped. Hard-linking the pointer is the same attack with the file's
+    // identity preserved.
+    rmSync(collidingForeign, { recursive: true, force: true }); mkdirSync(collidingForeign);
+    copyFileSync(path.join(collisionWorktrees, 'session', '.git'), path.join(collidingForeign, '.git'));
+    writeFileSync(path.join(collidingForeign, 'private-packet.json'), JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
+    await assert.rejects(() => fixtureContainment(collisionHost), /SESSION\/? \(embedded Git repository\)/);
+    rmSync(path.join(collidingForeign, '.git'), { force: true });
+    linkSync(path.join(collisionWorktrees, 'session', '.git'), path.join(collidingForeign, '.git'));
+    await assert.rejects(() => fixtureContainment(collisionHost), /SESSION\/? \(embedded Git repository\)/);
+  }
   const bareRepoHost = fixtureRepo('containment-bare-repository'); const bareRepoBase = git(bareRepoHost, ['rev-parse', 'HEAD']).trim(); const bareRepoPath = path.join(bareRepoHost, 'catalog.git'); git(bareRepoHost, ['init', '--bare', '--quiet', bareRepoPath]); execFileSync('git', ['--git-dir', bareRepoPath, 'hash-object', '-w', '--stdin'], { input: JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }), encoding: 'utf8', env: sanitizedFixtureGitEnv() }); mkdirSync(path.join(bareRepoPath, 'objects', 'info'), { recursive: true }); writeFileSync(path.join(bareRepoPath, 'objects', 'info', 'alternates'), '../alternate-objects\n');
   await assert.rejects(() => fixtureContainment(bareRepoHost), /catalog\.git \(bare Git repository\)/);
   git(bareRepoHost, ['add', 'catalog.git']); git(bareRepoHost, ['commit', '--quiet', '-m', 'synthetic bare repository']); git(bareRepoHost, ['rm', '--quiet', '-r', 'catalog.git']); git(bareRepoHost, ['commit', '--quiet', '-m', 'delete synthetic bare repository']); const bareRepoHead = git(bareRepoHost, ['rev-parse', 'HEAD']).trim();
@@ -1231,7 +1338,7 @@ git() { return 0; }
   assert(ci.includes('types: [opened, reopened, synchronize, edited]'));
   assert(ci.includes("if: github.event_name != 'pull_request' || github.event.pull_request.base.ref == 'main'"));
   const ciCheckoutBlocks = ci.split('uses: actions/checkout@v7').slice(1);
-  assert.equal(ciCheckoutBlocks.length, 4, 'CI checkout count changed; review least-privilege settings');
+  assert.equal(ciCheckoutBlocks.length, 5, 'CI checkout count changed; review least-privilege settings');
   for (const block of ciCheckoutBlocks) {
     const checkout = block.slice(0, block.indexOf('\n      - name:'));
     assert(checkout.includes('persist-credentials: false'), 'every CI checkout must drop the GitHub token');
