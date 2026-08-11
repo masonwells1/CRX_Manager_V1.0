@@ -98,6 +98,10 @@ function paramName(decl) {
   return (tokens[i] || "").replace(/^"|"$/g, "");
 }
 
+function escapedRegexLiteral(text) {
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 let payload;
 try {
   payload = JSON.parse(readFileSync(0, "utf8"));
@@ -1765,7 +1769,7 @@ try {
 
     const hasRecognizedActorRefusal = /ACTOR_MISMATCH/i.test(commentBlankedBody) ||
       actorParams.some((actorParam) => new RegExp(
-        `\\b${actorParam}\\s+does\\s+not\\s+match\\s+authenticated\\s+user\\b`,
+        `\\b${escapedRegexLiteral(actorParam)}\\s+does\\s+not\\s+match\\s+authenticated\\s+user\\b`,
         "i"
       ).test(commentBlankedBody));
     if (hasRecognizedActorRefusal) continue;

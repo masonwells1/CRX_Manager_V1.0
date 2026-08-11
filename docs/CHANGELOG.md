@@ -16,12 +16,12 @@ Unsafe function-bearing commands written through any tracked alias are denied,
 while harmless commands and dynamically created non-`cron.job` views remain
 allowed.
 
-The focused real-hook suite now has 264 passing assertions, including a real
+The focused real-hook suite now has 266 passing assertions, including a real
 two-migration dynamic-alias process test and unsafe/harmless lifecycle controls.
-Five load-bearing behaviors were mutation-proven: executable-literal retention,
+Six load-bearing behaviors were mutation-proven: executable-literal retention,
 dollar-tag blanking, parenthesized `EXECUTE`, and the parameter-specific
 current-main actor-refusal compatibility path, plus the unreadable historical
-alias manual-review fallback. Direct real-hook probes returned
+alias manual-review fallback and regex-safe quoted actor parameters. Direct real-hook probes returned
 `DENY` for the unsafe staged command and `ALLOW` for the harmless control, and
 all 24 current August migrations pass. The compatibility path accepts
 `<actual actor parameter> does not match authenticated user` in addition to the

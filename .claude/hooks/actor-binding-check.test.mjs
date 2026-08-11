@@ -111,6 +111,13 @@ ok(isDeny(r), "leading IN mode keyword does not hide the actor parameter");
 r = runHook(fn(MUTATION, '"p_performed_by" uuid'));
 ok(isDeny(r), "a quoted actor parameter name remains visible after structural masking");
 
+r = runHook(fn(
+  'INSERT INTO financial_audit_log (actor_user_id) VALUES ("p_actor[");',
+  '"p_actor[" uuid'
+));
+ok(isDeny(r) && !r.stderr.includes("internal error"),
+  "a quoted actor parameter with regex metacharacters is denied without failing open");
+
 // two functions in one migration: the second one is the offender
 r = runHook(
   fn(BOUND, "p_performed_by uuid").replace("test_fn", "good_fn") +
@@ -1523,6 +1530,13 @@ r = runHook(fn(`
   ${MUTATION}
 `));
 ok(!isDeny(r), "the current-main actor-specific authenticated-user refusal remains compatible");
+
+r = runHook(fn(
+  "RAISE EXCEPTION 'p_actor[ does not match authenticated user';\n" +
+    'INSERT INTO financial_audit_log (actor_user_id) VALUES ("p_actor[");',
+  '"p_actor[" uuid'
+));
+ok(!isDeny(r), "a metacharacter actor name can use its exact authenticated-user refusal");
 
 r = runHook(fn(
   "-- p_performed_by does not match authenticated user\n" + MUTATION
