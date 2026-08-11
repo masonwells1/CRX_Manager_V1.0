@@ -284,25 +284,75 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
   // restored or drifted database still sees it, so the containment was
   // advisory. It is now enforced at the apply itself.
   //
-  // "Ledger lacks it" is the trigger, because a ledger that HAS it is by
-  // definition the population the migration was approved against — and a
-  // duplicate apply there is an ordering problem, already handled above.
+  // EVERY apply is the trigger — ledger presence buys nothing (Codex High,
+  // round 12). Round 8 skipped any entry the ledger already contained, on the
+  // reasoning that such a database is "by definition the population the
+  // migration was approved against". That reasoning holds only at the instant
+  // of the first apply. A population drifts: orders get edited, returned,
+  // re-invoiced. Re-running a count-bound money repair days later rewrites
+  // whatever is there NOW, and the ordering guard above deliberately excludes a
+  // migration's own timestamp from its comparison (migration-ordering-lib.mjs
+  // — "a re-apply of the very same migration is idempotency, not ordering"), so
+  // the duplicate was not caught there either. Both gates waved it through.
+  //
+  // So a registered one-shot needs the fresh, project-bound, single-use
+  // override on its FIRST apply and on every one after it.
   {
-    const registryPath = path.join(projectDir, "supabase", "baselines", "one-shot-migrations.json");
-    let oneShot = null;
-    try {
-      const parsed = JSON.parse(readFileSync(registryPath, "utf8"));
-      oneShot = parsed?.one_shot;
-      if (!oneShot || typeof oneShot !== "object") throw new Error("no `one_shot` map");
-    } catch (err) {
+    // Read the registry — and later the migration body — from EVERY verified
+    // checkout, not just the primary one (Codex High, round 12).
+    //
+    // `CLAUDE_PROJECT_DIR` pins to the PRIMARY checkout even when the session is
+    // working inside a linked worktree. Rounds 8-11 read both the registry and
+    // `supabase/migrations/<stem>.sql` from that primary path, so a one-shot
+    // registered on a feature branch — the exact moment a fresh money repair is
+    // most dangerous and least reviewed — was invisible to this guard until the
+    // branch merged. The apply-time containment arrived only after it was no
+    // longer needed.
+    //
+    // `proofDirs` already resolves the two checkouts this guard is allowed to
+    // trust: the primary, plus this session's own cwd once `git worktree list`
+    // confirms it belongs to this repository. Their checkout roots are those
+    // paths minus the trailing `.claude/session-state`. Entries are UNIONED, so
+    // a stem registered in either checkout counts — union is never laxer than
+    // reading one path alone.
+    const evidenceRoots = [...new Set(proofDirs.map((d) => path.resolve(d, "..", "..")))];
+    const oneShot = {};
+    const registriesRead = [];
+    for (const root of evidenceRoots) {
+      const registryPath = path.join(root, "supabase", "baselines", "one-shot-migrations.json");
+      if (!existsSync(registryPath)) continue;
+      try {
+        const parsed = JSON.parse(readFileSync(registryPath, "utf8"));
+        const map = parsed?.one_shot;
+        if (!map || typeof map !== "object") throw new Error("no `one_shot` map");
+        // First checkout to register a stem wins the wording; the entry itself
+        // is what matters, and both spellings block identically.
+        for (const [stem, reason] of Object.entries(map)) {
+          if (!(stem in oneShot)) oneShot[stem] = reason;
+        }
+        registriesRead.push(registryPath);
+      } catch (err) {
+        // A registry that EXISTS but will not parse is the disagreement case:
+        // one checkout claims containment and the other cannot be read to
+        // confirm or deny it. Fail closed rather than fall back to the half
+        // that happened to load.
+        out("block",
+          `ONE-SHOT REPLAY GUARD: the one-shot migration registry at ${registryPath} exists but ` +
+          `could not be read (${err?.message || err}). Without it there is no way to tell an ` +
+          `idempotent schema migration from a population-bound data repair, so this apply is ` +
+          `refused. Restore the file from git (it is tracked) and retry.`);
+      }
+    }
+    if (registriesRead.length === 0) {
       // Fail closed. The registry is tracked in git and ships beside this hook,
-      // so an unreadable one means the checkout is broken or the file was
-      // removed — the two states in which a silent pass is most dangerous.
+      // so its absence from every verified checkout means the checkout is
+      // broken or the file was removed — the states in which a silent pass is
+      // most dangerous.
       out("block",
-        `ONE-SHOT REPLAY GUARD: could not read the one-shot migration registry at ${registryPath} ` +
-        `(${err?.message || err}). Without it there is no way to tell an idempotent schema ` +
-        `migration from a population-bound data repair, so this apply is refused. Restore the ` +
-        `file from git (it is tracked) and retry.`);
+        `ONE-SHOT REPLAY GUARD: no one-shot migration registry was found in any verified checkout ` +
+        `(looked in ${evidenceRoots.map((r) => path.join(r, "supabase", "baselines", "one-shot-migrations.json")).join(", ")}). ` +
+        `Without it there is no way to tell an idempotent schema migration from a population-bound ` +
+        `data repair, so this apply is refused. Restore the file from git (it is tracked) and retry.`);
     }
 
     // Normalize for comparison: lowercase, strip `--` line comments, collapse
@@ -321,8 +371,6 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
     };
 
     for (const [stem, reason] of Object.entries(oneShot)) {
-      if (ledgerHas(stem)) continue;
-
       const version = (stem.match(/\d{14}/) || [])[0] || "";
       let matched = "";
       // The MCP `name` is caller-controlled, so a name match is a convenience,
@@ -330,15 +378,20 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
       if (migName && (migName.includes(stem) || (version && migName.includes(version)))) {
         matched = `the migration name "${safeName}"`;
       } else if (normQuery) {
-        try {
-          const filePath = path.join(projectDir, "supabase", "migrations", `${stem}.sql`);
-          if (existsSync(filePath)) {
+        // Same reason the registry is read from every verified checkout: the
+        // migration file for a branch-local one-shot exists only in the
+        // worktree (Codex High, round 12).
+        for (const root of evidenceRoots) {
+          try {
+            const filePath = path.join(root, "supabase", "migrations", `${stem}.sql`);
+            if (!existsSync(filePath)) continue;
             const normFile = norm(readFileSync(filePath, "utf8"));
             if (normFile && (normQuery.includes(normFile) || normFile.includes(normQuery))) {
               matched = `the SQL body (it matches ${stem}.sql on disk)`;
+              break;
             }
-          }
-        } catch { /* a missing or unreadable file just means no body match */ }
+          } catch { /* a missing or unreadable file just means no body match */ }
+        }
       }
       if (!matched) continue;
 
@@ -411,11 +464,16 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
       out("block",
         `ONE-SHOT REPLAY GUARD: this apply matches ${matched}, which is registered as a one-shot ` +
-        `DATA migration in supabase/baselines/one-shot-migrations.json, and the applied-migration ` +
-        `ledger for this database does NOT contain it.\n\n` +
+        `DATA migration in supabase/baselines/one-shot-migrations.json. ` +
+        (ledgerHas(stem)
+          ? `The applied-migration ledger for this database already contains it, so this is a REPEAT ` +
+            `apply of a repair that has already run once.`
+          : `The applied-migration ledger for this database does NOT contain it.`) +
+        `\n\n` +
         `Why it is registered: ${reason}\n\n` +
-        `Its authorization was bound to the live population at the time it was written, so running ` +
-        `it against a database that never had it rewrites rows nobody approved. After a restore, ` +
+        `Its authorization was bound to the live population at the time it was written — counts, not ` +
+        `row identity. Running it against a database that never had it rewrites rows nobody approved; ` +
+        `running it a SECOND time rewrites whatever the population has since become. After a restore, ` +
         `the corrected values come back with the DATA — not by re-running the edit.\n\n` +
         (overrideWhy
           ? `An override file was present and has been CONSUMED without releasing this apply: ${overrideWhy}. ` +

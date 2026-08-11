@@ -112,6 +112,48 @@ are now fixtures in the suite, each confirmed red against the previous shape.
 Raised by CodeRabbit on PR #359 and deferred there only because a new commit
 would have discarded that PR's banked Vercel status while the daily build
 quota was exhausted.
+## 2026-08-10 — Every apply of a one-shot needs its own override; evidence follows the active worktree; the digest→write dataflow is immutable (PR #364, Codex round 12)
+
+Three ways a population-bound money repair could still reach live rows.
+
+**Ledger presence was treated as authorization.** The one-shot guard skipped any
+migration the applied-migration ledger already contained, reasoning that such a
+database *is* the population the repair was approved against. That holds at the
+instant of the first apply and not one minute longer — orders get edited,
+returned, re-invoiced — so re-running a count-bound repair a day later rewrote
+whatever the population had since become. The ordering guard could not catch the
+duplicate either: it deliberately excludes a migration's own timestamp, because a
+re-apply is idempotency rather than ordering. Both gates waved it through. A
+registered one-shot now requires the fresh, project-bound, single-use override on
+**every** apply, first or fiftieth, and the refusal says plainly when it is a
+repeat.
+
+**Apply-time evidence was read from the primary checkout only.**
+`CLAUDE_PROJECT_DIR` stays pinned to the primary checkout even while the session
+works inside a linked worktree, and the guard read both the one-shot registry and
+`supabase/migrations/<stem>.sql` from that path. A repair registered on a feature
+branch — unmerged, freshly written, the most dangerous kind — was therefore
+invisible to the containment until it landed, which is exactly when it no longer
+needed containing. Both are now read from every checkout this guard already
+verifies (the primary plus this session's own, resolved through `git worktree
+list`), and the entries are unioned. A registry file that exists but will not
+parse in either checkout fails the apply closed rather than falling back to
+whichever half loaded.
+
+**The approved-set validator proved the digest, not the dataflow.** Two shapes
+passed every earlier round: capturing the id array a second time *after* the
+digest comparison, so the write and its row-count assertion operated on an
+entirely different population while every check still matched; and a mismatch
+`RAISE EXCEPTION` nested one level deeper under a condition that is never true,
+which satisfied "the branch raises" without ever aborting. The validator now
+requires the mismatch raise in the comparison's own immediate body — same rule
+for the row-count assertion — and refuses any repair whose captured-id variable
+is assigned more than once anywhere in the migration.
+
+Proven by mutation, not by inspection: the approved-set validator suite is at
+**67 cases** and `migration-apply-guard` at **118 assertions**, with each new
+guard reverted in turn to confirm the matching case goes red.
+
 ## 2026-08-10 — One-shot replay overrides expire and are spent; approved-set repairs are one table each (PR #364, Codex round 11)
 
 Two ways a population-bound money repair could still be released against rows

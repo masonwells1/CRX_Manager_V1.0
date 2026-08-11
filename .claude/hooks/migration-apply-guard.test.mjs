@@ -613,11 +613,28 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(isDeny(r), "the same one-shot body under a different name → apply denied");
     ok(isOneShotDeny(r), "the body match, not the name, is what catches the renamed replay");
 
-    // 4. A ledger that ALREADY contains it is by definition the population the
-    //    migration was approved against — this guard has nothing to say there.
+    // 4. ROUND 12 (Codex High) reversed this case. Round 8 let a one-shot
+    //    through whenever the ledger already contained it, reasoning that such a
+    //    database IS the population the repair was approved against. True at the
+    //    instant of the first apply, false a day later: orders get edited,
+    //    returned, re-invoiced, and a count-bound money repair re-run against
+    //    that drifted population rewrites rows nobody approved. The ordering
+    //    guard cannot catch the duplicate either — it deliberately excludes a
+    //    migration's own timestamp — so ledger presence was a hole in BOTH gates.
     writeAppliedSnapshot(stateDir, { applied: ["20990101000000_already_applied", STEM] });
     r = apply(STEM, ONE_SHOT_SQL);
-    ok(!isOneShotDeny(r), "a ledger that already contains the one-shot is not a replay onto a foreign population");
+    ok(isOneShotDeny(r), "round-12: a one-shot already in the ledger is still refused — a re-apply needs its own override");
+    ok(/REPEAT apply/.test(r.stdout), "round-12: the deny says plainly that this repair has already run once");
+
+    // …and the override is what releases it, exactly as on a first apply.
+    writeFileSync(
+      path.join(stateDir, "one-shot-replay-override.json"),
+      JSON.stringify({
+        migration: STEM, queryHash: sha(ONE_SHOT_SQL), project: "x", issuedAt: new Date().toISOString(),
+      }),
+    );
+    r = apply(STEM, ONE_SHOT_SQL);
+    ok(!isOneShotDeny(r), "round-12: a fresh bound override authorizes a deliberate re-apply of an already-applied one-shot");
     writeAppliedSnapshot(stateDir, { applied: ["20990101000000_already_applied"] });
 
     // 5. The override is bound to the exact SQL, not to a name. A flag keyed on
@@ -696,6 +713,85 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(isDeny(r) && isOneShotDeny(r), "missing one-shot registry → apply denied (fail closed)");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ── ONE-SHOT EVIDENCE FOLLOWS THE ACTIVE CHECKOUT (Codex High, round 12) ────
+// CLAUDE_PROJECT_DIR pins to the PRIMARY checkout even when the session works
+// inside a linked worktree. Rounds 8-11 read the one-shot registry and the
+// migration body from that primary path only, so a one-shot registered on a
+// feature branch — a fresh, unmerged money repair, the most dangerous kind —
+// was invisible to this guard until the branch landed. Evidence now comes from
+// both verified checkouts, and the union is what counts.
+{
+  const root = mkdtempSync(path.join(os.tmpdir(), "mig-apply-guard-wt-"));
+  const primary = path.join(root, "primary");
+  const worktree = path.join(root, "feature-wt");
+  const git = (args, cwd) => spawnSync("git", args, { cwd, encoding: "utf8", env: hermeticEnv() });
+  try {
+    mkdirSync(primary, { recursive: true });
+    git(["init", "-b", "main"], primary);
+    git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "base"], primary);
+    const added = git(["worktree", "add", "-b", "feature", worktree], primary);
+    // If git cannot make a worktree here, the fixture proves nothing — say so
+    // out loud rather than passing vacuously.
+    ok(added.status === 0, "round-12 fixture: a linked worktree was created for the evidence test");
+
+    const STEM = "20990701000000_worktree_only_repair";
+    const SQL = "UPDATE public.orders SET total_profit = 7 WHERE id = 3;";
+    const REASON = "fixture: registered only on the feature branch";
+    for (const dir of [primary, worktree]) {
+      mkdirSync(path.join(dir, ".claude", "session-state"), { recursive: true });
+    }
+    // The PRIMARY registry is deliberately empty — it is the pre-merge state of
+    // main. Only the worktree knows about this repair.
+    writeOneShotRegistry(primary, {});
+    writeOneShotRegistry(worktree, { [STEM]: REASON });
+    mkdirSync(path.join(worktree, "supabase", "migrations"), { recursive: true });
+    writeFileSync(path.join(worktree, "supabase", "migrations", `${STEM}.sql`), `-- header\n${SQL}\n`);
+
+    const primaryState = path.join(primary, ".claude", "session-state");
+    writeAppliedSnapshot(primaryState, { applied: ["20990101000000_already_applied"] });
+    const runFrom = (cwd, name) => {
+      writeFileSync(path.join(primaryState, `migration-review-${name}.json`), JSON.stringify({
+        migration: name,
+        timestamp: new Date().toISOString(),
+        reviewers: ["rls-security-reviewer", "migration-drift-reviewer"],
+        findings: "clean",
+        queryHash: sha(SQL),
+      }));
+      return spawnSync(process.execPath, [HOOK], {
+        input: JSON.stringify({
+          tool_name: "mcp__supabase__apply_migration",
+          tool_input: { project_id: "x", name, query: SQL },
+        }),
+        encoding: "utf8",
+        cwd,
+        env: hermeticEnv({ CLAUDE_PROJECT_DIR: primary }),
+      });
+    };
+    const isOneShotDeny = (r) => r.stdout.includes("ONE-SHOT REPLAY GUARD");
+
+    let r = runFrom(worktree, STEM);
+    ok(isOneShotDeny(r), "round-12: a one-shot registered only in the active worktree still stops the apply");
+    ok(r.stdout.includes(REASON), "round-12: the deny quotes the worktree registry's own reason");
+
+    // Renaming still cannot dodge it — the body is matched against the SQL file
+    // that likewise exists only in the worktree.
+    r = runFrom(worktree, "20990701000001_innocent_name");
+    ok(isOneShotDeny(r), "round-12: the worktree's migration file catches the same body under a different name");
+
+    // Control: from the primary checkout the registry really is empty, so this
+    // apply is NOT one-shot-denied. That is what makes the two assertions above
+    // evidence of the fix rather than of some unrelated refusal — before round
+    // 12 every one of these ran against the primary registry and passed.
+    r = runFrom(primary, STEM);
+    ok(!isOneShotDeny(r), "round-12 control: from the primary checkout the empty registry genuinely says nothing");
+  } finally {
+    // Detach the worktree admin files before deleting, or git leaves the
+    // fixture repo pointing at a path that no longer exists.
+    spawnSync("git", ["worktree", "remove", "--force", worktree], { cwd: primary, env: hermeticEnv() });
+    rmSync(root, { recursive: true, force: true });
   }
 }
 

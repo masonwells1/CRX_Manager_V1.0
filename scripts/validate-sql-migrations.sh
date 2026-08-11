@@ -1106,6 +1106,14 @@ for file in $ALL_SQL; do
           # happens to be nearby, in an unrelated or unreachable branch, is not
           # the guard it looks like. Walk forward from the comparison, tracking
           # IF depth, and stop at the END IF that closes it.
+          #
+          # DEPTH 1 ONLY (Codex High, round 12). Accepting a RAISE at any depth
+          # inside the block accepted an UNREACHABLE one: `IF false THEN RAISE
+          # EXCEPTION ...; END IF;` nested under the digest comparison satisfied
+          # the check while the mismatch branch fell through and the write ran
+          # anyway. The abort has to be in the comparison's own immediate body,
+          # unconditionally — which is also the only shape this validator can
+          # read without evaluating conditions it has no way to evaluate.
           RAISE_IN_BRANCH=$(awk -v dl="$DIGEST_EXEC_LINE" '
             FNR < dl { next }
             {
@@ -1115,7 +1123,7 @@ for file in $ALL_SQL; do
                 if (l ~ /(^|[^a-z0-9_])if([^a-z0-9_]|$)/ && l !~ /end[[:space:]]+if/) depth++
                 if (l ~ /end[[:space:]]+if/) { depth--; if (depth <= 0) exit }
               }
-              if (l ~ /raise[[:space:]]+exception/) { print "yes"; exit }
+              if (depth == 1 && l ~ /raise[[:space:]]+exception/) { print "yes"; exit }
             }
           ' "$file" | grep -c yes || true)
 
@@ -1188,9 +1196,28 @@ for file in $ALL_SQL; do
           for DIGEST_SET_VAR in $DIGEST_SET_VARS; do
           if [ -z "$SET_BIND_WHY" ] && [ "$COMPUTED" -eq 1 ] && [ -n "$DIGEST_SET_VAR" ]; then
             CAPTURE_STATUS=$(awk -v fl="$FIRST_REWRITE_LINE" -v var="$DIGEST_SET_VAR" '
-              FNR >= fl { next }
-              { l = tolower($0); sub(/--.*/, "", l); buf = buf " " l }
+              { l = tolower($0); sub(/--.*/, "", l); all = all " " l; if (FNR < fl) buf = buf " " l }
               END {
+                # ---- ONE CAPTURE, NEVER REASSIGNED (Codex High, round 12) ----
+                # Everything downstream reasons about "the approved set" as if
+                # the variable holding it never changes. Nothing checked that.
+                # Capture the approved ids, hash them, pass the comparison —
+                # then reassign the same variable and let the write and the
+                # row-count assertion operate on an entirely different
+                # population, with the guard still reporting the migration
+                # bound to the approved set. Proving which assignment reaches
+                # which statement is dataflow analysis over PL/pgSQL text; the
+                # answer here is the same as for digests and for multi-table
+                # repairs — refuse the shape. One capture, one digest, one
+                # comparison, and the variable is never written again.
+                m = split(all, at, /;/)
+                for (i = 1; i <= m; i++) {
+                  s = at[i]
+                  if (s ~ ("into[ \t]+(strict[ \t]+)?" var "([^a-z0-9_]|$)") || s ~ (var "[ \t]*:="))
+                    assigns++
+                }
+                if (assigns > 1) { print "reassigned\t" assigns; exit }
+
                 n = split(buf, st, /;/)
                 for (i = 1; i <= n; i++) {
                   s = st[i]
@@ -1208,6 +1235,8 @@ for file in $ALL_SQL; do
             ' "$file")
             case "$CAPTURE_STATUS" in
               OK) ;;
+              reassigned*)
+                SET_BIND_WHY="'$DIGEST_SET_VAR' is assigned $(printf '%s' "$CAPTURE_STATUS" | cut -f2) times in this migration. The digest, the write and the row-count assertion all name that one variable, so a second assignment means the rows hashed and the rows written need not be the same rows — and this validator cannot tell which assignment reaches which statement. Capture the approved ids once and never write to '$DIGEST_SET_VAR' again; if a second population genuinely needs repairing, that is a second migration." ;;
               no-lock)
                 SET_BIND_WHY="'$DIGEST_SET_VAR' is captured without FOR UPDATE, so the approved rows are not locked between the digest and the write and a concurrent change lands unnoticed. Capture them as: SELECT array_agg(s.id ORDER BY s.id) INTO $DIGEST_SET_VAR FROM (SELECT t.id FROM <table> t WHERE <approved predicate> ORDER BY t.id FOR UPDATE) s;" ;;
               no-agg)
@@ -1231,7 +1260,10 @@ for file in $ALL_SQL; do
                   if (ln[i] ~ /raise[ \t]+exception/) { print "OK"; exit }
                   depth = 1
                   for (j = i + 1; j <= n; j++) {
-                    if (ln[j] ~ /raise[ \t]+exception/) { print "OK"; exit }
+                    # Depth 1 only — same reason as the digest branch above
+                    # (Codex High, round 12): a RAISE nested under `IF false`
+                    # is not an abort, it is decoration.
+                    if (depth == 1 && ln[j] ~ /raise[ \t]+exception/) { print "OK"; exit }
                     if (ln[j] ~ /(^|[^a-z0-9_])if([^a-z0-9_]|$)/ && ln[j] !~ /end[ \t]+if/) depth++
                     if (ln[j] ~ /end[ \t]+if/) { depth--; if (depth <= 0) break }
                   }

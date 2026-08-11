@@ -599,6 +599,98 @@ const CASES = [
       `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\nEND $$;\n`,
   },
 
+  // ── round 12: the dataflow between digest and write must be immutable ────
+  // Round 11 proved the digest is checked and covers the write's table and
+  // columns. It still only proved that SOME earlier statement captured the id
+  // array and that SOME nested statement raised — neither of which survives a
+  // determined author. Both holes below passed every earlier round.
+  {
+    // Codex round 12, finding 3a. The approved digest is computed and compared
+    // over the captured set — and then the set is captured AGAIN, unfiltered,
+    // and THAT is what the write and the row-count assertion use. Every check
+    // through round 11 passed: real digest, fail-closed comparison, matching
+    // table and column, write bound to `id = ANY(v_ids)`, count asserted
+    // against `array_length(v_ids, 1)` — of the second capture, consistently.
+    // The whole table is rewritten while the guard reports it bound.
+    name: 'Codex round-12 bypass: the captured set is re-assigned after the digest is checked',
+    expect: 'violation',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\n` +
+      `DECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
+      `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
+      `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
+      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
+      `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
+      `    FROM (SELECT id FROM public.orders ORDER BY id FOR UPDATE) s;\n` +
+      `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);\n` +
+      `  GET DIAGNOSTICS n = ROW_COUNT;\n` +
+      `  IF n <> array_length(v_ids, 1) THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\nEND $$;\n`,
+  },
+  {
+    // The `:=` spelling of the same trick. A guard that only recognised
+    // `INTO v_ids` would have accepted this one unchanged.
+    name: 'round-12: the same re-assignment written with := instead of INTO',
+    expect: 'violation',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\n` +
+      `DECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
+      `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
+      `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
+      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
+      `  v_ids := ARRAY(SELECT id FROM public.orders ORDER BY id);\n` +
+      `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);\n` +
+      `  GET DIAGNOSTICS n = ROW_COUNT;\n` +
+      `  IF n <> array_length(v_ids, 1) THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\nEND $$;\n`,
+  },
+  {
+    // Codex round 12, finding 3b. The mismatch branch contains a RAISE
+    // EXCEPTION — nested one level deeper, under a condition that is never
+    // true. Through round 11 the check asked only whether a raise appeared
+    // anywhere inside the branch, so a drifted population passed silently and
+    // the rewrite went ahead. The raise must be in the comparison's OWN body.
+    name: 'Codex round-12 bypass: the mismatch raise is real but unreachable',
+    expect: 'violation',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\n` +
+      `DECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
+      `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
+      `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
+      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
+      `    IF false THEN\n` +
+      `      RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n    END IF;\n  END IF;\n` +
+      `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);\n` +
+      `  GET DIAGNOSTICS n = ROW_COUNT;\n` +
+      `  IF n <> array_length(v_ids, 1) THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\nEND $$;\n`,
+  },
+  {
+    // Same shape one level down in the row-count assertion: the count check is
+    // the backstop that catches a write touching more rows than were approved,
+    // so burying ITS raise is the same bypass with a different target.
+    name: 'round-12: the row-count assertion raises only inside a nested branch',
+    expect: 'violation',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\n` +
+      `DECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
+      `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
+      `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
+      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
+      `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);\n` +
+      `  GET DIAGNOSTICS n = ROW_COUNT;\n` +
+      `  IF n <> array_length(v_ids, 1) THEN\n` +
+      `    IF false THEN\n` +
+      `      RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n    END IF;\n  END IF;\nEND $$;\n`,
+  },
+
   // ── round 10: the digest must cover the rows actually WRITTEN ────────────
   // Every check above proves the digest is real, fail-closed, and mentions the
   // rewritten tables and columns. None of it proved the hashed rows and the
