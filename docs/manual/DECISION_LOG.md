@@ -1,6 +1,6 @@
 # Decision Log
 
-Last verified: 2026-08-09
+Last verified: 2026-08-10
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
@@ -283,6 +283,33 @@ carried on `invoices.balance_cents`, which nothing in this path writes.
    The repository-replay gap this leaves is recorded in `docs/reference/migration-history.md`; it
    is closed by #354 and must not be papered over by re-emitting the same function in a second
    pending migration.
+
+## 2026-08-10 — Exact whole cents is the invariant; legacy numeric-dollar storage has a fail-closed approval gate
+
+**Source:** Mason's explicit 2026-08-10 project instruction, following the bigint-cents evaluation
+recorded in the 2026-08-09 changelog entry for canonical profit.
+
+**Decision.** New money storage remains bigint cents, but established PostgreSQL `numeric` dollar
+columns are not converted merely to satisfy the storage preference. PostgreSQL `numeric` is exact
+decimal; converting an established cluster is a coordinated unit change across database functions
+and UI readers, where one missed call site creates a 100x error. That storage type alone is not an
+approved exception. A legacy column becomes an approved compatibility exception only after its
+authoritative database arithmetic is verified as exact `numeric`, all existing values are verified
+as finite whole cents, and an active finite whole-cent CHECK is present. Dirty or unconstrained
+columns remain tracked findings and are not widened or rewritten without Mason's separate approval.
+
+**Operative rule.** The invariant is exact whole cents, not a blind type conversion. New database
+money columns use bigint cents. Legacy numeric-dollar storage may remain temporarily to avoid a
+risky unit rewrite, but it is not approved or suppressible until exact PostgreSQL `numeric`
+arithmetic, clean finite whole-cent values, and an active finite whole-cent CHECK are all verified.
+Dirty or unconstrained columns stay visible as tracked debt. New or changed authoritative TypeScript money math must
+parse decimal operands into integer cents before multiplying, dividing, rounding, or aggregating;
+do not introduce binary floating-point rounding. Existing helpers that still use binary conversion
+are migration work, not evidence that the old approach is acceptable. The server remains
+authoritative for persisted values.
+
+---
+
 ## 2026-08-09 — The order header is the canonical profit; line profit is derived to match it
 
 **Source:** live measurement during the PR #354 takeover session, recorded in
@@ -893,15 +920,20 @@ reserved balance, not a patch) plus a fresh Codex-gated build.
 
 ---
 
-## Foundational (~2026-05, still current) — Core engineering invariants
+## Foundational (~2026-05) — Core engineering invariants; money storage clause superseded 2026-08-10
 
-**Decision:** Four rules fixed at the project's foundation and never revisited: (1) money is
-always `bigint` cents, never floating-point; (2) business invariants (balances, inventory,
+**Decision:** Four rules fixed at the project's foundation: (1) money used bigint cents and never
+floating-point; (2) business invariants (balances, inventory,
 state transitions) are enforced in Postgres RPCs/triggers/constraints, not React; (3)
 `src/lib/db.ts` is the only Supabase client, and `assertRpcResult()`/`checkMutationResult()`
 are mandatory after every RPC call/`.update()`/`.delete()`; (4) every mutating RPC accepts and
 actually enforces `p_idempotency_key text DEFAULT NULL` (added after repeated double-submit
 bugs, e.g. the 2026-07-10 `save_job_applied_record` fix).
+The first clause is superseded by the 2026-08-10 exact-whole-cent decision above: bigint cents
+remains mandatory for new storage, while legacy PostgreSQL numeric-dollar storage is approved only
+after exact arithmetic, clean finite whole-cent values, and an active finite whole-cent CHECK are
+verified. Dirty or unconstrained columns remain tracked findings. The other three rules remain
+current and unchanged.
 **Why:** these are the recurring bug classes (money bugs, invariant bypass via a second code
 path, double-submits from retries/flaky networks) that have cost the most rework historically.
 **What this forbids/implies:** any new RPC, migration, or money-touching code that violates

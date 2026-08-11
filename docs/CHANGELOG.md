@@ -68,6 +68,46 @@ Three fixtures added: a DELETE hashing ids only (the bypass), a DELETE from a
 table with no material state (refused), and a correctly bound DELETE (passes).
 Mutating the substitution away turns the first two green, which is the point.
 
+## 2026-08-11 — Preserve the applied line-profit backfill without replaying it by default
+
+Added the exact source for live migration `20260810025159_backfill_stale_line_profit.sql`,
+closing the repository-to-ledger gap for the already-applied 37-line profit repair. Because
+that migration rewrote a production-specific business-row population, the post-baseline
+rebuild selector now reads a small one-shot registry and withholds the repair from default
+replay while reporting the omission on stderr. An explicit `--include-one-shot` escape hatch
+remains available only after the target population has been independently proven to match
+the population originally approved. After a restore proves it already contains the corrected
+values, `--one-shot-repair-plan` emits the reviewed ledger-repair commands needed to prevent a
+later unfiltered push from rediscovering the skipped rewrite. Focused tests prove the default
+quarantine, visible warning, registry/file correspondence, deliberate override, and durable
+ledger closeout path.
+
+## 2026-08-10 — Record the exact-whole-cent compatibility policy
+
+Recorded Mason's financial storage decision independently of the pricing implementation: new money
+storage uses bigint cents. Established PostgreSQL numeric-dollar storage may remain temporarily to
+avoid a risky unit rewrite, but it is approved only after exact numeric arithmetic, clean finite
+whole-cent values, and an active finite whole-cent CHECK are verified. Dirty or unconstrained
+columns remain tracked findings and may not be suppressed as accepted exceptions. Authoritative
+TypeScript money calculations and input-parsing paths that are added or changed must parse decimal
+operands into integer cents and may not introduce binary floating-point conversion, parsing,
+arithmetic, or rounding; display-only formatting from already-integer cents remains allowed. Updated
+required reviewer, workflow, architecture, operations, and audit-template guidance that still stated the superseded
+blanket bigint-only rule. The pre-existing `parseCents.ts` excess-precision truncation is recorded
+as open debt below rather than silently changing input behavior in this policy-only PR. The separate
+pricing implementation owns the money paths it changes; this PR changes no schema, data, or
+production behavior. Latest-head review also aligned the compliance/PDF reviewers, migration and RPC
+scaffolds, money hook message, inventory checklist, and required gotchas reference so none can
+override the fail-closed legacy-column approval gate. A final exact-head Sol review rejected the
+earlier "once clean" wording because it could hide dirty or unconstrained columns; the policy,
+review prompts, audit allowlists, and migration/RPC guidance now keep those columns visible until
+all three approval conditions are proven. A final current-head review also made the
+compliance reviewer reject raw use of the legacy cent parsers on inputs with more than two
+fractional digits unless an explicit exact rounding rule has been approved; the deterministic
+money-safety hook now gives the same qualified remediation instead of recommending the truncating
+helper by itself. The final exact-head review applied that same precision gate to the field-map UX
+loop prompt, which had still described the legacy parser as exact without qualifying its truncation.
+
 ## 2026-08-10 — Graphify-first agent navigation policy
 
 Made Graphify the explicit first-pass navigator for architecture, multi-file, workflow/migration,
@@ -189,6 +229,7 @@ are now fixtures in the suite, each confirmed red against the previous shape.
 Raised by CodeRabbit on PR #359 and deferred there only because a new commit
 would have discarded that PR's banked Vercel status while the daily build
 quota was exhausted.
+
 ## 2026-08-11 — History is content, a line is not a scope, and a decoy is not an abort (PR #364, Codex round 14)
 
 Three ways the approved-set rule could be satisfied by something that was not there.
@@ -392,6 +433,43 @@ Suites, all green: approved-set validator **61 mutation cases**, `migration-appl
 assertions**, `refresh-applied-migrations` **14 assertions**. Each fix was mutation-proved — the guard was
 broken on purpose and the new assertion went red before the fix went in.
 
+## 2026-08-10 — Pending commission snapshots reconciled live (PR #372)
+
+Closed the last open item from the canonical-profit workstream. The 2026-08-09 line-profit backfill
+re-derived line profit from the order header but left a small set of *pending* commission snapshots
+holding the pre-backfill figures, so a commission that had not yet been paid could be computed from a
+stale basis. `reconcile_pending_commission_snapshots` repairs exactly that set and nothing else.
+
+**The write set was pinned before it could move.** The migration is forward-only and binds itself to a
+SHA-256 fingerprint of the approved target rows, recomputed from live data immediately before the apply
+and matched exactly — so the migration could not widen its own scope between review and execution. It
+locks orders before commissions, deletes nothing, and excludes paid, cancelled, deleted, batched, job,
+and application commissions. It fails closed on target-set, lifecycle, money-value, or postcondition
+drift. Target size: 11 snapshot rows across 10 orders. Per-row and aggregate money figures are
+deliberately withheld here — this repository is public.
+
+**Applied live 2026-08-10** after Mason's explicit approval in the active session, with both
+`gpt-5.6-sol` high-effort reviewer charters re-minted against this exact body and returning CLEAN.
+Supabase assigned ledger version `20260810235207`; the disk file was B7-renamed to match, body
+byte-identical. Live readback shows zero remaining eligible mismatches, and the registered
+`pending_commission_snapshot_reconcile` chain returned the exact terminal marker `SMOKE_PASS_ROLLBACK`.
+
+One deviation from the handoff's "preserve these files exactly": the smoke's `SMOKE_FAIL` message
+contained the literal text `snapshot(s)`, which the repository's live-data guard parses as a function
+call, blocking the whole chain from running through the sanctioned channel. The wording is now
+`snapshot rows`. Assertion logic and the terminal marker are untouched.
+
+**Generated-artifact closeout.** `.claude/schema-registry.json` was regenerated from live introspection,
+not stamped: `_meta.migrations_high_water` moves `20260810025159` → `20260810235207` and the applied-name
+list goes 947 → 951 distinct names. Every schema-shape section is byte-identical
+(`generated_columns`, `status_enums`, `check_constraints`, `not_null_columns`, `columns`, `sequences`,
+`tables_without_updated_at`) — as it must be, since this migration contains no DDL. The one section that
+moved is `skipped_constraints`, 187 → 194, and none of the seven additions come from this migration:
+they are the whole-cent money CHECKs from `20260810151000_whole_cent_money_check_constraints`, live since
+earlier the same day. The registry was stale against three migrations, not one. Those constraint
+definitions are recorded here because the registry describes *live* truth; their migration sources sit on
+a separate in-flight branch and are untouched by this change.
+
 ## 2026-08-10 — Review fixes on the harness guards (PR #369)
 
 Six findings from the Codex and CodeRabbit reviews of PR #369, all in the pre-commit harness. Five are
@@ -479,6 +557,58 @@ Backfilled stale line-level profit through the canonical live trigger. Applied l
   - `bc094c43 docs(changelog): record 2026-08-09 live profit rounding repair and dependency merges`
 - **Migrations touched** (git diff --name-only origin/main...HEAD):
   - `supabase/migrations/20260810025159_backfill_stale_line_profit.sql`
+
+## 2026-08-09 — Team Board delegated completion shipped (database live, frontend merged via PR #351)
+
+Assigning a to-do to a teammate on the Team Board was effectively broken: the checkbox
+wrote straight to the table, and the creator-or-admin row policy silently rejected the
+assignee, so their click did nothing. Delegation is now governed by an RPC and the
+notification path is hardened.
+
+**Live database changes (owner-approved; applied and verified live on 2026-08-09/2026-08-10).** Both migrations below were already live before this entry was written. The PR carrying this entry (#372) recorded and re-verified that closeout only — it applied neither of these two migrations and mutated no live data through them.
+
+- `20260809130108_team_note_completion_rpc_and_assignment_notify` — adds
+  `complete_team_note(note_id, completed, idempotency_key)` as a SECURITY DEFINER function
+  with a pinned `search_path`, taking the actor from `auth.uid()` so it cannot be forged.
+  Authorization (creator, current assignee, or active admin) runs *before* the idempotency
+  replay, and the function reports the row's actual state so a no-op cannot rewrite
+  `completed_by`. Also adds the assignment trigger that files one `task_assigned`
+  notification, staying silent on self-assignment and unchanged assignees. Revoked from
+  PUBLIC and anon; granted to authenticated and the default `service_role` grant, while
+  runtime authorization still requires an active `auth.uid()` actor.
+- `20260810010308_active_team_note_assignment_actor` (authored as `20260809154649`) —
+  closes the gap review found afterwards: a deactivated profile whose token had not yet
+  expired could satisfy the legacy creator-only insert policy and make the owner-run
+  trigger notify an active teammate. Now the insert policy requires an active profile and
+  the trigger independently rejects an inactive effective actor. `tnotes_update` is
+  deliberately unchanged.
+
+Both migrations cleared the `rls-security-reviewer` and `migration-drift-reviewer` charters
+with CLEAN machine verdicts on the exact file content before apply, and both disk files were
+renamed content-identically to their server-assigned ledger versions.
+
+**Proven against live, by rollback-only probes rather than tests alone.** An active
+non-admin assignee completed a note they did not create, with `completed_by` stamped from
+`auth.uid()` and exactly one notification filed; an unrelated employee was refused with
+`NOT_AUTHORIZED_TO_COMPLETE`; a real deactivated profile was refused at the row-policy layer;
+and with that layer deliberately bypassed, the trigger's own guard raised `PROFILE_INACTIVE`.
+The normal assignment and completion path was re-checked afterwards and was unaffected.
+
+**Frontend (merged via PR #351; production rollout follows its Vercel deployment).** Team Board calls the
+RPC instead of writing the table, guards against double-submit, and maps the actionable runtime
+errors to specific messages. The checkbox is disabled with an explanatory tooltip for viewers who
+are not the creator, assignee, or an admin. Notification deep-links now route team notes to
+the board, and the deep-link fetch no longer waits on a populated list before resolving.
+
+**Post-apply closeout.** The full registered chain
+`scripts/smoke/smoke-complete-team-note-chain.sql` ran against live and reached exact
+`SMOKE_PASS_ROLLBACK`, proving the business path and fixture rollback. The schema registry
+was genuinely regenerated from live introspection through high-water `20260810025159`, and
+the generated TypeScript types match live. *(The registry has since been regenerated again,
+through high-water `20260810235207` — see the 2026-08-10 reconciliation entry at the top of
+this file. `20260810025159` is the high-water this Team Board closeout observed, not the
+current one.)*
+
 ## 2026-08-09 — Settled the canonical-profit question and applied the fix live
 
 Settled the canonical-profit question and applied the fix to production. Live measurement showed the order-vs-lines profit disagreement is a stale-cache bug, not a rounding artefact: orders.total_profit is trigger-recomputed and correct, while order_items.profit is a stored snapshot nothing refreshes, leaving 37 of 288 line rows stale across 17 orders. Mason decided the order header is canonical and line profit is derived from it, rounding each line's revenue and cost to whole cents before subtracting so the lines sum to the header exactly. Migration 20260809230500_single_canonical_line_profit.sql implements that, is forward-only, and both migration reviewers returned zero blockers. It was **applied live on 2026-08-09** (Supabase ledger version 20260810000427) after Mason's explicit approval. A post-apply live read confirmed both function bodies changed as written, the trigger now fires on all four money columns, and the SECURITY DEFINER flag and search_path are unchanged.
@@ -701,53 +831,14 @@ that fix (rebased onto the new `main`) plus the two Codex findings raised agains
 
 Coverage: apply-guard 79 assertions, ordering-lib 18, `agent-manifest-parity` clean.
 
-## 2026-08-09 — Team Board delegated completion shipped (database live, frontend in PR #351)
+## 2026-08-09 — Team Board delegated completion shipped (SUPERSEDED — see the entry above)
 
-Assigning a to-do to a teammate on the Team Board was effectively broken: the checkbox
-wrote straight to the table, and the creator-or-admin row policy silently rejected the
-assignee, so their click did nothing. Delegation is now governed by an RPC and the
-notification path is hardened.
-
-**Live database changes (owner-approved, applied this session).**
-
-- `20260809130108_team_note_completion_rpc_and_assignment_notify` — adds
-  `complete_team_note(note_id, completed, idempotency_key)` as a SECURITY DEFINER function
-  with a pinned `search_path`, taking the actor from `auth.uid()` so it cannot be forged.
-  Authorization (creator, current assignee, or active admin) runs *before* the idempotency
-  replay, and the function reports the row's actual state so a no-op cannot rewrite
-  `completed_by`. Also adds the assignment trigger that files one `task_assigned`
-  notification, staying silent on self-assignment and unchanged assignees. Revoked from
-  PUBLIC and anon; granted to authenticated only.
-- `20260810010308_active_team_note_assignment_actor` (authored as `20260809154649`) —
-  closes the gap review found afterwards: a deactivated profile whose token had not yet
-  expired could satisfy the legacy creator-only insert policy and make the owner-run
-  trigger notify an active teammate. Now the insert policy requires an active profile and
-  the trigger independently rejects an inactive effective actor. `tnotes_update` is
-  deliberately unchanged.
-
-Both migrations cleared the `rls-security-reviewer` and `migration-drift-reviewer` charters
-with CLEAN machine verdicts on the exact file content before apply, and both disk files were
-renamed content-identically to their server-assigned ledger versions.
-
-**Proven against live, by rollback-only probes rather than tests alone.** An active
-non-admin assignee completed a note they did not create, with `completed_by` stamped from
-`auth.uid()` and exactly one notification filed; an unrelated employee was refused with
-`NOT_AUTHORIZED_TO_COMPLETE`; a real deactivated profile was refused at the row-policy layer;
-and with that layer deliberately bypassed, the trigger's own guard raised `PROFILE_INACTIVE`.
-The normal assignment and completion path was re-checked afterwards and was unaffected.
-
-**Frontend (pushed to PR #351, not yet merged — users do not have it).** Team Board calls the
-RPC instead of writing the table, guards against double-submit, and maps six new error codes
-to specific messages. The checkbox is disabled with an explanatory tooltip for viewers who
-are not the creator, assignee, or an admin. Notification deep-links now route team notes to
-the board, and the deep-link fetch no longer waits on a populated list before resolving.
-
-**Not done.** The registered chain `scripts/smoke/smoke-complete-team-note-chain.sql` still
-needs its external `SMOKE_PASS_ROLLBACK` terminal; it is a manual `npm run smoke` spec, not
-CI. `.claude/schema-registry.json` was stale at `20260809130108` when this entry was first
-written; the merge into `main` on 2026-08-10 moved its high-water to `20260810010308` and
-added the two migrations below to its applied list. None of these changes alter a table,
-column, constraint, or enum, so no schema-shape section of that file moved.
+> **Superseded 2026-08-10.** This entry was written mid-flight, while PR #351 was still open and the
+> registered smoke chain had not yet returned its terminal marker. Both statements are now false: PR #351
+> merged on 2026-08-10 (merge commit `8dcb82fb`), and the chain reached exact `SMOKE_PASS_ROLLBACK` against
+> live. The accurate record of this work is the
+> **2026-08-09 — Team Board delegated completion shipped (database live, frontend merged via PR #351)**
+> entry earlier in this file. The stale text is removed rather than kept, so no reader can act on it.
 
 ## 2026-08-09 — Line-profit precision repair (live), dependency updates, and a public-repo disclosure guard
 
@@ -1079,6 +1170,7 @@ practice. The pipeline spec is archived at
 (branch protection, PR + CodeRabbit, exact-SHA Codex proofs, money/migration/
 bash-safety/RLS hooks) are unchanged. See `docs/manual/DECISION_LOG.md`
 (2026-08-07).
+
 ## 2026-08-08 — idempotency-body-check round-17: comments are separators
 
 Codex H1 against round 16, and the same root cause as round 15 in a different place: matching RAW
@@ -2801,6 +2893,7 @@ repository selectors, including the shared Git directory, before creating
 temporary repositories. This prevents false pre-commit failures without
 relaxing the production guard. Remittance stubs also expand for wrapped farm
 names so every line remains visible without covering balance or payment rows.
+
 ## 2026-08-03 — Factory blocked-review evidence and owner-reply clarity
 
 Independent Sol/high review now distinguishes an explicit `BLOCKERS` verdict
@@ -3182,6 +3275,7 @@ The safe bounded `BLOCKERS` report is returned directly by the review broker
 with its read-only Board evidence path after attachment. Repair lanes therefore
 receive the actionable findings without direct factory-state access or another
 model run; the content-addressed evidence artifact remains the durable source.
+
 ## 2026-08-02 — Factory resume replay and parked-Board repair
 
 The factory now serializes owner pause/resume evaluation and its conditional
@@ -4246,6 +4340,7 @@ flag-shaped value (exit 2, and no bogus directory). And an unexpected crash exit
 the runbook reads as "verification failed" — crashes now print `FAIL:` and exit 3, proven by
 injecting a permission error. The script turned out to already handle a missing, corrupt, or
 non-directory target itself, so exit 1 still means exactly what it claims.
+
 ## 2026-07-30 — Final Quote lifecycle replay review closed two operator-safety gaps
 
 The pending row-version migration now binds `create_quote_version` idempotent
@@ -4437,6 +4532,7 @@ the whole-calendar-month constraint.
 The live schema-integrity tripwire now guards the exact month-lock calls in
 both vendor-bill writers and period close, so a later function re-emission
 cannot silently reopen the race.
+
 ## 2026-07-30 — Governed factory pilot adds chat approvals and one read-only board
 
 The existing `/ship` delivery pipeline now has a governed, single-lane factory entry for plain-English
@@ -6712,6 +6808,7 @@ Harness review: documented cross-agent sync gaps (6 hooks Claude-only vs Codex; 
   - `a7806253 Durable commission routing: immutable profile UUIDs in splits (applied live as 20260722174029) (#216)`
   - `d8a17601 Fix bulk quote import lifecycle path`
 - **Migrations touched:** none — documentation and agent-guidance only.
+
 ## 2026-07-24 — Cleanup sprint progress check (automated weekly routine)
 
 - Weekly read-only SQL check against production. Negatives: 19 (+1 vs prior week — second consecutive increase). Over-received PO items: 15 (flat, 10 consecutive stalled weeks). Unbilled deliveries: 59 (flat). New negative-bucket rows are still being created despite the Phase 21 going-forward fix — warn-not-block delivery path (U9) likely still has an open write path. No legacy rows resolved in /integrity-cleanup this week. Phase 23 (DB CHECK constraints on inventory buckets) remains blocked. PR #226 filed with the progress log row; push notification sent to Mason.
@@ -6812,6 +6909,7 @@ Cross-session coordination for landing PR #213: pinged the duplicate chip sessio
 - Prepared the additive `20260722015019_supplier_cost_basis_phase2` migration behind the queued-RPC/frontend barrier. Its rollout flag is forcibly reset to `false` during migration, including when a drifted pre-existing row says `true`, so applying schema alone cannot enable the new cost-basis workflow. New tables/indexes and public RPC overloads fail closed on pre-existing schema drift. Pricing-free Product shells created after migration receive their initial basis on the first governed cost approval, without inventing a zero-cost basis. PO insert/first-receipt paths discard caller-supplied conversion provenance and derive only safe same-unit factor plus unit-identity snapshots. Both received-purchase and supplier-link evidence become ineligible if the Product inventory unit later changes; preview, apply, workspace, and history enforce the binding, enabled governance blocks direct unit reinterpretation, and a flag-off correction atomically closes the old active basis. Apply locks every Product before its final evidence re-resolution, closing the concurrent pricing-free unit-change race. The existing-line legacy backfill exception is scoped to the migration transaction and fails closed when its setting is absent, so later callers cannot replay it. Ledger-history authorization likewise fails closed when unset. Supplier-backed apply locks observations before referenced supplier rows to match the correction path and avoid deadlocks; actual-purchase apply locks PO items before parent POs to match receiving/reversal order. The new purchase snapshot constraint uses PostgreSQL's lower-impact validation sequence. While disabled, existing received-PO corrections clear stale provenance; once enabled, received cost-defining fields freeze. The disposable PostgreSQL proof covers both flag states and adversarial snapshot/unit-change inputs.
 - Applied follow-up `20260722035521_allow_inert_null_cost_workbook_rows` after authenticated frontend verification found that complete workbooks can legitimately include unchanged Products without a cost. Full manifest/tamper validation remains mandatory, while only the exact inert null-cost row skips basis resolution. A two-row rollback proof passed with one inert Product and one governed cost change. The feature flag remains OFF.
 - Applied forward-only overload assertion `20260722042515_assert_supplier_cost_basis_followup_overloads` after final push review found the applied replacement did not itself reject stale alternate RPC signatures. A concurrent overnight apply replayed the identical assertion as ledger version `20260722043537`; both executions only checked live shape and changed no function body, Product money, grants, or feature flag. Disk and documentation retain both successful ledger entries for parity.
+
 ## 2026-07-21 — Chemical-sale payment-terms build: migration 20260721223817 (save_invoice persists payment_terms; due_date now key-conditional) APPLIED LIVE with Mason's OK; InvoiceDetail terms picker + posted read-only display; single+batch PDF print invoice override. 3 codex review rounds (sol adversarial x2 + migration gauntlet clean).
 
 Chemical-sale payment-terms build: migration 20260721223817 (save_invoice persists payment_terms; due_date now key-conditional) APPLIED LIVE with Mason's OK; InvoiceDetail terms picker + posted read-only display; single+batch PDF print invoice override. 3 codex review rounds (sol adversarial x2 + migration gauntlet clean).
@@ -6991,6 +7089,7 @@ Bug-class regression suite: analyzed all ~60 bugs fixed 2026-07-10..20 (split-bi
   - `supabase/migrations/20260720175946_protect_governed_split_edit_and_void_group.sql`
   - `supabase/migrations/20260718010000_per_line_split_billing_schema.sql`
   - `supabase/migrations/20260720173059_fix_statement_opening_balance.sql`
+
 ## 2026-07-20 — Split-billing email authority completed
 
 - Re-read each invoice's server-owned disposition and lifecycle immediately before every invoice email send, including field-invoice lists and invoice detail.
@@ -7665,6 +7764,7 @@ Wrote `supabase/migrations/20260718010000_per_line_split_billing_schema.sql` —
 **NOT applied live** — validated only via `BEGIN…ROLLBACK` smoke against live schema (all objects create, all FKs resolve, assertions pass, nothing persists). Live apply stays gated to Mason (needs a baseline real-billing cycle first per spec §8).
 
 Review layer: 3 parallel reviewers (rls-security-reviewer, migration-drift-reviewer, Opus adversarial). Fixes folded in: allocated_acres → numeric(12,4) [authoritative largest-remainder store, spec §4]; snapshot invoice_id → ON DELETE RESTRICT [protect append-only history]; RLS policies wrap auth.uid() as (select auth.uid()) [avoids auth_rls_initplan warns, matches invoice_shares_select]; REVOKE SELECT FROM anon; freeze trigger checks both old+new invoice_item on UPDATE. Companion: `docs/plans/per-line-split-billing-READINESS-2026-07-17.md`.
+
 ## 2026-07-20 — Supplier pricing evidence restricted to ADMIN-ONLY (live fix before Phase 1b merge)
 
 - The Codex GitHub review on PR #179 caught a real security gap all earlier reviewers missed: the live Phase 1b reader RPCs, evidence-table SELECT policies, and the evidence-PDF bucket were gated admin-OR-sales, exposing supplier costs, `cost_history` values, and PO ids/numbers/unit costs to sales reps — contradicting the standing "cost data is admin-only" RLS contract (the contract tests passed because SECURITY DEFINER readers legitimately bypass table RLS). Mason settled it: **admin-only**.
@@ -8258,6 +8358,7 @@ UI overhaul loop complete: Office Cockpit = single morning screen (queues top, K
   - `supabase/migrations/20260710003000_u18b_morning_checks_fixes.sql`
   - `supabase/migrations/20260709230000_u18_safety_nets.sql`
   - `supabase/migrations/20260709233000_u17_email_log_select_own.sql`
+
 ## 2026-07-10 — docs: TODO.md refreshed to verified state + stray `.codex` mirror repaired
 
 Corrected the roadmap/TODO to match live reality and cleared a tooling snag that was blocking commits. Docs-only; no DB, no code, no deploy.
@@ -8336,6 +8437,7 @@ Fix (branch `claude/codex-gauntlet-review-a808d6`, migration `20260711020000_sav
 Codex gate (gpt-5.5) then found 1 BLOCKER (the timestamp collision, fixed by the rename) + 1 P1 (a lost-response idempotency key could be reused across a cancelled-then-new add or a different job, replaying the wrong record — fixed: `openAdd` resets the key per new-record intent, and the RPC's recovery SELECT is now scoped to `job_id` so a cross-job reuse re-raises instead of silently returning another job's record) + 2 P2 test-quality gaps (the coverage guard was over-claimed → comment corrected to state its real scope + residual gap; the table-unique test now also asserts the partial-unique-index DDL exists). All addressed.
 
 **Applied live** 2026-07-10 (live v20260710165446, Mason's OK); verified + sweeps clean + schema-registry regenerated for the new column; the independent Codex gate (gpt-5.5) went 2 rounds → NO FINDINGS. Landed to `main` via this merge; the frontend `useIdempotencyKey` dedup activates on the next Vercel deploy (safe until then — `job_applied_records` has 0 live rows). (The earlier-flagged `20260711000000_a9_close_period_guards` orphan was merged to `main` by its own session mid-run — no longer an open item.)
+
 ## 2026-07-10 — U18c: morning-notification-checks cron was firing at 01:20 AM, not 06:20. Fixed live (mig `20260711010000`, live v20260710154919).
 
 Found while checking the U18 cron's first run: the `morning-notification-checks` pg_cron job was scheduled `20 6 * * *` on the assumption it meant 06:20 local, but pg_cron runs in UTC (verified `current_setting('TimeZone') = 'UTC'`), so it fired at 06:20 UTC = **01:20 AM Central**. Same bug class as the A9 fix above — a "business time" written as if the DB were on the local clock. Re-scheduled to `20 11 * * *` = 06:20 America/Chicago in summer / 05:20 in winter (pg_cron can't track DST, so the earlier UTC time was chosen to keep it at-or-before 06:20 year-round for early-start ag crews). Cron-reschedule only; the function is untouched. rls + drift reviewers 0 blockers; proven live (schedule now `20 11 * * *`, single active job, rolled-back `PERFORM run_morning_notification_checks()` ran cleanly).
@@ -8906,6 +9008,7 @@ Applied **all 13** overnight bug-hunt fix migrations to production (Supabase pro
 - **8 MED/LOW:** job cancel gate (`_enforce_job_status_transition`) · `void_payment` partial-void status derived from balance · `preview_finance_charges` realigned to `generate_finance_charges` · OIFA post-invoice edit lock (`prevent_oifa_edit_after_post` trigger) · invoice-creator provenance/totals (`total_cost_cents` + `invoice_created` audit rows) · `complete_delivery` audit row + partial-rebill cost recompute · `create_quick_delivery` aggregates duplicate product lines by uuid · `create_invoice_from_blend_ticket` re-bill guard widened to `IS DISTINCT FROM 'unbilled'`.
 - **Two NEW trigger functions** added (`prevent_oifa_edit_after_post`, `enforce_field_application_type_lock`); no new callable RPCs. Doc counts bumped: migrations on disk **482 → 495**, trigger functions **47 → 51**, callable RPCs unchanged (226).
 - **Validation:** each gated by the **rls-security + migration-drift** reviewers + an independent **Codex** read-only review + the migration **apply-guard**; post-apply per-function `plpgsql_check = 0` errors / `overload = 1`, and the global overloads + `plpgsql_check` sweeps are clean. See `docs/audits/overnight-bug-hunt/` for the FIX-PLAN + LEDGER.
+
 ## 2026-06-19 — As-Applied: live billing crash fixed + Field-Invoice segregation
 
 Continued the As-Applied / Field-Invoice work on `feat/as-applied-invoices` (overnight build → Mason's morning review). Branch carries Phases 1a/1b/2/4 (Field Invoices area + reconciliation view + parked recipe-pricing migration); nothing else deployed.
@@ -8913,6 +9016,7 @@ Continued the As-Applied / Field-Invoice work on `feat/as-applied-invoices` (ove
 - **Live billing crash FIXED (applied to prod) — migration `20260618220000`.** Proving the applied→invoice loop end-to-end surfaced a latent crash: `transfer_job_to_invoice` raised `55000 record "v_conversion" is not assigned yet` for any job with a chemical line lacking a per-acre rate (the whole job→field-invoice rail died). Never surfaced because no field jobs have been billed (0 field invoices live). Fix: call `convert_to_gl_lb` unconditionally (single delta; unrated lines yield NULL gl/lb, no crash). Reviewers + Codex clean; applied with Mason's OK; **re-ran the full flow against the live fixed function → `SMOKE_PASS_ROLLBACK`**; post-apply invariants clean.
 - **Field-invoice segregation completed** (`18c5432`): the Chemical Sales `/invoices` list now excludes `invoice_type='field_application'` (fetch `.neq` + dropped type-filter option) so a field invoice no longer appears in both lists.
 - **Decisions captured (Mason 2026-06-19):** recipe pricing = **per-unit** (parked migration `20260618230000` confirmed; ships as a bundle with `save_blend_recipe` wiring + a recipe price UI); machine-fee + actor = **targeted fixes** (G1 per-acre `is_application_fee` line + G3 strict-actor — built in a focused follow-up). Both are non-urgent (the crash that mattered is fixed). Full status: `docs/audits/2026-06-18-as-applied-overnight-handoff.md`.
+
 ## 2026-06-17 — Retired dead `create_invoice_from_delivery` (Lane B delivery_id follow-up)
 
 Resolved the `delivery_id` duplicate-guard follow-up by **retiring the function** rather than patching it. **Migration `20260617210000`** (applied live, stamp `20260617210043`, Mason approved the retire).
@@ -9063,6 +9167,7 @@ Ran the first unconstrained product + design + architecture deep dive (5 paralle
 - Notable correction to project lore: the app IS a PWA (VitePWA + Workbox + IndexedDB offline write-queue, `vite.config.ts:23-85`) — the gap is offline *reads* and mobile UI shape, not missing offline support.
 
 ---
+
 ## 2026-06-11 (get_customer_statement — 4 AR blind spots closed, applied live)
 
 CHIP task_25d25699 (spawned from the 2026-06-10 error-prevention review's financial-predicate findings, FIN-README Findings item 2). The customer statement RPC had four blind spots that would have made statements wrong the moment AR activity started:

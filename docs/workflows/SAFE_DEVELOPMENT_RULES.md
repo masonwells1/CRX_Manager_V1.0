@@ -51,7 +51,7 @@ These are mandatory safety rules for anyone (human or AI) making changes to CRX 
 | NEVER remove RLS policies from any table | Data exposed to unauthorized users |
 | NEVER expose `service_role` key in frontend code | Full database access to anyone with browser dev tools |
 | NEVER modify `financial_audit_log` records | Destroys the immutable audit trail required for financial compliance |
-| NEVER store money as floating point | Rounding errors in financial calculations. Use bigint cents. |
+| NEVER store or calculate money with binary floating point | Rounding errors in financial calculations. New storage uses bigint cents; documented legacy PostgreSQL numeric-dollar columns use exact `numeric`. |
 
 ### Business Logic
 | Rule | Consequence of breaking |
@@ -159,16 +159,22 @@ Before any schema change, follow `docs/workflows/DATABASE_CHANGE_CHECKLIST.md`:
 
 ## Money Handling
 
-All money in CRX Manager is stored as **bigint cents** (whole numbers, no decimals).
+New money storage in CRX Manager uses **bigint cents** (whole numbers, no decimals). Established
+PostgreSQL `numeric` dollar storage may remain temporarily to avoid a risky unit rewrite, but it is
+not an approved or suppressible compatibility exception until database math is verified as exact
+`numeric`, all existing values are finite whole cents, and an active finite whole-cent CHECK is
+present. Dirty or unconstrained columns remain tracked findings and are not rewritten without approval.
 
 | Operation | How |
 |-----------|-----|
 | Store $25.50 | Store as `2550` (bigint cents) |
 | Display 2550 | Show as `$25.50` (divide by 100) |
-| User enters $25.50 | Convert to `2550` before saving (multiply by 100) |
+| User enters $25.50 | Parse the decimal text exactly to `2550` before saving; do not multiply a binary float by 100 |
 | Add $25.50 + $10.25 | Add `2550 + 1025 = 3575` (integer math) |
 
-**NEVER use floating point for money.** No `parseFloat()`, no `0.1 + 0.2` problems.
+**NEVER introduce binary floating-point money arithmetic.** New or changed TypeScript money paths
+parse decimal operands into integer cents before arithmetic. PostgreSQL legacy dollar paths use
+exact `numeric`, not `real` or `double precision`.
 
 ---
 

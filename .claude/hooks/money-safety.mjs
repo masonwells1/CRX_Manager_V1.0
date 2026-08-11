@@ -48,8 +48,14 @@ if (reParseFloatCents.test(content)) {
 if (violations.length > 0) {
   out("block",
     "MONEY SAFETY: " + violations.join(" | ") +
-    " Money in CRX Manager is stored as bigint cents (e.g. 2550 for $25.50). " +
-    "Use parseDollarsToCents() from src/lib/parseCents.");
+    " New money storage in CRX Manager uses bigint cents (e.g. 2550 for $25.50); " +
+    "existing PostgreSQL numeric-dollar storage may remain temporarily to avoid a risky unit rewrite, " +
+    "but it is not an approved exception until exact numeric math, clean finite whole-cent values, " +
+    "and an active finite whole-cent CHECK are verified; dirty or unconstrained columns remain findings. " +
+    "For authoritative TypeScript input, first reject more than two fractional digits or apply one " +
+    "explicit approved exact rounding rule; only then convert to integer cents. The legacy " +
+    "parseDollarsToCents() helper currently truncates excess precision, so it is not sufficient " +
+    "without that input validation.");
 }
 
 out("allow");

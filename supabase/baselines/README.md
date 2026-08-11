@@ -103,6 +103,25 @@ list from both version and captured name:
 node scripts/list-post-baseline-migrations.mjs
 ```
 
+The selector also reads `supabase/baselines/one-shot-migrations.json`. Migrations
+registered there rewrote a production-specific row population and are withheld
+from the normal replay plan; each withheld filename and reason is printed to
+stderr so the omission is never silent. `--include-one-shot` is an explicit
+escape hatch only for a target whose population has been independently proven
+to match the population originally approved. A normal data restore already
+contains those corrected values and must not replay the rewrite. After proving
+those restored values, record the skipped versions in that target's migration
+ledger before any later unfiltered push:
+
+```bash
+node scripts/list-post-baseline-migrations.mjs --one-shot-repair-plan
+# Inspect the printed commands, then run them against the same DATABASE_URL.
+```
+
+The generated commands use `supabase migration repair <version> --status
+applied`; they change only migration history, not business rows. Never run them
+until the restored data is proven to contain each registered correction.
+
 Do not execute those files directly with `psql`: that changes the schema without
 recording the migrations in `supabase_migrations.schema_migrations`. Instead,
 copy only the emitted files into an isolated Supabase CLI workdir, inspect the

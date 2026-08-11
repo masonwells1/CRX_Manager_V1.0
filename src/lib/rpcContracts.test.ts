@@ -2176,12 +2176,8 @@ function registryMigrationHighWater(): string {
 // Keep this set aligned with rows explicitly marked PENDING APPLY in
 // docs/reference/migration-history.md.
 //
-// Empty as of 2026-08-10, from two independent lines of work that both landed:
-// history rows 857-861 (the 2026-08-08 foundation ultra review migrations,
-// re-issued forward as 20260809170500-170900) applied live on 2026-08-09 and now
-// read APPLIED LIVE; and both Team Board delegation migrations applied live
-// 2026-08-09 under server-assigned ledger versions 20260809130108 and
-// 20260810010308. Nothing in this checkout is pending.
+// Empty as of 2026-08-10: the Team Board delegation migrations and the
+// foundation-review migrations are all applied live and documented below.
 const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([]);
 
 /**
