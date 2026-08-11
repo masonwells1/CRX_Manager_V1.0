@@ -18,8 +18,14 @@ This is the shared, project-level contract for every coding agent in this reposi
 3. Read `docs/workflows/SAFE_DEVELOPMENT_RULES.md` for any multi-file, data, money, security, production, migration, permission, or customer-facing task.
 4. Read `docs/reference/gotchas.md` and the relevant file under `docs/workflows/` for the area being changed.
 5. Treat executable code, migrations, live read-only evidence, and current grants as stronger evidence than prose or old handoffs.
-6. For architecture, multi-file planning, workflow/migration tracing, difficult debugging, structural audits, or PR impact analysis, automatically use the local Graphify workflow (`npm run graph:refresh`, then the smallest useful `graphify explain` / `affected` / `path` / `query`) before broad source reading. Use it to narrow scope and save tokens; verify material edges in current source and live read-only evidence.
+6. For architecture, multi-file planning, workflow/migration tracing, difficult debugging, structural audits, or PR impact analysis, automatically follow the Graph-First Navigation policy below before broad source reading.
 7. Claude workflow logic lives under `.claude/`; Codex-facing skills under `.agents/` are generated adapters. Do not maintain two independent workflow implementations.
+
+## Graph-First Navigation
+
+For architecture, multi-file planning, workflow or migration tracing, difficult debugging, structural audits, and PR-impact analysis, Graphify is the default first-pass navigator. Load the `graphify` skill automatically and follow its freshness, focused-query, reporting, and result-persistence procedures before broad file exploration; do not require Mason to remember to request it. A simple documentation lookup, obvious single-file edit, or already-known exact file does not need a graph query. If Graphify is unavailable or its supported refresh path skips, continue with focused source inspection and report that limitation instead of blocking the task.
+
+Use the graph to choose the smallest source surface that can answer or implement the task. Raw source reads do not require Mason's explicit request: they are required whenever needed to edit safely, verify a material connection, review behavior, or conduct an audit. Current source, executable tests, migrations, and live read-only database evidence remain authoritative; Graphify identifies where to look and never proves current behavior or the live schema.
 
 ## Plan and Approval Gates
 
