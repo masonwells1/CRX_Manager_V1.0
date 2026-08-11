@@ -110,11 +110,24 @@ function extractBody(file, label) {
   const bodies = [];
   let m;
   while ((m = re.exec(raw)) !== null) {
+    // Bound the delimiter search to THIS definition. Searching the rest of the
+    // file unbounded means a definition written with a different dollar-quote
+    // tag ($$ or $body$) silently yields some LATER function's body, and the
+    // md5 gate then fails with a misleading message (CodeRabbit, PR #384).
+    re.lastIndex = m.index + 1;
+    const nextDef = re.exec(raw);
+    re.lastIndex = nextDef ? nextDef.index : raw.length;
+    const limit = nextDef ? nextDef.index : raw.length;
+
     const open = raw.indexOf('AS $function$', m.index);
-    if (open === -1) fail(`${label}: definition at offset ${m.index} has no opening $function$ delimiter`);
+    if (open === -1 || open >= limit) {
+      fail(`${label}: definition at offset ${m.index} does not open with AS $function$ before the next definition`);
+    }
     const bodyStart = open + 'AS $function$'.length;
     const close = raw.indexOf('$function$', bodyStart);
-    if (close === -1) fail(`${label}: definition at offset ${m.index} has no closing $function$ delimiter`);
+    if (close === -1 || close > limit) {
+      fail(`${label}: definition at offset ${m.index} has no closing $function$ delimiter`);
+    }
     bodies.push(raw.slice(bodyStart, close));
   }
   if (bodies.length !== 1) {
@@ -206,7 +219,9 @@ try {
   for (let i = 0; i < 60; i++) {
     const r = docker(['exec', CONTAINER, 'pg_isready', '-U', 'postgres'], { allowFailure: true });
     if (r.status === 0) { up = true; break; }
-    spawnSync(process.execPath, ['-e', 'setTimeout(()=>{},1000)'], { timeout: 5000 });
+    // Block this thread for a second without paying for a whole extra Node
+    // process on every one of up to 60 retries (CodeRabbit, PR #384).
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
   }
   if (!up) fail('the container never became ready');
 

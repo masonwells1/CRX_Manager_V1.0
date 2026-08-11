@@ -12,9 +12,21 @@
 --     — the canonical header writer the fix defers to.
 --   * field_app_priced_quantity, normalize_rate_unit
 --   * check_idempotency, save_idempotency
---   * link_blend_ticket_to_order
 --   * create_order_from_blend_ticket — the PRE-FIX body, byte-for-byte, so the
 --     migration's md5 precondition is a real gate in here too.
+--
+-- Each of those was md5-verified against live pg_proc on 2026-08-11; the six
+-- helper bodies match exactly (modulo CRLF), so nothing under test is a
+-- paraphrase of production.
+--
+-- ONE DELIBERATE STAND-IN, not a copy:
+--
+--   * link_blend_ticket_to_order — live is 8.3 KB and reads a dozen tables this
+--     fixture trims away. The version here is a behavior-equivalent stub: it
+--     maps blend lines to order items, refuses an inexact or empty mapping, and
+--     flips order_link_status to 'linked', which is all the chain asserts. It
+--     is NOT byte-identical to live, so never treat a green run here as proof
+--     of that function's behavior — only of create_order_from_blend_ticket's.
 --
 -- Table definitions are trimmed to the columns these bodies touch. Anything
 -- trimmed cannot change the arithmetic under test.
@@ -453,6 +465,9 @@ BEGIN
     RAISE EXCEPTION 'IDEMPOTENCY_OPERATION_REQUIRED';
   END IF;
 
+  -- Serialize every transaction using the same key. The lock is intentionally
+  -- key-only so same-operation retries replay and cross-operation reuse fails
+  -- before either caller can perform business side effects.
   PERFORM pg_advisory_xact_lock(
     hashtextextended('crx:idempotency:' || p_key, 0)
   );
@@ -576,15 +591,22 @@ BEGIN
   END IF;
 
   -- Every mapped blend line must be accounted for to the last unit.
+  -- Wrapped in a subquery so v_bad is genuinely "how many blend lines are
+  -- short or over". Without it, SELECT count(*) ... GROUP BY ... HAVING puts
+  -- the FIRST offending group's row count into v_bad, which still trips the
+  -- guard but does not mean what the name says (CodeRabbit, PR #384).
   SELECT count(*) INTO v_bad
-    FROM blend_ticket_products btp
-    LEFT JOIN blend_ticket_to_order_items m
-           ON m.blend_ticket_product_id = btp.id
-          AND m.order_id = p_order_id
-   WHERE btp.blend_ticket_id = p_blend_ticket_id
-     AND btp.product_id IS NOT NULL
-   GROUP BY btp.id, btp.quantity
-  HAVING COALESCE(sum(m.quantity_applied), -1) IS DISTINCT FROM btp.quantity;
+    FROM (
+      SELECT btp.id
+        FROM blend_ticket_products btp
+        LEFT JOIN blend_ticket_to_order_items m
+               ON m.blend_ticket_product_id = btp.id
+              AND m.order_id = p_order_id
+       WHERE btp.blend_ticket_id = p_blend_ticket_id
+         AND btp.product_id IS NOT NULL
+       GROUP BY btp.id, btp.quantity
+      HAVING COALESCE(sum(m.quantity_applied), -1) IS DISTINCT FROM btp.quantity
+    ) bad_lines;
 
   IF COALESCE(v_bad, 0) > 0 THEN
     RAISE EXCEPTION 'BLEND_TICKET_ORDER_LINK_EMPTY_OR_INEXACT';

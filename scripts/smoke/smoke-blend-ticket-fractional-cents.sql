@@ -49,6 +49,7 @@ DECLARE
   v_grantees      text[];
   v_secdef        boolean;
   v_searchpath    text[];
+  v_overloads     integer;
 BEGIN
   ----------------------------------------------------------------------------
   -- 0. Actors
@@ -287,6 +288,20 @@ BEGIN
   ----------------------------------------------------------------------------
   -- 8. Contract: SECURITY DEFINER, pinned search_path, no anon/PUBLIC EXECUTE
   ----------------------------------------------------------------------------
+  -- Assert overload uniqueness FIRST. A second overload would make the
+  -- SELECT ... INTO below pick an arbitrary row, so the SECURITY DEFINER and
+  -- search_path assertions could pass against a function the callsite at
+  -- section 1 never invokes (CodeRabbit, PR #384).
+  SELECT count(*)
+    INTO v_overloads
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public'
+     AND p.proname = 'create_order_from_blend_ticket';
+  IF v_overloads <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: expected exactly 1 public.create_order_from_blend_ticket overload, found %', v_overloads;
+  END IF;
+
   SELECT p.prosecdef, p.proconfig
     INTO v_secdef, v_searchpath
     FROM pg_proc p
@@ -300,7 +315,12 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: search_path is not pinned to public, pg_temp — got %', v_searchpath;
   END IF;
 
-  SELECT array_agg(DISTINCT COALESCE(pg_get_userbyid(a.grantee), 'PUBLIC') ORDER BY COALESCE(pg_get_userbyid(a.grantee), 'PUBLIC'))
+  -- grantee = 0 IS PUBLIC, and pg_get_userbyid(0) does NOT return NULL for it —
+  -- it returns the literal string 'unknown (OID=0)', so a COALESCE(...,'PUBLIC')
+  -- here would never fire and the PUBLIC check below would silently fail OPEN.
+  -- Map the OID explicitly (CodeRabbit, PR #384).
+  SELECT array_agg(DISTINCT CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END
+                   ORDER BY CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END)
     INTO v_grantees
     FROM pg_proc p
     CROSS JOIN LATERAL aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
