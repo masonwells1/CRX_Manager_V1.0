@@ -13,6 +13,20 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN — `parseCents.ts` truncates excess fractional precision
+
+`parseDollarsToCents` and `parseDollarsToCentsSigned` currently accept inputs with
+more than two fractional digits and truncate them (`1.999` becomes 199 cents); the
+focused test explicitly preserves that legacy behavior. This predates the
+2026-08-10 exact-whole-cent policy. New or changed authoritative money paths must
+parse decimal operands exactly and must not copy this truncation. Changing the
+shared form-input helper needs a separate caller audit and UI decision: reject
+excess precision or apply one explicit approved rounding rule. The documentation
+prerequisite records the debt but deliberately does not change production input
+semantics.
+
+---
+
 ## RESOLVED LIVE 2026-08-09 — Team Board delegated completion and assignment notifications (frontend awaits push)
 
 Both migrations are applied live. `20260809130108_team_note_completion_rpc_and_assignment_notify` added the governed `complete_team_note` RPC and the assignment-notification trigger without widening the existing `tnotes_update` policy; live structure, grants, and the 26 standing invariant predicates passed. The HIGH that review then raised — an inactive profile with a still-valid JWT could satisfy the legacy `tnotes_insert` creator check and make the owner-run trigger notify an active teammate — is closed by `20260810010308_active_team_note_assignment_actor` (authored as `20260809154649`), which requires an active profile in the INSERT policy *and* independently in the trigger, leaving `tnotes_update` unchanged.

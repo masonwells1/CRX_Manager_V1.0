@@ -25,7 +25,7 @@ const PREAMBLE = [
   '- Do NOT edit, write, or delete any file. This is a review, not a fix.',
   '- Cite hard evidence for every finding: a file:line, a table/function name, or the exact read-only SQL you ran and what it returned.',
   '- Read CLAUDE.md and the relevant docs/reference/* files for the project\'s own documented rules and ACCEPTED exceptions before flagging anything.',
-  '- Known accepted findings — do NOT re-report: profile_public_view uses SECURITY DEFINER semantics by design; customer RLS is intentionally lower-bound-only; commissions.commission_amount is numeric dollars by design; reportPdf.ts columnStyles uses one allowed `any`.',
+  '- Known accepted findings — do NOT re-report: profile_public_view uses SECURITY DEFINER semantics by design; customer RLS is intentionally lower-bound-only; commissions.commission_amount uses numeric-dollar STORAGE by design (still audit its exact arithmetic and finite whole-cent constraint); reportPdf.ts columnStyles uses one allowed `any`.',
   '- Prefer precision over volume. Report only what you can substantiate. Do NOT pad with speculative or style-only nits. Report at most your 10 most significant findings for this dimension.',
 ].join('\n')
 
@@ -96,7 +96,7 @@ const DIMENSIONS = [
   {
     key: 'money-financial',
     prompt:
-      'Audit MONEY & FINANCIAL correctness. Flag: (a) binary-float money arithmetic or rounding, new money storage that is not bigint cents, or documented legacy PostgreSQL numeric-dollar columns that lose exact numeric math or their finite whole-cent constraint once clean; (b) parseDollarsToCents vs parseDollarsToCentsSigned misuse — signed is legitimate only in the 3 vendor-bill adjustment callsites; (c) any UPDATE that writes invoices.balance_cents (it is GENERATED ALWAYS — writing it is a bug); (d) violations of inventory_transactions / financial_audit_log immutability invariants; (e) rounding errors in commission splits or payment allocation. Inspect src/lib/parseCents.ts (parseDollarsToCents / parseDollarsToCentsSigned), src/lib/reconciliation.ts, the *.test.ts for commission-split / payment-allocation / finance-charge math, and the corresponding mutating RPC bodies via live pg_proc (commission split, payment allocation, finance charges).',
+      'Audit MONEY & FINANCIAL correctness. Flag: (a) binary-float money conversion, parsing, arithmetic, or rounding, new money storage that is not bigint cents, or documented legacy PostgreSQL numeric-dollar columns that lose exact numeric math or their finite whole-cent constraint once clean; (b) parseDollarsToCents vs parseDollarsToCentsSigned misuse — signed is legitimate only in the 3 vendor-bill adjustment callsites; (c) any UPDATE that writes invoices.balance_cents (it is GENERATED ALWAYS — writing it is a bug); (d) violations of inventory_transactions / financial_audit_log immutability invariants; (e) rounding errors in commission splits or payment allocation. Inspect src/lib/parseCents.ts (parseDollarsToCents / parseDollarsToCentsSigned), src/lib/reconciliation.ts, the *.test.ts for commission-split / payment-allocation / finance-charge math, and the corresponding mutating RPC bodies via live pg_proc (commission split, payment allocation, finance charges).',
   },
   {
     key: 'frontend-safety',

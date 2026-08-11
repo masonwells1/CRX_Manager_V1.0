@@ -8,9 +8,12 @@ Recorded Mason's financial storage decision independently of the pricing impleme
 storage uses bigint cents, while established PostgreSQL numeric-dollar columns may remain when their
 math stays exact and their values are constrained to finite whole cents once clean. Browser money
 paths that are added or changed must parse decimal operands into integer cents and may not introduce
-binary floating-point rounding. Updated every authoritative review/workflow source that still stated
-the superseded blanket bigint-only rule. Existing helper conversion is owned by the separate pricing
-implementation branch; this policy PR changes no schema, data, or production behavior.
+binary floating-point conversion, parsing, arithmetic, or rounding. Updated required reviewer,
+workflow, architecture, operations, and audit-template guidance that still stated the superseded
+blanket bigint-only rule. The pre-existing `parseCents.ts` excess-precision truncation is recorded
+as open debt below rather than silently changing input behavior in this policy-only PR. The separate
+pricing implementation owns the money paths it changes; this PR changes no schema, data, or
+production behavior.
 
 ## 2026-08-09 — Settled the canonical-profit question and applied the fix live
 

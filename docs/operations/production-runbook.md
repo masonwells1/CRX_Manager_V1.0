@@ -263,7 +263,9 @@ See §3.2 — write a forward-fix migration, never edit history.
 - **NEVER** drop RLS from a table. Every table must have RLS.
 - **NEVER** expose `service_role` key in the frontend.
 - **NEVER** modify `financial_audit_log` records — append-only.
-- **NEVER** store money as floating point — `bigint` cents only.
+- **NEVER** use binary floating point for money. New storage uses `bigint` cents;
+  documented legacy PostgreSQL numeric-dollar columns retain exact `numeric`
+  arithmetic and finite whole-cent constraints once clean.
 - **NEVER** commit with `--no-verify` (bypasses lint+build+test gate).
 - **NEVER** push to `main` directly with destructive force flags.
 
