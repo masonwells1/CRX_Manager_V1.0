@@ -1,0 +1,25 @@
+{
+  "_comment": [
+    "One-shot DATA migrations: migrations whose purpose was to rewrite specific",
+    "business rows that existed on production at a specific moment. They are",
+    "schema-neutral — replaying them rebuilds no structure and no behavior.",
+    "",
+    "They must never be replayed onto a database whose ledger does not already",
+    "contain them. Their authorization was bound to the live population at the",
+    "time they were written; a restored, staging, or drifted database is a",
+    "different population, and running the same UPDATE there rewrites rows",
+    "nobody approved. After a real restore the corrected values come back with",
+    "the DATA restore, not by re-running the edit.",
+    "",
+    "scripts/list-post-baseline-migrations.mjs withholds everything listed here",
+    "from the replay plan and says so on stderr. --include-one-shot overrides it,",
+    "which is a deliberate, reviewed act, never a default.",
+    "",
+    "Add an entry the moment a one-shot data migration is written. Schema and",
+    "function migrations do NOT belong here — they are idempotent by contract",
+    "and the replay plan must keep rebuilding them."
+  ],
+  "one_shot": {
+    "20260810025159_backfill_stale_line_profit": "Recomputed line-level profit for a 37-row population approved on 2026-08-09. Authorized by row/order/price counts, not by row identity — a different population with the same counts would satisfy that guard. Applied live; per AGENTS.md an applied migration is never edited, so containment lives here."
+  }
+}
