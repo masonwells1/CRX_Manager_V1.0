@@ -2,6 +2,33 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-11 — Let the order-totals trigger own the blend-ticket order header
+
+The validated whole-cent CHECK constraints now live on `orders.total_cost` and `orders.total_profit`
+were violated by blend-ticket order creation, which finished by overwriting the order header with raw,
+unrounded price-times-converted-quantity sums. Any blend ticket whose unit conversion produced a
+fractional quantity would have had its entire completed-ticket-to-order transaction rejected and
+rolled back. Production holds no blend ticket that has produced an order, so nothing was ever lost:
+the defect was latent, not historical.
+
+`20260811200000_blend_ticket_order_whole_cent_totals.sql` re-emits the function from its already-applied
+source, whose body was md5-matched against live before editing, with exactly two deltas. The raw header
+overwrite is deleted, and the header is read back from the row the AFTER-ROW totals trigger has already
+written from the per-line values -- so there is now one source of truth for those four columns instead of
+two that disagreed about rounding. The two hand-maintained running totals that fed only the removed
+statement are dropped as dead code. Per-line money, actor binding, idempotency, SECURITY DEFINER,
+search path and grants are byte-identical to the applied source.
+
+Scope was narrowed after checking live rather than assuming. An earlier draft also rounded the per-line
+money in the order-items INSERT; live constraint state shows no whole-cent CHECK on that line total or
+its margin percentage, and the BEFORE-ROW rounding trigger derives line profit from pre-rounded
+components while discarding whatever the caller passes, so the line INSERT could never have failed and
+those changes were removed as redundant. Because the header is now written only by a trigger, a missing
+or disabled trigger would leave every blend-ticket order header at zero silently instead of raising, so
+the migration ends with a fail-closed post-condition block asserting the function has exactly one
+overload, that the totals trigger exists and is enabled, that the removed overwrite is genuinely absent
+from the stored source, and that the actor-binding and idempotency guards survived the re-emission.
+
 ## 2026-08-11 — Commission-payout intent binding merged and applied live (PR #378)
 
 Closeout for the entry dated 2026-08-10 below, which is superseded on its two open points: the review
