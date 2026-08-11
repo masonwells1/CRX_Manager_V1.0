@@ -2,6 +2,42 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-11 — Dynamic SQL one level down is refused; one-shot registration is read, not grepped
+
+Closed both High findings from the round-18 adversarial review. Both were ways
+past the round-17 fixes rather than past the original guard, which is the point
+of running the review again.
+
+**Dynamic SQL hid inside a called helper.** The round-17 fix refuses a function
+body written as a quoted string, so the obvious dodge moved one step over: write
+the body dollar-quoted — perfectly readable — and put the rewrite inside an
+`EXECUTE` of a runtime string. Two blind spots then lined up exactly. The index
+that decides which functions are mutating blanks quoted text before it looks for
+writes, so the rewrite was not there to find and the helper looked read-only;
+and the top-level scanner strips function bodies before it looks for dynamic
+SQL, so it never saw the `EXECUTE` either. Define the helper, call it, and a
+protected table is rewritten with nothing reporting it. A function whose body
+builds SQL at runtime now counts as unbindable in exactly the same way a
+function that writes a protected table does, and calling one is refused. Which
+table it would write cannot be known statically — that is the whole reason to
+refuse the call rather than try to bind it.
+
+**The one-shot registration check was a text search, so a decoy satisfied it.**
+Round 17 required a digest-bound repair to be registered as one-shot, and
+checked that by grepping the registry file for the migration's name. But the
+apply-time guard and the replay planner both read one specific object in that
+file and nothing else. A key of the same name anywhere else — in the comment
+block at the top, say — matched the search and meant nothing to either guard, so
+a repair could pass the validator and still be replayable. The check now parses
+the file, insists that object really is an object, and requires the migration to
+be an own key of it carrying a note saying which population approved it.
+Anything unreadable, unparseable, or the wrong shape is refused rather than
+waved through.
+
+Two new mutation cases, one per bypass, taking the approved-set suite to 91. The
+harness gained the ability to write a decoy key outside the map, so the second
+case fails the way the real bypass would rather than by omitting the file.
+
 ## 2026-08-11 — Approved-set repairs must register as one-shot; quoted function bodies are refused
 
 Closed both High findings from the round-17 adversarial review of the migration

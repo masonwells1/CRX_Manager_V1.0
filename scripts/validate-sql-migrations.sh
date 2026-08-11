@@ -324,7 +324,26 @@ build_mutating_fn_index() {
           for (f in buf) {
             if (buf[f] ~ ("(^|[^a-z0-9_])(update|merge[ \t]+into|delete[ \t]+from|insert[ \t]+into|truncate([ \t]+table)?)[ \t]+(only[ \t]+)?(public\\.)?(" tables ")([^a-z0-9_]|$)")) {
               print f
+              continue
             }
+            # A body containing dynamic SQL counts too, and it has to, because
+            # the write is unreadable twice over: this index blanks quoted
+            # literals before looking for DML, so `EXECUTE '"'"'UPDATE public.orders
+            # ...'"'"'` shows no UPDATE and the function looks read-only; and the
+            # top-level scanner removes function bodies before it looks for
+            # EXECUTE, so the dynamic SQL is not seen there either. A helper
+            # like that, then called, was an unbound rewrite of a protected
+            # table that no channel reported. Which table it writes cannot be
+            # known statically — that is the whole problem — so the call is
+            # refused on the dynamic SQL alone.
+            #
+            # `EXECUTE FUNCTION` / `EXECUTE PROCEDURE` (trigger actions) and
+            # `EXECUTE ON` (privilege grants, which is how GRANT/REVOKE spell
+            # it) are the non-dynamic uses of the keyword; blank them first and
+            # ask whether any EXECUTE survives.
+            t = buf[f]
+            gsub(/(^|[^a-z0-9_])execute[ \t]+(function|procedure|on)([^a-z0-9_]|$)/, " x ", t)
+            if (t ~ /(^|[^a-z0-9_])execute([^a-z0-9_]|$)/) { print f }
           }
         }
       ' 2>/dev/null | sort -u | tr '\n' '|' | sed 's/|$//')
@@ -952,14 +971,16 @@ $MIG_BASENAME
 
     if [ -n "$INDIRECT_HITS" ]; then
       echo "VIOLATION: $file"
-      echo "  Top-level call to a function that rewrites business rows:"
+      echo "  Top-level call to a function whose body is an unbindable rewrite:"
       printf '%s\n' "$INDIRECT_HITS" | while IFS=$'\t' read -r n_ln n_fn n_kind n_cols n_var n_raw; do
-        echo "    line $n_ln: $n_fn() — its body writes a protected table"
+        echo "    line $n_ln: $n_fn() — its body writes a protected table, or"
+        echo "              builds SQL at runtime so no guard can see what it writes"
       done
       echo "  Calling it makes this migration a one-shot rewrite, but the rows it"
-      echo "  touches are decided by the function's own runtime predicates, so no"
-      echo "  digest can be shown to cover them. Inline the DML here so it can be"
-      echo "  read and bound to an approved set."
+      echo "  touches are decided by the function's own runtime predicates — or by"
+      echo "  a string assembled while it runs — so no digest can be shown to cover"
+      echo "  them. Inline the DML here, written out literally, so it can be read"
+      echo "  and bound to an approved set."
       echo ""
       VIOLATIONS=$((VIOLATIONS + 1))
     fi
@@ -1705,18 +1726,58 @@ $MIG_BASENAME
           echo "  Expected: $ONE_SHOT_REGISTRY"
           echo ""
           VIOLATIONS=$((VIOLATIONS + 1))
-        elif ! grep -qE "^[[:space:]]*\"${MIG_STEM}\"[[:space:]]*:" "$ONE_SHOT_REGISTRY"; then
-          echo "VIOLATION: $file"
-          echo "  Approved-set repair is not registered as one-shot."
-          echo "  Add \"$MIG_STEM\" to the one_shot map in:"
-          echo "    ${ONE_SHOT_REGISTRY#./}"
-          echo "  with one line saying which population it was approved against."
-          echo "  Until it is there, list-post-baseline-migrations.mjs will put it"
-          echo "  in a replay plan and the apply-time one-shot guard will not"
-          echo "  recognise it, so it can rewrite a restored population that never"
-          echo "  approved it."
-          echo ""
-          VIOLATIONS=$((VIOLATIONS + 1))
+        else
+          # Ask the registry the same question the guards ask it. A text search
+          # for the stem is not that question: `"20260810_x": "…"` sitting in
+          # the `_comment` block, or in any other object in the file, matches a
+          # grep and means nothing to the apply-time guard or the replay
+          # planner, both of which read `registry.one_shot` and nothing else. So
+          # parse the JSON, insist `one_shot` really is a plain object, and
+          # require the stem to be an OWN property of it — inherited names like
+          # `constructor` or `toString` would otherwise answer yes for free.
+          # Anything unreadable, unparseable, or shaped wrong fails closed.
+          REGISTRY_WHY=$(ONE_SHOT_REGISTRY="$ONE_SHOT_REGISTRY" MIG_STEM="$MIG_STEM" node -e "
+            const fs = require('fs');
+            const path = process.env.ONE_SHOT_REGISTRY;
+            const stem = process.env.MIG_STEM;
+            let raw;
+            try { raw = fs.readFileSync(path, 'utf8').replace(/^﻿/, ''); }
+            catch (e) { console.log('could not be read: ' + e.message); process.exit(0); }
+            let reg;
+            try { reg = JSON.parse(raw); }
+            catch (e) { console.log('is not valid JSON: ' + e.message); process.exit(0); }
+            if (reg === null || typeof reg !== 'object' || Array.isArray(reg)) {
+              console.log('is not a JSON object'); process.exit(0);
+            }
+            const map = reg.one_shot;
+            if (map === null || typeof map !== 'object' || Array.isArray(map)) {
+              console.log('has no one_shot object'); process.exit(0);
+            }
+            if (!Object.prototype.hasOwnProperty.call(map, stem)) {
+              console.log('does not list this migration in one_shot'); process.exit(0);
+            }
+            const why = map[stem];
+            if (typeof why !== 'string' || why.trim() === '') {
+              console.log('lists this migration in one_shot with no note saying which population approved it');
+              process.exit(0);
+            }
+          " 2>&1)
+
+          if [ -n "$REGISTRY_WHY" ]; then
+            echo "VIOLATION: $file"
+            echo "  Approved-set repair is not registered as one-shot."
+            echo "  The registry ${ONE_SHOT_REGISTRY#./}"
+            echo "    $REGISTRY_WHY."
+            echo "  Add \"$MIG_STEM\" as a key of the one_shot object, with one line"
+            echo "  saying which population it was approved against. Until it is"
+            echo "  there, list-post-baseline-migrations.mjs will put it in a replay"
+            echo "  plan and the apply-time one-shot guard will not recognise it, so"
+            echo "  it can rewrite a restored population that never approved it."
+            echo "  A key anywhere else in the file does not count: both guards read"
+            echo "  registry.one_shot and nothing else."
+            echo ""
+            VIOLATIONS=$((VIOLATIONS + 1))
+          fi
         fi
       elif [ -n "$OPT_OUT" ]; then
         # The waiver has exactly one honest use: the migration is populating a

@@ -1054,6 +1054,41 @@ const CASES = [
       `'BEGIN UPDATE public.orders SET total_profit = 0; END;';\n` +
       `SELECT public._fix2();\n`,
   },
+
+  // ── round 18, F1: dynamic SQL hidden one level down ──────────────────────
+  // The dollar-quoted body is readable, so the round-17 refusal stands down —
+  // but the write inside it is a runtime string. The mutating-function index
+  // blanks quoted literals before it looks for DML, so the UPDATE is not there
+  // to find and the helper looks read-only; and the top-level scanner removes
+  // function bodies before it looks for EXECUTE, so the dynamic SQL is not
+  // seen there either. Two blind spots that line up exactly: define the
+  // helper, call it, and rewrite a protected table with nothing reporting it.
+  {
+    name: 'a called function whose dollar-quoted body EXECUTEs a rewrite',
+    expect: 'violation',
+    mustReport: 'builds SQL at runtime',
+    sql:
+      `CREATE FUNCTION public._dyn() RETURNS void LANGUAGE plpgsql AS $$\n` +
+      `BEGIN\n` +
+      `  EXECUTE 'UPDATE public.orders SET total_profit = 0';\n` +
+      `END;\n` +
+      `$$;\n` +
+      `SELECT public._dyn();\n`,
+  },
+
+  // ── round 18, F2: a registry key that no guard actually reads ────────────
+  // The apply-time one-shot guard and the replay planner both read
+  // `registry.one_shot` and nothing else. A key of the same name sitting
+  // anywhere else in the file — the `_comment` block, say — satisfies a text
+  // search and contains nothing. `decoyRegistered` writes exactly that shape.
+  {
+    name: 'a digest-bound repair whose registry key sits outside the one_shot map',
+    expect: 'violation',
+    mustReport: 'does not list this migration in one_shot',
+    unregistered: true,
+    decoyRegistered: true,
+    sql: `-- APPROVED_SET_DIGEST: ${HEX}\n${goodSetBlock()}\n`,
+  },
 ];
 
 // A stamp no real migration uses, so these fixtures are never mistaken for
@@ -1125,15 +1160,19 @@ function classify(output, fileName) {
  *
  * @param {string} dir fixture root (the directory holding `supabase/`)
  * @param {string[]} stems migration basenames without the `.sql` suffix
+ * @param {string[]} decoys stems written OUTSIDE the one_shot map, which is
+ *   what a text search for the name matches and what no guard reads
  */
-function writeOneShotRegistry(dir, stems) {
+function writeOneShotRegistry(dir, stems, decoys = []) {
   const baselines = join(dir, 'supabase', 'baselines');
   mkdirSync(baselines, { recursive: true });
   const one_shot = {};
   for (const stem of stems) one_shot[stem] = 'fixture: approved against a synthetic population';
+  const _comment = {};
+  for (const stem of decoys) _comment[stem] = 'fixture: a key no guard reads';
   writeFileSync(
     join(baselines, 'one-shot-migrations.json'),
-    `${JSON.stringify({ one_shot }, null, 2)}\n`,
+    `${JSON.stringify(decoys.length ? { _comment, one_shot } : { one_shot }, null, 2)}\n`,
     'utf8',
   );
 }
@@ -1170,19 +1209,23 @@ function run() {
 
   const names = [];
   const registered = [];
+  const decoys = [];
   CASES.forEach((c, i) => {
     const name = `${IN_FORCE}${String(i).padStart(6, '0')}_case_${i}.sql`;
     writeFileSync(join(migrations, name), c.sql, 'utf8');
     names.push(name);
-    // Everything is registered except the case whose whole point is that it
-    // is not — otherwise that case would pass for a reason it never tested.
+    // Everything is registered except the cases whose whole point is that they
+    // are not — otherwise those cases would pass for a reason they never
+    // tested. A decoy is written into the file but outside the one_shot map,
+    // so it is still unregistered as far as any guard is concerned.
     if (!c.unregistered) registered.push(name.replace(/\.sql$/, ''));
+    if (c.decoyRegistered) decoys.push(name.replace(/\.sql$/, ''));
   });
-  writeOneShotRegistry(dir, [
-    ...registered,
-    GRANDFATHERED.replace(/\.sql$/, ''),
-    BACKDATED.replace(/\.sql$/, ''),
-  ]);
+  writeOneShotRegistry(
+    dir,
+    [...registered, GRANDFATHERED.replace(/\.sql$/, ''), BACKDATED.replace(/\.sql$/, '')],
+    decoys,
+  );
   // A real grandfathered migration, byte-for-byte, must stay silent: applied
   // history cannot be edited, so retro-checking it would only produce noise.
   // The same bytes under an unapproved (old-looking) name must be caught.
