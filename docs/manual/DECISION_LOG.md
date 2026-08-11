@@ -33,6 +33,63 @@ do not introduce binary floating-point rounding. Existing helpers that still use
 are migration work, not evidence that the old approach is acceptable. The server remains
 authoritative for persisted values.
 
+**The gate's "active finite whole-cent CHECK" is exactly this predicate.** Write it in full; the
+constraint is named `<table>_<column>_whole_cents_chk`.
+
+```sql
+CHECK (col IS NULL OR (col = ROUND(col, 2) AND col > '-Infinity' AND col < 'Infinity'))
+```
+
+**Both halves are load-bearing — a `ROUND`-only constraint does NOT clear the gate.** PostgreSQL
+`numeric` deliberately does not use IEEE-754 NaN semantics: so values stay sortable and indexable,
+it treats `NaN` as equal to `NaN` and greater than every finite value. `'NaN' = ROUND('NaN', 2)` is
+therefore TRUE, and a rounding-only check lets `NaN` straight through. The `< 'Infinity'` bound is
+what rejects it. This is the single easiest way to believe a column is gated when it is not.
+
+**Never add one as `NOT VALID` over a column that still holds dirty rows.** `NOT VALID` skips only
+the initial table scan. A CHECK is re-evaluated against the whole new row on every subsequent
+UPDATE, whatever column actually changed — so each legacy dirty row becomes permanently un-editable
+and the damage is invisible until a user tries to edit an old record. Repair the data first, then
+add the constraint `VALID` from the start.
+
+**Where each audited column stands.** Verified read-only against the live database on 2026-08-11.
+The 2026-08-10 order-profit evaluation measured 12 order/quote/commission columns; those are the
+only ones whose gate status is established. Other legacy dollar columns exist across the schema
+(`payments.amount`, `commission_payments.total_amount`, `commission_payment_items.amount`,
+`purchase_orders.total_cost`, the `products` price tiers, the `cost_history` snapshots and more).
+None of those are converted, and none are constrained — under the rule above they are unapproved
+tracked debt, not grandfathered. Extending the programme to them is unstarted work.
+
+**Gate satisfied — CHECK enforced (7):** `orders.total_cost`, `orders.total_profit`,
+`order_items.profit`, `quotes.total_price`, `quotes.total_profit`, `quote_items.total_price`,
+`quote_items.profit`.
+
+**Gate NOT satisfied — no CHECK, therefore not an approved exception (5):**
+
+| Column | Why deferred | Status |
+|---|---|---|
+| `order_items.total_price` | holds 35 of 288 legacy fractional-cent rows | awaiting data repair |
+| `quotes.total_cost` | holds 2 of 4 legacy fractional-cent rows | awaiting data repair |
+| `commissions.commission_amount` | holds 3 of 35 legacy fractional-cent rows | awaiting data repair |
+| `commissions.order_profit` | holds 3 of 35 legacy fractional-cent rows | awaiting data repair |
+| `orders.total_price` | data is clean; `_update_order_items_impl` overwrites it with the raw un-rounded line sum, so constraining it would reject ordinary edits | blocked on fixing that writer |
+
+Repairing the 43 dirty rows across the first four rewrites stored money and needs Mason's separate
+approval on its own migration — it is **not** covered by the 2026-08-10 decision.
+
+**Measured cost of the conversion that was declined** (live, 2026-08-10): 12 money columns, 46 live
+functions naming them, 101 functions touching those tables, 17 non-test `src/` files. Dollars→cents
+is a *unit* change and TypeScript sees `number` either way, so a single missed call site is a 100×
+error rather than a penny. It cannot be staged — database and UI must flip together — and the
+Supabase plan has no point-in-time recovery to roll back to.
+
+**General mechanic this established:** a change that departs from a written hard rule can never pass
+the adversarial review gate, because the reviewer is handed `AGENTS.md` as ground truth and will
+correctly block. Amending the rule **in the same diff does not clear it either** — measured on
+PR #371, where the original "red line bypassed" finding was replaced by a new HIGH objecting that
+the diff amends the very rule its own migrations rely on. That objection is structurally correct.
+Land the contract amendment as its own reviewed change first, then open the change that relies on it.
+
 ---
 
 ## 2026-08-09 — The order header is the canonical profit; line profit is derived to match it
