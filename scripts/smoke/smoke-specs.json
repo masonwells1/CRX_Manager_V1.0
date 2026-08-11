@@ -9,7 +9,7 @@
   "specs": {
     "assign_customers_sales_rep": {
       "chain": "smoke-assign-customers-sales-rep.sql",
-      "description": "Customer 360 ownership assignment chain: no-auth and non-admin callers are rejected; a non-sales-rep target is rejected; one real plus one missing customer raises ASSIGNMENT_CUSTOMER_SET_CHANGED and proves the real row stayed unchanged; an admin atomically assigns two active customers to an active sales rep; reversed-order exact replay returns the identical result; and changed-payload key reuse fails closed. All real-row updates and idempotency receipts roll back on SMOKE_PASS_ROLLBACK.",
+      "description": "Customer 360 ownership assignment chain: no-auth and non-admin callers are rejected; a non-sales-rep target is rejected; one real plus one missing customer raises ASSIGNMENT_CUSTOMER_SET_CHANGED and proves the real row stayed unchanged; an admin atomically assigns two active customers to an active sales rep and writes exactly one customer-scoped activity row per assignment; reversed-order exact replay returns the identical result without duplicating activity; and changed-payload key reuse fails closed. All customer, activity, and idempotency rows roll back on SMOKE_PASS_ROLLBACK.",
       "covers": [
         "assign_customers_sales_rep"
       ],

@@ -123,6 +123,7 @@ const CALL_LISTS: Array<{
 ];
 
 const CALL_LIST_KEYS = new Set<CallListKey>(CALL_LISTS.map((definition) => definition.key));
+const CUSTOMER_TIER_OPTIONS = [1, 2, 3] as const;
 
 function parseNonNegativeInteger(value: string | null, fallback: number, max = Number.MAX_SAFE_INTEGER): number {
   if (value === null || !/^\d+$/.test(value)) return fallback;
@@ -176,15 +177,16 @@ function whyNowText(listKey: CallListKey, row: CallListRow): string {
   if (listKey === 'lapsed-products' && 'lapsed_count' in row) {
     const count = isFiniteNumber(row.lapsed_count) && row.lapsed_count > 0 ? row.lapsed_count : 1;
     if (row.top_lapsed_product_name?.trim()) {
-      const products = count > 1
-        ? `${row.top_lapsed_product_name} and ${count - 1} other product${count - 1 === 1 ? '' : 's'}`
-        : row.top_lapsed_product_name;
+      const topProduct = row.top_lapsed_product_name.trim();
+      const otherProducts = count > 1
+        ? `; ${count - 1} other product${count - 1 === 1 ? '' : 's'} also lapsed`
+        : '';
       return isFiniteNumber(row.top_lapsed_product_prior_revenue_cents)
-        ? `Why now: ${products} lapsed after ${formatCents(row.top_lapsed_product_prior_revenue_cents)} in prior revenue.`
-        : `Why now: ${products} lapsed; prior revenue is unavailable.`;
+        ? `Why now: ${topProduct} lapsed after ${formatCents(row.top_lapsed_product_prior_revenue_cents)} in prior revenue${otherProducts}.`
+        : `Why now: ${topProduct} lapsed${otherProducts}; prior revenue is unavailable.`;
     }
     return isFiniteNumber(row.top_lapsed_product_prior_revenue_cents)
-      ? `Why now: ${count} prior-season product${count === 1 ? ' has' : 's have'} not been purchased this season after ${formatCents(row.top_lapsed_product_prior_revenue_cents)} in prior revenue.`
+      ? `Why now: ${count} prior-season product${count === 1 ? ' has' : 's have'} not been purchased this season; the top product had ${formatCents(row.top_lapsed_product_prior_revenue_cents)} in prior revenue.`
       : `Why now: ${count} prior-season product${count === 1 ? ' has' : 's have'} not been purchased this season; prior revenue is unavailable.`;
   }
   return 'Why now: This customer has no assigned sales representative.';
@@ -593,11 +595,6 @@ export default function CallLists() {
     };
   }, [rows, tiersLoadNonce, updateQuery]);
 
-  const tierOptions = useMemo(
-    () => [...new Set(Object.values(tiersByCustomer).filter((tier): tier is number => tier !== null))].sort((a, b) => a - b),
-    [tiersByCustomer],
-  );
-
   const filteredRows = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
     return rows.filter((row) => {
@@ -690,7 +687,7 @@ export default function CallLists() {
                   <label className="text-sm font-medium text-secondary">Tier
                     <select aria-label="Filter by customer tier" value={tierFilter} onChange={(event) => updateQuery({ tier: event.target.value || null })} className="mt-1 block min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-nav-dark sm:w-32">
                       <option value="">All tiers</option>
-                      {tierOptions.map((tier) => <option key={tier} value={String(tier)}>Tier {tier}</option>)}
+                      {CUSTOMER_TIER_OPTIONS.map((tier) => <option key={tier} value={String(tier)}>Tier {tier}</option>)}
                     </select>
                   </label>
                   <label className="text-sm font-medium text-secondary">Crop
@@ -709,7 +706,7 @@ export default function CallLists() {
         <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="relative w-full sm:max-w-sm">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-secondary" />
-            <input aria-label="Search call list by farm name" value={search} onChange={(event) => updateQuery({ search: event.target.value || null }, true)} placeholder="Search farm name" className="min-h-11 w-full rounded-lg border border-gray-300 bg-white pl-10 pr-3 text-sm text-nav-dark focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20" />
+            <input aria-label="Search call list by farm name" value={search} maxLength={100} onChange={(event) => updateQuery({ search: event.target.value || null }, true)} placeholder="Search farm name" className="min-h-11 w-full rounded-lg border border-gray-300 bg-white pl-10 pr-3 text-sm text-nav-dark focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20" />
           </div>
           {!loading && !requiredEnrichmentPending && !loadError && <p className="text-sm text-secondary">Showing {filteredRows.length} of {rows.length} customers</p>}
         </div>

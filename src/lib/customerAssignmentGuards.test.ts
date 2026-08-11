@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 const root = process.cwd();
 const migration = readFileSync(join(
   root,
-  'supabase/migrations/20260811183317_assign_customers_sales_rep.sql',
+  'supabase/migrations/20260811210357_log_customer_sales_rep_assignment.sql',
 ), 'utf8').replace(/\r\n/g, '\n');
 
 const functionBodyMatch = migration.match(
@@ -25,7 +25,7 @@ describe('atomic customer sales-rep assignment migration', () => {
     );
     expect(executableFunctionBody).toContain("v_actor_role IS DISTINCT FROM 'admin'");
     expect(executableFunctionBody).toMatch(
-      /PERFORM p\.id FROM public\.profiles p WHERE p\.id = p_sales_rep_id AND p\.role = 'sales_rep' AND p\.is_active = true FOR SHARE;/,
+      /SELECT COALESCE\(NULLIF\(p\.full_name, ''\), p\.id::text\) INTO v_sales_rep_name FROM public\.profiles p WHERE p\.id = p_sales_rep_id AND p\.role = 'sales_rep' AND p\.is_active = true FOR SHARE;/,
     );
     expect(executableFunctionBody).not.toContain('FOR KEY SHARE');
     expect(executableFunctionBody.indexOf('FOR SHARE;')).toBeLessThan(
@@ -48,7 +48,22 @@ describe('atomic customer sales-rep assignment migration', () => {
     expect(migration).toContain("regexp_replace(v_source, E'--[^\\n\\r]*', '', 'g')");
     expect(migration).toContain("regexp_replace(v_executable_source, '[[:space:]]+', ' ', 'g')");
     expect(migration).toContain(
-      "PERFORM p.id FROM public.profiles p WHERE p.id = p_sales_rep_id AND p.role = ''sales_rep'' AND p.is_active = true FOR SHARE;",
+      "SELECT COALESCE(NULLIF(p.full_name, ''''), p.id::text) INTO v_sales_rep_name FROM public.profiles p WHERE p.id = p_sales_rep_id AND p.role = ''sales_rep'' AND p.is_active = true FOR SHARE;",
+    );
+  });
+
+  it('writes one customer-scoped activity row in the assignment transaction', () => {
+    expect(executableFunctionBody).toContain('INSERT INTO public.activity_feed');
+    expect(executableFunctionBody).toContain("'customer_sales_rep_assigned'");
+    expect(executableFunctionBody).toContain("v_actor, 'customer', c.id, c.id");
+    expect(executableFunctionBody).toContain('GET DIAGNOSTICS v_audit_count = ROW_COUNT');
+    expect(executableFunctionBody).toContain('v_audit_count IS DISTINCT FROM v_updated_count');
+    expect(executableFunctionBody).toContain('ASSIGNMENT_AUDIT_COUNT_MISMATCH');
+    expect(executableFunctionBody.indexOf('UPDATE public.customers')).toBeLessThan(
+      executableFunctionBody.indexOf('INSERT INTO public.activity_feed'),
+    );
+    expect(executableFunctionBody.indexOf('INSERT INTO public.activity_feed')).toBeLessThan(
+      executableFunctionBody.indexOf('public.save_idempotency'),
     );
   });
 
@@ -62,7 +77,7 @@ describe('atomic customer sales-rep assignment migration', () => {
       /REVOKE ALL ON FUNCTION public\.assign_customers_sales_rep\(uuid\[\], uuid, text\)[\s\S]*FROM PUBLIC, anon;/,
     );
     expect(migration).toMatch(
-      /GRANT EXECUTE ON FUNCTION public\.assign_customers_sales_rep\(uuid\[\], uuid, text\)[\s\S]*TO authenticated;/,
+      /GRANT EXECUTE ON FUNCTION public\.assign_customers_sales_rep\(uuid\[\], uuid, text\)[\s\S]*TO authenticated, service_role;/,
     );
   });
 });

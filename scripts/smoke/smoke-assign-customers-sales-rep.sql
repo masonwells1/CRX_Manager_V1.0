@@ -13,6 +13,8 @@ DECLARE
   v_after_partial uuid;
   v_result jsonb;
   v_replay jsonb;
+  v_activity_before integer;
+  v_activity_after integer;
   v_key text := 'smoke:assign_customers_sales_rep:' || gen_random_uuid()::text;
   v_partial_key text := 'smoke:assign_customers_sales_rep:partial:' || gen_random_uuid()::text;
 BEGIN
@@ -136,6 +138,13 @@ BEGIN
   END IF;
 
   -- Positive two-customer assignment and exact replay.
+  SELECT count(*)
+    INTO v_activity_before
+    FROM public.activity_feed af
+   WHERE af.event_type = 'customer_sales_rep_assigned'
+     AND af.performed_by = v_admin_id
+     AND af.customer_id = ANY(v_customer_ids);
+
   v_result := public.assign_customers_sales_rep(
     v_customer_ids,
     v_sales_rep_id,
@@ -155,6 +164,17 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: positive assignment did not update both customers';
   END IF;
 
+  SELECT count(*)
+    INTO v_activity_after
+    FROM public.activity_feed af
+   WHERE af.event_type = 'customer_sales_rep_assigned'
+     AND af.performed_by = v_admin_id
+     AND af.customer_id = ANY(v_customer_ids);
+  IF v_activity_after - v_activity_before IS DISTINCT FROM 2 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: assignment wrote % activity rows instead of 2',
+      v_activity_after - v_activity_before;
+  END IF;
+
   v_replay := public.assign_customers_sales_rep(
     ARRAY[v_customer_ids[2], v_customer_ids[1]],
     v_sales_rep_id,
@@ -163,6 +183,16 @@ BEGIN
   IF v_replay IS DISTINCT FROM v_result THEN
     RAISE EXCEPTION 'SMOKE_FAIL: exact replay changed the result: first %, replay %',
       v_result, v_replay;
+  END IF;
+
+  IF (
+    SELECT count(*)
+      FROM public.activity_feed af
+     WHERE af.event_type = 'customer_sales_rep_assigned'
+       AND af.performed_by = v_admin_id
+       AND af.customer_id = ANY(v_customer_ids)
+  ) IS DISTINCT FROM v_activity_after THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: exact replay duplicated customer assignment activity rows';
   END IF;
 
   BEGIN

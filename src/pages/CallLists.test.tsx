@@ -150,7 +150,7 @@ describe('Call Lists adoption workspace', () => {
       'lapsed-products',
       'get_call_list_lapsed_products',
       baseRow({ lapsed_count: 3, top_lapsed_product_name: 'Atrazine', top_lapsed_product_prior_revenue_cents: 92500 }),
-      'Why now: Atrazine and 2 other products lapsed after $925.00 in prior revenue.',
+      'Why now: Atrazine lapsed after $925.00 in prior revenue; 2 other products also lapsed.',
     ],
     [
       'unassigned-accounts',
@@ -231,6 +231,22 @@ describe('Call Lists adoption workspace', () => {
     expect(screen.getByLabelText('Filter by customer tier')).toHaveValue('2');
     expect(screen.getByLabelText('Filter by customer crop')).toHaveValue('corn');
     expect(screen.getByLabelText('Search call list by farm name')).toHaveValue('North');
+    expect(screen.getByLabelText('Search call list by farm name')).toHaveAttribute('maxLength', '100');
+  });
+
+  it('keeps a restored tier visibly selectable when no returned customer uses that tier', async () => {
+    rpcRows.get_call_list_prepay_prospects = [baseRow({
+      prior_season_spend_cents: 100000,
+      current_season_prepay_cents: 0,
+    })];
+    customerEnrichment = [{ id: 'customer-1', assigned_tier: 2, crops: ['corn'] }];
+
+    renderCallLists('/call-lists?list=prepay&tier=3');
+
+    const tierSelect = await screen.findByLabelText('Filter by customer tier');
+    expect(tierSelect).toHaveValue('3');
+    expect(within(tierSelect).getByRole('option', { name: 'Tier 3' })).toBeInTheDocument();
+    expect(await screen.findByText('This call list is clear')).toBeInTheDocument();
   });
 
   it('preserves and blocks a requested rep filter until failed option validation succeeds', async () => {

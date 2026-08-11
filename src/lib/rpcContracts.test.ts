@@ -2180,9 +2180,11 @@ function registryMigrationHighWater(): string {
 // Keep this set aligned with rows explicitly marked PENDING APPLY in
 // docs/reference/migration-history.md.
 //
-// Empty as of 2026-08-10: the Team Board delegation migrations and the
-// foundation-review migrations are all applied live and documented below.
-const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([]);
+// The customer assignment activity migration is reviewed and proven locally,
+// but remains pending the separately guarded live Supabase apply lane.
+const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([
+  '20260811210357',
+]);
 
 /**
  * Explicitly pending migrations remain part of the contract inventory even
