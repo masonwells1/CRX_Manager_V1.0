@@ -2,6 +2,38 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-10 — Money rule carries a narrow, closed grandfather clause for existing `numeric` columns
+
+Policy-only change: no code, no schema, no migration. The `AGENTS.md` money rule
+now records the exception the existing order/quote money columns have always
+relied on, and `docs/manual/DECISION_LOG.md` carries the full rationale.
+
+The rule said "money is bigint cents." The pre-existing order and quote money
+columns are PostgreSQL `numeric` dollars — an exact decimal type, not a binary
+float — so the rule's actual purpose was already met, but the letter of it was
+not. The amended line grandfathers those columns on the condition that they are
+held to the same guarantee by enforced whole-cent CHECK constraints, and
+**closes the exception**: any money column added from 2026-08-10 onward is
+`bigint` cents.
+
+The DECISION_LOG entry records what a re-opened conversion would actually cost
+(12 money columns, 46 live functions naming them, 17 non-test source files, no
+staged rollout possible because a missed call site is a 100× error rather than a
+penny), why `numeric` is not floating point, why **both** halves of the
+whole-cent predicate are load-bearing (PostgreSQL sorts `NaN` as greater than
+every finite value, so `ROUND()` alone does not reject it — `< 'Infinity'`
+does), and why `NOT VALID` must never be shipped over known-dirty rows, since a
+CHECK re-evaluates the whole row on every later UPDATE and silently freezes
+those records.
+
+**Why this ships on its own.** The adversarial merge gate is handed `AGENTS.md`
+as ground truth. A change that departs from a written hard rule can never mint a
+clean proof while the rule still forbids it — but amending the rule *inside the
+same diff* does not clear the gate either: the reviewer is then asked to accept
+a rule change and its beneficiary in one untrusted change, and correctly refuses.
+The working mechanic is to land the contract amendment as its own reviewed
+change first, then open the change that relies on it.
+
 ## 2026-08-10 — Agent toolchain refresh; removed the dead Codex Sentry connector
 
 Verified the Codex side of the harness end-to-end from a Claude Code desktop session and brought the local agent toolchain current. All three Codex model tiers were confirmed live by running each one (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`); `codex-review`, `codex-gauntlet` and `codex-build.mjs` pin model and reasoning effort explicitly and correctly. Codex CLI (0.147.0) and Claude Code (2.1.226) were already at the newest published versions; six other global CLIs were updated (npm 11→12, vercel 55→58, google-workspace-mcp 2→4, filesystem MCP server, sentry, @sentry/cli), after which a live `codex exec` run confirmed the major npm jump broke nothing.
