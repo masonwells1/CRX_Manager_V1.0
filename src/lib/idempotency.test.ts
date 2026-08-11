@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generateIdempotencyKey, getIdempotencyMismatchResult, isMissingIntentBindingColumn, legacyIntentChanged } from './idempotency';
+import { generateIdempotencyKey, getIdempotencyBindingRejection, getIdempotencyMismatchResult, isMissingIntentBindingColumn, legacyIntentChanged } from './idempotency';
 
 describe('generateIdempotencyKey', () => {
   it('returns a string with the correct format', () => {
@@ -91,6 +91,32 @@ describe('getIdempotencyMismatchResult', () => {
       message: 'IDEMPOTENCY_INTENT_MISMATCH',
       details: JSON.stringify({ operation: 'save_invoice' }),
     }, 'save_invoice')).toBeNull();
+  });
+});
+
+describe('getIdempotencyBindingRejection', () => {
+  it('classifies every refusal that retires the key, and nothing else', () => {
+    expect(getIdempotencyBindingRejection({ message: 'IDEMPOTENCY_INTENT_MISMATCH' })).toBe('intent');
+    expect(getIdempotencyBindingRejection({ message: 'IDEMPOTENCY_ACTOR_MISMATCH' })).toBe('actor');
+    expect(getIdempotencyBindingRejection(new Error('IDEMPOTENCY_ACTOR_MISMATCH'))).toBe('actor');
+    // Both unusable-receipt codes must classify. If either fell through, the UI
+    // would leave the dead key in place and the admin could never retry.
+    expect(getIdempotencyBindingRejection({ message: 'IDEMPOTENCY_RESULT_INVALID' })).toBe('receipt');
+    expect(getIdempotencyBindingRejection({ message: 'IDEMPOTENCY_RECEIPT_MISSING' })).toBe('receipt');
+    expect(getIdempotencyBindingRejection(new Error('IDEMPOTENCY_RECEIPT_MISSING'))).toBe('receipt');
+  });
+
+  it('fails closed for anything else, so real failures still surface as errors', () => {
+    expect(getIdempotencyBindingRejection(null)).toBeNull();
+    expect(getIdempotencyBindingRejection('IDEMPOTENCY_INTENT_MISMATCH')).toBeNull();
+    // Cross-op reuse is deliberately NOT classified: the key belongs to a
+    // different operation entirely, so resetting it here would hide a caller bug.
+    expect(getIdempotencyBindingRejection({ message: 'IDEMPOTENCY_CROSS_OP_KEY_REUSE' })).toBeNull();
+    expect(getIdempotencyBindingRejection({ message: 'IDEMPOTENCY_KEY_REQUIRED' })).toBeNull();
+    expect(getIdempotencyBindingRejection({ message: 'Admin access required to post a commission payment' })).toBeNull();
+    // A substring must not be enough — only the exact refusal codes count.
+    expect(getIdempotencyBindingRejection({ message: 'wrapped: IDEMPOTENCY_INTENT_MISMATCH' })).toBeNull();
+    expect(getIdempotencyBindingRejection({})).toBeNull();
   });
 });
 
