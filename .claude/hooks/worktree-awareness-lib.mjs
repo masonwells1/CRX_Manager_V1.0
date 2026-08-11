@@ -233,12 +233,73 @@ export function isParkedDraftPath(repoRelPath, sqlText = "") {
 }
 
 // Full-disk fallback scans encounter many ordinary files. Reject non-SQL names
-// before reading them, then use the same explicit-header rule as the normal
-// branch-owned reader. Both /fleet and SessionStart call this helper.
-export function isParkedFallbackFile(repoRelPath, name, loadText = () => "") {
-  if (!/\.sql$/i.test(String(name || ""))) return false;
+// before reading them, then use the same explicit-header or verified history-pin
+// rule as the normal branch-owned reader. Both /fleet and SessionStart call this.
+export function parkedFallbackFileDiscovery(
+  repoRelPath,
+  name,
+  loadText = () => "",
+  historyText = null,
+  sha256Text = null,
+  parsedHistory = null,
+) {
+  if (!/\.sql$/i.test(String(name || ""))) {
+    return { state: "known", parked: false, reason: "" };
+  }
   const p = normRepoPath(repoRelPath);
-  return isParkedDraftPath(p, p.startsWith("supabase/migrations/") ? loadText() : "");
+  if (!p.startsWith("supabase/migrations/")) {
+    return { state: "known", parked: isParkedDraftPath(p), reason: "" };
+  }
+  const parked = parkedDraftPathsFrom(
+    [p],
+    () => true,
+    () => loadText(),
+    historyText,
+    sha256Text,
+    parsedHistory,
+  );
+  return {
+    state: parked.unknownReason ? "unknown" : "known",
+    parked: parked.has(p),
+    reason: parked.unknownReason || "",
+  };
+}
+
+// A degraded worktree may contain hundreds of migrations. Parse its history once,
+// then reuse that immutable result for every file classification; reparsing the
+// 600+ KiB history per SQL file can consume the SessionStart hook's entire budget.
+export function createParkedFallbackClassifier(
+  historyText = null,
+  sha256Text = null,
+  parseHistory = localCandidateMigrationPathsFromHistory,
+) {
+  const parsedHistory = parseHistory(historyText);
+  return (repoRelPath, name, loadText = () => "") => parkedFallbackFileDiscovery(
+    repoRelPath,
+    name,
+    loadText,
+    historyText,
+    sha256Text,
+    parsedHistory,
+  );
+}
+
+export function isParkedFallbackFile(
+  repoRelPath,
+  name,
+  loadText = () => "",
+  historyText = null,
+  sha256Text = null,
+  parsedHistory = null,
+) {
+  return parkedFallbackFileDiscovery(
+    repoRelPath,
+    name,
+    loadText,
+    historyText,
+    sha256Text,
+    parsedHistory,
+  ).parked;
 }
 
 // Which of the paths a worktree CHANGED since its branch point are parked drafts?
@@ -278,13 +339,33 @@ export function parkedDraftPathsFrom(
   readText = () => "",
   historyText = null,
   sha256Text = null,
+  parsedHistory = null,
 ) {
   const out = new Map();
-  const history = historyText === null ? null : localCandidateMigrationPathsFromHistory(historyText);
+  const history = parsedHistory ?? localCandidateMigrationPathsFromHistory(historyText);
   let unknownReason = "";
+  // Every normalized path the loop actually looked at. The registry reconciliation
+  // below needs it: a LOCAL CANDIDATE row whose SQL never entered this diff at all
+  // is invisible to a loop that only walks changed paths.
+  const visited = new Set();
   for (const raw of changedPaths || []) {
     const p = String(raw || "").trim();
-    if (!existsOnDisk(p)) continue;
+    visited.add(normRepoPath(p));
+    if (!existsOnDisk(p)) {
+      // A vanished path is normally just a retired draft — the SUPERSEDED- rename
+      // shows up in the diff as a change to the OLD path, and counting it would
+      // re-report the very file the rename retired. But if this branch's own
+      // migration-history still registers that path as a LOCAL CANDIDATE, the
+      // registry now points at SQL nobody can read, and skipping it silently makes
+      // /fleet report a confident zero over a dangling pin. Say UNKNOWN instead;
+      // "I don't know" sends the caller to a full scan, and under-reporting hides
+      // real pending work. This is an O(1) set lookup on a path already in hand,
+      // not the broad blob scan runtime deliberately avoids.
+      if (history?.state === "known" && history.paths.has(normRepoPath(p))) {
+        unknownReason ||= "branch-owned LOCAL CANDIDATE SQL named by migration history is missing from disk";
+      }
+      continue;
+    }
     const normalized = normRepoPath(p);
     const isForwardMigration = normalized.startsWith("supabase/migrations/");
     const sqlText = isForwardMigration ? readText(p) : "";
@@ -295,7 +376,7 @@ export function parkedDraftPathsFrom(
     // signal, exactly as it is after the branch lands on origin/main. Verify the pin
     // before surfacing it; an unreadable or mismatched candidate makes the branch state
     // UNKNOWN instead of silently disappearing from /fleet.
-    if (isForwardMigration && historyText !== null) {
+    if (isForwardMigration) {
       if (history?.state !== "known") {
         unknownReason ||= history?.reason || "worktree migration history is unreadable";
       } else if (history.paths.has(normalized)) {
@@ -315,6 +396,26 @@ export function parkedDraftPathsFrom(
     const key = normRepoPath(p);
     if (!out.has(key)) out.set(key, p);
   }
+
+  // Reconcile the registry against the diff OUTSIDE the loop. Both checks above only
+  // fire for a path the diff already handed us, so a caller whose changed-path list is
+  // empty — or whose list simply never mentions a registered candidate — got a
+  // confident zero over a registry this code never read (Codex on #369). The registry
+  // is the branch's own claim that pending SQL exists; if the diff cannot account for
+  // every row of it, the honest answer is UNKNOWN, which sends the caller to a full
+  // scan. Under-reporting hides real pending work; an extra scan only costs time.
+  if (historyText !== null) {
+    if (history?.state !== "known") {
+      unknownReason ||= history?.reason || "worktree migration history is unreadable";
+    } else {
+      for (const candidate of history.paths) {
+        if (visited.has(candidate)) continue;
+        unknownReason ||= "branch-owned LOCAL CANDIDATE SQL named by migration history is absent from this branch's own-draft diff";
+        break;
+      }
+    }
+  }
+
   Object.defineProperty(out, "unknownReason", { value: unknownReason, enumerable: false });
   return out;
 }
