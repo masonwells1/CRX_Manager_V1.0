@@ -206,6 +206,39 @@ jobs:
           VITE_MAPBOX_TOKEN: ${{ secrets.VITE_MAPBOX_TOKEN }}
         run: npm run build
 
+  phase3c-containment-windows:
+    name: Phase 3C Containment (Windows)
+    runs-on: windows-latest
+    needs: phase3-private-artifact-containment
+    timeout-minutes: 15
+    # The containment checker folds path case on win32 only, because that is the
+    # platform whose filesystem compares paths case-insensitively. Every other
+    # job here is ubuntu-latest, so those branches would never execute and the
+    # Windows-specific behavior could silently regress. This suite imports only
+    # Node builtins and sibling scripts, so it needs Git and Node but no
+    # `npm ci` -- keeping the extra Windows leg to roughly a minute.
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Phase 3C private-artifact regression tests (win32 path semantics)
+        # The hosted runner points TEMP at an 8.3 short path
+        # (`C:\Users\RUNNER~1\...`). Node's `os.tmpdir()`/`realpathSync` keep the
+        # short form while Git expands it, so a fixture repository created under
+        # the default TEMP can never equal `git rev-parse --show-toplevel` and
+        # every canonical-root check fails. `runner.temp` is a plain long path.
+        env:
+          TMP: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
+        run: node scripts/supplier-pricing-phase3-private-artifacts.test.mjs
+
   e2e-smoke:
     name: E2E Smoke Tests
     runs-on: ubuntu-latest
