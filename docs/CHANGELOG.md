@@ -2,6 +2,36 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-11 — A comment is not a disguise, and a digest binds the whole row
+
+Closed both High findings from the round-20 adversarial review.
+
+**One inserted comment defeated the replay guard.** A one-shot repair is
+authorized against the population that existed when it was written, so the apply
+guard refuses to run it again under any name — it compares the submitted SQL
+against the registered file after normalizing comments and whitespace away. That
+normalizer was a pattern that only understood `--` line comments, so a `/* */`
+block comment survived on one side of the comparison and both containment tests
+went false. Rename the migration, add a harmless comment, and equivalent SQL ran
+without the mandatory override. Comments now come out through a scanner that
+tracks nesting and leaves quoted literals alone, and whole-body containment is no
+longer the only test: each write statement in the registered file is matched on
+its own, so padding the replay with unrelated statements no longer hides it.
+
+**An approved-set digest proved the numbers and nothing else.** A data-rewriting
+migration must hash the rows it is about to change and compare that hash before
+the first write, which is what makes a stale authorization fail loudly. The hash
+only had to cover the columns being assigned — so for an order it covered the
+money and nothing about who owns the order, what state it is in, or whether it
+was voided. The population could advance its lifecycle or change hands between
+approval and apply, the digest would still match, and a stale authorization would
+rewrite authoritative money. Every rewritten table now binds its material
+before-state: ownership and actor references, lifecycle columns and their
+timestamps, money and quantity, alongside the assigned columns. Hashing the whole
+row at once is accepted outright for a single-table repair, since it is a
+provable superset of anything the check could enumerate. A delete against a table
+with nothing material to bind is still refused rather than waved through.
+
 ## 2026-08-11 — A qualified name is one name, a proof variable is written once, and scope is a statement
 
 Closed all three High findings from the round-19 adversarial review. Each is a

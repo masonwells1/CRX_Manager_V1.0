@@ -613,6 +613,41 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(isDeny(r), "the same one-shot body under a different name → apply denied");
     ok(isOneShotDeny(r), "the body match, not the name, is what catches the renamed replay");
 
+    // 3b. ROUND 20 (Codex High). The body match normalized comments away with a
+    //     regex that only understood `--` line comments. A `/* */` block comment
+    //     survived normalization on ONE side of the comparison, so both
+    //     containment tests went false and the renamed replay sailed through.
+    //     A single inserted comment defeated the whole control, which is why the
+    //     normalizer is now a scanner rather than a pattern.
+    const COMMENTED_ONE_SHOT =
+      "UPDATE public.orders /* harmless */ SET total_profit = 1 WHERE id = 2;";
+    r = apply("20990601000003_comment_disguised", COMMENTED_ONE_SHOT);
+    ok(isDeny(r), "round-20: a block comment inserted into the one-shot body → still denied");
+    ok(isOneShotDeny(r), "round-20: comments are stripped by a scanner, so the disguise does not break the body match");
+
+    // 3c. …and the same is true one step further out. Whole-body containment
+    //     only holds while one side is a substring of the other. A real repair
+    //     is several statements; carry over just its money write, wrap that in
+    //     different ones, and neither string contains the other. The write
+    //     statements are now compared individually, so the money write is caught
+    //     no matter what is packed around it.
+    writeFileSync(
+      path.join(tmp, "supabase", "migrations", `${STEM}.sql`),
+      `CREATE TEMP TABLE approved_ids (id int);\n${ONE_SHOT_SQL}\nDROP TABLE approved_ids;\n`,
+    );
+    const PADDED_ONE_SHOT =
+      "CREATE TABLE IF NOT EXISTS public.scratch_note (id int);\n" +
+      `${ONE_SHOT_SQL}\n` +
+      "ANALYZE public.orders;";
+    r = apply("20990601000004_padded_replay", PADDED_ONE_SHOT);
+    ok(isDeny(r), "round-20: the one-shot write padded with extra statements → still denied");
+    ok(isOneShotDeny(r), "round-20: the write statement itself is matched, not just the whole body");
+
+    // …and the padding trick must not turn the guard into a blunt instrument:
+    // an ordinary migration that merely mentions the same table is untouched.
+    r = apply("20990601000005_unrelated_index", "CREATE INDEX IF NOT EXISTS idx_orders_scratch ON public.orders (id);");
+    ok(!isOneShotDeny(r), "round-20: an unrelated statement against the same table is not a replay");
+
     // 4. ROUND 12 (Codex High) reversed this case. Round 8 let a one-shot
     //    through whenever the ledger already contained it, reasoning that such a
     //    database IS the population the repair was approved against. True at the

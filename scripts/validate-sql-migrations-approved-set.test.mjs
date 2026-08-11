@@ -35,6 +35,33 @@ const OTHER_HEX = 'b'.repeat(64);
  * set: a population with the same ids but different money would still pass.
  */
 const HASH_EXPR = `encode(digest(string_agg(id::text || ':' || total_profit::text, ',' ORDER BY id), 'sha256'), 'hex')`;
+/**
+ * The canonical full before-state (Codex High, round 20).
+ *
+ * HASH_EXPR above covers the row identity and the column being rewritten, and
+ * for nineteen rounds that was the accepted shape. It is a bypass: an order can
+ * change hands (`customer_id`, `salesman_id`), advance its lifecycle
+ * (`status`, `pricing_status`), be re-parented to a different quote, or be soft
+ * deleted, all without moving `total_profit` — so a digest taken at approval
+ * still matched, and a stale authorization rewrote authoritative money on a row
+ * nobody had approved in its current state.
+ *
+ * `to_jsonb(o.*)` hashes every column the row has, which is a provable superset
+ * of any list the validator could enumerate. It is also the shape a real author
+ * will reach for: `orders` has nine material columns, and hand-listing nine
+ * columns is how one gets quietly dropped.
+ */
+const WHOLE_ROW_HASH_EXPR =
+  `encode(digest(string_agg(o.id::text || ':' || to_jsonb(o.*)::text, ',' ORDER BY o.id), 'sha256'), 'hex')`;
+/**
+ * The same binding written out by hand, for the author who prefers it: every
+ * material column `orders` carries, per .claude/schema-registry.json.
+ */
+const ENUMERATED_HASH_EXPR =
+  `encode(digest(string_agg(id::text || ':' || quote_id::text || ':' || customer_id::text` +
+  ` || ':' || status::text || ':' || total_price::text || ':' || total_cost::text` +
+  ` || ':' || total_profit::text || ':' || salesman_id::text` +
+  ` || ':' || coalesce(deleted_at::text, '') || ':' || pricing_status::text, ',' ORDER BY id), 'sha256'), 'hex')`;
 /** A real hash, correctly assigned — but over a constant. Binds nothing. */
 const CONST_HASH_EXPR = `encode(digest('approved', 'sha256'), 'hex')`;
 /**
@@ -74,13 +101,28 @@ END $$;`;
  * @param {boolean} [o.lock=true]   capture under FOR UPDATE
  * @param {boolean} [o.count=true]  assert ROW_COUNT against the captured set
  * @param {string}  [o.writeWhere]  override the write's row selection
+ * @param {'whole'|'enumerated'|'assigned'} [o.bind='whole']
+ *   which before-state the digest covers. `assigned` is the round-19 shape —
+ *   ids plus the rewritten column only — and is now a real bypass, not a
+ *   synthetic one.
  */
-function goodSetBlock({ lock = true, count = true, writeWhere = 'WHERE id = ANY(v_ids)' } = {}) {
+function goodSetBlock({
+  lock = true,
+  count = true,
+  writeWhere = 'WHERE id = ANY(v_ids)',
+  bind = 'whole',
+} = {}) {
+  const digest =
+    bind === 'whole'
+      ? `  SELECT ${WHOLE_ROW_HASH_EXPR} INTO actual FROM public.orders o WHERE o.id = ANY(v_ids);\n`
+      : bind === 'enumerated'
+        ? `  SELECT ${ENUMERATED_HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n`
+        : `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n`;
   return (
     `DO $$\nDECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
     `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
     `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id${lock ? ' FOR UPDATE' : ''}) s;\n` +
-    `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+    digest +
     `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
     `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
     `  UPDATE public.orders SET total_profit = 0 ${writeWhere};\n` +
@@ -109,15 +151,20 @@ function goodSetBlock({ lock = true, count = true, writeWhere = 'WHERE id = ANY(
  * @param {string}  [o.table='commissions'] table to delete from
  */
 function goodDeleteSetBlock({ material = true, table = 'commissions' } = {}) {
-  const before =
-    ` || ':' || commission_amount::text || ':' || order_profit::text` +
-    ` || ':' || status::text || ':' || coalesce(deleted_at::text, '')`;
+  // Round 15 enumerated four columns here. Round 20 widened `commissions`'
+  // material set to ten — the parent identifiers Codex named (order_id,
+  // invoice_id, job_id) and the payee (customer_id, recipient,
+  // recipient_user_id) alongside the money and lifecycle it already had — so
+  // the enumeration is replaced by the whole-row projection that covers all of
+  // them and cannot fall behind the registry.
+  const before = ` || ':' || to_jsonb(d.*)::text`;
+  const alias = material ? ' d' : '';
   return (
     `DO $$\nDECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
     `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
     `    FROM (SELECT id FROM public.${table} WHERE stale ORDER BY id FOR UPDATE) s;\n` +
     `  SELECT encode(digest(string_agg(id::text${material ? before : ''}, ',' ORDER BY id), 'sha256'), 'hex')\n` +
-    `    INTO actual FROM public.${table} WHERE id = ANY(v_ids);\n` +
+    `    INTO actual FROM public.${table}${alias} WHERE id = ANY(v_ids);\n` +
     `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
     `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
     `  DELETE FROM public.${table} WHERE id = ANY(v_ids);\n` +
@@ -164,17 +211,25 @@ const CASES = [
     sql: `-- APPROVED_SET_DIGEST: ${HEX}\n${goodDeleteSetBlock({ material: false })}\n`,
   },
   {
-    // The other half of the round-15 fix. idempotency_keys is a protected
-    // business table with no lifecycle or financial column in the registry, so
-    // there is no before-value for a digest to bind and the id-only check would
-    // be all that is left. Refused rather than passed on ids alone — the author
-    // can still waive it, loudly and by name.
+    // The other half of the round-15 fix. product_families is a protected
+    // business table with no lifecycle, financial, ownership or parent column
+    // in the registry, so there is no before-value for a digest to bind and the
+    // id-only check would be all that is left. Refused rather than passed on
+    // ids alone — the author can still waive it, loudly and by name.
+    //
+    // This fixture used idempotency_keys until round 20 widened "material" to
+    // include reference columns; `request_actor_id` now binds that table, so it
+    // no longer exercises the refusal. If a future round widens the definition
+    // again and this case starts reporting a missing column instead, that is
+    // the signal to move it to whatever table is genuinely unbindable — not to
+    // delete it. The refusal is the only thing standing between an id-only
+    // DELETE and a silent pass.
     name: 'DELETE from a table with no material before-values is refused outright',
     expect: 'violation',
     mustReport: 'no lifecycle or financial column',
     sql:
       `-- APPROVED_SET_DIGEST: ${HEX}\n` +
-      `${goodDeleteSetBlock({ material: false, table: 'idempotency_keys' })}\n`,
+      `${goodDeleteSetBlock({ material: false, table: 'product_families' })}\n`,
   },
   {
     name: 'digest present only in a comment',
@@ -603,7 +658,7 @@ const CASES = [
       `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
       `  SELECT array_agg(s.id ORDER BY s.id) INTO v_item_ids\n` +
       `    FROM (SELECT id FROM public.order_items WHERE stale ORDER BY id FOR UPDATE) s;\n` +
-      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  SELECT ${WHOLE_ROW_HASH_EXPR} INTO actual FROM public.orders o WHERE o.id = ANY(v_ids);\n` +
       `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
       `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
       `  SELECT ${HASH_EXPR} INTO actual FROM public.order_items WHERE id = ANY(v_item_ids);\n` +
@@ -635,7 +690,7 @@ const CASES = [
       `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
       `  SELECT array_agg(s.id ORDER BY s.id) INTO v_item_ids\n` +
       `    FROM (SELECT id FROM public.order_items WHERE stale ORDER BY id FOR UPDATE) s;\n` +
-      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  SELECT ${WHOLE_ROW_HASH_EXPR} INTO actual FROM public.orders o WHERE o.id = ANY(v_ids);\n` +
       `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
       `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
       `  SELECT ${HASH_EXPR} INTO actual FROM public.order_items WHERE id = ANY(v_item_ids);\n` +
@@ -659,10 +714,10 @@ const CASES = [
       `DECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
       `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
       `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
-      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  SELECT ${WHOLE_ROW_HASH_EXPR} INTO actual FROM public.orders o WHERE o.id = ANY(v_ids);\n` +
       `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
       `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
-      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  SELECT ${WHOLE_ROW_HASH_EXPR} INTO actual FROM public.orders o WHERE o.id = ANY(v_ids);\n` +
       `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);\n` +
       `  GET DIAGNOSTICS n = ROW_COUNT;\n` +
       `  IF n <> array_length(v_ids, 1) THEN\n` +
@@ -689,7 +744,7 @@ const CASES = [
       `DECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
       `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
       `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
-      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  SELECT ${WHOLE_ROW_HASH_EXPR} INTO actual FROM public.orders o WHERE o.id = ANY(v_ids);\n` +
       `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
       `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
       `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
@@ -709,7 +764,7 @@ const CASES = [
       `DECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
       `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
       `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
-      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  SELECT ${WHOLE_ROW_HASH_EXPR} INTO actual FROM public.orders o WHERE o.id = ANY(v_ids);\n` +
       `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
       `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
       `  v_ids := ARRAY(SELECT id FROM public.orders ORDER BY id);\n` +
@@ -731,7 +786,7 @@ const CASES = [
       `DECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
       `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
       `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
-      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  SELECT ${WHOLE_ROW_HASH_EXPR} INTO actual FROM public.orders o WHERE o.id = ANY(v_ids);\n` +
       `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
       `    IF false THEN\n` +
       `      RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n    END IF;\n  END IF;\n` +
@@ -751,7 +806,7 @@ const CASES = [
       `DECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
       `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
       `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
-      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  SELECT ${WHOLE_ROW_HASH_EXPR} INTO actual FROM public.orders o WHERE o.id = ANY(v_ids);\n` +
       `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
       `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
       `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);\n` +
@@ -787,7 +842,7 @@ const CASES = [
       `DECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
       `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
       `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
-      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  SELECT ${WHOLE_ROW_HASH_EXPR} INTO actual FROM public.orders o WHERE o.id = ANY(v_ids);\n` +
       `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
       `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
       `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);\n` +
@@ -804,7 +859,7 @@ const CASES = [
       `DECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
       `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
       `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
-      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  SELECT ${WHOLE_ROW_HASH_EXPR} INTO actual FROM public.orders o WHERE o.id = ANY(v_ids);\n` +
       `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
       `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
       `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);\n` +
@@ -822,7 +877,7 @@ const CASES = [
       `DECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
       `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
       `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
-      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  SELECT ${WHOLE_ROW_HASH_EXPR} INTO actual FROM public.orders o WHERE o.id = ANY(v_ids);\n` +
       `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
       `    NULL;\n` +
       `  ELSE\n` +
@@ -841,7 +896,7 @@ const CASES = [
       `DECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
       `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
       `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
-      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  SELECT ${WHOLE_ROW_HASH_EXPR} INTO actual FROM public.orders o WHERE o.id = ANY(v_ids);\n` +
       `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
       `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
       `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);\n` +
@@ -895,7 +950,7 @@ const CASES = [
     sql:
       `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\n` +
       `DECLARE v_ids uuid[] := ARRAY[]::uuid[]; actual text; n integer;\nBEGIN\n` +
-      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  SELECT ${WHOLE_ROW_HASH_EXPR} INTO actual FROM public.orders o WHERE o.id = ANY(v_ids);\n` +
       `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
       `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
       `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);\n` +
@@ -941,7 +996,7 @@ const CASES = [
       `DECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
       `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
       `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
-      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  SELECT ${WHOLE_ROW_HASH_EXPR} INTO actual FROM public.orders o WHERE o.id = ANY(v_ids);\n` +
       `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
       `    RAISE NOTICE 'would RAISE EXCEPTION APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
       `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);\n` +
@@ -957,7 +1012,7 @@ const CASES = [
       `DECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
       `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
       `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
-      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  SELECT ${WHOLE_ROW_HASH_EXPR} INTO actual FROM public.orders o WHERE o.id = ANY(v_ids);\n` +
       `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
       `    /* RAISE EXCEPTION on drift -- TODO */ NULL;\n  END IF;\n` +
       `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);\n` +
@@ -1202,6 +1257,56 @@ const CASES = [
         `    IF false THEN RAISE EXCEPTION 'count'; END IF;\n`,
       ) +
       `\n`,
+  },
+
+  // ── round 20: a digest binds the ROW, not just the column being written ──
+  // Rounds 9-19 asked an UPDATE's digest to cover the columns the migration
+  // ASSIGNS. That is the whole hole: the assigned column is the one thing
+  // guaranteed not to have moved, since the approval was granted precisely
+  // because of its value. Everything that decides whether this is still the
+  // row anyone approved — who owns it, what it hangs off, where it is in its
+  // lifecycle — sat outside the hash (Codex High, round 20).
+  {
+    name: 'UPDATE digest covers the rewritten column but not ownership or lifecycle',
+    expect: 'violation',
+    mustReport: 'customer_id',
+    sql: `-- APPROVED_SET_DIGEST: ${HEX}\n${goodSetBlock({ bind: 'assigned' })}\n`,
+  },
+  {
+    // The same fixture with the whole row hashed. This is the shape the rule
+    // is meant to admit, and the one the round-20 shortcut exists for.
+    name: 'correct UPDATE: the digest binds the whole before-state via to_jsonb',
+    expect: 'silent',
+    sql: `-- APPROVED_SET_DIGEST: ${HEX}\n${goodSetBlock({ bind: 'whole' })}\n`,
+  },
+  {
+    // And by hand, for the author who would rather list them. If the two
+    // spellings ever stop agreeing, one of them is wrong.
+    name: 'correct UPDATE: the digest enumerates every material column instead',
+    expect: 'silent',
+    sql: `-- APPROVED_SET_DIGEST: ${HEX}\n${goodSetBlock({ bind: 'enumerated' })}\n`,
+  },
+  {
+    // The shortcut's own failure mode. A whole-row projection names no table,
+    // so on a two-table repair `to_jsonb(o.*)` would silently excuse the
+    // columns of the table it does NOT cover. It is accepted for single-table
+    // repairs only; here order_items.profit must still be called out.
+    name: 'to_jsonb of one table does not excuse a second table it never covers',
+    expect: 'violation',
+    mustReport: 'profit',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\nDECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
+      `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
+      `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
+      `  SELECT encode(digest(string_agg(o.id::text || ':' || to_jsonb(o.*)::text, ',' ORDER BY o.id), 'sha256'), 'hex')\n` +
+      `    INTO actual FROM public.orders o JOIN public.order_items oi ON oi.order_id = o.id\n` +
+      `    WHERE o.id = ANY(v_ids);\n` +
+      `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
+      `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);\n` +
+      `  UPDATE public.order_items SET profit = 0 WHERE id = ANY(v_ids);\n` +
+      `  GET DIAGNOSTICS n = ROW_COUNT;\n  IF n <> array_length(v_ids, 1) THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\nEND $$;\n`,
   },
 ];
 

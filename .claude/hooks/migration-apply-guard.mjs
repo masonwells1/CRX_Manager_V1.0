@@ -355,15 +355,88 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
         `data repair, so this apply is refused. Restore the file from git (it is tracked) and retry.`);
     }
 
-    // Normalize for comparison: lowercase, strip `--` line comments, collapse
-    // whitespace. Enough to catch a reformatted copy-paste of the same body;
-    // NOT enough to catch a materially rewritten one — but a materially
-    // rewritten body is a new migration that needs its own review anyway.
-    const norm = (s) => s
+    // Normalize for comparison: lowercase, strip comments, collapse whitespace.
+    //
+    // COMMENTS COME OUT VIA A SCANNER, NOT A REGEX (Codex High, round 20).
+    // Rounds 8-19 stripped `--` line comments with one regex and left `/* */`
+    // block comments standing. Codex dropped a single harmless block comment
+    // into the registered money backfill and BOTH substring comparisons below
+    // went false — so re-submitting the identical population-bound repair under
+    // a fresh timestamped name walked straight past the one-shot override. A
+    // one-character edit defeated the whole control.
+    //
+    // A scanner rather than stacked regexes because the two comment forms nest
+    // inside one another and inside string literals: `-- see /*` must not open a
+    // block that eats the rest of the file, `'/*'` must not either, and
+    // PostgreSQL block comments nest. Dollar-quoted bodies are deliberately NOT
+    // treated as opaque here: a `DO $$ ... $$` block IS the usual shape of a
+    // money repair, so a comment tucked inside one is the same evasion wearing a
+    // different hat. This text is only ever compared, never executed, so
+    // stripping inside a body costs nothing.
+    const stripComments = (s) => {
+      let acc = "";
+      let i = 0;
+      const n = s.length;
+      while (i < n) {
+        const two = s.slice(i, i + 2);
+        if (two === "--") {
+          while (i < n && s[i] !== "\n") i += 1;
+          acc += " ";
+          continue;
+        }
+        if (two === "/*") {
+          let depth = 1;
+          i += 2;
+          while (i < n && depth > 0) {
+            const inner = s.slice(i, i + 2);
+            if (inner === "/*") { depth += 1; i += 2; continue; }
+            if (inner === "*/") { depth -= 1; i += 2; continue; }
+            i += 1;
+          }
+          acc += " ";
+          continue;
+        }
+        const ch = s[i];
+        if (ch === "'" || ch === '"') {
+          // Copy the literal through verbatim so a `--` or `/*` sitting inside
+          // quoted data cannot blank the code that follows it.
+          acc += ch;
+          i += 1;
+          while (i < n) {
+            if (s[i] === ch && s[i + 1] === ch) { acc += ch + ch; i += 2; continue; }
+            if (s[i] === ch) { acc += ch; i += 1; break; }
+            acc += s[i];
+            i += 1;
+          }
+          continue;
+        }
+        acc += ch;
+        i += 1;
+      }
+      return acc;
+    };
+    const norm = (s) => stripComments(s)
       .toLowerCase()
-      .replace(/--[^\n]*/g, " ")
       .replace(/\s+/g, " ")
       .trim();
+
+    // WHOLE-BODY CONTAINMENT IS NOT THE ONLY TEST (Codex High, round 20).
+    // Both substring comparisons below ask whether one body wholly contains the
+    // other, which any inserted statement breaks just as cleanly as an inserted
+    // comment did. So the registered file is also broken into its individual
+    // write statements: if the submitted SQL still carries one of them, it is
+    // still replaying that repair no matter what was padded around it.
+    //
+    // Splitting on `;` cuts through dollar-quoted bodies too, which is what we
+    // want — it surfaces the `UPDATE ... WHERE id = ANY(v_ids)` buried inside a
+    // `DO` block as a fragment in its own right. Only write statements count,
+    // and only ones long enough to be specific; a short or read-only fragment
+    // would match half the repository and turn this into noise.
+    const writeStatements = (normalized) => normalized
+      .split(";")
+      .map((st) => st.trim())
+      .filter((st) => st.length >= 40 && /^(insert|update|delete|merge)\s/.test(st));
+
     const normQuery = norm(migQuery);
     const ledgerHas = (stem) => {
       const version = (stem.match(/\d{14}/) || [])[0];
@@ -388,6 +461,13 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
             const normFile = norm(readFileSync(filePath, "utf8"));
             if (normFile && (normQuery.includes(normFile) || normFile.includes(normQuery))) {
               matched = `the SQL body (it matches ${stem}.sql on disk)`;
+              break;
+            }
+            const shared = writeStatements(normFile).find((st) => normQuery.includes(st));
+            if (shared) {
+              matched =
+                `a write statement carried over from ${stem}.sql on disk ` +
+                `(“${shared.slice(0, 80)}${shared.length > 80 ? "…" : ""}”)`;
               break;
             }
           } catch { /* a missing or unreadable file just means no body match */ }

@@ -170,11 +170,12 @@ fi
 # registry rather than a hand-kept list, so a new status or money column is
 # protected the moment it exists.
 #
-# "Material" is deliberately narrow — state the row is in, money the row
-# carries, and the lifecycle timestamps that record an irreversible transition.
-# Notification bookkeeping (`*_sent_at`, reminder stamps) is excluded: it moves
-# on its own without the row meaning anything different, and requiring it would
-# push authors toward the opt-out for no safety gained.
+# "Material" is what makes this row THIS row: the state it is in, the money it
+# carries, the lifecycle timestamps that record an irreversible transition, and
+# — since round 20 — who owns it and what it hangs off. Notification
+# bookkeeping (`*_sent_at`, reminder stamps) is excluded: it moves on its own
+# without the row meaning anything different, and requiring it would push
+# authors toward the opt-out for no safety gained.
 MATERIAL_COLS_MAP=$(node -e "
 const fs = require('fs');
 const reg = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
@@ -186,7 +187,21 @@ const MONEY = /(^|_)(cents|price|cost|profit|amount|balance|total|subtotal|rate)
 // material to a deletion as a dollar figure is.
 const QUANTITY = /(^|_)(qty|quantity)(_|\$)/;
 const LIFECYCLE = /(^|_)(status|state|stage|phase)\$/;
-const material = (c) => LIFECYCLE.test(c) || MONEY.test(c) || QUANTITY.test(c) || LIFECYCLE_AT.test(c);
+// ---- OWNERSHIP AND PARENT IDENTITY (Codex High, round 20) ------------------
+// Lifecycle and money describe what STATE a row is in; they say nothing about
+// WHOSE row it is or WHAT it hangs off. Codex broke round 19 on exactly that
+// gap: an approved-set digest over orders.id + total_profit still matched after
+// the order was reassigned to a different customer or re-parented to a
+// different quote, so a stale approval could rewrite authoritative money on a
+// row that was no longer the row anyone approved. Every reference column is
+// therefore material — the owning party (customer_id, salesman_id,
+// recipient_user_id) and the parent identifiers Codex named for DELETE
+// coverage (order_id, invoice_id, product_id) alike. \`id\` itself is excluded
+// because the coverage check already requires it separately.
+const REFERENCE = (c) => c !== 'id' && /_id\$/.test(c);
+// The by-whom columns that carry no \`_id\` suffix.
+const ACTOR = /^(created_by|updated_by|deleted_by|voided_by|approved_by|posted_by|performed_by|assigned_to|owner|recipient)\$/;
+const material = (c) => LIFECYCLE.test(c) || MONEY.test(c) || QUANTITY.test(c) || LIFECYCLE_AT.test(c) || REFERENCE(c) || ACTOR.test(c);
 const rows = [];
 for (const t of Object.keys(cols).sort()) {
   if (!/^[a-z0-9_]+\$/.test(t)) continue;
@@ -1031,20 +1046,36 @@ $MIG_BASENAME
       REWRITE_COLS=$(printf '%s\n' "$REWRITES" | cut -f4 | tr ' ' '\n' \
                        | { grep -vx '-' || true; } | sort -u | tr '\n' ' ')
 
-      # ---- A DELETE BINDS ITS TABLE'S BEFORE-VALUES (Codex High, round 15) --
-      # A DELETE contributes no assigned columns, so on its own it asks the
-      # digest to cover row ids and nothing else. Substitute the target table's
-      # material columns (see MATERIAL_COLS_MAP above) so the SAME coverage
-      # machinery that binds an UPDATE's assigned columns now binds a DELETE's
-      # lifecycle and financial before-values. If a row's status or money moved
-      # after approval, the digest no longer matches and the migration aborts.
+      # ---- EVERY REWRITE BINDS ITS TABLE'S BEFORE-VALUES -------------------
+      # Round 15 (Codex High) established this for DELETE: a DELETE contributes
+      # no assigned columns, so on its own it asks the digest to cover row ids
+      # and nothing else. Substituting the target table's material columns (see
+      # MATERIAL_COLS_MAP above) binds its lifecycle and financial before-values
+      # instead.
       #
-      # A table the registry gives no material column for is refused outright
-      # rather than passed on ids alone — recorded here, decided in the chain
-      # below so it reads next to the other structural refusals.
+      # Round 20 (Codex High) showed the same hole one step to the left, on
+      # UPDATE. An UPDATE does contribute assigned columns, so it looked bound —
+      # but only to what it assigns. A digest over orders.id + total_profit
+      # still matched after the order changed hands, changed status, or was soft
+      # deleted, so an approval granted in one lifecycle state silently
+      # authorized rewriting authoritative money in another. Assigned columns
+      # are a floor, not the binding.
+      #
+      # So the substitution now runs for EVERY rewritten table, whatever the
+      # verb. A table's material columns are unioned with whatever that
+      # migration assigns, and the digest must cover the union.
+      #
+      # The REFUSAL stays DELETE-only, and deliberately so. A DELETE on a table
+      # the registry gives no material column for would decay to ids alone —
+      # nothing left to bind — so it is refused outright rather than passed on a
+      # technicality. An UPDATE in that position still binds the columns it
+      # assigns, which is strictly more than ids; refusing it would break
+      # column-bound repairs on bookkeeping tables for no safety gained.
+      # Recorded here, decided in the chain below so it reads next to the other
+      # structural refusals.
       DELETE_TABLES=$(printf '%s\n' "$REWRITES" | awk -F'\t' '$3 == "delete" { print $2 }' | sort -u)
       DELETE_UNBINDABLE=""
-      if [ -n "$DELETE_TABLES" ]; then
+      if [ -n "$REWRITE_TABLES" ]; then
         while IFS= read -r d_tbl; do
           if [ -z "$d_tbl" ]; then
             continue
@@ -1052,11 +1083,13 @@ $MIG_BASENAME
           d_cols=$(printf '%s\n' "$MATERIAL_COLS_MAP" \
                      | awk -F'\t' -v t="$d_tbl" '$1 == t { print $2 }')
           if [ -z "$d_cols" ]; then
-            DELETE_UNBINDABLE="$DELETE_UNBINDABLE $d_tbl"
+            if printf '%s\n' "$DELETE_TABLES" | grep -qx "$d_tbl"; then
+              DELETE_UNBINDABLE="$DELETE_UNBINDABLE $d_tbl"
+            fi
           else
             REWRITE_COLS="$REWRITE_COLS $d_cols"
           fi
-        done <<< "$DELETE_TABLES"
+        done <<< "$REWRITE_TABLES"
         # Word-split on purpose: re-flatten the appended groups into one sorted,
         # de-duplicated list, in the single-space-separated shape line ~1051
         # hands to awk.
@@ -1393,13 +1426,37 @@ $MIG_BASENAME
                 if (misst != "") {
                   print "never reads the rewritten table(s)" misst " — every table the migration rewrites has to be hashed, not just one of them"; exit
                 }
+                # ---- THE CANONICAL FULL BEFORE-STATE (Codex High, round 20) --
+                # Round 20 widened what a digest has to cover from "the columns
+                # you assign" to "everything material about the row" — for
+                # `orders` that is nine columns, and an author enumerating nine
+                # columns by hand will eventually drop one. The first remedy
+                # Codex recommended was a canonical full before-state, so
+                # that shape is accepted here as satisfying coverage outright:
+                # `to_jsonb(o.*)` hashes every column the row has, which is a
+                # provable superset of any list this check could name.
+                #
+                # Single-table repairs ONLY. A whole-row projection names no
+                # table, so on a two-table repair one `to_jsonb(o.*)` would
+                # excuse the columns of the table it does NOT cover. Enumerate
+                # in that case; the shortcut is not worth a fail-open.
+                # Count the REAL entries: tbllist arrives space-terminated, so
+                # split() hands back a trailing empty field and a plain
+                # `ntbl == 1` would never be true for a single-table repair.
+                nrealtbl = 0
+                for (k = 1; k <= ntbl; k++) if (tb[k] != "") nrealtbl++
+                wholerow = 0
+                if (nrealtbl == 1 && (spanall ~ /(to_jsonb|to_json|row_to_json|hstore)[ \t]*\([ \t]*[a-z0-9_]+\.\*/ ||
+                                      spanall ~ /\([ \t]*[a-z0-9_]+\.\*[ \t]*\)[ \t]*::/)) {
+                  wholerow = 1
+                }
                 missc = ""
                 for (k = 1; k <= ncol; k++) {
                   if (c[k] == "") continue
                   if (!tok_in(spanall, c[k])) missc = missc " " c[k]
                 }
-                if (missc != "") {
-                  print "leaves the rewritten column(s)" missc " outside the hashed expression — every column the migration assigns has to be covered, not just one of them"; exit
+                if (missc != "" && !wholerow) {
+                  print "leaves the rewritten column(s)" missc " outside the hashed expression — every column the migration assigns has to be covered, not just one of them. Hash to_jsonb(<alias>.*) to bind the whole row at once"; exit
                 }
                 # One captured set PER TABLE, reported as "table=var" pairs so the
                 # caller can hold every write on a table to the set for it.
