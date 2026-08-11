@@ -2,6 +2,35 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-11 — Executable proof for the blend-ticket whole-cent fix, and the run-time gap it exposes
+
+The blend-ticket fix below was reviewed and applied, but the fractional-quantity path it repairs had
+never actually been executed anywhere. `scripts/smoke/prove-blend-ticket-fractional-cents.mjs` now runs
+it end to end in a disposable, network-isolated PostgreSQL 17 container built from the repository's own
+migrations, with a fixture blend ticket whose unit conversion yields a fractional quantity.
+
+Six stages. It reproduces the original failure against the pre-fix body from `20260714230200` and
+observes the live CHECK constraint reject the header write; applies
+`20260811200000_blend_ticket_order_whole_cent_totals` and watches its own `$verify$` post-condition
+block pass; re-runs the registered smoke chain to `SMOKE_PASS_ROLLBACK`, asserting whole-cent totals
+equal to the canonical sum of rounded lines; then mutates the schema twice to confirm the apply-time
+guard fails closed when the totals trigger is missing and when it is `REPLICA`-only. That second
+mutation matters: `tgenabled` has four states, and the widespread `<> 'D'` idiom waves through a
+replica-only trigger that never fires in an ordinary session. The migration rejects both.
+
+The harness refuses to run unless the post-fix function body on disk still md5-matches the function
+live in production, so a green run is also a standing check that the repository and production have not
+drifted apart on this function. The smoke chain and fixture are registered in `smoke-specs.json` under
+`create_order_from_blend_ticket`.
+
+Stage six characterizes a residual defect the review pass did not surface: the trigger guarantee is
+**apply-time only**. With the fixed body in place and the trigger dropped afterwards, the RPC reports
+success and books a zero-value header — the read-back's `IF NOT FOUND` cannot catch it, because the
+order row exists by then regardless of whether the trigger ran. Only the smoke chain caught it. It
+takes a deliberate schema change to reach that state and the migration's guard blocks it at apply time,
+so this is tracked, not urgent; it is recorded in `docs/manual/KNOWN_ISSUES.md`. Closing it would mean
+asserting inside the RPC that the header was actually recalculated.
+
 ## 2026-08-11 — Let the order-totals trigger own the blend-ticket order header
 
 The validated whole-cent CHECK constraints now live on `orders.total_cost` and `orders.total_profit`
