@@ -324,7 +324,7 @@ export default function CallLists() {
   const isAdmin = role === 'admin';
   const [searchParams, setSearchParams] = useSearchParams();
   const querySignature = searchParams.toString();
-  const [reps, setReps] = useState<Array<{ id: string; full_name: string }>>([]);
+  const [reps, setReps] = useState<Array<{ id: string; full_name: string; is_active: boolean }>>([]);
   const [repsError, setRepsError] = useState(false);
   const [repsReady, setRepsReady] = useState(!isAdmin);
   const [repsLoadNonce, setRepsLoadNonce] = useState(0);
@@ -420,9 +420,8 @@ export default function CallLists() {
     void (async () => {
       const { data, error } = await supabase
         .from('profile_public_view')
-        .select('id, full_name')
+        .select('id, full_name, is_active')
         .eq('role', 'sales_rep')
-        .eq('is_active', true)
         .order('full_name');
       if (cancelled) return;
       if (error || !data) {
@@ -435,7 +434,11 @@ export default function CallLists() {
         return;
       }
       setRepsError(false);
-      setReps(data.flatMap((rep) => (rep.id ? [{ id: rep.id, full_name: rep.full_name || 'Unnamed rep' }] : [])));
+      setReps(data.flatMap((rep) => (rep.id ? [{
+        id: rep.id,
+        full_name: rep.full_name || 'Unnamed rep',
+        is_active: rep.is_active === true,
+      }] : [])));
       setRepsReady(true);
     })();
     return () => {
@@ -673,7 +676,11 @@ export default function CallLists() {
                   <label className="text-sm font-medium text-secondary">Sales rep
                     <select aria-label="Filter by sales rep" value={repFilter} onChange={(event) => changeRepFilter(event.target.value)} className="mt-1 block min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-nav-dark sm:w-48">
                       <option value="">All reps</option>
-                      {reps.map((rep) => <option key={rep.id} value={rep.id}>{rep.full_name}</option>)}
+                      {reps.map((rep) => (
+                        <option key={rep.id} value={rep.id}>
+                          {rep.full_name}{rep.is_active ? '' : ' (inactive)'}
+                        </option>
+                      ))}
                     </select>
                   </label>
                 )

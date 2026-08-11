@@ -22,6 +22,7 @@ let rpcImplementations: Record<string, RpcImplementation> = {};
 let customerEnrichment: unknown[] = [];
 let customerEnrichmentImplementation: QueryImplementation | null = null;
 let profileOptionsImplementation: QueryImplementation | null = null;
+let profileOptionsChain: Record<string, unknown> | null = null;
 
 function buildChain(result: QueryResult | Promise<QueryResult>): Record<string, unknown> {
   const self: Record<string, unknown> = {};
@@ -49,6 +50,7 @@ vi.mock('../components/customers/LogInteractionModal', () => ({ default: () => <
 import CallLists from './CallLists';
 
 const REP_A = '11111111-1111-4111-8111-111111111111';
+const REP_INACTIVE = '22222222-2222-4222-8222-222222222222';
 
 function baseRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -108,15 +110,17 @@ describe('Call Lists adoption workspace', () => {
     customerEnrichment = [{ id: 'customer-1', assigned_tier: 2, crops: ['corn'] }];
     customerEnrichmentImplementation = null;
     profileOptionsImplementation = null;
+    profileOptionsChain = null;
     mockRpc.mockImplementation((rpcName: string, args: Record<string, unknown>) => {
       const implementation = rpcImplementations[rpcName];
       return implementation ? implementation(args) : Promise.resolve(payload(rpcRows[rpcName] || []));
     });
     mockFrom.mockImplementation((table: string) => {
       if (table === 'profile_public_view') {
-        return buildChain(profileOptionsImplementation
+        profileOptionsChain = buildChain(profileOptionsImplementation
           ? profileOptionsImplementation()
-          : { data: [{ id: REP_A, full_name: 'Dana Rep' }], error: null });
+          : { data: [{ id: REP_A, full_name: 'Dana Rep', is_active: true }], error: null });
+        return profileOptionsChain;
       }
       if (table === 'customers') {
         return buildChain(customerEnrichmentImplementation
@@ -261,7 +265,7 @@ describe('Call Lists adoption workspace', () => {
       profileCalls += 1;
       return profileCalls === 1
         ? { data: null, error: { message: 'rep lookup failed' } }
-        : { data: [{ id: REP_A, full_name: 'Dana Rep' }], error: null };
+        : { data: [{ id: REP_A, full_name: 'Dana Rep', is_active: true }], error: null };
     };
 
     renderCallLists(`/call-lists?list=prepay&rep=${REP_A}`);
@@ -280,6 +284,39 @@ describe('Call Lists adoption workspace', () => {
     });
     expect(locationParams().get('rep')).toBe(REP_A);
     expect(screen.getByLabelText('Filter by sales rep')).toHaveValue(REP_A);
+  });
+
+  it('preserves an inactive rep bookmark and keeps the RPC scoped to that rep', async () => {
+    mockAuth.profile = { id: 'admin-1', role: 'admin' };
+    mockAuth.role = 'admin';
+    profileOptionsImplementation = async () => ({
+      data: [
+        { id: REP_A, full_name: 'Dana Rep', is_active: true },
+        { id: REP_INACTIVE, full_name: 'Former Rep', is_active: false },
+      ],
+      error: null,
+    });
+    rpcRows.get_call_list_prepay_prospects = [baseRow({
+      assigned_sales_rep: REP_INACTIVE,
+      prior_season_spend_cents: 100000,
+      current_season_prepay_cents: 0,
+    })];
+
+    renderCallLists(`/call-lists?list=prepay&rep=${REP_INACTIVE}`);
+
+    expect(await screen.findByText('North Farm')).toBeInTheDocument();
+    expect(mockRpc).toHaveBeenCalledWith('get_call_list_prepay_prospects', {
+      p_min_prior_spend_cents: 100000,
+      p_rep_id: REP_INACTIVE,
+    });
+    const repSelect = screen.getByLabelText('Filter by sales rep');
+    expect(repSelect).toHaveValue(REP_INACTIVE);
+    expect(within(repSelect).getByRole('option', { name: 'Former Rep (inactive)' })).toBeInTheDocument();
+    expect(locationParams().get('rep')).toBe(REP_INACTIVE);
+    expect(profileOptionsChain).not.toBeNull();
+    expect(profileOptionsChain!.select).toHaveBeenCalledWith('id, full_name, is_active');
+    expect(profileOptionsChain!.eq).toHaveBeenCalledWith('role', 'sales_rep');
+    expect(profileOptionsChain!.eq).not.toHaveBeenCalledWith('is_active', true);
   });
 
   it('falls back safely from invalid and role-forbidden query values', async () => {

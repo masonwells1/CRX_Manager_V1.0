@@ -64,6 +64,9 @@ export default function Customers() {
   const [needsFilter, setNeedsFilter] = useState<ProfileNeedFilter>('');
   const [repNames, setRepNames] = useState<Record<string, string>>({});
   const [assignableReps, setAssignableReps] = useState<Array<{ id: string; name: string }>>([]);
+  const [assignableRepsLoading, setAssignableRepsLoading] = useState(true);
+  const [assignableRepsError, setAssignableRepsError] = useState(false);
+  const [repsLoadNonce, setRepsLoadNonce] = useState(0);
   const [truncated, setTruncated] = useState(false);
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [deactivateModalOpen, setDeactivateModalOpen] = useState(false);
@@ -118,12 +121,24 @@ export default function Customers() {
   // who can be *assigned* work.
   useEffect(() => {
     let cancelled = false;
+    setAssignableRepsLoading(true);
+    setAssignableRepsError(false);
     void (async () => {
       const { data, error } = await supabase
         .from('profile_public_view')
         .select('id, full_name, role, is_active')
         .order('full_name');
-      if (cancelled || error || !data) return;
+      if (cancelled) return;
+      if (error || !data) {
+        setAssignableReps([]);
+        setAssignableRepsError(true);
+        setAssignableRepsLoading(false);
+        Sentry.captureException(
+          new Error(error ? error.message : 'sales-rep directory returned no data'),
+          { tags: { source: 'fetch', action: 'load_assignable_sales_reps' } },
+        );
+        return;
+      }
       setRepNames(Object.fromEntries(
         data.flatMap((p: { id: string | null; full_name: string | null; is_active: boolean | null }) => {
           if (!p.id) return [];
@@ -136,9 +151,10 @@ export default function Customers() {
           ? [{ id: p.id, name: p.full_name || 'Unnamed rep' }]
           : []
       )));
+      setAssignableRepsLoading(false);
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [repsLoadNonce]);
 
   const filtered = customers.filter((c) => {
     if (tierFilter && c.assigned_tier !== parseInt(tierFilter)) return false;
@@ -509,7 +525,7 @@ export default function Customers() {
               type="button"
               icon={<UserPlus className="h-4 w-4" />}
               loading={assigning}
-              disabled={!assignmentRepId || selectedCount === 0}
+              disabled={assignableRepsLoading || assignableRepsError || !assignmentRepId || selectedCount === 0}
               className="min-h-11 w-full sm:w-auto"
               onClick={() => void handleAssignSalesRep()}
             >
@@ -525,12 +541,38 @@ export default function Customers() {
               aria-label="Sales representative"
               value={assignmentRepId}
               onChange={(event) => setAssignmentRepId(event.target.value)}
+              disabled={assignableRepsLoading || assignableRepsError || assignableReps.length === 0}
               className="mt-1 block min-h-11 w-full rounded-lg border border-gray-300 bg-white px-3 text-sm text-nav-dark focus:border-crx-green focus:outline-none focus:ring-2 focus:ring-crx-green/20"
             >
-              <option value="">Choose an active sales rep</option>
+              <option value="">
+                {assignableRepsLoading
+                  ? 'Loading active sales reps…'
+                  : assignableRepsError
+                    ? 'Sales-rep directory unavailable'
+                    : assignableReps.length === 0
+                      ? 'No active sales reps available'
+                      : 'Choose an active sales rep'}
+              </option>
               {assignableReps.map((rep) => <option key={rep.id} value={rep.id}>{rep.name}</option>)}
             </select>
           </label>
+          {assignableRepsError ? (
+            <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-900">
+              <p>Active sales representatives could not be loaded. Retry before assigning customers.</p>
+              <Button
+                type="button"
+                variant="secondary"
+                className="mt-3 min-h-11"
+                onClick={() => setRepsLoadNonce((nonce) => nonce + 1)}
+              >
+                Retry loading sales reps
+              </Button>
+            </div>
+          ) : !assignableRepsLoading && assignableReps.length === 0 ? (
+            <p role="status" className="rounded-lg bg-amber-50 px-3 py-3 text-sm text-amber-900">
+              No active sales representatives are available. Activate a rep before assigning customers.
+            </p>
+          ) : null}
           {assignmentRepId ? (
             <p className="rounded-lg bg-blue-50 px-3 py-3 text-sm text-blue-800">
               Assign {selectedCount} selected customer{selectedCount === 1 ? '' : 's'} to {assignableReps.find((rep) => rep.id === assignmentRepId)?.name || 'the selected rep'}?

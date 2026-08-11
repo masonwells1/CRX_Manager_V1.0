@@ -241,6 +241,31 @@ describe('Customers list filters', () => {
       .toBe(false);
   });
 
+  it.each([
+    ['query error', { data: null, error: { message: 'directory unavailable' } }],
+    ['no-data response', { data: null, error: null }],
+  ])('fails closed and retries when the active sales-rep directory returns a %s', async (_case, failedResult) => {
+    mockTables(book, book.length, [{ data: book, error: null, count: book.length }], [
+      failedResult,
+      { data: profileRows, error: null },
+    ]);
+    renderCustomers();
+    await selectCustomer('Active Assigned Farm');
+    fireEvent.click(screen.getByRole('button', { name: 'Assign sales rep' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Assign sales representative' });
+    const repSelect = within(dialog).getByLabelText('Sales representative');
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(/could not be loaded/i);
+    expect(repSelect).toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: 'Assign customers' })).toBeDisabled();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Retry loading sales reps' }));
+
+    await waitFor(() => expect(within(repSelect).getByRole('option', { name: 'Dana Rep' })).toBeInTheDocument());
+    expect(repSelect).toBeEnabled();
+    expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('assigns the selected active customers, verifies the mutation, refetches, and clears selection', async () => {
     const assignedBook = book.map((row) => (
       row.id === 'c-2' ? { ...row, assigned_sales_rep: REP_A } : row

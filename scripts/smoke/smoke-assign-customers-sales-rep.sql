@@ -10,7 +10,11 @@ DECLARE
   v_sales_rep_id uuid;
   v_customer_ids uuid[];
   v_original_reps uuid[];
+  v_original_updated_at timestamptz[];
   v_after_partial uuid;
+  v_after_partial_updated_at timestamptz;
+  v_after_assignment_updated_at timestamptz[];
+  v_after_replay_updated_at timestamptz[];
   v_result jsonb;
   v_replay jsonb;
   v_activity_before integer;
@@ -53,8 +57,10 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_SETUP: two active customers are required';
   END IF;
 
-  SELECT array_agg(c.assigned_sales_rep ORDER BY c.id)
-    INTO v_original_reps
+  SELECT
+      array_agg(c.assigned_sales_rep ORDER BY c.id),
+      array_agg(c.updated_at ORDER BY c.id)
+    INTO v_original_reps, v_original_updated_at
     FROM public.customers c
    WHERE c.id = ANY(v_customer_ids);
 
@@ -128,13 +134,17 @@ BEGIN
     END IF;
   END;
 
-  SELECT c.assigned_sales_rep
-    INTO v_after_partial
+  SELECT c.assigned_sales_rep, c.updated_at
+    INTO v_after_partial, v_after_partial_updated_at
     FROM public.customers c
    WHERE c.id = v_customer_ids[1];
   IF v_after_partial IS DISTINCT FROM v_original_reps[1] THEN
     RAISE EXCEPTION 'SMOKE_FAIL: partial assignment changed the real customer from % to %',
       v_original_reps[1], v_after_partial;
+  END IF;
+  IF v_after_partial_updated_at IS DISTINCT FROM v_original_updated_at[1] THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: partial assignment changed the real customer timestamp from % to %',
+      v_original_updated_at[1], v_after_partial_updated_at;
   END IF;
 
   -- Positive two-customer assignment and exact replay.
@@ -164,6 +174,16 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: positive assignment did not update both customers';
   END IF;
 
+  SELECT array_agg(c.updated_at ORDER BY c.id)
+    INTO v_after_assignment_updated_at
+    FROM public.customers c
+   WHERE c.id = ANY(v_customer_ids);
+  IF v_after_assignment_updated_at[1] <= v_original_updated_at[1]
+     OR v_after_assignment_updated_at[2] <= v_original_updated_at[2] THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: positive assignment did not advance both customer timestamps from % to %',
+      v_original_updated_at, v_after_assignment_updated_at;
+  END IF;
+
   SELECT count(*)
     INTO v_activity_after
     FROM public.activity_feed af
@@ -183,6 +203,15 @@ BEGIN
   IF v_replay IS DISTINCT FROM v_result THEN
     RAISE EXCEPTION 'SMOKE_FAIL: exact replay changed the result: first %, replay %',
       v_result, v_replay;
+  END IF;
+
+  SELECT array_agg(c.updated_at ORDER BY c.id)
+    INTO v_after_replay_updated_at
+    FROM public.customers c
+   WHERE c.id = ANY(v_customer_ids);
+  IF v_after_replay_updated_at IS DISTINCT FROM v_after_assignment_updated_at THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: exact replay changed customer timestamps from % to %',
+      v_after_assignment_updated_at, v_after_replay_updated_at;
   END IF;
 
   IF (

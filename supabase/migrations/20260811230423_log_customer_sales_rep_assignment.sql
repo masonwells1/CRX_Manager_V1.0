@@ -4,9 +4,10 @@
 -- changes out of save_customer, but save_customer is also the path that writes
 -- customer_updated activity rows. This forward-only replacement keeps every
 -- existing authorization, locking, exact-set, and idempotency guard while
--- inserting one customer-scoped activity row per successful assignment. The
--- audit insert is in the same transaction: any insert/count failure rolls the
--- customer UPDATE and idempotency receipt back together.
+-- advancing the customer's normal updated_at timestamp and inserting one
+-- customer-scoped activity row per successful assignment. The audit insert is
+-- in the same transaction: any insert/count failure rolls the customer UPDATE
+-- and idempotency receipt back together.
 
 CREATE OR REPLACE FUNCTION public.assign_customers_sales_rep(
   p_customer_ids uuid[],
@@ -95,7 +96,8 @@ BEGIN
   END IF;
 
   UPDATE public.customers c
-     SET assigned_sales_rep = p_sales_rep_id
+     SET assigned_sales_rep = p_sales_rep_id,
+         updated_at = now()
    WHERE c.id = ANY(v_customer_ids)
      AND c.is_active = true;
   GET DIAGNOSTICS v_updated_count = ROW_COUNT;
@@ -156,7 +158,7 @@ GRANT EXECUTE ON FUNCTION public.assign_customers_sales_rep(uuid[], uuid, text)
   TO authenticated, service_role;
 
 COMMENT ON FUNCTION public.assign_customers_sales_rep(uuid[], uuid, text) IS
-  'Admin-only atomic bulk ownership assignment with customer-scoped activity rows. Requires an active sales-rep target, an exact distinct set of active customers, and payload-bound idempotent replay.';
+  'Admin-only atomic bulk ownership assignment with updated customer timestamps and customer-scoped activity rows. Requires an active sales-rep target, an exact distinct set of active customers, and payload-bound idempotent replay.';
 
 DO $verify$
 DECLARE
@@ -195,6 +197,7 @@ BEGIN
        'SELECT COALESCE(NULLIF(p.full_name, ''''), p.id::text) INTO v_sales_rep_name FROM public.profiles p WHERE p.id = p_sales_rep_id AND p.role = ''sales_rep'' AND p.is_active = true FOR SHARE;'
        IN v_executable_source
      ) = 0
+     OR v_executable_source NOT LIKE '%SET assigned_sales_rep = p_sales_rep_id, updated_at = now()%'
      OR v_executable_source NOT LIKE '%GET DIAGNOSTICS v_updated_count = ROW_COUNT%'
      OR v_executable_source NOT LIKE '%ASSIGNMENT_CUSTOMER_SET_CHANGED%'
      OR v_executable_source NOT LIKE '%public.check_idempotency%'

@@ -2183,7 +2183,7 @@ function registryMigrationHighWater(): string {
 // The customer assignment activity migration is reviewed and proven locally,
 // but remains pending the separately guarded live Supabase apply lane.
 const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([
-  '20260811210357',
+  '20260811230423',
 ]);
 
 /**

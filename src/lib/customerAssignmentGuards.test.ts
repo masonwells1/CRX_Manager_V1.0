@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 const root = process.cwd();
 const migration = readFileSync(join(
   root,
-  'supabase/migrations/20260811210357_log_customer_sales_rep_assignment.sql',
+  'supabase/migrations/20260811230423_log_customer_sales_rep_assignment.sql',
 ), 'utf8').replace(/\r\n/g, '\n');
 
 const functionBodyMatch = migration.match(
@@ -40,6 +40,16 @@ describe('atomic customer sales-rep assignment migration', () => {
     expect(migration).toContain('GET DIAGNOSTICS v_updated_count = ROW_COUNT');
     expect(migration).toContain('v_updated_count IS DISTINCT FROM cardinality(v_customer_ids)');
     expect(migration).toContain('ASSIGNMENT_CUSTOMER_SET_CHANGED');
+  });
+
+  it('advances customer updated_at in the same atomic ownership update', () => {
+    expect(executableFunctionBody).toMatch(
+      /UPDATE public\.customers c SET assigned_sales_rep = p_sales_rep_id, updated_at = now\(\) WHERE/,
+    );
+    expect(executableFunctionBody.indexOf('updated_at = now()')).toBeLessThan(
+      executableFunctionBody.indexOf('GET DIAGNOSTICS v_updated_count = ROW_COUNT'),
+    );
+    expect(migration).toContain("v_executable_source NOT LIKE '%SET assigned_sales_rep = p_sales_rep_id, updated_at = now()%'");
   });
 
   it('makes the migration postflight inspect executable SQL and pinned security settings', () => {

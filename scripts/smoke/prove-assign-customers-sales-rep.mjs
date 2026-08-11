@@ -13,7 +13,7 @@ const MIGRATION = path.join(
   ROOT,
   'supabase',
   'migrations',
-  '20260811210357_log_customer_sales_rep_assignment.sql',
+  '20260811230423_log_customer_sales_rep_assignment.sql',
 );
 const SMOKE = path.join(ROOT, 'scripts', 'smoke', 'smoke-assign-customers-sales-rep.sql');
 const PASS_TOKEN = 'SMOKE_PASS_ROLLBACK';
@@ -87,6 +87,7 @@ function assertInputs() {
   const migration = readFileSync(MIGRATION, 'utf8');
   for (const marker of [
     'FOR SHARE;',
+    'updated_at = now()',
     'INSERT INTO public.activity_feed',
     'ASSIGNMENT_AUDIT_COUNT_MISMATCH',
     'PERFORM public.save_idempotency(',
@@ -98,6 +99,7 @@ function assertInputs() {
     PASS_TOKEN,
     'assignment wrote % activity rows instead of 2',
     'exact replay duplicated',
+    'positive assignment did not advance both customer timestamps',
   ]) {
     assert.ok(smoke.includes(marker), `smoke marker missing: ${marker}`);
   }
@@ -148,7 +150,8 @@ CREATE TABLE public.customers (
   id uuid PRIMARY KEY,
   farm_name text NOT NULL,
   assigned_sales_rep uuid REFERENCES public.profiles(id),
-  is_active boolean NOT NULL
+  is_active boolean NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT '2000-01-01T00:00:00Z'
 );
 CREATE TABLE public.activity_feed (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -241,10 +244,11 @@ SELECT public.assign_customers_sales_rep(
 SELECT
   (SELECT count(*) FROM public.customers WHERE assigned_sales_rep IS NOT NULL),
   (SELECT count(*) FROM public.activity_feed),
-  (SELECT count(*) FROM public.idempotency_keys);
+  (SELECT count(*) FROM public.idempotency_keys),
+  (SELECT count(*) FROM public.customers WHERE updated_at <> '2000-01-01T00:00:00Z');
 UPDATE public.profiles SET is_active = true WHERE id = '${SALES_REP_ID}';
 `).stdout.trim().split(/\r?\n/)[0];
-  assert.equal(residue, '0|0|0', `deactivation race left mutation residue: ${residue}`);
+  assert.equal(residue, '0|0|0|0', `deactivation race left mutation residue: ${residue}`);
 }
 
 async function run() {
@@ -263,12 +267,13 @@ async function run() {
 SELECT
   (SELECT count(*) FROM public.customers WHERE assigned_sales_rep IS NOT NULL),
   (SELECT count(*) FROM public.activity_feed),
-  (SELECT count(*) FROM public.idempotency_keys);
+  (SELECT count(*) FROM public.idempotency_keys),
+  (SELECT count(*) FROM public.customers WHERE updated_at <> '2000-01-01T00:00:00Z');
 `).stdout.trim();
-  assert.equal(postSmoke, '0|0|0', `rollback smoke left residue: ${postSmoke}`);
+  assert.equal(postSmoke, '0|0|0|0', `rollback smoke left residue: ${postSmoke}`);
 
   console.log(
-    'ASSIGN_CUSTOMERS_SALES_REP_PROOF_PASS migration=exact smoke=rollback activity=2 replay=dedup target_deactivation=blocked',
+    'ASSIGN_CUSTOMERS_SALES_REP_PROOF_PASS migration=exact smoke=rollback updated_at=advanced activity=2 replay=dedup target_deactivation=blocked',
   );
 }
 
