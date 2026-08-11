@@ -115,7 +115,15 @@ arguments use PostgreSQL's named notation. Staged or indirect function-bearing
 commands remain denied, while direct harmless commands and existing pure-named
 calls retain their prior behavior.
 
-The focused actor-binding suite grew from 115 to 206 assertions while the
+Fresh exact-head review then found the same harmless mixed-notation false denial
+in `cron.schedule_in_database`, plus a remaining executor bypass where an
+unproven callable assembled `CREATE FUNCTION` from individually harmless string
+fragments. Positional command three is now inspected before later named options
+for both pg_cron APIs, and function headers are reconstructed across the literal
+fragments enclosed by an unproven callable before the reader decides the text is
+ordinary data.
+
+The focused actor-binding suite grew from 115 to 209 assertions while the
 idempotency reference suite remained at 86. Sixty continuation decisions were
 weakened or removed one at a time; every mutation made the real hook-process
 suite fail before restoration. Separate real-process probes allowed ordinary

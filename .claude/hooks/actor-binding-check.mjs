@@ -411,7 +411,7 @@ function hasOpaquePgCronCallCommand(rawStmt) {
       continue;
     }
     if (site.api === "schedule_in_database") {
-      if (hasNamedArgs || !isDirectSqlStringLiteral(args[2])) return true;
+      if (args.length < 3 || !isDirectSqlStringLiteral(args[2])) return true;
       continue;
     }
     if (site.api !== null && noCommandApis.has(site.api)) continue;
@@ -1196,9 +1196,18 @@ try {
         return true;
       }
       if (lits.length === 0) return false;
-      if (!isDynamicSqlStatement(stmt, rawStmt)) return false;
       const ddlLiterals = directExecuteLiteral ? [directExecuteLiteral.literal] : lits;
       if (!carriesFnHeader(ddlLiterals.map((l) => l.payload).join(""))) return false;
+      const hasUnprovenCallable = lits.some((lit) => {
+        const callablePrefix = maskSqlForCallNames(content.slice(0, lit.start));
+        return callablePrefix !== null && hasUnprovenCallableContext(
+          callablePrefix,
+          masked.slice(0, lit.start),
+          content,
+          lit.end
+        );
+      });
+      if (!isDynamicSqlStatement(stmt, rawStmt) && !hasUnprovenCallable) return false;
 
       // "One literal" is safe only when the dynamic-SQL expression is exactly
       // that literal. A format()/concat()/CASE template can keep the header in

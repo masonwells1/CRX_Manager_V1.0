@@ -333,6 +333,12 @@ ok(isDeny(r), "a parenthesized argument cannot hide function-bearing SQL");
 r = runHook(`SELECT dblink_exec('connection-name', $outer$${UNBOUND_DDL}$outer$);`);
 ok(isDeny(r), "dblink_exec cannot receive delayed actor-forgery SQL in a later argument");
 
+r = runHook(`SELECT dblink_exec(
+  'connection-name',
+  format('%s%s', 'CREATE ', $tail$${UNBOUND_DDL.slice("CREATE ".length)}$tail$)
+);`);
+ok(isDeny(r), "dblink_exec cannot assemble actor-forgery DDL from harmless-looking fragments");
+
 r = runHook(`ALTER FUNCTION public.execute_sql_readonly(text) RENAME TO actor_sql_alias;`);
 ok(isDeny(r), "the known SQL executor cannot be renamed past the name-bound reader");
 ok(r.stdout.includes("renames or moves execute_sql_readonly"),
@@ -622,6 +628,26 @@ r = runHook(`SELECT cron.schedule_in_database(
   'postgres'
 );`);
 ok(!isDeny(r), "cron.schedule_in_database without function DDL remains allowed");
+
+r = runHook(`SELECT cron.schedule_in_database(
+  'cross-db-safe-mixed-job',
+  '0 6 * * *',
+  $job$SELECT public.existing_safe_job()$job$,
+  'postgres',
+  username => 'postgres',
+  active => true
+);`);
+ok(!isDeny(r), "a harmless positional schedule_in_database command allows later named options");
+
+r = runHook(`${STAGED_DDL}
+SELECT cron.schedule_in_database(
+  'cross-db-staged-mixed-job',
+  '0 6 * * *',
+  (SELECT command FROM staged_cron_sql LIMIT 1),
+  'postgres',
+  active => true
+);`);
+ok(isDeny(r), "named options cannot hide a staged positional schedule_in_database command");
 
 r = runHook(`SELECT cron.alter_job(
   42,
