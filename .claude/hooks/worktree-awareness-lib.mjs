@@ -344,9 +344,28 @@ export function parkedDraftPathsFrom(
   const out = new Map();
   const history = parsedHistory ?? localCandidateMigrationPathsFromHistory(historyText);
   let unknownReason = "";
+  // Every normalized path the loop actually looked at. The registry reconciliation
+  // below needs it: a LOCAL CANDIDATE row whose SQL never entered this diff at all
+  // is invisible to a loop that only walks changed paths.
+  const visited = new Set();
   for (const raw of changedPaths || []) {
     const p = String(raw || "").trim();
-    if (!existsOnDisk(p)) continue;
+    visited.add(normRepoPath(p));
+    if (!existsOnDisk(p)) {
+      // A vanished path is normally just a retired draft — the SUPERSEDED- rename
+      // shows up in the diff as a change to the OLD path, and counting it would
+      // re-report the very file the rename retired. But if this branch's own
+      // migration-history still registers that path as a LOCAL CANDIDATE, the
+      // registry now points at SQL nobody can read, and skipping it silently makes
+      // /fleet report a confident zero over a dangling pin. Say UNKNOWN instead;
+      // "I don't know" sends the caller to a full scan, and under-reporting hides
+      // real pending work. This is an O(1) set lookup on a path already in hand,
+      // not the broad blob scan runtime deliberately avoids.
+      if (history?.state === "known" && history.paths.has(normRepoPath(p))) {
+        unknownReason ||= "branch-owned LOCAL CANDIDATE SQL named by migration history is missing from disk";
+      }
+      continue;
+    }
     const normalized = normRepoPath(p);
     const isForwardMigration = normalized.startsWith("supabase/migrations/");
     const sqlText = isForwardMigration ? readText(p) : "";
@@ -377,6 +396,26 @@ export function parkedDraftPathsFrom(
     const key = normRepoPath(p);
     if (!out.has(key)) out.set(key, p);
   }
+
+  // Reconcile the registry against the diff OUTSIDE the loop. Both checks above only
+  // fire for a path the diff already handed us, so a caller whose changed-path list is
+  // empty — or whose list simply never mentions a registered candidate — got a
+  // confident zero over a registry this code never read (Codex on #369). The registry
+  // is the branch's own claim that pending SQL exists; if the diff cannot account for
+  // every row of it, the honest answer is UNKNOWN, which sends the caller to a full
+  // scan. Under-reporting hides real pending work; an extra scan only costs time.
+  if (historyText !== null) {
+    if (history?.state !== "known") {
+      unknownReason ||= history?.reason || "worktree migration history is unreadable";
+    } else {
+      for (const candidate of history.paths) {
+        if (visited.has(candidate)) continue;
+        unknownReason ||= "branch-owned LOCAL CANDIDATE SQL named by migration history is absent from this branch's own-draft diff";
+        break;
+      }
+    }
+  }
+
   Object.defineProperty(out, "unknownReason", { value: unknownReason, enumerable: false });
   return out;
 }
