@@ -67,7 +67,15 @@ Never commit `.env` files or reveal keys. Never use `--no-verify`. Never use des
 - New tables must enable Row Level Security (RLS) and include policies in the same migration.
 - Mutating RPCs must accept and actually enforce `p_idempotency_key text DEFAULT NULL`.
 - `SECURITY DEFINER` functions normally must use `SET search_path = public, pg_temp` and deliberate grants. Per Mason's 2026-07-30 approval recorded in `docs/manual/DECISION_LOG.md`, an empty search path is allowed only as a narrow exception for a deliberately fully schema-qualified body with current source and migration-review proof.
-- Money is bigint cents. Never use floating-point math for stored or calculated money. **Narrow exception (Mason, 2026-08-10):** 12 enumerated pre-existing order, quote, and commission money columns stay PostgreSQL `numeric` dollars — an exact decimal type, not a binary float — rather than being converted. Each one **must** carry an enforced whole-cent *and* finite-value CHECK constraint; the 5 that do not yet carry one are outstanding work, not compliant, and no part of this exception licenses leaving them unconstrained or treating them as guarded. The exception covers only those 12 named columns and is closed to new ones: any money column added from 2026-08-10 onward is `bigint` cents. Canonical text, the column-by-column status, and the exact predicate: `docs/manual/DECISION_LOG.md` (2026-08-10 entry).
+- Money must be exact whole cents. New money storage uses bigint cents. Existing PostgreSQL
+  numeric-dollar storage may remain temporarily to avoid a risky unit rewrite, but it is an approved
+  compatibility exception only after authoritative database math is verified as exact `numeric`, all
+  existing values are finite whole cents, and an active finite whole-cent CHECK is present. Dirty or
+  unconstrained columns remain tracked findings and are never widened or rewritten without approval.
+  New or changed authoritative TypeScript
+  money math must parse decimal operands into integer cents before arithmetic; never introduce
+  binary floating-point rounding for money. See the 2026-08-10 decision in
+  `docs/manual/DECISION_LOG.md`.
 - Inventory and financial invariants belong in PostgreSQL RPCs/triggers, not only in React.
 - Use `src/lib/db.ts` as the only Supabase client.
 - Call `assertRpcResult()` after RPCs and `checkMutationResult()` after `.update()` or `.delete()`.

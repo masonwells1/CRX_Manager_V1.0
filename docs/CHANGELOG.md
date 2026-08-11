@@ -16,6 +16,32 @@ later unfiltered push from rediscovering the skipped rewrite. Focused tests prov
 quarantine, visible warning, registry/file correspondence, deliberate override, and durable
 ledger closeout path.
 
+## 2026-08-10 — Record the exact-whole-cent compatibility policy
+
+Recorded Mason's financial storage decision independently of the pricing implementation: new money
+storage uses bigint cents. Established PostgreSQL numeric-dollar storage may remain temporarily to
+avoid a risky unit rewrite, but it is approved only after exact numeric arithmetic, clean finite
+whole-cent values, and an active finite whole-cent CHECK are verified. Dirty or unconstrained
+columns remain tracked findings and may not be suppressed as accepted exceptions. Authoritative
+TypeScript money calculations and input-parsing paths that are added or changed must parse decimal
+operands into integer cents and may not introduce binary floating-point conversion, parsing,
+arithmetic, or rounding; display-only formatting from already-integer cents remains allowed. Updated
+required reviewer, workflow, architecture, operations, and audit-template guidance that still stated the superseded
+blanket bigint-only rule. The pre-existing `parseCents.ts` excess-precision truncation is recorded
+as open debt below rather than silently changing input behavior in this policy-only PR. The separate
+pricing implementation owns the money paths it changes; this PR changes no schema, data, or
+production behavior. Latest-head review also aligned the compliance/PDF reviewers, migration and RPC
+scaffolds, money hook message, inventory checklist, and required gotchas reference so none can
+override the fail-closed legacy-column approval gate. A final exact-head Sol review rejected the
+earlier "once clean" wording because it could hide dirty or unconstrained columns; the policy,
+review prompts, audit allowlists, and migration/RPC guidance now keep those columns visible until
+all three approval conditions are proven. A final current-head review also made the
+compliance reviewer reject raw use of the legacy cent parsers on inputs with more than two
+fractional digits unless an explicit exact rounding rule has been approved; the deterministic
+money-safety hook now gives the same qualified remediation instead of recommending the truncating
+helper by itself. The final exact-head review applied that same precision gate to the field-map UX
+loop prompt, which had still described the legacy parser as exact without qualifying its truncation.
+
 ## 2026-08-10 — Graphify-first agent navigation policy
 
 Made Graphify the explicit first-pass navigator for architecture, multi-file, workflow/migration,
@@ -27,40 +53,39 @@ with `save-result`/`reflect`. Focused source and live read-only evidence remain 
 and material proof; Graphify is navigation, not authority. When Graphify is unavailable or its wrapper
 reports a supported skip, agents continue with focused source inspection and disclose the limitation.
 
-## 2026-08-10 — Money rule carries a narrow, closed grandfather clause for existing `numeric` columns
+## 2026-08-10 — Spell out the whole-cent CHECK predicate and record which columns actually pass the gate
 
-Policy-only change: no code, no schema, no migration. The `AGENTS.md` money rule
-now records the exception the existing order, quote, and commission money
-columns have always relied on, and `docs/manual/DECISION_LOG.md` carries the
-full rationale plus a column-by-column table naming all 12 — which 7 are
-constrained and which 5 are deferred, with the reason and status for each.
+Documentation-only follow-on to the exact-whole-cent compatibility policy above:
+no code, no schema, no migration, and no change to the `AGENTS.md` rule itself.
 
-The rule said "money is bigint cents." The pre-existing order and quote money
-columns are PostgreSQL `numeric` dollars — an exact decimal type, not a binary
-float — so the rule's actual purpose was already met, but the letter of it was
-not. The amended line grandfathers the *storage type* only: each of those
-columns must still carry an enforced whole-cent CHECK constraint, and the 5 that
-do not yet carry one are outstanding work rather than compliant and must not be
-treated as guarded. The exception covers only the 12 named columns and is also
-**closed** — any money column added from 2026-08-10 onward is `bigint` cents.
+That policy says a legacy `numeric` dollar column is an approved exception only
+once "an active finite whole-cent CHECK is present," but it never said what that
+CHECK is. Written from the description alone, the obvious constraint —
+`CHECK (col = ROUND(col, 2))` — **does not work**, and fails in the direction
+that looks safe. PostgreSQL `numeric` deliberately does not use IEEE-754 `NaN`
+semantics: so values stay sortable and indexable, it treats `NaN` as equal to
+`NaN` and greater than every finite value, which makes `'NaN' = ROUND('NaN', 2)`
+true. A rounding-only check therefore admits `NaN` while appearing to satisfy the
+gate. `docs/manual/DECISION_LOG.md` now carries the full predicate, both halves
+marked load-bearing, and the `<table>_<column>_whole_cents_chk` naming rule;
+`docs/workflows/SAFE_DEVELOPMENT_RULES.md` repeats it where the money rules live.
 
-The DECISION_LOG entry records what a re-opened conversion would actually cost
-(12 money columns, 46 live functions naming them, 17 non-test source files, no
-staged rollout possible because a missed call site is a 100× error rather than a
-penny), why `numeric` is not floating point, why **both** halves of the
-whole-cent predicate are load-bearing (PostgreSQL sorts `NaN` as greater than
-every finite value, so `ROUND()` alone does not reject it — `< 'Infinity'`
-does), and why `NOT VALID` must never be shipped over known-dirty rows, since a
-CHECK re-evaluates the whole row on every later UPDATE and silently freezes
-those records.
+Also recorded: never add one of these as `NOT VALID` over a column that still
+holds dirty rows. `NOT VALID` skips only the initial scan, and a CHECK is
+re-evaluated against the whole new row on every later UPDATE whatever column
+changed — so each legacy dirty row becomes permanently un-editable, invisibly,
+until someone tries to edit an old record.
 
-**Why this ships on its own.** The adversarial merge gate is handed `AGENTS.md`
-as ground truth. A change that departs from a written hard rule can never mint a
-clean proof while the rule still forbids it — but amending the rule *inside the
-same diff* does not clear the gate either: the reviewer is then asked to accept
-a rule change and its beneficiary in one untrusted change, and correctly refuses.
-The working mechanic is to land the contract amendment as its own reviewed
-change first, then open the change that relies on it.
+Finally, the per-column gate status, verified read-only against the live
+database on 2026-08-11: of the 12 order/quote/commission columns the 2026-08-10
+evaluation measured, **7 carry the constraint and 5 do not**, with the reason and
+status for each. Four of the five hold legacy fractional-cent rows and need a
+data repair that is a separate, unapproved decision; `orders.total_price` is
+clean but blocked because `_update_order_items_impl` overwrites it with the raw
+un-rounded line sum. The entry also names the legacy dollar columns outside that
+audit (`payments.amount`, the `commissions` amounts, `purchase_orders.total_cost`,
+the `products` price tiers and others) as unconstrained tracked debt, so the
+grandfathering is not misread as covering them.
 
 ## 2026-08-10 — Agent toolchain refresh; removed the dead Codex Sentry connector
 
