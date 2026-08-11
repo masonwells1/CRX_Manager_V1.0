@@ -6,10 +6,10 @@
 // Run: node .claude/hooks/migration-apply-guard.test.mjs
 
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
@@ -379,7 +379,7 @@ function armAutopilot(stateDir, hoursFromNow) {
     r = runHook({ tool_name: "mcp__supabase__execute_sql", tool_input: { query: "DROP TABLE customers;" } }, tmp);
     ok(!isDeny(r), "other tools pass through untouched");
   } finally {
-    rmSync(tmp, { recursive: true, force: true });
+    rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 }
 
@@ -498,7 +498,7 @@ function armAutopilot(stateDir, hoursFromNow) {
 
     git(["worktree", "remove", "--force", linked], primary);
   } finally {
-    rmSync(tmp, { recursive: true, force: true });
+    rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 }
 
@@ -553,7 +553,7 @@ function armAutopilot(stateDir, hoursFromNow) {
       "the deny explains that an untimestamped, caller-supplied name cannot skip the ordering comparison",
     );
   } finally {
-    rmSync(tmp, { recursive: true, force: true });
+    rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 }
 
@@ -701,17 +701,55 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(isOneShotDeny(r), "the override authorizes that exact text and nothing else");
     rmSync(ovPath, { force: true });
 
-    // Consumption that FAILED is not consumption (Codex Medium, round 13). The
-    // delete used to be wrapped in a bare `catch {}`, so an override the guard
-    // could not remove stayed valid for the rest of its 30-minute window and
-    // released every apply in it. A directory at that path is the portable way
-    // to make unlinkSync fail — it is exactly the kind of leftover (a lock, a
-    // permissions problem, a stray folder) the swallowed error hid.
+    // Consumption that FAILED is not consumption (Codex Medium, round 13; in
+    // round 15 the consumption became a rename, so the same rule now governs
+    // the CLAIM). Spending the override used to be wrapped in a bare `catch {}`,
+    // so an override the guard could not remove stayed valid for the rest of its
+    // 30-minute window and released every apply in it. Two failure shapes,
+    // tested separately because only one of them is portable.
+    //
+    // A. Spendable but unusable — a directory sitting at that path. The holder
+    //    removes it, so the override IS spent, but nothing readable comes
+    //    back and the apply is refused rather than released on a guess.
     mkdirSync(ovPath, { recursive: true });
     r = apply(STEM, ONE_SHOT_SQL);
-    ok(isDeny(r), "round-13: an override that cannot be deleted blocks the apply");
-    ok(/could not be deleted/.test(r.stdout),
-       "round-13: the deny says the override was not spent, and names the path to clear by hand");
+    ok(isDeny(r), "round-13: an override that cannot be read blocks the apply");
+    ok(/could not be read/.test(r.stdout),
+       "round-13: the deny says the override was consumed without releasing anything");
+    rmSync(ovPath, { recursive: true, force: true });
+    // The holder must not leave its lock behind on a refused apply either: a
+    // stray lock fails closed and would wedge every later case in this fixture.
+    ok(!existsSync(`${ovPath}.lock`),
+       "round-16: the holder releases its lock even when the override is unreadable");
+
+    // B. Not spendable at all — the claim cannot be taken and the override is
+    //    STILL THERE. That is the dangerous shape: reading it would not have
+    //    spent it, so it must be refused outright rather than honoured.
+    //
+    //    Round 15 armed this by making a rename fail, which is platform
+    //    dependent — a read-only parent does it on POSIX and is a no-op on
+    //    Windows — so on the machine this guard actually runs on the case
+    //    printed "skipped" and asserted nothing. Now that the claim is an
+    //    exclusive create, the fault arms the same way everywhere: an existing
+    //    lock file IS an unclaimable override. No platform gate, no vacuous
+    //    pass, and it exercises the real stale-holder path an operator hits
+    //    when an apply dies mid-claim.
+    proofFor(STEM, ONE_SHOT_SQL);
+    writeFileSync(ovPath, goodOverride());
+    const heldLock = `${ovPath}.lock`;
+    writeFileSync(heldLock, "");
+    r = runHook({
+      tool_name: "mcp__supabase__apply_migration",
+      tool_input: { project_id: "x", name: STEM, query: ONE_SHOT_SQL },
+    }, tmp);
+    ok(isDeny(r), "round-16: an override whose claim is already held blocks the apply");
+    ok(/could not be claimed/.test(r.stdout),
+       "round-16: the deny says the override was not spent, and names the lock to clear by hand");
+    ok(existsSync(ovPath),
+       "round-16: a refused claim does NOT consume the override — it is still there for the operator");
+    ok(existsSync(heldLock),
+       "round-16: a losing apply does not release a lock it never held");
+    rmSync(heldLock, { recursive: true, force: true });
     rmSync(ovPath, { recursive: true, force: true });
 
     // 6. Fail closed. The registry is tracked in git; unreadable or absent means
@@ -725,7 +763,7 @@ function armAutopilot(stateDir, hoursFromNow) {
     r = apply("20990601000004_anything", BENIGN_SQL);
     ok(isDeny(r) && isOneShotDeny(r), "missing one-shot registry → apply denied (fail closed)");
   } finally {
-    rmSync(tmp, { recursive: true, force: true });
+    rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 }
 
@@ -805,6 +843,106 @@ function armAutopilot(stateDir, hoursFromNow) {
     // fixture repo pointing at a path that no longer exists.
     spawnSync("git", ["worktree", "remove", "--force", worktree], { cwd: primary, env: hermeticEnv() });
     rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// ── ONE OVERRIDE RELEASES ONE APPLY, EVEN UNDER CONCURRENCY (Codex High, r15) ─
+// Rounds 11-13 spent the override by reading it and THEN deleting it. That is
+// one-shot only if nothing else is running. Two apply hooks at once both passed
+// the exists check and both read the same bytes; one delete won, the loser got
+// ENOENT, and the loser's guard only refused when the path still existed — by
+// then it did not — so it proceeded on the copy it had already read. One
+// authorization, two live applies of a population-bound money repair.
+//
+// Making that race show up reliably takes two things. First a start gate: the
+// hook blocks on stdin, so eight processes are spawned, given a moment to boot,
+// and then released in one tight loop, which puts them at the override check
+// within a hair of each other. Second a wide window: the override carries a
+// multi-megabyte padding field, so the READ takes long enough that concurrent
+// readers overlap. Under the old code that combination lets several of them
+// through. Under a claim-before-read only the holder of the exclusive lock may
+// read and spend the override, so the count is exactly one.
+//
+// This test earned its keep: it is what caught round 15's rename-based claim
+// double-releasing on Windows. Note that it reproduces probabilistically — it
+// failed roughly one run in six — so a green run here is NOT by itself proof
+// that a claim primitive is exclusive. The deterministic guarantee lives in the
+// held-lock case above; this one is the end-to-end backstop.
+{
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "mig-apply-guard-race-"));
+  const stateDir = path.join(tmp, ".claude", "session-state");
+  mkdirSync(stateDir, { recursive: true });
+  const STEM = "20990801000000_concurrent_replay_fixture";
+  const SQL = "UPDATE public.orders SET total_profit = 5 WHERE id = 9;";
+  try {
+    writeAppliedSnapshot(stateDir, { applied: ["20990101000000_already_applied"] });
+    writeOneShotRegistry(tmp, { [STEM]: "fixture: population-bound money repair" });
+    writeFileSync(path.join(stateDir, `migration-review-${STEM}.json`), JSON.stringify({
+      migration: STEM,
+      timestamp: new Date().toISOString(),
+      reviewers: ["rls-security-reviewer", "migration-drift-reviewer"],
+      findings: "clean",
+      queryHash: sha(SQL),
+    }));
+
+    // ONE override, fully bound and freshly issued — the only thing standing
+    // between these applies and a release.
+    const ovPath = path.join(stateDir, "one-shot-replay-override.json");
+    writeFileSync(ovPath, JSON.stringify({
+      migration: STEM,
+      queryHash: sha(SQL),
+      project: "x",
+      issuedAt: new Date().toISOString(),
+      // Ignored by the guard; it exists only to make the read slow enough that
+      // a read-then-delete consumption has a window worth racing for.
+      _padding: "x".repeat(4 * 1024 * 1024),
+    }));
+
+    const RACERS = 8;
+    const racePayload = JSON.stringify({
+      tool_name: "mcp__supabase__apply_migration",
+      tool_input: { project_id: "x", name: STEM, query: SQL },
+    });
+    const racers = [];
+    for (let i = 0; i < RACERS; i++) {
+      const child = spawn(process.execPath, [HOOK], {
+        cwd: tmp,
+        env: hermeticEnv({ CLAUDE_PROJECT_DIR: tmp }),
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      let stdout = "";
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", (d) => { stdout += d; });
+      child.stderr.resume();
+      racers.push({
+        child,
+        out: () => stdout,
+        closed: new Promise((resolve) => child.on("close", resolve)),
+      });
+    }
+    // Every racer is now parked on its stdin read. Release them together.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    for (const r of racers) r.child.stdin.end(racePayload);
+    await Promise.all(racers.map((r) => r.closed));
+
+    const released = racers.filter((r) => r.out().includes('"permissionDecision":"allow"')).length;
+    const oneShotDenied = racers.filter((r) => r.out().includes("ONE-SHOT REPLAY GUARD")).length;
+    eq(released, 1,
+       `round-15: one override releases exactly ONE of ${RACERS} concurrent applies, not several`);
+    // …and every loser lost HERE, at the one-shot gate. Without this the count
+    // above could be satisfied by racers that some earlier gate turned away,
+    // which would make the race untested rather than won.
+    eq(oneShotDenied, RACERS - 1,
+       "round-15: every racer that did not win the claim is refused by the one-shot guard itself");
+    ok(!existsSync(ovPath),
+       "round-15: the shared override is gone after the race — the winner spent it");
+    // The claim is a private rename, so it must not litter the state directory
+    // with files a later reader could mistake for evidence.
+    const leftovers = readdirSync(stateDir).filter((f) => f.startsWith("one-shot-replay-override.json."));
+    eq(leftovers.length, 0,
+       "round-16: every racer releases its lock, leaving no stray state that would wedge later applies");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
 }
 

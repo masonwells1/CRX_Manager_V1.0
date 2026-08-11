@@ -2,6 +2,72 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-11 — One-shot replay override is claimed atomically; DELETEs bind their before-values
+
+Closed both High findings from the round-15 adversarial review of the migration
+guard work.
+
+**The "single-use" replay override was reusable under concurrency.** The apply
+guard read the override file and deleted it afterwards, which is two operations,
+not one. Two apply hooks running at the same time both passed the existence
+check and both read the same bytes; one delete won, the loser got a
+file-not-found error, and the loser's error handler only refused when the path
+still existed — by then it did not. So it carried on with the copy it had
+already read, and one explicit authorization released two live applies of a
+population-bound money migration. The override is now *claimed* before a single
+byte is read: an apply must first create a lock file next to the override with
+an exclusive-create open, and only the process that created it may read and
+spend the override. A claim that fails refuses the apply outright and names the
+lock to clear by hand — reading an override that survives its own use is the
+opposite of one-shot.
+
+The first attempt at that claim renamed the override to a private path, on the
+assumption that a rename can only succeed once. **That assumption is false on
+Windows, and it was caught by measurement rather than by reading the code.** A
+standalone harness ran eight processes racing to rename one source file to eight
+distinct destinations, 150 rounds: 21 rounds produced two winners and one
+produced three. POSIX `rename(2)` is exclusive; Win32 under contention is not.
+The same harness measured exclusive-create open, directory creation and hard
+linking at zero double-winners in 120 rounds each, and the guard now uses the
+first of those. Two smaller traps came out of the same pass: the guard's exit
+helper terminates the process, so the lock is released before any refusal is
+emitted rather than in cleanup that would never run; and the override is spent
+with a recursive remove, so a *directory* planted at the override path is still
+consumed and then refused as unreadable, which a plain file-unlink would have
+silently downgraded.
+
+Two regression tests, because they fail differently. A deterministic one plants
+a held lock and asserts the apply is refused, the override survives for the
+operator, and a losing apply never releases a lock it does not hold. A
+probabilistic one races eight real hook processes off a shared start gate
+against one override and asserts exactly one `allow`, seven refusals *at the
+one-shot gate specifically* (a count alone could be satisfied by racers an
+earlier gate turned away), no surviving override and no stray lock. The racing
+test is what caught the rename bug, but it only reproduced about one run in six
+— twenty consecutive runs of the fixed guard are clean, and that is corroboration,
+not proof. The deterministic case is the guarantee.
+
+**Approved-set validation did not bind a DELETE to anything that changes.** An
+UPDATE names the columns it assigns, so the digest could be required to cover
+them. A DELETE names none, so it was asked for row ids and nothing else — and a
+row id does not change when the row does. A record approved for deletion while
+it was a draft could be invoiced, delivered and paid in the interval, and the
+id-only digest would still match at apply time: CI would certify destroying a
+row that was no longer the row anyone approved. A DELETE is now bound to the
+same before-values an UPDATE would have been — the target table's lifecycle and
+financial columns, derived from the schema registry rather than a hand-kept
+list, so a new status or money column is protected the moment it exists. The
+derivation fails closed exactly as the protected-table list does. A table the
+registry records no material column for is refused outright rather than passed
+on ids alone; the author can still waive it, loudly and by name, through the
+existing marker. Notification bookkeeping is deliberately excluded: it moves on
+its own without the row meaning anything different, and requiring it would push
+authors toward the waiver for no safety gained.
+
+Three fixtures added: a DELETE hashing ids only (the bypass), a DELETE from a
+table with no material state (refused), and a correctly bound DELETE (passes).
+Mutating the substitution away turns the first two green, which is the point.
+
 ## 2026-08-10 — Graphify-first agent navigation policy
 
 Made Graphify the explicit first-pass navigator for architecture, multi-file, workflow/migration,

@@ -93,6 +93,41 @@ function goodSetBlock({ lock = true, count = true, writeWhere = 'WHERE id = ANY(
   );
 }
 
+/**
+ * The same shape for a DELETE (Codex High, round 15).
+ *
+ * A DELETE assigns no columns, so through round 14 the coverage check had
+ * nothing to require beyond row ids — and a row id is the one thing that does
+ * NOT change when the row does. A commission approved for deletion while it was
+ * pending could be paid out in the interval and the id-only digest would still
+ * match. The guard now substitutes the target table's lifecycle and financial
+ * columns from the schema registry, so `material: false` below is a real bypass
+ * someone could write, not a synthetic one.
+ *
+ * @param {object} [o]
+ * @param {boolean} [o.material=true] hash the before-values, not just the ids
+ * @param {string}  [o.table='commissions'] table to delete from
+ */
+function goodDeleteSetBlock({ material = true, table = 'commissions' } = {}) {
+  const before =
+    ` || ':' || commission_amount::text || ':' || order_profit::text` +
+    ` || ':' || status::text || ':' || coalesce(deleted_at::text, '')`;
+  return (
+    `DO $$\nDECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
+    `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
+    `    FROM (SELECT id FROM public.${table} WHERE stale ORDER BY id FOR UPDATE) s;\n` +
+    `  SELECT encode(digest(string_agg(id::text${material ? before : ''}, ',' ORDER BY id), 'sha256'), 'hex')\n` +
+    `    INTO actual FROM public.${table} WHERE id = ANY(v_ids);\n` +
+    `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
+    `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
+    `  DELETE FROM public.${table} WHERE id = ANY(v_ids);\n` +
+    `  GET DIAGNOSTICS n = ROW_COUNT;\n` +
+    `  IF n <> array_length(v_ids, 1) THEN\n` +
+    `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\n` +
+    `END $$;`
+  );
+}
+
 const CASES = [
   // ── must VIOLATE ────────────────────────────────────────────────────────
   {
@@ -114,6 +149,32 @@ const CASES = [
     name: 'DELETE FROM a business table',
     expect: 'violation',
     sql: `DELETE FROM public.invoice_items WHERE id IS NOT NULL;\n`,
+  },
+  {
+    // ---- Codex round-15 bypass: ids stay constant, state does not ---------
+    // Everything the round-14 guard asked of a DELETE is here: one table, a
+    // real sha256, compared for mismatch before the write, over the set the
+    // write itself uses, with the row count asserted. The only thing missing
+    // is the rows' before-values — and without them the digest says nothing
+    // about whether these commissions are still the pending ones that were
+    // approved, or have since been paid.
+    name: 'DELETE whose digest covers row ids but no material before-values',
+    expect: 'violation',
+    mustReport: 'order_profit',
+    sql: `-- APPROVED_SET_DIGEST: ${HEX}\n${goodDeleteSetBlock({ material: false })}\n`,
+  },
+  {
+    // The other half of the round-15 fix. idempotency_keys is a protected
+    // business table with no lifecycle or financial column in the registry, so
+    // there is no before-value for a digest to bind and the id-only check would
+    // be all that is left. Refused rather than passed on ids alone — the author
+    // can still waive it, loudly and by name.
+    name: 'DELETE from a table with no material before-values is refused outright',
+    expect: 'violation',
+    mustReport: 'no lifecycle or financial column',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\n` +
+      `${goodDeleteSetBlock({ material: false, table: 'idempotency_keys' })}\n`,
   },
   {
     name: 'digest present only in a comment',
@@ -361,6 +422,15 @@ const CASES = [
     name: 'correct fail-closed digest: one captured set drives the hash and the write',
     expect: 'silent',
     sql: `-- APPROVED_SET_DIGEST: ${HEX}\n${goodSetBlock()}\n`,
+  },
+  {
+    // The DELETE the round-15 rule is meant to admit: the same fixture as the
+    // bypass above, with the table's lifecycle and financial before-values
+    // hashed alongside the ids. If any of them moves between approval and
+    // apply, the digest stops matching and the migration aborts.
+    name: 'correct fail-closed DELETE: the digest covers the rows AND their material state',
+    expect: 'silent',
+    sql: `-- APPROVED_SET_DIGEST: ${HEX}\n${goodDeleteSetBlock()}\n`,
   },
   {
     name: 'rewrite inside a function body is runtime logic, not a data migration',

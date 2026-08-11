@@ -156,6 +156,60 @@ if [ -z "$BUSINESS_ROW_TABLES" ]; then
   exit 1
 fi
 
+# ---- MATERIAL BEFORE-VALUES PER TABLE (Codex High, round 15) ---------------
+# An UPDATE names the columns it assigns, so the approved-set digest can be
+# required to cover them. A DELETE names none. Round 14 therefore asked a
+# DELETE for nothing but row ids inside the digest — and a row id does not
+# change when the row does. A quote approved for deletion while it was a draft
+# could be invoiced, delivered and paid in the interval, and the id-only digest
+# would still match at apply time: CI would certify the destruction of a row
+# that is no longer the row anyone approved.
+#
+# So a DELETE is bound to the same before-values an UPDATE would have been:
+# the target table's lifecycle and financial columns, taken from the schema
+# registry rather than a hand-kept list, so a new status or money column is
+# protected the moment it exists.
+#
+# "Material" is deliberately narrow — state the row is in, money the row
+# carries, and the lifecycle timestamps that record an irreversible transition.
+# Notification bookkeeping (`*_sent_at`, reminder stamps) is excluded: it moves
+# on its own without the row meaning anything different, and requiring it would
+# push authors toward the opt-out for no safety gained.
+MATERIAL_COLS_MAP=$(node -e "
+const fs = require('fs');
+const reg = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+const cols = reg.columns || {};
+const LIFECYCLE_AT = /^[a-z0-9_]*(deleted|voided|paid|posted|invoiced|delivered|completed|cancelled|canceled|approved|finalized|refunded|closed|applied|archived|shipped|received|fulfilled|reconciled|settled|locked|signed)_at\$/;
+const MONEY = /(^|_)(cents|price|cost|profit|amount|balance|total|subtotal|rate)\$/;
+// Quantity matches anywhere in the name, not only at the end: the inventory
+// columns are quantity_on_hand / quantity_available, and a stock level is as
+// material to a deletion as a dollar figure is.
+const QUANTITY = /(^|_)(qty|quantity)(_|\$)/;
+const LIFECYCLE = /(^|_)(status|state|stage|phase)\$/;
+const material = (c) => LIFECYCLE.test(c) || MONEY.test(c) || QUANTITY.test(c) || LIFECYCLE_AT.test(c);
+const rows = [];
+for (const t of Object.keys(cols).sort()) {
+  if (!/^[a-z0-9_]+\$/.test(t)) continue;
+  const m = (cols[t] || []).filter(material);
+  if (m.length) rows.push(t + '\t' + m.join(' '));
+}
+if (rows.length < 50) {
+  throw new Error('schema registry yielded material columns for only ' + rows.length + ' tables');
+}
+process.stdout.write(rows.join('\n'));
+" "$APPROVED_SET_REGISTRY" 2>/dev/null || true)
+
+# Fail closed for the same reason the table list does. An empty map would make
+# every DELETE look like it had nothing material to bind, which is the silent
+# pass this check exists to remove.
+if [ -z "$MATERIAL_COLS_MAP" ]; then
+  echo "❌ FATAL: could not derive the material-column map from $APPROVED_SET_REGISTRY"
+  echo "   (needs a readable registry with a 'columns' map naming lifecycle/financial columns"
+  echo "    on at least 50 tables, and node on PATH)."
+  echo "   Approved-set DELETEs are bound to those before-values and must not run on a partial map."
+  exit 1
+fi
+
 # Tables that do NOT have an updated_at column
 TABLES_WITHOUT_UPDATED_AT=(
   commissions
@@ -870,6 +924,40 @@ $MIG_BASENAME
       REWRITE_COLS=$(printf '%s\n' "$REWRITES" | cut -f4 | tr ' ' '\n' \
                        | { grep -vx '-' || true; } | sort -u | tr '\n' ' ')
 
+      # ---- A DELETE BINDS ITS TABLE'S BEFORE-VALUES (Codex High, round 15) --
+      # A DELETE contributes no assigned columns, so on its own it asks the
+      # digest to cover row ids and nothing else. Substitute the target table's
+      # material columns (see MATERIAL_COLS_MAP above) so the SAME coverage
+      # machinery that binds an UPDATE's assigned columns now binds a DELETE's
+      # lifecycle and financial before-values. If a row's status or money moved
+      # after approval, the digest no longer matches and the migration aborts.
+      #
+      # A table the registry gives no material column for is refused outright
+      # rather than passed on ids alone — recorded here, decided in the chain
+      # below so it reads next to the other structural refusals.
+      DELETE_TABLES=$(printf '%s\n' "$REWRITES" | awk -F'\t' '$3 == "delete" { print $2 }' | sort -u)
+      DELETE_UNBINDABLE=""
+      if [ -n "$DELETE_TABLES" ]; then
+        while IFS= read -r d_tbl; do
+          if [ -z "$d_tbl" ]; then
+            continue
+          fi
+          d_cols=$(printf '%s\n' "$MATERIAL_COLS_MAP" \
+                     | awk -F'\t' -v t="$d_tbl" '$1 == t { print $2 }')
+          if [ -z "$d_cols" ]; then
+            DELETE_UNBINDABLE="$DELETE_UNBINDABLE $d_tbl"
+          else
+            REWRITE_COLS="$REWRITE_COLS $d_cols"
+          fi
+        done <<< "$DELETE_TABLES"
+        # Word-split on purpose: re-flatten the appended groups into one sorted,
+        # de-duplicated list, in the single-space-separated shape line ~1051
+        # hands to awk.
+        # shellcheck disable=SC2086
+        REWRITE_COLS=$(printf '%s\n' $REWRITE_COLS | { grep -v '^$' || true; } \
+                         | sort -u | tr '\n' ' ')
+      fi
+
       # The declared digest, from a comment marker.
       DIGEST_HEX=$(grep -oiE 'APPROVED_SET_DIGEST:[[:space:]]*[0-9a-f]{64}' "$file" \
                      | grep -oiE '[0-9a-f]{64}' | head -1 | tr '[:upper:]' '[:lower:]' || true)
@@ -901,6 +989,14 @@ $MIG_BASENAME
       # tables is two migrations, each binding its own approved population.
       if [ "$REWRITE_TABLE_COUNT" -gt 1 ]; then
         DIGEST_WHY="this migration rewrites $REWRITE_TABLE_COUNT business tables in one file ($REWRITE_TABLES_ONE_LINE). An approved-set repair binds ONE table to ONE digest and ONE fail-closed comparison; with several, the guard cannot tell which comparison governs which digest, and dropping one table's comparison leaves its rows unprotected while the other table's check still passes. Split this into one migration per table."
+      # ---- A DELETE WITH NOTHING TO BIND IS REFUSED (Codex High, round 15) --
+      # The generic digest path proves "these exact rows, in this exact state,
+      # were the ones approved". For a table the registry records no lifecycle
+      # or financial column on, the second half of that sentence has no
+      # material to stand on, and the check would decay to ids alone — which is
+      # the hole this round closes. Refuse instead of passing on a technicality.
+      elif [ -n "$DELETE_UNBINDABLE" ]; then
+        DIGEST_WHY="this migration DELETEs rows from$DELETE_UNBINDABLE, and the schema registry records no lifecycle or financial column on that table for the digest to bind. A DELETE assigns no columns, so an id-only digest still matches after the row's status or money has moved, and the approved set would certify destroying a row that is no longer the row that was approved. Either delete through a migration that can bind material before-values, or waive it with an APPROVED_SET_DIGEST: NOT-REQUIRED marker that names that table and says why it carries no material state."
       elif [ -n "$DIGEST_HEX" ]; then
         # Where is that hex first compared for INEQUALITY in executable sql?
         # Only a mismatch operator counts. `IF actual = '<approved>' THEN RAISE`
@@ -1621,7 +1717,10 @@ $MIG_BASENAME
         echo "VIOLATION: $file"
         echo "  Rewrites existing business rows without binding to the approved set:"
         printf '%s\n' "$REWRITES" | awk -F'\t' '{ printf "    line %s (%s): %s\n", $1, $3, $6 }'
-        [ -n "$DIGEST_WHY" ] && echo "  Digest present but not enforced: $DIGEST_WHY"
+        # Covers both shapes: a digest that is present but not enforced, and a
+        # rewrite this path refuses to bind at all (several tables in one file,
+        # or a DELETE with no material before-values to hash).
+        [ -n "$DIGEST_WHY" ] && echo "  Not bound to an approved set: $DIGEST_WHY"
         echo "  Counts are not identity. Add to the migration EITHER:"
         echo "    -- APPROVED_SET_DIGEST: <sha256 of the sorted approved ids + before-values>"
         echo "    and, BEFORE the first write, recompute it and RAISE EXCEPTION on mismatch; OR"

@@ -17,7 +17,7 @@
 // Setup matcher: this hook is registered against matcher "*" and filters
 // in-script for tool names containing "apply_migration".
 
-import { readFileSync, existsSync, readdirSync, statSync, mkdirSync, unlinkSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, statSync, mkdirSync, unlinkSync, openSync, closeSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -414,40 +414,114 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
       const OVERRIDE_MAX_SKEW_MS = 60 * 1000;
       let overrideOk = false;
       let overrideWhy = "";
+      let overrideClaimed = false;
       if (existsSync(ovPath)) {
         let raw = "";
-        try {
-          raw = readFileSync(ovPath, "utf8");
-        } catch (err) {
-          overrideWhy = `it could not be read (${err?.message || err})`;
-        }
-        // Consume before deciding. A parse failure, a mismatch, and a clean
-        // acceptance all have to leave the operator with a spent override —
-        // otherwise "one-shot" would mean "until someone remembers to delete
-        // it", which is what round 11 broke.
+        // CLAIM BEFORE READING (Codex High, round 15). Consume-before-deciding
+        // is not one shot under concurrency: rounds 11-13 read the file and
+        // deleted it afterwards, so two apply hooks running at once both passed
+        // the existsSync check and both read the same bytes. One delete won; the
+        // loser got ENOENT, and its catch only refused when the path still
+        // existed — by then it did not. The loser carried on with the copy it
+        // had already read, and BOTH applies were authorized by ONE
+        // authorization. That is exactly the multiple-attempt release this
+        // control exists to prevent on a population-bound money migration.
         //
-        // A DELETE THAT FAILED IS NOT A CONSUMPTION (Codex Medium, round 13).
-        // Swallowing the error let a file that could not be removed — a lock, a
-        // permissions problem, a directory sitting at that path — stay valid for
-        // the rest of its 30-minute window and release a second, third, fourth
-        // apply. So a failed delete refuses the apply outright: better a blocked
-        // replay the operator has to clear by hand than a one-shot that is not
-        // one shot.
+        // THE CLAIM IS AN EXCLUSIVE CREATE, NOT A RENAME (round 16).
+        //
+        // Round 15 claimed the override by renaming it to a private path, on
+        // the stated premise that "exactly one process can move the override
+        // away". THAT PREMISE IS FALSE ON WINDOWS, which is where this guard
+        // actually runs. Measured on this machine — 8 concurrent renames of one
+        // source to distinct destinations, 150 rounds — 21 rounds produced TWO
+        // winners and one produced THREE. The round-15 concurrency test caught
+        // it: two racers were released by a single override. POSIX rename(2) is
+        // exclusive; Win32 MoveFileEx under contention is not, so a rename-based
+        // claim reintroduced exactly the double-release it was written to fix.
+        //
+        // openSync(lock, "wx") — O_CREAT|O_EXCL — IS exclusive here: the same
+        // harness measured 0 double-winners in 120 rounds for exclusive-create
+        // (and for mkdir and link). So the claim is now: take an exclusive lock,
+        // and only the holder may read and delete the override. Deleting it
+        // while holding the lock is the consumption. A parse failure, a
+        // mismatch, and a clean acceptance all still leave the operator with a
+        // spent override, which is what round 11 required.
+        //
+        // The lock is released in a `finally` BEFORE any out() call, because
+        // out() calls process.exit and would otherwise leak the lock and wedge
+        // every later apply.
+        const lockPath = `${ovPath}.lock`;
+        let holdsLock = false;
+        let lockErr = null;
         try {
-          unlinkSync(ovPath);
+          closeSync(openSync(lockPath, "wx"));
+          holdsLock = true;
         } catch (err) {
+          lockErr = err;
+        }
+        if (!holdsLock) {
+          // A CLAIM THAT FAILED IS NOT A CONSUMPTION (Codex Medium, round 13,
+          // carried forward). Either another apply holds the claim right now, or
+          // a previous holder died and left the lock behind. In neither case did
+          // THIS apply own the authorization, and in the second case the override
+          // is still sitting there — it would stay valid for the rest of its
+          // 30-minute window and release a second, third, fourth apply. Refuse:
+          // better a blocked replay the operator clears by hand than a one-shot
+          // that is not one shot.
+          out("block",
+            `ONE-SHOT REPLAY GUARD: the replay override at ${ovPath} could not be claimed ` +
+            `(${lockErr?.message || lockErr}), so reading it would not have spent it. Either ` +
+            `another apply is consuming it right now, or a previous apply died holding the claim. ` +
+            `An override that survives its own use authorizes every apply until it expires, which ` +
+            `is the opposite of one-shot — refusing this apply.\n\n` +
+            `Remove ${lockPath} by hand (and ${ovPath} if it is still there), then write a fresh ` +
+            `override if the replay is genuinely intended.`);
+        }
+        let consumeErr = null;
+        try {
+          // Re-check UNDER the lock. Between the existsSync above and the lock
+          // an earlier holder may have spent it; if so this apply owns nothing
+          // and must fall through to the ordinary one-shot refusal below. It
+          // must never fall back on bytes it does not own.
           if (existsSync(ovPath)) {
-            out("block",
-              `ONE-SHOT REPLAY GUARD: the replay override at ${ovPath} could not be deleted ` +
-              `(${err?.message || err}), so reading it did not spend it. An override that survives ` +
-              `its own use authorizes every apply until it expires, which is the opposite of ` +
-              `one-shot — refusing this apply.\n\n` +
-              `Remove that path by hand, then write a fresh override if the replay is genuinely ` +
-              `intended.`);
+            try {
+              raw = readFileSync(ovPath, "utf8");
+            } catch (err) {
+              overrideWhy = `it could not be read (${err?.message || err})`;
+            }
+            // The delete IS the consumption. If it fails, the override survives
+            // its own use — so the bytes just read must not be honoured.
+            //
+            // rmSync, not unlinkSync: round 13 settled that an override which is
+            // SPENDABLE BUT UNUSABLE (a directory sitting at that path) must be
+            // spent and then refused for being unreadable. unlinkSync cannot
+            // remove a directory, so it would report "could not be consumed" and
+            // leave the thing in place — weakening a settled requirement to suit
+            // the implementation. The path is fixed and derived, so a recursive
+            // removal here is bounded to the override itself. The retries cover
+            // Windows' transient EPERM on a file another process just released.
+            try {
+              rmSync(ovPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+              overrideClaimed = true;
+            } catch (err) {
+              consumeErr = err;
+            }
           }
+        } finally {
+          try {
+            unlinkSync(lockPath);
+          } catch { /* a leftover lock fails closed: it only ever blocks applies */ }
+        }
+        if (consumeErr) {
+          out("block",
+            `ONE-SHOT REPLAY GUARD: the replay override at ${ovPath} was read but could not be ` +
+            `consumed (${consumeErr?.message || consumeErr}). An override that survives its own ` +
+            `use authorizes every apply until it expires — refusing this apply.\n\n` +
+            `Remove that path by hand, then write a fresh override if the replay is genuinely ` +
+            `intended.`);
         }
 
-        if (!overrideWhy) {
+        if (overrideClaimed && !overrideWhy) {
           try {
             const ov = JSON.parse(raw);
             const ovMigration = (ov?.migration || "").toString().trim();
