@@ -1,3 +1,4 @@
+-- STATUS: PARKED DRAFT - NOT APPLIED
 -- Wave A (ordering-cycle review 2026-08-09) — create_direct_order money hardening.
 --
 -- Closes two confirmed findings on the direct-order seam:
