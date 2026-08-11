@@ -23,14 +23,9 @@ This is the shared, project-level contract for every coding agent in this reposi
 
 ## Graph-First Navigation
 
-For architecture, multi-file planning, workflow or migration tracing, difficult debugging, structural audits, and PR-impact analysis, Graphify is the default first-pass navigator. Do not require Mason to remember to request it. A simple documentation lookup, obvious single-file edit, or already-known exact file does not need a graph query.
+For architecture, multi-file planning, workflow or migration tracing, difficult debugging, structural audits, and PR-impact analysis, Graphify is the default first-pass navigator. Load the `graphify` skill automatically and follow its freshness, focused-query, reporting, and result-persistence procedures before broad file exploration; do not require Mason to remember to request it. A simple documentation lookup, obvious single-file edit, or already-known exact file does not need a graph query.
 
-1. Inspect `graphify-out/GRAPH_REPORT.md` and compare its build commit with `git rev-parse HEAD`. Run `npm run graph:refresh` when the graph is missing, stale, or relevant operating-code/database files have changed locally.
-2. Before broad `Glob`/`Grep`/`Read` exploration, run the smallest useful `graphify explain`, `affected`, `path`, or budget-capped `query`. For a PR review, inspect the changed-file list first and query only shared symbols and direct dependents.
-3. Use `GRAPH_REPORT.md` as the generated freshness/community index and `graph.html` as an optional visual map. Prefer CLI queries over manually mining `graph.json` or `manifest.json`; those lower-level artifacts are for Graphify diagnosis.
-4. Use the graph result to choose the smallest source surface that can answer or implement the task. Raw source reads do not require Mason's explicit request: they are required whenever needed to edit safely, verify a material connection, review behavior, or conduct an audit.
-5. Treat current source, executable tests, migrations, and live read-only database evidence as authoritative. Graphify identifies where to look; it does not prove current behavior or the live schema. SQL/RPC, money, inventory, security, migration, and production claims must be confirmed outside the graph.
-6. For material investigations, report the graph build commit, exact query, candidate nodes, and the source/live evidence that confirmed or rejected the graph path. When a query materially helped, dead-ended, or was corrected, record that outcome with `graphify save-result`; use `graphify reflect` periodically to build local lessons. Because `graphify-out/` is gitignored, durable project decisions still belong in tracked project documentation.
+Use the graph to choose the smallest source surface that can answer or implement the task. Raw source reads do not require Mason's explicit request: they are required whenever needed to edit safely, verify a material connection, review behavior, or conduct an audit. Current source, executable tests, migrations, and live read-only database evidence remain authoritative; Graphify identifies where to look and never proves current behavior or the live schema.
 
 ## Plan and Approval Gates
 
