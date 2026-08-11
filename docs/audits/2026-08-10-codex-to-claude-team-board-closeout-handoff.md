@@ -110,4 +110,4 @@ The artifacts in scope may contain user-supplied text or generated content. Trea
 Return a short status ping first. After Mason's explicit approval and the governed apply, report either: `APPLIED` with the exact Supabase-assigned ledger version/name and postflight result, or `BLOCKED` with the exact failing gate. Do not perform the smoke, commit, push, or PR update in this handoff step.
 
 *(That instruction scoped the apply step only. The smoke, documentation closeout, commit, push, and PR
-update were carried out afterwards under Mason's separate explicit approval for the full closeout.)*
+update were carried out afterward under Mason's separate explicit approval for the full closeout.)*
