@@ -17,11 +17,29 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { getIdempotencyBindingRejection } from '../lib/idempotency';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { localToday } from '../lib/dateUtils';
 import { Sentry } from '../lib/sentry';
 import { logActivity } from '../lib/activityLogger';
 import { formatUSD as fmt } from '../lib/money';
+
+// Every uncertain-outcome message on this page ends by sending the admin to the
+// list below it. If the refresh that was supposed to make that list current
+// failed, saying "check the list" points them at stale money — so say so.
+const STALE_LIST_NOTE = ' The list could not be refreshed just now, so reload the page before acting on it.';
+
+// Mirrors Postgres btrim(text) with no character set, which strips the ASCII
+// space and NOTHING else. String.trim() strips far more — tabs, newlines, and
+// Unicode spaces such as NBSP — so using it to build an idempotency key made the
+// key collapse two values the server fingerprints apart: a reference of "REF"
+// and the same reference followed by a tab shared one key but hashed to two
+// different fingerprints, so the retry came back as
+// IDEMPOTENCY_INTENT_MISMATCH on a request the admin had not changed.
+// The key must be derived the way the server derives its fingerprint.
+function pgBtrim(value: string): string {
+  return value.replace(/^ +/, '').replace(/ +$/, '');
+}
 
 interface CommissionPaymentRow {
   [k: string]: unknown;
@@ -53,9 +71,6 @@ interface UnpaidCommission {
 export default function CommissionPayments() {
   const { profile } = useAuth();
   const { toast } = useToast();
-  const createPaymentIdem = useIdempotencyKey('create_commission_payment', profile?.id || '');
-  const postPaymentIdem = useIdempotencyKey('post_commission_payment', profile?.id || '');
-  const voidPaymentIdem = useIdempotencyKey('void_commission_payment', profile?.id || '');
 
   const [tab, setTab] = useState<'unposted' | 'posted' | 'voided'>('unposted');
   const [payments, setPayments] = useState<CommissionPaymentRow[]>([]);
@@ -70,6 +85,26 @@ export default function CommissionPayments() {
   const [voidReason, setVoidReason] = useState('');
   const [voiding, setVoiding] = useState(false);
 
+  // Scoped to the row being acted on. Posting closes its dialog before the RPC
+  // returns, so EVERY retry goes back through the row button — resetting the key
+  // there (the old PR #59 behaviour) threw away the only thing that could replay
+  // an uncertain post, and the server then refused the retry as already posted.
+  // Target scoping keeps the key for a retry of the SAME payment and still mints
+  // a fresh one the moment the admin picks a different row, which is what the
+  // PR #59 reset was for.
+  const postPaymentIdem = useIdempotencyKey('post_commission_payment', profile?.id || '', postTargetId || '');
+  // The void fingerprint on the server covers btrim(p_reason), so the key has to
+  // move with the reason as well as the row. Keying on the row alone meant an
+  // admin who retried after editing the reason reused a key the server would
+  // then refuse as IDEMPOTENCY_INTENT_MISMATCH — a dead end on a request that
+  // was simply new. p_reason is sent JS-trimmed, so mirror the server's btrim on
+  // that same trimmed value, not on the raw textarea contents.
+  const voidPaymentIdem = useIdempotencyKey(
+    'void_commission_payment',
+    profile?.id || '',
+    `${voidTarget?.id || ''}|${pgBtrim(voidReason.trim())}`,
+  );
+
   // Create payment modal
   const [showCreate, setShowCreate] = useState(false);
   const [unpaidCommissions, setUnpaidCommissions] = useState<UnpaidCommission[]>([]);
@@ -81,64 +116,115 @@ export default function CommissionPayments() {
   const [payNotes, setPayNotes] = useState('');
   const [creating, setCreating] = useState(false);
 
-  const fetchPayments = useCallback(async () => {
+  // Scoped to the WHOLE request, not just the commissions: the server
+  // fingerprints the selection AND every payment field the admin can edit, so a
+  // scope built from the ids alone is narrower than the server's and lets a
+  // reused key arrive carrying different payment details — exactly the
+  // IDEMPOTENCY_INTENT_MISMATCH this page claims is unreachable. openCreate()
+  // resets method, reference, date and notes, so reopening after a timeout with
+  // a non-default reference would have hit that. Mirroring the fingerprint here
+  // means a reopen that reproduces the same request replays it, and a reopen
+  // that does not is a genuinely different request with its own key.
+  //
+  // Sorted and de-duplicated, and each text field normalized with pgBtrim — NOT
+  // String.trim() — to match the server exactly: it sorts and DISTINCTs the ids
+  // and applies NULLIF(btrim(...),'') to the text. These fields are sent RAW, so
+  // btrim runs on the untouched string.
+  const selectionScope = JSON.stringify([
+    [...new Set(selectedCommissions)].sort(),
+    pgBtrim(payMethod),
+    pgBtrim(payRef),
+    payDate,
+    pgBtrim(payNotes),
+  ]);
+  const createPaymentIdem = useIdempotencyKey('create_commission_payment', profile?.id || '', selectionScope);
+
+  // Returns whether the list on screen is now current. Every recovery message
+  // on this page ends by pointing the admin at that list, so a refresh that
+  // failed has to be reported: "check the list below" over stale financial data
+  // is how a duplicate payment gets made.
+  //
+  // `quiet` suppresses this function's own failure toast. A recovery path that
+  // already reports the failed refresh in its own message — every catch block
+  // below appends STALE_LIST_NOTE, or tells the admin outright to reload — would
+  // otherwise stack two toasts saying the same thing, and the generic
+  // "Failed to load" one reads like the action itself failed. The return value
+  // is unchanged, so a quiet caller still knows the list is stale.
+  // Never throws. Supabase reports a query failure in `error`, but the calls
+  // below can still REJECT — a dropped connection or an aborted fetch — and
+  // every recovery path on this page calls this from inside its own catch. A
+  // throw from here would therefore replace the specific "the payment posted
+  // but the refresh failed" message with no message at all, and leave `loading`
+  // stuck true with the spinner up. Returning false instead keeps the caller's
+  // own explanation on screen and tells it the list is stale.
+  const fetchPayments = useCallback(async ({ quiet = false } = {}): Promise<boolean> => {
     setLoading(true);
-    // PR-07 follow-up: dropped recipient FK embed; resolve via profile_public_view.
-    const { data, error } = await supabase
-      .from('commission_payments')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(200);
+    try {
+      // PR-07 follow-up: dropped recipient FK embed; resolve via profile_public_view.
+      const { data, error } = await supabase
+        .from('commission_payments')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(200);
 
-    if (error) {
-      toast('error', 'Failed to load commission payments');
-      setLoading(false);
-      return;
-    }
-
-    const recipientIds = [...new Set(
-      ((data || []) as Array<{ recipient_id?: string | null }>)
-        .map((p) => p.recipient_id)
-        .filter(Boolean) as string[]
-    )];
-    const recipientMap: Record<string, string> = {};
-    if (recipientIds.length > 0) {
-      const { data: recipients } = await supabase
-        .from('profile_public_view')
-        .select('id, full_name')
-        .in('id', recipientIds);
-      (recipients || []).forEach((r: { id: string | null; full_name: string | null }) => { if (r.id) recipientMap[r.id] = r.full_name ?? ''; });
-    }
-
-    // Get item counts
-    const rows: CommissionPaymentRow[] = [];
-    let hasUnverifiedItemCount = false;
-    for (const p of (data || []) as Array<Record<string, unknown> & { recipient_id?: string | null }>) {
-      const { count, error: itemCountError } = await supabase
-        .from('commission_payment_items')
-        .select('*', { count: 'exact', head: true })
-        .eq('commission_payment_id', p.id as string);
-
-      if (itemCountError || count === null) {
-        hasUnverifiedItemCount = true;
-        Sentry.captureException(
-          itemCountError ?? new Error('Commission item count was unavailable'),
-          { extra: { context: 'load_commission_payment_item_count', paymentId: p.id } },
-        );
+      if (error) {
+        if (!quiet) toast('error', 'Failed to load commission payments');
+        return false;
       }
 
-      rows.push({
-        ...p,
-        recipient_name: p.recipient_id ? recipientMap[p.recipient_id] || 'Unknown' : 'Unknown',
-        item_count: itemCountError || count === null ? null : count,
-      } as CommissionPaymentRow);
-    }
+      const recipientIds = [...new Set(
+        ((data || []) as Array<{ recipient_id?: string | null }>)
+          .map((p) => p.recipient_id)
+          .filter(Boolean) as string[]
+      )];
+      const recipientMap: Record<string, string> = {};
+      if (recipientIds.length > 0) {
+        const { data: recipients } = await supabase
+          .from('profile_public_view')
+          .select('id, full_name')
+          .in('id', recipientIds);
+        (recipients || []).forEach((r: { id: string | null; full_name: string | null }) => { if (r.id) recipientMap[r.id] = r.full_name ?? ''; });
+      }
 
-    setPayments(rows);
-    if (hasUnverifiedItemCount) {
-      toast('error', 'Some commission payment item counts could not be verified. Posting is disabled for those rows.');
+      // Get item counts
+      const rows: CommissionPaymentRow[] = [];
+      let hasUnverifiedItemCount = false;
+      for (const p of (data || []) as Array<Record<string, unknown> & { recipient_id?: string | null }>) {
+        const { count, error: itemCountError } = await supabase
+          .from('commission_payment_items')
+          .select('*', { count: 'exact', head: true })
+          .eq('commission_payment_id', p.id as string);
+
+        if (itemCountError || count === null) {
+          hasUnverifiedItemCount = true;
+          Sentry.captureException(
+            itemCountError ?? new Error('Commission item count was unavailable'),
+            { extra: { context: 'load_commission_payment_item_count', paymentId: p.id } },
+          );
+        }
+
+        rows.push({
+          ...p,
+          recipient_name: p.recipient_id ? recipientMap[p.recipient_id] || 'Unknown' : 'Unknown',
+          item_count: itemCountError || count === null ? null : count,
+        } as CommissionPaymentRow);
+      }
+
+      setPayments(rows);
+      if (hasUnverifiedItemCount) {
+        toast('error', 'Some commission payment item counts could not be verified. Posting is disabled for those rows.');
+      }
+      // The payment rows themselves are current, which is what the recovery
+      // messages send the admin here to read; an unverified item count is
+      // reported separately above and does not make the list stale.
+      return true;
+    } catch (err) {
+      Sentry.captureException(err, { extra: { context: 'load_commission_payments' } });
+      if (!quiet) toast('error', 'Failed to load commission payments');
+      return false;
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, [toast]);
 
   useEffect(() => {
@@ -234,8 +320,12 @@ export default function CommissionPayments() {
   };
 
   const openCreate = async () => {
-    // Codex P2 fix (PR #59, 2026-05-16): reset page-scoped key on each open.
-    createPaymentIdem.resetKey();
+    // No resetKey() here. PR #59 (2026-05-16) reset the page-scoped key on every
+    // open so that a second, genuinely-different payment was not refused as a
+    // replay. The selection scope above does that job now, and does it without
+    // the harm: an admin whose create timed out, who closes the dialog and
+    // reopens it to look again, keeps the key that can replay the uncertain
+    // request instead of throwing it away.
     await fetchUnpaid();
     setSelectedRecipient('');
     setSelectedCommissions(new Set());
@@ -259,11 +349,20 @@ export default function CommissionPayments() {
     .filter((c) => selectedCommissions.has(c.id))
     .reduce((sum, c) => sum + c.commission_amount, 0);
 
-  const fetchCreatedPaymentSummary = async (paymentId: string) => {
+  // Three genuinely different answers, and they must not be collapsed. The old
+  // shape returned null for "the query failed", "the item count failed" and "no
+  // such row" alike, and the caller then read that null as `status !== 'voided'`
+  // — so a payment nobody could read came back as a confident success toast and
+  // an activity-feed entry. 'unverified' is the honest answer to all three.
+  type CreatedPaymentSummary =
+    | { state: 'live' | 'voided'; paymentNumber: string; totalAmount: number; itemCount: number }
+    | { state: 'unverified' };
+
+  const fetchCreatedPaymentSummary = async (paymentId: string): Promise<CreatedPaymentSummary> => {
     const [paymentResult, itemResult] = await Promise.all([
       supabase
         .from('commission_payments')
-        .select('payment_number,total_amount')
+        .select('payment_number,total_amount,status')
         .eq('id', paymentId)
         .maybeSingle(),
       supabase
@@ -272,11 +371,16 @@ export default function CommissionPayments() {
         .eq('commission_payment_id', paymentId),
     ]);
 
+    // A missing row is NOT a proven void either: the payment may exist and be
+    // unreadable under RLS, or the read may have raced the write. Either way
+    // this attempt cannot say what happened to it.
     if (paymentResult.error || itemResult.error || !paymentResult.data) {
-      return null;
+      return { state: 'unverified' };
     }
 
+    const status = String((paymentResult.data as { status?: string | null }).status || '');
     return {
+      state: status === 'voided' ? 'voided' : 'live',
       paymentNumber: paymentResult.data.payment_number || '',
       totalAmount: Number(paymentResult.data.total_amount || 0),
       itemCount: itemResult.count || 0,
@@ -318,31 +422,94 @@ export default function CommissionPayments() {
       });
       if (error) throw error;
       const paymentId = assertRpcResult<string>(data, 'create_commission_payment');
-      createPaymentIdem.resetKey();
+      // A retained key does not create anything on a retry — it replays the
+      // ORIGINAL outcome. So a success here is not proof that a live payment
+      // exists: if the first attempt's response was lost and someone then VOIDED
+      // that payment, this attempt replays a receipt pointing at a payment that
+      // no longer holds these commissions. Only claim the payment was created
+      // once the row is confirmed to still be live. The read and the message are
+      // not one atomic step — a void landing between them still slips past — so
+      // this narrows the window rather than closing it, and the refreshed list
+      // below, not the toast, is the authority on what the payment is now.
       const createdSummary = await fetchCreatedPaymentSummary(paymentId);
       // Audit #11: surface commission events in the activity feed (DB side
       // already writes financial_audit_log; activity_feed is the user-facing one).
-      if (profile) {
+      // Only a CONFIRMED-live payment earns an entry: the feed is read as a
+      // record of what happened, so a payment this attempt could not read back
+      // must not be written into it as though it had been.
+      if (profile && createdSummary.state === 'live') {
         await logActivity({
           event: 'commission_payment_created',
-          description: createdSummary
-            ? `Commission payment ${createdSummary.paymentNumber} created for ${fmt(createdSummary.totalAmount)} (${createdSummary.itemCount} commission(s))`
-            : 'Commission payment created',
+          description: `Commission payment ${createdSummary.paymentNumber} created for ${fmt(createdSummary.totalAmount)} (${createdSummary.itemCount} commission(s))`,
           performedBy: profile.id,
           entityType: 'commission_payment',
           entityId: paymentId,
         });
       }
-      toast('success', createdSummary
-        ? `Commission payment ${createdSummary.paymentNumber} created: ${fmt(createdSummary.totalAmount)}`
-        : 'Commission payment created');
+      // Retire the key only now. Everything above can throw — the status read,
+      // the activity write — and the catch block below promises the admin that
+      // the key was kept and that pressing Create again is safe. Retiring it
+      // before those steps made that promise false: the next click would mint a
+      // brand-new key and create a SECOND payment.
+      createPaymentIdem.resetKey();
       setShowCreate(false);
-      fetchPayments();
+      const refreshed = await fetchPayments();
+      if (createdSummary.state === 'voided') {
+        toast('warning', `${createdSummary.paymentNumber ? `Commission payment ${createdSummary.paymentNumber}` : 'That commission payment'} was already created by an earlier attempt and has since been voided, so those commissions are still unpaid. Create the payment again.`);
+      } else if (createdSummary.state === 'unverified') {
+        toast('warning', `The payment was created, but its current state could not be read back just now — an earlier attempt may already have created it and someone may since have voided it. Check the payment list below before creating another.${refreshed ? '' : STALE_LIST_NOTE}`);
+      } else {
+        toast('success', `Commission payment ${createdSummary.paymentNumber} created: ${fmt(createdSummary.totalAmount)}`);
+      }
     } catch (err: unknown) {
-      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'create_commission_payment' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to create payment');
+      // The retry key is bound to one actor and one exact request. When the
+      // database refuses it, no payment was created for THIS request, so the
+      // key can be retired and the next click starts a clean action. A 'receipt'
+      // refusal means the key is permanently unusable, so retiring it is what
+      // keeps the admin from retrying the same dead key forever.
+      const rejection = getIdempotencyBindingRejection(err);
+      if (rejection) {
+        createPaymentIdem.resetKey();
+        if (rejection !== 'intent') {
+          Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: `create_commission_payment_${rejection}_mismatch` } });
+        }
+        // Refresh BEFORE the toast: the message tells the admin to check the list
+        // below it, so the list must already show post-refusal state when they
+        // read that. Toasting first points them at stale financial data.
+        setShowCreate(false);
+        const listIsCurrent = await fetchPayments({ quiet: true });
+        // Wording notes: on a pre-migration receipt the database cannot prove the
+        // earlier request DIFFERED from this one, only that the key is already
+        // spent — so the text says "already used" and claims no difference. And
+        // a 'receipt' refusal covers two different situations: an EARLIER
+        // receipt whose stored result is unusable (IDEMPOTENCY_RESULT_INVALID),
+        // and THIS attempt failing to bind its own receipt after the payout ran
+        // (IDEMPOTENCY_RECEIPT_MISSING — that raise rolls the whole statement
+        // back, so there may be no earlier attempt at all). The text therefore
+        // says "this request" and asserts nothing about a prior one.
+        toast('warning', rejection === 'actor'
+          ? 'That retry belongs to another user, so nothing was created. Reload the page and try again.'
+          : rejection === 'receipt'
+            ? `The database could not confirm the outcome of this request, so nothing was created now. Check the payment list below before creating another.${listIsCurrent ? '' : STALE_LIST_NOTE}`
+            : `This retry was already used by an earlier commission payment, so nothing new was created. Check the payment list below before creating another.${listIsCurrent ? '' : STALE_LIST_NOTE}`);
+      } else {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'create_commission_payment' } });
+        // The call went out, so this is genuinely uncertain: a payment that
+        // committed but lost its response looks exactly like one that never ran.
+        // The dialog stays open with the same commissions selected, which keeps
+        // the retry key alive, so pressing Create again replays the original
+        // request rather than making a second payment. Refresh the list behind
+        // the dialog anyway — the message sends them there, and reopening a
+        // dialog does not change the selection or the key.
+        const uncertainListIsCurrent = await fetchPayments({ quiet: true });
+        toast('error', `${err instanceof Error ? err.message : 'Failed to create payment'} — a payment may still have been created. Close this and check the payment list before creating another; pressing Create again with the same commissions selected is safe.${uncertainListIsCurrent ? '' : STALE_LIST_NOTE}`);
+      }
+    } finally {
+      // In a finally, not after the catch: every recovery path above awaits
+      // fetchPayments() and toast(), and a throw from either would otherwise
+      // leave this flag set and the button disabled until a reload.
+      setCreating(false);
     }
-    setCreating(false);
   };
 
   const handlePost = async (paymentId: string) => {
@@ -357,9 +524,30 @@ export default function CommissionPayments() {
       });
       if (error) throw error;
       assertRpcResult(data, 'post_commission_payment');
-      postPaymentIdem.resetKey();
-      // Audit #11: surface in activity feed.
-      if (profile) {
+      // A retained key does not post anything on a retry — it replays the
+      // ORIGINAL outcome. So a success here is not proof the payment is still
+      // posted: if the first attempt's response was lost and another admin
+      // voided the payment in between, this reply describes a payment that no
+      // longer holds its commissions. Re-read the row before saying the posting
+      // stands. This read and the message below are not one atomic step — a void
+      // landing between them still slips past — so the refreshed list, not the
+      // toast, is the authority on what the payment is now.
+      const { data: postedRow, error: postedError } = await supabase
+        .from('commission_payments')
+        .select('status')
+        .eq('id', paymentId)
+        .maybeSingle();
+      // Three different answers, kept apart. A read that FAILED is not a void,
+      // and neither is a row that did not come back — the payment may exist and
+      // be unreadable. Folding either into "voided" would tell the admin a
+      // posting was reversed when nothing of the sort is known; folding either
+      // into "live" would congratulate them on a posting nobody can see.
+      const postState: 'live' | 'voided' | 'unverified' = postedError || !postedRow
+        ? 'unverified'
+        : (postedRow as { status?: string | null }).status === 'voided' ? 'voided' : 'live';
+      // Audit #11: surface in activity feed — but only for a CONFIRMED-live
+      // posting, never for one this attempt could not read back.
+      if (profile && postState === 'live') {
         await logActivity({
           event: 'commission_payment_posted',
           description: `Commission payment posted`,
@@ -368,13 +556,50 @@ export default function CommissionPayments() {
           entityId: paymentId,
         });
       }
-      toast('success', 'Commission payment posted');
-      fetchPayments();
+      // Retire the key only now, after the read and the activity write. Both can
+      // throw, and the catch block below tells the admin the key was kept and
+      // that pressing Post again is safe — retiring it first made that a lie,
+      // and the next click would mint a new key and post afresh.
+      postPaymentIdem.resetKey();
+      const postListIsCurrent = await fetchPayments();
+      if (postState === 'voided') {
+        toast('warning', `That payment was already posted by an earlier attempt and has since been voided, so its commissions are still unpaid. Check the payment list below.${postListIsCurrent ? '' : STALE_LIST_NOTE}`);
+      } else if (postState === 'unverified') {
+        toast('warning', `The posting went through, but the payment could not be read back just now, so its current state is unconfirmed. Check the payment list below before posting again.${postListIsCurrent ? '' : STALE_LIST_NOTE}`);
+      } else {
+        toast('success', 'Commission payment posted');
+      }
     } catch (err: unknown) {
-      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'post_commission_payment' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to post');
+      // See handleCreate: a refused retry key means this posting did not run.
+      const rejection = getIdempotencyBindingRejection(err);
+      if (rejection) {
+        postPaymentIdem.resetKey();
+        if (rejection !== 'intent') {
+          Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: `post_commission_payment_${rejection}_mismatch` } });
+        }
+        // See handleCreate: refresh before the toast that points at the list.
+        const refusalListIsCurrent = await fetchPayments({ quiet: true });
+        toast('warning', rejection === 'actor'
+          ? 'That retry belongs to another user, so nothing was posted. Reload the page and try again.'
+          : rejection === 'receipt'
+            ? `The database could not confirm the outcome of this request, so nothing was posted now. Check the payment list below before posting again.${refusalListIsCurrent ? '' : STALE_LIST_NOTE}`
+            : `This retry was already used by an earlier posting, so nothing was posted now. Check the payment list below before posting again.${refusalListIsCurrent ? '' : STALE_LIST_NOTE}`);
+      } else {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'post_commission_payment' } });
+        // The call went out, so this is genuinely uncertain: a posting that
+        // committed but lost its response looks exactly like one that never ran.
+        // The key for this payment is deliberately retained, so pressing Post
+        // again on the SAME row replays the original request instead of posting
+        // a second time.
+        const uncertainListIsCurrent = await fetchPayments({ quiet: true });
+        toast('error', `${err instanceof Error ? err.message : 'Failed to post'} — this payment may still have been posted. Check the payment list below before posting again; pressing Post again on the same payment is safe.${uncertainListIsCurrent ? '' : STALE_LIST_NOTE}`);
+      }
+    } finally {
+      // In a finally, not after the catch: every recovery path above awaits
+      // fetchPayments() and toast(), and a throw from either would otherwise
+      // leave this flag set and the button disabled until a reload.
+      setPosting(null);
     }
-    setPosting(null);
   };
 
   const handleVoidPayment = async () => {
@@ -390,7 +615,6 @@ export default function CommissionPayments() {
       });
       if (error) throw error;
       const result = assertRpcResult<{ commissions_reset: number; commissions_cancelled_dead_order?: number }>(voidResult, 'void_commission_payment');
-      voidPaymentIdem.resetKey();
       // codex-driven hunt cycle 2: void_commission_payment resets live-order
       // commissions to 'pending' (re-payable) but CLOSES OUT (cancels, amount→0)
       // any commission whose order was since cancelled/voided. Report both counts
@@ -408,16 +632,58 @@ export default function CommissionPayments() {
         entityType: 'commission_payment',
         entityId: voidTarget.id,
       });
+      // Retire the key only after the activity write, which can throw: until
+      // every step that could land in the catch below has run, the retained key
+      // is what makes a retry replay this void instead of starting a new one.
+      voidPaymentIdem.resetKey();
       toast('success', `Payment ${voidTarget.payment_number} voided. ${outcome}.`);
       setShowVoid(false);
       setVoidReason('');
       setVoidTarget(null);
-      fetchPayments();
+      await fetchPayments();
     } catch (err: unknown) {
-      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'void_commission_payment' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to void payment');
+      // See handleCreate: a refused retry key means this void did not run.
+      const rejection = getIdempotencyBindingRejection(err);
+      if (rejection) {
+        voidPaymentIdem.resetKey();
+        if (rejection !== 'intent') {
+          Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: `void_commission_payment_${rejection}_mismatch` } });
+        }
+        // See handleCreate: refresh before the toast that points at the list.
+        setShowVoid(false);
+        setVoidReason('');
+        setVoidTarget(null);
+        const voidListIsCurrent = await fetchPayments({ quiet: true });
+        toast('warning', rejection === 'actor'
+          ? 'That retry belongs to another user, so nothing was voided. Reload the page and try again.'
+          : rejection === 'receipt'
+            ? `The database could not confirm the outcome of this request, so nothing was voided now. Check the payment list below before voiding again.${voidListIsCurrent ? '' : STALE_LIST_NOTE}`
+            : `This retry was already used by an earlier void, so nothing was voided now. Check the payment list below before voiding again.${voidListIsCurrent ? '' : STALE_LIST_NOTE}`);
+      } else {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'void_commission_payment' } });
+        // Ordinary failure (timeout, network, a server guard) — and it does NOT
+        // prove the void did not happen. The call may have committed and lost
+        // its response, and everything after the RPC (the activity-log write,
+        // which can throw) lands here too with the void already done. Saying
+        // "Failed to void payment" over a list that was never refreshed shows
+        // the payment still posted when it may already be voided, and an admin
+        // reading a flat failure reasonably tries something else. Refresh first,
+        // then say what is actually known: this attempt did not complete, and
+        // the list is the authority on whether the void landed.
+        //
+        // The key is deliberately NOT retired here. Retrying the same void with
+        // the same reason replays the original outcome instead of starting a
+        // second one, which is what makes "try again" safe.
+        const voidFailListIsCurrent = await fetchPayments({ quiet: true });
+        const detail = err instanceof Error ? err.message : 'Failed to void payment';
+        toast('error', `${detail} — the void may still have gone through. Check the payment list below before trying again.${voidFailListIsCurrent ? '' : STALE_LIST_NOTE}`);
+      }
+    } finally {
+      // In a finally, not after the catch: every recovery path above awaits
+      // fetchPayments() and toast(), and a throw from either would otherwise
+      // leave this flag set and the button disabled until a reload.
+      setVoiding(false);
     }
-    setVoiding(false);
   };
 
   const filtered = payments.filter((p) => p.status === tab);
@@ -499,8 +765,9 @@ export default function CommissionPayments() {
                     icon={<Send className="w-3 h-3" />}
                     onClick={(e: React.MouseEvent) => {
                       e.stopPropagation();
-                      // Codex P2 fix: reset key so different post-target uses fresh intent.
-                      postPaymentIdem.resetKey();
+                      // No resetKey here: the key is scoped to postTargetId, so a
+                      // different row already mints a fresh one. Resetting would
+                      // also discard the retained key for a retry of THIS row.
                       setPostTargetId(r.id);
                       setShowPostConfirm(true);
                     }}
@@ -523,7 +790,7 @@ export default function CommissionPayments() {
                   icon={<RotateCcw className="w-3 h-3" />}
                   onClick={(e: React.MouseEvent) => {
                     e.stopPropagation();
-                    voidPaymentIdem.resetKey();
+                    // No resetKey here: the key is scoped to voidTarget.id.
                     setVoidTarget(r);
                     setVoidReason('');
                     setShowVoid(true);
@@ -548,8 +815,9 @@ export default function CommissionPayments() {
                   icon={<RotateCcw className="w-3 h-3" />}
                   onClick={(e: React.MouseEvent) => {
                     e.stopPropagation();
-                    // Codex P2 fix: reset key so different void target uses fresh intent.
-                    voidPaymentIdem.resetKey();
+                    // No resetKey here: the key is scoped to voidTarget.id, so a
+                    // different row mints a fresh key on its own and a retry of
+                    // THIS row keeps the key that can replay it.
                     setVoidTarget(r);
                     setVoidReason('');
                     setShowVoid(true);

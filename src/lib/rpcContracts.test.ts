@@ -10,7 +10,7 @@
  *   - Frontend passes a number where RPC expects a string
  *   - Missing required parameters
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -1756,6 +1756,15 @@ function getMigrationFiles(): { name: string; content: string }[] {
   return MIGRATION_FILES;
 }
 
+// The cache above made the scan O(files), but the FIRST caller still paid the
+// whole ~900-file disk read inside whichever test happened to reach it first,
+// on that test's 5s default budget. Under full-suite contention that still
+// flaked (seen blocking a commit on 2026-08-10). Warming it here moves the I/O
+// outside every per-test budget, where it can have a timeout that fits it.
+beforeAll(() => {
+  getMigrationFiles();
+}, 60_000);
+
 /**
  * Returns the body of the LATEST migration definition of `rpc`, or null if no
  * disk migration defines it by name (some functions live in consolidated files
@@ -2276,6 +2285,10 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
     'idempotency infrastructure helper (sections 2-6 closeout): claims a bound lifecycle key for replay; direct client EXECUTE is revoked',
   _guard_job_commission_split_immutable:
     'performs no DML at all (Wave A fix #4, 20260811050000, parked); it is classified as a mutator only because its refusal message names public.correct_job_commission_split so the office can see how to fix a wrong split, and the scanner reads that message text as a call. It RETURNS trigger, so PostgreSQL refuses any direct call, and every application-role EXECUTE is revoked. Pre-apply-window entry: prune it once the migration is at or below the registry high-water',
+  _crx_payout_assert_impl_20260809:
+    'read-only identity check used by 20260811130000 to decide whether a body may be renamed into the payout implementation slot; it writes nothing (the inventory sees its SELECT ... INTO local variables), every application-role EXECUTE is revoked, and the same migration drops it before finishing',
+  _crx_payout_assert_replay_20260809:
+    'read-only replay-state check used by 20260811130000 to decide whether an already-existing implementation may be adopted; it writes nothing (the inventory sees its SELECT ... INTO local variables, and reads the check_idempotency_intent name out of a REGEX STRING LITERAL as if it were a call), every application-role EXECUTE is revoked, and the same migration drops it before finishing',
   _insert_commissions_for_job: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _insert_commissions_for_order: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',
@@ -2289,6 +2302,8 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   _sync_quote_job_reservations: 'internal convergent reservation-sync helper called by parent RPCs',
   auto_expire_quotes: 'service-role maintenance sets only currently-expirable quote statuses',
   check_idempotency: 'idempotency infrastructure helper; mutation only purges an expired key',
+  check_idempotency_intent:
+    'idempotency infrastructure helper (Section 07 gauntlet finding 2); mutation only purges an expired key, and it raises rather than replays when the actor or request fingerprint differs; direct client EXECUTE is revoked',
   check_rate_limit: 'rate-limit counter intentionally records every invocation, including retries',
   check_remainder_reminders: 'maintenance reminder sweep uses persisted sent markers to deduplicate',
   check_unpriced_orders: 'cron reminder sweep uses persisted reminder and escalation sent markers',

@@ -1,4 +1,4 @@
-import { useEffect, useState , useCallback } from 'react';
+import { useEffect, useState , useCallback, useRef } from 'react';
 import { Download, CheckCircle2, FileText, Sprout } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import Card from '../components/ui/Card';
@@ -10,6 +10,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { hasPageAccess } from '../lib/pagePermissions';
 import { supabase, assertRpcResult } from '../lib/db';
+import { generateIdempotencyKey, getIdempotencyBindingRejection } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import LogbookReport from '../components/reports/LogbookReport';
@@ -32,6 +33,11 @@ type FinancialTab = 'pnl' | 'gross_sales' | 'customer_balance' | 'commission_bal
 type OperationalTab = 'chemical_history' | 'inventory_cost' | 'posted_applications' | 'price_list';
 
 // ─── Existing profitability interfaces (unchanged) ─────────────
+// Quick-pay recovery messages tell the admin what to do next based on what this
+// page is showing. If the refresh behind the message failed, the page is showing
+// the state from BEFORE the click, so say so rather than let it read as current.
+const STALE_COMMISSION_LIST_NOTE = ' The commission list on this page could not be refreshed just now, so reload before marking anything else paid.';
+
 interface CustomerProfit {
   [k: string]: unknown;
   farm_name: string;
@@ -124,6 +130,24 @@ export default function Reports() {
   const [revenueData, setRevenueData] = useState<RevenueSummary[]>([]);
   const [selectedCommissions, setSelectedCommissions] = useState<Set<string>>(new Set());
   const [markingPaid, setMarkingPaid] = useState(false);
+  // One retained idempotency key per (admin, date, commission selection) — the
+  // same scope the server now fingerprints. A retry of the SAME click reuses its
+  // key, so a network timeout cannot create a second payment; anything the server
+  // would see as a different request gets a different scope and therefore a
+  // different key, so an intent/actor refusal is unreachable from this page.
+  //
+  // The key is random rather than derived from the ids: after a batch succeeds
+  // its scope is cleared, so if that payment is later VOIDED and the same
+  // commissions are marked paid again, the next click is a genuinely new request
+  // instead of replaying the voided payment's receipt and reporting success for
+  // a batch that was never created.
+  //
+  // The payment DATE travels with the key rather than sitting in the scope. The
+  // server fingerprints the date, so a click at 23:59 whose response was lost
+  // could not be replayed at 00:01 if the date were recomputed — the retry would
+  // look like a different request, mint a new key, and try to create a SECOND
+  // batch for commissions the first click may already have paid.
+  const markPaidKeys = useRef(new Map<string, { key: string; date: string }>());
 
   // ─── FINANCIAL data ─────────────────────────────────────────
   const [pnlData, setPnlData] = useState<PnLRow[]>([]);
@@ -210,15 +234,30 @@ export default function Reports() {
     setProductData(result);
   }, [startDate, endDate, toast]);
 
-  const fetchCommissions = useCallback(async () => {
-    let query = supabase.from('commissions').select('*').order('order_date', { ascending: false });
-    if (!isAdmin && profile) query = query.eq('recipient_user_id', profile.id);
-    if (startDate) query = query.gte('order_date', startDate);
-    if (endDate) query = query.lte('order_date', endDate);
-    const { data, error } = await query;
-    if (error) { toast('error', 'Failed to load commissions.'); return; }
-    setCommissionData((data || []) as CommissionRow[]);
-    setSelectedCommissions(new Set());
+  // Returns whether the commission list on screen is now current. The quick-pay
+  // recovery messages send the admin to a list to work out what actually
+  // happened, so a refresh that failed has to be admitted rather than papered
+  // over with "check the list".
+  // Never throws — see the same note on fetchPayments in CommissionPayments.tsx.
+  // Both recovery paths in handleMarkPaid await this from inside their own
+  // catch, so a rejection here would discard the specific "some commissions were
+  // already batched" warning and surface nothing in its place.
+  const fetchCommissions = useCallback(async (): Promise<boolean> => {
+    try {
+      let query = supabase.from('commissions').select('*').order('order_date', { ascending: false });
+      if (!isAdmin && profile) query = query.eq('recipient_user_id', profile.id);
+      if (startDate) query = query.gte('order_date', startDate);
+      if (endDate) query = query.lte('order_date', endDate);
+      const { data, error } = await query;
+      if (error) { toast('error', 'Failed to load commissions.'); return false; }
+      setCommissionData((data || []) as CommissionRow[]);
+      setSelectedCommissions(new Set());
+      return true;
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'load_commissions' } });
+      toast('error', 'Failed to load commissions.');
+      return false;
+    }
   }, [isAdmin, profile, startDate, endDate, toast]);
 
   const fetchRevenue = useCallback(async () => {
@@ -454,6 +493,14 @@ export default function Reports() {
   // ─── Commission payment-batch creation ──────────────────────
   const handleMarkPaid = async () => {
     if (selectedCommissions.size === 0) { toast('error', 'Select at least one commission'); return; }
+    // Guard rather than assert. Everything below needs the actor id — it is
+    // both half the idempotency scope and the p_performed_by the server binds
+    // the receipt to — and a non-null assertion on a value the rest of this
+    // file treats as nullable would throw a TypeError INSIDE the try, where
+    // the catch reports it as a payment attempt of unknown outcome. Refusing
+    // up front is the honest answer: nothing was sent.
+    const actor = profile;
+    if (!actor) { toast('error', 'Your profile is still loading — try again in a moment.'); return; }
     // Only pending commissions can be marked paid
     const selected = commissionData.filter((c) => selectedCommissions.has(c.id));
     const nonPending = selected.filter((c) => c.status !== 'pending');
@@ -463,6 +510,19 @@ export default function Reports() {
     }
     setMarkingPaid(true);
     const today = localToday();
+    // Hoisted out of the try: one click makes one call PER RECIPIENT, so a
+    // refusal on the third recipient leaves the first two genuinely paid. The
+    // catch below has to be able to say so instead of claiming nothing happened.
+    let totalBatched = 0;
+    // Counted BEFORE each call, not after. `totalBatched` only rises once a
+    // response comes back, so a recipient whose payment commits but whose
+    // response is lost leaves it at zero — and on a single-recipient click that
+    // makes a committed batch indistinguishable from nothing having happened.
+    let attempted = 0;
+    // The scope whose call is in flight right now. A binding refusal poisons
+    // exactly this one key and no other, so the catch block needs to know which
+    // it was. Declared out here because the catch cannot see the try's scope.
+    let scopeInFlight: string | null = null;
     try {
       // Group by recipient — RPC requires all commissions per call belong to same recipient
       const byRecipient = new Map<string, string[]>();
@@ -472,33 +532,167 @@ export default function Reports() {
         byRecipient.get(rid)!.push(c.id);
       }
 
-      let totalBatched = 0;
+      // Scopes touched by THIS click, retired together once the whole loop
+      // finishes. Retiring inside the loop strands a partial batch: if
+      // recipient A succeeds and recipient B times out, dropping A's key means
+      // the retry sends A a NEW key, the server refuses A (its commissions are
+      // already in a non-voided payment), the loop throws, and B is never
+      // reached. Keeping A's key lets the retry replay A's receipt and carry on
+      // to B, which is the whole point of retaining a key.
+      const scopesThisClick: string[] = [];
+      const createdPaymentIds: string[] = [];
       for (const [, ids] of byRecipient) {
+        // Sorted and de-duplicated to match the server-side fingerprint, so
+        // re-selecting the same commissions in a different order is the same
+        // scope here as it is there.
+        const scope = `${actor.id}|${[...new Set(ids)].sort().join('-')}`;
+        let entry = markPaidKeys.current.get(scope);
+        if (!entry) {
+          // First attempt for this selection: mint the key and freeze the date
+          // with it, so every replay sends the same date the server already
+          // fingerprinted.
+          entry = { key: generateIdempotencyKey('create_commission_payment', actor.id), date: today };
+          markPaidKeys.current.set(scope, entry);
+        }
+        scopesThisClick.push(scope);
+        scopeInFlight = scope;
+        attempted += 1;
         const { data, error } = await supabase.rpc('create_commission_payment', {
           p_commission_ids: ids,
           p_payment_method: 'other',
           p_reference: '',
-          p_payment_date: today,
+          p_payment_date: entry.date,
           p_notes: 'Quick pay from Reports page',
-          p_performed_by: profile!.id,
-          // Deterministic key (no Date.now()) so a retried batch dedupes instead of
-          // creating duplicate commission payments. These commission ids transition
-          // to 'paid' on success, so the key can't collide with a future payment.
-          p_idempotency_key: `reports-commission-pay-${ids.join('-')}`,
+          p_performed_by: actor.id,
+          p_idempotency_key: entry.key,
         });
         if (error) throw new Error(error.message);
-        assertRpcResult<string>(data, 'create_commission_payment');
+        createdPaymentIds.push(assertRpcResult<string>(data, 'create_commission_payment'));
         totalBatched += ids.length;
       }
 
-      toast('success', `${totalBatched} commission(s) added to ${byRecipient.size} unposted payment batch${byRecipient.size > 1 ? 'es' : ''}. Review and post ${byRecipient.size > 1 ? 'them' : 'it'} in Commission Payments.`);
-      if (profile) logActivity({ event: 'commission_payment_batch_created', description: `${totalBatched} commission(s) added to unposted payment batches via Reports`, performedBy: profile.id });
-      fetchCommissions();
+      // A retained key does not create anything on a retry — it replays the
+      // ORIGINAL outcome. So a success here is not proof that a live batch
+      // exists: if the first attempt's response was lost and someone then VOIDED
+      // that payment, this click replays a receipt pointing at a batch that no
+      // longer holds these commissions. Confirm every returned payment is still
+      // live before saying the work landed; a row that is voided or missing
+      // means those commissions are still unpaid. This read and the message are
+      // not one atomic step — a void landing between them still slips past — so
+      // it narrows the window rather than closing it, and the refreshed list,
+      // not the toast, is the authority on what those batches are now.
+      const { data: statusRows, error: statusError } = await supabase
+        .from('commission_payments')
+        .select('id,status')
+        .in('id', createdPaymentIds);
+      // A batch that came back VOIDED is a proven reversal. A batch that did not
+      // come back at all — because the read failed, or because the row was not
+      // returned — proves nothing, and must not be counted as a void: telling the
+      // admin a payout was reversed when it may be perfectly intact is its own
+      // way of causing a duplicate.
+      if (statusError) {
+        Sentry.captureException(new Error(statusError.message), { extra: { context: 'mark_commissions_paid_status_readback' } });
+      }
+      const statusById = new Map<string, string>();
+      for (const r of (statusRows || []) as Array<{ id?: string | null; status?: string | null }>) {
+        if (r?.id) statusById.set(r.id, String(r.status ?? ''));
+      }
+      const voidedCount = createdPaymentIds.filter((id) => statusById.get(id) === 'voided').length;
+      const unverifiedCount = createdPaymentIds.filter((id) => !statusById.has(id)).length;
+      // A batch that came back POSTED is still a success — those commissions
+      // are paid — but the plain message below calls every batch "unposted"
+      // and tells the admin to go and post it. On a replay that is false: the
+      // first attempt's response was lost, another admin posted the resulting
+      // batch, and this retry replayed the original receipt. Sending someone
+      // to post an already-posted payout is how a second one gets created.
+      const postedCount = createdPaymentIds.filter((id) => statusById.get(id) === 'posted').length;
+
+      // Every recipient landed AND its outcome has been read back, so the click
+      // is finished and its keys are spent. Retiring them here — not mid-loop,
+      // and not before the read above — closes the void-then-repay window for a
+      // click that SUCCEEDED: the next click on the same commissions is then a
+      // genuinely new request rather than a replay. Doing it before the read
+      // would have made the catch block's promise false, since that block tells
+      // the admin the keys were kept and the retry will replay them.
+      for (const done of scopesThisClick) markPaidKeys.current.delete(done);
+
+      const listIsCurrent = await fetchCommissions();
+      if (voidedCount > 0 || unverifiedCount > 0) {
+        const parts: string[] = [];
+        if (voidedCount > 0) {
+          parts.push(`${voidedCount} of ${createdPaymentIds.length} payment batch(es) this click pointed at ${voidedCount === 1 ? 'has' : 'have'} since been voided, so those commissions are still unpaid`);
+        }
+        if (unverifiedCount > 0) {
+          parts.push(`${unverifiedCount} could not be read back just now, so ${unverifiedCount === 1 ? 'its' : 'their'} current state is unconfirmed`);
+        }
+        toast('warning', `${parts.join('; ')}. Check Commission Payments before marking them paid again.${listIsCurrent ? '' : STALE_COMMISSION_LIST_NOTE}`);
+      } else if (postedCount > 0) {
+        const remaining = createdPaymentIds.length - postedCount;
+        toast('success', `${totalBatched} commission(s) are in ${createdPaymentIds.length} payment batch(es). ${postedCount} ${postedCount === 1 ? 'is' : 'are'} already posted — nothing further to do for ${postedCount === 1 ? 'that one' : 'those'}${remaining > 0 ? `; review and post the remaining ${remaining} in Commission Payments` : ''}.${listIsCurrent ? '' : STALE_COMMISSION_LIST_NOTE}`);
+        logActivity({ event: 'commission_payment_batch_created', description: `${totalBatched} commission(s) in ${createdPaymentIds.length} payment batch(es) via Reports (${postedCount} already posted)`, performedBy: actor.id });
+      } else {
+        toast('success', `${totalBatched} commission(s) added to ${byRecipient.size} unposted payment batch${byRecipient.size > 1 ? 'es' : ''}. Review and post ${byRecipient.size > 1 ? 'them' : 'it'} in Commission Payments.`);
+        logActivity({ event: 'commission_payment_batch_created', description: `${totalBatched} commission(s) added to unposted payment batches via Reports`, performedBy: actor.id });
+      }
     } catch (err: unknown) {
-      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'mark_commissions_paid' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to update commissions');
+      // Backstop only. The scoping above should make a binding refusal
+      // unreachable from this page, so if one arrives the scope and the server
+      // fingerprint have drifted apart — drop the one key that was refused so
+      // the admin is not locked out of quick-pay, and report how far the loop
+      // got.
+      //
+      // Only that one. Clearing the whole map also threw away the keys of
+      // recipients this same click had ALREADY paid, which is the exact partial
+      // batch the design above exists to protect: recipient A lands, recipient B
+      // is refused, and a cleared map sends A a NEW key on the retry, which the
+      // server refuses because A's commissions already sit in a live payment —
+      // so the loop dies before it ever reaches B and the admin cannot finish
+      // the action without editing the selection by hand. It also discarded keys
+      // belonging to entirely unrelated earlier clicks.
+      const rejection = getIdempotencyBindingRejection(err);
+      if (rejection) {
+        if (scopeInFlight) markPaidKeys.current.delete(scopeInFlight);
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: `mark_commissions_paid_${rejection}_mismatch` } });
+        const refusalListIsCurrent = await fetchCommissions();
+        // Never claim "nothing was created" outright — recipients processed
+        // before the refusal really were paid, and telling the admin otherwise
+        // invites a duplicate batch. Even with totalBatched at zero the database
+        // only proved that THIS attempt did no new work: the refusal means a
+        // receipt already existed under this key, and that receipt can point at
+        // a batch an earlier attempt committed. So the zero case says "nothing
+        // new", never "no batch exists", and still sends the admin to look.
+        toast('warning', totalBatched > 0
+          ? `That retry could not be matched to this request. ${totalBatched} commission(s) were already added to a payment batch before it stopped — check Commission Payments before trying again.${refusalListIsCurrent ? '' : STALE_COMMISSION_LIST_NOTE}`
+          : `That retry could not be matched to this request, so nothing new was created by this attempt — but an earlier attempt may already have created a batch. Check Commission Payments before trying again.${refusalListIsCurrent ? '' : STALE_COMMISSION_LIST_NOTE}`);
+      } else {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'mark_commissions_paid' } });
+        // Ordinary failure (timeout, network, a server guard). Earlier recipients
+        // in this same click may already be batched, so refresh the list BEFORE
+        // saying anything and name how many landed — a bare error message reads
+        // as "nothing happened" and invites a duplicate batch. The keys for this
+        // click are deliberately NOT retired here: retrying replays them.
+        const genericListIsCurrent = await fetchCommissions();
+        const detail = err instanceof Error ? err.message : 'Failed to update commissions';
+        // Three different situations, and only the third may say nothing
+        // happened. `totalBatched` counts CONFIRMED recipients, so the recipient
+        // this stopped on is unaccounted for either way — a lost response on a
+        // committed payment looks exactly like a failure. Refreshing does not
+        // settle it: a new batch leaves the commissions 'pending', so this list
+        // looks the same whether or not one was created. Commission Payments is
+        // the only place that answers the question, so send the admin there
+        // whenever a call actually went out.
+        toast('error', totalBatched > 0
+          ? `${detail} — ${totalBatched} commission(s) were already added to a payment batch before it stopped, and the one it stopped on may have been added too. Check Commission Payments before trying again.${genericListIsCurrent ? '' : STALE_COMMISSION_LIST_NOTE}`
+          : attempted > 0
+            ? `${detail} — a payment batch may still have been created. Check Commission Payments before trying again.${genericListIsCurrent ? '' : STALE_COMMISSION_LIST_NOTE}`
+            : detail);
+      }
+    } finally {
+      // In a finally, not after the catch: both recovery paths above await
+      // fetchCommissions(), and a throw from either would otherwise leave this
+      // flag set and Mark Paid disabled until a reload.
+      setMarkingPaid(false);
     }
-    setMarkingPaid(false);
   };
 
   const toggleCommissionSelect = (id: string) => {
