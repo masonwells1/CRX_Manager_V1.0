@@ -1,6 +1,6 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-08-10 UTC, post-apply.** Live ledger high-water is `20260810235207` (`20260810183629_reconcile_pending_commission_snapshots`, B7-renamed on disk to the assigned version) at 958 ledger rows — the reconciliation that closed out the stale line-profit backfill, applied and verified live on 2026-08-10 with the registered smoke returning exact `SMOKE_PASS_ROLLBACK`. The prior high-water `20260810025159` (`20260810022500_backfill_stale_line_profit`) was the unrelated money-workstream migration applied after the Team Board work. Both Team Board migrations are live and now represented on disk: `20260809130108` added the governed `complete_team_note` RPC and assignment-notification trigger, and `20260810010308` closed the inactive-actor path in the insert policy and trigger. The full rollback-only business chain reached exact `SMOKE_PASS_ROLLBACK`; the compatible frontend was carried by PR #351, **merged 2026-08-10 (merge commit `8dcb82fb`)**, so only its Vercel production deployment remains as the browser rollout step.
+**Last verified: 2026-08-10 UTC, post-apply.** Live ledger high-water is `20260810235207` (`20260810183629_reconcile_pending_commission_snapshots`, B7-renamed on disk to the assigned version) at 958 ledger rows — the reconciliation that closed out the stale line-profit backfill, applied and verified live on 2026-08-10 with the registered smoke returning exact `SMOKE_PASS_ROLLBACK`. Ledger versions are UTC, which is why this stamp can read a day ahead of the local session date. The prior high-water `20260810025159` (`20260810022500_backfill_stale_line_profit`) was the money-workstream migration applied after the Team Board work. The 2026-08-09 post-apply verification that the rest of this header describes ended at `20260810010308` (`active_team_note_assignment_actor`); every ledger entry past it was applied live by separate 2026-08-10 sessions and is described in its own entry rather than here. Both Team Board migrations are live and now represented on disk: `20260809130108` added the governed `complete_team_note` RPC and assignment-notification trigger, and `20260810010308` closed the inactive-actor path in the insert policy and trigger. The full rollback-only business chain reached exact `SMOKE_PASS_ROLLBACK`; the compatible frontend was carried by PR #351, **merged 2026-08-10 (merge commit `8dcb82fb`)**, so only its Vercel production deployment remains as the browser rollout step.
 
 **2026-08-09 historical baseline.** The live re-read then covered the ledger, `CURRENT_STATE.md` counts, and all 27 invariant predicates: 26 CLEAN and the documented `fin-money-whole-cents` historical-data violation. The five foundation-ultra-review migrations applied later that day as ledger versions `20260809203222` through `20260809205423`. The formerly missing Team Board migration file and history row are now reconciled on PR #351.
 
@@ -8,6 +8,56 @@
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
+
+---
+
+## OPEN — the Codex `read_only=true` guard may not describe the connection Codex actually uses
+
+**Found 2026-08-10.** No production write was performed during the investigation.
+Production write capability remains unverified. This affects how much assurance
+the read-only guard is entitled to claim.
+
+`check-agent-workflows.mjs:92` and `check-agent-guidance.mjs:121` both assert
+that `.codex/config.toml` contains `read_only=true`, and that assertion is the
+stated guarantee that Codex cannot write to the live database. The guard checks
+that a **string is present in a file**. It does not check that the connection
+that string configures is the one serving Codex's Supabase traffic.
+
+On 2026-08-10 those two were observed to be different things:
+
+- The `[mcp_servers.supabase]` entry in `.codex/config.toml` **fails to
+  authenticate on every run** — `failed to refresh OAuth tokens for server
+  supabase` / `invalid_grant: Grant not found`. Its OAuth grant is dead, exactly
+  like the Sentry entry removed the same day.
+- Meanwhile the Supabase calls that actually succeed are served by
+  **`codex_apps/supabase`** — a separate built-in Codex App with its own
+  independent authentication. Observed tool line:
+  `mcp: codex_apps/supabase.list_migrations (completed)`, returning correct live
+  data — migration name `20260810022500_backfill_stale_line_profit`, live ledger
+  version `20260810025159` — verified against the live ledger from the Claude
+  side. The two stamps differ because a migration's filename prefix records when
+  it was written and its ledger version records when it was applied; they are
+  different numbers for the same migration.
+
+So the read-only assurance is asserted against a config entry that appears never
+to have authenticated, while real traffic flows through a channel whose
+permissions are **not verified by any guard in this repository**. Removing the
+dead entry was attempted and reverted precisely because the guard failed — the
+declared intent is worth keeping, but it should not be read as proof.
+
+**What is NOT known, and was deliberately not tested:** whether
+`codex_apps/supabase` is itself read-only. Establishing that empirically means
+attempting a write against the production database, which is not an acceptable
+test. A capability probe (asking Codex to list its Supabase tool names without
+calling them) was attempted twice and produced no usable output.
+
+**Owed to Mason (owner decision):** confirm in the Codex app's own connector
+settings whether the Supabase App is scoped read-only. If it is not, Codex has
+had unverified write capability against production for as long as the App has
+been serving traffic, and the guard has been reporting green throughout.
+
+**Do not** "fix" this by deleting the `read_only=true` line or by relaxing either
+check — both guards correctly refused the change that prompted this entry.
 
 ---
 
