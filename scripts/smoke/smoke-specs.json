@@ -225,11 +225,12 @@
     },
     "remaining_money_inventory_hardening": {
       "chain": "smoke-remaining-money-inventory-hardening.sql",
-      "description": "Final money/inventory audit chain: voided orders disappear from detail, summary, gross-sales, and finance-dashboard revenue; inactive sales/admin profiles are rejected; only an active admin can use the PO over-receive flag, NULL cannot bypass the quantity ceiling, and a real admin 11-against-10 receipt succeeds; anonymous gross-sales execution and authenticated direct payment-table writes are absent. Self-contained fixtures and terminal rollback.",
+      "description": "Final money/inventory audit chain: the canonical profitability RPC returns the same exact customer/product/month money basis for an active order; voided orders disappear from profitability, detail, summary, gross-sales, and finance-dashboard revenue; inactive sales/admin profiles are rejected; only an active admin can use the PO over-receive flag, NULL cannot bypass the quantity ceiling, and a real admin 11-against-10 receipt succeeds; anonymous gross-sales/profitability execution and authenticated direct payment-table writes are absent. Self-contained fixtures and terminal rollback.",
       "covers": [
         "get_sales_detail_report",
         "get_sales_summary_report",
         "get_gross_sales_report",
+        "get_profitability_report",
         "financial_dashboard_summary",
         "receive_po_items",
         "payments"

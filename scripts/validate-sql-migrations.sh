@@ -435,16 +435,45 @@ for file in $ALL_SQL; do
         # Drop quoting BEFORE normalizing, so "public"."orders" survives as one
         # dotted token instead of splitting into public . orders.
         gsub(/"/, "", line)
-        # Function-body mode. Both markers can share one line
-        # (CREATE FUNCTION f() RETURNS void AS $$ ... $$ LANGUAGE plpgsql;), so
-        # the close is checked on the same line as the open, not only after it.
-        if (line ~ /create[ \t]+(or[ \t]+replace[ \t]+)?function/) {
-          infn = 1
-          if (line ~ /language[ \t]+(plpgsql|sql)/) { infn = 0 }
-          next
+        # Function-body mode. Track the function AS $tag$ delimiter instead of
+        # LANGUAGE: PostgreSQL permits LANGUAGE before AS, which made the old
+        # scanner leave function mode before the body and misclassify every RPC
+        # UPDATE/DELETE as an install-time rewrite. A DO $tag$ block is never
+        # entered here and therefore remains visible to the one-shot guard.
+        #
+        # When a whole function and a following top-level statement share one
+        # line, resume after the definition semicolon so the statement cannot
+        # hide behind the function body.
+        if (!infn && line ~ /create[ \t]+(or[ \t]+replace[ \t]+)?function/) infn = 1
+        if (infn) {
+          if (fn_delim == "") {
+            if (match(line, /as[ \t]*\$[a-z0-9_]*\$/)) {
+              opener = substr(line, RSTART, RLENGTH)
+              sub(/^as[ \t]*/, "", opener)
+              fn_delim = opener
+              after_open = substr(line, RSTART + RLENGTH)
+              close_pos = index(after_open, fn_delim)
+              if (close_pos == 0) next
+              tail = substr(after_open, close_pos + length(fn_delim))
+            } else {
+              # Non-dollar-quoted definitions (for example AS 'object_file')
+              # still end at their statement semicolon. They contain no SQL
+              # body for this scanner to inspect.
+              if (index(line, ";") == 0) next
+              tail = substr(line, index(line, ";") + 1)
+            }
+          } else {
+            close_pos = index(line, fn_delim)
+            if (close_pos == 0) next
+            tail = substr(line, close_pos + length(fn_delim))
+          }
+          infn = 0
+          fn_delim = ""
+          semi = index(tail, ";")
+          if (semi == 0) next
+          line = substr(tail, semi + 1)
+          if (line !~ /[^ \t]/) next
         }
-        if (infn && line ~ /language[ \t]+(plpgsql|sql)/) { infn = 0; next }
-        if (infn) next
         # Normalize every non-identifier character to a space. This also strips
         # quotes, so "public"."orders" collapses to the token public.orders.
         # `;` `,` and `=` survive as tokens of their own: statement boundaries

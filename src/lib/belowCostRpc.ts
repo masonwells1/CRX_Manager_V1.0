@@ -80,3 +80,33 @@ export function belowCostLinesFromRpcError(error: unknown): BelowCostLine[] | nu
     return null;
   }
 }
+
+type RpcResponse = {
+  error: unknown;
+};
+
+/**
+ * Retry one failed money RPC after PostgreSQL supplies its locked live cost.
+ * The caller owns the idempotency key and closes over the same key for both
+ * calls. A cancellation returns the original denial without making a second
+ * request, so no mutation can slip through without an explicit reason.
+ */
+export async function retryBelowCostReasonRequired<T extends RpcResponse>(
+  initialReason: string | null,
+  call: (reason: string | null) => PromiseLike<T>,
+  requestReason: (lines: BelowCostLine[]) => Promise<string | null>,
+): Promise<{ response: T; reason: string | null; cancelled: boolean }> {
+  let response = await call(initialReason);
+  if (!response.error || initialReason !== null) {
+    return { response, reason: initialReason, cancelled: false };
+  }
+
+  const lines = belowCostLinesFromRpcError(response.error);
+  if (!lines) return { response, reason: initialReason, cancelled: false };
+
+  const reason = await requestReason(lines);
+  if (reason === null) return { response, reason: null, cancelled: true };
+
+  response = await call(reason);
+  return { response, reason, cancelled: false };
+}

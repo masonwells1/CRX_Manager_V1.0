@@ -14,6 +14,7 @@ import {
   checkDangerousCommand,
   checkCommandDeep,
   checkMigrationModify,
+  checkOneShotReplayCommand,
   extractNpmRunNames,
   resolveNpmScriptChain,
   readPackageScripts,
@@ -134,6 +135,38 @@ ok(!checkDangerousCommand("cat .env.example"), "reading .env.example is not a wr
     try { result = checkCommandDeep("npm run dangerous", missingDir); } catch { threw = true; }
     ok(!threw, "missing package.json does not throw");
     eq(result, null, "missing package.json warn-and-allows (no block) for the script-body check");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ── one-shot DATA migration direct-execution containment (2026-08-10) ─────
+{
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "bash-safety-one-shot-"));
+  try {
+    const stem = "20260810025159_backfill_stale_line_profit";
+    const migDir = path.join(tmp, "supabase", "migrations");
+    const baselineDir = path.join(tmp, "supabase", "baselines");
+    mkdirSync(migDir, { recursive: true });
+    mkdirSync(baselineDir, { recursive: true });
+    const sql = "DO $x$ BEGIN UPDATE public.order_items SET profit = 1; END $x$;\n";
+    const source = path.join(migDir, `${stem}.sql`);
+    const renamed = path.join(tmp, "renamed-copy.sql");
+    writeFileSync(source, sql);
+    writeFileSync(renamed, sql);
+    writeFileSync(
+      path.join(baselineDir, "one-shot-migrations.json"),
+      JSON.stringify({ one_shot: { [stem]: "historical population-bound repair" } }),
+    );
+
+    ok(checkOneShotReplayCommand(`psql -f supabase/migrations/${stem}.sql`, tmp), "psql original one-shot path is blocked");
+    ok(checkOneShotReplayCommand("Get-Content renamed-copy.sql | psql", tmp), "renamed byte-identical one-shot file is blocked");
+    ok(checkOneShotReplayCommand(`psql -c \"${sql}\"`, tmp), "pasted full one-shot body is blocked");
+    ok(checkOneShotReplayCommand(`supabase sql --file supabase/migrations/${stem}.sql`, tmp), "Supabase CLI one-shot replay is blocked");
+    eq(checkOneShotReplayCommand('psql -c "select 1"', tmp), null, "unrelated read-only psql command stays allowed");
+
+    writeFileSync(path.join(baselineDir, "one-shot-migrations.json"), "not json");
+    ok(checkOneShotReplayCommand('psql -c "select 1"', tmp), "unreadable one-shot registry fails closed for database execution");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

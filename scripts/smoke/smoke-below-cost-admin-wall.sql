@@ -71,6 +71,7 @@ BEGIN
     json_build_object('sub', v_sales, 'role', 'authenticated')::text,
     true
   );
+  PERFORM set_config('request.jwt.claim.sub', v_sales::text, true);
   BEGIN
     PERFORM public.create_direct_order(
       p_customer_id := v_customer,
@@ -157,6 +158,7 @@ BEGIN
     json_build_object('sub', v_admin, 'role', 'authenticated')::text,
     true
   );
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
   BEGIN
     PERFORM public.save_invoice(
       jsonb_build_object(

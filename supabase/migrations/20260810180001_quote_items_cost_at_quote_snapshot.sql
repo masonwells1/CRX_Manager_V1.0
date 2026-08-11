@@ -92,6 +92,12 @@
 -- qi.current_cost into order_items.cost_per_unit, which is now the quote-time
 -- snapshot — the intended behavior.
 
+-- Keep the approved population stable from the identity/source-value check
+-- through the backfill. Supabase applies each migration in one transaction, so
+-- this lock is held until every postflight assertion succeeds or the migration
+-- rolls back.
+LOCK TABLE public.quote_items IN ACCESS EXCLUSIVE MODE;
+
 ALTER TABLE public.quote_items
   ADD COLUMN IF NOT EXISTS cost_at_quote_cents bigint;
 
@@ -147,6 +153,51 @@ CREATE TRIGGER trg_snapshot_quote_item_cost
 -- Ground truth for historical margin. (Ordering matters: the guard below
 -- rejects any change to cost_at_quote_cents, including this NULL -> value
 -- fill, so the backfill must run first.)
+-- Approved live population measured read-only on 2026-08-11: 20 rows. The
+-- target column is new, but current_cost is a material existing source value,
+-- so bind both the row identities and source/target before-values.
+-- APPROVED_SET_DIGEST: 4a6cf639e7143c40b00dde82205662f1c9944ca71b5a098d8730d494993ada95
+DO $approved_set$
+DECLARE
+  v_actual_digest text;
+BEGIN
+  SELECT encode(
+           extensions.digest(
+             COALESCE(
+               string_agg(
+                 qi.id::text || ':' || qi.current_cost::text || ':' ||
+                   COALESCE(qi.cost_at_quote_cents::text, '<null>'),
+                 ',' ORDER BY qi.id
+               ),
+               ''
+             ),
+             'sha256'
+           ),
+           'hex'
+         )
+    INTO v_actual_digest
+    FROM public.quote_items AS qi
+   WHERE qi.cost_at_quote_cents IS NULL
+     AND qi.current_cost IS NOT NULL;
+
+  -- A schema-only disaster-recovery rebuild has no qualifying quote_items and
+  -- no business data to rewrite. Permit only that no-op case; every non-empty
+  -- population must match the live approved digest above.
+  IF v_actual_digest IS DISTINCT FROM '4a6cf639e7143c40b00dde82205662f1c9944ca71b5a098d8730d494993ada95' THEN
+    IF EXISTS (
+      SELECT 1
+      FROM public.quote_items AS qi
+      WHERE qi.cost_at_quote_cents IS NULL
+        AND qi.current_cost IS NOT NULL
+    ) THEN
+      RAISE EXCEPTION
+        'APPROVED_SET_DRIFTED: quote_items cost snapshot expected 4a6cf639e7143c40b00dde82205662f1c9944ca71b5a098d8730d494993ada95, got %',
+        v_actual_digest;
+    END IF;
+  END IF;
+END
+$approved_set$;
+
 UPDATE public.quote_items
    SET cost_at_quote_cents = ROUND(current_cost * 100)::bigint
  WHERE cost_at_quote_cents IS NULL

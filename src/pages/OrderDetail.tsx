@@ -36,6 +36,7 @@ import type { OrderSummaryData } from '../lib/orderSummaryPdf';
 import type { PickListData } from '../lib/orderPickListPdf';
 import { validateInventoryPositionShape } from '../lib/inventoryPositionValidator';
 import { inventoryPositionByProduct } from '../lib/inventoryPositionLookup';
+import { retryBelowCostReasonRequired } from '../lib/belowCostRpc';
 import { ProductOptionDetails } from '../components/products/ProductOptionPresentation';
 import type { Order, OrderItem, OrderShare, OrderItemFieldAllocation, Customer, Invoice, Delivery, Product, LinkedEntityType, InventoryPositionRow } from '../types';
 
@@ -558,17 +559,27 @@ export default function OrderDetail() {
           }));
 
         const itemsPayload = [...existingPayload, ...newPayload];
-        const guardedItemsPayload = belowCostReason
-          ? itemsPayload.map((item) => ({ ...item, below_cost_reason: belowCostReason }))
-          : itemsPayload;
-
         const idemKey = updateOrderIdem.getKey();
-        const { data, error } = await supabase.rpc('update_order_items', {
-          p_order_id: id!,
-          p_items: guardedItemsPayload,
-          p_performed_by: profile.id,
-          p_idempotency_key: idemKey,
-        });
+        const updateAttempt = await retryBelowCostReasonRequired(
+          belowCostReason,
+          async (reason) => {
+            const response = await supabase.rpc('update_order_items', {
+              p_order_id: id!,
+              p_items: reason
+                ? itemsPayload.map((item) => ({ ...item, below_cost_reason: reason }))
+                : itemsPayload,
+              p_performed_by: profile.id,
+              p_idempotency_key: idemKey,
+            });
+            return response;
+          },
+          (lines) => new Promise<string | null>((resolve) =>
+            setBelowCostPrompt({ lines, resolve })
+          ),
+        );
+        if (updateAttempt.cancelled) return;
+        belowCostReason = updateAttempt.reason;
+        const { data, error } = updateAttempt.response;
 
         if (error) {
           // Server-side backstop for the hidden Edit button: a draw-created
@@ -1148,14 +1159,26 @@ export default function OrderDetail() {
     setPricingOrder(true);
     try {
       const idemKey = priceOrderIdem.getKey();
-      const { data, error } = await supabase.rpc('price_order', {
-        p_order_id: order.id,
-        p_items: pricingBelowCostReason
-          ? priced.map((item) => ({ ...item, below_cost_reason: pricingBelowCostReason }))
-          : priced,
-        p_performed_by: profile.id,
-        p_idempotency_key: idemKey,
-      });
+      const pricingAttempt = await retryBelowCostReasonRequired(
+        pricingBelowCostReason,
+        async (reason) => {
+          const response = await supabase.rpc('price_order', {
+            p_order_id: order.id,
+            p_items: reason
+              ? priced.map((item) => ({ ...item, below_cost_reason: reason }))
+              : priced,
+            p_performed_by: profile.id,
+            p_idempotency_key: idemKey,
+          });
+          return response;
+        },
+        (lines) => new Promise<string | null>((resolve) =>
+          setBelowCostPrompt({ lines, resolve })
+        ),
+      );
+      if (pricingAttempt.cancelled) return;
+      pricingBelowCostReason = pricingAttempt.reason;
+      const { data, error } = pricingAttempt.response;
       if (error) throw error;
       const result = assertRpcResult<{ success: boolean; pricing_status: string; remaining_pending: number; invoices_swept: number }>(data, 'price_order');
       priceOrderIdem.resetKey();

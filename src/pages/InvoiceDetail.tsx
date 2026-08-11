@@ -35,7 +35,7 @@ import { useCreditLimitCheck } from '../hooks/useGuardrails';
 import GuardrailBanner from '../components/ui/GuardrailBanner';
 import { ProductSearchResultRow } from '../components/products/ProductSearchResultRow';
 import { appendBelowCostApproval } from '../lib/internalNotes';
-import { invoiceBelowCostValues } from '../lib/belowCostRpc';
+import { invoiceBelowCostValues, retryBelowCostReasonRequired } from '../lib/belowCostRpc';
 
 interface LineItem {
   id?: string;
@@ -773,63 +773,89 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           footer_notes: invoice.footer_notes || null,
         };
 
-        const itemsPayload = items.map((it, idx) => ({
-          product_id: it.product_id,
-          description: it.description || it.product_name,
-          quantity: it.quantity,
-          unit_price_cents: it.unit_price_cents,
-          extended_cents: it.extended_cents,
-          cost_cents: it.cost_cents,
-          sort_order: idx,
-          rate_per_acre: it.rate_per_acre,
-          acres: it.acres,
-          unit_size: it.unit_size,
-          // The invoice header notes print for the customer, so the below-cost
-          // approval reason is recorded on the affected line's notes instead.
-          notes:
-            belowCostReason && invoiceBelowCostValues({
-              isApplicationFee: it.is_application_fee,
-              unitPriceCents: it.unit_price_cents,
-              extendedCents: it.extended_cents,
-              costCents: it.cost_cents,
-            })
-              ? appendBelowCostApproval(it.notes, belowCostReason)
-              : it.notes,
-          // Field-application detail preserved through the edit (#3 edit-path) —
-          // null/false on chemical-sale lines, so save_invoice stays a no-op for them.
-          is_application_fee: it.is_application_fee,
-          rate_unit: it.rate_unit,
-          total_applied: it.total_applied,
-          total_applied_unit: it.total_applied_unit,
-          total_applied_gl_lb: it.total_applied_gl_lb,
-          gl_lb_unit: it.gl_lb_unit,
-          epa_registration: it.epa_registration,
-          product_form: it.product_form,
-          price_source: it.price_source,
-          quoted_price_cents: it.quoted_price_cents,
-        }));
-
         const idemKey = saveIdem.getKey();
-        const intent = JSON.stringify({ invoice: payload, items: itemsPayload });
-        const capability = await supabase
-          .from('idempotency_keys')
-          .select('request_fingerprint')
-          .limit(1);
-        if (capability.error) {
-          if (!isMissingIntentBindingColumn(capability.error)) throw capability.error;
-          // Frontend-first deployment compatibility: reuse an ambiguous key only
-          // for byte-identical input. The old RPC cannot reconcile edited intent.
-          if (legacyIntentChanged(legacySaveIntentRef.current, { key: idemKey, intent })) {
-            toast('warning', 'The previous save may already have completed. Reload this invoice before submitting different changes.');
-            return 'blocked';
-          }
-          legacySaveIntentRef.current = { key: idemKey, intent };
+        const saveAttempt = await retryBelowCostReasonRequired(
+          belowCostReason,
+          async (reason) => {
+            // A server challenge proves the first transaction rolled back, so
+            // the same idempotency key is safe and required for this governed
+            // retry even though the approval reason changes the JSON payload.
+            if (reason !== null && belowCostReason === null) {
+              legacySaveIntentRef.current = null;
+            }
+            const itemsPayload = items.map((it, idx) => ({
+              product_id: it.product_id,
+              description: it.description || it.product_name,
+              quantity: it.quantity,
+              unit_price_cents: it.unit_price_cents,
+              extended_cents: it.extended_cents,
+              cost_cents: it.cost_cents,
+              sort_order: idx,
+              rate_per_acre: it.rate_per_acre,
+              acres: it.acres,
+              unit_size: it.unit_size,
+              // The explicit transient property is consumed by the governed
+              // wrapper even when the browser's stored cost was older than the
+              // locked Product cost and therefore missed the initial prompt.
+              below_cost_reason: reason,
+              // The invoice header notes print for the customer, so a locally
+              // detected approval reason is recorded on line notes instead.
+              notes:
+                reason && invoiceBelowCostValues({
+                  isApplicationFee: it.is_application_fee,
+                  unitPriceCents: it.unit_price_cents,
+                  extendedCents: it.extended_cents,
+                  costCents: it.cost_cents,
+                })
+                  ? appendBelowCostApproval(it.notes, reason)
+                  : it.notes,
+              // Field-application detail preserved through the edit (#3 edit-path) —
+              // null/false on chemical-sale lines, so save_invoice stays a no-op for them.
+              is_application_fee: it.is_application_fee,
+              rate_unit: it.rate_unit,
+              total_applied: it.total_applied,
+              total_applied_unit: it.total_applied_unit,
+              total_applied_gl_lb: it.total_applied_gl_lb,
+              gl_lb_unit: it.gl_lb_unit,
+              epa_registration: it.epa_registration,
+              product_form: it.product_form,
+              price_source: it.price_source,
+              quoted_price_cents: it.quoted_price_cents,
+            }));
+
+            const intent = JSON.stringify({ invoice: payload, items: itemsPayload });
+            const capability = await supabase
+              .from('idempotency_keys')
+              .select('request_fingerprint')
+              .limit(1);
+            if (capability.error) {
+              if (!isMissingIntentBindingColumn(capability.error)) throw capability.error;
+              // Frontend-first deployment compatibility: reuse an ambiguous key only
+              // for byte-identical input. The old RPC cannot reconcile edited intent.
+              if (legacyIntentChanged(legacySaveIntentRef.current, { key: idemKey, intent })) {
+                toast('warning', 'The previous save may already have completed. Reload this invoice before submitting different changes.');
+                return { data: null, error: null, blocked: true };
+              }
+              legacySaveIntentRef.current = { key: idemKey, intent };
+            }
+            const response = await supabase.rpc('save_invoice', {
+              p_invoice: payload,
+              p_items: itemsPayload,
+              p_idempotency_key: idemKey,
+            });
+            return { ...response, blocked: false };
+          },
+          (lines) => new Promise<string | null>((resolve) =>
+            setBelowCostPrompt({ lines, resolve })
+          ),
+        );
+        if (saveAttempt.cancelled) {
+          legacySaveIntentRef.current = null;
+          return 'blocked';
         }
-        const { data, error } = await supabase.rpc('save_invoice', {
-          p_invoice: payload,
-          p_items: itemsPayload,
-          p_idempotency_key: idemKey,
-        });
+        belowCostReason = saveAttempt.reason;
+        const { data, error, blocked } = saveAttempt.response;
+        if (blocked) return 'blocked';
 
         if (error) {
           const receipt = getIdempotencyMismatchResult(error, 'save_invoice');

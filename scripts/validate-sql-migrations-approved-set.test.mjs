@@ -11,7 +11,7 @@
  * Each fixture is a synthetic migration written into a scratch directory, run
  * through the real script, and classified by what the script printed for it.
  */
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,6 +19,8 @@ import { spawnSync } from 'node:child_process';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, 'validate-sql-migrations.sh');
+const GIT_BASH = 'C:\\Program Files\\Git\\bin\\bash.exe';
+const BASH = process.platform === 'win32' && existsSync(GIT_BASH) ? GIT_BASH : 'bash';
 const HEX = 'a'.repeat(64);
 const OTHER_HEX = 'b'.repeat(64);
 
@@ -335,6 +337,14 @@ const CASES = [
       `  UPDATE public.orders SET total_profit = 0;\nEND;\n$$ LANGUAGE plpgsql;\n`,
   },
   {
+    name: 'LANGUAGE before AS does not expose the stored function body',
+    expect: 'silent',
+    sql:
+      `CREATE OR REPLACE FUNCTION public.f_language_first()\nRETURNS void\n` +
+      `LANGUAGE plpgsql\nSECURITY DEFINER\nAS $function$\nBEGIN\n` +
+      `  UPDATE public.orders SET total_profit = 0;\nEND;\n$function$;\n`,
+  },
+  {
     name: 'the words "update orders" inside a string literal are not a rewrite',
     expect: 'silent',
     sql: `DO $$\nBEGIN\n  RAISE NOTICE 'about to update orders and delete from invoices';\nEND $$;\n`,
@@ -379,8 +389,19 @@ function classify(output, fileName) {
   const lines = output.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     if (!lines[i].includes(fileName)) continue;
-    if (lines[i].startsWith('VIOLATION:')) return 'violation';
-    if (lines[i].startsWith('WARNING:')) return 'warning';
+    const block = lines.slice(i, i + 8).join('\n');
+    if (
+      lines[i].startsWith('VIOLATION:') &&
+      /Rewrites existing business rows|APPROVED_SET_DIGEST/.test(block)
+    ) {
+      return 'violation';
+    }
+    if (
+      lines[i].startsWith('WARNING:') &&
+      /Business-row rewrite WAIVED out of approved-set binding/.test(block)
+    ) {
+      return 'warning';
+    }
   }
   return 'silent';
 }
@@ -400,7 +421,7 @@ function run() {
   // history cannot be edited, so retro-checking it would only produce noise.
   writeFileSync(join(migrations, PRE_CUTOFF), `UPDATE public.orders SET total_profit = 0;\n`, 'utf8');
 
-  const res = spawnSync('bash', [SCRIPT, '--max-violations=999'], {
+  const res = spawnSync(BASH, [SCRIPT, '--max-violations=999'], {
     cwd: dir,
     encoding: 'utf8',
     env: { ...process.env },
@@ -417,7 +438,10 @@ function run() {
     failures.push(`  pre-cutoff migration is history\n    expected silent, got ${preGot}`);
   }
 
-  rmSync(dir, { recursive: true, force: true });
+  // Git Bash can release its Windows cwd handle a fraction after spawnSync
+  // returns. Retry cleanup so a transient handle does not turn correct guard
+  // behavior into a flaky test failure.
+  rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 
   if (failures.length > 0) {
     console.error(`❌ approved-set guard: ${failures.length} case(s) behaved wrong\n`);

@@ -81,6 +81,45 @@ data migration and withheld from normal rebuild replay, while a mutation-tested 
 requires sorted-ID plus material-before-value digests for every future business-row rewrite. A
 replacement exact-SHA review is required before publication.
 
+**Exact-SHA review follow-up 8 (still local).** Review of `45c8acf5` found that an admin whose
+browser held an older Product cost could miss the early below-cost prompt and receive only the
+server's locked-cost denial. Order editing, rush-order pricing, and Invoice saving now parse that
+server challenge, show the locked live price/cost comparison, and retry at most once with the same
+idempotency key after an explicit reason; cancellation and unrelated errors never retry. The same
+review found that the historical one-shot migration was protected on the normal apply path but
+could still be replayed through direct `psql` or Supabase CLI SQL. The shared shell/MCP process
+guard now blocks the registered stem, a renamed byte-identical copy, or a pasted full body, and
+fails closed when the one-shot registry or registered source is unreadable. The compatibility
+money rule is being established independently through prerequisite PR #374 so this pricing branch
+does not approve its own exception. Production remains unchanged, and a replacement exact-SHA
+review is still required before publication.
+
+**Local preflight follow-up 9 (still local).** The approved-set SQL audit was mistaking
+`UPDATE`/`DELETE` statements stored inside RPC definitions for one-shot migration writes whenever
+`LANGUAGE` appeared before the function body's `AS $tag$` delimiter. The scanner now tracks the
+actual dollar-quote boundary, keeps executable `DO` backfills visible, and resumes safely after an
+inline function definition. Its Windows mutation harness now invokes Git Bash instead of the WSL
+launcher and classifies only approved-set findings. All 42 adversarial cases pass, and the parked
+Quote cost-snapshot migration now locks the table and binds its sole install-time backfill to the
+20-row live approved population: sorted Quote-line ids plus the existing `current_cost` source and
+new-column null before-value. Any identity or source-cost drift aborts before the write. The
+exact extracted guard/backfill passed in a network-disabled disposable Supabase PostgreSQL 17
+container, and a one-cent source-cost mutation failed with `APPROVED_SET_DRIFTED`. The
+only second accepted population is the exact empty/no-op set for a schema-only rebuild where no
+row can be rewritten. The changed-migration audit reports zero violations; production is unchanged.
+
+**Preflight smoke follow-up 10 (still local).** The registered money/inventory rollback chain now
+exercises the new `get_profitability_report` RPC across customer, product, and month groupings. It
+requires the active control order to return the same exact revenue, snapshot cost, profit, margin,
+order count, and units in every grouping; then proves a real void removes it from all three and
+that `anon` has no execute path. Its auth fixtures now set both Supabase JWT identity forms, and its
+PO checks match the current governed contract: a real sales-rep over-receipt is denied, NULL cannot
+bypass the quantity ceiling, and an admin supplies the required reason. A reusable network-isolated
+PostgreSQL 17 prover restored the supported baseline, replayed 44 migrations through all three
+parked pricing migrations, proved the empty approved-set apply and non-empty drift rejection, ran
+all three pricing chains to `SMOKE_PASS_ROLLBACK`, and found zero fixture residue. This closes the
+migration-drift reviewer's missing-smoke blocker; production is unchanged.
+
 **Exact-SHA review follow-up (still local).** The review of `b5f949fa` correctly found that the
 first server-wall draft still left direct PostgREST line writes available, ran after the canonical
 rounding trigger and could overwrite its whole-cent result, and could parse an older approval
