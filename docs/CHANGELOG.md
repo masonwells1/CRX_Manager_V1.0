@@ -20,7 +20,8 @@ override the documented legacy-column exception. A final current-head review als
 compliance reviewer reject raw use of the legacy cent parsers on inputs with more than two
 fractional digits unless an explicit exact rounding rule has been approved; the deterministic
 money-safety hook now gives the same qualified remediation instead of recommending the truncating
-helper by itself.
+helper by itself. The final exact-head review applied that same precision gate to the field-map UX
+loop prompt, which had still described the legacy parser as exact without qualifying its truncation.
 
 ## 2026-08-10 — Graphify-first agent navigation policy
 

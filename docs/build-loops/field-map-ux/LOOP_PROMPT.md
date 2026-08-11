@@ -62,9 +62,10 @@ F2 is last because it may need an owner decision.
 - ESLint `no-unused-vars` fires on intermediate edit states (import added before its usage) - it
   clears when the usage lands; confirm with a final `npm run lint`.
 - New money storage is bigint cents; documented legacy PostgreSQL numeric-dollar columns retain
-  exact `numeric` arithmetic. Parse/edit dollars with the shared exact cents helpers, never binary
-  floating-point rounding.
-  (from `src/lib/parseCents`).
+  exact `numeric` arithmetic. Before using the shared helpers from `src/lib/parseCents`, reject
+  inputs with more than two fractional digits or apply one approved exact decimal rounding rule;
+  those legacy helpers currently truncate excess precision and are not sufficient alone. Never use
+  binary floating-point rounding for money.
 - In NEW code avoid raw em-dashes (the file-write pipeline can mangle them) - use ASCII "-" or the
   `—` escape / `&mdash;` in JSX text.
 - `npm run typecheck` (tsconfig.app.json) is the only real typecheck.
