@@ -31,8 +31,14 @@
 --       with the same key -> same payment id back, exactly 1 payment item.
 --   (d) concurrent-shape sanity (static, via prosrc): the FOR UPDATE lock
 --       sits ABOVE both the already-in-payment check and the recipient read,
---       so the locking covers every commission row the body reads; no
---       SELECT DISTINCT remains; exactly 1 overload. (True 2-session
+--       so the locking covers every commission row the body reads; the lock
+--       is the row-scoped `FOR UPDATE OF c` form (which is what makes the
+--       0A000 fix work — the DISTINCT lives in a joined subquery, not on the
+--       locking query); exactly 1 overload. Once migration
+--       20260811130000 is applied the accounting body lives in
+--       _create_commission_payment_intent_impl_20260809 and the public name
+--       is a thin intent-binding wrapper, so (d) resolves the body function
+--       first and additionally pins that the wrapper delegates to it. (True 2-session
 --       concurrency is not testable inside one DO block; the loser-blocks-
 --       then-sees-winner behaviour follows from lock-before-check under
 --       READ COMMITTED, which (d) pins structurally and (b) pins
@@ -93,6 +99,7 @@ DECLARE
   v_item_sum    numeric;
   v_n           int;
   v_src         text;
+  v_body_fn     text;
   v_err         text;
   v_idem_key    text;
 BEGIN
@@ -143,9 +150,13 @@ BEGIN
   -- 2. Scenario (a): happy path — this exact call raised SQLSTATE 0A000
   --    before the fix.
   -- --------------------------------------------------------------------
+  -- A key is REQUIRED since 20260811130000; passing NULL now raises
+  -- IDEMPOTENCY_KEY_REQUIRED before any work happens. Each scenario below uses
+  -- its OWN key so that what rejects a call is the guard the scenario is about,
+  -- never an accidental replay of a previous scenario's receipt.
   v_payment_id := create_commission_payment(
     ARRAY[v_c1, v_c2], 'check', '[SMOKE] ref ' || v_suffix,
-    CURRENT_DATE, '[SMOKE] cpfu notes', v_admin, NULL);
+    CURRENT_DATE, '[SMOKE] cpfu notes', v_admin, '[SMOKE]-cpfu-a-' || v_suffix);
 
   IF v_payment_id IS NULL THEN
     RAISE EXCEPTION 'SMOKE_FAIL(a): create_commission_payment returned NULL';
@@ -206,7 +217,7 @@ BEGIN
   BEGIN
     PERFORM create_commission_payment(
       ARRAY[v_c1, v_c2], 'check', '[SMOKE] dup ' || v_suffix,
-      CURRENT_DATE, '[SMOKE] dup attempt', v_admin, NULL);
+      CURRENT_DATE, '[SMOKE] dup attempt', v_admin, '[SMOKE]-cpfu-b-' || v_suffix);
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
   END;
@@ -246,22 +257,77 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL(d): overload count = %, expected 1', v_n;
   END IF;
 
+  -- Resolve which function actually HOLDS the accounting body before reading
+  -- any source off it. Migration 20260811130000 renames that body to
+  -- _create_commission_payment_intent_impl_20260809 and installs a thin
+  -- intent-binding wrapper back under the public name. Reading prosrc off the
+  -- public name alone would then report the row lock as MISSING and fail this
+  -- scenario the moment that migration goes live — a false regression on a
+  -- money path, which is exactly the alarm this file exists to make
+  -- trustworthy. Before that migration the public function IS the body, so
+  -- either way (d) pins the same property.
+  v_body_fn := 'create_commission_payment';
+  IF to_regprocedure(
+       'public._create_commission_payment_intent_impl_20260809(uuid[], text, text, date, text, uuid, text)'
+     ) IS NOT NULL THEN
+    v_body_fn := '_create_commission_payment_intent_impl_20260809';
+
+    -- The public entry point must be a WRAPPER, not a second copy of the
+    -- accounting body: it has to delegate to the implementation, and that
+    -- implementation must itself be a single overload.
+    SELECT prosrc INTO v_src
+      FROM pg_proc
+     WHERE proname = 'create_commission_payment'
+       AND pronamespace = 'public'::regnamespace;
+    IF position('_create_commission_payment_intent_impl_20260809' IN v_src) = 0 THEN
+      RAISE EXCEPTION 'SMOKE_FAIL(d): public.create_commission_payment does not delegate to the renamed implementation';
+    END IF;
+
+    SELECT count(*) INTO v_n
+      FROM pg_proc
+     WHERE proname = '_create_commission_payment_intent_impl_20260809'
+       AND pronamespace = 'public'::regnamespace;
+    IF v_n <> 1 THEN
+      RAISE EXCEPTION 'SMOKE_FAIL(d): implementation overload count = %, expected 1', v_n;
+    END IF;
+  END IF;
+
   SELECT prosrc INTO v_src
     FROM pg_proc
-   WHERE proname = 'create_commission_payment'
+   WHERE proname = v_body_fn
      AND pronamespace = 'public'::regnamespace;
 
-  IF position('SELECT DISTINCT' IN v_src) > 0 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL(d): SELECT DISTINCT still present in body';
+  -- The lock must be the row-scoped `FOR UPDATE OF c` form. That form is the
+  -- 0A000 fix: SQLSTATE 0A000 ("FOR UPDATE is not allowed with DISTINCT
+  -- clause") fires when the query CARRYING the lock has its own DISTINCT, so
+  -- the de-duplication was pushed down into a joined `SELECT DISTINCT id FROM
+  -- unnest(...)` subquery and the outer, locking query left plain.
+  --
+  -- This deliberately replaced a blanket "no SELECT DISTINCT anywhere in the
+  -- body" text ban. That ban was over-broad and had gone false: the current
+  -- body legitimately contains several subquery DISTINCTs, none of them on a
+  -- locking query, so the ban failed against live production while the fix it
+  -- was guarding was perfectly intact. A guard that cries wolf on a money path
+  -- is worse than no guard. Scenario (a) above is the real 0A000 regression
+  -- test anyway — it EXECUTES the call that used to raise it.
+  IF position('FOR UPDATE OF c' IN v_src) = 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL(d): row-scoped FOR UPDATE OF lock missing from % body', v_body_fn;
   END IF;
-  IF position('FOR UPDATE' IN v_src) = 0 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL(d): FOR UPDATE lock missing from body';
+  -- Lock above the already-in-payment check (first commission_payment_items
+  -- reference) AND above the recipient read (first recipient_user_id
+  -- reference), so the locking covers every commission row the body then
+  -- reads. The recipient anchor used to be a '[DELTA cpfu-2 BEGIN]' comment
+  -- sentinel; a later rewrite of this function dropped that comment, which
+  -- silently turned this check into an always-fail (position() returns 0 for
+  -- absent text). Anchor on code that the body cannot lose without changing
+  -- behaviour instead of on a comment.
+  IF position('commission_payment_items' IN v_src) = 0
+     OR position('recipient_user_id' IN v_src) = 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL(d): % body no longer contains the already-in-payment check or the recipient read — re-anchor this scenario', v_body_fn;
   END IF;
-  -- lock above the already-in-payment check (first commission_payment_items
-  -- reference) AND above the recipient read (the cpfu-2 sentinel)
-  IF position('FOR UPDATE' IN v_src) > position('commission_payment_items' IN v_src)
-     OR position('FOR UPDATE' IN v_src) > position('[DELTA cpfu-2 BEGIN]' IN v_src) THEN
-    RAISE EXCEPTION 'SMOKE_FAIL(d): lock does not cover the commission rows read by the body';
+  IF position('FOR UPDATE OF c' IN v_src) > position('commission_payment_items' IN v_src)
+     OR position('FOR UPDATE OF c' IN v_src) > position('recipient_user_id' IN v_src) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL(d): lock does not cover the commission rows read by the % body', v_body_fn;
   END IF;
 
   -- --------------------------------------------------------------------

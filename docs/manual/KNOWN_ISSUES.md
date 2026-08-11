@@ -1289,6 +1289,59 @@ Genuinely still-open items from that same hunt (checked against `LEDGER.json`, n
 
 Two items the ledger flagged as **"top build priority" and Codex-rated HIGH-on-severity** turned out to already be fixed by later sessions — confirmed via migration files on disk: `reverse_blend_ticket_approval:billed-ticket-reopen-and-edit` → `20260622080000_blend_ticket_reopen_and_content_lock.sql`; `void_commission_payment:resurrect-cancelled-order` → `20260622070000_void_commission_payment_dead_order_guard.sql`. Both **confirmed applied live** (present by name in `supabase_migrations.schema_migrations`, checked 2026-07-13).
 
+### PARTLY OPEN 2026-08-09 — two HIGH commission findings from the Section 7 gauntlet refresh (owner decision SETTLED: Option B; **3.5 fixed and live 2026-08-11**, 3.4 still parked)
+
+Source: `docs/audits/gauntlet/2026-08-09-section-07-commissions-splits-payouts-voids-refresh.md` (verdict REMEDIATION REQUIRED, 0 BLOCKER / 2 HIGH). Both were proven against **live** `pg_proc.prosrc`, not just disk. Neither is an access-control defect — RLS, admin-only payout reads, and RPC-only mutations all held. Gauntlet summary rows **3.4** and **3.5**.
+
+| # | Finding | Where | Live risk |
+|---|---|---|---|
+| 3.4 | **Historical Commission Balance reports are rewritten by later payout activity.** `get_commission_balance_report(date)` filters *earned* by `cm.order_date <= p_as_of_date` but derives paid/outstanding from **current** `cm.status`. | `src/pages/Reports.tsx:281-285`; `supabase/migrations/20260330100000_prelaunch_state_machine_and_security.sql:770-807` | A commission earned in June and paid in July shows as **paid** when the June 30 report is rerun; voiding that July payout flips it back to **outstanding**. Month-end commission liability is not reproducible for accounting or dispute review. Read-only defect — no wrong money moves. |
+| 3.5 | **Payout idempotency receipts are keyed to the operation, not the intent.** `useIdempotencyKey` scopes to `[operation, userId]` and deliberately retains the key after an uncertain response; `create_/post_/void_commission_payment` all run the operation-only replay check *before* loading the requested entity. | `src/hooks/useIdempotencyKey.ts:21-40`; `src/pages/CommissionPayments.tsx:302-420`; migrations `20260714180000:70-258`, `20260714230000:285-395`, `20260707060000:1569-1717` | Server posts Payment A, response is lost, admin retries on Payment B → server replays A's cached success and the UI reports success for the wrong payment. Same shape for a changed commission selection or void reason. Does **not** double-pay; it tells the operator a different financial action succeeded when it did not. |
+
+**Owner decision SETTLED (Mason, in-chat 2026-08-09): Option B.** Fix 3.5 (payout idempotency intent-binding) now; **3.4 stays parked** as a known reporting-accuracy defect. Rationale as presented and accepted: neither finding moves money wrongly, but 3.5 can tell an operator a payout succeeded when it did not, while 3.4 never causes a wrong payment and its proper fix (durable dated payout event ledger) is a materially larger build deserving its own session. Do not re-open 3.4 without a fresh owner decision; do not treat 3.4 as unknown — it is recorded here deliberately.
+
+Options as presented:
+
+- **Option A — park both.** No code changes; this entry is the record. Cheapest, but a wrong month-end commission number stays reproducible-wrong and the false-success replay stays live.
+- **Option B — fix 3.5 only (recommended by Claude 2026-08-09).** Bind each receipt to the authenticated actor plus a server-derived intent fingerprint (create: sorted commission IDs + method/reference/date/notes; post: payment ID; void: payment ID + normalized reason), reusing the established pattern in `20260803010917_bind_idempotency_to_mutation_intent.sql:16-168`. Identical intent replays once; a mismatched actor or fingerprint fails closed with `IDEMPOTENCY_ACTOR_MISMATCH` / `IDEMPOTENCY_INTENT_MISMATCH`. One migration + rollback-only smokes. Rationale: 3.5 is the only one of the two that can mislead an operator into believing a payout landed.
+- **Option C — fix both.** Adds an append-only dated commission payout event ledger (or fail-closed for historical dates) behind `get_commission_balance_report`, plus the 3.4 rollback smoke (earn → report → post after cutoff → void later → prove earlier snapshots unchanged). Materially larger: new durable table, backfill question for existing history, and a report-behavior change Mason would see.
+
+Prevention actions proposed by the report: a static guard requiring any RPC accepting a historical cutoff to reference dated immutable facts or reject unsupported dates (**not built** — belongs with 3.4); a source guard requiring commission payout RPCs and callers to carry an intent-binding marker and tests (**built 2026-08-09**, see below).
+
+### 3.5 CLOSED — APPLIED LIVE AND VERIFIED 2026-08-11
+
+Option B was merged to `main` via PR #378 and the migration was applied to production on 2026-08-11 with Mason's explicit approval, after the final Codex round returned clean. The live ledger carries it under version `20260811183437` with name `20260811130000_bind_commission_payout_idempotency_to_intent` (the apply tool stamps its own clock as the version — match on the name). Verified against production afterwards: the catalog postconditions all hold (one overload per function, no helper survived, `anon` locked out of all three entry points, no PostgREST role able to reach an internal function), and a nine-assertion rollback-only chain run live observed the actor and fingerprint on the receipt, an identical intent replaying to the same payment, `IDEMPOTENCY_INTENT_MISMATCH` on a changed selection / changed reference / a post aimed at a different payment, `IDEMPOTENCY_ACTOR_MISMATCH` for a second admin reusing the key, `IDEMPOTENCY_KEY_REQUIRED` on a NULL key, and a legacy unbound receipt failing closed. Full detail in `docs/CHANGELOG.md` (2026-08-11 closeout) and `docs/reference/migration-history.md` row 867. **3.4 remains open and parked** by the settled owner decision above.
+
+The table below records what was built, and is kept for reference; every row is now live.
+
+| Piece | File | State |
+| --- | --- | --- |
+| Migration — renames the three payout bodies to `_<name>_intent_impl_20260809` (money logic never retyped) and creates public wrappers that bind each receipt to `request_actor_id` + a SHA-256 `request_fingerprint`; adds the `check_idempotency_intent` helper | `supabase/migrations/20260811130000_bind_commission_payout_idempotency_to_intent.sql` | Written; proven in a disposable container |
+| Rollback-only smoke chain | `scripts/smoke/smoke-commission-payout-intent-binding.sql` (registered in `scripts/smoke/smoke-specs.json` under `create_commission_payment`) | Passing |
+| Container proof — network-isolated throwaway PostgreSQL 17, prints `COMMISSION_PAYOUT_INTENT_BINDING_PROOF_PASS` | `scripts/smoke/prove-commission-payout-intent-binding.mjs` | Green |
+| Frontend — `getIdempotencyBindingRejection` maps the three refusals to plain-English warnings and retires the dead key in all three handlers | `src/lib/idempotency.ts`, `src/pages/CommissionPayments.tsx` | Done |
+| Source guard the report asked for | `src/lib/commissionPayoutIntentBindingMigration.test.ts` | Passing |
+
+Two deliberate departures from the `20260803010917` reference pattern, both documented in the migration header:
+
+1. **The wrapper returns the committed receipt itself on an exact replay** instead of delegating back into the implementation. `idempotency_keys.result` is nullable and the implementation's operation-only `check_idempotency` reads a NULL result as "no receipt" — delegating would have re-executed the payout. A SQL-NULL or JSON-`null` stored result now raises `IDEMPOTENCY_RESULT_INVALID`.
+2. **No per-entity scope check before returning the receipt in the error DETAIL.** All three payout RPCs are admin-only, the wrapper re-runs `is_admin()` before any receipt is read, and an admin can already read every payout row.
+
+Mutation-tested (guard broken → test red → restored): the fingerprint comparison, the actor comparison, the legacy-receipt bridge, the frontend refusal branch, and the frontend key reset.
+
+**Both Codex reviews returned DO NOT SHIP on 2026-08-09 (sol and terra, independently). Every confirmed finding is fixed on this branch as of 2026-08-10; the branch is still not live and still needs a clean re-review plus Mason's explicit OK before the migration is applied.** What the reviews caught, and what changed:
+
+- **A dead key trapped the operator.** `IDEMPOTENCY_RESULT_INVALID` and `IDEMPOTENCY_RECEIPT_MISSING` were not classified, so the UI left an unusable key in place and every retry failed the same way forever. They are now a third refusal kind, `'receipt'`, with their own wording, and the key is retired like the other two.
+- **The UI asserted something the database cannot prove.** On a pre-migration receipt the database knows only that the key is spent, not that the earlier request differed. The warning no longer claims a different payment was involved.
+- **The refresh was not awaited**, so the toast told the admin to check a list that had not reloaded yet.
+- **The privilege post-condition checked only `anon` and `authenticated`.** A `service_role` grant could have put an unguarded implementation back on a PostgREST-reachable surface. The `DO $verify$` block now denies all three roles across the receipt helper and all three implementations.
+- **The concurrency test proved nothing.** Two `docker exec` sessions never actually overlapped, so deleting the advisory lock kept the proof green. The proof now holds both backends at a barrier and widens the window with a session-gated delay; removing the lock fails with two winners, as it should.
+- **Structural tests had a first-occurrence bug**: the ordering check compared against the un-keyed delegation branch, so the binding `UPDATE` could have moved ahead of the payout call unnoticed.
+
+Mutation coverage after the fixes: 7/7 behavioural mutations (advisory lock, result-invalid guard, `service_role` grant, two fingerprint fields, legacy replay, actor stamping) and 8/8 structural mutations go red. Full frontend suite green (4,339 tests).
+
+`src/lib/commissionPayoutGuards.test.ts` needed a rename-aware fix: the stale-selection guards moved into the renamed implementation, so a name-based scan read the new thin wrapper and reported them missing. It now reads the body from before the rename and separately proves the wrapper still calls it — worth remembering for any future migration that renames a guarded function out from under its public name.
+
 ---
 
 ## 1b. RESOLVED 2026-07-22 — commission-recipient close-out: PR #213 MERGED (after PR #216), all migrations live
