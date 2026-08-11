@@ -85,11 +85,12 @@ Review of that fix then found a real hole in the exemption itself, and this one
 could hide private data rather than merely block a push. A linked worktree of
 this repository is recognised by a `.git` pointer file naming a directory inside
 this repository's worktree bookkeeping. That pointer was trusted on its face, so
-a *copy* of a genuine worktree's pointer file was equally convincing. Because
-Windows can hold `session` and `SESSION` as two different directories that the
-containment check folds to a single key, a foreign directory parked at the
-colliding name could copy the pointer next door and inherit the exemption — its
-private contents skipped. That was reproduced end to end before anything
+a *copy* of a genuine worktree's pointer file was equally convincing. Windows
+compares names case-insensitively by default, but a directory can opt in to
+per-directory case sensitivity, and one that has can hold `session` and
+`SESSION` as two different directories that the containment check folds to a
+single key. A foreign directory parked at the colliding name could copy the
+pointer next door and inherit the exemption — its private contents skipped. That was reproduced end to end before anything
 changed: a private packet passed the gate. The exemption now reads the backlink
 Git keeps in that bookkeeping directory and requires it to name the very
 directory being exempted. The comparison is made on filesystem identity rather
