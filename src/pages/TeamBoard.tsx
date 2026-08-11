@@ -528,6 +528,8 @@ export default function TeamBoard() {
         completeIdem.resetKey();
         toast('error', 'That last change already went through. Please try again.');
         fetchNotes();
+      } else if (hasRpcCode(err, RpcErrorCodes.PROFILE_INACTIVE)) {
+        toast('error', 'Your account is inactive. Ask an admin to reactivate it before completing tasks.');
       } else {
         toast('error', err instanceof Error ? err.message : 'Failed to update note');
       }
