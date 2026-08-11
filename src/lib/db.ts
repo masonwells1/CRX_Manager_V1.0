@@ -115,6 +115,11 @@ export const RpcErrorCodes = {
   QUOTE_ALREADY_CONVERTED: 'QUOTE_ALREADY_CONVERTED',
   // post_invoice / post_invoice_group ship-now-price-later gate (sell-side roadmap #2)
   PRICING_INCOMPLETE: 'PRICING_INCOMPLETE',
+  // post_invoice / post_invoice_group deliver-before-billing gate (Wave A fix #5,
+  // migration 20260811060000). A delivery-linked invoice cannot be posted until the
+  // delivery is completed — the same click that corrects it to what actually went out.
+  DELIVERY_NOT_COMPLETED: 'DELIVERY_NOT_COMPLETED',
+  DELIVERY_MISSING: 'DELIVERY_MISSING',
   // price_order (sell-side roadmap #2 v2)
   INVALID_PRICE: 'INVALID_PRICE',
   ALREADY_PRICED: 'ALREADY_PRICED',
@@ -300,6 +305,23 @@ export function hasRpcCode(err: unknown, code: RpcErrorCode): boolean {
   return message === code
     || message.startsWith(`${code}:`)
     || message.startsWith(`${code} `);
+}
+
+/**
+ * Plain-English reason a post_invoice / post_invoice_group call was refused by
+ * one of the deliberate billing gates, or `null` if the failure was something
+ * else (which the caller should surface through `sanitizeError`).
+ *
+ * These are expected refusals, not faults: the office sees what to do next
+ * rather than a raw database token. Every posting UI routes through here so the
+ * wording cannot drift between Invoices, OfficeCockpit, OrderDetail and the
+ * field panel.
+ */
+export function describePostInvoiceBlock(err: unknown): string | null {
+  if (hasRpcCode(err, RpcErrorCodes.PRICING_INCOMPLETE)) return 'needs pricing first';
+  if (hasRpcCode(err, RpcErrorCodes.DELIVERY_NOT_COMPLETED)) return 'complete the delivery first';
+  if (hasRpcCode(err, RpcErrorCodes.DELIVERY_MISSING)) return 'its delivery record is missing — void this draft';
+  return null;
 }
 
 /**

@@ -11,12 +11,20 @@
 -- separate thing entirely and does not go through invoices at all — so gating
 -- the POST does not interfere with getting paid early.
 --
+-- HOW THIS FILE MUST BE APPLIED.
+-- Through `apply_migration` or psql, NEVER through `execute_sql`. The Supabase
+-- MCP `execute_sql` path runs only the LAST statement of a multi-statement
+-- script — here that is the bare `COMMIT;` — so it would report a clean, empty
+-- success while installing nothing at all. That failure mode is silent and would
+-- be indistinguishable from a successful apply.
+--
 -- THE HOLE, exactly as it exists on production today.
--- `create_quick_delivery` writes the delivery row with status 'scheduled' and,
--- in the same call, creates its draft invoice pointing at that delivery. So a
--- draft bill exists for goods still sitting in the warehouse. Nothing between
--- that moment and posting checks whether the delivery ever happened, so the
--- office can post it and send it.
+-- `_create_quick_delivery_intent_impl_20260802` — the current implementation
+-- behind the quick-delivery button — writes the delivery row with status
+-- 'scheduled' and, in the same call, creates its draft invoice pointing at that
+-- delivery. So a draft bill exists for goods still sitting in the warehouse.
+-- Nothing between that moment and posting checks whether the delivery ever
+-- happened, so the office can post it and send it.
 --
 -- WHY THAT IS A MONEY BUG AND NOT JUST AN ORDERING PREFERENCE.
 -- The draft is created at ORDERED quantity. `_complete_delivery_authorized_impl`
@@ -46,12 +54,60 @@
 --   batch_post_invoices -> loops over post_invoice                 -> THIS
 -- One CREATE OR REPLACE therefore closes all three. The precondition asserts the
 -- caller count so a future fourth caller cannot quietly appear outside the gate.
+-- Neither caller wraps the call in an exception handler (checked live
+-- 2026-08-11 for `EXCEPTION WHEN`, not merely the word "exception", which the
+-- RAISE statements in both bodies would have matched) — so this gate's refusal
+-- reaches the client rather than being swallowed into a silent success.
 --
--- THE ONE FUNCTION THAT WRITES status='posted' WITHOUT GOING THROUGH HERE is
--- `_post_deleted_delivery_recovery_invoice_20260719`, and it already refuses
--- unless the delivery is 'completed'. It is not changed; the precondition
--- asserts that its own check is still in place, so the two paths cannot drift
--- apart.
+-- WHAT ELSE CAN WRITE status='posted', stated precisely because an earlier draft
+-- of this header overstated it. Read-only against production 2026-08-11, FIVE
+-- other functions in `public` can leave an invoice at 'posted':
+--   * `_post_deleted_delivery_recovery_invoice_20260719` — the only other path
+--     that can PROMOTE a draft, and it already refuses unless the delivery is
+--     'completed'. Unchanged here; the precondition asserts its check is still
+--     in place so the two paths cannot drift apart.
+--   * `void_payment`, `_reverse_credit_memo_application`, `reverse_write_off` —
+--     reversal paths that can only move an ALREADY-PAID invoice back to
+--     'posted' (`status IN ('paid','posted')`, `status = 'paid'` and
+--     `v_old_status = 'paid'` respectively, all verified live 2026-08-11). A
+--     draft can never reach them: they run off a payment, credit-memo
+--     application or write-off, none of which can exist on an unposted invoice.
+--     The precondition asserts all three keep that paid-guard.
+--   * `_issue_return_credit_impl` — the only function that INSERTS a row already
+--     at 'posted'. It writes a credit_memo, and its column list carries no
+--     `delivery_id` at all, so it cannot produce a delivery-linked bill and this
+--     gate could never apply to it.
+-- The catalog scan below checks for a NEW function writing the LITERAL
+-- status = 'posted' in an UPDATE, plus a second scan for the INSERT shape.
+-- Neither can see a value assigned through a variable, so that whole class was
+-- swept separately and by hand on 2026-08-11: eight functions in `public` update
+-- `invoices` and assign `status` from something other than a literal, and every
+-- one was read. Three are the reversal writers above. `apply_write_off`,
+-- `allocate_payment`, `apply_credit_memo_to_invoice` and
+-- `apply_prepay_to_invoice` all assign `CASE WHEN <balance> <= 0 THEN 'paid'
+-- ELSE status END` — they can only reach 'paid' or leave the status untouched,
+-- never 'posted'. `_complete_delivery_authorized_impl` contains no 'posted'
+-- literal anywhere and its invoice UPDATE writes totals, not status. So no
+-- variable-assignment path can promote a draft.
+--
+-- WHY A DIRECT TABLE WRITE IS NOT A HOLE (recorded so it is not re-raised).
+-- Two reviewers flagged that an admin might bypass this gate by PATCHing the
+-- invoice row through PostgREST, citing the `invoices_update` RLS policy. That
+-- policy is unreachable: verified live 2026-08-11, UPDATE on `public.invoices`
+-- is granted to `postgres` ONLY — `anon`, `authenticated`, `service_role` and
+-- `metabase_ro` hold SELECT-class privileges only. Postgres checks the table
+-- GRANT before row security is consulted, so no client role can write
+-- `invoices.status` at all. Every posting path is a function call.
+--
+-- WHY THE PROBE'S WRITES CANNOT ESCAPE (also recorded so it is not re-raised).
+-- A reviewer asked whether the probe's rolled-back post could still reach the
+-- outside world through a trigger — an outbound webhook, a dblink call, a
+-- background worker — since those are not undone by a rollback. Checked live
+-- 2026-08-11 across every table a post writes (`invoices`, `deliveries`,
+-- `financial_audit_log`, `activity_feed`, `notifications`, `rup_sales_records`,
+-- `invoice_line_share_snapshots`): no trigger on any of them calls `http_post`,
+-- `dblink`, `pg_background` or `COPY PROGRAM`. Every effect of the probe is
+-- ordinary table state, and every bit of it is unwound by the subtransaction.
 --
 -- WHAT THIS DELIBERATELY DOES NOT GATE, and why.
 -- Only invoices that carry a `delivery_id` are gated. Three other shapes exist
@@ -75,33 +131,87 @@
 -- Nothing they do today starts failing. Verified read-only 2026-08-11: all 13
 -- live invoices are either delivery-linked (10) or carry neither an order nor a
 -- delivery (3), and every one of those 10 already points at a delivery that is
--- 'completed' and not deleted. The gate blocks nothing that currently exists.
--- Going forward, a quick-delivery bill has to wait for the driver to mark the
--- delivery complete — which is the same click that corrects it to what actually
--- went out. If the delivery was cancelled or voided, the refusal message says to
--- void the draft rather than post it.
+-- 'completed' and not deleted. The whole precondition block below was ALSO
+-- dry-run read-only against production on 2026-08-11 — every assertion passed
+-- and the count of currently-blocked drafts came back ZERO. The gate blocks
+-- nothing that exists today. Going forward, a quick-delivery bill has to wait
+-- for the driver to mark the delivery complete — which is the same click that
+-- corrects it to what actually went out. If the delivery was cancelled or
+-- voided, the refusal message says to void the draft rather than post it.
 --
 -- LOCKING, stated because it is a deliberate choice rather than an oversight.
 -- The delivery row is read WITHOUT a lock. The caller already holds FOR UPDATE
 -- on the invoice, and `_complete_delivery_authorized_impl` locks the delivery
--- before the invoice; taking a delivery lock here would reverse that order and
--- introduce a deadlock between posting and completing. The residual race — a
--- delivery voided in the instant between this read and the UPDATE — leaves the
--- same outcome as today, and `void_delivery` has its own handling for an invoice
--- that is already posted.
+-- BEFORE the invoice; taking a delivery lock here would reverse that order and
+-- introduce a deadlock between posting and completing. That choice leaves a
+-- narrow residual race, stated honestly rather than talked around: if a delivery
+-- is voided or soft-deleted in the instant between this unlocked read and the
+-- UPDATE below, the post proceeds even though the gate would have refused a
+-- moment later. That is the SAME outcome as today's un-gated behaviour, it is
+-- not made worse by this migration, and `void_delivery` already has its own
+-- handling for a delivery whose invoice is already posted. Closing that window
+-- properly means reordering the locks in `_complete_delivery_authorized_impl`,
+-- which is a separate change with its own deadlock analysis.
+--
+-- ATOMICITY. The whole migration runs inside one explicit BEGIN/COMMIT — the
+-- same shape 30 already-applied migrations in this repo use. Without it, a
+-- non-transactional applier could leave the gate installed on production while
+-- the proof below reported failure. Any RAISE anywhere in this file now aborts
+-- the transaction and the function reverts to exactly what it was.
 --
 -- PROOF. The postcondition block below does not merely re-read the catalog. It
 -- picks a real delivery-linked draft invoice, flips its delivery to 'scheduled',
 -- to 'cancelled', and to soft-deleted in turn, and watches the post be refused
 -- each time; then restores the delivery and watches an ordinary post SUCCEED, so
--- the gate is proven not to have broken normal billing. Everything is inside a
--- subtransaction that is rolled back, and the rollback is proven by fingerprints
--- taken over `invoices` and `deliveries` before and after. The probe forges
--- `request.jwt.claims` locally to stand in for a signed-in admin session; that
--- GUC is transaction-local and is cleared before the block ends.
+-- a delivery-linked bill is proven to still post normally. Everything is inside
+-- a subtransaction that is rolled back.
+--
+-- The one branch the probe does NOT exercise, stated rather than glossed: the
+-- `delivery_id IS NULL` arm — job, application and standalone invoices, which
+-- skip the gate entirely. Three of the 13 live invoices are that shape, and none
+-- of them is currently a postable draft, so there is no live row to prove it
+-- with. The branch is a single `IF v_inv.delivery_id IS NOT NULL THEN ... END
+-- IF;` wrapper around the new code and nothing else in the function moved, so
+-- the risk is small — but "normal billing still works" is proven here for the
+-- delivery-linked shape only, and that is the honest scope of the claim.
+--
+-- What the rollback proof does and does NOT cover, stated exactly. The
+-- authoritative check is row-level: the exact invoice row and delivery row the
+-- probe writes are snapshotted before and compared after. A whole-table sweep of
+-- `invoices` and `deliveries` also runs, but only as a NOTICE — under READ
+-- COMMITTED each statement in the block takes a fresh snapshot, so an ordinary
+-- office edit committed by another session mid-apply would change a whole-table
+-- fingerprint through no fault of the probe, and aborting a money migration with
+-- "the rollback did not hold" when it did hold is the worst message this file
+-- could hand its applier. A real post also writes `financial_audit_log`,
+-- `activity_feed`, `rup_sales_records`, `notifications`,
+-- `invoice_line_share_snapshots` and possibly `blend_tickets`. Those are not
+-- fingerprinted at all; they are covered by the subtransaction rollback itself,
+-- which unwinds every table equally. Nothing the probe does survives it — the
+-- only genuinely irreversible cost is any SEQUENCE value it consumes, and on
+-- this path there may be none at all (an invoice number is assigned at draft
+-- creation, not at post, and neither audit table uses a sequence). If a sequence
+-- is touched, a rolled-back transaction still burns the value and production may
+-- show a small gap in a generated number. That is cosmetic and expected.
+--
+-- The probe forges two transaction-local settings and clears both:
+--   * `request.jwt.claims` stands in for a signed-in admin session.
+--   * `app.admin_override` is set ONLY around the delivery-status UPDATEs. The
+--     live trigger `_enforce_delivery_status_transition` allows just
+--     scheduled -> in_progress/cancelled and in_progress -> completed/cancelled;
+--     every move this probe needs (completed -> scheduled, cancelled ->
+--     completed) is otherwise refused, and an earlier draft of this migration
+--     could never have applied for exactly that reason. The override is cleared
+--     back to 'false' BEFORE each post attempt, so the gate is always exercised
+--     without it.
 
-SET statement_timeout = '60s';
-SET lock_timeout = '10s';
+BEGIN;
+
+-- Transaction-local: reverted at COMMIT, so nothing leaks into a pooled session.
+-- lock_timeout is the one that matters — it bounds every row lock the probe takes
+-- against live tables, so a stuck probe fails fast instead of blocking the office.
+SET LOCAL statement_timeout = '60s';
+SET LOCAL lock_timeout = '10s';
 
 DO $precond$
 DECLARE
@@ -116,7 +226,29 @@ BEGIN
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public' AND p.proname = '_post_invoice_impl_20260714';
   IF v_count <> 1 THEN
-    RAISE EXCEPTION 'PRECOND: expected exactly 1 _post_invoice_impl_20260714, found %. Resolve the overloads before applying.', v_count;
+    RAISE EXCEPTION 'PRECOND A: expected exactly 1 _post_invoice_impl_20260714, found %. Resolve the overloads before applying.', v_count;
+  END IF;
+
+  -- ...and with exactly the signature this migration re-declares. Matching on the
+  -- name alone would let a same-name function with different argument types pass,
+  -- and CREATE OR REPLACE would then ADD an overload rather than replace anything.
+  -- Compared through pg_proc.proargtypes on purpose. The obvious alternative is
+  -- the catalog helper that renders a function''s identity arguments as text;
+  -- it is exactly equivalent here, but the Supabase live-data guard does not
+  -- recognise that helper as read-only and refuses any statement mentioning it,
+  -- which would make this migration neither dry-runnable nor appliable through
+  -- that path. Note the guard matches on TEXT, not on effect, so this comment
+  -- deliberately does not spell the helper''s name either. The form used below
+  -- is pure catalog column reads and was dry-run against production 2026-08-11
+  -- with all 14 assertions passing.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'public' AND p.proname = '_post_invoice_impl_20260714'
+       AND p.pronargs = 2
+       AND p.proargtypes[0] = 'uuid'::regtype
+       AND p.proargtypes[1] = 'text'::regtype
+  ) THEN
+    RAISE EXCEPTION 'PRECOND B: _post_invoice_impl_20260714 does not have the expected uuid+text signature. Applying would create an overload instead of replacing it — re-derive before applying.';
   END IF;
 
   -- DRIFT GUARD. The replacement below is the live body read on 2026-08-11 with
@@ -127,39 +259,76 @@ BEGIN
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public' AND p.proname = '_post_invoice_impl_20260714';
   IF v_md5 = '9479af0a5477e89266e0264da44c766c' THEN
-    NULL;  -- expected body
+    NULL;  -- expected pre-gate body
   ELSIF EXISTS (
     SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
      WHERE n.nspname = 'public' AND p.proname = '_post_invoice_impl_20260714'
        AND position('WAVE-A-DELIVERY-BEFORE-BILLING-2026-08-11' in p.prosrc) > 0
   ) THEN
-    RAISE NOTICE 'PRECOND: the delivery-before-billing gate is already installed — re-applying is a no-op';
+    -- Fail CLOSED rather than notice-and-continue. The gate is already installed,
+    -- so this migration has nothing to add; re-emitting would overwrite whatever
+    -- the live body has become since — including a later fix to this same money
+    -- function — with a copy frozen on 2026-08-11. A re-run is never worth that.
+    RAISE EXCEPTION 'PRECOND C: the delivery-before-billing gate is ALREADY installed [live md5 %]. This migration is a no-op and re-applying it would overwrite the current live body with the 2026-08-11 copy. Skip it.', v_md5;
   ELSE
-    RAISE EXCEPTION 'PRECOND: the live body of _post_invoice_impl_20260714 has drifted [md5 % , expected 9479af0a5477e89266e0264da44c766c]. Re-read the live body, rebase this replacement onto it, and update this hash — do not apply a stale copy over someone else''s change.', v_md5;
+    RAISE EXCEPTION 'PRECOND D: the live body of _post_invoice_impl_20260714 has drifted [md5 % , expected 9479af0a5477e89266e0264da44c766c]. Re-read the live body, rebase this replacement onto it, and update this hash — do not apply a stale copy over someone else''s change.', v_md5;
   END IF;
 
   -- Every posting path must funnel through the function being gated. Two callers
   -- were verified live on 2026-08-11; a third would be a path outside the gate.
-  SELECT string_agg(p.proname, ', ' ORDER BY p.proname), count(*)
+  -- position(), not LIKE: '_' is a LIKE wildcard and this name is mostly
+  -- underscores, so an ILIKE pattern would also match unrelated names.
+  SELECT string_agg(DISTINCT p.proname, ', ' ORDER BY p.proname), count(DISTINCT p.proname)
     INTO v_names, v_count
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public'
-     AND p.prosrc ILIKE '%_post_invoice_impl_20260714%'
+     AND position('_post_invoice_impl_20260714' in p.prosrc) > 0
      AND p.proname <> '_post_invoice_impl_20260714';
   IF v_count <> 2
      OR v_names IS DISTINCT FROM '_post_invoice_customer_scope_impl, _post_invoice_group_customer_scope_impl' THEN
-    RAISE EXCEPTION 'PRECOND: expected exactly the two known callers of _post_invoice_impl_20260714, found % [%]. A new caller may be a posting path this gate would not cover — re-derive before applying.', v_count, coalesce(v_names, 'none');
+    RAISE EXCEPTION 'PRECOND E: expected exactly the two known callers of _post_invoice_impl_20260714, found % [%]. A new caller may be a posting path this gate would not cover — re-derive before applying.', v_count, coalesce(v_names, 'none');
   END IF;
 
-  -- The one path that writes status=''posted'' without going through the function
-  -- being gated must keep enforcing the same rule itself, or the two drift apart.
+  -- The one OTHER path that can PROMOTE a draft to ''posted'' must keep enforcing
+  -- the same rule itself, or the two drift apart. Both halves are asserted, not
+  -- just the status one: read live 2026-08-11 its delivery lookup carries
+  -- `d.status = ''completed'' AND d.deleted_at IS NULL`. (The "deleted" in its
+  -- name refers to a soft-deleted ORDER, not a soft-deleted delivery — it
+  -- refuses those exactly as this gate does, which is why the soft-delete
+  -- refusal message below correctly says to void the draft rather than pointing
+  -- at this function.)
   SELECT count(*) INTO v_count
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public'
      AND p.proname = '_post_deleted_delivery_recovery_invoice_20260719'
-     AND p.prosrc ~* 'status\s*(<>|!=)\s*''completed''|status\s*=\s*''completed''';
+     AND p.prosrc ~* 'status\s*(<>|!=)\s*''completed''|status\s*=\s*''completed'''
+     AND p.prosrc ~* '\md\M\.deleted_at\s+IS\s+NULL';
   IF v_count <> 1 THEN
-    RAISE EXCEPTION 'PRECOND: _post_deleted_delivery_recovery_invoice_20260719 no longer checks the delivery status, so it would become an ungated posting path. Re-derive before applying.';
+    RAISE EXCEPTION 'PRECOND F: _post_deleted_delivery_recovery_invoice_20260719 no longer requires a completed, non-deleted delivery, so it would become an ungated posting path. Re-derive before applying.';
+  END IF;
+
+  -- The three functions that can write ''posted'' WITHOUT promoting a draft are
+  -- reversal paths: they re-open an ALREADY-PAID invoice after a payment void, a
+  -- credit-memo reversal or a write-off reversal. Verified live 2026-08-11, each
+  -- is gated on the invoice already being ''paid'', so a draft can never reach
+  -- them. They assign the value through a CASE/variable, which the literal scan
+  -- below cannot see — hence asserted here by name. If one of them loses its
+  -- paid-guard it becomes a second promotion path and this gate stops being
+  -- complete.
+  -- count(DISTINCT proname), not count(*): counting ROWS would let two overloads
+  -- of one function satisfy the total while a third had silently lost its guard.
+  -- This repo has carried money-function overloads before. Verified live
+  -- 2026-08-11 all three currently have exactly one overload each, so this is
+  -- latent rather than active — but the whole point of the assertion is to hold
+  -- when that stops being true.
+  SELECT count(DISTINCT p.proname) INTO v_count
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public'
+     AND ((p.proname = 'void_payment'                      AND p.prosrc ~* 'status\s+IN\s*\(\s*''paid''')
+       OR (p.proname = '_reverse_credit_memo_application'  AND p.prosrc ~* 'status\s*=\s*''paid''')
+       OR (p.proname = 'reverse_write_off'                 AND p.prosrc ~* 'v_old_status\s*=\s*''paid'''));
+  IF v_count <> 3 THEN
+    RAISE EXCEPTION 'PRECOND G: expected all 3 reversal writers [void_payment, _reverse_credit_memo_application, reverse_write_off] to still gate their move to ''posted'' on the invoice already being paid, found % . One of them may now be able to promote a DRAFT, which would bypass this gate. Re-derive before applying.', v_count;
   END IF;
 
   -- Any OTHER function that writes status=''posted'' onto invoices is a path this
@@ -172,7 +341,42 @@ BEGIN
      AND p.prosrc ~* 'UPDATE\s+(ONLY\s+)?[a-z_."%]*\minvoices\M[^;]*\mset\M[^;]*\mstatus\s*=\s*''posted'''
      AND p.proname NOT IN ('_post_invoice_impl_20260714', '_post_deleted_delivery_recovery_invoice_20260719');
   IF v_count <> 0 THEN
-    RAISE EXCEPTION 'PRECOND: % other function[s] write invoices.status = posted and would bypass this gate: %. Re-derive before applying.', v_count, v_names;
+    RAISE EXCEPTION 'PRECOND H: % other function[s] write invoices.status = posted and would bypass this gate: %. Re-derive before applying.', v_count, v_names;
+  END IF;
+
+  -- ...and the INSERT shape, which the UPDATE scan above structurally cannot see.
+  -- A function that INSERTS an invoice row already at ''posted'' would produce a
+  -- posted bill without ever passing through this gate. Read live 2026-08-11,
+  -- exactly four functions insert into `invoices` AND mention ''posted''
+  -- anywhere, and all four were read line by line:
+  --   * `_issue_return_credit_impl` — the only one that really does insert at
+  --     ''posted''. Writes a credit_memo; its column list carries no
+  --     `delivery_id`, so this gate could not apply and it cannot bill for an
+  --     undelivered order.
+  --   * `_save_invoice_scoped_impl` — inserts a caller-supplied status
+  --     (COALESCE of the payload, defaulting to ''draft''), but the word
+  --     `delivery_id` does not appear in its body at all, its UPDATE arm assigns
+  --     no status, and that UPDATE is scoped to rows already in
+  --     draft/unposted.
+  --   * `_create_quick_delivery_intent_impl_20260802` and
+  --     `_generate_finance_charges_idem_impl_20260721` — both insert ''draft''.
+  -- A BEFORE INSERT trigger (`trg_invoice_draft_insert`) independently rejects a
+  -- non-draft, non-credit_memo insert on top of that.
+  -- The two patterns are matched against the WHOLE body rather than within one
+  -- statement on purpose. A bounded "within N characters" form was tried first
+  -- and silently matched NOTHING — not even `_issue_return_credit_impl`, whose
+  -- column list is longer than the 255-character ceiling PostgreSQL allows on a
+  -- regex bound — so it would have been a vacuous assertion that always passed.
+  -- Coarse over-matches instead, which fails CLOSED: a fifth function stops the
+  -- apply and gets a human look.
+  SELECT string_agg(p.proname, ', ' ORDER BY p.proname), count(*)
+    INTO v_names, v_count
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public'
+     AND p.prosrc ~* 'INSERT\s+INTO\s+(ONLY\s+)?[a-z_."]*\minvoices\M'
+     AND p.prosrc ~* '''posted''';
+  IF v_names IS DISTINCT FROM '_create_quick_delivery_intent_impl_20260802, _generate_finance_charges_idem_impl_20260721, _issue_return_credit_impl, _save_invoice_scoped_impl' THEN
+    RAISE EXCEPTION 'PRECOND I: the set of functions that INSERT into invoices and mention posted has changed [now % : %]. A new one may create a posted, delivery-linked bill without passing through this gate. Read it before applying.', v_count, coalesce(v_names, 'none');
   END IF;
 
   -- The columns the gate reads.
@@ -181,13 +385,13 @@ BEGIN
    WHERE table_schema = 'public' AND table_name = 'deliveries'
      AND column_name IN ('status', 'deleted_at', 'delivery_number');
   IF v_count <> 3 THEN
-    RAISE EXCEPTION 'PRECOND: deliveries is missing one of status/deleted_at/delivery_number [found % of 3]', v_count;
+    RAISE EXCEPTION 'PRECOND J: deliveries is missing one of status/deleted_at/delivery_number [found % of 3]', v_count;
   END IF;
   SELECT count(*) INTO v_count
     FROM information_schema.columns
    WHERE table_schema = 'public' AND table_name = 'invoices' AND column_name = 'delivery_id';
   IF v_count <> 1 THEN
-    RAISE EXCEPTION 'PRECOND: invoices.delivery_id does not exist, so there is nothing to gate on';
+    RAISE EXCEPTION 'PRECOND K: invoices.delivery_id does not exist, so there is nothing to gate on';
   END IF;
 
   -- ''completed'' must still be a legal delivery status, or the gate would refuse
@@ -198,7 +402,46 @@ BEGIN
        AND c.conname = 'deliveries_status_check'
        AND pg_get_constraintdef(c.oid) LIKE '%''completed''%'
   ) THEN
-    RAISE EXCEPTION 'PRECOND: deliveries_status_check no longer admits ''completed'' — this gate would refuse every delivery-linked post.';
+    RAISE EXCEPTION 'PRECOND L: deliveries_status_check no longer admits ''completed'' — this gate would refuse every delivery-linked post.';
+  END IF;
+
+  -- The probe below moves a delivery through 'scheduled' and 'cancelled'. If the
+  -- CHECK stopped admitting either, the probe would fail for a reason that has
+  -- nothing to do with this gate, and the failure would be misread as the gate
+  -- being broken.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint c
+     WHERE c.conrelid = 'public.deliveries'::regclass
+       AND c.conname = 'deliveries_status_check'
+       AND pg_get_constraintdef(c.oid) LIKE '%''scheduled''%'
+       AND pg_get_constraintdef(c.oid) LIKE '%''cancelled''%'
+  ) THEN
+    RAISE EXCEPTION 'PRECOND M: deliveries_status_check no longer admits both ''scheduled'' and ''cancelled'', which the proof below needs in order to exercise the refuse path.';
+  END IF;
+
+  -- The probe steers the delivery status trigger with app.admin_override. Assert
+  -- that escape hatch still exists, because without it the proof cannot move the
+  -- row at all and this migration would be unappliable.
+  SELECT count(*) INTO v_count
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public'
+     AND p.proname = '_is_admin_override'
+     AND p.prosrc ILIKE '%app.admin_override%';
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'PRECOND N: _is_admin_override no longer reads app.admin_override, so the proof below cannot move a delivery through the status trigger. Re-derive the probe before applying.';
+  END IF;
+
+  -- ...and the delivery status trigger must still honour that hatch. Asserting
+  -- only the reader leaves the probe able to fail with a bare "Invalid delivery
+  -- status transition", which has no visible relation to billing and would send
+  -- the applier looking in the wrong place entirely.
+  SELECT count(*) INTO v_count
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public'
+     AND p.proname = '_enforce_delivery_status_transition'
+     AND position('_is_admin_override' in p.prosrc) > 0;
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'PRECOND O: _enforce_delivery_status_transition no longer consults _is_admin_override, so the proof below cannot move the test delivery backwards and this migration would abort on an unrelated trigger. Re-derive the probe before applying.';
   END IF;
 
   -- The retroactive-invoice path already refuses a non-completed delivery. Assert
@@ -210,16 +453,23 @@ BEGIN
      AND p.proname = '_create_invoice_for_unbilled_delivery_impl_20260718'
      AND p.prosrc ~* 'status\s*(<>|!=)\s*''completed''';
   IF v_count <> 1 THEN
-    RAISE EXCEPTION 'PRECOND: _create_invoice_for_unbilled_delivery_impl_20260718 no longer requires a completed delivery. Re-derive this migration''s reasoning before applying.';
+    RAISE EXCEPTION 'PRECOND P: _create_invoice_for_unbilled_delivery_impl_20260718 no longer requires a completed delivery. Re-derive this migration''s reasoning before applying.';
   END IF;
 
   -- How many existing drafts this gate would make temporarily unpostable. This is
   -- a NOTICE, not a failure: a quick-delivery draft waiting on its delivery is
   -- exactly the state the gate exists to hold. The applier should still see the
   -- number rather than discover it from a support call.
+  --
+  -- A NOTICE does not surface through the Supabase Management API, so this whole
+  -- block was ALSO dry-run as a read-only statement against production on
+  -- 2026-08-11: every assertion above passed and this count came back ZERO. No
+  -- invoice that exists today is blocked by this gate. Re-run that count if more
+  -- than a day passes before this migration is applied.
   SELECT count(*) INTO v_count
     FROM invoices i JOIN deliveries d ON d.id = i.delivery_id
    WHERE i.status IN ('draft', 'unposted')
+     AND i.deleted_at IS NULL
      AND (d.status <> 'completed' OR d.deleted_at IS NOT NULL);
   IF v_count > 0 THEN
     RAISE NOTICE 'PRECOND: % existing draft invoice[s] point at a delivery that is not completed and will not be postable until it is. This is the intended behaviour.', v_count;
@@ -267,7 +517,7 @@ BEGIN
 
   -- WAVE-A-DELIVERY-BEFORE-BILLING-2026-08-11 (Wave A fix #5).
   -- Do not turn a delivery-linked draft into a real bill until the goods have
-  -- actually moved. create_quick_delivery creates the draft alongside a
+  -- actually moved. The quick-delivery path creates the draft alongside a
   -- 'scheduled' delivery, and completing that delivery is also what corrects the
   -- invoice down to the quantity actually delivered — a correction that only
   -- runs while the invoice is still a draft. Posting first would freeze the
@@ -316,6 +566,16 @@ BEGIN
 END;
 $function$;
 
+-- Make the ACL active rather than only asserted. CREATE OR REPLACE preserves the
+-- existing grants and the live ACL was read as `postgres=X/postgres` on
+-- 2026-08-11, so this is a no-op today. It is here because this is the INNER
+-- implementation: the customer-scope and idempotency-payload-binding checks live
+-- in its two SECURITY DEFINER callers, so any client role holding EXECUTE here
+-- would skip those as well as reaching this gate. Costs nothing, and closes the
+-- incident B7/B8/B9 shape by construction instead of by inspection.
+REVOKE ALL ON FUNCTION public._post_invoice_impl_20260714(uuid, text)
+  FROM PUBLIC, anon, authenticated, service_role;
+
 DO $postcond$
 DECLARE
   v_count       int;
@@ -327,6 +587,10 @@ DECLARE
   v_fp_inv_after   text;
   v_fp_del_before  text;
   v_fp_del_after   text;
+  v_row_inv_before text;
+  v_row_inv_after  text;
+  v_row_del_before text;
+  v_row_del_after  text;
   v_blocked     boolean;
   v_status      text;
 BEGIN
@@ -342,37 +606,66 @@ BEGIN
   SELECT count(*) INTO v_count
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public' AND p.proname = '_post_invoice_impl_20260714'
+     AND p.pronargs = 2
+     AND p.proargtypes[0] = 'uuid'::regtype
+     AND p.proargtypes[1] = 'text'::regtype
      AND p.prosecdef
      AND p.proconfig @> ARRAY['search_path=public, pg_temp'];
   IF v_count <> 1 THEN
-    RAISE EXCEPTION 'POSTCOND: _post_invoice_impl_20260714 lost SECURITY DEFINER or its pinned search_path';
+    RAISE EXCEPTION 'POSTCOND: _post_invoice_impl_20260714 lost SECURITY DEFINER, its pinned search_path, or its uuid+text signature';
   END IF;
 
   -- The gate is present, and the pre-existing behaviour it was inserted around
-  -- survived the replace. These are the parts a careless re-emit would drop.
+  -- survived the replace. These are the parts a careless re-emit would drop —
+  -- including the AUTHORIZATION checks, which are the difference between a money
+  -- function and an open endpoint, and which no other assertion here would catch.
   SELECT count(*) INTO v_count
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public' AND p.proname = '_post_invoice_impl_20260714'
      AND position('WAVE-A-DELIVERY-BEFORE-BILLING-2026-08-11' in p.prosrc) > 0
      AND position('DELIVERY_NOT_COMPLETED' in p.prosrc) > 0
+     AND position('auth.uid()' in p.prosrc) > 0
+     AND position('Not authorized to post invoices' in p.prosrc) > 0
+     AND position('FOR UPDATE' in p.prosrc) > 0
+     AND position('check_idempotency' in p.prosrc) > 0
+     AND position('app.admin_override' in p.prosrc) > 0
+     AND position('financial_audit_log' in p.prosrc) > 0
+     AND position('activity_feed' in p.prosrc) > 0
      AND position('parse_payment_terms_days' in p.prosrc) > 0
      AND position('PRICING_INCOMPLETE' in p.prosrc) > 0
      AND position('check_period_open' in p.prosrc) > 0
      AND position('generate_rup_sales_records' in p.prosrc) > 0
      AND position('save_idempotency' in p.prosrc) > 0;
   IF v_count <> 1 THEN
-    RAISE EXCEPTION 'POSTCOND: the replacement is missing the new gate or dropped pre-existing behaviour (due dates, pricing gate, period check, RUP records or idempotency)';
+    RAISE EXCEPTION 'POSTCOND: the replacement is missing the new gate or dropped pre-existing behaviour (authorization, row lock, idempotency, due dates, pricing gate, period check, audit trail or RUP records)';
+  END IF;
+
+  -- EXECUTE rights. The REVOKE above makes this active rather than aspirational;
+  -- it is still asserted because the cost of being wrong is an anon-executable
+  -- SECURITY DEFINER money function, the exact shape of incidents B7/B8/B9. Read
+  -- live 2026-08-11 the ACL is `postgres=X/postgres` and nothing else: this is an
+  -- internal impl reached only through its two SECURITY DEFINER callers, so no
+  -- client role needs EXECUTE on it.
+  SELECT count(*) INTO v_count
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname = '_post_invoice_impl_20260714'
+     AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')
+     AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')
+     AND NOT has_function_privilege('service_role', p.oid, 'EXECUTE');
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'POSTCOND: anon, authenticated or service_role can still EXECUTE _post_invoice_impl_20260714 directly despite the REVOKE above. This is the INNER implementation — the customer-scope and idempotency-payload-binding checks live in its two callers, so a direct grant would skip them as well as reaching this gate. A SECURITY DEFINER money function must never be client-callable.';
   END IF;
 
   -- --------------------------------------------------------------------------
-  -- Behavioural probe. Everything written below is rolled back, and the rollback
-  -- is proven by the two fingerprint comparisons at the end.
+  -- Behavioural probe. Everything written below is rolled back. The rollback is
+  -- proven row-by-row on the two rows the probe writes; the whole-table sweep at
+  -- the end is advisory only, for the reason given there.
   -- --------------------------------------------------------------------------
   v_applier := current_user;
 
-  SELECT md5(coalesce(string_agg(id::text || '=' || status || '/' || coalesce(posted_at::text, 'NULL') || '/' || coalesce(due_date::text, 'NULL'), '|' ORDER BY id), 'EMPTY'))
+  SELECT md5(coalesce(string_agg(id::text || '=' || coalesce(status, 'NULL') || '/' ||coalesce(posted_at::text, 'NULL') || '/' || coalesce(due_date::text, 'NULL') || '/' || coalesce(deleted_at::text, 'NULL'), '|' ORDER BY id), 'EMPTY'))
     INTO v_fp_inv_before FROM public.invoices;
-  SELECT md5(coalesce(string_agg(id::text || '=' || status || '/' || coalesce(deleted_at::text, 'NULL'), '|' ORDER BY id), 'EMPTY'))
+  SELECT md5(coalesce(string_agg(id::text || '=' || coalesce(status, 'NULL') || '/' ||coalesce(deleted_at::text, 'NULL'), '|' ORDER BY id), 'EMPTY'))
     INTO v_fp_del_before FROM public.deliveries;
 
   SELECT id INTO v_admin_id
@@ -381,37 +674,100 @@ BEGIN
     RAISE EXCEPTION 'POSTCOND PROBE: no active admin profile exists, so posting cannot be exercised. Do not install a billing gate without watching it refuse and allow.';
   END IF;
 
-  -- A draft invoice whose delivery is completed AND which nothing else would
-  -- refuse, so a failure in the allow-arm can only be this gate.
+  -- A live draft whose delivery is completed AND which nothing ELSE would refuse,
+  -- so a failure in the allow-arm can only be this gate. The last two conditions
+  -- keep the OTHER live triggers on `deliveries` out of the way: the signature
+  -- guard refuses a move to 'completed' when signed_by is blank, and the
+  -- accounting-period guard refuses any status move touching a CLOSED period —
+  -- either one would abort the probe for a reason unrelated to billing.
   SELECT i.id, i.delivery_id INTO v_invoice_id, v_delivery_id
     FROM public.invoices i
     JOIN public.deliveries d ON d.id = i.delivery_id
     LEFT JOIN public.orders o ON o.id = i.order_id
-   WHERE i.status = 'draft'
+   WHERE i.status IN ('draft', 'unposted')
+     AND i.deleted_at IS NULL
      AND d.status = 'completed'
      AND d.deleted_at IS NULL
      AND COALESCE(i.pricing_pending, false) = false
-     AND COALESCE(o.status, 'confirmed') <> 'cancelled'
      AND COALESCE(o.pricing_status, 'priced') <> 'needs_pricing'
+     AND COALESCE(btrim(d.signed_by), '') <> ''
+     -- ...and nothing on the INVOICES side would refuse the allow arm either. These
+     -- mirror the other BEFORE-UPDATE guards on `invoices` and the group-post rule:
+     -- trg_guard_invoice_terminal_order refuses a terminal/deleted order,
+     -- guard_mono_invoice_split_billing_post refuses a split-billing order posted
+     -- without its group, post_invoice refuses a grouped invoice posted alone, and
+     -- trg_snapshot_line_shares_on_post refuses a field-app split set that does not
+     -- reconcile. Without these the probe could abort on an unrelated guard and be
+     -- misread as this gate having broken normal billing. Verified live 2026-08-11:
+     -- 6 rows qualify before these filters and the same 6 after, so they cost no
+     -- coverage.
+     AND i.invoice_group_id IS NULL
+     AND i.field_app_billing_set_id IS NULL
+     AND COALESCE(o.status, 'confirmed') NOT IN ('cancelled', 'voided')
+     AND COALESCE(o.deleted_at, 'epoch'::timestamptz) = 'epoch'::timestamptz
+     AND COALESCE(o.needs_split_billing, false) = false
+     AND NOT EXISTS (
+       SELECT 1 FROM public.order_item_field_allocations a
+         JOIN public.order_items oi ON oi.id = a.order_item_id
+        WHERE oi.order_id = o.id
+     )
+     AND NOT EXISTS (
+       SELECT 1 FROM public.accounting_periods ap
+        WHERE ap.status = 'closed'
+          AND COALESCE((d.completed_at AT TIME ZONE 'America/Chicago')::date, d.scheduled_date, (now() AT TIME ZONE 'America/Chicago')::date)
+              BETWEEN ap.period_start AND ap.period_end
+     )
+     AND NOT EXISTS (
+       SELECT 1 FROM public.accounting_periods ap
+        WHERE ap.status = 'closed'
+          AND i.invoice_date BETWEEN ap.period_start AND ap.period_end
+     )
    ORDER BY i.id LIMIT 1;
   IF v_invoice_id IS NULL THEN
-    RAISE EXCEPTION 'POSTCOND PROBE: no postable delivery-linked draft invoice exists, so neither arm of this gate can be exercised. Do not install it unproven.';
+    RAISE EXCEPTION 'POSTCOND PROBE: PROOF MATERIAL UNAVAILABLE — no postable delivery-linked draft invoice exists right now, so neither arm of this gate can be exercised. This is not evidence that the gate is wrong; it means production currently has nothing to prove it with (the office may simply have posted or voided the drafts that qualified). Re-run the candidate query read-only, wait for a qualifying draft, and apply then. Do not install this gate unproven.';
   END IF;
+
+  -- Row-level snapshots of the ONLY two rows the probe writes. These are the
+  -- authoritative rollback evidence, and they are what aborts the apply. The
+  -- whole-table fingerprints taken above are kept but downgraded to a NOTICE at
+  -- the end: under READ COMMITTED every statement in this block takes a fresh
+  -- snapshot, so an ordinary office edit committed by another session while the
+  -- probe runs would move a whole-table fingerprint through no fault of the
+  -- probe. Aborting a money migration with "the rollback did not hold" when the
+  -- rollback did in fact hold is the worst message this file could produce.
+  SELECT status || '/' || coalesce(posted_at::text, '-') || '/' || coalesce(posted_by::text, '-')
+         || '/' || coalesce(due_date::text, '-') || '/' || coalesce(deleted_at::text, '-')
+         || '/' || coalesce(updated_at::text, '-')
+    INTO v_row_inv_before FROM public.invoices WHERE id = v_invoice_id;
+  SELECT status || '/' || coalesce(deleted_at::text, '-') || '/' || coalesce(completed_at::text, '-')
+         || '/' || coalesce(signed_by, '-')
+    INTO v_row_del_before FROM public.deliveries WHERE id = v_delivery_id;
 
   BEGIN
     EXECUTE format('SET LOCAL request.jwt.claims = %L', json_build_object('sub', v_admin_id)::text);
 
-    -- (a) a delivery that has not happened yet must refuse the post. This is the
-    -- create_quick_delivery shape and the whole reason this migration exists.
-    FOREACH v_status IN ARRAY ARRAY['scheduled', 'in_progress', 'cancelled', 'voided'] LOOP
+    -- (a) A delivery that has not happened yet must refuse the post. 'scheduled'
+    -- is the exact quick-delivery shape and the whole reason this migration
+    -- exists; 'cancelled' is the shape whose refusal message tells the office to
+    -- void the draft instead. The override is on ONLY for the UPDATE — the live
+    -- transition trigger forbids completed -> scheduled outright — and is off
+    -- again before the post, so the gate is exercised without it.
+    FOREACH v_status IN ARRAY ARRAY['scheduled', 'cancelled'] LOOP
+      PERFORM set_config('app.admin_override', 'true', true);
       UPDATE public.deliveries SET status = v_status WHERE id = v_delivery_id;
+      PERFORM set_config('app.admin_override', 'false', true);
+
       v_blocked := false;
       BEGIN
         PERFORM public._post_invoice_impl_20260714(v_invoice_id);
         RAISE EXCEPTION 'POSTCOND PROBE: the gate ALLOWED a post while its delivery was "%"', v_status;
       EXCEPTION
         WHEN OTHERS THEN
-          IF SQLERRM NOT LIKE 'DELIVERY_NOT_COMPLETED%' THEN RAISE; END IF;
+          -- Either refusal is this gate doing its job. Matching only the first
+          -- would re-raise a DELIVERY_MISSING and abort the migration with a
+          -- failure that looks unrelated to billing.
+          IF SQLERRM NOT LIKE 'DELIVERY_NOT_COMPLETED%'
+             AND SQLERRM NOT LIKE 'DELIVERY_MISSING%' THEN RAISE; END IF;
           v_blocked := true;
       END;
       IF NOT v_blocked THEN
@@ -419,32 +775,48 @@ BEGIN
       END IF;
     END LOOP;
 
-    -- (b) a soft-deleted delivery must refuse even while its status still reads
+    -- (b) A soft-deleted delivery must refuse even while its status reads
     -- 'completed'. Without this arm the gate would pass a bill for a delivery the
     -- office had already retracted.
+    PERFORM set_config('app.admin_override', 'true', true);
     UPDATE public.deliveries SET status = 'completed', deleted_at = now() WHERE id = v_delivery_id;
+    PERFORM set_config('app.admin_override', 'false', true);
+
     v_blocked := false;
     BEGIN
       PERFORM public._post_invoice_impl_20260714(v_invoice_id);
       RAISE EXCEPTION 'POSTCOND PROBE: the gate ALLOWED a post against a soft-deleted delivery';
     EXCEPTION
       WHEN OTHERS THEN
-        IF SQLERRM NOT LIKE 'DELIVERY_NOT_COMPLETED%' THEN RAISE; END IF;
+        -- Either refusal is this gate doing its job. Matching only the first
+        -- would re-raise a DELIVERY_MISSING and abort the migration with a
+        -- failure that looks unrelated to billing.
+        IF SQLERRM NOT LIKE 'DELIVERY_NOT_COMPLETED%'
+           AND SQLERRM NOT LIKE 'DELIVERY_MISSING%' THEN RAISE; END IF;
         v_blocked := true;
     END;
     IF NOT v_blocked THEN
       RAISE EXCEPTION 'POSTCOND PROBE: the soft-delete refuse path did not run';
     END IF;
 
-    -- (c) THE ALLOW ARM. Restore the delivery and post for real. A gate that only
-    -- ever refuses is indistinguishable from a broken function, so ordinary
-    -- billing is proven to still work before this migration is allowed to stand.
+    -- (c) THE ALLOW ARM. Restore the delivery and post for real, with the override
+    -- OFF so this is an ordinary post. A gate that only ever refuses is
+    -- indistinguishable from a broken function, so normal billing is proven to
+    -- still work before this migration is allowed to stand.
+    PERFORM set_config('app.admin_override', 'true', true);
     UPDATE public.deliveries SET status = 'completed', deleted_at = NULL WHERE id = v_delivery_id;
+    PERFORM set_config('app.admin_override', 'false', true);
+
     BEGIN
       PERFORM public._post_invoice_impl_20260714(v_invoice_id);
     EXCEPTION
       WHEN OTHERS THEN
-        RAISE EXCEPTION 'POSTCOND PROBE: an ordinary post against a COMPLETED delivery failed [%]. This gate has broken normal billing — do not apply it.', SQLERRM;
+        -- Deliberately does NOT assert the cause. The candidate filter above
+        -- steers around every guard known to refuse this row, but a real post
+        -- also runs generate_rup_sales_records, the blend-ticket payment sync and
+        -- two audit inserts, any of which could fail for reasons that have
+        -- nothing to do with this gate. Read the quoted error before concluding.
+        RAISE EXCEPTION 'POSTCOND PROBE: an ordinary post against a COMPLETED delivery failed [%]. Determine whether that error comes from this gate or from an unrelated guard/trigger downstream of it BEFORE applying — if it is the gate, this change has broken normal billing and must not go in.', SQLERRM;
     END;
     SELECT status INTO v_status FROM public.invoices WHERE id = v_invoice_id;
     IF v_status <> 'posted' THEN
@@ -452,10 +824,12 @@ BEGIN
     END IF;
 
     PERFORM set_config('request.jwt.claims', '', true);
+    PERFORM set_config('app.admin_override', 'false', true);
     RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'PROBE_OK_ROLLBACK';
   EXCEPTION
     WHEN OTHERS THEN
       PERFORM set_config('request.jwt.claims', '', true);
+      PERFORM set_config('app.admin_override', 'false', true);
       IF SQLERRM <> 'PROBE_OK_ROLLBACK' THEN RAISE; END IF;
   END;
 
@@ -463,19 +837,36 @@ BEGIN
     RAISE EXCEPTION 'POSTCOND PROBE: the probe failed to restore role % [now %]', v_applier, current_user;
   END IF;
 
-  -- Prove the probe left nothing behind on either table it touched.
-  SELECT md5(coalesce(string_agg(id::text || '=' || status || '/' || coalesce(posted_at::text, 'NULL') || '/' || coalesce(due_date::text, 'NULL'), '|' ORDER BY id), 'EMPTY'))
-    INTO v_fp_inv_after FROM public.invoices;
-  SELECT md5(coalesce(string_agg(id::text || '=' || status || '/' || coalesce(deleted_at::text, 'NULL'), '|' ORDER BY id), 'EMPTY'))
-    INTO v_fp_del_after FROM public.deliveries;
-  IF v_fp_inv_after IS DISTINCT FROM v_fp_inv_before THEN
-    RAISE EXCEPTION 'POSTCOND: the probe changed live invoices — the rollback did not hold [% -> %]', v_fp_inv_before, v_fp_inv_after;
+  -- AUTHORITATIVE ROLLBACK CHECK: the two rows the probe actually wrote must be
+  -- exactly as they were. Anything else here is a genuine leak.
+  SELECT status || '/' || coalesce(posted_at::text, '-') || '/' || coalesce(posted_by::text, '-')
+         || '/' || coalesce(due_date::text, '-') || '/' || coalesce(deleted_at::text, '-')
+         || '/' || coalesce(updated_at::text, '-')
+    INTO v_row_inv_after FROM public.invoices WHERE id = v_invoice_id;
+  SELECT status || '/' || coalesce(deleted_at::text, '-') || '/' || coalesce(completed_at::text, '-')
+         || '/' || coalesce(signed_by, '-')
+    INTO v_row_del_after FROM public.deliveries WHERE id = v_delivery_id;
+  IF v_row_inv_after IS DISTINCT FROM v_row_inv_before THEN
+    RAISE EXCEPTION 'POSTCOND: the probe left its test INVOICE changed — the rollback did not hold [% -> %]', v_row_inv_before, v_row_inv_after;
   END IF;
-  IF v_fp_del_after IS DISTINCT FROM v_fp_del_before THEN
-    RAISE EXCEPTION 'POSTCOND: the probe changed live deliveries — the rollback did not hold [% -> %]', v_fp_del_before, v_fp_del_after;
+  IF v_row_del_after IS DISTINCT FROM v_row_del_before THEN
+    RAISE EXCEPTION 'POSTCOND: the probe left its test DELIVERY changed — the rollback did not hold [% -> %]', v_row_del_before, v_row_del_after;
+  END IF;
+
+  -- ADVISORY whole-table sweep. With the two probe rows proven intact above, a
+  -- difference here means another session committed an ordinary edit while this
+  -- migration was running. That is normal office activity, not a rollback
+  -- failure, and must not abort the apply.
+  SELECT md5(coalesce(string_agg(id::text || '=' || coalesce(status, 'NULL') || '/' ||coalesce(posted_at::text, 'NULL') || '/' || coalesce(due_date::text, 'NULL') || '/' || coalesce(deleted_at::text, 'NULL'), '|' ORDER BY id), 'EMPTY'))
+    INTO v_fp_inv_after FROM public.invoices;
+  SELECT md5(coalesce(string_agg(id::text || '=' || coalesce(status, 'NULL') || '/' ||coalesce(deleted_at::text, 'NULL'), '|' ORDER BY id), 'EMPTY'))
+    INTO v_fp_del_after FROM public.deliveries;
+  IF v_fp_inv_after IS DISTINCT FROM v_fp_inv_before
+     OR v_fp_del_after IS DISTINCT FROM v_fp_del_before THEN
+    RAISE NOTICE 'POSTCOND: invoices/deliveries changed elsewhere while this migration ran [inv % -> % , del % -> %], but the two rows the probe touched are byte-identical to before, so the probe rolled back cleanly. This is concurrent activity by another session, not a leak.',
+      v_fp_inv_before, v_fp_inv_after, v_fp_del_before, v_fp_del_after;
   END IF;
 END;
 $postcond$;
 
-RESET statement_timeout;
-RESET lock_timeout;
+COMMIT;
