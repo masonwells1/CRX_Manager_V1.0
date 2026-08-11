@@ -147,8 +147,17 @@ trusted executors while preserving direct harmless literals and ordinary
 PL/pgSQL `RETURN QUERY` syntax. A full historical migration scan found zero new
 denials from the narrowed rule.
 
-The focused actor-binding suite grew from 115 to 220 assertions while the
-idempotency reference suite remained at 86. Sixty-four continuation decisions were
+The final fresh-cycle review found that PostgreSQL's updatable views could
+rename the `cron.job` write target: a migration could declare a view over that
+table and then store unsafe function DDL through the view's `command` column.
+The reader now tracks views declared over `cron.job`, including quoted,
+schema-qualified, search-path-resolved, and transitive view aliases, and applies
+the existing direct/opaque command inspection to their UPDATEs. A direct
+harmless command remains allowed, staged commands remain fail-closed, and views
+over explicitly non-cron relations remain ordinary data.
+
+The focused actor-binding suite grew from 115 to 226 assertions while the
+idempotency reference suite remained at 86. Sixty-five continuation decisions were
 weakened or removed one at a time; every mutation made the real hook-process
 suite fail before restoration. Separate real-process probes allowed ordinary
 trigger/event-trigger declarations, direct-literal `USING`/`INTO`, and harmless

@@ -491,6 +491,44 @@ SET command = $job$SELECT public.existing_safe_job()$job$
 WHERE jobname = 'safe-existing-job';`);
 ok(!isDeny(r), "UPDATE cron.job.command without function DDL remains allowed");
 
+r = runHook(`CREATE TEMP VIEW cron_job_alias AS SELECT * FROM cron.job;
+UPDATE cron_job_alias
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`);
+ok(isDeny(r), "an updatable view cannot alias unsafe actor DDL into cron.job.command");
+
+r = runHook(`CREATE TEMP VIEW cron_job_alias AS SELECT * FROM cron.job;
+UPDATE cron_job_alias
+SET command = $job$SELECT public.existing_safe_job()$job$
+WHERE jobid = 42;`);
+ok(!isDeny(r), "an updatable cron.job view keeps a direct harmless command allowed");
+
+r = runHook(`${STAGED_DDL}
+CREATE TEMP VIEW cron_job_alias AS SELECT * FROM cron.job;
+UPDATE cron_job_alias
+SET command = (SELECT command FROM staged_cron_sql LIMIT 1)
+WHERE jobid = 42;`);
+ok(isDeny(r), "an updatable cron.job view cannot receive an opaque staged command");
+
+r = runHook(`CREATE TEMP VIEW ordinary_job_alias AS SELECT * FROM public.job;
+UPDATE ordinary_job_alias
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`);
+ok(!isDeny(r), "an ordinary non-cron view remains a data-only destination");
+
+r = runHook(`CREATE TEMP VIEW cron_job_alias AS SELECT * FROM cron.job;
+CREATE TEMP VIEW "CronJobFacade" AS SELECT * FROM cron_job_alias;
+UPDATE "CronJobFacade"
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`);
+ok(isDeny(r), "quoted transitive views cannot hide a cron.job command write");
+
+r = runHook(`CREATE VIEW public.cron_job_facade AS SELECT * FROM cron.job;
+UPDATE cron_job_facade
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`);
+ok(isDeny(r), "a search-path-resolved qualified view keeps the cron.job sink identity");
+
 r = runHook(`${STAGED_DDL}
 UPDATE cron.job
 SET command = (SELECT command FROM staged_cron_sql LIMIT 1)

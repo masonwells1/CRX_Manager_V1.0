@@ -239,6 +239,7 @@ const ASSIGN_RE =
 // normal UPDATE of documentation text is not reclassified as runtime DDL.
 const DECLARATION_INIT_RE =
   /(?:^|\bDECLARE\b)\s*(?:"[^"]+"|[A-Za-z_]\w*)\s+(?:CONSTANT\s+)?(?:"[^"]+"|[\w.]+(?:%(?:TYPE|ROWTYPE))?)(?:\s+(?:WITH(?:OUT)?\s+TIME\s+ZONE|DOUBLE\s+PRECISION|CHARACTER\s+VARYING|BIT\s+VARYING))?(?:\s*\([^;]*?\))?(?:\s*\[\s*\])?(?:\s+COLLATE\s+(?:"[^"]+"|[\w.]+))?(?:\s+NOT\s+NULL)?\s*(?::=|=(?!=)|DEFAULT\b)/i;
+let pgCronJobViewAliases = new Set();
 function isDynamicSqlStatement(stmt, rawStmt = stmt) {
   return /\bEXECUTE\b/i.test(stmt) ||
     ASSIGN_RE.test(stmt) ||
@@ -349,6 +350,71 @@ function normalizedQualifiedIdentifier(identifier) {
     while (/\s/.test(value[cursor] || "")) cursor++;
   }
   return parts.join(".");
+}
+
+function isPgCronJobName(identifier) {
+  const normalized = normalizedQualifiedIdentifier(identifier);
+  return normalized === "job" || normalized === "cron.job";
+}
+
+function isPgCronJobViewAliasName(identifier) {
+  const normalized = normalizedQualifiedIdentifier(identifier);
+  return normalized !== null && pgCronJobViewAliases.has(normalized);
+}
+
+function isPgCronJobWriteTarget(identifier) {
+  return isPgCronJobName(identifier) || isPgCronJobViewAliasName(identifier);
+}
+
+/** Find views declared by this migration whose query reads cron.job, including
+ * later views layered over an earlier alias. PostgreSQL simple views are
+ * updatable, so a write to such an alias changes cron.job.command even though
+ * the lexical target no longer says cron.job. */
+function declaredPgCronJobViewAliases(sql) {
+  const structural = maskSqlForCallNames(String(sql || ""));
+  if (structural === null) return new Set();
+  const viewHead = new RegExp(
+    `\\bCREATE\\s+(?:OR\\s+REPLACE\\s+)?(?:TEMP(?:ORARY)?\\s+)?` +
+    `(?:RECURSIVE\\s+)?VIEW\\s+(${SQL_QUALIFIED_IDENTIFIER_PATTERN})`,
+    "i"
+  );
+  const relationSource = new RegExp(
+    `\\b(?:FROM|JOIN|TABLE)\\s+(?:ONLY\\s+)?(${SQL_QUALIFIED_IDENTIFIER_PATTERN})`,
+    "gi"
+  );
+  const declarations = [];
+  for (const statement of structural.split(";")) {
+    const head = viewHead.exec(statement);
+    if (!head) continue;
+    const alias = normalizedQualifiedIdentifier(head[1]);
+    if (alias === null) continue;
+    const sources = [];
+    relationSource.lastIndex = 0;
+    let source;
+    while ((source = relationSource.exec(statement)) !== null) {
+      const normalized = normalizedQualifiedIdentifier(source[1]);
+      if (normalized !== null) sources.push(normalized);
+    }
+    declarations.push({ alias, sources });
+  }
+
+  const aliases = new Set();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const declaration of declarations) {
+      if (aliases.has(declaration.alias)) continue;
+      const reachesCronJob = declaration.sources.some((source) =>
+        source === "job" || source === "cron.job" || aliases.has(source) ||
+        aliases.has(source.split(".").at(-1))
+      );
+      if (!reachesCronJob) continue;
+      aliases.add(declaration.alias);
+      aliases.add(declaration.alias.split(".").at(-1));
+      changed = true;
+    }
+  }
+  return aliases;
 }
 
 /** Return the current pg_cron call sites while preserving the source argument
@@ -588,6 +654,12 @@ function hasOpaquePgCronCommandWrite(rawStmt) {
   const raw = String(rawStmt || "");
   const callableSql = maskSqlForCallNames(raw);
   if (callableSql === null) return true;
+  // The direct INSERT/MERGE validators are deliberately bound to cron.job's
+  // known column layout. A migration-created view can reorder or omit columns,
+  // so non-UPDATE writes through one require explicit manual review.
+  if (pgCronCommandWriteSites(callableSql).some(
+    (site) => site.viewAlias && site.kind !== "UPDATE"
+  )) return true;
   if (/\b(?:UPDATE|INSERT\s+INTO|MERGE\s+INTO|COPY)\b[\s\S]*U&\s*"/i.test(callableSql)) return true;
   if (/\bCOPY\b/i.test(callableSql)) return true;
 
@@ -643,18 +715,42 @@ function isPgCronCall(rawStmt) {
     unicodeCall.test(callableSql);
 }
 
+/** Return writes whose relation target is cron.job or a view declared over it
+ * in this migration. The mask preserves quoted-identifier spelling, and target
+ * comparison applies PostgreSQL's quoted/unquoted case rules. */
+function pgCronCommandWriteSites(callableSql) {
+  const writeBoundary = '(?:^|[^\\w$.\"])';
+  const relation = `(${SQL_QUALIFIED_IDENTIFIER_PATTERN})`;
+  const suffix = '(?:\\s*\\*)?(?=\\s|\\(|$)';
+  const patterns = [
+    ["COPY", new RegExp(`${writeBoundary}COPY\\s+(?:ONLY\\s+)?${relation}${suffix}`, "gi")],
+    ["INSERT", new RegExp(`${writeBoundary}INSERT\\s+INTO\\s+${relation}${suffix}`, "gi")],
+    ["MERGE", new RegExp(`${writeBoundary}MERGE\\s+INTO\\s+${relation}${suffix}`, "gi")],
+    ["UPDATE", new RegExp(`${writeBoundary}UPDATE\\s+(?:ONLY\\s+)?${relation}${suffix}`, "gi")],
+  ];
+  const sites = [];
+  for (const [kind, pattern] of patterns) {
+    let match;
+    while ((match = pattern.exec(callableSql)) !== null) {
+      if (!isPgCronJobWriteTarget(match[1])) continue;
+      sites.push({
+        kind,
+        end: match.index + match[0].length,
+        viewAlias: isPgCronJobViewAliasName(match[1]),
+      });
+    }
+  }
+  return sites;
+}
+
 /** cron.job.command is the table-level equivalent of cron.alter_job(command):
  * INSERT/COPY can create jobs and UPDATE/MERGE can replace their commands.
- * Recognize schema-qualified, quoted, ONLY/alias, tuple-assignment, and
- * search_path-resolved `job` forms while leaving other schemas alone. */
+ * Recognize schema-qualified, quoted, ONLY/alias, tuple-assignment,
+ * search_path-resolved `job`, and migration-declared updatable-view forms while
+ * leaving unrelated schemas/views alone. */
 function isPgCronCommandWrite(rawStmt) {
   const callableSql = maskSqlForCallNames(String(rawStmt || ""));
   if (callableSql === null) return false;
-  const jobTable = '(?:(?:"cron"|cron)\\s*\\.\\s*)?(?:"job"|job)';
-  const target = `(?:ONLY\\s+)?${jobTable}(?:\\s*\\*)?(?=\\s|\\(|$)`;
-  // A bare `job` target may resolve through search_path, but it must not match
-  // the suffix of an explicitly different schema such as public.job.
-  const writeBoundary = '(?:^|[^\\w$.\"])';
 
   // An escaped schema/table identifier can decode to cron.job. Any write using
   // such an identifier is opaque enough to require the runtime-DDL boundary.
@@ -662,34 +758,21 @@ function isPgCronCommandWrite(rawStmt) {
     return true;
   }
 
-  if (new RegExp(`${writeBoundary}COPY\\s+${target}`, "i").test(callableSql)) {
-    return true;
-  }
-
-  if (new RegExp(`${writeBoundary}INSERT\\s+INTO\\s+${target}`, "i").test(callableSql)) {
-    return true;
-  }
-
-  // MERGE can both insert a complete cron.job row and update command in WHEN
-  // branches. Treat the target as a sink without trying to prove which branch
-  // receives which literal.
-  if (new RegExp(`${writeBoundary}MERGE\\s+INTO\\s+${target}`, "i").test(callableSql)) {
-    return true;
-  }
-
-  const updateHead = new RegExp(`${writeBoundary}UPDATE\\s+${target}`, "i").exec(callableSql);
-  if (!updateHead) return false;
-  const tail = callableSql.slice(updateHead.index + updateHead[0].length);
+  const sites = pgCronCommandWriteSites(callableSql);
+  if (sites.some((site) => site.kind !== "UPDATE")) return true;
   const command = '(?:"command"|command)';
   const directAssignment = new RegExp(`(?:\\bSET\\b|,)\\s*${command}\\s*=`, "i");
   const tupleAssignment = new RegExp(
     `(?:\\bSET\\b|,)\\s*\\([^)]*(?:"command"|\\bcommand\\b)[^)]*\\)\\s*=`,
     "i"
   );
-  // The optional target alias is deliberately left in `tail`; both expressions
-  // search from SET/comma boundaries, so alias spelling cannot impersonate a
-  // command-column assignment.
-  return directAssignment.test(tail) || tupleAssignment.test(tail);
+  return sites.some((site) => {
+    const tail = callableSql.slice(site.end);
+    // The optional target alias is deliberately left in `tail`; both
+    // expressions search from SET/comma boundaries, so alias spelling cannot
+    // impersonate a command-column assignment.
+    return directAssignment.test(tail) || tupleAssignment.test(tail);
+  });
 }
 
 // EXECUTE is also a PostgreSQL privilege keyword. These two complete statement
@@ -1300,6 +1383,7 @@ function readAttrsAndBody(text, fromIdx) {
 
 const violations = [];
 try {
+  pgCronJobViewAliases = declaredPgCronJobViewAliases(content);
   if (hasExecuteSqlReadonlyIdentityChange(content)) {
     violations.push(
       "This migration renames or moves execute_sql_readonly, so later owner-executing SQL calls " +
