@@ -2,7 +2,7 @@
 
 **Last verified: 2026-08-11 UTC, post-deploy.** Live ledger high-water is `20260810235207` (`20260810183629_reconcile_pending_commission_snapshots`, B7-renamed on disk to the assigned version) at 958 ledger rows — the reconciliation that closed out the stale line-profit backfill, applied and verified live on 2026-08-10 with the registered smoke returning exact `SMOKE_PASS_ROLLBACK`. Ledger versions are UTC, which is why this stamp can read a day ahead of the local session date. The prior high-water `20260810025159` (`20260810022500_backfill_stale_line_profit`) was the money-workstream migration applied after the Team Board work. The 2026-08-09 post-apply verification that the rest of this header describes ended at `20260810010308` (`active_team_note_assignment_actor`); every ledger entry past it was applied live by separate 2026-08-10 sessions and is described in its own entry rather than here. Both Team Board migrations are live and now represented on disk: `20260809130108` added the governed `complete_team_note` RPC and assignment-notification trigger, and `20260810010308` closed the inactive-actor path in the insert policy and trigger. The full rollback-only business chain reached exact `SMOKE_PASS_ROLLBACK`; the compatible frontend was carried by PR #351 (merge commit `8dcb82fb`). Closeout PR #372 merged as `261d10bd` on 2026-08-11, Vercel reported the production deployment successful, and `/team-board` returned HTTP 200 with the app shell.
 
-**Repository lags production on the three whole-cent migrations.** History rows 868–870 (`20260810150000`, `20260810150500`, `20260810151000`; ledger versions `20260810152935`, `20260810154721`, `20260810155629`) are **applied live** but absent from `main` until PR #371 lands — see the dedicated entry below.
+**CLOSED 2026-08-11 — the repository no longer lags production on the three whole-cent migrations.** History rows 868–870 (`20260810150000`, `20260810150500`, `20260810151000`; ledger versions `20260810152935`, `20260810154721`, `20260810155629`) are **applied live** and their source is now on `main`: PR #371 merged as `465458a0` on 2026-08-11. `supabase/migrations/` is a complete reconstruction source again.
 
 **2026-08-10 money re-measure (read-only, live).** Whole-cent conformance by column, which is what history rows 868–870 are scoped against: `orders.total_price` 0 dirty, `orders.total_cost` 0, `orders.total_profit` 0, `order_items.profit` 0, `quotes.total_price` 0, `quotes.total_profit` 0, `quote_items.total_price` 0, `quote_items.profit` 0 — and still dirty: **`order_items.total_price` 35/288, `quotes.total_cost` 2/4, `commissions.commission_amount` 3/35, `commissions.order_profit` 3/35.** The `order_items` figure moved 46 → 35 because `20260810025159` (above) backfilled stale line profit through the canonical trigger; the 3 fractional `commissions` rows are unchanged and still deliberately unrepaired. **43 dirty rows remain and repairing them rewrites stored money — still Mason's separate decision, still not done.** Under the 2026-08-10 fail-closed money policy those columns are tracked debt, not an approved exception.
 
@@ -19,7 +19,7 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## OPEN 2026-08-10 — blend-ticket order creation can be rejected by the new whole-cent CHECKs
+## FIX BUILT AND PROVED 2026-08-11, NOT YET APPLIED LIVE — blend-ticket order creation can be rejected by the new whole-cent CHECKs
 
 **Severity: latent, not currently firing.** `create_order_from_blend_ticket` accumulates `v_total_price` and `v_total_cost` as raw `price * converted_quantity` products and writes them, plus `total_price - total_cost`, straight to `orders` with **no rounding** (live body confirmed 2026-08-10; `orders` has no BEFORE-UPDATE rounding trigger — only status/lineage/commission-stamp triggers). History row 870 added `orders_total_cost_whole_cents_chk` and `orders_total_profit_whole_cents_chk`, both live and `convalidated`. A blend ticket whose unit conversion yields a fractional quantity therefore produces a sub-cent total and the final write is **rejected**, rolling back the whole RPC and failing order creation from `BlendTicketDetail` with a raw constraint error.
 
@@ -27,7 +27,11 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 **Found by:** Codex P1 on PR #371, verified independently against live `pg_proc`, `pg_trigger` and `pg_constraint` rather than taken on trust.
 
-**Fix:** round the two accumulators at the write, matching what `trg_recalc_order_totals` already does on every other order path. Tracked in the Wave A ordering-cycle branch; until it lands, do not create the first blend ticket.
+**Fix (2026-08-11):** `supabase/migrations/20260811190000_blend_ticket_order_totals_whole_cents.sql`, carried by PR #371. **The original prescription above — "round the two accumulators at the write" — was superseded.** Rounding the header write would still overwrite the canonical header that `trg_order_items_round_money` (BEFORE ROW) and `after_order_items_change` → `trg_recalc_order_totals` (AFTER ROW) had already derived from the rounded lines, leaving two writers that can disagree. The migration **deletes** the header write instead and re-reads the stored header, so those four columns have exactly one source of truth. Because the header is then trigger-owned, the body also carries a run-time postcondition asserting the stored `total_price`, `total_cost` and `total_profit` equal the canonical sum of the rounded lines (`BLEND_TICKET_HEADER_NOT_RECALCULATED`), so a trigger dropped after the apply fails loudly instead of silently booking a zero-value order. Three preconditions fail the apply closed: the live body fingerprint plus single-overload, both `order_items` money triggers present and genuinely firing (`tgenabled`, `tgconstraint`, `tgqual`, `tgfoid`), and the recalculation trigger function's own body fingerprint. Proved across five stages against a disposable `postgres:17-alpine` carrying the live trigger bodies byte for byte; guarded by `src/lib/blendTicketOrderTotalsMigration.test.ts` (8 tests, mutation-tested both directions). Full detail in `docs/reference/migration-history.md` row 871.
+
+**Still not applied live** (Mason held the live apply on 2026-08-11 pending a clean adversarial proof and the merge of PR #371), so the operational guidance is unchanged: **do not create the first blend ticket until this migration is live.** Production still holds 0 blend tickets, so nothing is currently at risk.
+
+**Follow-up, deliberately not in this diff:** the two hand-maintained running totals (`v_total_price`, `v_total_cost`) that fed only the deleted header write are now dead code and should be removed. A concurrent session's competing migration `20260811200000_blend_ticket_order_whole_cent_totals` did remove them, but it carried no executable drift check and would have silently overwritten the hardened body when applied second. It reached `main` in PR #371 (merge `465458a0`, 2026-08-11) and was **never applied to the database** — verified against the live ledger. Mason chose this file over it on 2026-08-11, so the PR carrying this entry deletes it from `main`. Removing the accumulators makes the delta a second hunk and requires re-anchoring the container prover and its pinned removed-span fingerprint, so it belongs in its own change once this one is live.
 
 ---
 
@@ -123,11 +127,10 @@ repository's ability to reconstruct it.
 regenerating the registry from live only made it visible. Leaving the registry stale
 instead would have been a second, worse inaccuracy.
 
-**Closes when PR #371 lands.** That PR is the home of all three files (history rows 868–870)
-and this entry lives on its branch; the gap is closed the moment it merges. Until then, treat
-`supabase/migrations/` on `main` as an incomplete reconstruction source for anything dated
-2026-08-10 15:00 UTC or later, and prefer the live ledger. PR #372 deliberately did not copy
-the files in: duplicating an open PR's migrations would collide when #371 merges.
+**CLOSED — PR #371 merged as `465458a0` on 2026-08-11.** That PR was the home of all three files
+(history rows 868–870); all three are present under `supabase/migrations/` on `main`, verified by
+name on 2026-08-11, so `main` is a complete reconstruction source again for 2026-08-10 15:00 UTC
+and later. PR #372 deliberately did not copy the files in, to avoid colliding with #371 on merge.
 
 ---
 

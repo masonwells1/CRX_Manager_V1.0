@@ -254,7 +254,17 @@ full migration-apply proof gate. They replace function bodies and add CHECK cons
 introspection in the same change (high-water now `20260810155629`). No application code has
 been pushed, merged, or deployed — that is still separate.
 
-### `restore_quote_version` — the one residual path, measured against live 2026-08-11
+### `restore_quote_version` — a residual path, measured against live 2026-08-11
+
+> **Correction (2026-08-11).** This section previously called `restore_quote_version` "the one
+> residual path". That was wrong, and the error was load-bearing: it implied the constrained
+> columns had exactly one unrounded writer left. The exact-SHA `gpt-5.6-sol` review of PR #371
+> then found a second one on the ORDER side — `create_order_from_blend_ticket` overwrote
+> `orders.total_cost` / `total_profit` with raw, unrounded per-line accumulators, so a
+> fractional converted quantity produced a sub-cent value that
+> `orders_total_cost_whole_cents_chk` rejects, rolling the entire order creation back
+> (CRX-MONEY-001). It is fixed by migration `20260811190000`. `restore_quote_version` remains a
+> residual path on the QUOTE side; the live evidence below still stands as written.
 
 `20260810151000`'s header flags `restore_quote_version` as the only writer that can set a
 now-constrained quote money column without rounding: it replays `quote_versions.snapshot_data`

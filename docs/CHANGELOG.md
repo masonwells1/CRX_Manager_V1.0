@@ -2,32 +2,47 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-11 — Let the order-totals trigger own the blend-ticket order header
+## 2026-08-11 — Fix blend-ticket order creation failing on fractional quantities
 
-The validated whole-cent CHECK constraints now live on `orders.total_cost` and `orders.total_profit`
-were violated by blend-ticket order creation, which finished by overwriting the order header with raw,
-unrounded price-times-converted-quantity sums. Any blend ticket whose unit conversion produced a
-fractional quantity would have had its entire completed-ticket-to-order transaction rejected and
-rolled back. Production holds no blend ticket that has produced an order, so nothing was ever lost:
-the defect was latent, not historical.
-
-`20260811200000_blend_ticket_order_whole_cent_totals.sql` re-emits the function from its already-applied
-source, whose body was md5-matched against live before editing, with exactly two deltas. The raw header
-overwrite is deleted, and the header is read back from the row the AFTER-ROW totals trigger has already
-written from the per-line values -- so there is now one source of truth for those four columns instead of
-two that disagreed about rounding. The two hand-maintained running totals that fed only the removed
-statement are dropped as dead code. Per-line money, actor binding, idempotency, SECURITY DEFINER,
-search path and grants are byte-identical to the applied source.
-
-Scope was narrowed after checking live rather than assuming. An earlier draft also rounded the per-line
-money in the order-items INSERT; live constraint state shows no whole-cent CHECK on that line total or
-its margin percentage, and the BEFORE-ROW rounding trigger derives line profit from pre-rounded
-components while discarding whatever the caller passes, so the line INSERT could never have failed and
-those changes were removed as redundant. Because the header is now written only by a trigger, a missing
-or disabled trigger would leave every blend-ticket order header at zero silently instead of raising, so
-the migration ends with a fail-closed post-condition block asserting the function has exactly one
-overload, that the totals trigger exists and is enabled, that the removed overwrite is genuinely absent
-from the stored source, and that the actor-binding and idempotency guards survived the re-emission.
+Blend tickets whose converted quantity was not a whole number of units could not become orders at
+all. `create_order_from_blend_ticket` summed each line's extended price and cost without rounding
+and then wrote those raw sums into the order header, which the whole-cent constraints added live on
+2026-08-10 reject — so the database rolled the whole thing back and the user got a bare failure with
+no order, no line items and no inventory movement. Where the unrounded sum happened to land on a
+whole cent it was still wrong in kind: it overwrote the canonical header the `order_items` triggers
+had already derived from the rounded lines. Migration
+`20260811190000_blend_ticket_order_totals_whole_cents.sql` deletes that header write rather than
+wrapping it in a rounding call, because the BEFORE-row rounding trigger and the AFTER-row
+recalculation trigger have already produced the correct header by that point; the function now reads
+the stored header back — and then proves that header really is the canonical sum of the rounded
+lines, so a trigger dropped in the future fails loudly instead of quietly booking a zero-value order.
+That run-time check reads the three money columns straight out of `orders` and covers price, cost
+**and** profit; profit carries one of the two whole-cent constraints this migration exists to stop
+tripping, so a trigger that got price and cost right but profit wrong would not slip through. A
+header that cannot be read back at all is reported as exactly that rather than being blamed on the
+trigger.
+Nothing else in the function changes — authorization, idempotency, row locking, `SECURITY DEFINER`
+posture and grants are reproduced byte for byte from live. Three preconditions fail the apply closed:
+the live body must match the fingerprint this delta was written against and be the only overload;
+both `order_items` money triggers must be present and actually fire for an ordinary insert — checked
+down to whether a trigger is replica-only, deferred to commit time, filtered by a WHEN clause, or
+repointed at a different function, any of which would have passed a naive "is it enabled" test while
+the header silently went unwritten; and the recalculation trigger's own body must match the
+fingerprint the run-time check was copied from, because pinning *which* function a trigger points at
+says nothing about *what that function computes* — that formula has already been rewritten twice. Proved end to end against a disposable PostgreSQL 17 container —
+the failure reproduces on the pre-fix body, the migration applies verbatim, the registered smoke
+chain returns its terminal pass marker, dropping the rounding trigger makes the apply refuse, and
+dropping the recalculation trigger makes the fixed function refuse at run time instead of saving a
+zero-value order. Both `order_items` trigger functions in that container are the live bodies byte for byte, fetched
+from production and fingerprint-matched, so the proof exercises the real formulas rather than a
+plausible reproduction of them. The prover derives the pre-fix body by reversing the migration's own
+documented hunk and aborts unless *both* the reconstructed baseline and the span it removed match
+their pinned fingerprints — reversal alone would have deleted an unreviewed statement smuggled inside
+the hunk and still rebuilt the baseline byte-perfectly. A source-guard test locks the delta in and was mutation-tested in both directions — the
+raw header overwrite, a downgraded authorization gate and a deleted run-time postcondition each turn
+it red. This also corrects the 2026-08-10 audit's claim that `restore_quote_version` was the only
+remaining unrounded writer — this was a second one. The migration moves no money and changes no
+schema object; it is written and proved but **not applied live**, pending Mason's approval.
 
 ## 2026-08-11 — Commission-payout intent binding merged and applied live (PR #378)
 
