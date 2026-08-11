@@ -104,6 +104,40 @@ are now fixtures in the suite, each confirmed red against the previous shape.
 Raised by CodeRabbit on PR #359 and deferred there only because a new commit
 would have discarded that PR's banked Vercel status while the daily build
 quota was exhausted.
+## 2026-08-10 — One-shot replay overrides expire and are spent; approved-set repairs are one table each (PR #364, Codex round 11)
+
+Two ways a population-bound money repair could still be released against rows
+nobody approved.
+
+**The one-shot replay override was reusable across databases and across time.**
+It bound the migration name and a hash of the exact SQL — and nothing else. So
+an override written for one approved replay stayed valid indefinitely, and
+authorized the identical write on any database, including a restored one whose
+rows were never the population the repair was reviewed against. The override
+now must also name the target project and carry an `issuedAt` inside a
+30-minute window, and it is **consumed on sight**: the guard deletes it before
+deciding, so it releases exactly one apply attempt whether that attempt is then
+accepted or refused. A second replay needs a second, freshly minted override
+and, as before, Mason's explicit OK. Mutation cases cover a missing project, a
+foreign project, a missing `issuedAt`, a stale one, a future-dated one, and
+both consumption paths — the accepted override and the refused one.
+
+**A multi-table approved-set repair could pass with a digest nothing checked.**
+Coverage accumulated across every hash statement assigned to the compared
+variable, but only one comparison was ever verified fail-closed. Delete the
+second table's `IF`/`RAISE` and the migration still validated: table, column,
+and set coverage were all satisfied by a digest no verified comparison
+governed, so that table could be rewritten after its approved population had
+drifted. Re-deriving which comparison governs which digest is a dataflow
+analysis over PL/pgSQL text, and a guard that guesses wrong there is worse than
+no guard — so the unverifiable shape is refused instead. One rewritten business
+table, one digest, one fail-closed comparison; a repair spanning two tables is
+two migrations, each binding its own approved population. A second hash
+assigned into the compared variable is refused on the same ground.
+
+Suites, all green: approved-set validator **63 mutation cases**,
+`migration-apply-guard` **111 assertions**.
+
 ## 2026-08-10 — Approved-set digests now cover the rows actually written (PR #364, Codex round 10)
 
 Four HIGH findings from the round-10 adversarial review, every one of them against the guards added

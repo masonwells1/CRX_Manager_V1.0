@@ -776,9 +776,30 @@ for file in $ALL_SQL; do
       # blanket wave-through, and it is never silent — see the WARNING below.
       OPT_OUT=$(grep -iE 'APPROVED_SET_DIGEST:[[:space:]]*NOT-REQUIRED' "$file" | head -1 || true)
 
+      REWRITE_TABLE_COUNT=$(printf '%s\n' "$REWRITE_TABLES" | { grep -c . || true; })
+      REWRITE_TABLES_ONE_LINE=$(printf '%s\n' "$REWRITE_TABLES" | tr '\n' ' ' | sed 's/ *$//')
+
       DIGEST_BOUND=0
       DIGEST_WHY=""
-      if [ -n "$DIGEST_HEX" ]; then
+      # ---- ONE TABLE PER APPROVED-SET REPAIR (Codex High, round 11) ---------
+      # Round 10 tracked the captured id set per table so a two-table repair
+      # could carry one array each. Codex broke that in round 11: coverage
+      # accumulates across every hash statement assigned to the compared
+      # variable, but only ONE comparison is ever verified fail-closed. Delete
+      # the second table's IF/RAISE and the migration still passed — table,
+      # column and set coverage were all satisfied by a digest nothing checked.
+      #
+      # Proving "each table's digest is coupled to its own fail-closed
+      # comparison" means re-deriving, for every hash statement, which
+      # comparison governs it and whether the variable was overwritten in
+      # between. That is a dataflow analysis over PL/pgSQL text, and a guard
+      # that is wrong about it is worse than no guard. So the unverifiable shape
+      # is refused instead, exactly as the second predicate was in round 10: one
+      # rewritten table, one digest, one comparison. A repair spanning two
+      # tables is two migrations, each binding its own approved population.
+      if [ "$REWRITE_TABLE_COUNT" -gt 1 ]; then
+        DIGEST_WHY="this migration rewrites $REWRITE_TABLE_COUNT business tables in one file ($REWRITE_TABLES_ONE_LINE). An approved-set repair binds ONE table to ONE digest and ONE fail-closed comparison; with several, the guard cannot tell which comparison governs which digest, and dropping one table's comparison leaves its rows unprotected while the other table's check still passes. Split this into one migration per table."
+      elif [ -n "$DIGEST_HEX" ]; then
         # Where is that hex first compared for INEQUALITY in executable sql?
         # Only a mismatch operator counts. `IF actual = '<approved>' THEN RAISE`
         # reads like a guard and is the exact inversion of one: it aborts when
@@ -1016,8 +1037,19 @@ for file in $ALL_SQL; do
                     tblvar[tb[k]] = sv
                   }
                   found = 1
+                  nstmt++
                   stmtall = stmtall " " s
                   spanall = spanall " " span
+                }
+                # ONE digest, not a union of them (Codex High, round 11). The
+                # comparison below tests whatever the variable held LAST, so a
+                # second hash assigned to the same variable is coverage the
+                # guard cannot tie to any verified comparison — and in a repair
+                # with two of them, deleting one comparison left its material
+                # covered and unchecked. One statement has to satisfy the whole
+                # coverage test on its own.
+                if (nstmt > 1) {
+                  print "computes " nstmt " separate digests into " var " before the write — only the last one survives to be compared, so the rest is coverage no verified comparison governs. Compute one digest over the approved set and compare that one"; exit
                 }
                 # No statement assigns a hash into the compared variable at all.
                 # Printing nothing is the signal for that case; the caller

@@ -17,7 +17,7 @@
 // Setup matcher: this hook is registered against matcher "*" and filters
 // in-script for tool names containing "apply_migration".
 
-import { readFileSync, existsSync, readdirSync, statSync, mkdirSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, statSync, mkdirSync, unlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -346,17 +346,67 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
       // must hash the EXACT SQL they are about to run and record it. A named
       // flag would be a wave-through for any body; binding to `currentHash`
       // means the override authorizes this text and nothing else.
+      //
+      // ONE SHOT MEANS ONE SHOT (Codex High, round 11). Round 10 bound the
+      // override to the stem and the SQL hash and stopped there — so the same
+      // file stayed valid across DATABASES and across TIME. An override written
+      // for one approved replay still released the identical money write days
+      // later, against a restored or entirely different project: exactly the
+      // population drift this guard exists to stop. It must now also name the
+      // target project and carry a fresh timestamp, and it is CONSUMED on
+      // sight — deleted before the verdict is decided, so it authorizes one
+      // apply attempt whether that attempt is then accepted or refused.
       const ovPath = path.join(stateDir, "one-shot-replay-override.json");
+      const OVERRIDE_MAX_AGE_MS = 30 * 60 * 1000;
+      const OVERRIDE_MAX_SKEW_MS = 60 * 1000;
       let overrideOk = false;
-      try {
-        if (existsSync(ovPath)) {
-          const ov = JSON.parse(readFileSync(ovPath, "utf8"));
-          overrideOk =
-            (ov?.migration || "").toString().trim() === stem &&
-            currentHash !== "" &&
-            (ov?.queryHash || "").toString().trim().toLowerCase() === currentHash;
+      let overrideWhy = "";
+      if (existsSync(ovPath)) {
+        let raw = "";
+        try {
+          raw = readFileSync(ovPath, "utf8");
+        } catch (err) {
+          overrideWhy = `it could not be read (${err?.message || err})`;
         }
-      } catch { overrideOk = false; }
+        // Consume before deciding. A parse failure, a mismatch, and a clean
+        // acceptance all have to leave the operator with a spent override —
+        // otherwise "one-shot" would mean "until someone remembers to delete
+        // it", which is what round 11 broke.
+        try { unlinkSync(ovPath); } catch { /* already gone */ }
+
+        if (!overrideWhy) {
+          try {
+            const ov = JSON.parse(raw);
+            const ovMigration = (ov?.migration || "").toString().trim();
+            const ovHash = (ov?.queryHash || "").toString().trim().toLowerCase();
+            const ovProject = (ov?.project || "").toString().trim().toLowerCase();
+            const ovIssued = Date.parse((ov?.issuedAt || "").toString().trim());
+            const ageMs = Number.isFinite(ovIssued) ? Date.now() - ovIssued : NaN;
+
+            if (ovMigration !== stem) {
+              overrideWhy = `it authorizes "${ovMigration || "(no migration named)"}", not "${stem}"`;
+            } else if (currentHash === "" || ovHash !== currentHash) {
+              overrideWhy = `its queryHash does not match the SQL being applied`;
+            } else if (!ovProject) {
+              overrideWhy =
+                `it names no target project, so it cannot be shown to authorize a replay against ` +
+                `"${targetRef}" rather than some other database`;
+            } else if (ovProject !== targetRef.toLowerCase()) {
+              overrideWhy = `it authorizes project "${ovProject}", but this apply targets "${targetRef}"`;
+            } else if (!Number.isFinite(ovIssued)) {
+              overrideWhy = `its issuedAt is missing or unparseable, so its age cannot be checked`;
+            } else if (ageMs > OVERRIDE_MAX_AGE_MS || ageMs < -OVERRIDE_MAX_SKEW_MS) {
+              overrideWhy =
+                `it was issued ${Math.round(ageMs / 60000)} minute(s) ago, outside the ` +
+                `${OVERRIDE_MAX_AGE_MS / 60000}-minute window`;
+            } else {
+              overrideOk = true;
+            }
+          } catch (err) {
+            overrideWhy = `it is not valid JSON (${err?.message || err})`;
+          }
+        }
+      }
       if (overrideOk) continue;
 
       out("block",
@@ -367,13 +417,21 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
         `Its authorization was bound to the live population at the time it was written, so running ` +
         `it against a database that never had it rewrites rows nobody approved. After a restore, ` +
         `the corrected values come back with the DATA — not by re-running the edit.\n\n` +
-        `If this really is a deliberate, reviewed replay, bind the override to the exact SQL:\n` +
+        (overrideWhy
+          ? `An override file was present and has been CONSUMED without releasing this apply: ${overrideWhy}. ` +
+            `Write a new one below if the replay is genuinely intended.\n\n`
+          : ``) +
+        `If this really is a deliberate, reviewed replay, bind the override to the exact SQL, ` +
+        `this database, and this moment:\n` +
         `  node -e "const c=require('node:crypto'),f=require('node:fs');` +
         `const q=f.readFileSync('supabase/migrations/${stem}.sql','utf8');` +
         `f.writeFileSync('.claude/session-state/one-shot-replay-override.json',` +
-        `JSON.stringify({migration:'${stem}',queryHash:c.createHash('sha256').update(q).digest('hex')}))"\n` +
-        `That override authorizes that exact text and nothing else. Get Mason's explicit OK first — ` +
-        `this is a live money write.`);
+        `JSON.stringify({migration:'${stem}',queryHash:c.createHash('sha256').update(q).digest('hex'),` +
+        `project:'${targetRef}',issuedAt:new Date().toISOString()}))"\n` +
+        `That override authorizes that exact text, on ${targetRef}, for the next ` +
+        `${OVERRIDE_MAX_AGE_MS / 60000} minutes, for ONE apply attempt — it is deleted the moment ` +
+        `the guard reads it, so a second attempt needs a second override. Get Mason's explicit OK ` +
+        `first — this is a live money write.`);
     }
   }
 }

@@ -516,15 +516,16 @@ const CASES = [
       `  UPDATE public.orders SET total_profit = 0, subtotal_cents = 0;\nEND $$;\n`,
   },
   {
-    // The other side of the same rule: two tables, two digests, both asserted
-    // before either write. This has to pass, or the fix is just a ban on
-    // multi-table repairs.
-    name: 'two tables each covered by their own asserted digest is bound',
-    expect: 'silent',
-    // Each table needs its OWN captured array — orders.id and order_items.id are
-    // different id spaces — so the binding is tracked per table, not per
-    // migration. This has to pass, or the fix is just a ban on multi-table
-    // repairs.
+    // Round 10 accepted this shape: two tables, two captured arrays, two
+    // digests, both compared. Codex broke it in round 11 — see the pair of
+    // cases below. Coverage accumulates across every hash assigned to the
+    // compared variable, but only ONE comparison is verified fail-closed, so
+    // the second table's digest was material nothing checked. Rather than
+    // guess which comparison governs which digest, a multi-table repair is now
+    // refused outright and must be split into one migration per table.
+    name: 'round-11: a repair spanning two tables is refused, however well formed',
+    expect: 'violation',
+    mustReport: 'UPDATE public.order_items SET total_profit = 0 WHERE id = ANY(v_item_ids);',
     sql:
       `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\n` +
       `DECLARE v_ids uuid[]; v_item_ids uuid[]; actual text; n integer;\nBEGIN\n` +
@@ -545,6 +546,56 @@ const CASES = [
       `  UPDATE public.order_items SET total_profit = 0 WHERE id = ANY(v_item_ids);\n` +
       `  GET DIAGNOSTICS n = ROW_COUNT;\n` +
       `  IF n <> array_length(v_item_ids, 1) THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\nEND $$;\n`,
+  },
+
+  {
+    // The exact bypass Codex reported in round 11: take the well-formed
+    // two-table repair above and delete the SECOND table's comparison. Table,
+    // column and captured-set coverage all stay satisfied — by a digest that is
+    // now never checked — so order_items could be rewritten after its approved
+    // population had drifted, while orders' check still passed.
+    name: 'Codex round-11 bypass: two tables, the second comparison deleted',
+    expect: 'violation',
+    mustReport: 'UPDATE public.order_items SET total_profit = 0 WHERE id = ANY(v_item_ids);',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\n` +
+      `DECLARE v_ids uuid[]; v_item_ids uuid[]; actual text; n integer;\nBEGIN\n` +
+      `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
+      `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
+      `  SELECT array_agg(s.id ORDER BY s.id) INTO v_item_ids\n` +
+      `    FROM (SELECT id FROM public.order_items WHERE stale ORDER BY id FOR UPDATE) s;\n` +
+      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
+      `  SELECT ${HASH_EXPR} INTO actual FROM public.order_items WHERE id = ANY(v_item_ids);\n` +
+      `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);\n` +
+      `  GET DIAGNOSTICS n = ROW_COUNT;\n` +
+      `  IF n <> array_length(v_ids, 1) THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\n` +
+      `  UPDATE public.order_items SET total_profit = 0 WHERE id = ANY(v_item_ids);\n` +
+      `  GET DIAGNOSTICS n = ROW_COUNT;\n` +
+      `  IF n <> array_length(v_item_ids, 1) THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\nEND $$;\n`,
+  },
+  {
+    // The single-table form of the same accumulation hole: two hashes into one
+    // variable, one comparison. The comparison sees whatever ran last, so the
+    // other digest is coverage no verified check governs.
+    name: 'round-11: two digests computed into the same compared variable',
+    expect: 'violation',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\n` +
+      `DECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
+      `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
+      `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
+      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
+      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);\n` +
+      `  GET DIAGNOSTICS n = ROW_COUNT;\n` +
+      `  IF n <> array_length(v_ids, 1) THEN\n` +
       `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\nEND $$;\n`,
   },
 

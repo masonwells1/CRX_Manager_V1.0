@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
@@ -622,16 +622,64 @@ function armAutopilot(stateDir, hoursFromNow) {
 
     // 5. The override is bound to the exact SQL, not to a name. A flag keyed on
     //    the migration alone would authorize any body someone put under it.
+    //
+    //    Round 11 (Codex High) added the other two axes: an override bound only
+    //    to stem+hash stayed valid across DATABASES and across TIME, so one
+    //    approved replay released the identical money write days later against a
+    //    restored or different project. It must now also name the target and be
+    //    fresh, and it is consumed on sight.
     const ovPath = path.join(stateDir, "one-shot-replay-override.json");
-    writeFileSync(ovPath, JSON.stringify({ migration: STEM, queryHash: sha("some other sql") }));
+    const iso = (msAgo) => new Date(Date.now() - msAgo).toISOString();
+    // `apply()` transmits project_id "x", so that is the target this override
+    // has to name.
+    const goodOverride = (extra = {}) => JSON.stringify({
+      migration: STEM,
+      queryHash: sha(ONE_SHOT_SQL),
+      project: "x",
+      issuedAt: iso(0),
+      ...extra,
+    });
+
+    writeFileSync(ovPath, goodOverride({ queryHash: sha("some other sql") }));
     r = apply(STEM, ONE_SHOT_SQL);
     ok(isOneShotDeny(r), "an override whose queryHash does not match the transmitted SQL does not authorize it");
 
     writeFileSync(ovPath, JSON.stringify({ migration: STEM, queryHash: sha(ONE_SHOT_SQL) }));
     r = apply(STEM, ONE_SHOT_SQL);
-    ok(!isOneShotDeny(r), "a digest-bound override matching the exact SQL releases the one-shot refusal");
+    ok(isOneShotDeny(r), "round-11: an override naming no project does not authorize a replay on any database");
+
+    writeFileSync(ovPath, goodOverride({ project: "some-other-project-ref" }));
+    r = apply(STEM, ONE_SHOT_SQL);
+    ok(isOneShotDeny(r), "round-11: an override issued for a different project does not authorize this one");
+
+    writeFileSync(ovPath, goodOverride({ issuedAt: undefined }));
+    r = apply(STEM, ONE_SHOT_SQL);
+    ok(isOneShotDeny(r), "round-11: an override with no issuedAt cannot be shown to be fresh, so it is refused");
+
+    writeFileSync(ovPath, goodOverride({ issuedAt: iso(31 * 60 * 1000) }));
+    r = apply(STEM, ONE_SHOT_SQL);
+    ok(isOneShotDeny(r), "round-11: an override older than the 30-minute window no longer authorizes the replay");
+
+    writeFileSync(ovPath, goodOverride({ issuedAt: iso(-10 * 60 * 1000) }));
+    r = apply(STEM, ONE_SHOT_SQL);
+    ok(isOneShotDeny(r), "round-11: a future-dated override cannot buy extra window and is refused");
+
+    // Every one of those refusals must ALSO have spent the override — a file
+    // that survives its own rejection is a file someone can leave lying around.
+    ok(!existsSync(ovPath), "round-11: a refused override is consumed, not left on disk for the next attempt");
+
+    writeFileSync(ovPath, goodOverride());
+    r = apply(STEM, ONE_SHOT_SQL);
+    ok(!isOneShotDeny(r), "a fully bound override — exact SQL, this project, freshly issued — releases the refusal");
+    ok(!existsSync(ovPath), "round-11: an ACCEPTED override is consumed too, so it authorizes exactly one attempt");
+
+    // Consumed means the very next identical apply is refused again. Before
+    // round 11 this second attempt sailed through on the same file.
+    r = apply(STEM, ONE_SHOT_SQL);
+    ok(isOneShotDeny(r), "round-11: replaying the same approved SQL a second time needs a second override");
 
     // The same override must not release a DIFFERENT body.
+    writeFileSync(ovPath, goodOverride());
     r = apply(STEM, `${ONE_SHOT_SQL} -- edited`);
     ok(isOneShotDeny(r), "the override authorizes that exact text and nothing else");
     rmSync(ovPath, { force: true });
