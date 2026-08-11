@@ -770,6 +770,22 @@
         "billing"
       ]
     },
+    "commission_payout_intent_binding_live": {
+      "chain": "smoke-commission-payout-intent-binding-live.sql",
+      "description": "LIVE-RUNNABLE counterpart to the CONTAINER ONLY create_commission_payment chain above: it seeds its own [SMOKE] customer/order/commissions, needs no prover fixtures and no public.proof_effects, so it can be executed against the live database on demand (as postgres/service_role, after 20260811130000 is applied). This is the chain that actually certified the intent binding against production on 2026-08-11 - terminal text SMOKE_PASS_ROLLBACK (9/9 incl. cross-actor). Proves that a real payout's receipt carries request_actor_id plus a 64-character request_fingerprint; that an identical intent replays to the SAME payment id and the fingerprint ignores surrounding whitespace; that a changed commission selection or a changed reference on the retained key raises IDEMPOTENCY_INTENT_MISMATCH; that a NULL key raises IDEMPOTENCY_KEY_REQUIRED and pays nothing; that a pre-migration receipt with both binding columns NULL fails closed instead of replaying; that post_commission_payment replays correctly while the same key aimed at a DIFFERENT payment raises IDEMPOTENCY_INTENT_MISMATCH and leaves that payment unposted; and that a second active admin reusing the first admin's key gets IDEMPOTENCY_ACTOR_MISMATCH. On a database with only one active admin the chain ends at 8/8 and says so - still a PASS, but the cross-actor case went unproven. Keep both chains: the container one covers more cases (void, blank keys, cross-operation reuse, the unchanged guard surface), this one is the part that can be re-run live.",
+      "covers": [
+        "create_commission_payment",
+        "post_commission_payment",
+        "check_idempotency_intent",
+        "_create_commission_payment_intent_impl_20260809",
+        "_post_commission_payment_intent_impl_20260809"
+      ],
+      "area": [
+        "idempotency",
+        "security",
+        "billing"
+      ]
+    },
     "create_commission_payment": {
       "chain": "smoke-commission-payout-intent-binding.sql",
       "description": "CONTAINER ONLY - run via scripts/smoke/prove-commission-payout-intent-binding.mjs, never through run-smoke.mjs against the live database: the chain reads the disposable public.proof_effects table and the synthetic commission/profile ids that only the prover plants, so against live it dies on a missing relation instead of SMOKE_PASS_ROLLBACK. Section 07 gauntlet finding 2 (REQUIRES 20260811130000): the three commission payout RPCs keyed idempotency receipts on (idempotency_key, operation) only — the browser-generated key text embedded a user id, but the server never read, stored or validated it — so a retained browser key could replay a DIFFERENT payout's cached success. Proves per RPC that an exact retry replays the committed receipt once (create: order-swapped and duplicated commission id arrays still replay; void: a whitespace-variant reason still replays) and that the receipt carries request_actor_id plus request_fingerprint; that a changed intent is REJECTED with IDEMPOTENCY_INTENT_MISMATCH and performs no work (create: changed commission selection, changed notes, changed payment method; post: a different payment id; void: a different payment id or a changed reason); that a second admin reusing the same key gets IDEMPOTENCY_ACTOR_MISMATCH; that a pre-migration receipt carrying neither binding column fails closed instead of replaying; that cross-operation key reuse still raises; and that a NULL or blank key is REFUSED with IDEMPOTENCY_KEY_REQUIRED on all three RPCs and the refused call performs no work — the reverse of the pre-migration behaviour, where an omitted key did the work unreceipted. Also re-proves the unchanged guard surface — blank void reason, forged p_performed_by, non-admin on all three, and unauthenticated. prove-commission-payout-intent-binding.mjs runs the same chain against a network-isolated disposable PostgreSQL container, planting the fixtures the chain assumes. Ends in SMOKE_PASS_ROLLBACK.",

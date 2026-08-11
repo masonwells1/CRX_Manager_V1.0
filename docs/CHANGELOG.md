@@ -55,7 +55,7 @@ Verified against production after the apply, not inferred from the migration tex
   implementation-identity scenario. Inside the rolled-back transaction it created a real payment batch with
   matching items and an audit row, was refused on the duplicate as already sitting in a live payment, and
   replayed a keyed create back to the same payment id with exactly one item.
-- **Intent binding itself, proven live.** The checked-in intent-binding proof is a container harness and
+- **Intent binding itself, proven live.** The original intent-binding proof is a container harness and
   cannot run against production, so a nine-assertion chain was written and run live, ending in the same
   mandatory `SMOKE_PASS_ROLLBACK` so every effect was discarded. It observed: the receipt now carries the
   acting admin's id and a 64-character fingerprint; an identical intent replays to the same payment id and
@@ -68,6 +68,16 @@ Verified against production after the apply, not inferred from the migration tex
 
 No live rows were altered: every scenario above ran inside a transaction that ends in a deliberate
 exception, which is how these chains prove both the behaviour and the rollback.
+
+That nine-assertion chain is no longer session-only. It is now checked in verbatim as
+`scripts/smoke/smoke-commission-payout-intent-binding-live.sql` and registered under the spec key
+`commission_payout_intent_binding_live`, so anyone can re-certify the binding against production with
+`node scripts/smoke/run-smoke.mjs --spec commission_payout_intent_binding_live`. The committed file — header
+comment and all — was executed against production on 2026-08-11 and returned
+`SMOKE_PASS_ROLLBACK (9/9 incl. cross-actor)`, with a follow-up count confirming no `[SMOKE]` customer,
+order, commission or receipt row survived. The container-only chain stays registered alongside it: it covers
+more cases (void, blank keys, cross-operation reuse, the unchanged guard surface), and this one covers what
+can actually be re-run live.
 
 ## 2026-08-11 — Preserve the applied line-profit backfill without replaying it by default
 
