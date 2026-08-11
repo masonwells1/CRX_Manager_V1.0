@@ -41,7 +41,9 @@ A migration, now applied live, plus its frontend wiring. It fixes the audit find
 - Local gates green at packet time: typecheck, eslint, build, 4303/4427 vitest tests passing with 1 expected pre-apply failure (`rpcFixtureLiveDiff` — `complete_team_note` absent from the live pg_proc snapshot until applied; by policy that test goes green only after apply + snapshot regen).
 - Subagent reviews this session: rls-security-reviewer (3 rounds — final CLEAN, 0 BLOCKER/0 HIGH), migration-drift-reviewer (round 1: H1 authz-ordering, fixed; round 3 pending at packet time), typescript-types-drift-reviewer (clean), compliance-reviewer (round-1 HIGH on idempotency key scoping, fixed via single-flight + mismatch reset).
 
-## Claude's current position
+## Claude's position at packet time (HISTORICAL — superseded)
+
+> **Superseded 2026-08-10.** This was the *pre-apply* verdict. Both migrations are now applied live and verified (see the Post-review status at the top of this file); the current verdict is **applied and verified live**, not "safe to apply". The paragraph below is kept verbatim as the record of what was believed before the apply — do not read it as current status.
 
 Safe to apply. The authorization set (creator ∪ assignee ∪ active admin) is the intended widening and is narrower than what the UI previously implied; the actor is never caller-supplied; the fingerprint is actor-bound so cross-actor key replay fails closed; the trigger is spam-bounded only by note-creation ability (accepted as a small-team tradeoff, title truncated to 120 chars). Known accepted residuals: (1) the page-scoped idempotency key can produce one spurious mismatch toast after a lost-response commit (self-heals via resetKey); (2) no rate limit on assignment notifications; (3) live defaults also grant `service_role`, but a future edge function must propagate a user JWT so `auth.uid()` identifies an authorized actor, or introduce a separately reviewed trusted-service path.
 

@@ -9,7 +9,7 @@ wrote straight to the table, and the creator-or-admin row policy silently reject
 assignee, so their click did nothing. Delegation is now governed by an RPC and the
 notification path is hardened.
 
-**Live database changes (owner-approved, applied this session).**
+**Live database changes (owner-approved; applied and verified live on 2026-08-09/2026-08-10).** Both migrations below were already live before this entry was written. The PR carrying this entry (#372) recorded and re-verified that closeout only — it applied neither of these two migrations and mutated no live data through them.
 
 - `20260809130108_team_note_completion_rpc_and_assignment_notify` — adds
   `complete_team_note(note_id, completed, idempotency_key)` as a SECURITY DEFINER function
@@ -279,7 +279,7 @@ wrote straight to the table, and the creator-or-admin row policy silently reject
 assignee, so their click did nothing. Delegation is now governed by an RPC and the
 notification path is hardened.
 
-**Live database changes (owner-approved, applied this session).**
+**Live database changes (owner-approved; applied and verified live on 2026-08-09/2026-08-10).** Both migrations below were already live before this entry was written. The PR carrying this entry (#372) recorded and re-verified that closeout only — it applied neither of these two migrations and mutated no live data through them.
 
 - `20260809130108_team_note_completion_rpc_and_assignment_notify` — adds
   `complete_team_note(note_id, completed, idempotency_key)` as a SECURITY DEFINER function
