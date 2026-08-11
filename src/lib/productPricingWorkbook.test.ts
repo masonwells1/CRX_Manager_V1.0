@@ -343,5 +343,10 @@ describe('product pricing workbook', () => {
 
     await expect(parseProductPricingWorkbook(forgedArchive))
       .rejects.toThrow('expand to at most 25 MB');
-  }, 15_000);
+    // 45s (was 15s): the guard being tested is the REJECTION MESSAGE, not the
+    // clock — a broken bound would let ExcelJS expand the forged entry and the
+    // assertion would fail on the missing throw, not by running long. Building
+    // and streaming the forged archive is CPU-bound, so 15s was not enough
+    // headroom during a pre-commit run on a busy box.
+  }, 45_000);
 });
