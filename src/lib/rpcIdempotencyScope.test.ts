@@ -240,6 +240,17 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // the public save_purchase_order RPC and intentionally shares its one cache
   // namespace rather than creating an unreachable internal-operation cache.
   _save_purchase_order_ascii_identity_impl: ['save_purchase_order'],
+  // Direct EXECUTE is revoked (service_role only). This IS the original
+  // public convert_quote_to_order body: migration 20260730235031 renamed it
+  // with `ALTER FUNCTION ... RENAME TO _convert_quote_to_order_owner_impl`
+  // (line 986) and created a new public wrapper that delegates to it, so both
+  // layers read and write the one 'convert_quote_to_order' cache on purpose —
+  // a replay through the wrapper must find the result the impl saved. Giving
+  // the impl its own namespace would strand that cache. The shape is
+  // pre-existing and unchanged; it entered this test's scope only because
+  // migration 20260810150000 is the first to CREATE the function under its
+  // post-rename name (the rename itself defined no function body on disk).
+  _convert_quote_to_order_owner_impl: ['convert_quote_to_order'],
   // Owner-only implementation used by the public standalone/group posting
   // wrappers; all layers intentionally share the public post_invoice cache.
   _post_invoice_impl_20260714: ['post_invoice'],
