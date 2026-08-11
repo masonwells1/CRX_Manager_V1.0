@@ -42,19 +42,38 @@ function backupMarkerPath() {
   // trains Mason to ignore the one warning that says his only copy of production
   // data died. Newest-wins keeps the original protection (a stale local marker
   // simply loses to the newer canonical one) without inventing the false alarm.
+  //
+  // Ask Git where the main checkout is rather than deriving it from the common Git
+  // directory. `path.dirname(<git-common-dir>)` only lands on the checkout in the
+  // default `<checkout>/.git` layout: under `--separate-git-dir` or in a bare repo the
+  // Git directory lives somewhere else entirely, and dirname() then points at an
+  // unrelated folder that gets probed for — and could genuinely contain — a
+  // `backups/LATEST-OK.json` belonging to some other project (CodeRabbit on #369).
+  //
+  // `git worktree list --porcelain` lists the main worktree first and flags a bare
+  // repository outright. It is still not enough on its own: for a `--separate-git-dir`
+  // repository Git reports the *Git directory* as the main worktree, because nothing in
+  // that layout records the way back to the checkout. So the candidate is accepted only
+  // once it proves it is a checkout, by carrying a `.git` entry of its own. An
+  // unsupported layout is rejected rather than guessed at — the worktree-local marker
+  // then stands alone, which under-reports a shared backup but never invents one.
   const candidates = [localPath];
   try {
-    const commonDir = execFileSync(
+    const porcelain = execFileSync(
       "git",
-      ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+      ["worktree", "list", "--porcelain"],
       {
         cwd: projectDir,
         encoding: "utf8",
         timeout: 5000,
         stdio: ["ignore", "pipe", "ignore"],
       },
-    ).trim();
-    candidates.push(path.join(path.dirname(commonDir), "backups", "LATEST-OK.json"));
+    );
+    const firstEntry = porcelain.split(/\r?\n\r?\n/)[0] || "";
+    const mainWorktree = /^worktree (.+)$/m.exec(firstEntry)?.[1]?.trim();
+    if (mainWorktree && !/^bare$/m.test(firstEntry) && existsSync(path.join(mainWorktree, ".git"))) {
+      candidates.push(path.join(mainWorktree, "backups", "LATEST-OK.json"));
+    }
   } catch { /* fall back to the worktree-local path */ }
 
   let best = null;

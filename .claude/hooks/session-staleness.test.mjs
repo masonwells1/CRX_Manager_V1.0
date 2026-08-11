@@ -177,6 +177,43 @@ try {
   const staleLocalContext = additionalContextOf(r);
   ok(!staleLocalContext.includes("💾"), "FIX3: a stale worktree-local marker cannot fake a stale backup when the canonical one is fresh");
 
+  // ── FIX 3 (layout): an unsupported repository layout is REJECTED, never guessed
+  // at. Under `--separate-git-dir` the Git directory sits outside the checkout, so
+  // `path.dirname(<git-common-dir>)` lands on whatever happens to be the Git
+  // directory's parent — here the shared temp root, standing in for a folder that
+  // could easily hold some other project's backups/LATEST-OK.json. Reading that
+  // would report a backup of a completely different database as this project's.
+  // The decoy below is planted at exactly that wrong path and must go unread. ────
+  mkdirSync(path.join(tmpRoot, "backups"), { recursive: true });
+  writeFileSync(path.join(tmpRoot, "backups", "LATEST-OK.json"), JSON.stringify({
+    completed_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+    tables: 1,
+    total_rows: 1,
+  }));
+  const sepGitDir = path.join(tmpRoot, "sep-gitdir");
+  const sepMain = path.join(tmpRoot, "sep-main");
+  scaffold(sepMain, {
+    _meta: { migrations_high_water: "20260101000000", applied_migration_names: [] },
+  }, {});
+  execFileSync("git", ["init", "-b", "main", `--separate-git-dir=${sepGitDir}`, sepMain], { env: isolatedGitEnv, stdio: "ignore" });
+  execFileSync("git", ["-C", sepMain, "config", "user.email", "session-staleness@example.com"], { env: isolatedGitEnv });
+  execFileSync("git", ["-C", sepMain, "config", "user.name", "Session Staleness Test"], { env: isolatedGitEnv });
+  execFileSync("git", ["-C", sepMain, "add", ".claude", "supabase"], { env: isolatedGitEnv });
+  execFileSync("git", ["-C", sepMain, "commit", "-m", "fixture"], { env: isolatedGitEnv, stdio: "ignore" });
+  mkdirSync(path.join(sepMain, "backups"), { recursive: true });
+  writeFileSync(path.join(sepMain, "backups", "LATEST-OK.json"), JSON.stringify({
+    completed_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+    tables: 1,
+    total_rows: 1,
+  }));
+  const sepLinked = path.join(tmpRoot, "sep-linked");
+  execFileSync("git", ["-C", sepMain, "worktree", "add", "--detach", sepLinked], { env: isolatedGitEnv, stdio: "ignore" });
+  r = runHook(sepLinked);
+  eq(r.status, 0, "FIX3: separate-git-dir linked worktree exits 0");
+  const sepContext = additionalContextOf(r);
+  ok(!sepContext.includes("Last DB backup is 8 days old"), "FIX3: an unsupported layout never reports a backup marker found beside the Git directory");
+  ok(sepContext.includes("No database backup exists yet"), "FIX3: an unsupported layout says no backup rather than claiming an unrelated one");
+
   console.log(`session-staleness: ${pass} assertions passed`);
 } finally {
   rmSync(tmpRoot, { recursive: true, force: true });

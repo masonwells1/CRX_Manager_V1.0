@@ -282,8 +282,13 @@ export function parkedDraftPathsFrom(
   const out = new Map();
   const history = historyText === null ? null : localCandidateMigrationPathsFromHistory(historyText);
   let unknownReason = "";
+  // Every normalized path the loop actually looked at. The registry reconciliation
+  // below needs it: a LOCAL CANDIDATE row whose SQL never entered this diff at all
+  // is invisible to a loop that only walks changed paths.
+  const visited = new Set();
   for (const raw of changedPaths || []) {
     const p = String(raw || "").trim();
+    visited.add(normRepoPath(p));
     if (!existsOnDisk(p)) {
       // A vanished path is normally just a retired draft — the SUPERSEDED- rename
       // shows up in the diff as a change to the OLD path, and counting it would
@@ -329,6 +334,26 @@ export function parkedDraftPathsFrom(
     const key = normRepoPath(p);
     if (!out.has(key)) out.set(key, p);
   }
+
+  // Reconcile the registry against the diff OUTSIDE the loop. Both checks above only
+  // fire for a path the diff already handed us, so a caller whose changed-path list is
+  // empty — or whose list simply never mentions a registered candidate — got a
+  // confident zero over a registry this code never read (Codex on #369). The registry
+  // is the branch's own claim that pending SQL exists; if the diff cannot account for
+  // every row of it, the honest answer is UNKNOWN, which sends the caller to a full
+  // scan. Under-reporting hides real pending work; an extra scan only costs time.
+  if (historyText !== null) {
+    if (history?.state !== "known") {
+      unknownReason ||= history?.reason || "worktree migration history is unreadable";
+    } else {
+      for (const candidate of history.paths) {
+        if (visited.has(candidate)) continue;
+        unknownReason ||= "branch-owned LOCAL CANDIDATE SQL named by migration history is absent from this branch's own-draft diff";
+        break;
+      }
+    }
+  }
+
   Object.defineProperty(out, "unknownReason", { value: unknownReason, enumerable: false });
   return out;
 }
