@@ -11,10 +11,11 @@ relied on, and `docs/manual/DECISION_LOG.md` carries the full rationale.
 The rule said "money is bigint cents." The pre-existing order and quote money
 columns are PostgreSQL `numeric` dollars — an exact decimal type, not a binary
 float — so the rule's actual purpose was already met, but the letter of it was
-not. The amended line grandfathers those columns on the condition that they are
-held to the same guarantee by enforced whole-cent CHECK constraints, and
-**closes the exception**: any money column added from 2026-08-10 onward is
-`bigint` cents.
+not. The amended line grandfathers the *storage type* only: each of those
+columns must still carry an enforced whole-cent CHECK constraint, and one that
+does not yet carry it is outstanding work rather than compliant. The exception is
+also **closed** — any money column added from 2026-08-10 onward is `bigint`
+cents.
 
 The DECISION_LOG entry records what a re-opened conversion would actually cost
 (12 money columns, 46 live functions naming them, 17 non-test source files, no

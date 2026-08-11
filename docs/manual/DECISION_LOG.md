@@ -11,9 +11,11 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ## 2026-08-10 — Existing money columns stay `numeric` dollars, guarded by whole-cent CHECKs
 
-**Source:** `docs/audits/2026-08-10-order-profit-bigint-cents-evaluation.md`, written in response to
-CodeRabbit's Major finding on PR #354 asking for the canonical profit path to move to `bigint` cents.
-Mason approved the recommendation, and approved amending the `AGENTS.md` money rule to record it.
+**Source:** an evaluation of the order-profit money path, written in response to CodeRabbit's Major
+finding on PR #354 asking for the canonical profit path to move to `bigint` cents. Mason approved
+the recommendation, and approved amending the `AGENTS.md` money rule to record it. This entry is
+self-contained: the policy below stands on its own reasoning and does not depend on any artifact
+outside this change.
 
 **The question was** whether the `AGENTS.md` hard rule "Money is bigint cents" obliges the existing
 order and quote money columns — stored as `numeric` dollars — to be converted.
@@ -49,16 +51,17 @@ property the CHECK constraints already provide.
   changed, so a legacy dirty row becomes permanently un-editable. Constrain clean columns only;
   repair dirty ones first.
 
-**Implementation:** `20260810150000`, `20260810150500`, `20260810151000`, proven end-to-end in a
-throwaway `postgres:17-alpine` container and **applied live 2026-08-10** (Supabase ledger versions
-`20260810152935` / `20260810154721` / `20260810155629`). Seven already-clean columns are constrained
-and `convalidated`; the migration asserts the five dirty ones are *not* constrained. Forward-only —
-applying it moved no live money.
+**Implementation is deliberately out of scope for this entry.** This change is policy text only. The
+constraint migrations themselves, the container proof behind them, and their as-applied state are
+carried by their own separately reviewed change and are recorded there, so that this contract
+amendment can be reviewed on its own terms rather than on trust in artifacts it does not contain.
 
-**Explicitly still open, not covered by this decision:** repairing the legacy fractional-cent rows
-and then constraining the remaining five columns is a **separate** decision that has not been taken.
-`orders.total_price` additionally cannot be constrained until `_update_order_items_impl` stops
-overwriting the canonical header with the raw un-rounded line sum.
+**Explicitly still open, not covered by this decision:** repairing the legacy fractional-cent rows,
+and then constraining every grandfathered column that is not yet constrained, is a **separate**
+decision that has not been taken. Until that is done those columns are non-compliant with the rule
+above, and the rule says so — the exception grandfathers the *storage type*, never the missing
+invariant. `orders.total_price` additionally cannot be constrained until `_update_order_items_impl`
+stops overwriting the canonical header with the raw un-rounded line sum.
 
 **General mechanic this established:** a change that deliberately departs from a written hard rule
 can never pass the adversarial review gate, because the reviewer is given `AGENTS.md` as ground
