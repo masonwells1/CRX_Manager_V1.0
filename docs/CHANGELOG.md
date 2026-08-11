@@ -2,6 +2,10 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-11 — Customer 360 pre-push adversarial fixes
+
+Closed all three medium-severity findings from the fresh Sol review of the Customer 360 adoption pack. Customer ownership assignment now uses a new admin-only atomic RPC instead of a separate active-rep read followed by a direct customer update: the RPC locks the target rep, rejects any missing/inactive customer from the exact selected set, rolls partial matches back, and binds idempotent retries to the actor, customer IDs, and target rep. The Customers UI retains truthful post-save refresh handling and has regression coverage for inactive targets, changed customer sets, ambiguous failures, and intent-scoped keys. Call Lists now keeps a requested `rep=` URL pending and blocks list loading when rep-option validation fails, so an error cannot broaden the admin's requested scope to all reps; retry preserves and restores the filter. The approved migration was submitted as `20260811122851_assign_customers_sales_rep` and applied live under Supabase-assigned/disk version `20260811183317`; live catalog and grant checks passed, and the schema registry, generated Supabase types, and `pg_proc` fixture were refreshed through the resulting 960-row ledger high-water. The registered rollback smoke passed against the exact migration in disposable PostgreSQL; its live rollback-only run remains separately guarded by the required `REAL-DATA-OK` authorization.
+
 ## 2026-08-11 — Preserve the applied line-profit backfill without replaying it by default
 
 Added the exact source for live migration `20260810025159_backfill_stale_line_profit.sql`,

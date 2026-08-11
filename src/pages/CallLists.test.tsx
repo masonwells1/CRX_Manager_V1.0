@@ -21,6 +21,7 @@ let rpcRows: Record<string, unknown[]> = {};
 let rpcImplementations: Record<string, RpcImplementation> = {};
 let customerEnrichment: unknown[] = [];
 let customerEnrichmentImplementation: QueryImplementation | null = null;
+let profileOptionsImplementation: QueryImplementation | null = null;
 
 function buildChain(result: QueryResult | Promise<QueryResult>): Record<string, unknown> {
   const self: Record<string, unknown> = {};
@@ -106,13 +107,16 @@ describe('Call Lists adoption workspace', () => {
     rpcImplementations = {};
     customerEnrichment = [{ id: 'customer-1', assigned_tier: 2, crops: ['corn'] }];
     customerEnrichmentImplementation = null;
+    profileOptionsImplementation = null;
     mockRpc.mockImplementation((rpcName: string, args: Record<string, unknown>) => {
       const implementation = rpcImplementations[rpcName];
       return implementation ? implementation(args) : Promise.resolve(payload(rpcRows[rpcName] || []));
     });
     mockFrom.mockImplementation((table: string) => {
       if (table === 'profile_public_view') {
-        return buildChain({ data: [{ id: REP_A, full_name: 'Dana Rep' }], error: null });
+        return buildChain(profileOptionsImplementation
+          ? profileOptionsImplementation()
+          : { data: [{ id: REP_A, full_name: 'Dana Rep' }], error: null });
       }
       if (table === 'customers') {
         return buildChain(customerEnrichmentImplementation
@@ -227,6 +231,39 @@ describe('Call Lists adoption workspace', () => {
     expect(screen.getByLabelText('Filter by customer tier')).toHaveValue('2');
     expect(screen.getByLabelText('Filter by customer crop')).toHaveValue('corn');
     expect(screen.getByLabelText('Search call list by farm name')).toHaveValue('North');
+  });
+
+  it('preserves and blocks a requested rep filter until failed option validation succeeds', async () => {
+    mockAuth.profile = { id: 'admin-1', role: 'admin' };
+    mockAuth.role = 'admin';
+    rpcRows.get_call_list_prepay_prospects = [baseRow({
+      prior_season_spend_cents: 100000,
+      current_season_prepay_cents: 0,
+    })];
+    let profileCalls = 0;
+    profileOptionsImplementation = async () => {
+      profileCalls += 1;
+      return profileCalls === 1
+        ? { data: null, error: { message: 'rep lookup failed' } }
+        : { data: [{ id: REP_A, full_name: 'Dana Rep' }], error: null };
+    };
+
+    renderCallLists(`/call-lists?list=prepay&rep=${REP_A}`);
+
+    const retry = await screen.findByRole('button', { name: 'Rep filter failed — retry' });
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(locationParams().get('rep')).toBe(REP_A);
+    expect(screen.getByLabelText('Loading call list')).toBeInTheDocument();
+
+    fireEvent.click(retry);
+
+    expect(await screen.findByText('North Farm')).toBeInTheDocument();
+    expect(mockRpc).toHaveBeenCalledWith('get_call_list_prepay_prospects', {
+      p_min_prior_spend_cents: 100000,
+      p_rep_id: REP_A,
+    });
+    expect(locationParams().get('rep')).toBe(REP_A);
+    expect(screen.getByLabelText('Filter by sales rep')).toHaveValue(REP_A);
   });
 
   it('falls back safely from invalid and role-forbidden query values', async () => {

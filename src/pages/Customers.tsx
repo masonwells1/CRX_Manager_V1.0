@@ -11,8 +11,9 @@ import Modal from '../components/ui/Modal';
 import BulkCustomerImport from '../components/customers/BulkCustomerImport';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult } from '../lib/db';
+import { assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes, supabase, supabaseUntyped } from '../lib/db';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
 import { sanitizeError } from '../lib/errorSanitizer';
@@ -25,6 +26,13 @@ const CUSTOMER_FETCH_LIMIT = 1000;
 const UNASSIGNED_REP = '__unassigned__';
 type ProfileNeed = 'missing-rep' | 'missing-phone' | 'missing-email' | 'missing-crops';
 type ProfileNeedFilter = '' | ProfileNeed | 'ready';
+
+interface CustomerAssignmentResult {
+  success: boolean;
+  assigned_count: number;
+  customer_ids: string[];
+  sales_rep_id: string;
+}
 
 const NEED_LABELS: Record<ProfileNeed, string> = {
   'missing-rep': 'Missing rep',
@@ -159,6 +167,12 @@ export default function Customers() {
       getId: (c) => c.id,
       isSelectable: (c) => c.is_active,
     });
+  const assignmentIntentScope = `${assignmentRepId}|${selectedRows.map((customer) => customer.id).sort().join(',')}`;
+  const assignmentIdem = useIdempotencyKey(
+    'assign_customers_sales_rep',
+    profile?.id || '',
+    assignmentIntentScope,
+  );
 
   const checkboxCol = useMemo(
     () => createCheckboxColumn<Customer>(selected, toggleSelect, (c) => c.id, (c) => c.is_active),
@@ -318,27 +332,19 @@ export default function Customers() {
     setAssigning(true);
     try {
       const ids = selectedRows.map((customer) => customer.id);
-      const { data: currentRepRows, error: currentRepError } = await supabase
-        .from('profile_public_view')
-        .select('id, full_name')
-        .eq('id', targetRep.id)
-        .eq('role', 'sales_rep')
-        .eq('is_active', true)
-        .limit(1);
-      if (currentRepError) throw new Error('Could not confirm that the selected sales representative is still active. Retry the assignment.');
-      const currentRep = Array.isArray(currentRepRows)
-        ? currentRepRows.find((rep) => rep.id === targetRep.id)
-        : null;
-      if (!currentRep) throw new Error('The selected sales representative is no longer active. Choose another rep.');
-
-      const result = await supabase
-        .from('customers')
-        .update({ assigned_sales_rep: targetRep.id })
-        .in('id', ids)
-        .select('id');
-      checkMutationResult(result, 'Assign sales rep');
-      if (!Array.isArray(result.data) || result.data.length !== ids.length) {
-        throw new Error(`Assign sales rep updated ${Array.isArray(result.data) ? result.data.length : 0} of ${ids.length} selected customers. Retry the assignment.`);
+      const { data, error } = await supabaseUntyped.rpc('assign_customers_sales_rep', {
+        p_customer_ids: ids,
+        p_sales_rep_id: targetRep.id,
+        p_idempotency_key: assignmentIdem.getKey(),
+      });
+      if (error) throw error;
+      const result = assertRpcResult<CustomerAssignmentResult>(data, 'assign_customers_sales_rep');
+      if (
+        result.success !== true
+        || result.assigned_count !== ids.length
+        || result.sales_rep_id !== targetRep.id
+      ) {
+        throw new Error('The assignment response could not be verified. Reload the customer list before continuing.');
       }
 
       const refreshed = await fetchCustomers({ reportError: false });
@@ -352,15 +358,35 @@ export default function Customers() {
         clearSelection();
         setAssignModalOpen(false);
         setAssignmentRepId('');
+        assignmentIdem.resetKey();
         toast('error', 'Assignment was saved, but the customer list could not refresh. Reload before continuing.');
         return;
       }
       clearSelection();
       setAssignModalOpen(false);
       setAssignmentRepId('');
-      toast('success', `Assigned ${ids.length} customer${ids.length === 1 ? '' : 's'} to ${currentRep.full_name || targetRep.name}`);
+      assignmentIdem.resetKey();
+      toast('success', `Assigned ${ids.length} customer${ids.length === 1 ? '' : 's'} to ${targetRep.name}`);
     } catch (err) {
-      toast('error', sanitizeError(err));
+      if (hasRpcCode(err, RpcErrorCodes.ASSIGNMENT_SALES_REP_INACTIVE)) {
+        toast('error', 'The selected sales representative is no longer active. Choose another rep.');
+      } else if (hasRpcCode(err, RpcErrorCodes.ASSIGNMENT_CUSTOMER_SET_CHANGED)) {
+        const refreshed = await fetchCustomers({ reportError: false });
+        toast(
+          'error',
+          refreshed
+            ? 'The selected customer list changed before assignment. Nothing was assigned; review the refreshed selection and retry.'
+            : 'The selected customer list changed before assignment and the list could not refresh. Nothing was assigned; reload before retrying.',
+        );
+      } else if (hasRpcCode(err, RpcErrorCodes.ASSIGNMENT_REPLAY_PAYLOAD_MISMATCH)) {
+        // The server proved this key belongs to a different assignment intent,
+        // so reusing it can never succeed. The mutation did not run; rotate the
+        // key while preserving the visible selection for an immediate retry.
+        assignmentIdem.resetKey();
+        toast('error', 'The assignment selection changed after an earlier attempt. Review the selected customers and retry.');
+      } else {
+        toast('error', sanitizeError(err));
+      }
     } finally {
       setAssigning(false);
     }

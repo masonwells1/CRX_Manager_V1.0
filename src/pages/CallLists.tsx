@@ -425,7 +425,10 @@ export default function CallLists() {
       if (cancelled) return;
       if (error || !data) {
         setRepsError(true);
-        setRepsReady(true);
+        // A requested rep cannot be validated while the option lookup is
+        // unavailable. Stay pending so canonicalization preserves `rep=` and
+        // the list loader cannot silently broaden to every representative.
+        setRepsReady(false);
         Sentry.captureException(new Error(error ? error.message : 'rep options returned no data'), { extra: { context: 'CallLists.reps' } });
         return;
       }
