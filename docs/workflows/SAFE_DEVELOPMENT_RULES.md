@@ -161,6 +161,15 @@ Before any schema change, follow `docs/workflows/DATABASE_CHANGE_CHECKLIST.md`:
 
 All money in CRX Manager is stored as **bigint cents** (whole numbers, no decimals).
 
+**One grandfathered exception (Mason, 2026-08-10), closed to new columns.** The pre-existing order
+and quote money columns are PostgreSQL `numeric` dollars — an exact decimal type, not a binary
+float — and stay that way rather than being converted. The exception grandfathers the *storage type
+only*: each of those columns must still carry an enforced whole-cent CHECK constraint, and one that
+does not yet carry it is outstanding work, not compliant. Any money column created from 2026-08-10
+onward is `bigint` cents, no exceptions. Full rationale: `docs/manual/DECISION_LOG.md` (2026-08-10
+entry). The table below is the rule for every new money column and the pattern all money math
+follows.
+
 | Operation | How |
 |-----------|-----|
 | Store $25.50 | Store as `2550` (bigint cents) |
