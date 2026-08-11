@@ -776,6 +776,210 @@ WHERE jobid = 42;`, dynamicTempTarget);
 ok(!isDeny(r), "a dynamically created temporary view does not persist into a later migration");
 rmSync(dynamicViewRoot, { recursive: true, force: true });
 
+const scheduledViewRoot = mkdtempSync(path.join(os.tmpdir(), "actor-binding-scheduled-cron-view-"));
+const scheduledViewDir = path.join(scheduledViewRoot, "supabase", "migrations");
+mkdirSync(scheduledViewDir, { recursive: true });
+writeFileSync(
+  path.join(scheduledViewDir, "20260807000001_schedule_cron_job_facades.sql"),
+  `SELECT cron.schedule(
+  'create-scheduled-cron-job-facade',
+  '* * * * *',
+  $command$CREATE VIEW public.scheduled_cron_job_facade AS SELECT * FROM cron.job$command$
+);
+SELECT cron.schedule(
+  job_name => 'create-named-scheduled-cron-job-facade',
+  schedule => '* * * * *',
+  command => $command$CREATE VIEW public.named_scheduled_cron_job_facade AS SELECT * FROM cron.job$command$
+);
+SELECT cron.alter_job(
+  42,
+  '* * * * *',
+  $command$CREATE VIEW public.altered_scheduled_cron_job_facade AS SELECT * FROM cron.job$command$,
+  active => true
+);
+SELECT cron.schedule_in_database(
+  'create-cross-db-scheduled-cron-job-facade',
+  '* * * * *',
+  $command$CREATE VIEW public.cross_db_scheduled_cron_job_facade AS SELECT * FROM cron.job$command$,
+  'postgres',
+  active => true
+);
+SELECT cron.schedule(
+  'create-nested-scheduled-cron-job-facade',
+  '* * * * *',
+  $outer$SELECT cron.schedule(
+    'nested-create-view',
+    '* * * * *',
+    $inner$CREATE VIEW public.nested_scheduled_cron_job_facade AS SELECT * FROM cron.job$inner$
+  )$outer$
+);
+SELECT cron.schedule(
+  'create-scheduled-temp-cron-job-facade',
+  '* * * * *',
+  $command$CREATE TEMP VIEW scheduled_temp_cron_job_facade AS SELECT * FROM cron.job$command$
+);
+SELECT public.schedule(
+  'ordinary-non-cron-call',
+  '* * * * *',
+  $command$CREATE VIEW public.ordinary_scheduled_job_facade AS SELECT * FROM cron.job$command$
+);
+SELECT cron.schedule(
+  'create-scheduled-non-cron-facade',
+  '* * * * *',
+  $command$CREATE VIEW public.scheduled_non_cron_facade AS SELECT * FROM public.job$command$
+);
+DO $do$
+BEGIN
+  PERFORM cron.schedule(
+    'create-procedural-scheduled-cron-job-facade',
+    '* * * * *',
+    $command$CREATE VIEW public.procedural_scheduled_cron_job_facade AS SELECT * FROM cron.job$command$
+  );
+END
+$do$;
+`
+);
+writeFileSync(
+  path.join(scheduledViewDir, "20260807000002_move_scheduled_cron_job_facade.sql"),
+  `SELECT cron.schedule(
+  'move-scheduled-cron-job-facade',
+  '* * * * *',
+  $command$ALTER VIEW public.scheduled_cron_job_facade SET SCHEMA archive;
+ALTER VIEW archive.scheduled_cron_job_facade RENAME TO renamed_scheduled_cron_job_facade$command$
+);
+`
+);
+const scheduledCrossMigrationTarget = path.join(
+  scheduledViewDir,
+  "20260807000003_update_scheduled_cron_job_facades.sql"
+);
+for (const alias of [
+  "public.named_scheduled_cron_job_facade",
+  "public.altered_scheduled_cron_job_facade",
+  "public.cross_db_scheduled_cron_job_facade",
+  "public.nested_scheduled_cron_job_facade",
+  "public.procedural_scheduled_cron_job_facade",
+  "archive.renamed_scheduled_cron_job_facade",
+]) {
+  r = runHook(`UPDATE ${alias}
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`, scheduledCrossMigrationTarget);
+  ok(isDeny(r), `a delayed pg_cron command keeps ${alias} unsafe across migrations`);
+  r = runHook(`UPDATE ${alias}
+SET command = $job$SELECT public.existing_safe_job()$job$
+WHERE jobid = 42;`, scheduledCrossMigrationTarget);
+  ok(!isDeny(r), `a delayed pg_cron alias keeps harmless SQL allowed through ${alias}`);
+}
+r = runHook(`UPDATE public.scheduled_temp_cron_job_facade
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`, scheduledCrossMigrationTarget);
+ok(!isDeny(r), "a view created in a delayed TEMP command does not persist across migrations");
+r = runHook(`UPDATE public.ordinary_scheduled_job_facade
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`, scheduledCrossMigrationTarget);
+ok(!isDeny(r), "an ordinary non-cron schedule-like call does not invent a persistent alias");
+r = runHook(`UPDATE public.scheduled_non_cron_facade
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`, scheduledCrossMigrationTarget);
+ok(!isDeny(r), "a delayed view over a non-cron relation remains ordinary data");
+rmSync(scheduledViewRoot, { recursive: true, force: true });
+
+const opaqueScheduledViewRoot = mkdtempSync(
+  path.join(os.tmpdir(), "actor-binding-opaque-scheduled-cron-view-")
+);
+const opaqueScheduledViewDir = path.join(opaqueScheduledViewRoot, "supabase", "migrations");
+mkdirSync(opaqueScheduledViewDir, { recursive: true });
+writeFileSync(
+  path.join(opaqueScheduledViewDir, "20260807000001_schedule_opaque_cron_job_facade.sql"),
+  `SELECT cron.schedule(
+  'create-opaque-scheduled-cron-job-facade',
+  '* * * * *',
+  $command$DO E'BEGIN EXECUTE ''CREATE VIEW public.opaque_scheduled_cron_job_facade AS SELECT * FROM cron.job''; END'$command$
+);
+`
+);
+const opaqueScheduledTarget = path.join(
+  opaqueScheduledViewDir,
+  "20260807000002_update_opaque_scheduled_cron_job_facade.sql"
+);
+r = runHook(`UPDATE public.opaque_scheduled_cron_job_facade
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`, opaqueScheduledTarget);
+ok(isDeny(r), "an unreadable delayed pg_cron alias lifecycle fails closed across migrations");
+r = runHook(`UPDATE public.opaque_scheduled_cron_job_facade
+SET command = $job$SELECT public.existing_safe_job()$job$
+WHERE jobid = 42;`, opaqueScheduledTarget);
+ok(!isDeny(r), "the delayed pg_cron manual-review fallback keeps harmless SQL allowed");
+rmSync(opaqueScheduledViewRoot, { recursive: true, force: true });
+
+const builtScheduledViewRoot = mkdtempSync(
+  path.join(os.tmpdir(), "actor-binding-built-scheduled-cron-view-")
+);
+const builtScheduledViewDir = path.join(builtScheduledViewRoot, "supabase", "migrations");
+mkdirSync(builtScheduledViewDir, { recursive: true });
+writeFileSync(
+  path.join(builtScheduledViewDir, "20260807000001_schedule_built_cron_job_facade.sql"),
+  `SELECT cron.schedule(
+  'create-built-scheduled-cron-job-facade',
+  '* * * * *',
+  'CREATE ' || 'VIEW public.built_scheduled_cron_job_facade AS SELECT * FROM cron.' || 'job'
+);
+`
+);
+const builtScheduledTarget = path.join(
+  builtScheduledViewDir,
+  "20260807000002_update_built_scheduled_cron_job_facade.sql"
+);
+r = runHook(`UPDATE public.built_scheduled_cron_job_facade
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`, builtScheduledTarget);
+ok(isDeny(r), "an opaque built pg_cron alias lifecycle fails closed across migrations");
+r = runHook(`UPDATE public.built_scheduled_cron_job_facade
+SET command = $job$SELECT public.existing_safe_job()$job$
+WHERE jobid = 42;`, builtScheduledTarget);
+ok(!isDeny(r), "the built pg_cron manual-review fallback keeps harmless SQL allowed");
+rmSync(builtScheduledViewRoot, { recursive: true, force: true });
+
+const proceduralBuiltScheduledViewRoot = mkdtempSync(
+  path.join(os.tmpdir(), "actor-binding-procedural-built-scheduled-cron-view-")
+);
+const proceduralBuiltScheduledViewDir = path.join(
+  proceduralBuiltScheduledViewRoot,
+  "supabase",
+  "migrations"
+);
+mkdirSync(proceduralBuiltScheduledViewDir, { recursive: true });
+writeFileSync(
+  path.join(
+    proceduralBuiltScheduledViewDir,
+    "20260807000001_schedule_procedural_built_cron_job_facade.sql"
+  ),
+  `DO $do$
+BEGIN
+  PERFORM cron.schedule(
+    'create-procedural-built-scheduled-cron-job-facade',
+    '* * * * *',
+    'CREATE ' || 'VIEW public.procedural_built_scheduled_cron_job_facade ' ||
+      'AS SELECT * FROM cron.' || 'job'
+  );
+END
+$do$;
+`
+);
+const proceduralBuiltScheduledTarget = path.join(
+  proceduralBuiltScheduledViewDir,
+  "20260807000002_update_procedural_built_scheduled_cron_job_facade.sql"
+);
+r = runHook(`UPDATE public.procedural_built_scheduled_cron_job_facade
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`, proceduralBuiltScheduledTarget);
+ok(isDeny(r), "an opaque pg_cron alias builder inside procedural SQL fails closed across migrations");
+r = runHook(`UPDATE public.procedural_built_scheduled_cron_job_facade
+SET command = $job$SELECT public.existing_safe_job()$job$
+WHERE jobid = 42;`, proceduralBuiltScheduledTarget);
+ok(!isDeny(r), "the procedural pg_cron manual-review fallback keeps harmless SQL allowed");
+rmSync(proceduralBuiltScheduledViewRoot, { recursive: true, force: true });
+
 const encodedViewRoot = mkdtempSync(path.join(os.tmpdir(), "actor-binding-encoded-cron-view-"));
 const encodedViewDir = path.join(encodedViewRoot, "supabase", "migrations");
 mkdirSync(encodedViewDir, { recursive: true });

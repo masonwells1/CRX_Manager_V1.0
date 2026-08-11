@@ -363,6 +363,17 @@ function isDirectSqlStringLiteral(expression) {
   return close !== -1 && close + tag.length === sql.length;
 }
 
+/** Decode the payload from the direct-literal shape accepted above. Alias
+ * discovery does not map offsets back to the outer migration, so standard SQL
+ * doubled-quote decoding is safe here. */
+function directSqlStringPayload(expression) {
+  const sql = String(expression || "").trim();
+  if (!isDirectSqlStringLiteral(sql)) return null;
+  if (sql.startsWith("'")) return sql.slice(1, -1).replace(/''/g, "'");
+  const tag = dollarTagAt(sql, 0);
+  return tag === null ? null : sql.slice(tag.length, -tag.length);
+}
+
 function normalizedIdentifier(identifier) {
   const value = String(identifier || "").trim();
   if (/^U&/i.test(value)) return null;
@@ -418,21 +429,59 @@ function isPgCronJobWriteTarget(identifier) {
   return isPgCronJobName(identifier) || isPgCronJobViewAliasName(identifier);
 }
 
+/** Concatenate plain/dollar SQL string payloads for conservative keyword
+ * detection. This is not execution or exact decoding: it only makes
+ * `'CREATE ' || 'VIEW ...'` visible to the fail-closed lifecycle boundary. */
+function joinedSqlStringPayloads(text) {
+  const source = String(text || "");
+  let payloads = "";
+  for (let i = 0; i < source.length;) {
+    if (source[i] === "'") {
+      const end = scanQuoted(source, i);
+      if (end === -1) return payloads + source.slice(i + 1);
+      const payload = source.slice(i + 1, end - 1).replace(/''/g, "'");
+      payloads += payload;
+      if (/['$]/.test(payload)) payloads += joinedSqlStringPayloads(payload);
+      i = end;
+      continue;
+    }
+    const tag = source[i] === "$" ? dollarTagAt(source, i) : null;
+    if (tag) {
+      const close = source.indexOf(tag, i + tag.length);
+      if (close === -1) return payloads + source.slice(i + tag.length);
+      const payload = source.slice(i + tag.length, close);
+      payloads += payload + joinedSqlStringPayloads(payload);
+      i = close + tag.length;
+      continue;
+    }
+    i++;
+  }
+  return payloads;
+}
+
+function hasPossiblePgCronViewLifecycle(sql, aliases) {
+  const source = String(sql || "");
+  const candidates = [source, joinedSqlStringPayloads(source)];
+  const hasLifecycle = candidates.some((candidate) =>
+    /\b(?:CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:TEMP|TEMPORARY)\s+)?(?:RECURSIVE\s+)?VIEW|ALTER\s+(?:VIEW|TABLE))\b/i.test(candidate)
+  );
+  if (!hasLifecycle) return false;
+  return candidates.some((candidate) => {
+    if (/\bcron\s*\.\s*job\b/i.test(candidate) || /\bU&\s*"/i.test(candidate)) return true;
+    const folded = candidate.toLowerCase();
+    return [...aliases].some((alias) =>
+      typeof alias === "string" && folded.includes(alias.toLowerCase())
+    );
+  });
+}
+
 /** If executable alias parsing is unreadable, distinguish an unrelated fancy
  * procedural body from one that may create or rename a persistent cron.job
  * alias. The latter gets the wildcard/manual-review identity rather than being
  * forgotten across later migrations. */
 function hasPossibleOpaquePgCronViewLifecycle(sql, aliases) {
-  const source = String(sql || "");
-  if (!/\bEXECUTE\b/i.test(source) ||
-      !/\b(?:CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:TEMP|TEMPORARY)\s+)?(?:RECURSIVE\s+)?VIEW|ALTER\s+(?:VIEW|TABLE))\b/i.test(source)) {
-    return false;
-  }
-  if (/\bcron\s*\.\s*job\b/i.test(source) || /\bU&\s*"/i.test(source)) return true;
-  const folded = source.toLowerCase();
-  return [...aliases].some((alias) =>
-    typeof alias === "string" && folded.includes(alias.toLowerCase())
-  );
+  return /\bEXECUTE\b/i.test(String(sql || "")) &&
+    hasPossiblePgCronViewLifecycle(sql, aliases);
 }
 
 /** Find views declared by this migration whose query reads cron.job, including
@@ -543,6 +592,21 @@ function declaredPgCronJobViewAliases(sql, seedAliases = new Set(), includeTempo
       changed = true;
     }
   }
+
+  // pg_cron can execute the command after this migration returns. A persistent
+  // view created by that delayed command is therefore part of the historical
+  // alias lifecycle, while a TEMP view remains session-local to the cron run.
+  const delayedCommands = pgCronCommandLiteralPayloads(sourceSql, true);
+  if (delayedCommands.length > 0) {
+    const delayedAliases = declaredPgCronJobViewAliases(
+      delayedCommands.join(";\n"), aliases, false
+    );
+    for (const alias of delayedAliases) aliases.add(alias);
+  }
+  if (hasOpaquePgCronCallCommand(sourceSql, true) &&
+      hasPossiblePgCronViewLifecycle(sourceSql, aliases)) {
+    aliases.add(UNKNOWN_PG_CRON_JOB_VIEW_ALIAS);
+  }
   return aliases;
 }
 
@@ -584,9 +648,9 @@ function ensureHistoricalPgCronJobViewAliases() {
 /** Return the current pg_cron call sites while preserving the source argument
  * text. Unicode-escaped API names are returned with api=null and therefore use
  * the conservative unknown-API rule below. */
-function pgCronCallSites(rawStmt) {
+function pgCronCallSites(rawStmt, executableSql = false) {
   const raw = String(rawStmt || "");
-  const callableSql = maskSqlForCallNames(raw);
+  const callableSql = maskSqlForCallNames(raw, executableSql);
   if (callableSql === null) return [];
   const unicodeIdentifier =
     'U&\\s*"(?:[^"]|"")*"(?:\\s+UESCAPE\\s*\'(?:[^\']|\'\')*\')?';
@@ -637,6 +701,61 @@ function hasUnicodeNamedArgument(argument) {
   return /^\s*U&\s*"(?:[^"]|"")*"(?:\s+UESCAPE\s*'(?:[^']|'')*')?\s*(?:=>|:=)/i.test(masked);
 }
 
+function genericNamedArgumentValue(argument) {
+  const masked = maskSqlForCallNames(String(argument || ""));
+  if (masked === null) return null;
+  const named = new RegExp(
+    `^\\s*${SQL_IDENTIFIER_PATTERN}\\s*(?:=>|:=)\\s*`, "i"
+  ).exec(masked);
+  return named ? String(argument).slice(named[0].length) : String(argument);
+}
+
+/** Return every direct command literal stored by a pg_cron call. The positional
+ * indexes follow PostgreSQL's supported APIs and still work when later
+ * arguments switch to named notation. Unknown/Unicode APIs conservatively scan
+ * every direct literal value because any of them may be command-bearing. */
+function pgCronCommandLiteralPayloads(rawStmt, executableSql = false) {
+  const payloads = [];
+  const noCommandApis = new Set(["unschedule"]);
+  for (const site of pgCronCallSites(rawStmt, executableSql)) {
+    if (site.args === null || noCommandApis.has(site.api)) continue;
+    const args = site.args;
+    const namedCommand = args.map((arg) => namedArgumentValue(arg, "command"))
+      .find((value) => value !== null);
+    if (namedCommand !== undefined) {
+      const payload = directSqlStringPayload(namedCommand);
+      if (payload !== null) payloads.push(payload);
+      continue;
+    }
+
+    let command = null;
+    if (site.api === "alter_job") {
+      if (args.length >= 3 && !/(?:=>|:=)/.test(maskSqlForCallNames(args[2]) || "")) {
+        command = args[2];
+      }
+    } else if (site.api === "schedule") {
+      const index = args.length >= 3 ? 2 : 1;
+      if (args[index] !== undefined &&
+          !/(?:=>|:=)/.test(maskSqlForCallNames(args[index]) || "")) {
+        command = args[index];
+      }
+    } else if (site.api === "schedule_in_database") {
+      if (args.length >= 3 && !/(?:=>|:=)/.test(maskSqlForCallNames(args[2]) || "")) {
+        command = args[2];
+      }
+    } else {
+      for (const arg of args) {
+        const value = genericNamedArgumentValue(arg);
+        const payload = value === null ? null : directSqlStringPayload(value);
+        if (payload !== null) payloads.push(payload);
+      }
+    }
+    const payload = command === null ? null : directSqlStringPayload(command);
+    if (payload !== null) payloads.push(payload);
+  }
+  return payloads;
+}
+
 /** The legacy SECURITY DEFINER executor accepts exactly one SQL expression.
  * Anything except one direct literal is opaque and requires manual review. */
 function hasOpaqueExecuteSqlReadonlyCall(rawStmt) {
@@ -668,9 +787,9 @@ function hasOpaqueExecuteSqlReadonlyCall(rawStmt) {
 /** pg_cron persists command text beyond the migration. If that command arrives
  * through a variable, subquery, DEFAULT, concatenation, or another expression,
  * this lexical guard cannot inspect the eventual SQL and must fail closed. */
-function hasOpaquePgCronCallCommand(rawStmt) {
+function hasOpaquePgCronCallCommand(rawStmt, executableSql = false) {
   const noCommandApis = new Set(["unschedule"]);
-  for (const site of pgCronCallSites(rawStmt)) {
+  for (const site of pgCronCallSites(rawStmt, executableSql)) {
     if (site.args === null) return true;
     const args = site.args;
     if (args.some(hasUnicodeNamedArgument)) return true;
