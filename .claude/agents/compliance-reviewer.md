@@ -36,8 +36,11 @@ For each violation capture: file, line number, severity, and a one-line fix. **C
 - **Correct:** new money storage uses `bigint` cents. Documented legacy PostgreSQL numeric-dollar
   columns may remain only with exact `numeric` math and a finite whole-cent constraint once clean.
   Display cents via `formatCents()` from `src/lib/money.ts`; use `formatUSD()` only for an
-  already-dollar display value. Money INPUT must parse via `parseDollarsToCents` (positive) /
-  `parseDollarsToCentsSigned` (the 3 vendor-bill callsites only) from `src/lib/parseCents.ts`.
+  already-dollar display value. Money INPUT may use `parseDollarsToCents` (positive) /
+  `parseDollarsToCentsSigned` (the 3 vendor-bill callsites only) from `src/lib/parseCents.ts` only
+  after the input grammar rejects more than two fractional digits, or after one explicit approved
+  exact rounding rule is applied. Those legacy helpers currently truncate excess precision, so raw
+  use on an unconstrained input is a BLOCKER, not proof of compliance.
 
 ### CHECK 2 — Mutation result not checked  — HIGH
 - Any `supabase.from(...).update(...)` or `.delete(...)` whose result is not passed to `checkMutationResult(result, '<context>')` (imported from `../lib/db`).

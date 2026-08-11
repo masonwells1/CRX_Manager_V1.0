@@ -16,7 +16,9 @@ as open debt below rather than silently changing input behavior in this policy-o
 pricing implementation owns the money paths it changes; this PR changes no schema, data, or
 production behavior. Latest-head review also aligned the compliance/PDF reviewers, migration and RPC
 scaffolds, money hook message, inventory checklist, and required gotchas reference so none can
-override the documented legacy-column exception.
+override the documented legacy-column exception. A final current-head review also made the
+compliance reviewer reject raw use of the legacy cent parsers on inputs with more than two
+fractional digits unless an explicit exact rounding rule has been approved.
 
 ## 2026-08-10 — Agent toolchain refresh; removed the dead Codex Sentry connector
 
