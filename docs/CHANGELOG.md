@@ -2,6 +2,20 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-11 — Preserve the applied line-profit backfill without replaying it by default
+
+Added the exact source for live migration `20260810025159_backfill_stale_line_profit.sql`,
+closing the repository-to-ledger gap for the already-applied 37-line profit repair. Because
+that migration rewrote a production-specific business-row population, the post-baseline
+rebuild selector now reads a small one-shot registry and withholds the repair from default
+replay while reporting the omission on stderr. An explicit `--include-one-shot` escape hatch
+remains available only after the target population has been independently proven to match
+the population originally approved. After a restore proves it already contains the corrected
+values, `--one-shot-repair-plan` emits the reviewed ledger-repair commands needed to prevent a
+later unfiltered push from rediscovering the skipped rewrite. Focused tests prove the default
+quarantine, visible warning, registry/file correspondence, deliberate override, and durable
+ledger closeout path.
+
 ## 2026-08-10 — Declined the bigint-cents conversion and applied three whole-cent migrations live
 
 Evaluated CodeRabbit's bigint-cents request on the canonical profit path and declined the conversion, drafting three migrations that fix the underlying cent-scale defects instead. PostgreSQL `numeric` is exact decimal, not floating point, so the `AGENTS.md` money rule was never violated; converting `orders.total_profit`, `orders.total_cost`, `order_items.profit` and `order_items.net_margin` to bigint cents would reach `src/types/index.ts`, reporting, invoicing and commissions for no correctness gain. The real defects, confirmed from live function source, are that commission rows mint their basis from a stale pre-trigger profit value rather than the canonical order header, and that several creation paths store sub-cent money. Three migrations were written and then, on Mason's explicit in-chat approval, APPLIED LIVE to production on 2026-08-10 in order: `20260810150000` rebases the commission basis on the rounded order header and rounds `create_direct_order` money (ledger version `20260810152935`); `20260810150500` rounds `save_quote` `total_cost` and `quote_items` money (`20260810154721`); `20260810151000` adds whole-cent CHECK constraints to seven already-clean money columns, five more deferred behind a legacy backfill (`20260810155629`). All three ran end to end against a throwaway `postgres:17-alpine` first and every post-condition was mutation-tested to fail closed; each apply then passed the full proof gate, with both reviewer charters run as real `gpt-5.6-sol` high-effort Codex reviews returning CLEAN against the exact on-disk file hash. Post-apply live reads confirm every function body changed as written with `SECURITY DEFINER`, `search_path` and grants unchanged, and exactly the intended seven CHECK constraints present and validated with the five deferred columns still unconstrained. No live row was modified. The schema registry was rebuilt from live introspection afterwards. The three migrations are live in production; no application code has been pushed, merged, or deployed, so the repository and the deployed front end still lag the database. Deferred: the `_update_order_items_impl` `total_price` clobber is blocked on live-vs-disk function drift, and the quote-versus-order profit formula divergence is an owner decision.
@@ -15,6 +29,17 @@ Evaluated CodeRabbit's bigint-cents request on the canonical profit path and dec
   - `supabase/migrations/20260810150000_commission_basis_from_canonical_order_header.sql`
   - `supabase/migrations/20260810150500_save_quote_whole_cent_total_cost.sql`
   - `supabase/migrations/20260810151000_whole_cent_money_check_constraints.sql`
+
+## 2026-08-10 — Graphify-first agent navigation policy
+
+Made Graphify the explicit first-pass navigator for architecture, multi-file, workflow/migration,
+difficult-debugging, structural-audit, and PR-impact work. `AGENTS.md` now defines the shared routing,
+authority, and evidence boundaries; `CLAUDE.md` explicitly routes Claude through that policy. The shared
+Graphify skill carries the tool procedure: check graph freshness, query the smallest useful subgraph,
+use the generated report/visual index, minimize source reads, and preserve useful or corrected outcomes
+with `save-result`/`reflect`. Focused source and live read-only evidence remain mandatory for safe edits
+and material proof; Graphify is navigation, not authority. When Graphify is unavailable or its wrapper
+reports a supported skip, agents continue with focused source inspection and disclose the limitation.
 
 ## 2026-08-10 — Agent toolchain refresh; removed the dead Codex Sentry connector
 
