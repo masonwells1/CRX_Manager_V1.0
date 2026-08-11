@@ -194,6 +194,32 @@ forms. They also denied staged SQL delivered through schedule/update/insert/MERG
 expressions while preserving direct safe command literals. The exact-SHA independent review remains an
 external governed proof and must match the final branch HEAD before publication;
 this entry does not self-certify it.
+## 2026-08-10 — Record the exact-whole-cent compatibility policy
+
+Recorded Mason's financial storage decision independently of the pricing implementation: new money
+storage uses bigint cents. Established PostgreSQL numeric-dollar storage may remain temporarily to
+avoid a risky unit rewrite, but it is approved only after exact numeric arithmetic, clean finite
+whole-cent values, and an active finite whole-cent CHECK are verified. Dirty or unconstrained
+columns remain tracked findings and may not be suppressed as accepted exceptions. Authoritative
+TypeScript money calculations and input-parsing paths that are added or changed must parse decimal
+operands into integer cents and may not introduce binary floating-point conversion, parsing,
+arithmetic, or rounding; display-only formatting from already-integer cents remains allowed. Updated
+required reviewer, workflow, architecture, operations, and audit-template guidance that still stated the superseded
+blanket bigint-only rule. The pre-existing `parseCents.ts` excess-precision truncation is recorded
+as open debt below rather than silently changing input behavior in this policy-only PR. The separate
+pricing implementation owns the money paths it changes; this PR changes no schema, data, or
+production behavior. Latest-head review also aligned the compliance/PDF reviewers, migration and RPC
+scaffolds, money hook message, inventory checklist, and required gotchas reference so none can
+override the fail-closed legacy-column approval gate. A final exact-head Sol review rejected the
+earlier "once clean" wording because it could hide dirty or unconstrained columns; the policy,
+review prompts, audit allowlists, and migration/RPC guidance now keep those columns visible until
+all three approval conditions are proven. A final current-head review also made the
+compliance reviewer reject raw use of the legacy cent parsers on inputs with more than two
+fractional digits unless an explicit exact rounding rule has been approved; the deterministic
+money-safety hook now gives the same qualified remediation instead of recommending the truncating
+helper by itself. The final exact-head review applied that same precision gate to the field-map UX
+loop prompt, which had still described the legacy parser as exact without qualifying its truncation.
+
 ## 2026-08-10 — Graphify-first agent navigation policy
 
 Made Graphify the explicit first-pass navigator for architecture, multi-file, workflow/migration,
