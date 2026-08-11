@@ -23,7 +23,7 @@ This is the shared, project-level contract for every coding agent in this reposi
 
 ## Graph-First Navigation
 
-For architecture, multi-file planning, workflow or migration tracing, difficult debugging, structural audits, and PR-impact analysis, Graphify is the default first-pass navigator. Load the `graphify` skill automatically and follow its freshness, focused-query, reporting, and result-persistence procedures before broad file exploration; do not require Mason to remember to request it. A simple documentation lookup, obvious single-file edit, or already-known exact file does not need a graph query.
+For architecture, multi-file planning, workflow or migration tracing, difficult debugging, structural audits, and PR-impact analysis, Graphify is the default first-pass navigator. Load the `graphify` skill automatically and follow its freshness, focused-query, reporting, and result-persistence procedures before broad file exploration; do not require Mason to remember to request it. A simple documentation lookup, obvious single-file edit, or already-known exact file does not need a graph query. If Graphify is unavailable or its supported refresh path skips, continue with focused source inspection and report that limitation instead of blocking the task.
 
 Use the graph to choose the smallest source surface that can answer or implement the task. Raw source reads do not require Mason's explicit request: they are required whenever needed to edit safely, verify a material connection, review behavior, or conduct an audit. Current source, executable tests, migrations, and live read-only database evidence remain authoritative; Graphify identifies where to look and never proves current behavior or the live schema.
 

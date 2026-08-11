@@ -10,7 +10,8 @@ authority, and evidence boundaries; `CLAUDE.md` explicitly routes Claude through
 Graphify skill carries the tool procedure: check graph freshness, query the smallest useful subgraph,
 use the generated report/visual index, minimize source reads, and preserve useful or corrected outcomes
 with `save-result`/`reflect`. Focused source and live read-only evidence remain mandatory for safe edits
-and material proof; Graphify is navigation, not authority.
+and material proof; Graphify is navigation, not authority. When Graphify is unavailable or its wrapper
+reports a supported skip, agents continue with focused source inspection and disclose the limitation.
 
 ## 2026-08-10 — Agent toolchain refresh; removed the dead Codex Sentry connector
 

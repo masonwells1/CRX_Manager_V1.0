@@ -17,6 +17,8 @@ npm run graph:refresh
 
 The graph is local and gitignored under `graphify-out/`. It contains only the current operating code/database corpus selected by `.graphifyignore`; it never writes to production or sends code to a remote model.
 
+If `npm run graph:refresh` reports that Graphify is not installed or otherwise takes a supported skip path, do not block the task and do not pretend a graph query ran. Fall back to focused source inspection based on the changed files, known entry point, or narrow search terms; keep reads scoped, verify material behavior in source/live evidence, and report that Graphify was unavailable. A genuine refresh/query error is a tool blocker to report and diagnose, not a supported skip to silently ignore.
+
 Use `GRAPH_REPORT.md` as the freshness/community index and `graph.html` as an optional visual map. Prefer the CLI queries below over manually mining `graph.json` or `manifest.json` unless diagnosing Graphify itself.
 
 ## Use the smallest useful query
@@ -36,4 +38,4 @@ When a query materially guides the work, dead-ends, or is corrected, save that o
 
 ## What to report
 
-State the graph's build commit from `graphify-out/GRAPH_REPORT.md`, the exact graph query used, candidate nodes, and the source/live evidence that confirmed or rejected it. Do not present a graph-only connection as a verified behavior.
+State the graph's build commit from `graphify-out/GRAPH_REPORT.md`, the exact graph query used, candidate nodes, and the source/live evidence that confirmed or rejected it. When the fallback was required, state that no graph query ran and why. Do not present a graph-only connection as a verified behavior.
