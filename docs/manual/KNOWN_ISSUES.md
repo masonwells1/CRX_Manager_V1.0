@@ -1,6 +1,6 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-08-10 UTC (2026-08-09 evening America/Chicago), post-apply.** Live ledger high-water at the last read on this branch was `20260810010308` (`active_team_note_assignment_actor`) — ledger versions are UTC, which is why the stamp reads a day ahead of the local session date. Two independent lines of work applied live on 2026-08-09 and are reconciled below. Everything past this header carries its 2026-08-07 verification unless dated otherwise.
+**Last verified: 2026-08-10 UTC (2026-08-09 evening America/Chicago), post-apply.** Live ledger high-water at the last read on this branch was `20260810155629` (`20260810151000_whole_cent_money_check_constraints`), re-read 2026-08-10 — ledger versions are UTC, which is why the stamp reads a day ahead of the local session date. The 2026-08-09 post-apply verification that the rest of this header describes ended at `20260810010308` (`active_team_note_assignment_actor`); the four ledger entries past it were applied live by separate 2026-08-10 sessions and are not described below. Two independent lines of work applied live on 2026-08-09 and are reconciled below. Everything past this header carries its 2026-08-07 verification unless dated otherwise.
 
 **Team Board delegation — both halves live.** `20260809130108` added the governed `complete_team_note` RPC and the assignment-notification trigger, and `20260810010308` closed the inactive-actor notification path in both the `tnotes_insert` policy and the trigger itself. Both were verified live after apply, and the delegated-completion and inactive-actor behaviors were proven by rollback-only probes against live. The compatible frontend ships with PR #351, so delegated completion is live in the database but not reachable from the browser until that PR merges and deploys. An earlier 2026-08-09 read recorded `20260809130108` as having no file in this repository; PR #351 lands that file and its follow-up, closing the gap (see `docs/reference/migration-history.md` rows 863 and 864).
 
@@ -24,6 +24,56 @@ shared form-input helper needs a separate caller audit and UI decision: reject
 excess precision or apply one explicit approved rounding rule. The documentation
 prerequisite records the debt but deliberately does not change production input
 semantics.
+
+---
+
+## OPEN — the Codex `read_only=true` guard may not describe the connection Codex actually uses
+
+**Found 2026-08-10.** No production write was performed during the investigation.
+Production write capability remains unverified. This affects how much assurance
+the read-only guard is entitled to claim.
+
+`check-agent-workflows.mjs:92` and `check-agent-guidance.mjs:121` both assert
+that `.codex/config.toml` contains `read_only=true`, and that assertion is the
+stated guarantee that Codex cannot write to the live database. The guard checks
+that a **string is present in a file**. It does not check that the connection
+that string configures is the one serving Codex's Supabase traffic.
+
+On 2026-08-10 those two were observed to be different things:
+
+- The `[mcp_servers.supabase]` entry in `.codex/config.toml` **fails to
+  authenticate on every run** — `failed to refresh OAuth tokens for server
+  supabase` / `invalid_grant: Grant not found`. Its OAuth grant is dead, exactly
+  like the Sentry entry removed the same day.
+- Meanwhile the Supabase calls that actually succeed are served by
+  **`codex_apps/supabase`** — a separate built-in Codex App with its own
+  independent authentication. Observed tool line:
+  `mcp: codex_apps/supabase.list_migrations (completed)`, returning correct live
+  data — migration name `20260810022500_backfill_stale_line_profit`, live ledger
+  version `20260810025159` — verified against the live ledger from the Claude
+  side. The two stamps differ because a migration's filename prefix records when
+  it was written and its ledger version records when it was applied; they are
+  different numbers for the same migration.
+
+So the read-only assurance is asserted against a config entry that appears never
+to have authenticated, while real traffic flows through a channel whose
+permissions are **not verified by any guard in this repository**. Removing the
+dead entry was attempted and reverted precisely because the guard failed — the
+declared intent is worth keeping, but it should not be read as proof.
+
+**What is NOT known, and was deliberately not tested:** whether
+`codex_apps/supabase` is itself read-only. Establishing that empirically means
+attempting a write against the production database, which is not an acceptable
+test. A capability probe (asking Codex to list its Supabase tool names without
+calling them) was attempted twice and produced no usable output.
+
+**Owed to Mason (owner decision):** confirm in the Codex app's own connector
+settings whether the Supabase App is scoped read-only. If it is not, Codex has
+had unverified write capability against production for as long as the App has
+been serving traffic, and the guard has been reporting green throughout.
+
+**Do not** "fix" this by deleting the `read_only=true` line or by relaxing either
+check — both guards correctly refused the change that prompted this entry.
 
 ---
 
