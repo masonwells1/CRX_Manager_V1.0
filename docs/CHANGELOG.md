@@ -2,6 +2,80 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-10 — Review fixes on the harness guards (PR #369)
+
+Six findings from the Codex and CodeRabbit reviews of PR #369, all in the pre-commit harness. Five are
+code fixes, each mutation-proved (break the fix, watch the new assertion go red):
+
+1. **A registry row the diff never mentions no longer reads as "nothing pending."** Every check in
+   `parkedDraftPathsFrom` ran inside the loop over changed paths, so a branch that registers pending SQL
+   in `migration-history.md` but never touches that SQL in the diff got a confident zero over a registry
+   the code had not read. The registry is now reconciled against the diff outside the loop; an
+   unaccounted row answers UNKNOWN, which sends the caller to a full scan.
+2. **An unreadable migration history over an empty diff is UNKNOWN too** — same loop, same blind spot.
+3. **Migration enumeration is index-scoped, not a directory listing.** The guard describes the commit
+   being created, so it must not see untracked or unstaged `.sql` files. Proved by planting an untracked
+   migration and confirming only a directory listing finds it.
+4. **The backup-staleness check no longer guesses at the main checkout.** It derived the checkout from
+   `dirname(<git-common-dir>)`, which under `--separate-git-dir` or in a bare repo lands on an unrelated
+   folder that could hold some other project's `backups/LATEST-OK.json`. It now asks Git, and rejects
+   layouts it cannot resolve rather than reporting a different database's backup as this one's.
+5. **Canonical blobs come from the index only** — no HEAD fallback (which would validate history the
+   commit deletes) and no working-tree fallback (which would certify bytes the commit omits).
+6. **Doc fix:** `docs/audits/2026-08-08-foundation-ultra-review.md` still read as if its five follow-up
+   migrations were unapplied and its §2 fixes were future work. All of it is live since 2026-08-09, and a
+   reader following the old text could have replayed or restamped shipped work. The stale passages are
+   now labelled SUPERSEDED with the live status verified by direct introspection. The one genuinely open
+   item — the historical fractional-cent repair, whose statement is commented out on purpose — is called
+   out as Mason's decision and was **not** run.
+
+Hook suites: `worktree-awareness-lib` 185 assertions, `session-staleness` 23 assertions, both green.
+
+## 2026-08-10 — Harness guards now validate the commit being created (PR #357)
+
+Resolved the review findings on the abandoned harness-permissions branch. The headline defect: the
+migration cross-reference guard hashed the **staged** SQL blob but parsed the **unstaged**
+`migration-history.md`, so a commit whose staged history carried an all-zero sha256 pin passed all 176
+assertions while the correct pin sat unstaged on disk — the guard blessed a commit it had never
+actually inspected. Both artifacts now come from one index-first reader. Mutation-proved in a
+throwaway setup: staged-wrong/disk-right is RED, staged-right/disk-wrong is GREEN, history restored
+byte-identical.
+
+Two further guard fixes, each proved against the pre-fix code rather than asserted:
+
+- **Backup-freshness false alarm.** `session-staleness.mjs` always preferred the canonical checkout's
+  `backups/LATEST-OK.json`, but `/backup-db` stamps that marker in whichever checkout it ran from. A
+  backup taken inside a worktree was therefore invisible, and every later session warned that the only
+  copy of production data was missing or stale — training the reader to ignore the one warning that
+  matters. Now newest-wins, which keeps the original protection (a stale worktree marker still loses
+  to a newer canonical one) without the false alarm. Before/after in a throwaway repo: canonical-old
+  plus worktree-fresh warned "2414 days old" before and is silent after; both-old still warns;
+  neither-present still warns. This deliberately **reverses a previously-asserted rule** — the FIX 3
+  case in `session-staleness.test.mjs` asserted "shared canonical marker wins over a conflicting
+  worktree-local marker". That assertion is replaced, not deleted: the suite now pins both halves of
+  newest-wins (a fresher worktree marker is not masked, and a stale worktree marker cannot fake a
+  stale backup when the canonical one is fresh). Mutation-proved — restoring canonical-always-wins
+  turns the suite RED.
+- **Dangling candidate registry.** `parkedDraftPathsFrom()` skipped a vanished path before consulting
+  history, so a LOCAL CANDIDATE pin naming SQL that is not on disk produced a confident zero with no
+  `unknownReason`. It now reports UNKNOWN for exactly that case; a retired `SUPERSEDED-` draft, which
+  is not in the registry, stays silent as before. The pre-commit cross-reference guard already caught
+  this at commit time, so nothing dangling could reach `main` — the gap was that `/fleet` and
+  SessionStart under-reported until someone tried to commit.
+
+One reported finding is **not actioned because it does not reproduce**: exercised against this head, a
+headerless branch candidate registered only by a matching sha256 pin *is* surfaced, and a mismatched
+pin sets `unknownReason`.
+
+Also retired two stale documentation claims. `docs/audits/2026-08-08-foundation-ultra-review.md` and
+`docs/reference/rpc-functions.md` still said the foundation-ultra-review migrations were unapplied
+candidates and instructed agents to restamp them. They are **applied live** — re-issued forward as
+`20260809170500`–`20260809170900`, ledger versions `20260809203222`, `20260809204044`, `20260809204435`,
+`20260809204855`, `20260809205423`, with per-migration proof in `migration-history.md` rows 857–861.
+The one deliberate exception is unchanged: the historical money repair inside `20260809170800` stays
+commented out, so the 49 pre-existing fractional-cent rows are untouched and restating them remains
+Mason's decision.
+
 ## 2026-08-09 — Backfilled stale line-level profit through the canonical live trigger
 
 Backfilled stale line-level profit through the canonical live trigger. Applied live as ledger version 20260810025159 after both sanctioned gpt-5.6-sol high-effort reviewers returned CLEAN against the exact SQL hash. Data-only, no new formula: the migration re-writes total_price to itself on the affected primary keys so the existing BEFORE trigger re-derives each value, keeping the trigger the single definition of the rule. Reporting correction only; AR is driven by invoices.balance_cents and is untouched. Post-apply readback confirmed zero remaining disagreeing lines, every repaired order header agreeing with its own lines, and an aggregate change matching the pre-apply measurement exactly. Deliberate residuals recorded in docs/manual/KNOWN_ISSUES.md. Review follow-up: both PR reviewers read the tracked 20260808150400_round_money_to_whole_cents.sql, saw no profit assignment, and concluded the backfill was a no-op — live disproves that (the trigger does assign profit; zero rows remain stale), but their underlying point stands: the deriving body arrived via 20260809230500_single_canonical_line_profit (ledger version 20260810000427), which reaches main only with PR #354. The replay dependency is documented rather than duplicated, because two pending migrations re-emitting one function is the known overlap-clobber failure mode.

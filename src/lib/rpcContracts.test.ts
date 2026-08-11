@@ -1335,7 +1335,11 @@ describe('RPC contract: bulk_import_order', () => {
     expect(body).toContain('round(v_qty * v_price_per_unit, 2) - round(v_qty * v_cost_per_unit, 2)');
     expect(body).toContain('jsonb_to_recordset(v_normalized_items)');
     expect(body).toContain("'warnings', to_jsonb(v_warnings)");
-  });
+    // 60s (vs. the 5s default): the migration corpus is read once at module load,
+    // but this test still scans it, and the whole suite runs 150 files in parallel
+    // against one disk. Generous headroom keeps machine load from failing a test
+    // whose assertions are pure string matching.
+  }, 60_000);
 });
 
 describe('RPC contract: save_blend_recipe', () => {
@@ -1734,24 +1738,30 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
 };
 
 /**
- * Migration files (name + content), read from disk ONCE and memoized.
+ * Migration files (name + content), read from disk ONCE at module load.
  *
- * Why the cache: `latestFunctionBody` is called once per covered RPC, and each
- * call used to re-`readdirSync` + re-`readFileSync` its way back through the
- * ~500+ migration files. That O(RPCs × files) synchronous disk I/O finishes in
- * ~2s when this file runs alone (warm cache, no contention) but blew the 5s
+ * Why read them once: `latestFunctionBody` is called once per covered RPC, and
+ * each call used to re-`readdirSync` + re-`readFileSync` its way back through
+ * the 800+ migration files. That O(RPCs × files) synchronous disk I/O finishes
+ * in ~2s when this file runs alone (warm cache, no contention) but blew the 5s
  * test timeout under the full parallel suite (150 files contending for CPU/disk)
  * — a perf flake, not a logic failure. Reading each file once makes the disk
  * work O(files) total; the per-RPC scan is then pure in-memory regex.
+ *
+ * Why EAGER (module scope) rather than lazy-memoized: with a lazy cache the
+ * whole directory read was billed to whichever test happened to touch it first,
+ * so that one test carried ~900ms warm and >13s under heavy machine load —
+ * enough to blow even a generous per-test timeout while every later test ran
+ * free. Doing it at import time keeps the cost outside any test's timeout
+ * budget and makes it independent of test ordering and `-t` filtering.
  */
-let _migrationFilesCache: { name: string; content: string }[] | null = null;
+const MIGRATION_FILES: { name: string; content: string }[] = readdirSync(MIGRATIONS_DIR)
+  .filter((f) => f.endsWith('.sql'))
+  .sort() // timestamp-prefixed → ascending chronological
+  .map((name) => ({ name, content: readFileSync(join(MIGRATIONS_DIR, name), 'utf8') }));
+
 function getMigrationFiles(): { name: string; content: string }[] {
-  if (_migrationFilesCache) return _migrationFilesCache;
-  _migrationFilesCache = readdirSync(MIGRATIONS_DIR)
-    .filter((f) => f.endsWith('.sql'))
-    .sort() // timestamp-prefixed → ascending chronological
-    .map((name) => ({ name, content: readFileSync(join(MIGRATIONS_DIR, name), 'utf8') }));
-  return _migrationFilesCache;
+  return MIGRATION_FILES;
 }
 
 /**
