@@ -65,12 +65,21 @@ const CHAIN = join(HERE, 'smoke-blend-ticket-fractional-cents.sql');
 /** LF-normalized md5 of create_order_from_blend_ticket BEFORE the fix. */
 const PREFIX_BODY_MD5 = 'c056d2bf1200fd0fb73a0da54941a8d9';
 /**
- * LF-normalized md5 of create_order_from_blend_ticket as it runs in PRODUCTION,
- * read from pg_proc on 2026-08-11 after 20260811200000 was applied
+ * LF-normalized md5 of create_order_from_blend_ticket as read from production
+ * pg_proc ON 2026-08-11, after 20260811200000 was applied
  * (raw prosrc md5 27d4411a40fb14839babb786e8a6ba56, length 10015, one overload).
- * If this stops matching the file, production and the repo have diverged.
+ *
+ * This is a PINNED HISTORICAL SNAPSHOT, not a live reading. The prover runs its
+ * container with --network none and never contacts production, so a match here
+ * proves only that the repository file still equals what production held on
+ * that date — if the live function is re-emitted later, this still passes
+ * (CodeRabbit, PR #384). To re-confirm current parity, run against production:
+ *
+ *   SELECT md5(replace(prosrc, E'\r\n', E'\n')), length(prosrc), count(*) OVER ()
+ *     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+ *    WHERE n.nspname = 'public' AND p.proname = 'create_order_from_blend_ticket';
  */
-const LIVE_PROD_BODY_MD5 = '27d4411a40fb14839babb786e8a6ba56';
+const PROD_BODY_MD5_ON_2026_08_11 = '27d4411a40fb14839babb786e8a6ba56';
 
 const PASS_TOKEN = 'SMOKE_PASS_ROLLBACK';
 const IMAGE = 'postgres:17-alpine';
@@ -96,6 +105,28 @@ function docker(args, { input, allowFailure = false } = {}) {
 const psql = (sql, opts = {}) =>
   docker(['exec', '-i', CONTAINER, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q',
           '-v', 'ON_ERROR_STOP=1', '-f', '-'], { input: sql, ...opts });
+
+/**
+ * Apply a migration the way Supabase's migration runner does: as ONE
+ * transaction. Without --single-transaction the CREATE OR REPLACE FUNCTION and
+ * the grants commit before the trailing $verify$ block raises, so stages D/E
+ * would report "fails CLOSED" while the half-applied function stayed behind —
+ * which is the opposite of failing closed (CodeRabbit, PR #384).
+ */
+const psqlTxn = (sql, opts = {}) =>
+  docker(['exec', '-i', CONTAINER, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q',
+          '--single-transaction', '-v', 'ON_ERROR_STOP=1', '-f', '-'], { input: sql, ...opts });
+
+/** LF-normalized md5 of the create_order_from_blend_ticket body live in the container. */
+function bodyMd5InContainer() {
+  const r = psql(
+    `\\pset tuples_only on
+     \\pset format unaligned
+     SELECT md5(replace(prosrc, E'\\r\\n', E'\\n')) FROM pg_proc p
+       JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = 'create_order_from_blend_ticket';`);
+  return r.stdout.trim();
+}
 
 // ── pull each function body straight out of its migration ────────────────────
 
@@ -183,11 +214,12 @@ try {
   say(`pre-fix body md5 ${preMd5} matches the recorded pre-fix baseline`);
 
   const postMd5 = md5(postFix);
-  if (postMd5 !== LIVE_PROD_BODY_MD5) {
-    fail(`post-fix body md5 ${postMd5} != live production body ${LIVE_PROD_BODY_MD5}\n` +
-         'The repo and production have diverged. Re-read pg_proc and re-verify before trusting this proof.');
+  if (postMd5 !== PROD_BODY_MD5_ON_2026_08_11) {
+    fail(`post-fix body md5 ${postMd5} != the 2026-08-11 production snapshot ${PROD_BODY_MD5_ON_2026_08_11}\n` +
+         'The repo has moved off the body that was applied live. Re-read pg_proc and re-verify before trusting this proof.');
   }
-  say(`post-fix body md5 ${postMd5} matches the function running in PRODUCTION`);
+  say(`post-fix body md5 ${postMd5} matches the 2026-08-11 production snapshot`);
+  console.log('     (pinned snapshot, not a live reading — this container has no network)');
 
   const baseSql = lf(readFileSync(BASE, 'utf8'));
   const chainSql = lf(readFileSync(CHAIN, 'utf8'));
@@ -247,8 +279,8 @@ try {
   console.log('     ' + (aOut.split('\n').find((l) => /violates check constraint/.test(l)) || '').trim());
 
   // ── B: apply the migration ─────────────────────────────────────────────────
-  say('STAGE B — applying 20260811200000 VERBATIM from disk');
-  const b = psql(migrationSql, { allowFailure: true });
+  say('STAGE B — applying 20260811200000 VERBATIM from disk, in ONE transaction');
+  const b = psqlTxn(migrationSql, { allowFailure: true });
   if (b.status !== 0) fail(`STAGE B: the migration failed to apply:\n${b.stdout}\n${b.stderr}`);
   say('STAGE B ✔ applied and its own $verify$ postcondition block passed');
 
@@ -267,13 +299,20 @@ try {
   say('STAGE D — mutation test: drop after_order_items_change, re-apply');
   psql(preFixDefinition); // restore the baseline so the migration has work to do
   psql('DROP TRIGGER after_order_items_change ON public.order_items;');
-  const d = psql(migrationSql, { allowFailure: true });
+  const d = psqlTxn(migrationSql, { allowFailure: true });
   const dOut = d.stdout + d.stderr;
   if (d.status === 0) fail('STAGE D: the migration applied with the recalculation trigger MISSING. The $verify$ block fails open.');
   if (!/POSTCONDITION FAILED.*after_order_items_change is missing/.test(dOut)) {
     fail(`STAGE D: it refused, but not via the trigger-presence postcondition:\n${dOut}`);
   }
-  say('STAGE D ✔ the migration fails CLOSED when the recalculation trigger is gone');
+  // Refusing is only half of "fails closed": the earlier CREATE OR REPLACE and
+  // grants must be gone too. Confirm the pre-fix body is still what is installed.
+  const dBody = bodyMd5InContainer();
+  if (dBody !== md5(preFix)) {
+    fail(`STAGE D: the migration refused but did NOT roll back — installed body md5 ${dBody} ` +
+         `!= pre-fix ${md5(preFix)}. A half-applied migration is not failing closed.`);
+  }
+  say('STAGE D ✔ the migration fails CLOSED when the recalculation trigger is gone (and rolls back)');
   console.log('     ' + (dOut.split('\n').find((l) => /POSTCONDITION FAILED/.test(l)) || '').trim());
 
   // ── E: mutation-test the REPLICA-only trigger state ────────────────────────
@@ -291,7 +330,7 @@ try {
     fail(`STAGE E: could not put the trigger into replica-only state, got:\n${eState.stdout}${eState.stderr}`);
   }
   psql(preFixDefinition);
-  const e = psql(migrationSql, { allowFailure: true });
+  const e = psqlTxn(migrationSql, { allowFailure: true });
   const eOut = e.stdout + e.stderr;
   if (e.status === 0) {
     fail("STAGE E: the migration applied with the trigger REPLICA-only. It fails OPEN on tgenabled='R' — " +
@@ -300,7 +339,12 @@ try {
   if (!/POSTCONDITION FAILED.*will not fire on ordinary writes/.test(eOut)) {
     fail(`STAGE E: it refused, but not via the tgenabled postcondition:\n${eOut}`);
   }
-  say("STAGE E ✔ fails CLOSED on tgenabled='R', not just 'D'");
+  const eBody = bodyMd5InContainer();
+  if (eBody !== md5(preFix)) {
+    fail(`STAGE E: the migration refused but did NOT roll back — installed body md5 ${eBody} ` +
+         `!= pre-fix ${md5(preFix)}.`);
+  }
+  say("STAGE E ✔ fails CLOSED on tgenabled='R', not just 'D' (and rolls back)");
   console.log('     ' + (eOut.split('\n').find((l) => /POSTCONDITION FAILED/.test(l)) || '').trim());
 
   // ── F: characterize the residual RUN-TIME gap ──────────────────────────────

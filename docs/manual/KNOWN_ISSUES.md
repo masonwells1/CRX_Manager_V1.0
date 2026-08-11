@@ -39,19 +39,35 @@ codebase. The migration carries an apply-time `$verify$` block asserting exactly
 whole thing in a network-isolated disposable PostgreSQL 17 container: it reproduces the CHECK violation
 against the pre-fix body from `20260714230200`, applies `20260811200000` verbatim, and re-runs the chain to
 `SMOKE_PASS_ROLLBACK` with whole-cent totals equal to the canonical sum-of-rounded-lines. It refuses to run
-unless the post-fix body on disk still md5-matches the function live in production, so a green run also
-proves the repo and production have not diverged. Two mutation stages confirm the apply-time guard fails
-closed when the trigger is missing **and** when it is `REPLICA`-only — the latter is the case a
-`tgenabled <> 'D'` check would wave through, because a replica-only trigger never fires in an origin session.
+unless the post-fix body on disk still md5-matches the **pinned 2026-08-11 production snapshot** of that
+function — a historical reading, not a live one: the prover's container runs with `--network none` and never
+contacts production, so the match proves the repo has not drifted off what was applied, not that production
+is unchanged since. Both mutation stages apply the migration as a single transaction and confirm it fails
+closed **and rolls back** when the trigger is missing **and** when it is `REPLICA`-only — the latter is the
+case a `tgenabled <> 'D'` check would wave through, because a replica-only trigger never fires in an origin
+session.
 
-**Residual gap, still open — the trigger guarantee is APPLY-time only.** There is no equivalent run-time
-check. The fixed body reads the header back with `SELECT … INTO v_total_price` followed by `IF NOT FOUND`,
-but the `orders` row always exists by that point, so `FOUND` is true even when the trigger never ran. Stage F
-of the prover characterizes this: with the fixed body in place and `after_order_items_change` dropped, the
-RPC **reports success and books a zero-value header** — only the smoke chain catches it. This cannot happen
-by itself; it needs someone to drop or disable the trigger, which the migration's own guard prevents at apply
-time. Closing it would mean asserting inside the RPC that the header was actually recalculated. Not urgent,
-but do not treat the apply-time guard as run-time protection.
+### OPEN — residual run-time gap (CRX-MONEY-001-R): the trigger guarantee is APPLY-time only
+
+**Severity: HIGH if it ever fires — silent wrong money, no error.** There is no run-time equivalent of the
+apply-time check. The fixed body reads the header back with `SELECT … INTO v_total_price` followed by
+`IF NOT FOUND`, but the `orders` row always exists by that point, so `FOUND` is true even when the trigger
+never ran. Stage F of the prover characterizes this: with the fixed body in place and
+`after_order_items_change` dropped, the RPC **reports success and books a zero-value header** — nothing
+raises, and only the smoke chain catches it.
+
+- **Owner:** Mason to schedule; unassigned until then. Not scheduled into a current branch.
+- **Trigger condition:** requires the recalculation trigger to be dropped or disabled. It cannot occur on
+  its own, and `20260811200000`'s `$verify$` block blocks the migration path into that state.
+- **Mitigation (the fix, when scheduled):** assert inside `create_order_from_blend_ticket` that the header
+  it read back is non-zero and equals the sum of rounded line values, and raise instead of returning.
+  Same shape applies to every RPC that reads a trigger-maintained header back.
+- **Monitoring until then:** `scripts/smoke/prove-blend-ticket-fractional-cents.mjs` stage F is the standing
+  detector and fails the prover if the behavior changes. A live-side check —
+  `orders` rows where `total_price = 0` but priced `order_items` exist — is the query to run if a
+  blend-ticket order ever looks wrong; production currently holds **0** blend tickets, so there is nothing
+  to watch yet.
+- **Do not** treat the apply-time guard as run-time protection.
 
 ---
 
@@ -129,7 +145,12 @@ Delivery: the browser changes that call the RPC and open assignment notification
 
 ---
 
-## OPEN 2026-08-10 — three migrations are live but their source files are not yet on `main`
+## CLOSED 2026-08-11 — three migrations are live but their source files are not yet on `main`
+
+> **Closed by PR #371 (merge `465458a0`).** All three files are on `main`, alongside
+> `20260811200000`. Kept for history; the authoritative status is the header line at the top
+> of this file. The "Closes when PR #371 lands" paragraph below was written before it merged.
+
 
 Raised by Codex (P1) on PR #372 and **verified**: the schema registry records
 `20260810150000_commission_basis_from_canonical_order_header`,

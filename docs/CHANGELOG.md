@@ -18,18 +18,28 @@ guard fails closed when the totals trigger is missing and when it is `REPLICA`-o
 mutation matters: `tgenabled` has four states, and the widespread `<> 'D'` idiom waves through a
 replica-only trigger that never fires in an ordinary session. The migration rejects both.
 
-The harness refuses to run unless the post-fix function body on disk still md5-matches the function
-live in production, so a green run is also a standing check that the repository and production have not
-drifted apart on this function. The smoke chain and fixture are registered in `smoke-specs.json` under
-`create_order_from_blend_ticket`.
+Both mutation stages apply the migration as a single transaction, so "fails closed" means the function
+body is also rolled back rather than left half-replaced.
+
+The harness refuses to run unless the post-fix function body on disk still md5-matches a **pinned
+snapshot** of that function read from production `pg_proc` on 2026-08-11. That is a historical reading,
+not a live one — the container runs with `--network none` and the harness never contacts production —
+so it catches the repository drifting off what was applied, not production changing underneath. The
+comment in the script carries the exact query to re-confirm current parity by hand. The smoke chain and
+fixture are registered in `smoke-specs.json` under `create_order_from_blend_ticket`, flagged
+`container_only` so `--all` and `--area` runs skip it with an announced reason instead of sending a
+fixture-seeding chain at whatever database `SUPABASE_DB_URL` points to.
 
 Stage six characterizes a residual defect the review pass did not surface: the trigger guarantee is
 **apply-time only**. With the fixed body in place and the trigger dropped afterwards, the RPC reports
 success and books a zero-value header — the read-back's `IF NOT FOUND` cannot catch it, because the
-order row exists by then regardless of whether the trigger ran. Only the smoke chain caught it. It
-takes a deliberate schema change to reach that state and the migration's guard blocks it at apply time,
-so this is tracked, not urgent; it is recorded in `docs/manual/KNOWN_ISSUES.md`. Closing it would mean
-asserting inside the RPC that the header was actually recalculated.
+order row exists by then regardless of whether the trigger ran. Nothing raises; only the smoke chain
+caught it. Reaching that state takes a deliberate schema change that the migration's own guard blocks
+at apply time, and production holds no blend tickets, so it is not firing — but the failure mode is
+silent wrong money, not an error, which makes it a **HIGH-severity open data-integrity gap**, not a
+footnote. It is tracked as **CRX-MONEY-001-R** in `docs/manual/KNOWN_ISSUES.md` with an owner,
+mitigation and standing detector; stage F of the prover is that detector. Closing it means asserting
+inside the RPC that the header was actually recalculated.
 
 ## 2026-08-11 — Let the order-totals trigger own the blend-ticket order header
 
