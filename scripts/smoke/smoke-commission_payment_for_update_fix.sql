@@ -143,7 +143,7 @@ BEGIN
   -- 2. Scenario (a): happy path — this exact call raised SQLSTATE 0A000
   --    before the fix.
   -- --------------------------------------------------------------------
-  -- A key is REQUIRED since 20260810170000; passing NULL now raises
+  -- A key is REQUIRED since 20260811130000; passing NULL now raises
   -- IDEMPOTENCY_KEY_REQUIRED before any work happens. Each scenario below uses
   -- its OWN key so that what rejects a call is the guard the scenario is about,
   -- never an accidental replay of a previous scenario's receipt.

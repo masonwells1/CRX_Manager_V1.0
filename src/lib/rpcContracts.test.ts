@@ -2177,12 +2177,8 @@ function registryMigrationHighWater(): string {
 // Keep this set aligned with rows explicitly marked PENDING APPLY in
 // docs/reference/migration-history.md.
 //
-// Empty as of 2026-08-10, from two independent lines of work that both landed:
-// history rows 857-861 (the 2026-08-08 foundation ultra review migrations,
-// re-issued forward as 20260809170500-170900) applied live on 2026-08-09 and now
-// read APPLIED LIVE; and both Team Board delegation migrations applied live
-// 2026-08-09 under server-assigned ledger versions 20260809130108 and
-// 20260810010308. Nothing in this checkout is pending.
+// Empty as of 2026-08-10: the Team Board delegation migrations and the
+// foundation-review migrations are all applied live and documented below.
 const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([]);
 
 /**
@@ -2280,9 +2276,9 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   _claim_bound_lifecycle_idempotency:
     'idempotency infrastructure helper (sections 2-6 closeout): claims a bound lifecycle key for replay; direct client EXECUTE is revoked',
   _crx_payout_assert_impl_20260809:
-    'read-only identity check used by 20260810170000 to decide whether a body may be renamed into the payout implementation slot; it writes nothing (the inventory sees its SELECT ... INTO local variables), every application-role EXECUTE is revoked, and the same migration drops it before finishing',
+    'read-only identity check used by 20260811130000 to decide whether a body may be renamed into the payout implementation slot; it writes nothing (the inventory sees its SELECT ... INTO local variables), every application-role EXECUTE is revoked, and the same migration drops it before finishing',
   _crx_payout_assert_replay_20260809:
-    'read-only replay-state check used by 20260810170000 to decide whether an already-existing implementation may be adopted; it writes nothing (the inventory sees its SELECT ... INTO local variables, and reads the check_idempotency_intent name out of a REGEX STRING LITERAL as if it were a call), every application-role EXECUTE is revoked, and the same migration drops it before finishing',
+    'read-only replay-state check used by 20260811130000 to decide whether an already-existing implementation may be adopted; it writes nothing (the inventory sees its SELECT ... INTO local variables, and reads the check_idempotency_intent name out of a REGEX STRING LITERAL as if it were a call), every application-role EXECUTE is revoked, and the same migration drops it before finishing',
   _insert_commissions_for_job: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _insert_commissions_for_order: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',

@@ -138,6 +138,43 @@ Raised by CodeRabbit on PR #359 and deferred there only because a new commit
 would have discarded that PR's banked Vercel status while the daily build
 quota was exhausted.
 
+## 2026-08-10 — Pending commission snapshots reconciled live (PR #372)
+
+Closed the last open item from the canonical-profit workstream. The 2026-08-09 line-profit backfill
+re-derived line profit from the order header but left a small set of *pending* commission snapshots
+holding the pre-backfill figures, so a commission that had not yet been paid could be computed from a
+stale basis. `reconcile_pending_commission_snapshots` repairs exactly that set and nothing else.
+
+**The write set was pinned before it could move.** The migration is forward-only and binds itself to a
+SHA-256 fingerprint of the approved target rows, recomputed from live data immediately before the apply
+and matched exactly — so the migration could not widen its own scope between review and execution. It
+locks orders before commissions, deletes nothing, and excludes paid, cancelled, deleted, batched, job,
+and application commissions. It fails closed on target-set, lifecycle, money-value, or postcondition
+drift. Target size: 11 snapshot rows across 10 orders. Per-row and aggregate money figures are
+deliberately withheld here — this repository is public.
+
+**Applied live 2026-08-10** after Mason's explicit approval in the active session, with both
+`gpt-5.6-sol` high-effort reviewer charters re-minted against this exact body and returning CLEAN.
+Supabase assigned ledger version `20260810235207`; the disk file was B7-renamed to match, body
+byte-identical. Live readback shows zero remaining eligible mismatches, and the registered
+`pending_commission_snapshot_reconcile` chain returned the exact terminal marker `SMOKE_PASS_ROLLBACK`.
+
+One deviation from the handoff's "preserve these files exactly": the smoke's `SMOKE_FAIL` message
+contained the literal text `snapshot(s)`, which the repository's live-data guard parses as a function
+call, blocking the whole chain from running through the sanctioned channel. The wording is now
+`snapshot rows`. Assertion logic and the terminal marker are untouched.
+
+**Generated-artifact closeout.** `.claude/schema-registry.json` was regenerated from live introspection,
+not stamped: `_meta.migrations_high_water` moves `20260810025159` → `20260810235207` and the applied-name
+list goes 947 → 951 distinct names. Every schema-shape section is byte-identical
+(`generated_columns`, `status_enums`, `check_constraints`, `not_null_columns`, `columns`, `sequences`,
+`tables_without_updated_at`) — as it must be, since this migration contains no DDL. The one section that
+moved is `skipped_constraints`, 187 → 194, and none of the seven additions come from this migration:
+they are the whole-cent money CHECKs from `20260810151000_whole_cent_money_check_constraints`, live since
+earlier the same day. The registry was stale against three migrations, not one. Those constraint
+definitions are recorded here because the registry describes *live* truth; their migration sources sit on
+a separate in-flight branch and are untouched by this change.
+
 ## 2026-08-10 — Review fixes on the harness guards (PR #369)
 
 Six findings from the Codex and CodeRabbit reviews of PR #369, all in the pre-commit harness. Five are
@@ -214,7 +251,7 @@ Mason's decision.
 
 ## 2026-08-10 — Bound commission-payout idempotency to the actor and the intent (NOT applied live)
 
-The three commission payout RPCs — `create_commission_payment`, `post_commission_payment` and `void_commission_payment` — stored their retry receipts keyed on the operation and the key text alone. Nothing in the stored receipt recorded *who* was asking or *which* payment they had asked about — the key text the browser generated happened to contain a user id, but the server never read it, stored it or checked it against the caller — so a retry aimed at a different payment could be answered out of an earlier payment's cached success: the UI reports "posted", and the row the admin was actually looking at was never touched. Migration `20260810170000_bind_commission_payout_idempotency_to_intent.sql` binds every receipt to the acting user id and to a SHA-256 fingerprint of the request arguments, and fails closed — raising rather than replaying — whenever a reused key arrives carrying a different actor or a different fingerprint. Each RPC is split into a private implementation function with the binding check living in a thin public wrapper, so the check cannot be skipped by calling the inner function directly. The accounting body is moved, not retyped, so the money arithmetic cannot drift; the wrapper does normalize the free-text metadata it forwards — payment method, reference, notes and void reason are trimmed, and blank becomes NULL — so that the fingerprint and the row the payment stores can never disagree about what was asked for. This migration is written and reviewed but **has NOT been applied to production**; it is parked pending Mason's explicit approval.
+The three commission payout RPCs — `create_commission_payment`, `post_commission_payment` and `void_commission_payment` — stored their retry receipts keyed on the operation and the key text alone. Nothing in the stored receipt recorded *who* was asking or *which* payment they had asked about — the key text the browser generated happened to contain a user id, but the server never read it, stored it or checked it against the caller — so a retry aimed at a different payment could be answered out of an earlier payment's cached success: the UI reports "posted", and the row the admin was actually looking at was never touched. Migration `20260811130000_bind_commission_payout_idempotency_to_intent.sql` binds every receipt to the acting user id and to a SHA-256 fingerprint of the request arguments, and fails closed — raising rather than replaying — whenever a reused key arrives carrying a different actor or a different fingerprint. Each RPC is split into a private implementation function with the binding check living in a thin public wrapper, so the check cannot be skipped by calling the inner function directly. The accounting body is moved, not retyped, so the money arithmetic cannot drift; the wrapper does normalize the free-text metadata it forwards — payment method, reference, notes and void reason are trimmed, and blank becomes NULL — so that the fingerprint and the row the payment stores can never disagree about what was asked for. This migration is written and reviewed but **has NOT been applied to production**; it is parked pending Mason's explicit approval.
 
 The client side had a matching defect that the server fix alone would not have cured. `useIdempotencyKey` retained exactly one key at a time, so an admin who started a payout on one payment, moved to a second, then came *back* to the first was issued a third, brand-new key for a request the server had already committed — the retry the key exists to make safe. It now retains one key per target in a Map, and clearing a key on success retires only that target's key rather than every unresolved retry the admin still has open. The commission payments page scopes its create-payment key to the sorted set of commissions being paid *and* to the payment method, date, reference and note, which replaced a reset-on-dialog-open that was destroying the only key capable of replaying an uncertain create. Reopening the dialog on the same commissions with the same payment details now replays the same request; changing the selection, or correcting any of those details, is a genuinely different request and mints a fresh key. The scope is what the key is derived from, so this recovery holds only while the page stays mounted — navigating away and back still loses the key, which is the codebase-wide remount gap recorded below as out of scope. Because a replay can return a payment that has since been voided, the success path now reads the payment's status back and warns — rather than congratulating — when the replayed payment is no longer live, and the ordinary failure toast now tells the admin a payment may exist and to check the list before creating another.
 
@@ -243,13 +280,64 @@ Twelve rounds of adversarial Codex review have run against this branch, and **no
   - `af22dc16 Close round-3 review findings on payout intent binding`
   - `054e2de4 Close round-4 review findings on payout intent binding`
   - `c5fb7bf8 Close round-5 review findings on payout intent binding`
-  - `dbcdb4f6 Index migration 20260810170000 in migration-history`
+  - `dbcdb4f6 Index migration 20260811130000 in migration-history`
   - `d4b21b86 Close round-6 payout intent-binding findings`
   - `ca8802fd Close round-7 payout intent-binding findings`
   - `8c818619 Close round-8 payout intent-binding findings`
   - `c22ff94d Close round-9 findings on the payout intent binding`
   - `5c11b013 Close round-10 fail-open holes in the payout identity check`
   - plus this commit, closing the round-11 findings and recording the work here.
+
+## 2026-08-09 — Team Board delegated completion shipped (database live, frontend merged via PR #351)
+
+Assigning a to-do to a teammate on the Team Board was effectively broken: the checkbox
+wrote straight to the table, and the creator-or-admin row policy silently rejected the
+assignee, so their click did nothing. Delegation is now governed by an RPC and the
+notification path is hardened.
+
+**Live database changes (owner-approved; applied and verified live on 2026-08-09/2026-08-10).** Both migrations below were already live before this entry was written. The PR carrying this entry (#372) recorded and re-verified that closeout only — it applied neither of these two migrations and mutated no live data through them.
+
+- `20260809130108_team_note_completion_rpc_and_assignment_notify` — adds
+  `complete_team_note(note_id, completed, idempotency_key)` as a SECURITY DEFINER function
+  with a pinned `search_path`, taking the actor from `auth.uid()` so it cannot be forged.
+  Authorization (creator, current assignee, or active admin) runs *before* the idempotency
+  replay, and the function reports the row's actual state so a no-op cannot rewrite
+  `completed_by`. Also adds the assignment trigger that files one `task_assigned`
+  notification, staying silent on self-assignment and unchanged assignees. Revoked from
+  PUBLIC and anon; granted to authenticated and the default `service_role` grant, while
+  runtime authorization still requires an active `auth.uid()` actor.
+- `20260810010308_active_team_note_assignment_actor` (authored as `20260809154649`) —
+  closes the gap review found afterwards: a deactivated profile whose token had not yet
+  expired could satisfy the legacy creator-only insert policy and make the owner-run
+  trigger notify an active teammate. Now the insert policy requires an active profile and
+  the trigger independently rejects an inactive effective actor. `tnotes_update` is
+  deliberately unchanged.
+
+Both migrations cleared the `rls-security-reviewer` and `migration-drift-reviewer` charters
+with CLEAN machine verdicts on the exact file content before apply, and both disk files were
+renamed content-identically to their server-assigned ledger versions.
+
+**Proven against live, by rollback-only probes rather than tests alone.** An active
+non-admin assignee completed a note they did not create, with `completed_by` stamped from
+`auth.uid()` and exactly one notification filed; an unrelated employee was refused with
+`NOT_AUTHORIZED_TO_COMPLETE`; a real deactivated profile was refused at the row-policy layer;
+and with that layer deliberately bypassed, the trigger's own guard raised `PROFILE_INACTIVE`.
+The normal assignment and completion path was re-checked afterwards and was unaffected.
+
+**Frontend (merged via PR #351; production rollout follows its Vercel deployment).** Team Board calls the
+RPC instead of writing the table, guards against double-submit, and maps the actionable runtime
+errors to specific messages. The checkbox is disabled with an explanatory tooltip for viewers who
+are not the creator, assignee, or an admin. Notification deep-links now route team notes to
+the board, and the deep-link fetch no longer waits on a populated list before resolving.
+
+**Post-apply closeout.** The full registered chain
+`scripts/smoke/smoke-complete-team-note-chain.sql` ran against live and reached exact
+`SMOKE_PASS_ROLLBACK`, proving the business path and fixture rollback. The schema registry
+was genuinely regenerated from live introspection through high-water `20260810025159`, and
+the generated TypeScript types match live. *(The registry has since been regenerated again,
+through high-water `20260810235207` — see the 2026-08-10 reconciliation entry at the top of
+this file. `20260810025159` is the high-water this Team Board closeout observed, not the
+current one.)*
 
 ## 2026-08-09 — Settled the canonical-profit question and applied the fix live
 
@@ -473,53 +561,14 @@ that fix (rebased onto the new `main`) plus the two Codex findings raised agains
 
 Coverage: apply-guard 79 assertions, ordering-lib 18, `agent-manifest-parity` clean.
 
-## 2026-08-09 — Team Board delegated completion shipped (database live, frontend in PR #351)
+## 2026-08-09 — Team Board delegated completion shipped (SUPERSEDED — see the entry above)
 
-Assigning a to-do to a teammate on the Team Board was effectively broken: the checkbox
-wrote straight to the table, and the creator-or-admin row policy silently rejected the
-assignee, so their click did nothing. Delegation is now governed by an RPC and the
-notification path is hardened.
-
-**Live database changes (owner-approved, applied this session).**
-
-- `20260809130108_team_note_completion_rpc_and_assignment_notify` — adds
-  `complete_team_note(note_id, completed, idempotency_key)` as a SECURITY DEFINER function
-  with a pinned `search_path`, taking the actor from `auth.uid()` so it cannot be forged.
-  Authorization (creator, current assignee, or active admin) runs *before* the idempotency
-  replay, and the function reports the row's actual state so a no-op cannot rewrite
-  `completed_by`. Also adds the assignment trigger that files one `task_assigned`
-  notification, staying silent on self-assignment and unchanged assignees. Revoked from
-  PUBLIC and anon; granted to authenticated only.
-- `20260810010308_active_team_note_assignment_actor` (authored as `20260809154649`) —
-  closes the gap review found afterwards: a deactivated profile whose token had not yet
-  expired could satisfy the legacy creator-only insert policy and make the owner-run
-  trigger notify an active teammate. Now the insert policy requires an active profile and
-  the trigger independently rejects an inactive effective actor. `tnotes_update` is
-  deliberately unchanged.
-
-Both migrations cleared the `rls-security-reviewer` and `migration-drift-reviewer` charters
-with CLEAN machine verdicts on the exact file content before apply, and both disk files were
-renamed content-identically to their server-assigned ledger versions.
-
-**Proven against live, by rollback-only probes rather than tests alone.** An active
-non-admin assignee completed a note they did not create, with `completed_by` stamped from
-`auth.uid()` and exactly one notification filed; an unrelated employee was refused with
-`NOT_AUTHORIZED_TO_COMPLETE`; a real deactivated profile was refused at the row-policy layer;
-and with that layer deliberately bypassed, the trigger's own guard raised `PROFILE_INACTIVE`.
-The normal assignment and completion path was re-checked afterwards and was unaffected.
-
-**Frontend (pushed to PR #351, not yet merged — users do not have it).** Team Board calls the
-RPC instead of writing the table, guards against double-submit, and maps six new error codes
-to specific messages. The checkbox is disabled with an explanatory tooltip for viewers who
-are not the creator, assignee, or an admin. Notification deep-links now route team notes to
-the board, and the deep-link fetch no longer waits on a populated list before resolving.
-
-**Not done.** The registered chain `scripts/smoke/smoke-complete-team-note-chain.sql` still
-needs its external `SMOKE_PASS_ROLLBACK` terminal; it is a manual `npm run smoke` spec, not
-CI. `.claude/schema-registry.json` was stale at `20260809130108` when this entry was first
-written; the merge into `main` on 2026-08-10 moved its high-water to `20260810010308` and
-added the two migrations below to its applied list. None of these changes alter a table,
-column, constraint, or enum, so no schema-shape section of that file moved.
+> **Superseded 2026-08-10.** This entry was written mid-flight, while PR #351 was still open and the
+> registered smoke chain had not yet returned its terminal marker. Both statements are now false: PR #351
+> merged on 2026-08-10 (merge commit `8dcb82fb`), and the chain reached exact `SMOKE_PASS_ROLLBACK` against
+> live. The accurate record of this work is the
+> **2026-08-09 — Team Board delegated completion shipped (database live, frontend merged via PR #351)**
+> entry earlier in this file. The stale text is removed rather than kept, so no reader can act on it.
 
 ## 2026-08-09 — Line-profit precision repair (live), dependency updates, and a public-repo disclosure guard
 

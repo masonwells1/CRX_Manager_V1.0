@@ -18,14 +18,14 @@ function migrationFiles() {
 }
 
 /**
- * 20260810170000 RENAMED the payout bodies out from under their public names and
+ * 20260811130000 RENAMED the payout bodies out from under their public names and
  * put a thin intent-binding wrapper on top. The stale-selection guards below did
  * not move — they are still the only thing that runs the payout — but they now
  * live under the implementation name. Scanning past this migration would find
  * the wrapper and wrongly report the guards as deleted.
  */
 const PAYOUT_RENAME_MIGRATION =
-  '20260810170000_bind_commission_payout_idempotency_to_intent.sql';
+  '20260811130000_bind_commission_payout_idempotency_to_intent.sql';
 
 
 /**

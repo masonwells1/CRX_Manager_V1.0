@@ -7,7 +7,7 @@ import { functionHeaderPattern, lexed } from './sqlSourceLexer';
  * Source guard for the Section 07 gauntlet HIGH finding: the commission payout
  * RPCs keyed their idempotency receipts on [operation, user] only, so a
  * retained browser key could replay a DIFFERENT payout's cached success.
- * 20260810170000 binds each receipt to the acting user and a hash of the exact
+ * 20260811130000 binds each receipt to the acting user and a hash of the exact
  * request. These assertions keep both halves — the SQL wrappers and their
  * page-level callers — from silently losing that binding.
  *
@@ -16,7 +16,7 @@ import { functionHeaderPattern, lexed } from './sqlSourceLexer';
  * guards the structure those runtime proofs depend on.
  */
 const MIGRATION_PATH =
-  'supabase/migrations/20260810170000_bind_commission_payout_idempotency_to_intent.sql';
+  'supabase/migrations/20260811130000_bind_commission_payout_idempotency_to_intent.sql';
 
 const migration = readFileSync(MIGRATION_PATH, 'utf8').replace(/\r\n/g, '\n');
 const page = readFileSync('src/pages/CommissionPayments.tsx', 'utf8').replace(/\r\n/g, '\n');

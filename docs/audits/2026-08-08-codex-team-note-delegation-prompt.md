@@ -5,13 +5,13 @@
 **Reviewer:** Codex `gpt-5.6-sol`, high reasoning effort (independent second opinion)
 **Claude session:** pre-apply review of the Team Board delegation fix on branch `claude/todo-list-audit-hoxpl5` (PR #351). The Codex CLI is unavailable in the current cloud session, so this is the manual fallback packet.
 
-**Post-review status (2026-08-09):** migration applied live under Supabase-assigned version `20260809130108`, the disk file was B7-renamed, live catalog/ACL checks and all 26 invariant predicates passed, live schema artifacts were refreshed, and the temporary RPC-contract exemption was removed. The registered rollback-only smoke is still pending an external `SMOKE_PASS_ROLLBACK` result; the frontend remains pending in PR #351.
+**Post-review status (2026-08-10):** both migrations are applied live under Supabase-assigned versions `20260809130108` and `20260810010308`, both disk files were B7-renamed, live catalog/ACL checks passed, live schema artifacts were refreshed, and the temporary RPC-contract exemption was removed. The registered rollback-only smoke returned the required `SMOKE_PASS_ROLLBACK`; the frontend merged via PR #351. The invariant sweep has one unrelated, documented historical fractional-cent data residual.
 
 ---
 
 ## What I want you to review
 
-An UNAPPLIED migration plus its frontend wiring. It fixes the audit finding that an employee assigned a team task cannot mark it complete (`tnotes_update` RLS is creator-or-admin only), and that task assignment sends no notification. Question: **is this migration safe to apply live, and is the frontend wiring retry-safe?**
+A migration, now applied live, plus its frontend wiring. It fixes the audit finding that an employee assigned a team task cannot mark it complete (`tnotes_update` RLS is creator-or-admin only), and that task assignment sends no notification. The original review question was: **is this migration safe to apply live, and is the frontend wiring retry-safe?**
 
 ## Scope
 
@@ -36,12 +36,14 @@ An UNAPPLIED migration plus its frontend wiring. It fixes the audit finding that
 ## Live evidence (state of the gates at packet time)
 
 - Fresh candidate-specific Supabase MCP `list_migrations` preflight (2026-08-09 immediately before approved apply, project `rhyzpcqhnizqbxphqdkr`): the live ledger has 945 entries and its high-water remains `20260807220323` (`20260807221500_log_customer_fact_rpc`). The candidate disk version `20260808171000` is strictly greater and is absent from the live ledger. After apply, B7-rename the disk file to the MCP-assigned version and then add the migration-history row.
-- At packet time the migration was not yet applied. It is now live as `20260809130108`; the smoke chain (`complete_team_note` spec, covers the trigger fn too) still requires an external run — PASS = `SMOKE_PASS_ROLLBACK`.
+- At packet time the migration was not yet applied. It is now live as `20260809130108`, with the active-actor follow-up live as `20260810010308`; the smoke chain (`complete_team_note` spec, covers the trigger fn too) returned the required `SMOKE_PASS_ROLLBACK` and rolled back its fixtures.
 - db-invariant sweeps run post-apply per the ship pipeline; the migration's own postflight DO block asserts overload count, SECDEF, pinned search_path, and ACLs in the apply transaction.
 - Local gates green at packet time: typecheck, eslint, build, 4303/4427 vitest tests passing with 1 expected pre-apply failure (`rpcFixtureLiveDiff` — `complete_team_note` absent from the live pg_proc snapshot until applied; by policy that test goes green only after apply + snapshot regen).
 - Subagent reviews this session: rls-security-reviewer (3 rounds — final CLEAN, 0 BLOCKER/0 HIGH), migration-drift-reviewer (round 1: H1 authz-ordering, fixed; round 3 pending at packet time), typescript-types-drift-reviewer (clean), compliance-reviewer (round-1 HIGH on idempotency key scoping, fixed via single-flight + mismatch reset).
 
-## Claude's current position
+## Claude's position at packet time (HISTORICAL — superseded)
+
+> **Superseded 2026-08-10.** This was the *pre-apply* verdict. Both migrations are now applied live and verified (see the Post-review status at the top of this file); the current verdict is **applied and verified live**, not "safe to apply". The paragraph below is kept verbatim as the record of what was believed before the apply — do not read it as current status.
 
 Safe to apply. The authorization set (creator ∪ assignee ∪ active admin) is the intended widening and is narrower than what the UI previously implied; the actor is never caller-supplied; the fingerprint is actor-bound so cross-actor key replay fails closed; the trigger is spam-bounded only by note-creation ability (accepted as a small-team tradeoff, title truncated to 120 chars). Known accepted residuals: (1) the page-scoped idempotency key can produce one spurious mismatch toast after a lost-response commit (self-heals via resetKey); (2) no rate limit on assignment notifications; (3) live defaults also grant `service_role`, but a future edge function must propagate a user JWT so `auth.uid()` identifies an authorized actor, or introduce a separately reviewed trusted-service path.
 

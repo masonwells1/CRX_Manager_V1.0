@@ -1,12 +1,10 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-08-10 UTC (2026-08-09 evening America/Chicago), post-apply.** Live ledger high-water at the last read on this branch was `20260810155629` (`20260810151000_whole_cent_money_check_constraints`), re-read 2026-08-10 — ledger versions are UTC, which is why the stamp reads a day ahead of the local session date. The 2026-08-09 post-apply verification that the rest of this header describes ended at `20260810010308` (`active_team_note_assignment_actor`); the four ledger entries past it were applied live by separate 2026-08-10 sessions and are not described below. Two independent lines of work applied live on 2026-08-09 and are reconciled below. Everything past this header carries its 2026-08-07 verification unless dated otherwise.
+**Last verified: 2026-08-10 UTC, post-apply.** Live ledger high-water is `20260810235207` (`20260810183629_reconcile_pending_commission_snapshots`, B7-renamed on disk to the assigned version) at 958 ledger rows — the reconciliation that closed out the stale line-profit backfill, applied and verified live on 2026-08-10 with the registered smoke returning exact `SMOKE_PASS_ROLLBACK`. Ledger versions are UTC, which is why this stamp can read a day ahead of the local session date. The prior high-water `20260810025159` (`20260810022500_backfill_stale_line_profit`) was the money-workstream migration applied after the Team Board work. The 2026-08-09 post-apply verification that the rest of this header describes ended at `20260810010308` (`active_team_note_assignment_actor`); every ledger entry past it was applied live by separate 2026-08-10 sessions and is described in its own entry rather than here. Both Team Board migrations are live and now represented on disk: `20260809130108` added the governed `complete_team_note` RPC and assignment-notification trigger, and `20260810010308` closed the inactive-actor path in the insert policy and trigger. The full rollback-only business chain reached exact `SMOKE_PASS_ROLLBACK`; the compatible frontend was carried by PR #351, **merged 2026-08-10 (merge commit `8dcb82fb`)**, so only its Vercel production deployment remains as the browser rollout step.
 
-**Team Board delegation — both halves live.** `20260809130108` added the governed `complete_team_note` RPC and the assignment-notification trigger, and `20260810010308` closed the inactive-actor notification path in both the `tnotes_insert` policy and the trigger itself. Both were verified live after apply, and the delegated-completion and inactive-actor behaviors were proven by rollback-only probes against live. The compatible frontend ships with PR #351, so delegated completion is live in the database but not reachable from the browser until that PR merges and deploys. An earlier 2026-08-09 read recorded `20260809130108` as having no file in this repository; PR #351 lands that file and its follow-up, closing the gap (see `docs/reference/migration-history.md` rows 863 and 864).
+**2026-08-09 historical baseline.** The live re-read then covered the ledger, `CURRENT_STATE.md` counts, and all 27 invariant predicates: 26 CLEAN and the documented `fin-money-whole-cents` historical-data violation. The five foundation-ultra-review migrations applied later that day as ledger versions `20260809203222` through `20260809205423`. The formerly missing Team Board migration file and history row are now reconciled on PR #351.
 
-**2026-08-09 sweep and the five foundation-ultra-review migrations.** The 2026-08-09 re-read covered the live ledger, the section-2 counts in `CURRENT_STATE.md`, and all 27 standing invariant sweep predicates: 26 CLEAN and one violation, `fin-money-whole-cents` at exactly 49 rows (3 `commissions` + 46 `order_items`) — the documented, deliberately-unrepaired set described below. The five foundation-ultra-review migrations (history rows 857–861, re-issued forward as `20260809170500`–`20260809170900`) **APPLIED LIVE 2026-08-09, 20:32–20:54 UTC**, each behind its own freshly minted migration-apply-guard proof with both required reviewers clean, and each followed by a live post-apply read; Supabase assigned ledger versions `20260809203222`, `20260809204044`, `20260809204435`, `20260809204855`, `20260809205423` in file order. A 21:15 UTC re-measure confirms no stored money was restated: fractional-cent rows remain exactly 46 + 3 = 49 and `order_items.profit` holds 0 fractional rows. **`20260809170900` applied against the blocking escalation recorded below** — see that entry for what happened and the decision now owed by Mason.
-
-**2026-08-07 (evening) verification detail.** Live ledger high-water was `20260807220323` (`log_customer_fact_rpc`). Both formerly parked 2026-08-07 migrations are now APPLIED LIVE: the profile role-lock INSERT arm as `20260807215532` and the `log_customer_fact` CRM RPC as `20260807220323` (both reviewed CLEAN by both Codex charters, applied with Mason's in-chat approval; the paired predicate `profile-role-lock-insert-arm.sql` went 2 rows red → 0 green). The Section 4 bulk-order-import lifecycle gap is fixed live through six migrations: imports are confirmed-only, inventory-aware, activity-logged, actor/payload-bound for replay, non-finite-safe, Product-cost-authoritative, whole-cent per line, and create commissions from trigger-canonical stored profit. Post-apply catalog/grant checks, fractional active-sales-rep rollback smoke, all 21 standing invariant predicates, schema-registry refresh, and zero-residue checks passed. The earlier profile role-lock, CRM fact RPC, bulk-import lifecycle, idempotency, statement-disclosure, and historical AR report protections remain live as documented below.
+**2026-08-07 (evening) verification detail.** Live ledger high-water was `20260807220323` (`log_customer_fact_rpc`). Both formerly parked 2026-08-07 migrations are now APPLIED LIVE: the profile role-lock INSERT arm as `20260807215532` and the `log_customer_fact` CRM RPC as `20260807220323` (both reviewed CLEAN by both Codex charters, applied with Mason's in-chat approval; the paired predicate `profile-role-lock-insert-arm.sql` went 2 rows red → 0 green). The Section 4 bulk-order-import lifecycle gap is fixed live through seven migrations (`20260805211951`, `20260805220757`, `20260805224819`, `20260806000752`, `20260806004644`, `20260806012423`, `20260806023048` — history rows 681 and 849–854): imports are confirmed-only, inventory-aware, activity-logged, actor/payload-bound for replay, non-finite-safe, Product-cost-authoritative, whole-cent per line, and create commissions from trigger-canonical stored profit. Post-apply catalog/grant checks, fractional active-sales-rep rollback smoke, all 21 standing invariant predicates, schema-registry refresh, and zero-residue checks passed. The earlier idempotency, statement-disclosure, and historical AR report protections remain live as documented below.
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
@@ -63,13 +61,41 @@ check — both guards correctly refused the change that prompted this entry.
 
 ---
 
-## RESOLVED LIVE 2026-08-09 — Team Board delegated completion and assignment notifications (frontend awaits push)
+## RESOLVED LIVE 2026-08-10 — Team Board delegated completion and assignment notifications
 
 Both migrations are applied live. `20260809130108_team_note_completion_rpc_and_assignment_notify` added the governed `complete_team_note` RPC and the assignment-notification trigger without widening the existing `tnotes_update` policy; live structure, grants, and the 26 standing invariant predicates passed. The HIGH that review then raised — an inactive profile with a still-valid JWT could satisfy the legacy `tnotes_insert` creator check and make the owner-run trigger notify an active teammate — is closed by `20260810010308_active_team_note_assignment_actor` (authored as `20260809154649`), which requires an active profile in the INSERT policy *and* independently in the trigger, leaving `tnotes_update` unchanged.
 
 Proven live by rollback-only probes rather than by tests alone: an active non-admin **assignee completed a note they did not create** with `completed_by` stamped from `auth.uid()`; an unrelated active employee was refused with `NOT_AUTHORIZED_TO_COMPLETE`; a real deactivated profile with a valid token was refused at the RLS layer (42501); with RLS deliberately bypassed and the token subject set to that deactivated profile, the trigger's own guard raised `PROFILE_INACTIVE` (42501); and the normal path still filed exactly one `task_assigned` notification.
 
-Remaining: the browser changes that call the RPC and open assignment notifications are **committed but not pushed** on `claude/todo-list-audit-hoxpl5`, so PR #351 does not contain them yet — pushing needs Mason's approval. The registered chain `scripts/smoke/smoke-complete-team-note-chain.sql` still needs its external `SMOKE_PASS_ROLLBACK` terminal run; it is a manual `npm run smoke` spec, not CI, so nothing is red.
+Delivery: the browser changes that call the RPC and open assignment notifications were contained in PR #351, which merged on 2026-08-10 (merge commit `8dcb82fb`); only its Vercel production deployment remains as the rollout step. The registered chain `scripts/smoke/smoke-complete-team-note-chain.sql` passed live with exact terminal `SMOKE_PASS_ROLLBACK` and rolled every synthetic fixture back.
+
+---
+
+## OPEN 2026-08-10 — three migrations are live but their source files are not in `main`
+
+Raised by Codex (P1) on PR #372 and **verified**: the schema registry records
+`20260810150000_commission_basis_from_canonical_order_header`,
+`20260810150500_save_quote_whole_cent_total_cost`, and
+`20260810151000_whole_cent_money_check_constraints` as applied — they genuinely are, live
+since 2026-08-10 — but `git ls-tree` finds none of the three `.sql` files on `main` or on
+PR #372's branch. Their only home is commit `908da7a3` on `claude/confident-mclean-7f73d6`,
+the branch behind **PR #371**, which is still open.
+
+**Why it matters:** a clean baseline replay or a disaster-recovery rebuild driven from
+`supabase/migrations/` would silently omit the canonical commission basis, the save-quote
+whole-cent total cost, and all seven whole-cent money CHECK constraints — while the registry
+asserts they are present. Nothing is wrong on live; the gap is between live and the
+repository's ability to reconstruct it.
+
+**This is not caused by the registry refresh.** The source gap already existed on `main`;
+regenerating the registry from live only made it visible. Leaving the registry stale
+instead would have been a second, worse inaccuracy.
+
+**Closes when PR #371 lands** — that PR carries the three files. Until then, treat
+`supabase/migrations/` as an incomplete reconstruction source for anything dated 2026-08-10
+15:00 UTC or later, and prefer the live ledger. PR #372 deliberately did not copy the files
+in: duplicating an open PR's migrations would collide when #371 merges, and #372 was scoped
+out of touching #371.
 
 ---
 
@@ -420,15 +446,28 @@ apply: both function bodies carry the new logic, the trigger fires on all four
 columns and is enabled, and the row counts are unchanged (46 fractional
 `order_items`, 3 fractional `commissions`, 37 stale lines, 11 disagreeing
 orders), with no `orders` row written in the surrounding 15 minutes.
-It is forward-only: applying it moved no live money. The one-time repair of the
-37 stale lines is written but fully commented out and is still a **separate**
-decision that has NOT been taken, because writing those rows would also round 11
-of the 46 fractional-cent `order_items` rows that `20260809170800` is
-deliberately holding back.
+It is forward-only: applying it moved no live money. At the time this section was
+written, the one-time repair of the 37 stale lines was commented out and still a
+separate, untaken decision.
 
-**So the 11 disagreeing orders still disagree today.** The fix stops any *new*
-drift; it does not reach back. Those orders converge the next time one of their
-lines is written, or immediately if the section-3 repair is ever approved.
+> **Closed 2026-08-10 — the repair was approved and applied; the two paragraphs
+> that followed here are superseded.** Mason approved the repair, and it went
+> live as its own forward-only migration,
+> `20260810022500_backfill_stale_line_profit` (ledger version `20260810025159`),
+> which re-derives each stale line through the canonical trigger rather than
+> recomputing profit in the file. The pending commission snapshots those orders
+> carried were then reconciled by `reconcile_pending_commission_snapshots`
+> (ledger version `20260810235207`).
+>
+> **Live read-only measurement, 2026-08-10:** stale lines **37 → 0** of 288, and
+> disagreeing orders **11 → 1**. The single remaining disagreement is not a
+> regression — it is the one fulfilled order the backfill deliberately left out
+> of scope, whose *header* sits a cent above its own already-correct lines. That
+> is the mirror of this bug (a stale header, not stale lines) and is tracked on
+> its own rather than folded in here.
+>
+> Do not treat the stale-line repair as outstanding work, and do not re-apply
+> either migration — both are forward-only and already on the live ledger.
 
 **Still open after this lands, deliberately:** `_update_order_items_impl`
 (`20260617123503`, lines 274–275) overwrites `orders.total_price` with the raw
@@ -1186,11 +1225,11 @@ Prevention actions proposed by the report: a static guard requiring any RPC acce
 
 ### 3.5 BUILT AND PROVEN LOCALLY 2026-08-09 — NOT YET APPLIED LIVE
 
-Option B is implemented on branch `fix/commission-payout-intent-binding` (split off `main` on 2026-08-10; originally built on `ship/harden-actor-binding-sql-reader`). It is **not live**: the migration has never run against production. Treat 3.5 as still open in production until the ledger shows `20260810170000`.
+Option B is implemented on branch `fix/commission-payout-intent-binding` (split off `main` on 2026-08-10; originally built on `ship/harden-actor-binding-sql-reader`). It is **not live**: the migration has never run against production. Treat 3.5 as still open in production until the ledger shows `20260811130000`.
 
 | Piece | File | State |
 | --- | --- | --- |
-| Migration — renames the three payout bodies to `_<name>_intent_impl_20260809` (money logic never retyped) and creates public wrappers that bind each receipt to `request_actor_id` + a SHA-256 `request_fingerprint`; adds the `check_idempotency_intent` helper | `supabase/migrations/20260810170000_bind_commission_payout_idempotency_to_intent.sql` | Written; proven in a disposable container |
+| Migration — renames the three payout bodies to `_<name>_intent_impl_20260809` (money logic never retyped) and creates public wrappers that bind each receipt to `request_actor_id` + a SHA-256 `request_fingerprint`; adds the `check_idempotency_intent` helper | `supabase/migrations/20260811130000_bind_commission_payout_idempotency_to_intent.sql` | Written; proven in a disposable container |
 | Rollback-only smoke chain | `scripts/smoke/smoke-commission-payout-intent-binding.sql` (registered in `scripts/smoke/smoke-specs.json` under `create_commission_payment`) | Passing |
 | Container proof — network-isolated throwaway PostgreSQL 17, prints `COMMISSION_PAYOUT_INTENT_BINDING_PROOF_PASS` | `scripts/smoke/prove-commission-payout-intent-binding.mjs` | Green |
 | Frontend — `getIdempotencyBindingRejection` maps the three refusals to plain-English warnings and retires the dead key in all three handlers | `src/lib/idempotency.ts`, `src/pages/CommissionPayments.tsx` | Done |
