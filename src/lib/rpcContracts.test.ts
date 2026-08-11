@@ -2311,6 +2311,14 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   save_idempotency: 'idempotency infrastructure helper that stores the parent operation result',
   set_primary_customer_contact: 'convergent primary-contact promotion; replays settle to the same single-primary state; SECURITY INVOKER under customer RLS',
   settle_applied_record_acres: 'trigger-only derived-acre recomputation; direct client EXECUTE is revoked',
+  // trg_recalc_order_totals was listed here only for the pre-apply window: the
+  // inventory admits a discovered mutator whose defining migration is still
+  // ahead of the registry high-water. 20260809230500 is live and the registry
+  // was rebuilt from live introspection on 2026-08-10, so the function is no
+  // longer in the inventory at all and the exemption went stale. Its safety
+  // argument is unchanged and now recorded in migration-history row 862: it
+  // RETURNS trigger, so PostgreSQL refuses any direct call, and its
+  // recomputation of the order header from the current lines is convergent.
 };
 
 
