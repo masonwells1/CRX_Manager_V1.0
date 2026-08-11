@@ -701,6 +701,19 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(isOneShotDeny(r), "the override authorizes that exact text and nothing else");
     rmSync(ovPath, { force: true });
 
+    // Consumption that FAILED is not consumption (Codex Medium, round 13). The
+    // delete used to be wrapped in a bare `catch {}`, so an override the guard
+    // could not remove stayed valid for the rest of its 30-minute window and
+    // released every apply in it. A directory at that path is the portable way
+    // to make unlinkSync fail — it is exactly the kind of leftover (a lock, a
+    // permissions problem, a stray folder) the swallowed error hid.
+    mkdirSync(ovPath, { recursive: true });
+    r = apply(STEM, ONE_SHOT_SQL);
+    ok(isDeny(r), "round-13: an override that cannot be deleted blocks the apply");
+    ok(/could not be deleted/.test(r.stdout),
+       "round-13: the deny says the override was not spent, and names the path to clear by hand");
+    rmSync(ovPath, { recursive: true, force: true });
+
     // 6. Fail closed. The registry is tracked in git; unreadable or absent means
     //    the checkout is broken or the file was removed — the two states in
     //    which a silent pass is most dangerous.

@@ -123,6 +123,45 @@ are now fixtures in the suite, each confirmed red against the previous shape.
 Raised by CodeRabbit on PR #359 and deferred there only because a new commit
 would have discarded that PR's banked Vercel status while the daily build
 quota was exhausted.
+## 2026-08-11 — The write predicate, the row-count assertion and the mismatch branch are now read literally (PR #364, Codex round 13)
+
+Three shapes that wore the right words in the wrong arrangement.
+
+**The approved array only had to be *mentioned* in the row selection.** The
+scanner returned the first `id = ANY(<array>)` it found anywhere in the write, so
+`WHERE id = ANY(v_ids) OR TRUE` and `WHERE id = ANY(v_ids || v_everything)` both
+read as bound to the approved set while rewriting rows nobody approved. There is
+no static way to evaluate an arbitrary added predicate, so the added predicate is
+refused: the row selection must be exactly `WHERE id = ANY(<array>)`, ending the
+statement. Narrowing belongs in the capture that built the array — where it is
+hashed, and therefore approved — not in the write, where it is not.
+
+**The row-count assertion could run backwards.** Any `IF` mentioning
+`array_length(<array>)` that reached a `RAISE` satisfied the check, including
+`IF n = array_length(v_ids, 1) THEN RAISE` — which aborts when the write touched
+exactly the approved rows and succeeds when it touched some other number of them.
+`<` and `>` are the same failure in milder form, leaving one direction of drift
+unasserted. The condition must now be a single plain mismatch (`<>`, `!=`, `IS
+DISTINCT FROM`), either operand order, with nothing else comparing anything and
+no boolean keyword that would make the polarity unreadable.
+
+**The digest could abort in the `ELSE` arm.** Requiring the raise at depth one
+inside the comparison's block said *where* but not *which arm*, so
+`IF actual IS DISTINCT FROM '<digest>' THEN NULL; ELSE RAISE EXCEPTION; END IF`
+passed — aborting when the data matches and falling through to the write when it
+has drifted. Both raise walks, digest and row count, now stop at the first
+depth-one `ELSE`/`ELSIF`: only the mismatch arm itself counts.
+
+**A replay override that could not be deleted stayed valid.** The `unlinkSync`
+that spends a one-shot override swallowed its error, so a lock, a permissions
+failure, or a stray directory at that path left the override releasing every
+apply until it expired — a one-shot that is not one shot. A failed delete now
+refuses the apply and names the path to clear by hand.
+
+Proven by mutation, not by inspection: the approved-set validator suite is at
+**73 cases** and `migration-apply-guard` at **120 assertions**, with each new
+guard reverted in turn to confirm the matching cases go red and only those.
+
 ## 2026-08-10 — Every apply of a one-shot needs its own override; evidence follows the active worktree; the digest→write dataflow is immutable (PR #364, Codex round 12)
 
 Three ways a population-bound money repair could still reach live rows.

@@ -425,7 +425,27 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
         // acceptance all have to leave the operator with a spent override —
         // otherwise "one-shot" would mean "until someone remembers to delete
         // it", which is what round 11 broke.
-        try { unlinkSync(ovPath); } catch { /* already gone */ }
+        //
+        // A DELETE THAT FAILED IS NOT A CONSUMPTION (Codex Medium, round 13).
+        // Swallowing the error let a file that could not be removed — a lock, a
+        // permissions problem, a directory sitting at that path — stay valid for
+        // the rest of its 30-minute window and release a second, third, fourth
+        // apply. So a failed delete refuses the apply outright: better a blocked
+        // replay the operator has to clear by hand than a one-shot that is not
+        // one shot.
+        try {
+          unlinkSync(ovPath);
+        } catch (err) {
+          if (existsSync(ovPath)) {
+            out("block",
+              `ONE-SHOT REPLAY GUARD: the replay override at ${ovPath} could not be deleted ` +
+              `(${err?.message || err}), so reading it did not spend it. An override that survives ` +
+              `its own use authorizes every apply until it expires, which is the opposite of ` +
+              `one-shot — refusing this apply.\n\n` +
+              `Remove that path by hand, then write a fresh override if the replay is genuinely ` +
+              `intended.`);
+          }
+        }
 
         if (!overrideWhy) {
           try {

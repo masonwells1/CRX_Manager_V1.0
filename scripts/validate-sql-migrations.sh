@@ -623,16 +623,35 @@ for file in $ALL_SQL; do
       # token stream. An alias or schema prefix on the id column is fine
       # (`o.id`); `order_id = ANY(...)` is not — it must be the row identity the
       # digest also aggregated by.
-      function bound_var(p,   k, v) {
-        for (k = p; k <= ntok && tok[k] != ";"; k++) {
-          if (tok[k] !~ /(^|\.)id$/) continue
-          if (tok[k + 1] != "=" || tok[k + 2] != "any") continue
-          v = tok[k + 3]
-          if (v == "" || v == ";") continue
-          sub(/^[a-z0-9_]+\./, "", v)
-          return v
-        }
-        return "-"
+      #
+      # THE WHOLE PREDICATE, NOT AN OCCURRENCE OF ONE (Codex High, round 13).
+      # Round 12 returned the first `id = ANY(<var>)` it found ANYWHERE in the
+      # statement, so the array only had to be MENTIONED in the row selection,
+      # not to BE it:
+      #
+      #   UPDATE public.orders SET ... WHERE id = ANY(v_ids) OR TRUE;
+      #   UPDATE public.orders SET ... WHERE id = ANY(v_ids || v_everything);
+      #
+      # Both read as bound to the approved set and both rewrite rows nobody
+      # approved. Since there is no static way to evaluate an arbitrary added
+      # predicate, the added predicate is refused: the row selection must be
+      # EXACTLY `WHERE id = ANY(<array>)`, ending the statement (a RETURNING may
+      # follow). Narrowing belongs in the capture that built the array, where it
+      # is hashed and therefore approved — not in the write, where it is not.
+      function bound_var(p,   k, e, w, ce, v) {
+        for (e = p; e <= ntok && tok[e] != ";"; e++) { }
+        w = 0
+        for (k = p; k < e; k++) { if (tok[k] == "where") { w = k; break } }
+        if (w == 0) return "-"
+        ce = e
+        for (k = w + 1; k < e; k++) { if (tok[k] == "returning") { ce = k; break } }
+        if (ce - w - 1 != 4) return "~shape"
+        if (tok[w + 1] !~ /(^|\.)id$/) return "~shape"
+        if (tok[w + 2] != "=" || tok[w + 3] != "any") return "~shape"
+        v = tok[w + 4]
+        if (v == "") return "~shape"
+        sub(/^[a-z0-9_]+\./, "", v)
+        return v
       }
       # First token of the statement containing token p, so a privilege
       # `GRANT EXECUTE ON FUNCTION` is never mistaken for dynamic SQL.
@@ -1114,6 +1133,17 @@ for file in $ALL_SQL; do
           # anyway. The abort has to be in the comparison's own immediate body,
           # unconditionally — which is also the only shape this validator can
           # read without evaluating conditions it has no way to evaluate.
+          #
+          # THE MISMATCH BRANCH, NOT THE BLOCK (Codex High, round 13). Depth
+          # alone still counted a RAISE in the ELSE arm, which is the polarity
+          # inversion again wearing a different hat:
+          #
+          #   IF actual IS DISTINCT FROM '<digest>' THEN NULL;
+          #   ELSE RAISE EXCEPTION '...'; END IF;
+          #
+          # That aborts when the data MATCHES and falls through to the write
+          # when it has DRIFTED. So the scan now stops at the first depth-1
+          # ELSE/ELSIF: only the mismatch arm itself can satisfy the check.
           RAISE_IN_BRANCH=$(awk -v dl="$DIGEST_EXEC_LINE" '
             FNR < dl { next }
             {
@@ -1123,6 +1153,7 @@ for file in $ALL_SQL; do
                 if (l ~ /(^|[^a-z0-9_])if([^a-z0-9_]|$)/ && l !~ /end[[:space:]]+if/) depth++
                 if (l ~ /end[[:space:]]+if/) { depth--; if (depth <= 0) exit }
               }
+              if (depth == 1 && l ~ /(^|[^a-z0-9_])(else|elsif|elseif)([^a-z0-9_]|$)/) exit
               if (depth == 1 && l ~ /raise[[:space:]]+exception/) { print "yes"; exit }
             }
           ' "$file" | grep -c yes || true)
@@ -1178,6 +1209,9 @@ for file in $ALL_SQL; do
               if [ -z "$b_var" ] || [ "$b_var" = "-" ]; then
                 UNBOUND="$UNBOUND
     line $b_ln ($b_kind on $b_tbl): chooses its own rows — no WHERE id = ANY($WANT)"
+              elif [ "$b_var" = "~shape" ]; then
+                UNBOUND="$UNBOUND
+    line $b_ln ($b_kind on $b_tbl): its row selection is not exactly WHERE id = ANY($WANT) — anything else in that clause (an OR, a second predicate, a concatenated array) decides rows the digest never covered"
               else
                 UNBOUND="$UNBOUND
     line $b_ln ($b_kind on $b_tbl): writes through '$b_var', not the hashed set '$WANT'"
@@ -1248,6 +1282,38 @@ for file in $ALL_SQL; do
 
           if [ -z "$SET_BIND_WHY" ] && [ "$COMPUTED" -eq 1 ] && [ -n "$DIGEST_SET_VAR" ]; then
             COUNT_STATUS=$(awk -v var="$DIGEST_SET_VAR" '
+              # ---- THE ASSERTION MUST BE A MISMATCH (Codex High, round 13) ---
+              # Round 12 accepted any IF that mentioned array_length(<var>) and
+              # reached a RAISE, which accepted the inversion:
+              #
+              #   IF n = array_length(v_ids, 1) THEN RAISE EXCEPTION ...; END IF;
+              #
+              # That aborts when the write touched exactly the approved rows and
+              # succeeds when it touched some other number of them — the guard
+              # running backwards. `<`, `>` and `<=` are the same failure in
+              # milder form: they leave one direction of drift unasserted.
+              #
+              # So the condition has to be the canonical single mismatch, read
+              # structurally: exactly one of <>, != or IS DISTINCT FROM, nothing
+              # else comparing anything, and no boolean or conditional keyword
+              # that would make the polarity unreadable. Either operand order is
+              # fine (`n <> array_length(...)` or `array_length(...) <> n`).
+              function cond_ok(l,   c, q) {
+                c = l
+                gsub(/'"'"'[^'"'"']*'"'"'/, " ", c)
+                if (!match(c, /(^|[^a-z0-9_])if([^a-z0-9_]|$)/)) return 0
+                c = substr(c, RSTART + RLENGTH)
+                q = index(c, "then")
+                if (q > 0) c = substr(c, 1, q - 1)
+                gsub(/is[ \t]+distinct[ \t]+from/, " @ ", c)
+                gsub(/<>/, " @ ", c)
+                gsub(/!=/, " @ ", c)
+                gsub(/(array_length|cardinality)[ \t]*\([^)]*\)/, " arr ", c)
+                if (gsub(/@/, "@", c) != 1) return 0
+                if (c ~ /[=<>]/) return 0
+                if (c ~ /(^|[^a-z0-9_])(or|and|not|case|when|coalesce|nullif)([^a-z0-9_]|$)/) return 0
+                return 1
+              }
               { l = tolower($0); sub(/--.*/, "", l); ln[FNR] = l; n = FNR }
               END {
                 for (i = 1; i <= n; i++) {
@@ -1257,17 +1323,21 @@ for file in $ALL_SQL; do
                 for (i = 1; i <= n; i++) {
                   if (ln[i] !~ /(^|[^a-z0-9_])if([^a-z0-9_]|$)/) continue
                   if (ln[i] !~ ("(array_length|cardinality)[ \t]*\\([ \t]*" var "([^a-z0-9_]|$)")) continue
+                  if (!cond_ok(ln[i])) { polarity = 1; continue }
                   if (ln[i] ~ /raise[ \t]+exception/) { print "OK"; exit }
                   depth = 1
                   for (j = i + 1; j <= n; j++) {
                     # Depth 1 only — same reason as the digest branch above
                     # (Codex High, round 12): a RAISE nested under `IF false`
-                    # is not an abort, it is decoration.
+                    # is not an abort, it is decoration. And the ELSE arm is not
+                    # the mismatch arm (round 13), so the walk stops there.
+                    if (depth == 1 && ln[j] ~ /(^|[^a-z0-9_])(else|elsif|elseif)([^a-z0-9_]|$)/) break
                     if (depth == 1 && ln[j] ~ /raise[ \t]+exception/) { print "OK"; exit }
                     if (ln[j] ~ /(^|[^a-z0-9_])if([^a-z0-9_]|$)/ && ln[j] !~ /end[ \t]+if/) depth++
                     if (ln[j] ~ /end[ \t]+if/) { depth--; if (depth <= 0) break }
                   }
                 }
+                if (polarity) { print "polarity"; exit }
                 print "no-assert"
               }
             ' "$file")
@@ -1275,6 +1345,8 @@ for file in $ALL_SQL; do
               OK) ;;
               no-count)
                 SET_BIND_WHY="the writes never capture GET DIAGNOSTICS <n> = ROW_COUNT, so a rewrite that silently touched fewer rows than were approved would still report success" ;;
+              polarity)
+                SET_BIND_WHY="the row count IS compared against array_length($DIGEST_SET_VAR, 1), but not by a plain mismatch — an = test aborts when the write hit exactly the approved rows and passes when it hit some other number of them, and <, > or a compound condition leaves one direction of drift unasserted. Use the canonical form: IF <n> <> array_length($DIGEST_SET_VAR, 1) THEN RAISE EXCEPTION ...; END IF;" ;;
               *)
                 SET_BIND_WHY="the row count is never asserted against the approved set. After the write add: IF <n> <> array_length($DIGEST_SET_VAR, 1) THEN RAISE EXCEPTION ...; END IF;" ;;
             esac

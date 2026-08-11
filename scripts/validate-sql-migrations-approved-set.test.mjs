@@ -691,6 +691,97 @@ const CASES = [
       `      RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n    END IF;\n  END IF;\nEND $$;\n`,
   },
 
+  // ── round 13: the predicate and the two assertions, read literally ──────
+  // Round 12 read each of these three shapes loosely enough that a bypass
+  // could wear the right words in the wrong arrangement.
+  {
+    // The array only had to be MENTIONED in the row selection, not to BE it.
+    name: 'Codex round-13 bypass: the write predicate is widened with OR TRUE',
+    expect: 'violation',
+    sql: `-- APPROVED_SET_DIGEST: ${HEX}\n${goodSetBlock({ writeWhere: 'WHERE id = ANY(v_ids) OR TRUE' })}\n`,
+  },
+  {
+    // Same hole, no boolean operator at all: concatenate a second array into
+    // the one that was approved and the write covers both populations.
+    name: 'round-13: the approved array is concatenated with another array',
+    expect: 'violation',
+    sql: `-- APPROVED_SET_DIGEST: ${HEX}\n${goodSetBlock({ writeWhere: 'WHERE id = ANY(v_ids || v_extra)' })}\n`,
+  },
+  {
+    // The row-count guard running backwards: it aborts when the write hit
+    // exactly the approved rows and succeeds when it hit some other number.
+    name: 'Codex round-13 bypass: the row-count assertion is inverted to =',
+    expect: 'violation',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\n` +
+      `DECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
+      `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
+      `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
+      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
+      `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);\n` +
+      `  GET DIAGNOSTICS n = ROW_COUNT;\n` +
+      `  IF n = array_length(v_ids, 1) THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\nEND $$;\n`,
+  },
+  {
+    // Milder form of the same thing: one direction of drift goes unasserted.
+    name: 'round-13: the row count is compared with < instead of a mismatch',
+    expect: 'violation',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\n` +
+      `DECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
+      `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
+      `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
+      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
+      `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);\n` +
+      `  GET DIAGNOSTICS n = ROW_COUNT;\n` +
+      `  IF n < array_length(v_ids, 1) THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\nEND $$;\n`,
+  },
+  {
+    // Depth alone does not say WHICH arm: the abort sits in the ELSE, so a
+    // drifted digest falls straight through to the write.
+    name: 'Codex round-13 bypass: the digest aborts in the ELSE arm, not the mismatch arm',
+    expect: 'violation',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\n` +
+      `DECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
+      `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
+      `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
+      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
+      `    NULL;\n` +
+      `  ELSE\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
+      `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);\n` +
+      `  GET DIAGNOSTICS n = ROW_COUNT;\n` +
+      `  IF n <> array_length(v_ids, 1) THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\nEND $$;\n`,
+  },
+  {
+    // The row-count assertion with the same misplacement.
+    name: 'round-13: the row-count abort sits in the ELSE arm',
+    expect: 'violation',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\n` +
+      `DECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
+      `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
+      `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
+      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
+      `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);\n` +
+      `  GET DIAGNOSTICS n = ROW_COUNT;\n` +
+      `  IF n <> array_length(v_ids, 1) THEN\n` +
+      `    NULL;\n` +
+      `  ELSE\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\nEND $$;\n`,
+  },
+
   // ── round 10: the digest must cover the rows actually WRITTEN ────────────
   // Every check above proves the digest is real, fail-closed, and mentions the
   // rewritten tables and columns. None of it proved the hashed rows and the
