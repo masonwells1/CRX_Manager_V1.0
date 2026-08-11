@@ -68,9 +68,11 @@ Never commit `.env` files or reveal keys. Never use `--no-verify`. Never use des
 - Mutating RPCs must accept and actually enforce `p_idempotency_key text DEFAULT NULL`.
 - `SECURITY DEFINER` functions normally must use `SET search_path = public, pg_temp` and deliberate grants. Per Mason's 2026-07-30 approval recorded in `docs/manual/DECISION_LOG.md`, an empty search path is allowed only as a narrow exception for a deliberately fully schema-qualified body with current source and migration-review proof.
 - Money must be exact whole cents. New money storage uses bigint cents. Existing PostgreSQL
-  numeric-dollar columns are a documented compatibility exception only: authoritative database
-  math must stay exact `numeric`, clean columns get finite whole-cent CHECKs, and dirty legacy
-  values are never widened or rewritten without approval. New or changed authoritative TypeScript
+  numeric-dollar storage may remain temporarily to avoid a risky unit rewrite, but it is an approved
+  compatibility exception only after authoritative database math is verified as exact `numeric`, all
+  existing values are finite whole cents, and an active finite whole-cent CHECK is present. Dirty or
+  unconstrained columns remain tracked findings and are never widened or rewritten without approval.
+  New or changed authoritative TypeScript
   money math must parse decimal operands into integer cents before arithmetic; never introduce
   binary floating-point rounding for money. See the 2026-08-10 decision in
   `docs/manual/DECISION_LOG.md`.

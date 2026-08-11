@@ -5,15 +5,15 @@ import { createHash } from 'node:crypto'
 // sha256(finder body, evidence block excluded), first 16 hex. Regenerate ONLY when a
 // finder prompt change is intended — the failure message prints the new values.
 const PINNED_FINDER_HASHES = {
-  'S1:find1': '63e859c8118d03ea', 'S1:find2': '22cea3b2e8ce1a65',
-  'S2:find1': 'd291e83a0452f210', 'S2:find2': '55f0a4e7c8ca743f',
-  'S3:find1': '35c9769c9b02802d', 'S3:find2': '04df6e08af7bfec8',
-  'S4:find1': '962b983c2f2cee99', 'S4:find2': 'c7930f902142fcb9',
-  'S5:find1': '525a55982089c1a7',
-  'S6:find1': '8ca88b95f1d6dfe2', 'S6:find2': '5f6f2d8dc6c19506',
-  'S7:find1': 'fd48149623102ba7', 'S7:find2': '9c15cf243954e129',
-  'S8:find1': '4137ec0a158eb443', 'S8:find2': '7cbadcb990ade3ee',
-  'S9:find1': '57168ed2987780b5', 'S9:find2': '50d08750bf9283e7',
+  'S1:find1': 'ba61e4711e6d2e5c', 'S1:find2': 'd6f1389e8ca5c868',
+  'S2:find1': '3059a97f20948c80', 'S2:find2': '0e5e6f903a273c04',
+  'S3:find1': '3bd2fbb458b5587e', 'S3:find2': 'bcf387798eb83fde',
+  'S4:find1': 'c8c26f5fb291f074', 'S4:find2': '72a068406bef1fe2',
+  'S5:find1': 'fbea8d7095e05891',
+  'S6:find1': 'b8bceb628408f143', 'S6:find2': '089331b1517410f5',
+  'S7:find1': '8a8f9a7e00088df5', 'S7:find2': '4f5a8c8dd3adef8e',
+  'S8:find1': '2b6508645964fa96', 'S8:find2': '0dc9082e036b81cf',
+  'S9:find1': '6b898f97fe22d57d', 'S9:find2': '988d3a7fb0900fdc',
 }
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor

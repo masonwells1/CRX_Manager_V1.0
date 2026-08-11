@@ -19,8 +19,10 @@ ledger closeout path.
 ## 2026-08-10 — Record the exact-whole-cent compatibility policy
 
 Recorded Mason's financial storage decision independently of the pricing implementation: new money
-storage uses bigint cents, while established PostgreSQL numeric-dollar columns may remain when their
-math stays exact and their values are constrained to finite whole cents once clean. Authoritative
+storage uses bigint cents. Established PostgreSQL numeric-dollar storage may remain temporarily to
+avoid a risky unit rewrite, but it is approved only after exact numeric arithmetic, clean finite
+whole-cent values, and an active finite whole-cent CHECK are verified. Dirty or unconstrained
+columns remain tracked findings and may not be suppressed as accepted exceptions. Authoritative
 TypeScript money calculations and input-parsing paths that are added or changed must parse decimal
 operands into integer cents and may not introduce binary floating-point conversion, parsing,
 arithmetic, or rounding; display-only formatting from already-integer cents remains allowed. Updated
@@ -30,7 +32,10 @@ as open debt below rather than silently changing input behavior in this policy-o
 pricing implementation owns the money paths it changes; this PR changes no schema, data, or
 production behavior. Latest-head review also aligned the compliance/PDF reviewers, migration and RPC
 scaffolds, money hook message, inventory checklist, and required gotchas reference so none can
-override the documented legacy-column exception. A final current-head review also made the
+override the fail-closed legacy-column approval gate. A final exact-head Sol review rejected the
+earlier "once clean" wording because it could hide dirty or unconstrained columns; the policy,
+review prompts, audit allowlists, and migration/RPC guidance now keep those columns visible until
+all three approval conditions are proven. A final current-head review also made the
 compliance reviewer reject raw use of the legacy cent parsers on inputs with more than two
 fractional digits unless an explicit exact rounding rule has been approved; the deterministic
 money-safety hook now gives the same qualified remediation instead of recommending the truncating

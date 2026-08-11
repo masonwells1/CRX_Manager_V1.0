@@ -10,10 +10,6 @@
       "reason": "~53 anon-executable SECURITY DEFINER functions the advisor flags are accepted/inert grant-debt: each self-gates on auth.uid()/require_admin() as its first executable statement (runtime-proven anon is rejected). Trigger fns in the set error on direct call. NOT a hole."
     },
     {
-      "key": "commissions.commission_amount-numeric-dollars",
-      "reason": "commissions.commission_amount is numeric DOLLARS (not bigint cents) BY DESIGN. Do not flag as money-as-float."
-    },
-    {
       "key": "reportPdf.ts-columnStyles-any",
       "reason": "reportPdf.ts columnStyles uses the one allowed `any` per CLAUDE.md. Accepted."
     },

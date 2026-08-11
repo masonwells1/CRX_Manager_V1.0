@@ -16,7 +16,7 @@ export const meta = {
 // ---------------------------------------------------------------------------
 const PREAMBLE = [
   'You are auditing the CRX Manager codebase (React 18 + TypeScript + Vite + Supabase + Tailwind) at C:\\CRX_Manager.',
-  'It is a production agricultural-retail ERP. New money storage uses bigint cents; documented legacy PostgreSQL numeric-dollar columns are exact-decimal compatibility exceptions. The app spans 80+ pages, ~114 tables, ~286 callable RPCs, 619+ migrations, and 6 Edge Functions; treat any count as a lead to confirm live, never a fact.',
+  'It is a production agricultural-retail ERP. New money storage uses bigint cents. Existing PostgreSQL numeric-dollar storage is not an approved exception until exact numeric math, clean finite whole-cent values, and an active finite whole-cent CHECK are verified. The app spans 80+ pages, ~114 tables, ~286 callable RPCs, 619+ migrations, and 6 Edge Functions; treat any count as a lead to confirm live, never a fact.',
   '',
   'GROUND TRUTH: Use the actual repo on disk AND the LIVE Supabase database. The Supabase MCP tools are available — load them with ToolSearch (e.g. query "execute_sql" or "supabase list tables"). Live project id is rhyzpcqhnizqbxphqdkr. You MAY run read-only SQL (SELECT, pg_catalog, information_schema) to ground every finding against the live DB.',
   '',
@@ -25,7 +25,7 @@ const PREAMBLE = [
   '- Do NOT edit, write, or delete any file. This is a review, not a fix.',
   '- Cite hard evidence for every finding: a file:line, a table/function name, or the exact read-only SQL you ran and what it returned.',
   '- Read CLAUDE.md and the relevant docs/reference/* files for the project\'s own documented rules and ACCEPTED exceptions before flagging anything.',
-  '- Known accepted findings — do NOT re-report: profile_public_view uses SECURITY DEFINER semantics by design; customer RLS is intentionally lower-bound-only; commissions.commission_amount uses numeric-dollar STORAGE by design (still audit its exact arithmetic and finite whole-cent constraint); reportPdf.ts columnStyles uses one allowed `any`.',
+  '- Known accepted findings — do NOT re-report: profile_public_view uses SECURITY DEFINER semantics by design; customer RLS is intentionally lower-bound-only; reportPdf.ts columnStyles uses one allowed `any`. Numeric-dollar storage is never suppressed by type alone: audit every such column, including commissions.commission_amount, and report dirty values, inexact arithmetic, or a missing active finite whole-cent CHECK.',
   '- Prefer precision over volume. Report only what you can substantiate. Do NOT pad with speculative or style-only nits. Report at most your 10 most significant findings for this dimension.',
 ].join('\n')
 
@@ -96,7 +96,7 @@ const DIMENSIONS = [
   {
     key: 'money-financial',
     prompt:
-      'Audit MONEY & FINANCIAL correctness. Flag: (a) binary-float conversion, parsing, arithmetic, or rounding in authoritative money calculations or input parsing, new money storage that is not bigint cents, or documented legacy PostgreSQL numeric-dollar columns that lose exact numeric math or their finite whole-cent constraint once clean; allow display-only formatting such as converting integer cents for Intl.NumberFormat or PDF output; (b) parseDollarsToCents vs parseDollarsToCentsSigned misuse — signed is legitimate only in the 3 vendor-bill adjustment callsites; (c) any UPDATE that writes invoices.balance_cents (it is GENERATED ALWAYS — writing it is a bug); (d) violations of inventory_transactions / financial_audit_log immutability invariants; (e) rounding errors in commission splits or payment allocation. Inspect src/lib/parseCents.ts (parseDollarsToCents / parseDollarsToCentsSigned), src/lib/reconciliation.ts, the *.test.ts for commission-split / payment-allocation / finance-charge math, and the corresponding mutating RPC bodies via live pg_proc (commission split, payment allocation, finance charges).',
+      'Audit MONEY & FINANCIAL correctness. Flag: (a) binary-float conversion, parsing, arithmetic, or rounding in authoritative money calculations or input parsing; new money storage that is not bigint cents; or any legacy PostgreSQL numeric-dollar column without verified exact numeric math, clean finite whole-cent values, and an active finite whole-cent CHECK. Dirty or unconstrained legacy columns remain reportable and are not approved exceptions. Allow display-only formatting such as converting integer cents for Intl.NumberFormat or PDF output; (b) parseDollarsToCents vs parseDollarsToCentsSigned misuse — signed is legitimate only in the 3 vendor-bill adjustment callsites; (c) any UPDATE that writes invoices.balance_cents (it is GENERATED ALWAYS — writing it is a bug); (d) violations of inventory_transactions / financial_audit_log immutability invariants; (e) rounding errors in commission splits or payment allocation. Inspect src/lib/parseCents.ts (parseDollarsToCents / parseDollarsToCentsSigned), src/lib/reconciliation.ts, the *.test.ts for commission-split / payment-allocation / finance-charge math, and the corresponding mutating RPC bodies via live pg_proc (commission split, payment allocation, finance charges).',
   },
   {
     key: 'frontend-safety',

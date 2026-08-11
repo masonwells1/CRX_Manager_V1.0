@@ -154,7 +154,7 @@ Setting `updated_at = now()` in an UPDATE on these tables will crash the RPC. Th
 
 | Rule | Why |
 |------|-----|
-| Money must be exact whole cents. New storage uses `bigint` cents; documented legacy PostgreSQL numeric-dollar columns retain exact `numeric` math and finite whole-cent constraints once clean. | Binary-float conversion, parsing, arithmetic, or rounding corrupts authoritative money. Parse decimal input into integer cents; do not casually retype legacy values. |
+| Money must be exact whole cents. New storage uses `bigint` cents. Legacy PostgreSQL numeric-dollar storage is approved only after exact `numeric` math, clean finite whole-cent values, and an active finite whole-cent CHECK are verified; dirty or unconstrained columns remain findings. | Binary-float conversion, parsing, arithmetic, or rounding corrupts authoritative money. Parse decimal input into integer cents; do not casually retype legacy values. |
 | Season = October 1 to September 30 | Hardcoded in commission and prepay rollover logic |
 | Status enum strings are case- and value-sensitive | DB CHECK constraints enforce exact strings — `'void'` vs `'voided'` matters |
 

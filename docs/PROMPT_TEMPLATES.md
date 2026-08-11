@@ -162,7 +162,7 @@ Security:
 Data integrity:
 - [ ] All .update() and .delete() calls use checkMutationResult()
 - [ ] All RPC calls use assertRpcResult() where appropriate
-- [ ] Money resolves to exact whole cents: new storage is bigint cents; documented legacy numeric-dollar columns retain exact numeric math and finite whole-cent constraints once clean
+- [ ] Money resolves to exact whole cents: new storage is bigint cents; every legacy numeric-dollar column has verified exact numeric math, clean finite whole-cent values, and an active finite whole-cent CHECK; dirty or unconstrained columns remain findings
 - [ ] Status transitions follow the defined lifecycles
 
 Code quality:
@@ -254,7 +254,7 @@ Read the actual RPC functions and triggers in the migrations. Check:
 - Are there any RPCs that modify inventory without using FOR UPDATE locks?
 - Can two simultaneous Quick Deliveries oversell the same product?
 - Are there any places where quantity_available could go negative?
-- Does all money resolve to exact whole cents? Search for binary-float conversion/math, new non-bigint storage, and legacy numeric-dollar paths without exact numeric math or finite whole-cent constraints once clean.
+- Does all money resolve to exact whole cents? Search for binary-float conversion/math, new non-bigint storage, and every legacy numeric-dollar path without verified exact numeric math, clean finite whole-cent values, and an active finite whole-cent CHECK. Do not suppress dirty or unconstrained columns.
 - Are there any .update() or .delete() calls missing checkMutationResult()?
 - Are there any tables missing RLS policies? Cross-reference the actual DB schema.
 - Are there foreign key cascades that could accidentally delete important data?

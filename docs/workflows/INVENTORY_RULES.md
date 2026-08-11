@@ -254,5 +254,6 @@ Physical inventory verification process.
 - [ ] Verify that receiving updates both PO items AND inventory levels
 - [ ] Check cost_history creation when PO cost differs from product cost
 - [ ] Remember: season is October 1 to September 30 for all YTD calculations
-- [ ] Money remains exact whole cents: new storage uses bigint cents; documented legacy PostgreSQL
-      numeric-dollar columns keep exact numeric math and finite whole-cent constraints once clean
+- [ ] Money remains exact whole cents: new storage uses bigint cents; legacy PostgreSQL
+      numeric-dollar storage is approved only after exact numeric math, clean finite whole-cent
+      values, and an active finite whole-cent CHECK are verified; dirty or unconstrained columns remain findings

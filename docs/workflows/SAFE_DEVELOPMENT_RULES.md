@@ -160,9 +160,10 @@ Before any schema change, follow `docs/workflows/DATABASE_CHANGE_CHECKLIST.md`:
 ## Money Handling
 
 New money storage in CRX Manager uses **bigint cents** (whole numbers, no decimals). Established
-PostgreSQL `numeric` dollar columns are a documented compatibility exception: their database math
-must remain exact, clean columns need finite whole-cent constraints, and dirty legacy values are not
-rewritten without approval.
+PostgreSQL `numeric` dollar storage may remain temporarily to avoid a risky unit rewrite, but it is
+not an approved or suppressible compatibility exception until database math is verified as exact
+`numeric`, all existing values are finite whole cents, and an active finite whole-cent CHECK is
+present. Dirty or unconstrained columns remain tracked findings and are not rewritten without approval.
 
 | Operation | How |
 |-----------|-----|

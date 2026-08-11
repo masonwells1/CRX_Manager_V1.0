@@ -61,7 +61,9 @@ F2 is last because it may need an owner decision.
   the mock too, or the error path throws `No "X" export is defined on the mock`.
 - ESLint `no-unused-vars` fires on intermediate edit states (import added before its usage) - it
   clears when the usage lands; confirm with a final `npm run lint`.
-- New money storage is bigint cents; documented legacy PostgreSQL numeric-dollar columns retain
+- New money storage is bigint cents; legacy PostgreSQL numeric-dollar storage is approved only after
+  exact numeric math, clean finite whole-cent values, and an active finite whole-cent CHECK are verified;
+  dirty or unconstrained columns remain findings. Existing approved columns retain
   exact `numeric` arithmetic. Before using the shared helpers from `src/lib/parseCents`, reject
   inputs with more than two fractional digits or apply one approved exact decimal rounding rule;
   those legacy helpers currently truncate excess precision and are not sufficient alone. Never use

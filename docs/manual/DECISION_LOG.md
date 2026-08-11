@@ -9,7 +9,7 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
-## 2026-08-10 — Exact whole cents is the invariant; legacy numeric-dollar columns are a compatibility exception
+## 2026-08-10 — Exact whole cents is the invariant; legacy numeric-dollar storage has a fail-closed approval gate
 
 **Source:** Mason's explicit 2026-08-10 project instruction, following the bigint-cents evaluation
 recorded in the 2026-08-09 changelog entry for canonical profit.
@@ -17,14 +17,17 @@ recorded in the 2026-08-09 changelog entry for canonical profit.
 **Decision.** New money storage remains bigint cents, but established PostgreSQL `numeric` dollar
 columns are not converted merely to satisfy the storage preference. PostgreSQL `numeric` is exact
 decimal; converting an established cluster is a coordinated unit change across database functions
-and UI readers, where one missed call site creates a 100x error. The accepted compatibility path is
-exact numeric-dollar storage plus validated finite whole-cent CHECKs on clean columns. Dirty legacy
-columns are not widened or rewritten without Mason's separate approval.
+and UI readers, where one missed call site creates a 100x error. That storage type alone is not an
+approved exception. A legacy column becomes an approved compatibility exception only after its
+authoritative database arithmetic is verified as exact `numeric`, all existing values are verified
+as finite whole cents, and an active finite whole-cent CHECK is present. Dirty or unconstrained
+columns remain tracked findings and are not widened or rewritten without Mason's separate approval.
 
 **Operative rule.** The invariant is exact whole cents, not a blind type conversion. New database
-money columns use bigint cents. A legacy numeric-dollar column may remain only under this documented
-exception, must use exact PostgreSQL `numeric` arithmetic, and should receive a finite whole-cent
-CHECK once its existing rows are clean. New or changed authoritative TypeScript money math must
+money columns use bigint cents. Legacy numeric-dollar storage may remain temporarily to avoid a
+risky unit rewrite, but it is not approved or suppressible until exact PostgreSQL `numeric`
+arithmetic, clean finite whole-cent values, and an active finite whole-cent CHECK are all verified.
+Dirty or unconstrained columns stay visible as tracked debt. New or changed authoritative TypeScript money math must
 parse decimal operands into integer cents before multiplying, dividing, rounding, or aggregating;
 do not introduce binary floating-point rounding. Existing helpers that still use binary conversion
 are migration work, not evidence that the old approach is acceptable. The server remains
@@ -652,8 +655,9 @@ are mandatory after every RPC call/`.update()`/`.delete()`; (4) every mutating R
 actually enforces `p_idempotency_key text DEFAULT NULL` (added after repeated double-submit
 bugs, e.g. the 2026-07-10 `save_job_applied_record` fix).
 The first clause is superseded by the 2026-08-10 exact-whole-cent decision above: bigint cents
-remains mandatory for new storage, while documented legacy PostgreSQL numeric-dollar columns may
-remain under exact arithmetic and finite whole-cent constraints. The other three rules remain
+remains mandatory for new storage, while legacy PostgreSQL numeric-dollar storage is approved only
+after exact arithmetic, clean finite whole-cent values, and an active finite whole-cent CHECK are
+verified. Dirty or unconstrained columns remain tracked findings. The other three rules remain
 current and unchanged.
 **Why:** these are the recurring bug classes (money bugs, invariant bypass via a second code
 path, double-submits from retries/flaky networks) that have cost the most rework historically.
