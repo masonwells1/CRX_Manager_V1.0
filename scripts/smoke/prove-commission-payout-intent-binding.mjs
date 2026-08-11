@@ -895,6 +895,64 @@ function proveReplayIdentityGuard() {
     new RegExp(`public\\.${IMPL} already exists while public\\.create_commission_payment[^\\n]*is not a readable plpgsql function \\(language sql\\)`),
     `wrong refusal for a non-plpgsql public function:\n${wrongLanguageOut}`,
   );
+
+  // F. THE DOCUMENTED RESIDUAL, pinned so no one can mistake it for closed.
+  //
+  //    Cases C, D and E each fail one predicate. This case fails none: the
+  //    public stand-in is plpgsql, and its executable text contains a call to
+  //    the implementation AND a call to check_idempotency_intent() — both
+  //    parked inside `IF false`, so neither ever runs. The planted
+  //    implementation hides its own markers the same way. Every predicate the
+  //    replay check can state over text is satisfied, and the migration adopts
+  //    the planted body.
+  //
+  //    This is not fixable by a better text check. Reachability is undecidable
+  //    from source, and any predicate written here is one an author of the
+  //    planted body can read and satisfy. The barrier that actually stops this
+  //    is CREATE privilege on schema public: an actor who can install both of
+  //    these functions can equally replace the wrapper the instant the
+  //    migration finishes, with or without this check. The check's real job is
+  //    to stop the migration from silently adopting a HALF-APPLIED or
+  //    hand-edited state by accident, and for that a text check is adequate.
+  //
+  //    Asserting the adoption keeps the limit executable: if a later change
+  //    closes it, this case goes red and the claim in the CHANGELOG and in
+  //    migration-history.md gets revisited deliberately rather than drifting.
+  const DEAD_CODE_PUBLIC =
+    `CREATE OR REPLACE FUNCTION public.create_commission_payment(\n${HEADER}`
+    + 'AS $stub$\nBEGIN\n  IF false THEN\n'
+    + `    PERFORM public.${IMPL}(\n`
+    + '      p_commission_ids, p_payment_method, p_reference,\n'
+    + '      p_payment_date, p_notes, p_performed_by, p_idempotency_key);\n'
+    + "    PERFORM public.check_idempotency_intent(p_idempotency_key, '', NULL::uuid, '');\n"
+    + '  END IF;\n  RETURN NULL;\nEND;\n$stub$;\n';
+  const deadCode = psql(
+    'BEGIN;\nSET LOCAL check_function_bodies = off;\n'
+    + `CREATE FUNCTION public.${IMPL}(\n${HEADER}${REACHABLE_MARKER_IMPL}`
+    + `${DEAD_CODE_PUBLIC}${migration}\n`
+    // The planted body's own text, not its dollar-quote tag: prosrc is what
+    // sits BETWEEN the delimiters, so matching on the tag would pass whatever
+    // body was really adopted.
+    + "SELECT strpos(prosrc, 'INSERT INTO commission_payment_items VALUES (1)') > 0\n"
+    + '       AS adopted_planted\n'
+    + '  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace\n'
+    + ` WHERE n.nspname = 'public' AND p.proname = '${IMPL}';\n`
+    + 'ROLLBACK;\n',
+    { allowFailure: true },
+  );
+  const deadCodeOut = `${deadCode.stdout || ''}\n${deadCode.stderr || ''}`;
+  assert.equal(
+    deadCode.status,
+    0,
+    'the dead-code residual now refuses — that is an improvement, but the '
+    + 'CHANGELOG and migration-history.md still describe it as open. Update '
+    + `both, then update this case:\n${deadCodeOut}`,
+  );
+  assert.match(
+    deadCodeOut,
+    /adopted_planted[\s\S]*\n\s*t\s*\n/,
+    `case F did not reach the adoption it is pinning:\n${deadCodeOut}`,
+  );
 }
 
 try {

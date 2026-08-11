@@ -380,6 +380,26 @@ describe('migration scanner', () => {
     expect(codeOnly(definition).match(/FOR UPDATE OF c/g)).toHaveLength(1);
   });
 
+  it('codeOnly() does not read executable SQL out of a quoted alias in a body', () => {
+    // The other half of the literal problem. A later migration could delete the
+    // real lock and leave `AS "FOR UPDATE OF c"` behind as a column alias; the
+    // guard assertions at the bottom of this file would still find their text
+    // and stay green over a body that no longer locks anything.
+    const sql = [
+      `CREATE OR REPLACE FUNCTION public.pay(p_id uuid) RETURNS void LANGUAGE plpgsql AS $fn$`,
+      `BEGIN`,
+      `  PERFORM 1 AS "FOR UPDATE OF c" FROM c;`,
+      `END;`,
+      `$fn$;`,
+    ].join('\n');
+    const [definition] = functionDefinitions(sql, 'pay');
+    expect(definition, 'the raw body keeps the alias').toContain('"FOR UPDATE OF c"');
+    expect(
+      codeOnly(definition),
+      'a quoted alias was read as the lock it merely spells',
+    ).not.toMatch(/FOR UPDATE OF c/i);
+  });
+
   it('refuses to guess the schema of an unqualified definition after a session SET search_path', () => {
     // An unqualified CREATE FUNCTION is read as public, which is true only while
     // search_path still points there. A statement-level `SET search_path` puts a

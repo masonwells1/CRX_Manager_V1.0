@@ -136,14 +136,22 @@ export function lexSql(
       continue;
     }
 
-    if (sql[i] === '"' && !inBody) {
+    if (sql[i] === '"' && (!inBody || blankBodyLiterals)) {
       let j = i + 1;
       while (j < sql.length) {
         if (sql[j] === '"' && sql[j + 1] === '"') { j += 2; continue; }
         if (sql[j] === '"') { j += 1; break; }
         j += 1;
       }
-      idents.push({ start: i, end: j });
+      if (inBody) {
+        // A quoted identifier inside a body is a NAME — `AS "FOR UPDATE OF c"`
+        // is an alias, not the lock it reads like. In the code-only view it is
+        // blanked for the same reason a literal is: an assertion about
+        // executable SQL must not be satisfiable by text that only spells it.
+        blank(i, j);
+      } else {
+        idents.push({ start: i, end: j });
+      }
       i = j;
       continue;
     }
@@ -196,6 +204,12 @@ export function lexed(sql: string): Lexed {
  * `RAISE NOTICE 'FOR UPDATE OF c'` reads exactly like the lock it is supposed
  * to prove. Assertions about executable SQL run against this view instead;
  * assertions about an error code keep using the full body.
+ *
+ * This view also blanks quoted identifiers INSIDE a body, which the default
+ * view deliberately does not: `AS "FOR UPDATE OF c"` is an alias a hostile or
+ * careless author could leave behind after deleting the real lock, and it reads
+ * identically to one. Blanking is the safe direction here — over-blanking can
+ * only make a code assertion fail.
  */
 export function codeOnly(definition: string): string {
   return lexSql(definition, { blankBodyLiterals: true }).masked;
