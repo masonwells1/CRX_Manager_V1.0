@@ -58,14 +58,26 @@ done
 # happens to share the same counts satisfies a count-only guard and the
 # migration rewrites rows nobody approved.
 #
-# Only migrations stamped on or after the cutoff are held to this. Everything
-# before it is history — including 20260810025159_backfill_stale_line_profit.sql,
-# which is already APPLIED LIVE and therefore cannot be edited (AGENTS.md).
-# The cutoff sits one second past that stamp — not at the next midnight, which
-# would have left every later 20260810 migration unguarded. It is a timestamp,
-# not an allowlist, so it needs no maintenance, and every migration written from
-# here on is in force.
-APPROVED_SET_CUTOFF=20260810025160
+# WHAT COUNTS AS HISTORY IS NOT THE FILENAME (Codex High, round 14).
+#
+# This used to be scoped by a filename timestamp cutoff: stamped before it,
+# history; stamped after it, in force. The stamp is part of the filename, and
+# the filename is chosen by whoever writes the migration — so a brand-new file
+# named with an older stamp landed on the history side and was never scanned at
+# all. The guard could be switched off by the input it was guarding, which is
+# the whole class of bug the last four rounds have been about.
+#
+# History is now defined by CONTENT, from a frozen manifest of every migration
+# that existed when the rule landed (scripts/approved-set-grandfathered.txt,
+# basename + sha256). A file is skipped only if its basename is listed there AND
+# its bytes still hash to the recorded value. A new file — any name, any stamp —
+# is in force, and so is any edit to a listed file. Migrations already applied
+# live, which AGENTS.md forbids editing, keep passing untouched; that is the
+# only thing the cutoff was ever there to do.
+#
+# The manifest is FROZEN, not maintained: a row added to it exempts that
+# migration, which is a reviewed decision, not routine upkeep.
+APPROVED_SET_GRANDFATHER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/approved-set-grandfathered.txt"
 
 # Which tables carry rows worth binding an approval to? DEFAULT-DENY: every
 # table in .claude/schema-registry.json, minus a short, reason-annotated
@@ -346,6 +358,43 @@ echo "  Scanning $FILE_COUNT migration file(s)..."
 echo "============================================"
 echo ""
 
+# Which of the scanned files are history? Resolved once, in ONE process: the
+# manifest holds 868 entries, and hashing that many files with a shell loop
+# costs two process spawns each and takes minutes on Windows. The result is a
+# newline-delimited list of basenames, matched below without spawning anything.
+GRANDFATHERED=$(printf '%s\n' "$ALL_SQL" | node -e "
+const { createHash } = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const manifest = new Map();
+for (const line of fs.readFileSync(process.argv[1], 'utf8').split(/\r?\n/)) {
+  if (!line || line.startsWith('#')) continue;
+  const m = line.match(/^([0-9a-f]{64})\s+(\S+)/);
+  if (m) manifest.set(m[2], m[1]);
+}
+if (manifest.size < 500) throw new Error('grandfather manifest is truncated: ' + manifest.size);
+const out = [];
+for (const f of fs.readFileSync(0, 'utf8').split(/\r?\n/).filter(Boolean)) {
+  const want = manifest.get(path.basename(f));
+  if (!want) continue;
+  const norm = Buffer.from(fs.readFileSync(f, 'latin1').replace(/\r/g, ''), 'latin1');
+  if (createHash('sha256').update(norm).digest('hex') === want) out.push(path.basename(f));
+}
+process.stdout.write(out.join('\n'));
+" "$APPROVED_SET_GRANDFATHER" 2>/dev/null || echo "__GRANDFATHER_UNREADABLE__")
+
+# Fail closed, loudly. Silently treating an unreadable manifest as "nothing is
+# history" would bury the real problem under every legacy violation at once;
+# treating it as "everything is history" would disable the check outright.
+if [ "$GRANDFATHERED" = "__GRANDFATHER_UNREADABLE__" ]; then
+  echo "❌ FATAL: could not read the approved-set grandfather manifest at"
+  echo "   $APPROVED_SET_GRANDFATHER"
+  echo "   (needs a readable manifest of at least 500 '<sha256>  <basename>' rows, and node on PATH)."
+  echo "   Without it there is no way to tell a historical migration from a new one,"
+  echo "   and the approved-set binding check must not guess."
+  exit 1
+fi
+
 for file in $ALL_SQL; do
   # Strip SQL comments for pattern matching
   CODE_ONLY=$(grep -v '^\s*--' "$file" 2>/dev/null || true)
@@ -476,11 +525,19 @@ for file in $ALL_SQL; do
 
   # ================================================================
   # APPROVED-SET BINDING for one-shot business-row rewrites
-  # See APPROVED_SET_CUTOFF above for why this is date-scoped.
+  # See APPROVED_SET_GRANDFATHER above for what counts as history and why it is
+  # content, not a filename stamp.
   # ================================================================
   MIG_BASENAME=$(basename "$file")
-  MIG_STAMP="${MIG_BASENAME%%_*}"
-  if [[ "$MIG_STAMP" =~ ^[0-9]{14}$ ]] && [ "$MIG_STAMP" -ge "$APPROVED_SET_CUTOFF" ]; then
+  case "
+$GRANDFATHERED
+" in
+    *"
+$MIG_BASENAME
+"*) MIG_IS_HISTORY=1 ;;
+    *) MIG_IS_HISTORY=0 ;;
+  esac
+  if [ "$MIG_IS_HISTORY" -eq 0 ]; then
     # Find UPDATE/DELETE against a business table that is NOT inside a function
     # body. A DO $$ ... $$ block is deliberately NOT treated as a function body:
     # that is exactly where one-shot backfills live.
@@ -558,22 +615,48 @@ for file in $ALL_SQL; do
         # to the matching close, whatever order the clauses came in, and a
         # differently-tagged nested quote inside it is passed over. A DO block
         # is deliberately NOT a function body — that is where backfills live.
-        if (!infn && line ~ /create[ \t]+(or[ \t]+replace[ \t]+)?function/) {
-          infn = 1; fntag = ""
-        }
-        if (infn) {
-          s = line
-          while (match(s, /\$[a-z0-9_]*\$/)) {
-            d = substr(s, RSTART, RLENGTH)
-            s = substr(s, RSTART + RLENGTH)
-            if (fntag == "") { fntag = d; continue }
-            if (d == fntag) { infn = 0; fntag = ""; break }
+        #
+        # SCAN THE WHOLE LINE, NOT WHATEVER STARTS IT (Codex High, round 14).
+        # This used to flip into body mode and `next` the entire PHYSICAL line,
+        # so anything sharing that line with the definition was never seen:
+        #
+        #   CREATE FUNCTION f() ... AS $$ ... $$; UPDATE public.orders SET ...;
+        #
+        # is legal SQL, and the UPDATE — a top-level rewrite of a protected
+        # table — vanished with the line that carried it. A rewrite sitting
+        # BEFORE a definition on one line disappeared the same way. So the line
+        # is consumed as a stream instead: text outside any body accumulates
+        # into `top`, body text is dropped, however often the two alternate.
+        top = ""
+        rest = line
+        while (rest != "") {
+          if (!infn) {
+            if (!match(rest, /create[ \t]+(or[ \t]+replace[ \t]+)?function/)) {
+              top = top " " rest
+              break
+            }
+            top = top " " substr(rest, 1, RSTART - 1)
+            rest = substr(rest, RSTART)
+            infn = 1; fntag = ""
           }
-          # A string-literal body (AS '"'"'select 1'"'"') opens no dollar quote; without
-          # this the signature would swallow the rest of the file.
-          if (infn && fntag == "" && line ~ /;/) { infn = 0 }
-          next
+          closed = 0
+          while (match(rest, /\$[a-z0-9_]*\$/)) {
+            d = substr(rest, RSTART, RLENGTH)
+            rest = substr(rest, RSTART + RLENGTH)
+            if (fntag == "") { fntag = d; continue }
+            if (d == fntag) { infn = 0; fntag = ""; closed = 1; break }
+          }
+          if (closed) continue
+          # A string-literal body (AS <quote>select 1<quote>) opens no dollar
+          # quote; without this the signature would swallow the rest of the
+          # file. Its terminator ends it, and what follows is top level again.
+          if (fntag == "") {
+            q = index(rest, ";")
+            if (q > 0) { infn = 0; rest = substr(rest, q + 1); continue }
+          }
+          break
         }
+        line = top
         # Normalize every non-identifier character to a space. This also strips
         # quotes, so "public"."orders" collapses to the token public.orders.
         # `;` `,` and `=` survive as tokens of their own: statement boundaries
@@ -1144,10 +1227,40 @@ for file in $ALL_SQL; do
           # That aborts when the data MATCHES and falls through to the write
           # when it has DRIFTED. So the scan now stops at the first depth-1
           # ELSE/ELSIF: only the mismatch arm itself can satisfy the check.
-          RAISE_IN_BRANCH=$(awk -v dl="$DIGEST_EXEC_LINE" '
-            FNR < dl { next }
+          #
+          # A DECOY IS NOT AN ABORT (Codex High, round 14). This matched the
+          # raw line, so RAISE NOTICE <q>RAISE EXCEPTION<q>; read as a real
+          # abort: prose inside a string literal satisfying the fail-closed
+          # check while the mismatch branch fell straight through to the write.
+          # Block comments were the same trick with different delimiters.
+          # Strings and block comments are now removed before anything is
+          # matched, with the state carried across lines so a multi-line literal
+          # cannot smuggle text through either — and EVERY line is stripped,
+          # not just the ones from the comparison onward, or that state would
+          # start out wrong.
+          RAISE_IN_BRANCH=$(awk -v dl="$DIGEST_EXEC_LINE" -v Q="'" '
+            function strip(l,   out, a, b, c, m, p) {
+              l = tolower(l)
+              out = ""
+              while (l != "") {
+                if (instr) { p = index(l, Q); if (p == 0) return out; l = substr(l, p + 1); instr = 0; continue }
+                if (inblk) { p = index(l, "*/"); if (p == 0) return out; l = substr(l, p + 2); inblk = 0; continue }
+                a = index(l, "--"); b = index(l, "/*"); c = index(l, Q)
+                m = 0
+                if (a > 0) m = a
+                if (b > 0 && (m == 0 || b < m)) m = b
+                if (c > 0 && (m == 0 || c < m)) m = c
+                if (m == 0) { out = out l; break }
+                out = out substr(l, 1, m - 1) " "
+                if (m == a) break
+                if (m == b) { inblk = 1; l = substr(l, m + 2); continue }
+                instr = 1; l = substr(l, m + 1)
+              }
+              return out
+            }
             {
-              l = tolower($0); sub(/--.*/, "", l)
+              l = strip($0)
+              if (FNR < dl) next
               if (FNR == dl) { depth = 1 }
               else {
                 if (l ~ /(^|[^a-z0-9_])if([^a-z0-9_]|$)/ && l !~ /end[[:space:]]+if/) depth++
@@ -1281,7 +1394,26 @@ for file in $ALL_SQL; do
           fi
 
           if [ -z "$SET_BIND_WHY" ] && [ "$COMPUTED" -eq 1 ] && [ -n "$DIGEST_SET_VAR" ]; then
-            COUNT_STATUS=$(awk -v var="$DIGEST_SET_VAR" '
+            COUNT_STATUS=$(awk -v var="$DIGEST_SET_VAR" -v Q="'" '
+              function strip(l,   out, a, b, c, m, p) {
+                l = tolower(l)
+                out = ""
+                while (l != "") {
+                  if (instr) { p = index(l, Q); if (p == 0) return out; l = substr(l, p + 1); instr = 0; continue }
+                  if (inblk) { p = index(l, "*/"); if (p == 0) return out; l = substr(l, p + 2); inblk = 0; continue }
+                  a = index(l, "--"); b = index(l, "/*"); c = index(l, Q)
+                  m = 0
+                  if (a > 0) m = a
+                  if (b > 0 && (m == 0 || b < m)) m = b
+                  if (c > 0 && (m == 0 || c < m)) m = c
+                  if (m == 0) { out = out l; break }
+                  out = out substr(l, 1, m - 1) " "
+                  if (m == a) break
+                  if (m == b) { inblk = 1; l = substr(l, m + 2); continue }
+                  instr = 1; l = substr(l, m + 1)
+                }
+                return out
+              }
               # ---- THE ASSERTION MUST BE A MISMATCH (Codex High, round 13) ---
               # Round 12 accepted any IF that mentioned array_length(<var>) and
               # reached a RAISE, which accepted the inversion:
@@ -1298,9 +1430,22 @@ for file in $ALL_SQL; do
               # else comparing anything, and no boolean or conditional keyword
               # that would make the polarity unreadable. Either operand order is
               # fine (`n <> array_length(...)` or `array_length(...) <> n`).
-              function cond_ok(l,   c, q) {
+              #
+              # AND IT MUST COMPARE THE COUNT THAT WAS ACTUALLY MEASURED
+              # (Codex High, round 14). Round 13 only required that a
+              # GET DIAGNOSTICS ... ROW_COUNT existed *somewhere* in the file,
+              # never that the value it assigned was the value being tested. So
+              #
+              #   IF cardinality(v_ids) <> cardinality(v_ids) THEN RAISE ...
+              #
+              # passed: perfect canonical shape, comparing a thing to itself,
+              # asserting nothing. The other side of the mismatch now has to be
+              # a variable some GET DIAGNOSTICS <var> = ROW_COUNT assigned, and
+              # the assertion has to come after that assignment. Return 1 = the
+              # canonical assertion, 2 = right shape but the operands are not
+              # tied to a measured count, 0 = wrong operator shape entirely.
+              function cond_ok(l, rcre,   c, q, lhs, rhs) {
                 c = l
-                gsub(/'"'"'[^'"'"']*'"'"'/, " ", c)
                 if (!match(c, /(^|[^a-z0-9_])if([^a-z0-9_]|$)/)) return 0
                 c = substr(c, RSTART + RLENGTH)
                 q = index(c, "then")
@@ -1312,18 +1457,39 @@ for file in $ALL_SQL; do
                 if (gsub(/@/, "@", c) != 1) return 0
                 if (c ~ /[=<>]/) return 0
                 if (c ~ /(^|[^a-z0-9_])(or|and|not|case|when|coalesce|nullif)([^a-z0-9_]|$)/) return 0
-                return 1
+                q = index(c, "@")
+                lhs = substr(c, 1, q - 1); rhs = substr(c, q + 1)
+                gsub(/[^a-z0-9_]/, " ", lhs); gsub(/^[ \t]+|[ \t]+$/, "", lhs)
+                gsub(/[^a-z0-9_]/, " ", rhs); gsub(/^[ \t]+|[ \t]+$/, "", rhs)
+                if (lhs == "arr" && rhs ~ ("^(" rcre ")$")) return 1
+                if (rhs == "arr" && lhs ~ ("^(" rcre ")$")) return 1
+                return 2
               }
-              { l = tolower($0); sub(/--.*/, "", l); ln[FNR] = l; n = FNR }
+              { ln[FNR] = strip($0); n = FNR }
               END {
+                # Which identifiers actually hold a measured row count, and from
+                # which line onward. A line may assign more than one.
+                rcre = ""
                 for (i = 1; i <= n; i++) {
-                  if (ln[i] ~ /get[ \t]+diagnostics/ && ln[i] ~ /row_count/) diag = 1
+                  if (ln[i] !~ /get[ \t]+diagnostics/) continue
+                  s = ln[i]
+                  while (match(s, /get[ \t]+diagnostics[ \t]+(strict[ \t]+)?[a-z0-9_]+[ \t]*:?=[ \t]*row_count/)) {
+                    d = substr(s, RSTART, RLENGTH)
+                    s = substr(s, RSTART + RLENGTH)
+                    sub(/[ \t]*:?=[ \t]*row_count$/, "", d)
+                    sub(/.*[ \t]/, "", d)
+                    if (!(d in rcln)) { rcln[d] = i; rcre = (rcre == "" ? d : rcre "|" d) }
+                  }
                 }
-                if (!diag) { print "no-count"; exit }
+                if (rcre == "") { print "no-count"; exit }
                 for (i = 1; i <= n; i++) {
                   if (ln[i] !~ /(^|[^a-z0-9_])if([^a-z0-9_]|$)/) continue
                   if (ln[i] !~ ("(array_length|cardinality)[ \t]*\\([ \t]*" var "([^a-z0-9_]|$)")) continue
-                  if (!cond_ok(ln[i])) { polarity = 1; continue }
+                  ck = cond_ok(ln[i], rcre)
+                  if (ck != 1) { if (ck == 2) operand = 1; else polarity = 1; continue }
+                  after = 0
+                  for (v in rcln) { if (ln[i] ~ ("(^|[^a-z0-9_])" v "([^a-z0-9_]|$)") && rcln[v] < i) after = 1 }
+                  if (!after) { operand = 1; continue }
                   if (ln[i] ~ /raise[ \t]+exception/) { print "OK"; exit }
                   depth = 1
                   for (j = i + 1; j <= n; j++) {
@@ -1337,6 +1503,7 @@ for file in $ALL_SQL; do
                     if (ln[j] ~ /end[ \t]+if/) { depth--; if (depth <= 0) break }
                   }
                 }
+                if (operand) { print "unbound-count"; exit }
                 if (polarity) { print "polarity"; exit }
                 print "no-assert"
               }
@@ -1345,6 +1512,8 @@ for file in $ALL_SQL; do
               OK) ;;
               no-count)
                 SET_BIND_WHY="the writes never capture GET DIAGNOSTICS <n> = ROW_COUNT, so a rewrite that silently touched fewer rows than were approved would still report success" ;;
+              unbound-count)
+                SET_BIND_WHY="the mismatch test against array_length($DIGEST_SET_VAR, 1) does not compare a measured row count — the other side has to be the variable a GET DIAGNOSTICS <n> = ROW_COUNT actually assigned, on an earlier line. Comparing the approved set to itself is the canonical shape asserting nothing" ;;
               polarity)
                 SET_BIND_WHY="the row count IS compared against array_length($DIGEST_SET_VAR, 1), but not by a plain mismatch — an = test aborts when the write hit exactly the approved rows and passes when it hit some other number of them, and <, > or a compound condition leaves one direction of drift unasserted. Use the canonical form: IF <n> <> array_length($DIGEST_SET_VAR, 1) THEN RAISE EXCEPTION ...; END IF;" ;;
               *)

@@ -11,7 +11,7 @@
  * Each fixture is a synthetic migration written into a scratch directory, run
  * through the real script, and classified by what the script printed for it.
  */
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -833,12 +833,143 @@ const CASES = [
       `  IF n <> array_length(v_ids, 1) THEN\n` +
       `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\nEND $$;\n`,
   },
+
+  // ── round 14: a whole physical line is not a scope ───────────────────────
+  // The body scanner used to skip the ENTIRE line once it saw CREATE FUNCTION,
+  // so anything sharing that line with the definition vanished with it.
+  {
+    name: 'top-level UPDATE trailing a one-line function definition',
+    expect: 'violation',
+    mustReport: 'update',
+    sql:
+      `CREATE FUNCTION public.f() RETURNS void LANGUAGE sql AS $fn$ SELECT 1 $fn$; ` +
+      `UPDATE public.orders SET total_profit = 0;\n`,
+  },
+  {
+    name: 'top-level UPDATE leading a one-line function definition',
+    expect: 'violation',
+    mustReport: 'update',
+    sql:
+      `UPDATE public.orders SET total_profit = 0; ` +
+      `CREATE FUNCTION public.f() RETURNS void LANGUAGE sql AS $fn$ SELECT 1 $fn$;\n`,
+  },
+  {
+    name: 'a one-line function whose BODY writes is still just a definition',
+    expect: 'silent',
+    sql:
+      `CREATE FUNCTION public.f() RETURNS void LANGUAGE plpgsql AS ` +
+      `$fn$ BEGIN UPDATE public.orders SET total_profit = 0; END $fn$;\n`,
+  },
+
+  // ── round 14: a decoy is not an abort ────────────────────────────────────
+  {
+    name: 'the abort is prose inside a string literal, not a real RAISE',
+    expect: 'violation',
+    mustReport: 'does not RAISE EXCEPTION inside its own IF block',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\n` +
+      `DECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
+      `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
+      `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
+      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
+      `    RAISE NOTICE 'would RAISE EXCEPTION APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
+      `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);\n` +
+      `  GET DIAGNOSTICS n = ROW_COUNT;\n  IF n <> array_length(v_ids, 1) THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\nEND $$;\n`,
+  },
+  {
+    name: 'the abort is inside a block comment',
+    expect: 'violation',
+    mustReport: 'does not RAISE EXCEPTION inside its own IF block',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\n` +
+      `DECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
+      `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
+      `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
+      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
+      `    /* RAISE EXCEPTION on drift -- TODO */ NULL;\n  END IF;\n` +
+      `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);\n` +
+      `  GET DIAGNOSTICS n = ROW_COUNT;\n  IF n <> array_length(v_ids, 1) THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\nEND $$;\n`,
+  },
+
+  // ── round 14: the count assertion must compare a MEASURED count ──────────
+  {
+    name: 'the count assertion compares the approved set to itself',
+    expect: 'violation',
+    mustReport: 'does not compare a measured row count',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\n` +
+      goodSetBlock({ count: false }).replace(
+        /END \$\$;$/,
+        `  GET DIAGNOSTICS n = ROW_COUNT;\n` +
+          `  IF cardinality(v_ids) <> cardinality(v_ids) THEN\n` +
+          `    RAISE EXCEPTION 'APPROVED_SET_COUNT';\n  END IF;\nEND $$;`,
+      ) +
+      `\n`,
+  },
+  {
+    name: 'the count is asserted before GET DIAGNOSTICS ever measures it',
+    expect: 'violation',
+    mustReport: 'does not compare a measured row count',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\n` +
+      goodSetBlock({ count: false }).replace(
+        /END \$\$;$/,
+        `  IF n <> array_length(v_ids, 1) THEN\n` +
+          `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\n` +
+          `  GET DIAGNOSTICS n = ROW_COUNT;\nEND $$;`,
+      ) +
+      `\n`,
+  },
+  {
+    // The two cases above are both caught twice over: once because neither
+    // operand is a measured count, and again because nothing was measured
+    // before the test. This one is caught ONLY by the operand check — it does
+    // name the real ROW_COUNT variable, and it does name it after the
+    // measurement, but it slips a fudge factor in so the test can never fire.
+    // Without it, breaking the operand check alone leaves every case green.
+    name: 'the count is compared against a doctored row count (n - 1)',
+    expect: 'violation',
+    mustReport: 'does not compare a measured row count',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\n` +
+      goodSetBlock({ count: false }).replace(
+        /END \$\$;$/,
+        `  GET DIAGNOSTICS n = ROW_COUNT;\n` +
+          `  IF cardinality(v_ids) <> n - 1 THEN\n` +
+          `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\nEND $$;`,
+      ) +
+      `\n`,
+  },
 ];
 
-// A stamp at/after the cutoff, so the guard is in force.
+// A stamp no real migration uses, so these fixtures are never mistaken for
+// history. What actually makes them in-force is that they are absent from the
+// grandfather manifest — the stamp is only there to keep the names unique.
 const IN_FORCE = 29990101;
-// A stamp before the cutoff: history, never retro-checked.
-const PRE_CUTOFF = '20260101000001_pre_cutoff.sql';
+
+/**
+ * A migration that is genuinely on the history side: its basename is in
+ * scripts/approved-set-grandfathered.txt and it violates the rule outright, so
+ * "silent" can only mean the grandfather lookup exempted it and never that the
+ * file happened to be clean. Copied byte-for-byte from the repo.
+ */
+const GRANDFATHERED = '20260228200000_season_calendar_oct_sep.sql';
+const GRANDFATHERED_BODY = readFileSync(
+  join(HERE, '..', 'supabase', 'migrations', GRANDFATHERED),
+  'utf8',
+);
+/**
+ * The same bytes under a name nobody has approved. Before round 14 the rule was
+ * scoped by the timestamp in the filename, so writing a new migration with an
+ * old-looking stamp put it on the history side and it was never scanned at all
+ * — the guard switched off by the input it was guarding (Codex High, round 14,
+ * CRX-SEC-001). Content decides now, so this must be caught.
+ */
+const BACKDATED = '20260101000001_backdated.sql';
 
 /**
  * The reported block for one file, so a case can assert WHAT the guard said and
@@ -867,6 +998,37 @@ function classify(output, fileName) {
   return 'silent';
 }
 
+/**
+ * Editing a grandfathered migration puts it back in force. This needs its own
+ * validator run because the fixture has to reuse the real basename, which the
+ * verbatim-copy case already occupies. Two files, so it costs seconds.
+ *
+ * @returns {string[]} failure descriptions, empty when the guard behaved
+ */
+function runEditedGrandfather() {
+  const dir = mkdtempSync(join(tmpdir(), 'crx-approved-set-edited-'));
+  const migrations = join(dir, 'supabase', 'migrations');
+  mkdirSync(migrations, { recursive: true });
+  writeFileSync(
+    join(migrations, GRANDFATHERED),
+    `${GRANDFATHERED_BODY}\n-- a later edit, however small\n`,
+    'utf8',
+  );
+  const res = spawnSync('bash', [SCRIPT, '--max-violations=999'], {
+    cwd: dir,
+    encoding: 'utf8',
+    env: { ...process.env },
+  });
+  const out = `${res.stdout || ''}\n${res.stderr || ''}`;
+  rmSync(dir, { recursive: true, force: true });
+
+  const got = classify(out, GRANDFATHERED);
+  if (got === 'violation') return [];
+  return [
+    `  an edited grandfathered migration is back in force\n    expected violation, got ${got}`,
+  ];
+}
+
 function run() {
   const dir = mkdtempSync(join(tmpdir(), 'crx-approved-set-'));
   const migrations = join(dir, 'supabase', 'migrations');
@@ -878,9 +1040,11 @@ function run() {
     writeFileSync(join(migrations, name), c.sql, 'utf8');
     names.push(name);
   });
-  // The same rewrite, stamped before the cutoff, must stay silent: applied
+  // A real grandfathered migration, byte-for-byte, must stay silent: applied
   // history cannot be edited, so retro-checking it would only produce noise.
-  writeFileSync(join(migrations, PRE_CUTOFF), `UPDATE public.orders SET total_profit = 0;\n`, 'utf8');
+  // The same bytes under an unapproved (old-looking) name must be caught.
+  writeFileSync(join(migrations, GRANDFATHERED), GRANDFATHERED_BODY, 'utf8');
+  writeFileSync(join(migrations, BACKDATED), GRANDFATHERED_BODY, 'utf8');
 
   const res = spawnSync('bash', [SCRIPT, '--max-violations=999'], {
     cwd: dir,
@@ -903,12 +1067,27 @@ function run() {
       }
     }
   });
-  const preGot = classify(out, PRE_CUTOFF);
-  if (preGot !== 'silent') {
-    failures.push(`  pre-cutoff migration is history\n    expected silent, got ${preGot}`);
+  // Not "silent": this file also trips an unrelated column-alias WARNING, and
+  // asserting on that would make the case fail whenever some other check
+  // changes. What is under test is the approved-set rule, so what has to be
+  // absent is the VIOLATION — which the identical bytes under an unapproved
+  // name (below) do produce.
+  const gfGot = classify(out, GRANDFATHERED);
+  if (gfGot === 'violation') {
+    failures.push(
+      `  a migration in the grandfather manifest is history\n    expected no violation, got ${gfGot}`,
+    );
+  }
+  const backGot = classify(out, BACKDATED);
+  if (backGot !== 'violation') {
+    failures.push(
+      `  the same bytes under an unapproved name are in force\n` +
+        `    expected violation, got ${backGot}`,
+    );
   }
 
   rmSync(dir, { recursive: true, force: true });
+  failures.push(...runEditedGrandfather());
 
   if (failures.length > 0) {
     console.error(`❌ approved-set guard: ${failures.length} case(s) behaved wrong\n`);
@@ -917,7 +1096,7 @@ function run() {
     console.error(out);
     process.exit(1);
   }
-  console.log(`✅ approved-set guard: ${CASES.length + 1} mutation cases behaved correctly`);
+  console.log(`✅ approved-set guard: ${CASES.length + 3} mutation cases behaved correctly`);
 }
 
 run();

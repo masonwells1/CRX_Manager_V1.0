@@ -123,6 +123,67 @@ are now fixtures in the suite, each confirmed red against the previous shape.
 Raised by CodeRabbit on PR #359 and deferred there only because a new commit
 would have discarded that PR's banked Vercel status while the daily build
 quota was exhausted.
+## 2026-08-11 — History is content, a line is not a scope, and a decoy is not an abort (PR #364, Codex round 14)
+
+Three ways the approved-set rule could be satisfied by something that was not there.
+
+**The guard could be switched off by the input it was guarding.** Which
+migrations counted as history was decided by the timestamp in the filename:
+stamped before the cutoff, exempt; stamped after it, in force. The stamp is part
+of the filename, and the filename is chosen by whoever writes the migration — so
+a brand-new file named with an older stamp landed on the history side and was
+never scanned at all. History is now decided by content, from a frozen manifest
+of every migration that existed when the rule landed (basename plus sha256, with
+carriage returns stripped so a Windows and a Linux checkout agree). A file is
+skipped only if its name is listed *and* its bytes still hash to the recorded
+value; a new file under any name is in force, and so is any edit to a listed
+one. The manifest is frozen, not maintained — appending to it exempts that
+migration and is a reviewed act, not routine upkeep. An unreadable manifest
+fails the run closed rather than guessing in either direction.
+
+**A whole physical line was treated as a scope.** On seeing `CREATE FUNCTION`
+the body scanner skipped the rest of the line, so a top-level rewrite sharing
+that line with the definition disappeared with it — in both directions, before
+the definition and after it. Each line is now consumed as a stream: text outside
+any body accumulates, body text is dropped, however often the two alternate on
+one line.
+
+**Prose could stand in for the abort, and the row count for itself.** The
+mismatch-branch check matched the raw line, so `RAISE NOTICE '…RAISE
+EXCEPTION…'` — and the same words inside a block comment — read as a real abort
+while the mismatch branch fell through to the write. String literals and block
+comments are now removed before anything is matched, with the state carried
+across lines so a multi-line literal cannot smuggle text through either. And the
+row-count assertion only required that a `GET DIAGNOSTICS … ROW_COUNT` existed
+somewhere in the file, never that the value it captured was the value being
+tested, so comparing the approved set to itself passed with perfect canonical
+shape and asserted nothing. The other side of the mismatch must now be a
+variable an *earlier* `GET DIAGNOSTICS` actually assigned — not a doctored one
+either, so subtracting a fudge factor from the measured count no longer passes.
+
+**One exemption was added deliberately.** Switching from a filename cutoff to a
+content manifest means a migration that is already applied to the live database
+but still sits on an open branch counts as a *new* file the moment it merges.
+One such migration exists — stamp 20260810235207, which reconciles pending
+commission snapshots — and it rewrites those rows without an approved-set
+binding. Its write has already happened in production and an applied migration
+must not be edited, so it is listed in the manifest, pinned to the exact bytes on
+its branch. Amend it before it merges and the hash stops matching and the rule
+goes back in force, which is the right outcome. Without this row it would have
+red-built `main` for everyone on merge. Verified by scanning all 868 migrations
+in the tree: 61 violations, unchanged from the CI baseline, so nothing else
+regressed.
+
+Separately, four migrations are applied to the live database with no file on any
+branch or in any checkout (stamps 20260810000427, 20260810152935, 20260810154721
+and 20260810155629). Nothing scans them because nothing has them; recorded here
+as drift to reconcile, not as a blocker.
+
+Proven by mutation, not by inspection: the approved-set validator suite is at
+**83 cases**. Each new guard was reverted in turn and the matching cases went
+red and only those — including the two that turned out to be covered twice over,
+which needed a case built specifically to isolate each one.
+
 ## 2026-08-11 — The write predicate, the row-count assertion and the mismatch branch are now read literally (PR #364, Codex round 13)
 
 Three shapes that wore the right words in the wrong arrangement.
