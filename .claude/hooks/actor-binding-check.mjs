@@ -48,7 +48,8 @@
 //     deeper verification is the sweeps' job; this hook only stops the
 //     no-guard-at-all case, which is the one that actually shipped.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import path from "node:path";
 
 function out(decision, reason) {
   const payload = decision === "block"
@@ -240,6 +241,8 @@ const ASSIGN_RE =
 const DECLARATION_INIT_RE =
   /(?:^|\bDECLARE\b)\s*(?:"[^"]+"|[A-Za-z_]\w*)\s+(?:CONSTANT\s+)?(?:"[^"]+"|[\w.]+(?:%(?:TYPE|ROWTYPE))?)(?:\s+(?:WITH(?:OUT)?\s+TIME\s+ZONE|DOUBLE\s+PRECISION|CHARACTER\s+VARYING|BIT\s+VARYING))?(?:\s*\([^;]*?\))?(?:\s*\[\s*\])?(?:\s+COLLATE\s+(?:"[^"]+"|[\w.]+))?(?:\s+NOT\s+NULL)?\s*(?::=|=(?!=)|DEFAULT\b)/i;
 let pgCronJobViewAliases = new Set();
+let pgCronJobViewHistoryChecked = false;
+let pgCronJobViewHistoryUnavailable = false;
 function isDynamicSqlStatement(stmt, rawStmt = stmt) {
   return /\bEXECUTE\b/i.test(stmt) ||
     ASSIGN_RE.test(stmt) ||
@@ -357,9 +360,16 @@ function isPgCronJobName(identifier) {
   return normalized === "job" || normalized === "cron.job";
 }
 
+function aliasSetHas(aliases, normalized) {
+  return aliases.has(normalized) || aliases.has(normalized.split(".").at(-1));
+}
+
 function isPgCronJobViewAliasName(identifier) {
   const normalized = normalizedQualifiedIdentifier(identifier);
-  return normalized !== null && pgCronJobViewAliases.has(normalized);
+  if (normalized === null) return false;
+  if (aliasSetHas(pgCronJobViewAliases, normalized)) return true;
+  ensureHistoricalPgCronJobViewAliases();
+  return pgCronJobViewHistoryUnavailable || aliasSetHas(pgCronJobViewAliases, normalized);
 }
 
 function isPgCronJobWriteTarget(identifier) {
@@ -370,11 +380,11 @@ function isPgCronJobWriteTarget(identifier) {
  * later views layered over an earlier alias. PostgreSQL simple views are
  * updatable, so a write to such an alias changes cron.job.command even though
  * the lexical target no longer says cron.job. */
-function declaredPgCronJobViewAliases(sql) {
+function declaredPgCronJobViewAliases(sql, seedAliases = new Set(), includeTemporaryViews = true) {
   const structural = maskSqlForCallNames(String(sql || ""));
-  if (structural === null) return new Set();
+  if (structural === null) return new Set(seedAliases);
   const viewHead = new RegExp(
-    `\\bCREATE\\s+(?:OR\\s+REPLACE\\s+)?(?:TEMP(?:ORARY)?\\s+)?` +
+    `\\bCREATE\\s+(?:OR\\s+REPLACE\\s+)?(?:(TEMP(?:ORARY)?)\\s+)?` +
     `(?:RECURSIVE\\s+)?VIEW\\s+(${SQL_QUALIFIED_IDENTIFIER_PATTERN})`,
     "i"
   );
@@ -382,39 +392,96 @@ function declaredPgCronJobViewAliases(sql) {
     `\\b(?:FROM|JOIN|TABLE)\\s+(?:ONLY\\s+)?(${SQL_QUALIFIED_IDENTIFIER_PATTERN})`,
     "gi"
   );
+  const renameHead = new RegExp(
+    `\\bALTER\\s+(?:VIEW|TABLE)\\s+(?:IF\\s+EXISTS\\s+)?(?:ONLY\\s+)?` +
+    `(${SQL_QUALIFIED_IDENTIFIER_PATTERN})\\s+RENAME\\s+TO\\s+(${SQL_IDENTIFIER_PATTERN})`,
+    "i"
+  );
   const declarations = [];
+  const renames = [];
   for (const statement of structural.split(";")) {
     const head = viewHead.exec(statement);
-    if (!head) continue;
-    const alias = normalizedQualifiedIdentifier(head[1]);
-    if (alias === null) continue;
-    const sources = [];
-    relationSource.lastIndex = 0;
-    let source;
-    while ((source = relationSource.exec(statement)) !== null) {
-      const normalized = normalizedQualifiedIdentifier(source[1]);
-      if (normalized !== null) sources.push(normalized);
+    if (head && (includeTemporaryViews || !head[1])) {
+      const alias = normalizedQualifiedIdentifier(head[2]);
+      if (alias !== null) {
+        const sources = [];
+        relationSource.lastIndex = 0;
+        let source;
+        while ((source = relationSource.exec(statement)) !== null) {
+          const normalized = normalizedQualifiedIdentifier(source[1]);
+          if (normalized !== null) sources.push(normalized);
+        }
+        declarations.push({ alias, sources });
+      }
     }
-    declarations.push({ alias, sources });
+    const rename = renameHead.exec(statement);
+    if (rename) {
+      const from = normalizedQualifiedIdentifier(rename[1]);
+      const toBase = normalizedIdentifier(rename[2]);
+      if (from !== null && toBase !== null) {
+        const schemaPrefix = from.includes(".") ? from.slice(0, from.lastIndexOf(".") + 1) : "";
+        renames.push({ from, to: schemaPrefix + toBase });
+      }
+    }
   }
 
-  const aliases = new Set();
+  const aliases = new Set(seedAliases);
   let changed = true;
   while (changed) {
     changed = false;
     for (const declaration of declarations) {
-      if (aliases.has(declaration.alias)) continue;
+      if (aliasSetHas(aliases, declaration.alias)) continue;
       const reachesCronJob = declaration.sources.some((source) =>
-        source === "job" || source === "cron.job" || aliases.has(source) ||
-        aliases.has(source.split(".").at(-1))
+        source === "job" || source === "cron.job" || aliasSetHas(aliases, source)
       );
       if (!reachesCronJob) continue;
       aliases.add(declaration.alias);
       aliases.add(declaration.alias.split(".").at(-1));
       changed = true;
     }
+    for (const rename of renames) {
+      if (!aliasSetHas(aliases, rename.from) || aliasSetHas(aliases, rename.to)) continue;
+      aliases.add(rename.to);
+      aliases.add(rename.to.split(".").at(-1));
+      changed = true;
+    }
   }
   return aliases;
+}
+
+/** Persistent views survive the migration session, so a later migration can
+ * update cron.job through an alias that is absent from its own SQL text. Read
+ * earlier migration files in lexical order and retain every persistent alias
+ * ever observed to reach cron.job. The monotonic set intentionally keeps
+ * dropped/replaced names: a conservative false positive can use the explicit
+ * review marker, while forgetting a live alias would reopen delayed SQL. */
+function historicalPgCronJobViewAliases(targetPath) {
+  const absoluteTarget = path.resolve(targetPath);
+  const migrationDir = path.dirname(absoluteTarget);
+  const currentName = path.basename(absoluteTarget);
+  const priorNames = readdirSync(migrationDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".sql") && entry.name < currentName)
+    .map((entry) => entry.name)
+    .sort();
+  let aliases = new Set();
+  for (const priorName of priorNames) {
+    const priorSql = readFileSync(path.join(migrationDir, priorName), "utf8");
+    aliases = declaredPgCronJobViewAliases(priorSql, aliases, false);
+  }
+  return aliases;
+}
+
+function ensureHistoricalPgCronJobViewAliases() {
+  if (pgCronJobViewHistoryChecked) return;
+  pgCronJobViewHistoryChecked = true;
+  try {
+    const historicalAliases = historicalPgCronJobViewAliases(filePath);
+    pgCronJobViewAliases = declaredPgCronJobViewAliases(content, historicalAliases, true);
+  } catch {
+    // If the migration history cannot be read, an otherwise unknown command
+    // target must be treated as a possible persistent cron.job view alias.
+    pgCronJobViewHistoryUnavailable = true;
+  }
 }
 
 /** Return the current pg_cron call sites while preserving the source argument

@@ -529,6 +529,119 @@ SET command = $job$${UNBOUND_DDL}$job$
 WHERE jobid = 42;`);
 ok(isDeny(r), "a search-path-resolved qualified view keeps the cron.job sink identity");
 
+const crossMigrationRoot = mkdtempSync(path.join(os.tmpdir(), "actor-binding-cron-view-"));
+const crossMigrationDir = path.join(crossMigrationRoot, "supabase", "migrations");
+mkdirSync(crossMigrationDir, { recursive: true });
+writeFileSync(
+  path.join(crossMigrationDir, "20260807000001_create_cron_job_facade.sql"),
+  "CREATE VIEW persistent_cron_job_facade AS SELECT * FROM cron.job;\n"
+);
+const crossMigrationTarget = path.join(
+  crossMigrationDir,
+  "20260807000002_update_cron_job_facade.sql"
+);
+r = runHook(`UPDATE public.persistent_cron_job_facade
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`, crossMigrationTarget);
+ok(isDeny(r), "a persistent cron.job view from an earlier migration remains an unsafe command sink");
+
+r = runHook(`${STAGED_DDL}
+UPDATE public.persistent_cron_job_facade
+SET command = (SELECT command FROM staged_cron_sql LIMIT 1)
+WHERE jobid = 42;`, crossMigrationTarget);
+ok(isDeny(r), "an earlier persistent cron.job view cannot receive staged actor DDL");
+
+r = runHook(`UPDATE public.persistent_cron_job_facade
+SET command = $job$SELECT public.existing_safe_job()$job$
+WHERE jobid = 42;`, crossMigrationTarget);
+ok(!isDeny(r), "an earlier persistent cron.job view keeps a direct harmless command allowed");
+
+writeFileSync(
+  path.join(crossMigrationDir, "20260807000002_rename_cron_job_facade.sql"),
+  "ALTER VIEW persistent_cron_job_facade RENAME TO renamed_cron_job_facade;\n"
+);
+const renamedCrossMigrationTarget = path.join(
+  crossMigrationDir,
+  "20260807000003_update_renamed_cron_job_facade.sql"
+);
+r = runHook(`UPDATE public.renamed_cron_job_facade
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`, renamedCrossMigrationTarget);
+ok(isDeny(r), "renaming a persistent cron.job view in an earlier migration cannot erase its sink identity");
+
+writeFileSync(
+  path.join(crossMigrationDir, "20260807000004_create_temp_cron_job_facade.sql"),
+  "CREATE TEMP VIEW prior_temp_cron_job_facade AS SELECT * FROM cron.job;\n"
+);
+const priorTempCrossMigrationTarget = path.join(
+  crossMigrationDir,
+  "20260807000005_update_prior_temp_cron_job_facade.sql"
+);
+r = runHook(`UPDATE public.prior_temp_cron_job_facade
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`, priorTempCrossMigrationTarget);
+ok(!isDeny(r), "a temporary cron.job view from an earlier migration does not persist as a sink alias");
+
+const missingHistoryTarget = path.join(
+  crossMigrationRoot,
+  "missing",
+  "supabase",
+  "migrations",
+  "20260807000006_missing_history.sql"
+);
+r = runHook(`UPDATE public.unknown_cron_job_facade
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`, missingHistoryTarget);
+ok(isDeny(r), "unreadable migration history fails closed for an unknown command target");
+rmSync(crossMigrationRoot, { recursive: true, force: true });
+
+const schemaLifecycleRoot = mkdtempSync(path.join(os.tmpdir(), "actor-binding-cron-schema-"));
+const schemaLifecycleDir = path.join(schemaLifecycleRoot, "supabase", "migrations");
+mkdirSync(schemaLifecycleDir, { recursive: true });
+writeFileSync(
+  path.join(schemaLifecycleDir, "20260807000101_create_schema_cron_job_facade.sql"),
+  "CREATE VIEW public.schema_cron_job_facade AS SELECT * FROM cron.job;\n"
+);
+writeFileSync(
+  path.join(schemaLifecycleDir, "20260807000102_move_schema_cron_job_facade.sql"),
+  "ALTER VIEW public.schema_cron_job_facade SET SCHEMA archive;\n"
+);
+const schemaLifecycleTarget = path.join(
+  schemaLifecycleDir,
+  "20260807000103_update_schema_cron_job_facade.sql"
+);
+r = runHook(`UPDATE archive.schema_cron_job_facade
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`, schemaLifecycleTarget);
+ok(isDeny(r), "moving a persistent cron.job view to another schema cannot erase its sink identity");
+rmSync(schemaLifecycleRoot, { recursive: true, force: true });
+
+const dropLifecycleRoot = mkdtempSync(path.join(os.tmpdir(), "actor-binding-cron-drop-"));
+const dropLifecycleDir = path.join(dropLifecycleRoot, "supabase", "migrations");
+mkdirSync(dropLifecycleDir, { recursive: true });
+writeFileSync(
+  path.join(dropLifecycleDir, "20260807000201_create_drop_cron_job_facade.sql"),
+  "CREATE VIEW public.reused_job_facade AS SELECT * FROM cron.job;\n"
+);
+writeFileSync(
+  path.join(dropLifecycleDir, "20260807000202_reuse_drop_cron_job_facade.sql"),
+  "DROP VIEW public.reused_job_facade;\n" +
+    "CREATE VIEW public.reused_job_facade AS SELECT * FROM public.job;\n"
+);
+const dropLifecycleTarget = path.join(
+  dropLifecycleDir,
+  "20260807000203_update_reused_job_facade.sql"
+);
+r = runHook(`UPDATE public.reused_job_facade
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`, dropLifecycleTarget);
+ok(isDeny(r), "a dropped and reused cron.job alias stays conservatively review-only");
+r = runHook(`UPDATE public.reused_job_facade
+SET command = $job$SELECT public.existing_safe_job()$job$
+WHERE jobid = 42;`, dropLifecycleTarget);
+ok(!isDeny(r), "a dropped and reused alias still permits a direct harmless command");
+rmSync(dropLifecycleRoot, { recursive: true, force: true });
+
 r = runHook(`${STAGED_DDL}
 UPDATE cron.job
 SET command = (SELECT command FROM staged_cron_sql LIMIT 1)

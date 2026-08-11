@@ -170,8 +170,19 @@ the existing direct/opaque command inspection to their UPDATEs. A direct
 harmless command remains allowed, staged commands remain fail-closed, and views
 over explicitly non-cron relations remain ordinary data.
 
-The focused actor-binding suite grew from 115 to 226 assertions while the
-idempotency reference suite remained at 86. Sixty-five continuation decisions were
+The next exact-head review found that this tracking stopped at the current
+migration, even though persistent PostgreSQL views remain updatable by later
+migrations. The hook now loads earlier migration files on demand, carries a
+monotonic set of persistent `cron.job` view aliases across them, and preserves
+that sink identity through unqualified-to-qualified references, view/table
+renames, schema movement, and conservative drop/name reuse. Temporary views do
+not leak into later files. If migration history cannot be read, an unknown
+command target is treated as a possible cron alias instead of being allowed.
+Multi-file real-process regressions deny direct and staged unsafe commands
+through an earlier view while allowing direct harmless commands.
+
+The focused actor-binding suite grew from 115 to 235 assertions while the
+idempotency reference suite remained at 86. Seventy continuation decisions were
 weakened or removed one at a time; every mutation made the real hook-process
 suite fail before restoration. Separate real-process probes allowed ordinary
 trigger/event-trigger declarations, direct-literal `USING`/`INTO`, and harmless
