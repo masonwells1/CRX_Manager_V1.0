@@ -633,6 +633,23 @@ r = runHook(`${STAGED_DDL}
 SELECT cron.alter_job(42, command := (SELECT command FROM staged_cron_sql LIMIT 1));`);
 ok(isDeny(r), "cron.alter_job cannot receive a staged command expression");
 
+r = runHook(`${STAGED_DDL}
+SELECT cron.alter_job(
+  42,
+  '* * * * *',
+  (SELECT command FROM staged_cron_sql LIMIT 1),
+  active => true
+);`);
+ok(isDeny(r), "named options cannot hide a staged positional cron.alter_job command");
+
+r = runHook(`SELECT cron.alter_job(
+  42,
+  '0 6 * * *',
+  $job$SELECT public.existing_safe_job()$job$,
+  active => true
+);`);
+ok(!isDeny(r), "a harmless positional cron.alter_job command remains allowed with named options");
+
 r = runHook(`SELECT cron.alter_job(42, active := false);`);
 ok(!isDeny(r), "cron.alter_job without function DDL remains allowed");
 

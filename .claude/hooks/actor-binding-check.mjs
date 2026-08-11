@@ -400,7 +400,7 @@ function hasOpaquePgCronCallCommand(rawStmt) {
 
     const hasNamedArgs = args.some((arg) => /(?:=>|:=)/.test(maskSqlForCallNames(arg) || ""));
     if (site.api === "alter_job") {
-      if (hasNamedArgs || args.length < 3) continue; // command was not changed
+      if (args.length < 3) continue; // command was not changed
       if (!isDirectSqlStringLiteral(args[2])) return true;
       continue;
     }
