@@ -61,7 +61,10 @@ Flag any:
 - `didDrawPage` / `didDrawCell` that calls anything that might throw without try/catch. Severity = **MED**.
 
 ### CHECK 5 — Currency and number formatting
-CRX Manager money is stored as `bigint` cents. Format money via the shared helpers in `src/lib/money.ts` — `formatCents(cents)` for `*_cents` values (divides by 100), `formatUSD(dollars)` for already-dollar values. Never inline `cents/100` math. Flag inline division as the defect. PDFs should:
+New CRX Manager money storage uses `bigint` cents; documented legacy PostgreSQL numeric-dollar
+columns are an exact-decimal compatibility exception. Format money via the shared helpers in
+`src/lib/money.ts` — `formatCents(cents)` for `*_cents` values (divides by 100), `formatUSD(dollars)`
+for already-dollar display values. Never inline `cents/100` math. Flag inline division as the defect. PDFs should:
 - Use `formatCents` / `formatUSD` rather than inline arithmetic
 - Use a two-decimal display and a `$` prefix consistently
 - Use thousands separators

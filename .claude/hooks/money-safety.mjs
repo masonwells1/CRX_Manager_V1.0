@@ -48,8 +48,9 @@ if (reParseFloatCents.test(content)) {
 if (violations.length > 0) {
   out("block",
     "MONEY SAFETY: " + violations.join(" | ") +
-    " Money in CRX Manager is stored as bigint cents (e.g. 2550 for $25.50). " +
-    "Use parseDollarsToCents() from src/lib/parseCents.");
+    " New money storage in CRX Manager uses bigint cents (e.g. 2550 for $25.50); " +
+    "documented legacy PostgreSQL numeric-dollar columns remain exact-decimal exceptions. " +
+    "Use parseDollarsToCents() from src/lib/parseCents for authoritative TypeScript input.");
 }
 
 out("allow");

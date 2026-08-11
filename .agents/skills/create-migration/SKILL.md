@@ -65,7 +65,9 @@ date -u +"%Y%m%d%H%M%S"
        the lookup scoped to `operation`, not the key alone.
      - Mutating RPCs validate the actor against `auth.uid()` and check role/active-profile; never
        trust a caller-supplied `p_performed_by` without an `ACTOR_MISMATCH` gate.
-     - Money is `bigint` cents — never float.
+     - New money storage is `bigint` cents — never float. A documented existing PostgreSQL
+       numeric-dollar column may remain only with exact `numeric` math and a finite whole-cent
+       constraint once clean; do not retype or widen its values without owner approval.
 
    If the change involves an RPC of any complexity, use `/new-rpc` instead: it carries the full
    RPC contract and this skill's template is deliberately minimal.

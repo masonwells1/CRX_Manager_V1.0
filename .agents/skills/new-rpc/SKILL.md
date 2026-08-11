@@ -170,7 +170,9 @@ That combination is exactly what `rls-security-reviewer` looks for.
 - idempotency_keys columns: `idempotency_key`, `operation`, `result` — NEVER `key`, `entity_type`, `entity_id`
 - `result` column is `jsonb` — NEVER cast to `::text`
 - Deliberate grants on EVERY function: `REVOKE ALL ... FROM PUBLIC, anon;` + `GRANT EXECUTE ... TO authenticated;` — REVOKE FROM PUBLIC alone does NOT de-anon
-- Money values: use `bigint` for cents, NEVER `numeric` or `float` for money storage
+- Money values: new storage uses `bigint` cents, never `numeric` dollars or `float`. A documented
+  existing PostgreSQL numeric-dollar column may remain only with exact `numeric` math and a finite
+  whole-cent constraint once clean; do not retype or widen its values in an RPC change.
 
 ## Step 4: Update TypeScript Types
 

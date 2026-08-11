@@ -33,7 +33,11 @@ For each violation capture: file, line number, severity, and a one-line fix. **C
 - Any `parseFloat(...)` on a variable or property whose name ends in `_cents` / contains `cents`.
 - Money math (`+ - * /`) on `*_cents` values that routes through a float (e.g. `Number(x) * 1.0`, `* 100` without integer rounding).
 - New money stored/typed as `number` meant to be dollars where the rest of the table uses `bigint` cents.
-- **Correct:** money is `bigint` cents; display divides by 100 via `formatCents()` from `src/lib/money.ts`. Money INPUT must parse via `parseDollarsToCents` (positive) / `parseDollarsToCentsSigned` (the 3 vendor-bill callsites only) from `src/lib/parseCents.ts`.
+- **Correct:** new money storage uses `bigint` cents. Documented legacy PostgreSQL numeric-dollar
+  columns may remain only with exact `numeric` math and a finite whole-cent constraint once clean.
+  Display cents via `formatCents()` from `src/lib/money.ts`; use `formatUSD()` only for an
+  already-dollar display value. Money INPUT must parse via `parseDollarsToCents` (positive) /
+  `parseDollarsToCentsSigned` (the 3 vendor-bill callsites only) from `src/lib/parseCents.ts`.
 
 ### CHECK 2 — Mutation result not checked  — HIGH
 - Any `supabase.from(...).update(...)` or `.delete(...)` whose result is not passed to `checkMutationResult(result, '<context>')` (imported from `../lib/db`).

@@ -14,7 +14,9 @@ required reviewer, workflow, architecture, operations, and audit-template guidan
 blanket bigint-only rule. The pre-existing `parseCents.ts` excess-precision truncation is recorded
 as open debt below rather than silently changing input behavior in this policy-only PR. The separate
 pricing implementation owns the money paths it changes; this PR changes no schema, data, or
-production behavior.
+production behavior. Latest-head review also aligned the compliance/PDF reviewers, migration and RPC
+scaffolds, money hook message, inventory checklist, and required gotchas reference so none can
+override the documented legacy-column exception.
 
 ## 2026-08-10 — Own-worktree containment compares paths case-insensitively on Windows
 
