@@ -106,7 +106,7 @@ All variables must start with `VITE_` to be accessible in the app. See `.env.exa
 
 ## Database
 
-Production currently has 156 public base tables (+2 views), 440 callable function overloads across 432 names, and 128 trigger-function overloads. The repository contains 863 migration files, including local candidates that may not yet be live. Seven JWT-protected Edge Functions are active in production.
+Production currently has 156 public base tables (+2 views), 440 callable function overloads across 432 names, and 129 trigger-function overloads. The repository contains 869 migration files, including local candidates that may not yet be live. Seven JWT-protected Edge Functions are active in production.
 
 See [CLAUDE.md](./CLAUDE.md) for the complete table list, RLS policy matrix, and RPC function inventory.
 
@@ -128,7 +128,7 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for full deployment instructions, environme
 
 - **80 pages**, fully lazy-loaded across **88 routes**
 - **323 unit-test files** + **94 E2E spec files** (pass totals come from the current test run)
-- **156 live database tables** (+2 views), 440 callable function overloads, 863 migration files on disk
+- **156 live database tables** (+2 views), 440 callable function overloads, 869 migration files on disk
 - **0 ESLint errors**, 0 TypeScript errors
 - **Pre-commit hook** blocks commits if build or tests fail
 - **Deployed to Vercel** at [croprxsolutions.app](https://croprxsolutions.app) (live)
@@ -141,4 +141,4 @@ Private - All rights reserved
 ---
 
 **Version:** 1.0
-**Last Updated:** 2026-06-15
+**Last Updated:** 2026-08-11
