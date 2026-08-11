@@ -5,7 +5,7 @@
 // Run: node .claude/hooks/session-staleness.test.mjs
 
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -15,12 +15,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0;
 function ok(c, m) { assert.ok(c, m); pass++; }
 function eq(a, b, m) { assert.equal(a, b, m); pass++; }
+const isolatedGitEnv = Object.fromEntries(
+  Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
+);
 
 function runHook(projectDir) {
   return spawnSync(process.execPath, [path.join(__dirname, "session-staleness.mjs")], {
     input: "",
     encoding: "utf8",
-    env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir },
+    env: { ...isolatedGitEnv, CLAUDE_PROJECT_DIR: projectDir },
   });
 }
 
@@ -113,6 +116,103 @@ try {
   ok(ctxG.includes("session-staleness"), "FIX2: warning names the hook");
   ok(ctxG.includes("unreadable/unparseable"), "FIX2: warning text matches the SKIPPED-check pattern");
   ok(ctxG.includes("/regen-schema-registry") || ctxG.includes("regen-schema-registry"), "FIX2: warning points at the fix");
+
+  // ── FIX 3: linked worktrees see the canonical checkout's gitignored backup
+  // marker instead of falsely claiming that no backup exists. ──────────────
+  const backupRepo = path.join(tmpRoot, "backup-repo");
+  scaffold(backupRepo, {
+    _meta: { migrations_high_water: "20260101000000", applied_migration_names: [] },
+  }, {});
+  execFileSync("git", ["init", "-b", "main", backupRepo], { env: isolatedGitEnv, stdio: "ignore" });
+  execFileSync("git", ["-C", backupRepo, "config", "user.email", "session-staleness@example.com"], { env: isolatedGitEnv });
+  execFileSync("git", ["-C", backupRepo, "config", "user.name", "Session Staleness Test"], { env: isolatedGitEnv });
+  execFileSync("git", ["-C", backupRepo, "add", ".claude", "supabase"], { env: isolatedGitEnv });
+  execFileSync("git", ["-C", backupRepo, "commit", "-m", "fixture"], { env: isolatedGitEnv, stdio: "ignore" });
+  mkdirSync(path.join(backupRepo, "backups"), { recursive: true });
+  writeFileSync(path.join(backupRepo, "backups", "LATEST-OK.json"), JSON.stringify({
+    completed_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+    tables: 1,
+    total_rows: 1,
+  }));
+  const linkedWorktree = path.join(tmpRoot, "backup-linked");
+  execFileSync("git", ["-C", backupRepo, "worktree", "add", "--detach", linkedWorktree], { env: isolatedGitEnv, stdio: "ignore" });
+  r = runHook(linkedWorktree);
+  eq(r.status, 0, "FIX3: linked-worktree backup check exits 0");
+  const linkedBackupContext = additionalContextOf(r);
+  ok(linkedBackupContext.includes("Last DB backup is 8 days old"), "FIX3: linked worktree reads canonical marker and computes backup age");
+  ok(!linkedBackupContext.includes("No database backup exists yet"), "FIX3: canonical backup marker prevents false missing-backup warning");
+
+  // NEWEST-WINS (2026-08-10, replaces canonical-always-wins). /backup-db stamps
+  // backups/LATEST-OK.json relative to the checkout it ran in, so a backup taken
+  // from a worktree lives only in that worktree. Preferring the canonical marker
+  // unconditionally made that real, recent backup invisible and warned "stale" at
+  // every later session — which trains Mason to ignore the one warning that says
+  // his only copy of production data died. Both halves are asserted below: the
+  // fresher marker wins wherever it lives, and the protection the old rule
+  // existed for (a stale local marker masking shared truth) still holds.
+  mkdirSync(path.join(linkedWorktree, "backups"), { recursive: true });
+  writeFileSync(path.join(linkedWorktree, "backups", "LATEST-OK.json"), JSON.stringify({
+    completed_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+    tables: 99,
+    total_rows: 99,
+  }));
+  r = runHook(linkedWorktree);
+  eq(r.status, 0, "FIX3: linked-worktree backup check with a local marker exits 0");
+  const freshLocalContext = additionalContextOf(r);
+  ok(!freshLocalContext.includes("Last DB backup is 8 days old"), "FIX3: a fresher worktree-local backup is not masked by the older canonical marker");
+  ok(!freshLocalContext.includes("💾"), "FIX3: a 2-day-old backup taken from a worktree raises no backup warning at all");
+
+  // Inverse: a STALE worktree-local marker must not mask a fresh canonical one.
+  writeFileSync(path.join(linkedWorktree, "backups", "LATEST-OK.json"), JSON.stringify({
+    completed_at: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString(),
+    tables: 1,
+    total_rows: 1,
+  }));
+  writeFileSync(path.join(backupRepo, "backups", "LATEST-OK.json"), JSON.stringify({
+    completed_at: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(),
+    tables: 1,
+    total_rows: 1,
+  }));
+  r = runHook(linkedWorktree);
+  const staleLocalContext = additionalContextOf(r);
+  ok(!staleLocalContext.includes("💾"), "FIX3: a stale worktree-local marker cannot fake a stale backup when the canonical one is fresh");
+
+  // ── FIX 3 (layout): an unsupported repository layout is REJECTED, never guessed
+  // at. Under `--separate-git-dir` the Git directory sits outside the checkout, so
+  // `path.dirname(<git-common-dir>)` lands on whatever happens to be the Git
+  // directory's parent — here the shared temp root, standing in for a folder that
+  // could easily hold some other project's backups/LATEST-OK.json. Reading that
+  // would report a backup of a completely different database as this project's.
+  // The decoy below is planted at exactly that wrong path and must go unread. ────
+  mkdirSync(path.join(tmpRoot, "backups"), { recursive: true });
+  writeFileSync(path.join(tmpRoot, "backups", "LATEST-OK.json"), JSON.stringify({
+    completed_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+    tables: 1,
+    total_rows: 1,
+  }));
+  const sepGitDir = path.join(tmpRoot, "sep-gitdir");
+  const sepMain = path.join(tmpRoot, "sep-main");
+  scaffold(sepMain, {
+    _meta: { migrations_high_water: "20260101000000", applied_migration_names: [] },
+  }, {});
+  execFileSync("git", ["init", "-b", "main", `--separate-git-dir=${sepGitDir}`, sepMain], { env: isolatedGitEnv, stdio: "ignore" });
+  execFileSync("git", ["-C", sepMain, "config", "user.email", "session-staleness@example.com"], { env: isolatedGitEnv });
+  execFileSync("git", ["-C", sepMain, "config", "user.name", "Session Staleness Test"], { env: isolatedGitEnv });
+  execFileSync("git", ["-C", sepMain, "add", ".claude", "supabase"], { env: isolatedGitEnv });
+  execFileSync("git", ["-C", sepMain, "commit", "-m", "fixture"], { env: isolatedGitEnv, stdio: "ignore" });
+  mkdirSync(path.join(sepMain, "backups"), { recursive: true });
+  writeFileSync(path.join(sepMain, "backups", "LATEST-OK.json"), JSON.stringify({
+    completed_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+    tables: 1,
+    total_rows: 1,
+  }));
+  const sepLinked = path.join(tmpRoot, "sep-linked");
+  execFileSync("git", ["-C", sepMain, "worktree", "add", "--detach", sepLinked], { env: isolatedGitEnv, stdio: "ignore" });
+  r = runHook(sepLinked);
+  eq(r.status, 0, "FIX3: separate-git-dir linked worktree exits 0");
+  const sepContext = additionalContextOf(r);
+  ok(!sepContext.includes("Last DB backup is 8 days old"), "FIX3: an unsupported layout never reports a backup marker found beside the Git directory");
+  ok(sepContext.includes("No database backup exists yet"), "FIX3: an unsupported layout says no backup rather than claiming an unrelated one");
 
   console.log(`session-staleness: ${pass} assertions passed`);
 } finally {

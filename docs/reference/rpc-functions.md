@@ -1,13 +1,15 @@
-# RPC Functions Reference (356 callable overloads across 348 names + 89 trigger functions — live DB as of 2026-07-17)
+# RPC Functions Reference (440 callable overloads across 432 names + 128 trigger functions — live DB as of 2026-08-09)
 
-> Function inventory verified live against Supabase project `rhyzpcqhnizqbxphqdkr` (`pg_proc` joined to `pg_namespace` where `nspname='public'`, split by `prorettype = 'trigger'::regtype`): **356 callable overloads across 348 distinct names**, **89 trigger function overloads/names**, **437 total public function names**. This supersedes the earlier 2026-06-29 branch-HEAD snapshot (270 + 56), which was measured against a local throwaway DB before the field-app parity migrations and subsequent sprints shipped live.
+> Function inventory verified live against Supabase project `rhyzpcqhnizqbxphqdkr` (`pg_proc` joined to `pg_namespace` where `nspname='public'`, split by trigger return type): **440 callable overloads across 432 distinct names**, **128 trigger function overloads/names**, **560 total public function names**.
 >
 > **2026-07-13 note:** the section-by-section inventory below (Atomic Save/Delete, Order & Delivery, Invoice & Payments, …) is a **curated snapshot last verified 2026-06-29** and has not been re-audited function-by-function against the live count above — treat the live DB (or `.claude/schema-registry.json` for structural facts) as authoritative if a specific function's existence, signature, or behavior is load-bearing. The detailed sections below document the notable functions, not an exhaustive per-function enumeration.
-
+>
 > **Prior baselines:** 2026-06-23 live: 228 callable RPCs + 51 trigger functions. 2026-06-29 branch HEAD (local, pre-live-merge): 270 callable RPCs + 56 trigger functions.
-
+>
+> **2026-08-09 update (retires the earlier candidate warning):** those function and trigger changes **are live**. The candidates `20260808150100` / `20260808150200` / `20260808150400` were re-issued forward and applied on 2026-08-09 as `20260809170500` / `20260809170600` / `20260809170800` (ledger versions `20260809203222`, `20260809204044`, `20260809204855`), together with `20260809170700` and `20260809170900`. Production now carries the restored `batch_apply_prepayments` actor guard, the cancel-order `quantity_remaining` zeroing, and the whole-cent rounding trigger function `public._round_money_to_whole_cents`. Per-migration proof: `docs/reference/migration-history.md` rows 857–861.
+>
 > **IMPORTANT:** As of migration 20260331600000, all mutating RPCs have exactly ONE overload with `p_idempotency_key text DEFAULT NULL`. Never create function overloads — see SAFE_DEVELOPMENT_RULES.md.
-
+>
 > **Audit (2026-03-16):** Round 3 idempotency fix applied via migration 20260332700000. All public functions verified to use correct `idempotency_keys` columns (`idempotency_key`, `operation`, `result`). Pre-commit hook now blocks wrong patterns.
 
 ---
@@ -281,6 +283,7 @@ Migrations `20260714220000` through `20260714224000` preserve existing public si
 - `get_yesterday_delivery_recap()` — SECURITY DEFINER, role-aware. Returns `{ completed: [...], issues: [...], summary: { total_completed, total_with_issues, total_cancelled } }`. Same role filtering as above.
 - `get_notes_for_entity(p_entity_type text, p_entity_id uuid)` — SECURITY DEFINER. Returns all non-deleted team_notes linked to a specific entity, ordered by is_pinned DESC, created_at DESC.
 - `get_team_workload()` — SECURITY DEFINER. Returns jsonb array of team members with `id`, `full_name`, `role`, `open_tasks`, `overdue_tasks`, `today_deliveries`, `week_deliveries`. Aggregates from team_notes and deliveries tables.
+- `complete_team_note(p_note_id uuid, p_completed boolean, p_idempotency_key text DEFAULT NULL)` — SECURITY DEFINER, search_path = public, pg_temp. Completes or reopens a team note; authorization is creator OR current assignee OR active admin (this is the delegation fix — `tnotes_update` RLS stays creator-or-admin, so assignees complete via this RPC only). Idempotency enforced via `check_idempotency`/`save_idempotency` with an actor-bound md5 fingerprint — a different user replaying the same key fails closed (`COMPLETE_REPLAY_PAYLOAD_MISMATCH`). Error tokens: `NOTE_ID_REQUIRED`, `COMPLETED_FLAG_REQUIRED`, `AUTH_REQUIRED`, `PROFILE_INACTIVE`, `NOTE_NOT_FOUND`, `NOT_AUTHORIZED_TO_COMPLETE`. Called by TeamBoard.tsx `toggleComplete`. Companion trigger `notify_team_note_assignment` (same migration, `20260809130108`) inserts a `task_assigned` notification when a note is created with an assignee or reassigned (self-assignment silent). Live EXECUTE includes `authenticated` and `service_role`; service-role calls still need a propagated user JWT to satisfy `auth.uid()`, or a separately reviewed trusted-service path.
 
 ## Inventory Forecasting
 - `get_inventory_forecast(p_months_ahead integer DEFAULT 6)` → Returns jsonb array of planned demand vs supply by product and month. SECURITY DEFINER, search_path = public, pg_temp

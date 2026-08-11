@@ -1327,7 +1327,11 @@ describe('RPC contract: bulk_import_order', () => {
     expect(body).toContain('round(v_qty * v_price_per_unit, 2) - round(v_qty * v_cost_per_unit, 2)');
     expect(body).toContain('jsonb_to_recordset(v_normalized_items)');
     expect(body).toContain("'warnings', to_jsonb(v_warnings)");
-  });
+    // 60s (vs. the 5s default): the migration corpus is read once at module load,
+    // but this test still scans it, and the whole suite runs 150 files in parallel
+    // against one disk. Generous headroom keeps machine load from failing a test
+    // whose assertions are pure string matching.
+  }, 60_000);
 });
 
 describe('RPC contract: save_blend_recipe', () => {
@@ -1726,24 +1730,30 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
 };
 
 /**
- * Migration files (name + content), read from disk ONCE and memoized.
+ * Migration files (name + content), read from disk ONCE at module load.
  *
- * Why the cache: `latestFunctionBody` is called once per covered RPC, and each
- * call used to re-`readdirSync` + re-`readFileSync` its way back through the
- * ~500+ migration files. That O(RPCs × files) synchronous disk I/O finishes in
- * ~2s when this file runs alone (warm cache, no contention) but blew the 5s
+ * Why read them once: `latestFunctionBody` is called once per covered RPC, and
+ * each call used to re-`readdirSync` + re-`readFileSync` its way back through
+ * the 800+ migration files. That O(RPCs × files) synchronous disk I/O finishes
+ * in ~2s when this file runs alone (warm cache, no contention) but blew the 5s
  * test timeout under the full parallel suite (150 files contending for CPU/disk)
  * — a perf flake, not a logic failure. Reading each file once makes the disk
  * work O(files) total; the per-RPC scan is then pure in-memory regex.
+ *
+ * Why EAGER (module scope) rather than lazy-memoized: with a lazy cache the
+ * whole directory read was billed to whichever test happened to touch it first,
+ * so that one test carried ~900ms warm and >13s under heavy machine load —
+ * enough to blow even a generous per-test timeout while every later test ran
+ * free. Doing it at import time keeps the cost outside any test's timeout
+ * budget and makes it independent of test ordering and `-t` filtering.
  */
-let _migrationFilesCache: { name: string; content: string }[] | null = null;
+const MIGRATION_FILES: { name: string; content: string }[] = readdirSync(MIGRATIONS_DIR)
+  .filter((f) => f.endsWith('.sql'))
+  .sort() // timestamp-prefixed → ascending chronological
+  .map((name) => ({ name, content: readFileSync(join(MIGRATIONS_DIR, name), 'utf8') }));
+
 function getMigrationFiles(): { name: string; content: string }[] {
-  if (_migrationFilesCache) return _migrationFilesCache;
-  _migrationFilesCache = readdirSync(MIGRATIONS_DIR)
-    .filter((f) => f.endsWith('.sql'))
-    .sort() // timestamp-prefixed → ascending chronological
-    .map((name) => ({ name, content: readFileSync(join(MIGRATIONS_DIR, name), 'utf8') }));
-  return _migrationFilesCache;
+  return MIGRATION_FILES;
 }
 
 // The cache above made the scan O(files), but the FIRST caller still paid the
@@ -2167,9 +2177,12 @@ function registryMigrationHighWater(): string {
 // Keep this set aligned with rows explicitly marked PENDING APPLY in
 // docs/reference/migration-history.md.
 //
-// Empty as of 2026-08-09: history rows 857-861 (the 2026-08-08 foundation ultra
-// review migrations, re-issued forward as 20260809170500-170900) applied live on
-// 2026-08-09 and their rows now read APPLIED LIVE, so nothing is pending.
+// Empty as of 2026-08-10, from two independent lines of work that both landed:
+// history rows 857-861 (the 2026-08-08 foundation ultra review migrations,
+// re-issued forward as 20260809170500-170900) applied live on 2026-08-09 and now
+// read APPLIED LIVE; and both Team Board delegation migrations applied live
+// 2026-08-09 under server-assigned ledger versions 20260809130108 and
+// 20260810010308. Nothing in this checkout is pending.
 const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([]);
 
 /**
@@ -2247,6 +2260,15 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
  * Every exemption needs a concrete mechanism/reason. This is intentionally
  * separate from the missing-key backlog: an ordinary business mutator belongs
  * in MUTATING_RPCS_MISSING_IDEMPOTENCY and must eventually be fixed.
+ *
+ * Trigger-only functions that never reach the generated types enter the
+ * inventory only while their migration is newer than the registry high-water,
+ * so their entries here are pre-apply-window entries and the
+ * "exemptions are current" test below requires pruning them once the migration
+ * is applied and the high-water moves past it. `notify_team_note_assignment`
+ * (20260810010308) and `trg_recalc_order_totals` (20260809230500) were pruned
+ * on 2026-08-10 for exactly that reason — both are live; neither is exempt from
+ * anything, they are simply no longer discovered.
  */
 const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   _close_undelivered_order_remainder_20260718:
@@ -2292,8 +2314,6 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   save_idempotency: 'idempotency infrastructure helper that stores the parent operation result',
   set_primary_customer_contact: 'convergent primary-contact promotion; replays settle to the same single-primary state; SECURITY INVOKER under customer RLS',
   settle_applied_record_acres: 'trigger-only derived-acre recomputation; direct client EXECUTE is revoked',
-  trg_recalc_order_totals:
-    'RETURNS trigger, so PostgreSQL refuses any direct call and it can only run from its order_items trigger inside the parent transaction; convergent recomputation of the order header from the current lines, so a replay settles on the same totals',
 };
 
 

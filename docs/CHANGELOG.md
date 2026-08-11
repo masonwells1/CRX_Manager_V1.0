@@ -2,6 +2,216 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-11 — Preserve the applied line-profit backfill without replaying it by default
+
+Added the exact source for live migration `20260810025159_backfill_stale_line_profit.sql`,
+closing the repository-to-ledger gap for the already-applied 37-line profit repair. Because
+that migration rewrote a production-specific business-row population, the post-baseline
+rebuild selector now reads a small one-shot registry and withholds the repair from default
+replay while reporting the omission on stderr. An explicit `--include-one-shot` escape hatch
+remains available only after the target population has been independently proven to match
+the population originally approved. After a restore proves it already contains the corrected
+values, `--one-shot-repair-plan` emits the reviewed ledger-repair commands needed to prevent a
+later unfiltered push from rediscovering the skipped rewrite. Focused tests prove the default
+quarantine, visible warning, registry/file correspondence, deliberate override, and durable
+ledger closeout path.
+
+## 2026-08-10 — Graphify-first agent navigation policy
+
+Made Graphify the explicit first-pass navigator for architecture, multi-file, workflow/migration,
+difficult-debugging, structural-audit, and PR-impact work. `AGENTS.md` now defines the shared routing,
+authority, and evidence boundaries; `CLAUDE.md` explicitly routes Claude through that policy. The shared
+Graphify skill carries the tool procedure: check graph freshness, query the smallest useful subgraph,
+use the generated report/visual index, minimize source reads, and preserve useful or corrected outcomes
+with `save-result`/`reflect`. Focused source and live read-only evidence remain mandatory for safe edits
+and material proof; Graphify is navigation, not authority. When Graphify is unavailable or its wrapper
+reports a supported skip, agents continue with focused source inspection and disclose the limitation.
+
+## 2026-08-10 — Agent toolchain refresh; removed the dead Codex Sentry connector
+
+Verified the Codex side of the harness end-to-end from a Claude Code desktop session and brought the local agent toolchain current. All three Codex model tiers were confirmed live by running each one (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`); `codex-review`, `codex-gauntlet` and `codex-build.mjs` pin model and reasoning effort explicitly and correctly. Codex CLI (0.147.0) and Claude Code (2.1.226) were already at the newest published versions; six other global CLIs were updated (npm 11→12, vercel 55→58, google-workspace-mcp 2→4, filesystem MCP server, sentry, @sentry/cli), after which a live `codex exec` run confirmed the major npm jump broke nothing.
+
+- **Removed `[mcp_servers.sentry]` from `.codex/config.toml`.** Its OAuth grant had been revoked server-side (`invalid_grant: Grant not found`), so every Codex run logged two refresh errors before doing any work. Sentry is not configured for Codex and nothing depends on it — the only `sentry` string in the Codex workflows is `src/lib/sentry`, an application source path, not this connector. Removed so a future OAuth error in a Codex run means something instead of being noise operators learn to scroll past. Verified after removal: `codex mcp list` shows Supabase only, and a live run returned the correct most-recent migration with zero *Sentry* OAuth errors. The retained Supabase entry still fails its own OAuth refresh on every run with the same `invalid_grant` — a separate, pre-existing defect this change neither fixed nor introduced, recorded in the new KNOWN_ISSUES entry below.
+- **`[mcp_servers.supabase]` deliberately kept**, including `read_only=true`. It is asserted by both `check-agent-workflows.mjs` and `check-agent-guidance.mjs`. An attempt to remove it as a second dead entry was reverted when that guard failed — see the new KNOWN_ISSUES entry, which records what that guard does and does not actually prove.
+- **`agent-pair-review.md` names no model or effort.** It reaches `gpt-5.6-sol` at high effort only by routing through `codex-review`; nothing enforces it. Filed as follow-up, not fixed here.
+
+## 2026-08-10 — Own-worktree containment compares paths case-insensitively on Windows
+
+Closed a narrower instance of the push block the 2026-08-09 own-worktree
+exemption was written to remove. That exemption keys its registry by a path
+string: `registeredWorktreeDirectories()` stored the repo-relative path using
+the casing `git worktree list --porcelain` printed, and `worktreeEntryKind()`
+built its lookup key from the casing the ignored-directory listing reported.
+Every other containment comparison in the checker routes through
+`containmentPathKey()`, which lowercases on win32 precisely so a containment
+decision cannot hinge on the casing Git happened to print — that Set
+round-trip was the one place that did not.
+
+On Windows the two casings can disagree, and when they did the membership
+lookup missed and a legitimate linked worktree of this same repository was
+classified as an embedded repository, failing the pre-push containment gate.
+It failed closed, so it over-blocked a push and never risked leaking a private
+artifact — a regression risk, not a security hole. Both the stored key and the
+lookup key now go through `containmentPathKey()`, preserving the existing
+`path.relative` and forward-slash conversion.
+
+New fixtures drive the disagreement from both sides against a real registered
+worktree: the registry casing skewed away from disk, and the ignored-listing
+casing skewed away from the registry. Each asserts the harness actually
+rewrote a path, so neither can pass vacuously. The first also asserts the
+correct fail-closed result on case-sensitive filesystems, where the two
+casings genuinely name two different directories; the second is Windows-only,
+because elsewhere the skewed path names a directory that does not exist.
+Reverting either half of the fix turned the suite red before restore.
+
+Codex's review of that fix raised two findings on PR #366, both real and both
+addressed in the same PR. First, folding case decides which registry key a
+candidate matches, and matching a key was the *only* thing granting the
+exemption. A Windows directory with per-directory case sensitivity enabled can
+hold `session` and `SESSION` at once — two different directories that fold to
+one key — so a foreign repository parked at the colliding name would have
+inherited a linked worktree's exemption and had its contents skipped instead of
+failing closed. `worktreeEntryKind()` now re-verifies the `.git` pointer file on
+the candidate directory itself before exempting it, which is the same two-signal
+rule the registry side already applied and does not depend on case semantics at
+all. A new fixture enables per-directory case sensitivity, builds both
+directories for real, and asserts the foreign one is still rejected; it skips
+where the filesystem cannot hold two case-distinct names. Removing the
+re-verification turned it red before restore.
+
+Second, every CI runner in this repository is `ubuntu-latest`, where
+`containmentPathKey()` is the identity function — so the Windows-only branches
+never executed and both production edits could have been reverted with CI still
+green. A `Phase 3C Containment (Windows)` job now runs this suite on
+`windows-latest`. The suite imports only Node builtins and sibling scripts, so
+that leg needs Git and Node but no `npm ci`.
+
+Standing that job up surfaced a pre-existing incompatibility between this suite
+and the hosted Windows runner, which points `TEMP` at an 8.3 short path
+(`C:\Users\RUNNER~1\...`). The suite builds its fixture repositories under
+`os.tmpdir()`, and Node's `realpathSync` keeps the short form while Git expands
+it, so a fixture root passed its own canonical check and then never equalled
+`git rev-parse --show-toplevel` — every canonical-root assertion failed. That
+was reproduced locally against a deliberately short-named directory before
+being fixed; the job now runs with `TMP`/`TEMP` set to `runner.temp`, a plain
+long path. The guard itself is unchanged: the fix corrects the test
+environment, not the check. The suite also pins the number of CI checkout steps
+so each new one gets a least-privilege review, and this job's checkout drops the
+GitHub token like the other four.
+
+Running on Windows for the first time then exposed a second dormant case. One
+assertion checks that a forbidden `private-artifacts` name fails closed before
+any reparse point is dereferenced, and it built that link as a junction aimed at
+a file. A junction is a directory-only reparse point, so aimed at a file it is a
+broken link Git cannot open (`could not open directory ... Not a directory`),
+the entry never reaches the name rule, and the assertion fails. It had gone
+unnoticed because it sat behind a Windows *file* symlink whose creation needs a
+privilege an ordinary account lacks — the resulting `EPERM` skipped the block on
+every Windows machine except an elevated CI runner. The junction case now stands
+in its own block and aims at a directory, so it executes on an ordinary Windows
+account too; it was confirmed red against the old shape and green against the new
+one on a non-elevated machine. The guard is again unchanged, and was verified
+directly: a junction pointing at a real directory of packets — the shape that
+could actually carry private data — was already rejected.
+
+Review of that fix then found a real hole in the exemption itself, and this one
+could hide private data rather than merely block a push. A linked worktree of
+this repository is recognised by a `.git` pointer file naming a directory inside
+this repository's worktree bookkeeping. That pointer was trusted on its face, so
+a *copy* of a genuine worktree's pointer file was equally convincing. Windows
+compares names case-insensitively by default, but a directory can opt in to
+per-directory case sensitivity, and one that has can hold `session` and
+`SESSION` as two different directories that the containment check folds to a
+single key. A foreign directory parked at the colliding name could copy the
+pointer next door and inherit the exemption — its private contents skipped. That was reproduced end to end before anything
+changed: a private packet passed the gate. The exemption now reads the backlink
+Git keeps in that bookkeeping directory and requires it to name the very
+directory being exempted. The comparison is made on filesystem identity rather
+than path text, because Node's `realpathSync` returns whatever casing it was
+handed on Windows while case-sensitive directories make two spellings genuinely
+two places; and it compares the backlink's parent *directory*, so hard-linking
+the pointer file — which would preserve the file's identity — fails too, NTFS
+having no way to hard-link a directory. Both attacks and both legitimate cases
+are now fixtures in the suite, each confirmed red against the previous shape.
+
+Raised by CodeRabbit on PR #359 and deferred there only because a new commit
+would have discarded that PR's banked Vercel status while the daily build
+quota was exhausted.
+
+## 2026-08-10 — Review fixes on the harness guards (PR #369)
+
+Six findings from the Codex and CodeRabbit reviews of PR #369, all in the pre-commit harness. Five are
+code fixes, each mutation-proved (break the fix, watch the new assertion go red):
+
+1. **A registry row the diff never mentions no longer reads as "nothing pending."** Every check in
+   `parkedDraftPathsFrom` ran inside the loop over changed paths, so a branch that registers pending SQL
+   in `migration-history.md` but never touches that SQL in the diff got a confident zero over a registry
+   the code had not read. The registry is now reconciled against the diff outside the loop; an
+   unaccounted row answers UNKNOWN, which sends the caller to a full scan.
+2. **An unreadable migration history over an empty diff is UNKNOWN too** — same loop, same blind spot.
+3. **Migration enumeration is index-scoped, not a directory listing.** The guard describes the commit
+   being created, so it must not see untracked or unstaged `.sql` files. Proved by planting an untracked
+   migration and confirming only a directory listing finds it.
+4. **The backup-staleness check no longer guesses at the main checkout.** It derived the checkout from
+   `dirname(<git-common-dir>)`, which under `--separate-git-dir` or in a bare repo lands on an unrelated
+   folder that could hold some other project's `backups/LATEST-OK.json`. It now asks Git, and rejects
+   layouts it cannot resolve rather than reporting a different database's backup as this one's.
+5. **Canonical blobs come from the index only** — no HEAD fallback (which would validate history the
+   commit deletes) and no working-tree fallback (which would certify bytes the commit omits).
+6. **Doc fix:** `docs/audits/2026-08-08-foundation-ultra-review.md` still read as if its five follow-up
+   migrations were unapplied and its §2 fixes were future work. All of it is live since 2026-08-09, and a
+   reader following the old text could have replayed or restamped shipped work. The stale passages are
+   now labelled SUPERSEDED with the live status verified by direct introspection. The one genuinely open
+   item — the historical fractional-cent repair, whose statement is commented out on purpose — is called
+   out as Mason's decision and was **not** run.
+
+Hook suites: `worktree-awareness-lib` 185 assertions, `session-staleness` 23 assertions, both green.
+
+## 2026-08-10 — Harness guards now validate the commit being created (PR #357)
+
+Resolved the review findings on the abandoned harness-permissions branch. The headline defect: the
+migration cross-reference guard hashed the **staged** SQL blob but parsed the **unstaged**
+`migration-history.md`, so a commit whose staged history carried an all-zero sha256 pin passed all 176
+assertions while the correct pin sat unstaged on disk — the guard blessed a commit it had never
+actually inspected. Both artifacts now come from one index-first reader. Mutation-proved in a
+throwaway setup: staged-wrong/disk-right is RED, staged-right/disk-wrong is GREEN, history restored
+byte-identical.
+
+Two further guard fixes, each proved against the pre-fix code rather than asserted:
+
+- **Backup-freshness false alarm.** `session-staleness.mjs` always preferred the canonical checkout's
+  `backups/LATEST-OK.json`, but `/backup-db` stamps that marker in whichever checkout it ran from. A
+  backup taken inside a worktree was therefore invisible, and every later session warned that the only
+  copy of production data was missing or stale — training the reader to ignore the one warning that
+  matters. Now newest-wins, which keeps the original protection (a stale worktree marker still loses
+  to a newer canonical one) without the false alarm. Before/after in a throwaway repo: canonical-old
+  plus worktree-fresh warned "2414 days old" before and is silent after; both-old still warns;
+  neither-present still warns. This deliberately **reverses a previously-asserted rule** — the FIX 3
+  case in `session-staleness.test.mjs` asserted "shared canonical marker wins over a conflicting
+  worktree-local marker". That assertion is replaced, not deleted: the suite now pins both halves of
+  newest-wins (a fresher worktree marker is not masked, and a stale worktree marker cannot fake a
+  stale backup when the canonical one is fresh). Mutation-proved — restoring canonical-always-wins
+  turns the suite RED.
+- **Dangling candidate registry.** `parkedDraftPathsFrom()` skipped a vanished path before consulting
+  history, so a LOCAL CANDIDATE pin naming SQL that is not on disk produced a confident zero with no
+  `unknownReason`. It now reports UNKNOWN for exactly that case; a retired `SUPERSEDED-` draft, which
+  is not in the registry, stays silent as before. The pre-commit cross-reference guard already caught
+  this at commit time, so nothing dangling could reach `main` — the gap was that `/fleet` and
+  SessionStart under-reported until someone tried to commit.
+
+One reported finding is **not actioned because it does not reproduce**: exercised against this head, a
+headerless branch candidate registered only by a matching sha256 pin *is* surfaced, and a mismatched
+pin sets `unknownReason`.
+
+Also retired two stale documentation claims. `docs/audits/2026-08-08-foundation-ultra-review.md` and
+`docs/reference/rpc-functions.md` still said the foundation-ultra-review migrations were unapplied
+candidates and instructed agents to restamp them. They are **applied live** — re-issued forward as
+`20260809170500`–`20260809170900`, ledger versions `20260809203222`, `20260809204044`, `20260809204435`,
+`20260809204855`, `20260809205423`, with per-migration proof in `migration-history.md` rows 857–861.
+The one deliberate exception is unchanged: the historical money repair inside `20260809170800` stays
+commented out, so the 49 pre-existing fractional-cent rows are untouched and restating them remains
+Mason's decision.
+
 ## 2026-08-10 — Bound commission-payout idempotency to the actor and the intent (NOT applied live)
 
 The three commission payout RPCs — `create_commission_payment`, `post_commission_payment` and `void_commission_payment` — stored their retry receipts keyed on the operation and the key text alone. Nothing in the stored receipt recorded *who* was asking or *which* payment they had asked about — the key text the browser generated happened to contain a user id, but the server never read it, stored it or checked it against the caller — so a retry aimed at a different payment could be answered out of an earlier payment's cached success: the UI reports "posted", and the row the admin was actually looking at was never touched. Migration `20260810170000_bind_commission_payout_idempotency_to_intent.sql` binds every receipt to the acting user id and to a SHA-256 fingerprint of the request arguments, and fails closed — raising rather than replaying — whenever a reused key arrives carrying a different actor or a different fingerprint. Each RPC is split into a private implementation function with the binding check living in a thin public wrapper, so the check cannot be skipped by calling the inner function directly. The accounting body is moved, not retyped, so the money arithmetic cannot drift; the wrapper does normalize the free-text metadata it forwards — payment method, reference, notes and void reason are trimmed, and blank becomes NULL — so that the fingerprint and the row the payment stores can never disagree about what was asked for. This migration is written and reviewed but **has NOT been applied to production**; it is parked pending Mason's explicit approval.
@@ -263,6 +473,54 @@ that fix (rebased onto the new `main`) plus the two Codex findings raised agains
 
 Coverage: apply-guard 79 assertions, ordering-lib 18, `agent-manifest-parity` clean.
 
+## 2026-08-09 — Team Board delegated completion shipped (database live, frontend in PR #351)
+
+Assigning a to-do to a teammate on the Team Board was effectively broken: the checkbox
+wrote straight to the table, and the creator-or-admin row policy silently rejected the
+assignee, so their click did nothing. Delegation is now governed by an RPC and the
+notification path is hardened.
+
+**Live database changes (owner-approved, applied this session).**
+
+- `20260809130108_team_note_completion_rpc_and_assignment_notify` — adds
+  `complete_team_note(note_id, completed, idempotency_key)` as a SECURITY DEFINER function
+  with a pinned `search_path`, taking the actor from `auth.uid()` so it cannot be forged.
+  Authorization (creator, current assignee, or active admin) runs *before* the idempotency
+  replay, and the function reports the row's actual state so a no-op cannot rewrite
+  `completed_by`. Also adds the assignment trigger that files one `task_assigned`
+  notification, staying silent on self-assignment and unchanged assignees. Revoked from
+  PUBLIC and anon; granted to authenticated only.
+- `20260810010308_active_team_note_assignment_actor` (authored as `20260809154649`) —
+  closes the gap review found afterwards: a deactivated profile whose token had not yet
+  expired could satisfy the legacy creator-only insert policy and make the owner-run
+  trigger notify an active teammate. Now the insert policy requires an active profile and
+  the trigger independently rejects an inactive effective actor. `tnotes_update` is
+  deliberately unchanged.
+
+Both migrations cleared the `rls-security-reviewer` and `migration-drift-reviewer` charters
+with CLEAN machine verdicts on the exact file content before apply, and both disk files were
+renamed content-identically to their server-assigned ledger versions.
+
+**Proven against live, by rollback-only probes rather than tests alone.** An active
+non-admin assignee completed a note they did not create, with `completed_by` stamped from
+`auth.uid()` and exactly one notification filed; an unrelated employee was refused with
+`NOT_AUTHORIZED_TO_COMPLETE`; a real deactivated profile was refused at the row-policy layer;
+and with that layer deliberately bypassed, the trigger's own guard raised `PROFILE_INACTIVE`.
+The normal assignment and completion path was re-checked afterwards and was unaffected.
+
+**Frontend (pushed to PR #351, not yet merged — users do not have it).** Team Board calls the
+RPC instead of writing the table, guards against double-submit, and maps six new error codes
+to specific messages. The checkbox is disabled with an explanatory tooltip for viewers who
+are not the creator, assignee, or an admin. Notification deep-links now route team notes to
+the board, and the deep-link fetch no longer waits on a populated list before resolving.
+
+**Not done.** The registered chain `scripts/smoke/smoke-complete-team-note-chain.sql` still
+needs its external `SMOKE_PASS_ROLLBACK` terminal; it is a manual `npm run smoke` spec, not
+CI. `.claude/schema-registry.json` was stale at `20260809130108` when this entry was first
+written; the merge into `main` on 2026-08-10 moved its high-water to `20260810010308` and
+added the two migrations below to its applied list. None of these changes alter a table,
+column, constraint, or enum, so no schema-shape section of that file moved.
+
 ## 2026-08-09 — Line-profit precision repair (live), dependency updates, and a public-repo disclosure guard
 
 Orchestration session. No application code was authored here. Two durable outcomes: one
@@ -323,8 +581,17 @@ publishing live order identifiers and exact per-order financial figures into a p
 repository. That was a real disclosure risk and the entry was rewritten. Treat
 `docs/CHANGELOG.md` as public: describe what changed and why, not the production values.
 
+**Test change (the one executable change authored here).** `src/lib/productPricingWorkbook.test.ts`
+and `src/lib/supplierPricingWorkbook.test.ts` each received an explicit 20s per-test timeout. Both
+tests generate a real `.xlsx` and re-parse it; standalone they finish in ~1.3s, but under full-suite
+parallel load they repeatedly crossed vitest's 5s default and failed the pre-commit gate. 20s matches
+the existing per-test idiom already used by `moneyInventoryGauntletFixes.test.ts` and
+`rpcFixtureLiveDiff.test.ts`, and still leaves the timeout able to catch a genuine hang. (The
+originating commit message cited `pages-render.test.tsx` for that idiom; that file is at 10s.)
+
 - **Commits this session** (git log origin/main..HEAD):
-  - documentation only — the work landed via GitHub PR merges and one live database statement
+  - documentation plus the two test-timeout changes above; all other work landed via GitHub PR merges
+    and one live database statement
 - **Migrations touched** (git diff --name-only origin/main...HEAD):
   - none
 
@@ -387,6 +654,54 @@ Wave D (MED maintenance). No remediation has started.
 
 - **Landed via** PR #356.
 - **Migrations touched:** none.
+
+## 2026-08-08 — CRX harness and Codex maximum-permissions audit
+
+Verified the current CRX agent harness against `origin/main`, the synced Claude/Codex workflow
+manifests, current OpenAI Codex permission guidance, and fresh local execution. Codex is confirmed
+at `approval_policy = "never"` plus `sandbox_mode = "danger-full-access"`; a fresh nested session
+reported approval Never, unrestricted filesystem access, enabled network access, and loaded both
+global and repository hooks. Updated the npm Codex CLI from 0.145.0 to 0.147.0 and hardened the
+machine-wide command guard with regression coverage for destructive Git plumbing and variant
+spellings while preserving ordinary commands such as `node --test`.
+
+Fixed `session-staleness.mjs` so linked worktrees resolve the gitignored database-backup marker
+through Git's common directory. The current canonical marker is now correctly reported as 10 days
+old instead of nonexistent. Added a real linked-worktree regression fixture; the focused suite now
+passes 19 assertions. The full audit and protected-harness follow-ups are recorded in
+`docs/audits/2026-08-08-crx-harness-permissions-audit.md`. No production deploy, live migration,
+live-data mutation, or database backup ran in this audit.
+
+Repaired parked-migration fleet visibility without changing the four candidate SQL files: an exact
+`LOCAL CANDIDATE / NOT APPLIED` history row may now pin the full SQL sha256 as the second immutable
+fact instead of requiring a comment-only migration edit. The shared fleet/SessionStart reader fails
+closed on missing or mismatched pins, and the repository regression proves all four candidates remain
+visible after merge.
+
+Closed the final PR review gap for branch-owned candidates too: before merge, a clean or dirty
+worktree can now prove an ordinary forward migration from its own exact history pin. Windows CRLF
+working copies are normalized to the LF blob Git will commit, while a missing or mismatched pin
+marks parked state unknown instead of silently reporting a clean zero.
+
+Final exact-head review hardening makes an explicit parked SQL header unable to bypass a stale
+history pin, and makes every linked worktree prefer the shared canonical backup marker over any
+conflicting local copy. This keeps both migration and backup status fail-closed and fleet-wide.
+
+**2026-08-10 merge reconciliation:** the four audit-time candidates were subsequently re-issued
+above the live high-water and applied through the governed migration pipeline on 2026-08-09. The
+SHA-pin coverage now uses repository fixtures; it no longer describes those applied files as parked.
+The final exact-SHA adversarial review also found and drove a fail-closed correction: unreadable
+worktree migration history now marks parked state unknown, and degraded disk discovery recognizes
+a matching history SHA pin instead of requiring an SQL status header. Shared regressions cover both
+paths, and the real fleet and SessionStart consumers still report zero parked migrations.
+After three normal pre-commit attempts exposed unrelated 5–15 second test timeouts under concurrent
+CRX worktree load, local Vitest concurrency was capped at two workers (CI keeps its isolated-runner
+default). The complete suite then passed all 323 files and 4,304 active tests without relaxing any
+individual timeout or skipping any test.
+The follow-up exact-SHA review then caught a timeout-scale regression in degraded migration discovery:
+the 600+ KiB history file was reparsed for every SQL file. Fallback classification now parses history
+once per worktree and reuses the structured result; a 867-file regression proves one parse and
+completion inside the SessionStart hook's 10-second budget.
 
 ## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
 
@@ -513,6 +828,15 @@ failure did not reproduce here — it passes with 29 assertions, and `agent-mani
   - `51582137 chore: commit auto-added local permission entry`
   - `c6c45fb5 docs: record Mason's four foundation-ultra-review owner decisions`
   - `f5811338 audit: 2026-08-08 foundation ultra review + bucket-1 doc/test fixes`
+
+## 2026-08-08 — Read-only audit of the Team Board to-do/delegation feature; added…
+
+Read-only audit of the Team Board to-do/delegation feature; added docs/audits/team-board-todo-audit-2026-08-08.md (branch claude/todo-list-audit-hoxpl5, draft PR #351). Key findings: tnotes_update RLS blocks assignees from completing delegated tasks, task assignment sends no notification, note deep-links broken in TeamBoard and Notifications, escalation column unused; board dormant since 2026-03-20. No code, migration, or live-data changes.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `6bb86d18 docs: add Team Board / to-do list functionality audit (2026-08-08)`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
 
 ## 2026-08-07 — Governed Software Factory REMOVED
 

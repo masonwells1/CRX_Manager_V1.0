@@ -26,6 +26,75 @@ function emit(extra) {
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const warnings = [];
 
+function backupMarkerPath() {
+  const localPath = path.join(projectDir, "backups", "LATEST-OK.json");
+
+  // Linked worktrees share the main checkout's Git common directory, but they
+  // do not share gitignored backup files, so the marker can legitimately land in
+  // either place: `/backup-db` stamps `backups/LATEST-OK.json` relative to the
+  // checkout it ran in (scripts/backup-db.mjs), which is a worktree whenever the
+  // backup session was started from one.
+  //
+  // Pick the NEWEST marker rather than preferring one location. Preferring the
+  // canonical checkout kept a stale worktree-local marker from masking shared
+  // state, but it also meant a backup taken from a worktree was invisible — every
+  // later session then warned that a fresh backup was missing or stale, which
+  // trains Mason to ignore the one warning that says his only copy of production
+  // data died. Newest-wins keeps the original protection (a stale local marker
+  // simply loses to the newer canonical one) without inventing the false alarm.
+  //
+  // Ask Git where the main checkout is rather than deriving it from the common Git
+  // directory. `path.dirname(<git-common-dir>)` only lands on the checkout in the
+  // default `<checkout>/.git` layout: under `--separate-git-dir` or in a bare repo the
+  // Git directory lives somewhere else entirely, and dirname() then points at an
+  // unrelated folder that gets probed for — and could genuinely contain — a
+  // `backups/LATEST-OK.json` belonging to some other project (CodeRabbit on #369).
+  //
+  // `git worktree list --porcelain` lists the main worktree first and flags a bare
+  // repository outright. It is still not enough on its own: for a `--separate-git-dir`
+  // repository Git reports the *Git directory* as the main worktree, because nothing in
+  // that layout records the way back to the checkout. So the candidate is accepted only
+  // once it proves it is a checkout, by carrying a `.git` entry of its own. An
+  // unsupported layout is rejected rather than guessed at — the worktree-local marker
+  // then stands alone, which under-reports a shared backup but never invents one.
+  const candidates = [localPath];
+  try {
+    const porcelain = execFileSync(
+      "git",
+      ["worktree", "list", "--porcelain"],
+      {
+        cwd: projectDir,
+        encoding: "utf8",
+        timeout: 5000,
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
+    const firstEntry = porcelain.split(/\r?\n\r?\n/)[0] || "";
+    const mainWorktree = /^worktree (.+)$/m.exec(firstEntry)?.[1]?.trim();
+    if (mainWorktree && !/^bare$/m.test(firstEntry) && existsSync(path.join(mainWorktree, ".git"))) {
+      candidates.push(path.join(mainWorktree, "backups", "LATEST-OK.json"));
+    }
+  } catch { /* fall back to the worktree-local path */ }
+
+  let best = null;
+  let bestAt = -Infinity;
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) continue;
+    // An unreadable or undated marker still counts as "a backup exists" — it must
+    // not be silently dropped in favour of nothing — it just cannot win on date.
+    let completedAt = -Infinity;
+    try {
+      const parsed = Date.parse(JSON.parse(readFileSync(candidate, "utf8"))?.completed_at);
+      if (Number.isFinite(parsed)) completedAt = parsed;
+    } catch { /* undated marker: keep it as a last-resort candidate */ }
+    if (best === null || completedAt > bestAt) {
+      best = candidate;
+      bestAt = completedAt;
+    }
+  }
+  return best ?? localPath;
+}
+
 function migrationMayAffectSchemaRegistry(sql) {
   const withoutComments = String(sql)
     .replace(/\/\*[\s\S]*?\*\//g, " ")
@@ -175,7 +244,7 @@ try {
 
 // ─── CHECK 4 — weekly DB backup freshness (backups/LATEST-OK.json) ───────
 try {
-  const latestOkPath = path.join(projectDir, "backups", "LATEST-OK.json");
+  const latestOkPath = backupMarkerPath();
   if (!existsSync(latestOkPath)) {
     warnings.push(
       `💾 No database backup exists yet — say "back up the database" to create the first one.\n` +

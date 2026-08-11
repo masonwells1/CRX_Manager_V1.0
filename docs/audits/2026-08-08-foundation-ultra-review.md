@@ -2,6 +2,8 @@
 
 **Verdict: SOLID-WITH-FOLLOWUPS**
 
+> **Status reconciliation — 2026-08-09 (supersedes the earlier "none is applied live" note):** the five follow-up migrations are **APPLIED LIVE**. They were written 2026-08-08 as `20260808150100`–`20260808150400` plus `20260808170000`, fell below the live high-water, and were re-issued forward as `20260809170500`–`20260809170900`; Supabase assigned ledger versions `20260809203222`, `20260809204044`, `20260809204435`, `20260809204855`, `20260809205423`. See `docs/reference/migration-history.md` rows 857–861 for the per-migration apply proof. Where a finding below says it is "fixed by" one of the old `20260808*` filenames, read that as the re-issued file of the same name — the fix is in production. The one deliberate exception is the historical money repair: `20260809170800` installs the whole-cent rounding trigger going forward, but its backfill statement is **commented out on purpose**, so the 49 pre-existing fractional-cent rows are unchanged and restating them remains Mason's decision.
+
 No BLOCKER. No HIGH survived adversarial verification. The foundation is sound enough to build the next stretch of features on. The most valuable finding of this run is not a bug — it is a **process gap in how migrations reach production**, described in §2.
 
 Read-only run. Nothing was changed in the database, no migration was applied, no function deployed. The only file written is this report.
@@ -46,13 +48,15 @@ Then the ledger recorded:
 20260715134618 | 20260714185130_gate_batch_prepay_admin    <-- OLDER file, LATER version
 ```
 
-The older disk file was replayed **after** the newer one and re-created `batch_apply_prepayments` with its full pre-rename body, discarding the actor guard. Live authorization is now only:
+The older disk file was replayed **after** the newer one and re-created `batch_apply_prepayments` with its full pre-rename body, discarding the actor guard. **As observed on 2026-08-08**, live authorization was only:
 
 ```sql
 IF NOT public.is_admin() THEN
   RAISE EXCEPTION 'Admin access required' USING ERRCODE = '42501';
 END IF;
 ```
+
+> **SUPERSEDED 2026-08-09 — this is a historical observation, not current state.** The actor guard has been restored. Live `batch_apply_prepayments(jsonb, uuid, text)` now carries both the `AUTH_REQUIRED` check and the `ACTOR_MISMATCH` actor guard alongside the admin gate (re-verified by direct introspection of the live function body on 2026-08-09). Do **not** replay or restamp anything in this section.
 
 **Nothing detected this.** It surfaced only because this audit hash-compared all 566 live functions against every definition on disk.
 
@@ -65,9 +69,11 @@ END IF;
 
 **Why it still matters:** the same mechanism can revert a guard that *does* matter. A stale disk file re-applied out of order silently undid a security hardening migration and no gate caught it. The defense-in-depth invariant also becomes load-bearing the moment anyone adds attribution logging to this path.
 
-**Fix (two parts, both forward-only — never replay):**
-1. A forward migration re-creating `batch_apply_prepayments(jsonb,uuid,text)` with the `AUTH_REQUIRED` / `ACTOR_MISMATCH` / admin block, delegating to `_batch_apply_prepayments_impl`, plus `REVOKE ALL FROM PUBLIC, anon` and `GRANT EXECUTE TO authenticated, service_role`.
-2. A **preflight ordering guard**: fail when a migration whose recorded name embeds an older timestamp is applied after a newer one. This is the durable prevention, and it is worth more than the single fix above.
+**Fix (two parts, both forward-only — never replay) — BOTH LANDED 2026-08-09:**
+1. ~~A forward migration re-creating~~ **DONE.** `batch_apply_prepayments(jsonb,uuid,text)` was re-created with the `AUTH_REQUIRED` / `ACTOR_MISMATCH` / admin block, delegating to `_batch_apply_prepayments_impl`, plus `REVOKE ALL FROM PUBLIC, anon` and `GRANT EXECUTE TO authenticated, service_role`. Live and verified.
+2. ~~A **preflight ordering guard**~~ **DONE.** The guard fails when a migration whose recorded name embeds an older timestamp is applied after a newer one. This was the durable prevention, and it was worth more than the single fix above.
+
+> **SUPERSEDED 2026-08-09.** Both items above are shipped and live. They are kept here for the record of what the audit recommended — they are **not** an open work list.
 
 **Scope caveat, stated plainly:** the verifier checked only the prepay and rate-limit slices. Both slices it examined contained drift. It explicitly declined to assume the remaining ~700 ledger rows are clean. A full ledger-vs-disk ordering reconciliation is recommended and is **not** covered by this report.
 
@@ -83,7 +89,7 @@ END IF;
 
 **M4 — `cancel_order` leaves `quantity_remaining` non-zero.** One cancelled order line carries `quantity_remaining = 247`. 1 of 117 inventory rows; the other 116 tie exactly.
 
-> **CORRECTION (2026-08-08, post-report).** This finding originally also claimed the stock stays prebooked. That half is WRONG. Tracing the live chain shows `_cancel_order_impl_20260714` already releases prebooked stock and writes a `released` ledger row — ORD-2026-0330 HAS that row — and the `partially_fulfilled` path already zeroed both. Only `quantity_remaining` was stranded. The product's residual `quantity_prebooked = 36` is March 2026 historical drift (L2 below), not a cancellation defect. Fixed by migration `20260808150200`, which zeroes `quantity_remaining` and nothing else — a second release path would double-release inventory.
+> **CORRECTION (2026-08-08, post-report; live status rechecked 2026-08-09).** This finding originally also claimed the stock stays prebooked. That half is WRONG. Tracing the live chain shows `_cancel_order_impl_20260714` already releases prebooked stock and writes a `released` ledger row — ORD-2026-0330 HAS that row — and the `partially_fulfilled` path already zeroed both. Only `quantity_remaining` was stranded. The product's residual `quantity_prebooked = 36` is March 2026 historical drift (L2 below), not a cancellation defect. Migration `20260808150200` zeroes `quantity_remaining` and nothing else — it is **now applied live**, re-issued as `20260809170600`; deliberately no second release path, which would double-release inventory.
 
 **M5 — The go-live prebook check produces a false discrepancy.** `checkPrebookedInventory()` (`tests/e2e/golive/utils/reconciliation-checks.ts:355-372`) sums `order_items.quantity_remaining` with no order-status awareness; its caller (`tests/e2e/golive/stream0-db-integrity.spec.ts:237`) fetches `order_items?select=product_id,quantity_remaining&quantity_remaining=gt.0` with no join to `orders`. Confirmed live: exactly one `cancelled` order line carries 247 units. Capped at MED because the check only `console.log`s rather than failing the build — it produces a misleading go-live report, not a red build.
 
@@ -145,9 +151,9 @@ All four were answered by Mason in chat on 2026-08-08. Canonical record:
    **ANSWERED: leave as is.** Payments stay visible company-wide.
 2. **Canonical rounding point (M3).** Where should `order_items.total_price` and `commissions.commission_amount` be rounded to whole cents? A $5,245.195 commission is currently pending payout. Once decided, a live invariant predicate should assert whole cents on both.
    **ANSWERED: round to two decimals (whole cents).** The pending commission resolves to $5,245.20.
-   Needs a forward migration — not yet written.
-3. **`cancel_order` semantics (M4).** Should cancelling an order zero `quantity_remaining` on its lines and release the prebooked stock? Current behavior leaves both stranded.
-   **ANSWERED: yes, cancelling releases stock.** Current behavior is a bug. Needs a forward migration — not yet written.
+   ~~Forward migration `20260808150400` is written locally but not applied live~~ — **SUPERSEDED 2026-08-09: applied live** (re-issued as `20260809170800`; see the status note at the top). It is forward-looking and deliberately does **not** repair the historical rows: the backfill statement inside it is commented out on purpose, and restating those rows remains Mason's decision. The historical counts quoted here are the 2026-08-08 snapshot; re-measured on 2026-08-09 the live counts were **35 `order_items` rows and 0 `commissions` rows** off whole cents, because the rounding trigger this migration installs normalises any row ordinary business activity touches. Re-measure before acting on any number in this section.
+3. **`cancel_order` semantics (M4).** Should cancelling an order zero `quantity_remaining` on its lines while preserving the existing stock-release path?
+   **ANSWERED: yes.** Stock already releases; only the non-zero remaining quantity is a bug. ~~Forward migration `20260808150200` is written locally but not applied live.~~ **SUPERSEDED 2026-08-09: applied live** (re-issued as `20260809170600`). The zeroing runs inside `_cancel_order_split_provenance_impl_20260719`, which `cancel_order` delegates to — verified live on 2026-08-09.
 4. **Negative inventory (L3).** The recorded decision is "reconcile only from physical counts". Still 19 rows. Confirm it stands, or schedule the re-base.
    **ANSWERED: it stands.** No re-base scheduled; reconcile only from physical counts.
 
@@ -184,6 +190,10 @@ Naming these so the SOLID verdict cannot be read as covering them:
 
 ## 10. Suggested next step
 
-Land the two forward migrations from §2 (actor-guard restoration + the ledger ordering preflight guard) via `/ship`, one at a time, with a `/codex-cross-review` packet for the pair. The ordering guard is the higher-value of the two.
+> **SUPERSEDED 2026-08-09 — the step below is DONE. Do not re-run it.** The two forward migrations from §2 (actor-guard restoration + the ledger ordering preflight guard) are landed and live, along with the other three follow-ups. See the status note at the top of this report for the ledger versions and apply proof.
+
+~~Land the two forward migrations from §2 (actor-guard restoration + the ledger ordering preflight guard) via `/ship`, one at a time, with a `/codex-cross-review` packet for the pair. The ordering guard is the higher-value of the two.~~
+
+**The one thing still genuinely open** is the historical money repair described in §7 item 2: the pre-existing fractional-cent rows are unchanged, the repair statement inside `20260809170800` is commented out on purpose, and restating those rows is Mason's decision — not a follow-up any session should take on its own.
 
 Everything else in §3 either waits on an owner decision (§7) or is a doc/test fix.

@@ -3,8 +3,9 @@
 // Run: node .claude/hooks/worktree-awareness-lib.test.mjs
 
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +14,8 @@ import {
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName,
   lastNonEmptyLine, firstCommentLine, fleetSummaryLine,
   isParkedDraftPath, parkedDraftPathsFrom, draftPathspec, normRepoPath,
-  hasExplicitParkedMigrationHeader, isParkedFallbackFile, originMainDraftPathSet,
+  hasExplicitParkedMigrationHeader, isParkedFallbackFile, parkedFallbackFileDiscovery,
+  createParkedFallbackClassifier, originMainDraftPathSet,
   fallbackPathsAgainstOrigin, parkedMainlinePathsFrom, parkedMainlineDiscoveryFrom,
   localCandidateMigrationPathsFromHistory, validateParkedMigrationCrossReferences,
   ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, originMainParkedMigrationPrefilter,
@@ -24,6 +26,7 @@ import {
 let pass = 0;
 function ok(cond, msg) { assert.ok(cond, msg); pass++; }
 function eq(a, b, msg) { assert.deepEqual(a, b, msg); pass++; }
+function sha256Text(text) { return createHash("sha256").update(text, "utf8").digest("hex"); }
 
 const sample = [
   "worktree C:/CRX_Manager",
@@ -168,6 +171,15 @@ eq(parkedDraftPathsFrom([DISPATCH], () => false).size, 0, "a draft the branch de
 eq(parkedDraftPathsFrom([DISPATCH], (p) => p === DISPATCH).size, 1, "the existence check sees the raw path, not the lower-cased key");
 eq(parkedDraftPathsFrom([PARKED_FORWARD], () => true, () => PARKED_FORWARD_HEADER).size, 1, "an explicitly parked forward migration is retained");
 eq(parkedDraftPathsFrom([PARKED_FORWARD], () => true, () => "-- ordinary migration\nSELECT 1;").size, 0, "a forward migration without the header is excluded");
+const unreadableBranchHistory = parkedDraftPathsFrom(
+  ["supabase/migrations/20260101000000_real.sql"],
+  () => true,
+  () => "-- ordinary migration\nSELECT 1;\n",
+  null,
+  sha256Text,
+);
+eq(unreadableBranchHistory.size, 0, "unreadable history does not invent a parked candidate");
+ok(unreadableBranchHistory.unknownReason.includes("history is unreadable"), "unreadable branch history fails closed instead of returning a clean zero");
 
 // The pathspec covers the two draft folders plus explicitly marked forward migrations.
 eq(draftPathspec(), ["scripts/.staging-migrations", "docs/audits", "supabase/migrations"], "git includes only draft folders plus explicitly marked forward migrations");
@@ -272,7 +284,30 @@ const exactCandidateFailure = parkedMainlineDiscoveryFrom(
   (p) => exactCandidateBatch.get(normRepoPath(p)) ?? null,
   possibleParkedMigrationPaths,
 );
-eq(exactCandidateFailure.reason, "LOCAL CANDIDATE SQL lacks an explicit parked status header", "a batched readable candidate without its header reports the explicit status failure, not an unreadable blob");
+eq(exactCandidateFailure.reason, "LOCAL CANDIDATE SQL lacks an explicit parked status header or SQL sha256 pin", "a batched readable candidate without either marker reports the explicit status failure, not an unreadable blob");
+
+const candidateWithoutHeaderText = mainlineTexts.get(CANDIDATE_NO_HEADER);
+const pinnedCandidateHistory = mainlineHistory.replace(
+  "File: `20260730235959_candidate_without_header.sql`.",
+  `File: \`20260730235959_candidate_without_header.sql\`. SQL sha256: \`${sha256Text(candidateWithoutHeaderText)}\`.`,
+);
+const pinnedCandidate = parkedMainlineDiscoveryFrom(
+  mainlinePaths,
+  pinnedCandidateHistory,
+  (p) => mainlineTexts.get(p),
+  possibleParkedMigrationPaths,
+  sha256Text,
+);
+eq(pinnedCandidate.state, "known", "a matching SQL sha256 pin is a deterministic alternative to a comment-only migration edit");
+ok(pinnedCandidate.paths.has(CANDIDATE_NO_HEADER), "a hash-pinned headerless candidate remains visible as parked");
+const mismatchedPinnedCandidate = parkedMainlineDiscoveryFrom(
+  mainlinePaths,
+  pinnedCandidateHistory.replace(/[a-f0-9]{64}(?=`\.)/, "0".repeat(64)),
+  (p) => mainlineTexts.get(p),
+  possibleParkedMigrationPaths,
+  sha256Text,
+);
+eq(mismatchedPinnedCandidate.state, "unknown", "a stale SQL sha256 pin fails closed instead of hiding candidate drift");
 
 const mergedHistory = mainlineHistory.replace("**LOCAL CANDIDATE — NOT APPLIED.** File: `20260730235959_candidate_without_header.sql`.", "**APPLIED LIVE.** File: `20260730235959_candidate_without_header.sql`.");
 const mergedReads = [];
@@ -473,17 +508,90 @@ eq(unreadableBlob.state, "unknown", "unreadable candidate SQL blob is PARKED STA
 const proseTimestamp = localCandidateMigrationPathsFromHistory("| 842 | 20260729231031 | **LOCAL CANDIDATE — NOT APPLIED.** Apply 20260729231031_vendor_bill_period_close_lock.sql after review. |");
 eq(proseTimestamp.state, "unknown", "prose filename/timestamp is not accepted as the exact Markdown migration reference");
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const migrationDir = path.join(repoRoot, "supabase", "migrations");
-const repoMigrationPaths = readdirSync(migrationDir).filter((name) => name.endsWith(".sql")).map((name) => `supabase/migrations/${name}`);
+// Enumerate the migrations from the INDEX, not the working tree. This guard runs
+// inside pre-commit and must describe the commit being created: a directory listing
+// also returns files that are untracked or unstaged, so staging a history row that
+// pins an untracked .sql file satisfied every assertion below while the commit itself
+// shipped a registry pointing at SQL nobody else would ever receive (Codex on #369).
+// `git ls-files` lists exactly what this commit will contain — a staged deletion is
+// already gone from it, and an untracked candidate was never in it.
+const enumerateIndexedMigrations = () => execFileSync("git", ["ls-files", "--", "supabase/migrations"], {
+  cwd: repoRoot,
+  encoding: "utf8",
+  maxBuffer: 8 * 1024 * 1024,
+})
+  .split(/\r?\n/)
+  .map((line) => line.trim())
+  .filter((line) => line.toLowerCase().endsWith(".sql"));
+const repoMigrationPaths = enumerateIndexedMigrations();
+// Prove the enumeration really is index-scoped rather than a directory listing: drop an
+// untracked .sql into supabase/migrations and confirm only the directory listing sees
+// it. Removed in `finally` so a failure here never leaves a stray migration behind.
+{
+  const decoyName = "00000000000000_untracked_enumeration_probe.sql";
+  const decoyPath = path.join(repoRoot, "supabase", "migrations", decoyName);
+  try {
+    writeFileSync(decoyPath, "-- enumeration probe; never committed\nSELECT 1;\n");
+    const listedOnDisk = readdirSync(path.join(repoRoot, "supabase", "migrations")).includes(decoyName);
+    ok(listedOnDisk, "the probe file really is on disk, so the next assertion is not vacuous");
+    // Deliberately re-runs the SAME enumerator the guard uses, not a private copy of
+    // the command: a probe with its own git invocation would still pass if the real
+    // enumeration were switched back to a directory listing.
+    ok(!enumerateIndexedMigrations().some((p) => p.endsWith(decoyName)), "an untracked migration is invisible to the index-scoped enumeration this guard runs on");
+  } finally {
+    rmSync(decoyPath, { force: true });
+  }
+}
+// Read the canonical LF blob, not the working copy: `core.autocrlf=true` hands
+// Windows a CRLF file whose sha256 can never match a migration-history pin.
+//
+// The INDEX is the only source, deliberately — no HEAD fallback and no working-tree
+// fallback. The index is exactly what this commit will contain, so it already covers
+// every legitimate case: a tracked unmodified file is in it, and so is a migration
+// this very commit adds, where HEAD does not have the file yet. The only paths
+// `git show :path` cannot resolve are ones the commit will not carry — a file staged
+// for DELETION (falling back to HEAD would validate history the commit removes,
+// CodeRabbit on #369) and an untracked file (hashing unstaged bytes certifies content
+// the commit omits, Codex on the same PR). Both must fail, so both return null and the
+// caller asserts loudly.
+const readCanonicalBlob = (repoPath) => {
+  try {
+    return execFileSync("git", ["show", `:${repoPath}`], { cwd: repoRoot, encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
+  } catch {
+    return null;
+  }
+};
+// Both sides of the cross-reference must come from the SAME source, or the guard
+// compares artifacts that will never be committed together: hashing the staged
+// SQL while parsing the unstaged history file lets a staged all-zero pin pass
+// because the correct pin is still sitting unstaged on disk. Read the history
+// through the same index-first reader so pre-commit validates the commit being
+// created, not a mix of staged and working-tree bytes.
+const historyText = readCanonicalBlob("docs/reference/migration-history.md");
+ok(typeof historyText === "string", "migration history is readable from the index or HEAD, not only from the working tree");
 const currentCrossReference = validateParkedMigrationCrossReferences(
   repoMigrationPaths,
-  readFileSync(path.join(repoRoot, "docs", "reference", "migration-history.md"), "utf8"),
-  (p) => readFileSync(path.join(repoRoot, ...p.split("/")), "utf8"),
+  historyText,
+  readCanonicalBlob,
+  sha256Text,
 );
 eq(currentCrossReference.state, "known", "repository correction guard proves every current parked header is either this exact candidate or an exact applied/retired history row");
+// Independent count, deliberately not the lib's parser: how many distinct
+// migration files does the history file itself mark LOCAL CANDIDATE right now?
+// Hard-coding a number goes stale the moment a candidate is applied live (all
+// four 20260808* candidates were re-issued and applied on 2026-08-09, taking
+// this from 4 to 0), and a stale number turns a real guard into a red build.
+const independentCandidateCount = new Set(
+  historyText
+    .split(/\r?\n/)
+    .filter((line) => /LOCAL CANDIDATE/i.test(line))
+    .flatMap((line) => [...line.matchAll(/`(\d{14}_[a-z0-9_]+\.sql)`/gi)].map((m) => m[1].toLowerCase())),
+).size;
+eq(currentCrossReference.paths.size, independentCandidateCount, "repository correction guard keeps every hash-pinned local candidate visible");
 const periodCloseMatches = repoMigrationPaths.filter((p) => p.endsWith("_vendor_bill_period_close_lock.sql"));
 eq(periodCloseMatches.length, 1, "period-close migration has one stable-suffix match");
-const periodCloseCandidate = readFileSync(path.join(repoRoot, ...periodCloseMatches[0].split("/")), "utf8");
+const periodCloseCandidate = readCanonicalBlob(periodCloseMatches[0]);
+ok(typeof periodCloseCandidate === "string", "period-close candidate SQL is readable from the index or HEAD");
 ok(/check_period_open[\s\S]*?SET search_path = ''[\s\S]*?FROM public\.accounting_periods/.test(periodCloseCandidate), "period-close candidate deliberately hardens check_period_open to an empty search path while retaining schema-qualified body references");
 
 // Path normalization the count key depends on.
@@ -527,6 +635,48 @@ eq(
 const DRAFT_A = "scripts/.staging-migrations/PARKED-a.sql";
 const DRAFT_B = "docs/audits/hunt/PARKED-b.sql";
 const SUPERSEDED_A = "scripts/.staging-migrations/SUPERSEDED-a.sql";
+const BRANCH_CANDIDATE_SQL = "-- ordinary reviewed candidate\nSELECT 42;\n";
+const BRANCH_CANDIDATE_HISTORY = `| Entry | 20260101000000 | **LOCAL CANDIDATE — NOT APPLIED.** File: \`20260101000000_real.sql\`. SQL sha256: \`${sha256Text(BRANCH_CANDIDATE_SQL)}\`. |`;
+const hashPinnedFallback = parkedFallbackFileDiscovery(
+  "supabase/migrations/20260101000000_real.sql",
+  "20260101000000_real.sql",
+  () => BRANCH_CANDIDATE_SQL,
+  BRANCH_CANDIDATE_HISTORY,
+  sha256Text,
+);
+eq(hashPinnedFallback.state, "known", "degraded fallback verifies readable migration history");
+eq(hashPinnedFallback.parked, true, "degraded fallback discovers a matching SHA-pinned candidate without an SQL status header");
+const unreadableFallbackHistory = parkedFallbackFileDiscovery(
+  "supabase/migrations/20260101000000_real.sql",
+  "20260101000000_real.sql",
+  () => BRANCH_CANDIDATE_SQL,
+  null,
+  sha256Text,
+);
+eq(unreadableFallbackHistory.state, "unknown", "degraded fallback reports unreadable migration history as unknown");
+eq(unreadableFallbackHistory.parked, false, "unreadable fallback history cannot self-certify a SHA-pinned candidate");
+const timeoutScaleHistory = `${BRANCH_CANDIDATE_HISTORY}\n${"| 1 | 20260101000001 | APPLIED migration fixture. |\n".repeat(14000)}`;
+let timeoutScaleHistoryParses = 0;
+const timeoutScaleStarted = performance.now();
+const timeoutScaleClassifier = createParkedFallbackClassifier(
+  timeoutScaleHistory,
+  sha256Text,
+  (text) => {
+    timeoutScaleHistoryParses++;
+    return localCandidateMigrationPathsFromHistory(text);
+  },
+);
+let timeoutScaleDiscovery = null;
+for (let i = 0; i < 867; i++) {
+  timeoutScaleDiscovery = timeoutScaleClassifier(
+    "supabase/migrations/20260101000000_real.sql",
+    "20260101000000_real.sql",
+    () => BRANCH_CANDIDATE_SQL,
+  );
+}
+eq(timeoutScaleHistoryParses, 1, "degraded fallback parses migration history once per worktree, not once per SQL file");
+eq(timeoutScaleDiscovery?.parked, true, "timeout-scale fallback retains SHA-pinned discovery across 867 classifications");
+ok(performance.now() - timeoutScaleStarted < 10_000, "867 fallback classifications complete within the SessionStart hook budget");
 
 // Builds a reader over a fake git. `responses` maps a git subcommand to its output lines;
 // a value of null means that git call failed. Records every call for assertions.
@@ -538,6 +688,8 @@ function fakeReader(responses, opts = {}) {
     dirtyCount: opts.dirtyCount || (() => 0),
     exists: opts.exists || (() => true),
     readText: opts.readText || (() => ""),
+    readHistory: opts.readHistory || (() => null),
+    sha256Text: opts.sha256Text || sha256Text,
     run: (args, cwd) => {
       calls.push({ cmd: args[0], args, cwd });
       const hit = responses[args[0]];
@@ -570,6 +722,99 @@ const DIRTY_ENTRY = { path: "C:/wt-dirty", head: "b".repeat(40) };
     { readText: () => PARKED_FORWARD_HEADER },
   );
   eq([...reader(CLEAN_ENTRY).values()], [PARKED_FORWARD], "clean branch surfaces explicitly parked forward migration");
+}
+
+// A branch-owned candidate may use the same exact history pin that mainline discovery
+// accepts, so it remains visible before merge without a comment-only SQL edit.
+{
+  const branchCandidate = "supabase/migrations/20260101000000_real.sql";
+  const { reader } = fakeReader(
+    { "merge-base": ["base1"], diff: [branchCandidate] },
+    {
+      readText: () => BRANCH_CANDIDATE_SQL,
+      readHistory: () => BRANCH_CANDIDATE_HISTORY,
+    },
+  );
+  eq([...reader(CLEAN_ENTRY).values()], [branchCandidate], "clean branch surfaces a hash-pinned forward migration");
+}
+
+{
+  const branchCandidate = "supabase/migrations/20260101000000_real.sql";
+  const { reader } = fakeReader(
+    { "merge-base": ["base1"], diff: [branchCandidate] },
+    {
+      readText: () => `${BRANCH_CANDIDATE_SQL}-- drift\n`,
+      readHistory: () => BRANCH_CANDIDATE_HISTORY,
+    },
+  );
+  const result = reader(CLEAN_ENTRY);
+  eq([...result.values()], [], "mismatched branch candidate is not counted as verified");
+  ok(result.unknownReason.includes("does not match"), "mismatched branch candidate fails closed as unknown");
+}
+
+{
+  const branchCandidate = "supabase/migrations/20260101000000_real.sql";
+  const { reader } = fakeReader(
+    { "merge-base": ["base1"], diff: [branchCandidate] },
+    {
+      readText: () => `${PARKED_FORWARD_HEADER}-- changed after pin\n`,
+      readHistory: () => BRANCH_CANDIDATE_HISTORY,
+    },
+  );
+  const result = reader(CLEAN_ENTRY);
+  eq([...result.values()], [branchCandidate], "explicit parked header keeps the candidate visible");
+  ok(result.unknownReason.includes("does not match"), "explicit parked header cannot bypass a stale SQL pin");
+}
+
+// The registry has to be reconciled against the diff even when the diff never mentions
+// it. Every check above runs inside the changed-path loop, so a LOCAL CANDIDATE row
+// whose SQL is missing from the diff entirely — or a history file that will not parse
+// while nothing changed at all — produced a confident zero over a registry the code
+// never actually read (Codex on #369). Both now answer UNKNOWN, which sends the caller
+// to a full scan; under-reporting hides real pending work.
+{
+  const orphan = parkedDraftPathsFrom(
+    ["src/pages/Invoices.tsx"],
+    () => true,
+    () => BRANCH_CANDIDATE_SQL,
+    BRANCH_CANDIDATE_HISTORY,
+    sha256Text,
+  );
+  eq(orphan.size, 0, "a registered candidate the diff never named is not invented as a pending path");
+  ok(orphan.unknownReason.includes("absent from this branch's own-draft diff"), "a LOCAL CANDIDATE row the diff never mentions makes the branch UNKNOWN, not zero");
+}
+{
+  const emptyDiff = parkedDraftPathsFrom(
+    [],
+    () => true,
+    () => "",
+    "| 842 | 20260729231031 | **LOCAL CANDIDATE — NOT APPLIED.** Apply 20260729231031_vendor_bill_period_close_lock.sql after review. |",
+    sha256Text,
+  );
+  eq(emptyDiff.size, 0, "an unparseable history over an empty diff still reports no paths");
+  ok(emptyDiff.unknownReason.length > 0, "an unparseable migration history is UNKNOWN even when the diff is empty");
+}
+{
+  // The reconciliation must not turn every ordinary branch UNKNOWN: a history that
+  // registers no candidates still leaves an unrelated diff a confident zero.
+  const appliedOnlyHistory = "| 842 | 20260101000000 | **APPLIED LIVE.** File: `20260101000000_real.sql`. |";
+  const noCandidates = parkedDraftPathsFrom(["src/pages/Invoices.tsx"], () => true, () => "", appliedOnlyHistory, sha256Text);
+  eq(noCandidates.unknownReason, "", "a history with no LOCAL CANDIDATE rows keeps an unrelated diff confidently zero");
+}
+
+// Windows may materialize a normal text migration with CRLF even though Git stores and
+// pins its LF blob. The worktree verifier must compare the bytes Git will commit.
+{
+  const branchCandidate = "supabase/migrations/20260101000000_real.sql";
+  const { reader } = fakeReader(
+    { "merge-base": ["base1"], diff: [branchCandidate] },
+    {
+      readText: () => BRANCH_CANDIDATE_SQL.replace(/\n/g, "\r\n"),
+      readHistory: () => BRANCH_CANDIDATE_HISTORY,
+      sha256Text: (text) => sha256Text(text.replace(/\r\n/g, "\n")),
+    },
+  );
+  eq([...reader(CLEAN_ENTRY).values()], [branchCandidate], "CRLF checkout verifies against the pinned LF Git blob");
 }
 
 // A dirty checkout must be asked in place, and its untracked files count too — that is
