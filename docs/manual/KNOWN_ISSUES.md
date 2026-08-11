@@ -1220,7 +1220,7 @@ Genuinely still-open items from that same hunt (checked against `LEDGER.json`, n
 
 Two items the ledger flagged as **"top build priority" and Codex-rated HIGH-on-severity** turned out to already be fixed by later sessions — confirmed via migration files on disk: `reverse_blend_ticket_approval:billed-ticket-reopen-and-edit` → `20260622080000_blend_ticket_reopen_and_content_lock.sql`; `void_commission_payment:resurrect-cancelled-order` → `20260622070000_void_commission_payment_dead_order_guard.sql`. Both **confirmed applied live** (present by name in `supabase_migrations.schema_migrations`, checked 2026-07-13).
 
-### OPEN 2026-08-09 — two HIGH commission findings from the Section 7 gauntlet refresh (owner decision SETTLED: Option B; 3.4 parked, 3.5 built but not yet live)
+### PARTLY OPEN 2026-08-09 — two HIGH commission findings from the Section 7 gauntlet refresh (owner decision SETTLED: Option B; **3.5 fixed and live 2026-08-11**, 3.4 still parked)
 
 Source: `docs/audits/gauntlet/2026-08-09-section-07-commissions-splits-payouts-voids-refresh.md` (verdict REMEDIATION REQUIRED, 0 BLOCKER / 2 HIGH). Both were proven against **live** `pg_proc.prosrc`, not just disk. Neither is an access-control defect — RLS, admin-only payout reads, and RPC-only mutations all held. Gauntlet summary rows **3.4** and **3.5**.
 
@@ -1239,9 +1239,11 @@ Options as presented:
 
 Prevention actions proposed by the report: a static guard requiring any RPC accepting a historical cutoff to reference dated immutable facts or reject unsupported dates (**not built** — belongs with 3.4); a source guard requiring commission payout RPCs and callers to carry an intent-binding marker and tests (**built 2026-08-09**, see below).
 
-### 3.5 BUILT AND PROVEN LOCALLY 2026-08-09 — NOT YET APPLIED LIVE
+### 3.5 CLOSED — APPLIED LIVE AND VERIFIED 2026-08-11
 
-Option B is implemented on branch `fix/commission-payout-intent-binding` (split off `main` on 2026-08-10; originally built on `ship/harden-actor-binding-sql-reader`). It is **not live**: the migration has never run against production. Treat 3.5 as still open in production until the ledger shows `20260811130000`.
+Option B was merged to `main` via PR #378 and the migration was applied to production on 2026-08-11 with Mason's explicit approval, after the final Codex round returned clean. The live ledger carries it under version `20260811183437` with name `20260811130000_bind_commission_payout_idempotency_to_intent` (the apply tool stamps its own clock as the version — match on the name). Verified against production afterwards: the catalog postconditions all hold (one overload per function, no helper survived, `anon` locked out of all three entry points, no PostgREST role able to reach an internal function), and a nine-assertion rollback-only chain run live observed the actor and fingerprint on the receipt, an identical intent replaying to the same payment, `IDEMPOTENCY_INTENT_MISMATCH` on a changed selection / changed reference / a post aimed at a different payment, `IDEMPOTENCY_ACTOR_MISMATCH` for a second admin reusing the key, `IDEMPOTENCY_KEY_REQUIRED` on a NULL key, and a legacy unbound receipt failing closed. Full detail in `docs/CHANGELOG.md` (2026-08-11 closeout) and `docs/reference/migration-history.md` row 867. **3.4 remains open and parked** by the settled owner decision above.
+
+The table below records what was built, and is kept for reference; every row is now live.
 
 | Piece | File | State |
 | --- | --- | --- |
