@@ -2,6 +2,31 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-11 — Drop the pre-rename duplicate of the reconcile-snapshots migration
+
+The already-applied reconcile-pending-commission-snapshots migration was carried on the
+`claude/wave-a-money` branch under two filenames at once: the pre-rename
+`20260810183629_reconcile_pending_commission_snapshots.sql` and the post-rename
+`20260810235207_reconcile_pending_commission_snapshots.sql`. Both bodies are byte-identical
+after LF normalization, hashing to `a5b011eff14fc6bc0befb7a6043f772f0ff5f5bbbe05c649d53f9923bd8bf5bd`
+— the same SHA-256 that `docs/reference/migration-history.md` row 866 cites as the canonical body.
+The two files differed only in line endings.
+
+`origin/main` carries the post-rename name only; the file was deliberately renamed after the live
+apply, and `docs/audits/2026-08-10-codex-to-claude-team-board-closeout-handoff.md` records in terms
+that the pre-rename filename no longer exists. This branch still held the old name from an earlier
+source-recovery pass, so opening a pull request from it would have re-added a file `main` removed on
+purpose and left a second on-disk copy of a migration that is already live — the shape that reads as a
+pending change to the next agent inspecting the folder.
+
+Removal only: no SQL was edited, nothing was applied to or reverted from production, and the live
+ledger is untouched. `check:docs` moves from 881/881 to 880/880, PASS on both sides, because the
+"all migrations indexed" check counts the folder directly rather than a hand-maintained claim.
+
+Also in this branch's merge of `origin/main`: resolving `docs/reference/migration-history.md` against
+main's rows 868-871 renumbered the six Wave A rows to 872-877, and the row this branch had added for
+the pre-rename filename was dropped as a duplicate of main's row 866.
+
 ## 2026-08-11 — Let the order-totals trigger own the blend-ticket order header
 
 The validated whole-cent CHECK constraints now live on `orders.total_cost` and `orders.total_profit`
