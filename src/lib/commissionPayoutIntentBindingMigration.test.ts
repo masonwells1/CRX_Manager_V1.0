@@ -374,6 +374,19 @@ describe('commission payout intent-binding migration', () => {
       "'^[$][$]|^[$][^0-9$[:space:]][^$[:space:]]*[$]'",
     );
 
+    // Round-10 finding. That tag was read out of a FIXED 256-character window,
+    // which is fail-OPEN: Postgres puts no length limit on a dollar tag, so a
+    // legal tag longer than the window is not recognised at all, the '$' is
+    // emitted as ordinary code, and everything inside that literal — markers
+    // included — is then read as executable SQL. The tag has to be matched
+    // against the remainder of the source, with no window.
+    expect(helper, 'the lexer reads dollar-quote tags through a fixed window').toContain(
+      "tag := substring(substr(p_src, i) FROM '^[$][$]|^[$][^0-9$[:space:]][^$[:space:]]*[$]');",
+    );
+    expect(helper, 'the lexer still bounds the dollar-tag scan').not.toMatch(
+      /substr\(p_src, i, \d\d+\)/,
+    );
+
     // It runs before the first rename that uses it, and it is not reachable
     // from the browser while it exists.
     expect(create).toBeLessThan(
@@ -415,12 +428,39 @@ describe('commission payout intent-binding migration', () => {
     // Both predicates are asserted against v_code, the reduced body — matching
     // the raw v_src instead would count a marker that only appears in a comment
     // or inside a RAISE NOTICE, which is the hole the lexer exists to close.
+    //
+    // Round-10 finding. That boundary was written as the BLACKLIST
+    // [^A-Za-z0-9_$], and a blacklist cannot be written correctly here:
+    // Postgres allows letters with diacriticals and non-Latin letters in
+    // unquoted identifiers, so 'é' counted as a boundary and
+    // fakeécheck_idempotency() satisfied the marker again. It is now a
+    // WHITELIST of the ASCII characters that may legally abut a call or a table
+    // reference, so any character the list does not name — any letter, digit,
+    // underscore, dollar, or byte above ASCII — fails closed.
+    expect(assert, 'the identifier boundary is a blacklist, not a whitelist').toContain(
+      "v_bnd    constant text := '[[:space:](),;:=+*/<>|&~!@#%^?\\[\\]{}.''-]';",
+    );
+    // …and the blacklist is gone from the executable text. Comment lines are
+    // stripped first: the DECLARE block explains WHY the blacklist was wrong and
+    // has to be able to name it.
+    const assertCode = assert.split('\n').filter((line) => !line.trim().startsWith('--')).join('\n');
+    expect(assertCode, 'the boundary blacklist is still in use').not.toContain('[^A-Za-z0-9_$]');
     expect(assert, 'check_idempotency is matched as a bare substring').toContain(
-      "IF v_code !~ '(^|[^A-Za-z0-9_$])check_idempotency[[:space:]]*\\('",
+      "IF v_code !~ ('(^|' || v_bnd || ')check_idempotency[[:space:]]*\\(')",
     );
     expect(assert, 'commission_payment_items is matched as a bare substring').toContain(
-      "OR v_code !~ '(^|[^A-Za-z0-9_$])commission_payment_items([^A-Za-z0-9_$]|$)'",
+      "OR v_code !~ ('(^|' || v_bnd || ')commission_payment_items(' || v_bnd || '|$)')",
     );
+
+    // Round-10 finding. prosrc is LANGUAGE-DEPENDENT: for a SQL-standard
+    // BEGIN ATOMIC body it is not the source at all, and for an internal or C
+    // function it is a symbol name. Reading any of those as PL/pgSQL is
+    // meaningless, so the checker demands the one language whose prosrc the
+    // lexer is written to parse, and refuses anything else.
+    expect(assert, 'the checker reads prosrc without checking the language').toContain(
+      "IF v_lang IS DISTINCT FROM 'plpgsql'::name OR coalesce(btrim(v_src), '') = '' THEN",
+    );
+    expect(assert).toContain('JOIN pg_language l ON l.oid = p.prolang');
 
     // Round-9 finding. The lexer treats backslash as an escape only inside
     // E'…', which is correct ONLY under standard_conforming_strings = on. With
@@ -430,11 +470,11 @@ describe('commission payout intent-binding migration', () => {
     expect(assert, 'a body that turns off standard_conforming_strings is not refused')
       .toContain("lower(setting) LIKE 'standard\\_conforming\\_strings=%'");
     expect(assert).toContain("current_setting('standard_conforming_strings', true)");
-    expect(assert.match(/RAISE EXCEPTION/g) ?? []).toHaveLength(3);
+    expect(assert.match(/RAISE EXCEPTION/g) ?? []).toHaveLength(4);
 
     // It reads the function itself rather than taking a body as text, so the
     // two rename paths cannot be handed different source than they validate.
-    expect(assert).toContain('SELECT p.prosrc, p.proconfig INTO v_src, v_config FROM pg_proc p WHERE p.oid = p_oid;');
+    expect(assert).toContain('SELECT p.prosrc, p.proconfig, l.lanname INTO v_src, v_config, v_lang');
     expect(assert).toContain("v_code := public._crx_payout_code_only_20260809(v_src, p_what);");
 
     // Same lifecycle as the lexer: unreachable from the browser while it
@@ -448,6 +488,88 @@ describe('commission payout intent-binding migration', () => {
     const verify = migration.slice(migration.indexOf('DO $verify$'));
     expect(verify).toContain(
       "RAISE EXCEPTION 'the identity-check helper _crx_payout_assert_impl_20260809 was left behind'",
+    );
+  });
+
+  it.each(PAYOUT_RPCS)('$name refuses a replay state it could not have produced', (rpc) => {
+    // Round-10 finding. Marker presence cannot prove REACHABILITY — a body can
+    // carry both contract markers inside `IF false` and never execute either —
+    // so the identity check alone is not enough on the replay path. The state
+    // machine is constrained instead: there are exactly two states this
+    // migration can legitimately re-enter with the private implementation
+    // already present. Either a prior apply completed, in which case the public
+    // function IS the wrapper and its source names the implementation; or a
+    // prior apply was interrupted between the rename and the wrapper, in which
+    // case the public function is absent. A public function that exists and is
+    // still UNWRAPPED means something else put that implementation there, and
+    // adopting it would wrap a body this migration never renamed.
+    const start = migration.indexOf(
+      `IF to_regprocedure('public.${rpc.impl}(${rpc.signature})') IS NULL THEN`,
+    );
+    expect(start, `${rpc.name} rename block not found`).toBeGreaterThan(0);
+    const block = migration.slice(start, migration.indexOf('\nEND\n$rename_', start));
+    const elseAt = block.indexOf('\n  ELSE\n');
+    expect(elseAt, `${rpc.name} has no branch for an implementation that already exists`)
+      .toBeGreaterThan(0);
+    const replay = block.slice(elseAt);
+    expect(replay, `${rpc.name} adopts a pre-existing implementation without checking the state`)
+      .toContain(
+        'PERFORM public._crx_payout_assert_replay_20260809(\n'
+        + `      'public.${rpc.name}(${rpc.signature})',\n`
+        + `      '${rpc.impl}',\n`
+        + `      'public.${rpc.impl}');`,
+      );
+    // Order matters: the state check has to run BEFORE the body is validated,
+    // so a planted implementation is refused on provenance rather than on
+    // whether it manages to look like the real one.
+    expect(
+      replay.indexOf('PERFORM public._crx_payout_assert_replay_20260809('),
+      `${rpc.name} validates the body before checking where it came from`,
+    ).toBeLessThan(replay.indexOf('PERFORM public._crx_payout_assert_impl_20260809('));
+  });
+
+  it('refuses to adopt an implementation it did not itself rename', () => {
+    const create = migration.indexOf(
+      'CREATE OR REPLACE FUNCTION public._crx_payout_assert_replay_20260809(',
+    );
+    expect(create, 'the replay-state check is not defined').toBeGreaterThan(-1);
+    const assert = migration.slice(create, migration.indexOf('$assert_replay$;', create));
+
+    // An absent public function is the interrupted-apply state and is allowed
+    // through; a present one has to name the implementation in its source.
+    expect(assert).toContain('v_oid := to_regprocedure(p_public_sig);');
+    expect(assert, 'the interrupted-apply state is not allowed through').toContain(
+      'IF v_oid IS NULL THEN\n    RETURN;',
+    );
+    // Deliberately the RAW source, not the lexed code: any mention at all,
+    // comment included, is enough to believe the public function is already the
+    // wrapper, and the conservative direction here is to believe it LESS
+    // readily rather than more.
+    expect(assert, 'the wrapper check reads lexed code instead of raw source').toContain(
+      "IF strpos(coalesce(v_src, ''), p_impl_name) = 0 THEN",
+    );
+    expect(assert).toContain('RAISE EXCEPTION');
+
+    // Same lifecycle as the other two helpers: created before first use,
+    // unreachable from the browser while it exists, dropped afterwards, and the
+    // post-conditions refuse if it survived.
+    expect(create).toBeLessThan(migration.indexOf('DO $rename_create$'));
+    expect(migration).toContain(
+      'REVOKE ALL ON FUNCTION public._crx_payout_assert_replay_20260809(text, text, text)\n'
+      + '  FROM PUBLIC, anon, authenticated, service_role;',
+    );
+    const drop = migration.indexOf(
+      'DROP FUNCTION IF EXISTS public._crx_payout_assert_replay_20260809(text, text, text);',
+    );
+    expect(drop, 'the replay-state check is left behind').toBeGreaterThan(
+      migration.lastIndexOf('PERFORM public._crx_payout_assert_replay_20260809('),
+    );
+    const verify = migration.slice(migration.indexOf('DO $verify$'));
+    expect(verify).toContain(
+      "IF to_regprocedure('public._crx_payout_assert_replay_20260809(text, text, text)') IS NOT NULL THEN",
+    );
+    expect(verify).toContain(
+      "RAISE EXCEPTION 'the identity-check helper _crx_payout_assert_replay_20260809 was left behind'",
     );
   });
 

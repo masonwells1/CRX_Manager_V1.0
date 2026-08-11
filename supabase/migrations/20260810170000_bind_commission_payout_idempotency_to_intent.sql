@@ -281,7 +281,13 @@ BEGIN
       -- '$' or whitespace that does not start with a digit. That is slightly
       -- WIDER than Postgres: the excess is fail-closed, because over-blanking
       -- can only remove markers and cause a refusal, never fabricate one.
-      tag := substring(substr(p_src, i, 256) FROM '^[$][$]|^[$][^0-9$[:space:]][^$[:space:]]*[$]');
+      --
+      -- Scanned to the END of the source, not through a fixed window. A window
+      -- is fail-OPEN: Postgres puts no length limit on a dollar tag, so a legal
+      -- tag longer than the window is not recognised, the '$' is emitted as
+      -- ordinary code, and everything inside that literal — markers included —
+      -- is then read as executable SQL.
+      tag := substring(substr(p_src, i) FROM '^[$][$]|^[$][^0-9$[:space:]][^$[:space:]]*[$]');
       IF tag IS NULL THEN
         out_text := out_text || c;
         i := i + 1;
@@ -340,6 +346,14 @@ REVOKE ALL ON FUNCTION public._crx_payout_code_only_20260809(text, text)
 -- fakecheck_idempotency() and writing archived_commission_payment_items
 -- satisfies a plain LIKE '%…%' on both while doing neither.
 --
+-- What this proves, exactly: that the body is plpgsql, that its source can be
+-- read, and that both contract identifiers appear in its executable text. It
+-- does NOT prove they are reached — markers inside `IF false` still count. That
+-- residual gap is bounded by the replay-state check below, which refuses to
+-- adopt any implementation this migration did not itself rename, and beyond it
+-- by CREATE privilege on schema public: an actor able to plant such a body
+-- could equally replace the public wrapper, so no check here is the boundary.
+--
 -- One function rather than six inlined copies so the two rename paths below —
 -- first application, and replay over an implementation that already exists —
 -- provably apply the SAME test. Dropped with the lexer at the end of this file.
@@ -350,11 +364,32 @@ STABLE
 SET search_path TO pg_catalog, pg_temp
 AS $assert_impl$
 DECLARE
+  -- Identifier boundary, as a WHITELIST of the ASCII characters that may
+  -- legally abut a call or a table reference. A blacklist cannot be written
+  -- correctly here: Postgres allows letters with diacriticals and non-Latin
+  -- letters in unquoted identifiers, so '[^A-Za-z0-9_$]' treats the 'é' in
+  -- fakeécheck_idempotency() as a boundary and accepts a body that calls an
+  -- entirely different function. Anything outside this list — any letter,
+  -- digit, underscore, dollar, or byte above ASCII — is NOT a boundary, so an
+  -- unfamiliar character fails closed.
+  v_bnd    constant text := '[[:space:](),;:=+*/<>|&~!@#%^?\[\]{}.''-]';
   v_src    text;
   v_config text[];
+  v_lang   name;
   v_code   text;
 BEGIN
-  SELECT p.prosrc, p.proconfig INTO v_src, v_config FROM pg_proc p WHERE p.oid = p_oid;
+  SELECT p.prosrc, p.proconfig, l.lanname INTO v_src, v_config, v_lang
+    FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
+   WHERE p.oid = p_oid;
+
+  -- prosrc is language-dependent: for a SQL-standard BEGIN ATOMIC body it is
+  -- not the source at all, and for an internal or C function it is a symbol
+  -- name. Reading any of those as PL/pgSQL is meaningless, so require the one
+  -- language whose prosrc the lexer below is written to parse.
+  IF v_lang IS DISTINCT FROM 'plpgsql'::name OR coalesce(btrim(v_src), '') = '' THEN
+    RAISE EXCEPTION '% is not a plpgsql function with a readable source (language %), so it cannot be checked; refusing to rename it',
+      p_what, coalesce(v_lang::text, '<missing>');
+  END IF;
 
   -- The lexer treats backslash as an escape only inside E'…'. That is correct
   -- under standard_conforming_strings = on, which is the server default and the
@@ -376,14 +411,62 @@ BEGIN
 
   v_code := public._crx_payout_code_only_20260809(v_src, p_what);
 
-  IF v_code !~ '(^|[^A-Za-z0-9_$])check_idempotency[[:space:]]*\('
-     OR v_code !~ '(^|[^A-Za-z0-9_$])commission_payment_items([^A-Za-z0-9_$]|$)' THEN
+  IF v_code !~ ('(^|' || v_bnd || ')check_idempotency[[:space:]]*\(')
+     OR v_code !~ ('(^|' || v_bnd || ')commission_payment_items(' || v_bnd || '|$)') THEN
     RAISE EXCEPTION '% does not look like the payout implementation this migration wraps (it must call check_idempotency() and touch commission_payment_items); refusing to rename it', p_what;
   END IF;
 END
 $assert_impl$;
 
 REVOKE ALL ON FUNCTION public._crx_payout_assert_impl_20260809(regprocedure, text)
+  FROM PUBLIC, anon, authenticated, service_role;
+
+-- The replay-state check. Marker presence says a body LOOKS like the payout
+-- implementation; it cannot say this migration is the thing that put it there.
+-- So constrain the state machine instead. There are exactly two legitimate ways
+-- the private implementation name is already occupied:
+--
+--   * a completed prior application — the public function exists and is this
+--     migration's wrapper, because the wrapper is what CREATE OR REPLACE left
+--     behind after the rename; or
+--   * an application interrupted between the rename and the wrapper — the
+--     public function does not exist at all, because the rename took it away.
+--
+-- Any other state means something this migration never renamed is sitting on
+-- the implementation name while the real payout function is still unwrapped.
+-- Adopting it would wire an arbitrary body into the money path and stamp its
+-- fabricated receipts with the authenticated actor. Refuse and make a human
+-- look, rather than guess.
+CREATE OR REPLACE FUNCTION public._crx_payout_assert_replay_20260809(
+  p_public_sig text, p_impl_name text, p_what text)
+RETURNS void
+LANGUAGE plpgsql
+STABLE
+SET search_path TO pg_catalog, pg_temp
+AS $assert_replay$
+DECLARE
+  v_oid oid;
+  v_src text;
+BEGIN
+  v_oid := to_regprocedure(p_public_sig);
+  -- Interrupted between the rename and the wrapper. The implementation is the
+  -- body this migration renamed, and the CREATE OR REPLACE below restores the
+  -- wrapper over it.
+  IF v_oid IS NULL THEN
+    RETURN;
+  END IF;
+  SELECT p.prosrc INTO v_src FROM pg_proc p WHERE p.oid = v_oid;
+  -- Raw source, not lexed: ANY mention, comment included, is enough to believe
+  -- the public function is already the wrapper, and the conservative direction
+  -- here is to believe it less readily, not more.
+  IF strpos(coalesce(v_src, ''), p_impl_name) = 0 THEN
+    RAISE EXCEPTION '% already exists while % is still unwrapped, so this migration did not create it; refusing to adopt an implementation it never renamed',
+      p_what, p_public_sig;
+  END IF;
+END
+$assert_replay$;
+
+REVOKE ALL ON FUNCTION public._crx_payout_assert_replay_20260809(text, text, text)
   FROM PUBLIC, anon, authenticated, service_role;
 
 -- ---------------------------------------------------------------------------
@@ -427,7 +510,12 @@ BEGIN
     -- a partially-applied migration, or any unrelated function that happens to
     -- occupy this name, would be adopted silently and every payout would then
     -- report success for work the real implementation never did. The name is
-    -- not evidence — hold the pre-existing body to exactly the same test.
+    -- not evidence — hold the pre-existing body to exactly the same test, and
+    -- first refuse any state this migration could not itself have produced.
+    PERFORM public._crx_payout_assert_replay_20260809(
+      'public.create_commission_payment(uuid[], text, text, date, text, uuid, text)',
+      '_create_commission_payment_intent_impl_20260809',
+      'public._create_commission_payment_intent_impl_20260809');
     PERFORM public._crx_payout_assert_impl_20260809(
       to_regprocedure('public._create_commission_payment_intent_impl_20260809(uuid[], text, text, date, text, uuid, text)'),
       'public._create_commission_payment_intent_impl_20260809');
@@ -607,6 +695,10 @@ BEGIN
   ELSE
     -- See create: a pre-existing implementation is held to the same test, so a
     -- replay cannot wrap a body this migration never validated.
+    PERFORM public._crx_payout_assert_replay_20260809(
+      'public.post_commission_payment(uuid, uuid, text)',
+      '_post_commission_payment_intent_impl_20260809',
+      'public._post_commission_payment_intent_impl_20260809');
     PERFORM public._crx_payout_assert_impl_20260809(
       to_regprocedure('public._post_commission_payment_intent_impl_20260809(uuid, uuid, text)'),
       'public._post_commission_payment_intent_impl_20260809');
@@ -742,6 +834,10 @@ BEGIN
   ELSE
     -- See create: a pre-existing implementation is held to the same test, so a
     -- replay cannot wrap a body this migration never validated.
+    PERFORM public._crx_payout_assert_replay_20260809(
+      'public.void_commission_payment(uuid, text, uuid, text)',
+      '_void_commission_payment_intent_impl_20260809',
+      'public._void_commission_payment_intent_impl_20260809');
     PERFORM public._crx_payout_assert_impl_20260809(
       to_regprocedure('public._void_commission_payment_intent_impl_20260809(uuid, text, uuid, text)'),
       'public._void_commission_payment_intent_impl_20260809');
@@ -859,6 +955,7 @@ GRANT EXECUTE ON FUNCTION public.void_commission_payment(uuid, text, uuid, text)
 -- The identity-check helpers exist only for the three renames above. Drop them
 -- so the migration leaves no extra function behind for a later caller to reach.
 -- Order matters: the assert helper calls the lexer.
+DROP FUNCTION IF EXISTS public._crx_payout_assert_replay_20260809(text, text, text);
 DROP FUNCTION IF EXISTS public._crx_payout_assert_impl_20260809(regprocedure, text);
 DROP FUNCTION IF EXISTS public._crx_payout_code_only_20260809(text, text);
 
@@ -891,6 +988,9 @@ DECLARE
 BEGIN
   IF to_regprocedure('public._crx_payout_code_only_20260809(text, text)') IS NOT NULL THEN
     RAISE EXCEPTION 'the identity-check helper _crx_payout_code_only_20260809 was left behind';
+  END IF;
+  IF to_regprocedure('public._crx_payout_assert_replay_20260809(text, text, text)') IS NOT NULL THEN
+    RAISE EXCEPTION 'the identity-check helper _crx_payout_assert_replay_20260809 was left behind';
   END IF;
   IF to_regprocedure('public._crx_payout_assert_impl_20260809(regprocedure, text)') IS NOT NULL THEN
     RAISE EXCEPTION 'the identity-check helper _crx_payout_assert_impl_20260809 was left behind';

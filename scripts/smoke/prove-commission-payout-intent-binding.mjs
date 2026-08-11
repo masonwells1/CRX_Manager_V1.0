@@ -575,6 +575,10 @@ function proveCodeOnlyLexer() {
     // Round-9 finding: a dollar-quote tag is IDENTIFIER characters, and Postgres
     // identifiers are not ASCII-only. An [A-Za-z_] tag rule read this as CODE.
     ['a dollar-quoted literal with a non-ASCII tag', 'RAISE NOTICE $café$commission_payment_items$café$;'],
+    // Round-10 finding: the tag was sought inside a fixed 256-character window,
+    // so a legal longer tag was not recognised and the literal read as CODE.
+    ['a dollar-quoted literal with a 260-character tag',
+      `RAISE NOTICE $${'t'.repeat(260)}$commission_payment_items$${'t'.repeat(260)}$;`],
     ['an E-string with an escaped quote', "RAISE NOTICE E'commission_payment_items \\' still inside';"],
     ['a literal holding a -- comment opener', "RAISE NOTICE 'commission_payment_items -- x';"],
     ['a literal holding a */ comment closer', "RAISE NOTICE 'commission_payment_items */ x';"],
@@ -661,16 +665,45 @@ function proveIdentityGuard() {
       'BEGIN\n  PERFORM check_idempotency(1);\n  INSERT INTO commission_payment_items VALUES (1);\n  RETURN NULL;\nEND;',
       /sets standard_conforming_strings off/,
       'SET standard_conforming_strings TO off\n'],
+    // Round-10 finding: the boundary was '[^A-Za-z0-9_$]', but Postgres allows
+    // letters with diacriticals in unquoted identifiers — so the 'é' READ AS a
+    // boundary and these two entirely different names satisfied both markers.
+    // The boundary is now a whitelist of ASCII characters that may legally abut
+    // a call, so any letter, ASCII or not, fails closed.
+    // Every marker here is abutted by 'é' on the side the old blacklist would
+    // have accepted, so the old rule passed this body on BOTH predicates. An
+    // ASCII tail on one side only would not have proven it: the table marker
+    // still has to fail on its LEADING character, or a blacklist that keeps
+    // rejecting '_commission_payment_items' would look like a working guard.
+    ['markers that are only parts of longer non-ASCII identifiers',
+      'BEGIN\n  PERFORM fakeécheck_idempotency(1);\n  INSERT INTO écommission_payment_itemsé VALUES (1);\n  RETURN NULL;\nEND;',
+      REFUSED],
+    // Round-10 finding: the dollar-tag reader searched a fixed 256-character
+    // window. Postgres puts no length limit on a tag, so a longer one was not
+    // recognised, the '$' was emitted as ordinary code, and the whole literal
+    // — markers included — was read as executable SQL.
+    ['markers inside a dollar-quoted literal with a 260-character tag',
+      `BEGIN\n  RAISE NOTICE $${'t'.repeat(260)}$check_idempotency( commission_payment_items$${'t'.repeat(260)}$;\n  RETURN NULL;\nEND;`,
+      REFUSED],
+    // Round-10 finding: prosrc is language-dependent. For a SQL-standard
+    // BEGIN ATOMIC body it is not the source, and for a C function it is a
+    // symbol name; parsing any of those as PL/pgSQL is meaningless. Refused on
+    // the language, before the markers are looked at.
+    ['a body that is not plpgsql at all',
+      'SELECT NULL::uuid',
+      /is not a plpgsql function with a readable source/,
+      '',
+      'sql'],
   ];
 
-  for (const [label, body, expected, extraConfig = ''] of DECOYS) {
+  for (const [label, body, expected, extraConfig = '', lang = 'plpgsql'] of DECOYS) {
     const run = psql(
       `BEGIN;\nDROP FUNCTION ${SIGNATURE};\n`
       + 'CREATE FUNCTION public.create_commission_payment(\n'
       + '  p_commission_ids uuid[], p_payment_method text, p_reference text,\n'
       + '  p_payment_date date, p_notes text,\n'
       + '  p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text\n'
-      + ') RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path TO public, pg_temp\n'
+      + `) RETURNS uuid LANGUAGE ${lang} SECURITY DEFINER SET search_path TO public, pg_temp\n`
       + extraConfig
       + `AS $decoy$\n${body}\n$decoy$;\n`
       + `${migration}\nROLLBACK;\n`,
@@ -707,27 +740,59 @@ function proveIdentityGuard() {
 function proveReplayIdentityGuard() {
   const migration = readFileSync(MIGRATION, 'utf8');
   const IMPL = '_create_commission_payment_intent_impl_20260809';
-  const run = psql(
-    `BEGIN;\nCREATE FUNCTION public.${IMPL}(\n`
-    + '  p_commission_ids uuid[], p_payment_method text, p_reference text,\n'
+  const HEADER =
+    '  p_commission_ids uuid[], p_payment_method text, p_reference text,\n'
     + '  p_payment_date date, p_notes text,\n'
     + '  p_performed_by uuid DEFAULT NULL::uuid, p_idempotency_key text DEFAULT NULL::text\n'
-    + ') RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path TO public, pg_temp\n'
-    + "AS $decoy$\nBEGIN\n  RAISE NOTICE 'check_idempotency( commission_payment_items';\n  RETURN NULL;\nEND;\n$decoy$;\n"
-    + `${migration}\nROLLBACK;\n`,
+    + ') RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path TO public, pg_temp\n';
+  // Markers inside a literal: this body would fail the marker check too, so the
+  // assertion below proves it is refused EARLIER, on the state itself.
+  const DECOY_BODY =
+    "AS $decoy$\nBEGIN\n  RAISE NOTICE 'check_idempotency( commission_payment_items';\n  RETURN NULL;\nEND;\n$decoy$;\n";
+
+  // A. Round-10 finding. The implementation name is occupied while the PUBLIC
+  //    function is still the unwrapped original — a state this migration cannot
+  //    have produced, because its own rename would have taken that function
+  //    away. Refused on the state, without ever reaching the marker check.
+  const planted = psql(
+    `BEGIN;\nCREATE FUNCTION public.${IMPL}(\n${HEADER}${DECOY_BODY}${migration}\nROLLBACK;\n`,
     { allowFailure: true },
   );
-  const output = `${run.stdout || ''}\n${run.stderr || ''}`;
-  assert.notEqual(run.status, 0, `the migration wrapped an unvalidated implementation:\n${output}`);
+  const plantedOut = `${planted.stdout || ''}\n${planted.stderr || ''}`;
+  assert.notEqual(planted.status, 0, `the migration wrapped an unvalidated implementation:\n${plantedOut}`);
   assert.match(
-    output,
-    new RegExp(`public\\.${IMPL} does not look like the payout implementation`),
-    `wrong refusal on the replay path:\n${output}`,
+    plantedOut,
+    new RegExp(`public\\.${IMPL} already exists while public\\.create_commission_payment`),
+    `wrong refusal on the replay path:\n${plantedOut}`,
   );
   assert.equal(
     psqlValue(`SELECT to_regprocedure('public.${IMPL}(uuid[], text, text, date, text, uuid, text)') IS NULL;`),
     't',
     'the replay decoy transaction did not roll back',
+  );
+
+  // B. The state check passing is not the whole guard. Apply the migration for
+  //    real, so the public function IS the wrapper and the replay state is
+  //    legitimate, then swap the implementation underneath it. The marker check
+  //    has to catch that on its own — otherwise "already applied" would be a
+  //    standing invitation to replace the body a completed apply left behind.
+  const swapped = psql(
+    `BEGIN;\n${migration}\n`
+    + `CREATE OR REPLACE FUNCTION public.${IMPL}(\n${HEADER}${DECOY_BODY}`
+    + `${migration}\nROLLBACK;\n`,
+    { allowFailure: true },
+  );
+  const swappedOut = `${swapped.stdout || ''}\n${swapped.stderr || ''}`;
+  assert.notEqual(swapped.status, 0, `a swapped implementation was re-adopted unchecked:\n${swappedOut}`);
+  assert.match(
+    swappedOut,
+    new RegExp(`public\\.${IMPL} does not look like the payout implementation`),
+    `wrong refusal for a swapped implementation:\n${swappedOut}`,
+  );
+  assert.equal(
+    psqlValue(`SELECT to_regprocedure('public.${IMPL}(uuid[], text, text, date, text, uuid, text)') IS NULL;`),
+    't',
+    'the swapped-implementation transaction did not roll back',
   );
 }
 
