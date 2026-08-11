@@ -546,6 +546,27 @@ SET command = $job$${UNBOUND_DDL}$job$
 WHERE jobid = 42;`);
 ok(isDeny(r), "a search-path-resolved qualified view keeps the cron.job sink identity");
 
+r = runHook(`CREATE TEMP VIEW unicode_source_cron_job_alias AS
+SELECT * FROM U&"\\0063ron".job;
+UPDATE unicode_source_cron_job_alias
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`);
+ok(isDeny(r), "a Unicode-escaped cron.job view source remains an unsafe command sink");
+
+r = runHook(`CREATE TEMP VIEW unicode_source_cron_job_alias AS
+SELECT * FROM U&"\\0063ron".job;
+UPDATE unicode_source_cron_job_alias
+SET command = $job$SELECT public.existing_safe_job()$job$
+WHERE jobid = 42;`);
+ok(!isDeny(r), "a Unicode-source cron.job view keeps a direct harmless command allowed");
+
+r = runHook(`CREATE TEMP VIEW custom_escape_cron_job_alias AS
+SELECT * FROM U&"!0063ron" UESCAPE '!'.job;
+UPDATE custom_escape_cron_job_alias
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`);
+ok(isDeny(r), "a custom-UESCAPE cron.job view source fails closed");
+
 const crossMigrationRoot = mkdtempSync(path.join(os.tmpdir(), "actor-binding-cron-view-"));
 const crossMigrationDir = path.join(crossMigrationRoot, "supabase", "migrations");
 mkdirSync(crossMigrationDir, { recursive: true });
@@ -574,12 +595,29 @@ WHERE jobid = 42;`, crossMigrationTarget);
 ok(!isDeny(r), "an earlier persistent cron.job view keeps a direct harmless command allowed");
 
 writeFileSync(
-  path.join(crossMigrationDir, "20260807000002_rename_cron_job_facade.sql"),
+  path.join(crossMigrationDir, "20260807000002_create_unicode_source_facade.sql"),
+  "CREATE VIEW persistent_unicode_source_facade AS SELECT * FROM U&\"\\0063ron\".job;\n"
+);
+const unicodeSourceCrossMigrationTarget = path.join(
+  crossMigrationDir,
+  "20260807000003_update_unicode_source_facade.sql"
+);
+r = runHook(`UPDATE public.persistent_unicode_source_facade
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`, unicodeSourceCrossMigrationTarget);
+ok(isDeny(r), "a Unicode-source cron.job view remains a sink across migrations");
+r = runHook(`UPDATE public.persistent_unicode_source_facade
+SET command = $job$SELECT public.existing_safe_job()$job$
+WHERE jobid = 42;`, unicodeSourceCrossMigrationTarget);
+ok(!isDeny(r), "a historical Unicode-source alias keeps direct harmless SQL allowed");
+
+writeFileSync(
+  path.join(crossMigrationDir, "20260807000004_rename_cron_job_facade.sql"),
   "ALTER VIEW persistent_cron_job_facade RENAME TO renamed_cron_job_facade;\n"
 );
 const renamedCrossMigrationTarget = path.join(
   crossMigrationDir,
-  "20260807000003_update_renamed_cron_job_facade.sql"
+  "20260807000005_update_renamed_cron_job_facade.sql"
 );
 r = runHook(`UPDATE public.renamed_cron_job_facade
 SET command = $job$${UNBOUND_DDL}$job$
@@ -587,12 +625,12 @@ WHERE jobid = 42;`, renamedCrossMigrationTarget);
 ok(isDeny(r), "renaming a persistent cron.job view in an earlier migration cannot erase its sink identity");
 
 writeFileSync(
-  path.join(crossMigrationDir, "20260807000004_create_temp_cron_job_facade.sql"),
+  path.join(crossMigrationDir, "20260807000006_create_temp_cron_job_facade.sql"),
   "CREATE TEMP VIEW prior_temp_cron_job_facade AS SELECT * FROM cron.job;\n"
 );
 const priorTempCrossMigrationTarget = path.join(
   crossMigrationDir,
-  "20260807000005_update_prior_temp_cron_job_facade.sql"
+  "20260807000007_update_prior_temp_cron_job_facade.sql"
 );
 r = runHook(`UPDATE public.prior_temp_cron_job_facade
 SET command = $job$${UNBOUND_DDL}$job$
@@ -604,13 +642,78 @@ const missingHistoryTarget = path.join(
   "missing",
   "supabase",
   "migrations",
-  "20260807000006_missing_history.sql"
+  "20260807000008_missing_history.sql"
 );
 r = runHook(`UPDATE public.unknown_cron_job_facade
 SET command = $job$${UNBOUND_DDL}$job$
 WHERE jobid = 42;`, missingHistoryTarget);
 ok(isDeny(r), "unreadable migration history fails closed for an unknown command target");
 rmSync(crossMigrationRoot, { recursive: true, force: true });
+
+const unicodeAliasRoot = mkdtempSync(path.join(os.tmpdir(), "actor-binding-cron-unicode-alias-"));
+const unicodeAliasDir = path.join(unicodeAliasRoot, "supabase", "migrations");
+mkdirSync(unicodeAliasDir, { recursive: true });
+writeFileSync(
+  path.join(unicodeAliasDir, "20260807000001_create_unicode_named_facade.sql"),
+  "CREATE VIEW U&\"\\0075nicode_named_facade\" AS SELECT * FROM cron.job;\n"
+);
+const unicodeNamedCrossMigrationTarget = path.join(
+  unicodeAliasDir,
+  "20260807000002_update_unicode_named_facade.sql"
+);
+r = runHook(`UPDATE public.unicode_named_facade
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`, unicodeNamedCrossMigrationTarget);
+ok(isDeny(r), "an opaque Unicode view identity fails closed across migrations");
+r = runHook(`UPDATE public.unicode_named_facade
+SET command = $job$SELECT public.existing_safe_job()$job$
+WHERE jobid = 42;`, unicodeNamedCrossMigrationTarget);
+ok(!isDeny(r), "an opaque Unicode view identity still permits direct harmless SQL");
+rmSync(unicodeAliasRoot, { recursive: true, force: true });
+
+const unicodeRenameRoot = mkdtempSync(path.join(os.tmpdir(), "actor-binding-cron-unicode-rename-"));
+const unicodeRenameDir = path.join(unicodeRenameRoot, "supabase", "migrations");
+mkdirSync(unicodeRenameDir, { recursive: true });
+writeFileSync(
+  path.join(unicodeRenameDir, "20260807000001_create_rename_facade.sql"),
+  "CREATE VIEW persistent_cron_job_facade AS SELECT * FROM cron.job;\n"
+);
+writeFileSync(
+  path.join(unicodeRenameDir, "20260807000002_rename_facade_to_unicode.sql"),
+  "ALTER VIEW persistent_cron_job_facade RENAME TO U&\"\\0075nicode_renamed_facade\";\n"
+);
+const unicodeRenameCrossMigrationTarget = path.join(
+  unicodeRenameDir,
+  "20260807000003_update_unicode_renamed_facade.sql"
+);
+r = runHook(`UPDATE public.unicode_renamed_facade
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`, unicodeRenameCrossMigrationTarget);
+ok(isDeny(r), "renaming a tracked alias through Unicode notation fails closed");
+rmSync(unicodeRenameRoot, { recursive: true, force: true });
+
+const unicodeRenameSourceRoot = mkdtempSync(
+  path.join(os.tmpdir(), "actor-binding-cron-unicode-rename-source-")
+);
+const unicodeRenameSourceDir = path.join(unicodeRenameSourceRoot, "supabase", "migrations");
+mkdirSync(unicodeRenameSourceDir, { recursive: true });
+writeFileSync(
+  path.join(unicodeRenameSourceDir, "20260807000001_create_rename_source_facade.sql"),
+  "CREATE VIEW persistent_cron_job_facade AS SELECT * FROM cron.job;\n"
+);
+writeFileSync(
+  path.join(unicodeRenameSourceDir, "20260807000002_rename_facade_from_unicode.sql"),
+  "ALTER VIEW U&\"\\0070ersistent_cron_job_facade\" RENAME TO renamed_from_unicode;\n"
+);
+const unicodeRenameSourceTarget = path.join(
+  unicodeRenameSourceDir,
+  "20260807000003_update_renamed_from_unicode.sql"
+);
+r = runHook(`UPDATE public.renamed_from_unicode
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`, unicodeRenameSourceTarget);
+ok(isDeny(r), "a Unicode-spelled source alias cannot escape rename tracking");
+rmSync(unicodeRenameSourceRoot, { recursive: true, force: true });
 
 const schemaLifecycleRoot = mkdtempSync(path.join(os.tmpdir(), "actor-binding-cron-schema-"));
 const schemaLifecycleDir = path.join(schemaLifecycleRoot, "supabase", "migrations");

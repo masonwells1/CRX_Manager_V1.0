@@ -189,8 +189,16 @@ columns, variables, subqueries, builders, casts, and Unicode forms require the
 existing exemption/manual-review path even when their current staged value looks
 harmless.
 
-The focused actor-binding suite grew from 115 to 238 assertions while the
-idempotency reference suite remained at 86. Seventy-four continuation decisions
+The next exact-head review found that PostgreSQL Unicode identifier syntax could
+hide `cron.job` as a view source, causing the alias collector to discard the
+relation before the existing Unicode write guard ran. Any unnormalizable view
+source now conservatively makes that view a delayed-SQL alias. Opaque Unicode
+view names and rename targets carry a fail-closed wildcard across later
+migrations, while harmless direct commands through the tracked alias remain
+allowed.
+
+The focused actor-binding suite grew from 115 to 247 assertions while the
+idempotency reference suite remained at 86. Seventy-eight continuation decisions
 were weakened or removed one at a time; every mutation made the real hook-process
 suite fail before restoration. Separate real-process probes allowed ordinary
 trigger/event-trigger declarations, direct-literal `USING`/`INTO`, and harmless

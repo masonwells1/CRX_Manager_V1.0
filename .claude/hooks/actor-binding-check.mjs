@@ -360,8 +360,11 @@ function isPgCronJobName(identifier) {
   return normalized === "job" || normalized === "cron.job";
 }
 
+const UNKNOWN_PG_CRON_JOB_VIEW_ALIAS = Symbol("unknown-pg-cron-job-view-alias");
+
 function aliasSetHas(aliases, normalized) {
-  return aliases.has(normalized) || aliases.has(normalized.split(".").at(-1));
+  return aliases.has(UNKNOWN_PG_CRON_JOB_VIEW_ALIAS) ||
+    aliases.has(normalized) || aliases.has(normalized.split(".").at(-1));
 }
 
 function isPgCronJobViewAliasName(identifier) {
@@ -403,16 +406,16 @@ function declaredPgCronJobViewAliases(sql, seedAliases = new Set(), includeTempo
     const head = viewHead.exec(statement);
     if (head && (includeTemporaryViews || !head[1])) {
       const alias = normalizedQualifiedIdentifier(head[2]);
-      if (alias !== null) {
-        const sources = [];
-        relationSource.lastIndex = 0;
-        let source;
-        while ((source = relationSource.exec(statement)) !== null) {
-          const normalized = normalizedQualifiedIdentifier(source[1]);
-          if (normalized !== null) sources.push(normalized);
-        }
-        declarations.push({ alias, sources });
+      const sources = [];
+      let hasOpaqueSource = false;
+      relationSource.lastIndex = 0;
+      let source;
+      while ((source = relationSource.exec(statement)) !== null) {
+        const normalized = normalizedQualifiedIdentifier(source[1]);
+        if (normalized === null) hasOpaqueSource = true;
+        else sources.push(normalized);
       }
+      declarations.push({ alias, sources, hasOpaqueSource });
     }
     const rename = renameHead.exec(statement);
     if (rename) {
@@ -421,7 +424,7 @@ function declaredPgCronJobViewAliases(sql, seedAliases = new Set(), includeTempo
       if (from !== null && toBase !== null) {
         const schemaPrefix = from.includes(".") ? from.slice(0, from.lastIndexOf(".") + 1) : "";
         renames.push({ from, to: schemaPrefix + toBase });
-      }
+      } else renames.push({ from, to: null });
     }
   }
 
@@ -430,17 +433,39 @@ function declaredPgCronJobViewAliases(sql, seedAliases = new Set(), includeTempo
   while (changed) {
     changed = false;
     for (const declaration of declarations) {
-      if (aliasSetHas(aliases, declaration.alias)) continue;
-      const reachesCronJob = declaration.sources.some((source) =>
+      if (declaration.alias !== null && aliasSetHas(aliases, declaration.alias)) continue;
+      const reachesCronJob = declaration.hasOpaqueSource || declaration.sources.some((source) =>
         source === "job" || source === "cron.job" || aliasSetHas(aliases, source)
       );
       if (!reachesCronJob) continue;
+      if (declaration.alias === null) {
+        if (!aliases.has(UNKNOWN_PG_CRON_JOB_VIEW_ALIAS)) {
+          aliases.add(UNKNOWN_PG_CRON_JOB_VIEW_ALIAS);
+          changed = true;
+        }
+        continue;
+      }
       aliases.add(declaration.alias);
       aliases.add(declaration.alias.split(".").at(-1));
       changed = true;
     }
     for (const rename of renames) {
-      if (!aliasSetHas(aliases, rename.from) || aliasSetHas(aliases, rename.to)) continue;
+      if (rename.from === null) {
+        if (!aliases.has(UNKNOWN_PG_CRON_JOB_VIEW_ALIAS)) {
+          aliases.add(UNKNOWN_PG_CRON_JOB_VIEW_ALIAS);
+          changed = true;
+        }
+        continue;
+      }
+      if (!aliasSetHas(aliases, rename.from)) continue;
+      if (rename.to === null) {
+        if (!aliases.has(UNKNOWN_PG_CRON_JOB_VIEW_ALIAS)) {
+          aliases.add(UNKNOWN_PG_CRON_JOB_VIEW_ALIAS);
+          changed = true;
+        }
+        continue;
+      }
+      if (aliasSetHas(aliases, rename.to)) continue;
       aliases.add(rename.to);
       aliases.add(rename.to.split(".").at(-1));
       changed = true;
