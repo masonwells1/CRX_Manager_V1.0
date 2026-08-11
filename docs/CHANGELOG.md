@@ -2,6 +2,16 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-10 — Graphify-first agent navigation policy
+
+Made Graphify the explicit first-pass navigator for architecture, multi-file, workflow/migration,
+difficult-debugging, structural-audit, and PR-impact work. `AGENTS.md` now defines the shared decision
+sequence: check graph freshness, query the smallest useful subgraph before broad file exploration, use
+the result to minimize source reads, and verify every material claim in current source or live read-only
+evidence. `CLAUDE.md` explicitly routes Claude through the same policy and the shared Graphify skill now
+covers the generated report/visual index plus `save-result`/`reflect` feedback. Focused source reads
+remain mandatory for safe edits and proof; Graphify is navigation, not authority.
+
 ## 2026-08-10 — Own-worktree containment compares paths case-insensitively on Windows
 
 Closed a narrower instance of the push block the 2026-08-09 own-worktree
