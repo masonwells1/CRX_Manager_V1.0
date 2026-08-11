@@ -347,6 +347,35 @@ r = runHook(`SELECT dblink_exec(
 );`);
 ok(isDeny(r), "Unicode-encoded function DDL cannot cross an unproven callable boundary");
 
+r = runHook(`SELECT query_to_xml(
+  'SEL' || chr(69) || 'CT cron.schedule(''delayed-actor-ddl'', ''* * * * *'', ''CRE'' || chr(65) || ''TE OR REPLACE FUNCTION public.dynamic_actor(p_performed_by uuid) RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $fn$ BEGIN UPDATE invoices SET created_by = p_performed_by; END $fn$;'')',
+  true,
+  false,
+  ''
+);`);
+ok(isDeny(r), "an unproven callable cannot receive dynamically obscured SQL");
+
+r = runHook(`SELECT query_to_xml('SELECT 1', true, false, '');`);
+ok(!isDeny(r), "an unproven callable may receive one direct harmless SQL literal");
+
+r = runHook(`CREATE OR REPLACE FUNCTION public.safe_search(p_query text)
+RETURNS TABLE(label text)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+AS $fn$
+BEGIN
+  RETURN QUERY (
+    SELECT 'customer-'::text || p_query
+  );
+END;
+$fn$;`);
+ok(!isDeny(r), "RETURN QUERY syntax is not mistaken for an unproven callable");
+
+r = runHook(`SELECT public."Execute_SQL_Readonly"($outer$${UNBOUND_DDL}$outer$);`);
+ok(isDeny(r), "a quoted mixed-case callable cannot inherit a trusted executor identity");
+
+r = runHook(`SELECT public."execute_sql_readonly"($query$SELECT 1$query$);`);
+ok(!isDeny(r), "the exact quoted trusted executor keeps its harmless direct-literal behavior");
+
 r = runHook(`ALTER FUNCTION public.execute_sql_readonly(text) RENAME TO actor_sql_alias;`);
 ok(isDeny(r), "the known SQL executor cannot be renamed past the name-bound reader");
 ok(r.stdout.includes("renames or moves execute_sql_readonly"),

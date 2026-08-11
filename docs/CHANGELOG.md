@@ -137,8 +137,18 @@ it to the safe built-in `unschedule`. Quoted API names now preserve their decode
 case, so custom mixed-case sinks remain unknown and fail closed while exact
 quoted and case-folded unquoted calls to the real built-in remain allowed.
 
-The focused actor-binding suite grew from 115 to 215 assertions while the
-idempotency reference suite remained at 86. Sixty-one continuation decisions were
+The fresh repair review then found that an unallowlisted SQL-text callable such
+as `query_to_xml(...)` could receive a function-bearing query assembled from
+individually harmless string fragments. The reader now fails closed only at
+callables whose names indicate an `exec`, `execute`, `query`, or `sql` text sink
+when a string-bearing argument is not one directly inspectable literal. This
+narrow boundary denies the obscured query and quoted mixed-case lookalikes of
+trusted executors while preserving direct harmless literals and ordinary
+PL/pgSQL `RETURN QUERY` syntax. A full historical migration scan found zero new
+denials from the narrowed rule.
+
+The focused actor-binding suite grew from 115 to 220 assertions while the
+idempotency reference suite remained at 86. Sixty-four continuation decisions were
 weakened or removed one at a time; every mutation made the real hook-process
 suite fail before restoration. Separate real-process probes allowed ordinary
 trigger/event-trigger declarations, direct-literal `USING`/`INTO`, and harmless

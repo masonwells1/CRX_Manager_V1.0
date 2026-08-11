@@ -329,6 +329,28 @@ function normalizedIdentifier(identifier) {
   return value.toLowerCase();
 }
 
+function normalizedQualifiedIdentifier(identifier) {
+  const value = String(identifier || "").trim();
+  const component = new RegExp(SQL_IDENTIFIER_PATTERN, "y");
+  const parts = [];
+  let cursor = 0;
+  while (cursor < value.length) {
+    component.lastIndex = cursor;
+    const match = component.exec(value);
+    if (!match) return null;
+    const normalized = normalizedIdentifier(match[0]);
+    if (normalized === null) return null;
+    parts.push(normalized);
+    cursor = component.lastIndex;
+    while (/\s/.test(value[cursor] || "")) cursor++;
+    if (cursor === value.length) break;
+    if (value[cursor] !== ".") return null;
+    cursor++;
+    while (/\s/.test(value[cursor] || "")) cursor++;
+  }
+  return parts.join(".");
+}
+
 /** Return the current pg_cron call sites while preserving the source argument
  * text. Unicode-escaped API names are returned with api=null and therefore use
  * the conservative unknown-API rule below. */
@@ -933,7 +955,7 @@ function isExecuteSqlReadonlyLiteralPrefix(prefix) {
 }
 
 const NON_CALLABLE_PAREN_KEYWORDS = new Set([
-  "all", "any", "array", "as", "case", "cast", "exists", "in", "row", "select", "values",
+  "all", "any", "array", "as", "case", "cast", "exists", "in", "query", "row", "select", "values",
 ]);
 
 function unmatchedOpenParens(prefix) {
@@ -970,9 +992,17 @@ function callableNameBeforeOpen(prefix, open) {
 }
 
 function isKnownSqlExecutorName(name) {
-  const legacy = /^(?:(?:"public"|public)\s*\.\s*)?(?:"execute_sql_readonly"|execute_sql_readonly)$/i;
-  const pgCron = /^(?:(?:"cron"|cron)\s*\.\s*)?(?:"(?:schedule|schedule_in_database|alter_job)"|schedule|schedule_in_database|alter_job)$/i;
-  return legacy.test(name) || pgCron.test(name);
+  const normalized = normalizedQualifiedIdentifier(name);
+  return new Set([
+    "execute_sql_readonly",
+    "public.execute_sql_readonly",
+    "schedule",
+    "schedule_in_database",
+    "alter_job",
+    "cron.schedule",
+    "cron.schedule_in_database",
+    "cron.alter_job",
+  ]).has(normalized);
 }
 
 function isExecuteFormatBuilderName(name) {
@@ -988,6 +1018,68 @@ function hasUnprovenCallableContext(callablePrefix, structuralPrefix, fullText, 
     if (isExecuteFormatBuilderName(name) &&
         inExecuteStatement(structuralPrefix, fullText, literalEnd)) continue;
     return true;
+  }
+  return false;
+}
+
+function hasStringLiteral(expression) {
+  const text = String(expression || "");
+  for (let i = 0; i < text.length;) {
+    if (text[i] === "-" && text[i + 1] === "-") {
+      const newline = text.indexOf("\n", i + 2);
+      i = newline === -1 ? text.length : newline;
+      continue;
+    }
+    if (text[i] === "/" && text[i + 1] === "*") {
+      let depth = 1;
+      i += 2;
+      while (i < text.length && depth > 0) {
+        if (text[i] === "/" && text[i + 1] === "*") { depth++; i += 2; continue; }
+        if (text[i] === "*" && text[i + 1] === "/") { depth--; i += 2; continue; }
+        i++;
+      }
+      continue;
+    }
+    if (text[i] === "'") return scanQuoted(text, i) !== -1;
+    if (text[i] === '"') {
+      const end = scanQuoted(text, i);
+      if (end === -1) return false;
+      i = end;
+      continue;
+    }
+    const tag = text[i] === "$" ? dollarTagAt(text, i) : null;
+    if (tag) return text.indexOf(tag, i + tag.length) !== -1;
+    i++;
+  }
+  return false;
+}
+
+/** A callable not proven data-only may execute or store any string argument.
+ * If that argument is an expression rather than one inspectable literal, the
+ * reader cannot prove that chr()/concat()/format() did not obscure SQL tokens. */
+function isPotentialSqlTextSinkName(name) {
+  const normalized = normalizedQualifiedIdentifier(name);
+  if (normalized === null) return true;
+  const base = normalized.split(".").at(-1) || "";
+  return /(?:^|_)(?:exec(?:ute)?|query|sql)(?:_|$)/i.test(base);
+}
+
+function hasOpaqueUnprovenSqlCallableArgument(rawStmt) {
+  const structural = maskSqlForCallNames(rawStmt);
+  if (structural === null) return true;
+  for (let open = 0; open < structural.length; open++) {
+    if (structural[open] !== "(") continue;
+    const name = callableNameBeforeOpen(structural, open);
+    if (name === null || isKnownSqlExecutorName(name) || !isPotentialSqlTextSinkName(name)) continue;
+    const parsed = readBalancedParens(structural, open);
+    if (!parsed) return true;
+    const args = splitTopLevelArgs(
+      parsed.params,
+      rawStmt.slice(open + 1, parsed.end - 1)
+    );
+    if (args.some((arg) => hasStringLiteral(arg) && !isDirectSqlStringLiteral(arg))) {
+      return true;
+    }
   }
   return false;
 }
@@ -1270,6 +1362,15 @@ try {
           "using a variable, subquery, DEFAULT, concatenation, or another expression that the " +
           "actor-binding guard cannot inspect. " +
           "Supply the complete command directly as one plain or dollar-quoted string literal, " +
+          "or add the file-level exempt marker (-- actor-binding-check: exempt) and get a manual review."
+        );
+        return true;
+      }
+      if (!hasProceduralContainer && hasOpaqueUnprovenSqlCallableArgument(rawStmt)) {
+        violations.push(
+          "This migration passes a dynamically assembled string to a callable that is not " +
+          "allowlisted as a data-only sink. The callable may execute or store SQL whose tokens " +
+          "are obscured by concatenation or helper functions. Supply one complete direct literal, " +
           "or add the file-level exempt marker (-- actor-binding-check: exempt) and get a manual review."
         );
         return true;
