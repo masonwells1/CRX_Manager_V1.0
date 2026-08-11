@@ -53,6 +53,40 @@ with `save-result`/`reflect`. Focused source and live read-only evidence remain 
 and material proof; Graphify is navigation, not authority. When Graphify is unavailable or its wrapper
 reports a supported skip, agents continue with focused source inspection and disclose the limitation.
 
+## 2026-08-10 — Spell out the whole-cent CHECK predicate and record which columns actually pass the gate
+
+Documentation-only follow-on to the exact-whole-cent compatibility policy above:
+no code, no schema, no migration, and no change to the `AGENTS.md` rule itself.
+
+That policy says a legacy `numeric` dollar column is an approved exception only
+once "an active finite whole-cent CHECK is present," but it never said what that
+CHECK is. Written from the description alone, the obvious constraint —
+`CHECK (col = ROUND(col, 2))` — **does not work**, and fails in the direction
+that looks safe. PostgreSQL `numeric` deliberately does not use IEEE-754 `NaN`
+semantics: so values stay sortable and indexable, it treats `NaN` as equal to
+`NaN` and greater than every finite value, which makes `'NaN' = ROUND('NaN', 2)`
+true. A rounding-only check therefore admits `NaN` while appearing to satisfy the
+gate. `docs/manual/DECISION_LOG.md` now carries the full predicate, both halves
+marked load-bearing, and the `<table>_<column>_whole_cents_chk` naming rule;
+`docs/workflows/SAFE_DEVELOPMENT_RULES.md` repeats it where the money rules live.
+
+Also recorded: never add one of these as `NOT VALID` over a column that still
+holds dirty rows. `NOT VALID` skips only the initial scan, and a CHECK is
+re-evaluated against the whole new row on every later UPDATE whatever column
+changed — so each legacy dirty row becomes permanently un-editable, invisibly,
+until someone tries to edit an old record.
+
+Finally, the per-column gate status, verified read-only against the live
+database on 2026-08-11: of the 12 order/quote/commission columns the 2026-08-10
+evaluation measured, **7 carry the constraint and 5 do not**, with the reason and
+status for each. Four of the five hold legacy fractional-cent rows and need a
+data repair that is a separate, unapproved decision; `orders.total_price` is
+clean but blocked because `_update_order_items_impl` overwrites it with the raw
+un-rounded line sum. The entry also names the legacy dollar columns outside that
+audit (`payments.amount`, the `commissions` amounts, `purchase_orders.total_cost`,
+the `products` price tiers and others) as unconstrained tracked debt, so the
+grandfathering is not misread as covering them.
+
 ## 2026-08-10 — Agent toolchain refresh; removed the dead Codex Sentry connector
 
 Verified the Codex side of the harness end-to-end from a Claude Code desktop session and brought the local agent toolchain current. All three Codex model tiers were confirmed live by running each one (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`); `codex-review`, `codex-gauntlet` and `codex-build.mjs` pin model and reasoning effort explicitly and correctly. Codex CLI (0.147.0) and Claude Code (2.1.226) were already at the newest published versions; six other global CLIs were updated (npm 11→12, vercel 55→58, google-workspace-mcp 2→4, filesystem MCP server, sentry, @sentry/cli), after which a live `codex exec` run confirmed the major npm jump broke nothing.
@@ -8031,7 +8065,6 @@ Source: Mason's narrated ChemMan screen recordings (docs/walkthroughs/) -> gap a
 - Review-gate kills this run included: condensed loader PDF summing chemical amounts (double-strength risk), dead Save buttons, pan-erases-sketch, obstacle-mode boundary-drag/keyboard bypasses, wrong acres on printed maps, CSP-blocked legal lookup.
 - Tests at wrap: 3,351 passed / 117 skipped. Final whole-branch review satisfied by per-unit CLEAN verdicts covering 100% of the branch delta (every pushed line was verdicted; no unreviewed lines exist).
 
-
 ## 2026-07-11 — Mobile overhaul loop COMPLETE on feat/mobile-overhaul-2026-07 (6 commits, frontend-only): bottom nav + drawer, compact TopBar/scrollable Tabs/PageHeader, Jobs/Dispatch/Inventory/Receiving phone cards, Cockpit+Field Invoices 375px pass, full-screen modals + PWA polish. All gates green. Awaiting Mason 'push it'.
 
 Mobile overhaul loop COMPLETE on feat/mobile-overhaul-2026-07 (6 commits, frontend-only): bottom nav + drawer, compact TopBar/scrollable Tabs/PageHeader, Jobs/Dispatch/Inventory/Receiving phone cards, Cockpit+Field Invoices 375px pass, full-screen modals + PWA polish. All gates green. Awaiting Mason 'push it'.
@@ -8428,9 +8461,6 @@ Turned the previously read-only **Brand vs Generic** page into an admin CRUD man
 - **Proof:** typecheck + eslint + build clean · every-page render smoke · 4 behavioral tests (real render + click-through capturing the actual insert payload) · **rolled-back LIVE insert smoke** — both payload shapes accepted by the real `ingredient_map` schema (FK + NOT NULL), aborted, 0 rows persisted. `compliance-reviewer` CLEAN.
 - **Ship state:** committed to `fix/structure-wave-2026-07`, **not** pushed to `main`. Merging the branch to `main` deploys it (Vercel) — owner-gated.
 
-
-
-
 ## 2026-07-02 — Inventory-aware scheduling, Layer 2 (scheduled jobs reserve + draw against bookings)
 
 Scheduled field jobs now actually **reserve** the inventory they'll consume, instead of just showing a warning light. When a job is scheduled, each product on it becomes a real inventory hold (`hold_type='job'`, non-expiring), and if the job belongs to a planned booking (a quote), it **draws** against that booking so the same units are never counted or billed twice. Built file-only in the `feat/inventory-layer2` worktree, hardened over 5 Codex rounds, then applied live as one batch (14 migrations) on Mason's go-ahead.
@@ -8444,7 +8474,6 @@ Scheduled field jobs now actually **reserve** the inventory they'll consume, ins
 - **Final Codex push-gate (2026-07-03)** ran on the exact merge tip and surfaced 3 P1s. One was newly-caught and single-job-reachable — **`save_quote` let you un-check "Planned" on a booking a scheduled job was still drawing from**, which reopened the booking while the job kept consuming stock (double-count). Fixed + applied live as migration **`20260702183000`** (A3.10): `save_quote` now rejects the unplan with `BOOKING_HAS_JOB_RESERVATION` (verbatim reproduction + guard-only change; rls + drift reviewers clean; `plpgsql_check` clean; post-apply sweeps clean).
 - **Coordination fix — the deferred multi-job P1s are now CLOSED (2026-07-03, migration `20260703120000`, A3.11).** A post-fix Codex gate on `183000` confirmed the unplan guard but showed it was one facet of a broader gap: quote edits and job scheduling didn't coordinate their reservations. Built ONE designed fix — a coordinated allocator **`_sync_quote_job_reservations`** that rebuilds all of a quote's active jobs together, sharing the crop-drawable remainder and the order-prebooked coverage ONCE across sibling jobs (first-come-first-served). It closes all four open facets: multi-job sibling reallocation on cancel (#2), order coverage counted once not per-job (#3), a stale job draw when a quote's booked quantity grows (#4), and a TOCTOU race in the unplan guard (#5 — `save_quote` now locks the quote before checking). `_sync_job_holds` re-routes quote-linked jobs through it; `save_quote` re-syncs its jobs after every edit. For a single job it is arithmetically identical to the old formula, so nothing changes in the common one-job case. Warn-only. Proven before apply: `plpgsql_check` clean, a 5-scenario arithmetic replay of every Codex target, and a real rolled-back `[E2E]` end-to-end (two jobs share a booking of 100 → draws 60/40, holds 60/60 → cancel one → the sibling re-draws to 60); rls + drift reviewers + Codex all clean; post-apply sweeps clean. **No residual Layer 2 deferrals remain.**
 - **Two sell channels kept separate (2026-07-03, migration `20260703130000`, A3.12).** Owner clarified the business runs two channels off the same planned booking: **chemical sales** (product we deliver to the customer for them to apply) and **job applications** (product we apply for the customer). Both hold shed stock until fulfilled, for different reasons, so their reservations must **add up, never offset** — and Mason needs an accurate "what's scheduled for us to apply" count. A full-feature Codex push-gate over the whole feature surfaced three items: **#A** the job-reservation math was *shrinking* a job's shed reservation by whatever an order had already drawn (assuming the two channels shared stock) — under-counting the shed need; fixed so **a job reserves its full application demand** (draws still cap at the booking, so nothing is double-billed — only the reservation grew to be honest). **#C** restoring an old quote version didn't re-sync its jobs; fixed to call the coordinated allocator like a normal save. **#B** (relaxing the accept guard so a completed-job booking could be "accepted") was **deliberately dropped** — in this app "accept" means Convert-to-Order (a chemical sale), which is the wrong channel for a booking fulfilled by application; Codex confirmed it was both unreachable and semantically wrong. Such bookings safely stay open (fulfilled via the application invoices); a dedicated "close / mark fulfilled by application" action is a separate owner business-process decision. Proven before apply: `plpgsql_check` clean, and a real rolled-back `[E2E]` end-to-end (order 40 + booking 100 + job needing 80 → job reserves **80** full, draws 60); rls + drift reviewers + Codex clean (only a routine doc-count); post-apply sweeps clean. Frontend: the Inventory holds list now shows a **"Job"** badge and hides the (now server-rejected) Release button for job reservations, which release automatically via the job lifecycle.
-
 
 ## 2026-07-03 — Structure Wave-2: AR due-date/aging + configurable reminder + product-category two-axis remap (4 migrations APPLIED LIVE)
 

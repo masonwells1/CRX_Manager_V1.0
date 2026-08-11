@@ -165,6 +165,26 @@ not an approved or suppressible compatibility exception until database math is v
 `numeric`, all existing values are finite whole cents, and an active finite whole-cent CHECK is
 present. Dirty or unconstrained columns remain tracked findings and are not rewritten without approval.
 
+**The "active finite whole-cent CHECK" above means exactly this predicate — write it in full:**
+
+```
+CHECK (col IS NULL OR (col = ROUND(col, 2) AND col > '-Infinity' AND col < 'Infinity'))
+```
+
+**Both halves are load-bearing; a `ROUND`-only check does NOT satisfy the rule.** PostgreSQL
+`numeric` deliberately does not use IEEE-754 NaN semantics — so values stay sortable and indexable,
+it treats `NaN` as equal to `NaN` and greater than every finite value. That makes
+`'NaN' = ROUND('NaN', 2)` true, so a rounding-only constraint lets `NaN` straight through. The
+`< 'Infinity'` bound is what rejects it. Name the constraint `<table>_<column>_whole_cents_chk`.
+
+**Never add one as `NOT VALID` over a column that still holds dirty rows.** `NOT VALID` only skips
+the initial scan; a CHECK is re-evaluated against the whole new row on every later UPDATE, whatever
+column changed, so each legacy dirty row becomes permanently un-editable. Repair the data first,
+then add the constraint `VALID`.
+
+Which columns are constrained today, which are deferred and why:
+`docs/manual/DECISION_LOG.md` (2026-08-10 entry).
+
 | Operation | How |
 |-----------|-----|
 | Store $25.50 | Store as `2550` (bigint cents) |
