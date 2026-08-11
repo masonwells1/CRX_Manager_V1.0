@@ -2,6 +2,20 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-11 — Preserve the applied line-profit backfill without replaying it by default
+
+Added the exact source for live migration `20260810025159_backfill_stale_line_profit.sql`,
+closing the repository-to-ledger gap for the already-applied 37-line profit repair. Because
+that migration rewrote a production-specific business-row population, the post-baseline
+rebuild selector now reads a small one-shot registry and withholds the repair from default
+replay while reporting the omission on stderr. An explicit `--include-one-shot` escape hatch
+remains available only after the target population has been independently proven to match
+the population originally approved. After a restore proves it already contains the corrected
+values, `--one-shot-repair-plan` emits the reviewed ledger-repair commands needed to prevent a
+later unfiltered push from rediscovering the skipped rewrite. Focused tests prove the default
+quarantine, visible warning, registry/file correspondence, deliberate override, and durable
+ledger closeout path.
+
 ## 2026-08-10 — Graphify-first agent navigation policy
 
 Made Graphify the explicit first-pass navigator for architecture, multi-file, workflow/migration,
