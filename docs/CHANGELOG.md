@@ -2,6 +2,47 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-11 — Approved-set repairs must register as one-shot; quoted function bodies are refused
+
+Closed both High findings from the round-17 adversarial review of the migration
+guard work. Each was a way to get a rewrite of a protected business table past
+every static check in the SQL validator.
+
+**A digest-bound repair was never required to register itself as one-shot.** The
+approved-set rule already forces a data repair to hash the rows it is about to
+rewrite and abort if they have moved, which is what makes the repair safe *once*
+— against the population it was approved for. What makes it safe *twice* is a
+different mechanism entirely: the apply-time replay guard and the replay-plan
+builder both look a migration up in the one-shot registry beside the migrations
+and act only on what they find there. Nothing connected the two. A repair could
+be perfectly digest-bound and completely unregistered, and then a replay onto a
+restored or drifted database would hand it straight through — the digest does
+not help there, because after a restore those are different rows wearing the
+same ids. The validator now requires every digest-bound repair to carry a
+registry entry naming the population it was approved against, and says so in the
+refusal. Ordinary schema migrations are untouched: the requirement hangs off the
+digest binding, not off the file.
+
+**A function body written as a single-quoted string was invisible to every
+scanner.** PostgreSQL accepts a body as a plain string literal, not just as a
+dollar-quoted block. Every scanner in the validator strips single-quoted
+literals before it looks for writes — that is what stops the words "update
+orders" inside a `RAISE NOTICE` from being read as a rewrite. So a body written
+as a string vanished three times over: its `UPDATE` was not seen, the function
+was not indexed as mutating, and a later call to it was not refused. The result
+was an arbitrary rewrite of a protected table with no approved-set binding
+anywhere. Rather than teach four scanners to parse quoted bodies, the shape is
+now refused outright, in both the one-line form and the form where the quote
+opens on the line after `AS`. This costs nothing: every function in the
+repository is already dollar-quoted, and a sweep of the full migration corpus
+produces zero hits.
+
+Three new mutation cases, one per bypass plus the second quoting form, taking
+the approved-set suite to 89. The test harness now builds a one-shot registry in
+its scratch directory the way the real repository has one, and deliberately
+leaves the unregistered fixture out of it, so that case fails for the reason it
+is testing rather than for a missing file.
+
 ## 2026-08-11 — One-shot replay override is claimed atomically; DELETEs bind their before-values
 
 Closed both High findings from the round-15 adversarial review of the migration

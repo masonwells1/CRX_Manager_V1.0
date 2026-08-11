@@ -1014,6 +1014,46 @@ const CASES = [
       ) +
       `\n`,
   },
+
+  // ── round 17, SEC-001: a digest binds rows, registration contains replay ──
+  // A digest-bound repair is by definition ONE-SHOT: it was approved against
+  // one population. The apply-time replay guard and the replay-plan builder
+  // both act only on what supabase/baselines/one-shot-migrations.json lists,
+  // so an unregistered repair is contained by nothing — a replay onto a
+  // restored database hands it straight through to rows that never approved
+  // it. `unregistered` keeps this fixture out of the registry the harness
+  // writes for every other case.
+  {
+    name: 'a digest-bound repair that is not registered as one-shot',
+    expect: 'violation',
+    mustReport: 'not registered as one-shot',
+    unregistered: true,
+    sql: `-- APPROVED_SET_DIGEST: ${HEX}\n${goodSetBlock()}\n`,
+  },
+
+  // ── round 17, SEC-002: a single-quoted function body hides its writes ────
+  // Every scanner here strips single-quoted literals before looking for
+  // writes, so a body written as a string is invisible three times over: the
+  // UPDATE is not seen, the function is not indexed as mutating, and the call
+  // below is not refused. Refuse the shape instead of parsing it.
+  {
+    name: 'a called function whose single-quoted body rewrites a protected table',
+    expect: 'violation',
+    mustReport: 'single-quoted string',
+    sql:
+      `CREATE FUNCTION public._fix() RETURNS void LANGUAGE plpgsql AS ` +
+      `'BEGIN UPDATE public.orders SET total_profit = 0; END;';\n` +
+      `SELECT public._fix();\n`,
+  },
+  {
+    name: 'the single-quoted body opens on the line after AS',
+    expect: 'violation',
+    mustReport: 'single-quoted string',
+    sql:
+      `CREATE OR REPLACE FUNCTION public._fix2() RETURNS void\nLANGUAGE plpgsql\nAS\n` +
+      `'BEGIN UPDATE public.orders SET total_profit = 0; END;';\n` +
+      `SELECT public._fix2();\n`,
+  },
 ];
 
 // A stamp no real migration uses, so these fixtures are never mistaken for
@@ -1075,10 +1115,34 @@ function classify(output, fileName) {
  *
  * @returns {string[]} failure descriptions, empty when the guard behaved
  */
+/**
+ * The real repo keeps a one-shot registry beside the migrations, and since
+ * round 17 a digest-bound repair must appear in it — an approved-set repair is
+ * one-shot by construction, and registration is what stops a replay re-running
+ * it against a population that never approved it. A fixture directory with no
+ * registry would therefore fail every digest-bound case for the wrong reason,
+ * so every harness builds one.
+ *
+ * @param {string} dir fixture root (the directory holding `supabase/`)
+ * @param {string[]} stems migration basenames without the `.sql` suffix
+ */
+function writeOneShotRegistry(dir, stems) {
+  const baselines = join(dir, 'supabase', 'baselines');
+  mkdirSync(baselines, { recursive: true });
+  const one_shot = {};
+  for (const stem of stems) one_shot[stem] = 'fixture: approved against a synthetic population';
+  writeFileSync(
+    join(baselines, 'one-shot-migrations.json'),
+    `${JSON.stringify({ one_shot }, null, 2)}\n`,
+    'utf8',
+  );
+}
+
 function runEditedGrandfather() {
   const dir = mkdtempSync(join(tmpdir(), 'crx-approved-set-edited-'));
   const migrations = join(dir, 'supabase', 'migrations');
   mkdirSync(migrations, { recursive: true });
+  writeOneShotRegistry(dir, [GRANDFATHERED.replace(/\.sql$/, '')]);
   writeFileSync(
     join(migrations, GRANDFATHERED),
     `${GRANDFATHERED_BODY}\n-- a later edit, however small\n`,
@@ -1105,11 +1169,20 @@ function run() {
   mkdirSync(migrations, { recursive: true });
 
   const names = [];
+  const registered = [];
   CASES.forEach((c, i) => {
     const name = `${IN_FORCE}${String(i).padStart(6, '0')}_case_${i}.sql`;
     writeFileSync(join(migrations, name), c.sql, 'utf8');
     names.push(name);
+    // Everything is registered except the case whose whole point is that it
+    // is not — otherwise that case would pass for a reason it never tested.
+    if (!c.unregistered) registered.push(name.replace(/\.sql$/, ''));
   });
+  writeOneShotRegistry(dir, [
+    ...registered,
+    GRANDFATHERED.replace(/\.sql$/, ''),
+    BACKDATED.replace(/\.sql$/, ''),
+  ]);
   // A real grandfathered migration, byte-for-byte, must stay silent: applied
   // history cannot be edited, so retro-checking it would only produce noise.
   // The same bytes under an unapproved (old-looking) name must be caught.

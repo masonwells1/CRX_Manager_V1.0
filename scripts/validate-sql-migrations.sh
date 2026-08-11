@@ -877,6 +877,59 @@ $MIG_BASENAME
       }
     ' "$file")
 
+    # ── A function body written as a single-quoted string ───────────────────
+    # PostgreSQL accepts `CREATE FUNCTION f() ... AS 'BEGIN UPDATE ...; END;'`.
+    # Every scanner in this file strips single-quoted literals before it looks
+    # for writes, so a body written that way is invisible three times over: the
+    # rewrite is not seen, the function is not indexed as mutating, and a later
+    # `SELECT f()` is not refused. That is an unbound rewrite of a protected
+    # table with nothing standing in its way.
+    #
+    # Rather than teach four scanners to parse quoted bodies, refuse the shape.
+    # CRX writes dollar-quoted bodies everywhere, so this costs nothing and
+    # closes the hole fail-closed.
+    QUOTED_BODIES=$(awk '
+      { line = tolower($0)
+        while (1) {
+          if (inblk) { e = index(line, "*/"); if (e == 0) { line = ""; break }
+                       line = substr(line, e + 2); inblk = 0 }
+          s = index(line, "/*"); if (s == 0) break
+          e = index(substr(line, s + 2), "*/")
+          if (e == 0) { line = substr(line, 1, s - 1); inblk = 1; break }
+          line = substr(line, 1, s - 1) " " substr(line, s + 2 + e + 1)
+        }
+        sub(/--.*/, "", line)
+        if (line ~ /create[ \t]+(or[ \t]+replace[ \t]+)?(function|procedure)[ \t]/) { pending = 1 }
+        if (!pending) next
+        # A dollar quote opens the body: this is the shape we want, stand down.
+        if (line ~ /\$[a-z0-9_]*\$/) { pending = 0; awaitq = 0; next }
+        if (line ~ /(^|[^a-z0-9_])as[ \t]*'"'"'/) {
+          printf "%d\t%s\n", FNR, $0; pending = 0; awaitq = 0; next
+        }
+        # `AS` at end of line, body opens on the next one.
+        if (line ~ /(^|[^a-z0-9_])as[ \t]*$/) { awaitq = 1; next }
+        if (awaitq && line ~ /^[ \t]*'"'"'/) {
+          printf "%d\t%s\n", FNR, $0; pending = 0; awaitq = 0; next
+        }
+        if (awaitq && line ~ /[^ \t]/) { awaitq = 0 }
+      }
+    ' "$file")
+
+    if [ -n "$QUOTED_BODIES" ]; then
+      echo "VIOLATION: $file"
+      echo "  Function body written as a single-quoted string:"
+      printf '%s\n' "$QUOTED_BODIES" | while IFS=$'\t' read -r q_ln q_raw; do
+        echo "    line $q_ln: $q_raw"
+      done
+      echo "  Every scanner in this validator strips single-quoted literals before"
+      echo "  it looks for writes, so a body written this way is invisible: its"
+      echo "  UPDATE is not seen, the function is not indexed as mutating, and a"
+      echo "  later call to it is not refused. Use a dollar-quoted body"
+      echo "  (\$\$ ... \$\$) so the statements inside can be read and bound."
+      echo ""
+      VIOLATIONS=$((VIOLATIONS + 1))
+    fi
+
     # Dynamic SQL rides the same scan but is not a bindable rewrite — it is a
     # refusal, and it stands on its own whether or not any table rewrite was
     # also found.
@@ -1633,7 +1686,38 @@ $MIG_BASENAME
       fi
 
       if [ "$DIGEST_BOUND" -eq 1 ]; then
-        : # bound to an approved-set digest, asserted fail-closed before the write
+        # Bound to an approved-set digest and asserted fail-closed before the
+        # write — which is exactly what makes this file a ONE-SHOT repair, not
+        # an idempotent schema change. The apply-time replay guard and the
+        # replay-plan builder both look a migration up in
+        # supabase/baselines/one-shot-migrations.json and act only on what they
+        # find there, so an unregistered repair is contained by nothing: a
+        # replay onto a restored or drifted database hands it straight through.
+        # The digest does not cover that case — it binds the rows approved when
+        # it was written, and after a restore those are different rows wearing
+        # the same ids. Registration is the containment, so require it here
+        # rather than trusting the author to remember.
+        ONE_SHOT_REGISTRY="$(dirname "$MIGRATION_DIR")/baselines/one-shot-migrations.json"
+        MIG_STEM="${MIG_BASENAME%.sql}"
+        if [ ! -f "$ONE_SHOT_REGISTRY" ]; then
+          echo "VIOLATION: $file"
+          echo "  Approved-set repair with no one-shot registry to contain it."
+          echo "  Expected: $ONE_SHOT_REGISTRY"
+          echo ""
+          VIOLATIONS=$((VIOLATIONS + 1))
+        elif ! grep -qE "^[[:space:]]*\"${MIG_STEM}\"[[:space:]]*:" "$ONE_SHOT_REGISTRY"; then
+          echo "VIOLATION: $file"
+          echo "  Approved-set repair is not registered as one-shot."
+          echo "  Add \"$MIG_STEM\" to the one_shot map in:"
+          echo "    ${ONE_SHOT_REGISTRY#./}"
+          echo "  with one line saying which population it was approved against."
+          echo "  Until it is there, list-post-baseline-migrations.mjs will put it"
+          echo "  in a replay plan and the apply-time one-shot guard will not"
+          echo "  recognise it, so it can rewrite a restored population that never"
+          echo "  approved it."
+          echo ""
+          VIOLATIONS=$((VIOLATIONS + 1))
+        fi
       elif [ -n "$OPT_OUT" ]; then
         # The waiver has exactly one honest use: the migration is populating a
         # column IT JUST ADDED, so there is no pre-existing approved population
