@@ -16,6 +16,14 @@ Evaluated CodeRabbit's bigint-cents request on the canonical profit path and dec
   - `supabase/migrations/20260810150500_save_quote_whole_cent_total_cost.sql`
   - `supabase/migrations/20260810151000_whole_cent_money_check_constraints.sql`
 
+## 2026-08-10 — Agent toolchain refresh; removed the dead Codex Sentry connector
+
+Verified the Codex side of the harness end-to-end from a Claude Code desktop session and brought the local agent toolchain current. All three Codex model tiers were confirmed live by running each one (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`); `codex-review`, `codex-gauntlet` and `codex-build.mjs` pin model and reasoning effort explicitly and correctly. Codex CLI (0.147.0) and Claude Code (2.1.226) were already at the newest published versions; six other global CLIs were updated (npm 11→12, vercel 55→58, google-workspace-mcp 2→4, filesystem MCP server, sentry, @sentry/cli), after which a live `codex exec` run confirmed the major npm jump broke nothing.
+
+- **Removed `[mcp_servers.sentry]` from `.codex/config.toml`.** Its OAuth grant had been revoked server-side (`invalid_grant: Grant not found`), so every Codex run logged two refresh errors before doing any work. Sentry is not configured for Codex and nothing depends on it — the only `sentry` string in the Codex workflows is `src/lib/sentry`, an application source path, not this connector. Removed so a future OAuth error in a Codex run means something instead of being noise operators learn to scroll past. Verified after removal: `codex mcp list` shows Supabase only, and a live run returned the correct most-recent migration with zero *Sentry* OAuth errors. The retained Supabase entry still fails its own OAuth refresh on every run with the same `invalid_grant` — a separate, pre-existing defect this change neither fixed nor introduced, recorded in the new KNOWN_ISSUES entry below.
+- **`[mcp_servers.supabase]` deliberately kept**, including `read_only=true`. It is asserted by both `check-agent-workflows.mjs` and `check-agent-guidance.mjs`. An attempt to remove it as a second dead entry was reverted when that guard failed — see the new KNOWN_ISSUES entry, which records what that guard does and does not actually prove.
+- **`agent-pair-review.md` names no model or effort.** It reaches `gpt-5.6-sol` at high effort only by routing through `codex-review`; nothing enforces it. Filed as follow-up, not fixed here.
+
 ## 2026-08-10 — Own-worktree containment compares paths case-insensitively on Windows
 
 Closed a narrower instance of the push block the 2026-08-09 own-worktree

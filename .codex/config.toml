@@ -3,9 +3,3 @@ url = "https://mcp.supabase.com/mcp?project_ref=rhyzpcqhnizqbxphqdkr&read_only=t
 startup_timeout_sec = 30
 tool_timeout_sec = 120
 required = false
-
-[mcp_servers.sentry]
-url = "https://mcp.sentry.dev/mcp"
-startup_timeout_sec = 30
-tool_timeout_sec = 120
-required = false
