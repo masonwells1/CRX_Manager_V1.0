@@ -233,12 +233,73 @@ export function isParkedDraftPath(repoRelPath, sqlText = "") {
 }
 
 // Full-disk fallback scans encounter many ordinary files. Reject non-SQL names
-// before reading them, then use the same explicit-header rule as the normal
-// branch-owned reader. Both /fleet and SessionStart call this helper.
-export function isParkedFallbackFile(repoRelPath, name, loadText = () => "") {
-  if (!/\.sql$/i.test(String(name || ""))) return false;
+// before reading them, then use the same explicit-header or verified history-pin
+// rule as the normal branch-owned reader. Both /fleet and SessionStart call this.
+export function parkedFallbackFileDiscovery(
+  repoRelPath,
+  name,
+  loadText = () => "",
+  historyText = null,
+  sha256Text = null,
+  parsedHistory = null,
+) {
+  if (!/\.sql$/i.test(String(name || ""))) {
+    return { state: "known", parked: false, reason: "" };
+  }
   const p = normRepoPath(repoRelPath);
-  return isParkedDraftPath(p, p.startsWith("supabase/migrations/") ? loadText() : "");
+  if (!p.startsWith("supabase/migrations/")) {
+    return { state: "known", parked: isParkedDraftPath(p), reason: "" };
+  }
+  const parked = parkedDraftPathsFrom(
+    [p],
+    () => true,
+    () => loadText(),
+    historyText,
+    sha256Text,
+    parsedHistory,
+  );
+  return {
+    state: parked.unknownReason ? "unknown" : "known",
+    parked: parked.has(p),
+    reason: parked.unknownReason || "",
+  };
+}
+
+// A degraded worktree may contain hundreds of migrations. Parse its history once,
+// then reuse that immutable result for every file classification; reparsing the
+// 600+ KiB history per SQL file can consume the SessionStart hook's entire budget.
+export function createParkedFallbackClassifier(
+  historyText = null,
+  sha256Text = null,
+  parseHistory = localCandidateMigrationPathsFromHistory,
+) {
+  const parsedHistory = parseHistory(historyText);
+  return (repoRelPath, name, loadText = () => "") => parkedFallbackFileDiscovery(
+    repoRelPath,
+    name,
+    loadText,
+    historyText,
+    sha256Text,
+    parsedHistory,
+  );
+}
+
+export function isParkedFallbackFile(
+  repoRelPath,
+  name,
+  loadText = () => "",
+  historyText = null,
+  sha256Text = null,
+  parsedHistory = null,
+) {
+  return parkedFallbackFileDiscovery(
+    repoRelPath,
+    name,
+    loadText,
+    historyText,
+    sha256Text,
+    parsedHistory,
+  ).parked;
 }
 
 // Which of the paths a worktree CHANGED since its branch point are parked drafts?
@@ -278,9 +339,10 @@ export function parkedDraftPathsFrom(
   readText = () => "",
   historyText = null,
   sha256Text = null,
+  parsedHistory = null,
 ) {
   const out = new Map();
-  const history = historyText === null ? null : localCandidateMigrationPathsFromHistory(historyText);
+  const history = parsedHistory ?? localCandidateMigrationPathsFromHistory(historyText);
   let unknownReason = "";
   // Every normalized path the loop actually looked at. The registry reconciliation
   // below needs it: a LOCAL CANDIDATE row whose SQL never entered this diff at all
@@ -314,7 +376,7 @@ export function parkedDraftPathsFrom(
     // signal, exactly as it is after the branch lands on origin/main. Verify the pin
     // before surfacing it; an unreadable or mismatched candidate makes the branch state
     // UNKNOWN instead of silently disappearing from /fleet.
-    if (isForwardMigration && historyText !== null) {
+    if (isForwardMigration) {
       if (history?.state !== "known") {
         unknownReason ||= history?.reason || "worktree migration history is unreadable";
       } else if (history.paths.has(normalized)) {
