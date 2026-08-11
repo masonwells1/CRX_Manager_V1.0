@@ -2244,6 +2244,14 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // MUTATING_RPCS_WITH_IDEMPOTENCY. This bucket remains for the normal pre-apply
   // window: an RPC introduced by a PR migration that is not yet live belongs
   // here until the next truthful live type regeneration.
+
+  // Wave A fix #4 (20260811050000, parked). It accepts p_idempotency_key and
+  // routes it through check_idempotency/save_idempotency, but it cannot appear
+  // in the generated types until the migration applies, so the inventory sees a
+  // mutator with no declared key. This is exactly the pre-apply window this
+  // bucket exists for; the staleness test above deletes it for us by failing the
+  // moment the RPC shows up in the generated types.
+  'correct_job_commission_split',
 ]);
 
 /**
@@ -2270,6 +2278,8 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
     'idempotency infrastructure helper (sections 2-6 closeout): binds a completed lifecycle result to its key; direct client EXECUTE is revoked',
   _claim_bound_lifecycle_idempotency:
     'idempotency infrastructure helper (sections 2-6 closeout): claims a bound lifecycle key for replay; direct client EXECUTE is revoked',
+  _guard_job_commission_split_immutable:
+    'performs no DML at all (Wave A fix #4, 20260811050000, parked); it is classified as a mutator only because its refusal message names public.correct_job_commission_split so the office can see how to fix a wrong split, and the scanner reads that message text as a call. It RETURNS trigger, so PostgreSQL refuses any direct call, and every application-role EXECUTE is revoked. Pre-apply-window entry: prune it once the migration is at or below the registry high-water',
   _insert_commissions_for_job: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _insert_commissions_for_order: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',
