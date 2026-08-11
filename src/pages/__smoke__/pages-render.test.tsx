@@ -367,6 +367,12 @@ describe('pages render-smoke (P4 — every page must mount without crashing)', (
         window.removeEventListener('error', onWindowError);
         window.removeEventListener('unhandledrejection', onUnhandledRejection);
       }
-    }, 10000);
+      // 45s (was 10s): this test asserts only that the page MOUNTS without
+      // throwing — nothing about how fast. Each case lazy-imports a page and
+      // its whole dependency graph, so its wall time tracks machine load, and
+      // AccountsPayable/InvoiceDetail blew 10s during a pre-commit run on a
+      // busy box. Generous headroom keeps load from turning a mount smoke into
+      // a red build; a page that genuinely hangs still fails, just later.
+    }, 45_000);
   }
 });
