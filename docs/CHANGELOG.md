@@ -6,10 +6,11 @@ All significant development milestones, in reverse chronological order.
 
 Recorded Mason's financial storage decision independently of the pricing implementation: new money
 storage uses bigint cents, while established PostgreSQL numeric-dollar columns may remain when their
-math stays exact and their values are constrained to finite whole cents once clean. Browser money
-paths that are added or changed must parse decimal operands into integer cents and may not introduce
-binary floating-point conversion, parsing, arithmetic, or rounding. Updated required reviewer,
-workflow, architecture, operations, and audit-template guidance that still stated the superseded
+math stays exact and their values are constrained to finite whole cents once clean. Authoritative
+browser money calculations and input-parsing paths that are added or changed must parse decimal
+operands into integer cents and may not introduce binary floating-point conversion, parsing,
+arithmetic, or rounding; display-only formatting from already-integer cents remains allowed. Updated
+required reviewer, workflow, architecture, operations, and audit-template guidance that still stated the superseded
 blanket bigint-only rule. The pre-existing `parseCents.ts` excess-precision truncation is recorded
 as open debt below rather than silently changing input behavior in this policy-only PR. The separate
 pricing implementation owns the money paths it changes; this PR changes no schema, data, or
