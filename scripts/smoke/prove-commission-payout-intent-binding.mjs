@@ -42,7 +42,21 @@ function docker(args, { input, allowFailure = false } = {}) {
     timeout: 180_000,
     killSignal: 'SIGTERM',
   });
-  if (result.error) throw result.error;
+  // A spawn-level problem — docker not installed (ENOENT), or the 180s timeout
+  // firing — arrives as result.error with result.status null. Throwing it
+  // regardless of allowFailure meant the cleanup call in main()'s finally block
+  // rethrew over the top of whatever had actually gone wrong, so the operator
+  // saw the cleanup failure and never the real one. Callers that opted into
+  // failure get a normally-shaped failed result instead.
+  if (result.error) {
+    if (!allowFailure) throw result.error;
+    return {
+      ...result,
+      status: result.status ?? -1,
+      stdout: result.stdout ?? '',
+      stderr: result.stderr ?? String(result.error.message ?? result.error),
+    };
+  }
   if (!allowFailure && result.status !== 0) {
     throw new Error(`docker ${args.join(' ')} failed:\n${result.stderr || result.stdout}`);
   }
@@ -223,6 +237,8 @@ function assertInputs() {
     'changed reference was accepted',
     'changed payment date was accepted',
     'a second actor consumed the receipt',
+    'a second actor consumed the post receipt',
+    'a second actor consumed the void receipt',
     'legacy unbound receipt was replayed',
     'legacy unbound post receipt was replayed',
     'legacy unbound void receipt was replayed',
@@ -231,6 +247,8 @@ function assertInputs() {
     'a NULL stored result was replayed as success',
     'a JSON null stored result was replayed as success',
     'a whitespace-only idempotency key was accepted',
+    'a key with no printable ASCII was accepted by create',
+    'the refused non-ASCII-blank create still paid out',
     'cross-op message lost its detail',
     'forged p_performed_by was accepted on the post replay path',
     'forged p_performed_by was accepted on the void replay path',

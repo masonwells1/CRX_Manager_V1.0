@@ -1204,7 +1204,7 @@ Genuinely still-open items from that same hunt (checked against `LEDGER.json`, n
 
 Two items the ledger flagged as **"top build priority" and Codex-rated HIGH-on-severity** turned out to already be fixed by later sessions — confirmed via migration files on disk: `reverse_blend_ticket_approval:billed-ticket-reopen-and-edit` → `20260622080000_blend_ticket_reopen_and_content_lock.sql`; `void_commission_payment:resurrect-cancelled-order` → `20260622070000_void_commission_payment_dead_order_guard.sql`. Both **confirmed applied live** (present by name in `supabase_migrations.schema_migrations`, checked 2026-07-13).
 
-### OPEN 2026-08-09 — two HIGH commission findings from the Section 7 gauntlet refresh (awaiting owner decision)
+### OPEN 2026-08-09 — two HIGH commission findings from the Section 7 gauntlet refresh (owner decision SETTLED: Option B; 3.4 parked, 3.5 built but not yet live)
 
 Source: `docs/audits/gauntlet/2026-08-09-section-07-commissions-splits-payouts-voids-refresh.md` (verdict REMEDIATION REQUIRED, 0 BLOCKER / 2 HIGH). Both were proven against **live** `pg_proc.prosrc`, not just disk. Neither is an access-control defect — RLS, admin-only payout reads, and RPC-only mutations all held. Gauntlet summary rows **3.4** and **3.5**.
 

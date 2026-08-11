@@ -989,7 +989,15 @@ describe('Reports quick-pay idempotency scope', () => {
     // The scope has to match what the server fingerprints. If it were narrower
     // than the fingerprint, a changed field would reuse the key and the server
     // would hard-refuse a retry the admin cannot escape.
-    expect(markPaid).toContain('const scope = `${profile!.id}|${[...new Set(ids)].sort().join(\'-\')}`');
+    // `actor` is the null-checked binding for `profile` taken at the top of
+    // handleMarkPaid. It used to read `profile!.id` here — a non-null assertion
+    // that would have thrown a TypeError INSIDE the try block, where the catch
+    // reports it as a payment of unknown outcome. Same identity, honestly
+    // guarded; assert against the guarded binding so a regression back to the
+    // assertion form is caught.
+    expect(markPaid).toContain('const scope = `${actor.id}|${[...new Set(ids)].sort().join(\'-\')}`');
+    expect(markPaid, 'the actor id must come from a guard, not a non-null assertion')
+      .not.toContain('profile!');
     expect(markPaid).toContain('markPaidKeys.current.get(scope)');
     expect(markPaid).toContain('markPaidKeys.current.set(scope, entry)');
 

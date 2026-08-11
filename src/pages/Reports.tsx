@@ -493,6 +493,14 @@ export default function Reports() {
   // ─── Commission payment-batch creation ──────────────────────
   const handleMarkPaid = async () => {
     if (selectedCommissions.size === 0) { toast('error', 'Select at least one commission'); return; }
+    // Guard rather than assert. Everything below needs the actor id — it is
+    // both half the idempotency scope and the p_performed_by the server binds
+    // the receipt to — and a non-null assertion on a value the rest of this
+    // file treats as nullable would throw a TypeError INSIDE the try, where
+    // the catch reports it as a payment attempt of unknown outcome. Refusing
+    // up front is the honest answer: nothing was sent.
+    const actor = profile;
+    if (!actor) { toast('error', 'Your profile is still loading — try again in a moment.'); return; }
     // Only pending commissions can be marked paid
     const selected = commissionData.filter((c) => selectedCommissions.has(c.id));
     const nonPending = selected.filter((c) => c.status !== 'pending');
@@ -537,13 +545,13 @@ export default function Reports() {
         // Sorted and de-duplicated to match the server-side fingerprint, so
         // re-selecting the same commissions in a different order is the same
         // scope here as it is there.
-        const scope = `${profile!.id}|${[...new Set(ids)].sort().join('-')}`;
+        const scope = `${actor.id}|${[...new Set(ids)].sort().join('-')}`;
         let entry = markPaidKeys.current.get(scope);
         if (!entry) {
           // First attempt for this selection: mint the key and freeze the date
           // with it, so every replay sends the same date the server already
           // fingerprinted.
-          entry = { key: generateIdempotencyKey('create_commission_payment', profile!.id), date: today };
+          entry = { key: generateIdempotencyKey('create_commission_payment', actor.id), date: today };
           markPaidKeys.current.set(scope, entry);
         }
         scopesThisClick.push(scope);
@@ -555,7 +563,7 @@ export default function Reports() {
           p_reference: '',
           p_payment_date: entry.date,
           p_notes: 'Quick pay from Reports page',
-          p_performed_by: profile!.id,
+          p_performed_by: actor.id,
           p_idempotency_key: entry.key,
         });
         if (error) throw new Error(error.message);
@@ -591,6 +599,13 @@ export default function Reports() {
       }
       const voidedCount = createdPaymentIds.filter((id) => statusById.get(id) === 'voided').length;
       const unverifiedCount = createdPaymentIds.filter((id) => !statusById.has(id)).length;
+      // A batch that came back POSTED is still a success — those commissions
+      // are paid — but the plain message below calls every batch "unposted"
+      // and tells the admin to go and post it. On a replay that is false: the
+      // first attempt's response was lost, another admin posted the resulting
+      // batch, and this retry replayed the original receipt. Sending someone
+      // to post an already-posted payout is how a second one gets created.
+      const postedCount = createdPaymentIds.filter((id) => statusById.get(id) === 'posted').length;
 
       // Every recipient landed AND its outcome has been read back, so the click
       // is finished and its keys are spent. Retiring them here — not mid-loop,
@@ -611,9 +626,13 @@ export default function Reports() {
           parts.push(`${unverifiedCount} could not be read back just now, so ${unverifiedCount === 1 ? 'its' : 'their'} current state is unconfirmed`);
         }
         toast('warning', `${parts.join('; ')}. Check Commission Payments before marking them paid again.${listIsCurrent ? '' : STALE_COMMISSION_LIST_NOTE}`);
+      } else if (postedCount > 0) {
+        const remaining = createdPaymentIds.length - postedCount;
+        toast('success', `${totalBatched} commission(s) are in ${createdPaymentIds.length} payment batch(es). ${postedCount} ${postedCount === 1 ? 'is' : 'are'} already posted — nothing further to do for ${postedCount === 1 ? 'that one' : 'those'}${remaining > 0 ? `; review and post the remaining ${remaining} in Commission Payments` : ''}.${listIsCurrent ? '' : STALE_COMMISSION_LIST_NOTE}`);
+        logActivity({ event: 'commission_payment_batch_created', description: `${totalBatched} commission(s) in ${createdPaymentIds.length} payment batch(es) via Reports (${postedCount} already posted)`, performedBy: actor.id });
       } else {
         toast('success', `${totalBatched} commission(s) added to ${byRecipient.size} unposted payment batch${byRecipient.size > 1 ? 'es' : ''}. Review and post ${byRecipient.size > 1 ? 'them' : 'it'} in Commission Payments.`);
-        if (profile) logActivity({ event: 'commission_payment_batch_created', description: `${totalBatched} commission(s) added to unposted payment batches via Reports`, performedBy: profile.id });
+        logActivity({ event: 'commission_payment_batch_created', description: `${totalBatched} commission(s) added to unposted payment batches via Reports`, performedBy: actor.id });
       }
     } catch (err: unknown) {
       // Backstop only. The scoping above should make a binding refusal
