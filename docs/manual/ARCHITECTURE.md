@@ -95,11 +95,16 @@ by a different button, page, or a race between two browser tabs. See
 idempotency, row-locking, and status-guards are near-universal on the
 busiest database functions).
 
-**Money is always a `bigint` of cents** — never a float, never a `numeric`
-dollars column for anything that gets summed or compared. `100` means
-`$1.00`. This is enforced by a pre-write hook (`money-safety.mjs`, see
-`docs/reference/agent-guardrails.md`) that blocks `parseFloat()` on any
-variable whose name ends in `_cents`.
+**Money must resolve to exact whole cents.** New storage uses `bigint` cents,
+where `100` means `$1.00`. Established PostgreSQL `numeric` dollar storage may
+remain temporarily to avoid a risky unit rewrite, but it is not an approved
+compatibility exception until database math is verified as exact `numeric`, all
+existing values are finite whole cents, and an active finite whole-cent CHECK is
+present. Dirty or unconstrained columns remain tracked findings. TypeScript must parse decimal
+operands into integer cents before money math; binary-float conversion,
+arithmetic, and rounding are not allowed. The pre-write `money-safety.mjs` hook
+(see `docs/reference/agent-guardrails.md`) blocks `parseFloat()` on variables
+whose names end in `_cents`.
 
 Concrete rules that follow from this principle (full list in `AGENTS.md`
 "CRX Hard Rules"):

@@ -3,7 +3,6 @@
   "acceptedByDesign": [
     { "key": "profile_public_view-security-definer", "reason": "profile_public_view uses security_invoker=off (SECURITY DEFINER semantics) BY DESIGN to expose only non-PII profile columns. Advisor flags ERROR; accepted. Migration 20260510070000." },
     { "key": "anon-executable-secdef-functions", "reason": "~53 anon-executable SECURITY DEFINER functions are accepted/inert grant-debt: each self-gates on auth.uid()/require_admin() as its first executable statement (runtime-proven anon is rejected). Trigger fns in the set error on direct call. NOT a hole. Only a NEW anon-exec SECDEF mutator NOT in this baseline is a finding." },
-    { "key": "commissions.commission_amount-numeric-dollars", "reason": "commissions.commission_amount is numeric DOLLARS (not bigint cents) BY DESIGN. Do not flag as money-as-float." },
     { "key": "reportPdf.ts-columnStyles-any", "reason": "reportPdf.ts columnStyles uses the one allowed `any` per CLAUDE.md. Accepted." },
     { "key": "customer-rls-lower-bound-only", "reason": "Customer RLS is intentionally lower-bound-only by design. Accepted." },
     { "key": "supabase-leaked-password-protection-disabled", "reason": "Leaked-password protection toggle is a known OWNER item (L4) — Mason toggles it in the Supabase dashboard. Not a code finding." },

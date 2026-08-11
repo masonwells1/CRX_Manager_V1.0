@@ -61,8 +61,13 @@ F2 is last because it may need an owner decision.
   the mock too, or the error path throws `No "X" export is defined on the mock`.
 - ESLint `no-unused-vars` fires on intermediate edit states (import added before its usage) - it
   clears when the usage lands; confirm with a final `npm run lint`.
-- Money is bigint cents; display/edit dollars via `(cents/100).toFixed(2)` + `parseDollarsToCents`
-  (from `src/lib/parseCents`).
+- New money storage is bigint cents; legacy PostgreSQL numeric-dollar storage is approved only after
+  exact numeric math, clean finite whole-cent values, and an active finite whole-cent CHECK are verified;
+  dirty or unconstrained columns remain findings. Existing approved columns retain
+  exact `numeric` arithmetic. Before using the shared helpers from `src/lib/parseCents`, reject
+  inputs with more than two fractional digits or apply one approved exact decimal rounding rule;
+  those legacy helpers currently truncate excess precision and are not sufficient alone. Never use
+  binary floating-point rounding for money.
 - In NEW code avoid raw em-dashes (the file-write pipeline can mangle them) - use ASCII "-" or the
   `—` escape / `&mdash;` in JSX text.
 - `npm run typecheck` (tsconfig.app.json) is the only real typecheck.

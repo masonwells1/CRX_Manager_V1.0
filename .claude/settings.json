@@ -386,7 +386,7 @@
         "hooks": [
           {
             "type": "prompt",
-            "prompt": "CONTEXT COMPACTION is about to happen. Summarize: files modified this session; migrations created (and whether src/types/index.ts was updated); current task and next step; last build/test status. Always include these reminders: idempotency_keys columns are idempotency_key/operation/result (jsonb, no ::text); money = bigint cents, use parseDollarsToCents; .update/.delete need checkMutationResult; RPC usage needs assertRpcResult; SECURITY DEFINER functions need SET search_path = public, pg_temp; Mason has zero coding experience — explain in plain English."
+            "prompt": "CONTEXT COMPACTION is about to happen. Summarize: files modified this session; migrations created (and whether src/types/index.ts was updated); current task and next step; last build/test status. Always include these reminders: idempotency_keys columns are idempotency_key/operation/result (jsonb, no ::text); money = exact whole cents — new storage uses bigint cents, documented legacy PostgreSQL numeric-dollar columns keep exact numeric math and whole-cent constraints once clean, and authoritative TypeScript rejects amounts with more than two fractional digits or applies one approved exact decimal rounding rule before converting to integer cents; parseDollarsToCents() currently truncates excess precision and is insufficient without that validation; binary-floating-point rounding is prohibited for money; .update/.delete need checkMutationResult; RPC usage needs assertRpcResult; SECURITY DEFINER functions need SET search_path = public, pg_temp; Mason has zero coding experience — explain in plain English."
           }
         ]
       }
