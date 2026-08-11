@@ -2,6 +2,33 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-10 — Approved-set digests now cover the rows actually written (PR #364, Codex round 10)
+
+Four HIGH findings from the round-10 adversarial review, every one of them against the guards added
+earlier in this same PR rather than against the migration it was guarding:
+
+1. **A one-shot replay decision is bound to the database it was captured from.** The applied-migration
+   snapshot carried no project identity, so a capture taken against one Supabase project could authorize
+   a replay decision against another. `refresh-applied-migrations.mjs` now requires `--project=<ref>` and
+   stamps it into the snapshot; `migration-apply-guard.mjs` refuses an unbound snapshot, a snapshot from
+   a different project, and the legacy bare-array shape.
+2. **The approved-set digest had to cover the rows actually written.** The validator only checked that the
+   hashing statements *mentioned* every rewritten table and column — never that the hash and the write
+   select the same rows. Its own accepted fixture demonstrated the hole: hash `orders WHERE stale`, then
+   update every order. There is no static way to prove two arbitrary SQL predicates match, so the second
+   predicate is now banned outright. A repair must capture one id array per table under `FOR UPDATE`,
+   hash exactly `WHERE id = ANY(<that array>)`, write through the same array, and assert `ROW_COUNT`
+   against it. Tracking is **per table**, not per migration, so a legitimate two-table repair with two
+   captured arrays still passes.
+3. **A decoy inequality could make an inverted digest guard pass** — the comparison is now read from the
+   statement that actually raises.
+4. **Function-driven rewrites are no longer invisible** — a repair that mutates through a called function
+   is attributed to the tables that function writes.
+
+Suites, all green: approved-set validator **61 mutation cases**, `migration-apply-guard` **103
+assertions**, `refresh-applied-migrations` **14 assertions**. Each fix was mutation-proved — the guard was
+broken on purpose and the new assertion went red before the fix went in.
+
 ## 2026-08-10 — Review fixes on the harness guards (PR #369)
 
 Six findings from the Codex and CodeRabbit reviews of PR #369, all in the pre-commit harness. Five are

@@ -188,6 +188,83 @@ if [ ! -d "$MIGRATION_DIR" ]; then
   exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# MUTATING-FUNCTION INDEX (Codex High, round 10, finding 4)
+# ---------------------------------------------------------------------------
+# The rewrite scanner below deliberately skips function BODIES: a body is
+# runtime logic, not a one-shot data migration. That is true right up until the
+# migration calls the function itself, and then it is a bypass:
+#
+#   CREATE FUNCTION _fix() RETURNS void LANGUAGE plpgsql AS $x$
+#   BEGIN UPDATE public.orders SET total_profit = 0; END $x$;
+#   SELECT _fix();
+#
+# The UPDATE is invisible (inside a body) and the SELECT is not a write, so the
+# whole thing passed with no approved-set binding at all. The same hole is open
+# for functions defined by EARLIER migrations — `SELECT public.recalc_all()` is
+# just as total a rewrite, and its body is not even in this file.
+#
+# So the write set of every function EVERY migration defines is indexed once,
+# and a top-level call to any function in that index is refused. The index is
+# built from the whole migration directory, which includes the file being
+# scanned, so same-file and cross-file helpers are covered by one mechanism.
+#
+# Deliberately over-strict in two ways, both fail-closed: a function is judged
+# by the union of every definition of it in history (an old mutating body still
+# counts after a later rewrite made it read-only), and the refusal stands even
+# if the migration DOES carry a digest — a body's predicates are runtime logic,
+# so no static check can show the digest covers the rows it touches. Inline the
+# DML so it can be read and bound, or split the helper into its own migration
+# that does not call it.
+MUTATING_FNS_RE=""
+MUTATING_FNS_BUILT=false
+build_mutating_fn_index() {
+  if [ "$MUTATING_FNS_BUILT" = true ]; then return 0; fi
+  MUTATING_FNS_BUILT=true
+  MUTATING_FNS_RE=$(find "$MIGRATION_DIR" -name '*.sql' -type f -print0 \
+    | xargs -0 awk -v tables="$BUSINESS_ROW_TABLES" '
+        # Per-file reset: an unterminated body must not leak into the next file.
+        FNR == 1 { infn = 0; curfn = ""; tag = "" }
+        {
+          l = tolower($0)
+          sub(/--.*/, "", l)
+          gsub(/'"'"'[^'"'"']*'"'"'/, " ", l)
+          gsub(/"/, "", l)
+          if (!infn) {
+            if (l !~ /create[ \t]+(or[ \t]+replace[ \t]+)?function[ \t]/) next
+            f = l
+            sub(/^.*create[ \t]+(or[ \t]+replace[ \t]+)?function[ \t]+/, "", f)
+            sub(/[^a-z0-9_.].*$/, "", f)
+            sub(/^public\./, "", f)
+            if (f == "") next
+            curfn = f; infn = 1; tag = ""
+          }
+          buf[curfn] = buf[curfn] " " l
+          # Body extent is tracked by DOLLAR QUOTES, not by the LANGUAGE marker:
+          # `LANGUAGE plpgsql AS $$...$$` puts the marker BEFORE the body, and a
+          # marker-terminated scan would attribute an empty body to the function.
+          s = l
+          while (match(s, /\$[a-z0-9_]*\$/)) {
+            d = substr(s, RSTART, RLENGTH)
+            s = substr(s, RSTART + RLENGTH)
+            if (tag == "") { tag = d; continue }
+            if (d == tag) { infn = 0; curfn = ""; tag = ""; break }
+          }
+          # String-literal body (`AS '"'"'select 1'"'"' LANGUAGE sql;`) never opens a
+          # dollar quote; without this the body would swallow the rest of the file.
+          if (infn && tag == "" && l ~ /;/) { infn = 0; curfn = "" }
+        }
+        END {
+          for (f in buf) {
+            if (buf[f] ~ ("(^|[^a-z0-9_])(update|merge[ \t]+into|delete[ \t]+from|insert[ \t]+into|truncate([ \t]+table)?)[ \t]+(only[ \t]+)?(public\\.)?(" tables ")([^a-z0-9_]|$)")) {
+              print f
+            }
+          }
+        }
+      ' 2>/dev/null | sort -u | tr '\n' '|' | sed 's/|$//')
+  return 0
+}
+
 SCAN_MODE="full"
 DELETED=""
 if [ "$CHANGED_ONLY" = true ]; then
@@ -435,7 +512,12 @@ for file in $ALL_SQL; do
     # tab as IFS *whitespace*, so a run of tabs collapses into one delimiter
     # and an empty field silently shifts every field after it — which put the
     # statement text into r_cols and left r_raw blank for every DELETE.
-    SCAN_HITS=$(awk -v tables="$BUSINESS_ROW_TABLES" '
+    #
+    # Indirect rewrites ride a third channel (kind `indirect`) and are also a
+    # refusal — see MUTATING-FUNCTION INDEX above for why a call to a body that
+    # writes a protected table cannot be bound to a digest.
+    build_mutating_fn_index
+    SCAN_HITS=$(awk -v tables="$BUSINESS_ROW_TABLES" -v mutfns="$MUTATING_FNS_RE" '
       {
         raw[FNR] = $0
         line = tolower($0)
@@ -458,16 +540,40 @@ for file in $ALL_SQL; do
         # Drop quoting BEFORE normalizing, so "public"."orders" survives as one
         # dotted token instead of splitting into public . orders.
         gsub(/"/, "", line)
-        # Function-body mode. Both markers can share one line
-        # (CREATE FUNCTION f() RETURNS void AS $$ ... $$ LANGUAGE plpgsql;), so
-        # the close is checked on the same line as the open, not only after it.
-        if (line ~ /create[ \t]+(or[ \t]+replace[ \t]+)?function/) {
-          infn = 1
-          if (line ~ /language[ \t]+(plpgsql|sql)/) { infn = 0 }
+        # Function-body mode, bounded by DOLLAR QUOTES — not by the LANGUAGE
+        # marker, which round 9 used and which is wrong in both directions.
+        # CRX writes functions LANGUAGE-first:
+        #
+        #   CREATE OR REPLACE FUNCTION f() RETURNS void
+        #   LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+        #   AS $$ BEGIN UPDATE public.orders SET ...; END $$;
+        #
+        # so the marker arrives BEFORE the body: body mode ended on line 2 and
+        # every statement in the body was scanned as though it were top-level.
+        # That made ordinary trigger and RPC definitions look like unbound
+        # one-shot rewrites (a false alarm on legitimate work), while a
+        # body-first function still hid its DML — the fail-open half.
+        #
+        # A dollar-quote tag is unambiguous: the body runs from the opening tag
+        # to the matching close, whatever order the clauses came in, and a
+        # differently-tagged nested quote inside it is passed over. A DO block
+        # is deliberately NOT a function body — that is where backfills live.
+        if (!infn && line ~ /create[ \t]+(or[ \t]+replace[ \t]+)?function/) {
+          infn = 1; fntag = ""
+        }
+        if (infn) {
+          s = line
+          while (match(s, /\$[a-z0-9_]*\$/)) {
+            d = substr(s, RSTART, RLENGTH)
+            s = substr(s, RSTART + RLENGTH)
+            if (fntag == "") { fntag = d; continue }
+            if (d == fntag) { infn = 0; fntag = ""; break }
+          }
+          # A string-literal body (AS '"'"'select 1'"'"') opens no dollar quote; without
+          # this the signature would swallow the rest of the file.
+          if (infn && fntag == "" && line ~ /;/) { infn = 0 }
           next
         }
-        if (infn && line ~ /language[ \t]+(plpgsql|sql)/) { infn = 0; next }
-        if (infn) next
         # Normalize every non-identifier character to a space. This also strips
         # quotes, so "public"."orders" collapses to the token public.orders.
         # `;` `,` and `=` survive as tokens of their own: statement boundaries
@@ -502,6 +608,32 @@ for file in $ALL_SQL; do
         }
         return out
       }
+      # Which captured id-set does the statement starting at token p write
+      # through? (Codex High, round 10, finding 2.)
+      #
+      # A digest binds nothing unless the rows it hashed are the rows that get
+      # written. Hashing `orders WHERE stale` and then updating every order
+      # satisfied every earlier check — the two predicates were never required
+      # to select the same ids. The fix is to remove the second predicate
+      # entirely: capture the approved ids ONCE, hash those, then write through
+      # `WHERE id = ANY(<that same array>)`.
+      #
+      # Normalization already turned `ANY(v_ids)` into the tokens `any` `v_ids`
+      # and kept `=` as its own token, so the shape is read directly off the
+      # token stream. An alias or schema prefix on the id column is fine
+      # (`o.id`); `order_id = ANY(...)` is not — it must be the row identity the
+      # digest also aggregated by.
+      function bound_var(p,   k, v) {
+        for (k = p; k <= ntok && tok[k] != ";"; k++) {
+          if (tok[k] !~ /(^|\.)id$/) continue
+          if (tok[k + 1] != "=" || tok[k + 2] != "any") continue
+          v = tok[k + 3]
+          if (v == "" || v == ";") continue
+          sub(/^[a-z0-9_]+\./, "", v)
+          return v
+        }
+        return "-"
+      }
       # First token of the statement containing token p, so a privilege
       # `GRANT EXECUTE ON FUNCTION` is never mistaken for dynamic SQL.
       function stmt_head(p,   k) {
@@ -517,8 +649,26 @@ for file in $ALL_SQL; do
               tok[i + 1] != "function" && tok[i + 1] != "procedure" &&
               tok[i + 1] != "on" &&
               stmt_head(i) != "grant" && stmt_head(i) != "revoke") {
-            printf "%d\t%s\t%s\t%s\t%s\n", tokln[i], "(dynamic)", "dynamic", "-", raw[tokln[i]]
+            printf "%d\t%s\t%s\t%s\t%s\t%s\n", tokln[i], "(dynamic)", "dynamic", "-", "-", raw[tokln[i]]
             continue
+          }
+          # Indirect rewrite: a top-level CALL/PERFORM/SELECT of a function whose
+          # body writes a protected table. The name alone is not a call — it is
+          # also how a function is granted, dropped, commented, altered, and
+          # bound to a trigger — so those statement heads are excluded. Everything
+          # else counts, including inside a DO block, which is exactly where a
+          # `PERFORM _fix()` bypass would sit.
+          callee = tok[i]
+          sub(/^public\./, "", callee)
+          if (mutfns != "" && callee ~ ("^(" mutfns ")$") && !seenfn[callee]) {
+            h = stmt_head(i)
+            if (h != "grant" && h != "revoke" && h != "comment" && h != "drop" &&
+                h != "alter" && h != "create" &&
+                tok[i - 1] != "function" && tok[i - 1] != "procedure") {
+              seenfn[callee] = 1
+              printf "%d\t%s\t%s\t%s\t%s\t%s\n", tokln[i], callee, "indirect", "-", "-", raw[tokln[i]]
+              continue
+            }
           }
           if (tok[i] == "truncate") {
             j = i + 1
@@ -528,7 +678,7 @@ for file in $ALL_SQL; do
               tt = tok[j]
               sub(/^public\./, "", tt)
               if (tt ~ ("^(" tables ")$")) {
-                printf "%d\t%s\t%s\t%s\t%s\n", tokln[i], tt, "truncate", "-", raw[tokln[i]]
+                printf "%d\t%s\t%s\t%s\t%s\t%s\n", tokln[i], tt, "truncate", "-", "-", raw[tokln[i]]
               }
               if (tok[j + 1] == ",") { j += 2; continue }
               break
@@ -564,8 +714,8 @@ for file in $ALL_SQL; do
           sub(/^public\./, "", target)
           if (target ~ ("^(" tables ")$")) {
             sc = (setp ? set_cols(setp) : "")
-            printf "%d\t%s\t%s\t%s\t%s\n", tokln[i], target, kind,
-                   (sc == "" ? "-" : sc), raw[tokln[i]]
+            printf "%d\t%s\t%s\t%s\t%s\t%s\n", tokln[i], target, kind,
+                   (sc == "" ? "-" : sc), bound_var(i), raw[tokln[i]]
           }
         }
       }
@@ -575,17 +725,32 @@ for file in $ALL_SQL; do
     # refusal, and it stands on its own whether or not any table rewrite was
     # also found.
     DYNAMIC_HITS=$(printf '%s\n' "$SCAN_HITS" | awk -F'\t' 'NF && $3 == "dynamic"')
-    REWRITES=$(printf '%s\n' "$SCAN_HITS" | awk -F'\t' 'NF && $3 != "dynamic"')
+    INDIRECT_HITS=$(printf '%s\n' "$SCAN_HITS" | awk -F'\t' 'NF && $3 == "indirect"')
+    REWRITES=$(printf '%s\n' "$SCAN_HITS" | awk -F'\t' 'NF && $3 != "dynamic" && $3 != "indirect"')
 
     if [ -n "$DYNAMIC_HITS" ]; then
       echo "VIOLATION: $file"
       echo "  Top-level dynamic SQL in a data migration:"
-      printf '%s\n' "$DYNAMIC_HITS" | while IFS=$'\t' read -r d_ln d_tbl d_kind d_cols d_raw; do
+      printf '%s\n' "$DYNAMIC_HITS" | while IFS=$'\t' read -r d_ln d_tbl d_kind d_cols d_var d_raw; do
         echo "    line $d_ln: $d_raw"
       done
       echo "  An EXECUTE builds its statement at runtime, so no static guard can"
       echo "  see which tables or columns it rewrites — including this one."
       echo "  Write the statement out literally so it can be read and bound."
+      echo ""
+      VIOLATIONS=$((VIOLATIONS + 1))
+    fi
+
+    if [ -n "$INDIRECT_HITS" ]; then
+      echo "VIOLATION: $file"
+      echo "  Top-level call to a function that rewrites business rows:"
+      printf '%s\n' "$INDIRECT_HITS" | while IFS=$'\t' read -r n_ln n_fn n_kind n_cols n_var n_raw; do
+        echo "    line $n_ln: $n_fn() — its body writes a protected table"
+      done
+      echo "  Calling it makes this migration a one-shot rewrite, but the rows it"
+      echo "  touches are decided by the function's own runtime predicates, so no"
+      echo "  digest can be shown to cover them. Inline the DML here so it can be"
+      echo "  read and bound to an approved set."
       echo ""
       VIOLATIONS=$((VIOLATIONS + 1))
     fi
@@ -623,6 +788,40 @@ for file in $ALL_SQL; do
         # Also capture the identifier on the left of that operator, so the next
         # check can prove THAT variable is the one the hash was computed into —
         # otherwise any unrelated hash call anywhere above satisfies the guard.
+        #
+        # Round 10 (Codex High): "an inequality occurs somewhere to the left" is
+        # not the same claim as "the computed hash is compared against the
+        # approved digest", and the gap between those two is a working bypass:
+        #
+        #   IF actual <> actual OR actual = '<approved digest>' THEN RAISE ...
+        #
+        # The old scan saw a mismatch operator, recovered the correct variable
+        # name from its left side, and passed — while the operator that actually
+        # governs the digest is `=`. At runtime that raises when the data is
+        # APPROVED and writes when it has DRIFTED: the precise polarity
+        # inversion this guard exists to stop, wearing the shape of a guard.
+        #
+        # So the mismatch operator must now be the one that governs the digest,
+        # proven structurally rather than positionally:
+        #
+        #   ADJACENCY — nothing but whitespace and the opening quote may sit
+        #   between the operator and the digest literal. In the decoy, `<>` is
+        #   separated from the hex by `actual or actual = '`, so it no longer
+        #   counts as the digest's operator.
+        #
+        #   NO COMPOUND CONDITION — adjacency alone still admits
+        #   `IF false AND v_actual <> '<hex>' THEN RAISE`, where the RAISE is
+        #   unreachable. A boolean or conditional keyword anywhere in the
+        #   condition means the polarity is no longer decidable by reading the
+        #   operator, so the canonical single-comparison shape is required:
+        #
+        #     IF v_actual IS DISTINCT FROM '"'"'<approved digest>'"'"' THEN
+        #       RAISE EXCEPTION ...;
+        #     END IF;
+        #
+        # This is deliberately narrow. A migration is free to write any guard it
+        # likes; it just cannot claim digest binding for one the validator
+        # cannot read the polarity of.
         DIGEST_CMP=$(awk -v hex="$DIGEST_HEX" '
           {
             l = tolower($0); sub(/--.*/, "", l)
@@ -637,20 +836,45 @@ for file in $ALL_SQL; do
             gsub(/!=/, "@", pre)
             k = 0
             for (j = length(pre); j >= 1; j--) { if (substr(pre, j, 1) == "@") { k = j; break } }
-            if (k == 0) next
+            if (k == 0) { print FNR "\t\tno-mismatch"; exit }
+            # ADJACENCY: only blanks and the digest literal'"'"'s opening quote may
+            # stand between that operator and the digest itself.
+            gap = substr(pre, k + 1)
+            if (gap !~ /^[ \t]*'"'"'?[ \t]*$/) { print FNR "\t\tdecoy"; exit }
             lhs = substr(pre, 1, k - 1)
+            # NO COMPOUND CONDITION: the governing operator must be the only one.
+            if (lhs ~ /(^|[^a-z0-9_])(or|and|not|case|when|coalesce|nullif)([^a-z0-9_]|$)/) {
+              print FNR "\t\tcompound"; exit
+            }
             sub(/[^a-z0-9_]+$/, "", lhs)
-            if (match(lhs, /[a-z0-9_]+$/)) { print FNR "\t" substr(lhs, RSTART, RLENGTH) }
-            else { print FNR "\t" }
+            if (match(lhs, /[a-z0-9_]+$/)) { print FNR "\t" substr(lhs, RSTART, RLENGTH) "\tok" }
+            else { print FNR "\t\tok" }
             exit
           }
         ' "$file")
+        DIGEST_CMP_STATUS=$(printf '%s' "$DIGEST_CMP" | cut -f3)
         DIGEST_EXEC_LINE=$(printf '%s' "$DIGEST_CMP" | cut -f1)
         DIGEST_VAR=$(printf '%s' "$DIGEST_CMP" | cut -f2)
+        # A rejected comparison is NOT a comparison. Blank the line so every
+        # downstream test treats it as "never compared", and carry a reason that
+        # names the specific shape rather than the generic one.
+        DIGEST_CMP_WHY=""
+        case "$DIGEST_CMP_STATUS" in
+          decoy)
+            DIGEST_CMP_WHY="the digest at line $DIGEST_EXEC_LINE is not governed by the mismatch operator on that line — something else sits between them (a decoy such as \`IF actual <> actual OR actual = '<digest>'\` compares the digest with =, which aborts when the data is right and writes when it has drifted)"
+            DIGEST_EXEC_LINE="" ;;
+          compound)
+            DIGEST_CMP_WHY="the digest at line $DIGEST_EXEC_LINE is compared inside a compound condition — its polarity is not readable. Use the canonical single test: IF <computed> IS DISTINCT FROM '<digest>' THEN RAISE EXCEPTION"
+            DIGEST_EXEC_LINE="" ;;
+          no-mismatch)
+            DIGEST_EXEC_LINE="" ;;
+        esac
         DIGEST_MENTION_LINE=$(awk -v hex="$DIGEST_HEX" '
           { l = tolower($0); sub(/--.*/, "", l); if (index(l, hex) > 0) { print FNR; exit } }
         ' "$file")
-        if [ -z "$DIGEST_EXEC_LINE" ] && [ -n "$DIGEST_MENTION_LINE" ]; then
+        if [ -n "$DIGEST_CMP_WHY" ]; then
+          DIGEST_WHY="$DIGEST_CMP_WHY"
+        elif [ -z "$DIGEST_EXEC_LINE" ] && [ -n "$DIGEST_MENTION_LINE" ]; then
           DIGEST_WHY="the digest is mentioned at line $DIGEST_MENTION_LINE but never tested for a MISMATCH — use <>, != or IS DISTINCT FROM (an = test aborts when the data is right and writes when it has drifted)"
         elif [ -z "$DIGEST_EXEC_LINE" ]; then
           DIGEST_WHY="the digest appears only in a comment — it is documented, never compared"
@@ -695,6 +919,7 @@ for file in $ALL_SQL; do
           # `;`, and the hash call and the assignment must land in one statement.
           DIGEST_VAR_RE=$(printf '%s' "$DIGEST_VAR" | sed 's/[^a-z0-9_]//g')
           DIGEST_SRC_WHY=""
+          DIGEST_SET_PAIRS=""
           if [ -z "$DIGEST_VAR_RE" ]; then
             COMPUTED=0
           else
@@ -723,6 +948,15 @@ for file in $ALL_SQL; do
               # identifier (`order_id` must NOT satisfy `id`)?
               function tok_in(str, t) {
                 return (str ~ ("(^|[^a-z0-9_])([a-z0-9_]+\\.)?" t "([^a-z0-9_]|$)"))
+              }
+              # The array variable a statement restricts its rows to, from
+              # `WHERE o.id = ANY(v_ids)`. "" when the statement chooses its rows
+              # by some other predicate. (Codex High, round 10, finding 2.)
+              function id_set_var(str,   v) {
+                if (match(str, /(^|[^a-z0-9_.])([a-z0-9_]+\.)?id[ \t]*=[ \t]*any[ \t]*\([ \t]*[a-z0-9_]+/) == 0) return ""
+                v = substr(str, RSTART, RLENGTH)
+                sub(/.*[ \t(]/, "", v)
+                return v
               }
               FNR >= fl { next }
               { l = tolower($0); sub(/--.*/, "", l); buf = buf " " l }
@@ -758,6 +992,29 @@ for file in $ALL_SQL; do
                   if (!tok_in(span, "id")) {
                     print "does not cover the row ids inside the hashed expression"; exit
                   }
+                  # The hashed rows must be a CAPTURED SET, not a predicate.
+                  # A predicate is re-evaluated by every statement that repeats
+                  # it, and nothing forces the writes to repeat it at all — the
+                  # hole Codex found: hash `orders WHERE stale`, then update
+                  # every order. An array of ids captured once cannot drift
+                  # between the digest and the write.
+                  #
+                  # Per TABLE, not per migration: a repair spanning orders and
+                  # order_items needs one captured array each, because their ids
+                  # are different id spaces. One set per table, shared by that
+                  # the digest and the writes for that one table.
+                  sv = id_set_var(s)
+                  if (sv == "") {
+                    print "chooses the hashed rows with a predicate instead of a captured id set — the digest statement must read WHERE id = ANY(<captured ids>), the same array every write is restricted to"; exit
+                  }
+                  for (k = 1; k <= ntbl; k++) {
+                    if (tb[k] == "") continue
+                    if (s !~ ("(^|[^a-z0-9_.])(public\\.)?" tb[k] "([^a-z0-9_]|$)")) continue
+                    if ((tb[k] in tblvar) && tblvar[tb[k]] != sv) {
+                      print "hashes " tb[k] " against two different id sets (" tblvar[tb[k]] " and " sv ") — one captured set has to drive the digest and the writes for a table"; exit
+                    }
+                    tblvar[tb[k]] = sv
+                  }
                   found = 1
                   stmtall = stmtall " " s
                   spanall = spanall " " span
@@ -789,15 +1046,27 @@ for file in $ALL_SQL; do
                 if (missc != "") {
                   print "leaves the rewritten column(s)" missc " outside the hashed expression — every column the migration assigns has to be covered, not just one of them"; exit
                 }
-                print "OK"
+                # One captured set PER TABLE, reported as "table=var" pairs so the
+                # caller can hold every write on a table to the set for it.
+                pairs = ""
+                for (k = 1; k <= ntbl; k++) {
+                  if (tb[k] == "") continue
+                  if (!(tb[k] in tblvar)) {
+                    print "never restricts its hash of " tb[k] " to a captured id set"; exit
+                  }
+                  pairs = pairs " " tb[k] "=" tblvar[tb[k]]
+                }
+                print "OK\t" substr(pairs, 2)
               }
             ' "$file")
-            if [ "$DIGEST_SRC_WHY" = "OK" ]; then
-              COMPUTED=1
-              DIGEST_SRC_WHY=""
-            else
-              COMPUTED=0
-            fi
+            case "$DIGEST_SRC_WHY" in
+              OK*)
+                DIGEST_SET_PAIRS=$(printf '%s' "$DIGEST_SRC_WHY" | cut -f2)
+                COMPUTED=1
+                DIGEST_SRC_WHY=""
+                ;;
+              *) COMPUTED=0 ;;
+            esac
           fi
 
           # Fail-closed: the mismatch branch must abort. Require the RAISE to sit
@@ -818,12 +1087,144 @@ for file in $ALL_SQL; do
             }
           ' "$file" | grep -c yes || true)
 
+          # ---- SAME-SET BINDING (Codex High, round 10, finding 2) ------------
+          # Everything above proves the digest is real, fail-closed, and covers
+          # the rewritten tables and columns. None of it proved the digest
+          # covers the rows the migration actually WRITES. It did not, and the
+          # gap was a working bypass: hash `orders WHERE stale`, then run an
+          # unrestricted `UPDATE public.orders`. Two predicates, no requirement
+          # that they select the same ids, and the second one is the one that
+          # touches the data.
+          #
+          # There is no static way to prove two arbitrary SQL predicates are
+          # equivalent, so the shape removes the second predicate instead:
+          #
+          #   SELECT array_agg(s.id ORDER BY s.id) INTO v_ids
+          #     FROM (SELECT o.id FROM public.orders o
+          #            WHERE <approved predicate> ORDER BY o.id FOR UPDATE) s;
+          #   SELECT encode(digest(string_agg(o.id::text || ':' ||
+          #                                   o.total_profit_cents::text,
+          #                                   ',' ORDER BY o.id), 'sha256'), 'hex')
+          #     INTO v_actual FROM public.orders o WHERE o.id = ANY(v_ids);
+          #   IF v_actual IS DISTINCT FROM '<digest>' THEN RAISE EXCEPTION ...; END IF;
+          #   UPDATE public.orders SET ... WHERE id = ANY(v_ids);
+          #   GET DIAGNOSTICS v_n = ROW_COUNT;
+          #   IF v_n <> array_length(v_ids, 1) THEN RAISE EXCEPTION ...; END IF;
+          #
+          # Three properties, each checked below:
+          #   1. every write is restricted to the SAME array the digest hashed,
+          #      so the write set cannot exceed the approved set;
+          #   2. that array is captured once, under FOR UPDATE, so nothing can
+          #      change between the digest and the write (the subselect is not
+          #      decoration — Postgres rejects FOR UPDATE alongside array_agg);
+          #   3. the row count is asserted against the captured set, so a write
+          #      silently narrowed to FEWER rows than were approved also aborts.
+          #
+          # The sets are tracked PER TABLE: a repair spanning orders and
+          # order_items needs one captured array each, since their ids are
+          # different id spaces. DIGEST_SET_PAIRS carries "table=var" for every
+          # rewritten table.
+          SET_BIND_WHY=""
+          if [ "$COMPUTED" -eq 1 ] && [ -n "$DIGEST_SET_PAIRS" ]; then
+            UNBOUND=""
+            while IFS=$'\t' read -r b_ln b_tbl b_kind b_cols b_var b_raw; do
+              [ -z "$b_tbl" ] && continue
+              WANT=""
+              for pair in $DIGEST_SET_PAIRS; do
+                [ "${pair%%=*}" = "$b_tbl" ] && WANT="${pair#*=}"
+              done
+              [ -z "$WANT" ] && continue   # coverage check above already reported it
+              [ "$b_var" = "$WANT" ] && continue
+              if [ -z "$b_var" ] || [ "$b_var" = "-" ]; then
+                UNBOUND="$UNBOUND
+    line $b_ln ($b_kind on $b_tbl): chooses its own rows — no WHERE id = ANY($WANT)"
+              else
+                UNBOUND="$UNBOUND
+    line $b_ln ($b_kind on $b_tbl): writes through '$b_var', not the hashed set '$WANT'"
+              fi
+            done <<< "$REWRITES"
+            if [ -n "$UNBOUND" ]; then
+              SET_BIND_WHY="the digest covers the captured id set(s) $DIGEST_SET_PAIRS, but these writes are not restricted to the same set:$UNBOUND
+  A digest over one predicate authorizes nothing about rows selected by another. Capture the approved ids once, hash those, and write WHERE id = ANY(<that same array>)."
+            fi
+          fi
+
+          # Every distinct captured array must be locked at capture and asserted
+          # against the row count of the writes it drives.
+          DIGEST_SET_VARS=$(printf '%s\n' $DIGEST_SET_PAIRS | sed 's/^[^=]*=//' | sort -u)
+
+          for DIGEST_SET_VAR in $DIGEST_SET_VARS; do
+          if [ -z "$SET_BIND_WHY" ] && [ "$COMPUTED" -eq 1 ] && [ -n "$DIGEST_SET_VAR" ]; then
+            CAPTURE_STATUS=$(awk -v fl="$FIRST_REWRITE_LINE" -v var="$DIGEST_SET_VAR" '
+              FNR >= fl { next }
+              { l = tolower($0); sub(/--.*/, "", l); buf = buf " " l }
+              END {
+                n = split(buf, st, /;/)
+                for (i = 1; i <= n; i++) {
+                  s = st[i]
+                  if (s !~ ("into[ \t]+(strict[ \t]+)?" var "([^a-z0-9_]|$)") &&
+                      s !~ (var "[ \t]*:=")) continue
+                  if (s !~ /(^|[^a-z0-9_.])array_agg[ \t]*\(/) { nagg = 1; continue }
+                  found = 1
+                  if (s !~ /(^|[^a-z0-9_])for[ \t]+update([^a-z0-9_]|$)/) { nolock = 1; continue }
+                  print "OK"; exit
+                }
+                if (found && nolock) { print "no-lock"; exit }
+                if (nagg) { print "no-agg"; exit }
+                print "no-capture"
+              }
+            ' "$file")
+            case "$CAPTURE_STATUS" in
+              OK) ;;
+              no-lock)
+                SET_BIND_WHY="'$DIGEST_SET_VAR' is captured without FOR UPDATE, so the approved rows are not locked between the digest and the write and a concurrent change lands unnoticed. Capture them as: SELECT array_agg(s.id ORDER BY s.id) INTO $DIGEST_SET_VAR FROM (SELECT t.id FROM <table> t WHERE <approved predicate> ORDER BY t.id FOR UPDATE) s;" ;;
+              no-agg)
+                SET_BIND_WHY="'$DIGEST_SET_VAR' is assigned before line $FIRST_REWRITE_LINE but not by an array_agg() capture of the approved ids, so what the digest and the writes are restricted to is not a set this migration read out of the table" ;;
+              *)
+                SET_BIND_WHY="the digest and the writes are restricted to '$DIGEST_SET_VAR', but nothing before line $FIRST_REWRITE_LINE captures that array from the table — an id set that is not read out of the database approves nothing" ;;
+            esac
+          fi
+
+          if [ -z "$SET_BIND_WHY" ] && [ "$COMPUTED" -eq 1 ] && [ -n "$DIGEST_SET_VAR" ]; then
+            COUNT_STATUS=$(awk -v var="$DIGEST_SET_VAR" '
+              { l = tolower($0); sub(/--.*/, "", l); ln[FNR] = l; n = FNR }
+              END {
+                for (i = 1; i <= n; i++) {
+                  if (ln[i] ~ /get[ \t]+diagnostics/ && ln[i] ~ /row_count/) diag = 1
+                }
+                if (!diag) { print "no-count"; exit }
+                for (i = 1; i <= n; i++) {
+                  if (ln[i] !~ /(^|[^a-z0-9_])if([^a-z0-9_]|$)/) continue
+                  if (ln[i] !~ ("(array_length|cardinality)[ \t]*\\([ \t]*" var "([^a-z0-9_]|$)")) continue
+                  if (ln[i] ~ /raise[ \t]+exception/) { print "OK"; exit }
+                  depth = 1
+                  for (j = i + 1; j <= n; j++) {
+                    if (ln[j] ~ /raise[ \t]+exception/) { print "OK"; exit }
+                    if (ln[j] ~ /(^|[^a-z0-9_])if([^a-z0-9_]|$)/ && ln[j] !~ /end[ \t]+if/) depth++
+                    if (ln[j] ~ /end[ \t]+if/) { depth--; if (depth <= 0) break }
+                  }
+                }
+                print "no-assert"
+              }
+            ' "$file")
+            case "$COUNT_STATUS" in
+              OK) ;;
+              no-count)
+                SET_BIND_WHY="the writes never capture GET DIAGNOSTICS <n> = ROW_COUNT, so a rewrite that silently touched fewer rows than were approved would still report success" ;;
+              *)
+                SET_BIND_WHY="the row count is never asserted against the approved set. After the write add: IF <n> <> array_length($DIGEST_SET_VAR, 1) THEN RAISE EXCEPTION ...; END IF;" ;;
+            esac
+          fi
+          done
+
           if [ "$COMPUTED" -eq 0 ] && [ -n "$DIGEST_SRC_WHY" ]; then
             DIGEST_WHY="the hash assigned to '${DIGEST_VAR}' before line $FIRST_REWRITE_LINE $DIGEST_SRC_WHY — a digest that does not cover the rewritten rows and their before-values authorizes nothing. Required shape: v := encode(digest((SELECT string_agg(t.id::text || ':' || t.<col>::text, ',' ORDER BY t.id) FROM <rewritten table> t WHERE ...), 'sha256'), 'hex')"
           elif [ "$COMPUTED" -eq 0 ]; then
             DIGEST_WHY="the value compared to the digest at line $DIGEST_EXEC_LINE is not one this migration computed — no statement before line $FIRST_REWRITE_LINE assigns a hash (md5/sha256/digest/encode) into '${DIGEST_VAR:-<no identifier>}'"
           elif [ "$RAISE_IN_BRANCH" -eq 0 ]; then
             DIGEST_WHY="the comparison at line $DIGEST_EXEC_LINE does not RAISE EXCEPTION inside its own IF block — a mismatch would not abort"
+          elif [ -n "$SET_BIND_WHY" ]; then
+            DIGEST_WHY="$SET_BIND_WHY"
           else
             DIGEST_BOUND=1
           fi
@@ -869,7 +1270,7 @@ for file in $ALL_SQL; do
 
         MISSING_TBL=""
         UNADDED_TBL=""
-        while IFS=$'\t' read -r r_ln r_tbl r_kind r_cols r_raw; do
+        while IFS=$'\t' read -r r_ln r_tbl r_kind r_cols r_var r_raw; do
           [ -z "$r_tbl" ] && continue
           if ! echo "$OPT_OUT" | grep -qiE "(^|[^a-z0-9_])${r_tbl}([^a-z0-9_]|$)"; then
             case " $MISSING_TBL " in
@@ -914,7 +1315,7 @@ for file in $ALL_SQL; do
       else
         echo "VIOLATION: $file"
         echo "  Rewrites existing business rows without binding to the approved set:"
-        printf '%s\n' "$REWRITES" | awk -F'\t' '{ printf "    line %s (%s): %s\n", $1, $3, $5 }'
+        printf '%s\n' "$REWRITES" | awk -F'\t' '{ printf "    line %s (%s): %s\n", $1, $3, $6 }'
         [ -n "$DIGEST_WHY" ] && echo "  Digest present but not enforced: $DIGEST_WHY"
         echo "  Counts are not identity. Add to the migration EITHER:"
         echo "    -- APPROVED_SET_DIGEST: <sha256 of the sorted approved ids + before-values>"

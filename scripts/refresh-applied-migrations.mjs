@@ -15,13 +15,24 @@
 //     select version, name from supabase_migrations.schema_migrations
 //      order by version;
 //
-//   then pipe that JSON in:
+//   then pipe that JSON in, naming the project it came FROM:
 //
-//     node scripts/refresh-applied-migrations.mjs < rows.json
-//     cat rows.json | node scripts/refresh-applied-migrations.mjs
+//     node scripts/refresh-applied-migrations.mjs --project=<ref> < rows.json
+//     cat rows.json | node scripts/refresh-applied-migrations.mjs --project=<ref>
 //
 //   Accepts either a bare array or {result: [...]} / {applied: [...]}, and rows
 //   shaped as strings, {name}, or {version}.
+//
+// WHY --project IS REQUIRED
+//   A ledger is only evidence about the database it was read from. Recording
+//   only time, count and names made the snapshot portable between databases:
+//   capture production's ledger, then aim an apply at a restored copy or a
+//   staging branch, and the guard reads production's migration names as though
+//   they were that database's — the one-shot replay protection switches itself
+//   off against the very database that has not run the migration (Codex High,
+//   PR #364 round 10). The project ref is written here and must match the
+//   apply's target ref there; there is no default, because a guessed default is
+//   what makes a mismatch invisible.
 //
 // STALENESS
 //   The snapshot records when it was taken. It is advisory input to a guard
@@ -34,6 +45,38 @@ import path from "node:path";
 
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const outPath = path.join(projectDir, ".claude", "session-state", "applied-migrations.json");
+
+// Which database did these rows come from? Required, CLI-only. Deliberately no
+// environment fallback: SUPABASE_PROJECT_REF is exported by nothing in either
+// manifest, so an env default would be empty in every normal run and a stray
+// value in an abnormal one — the two ways a binding stops binding.
+const PROJECT_REF_SHAPE = /^[a-z0-9]{15,40}$/;
+const projectArg = process.argv
+  .slice(2)
+  .map((a) => (a.startsWith("--project=") ? a.slice("--project=".length) : ""))
+  .filter(Boolean)
+  .pop();
+const projectRef = (projectArg || "").toString().trim().toLowerCase();
+
+if (!projectRef) {
+  console.error(
+    "refresh-applied-migrations: --project=<supabase project ref> is required.\n" +
+    "  A ledger snapshot is evidence about ONE database. Without the ref, production's\n" +
+    "  ledger can be replayed against a restored or staging database and the one-shot\n" +
+    "  replay guard would read it as that database's own history.\n" +
+    "  Example: node scripts/refresh-applied-migrations.mjs --project=rhyzpcqhnizqbxphqdkr < rows.json"
+  );
+  process.exit(1);
+}
+
+if (!PROJECT_REF_SHAPE.test(projectRef)) {
+  console.error(
+    `refresh-applied-migrations: --project=${JSON.stringify(projectRef)} is not a Supabase project ` +
+    "ref (expected 15-40 lowercase alphanumeric characters). Refusing to stamp the snapshot with " +
+    "a value that cannot be matched against the apply target."
+  );
+  process.exit(1);
+}
 
 let raw = "";
 try {
@@ -166,8 +209,15 @@ if (!applied.length) {
 mkdirSync(path.dirname(outPath), { recursive: true });
 writeFileSync(
   outPath,
-  `${JSON.stringify({ captured_at: new Date().toISOString(), count: applied.length, applied }, null, 2)}\n`,
+  `${JSON.stringify(
+    { captured_at: new Date().toISOString(), project_id: projectRef, count: applied.length, applied },
+    null,
+    2
+  )}\n`,
   "utf8"
 );
 
-console.log(`refresh-applied-migrations: wrote ${applied.length} applied migration names to ${outPath}`);
+console.log(
+  `refresh-applied-migrations: wrote ${applied.length} applied migration names for project ` +
+  `${projectRef} to ${outPath}`
+);

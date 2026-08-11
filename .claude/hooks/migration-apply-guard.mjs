@@ -135,7 +135,7 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
     `Refresh it first (read-only):\n` +
     `  1. Via Supabase MCP execute_sql on ${targetRef}:\n` +
     `       select version, name from supabase_migrations.schema_migrations order by version;\n` +
-    `  2. Pipe that JSON into: node scripts/refresh-applied-migrations.mjs\n` +
+    `  2. Pipe that JSON into: node scripts/refresh-applied-migrations.mjs --project=${targetRef}\n` +
     `The snapshot is gitignored and per-checkout, so a fresh clone or a newer apply elsewhere ` +
     `means it must be regenerated. Do NOT hand-write it.`;
 
@@ -149,6 +149,32 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
         `detected. Refusing the apply.\n\n${howTo}`);
     }
     const parsed = JSON.parse(readFileSync(snapPath, "utf8"));
+
+    // The snapshot must name the database it was read from, and that database
+    // must be the one this apply is aimed at. Time, count and names alone are
+    // portable: production's ledger carried to a restored copy or a staging
+    // branch reads as that database's own history, and `ledgerHas()` below then
+    // reports a one-shot money migration as already applied against a database
+    // that has never run it — switching the replay guard off exactly where it
+    // is needed (Codex High, PR #364 round 10). A bare-array snapshot cannot
+    // carry the field at all, so it is no longer accepted.
+    const snapProject = (Array.isArray(parsed) ? "" : (parsed?.project_id ?? ""))
+      .toString().trim().toLowerCase();
+    if (!snapProject) {
+      out("block",
+        `MIGRATION ORDERING GUARD: the applied-migration snapshot at ${snapPath} does not record ` +
+        `which database it was captured from, so it cannot be shown to describe ${targetRef}. An ` +
+        `unbound ledger is replayable against any database, which would disable the one-shot ` +
+        `replay check. Refusing the apply.\n\n${howTo}`);
+    }
+    if (snapProject !== targetRef.toLowerCase()) {
+      out("block",
+        `MIGRATION ORDERING GUARD: the applied-migration snapshot was captured from project ` +
+        `"${snapProject}" but this apply targets "${targetRef}". A ledger is evidence about one ` +
+        `database only — reading another database's applied list here would both mis-order this ` +
+        `migration and mark one-shot data repairs as already run. Refusing the apply.\n\n${howTo}`);
+    }
+
     const rows = Array.isArray(parsed) ? parsed : parsed?.applied;
     if (!Array.isArray(rows) || rows.length === 0) {
       out("block",

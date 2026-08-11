@@ -49,7 +49,14 @@ const CONST_HASH_EXPR = `encode(digest('approved', 'sha256'), 'hex')`;
 const CONST_HASH_DECOY_SELECT =
   `SELECT ${CONST_HASH_EXPR},\n         string_agg(id::text || ':' || total_profit::text, ',' ORDER BY id)\n` +
   `    INTO actual, junk FROM public.orders`;
-const GOOD_DIGEST_BLOCK = `DO $$
+/**
+ * A digest block that hashes rows chosen by a PREDICATE. Through round 9 this
+ * was the accepted shape, and it was a working bypass: hashing
+ * `orders WHERE stale` never constrained what the writes selected, so an
+ * unrestricted `UPDATE public.orders` satisfied every check (Codex High, round
+ * 10, finding 2). Kept as a fixture so the bypass stays proven closed.
+ */
+const PREDICATE_DIGEST_BLOCK = `DO $$
 DECLARE actual text;
 BEGIN
   SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE stale;
@@ -57,6 +64,34 @@ BEGIN
     RAISE EXCEPTION 'APPROVED_SET_DRIFTED: expected ${HEX}, got %', actual;
   END IF;
 END $$;`;
+
+/**
+ * The shape that replaced it. There is no static way to prove two arbitrary SQL
+ * predicates select the same rows, so the second predicate is removed instead:
+ * one id array, captured once under FOR UPDATE, hashed, and written through.
+ *
+ * @param {object} [o]
+ * @param {boolean} [o.lock=true]   capture under FOR UPDATE
+ * @param {boolean} [o.count=true]  assert ROW_COUNT against the captured set
+ * @param {string}  [o.writeWhere]  override the write's row selection
+ */
+function goodSetBlock({ lock = true, count = true, writeWhere = 'WHERE id = ANY(v_ids)' } = {}) {
+  return (
+    `DO $$\nDECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
+    `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
+    `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id${lock ? ' FOR UPDATE' : ''}) s;\n` +
+    `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+    `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
+    `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
+    `  UPDATE public.orders SET total_profit = 0 ${writeWhere};\n` +
+    (count
+      ? `  GET DIAGNOSTICS n = ROW_COUNT;\n` +
+        `  IF n <> array_length(v_ids, 1) THEN\n` +
+        `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\n`
+      : '') +
+    `END $$;`
+  );
+}
 
 const CASES = [
   // ── must VIOLATE ────────────────────────────────────────────────────────
@@ -88,7 +123,7 @@ const CASES = [
   {
     name: 'digest compared AFTER the write',
     expect: 'violation',
-    sql: `-- APPROVED_SET_DIGEST: ${HEX}\nUPDATE public.orders SET total_profit = 0;\n${GOOD_DIGEST_BLOCK}\n`,
+    sql: `-- APPROVED_SET_DIGEST: ${HEX}\nUPDATE public.orders SET total_profit = 0;\n${PREDICATE_DIGEST_BLOCK}\n`,
   },
   {
     name: 'digest mentioned in executable SQL but never compared',
@@ -323,9 +358,9 @@ const CASES = [
 
   // ── must PASS silently ──────────────────────────────────────────────────
   {
-    name: 'correct fail-closed digest: computed, compared, aborts, before the write',
+    name: 'correct fail-closed digest: one captured set drives the hash and the write',
     expect: 'silent',
-    sql: `-- APPROVED_SET_DIGEST: ${HEX}\n${GOOD_DIGEST_BLOCK}\nUPDATE public.orders SET total_profit = 0;\n`,
+    sql: `-- APPROVED_SET_DIGEST: ${HEX}\n${goodSetBlock()}\n`,
   },
   {
     name: 'rewrite inside a function body is runtime logic, not a data migration',
@@ -486,16 +521,83 @@ const CASES = [
     // multi-table repairs.
     name: 'two tables each covered by their own asserted digest is bound',
     expect: 'silent',
+    // Each table needs its OWN captured array — orders.id and order_items.id are
+    // different id spaces — so the binding is tracked per table, not per
+    // migration. This has to pass, or the fix is just a ban on multi-table
+    // repairs.
     sql:
-      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\nDECLARE actual text;\nBEGIN\n` +
-      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE stale;\n` +
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\n` +
+      `DECLARE v_ids uuid[]; v_item_ids uuid[]; actual text; n integer;\nBEGIN\n` +
+      `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
+      `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
+      `  SELECT array_agg(s.id ORDER BY s.id) INTO v_item_ids\n` +
+      `    FROM (SELECT id FROM public.order_items WHERE stale ORDER BY id FOR UPDATE) s;\n` +
+      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
       `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
       `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
-      `  SELECT ${HASH_EXPR} INTO actual FROM public.order_items WHERE stale;\n` +
+      `  SELECT ${HASH_EXPR} INTO actual FROM public.order_items WHERE id = ANY(v_item_ids);\n` +
       `  IF actual IS DISTINCT FROM '${OTHER_HEX}' THEN\n` +
       `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
-      `  UPDATE public.orders SET total_profit = 0;\n` +
-      `  UPDATE public.order_items SET total_profit = 0;\nEND $$;\n`,
+      `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);\n` +
+      `  GET DIAGNOSTICS n = ROW_COUNT;\n` +
+      `  IF n <> array_length(v_ids, 1) THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\n` +
+      `  UPDATE public.order_items SET total_profit = 0 WHERE id = ANY(v_item_ids);\n` +
+      `  GET DIAGNOSTICS n = ROW_COUNT;\n` +
+      `  IF n <> array_length(v_item_ids, 1) THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\nEND $$;\n`,
+  },
+
+  // ── round 10: the digest must cover the rows actually WRITTEN ────────────
+  // Every check above proves the digest is real, fail-closed, and mentions the
+  // rewritten tables and columns. None of it proved the hashed rows and the
+  // written rows are the same rows — and they were not required to be, which
+  // was a working bypass (Codex High, round 10, finding 2).
+  {
+    name: 'Codex round-10 bypass: hash a predicate, then rewrite the whole table',
+    expect: 'violation',
+    mustReport: 'UPDATE public.orders SET total_profit = 0;',
+    sql: `-- APPROVED_SET_DIGEST: ${HEX}\n${PREDICATE_DIGEST_BLOCK}\nUPDATE public.orders SET total_profit = 0;\n`,
+  },
+  {
+    // The narrower version of the same hole: the write IS restricted, just not
+    // to the set that was approved.
+    name: 'a write bound to a different array than the digest hashed',
+    expect: 'violation',
+    sql: `-- APPROVED_SET_DIGEST: ${HEX}\n${goodSetBlock({ writeWhere: 'WHERE id = ANY(v_other)' })}\n`,
+  },
+  {
+    // Without the lock the ids are a snapshot: a concurrent transaction can
+    // change an approved row between the digest and the write, and the digest
+    // that authorized the write no longer describes it.
+    name: 'the captured id set is not locked with FOR UPDATE',
+    expect: 'violation',
+    sql: `-- APPROVED_SET_DIGEST: ${HEX}\n${goodSetBlock({ lock: false })}\n`,
+  },
+  {
+    // The set bounds the write from above but not from below. Without the
+    // count, a write that silently touched FEWER rows than were approved — a
+    // trigger, a partial predicate, a row already gone — still reports success.
+    name: 'the row count is never asserted against the captured set',
+    expect: 'violation',
+    sql: `-- APPROVED_SET_DIGEST: ${HEX}\n${goodSetBlock({ count: false })}\n`,
+  },
+  {
+    // An id array that is not read out of the table approves nothing: the
+    // digest and the write agree with each other about a set neither of them
+    // got from the database.
+    name: 'an id set assigned from a literal, never captured from the table',
+    expect: 'violation',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\n` +
+      `DECLARE v_ids uuid[] := ARRAY[]::uuid[]; actual text; n integer;\nBEGIN\n` +
+      `  SELECT ${HASH_EXPR} INTO actual FROM public.orders WHERE id = ANY(v_ids);\n` +
+      `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
+      `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);\n` +
+      `  GET DIAGNOSTICS n = ROW_COUNT;\n` +
+      `  IF n <> array_length(v_ids, 1) THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\nEND $$;\n`,
   },
 ];
 

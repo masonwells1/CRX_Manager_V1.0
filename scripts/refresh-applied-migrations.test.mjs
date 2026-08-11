@@ -24,10 +24,12 @@ let passed = 0;
 
 // Each run gets its own CLAUDE_PROJECT_DIR so a test can never touch the real
 // session-state snapshot.
-function run(input) {
+const TEST_PROJECT = "rhyzpcqhnizqbxphqdkr";
+
+function run(input, args = [`--project=${TEST_PROJECT}`]) {
   const dir = mkdtempSync(path.join(tmpdir(), "refresh-applied-"));
   try {
-    const res = spawnSync(process.execPath, [script], {
+    const res = spawnSync(process.execPath, [script, ...args], {
       input: typeof input === "string" ? input : JSON.stringify(input),
       encoding: "utf8",
       env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
@@ -126,6 +128,47 @@ check("refuses a snapshot where nothing carries a timestamp", () => {
   const res = run({ result: [{ version: "abc", name: "initial_schema" }] });
   assert.notEqual(res.status, 0);
   assert.equal(res.written, null);
+});
+
+// ---------------------------------------------------------------------------
+// The snapshot must be BOUND to the database it came from (Codex High, PR #364
+// round 10). Without a project ref the file is portable evidence: production's
+// ledger read against a restored or staging database disables the one-shot
+// replay guard for that database.
+// ---------------------------------------------------------------------------
+const REAL_ROWS = { result: [{ version: "20260727174805", name: "deactivation_revokes_auth_access" }] };
+
+check("refuses to write a snapshot with no --project", () => {
+  const res = run(REAL_ROWS, []);
+  assert.notEqual(res.status, 0, "must refuse");
+  assert.equal(res.written, null, "must write nothing");
+  assert.match(res.stderr, /--project/);
+});
+
+check("refuses a --project value that is not a project ref", () => {
+  const res = run(REAL_ROWS, ["--project=../../etc"]);
+  assert.notEqual(res.status, 0, "must refuse");
+  assert.equal(res.written, null);
+});
+
+check("refuses an empty --project value", () => {
+  const res = run(REAL_ROWS, ["--project="]);
+  assert.notEqual(res.status, 0, "must refuse");
+  assert.equal(res.written, null);
+});
+
+check("stamps the snapshot with the project it was captured from", () => {
+  const res = run(REAL_ROWS);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.written.project_id, TEST_PROJECT);
+});
+
+check("a different project produces a differently-bound snapshot", () => {
+  const other = "abcdefghijklmnopqrst";
+  const res = run(REAL_ROWS, [`--project=${other}`]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.written.project_id, other);
+  assert.notEqual(res.written.project_id, TEST_PROJECT);
 });
 
 console.log(`refresh-applied-migrations: ${passed} assertions passed`);

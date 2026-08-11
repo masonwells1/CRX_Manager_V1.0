@@ -119,12 +119,20 @@ function writeProof(stateDir, query, extra = {}) {
 // a pass — a gitignored snapshot means a clean checkout would otherwise skip the
 // check exactly when it matters (Codex P1, PR #348). Every fixture that expects
 // to reach the proof gate must therefore supply a fresh snapshot first.
-function writeAppliedSnapshot(stateDir, { applied = ["20260808150400_round_money_to_whole_cents"], ageHours = 0 } = {}) {
-  writeFileSync(path.join(stateDir, "applied-migrations.json"), JSON.stringify({
+// `project` defaults to the fixture calls' own project_id ("x"): a snapshot is
+// evidence about ONE database, and since round 10 the guard refuses one that
+// does not say which (Codex High, PR #364).
+function writeAppliedSnapshot(
+  stateDir,
+  { applied = ["20260808150400_round_money_to_whole_cents"], ageHours = 0, project = "x" } = {},
+) {
+  const snap = {
     captured_at: new Date(Date.now() - ageHours * 3600_000).toISOString(),
     count: applied.length,
     applied,
-  }));
+  };
+  if (project !== null) snap.project_id = project;
+  writeFileSync(path.join(stateDir, "applied-migrations.json"), JSON.stringify(snap));
 }
 // supabase/baselines/one-shot-migrations.json is tracked in git and ships
 // beside the hook, so the hook fails CLOSED when it is missing — every fixture
@@ -184,6 +192,34 @@ function armAutopilot(stateDir, hoursFromNow) {
     writeFileSync(path.join(stateDir, "applied-migrations.json"), "{not json");
     r = runHook(call(BENIGN_SQL), tmp);
     ok(isDeny(r), "unparseable snapshot → apply denied");
+
+    // A ledger is evidence about the database it was read FROM. Production's
+    // snapshot carried to a restored copy or a staging branch would otherwise
+    // report one-shot money repairs as already applied against a database that
+    // has never run them (Codex High, PR #364 round 10).
+    writeAppliedSnapshot(stateDir, { project: null });
+    r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r), "snapshot with no project_id → apply denied");
+    ok(
+      r.stdout.includes("does not record"),
+      "unbound-snapshot deny explains that the database is unnamed",
+    );
+
+    writeAppliedSnapshot(stateDir, { project: "some_other_project" });
+    r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r), "snapshot captured from a DIFFERENT project → apply denied");
+    ok(
+      r.stdout.includes("some_other_project") && /targets\s*\\?"x\\?"/.test(r.stdout),
+      "cross-project deny names both the snapshot's project and the apply target",
+    );
+
+    // A bare array cannot carry the binding at all, so it is no longer evidence.
+    writeFileSync(
+      path.join(stateDir, "applied-migrations.json"),
+      JSON.stringify(["20260808150400_round_money_to_whole_cents"]),
+    );
+    r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r), "bare-array snapshot (cannot name a project) → apply denied");
 
     // The subtle one: present, fresh, non-empty — but nothing is timestamped, so
     // no ordering verdict is possible. That must not read as a pass.
@@ -400,7 +436,10 @@ function armAutopilot(stateDir, hoursFromNow) {
     // what the real harness does. Only the session's reported cwd varies, which
     // is the whole behaviour under test.
     const callFrom = (cwd, query, name = MIG) =>
-      ({ tool_name: "mcp__supabase__apply_migration", cwd, tool_input: { name, query } });
+      // project_id must match the snapshot's project ("x", writeAppliedSnapshot's
+      // default) or the ordering guard blocks on the database binding before the
+      // proof-scoping behaviour under test is ever reached.
+      ({ tool_name: "mcp__supabase__apply_migration", cwd, tool_input: { project_id: "x", name, query } });
 
     let r = runHook(callFrom(linked, BENIGN_SQL), primary);
     ok(!isDeny(r), "a proof minted in the worktree the session is working in satisfies the gate");
