@@ -161,14 +161,23 @@ Before any schema change, follow `docs/workflows/DATABASE_CHANGE_CHECKLIST.md`:
 
 All money in CRX Manager is stored as **bigint cents** (whole numbers, no decimals).
 
-**One grandfathered exception (Mason, 2026-08-10), closed to new columns.** The pre-existing order
-and quote money columns are PostgreSQL `numeric` dollars — an exact decimal type, not a binary
-float — and stay that way rather than being converted. The exception grandfathers the *storage type
-only*: each of those columns must still carry an enforced whole-cent CHECK constraint, and one that
-does not yet carry it is outstanding work, not compliant. Any money column created from 2026-08-10
-onward is `bigint` cents, no exceptions. Full rationale: `docs/manual/DECISION_LOG.md` (2026-08-10
-entry). The table below is the rule for every new money column and the pattern all money math
-follows.
+**One grandfathered exception (Mason, 2026-08-10), closed to new columns.** Twelve enumerated
+pre-existing order, quote, and commission money columns are PostgreSQL `numeric` dollars — an exact
+decimal type, not a binary float — and stay that way rather than being converted. The exception
+grandfathers the *storage type only*: each of those columns must still carry an enforced CHECK
+constraint, and 5 of the 12 do not yet carry one — those are outstanding work, not compliant, and
+must not be treated as guarded. The constraint is exactly
+
+```
+CHECK (col IS NULL OR (col = ROUND(col, 2) AND col > '-Infinity' AND col < 'Infinity'))
+```
+
+**Both halves are load-bearing — a `ROUND`-only check is not sufficient.** PostgreSQL `numeric`
+does not use IEEE-754 NaN semantics: it treats `NaN` as equal to `NaN`, so `'NaN' = ROUND('NaN',2)`
+is true and the rounding clause lets `NaN` through. The `< 'Infinity'` bound is what rejects it.
+Any money column created from 2026-08-10 onward is `bigint` cents, no exceptions. Full rationale,
+the per-column status, and which 5 are deferred: `docs/manual/DECISION_LOG.md` (2026-08-10 entry).
+The table below is the rule for every new money column and the pattern all money math follows.
 
 | Operation | How |
 |-----------|-----|

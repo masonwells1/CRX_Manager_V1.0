@@ -30,17 +30,19 @@ reports a supported skip, agents continue with focused source inspection and dis
 ## 2026-08-10 — Money rule carries a narrow, closed grandfather clause for existing `numeric` columns
 
 Policy-only change: no code, no schema, no migration. The `AGENTS.md` money rule
-now records the exception the existing order/quote money columns have always
-relied on, and `docs/manual/DECISION_LOG.md` carries the full rationale.
+now records the exception the existing order, quote, and commission money
+columns have always relied on, and `docs/manual/DECISION_LOG.md` carries the
+full rationale plus a column-by-column table naming all 12 — which 7 are
+constrained and which 5 are deferred, with the reason and status for each.
 
 The rule said "money is bigint cents." The pre-existing order and quote money
 columns are PostgreSQL `numeric` dollars — an exact decimal type, not a binary
 float — so the rule's actual purpose was already met, but the letter of it was
 not. The amended line grandfathers the *storage type* only: each of those
-columns must still carry an enforced whole-cent CHECK constraint, and one that
-does not yet carry it is outstanding work rather than compliant. The exception is
-also **closed** — any money column added from 2026-08-10 onward is `bigint`
-cents.
+columns must still carry an enforced whole-cent CHECK constraint, and the 5 that
+do not yet carry one are outstanding work rather than compliant and must not be
+treated as guarded. The exception covers only the 12 named columns and is also
+**closed** — any money column added from 2026-08-10 onward is `bigint` cents.
 
 The DECISION_LOG entry records what a re-opened conversion would actually cost
 (12 money columns, 46 live functions naming them, 17 non-test source files, no

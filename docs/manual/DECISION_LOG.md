@@ -39,8 +39,30 @@ property the CHECK constraints already provide.
 **Operative rules:**
 - The exception is **closed to new columns.** Any money column created from 2026-08-10 onward is
   `bigint` cents. This is a grandfather clause, not a general licence to use `numeric` for money.
+- The exception covers **only the 12 columns enumerated below.** A `numeric` money column that is
+  not on that list is not grandfathered at all.
 - Every `numeric` money column must carry a `*_whole_cents_chk` constraint, or be listed as a
   deliberate, documented deferral with the reason.
+
+**The 12 grandfathered columns, and which are actually guarded.** Verified against the live
+database on 2026-08-11. **Guarded — constraint enforced (7):** `orders.total_cost`,
+`orders.total_profit`, `order_items.profit`, `quotes.total_price`, `quotes.total_profit`,
+`quote_items.total_price`, `quote_items.profit`.
+
+**Deferred — NOT constrained, therefore NOT compliant (5).** Treat a value read from any of these
+as possibly sub-cent or non-finite; the grandfather clause does not make them safe.
+
+| Column | Why deferred | Status |
+|---|---|---|
+| `order_items.total_price` | holds 35 of 288 legacy fractional-cent rows | awaiting data repair |
+| `quotes.total_cost` | holds 2 of 4 legacy fractional-cent rows | awaiting data repair |
+| `commissions.commission_amount` | holds 3 of 35 legacy fractional-cent rows | awaiting data repair |
+| `commissions.order_profit` | holds 3 of 35 legacy fractional-cent rows | awaiting data repair |
+| `orders.total_price` | data is clean; `_update_order_items_impl` overwrites it with the raw un-rounded line sum, so constraining it would reject ordinary edits | blocked on fixing that writer |
+
+The 43 dirty rows across the first four are a **separate, not-yet-taken** decision: repairing them
+rewrites stored money and needs Mason's explicit OK on its own migration. The constraints follow
+that repair as `VALID` from the start — never `NOT VALID`, for the reason below.
 - The predicate is `col IS NULL OR (col = ROUND(col,2) AND col > '-Infinity' AND col < 'Infinity')`.
   **Both halves are load-bearing — never "simplify" it to the ROUND clause alone.** PostgreSQL
   `numeric` deliberately does not use IEEE-754 NaN semantics: so values can be sorted and indexed, it
