@@ -21,6 +21,34 @@ Delivery: the browser changes that call the RPC and open assignment notification
 
 ---
 
+## OPEN 2026-08-10 — three migrations are live but their source files are not in `main`
+
+Raised by Codex (P1) on PR #372 and **verified**: the schema registry records
+`20260810150000_commission_basis_from_canonical_order_header`,
+`20260810150500_save_quote_whole_cent_total_cost`, and
+`20260810151000_whole_cent_money_check_constraints` as applied — they genuinely are, live
+since 2026-08-10 — but `git ls-tree` finds none of the three `.sql` files on `main` or on
+PR #372's branch. Their only home is commit `908da7a3` on `claude/confident-mclean-7f73d6`,
+the branch behind **PR #371**, which is still open.
+
+**Why it matters:** a clean baseline replay or a disaster-recovery rebuild driven from
+`supabase/migrations/` would silently omit the canonical commission basis, the save-quote
+whole-cent total cost, and all seven whole-cent money CHECK constraints — while the registry
+asserts they are present. Nothing is wrong on live; the gap is between live and the
+repository's ability to reconstruct it.
+
+**This is not caused by the registry refresh.** The source gap already existed on `main`;
+regenerating the registry from live only made it visible. Leaving the registry stale
+instead would have been a second, worse inaccuracy.
+
+**Closes when PR #371 lands** — that PR carries the three files. Until then, treat
+`supabase/migrations/` as an incomplete reconstruction source for anything dated 2026-08-10
+15:00 UTC or later, and prefer the live ledger. PR #372 deliberately did not copy the files
+in: duplicating an open PR's migrations would collide when #371 merges, and #372 was scoped
+out of touching #371.
+
+---
+
 ## OPEN — agent tooling breaks in remote (Claude Code on the web) sessions
 
 **Found 2026-08-04**, extended 2026-08-05. Three problems, two sharing one root
@@ -368,15 +396,28 @@ apply: both function bodies carry the new logic, the trigger fires on all four
 columns and is enabled, and the row counts are unchanged (46 fractional
 `order_items`, 3 fractional `commissions`, 37 stale lines, 11 disagreeing
 orders), with no `orders` row written in the surrounding 15 minutes.
-It is forward-only: applying it moved no live money. The one-time repair of the
-37 stale lines is written but fully commented out and is still a **separate**
-decision that has NOT been taken, because writing those rows would also round 11
-of the 46 fractional-cent `order_items` rows that `20260809170800` is
-deliberately holding back.
+It is forward-only: applying it moved no live money. At the time this section was
+written, the one-time repair of the 37 stale lines was commented out and still a
+separate, untaken decision.
 
-**So the 11 disagreeing orders still disagree today.** The fix stops any *new*
-drift; it does not reach back. Those orders converge the next time one of their
-lines is written, or immediately if the section-3 repair is ever approved.
+> **Closed 2026-08-10 — the repair was approved and applied; the two paragraphs
+> that followed here are superseded.** Mason approved the repair, and it went
+> live as its own forward-only migration,
+> `20260810022500_backfill_stale_line_profit` (ledger version `20260810025159`),
+> which re-derives each stale line through the canonical trigger rather than
+> recomputing profit in the file. The pending commission snapshots those orders
+> carried were then reconciled by `reconcile_pending_commission_snapshots`
+> (ledger version `20260810235207`).
+>
+> **Live read-only measurement, 2026-08-10:** stale lines **37 → 0** of 288, and
+> disagreeing orders **11 → 1**. The single remaining disagreement is not a
+> regression — it is the one fulfilled order the backfill deliberately left out
+> of scope, whose *header* sits a cent above its own already-correct lines. That
+> is the mirror of this bug (a stale header, not stale lines) and is tracked on
+> its own rather than folded in here.
+>
+> Do not treat the stale-line repair as outstanding work, and do not re-apply
+> either migration — both are forward-only and already on the live ledger.
 
 **Still open after this lands, deliberately:** `_update_order_items_impl`
 (`20260617123503`, lines 274–275) overwrites `orders.total_price` with the raw
