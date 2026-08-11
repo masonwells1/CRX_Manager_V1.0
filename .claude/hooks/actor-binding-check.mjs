@@ -43,9 +43,10 @@
 //   * Non-mutating functions are never flagged (a reporting function taking
 //     p_user_id as a filter is not an attribution risk).
 //   * SECURITY INVOKER functions are never flagged (RLS still applies to them).
-//   * The check is satisfied by the presence of the ACTOR_MISMATCH token anywhere
-//     in the body — it does not attempt to verify the guard is correct. That
-//     deeper verification is the sweeps' job; this hook only stops the
+//   * The check is satisfied by the ACTOR_MISMATCH token, or by the legacy-main
+//     refusal `<actual actor parameter> does not match authenticated user`,
+//     anywhere in the body. It does not attempt to verify the guard is correct.
+//     That deeper verification is the sweeps' job; this hook only stops the
 //     no-guard-at-all case, which is the one that actually shipped.
 
 import { readFileSync, readdirSync } from "node:fs";
@@ -256,8 +257,14 @@ function isDynamicSqlStatement(stmt, rawStmt = stmt) {
 /** Mask data strings and comments but retain quoted identifiers. The main SQL
  * mask deliberately blanks quoted identifiers so a name such as "EXECUTE"
  * cannot impersonate syntax. pg_cron's schema/API identity is the one place we
- * need the original identifier spelling, including "cron"."schedule". */
-function maskSqlForCallNames(text) {
+ * need the original identifier spelling, including "cron"."schedule".
+ *
+ * Alias discovery opts into executableSql so a direct EXECUTE literal can
+ * create, rename, or move an updatable cron.job view without disappearing as
+ * ordinary string data. Only procedural containers and the command literal
+ * immediately supplied to EXECUTE are retained; documentation/data strings
+ * remain masked. */
+function maskSqlForCallNames(text, executableSql = false) {
   let out = "";
   let i = 0;
   while (i < text.length) {
@@ -284,7 +291,22 @@ function maskSqlForCallNames(text) {
     if (text[i] === "'") {
       const end = scanQuoted(text, i);
       if (end === -1) return null;
-      out += "'" + " ".repeat(end - i - 2) + "'";
+      const payload = text.slice(i + 1, end - 1);
+      const proceduralStringKind = executableSql ? proceduralSingleQuoteKind(out) : null;
+      const isProceduralContainer = proceduralStringKind !== null;
+      const isExecutable = executableSql && (isProceduralContainer ||
+        /\bEXECUTE\s*(?:\(\s*)?$/i.test(out));
+      if (isProceduralContainer && proceduralStringKind !== "plain") return null;
+      if (isProceduralContainer && hasAdjacentNewlineString(text, end) !== false) return null;
+      if (isExecutable) {
+        // This alias-only mask does not need the contents of nested data
+        // strings; it only preserves the executable relation structure.
+        const inner = maskSqlForCallNames(payload, true);
+        if (inner === null) return null;
+        out += " " + inner + " ";
+      } else {
+        out += "'" + " ".repeat(end - i - 2) + "'";
+      }
       i = end;
       continue;
     }
@@ -301,7 +323,20 @@ function maskSqlForCallNames(text) {
         const close = text.indexOf(tag, i + tag.length);
         if (close === -1) return null;
         const end = close + tag.length;
-        out += tag + " ".repeat(end - i - (2 * tag.length)) + tag;
+        const payload = text.slice(i + tag.length, close);
+        const isProceduralContainer = executableSql && isProceduralContainerPrefix(out);
+        const isExecutable = executableSql && (isProceduralContainer ||
+          /\bEXECUTE\s*(?:\(\s*)?$/i.test(out));
+        if (isExecutable) {
+          const inner = maskSqlForCallNames(payload, true);
+          if (inner === null) return null;
+          // Dollar tags may legally contain `$`, which is also legal inside an
+          // unquoted identifier. Blank the delimiters so `cron.job$view$`
+          // cannot be misread as the source relation name.
+          out += " ".repeat(tag.length) + inner + " ".repeat(tag.length);
+        } else {
+          out += tag + " ".repeat(end - i - (2 * tag.length)) + tag;
+        }
         i = end;
         continue;
       }
@@ -379,13 +414,47 @@ function isPgCronJobWriteTarget(identifier) {
   return isPgCronJobName(identifier) || isPgCronJobViewAliasName(identifier);
 }
 
+/** If executable alias parsing is unreadable, distinguish an unrelated fancy
+ * procedural body from one that may create or rename a persistent cron.job
+ * alias. The latter gets the wildcard/manual-review identity rather than being
+ * forgotten across later migrations. */
+function hasPossibleOpaquePgCronViewLifecycle(sql, aliases) {
+  const source = String(sql || "");
+  if (!/\bEXECUTE\b/i.test(source) ||
+      !/\b(?:CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:TEMP|TEMPORARY)\s+)?(?:RECURSIVE\s+)?VIEW|ALTER\s+(?:VIEW|TABLE))\b/i.test(source)) {
+    return false;
+  }
+  if (/\bcron\s*\.\s*job\b/i.test(source) || /\bU&\s*"/i.test(source)) return true;
+  const folded = source.toLowerCase();
+  return [...aliases].some((alias) =>
+    typeof alias === "string" && folded.includes(alias.toLowerCase())
+  );
+}
+
 /** Find views declared by this migration whose query reads cron.job, including
  * later views layered over an earlier alias. PostgreSQL simple views are
  * updatable, so a write to such an alias changes cron.job.command even though
  * the lexical target no longer says cron.job. */
 function declaredPgCronJobViewAliases(sql, seedAliases = new Set(), includeTemporaryViews = true) {
-  const structural = maskSqlForCallNames(String(sql || ""));
-  if (structural === null) return new Set(seedAliases);
+  const sourceSql = String(sql || "");
+  const aliases = new Set(seedAliases);
+  const staticStructural = maskSqlForCallNames(sourceSql);
+  const executableStructural = maskSqlForCallNames(sourceSql, true);
+  if (staticStructural === null) {
+    if (hasPossibleOpaquePgCronViewLifecycle(sourceSql, aliases)) {
+      aliases.add(UNKNOWN_PG_CRON_JOB_VIEW_ALIAS);
+    }
+    return aliases;
+  }
+  // An unrelated procedural body can be too fancy for the executable reader
+  // without making static view discovery uncertain. The main SQL reader still
+  // fails closed on such current-file code; historical alias discovery keeps
+  // the proven static result instead of turning every relation into an alias.
+  if (executableStructural === null &&
+      hasPossibleOpaquePgCronViewLifecycle(sourceSql, aliases)) {
+    aliases.add(UNKNOWN_PG_CRON_JOB_VIEW_ALIAS);
+  }
+  const structural = executableStructural ?? staticStructural;
   const viewHead = new RegExp(
     `\\bCREATE\\s+(?:OR\\s+REPLACE\\s+)?(?:(TEMP(?:ORARY)?)\\s+)?` +
     `(?:RECURSIVE\\s+)?VIEW\\s+(${SQL_QUALIFIED_IDENTIFIER_PATTERN})`,
@@ -428,7 +497,6 @@ function declaredPgCronJobViewAliases(sql, seedAliases = new Set(), includeTempo
     }
   }
 
-  const aliases = new Set(seedAliases);
   let changed = true;
   while (changed) {
     changed = false;
@@ -1695,7 +1763,12 @@ try {
       .filter((n) => ACTOR_PARAM_RE.test(n));
     if (actorParams.length === 0) continue;
 
-    if (/ACTOR_MISMATCH/i.test(commentBlankedBody)) continue;
+    const hasRecognizedActorRefusal = /ACTOR_MISMATCH/i.test(commentBlankedBody) ||
+      actorParams.some((actorParam) => new RegExp(
+        `\\b${actorParam}\\s+does\\s+not\\s+match\\s+authenticated\\s+user\\b`,
+        "i"
+      ).test(commentBlankedBody));
+    if (hasRecognizedActorRefusal) continue;
 
     violations.push(
       `Function ${fnName}: SECURITY DEFINER, mutates or executes dynamic SQL, and declares the forgeable actor parameter(s) ` +

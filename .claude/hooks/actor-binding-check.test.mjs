@@ -546,6 +546,52 @@ SET command = $job$${UNBOUND_DDL}$job$
 WHERE jobid = 42;`);
 ok(isDeny(r), "a search-path-resolved qualified view keeps the cron.job sink identity");
 
+r = runHook(`DO $do$
+BEGIN
+  EXECUTE $view$CREATE VIEW public.dynamic_cron_job_facade AS SELECT * FROM cron.job$view$;
+END
+$do$;
+UPDATE public.dynamic_cron_job_facade
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`);
+ok(isDeny(r), "a directly executed cron.job view cannot hide an unsafe same-file command update");
+
+r = runHook(`DO $do$
+BEGIN
+  EXECUTE $view$CREATE VIEW public.dynamic_cron_job_facade AS SELECT * FROM cron.job$view$;
+END
+$do$;
+UPDATE public.dynamic_cron_job_facade
+SET command = $job$SELECT public.existing_safe_job()$job$
+WHERE jobid = 42;`);
+ok(!isDeny(r), "a directly executed cron.job view keeps a harmless same-file command allowed");
+
+r = runHook(`DO $do$
+BEGIN
+  EXECUTE ('CREATE VIEW public.parenthesized_dynamic_cron_job_facade AS SELECT * FROM cron.job');
+END
+$do$;
+UPDATE public.parenthesized_dynamic_cron_job_facade
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`);
+ok(isDeny(r), "a parenthesized direct EXECUTE literal still registers its cron.job view alias");
+
+r = runHook(`SELECT 'CREATE VIEW public.documented_cron_job_facade AS SELECT * FROM cron.job';
+UPDATE public.documented_cron_job_facade
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`);
+ok(!isDeny(r), "cron.job view text held only as ordinary data does not invent an executable alias");
+
+r = runHook(`DO $do$
+BEGIN
+  EXECUTE $view$CREATE VIEW public.dynamic_ordinary_job_facade AS SELECT * FROM public.job$view$;
+END
+$do$;
+UPDATE public.dynamic_ordinary_job_facade
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`);
+ok(!isDeny(r), "a dynamically created non-cron view remains a data-only destination");
+
 r = runHook(`CREATE TEMP VIEW unicode_source_cron_job_alias AS
 SELECT * FROM U&"\\0063ron".job;
 UPDATE unicode_source_cron_job_alias
@@ -649,6 +695,100 @@ SET command = $job$${UNBOUND_DDL}$job$
 WHERE jobid = 42;`, missingHistoryTarget);
 ok(isDeny(r), "unreadable migration history fails closed for an unknown command target");
 rmSync(crossMigrationRoot, { recursive: true, force: true });
+
+const dynamicViewRoot = mkdtempSync(path.join(os.tmpdir(), "actor-binding-dynamic-cron-view-"));
+const dynamicViewDir = path.join(dynamicViewRoot, "supabase", "migrations");
+mkdirSync(dynamicViewDir, { recursive: true });
+writeFileSync(
+  path.join(dynamicViewDir, "20260807000001_create_dynamic_cron_job_facade.sql"),
+  `DO $do$
+BEGIN
+  EXECUTE $view$CREATE VIEW public.dynamic_persistent_cron_job_facade AS SELECT * FROM cron.job$view$;
+  EXECUTE 'CREATE VIEW public.quoted_dynamic_cron_job_facade AS SELECT * FROM cron.job WHERE ''cron'' = ''cron''';
+END
+$do$;\n`
+);
+const dynamicCrossMigrationTarget = path.join(
+  dynamicViewDir,
+  "20260807000002_update_dynamic_cron_job_facade.sql"
+);
+r = runHook(`UPDATE public.dynamic_persistent_cron_job_facade
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`, dynamicCrossMigrationTarget);
+ok(isDeny(r), "a dynamically created persistent cron.job view remains an unsafe sink across migrations");
+r = runHook(`UPDATE public.dynamic_persistent_cron_job_facade
+SET command = $job$SELECT public.existing_safe_job()$job$
+WHERE jobid = 42;`, dynamicCrossMigrationTarget);
+ok(!isDeny(r), "a dynamically created persistent cron.job view keeps harmless cross-file SQL allowed");
+r = runHook(`UPDATE public.quoted_dynamic_cron_job_facade
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`, dynamicCrossMigrationTarget);
+ok(isDeny(r), "a quoted direct EXECUTE view with inner string data remains unsafe across migrations");
+r = runHook(`UPDATE public.quoted_dynamic_cron_job_facade
+SET command = $job$SELECT public.existing_safe_job()$job$
+WHERE jobid = 42;`, dynamicCrossMigrationTarget);
+ok(!isDeny(r), "a quoted direct EXECUTE view with inner string data keeps harmless SQL allowed");
+
+writeFileSync(
+  path.join(dynamicViewDir, "20260807000002_move_and_rename_dynamic_cron_job_facade.sql"),
+  `DO $do$
+BEGIN
+  EXECUTE 'ALTER VIEW public.dynamic_persistent_cron_job_facade SET SCHEMA archive';
+  EXECUTE 'ALTER VIEW archive.dynamic_persistent_cron_job_facade RENAME TO dynamic_renamed_cron_job_facade';
+END
+$do$;\n`
+);
+const dynamicLifecycleTarget = path.join(
+  dynamicViewDir,
+  "20260807000003_update_dynamic_renamed_cron_job_facade.sql"
+);
+r = runHook(`UPDATE archive.dynamic_renamed_cron_job_facade
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`, dynamicLifecycleTarget);
+ok(isDeny(r), "dynamic schema movement and rename cannot erase a persistent cron.job alias");
+r = runHook(`UPDATE archive.dynamic_renamed_cron_job_facade
+SET command = $job$SELECT public.existing_safe_job()$job$
+WHERE jobid = 42;`, dynamicLifecycleTarget);
+ok(!isDeny(r), "a dynamically moved and renamed alias keeps harmless SQL allowed");
+
+writeFileSync(
+  path.join(dynamicViewDir, "20260807000004_create_dynamic_temp_cron_job_facade.sql"),
+  `DO $do$
+BEGIN
+  EXECUTE $view$CREATE TEMP VIEW dynamic_prior_temp_cron_job_facade AS SELECT * FROM cron.job$view$;
+END
+$do$;\n`
+);
+const dynamicTempTarget = path.join(
+  dynamicViewDir,
+  "20260807000005_update_dynamic_prior_temp_cron_job_facade.sql"
+);
+r = runHook(`UPDATE public.dynamic_prior_temp_cron_job_facade
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`, dynamicTempTarget);
+ok(!isDeny(r), "a dynamically created temporary view does not persist into a later migration");
+rmSync(dynamicViewRoot, { recursive: true, force: true });
+
+const encodedViewRoot = mkdtempSync(path.join(os.tmpdir(), "actor-binding-encoded-cron-view-"));
+const encodedViewDir = path.join(encodedViewRoot, "supabase", "migrations");
+mkdirSync(encodedViewDir, { recursive: true });
+writeFileSync(
+  path.join(encodedViewDir, "20260807000001_create_encoded_cron_job_facade.sql"),
+  `DO E'BEGIN EXECUTE ''CREATE VIEW public.encoded_dynamic_cron_job_facade AS SELECT * FROM cron.job''; END';\n`
+);
+const encodedDynamicTarget = path.join(
+  encodedViewDir,
+  "20260807000002_update_encoded_dynamic_cron_job_facade.sql"
+);
+r = runHook(`UPDATE public.encoded_dynamic_cron_job_facade
+SET command = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`, encodedDynamicTarget);
+ok(isDeny(r), "an unreadable encoded executable alias requires manual review across migrations");
+r = runHook(`UPDATE public.encoded_dynamic_cron_job_facade
+SET command = $job$SELECT public.existing_safe_job()$job$
+WHERE jobid = 42;`, encodedDynamicTarget);
+ok(!isDeny(r), "the encoded-alias manual-review fallback still permits harmless commands");
+rmSync(encodedViewRoot, { recursive: true, force: true });
 
 const unicodeAliasRoot = mkdtempSync(path.join(os.tmpdir(), "actor-binding-cron-unicode-alias-"));
 const unicodeAliasDir = path.join(unicodeAliasRoot, "supabase", "migrations");
@@ -1375,6 +1515,25 @@ ok(isDeny(r), "dollar-quoted function DDL stored inside procedural code cannot d
 // ── NEGATIVE: correctly bound / out of scope / exempt ──────────────────────
 r = runHook(fn(BOUND));
 ok(!isDeny(r), "body raising ACTOR_MISMATCH is allowed");
+
+r = runHook(fn(`
+  IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+  END IF;
+  ${MUTATION}
+`));
+ok(!isDeny(r), "the current-main actor-specific authenticated-user refusal remains compatible");
+
+r = runHook(fn(
+  "-- p_performed_by does not match authenticated user\n" + MUTATION
+));
+ok(isDeny(r), "the current-main refusal text inside a comment does not count as actor binding");
+
+r = runHook(fn(
+  "RAISE EXCEPTION 'p_performed_by does not match authenticated user';\n" + MUTATION,
+  "p_created_by uuid"
+));
+ok(isDeny(r), "a refusal naming a different actor parameter does not satisfy the guard");
 
 r = runHook(fn(`
   IF p_performed_by IS DISTINCT FROM auth.uid() THEN

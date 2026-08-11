@@ -2,6 +2,32 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-11 — Close executable cross-migration cron.job view aliases
+
+Hardened the actor-binding SQL reader against persistent updatable aliases that
+are created through a direct `EXECUTE` literal. The alias lifecycle scan now
+retains executable SQL inside procedural containers, single-quoted commands,
+dollar-quoted commands, and parenthesized direct `EXECUTE` forms while keeping
+ordinary data strings masked. Dollar-quote delimiters are blanked before
+relation parsing so their legal `$` characters cannot become part of a source
+identifier. Persistent aliases remain tracked across later migrations and
+through schema movement or rename; temporary aliases do not leak across files.
+Unsafe function-bearing commands written through any tracked alias are denied,
+while harmless commands and dynamically created non-`cron.job` views remain
+allowed.
+
+The focused real-hook suite now has 264 passing assertions, including a real
+two-migration dynamic-alias process test and unsafe/harmless lifecycle controls.
+Five load-bearing behaviors were mutation-proven: executable-literal retention,
+dollar-tag blanking, parenthesized `EXECUTE`, and the parameter-specific
+current-main actor-refusal compatibility path, plus the unreadable historical
+alias manual-review fallback. Direct real-hook probes returned
+`DENY` for the unsafe staged command and `ALLOW` for the harmless control, and
+all 24 current August migrations pass. The compatibility path accepts
+`<actual actor parameter> does not match authenticated user` in addition to the
+canonical `ACTOR_MISMATCH` token, but still rejects comments and a refusal that
+names a different actor parameter.
+
 ## 2026-08-11 — Preserve the applied line-profit backfill without replaying it by default
 
 Added the exact source for live migration `20260810025159_backfill_stale_line_profit.sql`,
