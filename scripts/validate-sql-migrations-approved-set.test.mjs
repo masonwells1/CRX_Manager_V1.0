@@ -1089,6 +1089,120 @@ const CASES = [
     decoyRegistered: true,
     sql: `-- APPROVED_SET_DIGEST: ${HEX}\n${goodSetBlock()}\n`,
   },
+
+  // ── round 19, F1: a qualified name the tokenizer had split in three ──────
+  // `UPDATE public . orders` is legal PostgreSQL. The tokenizer keeps `.` as an
+  // ordinary character but splits on whitespace, and every target read took the
+  // single token after UPDATE / DELETE FROM / INSERT INTO as the table — so it
+  // read `public`, matched no protected table, and reported no rewrite at all.
+  // A money rewrite needing neither a digest nor one-shot registration, written
+  // with nothing more exotic than a space (Codex High, round 19).
+  {
+    name: 'space-separated qualification: UPDATE public . orders',
+    expect: 'violation',
+    sql: `UPDATE public . orders SET total_profit = 0;\n`,
+  },
+  {
+    name: 'the qualification is split across lines',
+    expect: 'violation',
+    sql: `UPDATE public\n  .\n  orders\n  SET total_profit = 0;\n`,
+  },
+  {
+    name: 'quoted identifiers, split: "public" . "order_items"',
+    expect: 'violation',
+    sql: `UPDATE "public" . "order_items" SET profit = 0;\n`,
+  },
+  {
+    name: 'DELETE FROM public . commissions',
+    expect: 'violation',
+    sql: `DELETE FROM public . commissions WHERE id IS NOT NULL;\n`,
+  },
+  {
+    // The same spelling one level down. The helper index flattens a body to a
+    // single line before matching, so a split qualification did not match
+    // `(public\.)?<table>` there either and the function looked read-only.
+    name: 'a called function whose body splits the qualification',
+    expect: 'violation',
+    sql:
+      `CREATE FUNCTION public._split() RETURNS void LANGUAGE plpgsql AS $$\n` +
+      `BEGIN\n` +
+      `  UPDATE public . orders SET total_profit = 0;\n` +
+      `END;\n` +
+      `$$;\n` +
+      `SELECT public._split();\n`,
+  },
+
+  // ── round 19, F2: the proof variable is written twice ────────────────────
+  // The digest check proved a hash had been assigned to the compared variable
+  // and stopped there. A plain overwrite afterwards was invisible: the digest
+  // is genuinely computed, the comparison genuinely reads the variable, and the
+  // value it reads is whatever that second statement left there. The comparison
+  // then passes however far the population has drifted (Codex High, round 19).
+  //
+  // The overwrite deliberately does NOT spell the digest out. Writing
+  // `actual := '<HEX>'` is caught a step earlier — that line becomes the first
+  // executable mention of the digest and fails the mismatch-test check — so it
+  // would prove a different rule. Reading a saved value out of a notes table is
+  // the same bypass with nothing for the earlier check to catch.
+  {
+    name: 'the compared digest is overwritten after it is computed',
+    expect: 'violation',
+    mustReport: 'Assign the compared variable exactly once',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\n` +
+      goodSetBlock().replace(
+        `  IF actual IS DISTINCT FROM '${HEX}' THEN`,
+        `  SELECT saved INTO actual FROM public.repair_notes WHERE key = 'orders';\n` +
+          `  IF actual IS DISTINCT FROM '${HEX}' THEN`,
+      ) +
+      `\n`,
+  },
+  {
+    // The same gap on the row-count side: GET DIAGNOSTICS measures the write,
+    // then a second assignment replaces the measurement with the approved
+    // count, and the assertion compares that count with itself.
+    name: 'the measured row count is overwritten before the assertion',
+    expect: 'violation',
+    mustReport: 'assigned more than once before the assertion',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\n` +
+      goodSetBlock().replace(
+        `  IF n <> array_length(v_ids, 1) THEN`,
+        `  n := array_length(v_ids, 1);\n  IF n <> array_length(v_ids, 1) THEN`,
+      ) +
+      `\n`,
+  },
+
+  // ── round 19, F3: an abort that can never run ────────────────────────────
+  // Both fail-closed checks walked physical lines, giving each line one depth.
+  // A line that opened an IF and closed it again therefore changed nothing, so
+  // `IF false THEN RAISE EXCEPTION ...; END IF;` written on one line put a
+  // RAISE at depth one inside the mismatch branch while the branch fell
+  // straight through to the write (Codex High, round 19).
+  {
+    name: 'the digest mismatch branch aborts only inside an unreachable same-line IF',
+    expect: 'violation',
+    mustReport: 'does not RAISE EXCEPTION inside its own IF block',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\n` +
+      goodSetBlock().replace(
+        `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n`,
+        `    IF false THEN RAISE EXCEPTION 'drift'; END IF;\n`,
+      ) +
+      `\n`,
+  },
+  {
+    name: 'the row-count assertion aborts only inside an unreachable same-line IF',
+    expect: 'violation',
+    mustReport: 'row count is never asserted against the approved set',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\n` +
+      goodSetBlock().replace(
+        `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n`,
+        `    IF false THEN RAISE EXCEPTION 'count'; END IF;\n`,
+      ) +
+      `\n`,
+  },
 ];
 
 // A stamp no real migration uses, so these fixtures are never mistaken for

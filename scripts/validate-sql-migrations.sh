@@ -322,7 +322,14 @@ build_mutating_fn_index() {
         }
         END {
           for (f in buf) {
-            if (buf[f] ~ ("(^|[^a-z0-9_])(update|merge[ \t]+into|delete[ \t]+from|insert[ \t]+into|truncate([ \t]+table)?)[ \t]+(only[ \t]+)?(public\\.)?(" tables ")([^a-z0-9_]|$)")) {
+            # `UPDATE public . orders` is legal, and the body arrives here with
+            # its newlines already flattened to spaces, so a qualification split
+            # by either would not match `(public\.)?` and the helper would look
+            # read-only. Close the gap the same way the top-level scanner does:
+            # weld the pieces of a qualified name back together first.
+            b = buf[f]
+            gsub(/[ \t]*\.[ \t]*/, ".", b)
+            if (b ~ ("(^|[^a-z0-9_])(update|merge[ \t]+into|delete[ \t]+from|insert[ \t]+into|truncate([ \t]+table)?)[ \t]+(only[ \t]+)?(public\\.)?(" tables ")([^a-z0-9_]|$)")) {
               print f
               continue
             }
@@ -341,7 +348,7 @@ build_mutating_fn_index() {
             # `EXECUTE ON` (privilege grants, which is how GRANT/REVOKE spell
             # it) are the non-dynamic uses of the keyword; blank them first and
             # ask whether any EXECUTE survives.
-            t = buf[f]
+            t = b
             gsub(/(^|[^a-z0-9_])execute[ \t]+(function|procedure|on)([^a-z0-9_]|$)/, " x ", t)
             if (t ~ /(^|[^a-z0-9_])execute([^a-z0-9_]|$)/) { print f }
           }
@@ -816,6 +823,32 @@ $MIG_BASENAME
         return tok[1]
       }
       END {
+        # `UPDATE public . orders SET ...` is legal PostgreSQL, and so is the
+        # same qualification broken across lines. The tokenizer keeps `.` as an
+        # ordinary character but splits on whitespace, so either spelling
+        # arrives here as three tokens — and every target read below takes the
+        # SINGLE token after UPDATE / DELETE FROM / INSERT INTO as the table.
+        # It would read `public`, find no protected table by that name, and
+        # report no rewrite at all: an unapproved money rewrite needing neither
+        # a digest nor one-shot registration. Join the pieces back into one
+        # qualified name first. Done over the finished token array rather than
+        # per line so a name split by a newline is joined too. `;` `,` and `=`
+        # are never absorbed — they are statement and clause boundaries, and
+        # welding one into a name would silently move those boundaries.
+        m = 0
+        for (i = 1; i <= ntok; i++) {
+          if (m > 0 &&
+              tok[i] != ";" && tok[i] != "," && tok[i] != "=" &&
+              jtok[m] != ";" && jtok[m] != "," && jtok[m] != "=" &&
+              (jtok[m] ~ /\.$/ || tok[i] ~ /^\./)) {
+            jtok[m] = jtok[m] tok[i]
+            continue
+          }
+          m++; jtok[m] = tok[i]; jtokln[m] = tokln[i]
+        }
+        for (i = 1; i <= m; i++) { tok[i] = jtok[i]; tokln[i] = jtokln[i] }
+        for (i = m + 1; i <= ntok; i++) { delete tok[i]; delete tokln[i] }
+        ntok = m
         for (i = 1; i <= ntok; i++) {
           # Dynamic SQL: refused outright, no table needed. `EXECUTE FUNCTION`
           # / `EXECUTE PROCEDURE` (trigger bodies) and `... EXECUTE ON ...`
@@ -1270,6 +1303,17 @@ $MIG_BASENAME
                 found = 0
                 for (i = 1; i <= n; i++) {
                   s = st[i]
+                  # Count assignments to the compared variable BEFORE asking
+                  # whether they compute a hash. The check below only ever
+                  # counted hash-producing ones, so a plain overwrite —
+                  #   SELECT <real digest> INTO actual ...;
+                  #   actual := <q><approved digest><q>;
+                  # sailed through: the digest is genuinely computed, the
+                  # comparison genuinely reads `actual`, and the value it reads
+                  # is a constant the author typed. The comparison then passes
+                  # no matter how far the population drifted.
+                  if (s ~ ("into[ \t]+(strict[ \t]+)?" var "([^a-z0-9_]|$)") ||
+                      s ~ ("(^|[^a-z0-9_])" var "[ \t]*:=")) nassign++
                   if (s !~ /(md5|sha224|sha256|sha384|sha512|digest|encode)[ \t]*\(/) continue
                   if (s !~ ("into[ \t]+(strict[ \t]+)?" var "([^a-z0-9_]|$)") &&
                       s !~ (var "[ \t]*:=")) continue
@@ -1327,6 +1371,13 @@ $MIG_BASENAME
                 # Printing nothing is the signal for that case; the caller
                 # reports it separately.
                 if (!found) exit
+                # Exactly one assignment, all the way through to the comparison.
+                # One hash statement is not enough on its own if something else
+                # writes the same variable afterwards, because the comparison
+                # tests whatever it holds LAST.
+                if (nassign > nstmt) {
+                  print "assigns " var " again without computing a digest — the comparison tests whatever that later statement left there, so the digest it appears to check proves nothing. Assign the compared variable exactly once"; exit
+                }
                 # The tables stay a statement-level check: in the mandated shape
                 # the FROM sits OUTSIDE the hash call
                 # (SELECT encode(digest(string_agg(...))) FROM orders), and it
@@ -1428,16 +1479,45 @@ $MIG_BASENAME
               }
               return out
             }
+            # EVERY line is stripped, but only the lines from the comparison
+            # onward are walked.
             {
               l = strip($0)
-              if (FNR < dl) next
-              if (FNR == dl) { depth = 1 }
-              else {
-                if (l ~ /(^|[^a-z0-9_])if([^a-z0-9_]|$)/ && l !~ /end[[:space:]]+if/) depth++
-                if (l ~ /end[[:space:]]+if/) { depth--; if (depth <= 0) exit }
+              if (FNR >= dl) buf = buf " " l
+            }
+            # SCOPE IS A STATEMENT, NOT A PHYSICAL LINE (Codex High, round 19).
+            # The old walk gave each line a single depth, so a line that opened
+            # an IF and closed it again changed nothing — and
+            #
+            #   IF actual IS DISTINCT FROM <q>...<q> THEN
+            #     IF false THEN RAISE EXCEPTION <q>drift<q>; END IF;
+            #   END IF;
+            #
+            # put a RAISE the guard would find at depth one while the branch
+            # fell straight through to the write, because the raise it found
+            # can never run. Walking words instead means a nested block opens
+            # and closes exactly where it really does, on one line or twenty.
+            END {
+              gsub(/[^a-z0-9_]+/, " ", buf)
+              n = split(buf, w, / +/)
+              started = 0; depth = 0
+              for (i = 1; i <= n; i++) {
+                # Anything ahead of the comparison IF is not inside its branch.
+                if (!started) {
+                  if (w[i] == "end" && w[i + 1] == "if") { i++; continue }
+                  if (w[i] == "if") { started = 1; depth = 1 }
+                  continue
+                }
+                if (w[i] == "end" && w[i + 1] == "if") {
+                  depth--
+                  if (depth <= 0) exit
+                  i++
+                  continue
+                }
+                if (w[i] == "if") { depth++; continue }
+                if (depth == 1 && (w[i] == "else" || w[i] == "elsif" || w[i] == "elseif")) exit
+                if (depth == 1 && w[i] == "raise" && w[i + 1] == "exception") { print "yes"; exit }
               }
-              if (depth == 1 && l ~ /(^|[^a-z0-9_])(else|elsif|elseif)([^a-z0-9_]|$)/) exit
-              if (depth == 1 && l ~ /raise[[:space:]]+exception/) { print "yes"; exit }
             }
           ' "$file" | grep -c yes || true)
 
@@ -1635,6 +1715,52 @@ $MIG_BASENAME
                 if (rhs == "arr" && lhs ~ ("^(" rcre ")$")) return 1
                 return 2
               }
+              # Does a RAISE EXCEPTION govern the branch opened at line `from`?
+              # Scope is a STATEMENT, not a physical line (Codex High, round
+              # 19): a line holding both an IF and its END IF used to change
+              # nothing, so `IF false THEN RAISE EXCEPTION ...; END IF;` written
+              # on the assertion line itself read as an abort while being
+              # unreachable. Walking words puts every nested block exactly where
+              # it opens and closes.
+              function raise_at_depth1(from,   j, b, nn, w, k, depth, started) {
+                b = ""
+                for (j = from; j <= n; j++) b = b " " ln[j]
+                gsub(/[^a-z0-9_]+/, " ", b)
+                nn = split(b, w, / +/)
+                started = 0; depth = 0
+                for (k = 1; k <= nn; k++) {
+                  if (!started) {
+                    if (w[k] == "end" && w[k + 1] == "if") { k++; continue }
+                    if (w[k] == "if") { started = 1; depth = 1 }
+                    continue
+                  }
+                  if (w[k] == "end" && w[k + 1] == "if") {
+                    depth--
+                    if (depth <= 0) return 0
+                    k++
+                    continue
+                  }
+                  if (w[k] == "if") { depth++; continue }
+                  # The ELSE arm is not the mismatch arm (round 13).
+                  if (depth == 1 && (w[k] == "else" || w[k] == "elsif" || w[k] == "elseif")) return 0
+                  if (depth == 1 && w[k] == "raise" && w[k + 1] == "exception") return 1
+                }
+                return 0
+              }
+              # How many times is `v` assigned before line `stop`? Every form
+              # counts: the GET DIAGNOSTICS that measures it, a plain `:=`, and
+              # a SELECT ... INTO. Each match is blanked as it is counted so the
+              # `v :=` inside a GET DIAGNOSTICS is not counted twice.
+              function assign_count(v, stop,   j, c, na) {
+                na = 0
+                for (j = 1; j < stop; j++) {
+                  c = ln[j]
+                  na += gsub(("get[ \t]+diagnostics[ \t]+(strict[ \t]+)?" v "[ \t]*:?=[ \t]*row_count"), " @ ", c)
+                  na += gsub(("(^|[^a-z0-9_])" v "[ \t]*:="), " @ ", c)
+                  na += gsub(("into[ \t]+(strict[ \t]+)?" v "([^a-z0-9_]|$)"), " @ ", c)
+                }
+                return na
+              }
               { ln[FNR] = strip($0); n = FNR }
               END {
                 # Which identifiers actually hold a measured row count, and from
@@ -1660,19 +1786,24 @@ $MIG_BASENAME
                   after = 0
                   for (v in rcln) { if (ln[i] ~ ("(^|[^a-z0-9_])" v "([^a-z0-9_]|$)") && rcln[v] < i) after = 1 }
                   if (!after) { operand = 1; continue }
-                  if (ln[i] ~ /raise[ \t]+exception/) { print "OK"; exit }
-                  depth = 1
-                  for (j = i + 1; j <= n; j++) {
-                    # Depth 1 only — same reason as the digest branch above
-                    # (Codex High, round 12): a RAISE nested under `IF false`
-                    # is not an abort, it is decoration. And the ELSE arm is not
-                    # the mismatch arm (round 13), so the walk stops there.
-                    if (depth == 1 && ln[j] ~ /(^|[^a-z0-9_])(else|elsif|elseif)([^a-z0-9_]|$)/) break
-                    if (depth == 1 && ln[j] ~ /raise[ \t]+exception/) { print "OK"; exit }
-                    if (ln[j] ~ /(^|[^a-z0-9_])if([^a-z0-9_]|$)/ && ln[j] !~ /end[ \t]+if/) depth++
-                    if (ln[j] ~ /end[ \t]+if/) { depth--; if (depth <= 0) break }
+                  # AND ASSIGNED EXACTLY ONCE ON THE WAY THERE (Codex High,
+                  # round 19). Requiring only that SOME GET DIAGNOSTICS had
+                  # written the variable earlier let a later plain assignment
+                  # replace the measurement:
+                  #   GET DIAGNOSTICS v_n = ROW_COUNT;
+                  #   v_n := array_length(v_ids, 1);
+                  # The assertion then compares the approved count with itself
+                  # — canonical shape, measuring nothing. If a repair really
+                  # writes twice, give each write its own counter.
+                  reasg = 0
+                  for (v in rcln) {
+                    if (ln[i] !~ ("(^|[^a-z0-9_])" v "([^a-z0-9_]|$)")) continue
+                    if (assign_count(v, i) != 1) reasg = 1
                   }
+                  if (reasg) { reassigned = 1; continue }
+                  if (raise_at_depth1(i)) { print "OK"; exit }
                 }
+                if (reassigned) { print "reassigned-count"; exit }
                 if (operand) { print "unbound-count"; exit }
                 if (polarity) { print "polarity"; exit }
                 print "no-assert"
@@ -1682,6 +1813,8 @@ $MIG_BASENAME
               OK) ;;
               no-count)
                 SET_BIND_WHY="the writes never capture GET DIAGNOSTICS <n> = ROW_COUNT, so a rewrite that silently touched fewer rows than were approved would still report success" ;;
+              reassigned-count)
+                SET_BIND_WHY="the row count it compares is assigned more than once before the assertion, so what the assertion reads is whatever was written last — a later \`<n> := array_length($DIGEST_SET_VAR, 1)\` turns the check into the approved count compared with itself. Let exactly one GET DIAGNOSTICS <n> = ROW_COUNT assign it, and give a second write its own counter" ;;
               unbound-count)
                 SET_BIND_WHY="the mismatch test against array_length($DIGEST_SET_VAR, 1) does not compare a measured row count — the other side has to be the variable a GET DIAGNOSTICS <n> = ROW_COUNT actually assigned, on an earlier line. Comparing the approved set to itself is the canonical shape asserting nothing" ;;
               polarity)

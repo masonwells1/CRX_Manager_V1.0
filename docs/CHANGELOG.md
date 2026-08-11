@@ -2,6 +2,50 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-11 — A qualified name is one name, a proof variable is written once, and scope is a statement
+
+Closed all three High findings from the round-19 adversarial review. Each is a
+way past a round-18 fix rather than past the original guard.
+
+**A space made a protected table invisible.** `UPDATE public . orders SET ...`
+is legal PostgreSQL, and so is the same qualification broken across lines. The
+tokenizer keeps `.` as an ordinary character but splits on whitespace, and every
+place that reads a write target took the single token after UPDATE / DELETE FROM
+/ INSERT INTO as the table name. It read `public`, matched no protected table,
+and reported no rewrite at all — an unapproved money rewrite needing neither a
+digest nor one-shot registration, written with nothing more exotic than a space.
+The pieces of a qualified name are now welded back together before any target is
+read, over the finished token array so a name split by a newline is joined too.
+Statement and clause boundaries are never absorbed. The helper index that
+decides which functions are mutating had the same gap and is closed the same
+way.
+
+**The variable holding the proof could be written twice.** The digest check
+proved a hash had been assigned to the compared variable and stopped there, so a
+plain overwrite afterwards was invisible: the digest is genuinely computed, the
+comparison genuinely reads the variable, and the value it reads is whatever the
+second statement left there. The comparison then passes however far the
+population has drifted. The measured row count had the identical gap — replace
+the measurement with the approved count and the assertion compares that count
+with itself. Each proof-critical variable must now be assigned exactly once on
+the way to the check that reads it; a repair that genuinely needs a second write
+gives it its own counter.
+
+**Scope was a physical line, so an unreachable abort counted.** Both fail-closed
+checks walked lines and gave each line a single depth, so a line that opened an
+IF and closed it again changed nothing. Writing `IF false THEN RAISE EXCEPTION
+...; END IF;` on one line therefore put a RAISE at depth one inside the mismatch
+branch while the branch fell straight through to the write: drift would not
+abort, and the guard called it fail-closed. Both checks now walk words, so a
+nested block opens and closes exactly where it really does, on one line or
+twenty.
+
+Nine mutation cases cover the three findings — split qualifications with
+whitespace, newlines, quoted identifiers and one level down inside a helper;
+digest and row-count reassignment; and same-line unreachable aborts on both
+fail-closed checks. The suite stands at 100 cases and the full corpus scan is
+unchanged, so none of this is a new false positive on real migration history.
+
 ## 2026-08-11 — Dynamic SQL one level down is refused; one-shot registration is read, not grepped
 
 Closed both High findings from the round-18 adversarial review. Both were ways
