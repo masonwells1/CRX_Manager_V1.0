@@ -10,6 +10,109 @@ Verified the Codex side of the harness end-to-end from a Claude Code desktop ses
 - **`[mcp_servers.supabase]` deliberately kept**, including `read_only=true`. It is asserted by both `check-agent-workflows.mjs` and `check-agent-guidance.mjs`. An attempt to remove it as a second dead entry was reverted when that guard failed — see the new KNOWN_ISSUES entry, which records what that guard does and does not actually prove.
 - **`agent-pair-review.md` names no model or effort.** It reaches `gpt-5.6-sol` at high effort only by routing through `codex-review`; nothing enforces it. Filed as follow-up, not fixed here.
 
+## 2026-08-10 — Own-worktree containment compares paths case-insensitively on Windows
+
+Closed a narrower instance of the push block the 2026-08-09 own-worktree
+exemption was written to remove. That exemption keys its registry by a path
+string: `registeredWorktreeDirectories()` stored the repo-relative path using
+the casing `git worktree list --porcelain` printed, and `worktreeEntryKind()`
+built its lookup key from the casing the ignored-directory listing reported.
+Every other containment comparison in the checker routes through
+`containmentPathKey()`, which lowercases on win32 precisely so a containment
+decision cannot hinge on the casing Git happened to print — that Set
+round-trip was the one place that did not.
+
+On Windows the two casings can disagree, and when they did the membership
+lookup missed and a legitimate linked worktree of this same repository was
+classified as an embedded repository, failing the pre-push containment gate.
+It failed closed, so it over-blocked a push and never risked leaking a private
+artifact — a regression risk, not a security hole. Both the stored key and the
+lookup key now go through `containmentPathKey()`, preserving the existing
+`path.relative` and forward-slash conversion.
+
+New fixtures drive the disagreement from both sides against a real registered
+worktree: the registry casing skewed away from disk, and the ignored-listing
+casing skewed away from the registry. Each asserts the harness actually
+rewrote a path, so neither can pass vacuously. The first also asserts the
+correct fail-closed result on case-sensitive filesystems, where the two
+casings genuinely name two different directories; the second is Windows-only,
+because elsewhere the skewed path names a directory that does not exist.
+Reverting either half of the fix turned the suite red before restore.
+
+Codex's review of that fix raised two findings on PR #366, both real and both
+addressed in the same PR. First, folding case decides which registry key a
+candidate matches, and matching a key was the *only* thing granting the
+exemption. A Windows directory with per-directory case sensitivity enabled can
+hold `session` and `SESSION` at once — two different directories that fold to
+one key — so a foreign repository parked at the colliding name would have
+inherited a linked worktree's exemption and had its contents skipped instead of
+failing closed. `worktreeEntryKind()` now re-verifies the `.git` pointer file on
+the candidate directory itself before exempting it, which is the same two-signal
+rule the registry side already applied and does not depend on case semantics at
+all. A new fixture enables per-directory case sensitivity, builds both
+directories for real, and asserts the foreign one is still rejected; it skips
+where the filesystem cannot hold two case-distinct names. Removing the
+re-verification turned it red before restore.
+
+Second, every CI runner in this repository is `ubuntu-latest`, where
+`containmentPathKey()` is the identity function — so the Windows-only branches
+never executed and both production edits could have been reverted with CI still
+green. A `Phase 3C Containment (Windows)` job now runs this suite on
+`windows-latest`. The suite imports only Node builtins and sibling scripts, so
+that leg needs Git and Node but no `npm ci`.
+
+Standing that job up surfaced a pre-existing incompatibility between this suite
+and the hosted Windows runner, which points `TEMP` at an 8.3 short path
+(`C:\Users\RUNNER~1\...`). The suite builds its fixture repositories under
+`os.tmpdir()`, and Node's `realpathSync` keeps the short form while Git expands
+it, so a fixture root passed its own canonical check and then never equalled
+`git rev-parse --show-toplevel` — every canonical-root assertion failed. That
+was reproduced locally against a deliberately short-named directory before
+being fixed; the job now runs with `TMP`/`TEMP` set to `runner.temp`, a plain
+long path. The guard itself is unchanged: the fix corrects the test
+environment, not the check. The suite also pins the number of CI checkout steps
+so each new one gets a least-privilege review, and this job's checkout drops the
+GitHub token like the other four.
+
+Running on Windows for the first time then exposed a second dormant case. One
+assertion checks that a forbidden `private-artifacts` name fails closed before
+any reparse point is dereferenced, and it built that link as a junction aimed at
+a file. A junction is a directory-only reparse point, so aimed at a file it is a
+broken link Git cannot open (`could not open directory ... Not a directory`),
+the entry never reaches the name rule, and the assertion fails. It had gone
+unnoticed because it sat behind a Windows *file* symlink whose creation needs a
+privilege an ordinary account lacks — the resulting `EPERM` skipped the block on
+every Windows machine except an elevated CI runner. The junction case now stands
+in its own block and aims at a directory, so it executes on an ordinary Windows
+account too; it was confirmed red against the old shape and green against the new
+one on a non-elevated machine. The guard is again unchanged, and was verified
+directly: a junction pointing at a real directory of packets — the shape that
+could actually carry private data — was already rejected.
+
+Review of that fix then found a real hole in the exemption itself, and this one
+could hide private data rather than merely block a push. A linked worktree of
+this repository is recognised by a `.git` pointer file naming a directory inside
+this repository's worktree bookkeeping. That pointer was trusted on its face, so
+a *copy* of a genuine worktree's pointer file was equally convincing. Windows
+compares names case-insensitively by default, but a directory can opt in to
+per-directory case sensitivity, and one that has can hold `session` and
+`SESSION` as two different directories that the containment check folds to a
+single key. A foreign directory parked at the colliding name could copy the
+pointer next door and inherit the exemption — its private contents skipped. That was reproduced end to end before anything
+changed: a private packet passed the gate. The exemption now reads the backlink
+Git keeps in that bookkeeping directory and requires it to name the very
+directory being exempted. The comparison is made on filesystem identity rather
+than path text, because Node's `realpathSync` returns whatever casing it was
+handed on Windows while case-sensitive directories make two spellings genuinely
+two places; and it compares the backlink's parent *directory*, so hard-linking
+the pointer file — which would preserve the file's identity — fails too, NTFS
+having no way to hard-link a directory. Both attacks and both legitimate cases
+are now fixtures in the suite, each confirmed red against the previous shape.
+
+Raised by CodeRabbit on PR #359 and deferred there only because a new commit
+would have discarded that PR's banked Vercel status while the daily build
+quota was exhausted.
+
 ## 2026-08-10 — Review fixes on the harness guards (PR #369)
 
 Six findings from the Codex and CodeRabbit reviews of PR #369, all in the pre-commit harness. Five are
