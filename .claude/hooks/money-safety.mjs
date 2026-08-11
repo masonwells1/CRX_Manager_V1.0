@@ -49,7 +49,8 @@ if (violations.length > 0) {
   out("block",
     "MONEY SAFETY: " + violations.join(" | ") +
     " New money storage in CRX Manager uses bigint cents (e.g. 2550 for $25.50); " +
-    "documented legacy PostgreSQL numeric-dollar columns remain exact-decimal exceptions. " +
+    "documented legacy PostgreSQL numeric-dollar columns remain exceptions only while database " +
+    "math stays exact numeric and, once their data is clean, a finite whole-cent constraint is present. " +
     "For authoritative TypeScript input, first reject more than two fractional digits or apply one " +
     "explicit approved exact rounding rule; only then convert to integer cents. The legacy " +
     "parseDollarsToCents() helper currently truncates excess precision, so it is not sufficient " +
