@@ -85,6 +85,9 @@ function assertInputs() {
     assert.ok(existsSync(file), `missing checked-in proof input: ${file}`);
   }
   const migration = readFileSync(MIGRATION, 'utf8');
+  const executableMigration = migration
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/--[^\r\n]*/g, ' ');
   for (const marker of [
     'FOR SHARE;',
     'updated_at = now()',
@@ -92,7 +95,7 @@ function assertInputs() {
     'ASSIGNMENT_AUDIT_COUNT_MISMATCH',
     'PERFORM public.save_idempotency(',
   ]) {
-    assert.ok(migration.includes(marker), `migration marker missing: ${marker}`);
+    assert.ok(executableMigration.includes(marker), `executable migration marker missing: ${marker}`);
   }
   const smoke = readFileSync(SMOKE, 'utf8');
   for (const marker of [
@@ -103,6 +106,16 @@ function assertInputs() {
   ]) {
     assert.ok(smoke.includes(marker), `smoke marker missing: ${marker}`);
   }
+}
+
+function inspectGitStatus() {
+  const result = spawnSync('git', ['status', '--short', '--branch'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    timeout: 10_000,
+  });
+  if (result.error) throw result.error;
+  assert.equal(result.status, 0, result.stderr || 'git status preflight failed');
 }
 
 function startContainer() {
@@ -253,6 +266,7 @@ UPDATE public.profiles SET is_active = true WHERE id = '${SALES_REP_ID}';
 
 async function run() {
   assertInputs();
+  inspectGitStatus();
   startContainer();
   installMinimumShape();
   psql(readFileSync(MIGRATION, 'utf8'));

@@ -388,11 +388,18 @@ export default function Customers() {
         toast('error', 'The selected sales representative is no longer active. Choose another rep.');
       } else if (hasRpcCode(err, RpcErrorCodes.ASSIGNMENT_CUSTOMER_SET_CHANGED)) {
         const refreshed = await fetchCustomers({ reportError: false });
+        // The server proved at least one requested row is no longer eligible.
+        // Drop the entire ambiguous selection so an inactive row cannot remain
+        // invisibly selected and poison every retry.
+        clearSelection();
+        setAssignModalOpen(false);
+        setAssignmentRepId('');
+        assignmentIdem.resetKey();
         toast(
           'error',
           refreshed
-            ? 'The selected customer list changed before assignment. Nothing was assigned; review the refreshed selection and retry.'
-            : 'The selected customer list changed before assignment and the list could not refresh. Nothing was assigned; reload before retrying.',
+            ? 'The selected customer list changed before assignment. Nothing was assigned; reselect active customers from the refreshed list and retry.'
+            : 'The selected customer list changed before assignment and the list could not refresh. Nothing was assigned; the selection was cleared, so reload before selecting customers again.',
         );
       } else if (hasRpcCode(err, RpcErrorCodes.ASSIGNMENT_REPLAY_PAYLOAD_MISMATCH)) {
         // The server proved this key belongs to a different assignment intent,
