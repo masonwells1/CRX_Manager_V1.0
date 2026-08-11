@@ -1,19 +1,34 @@
 -- 20260811060000_require_completed_delivery_before_invoice_post.sql
 -- STATUS: PARKED DRAFT - NOT APPLIED.
--- Reviewed twice (RLS/security and migration-drift); both rounds of findings are
--- folded in. The full 20-assertion precondition block was dry-run read-only
--- against production on 2026-08-11 after the second review round: every
--- assertion passed and zero existing drafts are blocked by the gate. Still
--- required before this can go live, in this order: a re-review of THIS revision
--- by both reviewers (each has so far only seen a superseded one), an independent
--- Codex verdict on the exact commit, a fresh migration-apply-guard proof, a
--- forward re-stamp of this filename past the live high-water mark at apply time,
--- and Mason saying yes in the conversation. The dry-run above goes stale: re-run
--- it if more than a day passes, since it is a statement about live schema that
--- other sessions can change. Do not apply during office hours: the
--- probe holds row locks on one live invoice and one live delivery for the whole
--- apply, and lock_timeout bounds only this transaction, not the office session
--- that ends up waiting behind it.
+-- Reviewed three times by both reviewers (RLS/security and migration-drift);
+-- every round of findings is folded in. The precondition block was dry-run
+-- read-only against production on 2026-08-11 after the second round: all 20
+-- assertions passed and zero existing drafts are blocked by the gate. The third
+-- round added PRECOND R and tightened PRECOND Q, so the block now carries 21
+-- assertions and MUST be dry-run again before applying — see below.
+--
+-- Still required before this can go live, in this order:
+--   1. Land and deploy the FRONTEND half first. src/lib/db.ts maps
+--      DELIVERY_NOT_COMPLETED and DELIVERY_MISSING to plain-English sentences,
+--      and that mapping is on this branch, not yet on origin/main. Applying the
+--      migration ahead of the Vercel deploy shows the office a raw error token
+--      instead of "complete the delivery first". Merge, then apply.
+--   2. Re-run the read-only dry-run of the precondition block at its full 21
+--      assertions. The earlier run covered 20.
+--   3. An independent Codex verdict on the exact commit.
+--   4. A fresh migration-apply-guard proof.
+--   5. A forward re-stamp of this filename past the live high-water mark, read
+--      from list_migrations at apply time — five sibling Wave A migrations are
+--      queued ahead of this one and Supabase assigns the live version from the
+--      server clock.
+--   6. Mason saying yes in the conversation.
+--
+-- The dry-run goes stale: re-run it if more than a day passes, since it is a
+-- statement about live schema that other sessions can change. Do not apply during
+-- office hours: the probe holds row locks on one live invoice and one live
+-- delivery for the whole apply, and lock_timeout bounds only how long this
+-- transaction WAITS for a lock, not how long it holds one, so an office session
+-- that lands behind the probe waits for the commit.
 --
 -- Wave A fix #5 of the 2026-08-09 ordering-cycle review.
 -- Finding: an invoice that is tied to a delivery can be POSTED — turned into a
@@ -68,10 +83,22 @@
 --   batch_post_invoices -> loops over post_invoice                 -> THIS
 -- One CREATE OR REPLACE therefore closes all three. The precondition asserts the
 -- caller count so a future fourth caller cannot quietly appear outside the gate.
--- Neither caller wraps the call in an exception handler (checked live
+-- Neither DIRECT caller wraps the call in an exception handler (checked live
 -- 2026-08-11 for `EXCEPTION WHEN`, not merely the word "exception", which the
--- RAISE statements in both bodies would have matched) — so this gate's refusal
--- reaches the client rather than being swallowed into a silent success.
+-- RAISE statements in both bodies would have matched) — so on the two direct
+-- paths this gate's refusal reaches the client rather than being swallowed into
+-- a silent success.
+--
+-- `batch_post_invoices` is the exception, and the claim above is deliberately
+-- scoped to exclude it. That RPC catches OTHERS per invoice, folds the message
+-- into a `failures` array and returns a success-shaped result, so it reports
+-- this gate's refusal as DATA rather than raising it. `describePostInvoiceBlock`
+-- in src/lib/db.ts only inspects a THROWN error, so a caller of that RPC would
+-- see the raw DELIVERY_NOT_COMPLETED token instead of the plain-English
+-- sentence. No live UI is affected: src/pages/Invoices.tsx does not call it — it
+-- loops client-side over post_invoice/post_invoice_group, both of which do route
+-- through describePostInvoiceBlock. Recorded so the next reader does not have to
+-- re-derive it, and so a future UI that adopts the RPC knows what it inherits.
 --
 -- WHAT ELSE CAN WRITE status='posted', stated precisely because an earlier draft
 -- of this header overstated it. Read-only against production 2026-08-11, FIVE
@@ -157,8 +184,15 @@
 -- 2026-08-11 across every table a post writes (`invoices`, `deliveries`,
 -- `financial_audit_log`, `activity_feed`, `notifications`, `rup_sales_records`,
 -- `invoice_line_share_snapshots`): no trigger on any of them calls `http_post`,
--- `dblink`, `pg_background` or `COPY PROGRAM`. Every effect of the probe is
--- ordinary table state, and every bit of it is unwound by the subtransaction.
+-- `dblink`, `pg_background`, `COPY PROGRAM`, `supabase_functions.http_request`
+-- (the Database Webhooks trigger function), `net.http_get`/`net.http_post` or
+-- `pg_notify`. The last three were added to the sweep after a reviewer noted the
+-- original four missed the Supabase-native webhook path. They would in fact have
+-- been safe anyway — pg_net enqueues into `net.http_request_queue`, which the
+-- subtransaction unwinds, and NOTIFY payloads are only delivered on top-level
+-- commit — but the enumeration is what this file offers as evidence, so the
+-- enumeration is what had to be complete. Every effect of the probe is ordinary
+-- table state, and every bit of it is unwound by the subtransaction.
 --
 -- WHAT THIS DELIBERATELY DOES NOT GATE, and why.
 -- Only invoices that carry a `delivery_id` are gated. Three other shapes exist
@@ -259,8 +293,11 @@
 BEGIN;
 
 -- Transaction-local: reverted at COMMIT, so nothing leaks into a pooled session.
--- lock_timeout is the one that matters — it bounds every row lock the probe takes
--- against live tables, so a stuck probe fails fast instead of blocking the office.
+-- lock_timeout bounds how long this transaction WAITS for a lock, so a probe that
+-- collides with an office session fails fast instead of hanging the apply. It does
+-- NOT bound how long the probe HOLDS the locks it already took — those are held
+-- until COMMIT, which is why the header still says do not apply during office
+-- hours. The two are easy to conflate and an earlier revision of this comment did.
 -- 180s, not 60s. statement_timeout bounds each STATEMENT, and the postcondition
 -- block below is ONE statement covering two whole-table fingerprints, a candidate
 -- query with four correlated NOT EXISTS subqueries, and four real post attempts
@@ -299,9 +336,11 @@ BEGIN
   -- would only have cost the dry-run, which is the cheaper thing to lose but not
   -- one worth losing.) Note the guard matches on TEXT, not on effect, so this
   -- comment deliberately does not spell the helper''s name either. The form used
-  -- below is pure catalog column reads. This block was dry-run read-only against
-  -- production on 2026-08-11 at its full 20 assertions, after the second review
-  -- round added F2, G2, P2 and Q and widened B and I: all 20 passed.
+  -- below is pure catalog column reads. This block has been dry-run read-only
+  -- against production twice on 2026-08-11: once at 20 assertions after the
+  -- second review round added F2, G2, P2 and Q and widened B and I, and again at
+  -- its current 21 after the third round added R and tightened Q. Both runs
+  -- passed every assertion with zero existing drafts blocked.
   -- Return type, parameter NAMES and the trailing DEFAULT are asserted too. They
   -- do not affect overload identity, but CREATE OR REPLACE refuses to change any
   -- of them and would abort with a bare PostgreSQL message ("cannot change name
@@ -600,16 +639,50 @@ BEGIN
   -- non-credit_memo insert. Every other load-bearing external object in this file
   -- gets an assertion; this one was the exception. Read live 2026-08-11:
   -- trg_invoice_draft_insert on public.invoices, handler
-  -- enforce_invoice_draft_on_insert, enabled (tgenabled = ''O'').
+  -- enforce_invoice_draft_on_insert, tgtype = 7, tgenabled = ''O''.
+  --
+  -- The timing and level are pinned, not assumed. An earlier revision checked
+  -- only the name, the handler and `tgenabled <> ''D''`, which passes in exactly
+  -- the case the assertion exists to catch: a trigger recreated AFTER INSERT, or
+  -- at statement level, cannot stop the insert but still satisfies a name check,
+  -- and ''R'' (replica-only) never fires on the origin server at all. tgtype is a
+  -- bitmask — 1 = FOR EACH ROW, 2 = BEFORE, 4 = INSERT, 64 = INSTEAD OF — so
+  -- masking with 71 and requiring 7 pins BEFORE INSERT FOR EACH ROW and rules
+  -- out INSTEAD OF in one test. Live value is exactly 7.
   SELECT count(*) INTO v_count
     FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid
    WHERE t.tgrelid = 'public.invoices'::regclass
      AND NOT t.tgisinternal
      AND t.tgname = 'trg_invoice_draft_insert'
      AND p.proname = 'enforce_invoice_draft_on_insert'
-     AND t.tgenabled <> 'D';
+     AND (t.tgtype & 71) = 7
+     AND t.tgenabled IN ('O', 'A');
   IF v_count <> 1 THEN
-    RAISE EXCEPTION 'PRECOND Q: the trg_invoice_draft_insert BEFORE INSERT trigger on invoices is missing, disabled or no longer runs enforce_invoice_draft_on_insert. It is the backstop that stops a caller-supplied status inserting an invoice already at ''posted'' — without it a posted, delivery-linked bill could be created without ever passing through this gate. Re-derive before applying.';
+    RAISE EXCEPTION 'PRECOND Q: the trg_invoice_draft_insert trigger on invoices is missing, disabled, replica-only, no longer BEFORE INSERT FOR EACH ROW, or no longer runs enforce_invoice_draft_on_insert. It is the backstop that stops a caller-supplied status inserting an invoice already at ''posted'' — without it a posted, delivery-linked bill could be created without ever passing through this gate. Re-derive before applying.';
+  END IF;
+
+  -- PRECOND R. Every completeness scan above matches against `pg_proc.prosrc`.
+  -- For a function written with a SQL-standard body (LANGUAGE sql ... BEGIN
+  -- ATOMIC) the executable body lives in `prosqlbody` instead, and prosrc is left
+  -- BLANK — verified live 2026-08-11 on PostgreSQL 17.6: all 56 such functions on
+  -- this database have prosrc of length zero, none NULL. That matters in two
+  -- opposite directions. The inverted assertions (F, G, P) count definitions that
+  -- FAIL their guard, and a blank body fails every guard, so they abort — fail
+  -- CLOSED, which is correct. But the SET assertions (E, H, I) look for a body
+  -- that DOES something, and a blank body matches nothing, so a BEGIN ATOMIC
+  -- function that posted an invoice would be invisible to all three — fail OPEN,
+  -- which is not acceptable in the assertion carrying this file''s completeness
+  -- argument. Rather than rewrite ten regexes against a deparsed definition, pin
+  -- the premise directly: no function in `public` uses a SQL-standard body today
+  -- (verified live, count = 0), so every prosrc scan in this block is sound. If
+  -- that stops being true, this migration aborts and a human re-derives the
+  -- scans instead of trusting them.
+  SELECT count(*) INTO v_count
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public'
+     AND p.prosqlbody IS NOT NULL;
+  IF v_count <> 0 THEN
+    RAISE EXCEPTION 'PRECOND R: % function[s] in public now use a SQL-standard body [LANGUAGE sql ... BEGIN ATOMIC]. Their bodies are not in pg_proc.prosrc, so the completeness scans in this block cannot see what they do — a function that posts an invoice would be invisible to PRECOND E, H and I. Re-derive those scans before applying.', v_count;
   END IF;
 
   -- How many existing drafts this gate would make temporarily unpostable. This is
@@ -622,11 +695,24 @@ BEGIN
   -- 2026-08-11: every assertion above passed and this count came back ZERO. No
   -- invoice that exists today is blocked by this gate. Re-run that count if more
   -- than a day passes before this migration is applied.
+  --
+  -- LEFT JOIN, not an inner join, and that is load-bearing. The gate installed
+  -- below adds a refusal that did not exist before — DELIVERY_MISSING, for an
+  -- invoice whose delivery_id points at a row that is gone. An inner join drops
+  -- exactly those rows, so the count would be structurally blind to the one new
+  -- blocking class it exists to measure, and the applier would read ''nothing is
+  -- blocked'' while a bill became permanently unpostable. Verified live
+  -- 2026-08-11 that the class is empty and cannot currently be populated:
+  -- `invoices_delivery_id_fkey` is a VALIDATED foreign key from
+  -- invoices.delivery_id to deliveries.id, and zero invoices hold a dangling
+  -- reference. The LEFT JOIN stays anyway — the FK is not asserted by this
+  -- block, so the count should not silently depend on it.
   SELECT count(*) INTO v_count
-    FROM invoices i JOIN deliveries d ON d.id = i.delivery_id
+    FROM invoices i LEFT JOIN deliveries d ON d.id = i.delivery_id
    WHERE i.status IN ('draft', 'unposted')
      AND i.deleted_at IS NULL
-     AND (d.status <> 'completed' OR d.deleted_at IS NOT NULL);
+     AND i.delivery_id IS NOT NULL
+     AND (d.id IS NULL OR d.status <> 'completed' OR d.deleted_at IS NOT NULL);
   IF v_count > 0 THEN
     RAISE NOTICE 'PRECOND: % existing draft invoice[s] point at a delivery that is not completed and will not be postable until it is. This is the intended behaviour.', v_count;
   ELSE
@@ -692,7 +778,11 @@ BEGIN
     IF v_del_deleted IS NOT NULL THEN
       RAISE EXCEPTION 'DELIVERY_NOT_COMPLETED: delivery % for invoice % has been deleted, so nothing was delivered against this bill. Void this invoice instead of posting it.', v_del_number, v_inv.invoice_number;
     END IF;
-    IF v_del_status <> 'completed' THEN
+    -- IS DISTINCT FROM, not <>. deliveries.status is NOT NULL today, so the two
+    -- are equivalent — but <> against a NULL yields NULL, the IF does not fire,
+    -- and the post proceeds. That is the wrong direction to fail on a money gate
+    -- if the column's nullability ever changes.
+    IF v_del_status IS DISTINCT FROM 'completed' THEN
       RAISE EXCEPTION 'DELIVERY_NOT_COMPLETED: delivery % for invoice % is "%", not completed. Complete the delivery first — that same step also corrects this invoice to the quantities actually delivered. If the delivery was cancelled or voided, void this invoice rather than posting it.', v_del_number, v_inv.invoice_number, v_del_status;
     END IF;
   END IF;
@@ -731,6 +821,20 @@ $function$;
 -- incident B7/B8/B9 shape by construction instead of by inspection.
 REVOKE ALL ON FUNCTION public._post_invoice_impl_20260714(uuid, text)
   FROM PUBLIC, anon, authenticated, service_role;
+
+-- metabase_ro is the reporting login. The postcondition below ASSERTS it holds no
+-- EXECUTE here, so the remediation has to cover it too — an assertion broader
+-- than its remedy aborts the migration where it could simply have fixed the
+-- problem. It is not in the REVOKE above because REVOKE cannot be conditional and
+-- the role may legitimately have been retired, so it is done here guarded on
+-- pg_roles. No-op today: the live ACL is `postgres=X/postgres` and nothing else.
+DO $revoke_reporting$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'metabase_ro') THEN
+    EXECUTE 'REVOKE ALL ON FUNCTION public._post_invoice_impl_20260714(uuid, text) FROM metabase_ro';
+  END IF;
+END;
+$revoke_reporting$;
 
 DO $postcond$
 DECLARE
@@ -804,17 +908,20 @@ BEGIN
   SELECT count(*) INTO v_count
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public' AND p.proname = '_post_invoice_impl_20260714'
-     AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')
-     AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')
-     AND NOT has_function_privilege('service_role', p.oid, 'EXECUTE')
+     -- Every role check uses the same EXISTS-on-pg_roles form, because
+     -- has_function_privilege ERRORS on a role that does not exist rather than
+     -- returning false. An earlier revision guarded only metabase_ro that way and
+     -- named the other three directly, which made this migration unappliable
+     -- against any database where anon, authenticated or service_role is absent —
+     -- always true on Supabase, not true of a plain-Postgres restore, and the
+     -- container replay harness is exactly that shape. A role that does not exist
+     -- holds no privilege, which is what the EXISTS form says.
+     --
      -- metabase_ro is the reporting login; it holds SELECT-class rights on the
-     -- money tables and must never gain EXECUTE on a posting function. Wrapped in
-     -- an EXISTS on pg_roles because has_function_privilege ERRORS on a role that
-     -- does not exist, which would abort this migration on a database where the
-     -- reporting login has simply been retired.
+     -- money tables and must never gain EXECUTE on a posting function.
      AND NOT EXISTS (
        SELECT 1 FROM pg_roles r
-        WHERE r.rolname = 'metabase_ro'
+        WHERE r.rolname IN ('anon', 'authenticated', 'service_role', 'metabase_ro')
           AND has_function_privilege(r.oid, p.oid, 'EXECUTE')
      );
   IF v_count <> 1 THEN
