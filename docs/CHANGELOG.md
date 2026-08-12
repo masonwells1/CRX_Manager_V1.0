@@ -38,13 +38,23 @@ identity variable that was overwritten. Nested, caught, post-mutation, or
 zero-iteration-loop exceptions cannot stand in for the direct refusal either.
 Existing direct, quoted-parameter, and current-August
 `v_actor := auth.uid()` refusal forms remain compatible. The focused real-hook
-suite passes 313 assertions. Sixteen isolated mutations across the repair each
+suite passes 317 assertions. Seventeen isolated mutations across the repair each
 failed on their owning regression before the production clause was restored;
 one additional procedure-call clause was removed when mutation testing proved
 it redundant with the earlier mutation-order gate. Direct hook probes deny the
 conditional-binding and partially guarded multi-actor exploits while allowing
 their unconditional and fully guarded controls. All 30 current August
 migrations pass the repaired hook without a denial or internal error.
+
+A fresh exact-head review then reproduced a delayed-SQL bypass through an
+updatable view that renamed `cron.job.command` to `payload`. Every UPDATE through
+a tracked `cron.job` view now enters the command-write boundary. Assignments to
+the canonical `command` column retain their existing direct-literal inspection;
+an update through any renamed or otherwise unproven view column fails closed to
+manual review. Same-file explicit-column-list and `command AS payload` probes,
+plus a real two-migration persistent-view probe, deny unsafe actor DDL. The
+existing direct harmless `command` controls remain allowed, while harmless SQL
+through an unproven renamed column deliberately requires manual review.
 
 ## 2026-08-11 — Close executable cross-migration cron.job view aliases
 

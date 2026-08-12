@@ -1041,7 +1041,10 @@ function isPgCronCommandWrite(rawStmt) {
   }
 
   const sites = pgCronCommandWriteSites(callableSql);
-  if (sites.some((site) => site.kind !== "UPDATE")) return true;
+  // A view can rename cron.job.command (for example, `command AS payload`).
+  // Treat every tracked-view UPDATE as a command write unless the later direct
+  // assignment checks can prove the canonical command column is inspectable.
+  if (sites.some((site) => site.viewAlias || site.kind !== "UPDATE")) return true;
   const command = '(?:"command"|command)';
   const directAssignment = new RegExp(`(?:\\bSET\\b|,)\\s*${command}\\s*=`, "i");
   const tupleAssignment = new RegExp(

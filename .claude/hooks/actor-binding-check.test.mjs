@@ -527,6 +527,28 @@ SET command = $job$SELECT public.existing_safe_job()$job$
 WHERE jobid = 42;`);
 ok(!isDeny(r), "an updatable cron.job view keeps a direct harmless command allowed");
 
+r = runHook(`SELECT cron.schedule('renamed-column-probe', '* * * * *', 'SELECT 1');
+CREATE VIEW public.cron_job_facade (job_id, payload, job_name) AS
+SELECT jobid, command, jobname FROM cron.job;
+UPDATE public.cron_job_facade
+SET payload = $job$${UNBOUND_DDL}$job$
+WHERE job_name = 'renamed-column-probe';`);
+ok(isDeny(r), "an explicit view column list cannot rename an unsafe cron.job command out of inspection");
+
+r = runHook(`CREATE VIEW public.cron_job_facade AS
+SELECT jobid, command AS payload, jobname FROM cron.job;
+UPDATE public.cron_job_facade
+SET payload = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`);
+ok(isDeny(r), "a SELECT alias cannot rename an unsafe cron.job command out of inspection");
+
+r = runHook(`CREATE VIEW public.cron_job_facade AS
+SELECT jobid, command AS payload, jobname FROM cron.job;
+UPDATE public.cron_job_facade
+SET payload = $job$SELECT public.existing_safe_job()$job$
+WHERE jobid = 42;`);
+ok(isDeny(r), "an unproven renamed cron.job column requires manual review even for harmless SQL");
+
 r = runHook(`${STAGED_DDL}
 CREATE TEMP VIEW cron_job_alias AS SELECT * FROM cron.job;
 UPDATE cron_job_alias
@@ -646,6 +668,19 @@ r = runHook(`UPDATE public.persistent_cron_job_facade
 SET command = $job$SELECT public.existing_safe_job()$job$
 WHERE jobid = 42;`, crossMigrationTarget);
 ok(!isDeny(r), "an earlier persistent cron.job view keeps a direct harmless command allowed");
+
+writeFileSync(
+  path.join(crossMigrationDir, "20260807000002_create_renamed_cron_job_facade.sql"),
+  "CREATE VIEW persistent_renamed_cron_job_facade AS SELECT jobid, command AS payload FROM cron.job;\n"
+);
+const renamedColumnCrossMigrationTarget = path.join(
+  crossMigrationDir,
+  "20260807000003_update_renamed_cron_job_facade.sql"
+);
+r = runHook(`UPDATE public.persistent_renamed_cron_job_facade
+SET payload = $job$${UNBOUND_DDL}$job$
+WHERE jobid = 42;`, renamedColumnCrossMigrationTarget);
+ok(isDeny(r), "a renamed cron.job command column remains fail-closed across migrations");
 
 writeFileSync(
   path.join(crossMigrationDir, "20260807000002_create_unicode_source_facade.sql"),
