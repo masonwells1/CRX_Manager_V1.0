@@ -2176,11 +2176,8 @@ function registryMigrationHighWater(): string {
 // Keep this set aligned with rows explicitly marked PENDING APPLY in
 // docs/reference/migration-history.md.
 //
-// The customer assignment activity migration is reviewed and proven locally,
-// but remains pending the separately guarded live Supabase apply lane.
-const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([
-  '20260811230423',
-]);
+// No migration indexed by the current history is waiting on a live apply.
+const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>();
 
 /**
  * Explicitly pending migrations remain part of the contract inventory even
