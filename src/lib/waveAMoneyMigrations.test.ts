@@ -219,4 +219,28 @@ describe('Wave A money migration remediation', () => {
     expect(residueProof).toBeGreaterThan(authorizedCompletion);
     expect(rollback).toBeGreaterThan(residueProof);
   });
+
+  it('revokes every client role from the delivery-completion trigger guard when present', () => {
+    const guardStart = deliveryBillingSql.indexOf(
+      'CREATE FUNCTION public._guard_delivery_completion_authorized()',
+    );
+    const guardEnd = deliveryBillingSql.indexOf(
+      'CREATE TRIGGER trg_guard_delivery_completion_authorized',
+      guardStart,
+    );
+    const guardInstall = deliveryBillingSql.slice(guardStart, guardEnd);
+
+    expect(guardInstall).toContain(
+      'REVOKE ALL ON FUNCTION public._guard_delivery_completion_authorized() FROM PUBLIC;',
+    );
+    expect(guardInstall).toContain(
+      "FOREACH v_role IN ARRAY ARRAY['anon', 'authenticated', 'service_role'] LOOP",
+    );
+    expect(guardInstall).toContain(
+      "IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_role) THEN",
+    );
+    expect(guardInstall).toContain(
+      "'REVOKE ALL ON FUNCTION public._guard_delivery_completion_authorized() FROM %I'",
+    );
+  });
 });

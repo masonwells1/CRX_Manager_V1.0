@@ -792,7 +792,37 @@ BEGIN
 END;
 $function$;
 
+-- Revoking PUBLIC alone is NOT enough here, and getting this wrong aborts the
+-- whole migration rather than merely leaving a loose grant. This project carries
+-- ALTER DEFAULT PRIVILEGES in schema public granting EXECUTE on NEW functions to
+-- anon, authenticated and service_role, so a freshly created function lands with
+-- explicit per-role grants and `REVOKE ... FROM PUBLIC` strips only the PUBLIC
+-- entry. The POSTCOND below ASSERTS none of those three holds EXECUTE, so
+-- without the loop this file fails its own assertion on first apply and rolls
+-- back both the provenance guard and the delivery-before-billing gate. Confirmed
+-- against live pg_default_acl on 2026-08-12; documented in
+-- docs/reference/gotchas.md ("REVOKE ... FROM PUBLIC does NOT strip anon").
+-- PUBLIC is revoked unconditionally because it is a pseudo-role, always
+-- resolves, and is the widest grantee. The named roles go through a
+-- pg_roles-guarded loop because REVOKE cannot be made conditional and ERRORS on
+-- a role that does not exist, so naming them directly would tie this file to
+-- targets that happen to carry Supabase's platform roles.
 REVOKE ALL ON FUNCTION public._guard_delivery_completion_authorized() FROM PUBLIC;
+
+DO $revoke_named_roles$
+DECLARE
+  v_role text;
+BEGIN
+  FOREACH v_role IN ARRAY ARRAY['anon', 'authenticated', 'service_role'] LOOP
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_role) THEN
+      EXECUTE format(
+        'REVOKE ALL ON FUNCTION public._guard_delivery_completion_authorized() FROM %I',
+        v_role
+      );
+    END IF;
+  END LOOP;
+END;
+$revoke_named_roles$;
 
 CREATE TRIGGER trg_guard_delivery_completion_authorized
   BEFORE UPDATE OF status ON public.deliveries

@@ -2,6 +2,31 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-12 — Wave A remediation round 4: the delivery guard would have aborted its own migration
+
+The adversarial review of round 3 returned BLOCKED with a single finding, confirmed against live and
+fixed here. The six migrations remain parked and unapplied.
+
+The new trigger-guard function was locked down with `REVOKE ALL … FROM PUBLIC` alone. That is not
+sufficient on this project and the consequence is not a loose grant — it is a migration that cannot
+succeed. `ALTER DEFAULT PRIVILEGES` in schema `public` grants EXECUTE on **new** functions to `anon`,
+`authenticated` and `service_role`, so a freshly created function lands carrying explicit per-role
+grants and revoking `PUBLIC` strips only the `PUBLIC` entry; this was re-confirmed read-only against
+`pg_default_acl` today and is the gotcha recorded on 2026-07-27. The same migration's postcondition
+then asserts that none of those three roles holds EXECUTE on the guard, so on first apply the
+assertion would have fired, the explicit transaction would have rolled back, and **both** the
+delivery-completion provenance guard and the delivery-before-billing gate would have failed to
+install. The named roles now go through the same `pg_roles`-guarded revoke loop this file already
+used for the inner posting implementation, with `PUBLIC` still revoked unconditionally as the widest
+grantee. A regression assertion covers it, confirmed red against the unfixed form.
+
+The comment introduced alongside the fix claimed the replay container carries none of the Supabase
+roles. That claim was not established — the harness restores into the `supabase/postgres` image —
+and it is also not the reason the loop is needed. The comment now states the reason that is actually
+load-bearing and verified: default privileges make the named grants real, the postcondition asserts
+their absence, and `REVOKE` errors on a role that does not exist, which is why the loop is guarded
+rather than naming the roles inline.
+
 ## 2026-08-12 — Wave A remediation round 3: replay safety and a forgeable delivery status
 
 A second adversarial review, run against the exact committed diff of the entry below, returned
