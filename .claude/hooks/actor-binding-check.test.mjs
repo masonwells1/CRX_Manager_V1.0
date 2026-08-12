@@ -470,6 +470,50 @@ $outer$);
 ALTER FUNCTION public.actor_sql_alias(text) RENAME TO execute_sql_readonly;`);
 ok(isDeny(r), "rename-call-restore cannot hide delayed actor-forgery SQL");
 
+r = runHook(`ALTER TABLE cron.job RENAME TO job_shadow;
+UPDATE cron.job_shadow SET command = $job$${UNBOUND_DDL}$job$ WHERE jobid = 42;
+ALTER TABLE cron.job_shadow RENAME TO job;`);
+ok(isDeny(r), "rename-update-restore cannot hide delayed actor-forgery SQL in cron.job");
+ok(r.stdout.includes("renames or moves cron.job, or renames its command column"),
+  "the cron table rename reaches the dedicated identity-change guard");
+
+r = runHook(`ALTER TABLE cron.job SET SCHEMA archive;
+UPDATE archive.job SET command = $job$${UNBOUND_DDL}$job$ WHERE jobid = 42;
+ALTER TABLE archive.job SET SCHEMA cron;`);
+ok(isDeny(r), "schema-move-update-restore cannot hide delayed actor-forgery SQL in cron.job");
+
+r = runHook(`ALTER TABLE cron.job RENAME COLUMN command TO payload;
+UPDATE cron.job SET payload = $job$${UNBOUND_DDL}$job$ WHERE jobid = 42;
+ALTER TABLE cron.job RENAME COLUMN payload TO command;`);
+ok(isDeny(r), "column-rename-update-restore cannot hide delayed actor-forgery SQL in cron.job");
+
+r = runHook(`ALTER TABLE "cron"."job" RENAME COLUMN "command" TO payload;`);
+ok(isDeny(r), "quoted physical cron.job command identity changes require manual review");
+
+r = runHook(`SET search_path = cron, public;
+ALTER TABLE job RENAME TO job_shadow;`);
+ok(isDeny(r), "a search-path-resolved cron job table cannot be renamed past the reader");
+
+r = runHook(`DO $do$ BEGIN
+  EXECUTE $ddl$ALTER TABLE cron.job RENAME TO job_shadow$ddl$;
+END $do$;`);
+ok(isDeny(r), "direct dynamic SQL cannot rename cron.job past the name-bound reader");
+
+r = runHook(`ALTER TABLE U&"\\0063ron".job RENAME TO job_shadow;`);
+ok(isDeny(r), "an opaque Unicode cron.job identity change requires manual review");
+
+r = runHook(`ALTER TABLE cron.job RENAME COLUMN U&"\\0063ommand" TO payload;`);
+ok(isDeny(r), "an opaque Unicode cron.job column rename requires manual review");
+
+r = runHook(`ALTER TABLE public.job RENAME TO archived_job;`);
+ok(!isDeny(r), "an unrelated qualified job table can still be renamed");
+
+r = runHook(`ALTER TABLE cron.job RENAME COLUMN jobname TO display_name;`);
+ok(!isDeny(r), "renaming a non-command cron.job column remains outside the SQL sink identity");
+
+r = runHook(`SELECT 'ALTER TABLE cron.job RENAME TO documented_job';`);
+ok(!isDeny(r), "cron.job identity-change text held only as data remains allowed");
+
 r = runHook(`SELECT U&"\\0065xecute_sql_readonly"($outer$
   SELECT cron.schedule('unicode-executor-actor-ddl', '* * * * *',
     $job$${UNBOUND_DDL}$job$)

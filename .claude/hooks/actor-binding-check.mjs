@@ -1683,6 +1683,38 @@ function hasExecuteSqlReadonlyIdentityChange(rawSql) {
   return exact.test(callableSql) || opaqueUnicode.test(callableSql);
 }
 
+/** cron.job.command is a delayed owner-executing SQL boundary. Renaming or
+ * schema-moving the physical table, or renaming that column, makes subsequent
+ * writes invisible to the name-bound reader. Refuse the identity change
+ * itself instead of attempting to follow temporary names through arbitrary
+ * SQL and later migration files. */
+function hasPgCronJobIdentityChange(rawSql) {
+  const callableSql = maskSqlForCallNames(String(rawSql || ""), true);
+  if (callableSql === null) return false;
+  const alterTable = new RegExp(
+    `\\bALTER\\s+TABLE\\s+(?:IF\\s+EXISTS\\s+)?(?:ONLY\\s+)?` +
+      `(${SQL_QUALIFIED_IDENTIFIER_PATTERN})(?:\\s*\\*)?\\s+`,
+    "gi"
+  );
+  let match;
+  while ((match = alterTable.exec(callableSql)) !== null) {
+    const target = normalizedQualifiedIdentifier(match[1]);
+    const action = callableSql.slice(alterTable.lastIndex).split(";", 1)[0];
+    const changesIdentity = new RegExp(
+      `^\\s*(?:RENAME\\s+TO\\b|SET\\s+SCHEMA\\b|` +
+        `RENAME\\s+(?:COLUMN\\s+)?` +
+        `(?:"command"|command|${SQL_UNICODE_IDENTIFIER_PATTERN})\\s+TO\\b)`,
+      "i"
+    ).test(action);
+    if (!changesIdentity) continue;
+    // PostgreSQL decodes U&"..." identifiers before lookup. This reader does
+    // not guess their decoded relation identity, so an identity-changing ALTER
+    // with an opaque target requires the explicit manual-review path.
+    if (target === null || target === "job" || target === "cron.job") return true;
+  }
+  return false;
+}
+
 let sawOpaqueFunctionCallable = false;
 
 /** Replace comments and quoted-string contents with spaces, while recursively
@@ -1880,6 +1912,14 @@ try {
       "This migration renames or moves execute_sql_readonly, so later owner-executing SQL calls " +
       "would no longer match the actor-binding reader. Keep the canonical identity, or add the " +
       "file-level exempt marker (-- actor-binding-check: exempt) and get a manual review."
+    );
+  }
+  if (hasPgCronJobIdentityChange(content)) {
+    violations.push(
+      "This migration renames or moves cron.job, or renames its command column, so later scheduled " +
+      "SQL writes would no longer match the actor-binding reader. Keep cron.job.command at its " +
+      "canonical identity, or add the file-level exempt marker (-- actor-binding-check: exempt) " +
+      "and get a manual review."
     );
   }
   const masked = maskSqlNoise(content);
