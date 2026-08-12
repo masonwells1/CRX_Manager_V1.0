@@ -256,6 +256,66 @@ authors toward the waiver for no safety gained.
 Three fixtures added: a DELETE hashing ids only (the bypass), a DELETE from a
 table with no material state (refused), and a correctly bound DELETE (passes).
 Mutating the substitution away turns the first two green, which is the point.
+=======
+## 2026-08-11 — A smoke selection that runs nothing no longer reports success
+
+Follow-up to the entry below, from its own adversarial review. Container-only chains are dropped
+from a selection with an announced skip, but the runner then returned normally when that left
+nothing to run — so `run-smoke.mjs --spec trg_recalc_order_totals`, whose only match reaches the
+container-only chain through a `covers` entry, executed zero checks and exited 0. Anything shelling
+out and reading the exit code saw green for work that never happened, which is the exact failure
+class this runner exists to prevent. An empty runnable selection now exits 2 through the existing
+`fail()` path and names the prover command for each skipped chain. Covered by a regression test in
+`bugClassRegressionGuards.test.ts` that was confirmed red against the old behavior.
+
+## 2026-08-11 — Executable proof for the blend-ticket whole-cent fix, and the run-time gap it exposes
+
+The blend-ticket fix below was reviewed and applied, but the fractional-quantity path it repairs had
+never actually been executed anywhere. `scripts/smoke/prove-blend-ticket-fractional-cents.mjs` now runs
+it end to end in a disposable, network-isolated PostgreSQL 17 container built from the repository's own
+migrations, with a fixture blend ticket whose unit conversion yields a fractional quantity.
+
+Six stages. It reproduces the original failure against the pre-fix body from `20260714230200` and
+observes the live CHECK constraint reject the header write; applies
+`20260811200000_blend_ticket_order_whole_cent_totals` and watches its own `$verify$` post-condition
+block pass; re-runs the registered smoke chain to `SMOKE_PASS_ROLLBACK`, asserting whole-cent totals
+equal to the canonical sum of rounded lines; then mutates the schema twice to confirm the apply-time
+guard fails closed when the totals trigger is missing and when it is `REPLICA`-only. That second
+mutation matters: `tgenabled` has four states, and the widespread `<> 'D'` idiom waves through a
+replica-only trigger that never fires in an ordinary session. The migration rejects both.
+
+Both mutation stages apply the migration as a single transaction, so "fails closed" means the function
+body is also rolled back rather than left half-replaced.
+
+The harness refuses to run unless the post-fix function body on disk still md5-matches a **pinned
+snapshot** of that function read from production `pg_proc` on 2026-08-11. That is a historical reading,
+not a live one — the container runs with `--network none` and the harness never contacts production —
+so it catches the repository drifting off what was applied, not production changing underneath. The
+comment in the script carries the exact query to re-confirm current parity by hand. The smoke chain and
+fixture are registered in `smoke-specs.json` under `create_order_from_blend_ticket`, flagged
+`container_only` so `--all` and `--area` runs skip it with an announced reason instead of sending a
+fixture-seeding chain at whatever database `SUPABASE_DB_URL` points to.
+
+Stage six characterizes a residual defect the review pass did not surface: the trigger guarantee is
+**apply-time only**. With the fixed body in place and the trigger dropped afterwards, the RPC reports
+success and books a zero-value header — the read-back's `IF NOT FOUND` cannot catch it, because the
+order row exists by then regardless of whether the trigger ran. Nothing raises; only the smoke chain
+caught it. Reaching that state takes a deliberate schema change that the migration's own guard blocks
+at apply time, and production holds no blend tickets, so it is not firing — but the failure mode is
+silent wrong money, not an error, which makes it a **HIGH-severity open data-integrity gap**, not a
+footnote. It is tracked as **CRX-MONEY-001-R** in `docs/manual/KNOWN_ISSUES.md` with an owner,
+mitigation and standing detector; stage F of the prover is that detector. Closing it means asserting
+inside the RPC that the header was actually recalculated.
+## 2026-08-11 — Customer 360 pre-push adversarial fixes
+
+Closed all three medium-severity findings from the fresh Sol review of the Customer 360 adoption pack. Customer ownership assignment now uses a new admin-only atomic RPC instead of a separate active-rep read followed by a direct customer update: the RPC locks the target rep, rejects any missing/inactive customer from the exact selected set, rolls partial matches back, and binds idempotent retries to the actor, customer IDs, and target rep. The Customers UI retains truthful post-save refresh handling and has regression coverage for inactive targets, changed customer sets, ambiguous failures, and intent-scoped keys. Call Lists now keeps a requested `rep=` URL pending and blocks list loading when rep-option validation fails, so an error cannot broaden the admin's requested scope to all reps; retry preserves and restores the filter. The approved migration was submitted as `20260811122851_assign_customers_sales_rep` and applied live under Supabase-assigned/disk version `20260811183317`; live catalog and grant checks passed, and the schema registry, generated Supabase types, and `pg_proc` fixture were refreshed through the resulting 960-row ledger high-water. The registered rollback smoke passed against the exact migration in disposable PostgreSQL; its live rollback-only run remains separately guarded by the required `REAL-DATA-OK` authorization.
+
+PR review follow-up tightened the Call Lists tier URL restoration, capped search text at 100 characters, and corrected lapsed-product wording so only the named top product is attributed its measured prior revenue. It also identified real audit-visibility and freshness gaps: the atomic assignment RPC had bypassed `save_customer`, which normally advances `customers.updated_at` and records customer changes in `activity_feed`. Forward-only migration submitted as `20260811230423_log_customer_sales_rep_assignment.sql` preserves the live RPC's authorization, lock, exact-set, and replay behavior while advancing `updated_at` and adding one customer-scoped activity row per selected active customer in the same transaction. An exact count mismatch aborts the assignment and receipt together; exact replay cannot duplicate activity or touch the timestamp again. The file was forward-renamed from `20260811210357` after live high-water moved to `20260811220045`, then applied live and B7-renamed content-identically as `20260812003315_log_customer_sales_rep_assignment.sql`. Both final-path, content-bound `gpt-5.6-sol` high migration charters and the exact committed-SHA review returned CLEAN; the network-isolated PostgreSQL 17 harness mutation-tested timestamp advancement/rollback, activity de-duplication, and concurrent deactivation. Post-apply live reads confirmed ledger row 962, the intended catalog/grant/body guards, and a genuine schema-registry refresh through the new high-water.
+
+A final PR-thread pass closed one more retry trap: when exact-set validation reports that a selected customer became ineligible, Customers now clears the ambiguous selection, closes the assignment modal, and rotates the rejected intent key after the refresh attempt. An inactive row therefore cannot remain invisibly selected and make every retry fail. Regression coverage proves both successful-refresh and failed-refresh branches clear the selection. The disposable PostgreSQL proof now checks migration markers only after stripping SQL comments and performs the required read-only Git-status preflight before starting its isolated container.
+
+The exact-commit Sol gate returned clean with one actionable low-severity hardening note: Call Lists exposed raw backend error messages in its failure toast. The toast now uses a stable retry message while the original exception remains available to Sentry, and a regression test proves internal relation details never reach the user.
+
 ## 2026-08-11 — Let the order-totals trigger own the blend-ticket order header
 
 The validated whole-cent CHECK constraints now live on `orders.total_cost` and `orders.total_profit`

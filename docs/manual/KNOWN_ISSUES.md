@@ -1,11 +1,9 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-08-11 UTC, post-deploy.** Live ledger high-water is `20260810235207` (`20260810183629_reconcile_pending_commission_snapshots`, B7-renamed on disk to the assigned version) at 958 ledger rows — the reconciliation that closed out the stale line-profit backfill, applied and verified live on 2026-08-10 with the registered smoke returning exact `SMOKE_PASS_ROLLBACK`. Ledger versions are UTC, which is why this stamp can read a day ahead of the local session date. The prior high-water `20260810025159` (`20260810022500_backfill_stale_line_profit`) was the money-workstream migration applied after the Team Board work. The 2026-08-09 post-apply verification that the rest of this header describes ended at `20260810010308` (`active_team_note_assignment_actor`); every ledger entry past it was applied live by separate 2026-08-10 sessions and is described in its own entry rather than here. Both Team Board migrations are live and now represented on disk: `20260809130108` added the governed `complete_team_note` RPC and assignment-notification trigger, and `20260810010308` closed the inactive-actor path in the insert policy and trigger. The full rollback-only business chain reached exact `SMOKE_PASS_ROLLBACK`; the compatible frontend was carried by PR #351 (merge commit `8dcb82fb`). Closeout PR #372 merged as `261d10bd` on 2026-08-11, Vercel reported the production deployment successful, and `/team-board` returned HTTP 200 with the app shell.
+**Last verified: 2026-08-12 UTC, post-apply.** Live ledger high-water is `20260812003315` at 962 rows, carrying submitted name `20260811230423_log_customer_sales_rep_assignment`. The Customer 360 assignment RPC is live with atomic customer timestamp/activity logging, one overload, the reviewed security/search-path/grant shape, and no table, column, enum, generated-column, signature, or public-function-name-count change. The schema registry was genuinely refreshed through the same high-water. Ledger versions are UTC and Supabase applies may assign a version different from the submitted filename, so match the recorded name when reconciling an apply. The historical Team Board, money, and commission-payout details below remain separately dated evidence rather than claims that their older high-waters are current.
 
-**Earlier read on this branch, retained for the money detail it carries.** Live ledger high-water was then **`20260810025159`** (`20260810022500_backfill_stale_line_profit`), re-read live on 2026-08-10 along with the `fin-money-whole-cents` predicate, which now reports **38** rows (**35** `order_items.total_price` + **3** `commissions.commission_amount`) rather than 49: the backfill re-wrote 11 sub-cent price rows through the rounding trigger as a side effect of re-deriving profit. `order_items.profit` reports **0** sub-cent rows and **0** rows disagreeing with the canonical rule, so the backfill holds. The remaining 38 are the documented, deliberately-unrepaired set described below. Also applied since the previous stamp: `20260810000427` (`20260809230500_single_canonical_line_profit`) and `20260810010308` (`20260809154649_active_team_note_assignment_actor`, from a concurrent session). Ledger versions are UTC, which is why those stamps read a day ahead of the local session date. The 2026-08-09 verification text below is retained for provenance. Everything past this header carries its 2026-08-07 verification unless dated otherwise.
-
-**Team Board delegation — both halves live.** `20260809130108` added the governed `complete_team_note` RPC and the assignment-notification trigger, and `20260810010308` closed the inactive-actor notification path in both the `tnotes_insert` policy and the trigger itself. Both were verified live after apply, and the delegated-completion and inactive-actor behaviors were proven by rollback-only probes against live. The compatible frontend ships with PR #351, so delegated completion is live in the database but not reachable from the browser until that PR merges and deploys. An earlier 2026-08-09 read recorded `20260809130108` as having no file in this repository; PR #351 lands that file and its follow-up, closing the gap (see `docs/reference/migration-history.md` rows 863 and 864).
-**Repository lags production on the three whole-cent migrations.** History rows 868–870 (`20260810150000`, `20260810150500`, `20260810151000`; ledger versions `20260810152935`, `20260810154721`, `20260810155629`) are **applied live** but absent from `main` until PR #371 lands — see the dedicated entry below.
+**Repository/production gap on the whole-cent migrations: CLOSED 2026-08-11.** History rows 868–870 (`20260810150000`, `20260810150500`, `20260810151000`; ledger versions `20260810152935`, `20260810154721`, `20260810155629`) were applied live before they existed on `main`. **PR #371 landed as merge `465458a0`**, bringing those three plus `20260811200000_blend_ticket_order_whole_cent_totals` (applied live as ledger `20260811220045`) onto `main`. Disk and production now agree on all four — independently re-verified against live `pg_proc` on 2026-08-11.
+The remaining fractional historical rows described below are still tracked data debt and were not rewritten by that repository closeout.
 
 **2026-08-10 money re-measure (read-only, live).** Whole-cent conformance by column, which is what history rows 868–870 are scoped against: `orders.total_price` 0 dirty, `orders.total_cost` 0, `orders.total_profit` 0, `order_items.profit` 0, `quotes.total_price` 0, `quotes.total_profit` 0, `quote_items.total_price` 0, `quote_items.profit` 0 — and still dirty: **`order_items.total_price` 35/288, `quotes.total_cost` 2/4, `commissions.commission_amount` 3/35, `commissions.order_profit` 3/35.** The `order_items` figure moved 46 → 35 because `20260810025159` (above) backfilled stale line profit through the canonical trigger; the 3 fractional `commissions` rows are unchanged and still deliberately unrepaired. **43 dirty rows remain and repairing them rewrites stored money — still Mason's separate decision, still not done.** Under the 2026-08-10 fail-closed money policy those columns are tracked debt, not an approved exception.
 
@@ -22,7 +20,7 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## OPEN 2026-08-10 — blend-ticket order creation can be rejected by the new whole-cent CHECKs
+## FIXED LIVE 2026-08-11 — blend-ticket order creation could be rejected by the whole-cent CHECKs
 
 **Severity: latent, not currently firing.** `create_order_from_blend_ticket` accumulates `v_total_price` and `v_total_cost` as raw `price * converted_quantity` products and writes them, plus `total_price - total_cost`, straight to `orders` with **no rounding** (live body confirmed 2026-08-10; `orders` has no BEFORE-UPDATE rounding trigger — only status/lineage/commission-stamp triggers). History row 870 added `orders_total_cost_whole_cents_chk` and `orders_total_profit_whole_cents_chk`, both live and `convalidated`. A blend ticket whose unit conversion yields a fractional quantity therefore produces a sub-cent total and the final write is **rejected**, rolling back the whole RPC and failing order creation from `BlendTicketDetail` with a raw constraint error.
 
@@ -30,7 +28,47 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 **Found by:** Codex P1 on PR #371, verified independently against live `pg_proc`, `pg_trigger` and `pg_constraint` rather than taken on trust.
 
-**Fix:** round the two accumulators at the write, matching what `trg_recalc_order_totals` already does on every other order path. Tracked in the Wave A ordering-cycle branch; until it lands, do not create the first blend ticket.
+**Fixed by** `20260811200000_blend_ticket_order_whole_cent_totals` (PR #371, merge `465458a0`), **applied live
+2026-08-11 as ledger version `20260811220045`**. The fix deletes the raw header write rather than rounding it:
+`after_order_items_change` → `trg_recalc_order_totals` has already written all four header columns from the
+per-line values, rounding each on the way in, so the RPC now reads that canonical header back and returns it.
+Rounding the accumulators instead would have kept two independent computations of the same number in the
+codebase. The migration carries an apply-time `$verify$` block asserting exactly one overload and that
+`after_order_items_change` is present, enabled, bound to `trg_recalc_order_totals()` and fires on INSERT.
+
+**Proved by execution, not review alone.** `scripts/smoke/prove-blend-ticket-fractional-cents.mjs` runs the
+whole thing in a network-isolated disposable PostgreSQL 17 container: it reproduces the CHECK violation
+against the pre-fix body from `20260714230200`, applies `20260811200000` verbatim, and re-runs the chain to
+`SMOKE_PASS_ROLLBACK` with whole-cent totals equal to the canonical sum-of-rounded-lines. It refuses to run
+unless the post-fix body on disk still md5-matches the **pinned 2026-08-11 production snapshot** of that
+function — a historical reading, not a live one: the prover's container runs with `--network none` and never
+contacts production, so the match proves the repo has not drifted off what was applied, not that production
+is unchanged since. Both mutation stages apply the migration as a single transaction and confirm it fails
+closed **and rolls back** when the trigger is missing **and** when it is `REPLICA`-only — the latter is the
+case a `tgenabled <> 'D'` check would wave through, because a replica-only trigger never fires in an origin
+session.
+
+### OPEN — residual run-time gap (CRX-MONEY-001-R): the trigger guarantee is APPLY-time only
+
+**Severity: HIGH if it ever fires — silent wrong money, no error.** There is no run-time equivalent of the
+apply-time check. The fixed body reads the header back with `SELECT … INTO v_total_price` followed by
+`IF NOT FOUND`, but the `orders` row always exists by that point, so `FOUND` is true even when the trigger
+never ran. Stage F of the prover characterizes this: with the fixed body in place and
+`after_order_items_change` dropped, the RPC **reports success and books a zero-value header** — nothing
+raises, and only the smoke chain catches it.
+
+- **Owner:** Mason to schedule; unassigned until then. Not scheduled into a current branch.
+- **Trigger condition:** requires the recalculation trigger to be dropped or disabled. It cannot occur on
+  its own, and `20260811200000`'s `$verify$` block blocks the migration path into that state.
+- **Mitigation (the fix, when scheduled):** assert inside `create_order_from_blend_ticket` that the header
+  it read back is non-zero and equals the sum of rounded line values, and raise instead of returning.
+  Same shape applies to every RPC that reads a trigger-maintained header back.
+- **Monitoring until then:** `scripts/smoke/prove-blend-ticket-fractional-cents.mjs` stage F is the standing
+  detector and fails the prover if the behavior changes. A live-side check —
+  `orders` rows where `total_price = 0` but priced `order_items` exist — is the query to run if a
+  blend-ticket order ever looks wrong; production currently holds **0** blend tickets, so there is nothing
+  to watch yet.
+- **Do not** treat the apply-time guard as run-time protection.
 
 ---
 
@@ -98,36 +136,6 @@ check — both guards correctly refused the change that prompted this entry.
 
 ---
 
-## OPEN — three money residuals deliberately left by the 2026-08-09 profit backfill
-
-**Found 2026-08-09** while applying `20260810022500_backfill_stale_line_profit.sql`. All three were
-measured, disclosed to Mason, and scoped OUT of that migration on purpose. None is a new bug; each is
-a known remainder. Do not "discover" them again, and do not fold them into an unrelated change.
-
-1. **Eleven `pending` commission rows keep a pre-backfill basis.** The backfill restates eleven order
-   headers (downward, up to a cent each). Pending commissions are rescaled from the order header by
-   the `update_order_items` RPC — **not** by a trigger — so a direct `UPDATE` on `order_items` never
-   reaches that logic. Each affected commission is therefore off by a fraction of a cent. Rewriting
-   commission rows was not approved, so they were left alone. Fixing this means re-running the
-   commission rescale for those orders, which is a money write and needs its own approval.
-2. **One fulfilled order's header sits a cent above its own lines.** This is the *mirror* of the bug
-   the backfill fixed: the lines are already canonical and the **header** is stale, left over from
-   the older aggregate-rounding version of `trg_recalc_order_totals`. Because that order has no stale
-   lines, the backfill's predicate does not select it and cannot repair it. A no-op write to any of
-   its lines would re-fire `trg_recalc_order_totals` and settle it — one cent, needs approval.
-3. **The other sub-cent-price `order_items` rows, and the parked pending-payout row, are untouched.**
-   Their stored profit already agrees with the canonical rule, so they are correct; only their prices
-   carry sub-cent fractions. They were deliberately held back by the earlier rounding work and remain
-   held back. See the 2026-08-08 canonical-rounding decision in `docs/manual/DECISION_LOG.md`.
-
-**Why this matters for invariant sweeps:** a sweep that compares `orders.total_profit` against
-`SUM(order_items.profit)` across the whole table will report item (2) as one mismatching order, and a
-sweep comparing a commission's stored basis against the current order header will report item (1) as
-eleven rows. Both are expected until separately approved and fixed — treat a *larger* count as the
-real signal.
-
----
-
 ## RESOLVED LIVE 2026-08-10 — Team Board delegated completion and assignment notifications
 
 Both migrations are applied live. `20260809130108_team_note_completion_rpc_and_assignment_notify` added the governed `complete_team_note` RPC and the assignment-notification trigger without widening the existing `tnotes_update` policy; live structure, grants, and the 26 standing invariant predicates passed. The HIGH that review then raised — an inactive profile with a still-valid JWT could satisfy the legacy `tnotes_insert` creator check and make the owner-run trigger notify an active teammate — is closed by `20260810010308_active_team_note_assignment_actor` (authored as `20260809154649`), which requires an active profile in the INSERT policy *and* independently in the trigger, leaving `tnotes_update` unchanged.
@@ -138,7 +146,12 @@ Delivery: the browser changes that call the RPC and open assignment notification
 
 ---
 
-## OPEN 2026-08-10 — three migrations are live but their source files are not yet on `main`
+## CLOSED 2026-08-11 — three migrations are live but their source files are not yet on `main`
+
+> **Closed by PR #371 (merge `465458a0`).** All three files are on `main`, alongside
+> `20260811200000`. Kept for history; the authoritative status is the header line at the top
+> of this file. The "Closes when PR #371 lands" paragraph below was written before it merged.
+
 
 Raised by Codex (P1) on PR #372 and **verified**: the schema registry records
 `20260810150000_commission_basis_from_canonical_order_header`,
@@ -541,41 +554,6 @@ pre-existing and unrelated to profit — the exactness guarantee above is scoped
 to `total_profit` only, and `total_price` can still sit a fraction of a cent off
 its own lines until that RPC is fixed. Recorded so nobody reads the new
 guarantee as broader than it is.
-
-### Two more header writers do the same thing — verified live 2026-08-10
-
-`_update_order_items_impl` is not the only one. Every RPC that creates or
-rewrites an order builds the header from **its own running total in PL/pgSQL**
-and then writes that number onto `orders`, instead of re-reading what the
-`order_items` rows actually hold after the `_round_money_to_whole_cents` BEFORE
-trigger has rewritten them. The trigger is the canonical rule; an accumulator
-that ran before it is a second, competing definition.
-
-Both were read out of `pg_proc` on the live database on 2026-08-10, not inferred
-from a migration file:
-
-- **`draw_down_quote`** — this is the one that can actually drift. It sums line
-  totals as `numeric` **dollars** (`v_total_price := v_total_price + v_line_total`,
-  body line 219) and writes `orders.total_price / total_cost / total_profit /
-  total_margin_pct` straight from those accumulators (body lines 234–235). Each
-  stored line, meanwhile, was rounded to whole cents on insert. So a quote whose
-  prices carry sub-cent precision produces a header that is up to half a cent per
-  line away from the sum of its own lines — which is exactly the shape of the one
-  fulfilled order left disagreeing after the 2026-08-09 backfill.
-- **`_create_quick_delivery_intent_impl_20260802`** — same structure, materially
-  safer. It accumulates in **integer cents** (`safe_cents_qty`, body lines 166–167)
-  and writes the header at body lines 205–207, so it cannot produce a fractional
-  residual of its own. It is still an independent accumulator rather than a
-  re-read of the stored lines, so it stays on this list; it is second priority.
-
-**Not fixed here, and not urgent.** The correct fix is structural — every header
-writer stops accumulating and instead re-reads the stored lines (or defers to
-`trg_recalc_order_totals`, which already does), so there is one definition of the
-header instead of four. That touches three money RPCs at once and rewrites live
-header values on the next write to each affected order, so it is a planned change
-with its own review and Codex gate, not a drive-by. Until it happens, the exactness
-guarantee above holds for `total_profit` written **through the trigger** and does
-not extend to a header these RPCs wrote directly.
 
 ## RESOLVED LIVE — Quote and Customer whole-record saves reject stale editors
 

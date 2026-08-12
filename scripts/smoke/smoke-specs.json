@@ -7,6 +7,40 @@
     "area_tags": "Every spec carries an \"area\" array (business-area tags: billing, inventory, lifecycle, pricing, security, idempotency, regression). run-smoke.mjs --area <area> selects by tag; scripts/run-area.mjs bundles these with the matching vitest slice and DB invariant sweeps."
   },
   "specs": {
+    "create_order_from_blend_ticket": {
+      "chain": "smoke-blend-ticket-fractional-cents.sql",
+      "container_only": true,
+      "container_prover": "prove-blend-ticket-fractional-cents.mjs",
+      "description": "CONTAINER ONLY - run via scripts/smoke/prove-blend-ticket-fractional-cents.mjs, never through run-smoke.mjs against the live database: the chain INSERTs a customer, blend ticket and order, which the LIVE-DATA GUARD correctly refuses. CRX-MONEY-001 (fixed live by 20260811200000, ledger 20260811220045): create_order_from_blend_ticket finished by overwriting the orders header from raw unrounded price x converted-quantity sums, so any blend ticket whose quantity produced a sub-cent line value violated orders_total_cost_whole_cents_chk / orders_total_profit_whole_cents_chk and rolled back the entire completed-ticket-to-order transaction. Latent, never hit in production - no blend ticket has ever produced an order. The prover reads the PRE-FIX body from 20260714230200 and the POST-FIX body from 20260811200000, refusing to run unless the post-fix md5 still equals a pinned snapshot of production pg_proc taken 2026-08-11 - a historical reading, not a live one, since the container has no network, so it catches the repo drifting off what was applied rather than production changing underneath. Six stages: A the pre-fix body violates the whole-cent CHECK; B the migration applies verbatim and its own $ postcondition passes; C the fixed body books whole-cent totals equal to the canonical sum-of-rounded-lines, reports back what it stored, links the ticket, replays idempotently and keeps SECURITY DEFINER, a pinned search_path and no anon/PUBLIC EXECUTE; D re-applying with after_order_items_change dropped FAILS CLOSED; E re-applying with that trigger set REPLICA-only also FAILS CLOSED, which the widespread tgenabled <> 'D' idiom would not catch; F characterizes the one residual gap - the trigger guarantee is APPLY-time only, so with the fixed body and the trigger dropped at RUN time the RPC reports success and books a zero-value header. Ends in SMOKE_PASS_ROLLBACK at stage C. Every helper body in the fixture is md5-verified against live pg_proc EXCEPT link_blend_ticket_to_order, which is a deliberate behavior-equivalent stand-in (live is 8.3 KB across tables the fixture trims) - it is therefore NOT listed in covers; real coverage for it lives in the create_blend_ticket chain.",
+      "covers": [
+        "create_order_from_blend_ticket",
+        "trg_recalc_order_totals",
+        "_round_money_to_whole_cents",
+        "field_app_priced_quantity",
+        "check_idempotency",
+        "save_idempotency"
+      ],
+      "area": [
+        "regression",
+        "pricing",
+        "lifecycle",
+        "security",
+        "idempotency"
+      ]
+    },
+    "assign_customers_sales_rep": {
+      "chain": "smoke-assign-customers-sales-rep.sql",
+      "description": "Customer 360 ownership assignment chain: no-auth and non-admin callers are rejected; a non-sales-rep target is rejected; one real plus one missing customer raises ASSIGNMENT_CUSTOMER_SET_CHANGED and proves the real row stayed unchanged; an admin atomically assigns two active customers to an active sales rep and writes exactly one customer-scoped activity row per assignment; reversed-order exact replay returns the identical result without duplicating activity; and changed-payload key reuse fails closed. All customer, activity, and idempotency rows roll back on SMOKE_PASS_ROLLBACK.",
+      "covers": [
+        "assign_customers_sales_rep"
+      ],
+      "area": [
+        "lifecycle",
+        "security",
+        "idempotency",
+        "regression"
+      ]
+    },
     "complete_team_note": {
       "chain": "smoke-complete-team-note-chain.sql",
       "description": "Team Board delegation chain (migrations 20260809130108 + 20260810010308): INSERT-with-assignee fires exactly one task_assigned notification; a rollback-only synthetic inactive auth/profile fixture proves inactive actors are rejected and inactive assignees stay silent without touching a real teammate's auth state; no-auth and anon calls raise AUTH_REQUIRED; an authenticated outsider (not creator/assignee/admin) is rejected; the non-admin ASSIGNEE completes a note they did not create with completed_by stamped from auth.uid(); exact idempotent replay returns the saved result without double activity logging; same-key different-payload raises COMPLETE_REPLAY_PAYLOAD_MISMATCH; the creator reopens; reassignment notifies only the new assignee; self-assignment and unchanged-assignee updates stay silent; a soft-deleted note raises NOTE_NOT_FOUND; anon EXECUTE is denied on the RPC and client roles cannot EXECUTE the trigger function. Terminal rollback.",

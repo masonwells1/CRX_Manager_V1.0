@@ -1419,6 +1419,9 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   // types regenerated 2026-07-21): each declares p_idempotency_key and replays via
   // check_idempotency/save_idempotency.
   'approve_supplier_price_import',
+  // Customer 360 ownership assignment: payload-bound replay is serialized by
+  // check_idempotency before the target rep/customer rows are mutated.
+  'assign_customers_sales_rep',
   'batch_apply_all_prepayments',
   'batch_apply_prepayments',
   'batch_cancel_deliveries',
@@ -2185,9 +2188,8 @@ function registryMigrationHighWater(): string {
 // Keep this set aligned with rows explicitly marked PENDING APPLY in
 // docs/reference/migration-history.md.
 //
-// Empty as of 2026-08-10: the Team Board delegation migrations and the
-// foundation-review migrations are all applied live and documented below.
-const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([]);
+// No migration indexed by the current history is waiting on a live apply.
+const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>();
 
 /**
  * Explicitly pending migrations remain part of the contract inventory even
@@ -2283,10 +2285,6 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
     'idempotency infrastructure helper (sections 2-6 closeout): binds a completed lifecycle result to its key; direct client EXECUTE is revoked',
   _claim_bound_lifecycle_idempotency:
     'idempotency infrastructure helper (sections 2-6 closeout): claims a bound lifecycle key for replay; direct client EXECUTE is revoked',
-  _crx_payout_assert_impl_20260809:
-    'read-only identity check used by 20260811130000 to decide whether a body may be renamed into the payout implementation slot; it writes nothing (the inventory sees its SELECT ... INTO local variables), every application-role EXECUTE is revoked, and the same migration drops it before finishing',
-  _crx_payout_assert_replay_20260809:
-    'read-only replay-state check used by 20260811130000 to decide whether an already-existing implementation may be adopted; it writes nothing (the inventory sees its SELECT ... INTO local variables, and reads the check_idempotency_intent name out of a REGEX STRING LITERAL as if it were a call), every application-role EXECUTE is revoked, and the same migration drops it before finishing',
   _insert_commissions_for_job: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _insert_commissions_for_order: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',
