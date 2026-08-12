@@ -19,10 +19,10 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
 
 - The current source blob is pinned to `c8bec70830c643e474831985f5e6c3bd16630386`.
 - `node scripts/apply-live-testdata-maintenance-20260812.mjs --verify` produced pinned output blob
-  `d15d0c77077e50648ce785c306a8832d34a097a9`, matched all three snippet SHA-256 values, and passed a
+  `69177ebe14b04458e5a84247b279d63618edc0f2`, matched all three snippet SHA-256 values, and passed a
   Node module syntax check without changing the repository target.
-- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 64 assertions against the
-  generated module, including all classifier defect classes found by the first thirteen Sol reviews.
+- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 67 assertions against the
+  generated module, including all classifier defect classes found by the first fourteen Sol reviews.
 - The write mode refused the dirty build worktree even with Mason's dated token.
 - Current recovery proof passed ESLint, TypeScript typecheck, production build, all 4,466 executed
   Vitest assertions (123 skipped), all agent-workflow tests, agent health, dependency integrity,
@@ -110,6 +110,13 @@ any later live migration apply still requires the repository's current explicit 
   external effects. `COPY` now fails closed categorically, and the blanket exemption is replaced by
   an object-specific allowlist of transaction-safe schema and `SET LOCAL` smoke statements. Both
   exact `COPY` forms plus an unrecognized rollback-wrapped command are pinned. A fresh exact-head
+  review remains required.
+- The fourteenth exact-head Sol review found that `CREATE TEMP TABLE ... LIKE ... INCLUDING DEFAULTS`
+  could clone a production column default whose later temp-table insert advances a persistent invoice
+  sequence. Same-batch temp DML is now exempted only for a direct CTAS scratch table; cloned or declared
+  tables receive no later-write exemption. The function-call view also removes the DDL object declaration
+  without hiding expressions inside its column body, so a table name plus `(` is no longer mistaken for
+  an RPC. The exact cloned-default batch and declared-table follow-up are pinned. A fresh exact-head
   review remains required.
 - GitHub checks and CodeRabbit must be complete and acceptable on the exact PR head.
 

@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { buildMaintainedSource } from "./apply-live-testdata-maintenance-20260812.mjs";
 
 const { output, blob } = buildMaintainedSource();
-assert.equal(blob, "d15d0c77077e50648ce785c306a8832d34a097a9", "pinned generated blob");
+assert.equal(blob, "69177ebe14b04458e5a84247b279d63618edc0f2", "pinned generated blob");
 
 const scratch = mkdtempSync(path.join(tmpdir(), "crx-live-guard-candidate-test-"));
 try {
@@ -77,6 +77,8 @@ try {
     "BEGIN; COPY public.customers TO PROGRAM 'example-command'; ROLLBACK;",
     "BEGIN; COPY public.customers TO '/tmp/customer-export.csv'; ROLLBACK;",
     "BEGIN; VACUUM public.customers; ROLLBACK;",
+    "CREATE TEMP TABLE get_scratch (LIKE public.invoices INCLUDING DEFAULTS); INSERT INTO pg_temp.get_scratch (customer_id, created_by) SELECT gen_random_uuid(), gen_random_uuid() FROM generate_series(1, 1000000);",
+    "CREATE TEMP TABLE scratch_columns (id int, x int); UPDATE pg_temp.scratch_columns SET x = 1 WHERE id = 1;",
   ];
   for (const sql of blocked) {
     assert.equal(classifySql(sql).block, true, `must block: ${sql}`);
@@ -86,6 +88,7 @@ try {
     "SELECT * FROM customers WHERE id = 1",
     "CREATE TEMP TABLE some_log_table AS SELECT 1 AS id, 0 AS x; UPDATE pg_temp.some_log_table SET x = 1 WHERE id = 1",
     "CREATE TEMP TABLE scratch AS SELECT 1",
+    "CREATE TEMP TABLE scratch_columns (id int, x int)",
     "BEGIN; ALTER TABLE invoices ADD COLUMN x text; ROLLBACK;",
     "BEGIN; SET LOCAL statement_timeout = '1s'; SELECT 1; ROLLBACK;",
   ];

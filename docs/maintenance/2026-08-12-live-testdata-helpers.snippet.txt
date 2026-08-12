@@ -155,8 +155,21 @@ function isPgTempTarget(target) {
 }
 
 function tempBaseTableName(statement) {
-  const match = /^\s*create\s+(?:temp|temporary)\s+table(?:\s+if\s+not\s+exists)?\s+(?:(?:"?(?:pg_temp|pg_temp_\d+)"?)\s*\.\s*)?"?([a-z_][a-z0-9_$]*)"?/i.exec(statement);
+  // Only a direct CTAS scratch table earns a same-batch DML exemption. Column
+  // declarations, LIKE/OF clones, copied defaults, generated expressions, and
+  // domains can hide calls that mutate persistent state when a row is inserted.
+  const match = /^\s*create\s+(?:temp|temporary)\s+table(?:\s+if\s+not\s+exists)?\s+(?:(?:"?(?:pg_temp|pg_temp_\d+)"?)\s*\.\s*)?"?([a-z_][a-z0-9_$]*)"?\s+as\s+(?:select|with|values)\b/i.exec(statement);
   return match?.[1]?.toLowerCase() || null;
+}
+
+function functionCallView(statement) {
+  // A CREATE TABLE object name followed by a column-definition parenthesis is
+  // not a function call. Remove only that declaration token; expressions in
+  // the column body and CTAS query remain visible to the default-deny scanner.
+  return statement.replace(
+    /^\s*create\s+(?:temp|temporary)\s+table(?:\s+if\s+not\s+exists)?\s+(?:(?:"?(?:pg_temp|pg_temp_\d+)"?)\s*\.\s*)?"?[a-z_][a-z0-9_$]*"?(?=\s*\()/i,
+    "",
+  );
 }
 
 function isRollbackSafeSmokeStatement(statement) {
