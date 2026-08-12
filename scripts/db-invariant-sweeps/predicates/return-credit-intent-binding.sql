@@ -13,12 +13,17 @@ WITH expected(signature, body_sha256) AS (
     ('cancel_return(uuid,text,uuid,text)', '7207a20de54e00922daeedc13b3ade2526df381f29e4736078e9401be101c53b'),
     ('receive_return(uuid,uuid,text)', '80873cb93b67293a811f6be91efb224f7f4dd085fa8c4282267336be430b8b6a'),
     ('issue_return_credit(uuid,uuid,text)', 'b93b4948fd138e6e65031b81959c7311f2846d354af45a8a882c09f1514a6314')
+), protected_expected(signature, body_sha256) AS (
+  VALUES
+    ('_reverse_credit_memo_application(uuid,uuid,text,text)', '744c48493d549f9bc2297270bfdc0977935a4f29ed44fe2e336c8a6fce6ecbf8'),
+    ('snapshot_invoice_line_shares_on_post()', 'f12078a7b476444df206f0e9baa21fff26ee5cda9ef6a96dabf772909984f42a')
 ), public_actual AS (
   SELECT p.oid,
          p.oid::regprocedure::text AS signature,
          encode(sha256(convert_to(replace(p.prosrc, E'\r\n', E'\n'), 'UTF8')), 'hex') AS body_sha256,
          p.prosecdef,
-         p.proconfig
+         p.proconfig,
+         pg_get_userbyid(p.proowner) AS function_owner
     FROM pg_proc p
    WHERE p.pronamespace = 'public'::regnamespace
      AND p.proname IN (
@@ -46,6 +51,7 @@ SELECT 'return-credit-wrapper:' || e.signature AS violation_key,
   LEFT JOIN public_actual a ON a.signature = e.signature
  WHERE a.oid IS NULL
     OR a.body_sha256 IS DISTINCT FROM e.body_sha256
+    OR a.function_owner IS DISTINCT FROM 'postgres'
     OR NOT a.prosecdef
     OR a.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
     OR NOT has_function_privilege('authenticated', a.oid, 'EXECUTE')
@@ -78,7 +84,10 @@ SELECT 'return-credit-reversal:due-date-status' AS violation_key,
    SELECT 1
      FROM pg_proc p
     WHERE p.oid = to_regprocedure('public._reverse_credit_memo_application(uuid,uuid,text,text)')
-      AND encode(sha256(convert_to(replace(p.prosrc, E'\r\n', E'\n'), 'UTF8')), 'hex') = '744c48493d549f9bc2297270bfdc0977935a4f29ed44fe2e336c8a6fce6ecbf8'
+      AND encode(sha256(convert_to(replace(p.prosrc, E'\r\n', E'\n'), 'UTF8')), 'hex') = (
+        SELECT body_sha256 FROM protected_expected
+         WHERE signature = '_reverse_credit_memo_application(uuid,uuid,text,text)'
+      )
       AND p.prosecdef
       AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
       AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')
@@ -94,7 +103,10 @@ SELECT 'return-credit-reversal:snapshot-suppression' AS violation_key,
    SELECT 1
      FROM pg_proc p
     WHERE p.oid = to_regprocedure('public.snapshot_invoice_line_shares_on_post()')
-      AND encode(sha256(convert_to(replace(p.prosrc, E'\r\n', E'\n'), 'UTF8')), 'hex') = 'f12078a7b476444df206f0e9baa21fff26ee5cda9ef6a96dabf772909984f42a'
+      AND encode(sha256(convert_to(replace(p.prosrc, E'\r\n', E'\n'), 'UTF8')), 'hex') = (
+        SELECT body_sha256 FROM protected_expected
+         WHERE signature = 'snapshot_invoice_line_shares_on_post()'
+      )
       AND p.prosecdef
       AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
       AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')

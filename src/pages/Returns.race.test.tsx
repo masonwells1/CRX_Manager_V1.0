@@ -90,7 +90,7 @@ vi.mock('../lib/criticalAction', () => ({
 
 import Returns from './Returns';
 
-describe('Returns detail loading', () => {
+describe('Returns loading and retry behavior', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     intentKeys.clear();

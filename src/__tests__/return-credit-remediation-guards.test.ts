@@ -14,6 +14,7 @@ const rpcDoc = readFileSync(path.join(root, 'docs/reference/rpc-functions.md'), 
 const docDriftCheck = readFileSync(path.join(root, 'scripts/check-doc-drift.mjs'), 'utf8');
 const smoke = readFileSync(path.join(root, 'scripts/smoke/smoke-return-credit-chain.sql'), 'utf8');
 const realSchemaProver = readFileSync(path.join(root, 'scripts/smoke/verify-return-credit-real-schema.mjs'), 'utf8');
+const smokeSpecs = JSON.parse(readFileSync(path.join(root, 'scripts/smoke/smoke-specs.json'), 'utf8'));
 
 const wrapperNames = [
   'create_return', 'approve_return', 'reject_return', 'cancel_return',
@@ -52,6 +53,7 @@ function assertFrontendGuards(returnsText: string, invoiceText: string) {
     expect(returnsText).toContain(`useIdempotencyKey('${operation}', profile?.id || '', returnIntentScope)`);
   }
   expect(returnsText).toContain('JSON.stringify([returnPayload, itemsPayload])');
+  expect(returnsText).toContain('unresolvedCreateIntent?.intent.intentScope ?? createIntent.intentScope');
   expect(returnsText).toContain('p_return: requestIntent.returnPayload');
   expect(returnsText).toContain('p_items: requestIntent.itemsPayload');
   expect(returnsText).toContain('setUnresolvedCreateIntent({');
@@ -62,6 +64,8 @@ function assertFrontendGuards(returnsText: string, invoiceText: string) {
   expect(returnsText).toContain('createIdem.resetKey();\n        setUnresolvedCreateIntent(null);');
   expect(returnsText).toContain('cancelIdem.getKeyFor(cancelScope)');
   expect(returnsText).toContain('JSON.stringify([activeReturn.id, reason.trim()])');
+  expect(returnsText).toContain('onClose={closeCreate}');
+  expect(returnsText).toContain('onClick={closeCreate} disabled={creating}>Cancel</Button>');
   expect(invoiceText).toContain('Number.isInteger(applyCreditAmountCents) ? applyCreditAmountCents : null');
   expect(invoiceText).toContain('closeDisabled={applyingCredit}');
   expect(invoiceText).toContain('disabled={applyingCredit}>Cancel</Button>');
@@ -101,6 +105,7 @@ function assertExecutableProofGuards(smokeText: string, proverText: string) {
 function assertInvariantGuards(predicateText: string) {
   for (const anchor of [
     "OR NOT has_function_privilege('authenticated', a.oid, 'EXECUTE')",
+    "OR a.function_owner IS DISTINCT FROM 'postgres'",
     "OR has_function_privilege('service_role', a.oid, 'EXECUTE')",
     "has_function_privilege('authenticated', 'public.check_idempotency_intent(text,text,uuid,text)', 'EXECUTE')",
   ]) expect(predicateText).toContain(anchor);
@@ -139,9 +144,9 @@ describe('return/credit remediation durable guards', () => {
       expect(sha256(bodyFor(migration, name))).toBe(expectedHash(signature));
     }
     expect(sha256(bodyFor(migration, '_reverse_credit_memo_application')))
-      .toBe('744c48493d549f9bc2297270bfdc0977935a4f29ed44fe2e336c8a6fce6ecbf8');
+      .toBe(expectedHash('_reverse_credit_memo_application(uuid,uuid,text,text)'));
     expect(sha256(bodyFor(migration, 'snapshot_invoice_line_shares_on_post')))
-      .toBe('f12078a7b476444df206f0e9baa21fff26ee5cda9ef6a96dabf772909984f42a');
+      .toBe(expectedHash('snapshot_invoice_line_shares_on_post()'));
   });
 
   it.each([
@@ -164,11 +169,13 @@ describe('return/credit remediation durable guards', () => {
     const mutations: Array<[string, string, string]> = [
       ['return scope', returnsSource.replace("const returnIntentScope = activeReturn?.id || ''", "const returnIntentScope = ''"), invoiceSource],
       ['create payload scope', returnsSource.replace('JSON.stringify([returnPayload, itemsPayload])', 'JSON.stringify([returnPayload])'), invoiceSource],
+      ['effective create scope', returnsSource.replace('unresolvedCreateIntent?.intent.intentScope ?? createIntent.intentScope', 'createIntent.intentScope'), invoiceSource],
       ['create unresolved state', returnsSource.replace('setUnresolvedCreateIntent({', 'void ({'), invoiceSource],
       ['create input lock', returnsSource.split('disabled={createPayloadLocked}').join('disabled={creating}'), invoiceSource],
       ['legacy create reconciliation', returnsSource.replace('committedCreateResultFromIntentMismatch(error)', 'null'), invoiceSource],
       ['create definitive unlock', returnsSource.replace('if (isDefinitiveRpcRejection(error))', 'if (false)'), invoiceSource],
       ['cancel exact scope', returnsSource.replace('cancelIdem.getKeyFor(cancelScope)', 'cancelIdem.getKey()'), invoiceSource],
+      ['shared create close', returnsSource.replace('onClick={closeCreate} disabled={creating}>Cancel</Button>', 'onClick={() => setShowCreate(false)} disabled={creating}>Cancel</Button>'), invoiceSource],
       ['apply close lock', returnsSource, invoiceSource.replace('closeDisabled={applyingCredit}', 'closeDisabled={false}')],
       ['integer cents scope', returnsSource, invoiceSource.replace('Number.isInteger(applyCreditAmountCents) ? applyCreditAmountCents : null', 'null')],
       ['no reset on reopen', returnsSource, invoiceSource.replace('setShowApplyCreditModal(true);', 'applyCreditIdem.resetKey();\n    setShowApplyCreditModal(true);')],
@@ -188,7 +195,7 @@ describe('return/credit remediation durable guards', () => {
     const original = bodyFor(migration, '_reverse_credit_memo_application');
     const mutated = original.replace('i.due_date < CURRENT_DATE', 'false');
     expect(mutated).not.toBe(original);
-    expect(sha256(mutated)).not.toBe('744c48493d549f9bc2297270bfdc0977935a4f29ed44fe2e336c8a6fce6ecbf8');
+    expect(sha256(mutated)).not.toBe(expectedHash('_reverse_credit_memo_application(uuid,uuid,text,text)'));
   });
 
   it('mutation-kills reversal helper idempotency exemption and actor validation', () => {
@@ -200,7 +207,7 @@ describe('return/credit remediation durable guards', () => {
     ]) {
       const mutated = original.replace(from, to);
       expect(mutated).not.toBe(original);
-      expect(sha256(mutated)).not.toBe('744c48493d549f9bc2297270bfdc0977935a4f29ed44fe2e336c8a6fce6ecbf8');
+      expect(sha256(mutated)).not.toBe(expectedHash('_reverse_credit_memo_application(uuid,uuid,text,text)'));
     }
   });
 
@@ -212,7 +219,7 @@ describe('return/credit remediation durable guards', () => {
     ]) {
       const mutated = original.replace(from, to);
       expect(mutated).not.toBe(original);
-      expect(sha256(mutated)).not.toBe('f12078a7b476444df206f0e9baa21fff26ee5cda9ef6a96dabf772909984f42a');
+      expect(sha256(mutated)).not.toBe(expectedHash('snapshot_invoice_line_shares_on_post()'));
     }
   });
 
@@ -290,6 +297,7 @@ describe('return/credit remediation durable guards', () => {
     assertInvariantGuards(predicate);
     for (const anchor of [
       "OR NOT has_function_privilege('authenticated', a.oid, 'EXECUTE')",
+      "OR a.function_owner IS DISTINCT FROM 'postgres'",
       "OR has_function_privilege('service_role', a.oid, 'EXECUTE')",
       "has_function_privilege('authenticated', 'public.check_idempotency_intent(text,text,uuid,text)', 'EXECUTE')",
     ]) {
@@ -304,6 +312,12 @@ describe('return/credit remediation durable guards', () => {
       expect(schemaDoc).toMatch(new RegExp(`\\b${column}\\b`));
     }
     expect(schemaDoc).not.toContain('return_type, reason_category');
+  });
+
+  it('keeps the canonical chain in billing, inventory, idempotency, and security slices', () => {
+    expect(smokeSpecs.specs.issue_return_credit.area).toEqual(expect.arrayContaining([
+      'billing', 'inventory', 'idempotency', 'security',
+    ]));
   });
 
   it('fails closed when the Returns status registry or exact retry rollout state drifts', () => {

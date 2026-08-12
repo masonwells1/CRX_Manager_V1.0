@@ -492,7 +492,9 @@
       ],
       "area": [
         "billing",
-        "inventory"
+        "inventory",
+        "idempotency",
+        "security"
       ]
     },
     "cancel_return": {

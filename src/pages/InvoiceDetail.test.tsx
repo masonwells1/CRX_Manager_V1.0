@@ -240,7 +240,7 @@ describe('InvoiceDetail', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled());
 
     fireEvent.keyDown(document, { key: 'Escape' });
-    fireEvent.click(dialog.firstElementChild as Element);
+    fireEvent.click(dialog.querySelector('[aria-hidden="true"]') as Element);
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(screen.getByRole('dialog', { name: 'Apply Credit Memo' })).toBeInTheDocument();

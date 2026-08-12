@@ -186,7 +186,8 @@ export default function Returns() {
   const creditIdem = useIdempotencyKey('issue_return_credit', profile?.id || '', returnIntentScope);
   const cancelIdem = useIdempotencyKey('cancel_return', profile?.id || '', returnIntentScope);
   const rejectIdem = useIdempotencyKey('reject_return', profile?.id || '', returnIntentScope);
-  const createIdem = useIdempotencyKey('create_return', profile?.id || '', createIntent.intentScope);
+  const effectiveCreateIntentScope = unresolvedCreateIntent?.intent.intentScope ?? createIntent.intentScope;
+  const createIdem = useIdempotencyKey('create_return', profile?.id || '', effectiveCreateIntentScope);
 
   const fetchReturns = useCallback(async () => {
     setLoading(true);
@@ -327,6 +328,13 @@ export default function Returns() {
     setCustomerOrders([]);
     setOrderItems([]);
     setShowCreate(true);
+  };
+
+  const closeCreate = () => {
+    if (creating) return;
+    customerOrdersRequestRef.current += 1;
+    orderItemsRequestRef.current += 1;
+    setShowCreate(false);
   };
 
   const addItem = () => {
@@ -823,12 +831,7 @@ export default function Returns() {
       {/* Create Return Modal */}
       <Modal
         open={showCreate}
-        onClose={() => {
-          if (creating) return;
-          customerOrdersRequestRef.current += 1;
-          orderItemsRequestRef.current += 1;
-          setShowCreate(false);
-        }}
+        onClose={closeCreate}
         title="New Return / RMA"
         size="large"
         closeDisabled={creating}
@@ -1020,7 +1023,7 @@ export default function Returns() {
           )}
 
           <div className="flex justify-end gap-2 pt-2 border-t">
-            <Button variant="secondary" onClick={() => setShowCreate(false)} disabled={creating}>Cancel</Button>
+            <Button variant="secondary" onClick={closeCreate} disabled={creating}>Cancel</Button>
             <Button onClick={handleCreate} loading={creating}>Create Return</Button>
           </div>
         </div>
