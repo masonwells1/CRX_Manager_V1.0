@@ -287,3 +287,105 @@ keep the branch parked. If all are current and CLEAN, the next separate action
 is the protected branch/PR landing flow after confirming publication authority.
 
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.
+
+---
+
+# 2026-08-12 fresh repair cycle — parked after round 3
+
+## WHERE
+
+- Repository: `masonwells1/CRX_Manager_V1.0`.
+- Isolated checkout: `C:\Users\mason\.codex\worktrees\df6d\CRX_Manager`.
+- Local branch: `codex/actor-binding-mixed-notation-repair-20260810`.
+- Parked local source HEAD: `6b835feb208b5f270c6b1ac6f87af291c332162c`.
+- Protected landing lane: PR `#373`, branch
+  `codex/harden-actor-binding-sql-reader`.
+- Concurrently observed remote PR HEAD on 2026-08-12:
+  `bd31f84ad45c9c96a3e145461e0bb30f29c551f3`. The local and remote heads
+  diverged by 25 local-only commits and one remote-only main-merge commit. Do
+  not force-push or overwrite that remote head; re-integrate it before any
+  future publication attempt.
+- Supabase project `rhyzpcqhnizqbxphqdkr` was used only for focused read-only
+  catalog evidence. No migration was applied and no live data was changed.
+
+## GOAL
+
+Finish the actor-binding SQL reader so every supported route that can persist
+or execute function-bearing SQL is inspected fail-closed. Done requires the
+full repository gate, real mutation/reproduction evidence, and a terminal
+exact-HEAD `CODEX_PROOF_VERDICT: CLEAN` before PR publication or merge.
+
+## PROVEN
+
+- Early `RETURN`, `EXIT`, and `CONTINUE` before the legacy actor guard are
+  rejected; focused mutation proof failed before restoration and passed after.
+- Quoted and Unicode-qualified actor-variable rebinding is rejected.
+- User-defined PostgreSQL operators wrapping `execute_sql_readonly(text)` and
+  function-bearing SQL embedded in `COPY ... TO PROGRAM` are rejected. Both
+  concrete exploits were red before the repair and green after it.
+- The final local source HEAD passed the complete mandatory gate: 327 test
+  files, 4,466 passing tests, 123 intentional skips, 333 actor-binding
+  assertions, lint, typecheck, build, workflow/guard suites, documentation,
+  dependency, and containment checks.
+- All 36 August migration files were inspected by the actor-binding hook with
+  zero denials and zero internal errors. Three Wave A migrations carry explicit
+  manual-review exemptions for intentionally indirect SQL; they remain parked
+  and unapplied.
+- Focused live read-only evidence confirmed no current PostgreSQL operator
+  points to `execute_sql_readonly`. Broader database sweeps were inaccessible
+  through the available narrow connector guard and are not claimed as passed.
+
+## WRITTEN, NOT PROVEN
+
+- Commits through `6b835feb` are clean and preserved locally, but the exact-HEAD
+  security proof did not return CLEAN. Passing local tests do not approve this
+  source for push or merge.
+- This appended parking record describes the state after that source review; it
+  is not part of the reviewed `6b835feb` source HEAD.
+
+## NOT STARTED
+
+- Add fail-closed handling or complete identity tracking for temporary identity
+  changes to `cron.job` and `cron.job.command`.
+- Add real-process regressions for table rename/restore, schema move/restore,
+  and command-column rename/restore bypasses, with harmless controls and
+  mutation proof.
+- Run the complete repository gate on the resulting commit.
+- Start a new governed review cycle and require a terminal CLEAN proof.
+- Only then integrate the current remote PR head without force, push PR `#373`,
+  wait for required checks and Vercel, read and resolve CodeRabbit, merge, and
+  verify production.
+
+## APPROVAL STATE
+
+Mason authorized this session to repair, commit, push, update PR `#373`, merge
+through the protected green workflow, and verify production. The review gate
+blocked publication, so none of the parked local repair commits were pushed or
+merged by this session. This handoff itself does not carry approval into a new
+task; the receiving task must verify current authority and state.
+
+## GATES AND BLOCKERS
+
+- Review round 1 found quoted function/block qualifiers; fixed in `bd1466f6`.
+- Review round 2 found PostgreSQL operator aliases and `COPY ... PROGRAM` as
+  alternate SQL sinks; fixed in `6b835feb`.
+- Final review round 3 returned `CODEX_PROOF_VERDICT: BLOCKERS` with
+  `SEC-01 — HIGH`: temporarily renaming `cron.job`, moving it to another schema,
+  or renaming its `command` column lets delayed actor-function SQL bypass the
+  scheduler write detector. The reviewer reproduced all three shapes: the
+  approved base denied them and candidate `6b835feb` allowed them.
+- The three-round cap is exhausted. Do not self-certify, push, or merge this
+  source head. The exact review capture is at
+  `C:\Users\mason\.codex\worktrees\df6d\CRX_Manager\.claude\session-state\codex-review-latest.txt`.
+- The schema-registry warning is expected for written-but-unapplied Wave A
+  migrations. Do not regenerate the live registry as though those migrations
+  were applied.
+
+## FIRST ACTION
+
+From a fresh repair task, fetch `origin/main` and PR `#373`, preserve both the
+parked local commits and the concurrent remote merge, then reproduce the three
+`cron.job` identity-change bypasses in the real hook test harness before making
+the smallest fail-closed repair.
+
+Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.
