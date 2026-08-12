@@ -153,6 +153,24 @@ current commit containing all bounded successor corrections.
 
 **Full audit (manual):** `scripts/validate-sql-migrations.sh` — scans ALL migration files. Run with `--idempotency-only` for focused check.
 
+CI runs it twice, and the two steps answer different questions. The aggregate
+pass (`--max-violations=61`) answers "is the corpus getting worse overall"; it
+structurally cannot answer "did *this* change add a violation," because a new
+finding hides under the total whenever an old one is fixed. The second pass
+(`--changed-only`) scans only the migrations the change touched against the
+merge base, at zero tolerance.
+
+**Do not raise `--max-violations` to admit a known-benign finding.** An
+aggregate is a pool: the extra slots are not bound to the findings that
+justified them, so a later fix frees a slot for a genuinely new violation while
+CI stays green. Pin the finding instead, in
+`scripts/sql-audit-hash-exemptions.txt` — `<sha256>  <basename>  <count>`, hashed
+over CR-stripped bytes. Editing the file voids its row, no other file can consume
+it, and an extra violation beyond `<count>` still counts. When a pinned file
+stops violating, the audit prints a `STALE EXEMPTIONS` block so the dead row gets
+removed. Adding a row is a reviewed decision: the right first move for a new
+violation is to fix it.
+
 **Refresh schema registry after schema changes:** `node scripts/regenerate-schema-registry.mjs` (or ask Claude Code to do it via Supabase MCP).
 
 **Shared guidance:** edit `AGENTS.md` intentionally. `CLAUDE.md` imports it and contains only Claude-specific routing. Verify with `npm run check:agent-guidance`.

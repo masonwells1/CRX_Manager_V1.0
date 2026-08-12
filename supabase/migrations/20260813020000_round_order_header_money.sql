@@ -638,7 +638,7 @@ BEGIN
     EXCEPTION
       WHEN check_violation THEN
         -- orders carries several CHECKs — five at this migration's apply time,
-        -- seven once the sibling 20260812030000 adds its two finiteness checks.
+        -- seven once the sibling 20260813030000 adds its two finiteness checks.
         -- Reporting every 23514 as "the trigger did not fire" would be a confident
         -- wrong diagnosis on a money path, so the real constraint name and message
         -- are carried through instead of discarded.

@@ -79,6 +79,29 @@ done
 # migration, which is a reviewed decision, not routine upkeep.
 APPROVED_SET_GRANDFATHER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/approved-set-grandfathered.txt"
 
+# ---------------------------------------------------------------------------
+# HASH-PINNED VIOLATION EXEMPTIONS (Codex Medium, round 24)
+# ---------------------------------------------------------------------------
+# --max-violations is an AGGREGATE allowance, and an aggregate is a pool. When
+# a new check starts firing on old migrations nobody may edit, the obvious move
+# is to raise the number — and that hands the corpus N free slots. If one of
+# the old findings is later fixed, its slot does not close; a genuinely new
+# violation can take it and CI stays green.
+#
+# So an acknowledged finding is pinned instead: <sha256>  <basename>  <count>.
+# The exemption applies only while that file's bytes still hash to the recorded
+# value, and only up to `count` violations in that one file. Edit the file and
+# the exemption is void. A different file cannot use it. A tenth violation in a
+# file allowed nine still counts. And when a pinned file stops violating, the
+# audit says so, so the row can be removed rather than lingering as headroom.
+#
+# Hashes are computed over CR-stripped bytes, exactly like the grandfather
+# manifest, so a CRLF checkout on Windows and an LF checkout on Linux agree.
+#
+# A missing or unreadable manifest means NO exemptions — the failure direction
+# is more violations, not fewer, so there is nothing to fail closed against.
+SQL_AUDIT_EXEMPTIONS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sql-audit-hash-exemptions.txt"
+
 # Which tables carry rows worth binding an approval to? DEFAULT-DENY: every
 # table in .claude/schema-registry.json, minus a short, reason-annotated
 # exemption list.
@@ -711,6 +734,39 @@ if [ "$GRANDFATHERED" = "__GRANDFATHER_UNREADABLE__" ]; then
   exit 1
 fi
 
+# Resolve the hash-pinned exemptions for the scanned set, in one process, the
+# same way the grandfather manifest is resolved. Output is `<basename> <count>`
+# per line, and ONLY for files whose bytes still match the recorded hash — a row
+# whose file has since been edited simply does not appear, so its violations
+# count in full. Absent or unreadable manifest => no exemptions.
+EXEMPT_ROWS=$(printf '%s\n' "$ALL_SQL" | node -e "
+const { createHash } = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const manifest = new Map();
+let raw = '';
+try { raw = fs.readFileSync(process.argv[1], 'utf8'); } catch { process.exit(0); }
+for (const line of raw.split(/\r?\n/)) {
+  if (!line || line.trim().startsWith('#')) continue;
+  const m = line.match(/^([0-9a-f]{64})\s+(\S+)\s+(\d+)/);
+  if (m) manifest.set(m[2], { hash: m[1], count: Number(m[3]) });
+}
+const out = [];
+for (const f of fs.readFileSync(0, 'utf8').split(/\r?\n/).filter(Boolean)) {
+  const row = manifest.get(path.basename(f));
+  if (!row) continue;
+  let norm;
+  try { norm = Buffer.from(fs.readFileSync(f, 'latin1').replace(/\r/g, ''), 'latin1'); } catch { continue; }
+  if (createHash('sha256').update(norm).digest('hex') === row.hash) {
+    out.push(path.basename(f) + ' ' + row.count);
+  }
+}
+process.stdout.write(out.join('\n'));
+" "$SQL_AUDIT_EXEMPTIONS" 2>/dev/null || true)
+
+EXEMPTED_TOTAL=0
+EXEMPT_STALE=""
+
 for file in $ALL_SQL; do
   # Strip SQL comments for pattern matching
   CODE_ONLY=$(grep -v '^\s*--' "$file" 2>/dev/null || true)
@@ -718,6 +774,10 @@ for file in $ALL_SQL; do
   if [ -z "$CODE_ONLY" ]; then
     continue
   fi
+
+  # Violations this file contributes, so a hash-pinned allowance can be applied
+  # to THIS file at the end of the iteration rather than to a global pool.
+  FILE_VIOL_BEFORE=$VIOLATIONS
 
   # pg_get_functiondef exemption — scoped by name to specific already-applied
   # migrations that reference the catalog fn ONLY inside a read-only post-apply
@@ -2562,6 +2622,34 @@ process.stdout.write(out.join('\n'));
     echo ""
     WARNINGS=$((WARNINGS + 1))
   fi
+
+  # ----- hash-pinned exemption for THIS file (see SQL_AUDIT_EXEMPTIONS) -----
+  # Reached only on the full check path; --idempotency-only continues above and
+  # is never run with a baseline, so there is nothing to exempt there.
+  EX_BASE=$(basename "$file")
+  EX_ALLOW=$(printf '%s\n' "$EXEMPT_ROWS" | awk -v b="$EX_BASE" '$1 == b { print $2; exit }')
+  if [ -n "$EX_ALLOW" ]; then
+    FILE_VIOL=$((VIOLATIONS - FILE_VIOL_BEFORE))
+    EX_USED=$FILE_VIOL
+    if [ "$EX_USED" -gt "$EX_ALLOW" ]; then EX_USED=$EX_ALLOW; fi
+    VIOLATIONS=$((VIOLATIONS - EX_USED))
+    EXEMPTED_TOTAL=$((EXEMPTED_TOTAL + EX_USED))
+    if [ "$FILE_VIOL" -gt "$EX_ALLOW" ]; then
+      echo "NOTE: $EX_BASE has $FILE_VIOL violation(s) but only $EX_ALLOW are exempt —"
+      echo "  the extra $((FILE_VIOL - EX_ALLOW)) count against the baseline."
+      echo ""
+    elif [ "$FILE_VIOL" -lt "$EX_ALLOW" ]; then
+      EXEMPT_STALE="${EXEMPT_STALE}    $EX_BASE: exempts $EX_ALLOW, now violates $FILE_VIOL
+"
+    elif [ "$FILE_VIOL" -gt 0 ]; then
+      # Say so explicitly. The VIOLATION block above was printed before this
+      # reconciliation ran, so without this line the log shows findings and a
+      # total of zero, and an exempted finding reads exactly like a live one.
+      echo "NOTE: the $FILE_VIOL violation(s) above in $EX_BASE are hash-pinned"
+      echo "  exemptions and do NOT count against the baseline."
+      echo ""
+    fi
+  fi
 done
 
 echo "============================================"
@@ -2569,7 +2657,19 @@ echo "  Audit Complete"
 echo "  Files scanned: $FILE_COUNT"
 echo "  Violations:    $VIOLATIONS"
 echo "  Warnings:      $WARNINGS"
+if [ "$EXEMPTED_TOTAL" -gt 0 ]; then
+  echo "  Exempted:      $EXEMPTED_TOTAL (hash-pinned, see scripts/sql-audit-hash-exemptions.txt)"
+fi
 echo "============================================"
+
+# A pinned row that no longer fires is headroom nobody is watching. Say so, so
+# it gets removed instead of quietly staying available to something else.
+if [ -n "$EXEMPT_STALE" ]; then
+  echo ""
+  echo "STALE EXEMPTIONS — these rows now allow more than the file produces."
+  echo "Lower or delete them in scripts/sql-audit-hash-exemptions.txt:"
+  printf '%s' "$EXEMPT_STALE"
+fi
 
 if [ -n "$MAX_VIOLATIONS" ]; then
   # Baseline ratchet mode — used by CI. Exits 0 when violations <= baseline so

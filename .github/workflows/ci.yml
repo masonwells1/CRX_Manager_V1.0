@@ -129,15 +129,30 @@ jobs:
         # idempotency-keys column-name bugs and pg_get_functiondef pattern.
         # Wave A's explicit-rewrite migrations (20260506190000) start the
         # ratchet downward. Lower this number whenever a wave reduces it.
-        # 2026-08-12: bumped 61 -> 70 for the six Wave A migrations
-        # 20260812010000..20260812060000. All nine additions are the same
-        # blind spot, not new defects: every flagged write sits inside a
-        # DO $postcond$ self-test probe that always ends in
-        # PROBE_OK_ROLLBACK, and the flagged dynamic SQL is ALTER TABLE ADD
-        # CONSTRAINT and REVOKE, never DML. The guard cannot yet tell an
-        # always-rolled-back probe from a real rewrite. Teaching it that is
-        # tracked separately; do not raise this number again to absorb one.
-        run: bash scripts/validate-sql-migrations.sh --max-violations=70
+        # 2026-08-12: this number STAYS at 61. This branch's validator is the
+        # first to measure the six Wave A migrations (main still runs the short
+        # 349-line one), and it finds nine violations in them. Raising the
+        # aggregate to 70 to admit those was the wrong instrument: an aggregate
+        # is a pool, so it would have handed the corpus nine floating slots, and
+        # when one of the old findings is later fixed its slot does not close --
+        # a genuinely new violation can take it while CI stays green. Each of
+        # the nine is instead pinned to its file's exact sha256 in
+        # scripts/sql-audit-hash-exemptions.txt: editing the file voids its
+        # exemption, no other file can consume it, and a tenth violation in a
+        # file allowed nine still counts here.
+        run: bash scripts/validate-sql-migrations.sh --max-violations=61
+
+      - name: Reject any violation in a migration this change touched
+        # Zero tolerance, and deliberately independent of the baseline above.
+        # The aggregate scan answers "is the corpus getting worse overall"; it
+        # cannot answer "did THIS change add a violation", because a new finding
+        # can hide under the total whenever an old one goes away. This step
+        # scans only what the change touched vs the merge base, where the
+        # correct number of violations is zero. --max-violations is ignored on
+        # that path by design; it is passed only so the script's full-scan
+        # fallback (base ref unavailable) still has its normal baseline instead
+        # of failing on 61 legacy findings.
+        run: bash scripts/validate-sql-migrations.sh --changed-only --max-violations=61
 
   lint-typecheck-test:
     name: Lint, Type Check, Test, Build

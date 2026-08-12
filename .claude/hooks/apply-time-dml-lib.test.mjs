@@ -178,4 +178,73 @@ eq(T(null), [], "a null body does not throw");
   ok(r.targets.has("order_items.total_price"), "an unterminated DO body still reports its write");
 }
 
+// ------------------------------------------- round 24: define-and-call
+// Dropping routine bodies was the right call for a migration that only DEFINES
+// behavior — and it opened a door for one that defines behavior and then runs
+// it. These four spellings all rewrite the column while the file, read
+// naively, contains no apply-time UPDATE at all.
+{
+  const body = "UPDATE public.order_items SET total_price = (total_price) WHERE id = ANY(v_ids);";
+  const CALLED = [
+    ["a bare SELECT of the helper",
+     `CREATE FUNCTION public.tmp_fix() RETURNS void LANGUAGE plpgsql AS $$ BEGIN ${body} END; $$;\nSELECT public.tmp_fix();`],
+    ["CALL of a procedure",
+     `CREATE PROCEDURE public.tmp_fix() LANGUAGE plpgsql AS $$ BEGIN ${body} END; $$;\nCALL public.tmp_fix();`],
+    ["PERFORM inside a DO block",
+     `CREATE FUNCTION public.h() RETURNS void LANGUAGE plpgsql AS $$ BEGIN ${body} END; $$;\nDO $$ BEGIN PERFORM public.h(); END $$;`],
+    ["a helper that calls a helper",
+     `CREATE FUNCTION public.i() RETURNS void LANGUAGE plpgsql AS $$ BEGIN ${body} END; $$;\n` +
+     `CREATE FUNCTION public.o() RETURNS void LANGUAGE plpgsql AS $$ BEGIN PERFORM public.i(); END; $$;\nSELECT public.o();`],
+    ["the call written before the definition",
+     `DO $$ BEGIN PERFORM public.later(); END $$;\n` +
+     `CREATE FUNCTION public.later() RETURNS void LANGUAGE plpgsql AS $$ BEGIN ${body} END; $$;`],
+  ];
+  for (const [label, sql] of CALLED) {
+    ok(has(sql, "order_items.total_price"), `round-24: ${label} is an apply-time write`);
+  }
+
+  // A routine that calls itself must not spin the fixpoint forever.
+  const recursive =
+    `CREATE FUNCTION public.loopy(n int) RETURNS void LANGUAGE plpgsql AS $$ BEGIN\n` +
+    `  IF n > 0 THEN PERFORM public.loopy(n - 1); END IF; ${body} END; $$;\nSELECT public.loopy(3);`;
+  ok(has(recursive, "order_items.total_price"), "round-24: a self-recursive helper terminates and still reports its write");
+}
+
+// PRECISION. Defining a routine is free, and so is every DDL form that merely
+// NAMES it. If these were charged for their bodies, almost every RPC migration
+// in the repository would demand an override — which is how a guard gets
+// switched off rather than fixed.
+{
+  const decl = "CREATE OR REPLACE FUNCTION public.recalc() RETURNS void LANGUAGE plpgsql AS $$ BEGIN UPDATE order_items SET total_price = 1; END; $$;";
+  eq(T(decl), [], "round-24: defining a routine writes nothing");
+  eq(T(`${decl}\nGRANT EXECUTE ON FUNCTION public.recalc() TO authenticated;`), [],
+     "round-24: granting EXECUTE is not calling it");
+  eq(T(`${decl}\nREVOKE EXECUTE ON FUNCTION public.recalc() FROM anon;`), [],
+     "round-24: revoking EXECUTE is not calling it");
+  eq(T(`${decl}\nALTER FUNCTION public.recalc() SET search_path = public, pg_temp;`), [],
+     "round-24: ALTER FUNCTION is not calling it");
+  eq(T(`${decl}\nCOMMENT ON FUNCTION public.recalc() IS 'x';`), [],
+     "round-24: COMMENT ON FUNCTION is not calling it");
+  eq(T(`DROP FUNCTION IF EXISTS public.recalc();\n${decl}`), [],
+     "round-24: drop-and-redefine — the commonest shape here — is not calling it");
+  eq(T(`DROP FUNCTION public.recalc();\n${decl}`), [],
+     "round-24: an unconditional DROP FUNCTION is not calling it");
+}
+
+// A routine this file does not define cannot be read, so it is reported rather
+// than assumed harmless. CALL and PERFORM run something for its effect; that is
+// the narrow case worth flagging, and it measured at 16 of 881 migrations.
+{
+  const r = applyTimeWriteTargets("CALL public.do_the_repair();");
+  eq([...r.unknownCalls], ["do_the_repair"], "round-24: a CALL of an undefined routine is reported");
+  ok(r.targets.size === 0, "round-24: an unreadable call invents no specific target");
+
+  const q = applyTimeWriteTargets("DO $$ BEGIN PERFORM public.some_helper(1); END $$;");
+  eq([...q.unknownCalls], ["some_helper"], "round-24: PERFORM of an undefined routine is reported");
+
+  const own = applyTimeWriteTargets(
+    "CREATE FUNCTION public.mine() RETURNS void LANGUAGE plpgsql AS $$ BEGIN NULL; END; $$;\nCALL public.mine();");
+  eq([...own.unknownCalls], [], "round-24: calling a routine this file defines is not unknown");
+}
+
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

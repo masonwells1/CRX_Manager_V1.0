@@ -26,6 +26,20 @@
 // contrast, executes immediately, so its body IS apply-time and is parsed as
 // such. Routine bodies are dropped; DO bodies are recursed into.
 //
+// ROUND 24. Dropping routine bodies opened a door: define the repair inside a
+// helper and call it in the same migration.
+//
+//   CREATE FUNCTION tmp_fix() ... AS $$ UPDATE order_items SET total_price ... $$;
+//   SELECT tmp_fix();
+//
+// The definition is deferred and the call looks like a read, so the analyzer
+// saw nothing while the migration rewrote the column. A body is deferred only
+// until something invokes it. So routine bodies are no longer discarded — they
+// are set aside, and any body the migration invokes at apply time (CALL,
+// PERFORM, or a bare call in any executing position) has its writes folded back
+// in, transitively through helpers that call helpers. Defining a function is
+// still free; defining one and running it is not.
+//
 // Everything here fails toward over-reporting: an unparseable construct is
 // reported as a write rather than skipped, because a false demand for an
 // override costs one prompt and a false silence costs a money population.
@@ -55,15 +69,18 @@ const NON_RELATION_KEYWORDS = new Set([
  * `DO` block bodies, so what remains is the code that runs when this migration
  * is applied.
  *
- * Returns `{ code, literals }` where `literals` holds the text of every string
- * literal that appeared in apply-time position — that is where dynamic SQL
- * hides, and it is scanned separately.
+ * Returns `{ code, literals, routines }`. `literals` holds the text of every
+ * string literal that appeared in apply-time position — that is where dynamic
+ * SQL hides, and it is scanned separately. `routines` holds every routine body
+ * this SQL defines, parsed as if it were running, keyed by name; a body only
+ * counts once something invokes it, which the caller resolves.
  */
 export function applyTimeCode(sql, depth = 0) {
   let code = "";
   const literals = [];
+  const routines = [];
   // Guard against a pathological nest; 8 is far past anything real.
-  if (typeof sql !== "string" || depth > 8) return { code, literals };
+  if (typeof sql !== "string" || depth > 8) return { code, literals, routines };
   const n = sql.length;
   let i = 0;
   let stmtStart = 0; // where the current statement begins inside `code`
@@ -103,14 +120,22 @@ export function applyTimeCode(sql, depth = 0) {
         // which is the over-reporting direction.
         const stmt = code.slice(stmtStart).trim().toLowerCase();
         const deferred = /\b(function|procedure)\b/.test(stmt);
+        const inner = applyTimeCode(body, depth + 1);
         if (deferred) {
-          // Keep a placeholder so the statement still parses, but contribute
-          // no writes and no literals from inside the body.
+          // Keep a placeholder so the statement still parses, and contribute no
+          // writes from inside the body — UNTIL something calls it. The body is
+          // parsed now and filed under the routine's name so the caller can fold
+          // it back in if this migration invokes it (round 24).
           code += " '' ";
+          const named = /\b(?:function|procedure)\s+([A-Za-z0-9_.]+)/.exec(stmt);
+          const bare = named ? named[1].split(".").pop() : "";
+          if (bare) routines.push({ name: bare, code: inner.code, literals: inner.literals });
+          // A routine defined inside this body is still defined by this file.
+          routines.push(...inner.routines);
         } else {
-          const inner = applyTimeCode(body, depth + 1);
           code += ` ${inner.code} `;
           literals.push(...inner.literals);
+          routines.push(...inner.routines);
         }
         i = close === -1 ? n : close + tag.length;
         continue;
@@ -159,7 +184,7 @@ export function applyTimeCode(sql, depth = 0) {
     i += 1;
   }
 
-  return { code, literals };
+  return { code, literals, routines };
 }
 
 function readIdent(s, pos) {
@@ -269,8 +294,7 @@ const WRITE_VERB = /\b(update|insert\s+into|delete\s+from|merge\s+into)\s/gi;
  * is true when such a literal names its relation with a format placeholder
  * instead of a literal name, which no static read can pin down.
  */
-export function applyTimeWriteTargets(sql) {
-  const { code, literals } = applyTimeCode(sql || "");
+function targetsFromCode(code, literals) {
   const s = code.toLowerCase();
   const targets = new Set();
   const tables = new Set();
@@ -364,6 +388,93 @@ export function applyTimeWriteTargets(sql) {
   }
 
   return { targets, tables, dynamicWrites, unresolved: unresolved || unparsedUpsert };
+}
+
+// Which of `defined` does this code actually invoke? A name followed by `(` is
+// a call in every executing position — `CALL f()`, `PERFORM f()`, `SELECT f()`,
+// `SELECT * FROM f()`, an argument, a default. The one position where it is NOT
+// a call is right after the words FUNCTION or PROCEDURE, which is how
+// `CREATE FUNCTION f(`, `GRANT EXECUTE ON FUNCTION f(`, `DROP FUNCTION f(`, and
+// `ALTER FUNCTION f(` all read. Excluding exactly that keeps a migration free to
+// define and grant a routine without being charged for its body.
+//
+// `DROP FUNCTION IF EXISTS f()` puts two words between the keyword and the
+// name, and reading that as a call charged a plain drop-and-redefine — the most
+// ordinary shape in this repository — for the body it was replacing.
+const NOT_A_CALL = /\b(function|procedure)\s+(?:if\s+(?:not\s+)?exists\s+)?(?:[a-z0-9_]+\.)?$/;
+
+function invokedRoutines(codeLower, defined) {
+  const found = new Set();
+  for (const name of defined) {
+    const re = new RegExp(`(^|[^A-Za-z0-9_.])((?:[a-z0-9_]+\\.)?)${name}\\s*\\(`, "g");
+    let mm;
+    while ((mm = re.exec(codeLower)) !== null) {
+      const nameStart = mm.index + mm[1].length + mm[2].length;
+      if (NOT_A_CALL.test(codeLower.slice(0, nameStart))) continue;
+      found.add(name);
+      break;
+    }
+  }
+  return found;
+}
+
+// `CALL x(...)` and `PERFORM x(...)` exist only to run something for its side
+// effects. When x is not defined in this file we cannot read its body, so the
+// caller is told about it rather than being allowed to assume it writes nothing.
+const EXEC_VERB = /\b(?:call|perform)\s+([a-z0-9_.]+)\s*\(/g;
+
+/**
+ * The (table, column) pairs a migration writes when it is applied.
+ *
+ * See `targetsFromCode` for the shape. On top of the statements that run
+ * directly, this folds in the body of every routine the migration defines AND
+ * invokes, following helper-calls-helper chains to a fixpoint.
+ *
+ * `unknownCalls` names routines the migration executes for effect but does not
+ * define; their bodies live in the database, not in this file.
+ */
+export function applyTimeWriteTargets(sql) {
+  const { code, literals, routines } = applyTimeCode(sql || "");
+  const top = targetsFromCode(code, literals);
+
+  const byName = new Map();
+  for (const r of routines) {
+    if (!byName.has(r.name)) byName.set(r.name, r);
+  }
+
+  // Fold in every invoked body, then anything those bodies invoke, until the
+  // set stops growing. `seen` also stops a recursive routine from looping.
+  const seen = new Set();
+  let frontier = invokedRoutines(code.toLowerCase(), byName.keys());
+  while (frontier.size) {
+    const next = new Set();
+    for (const name of frontier) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      const r = byName.get(name);
+      if (!r) continue;
+      const inner = targetsFromCode(r.code, r.literals);
+      for (const t of inner.targets) top.targets.add(t);
+      for (const t of inner.tables) top.tables.add(t);
+      top.dynamicWrites.push(...inner.dynamicWrites);
+      if (inner.unresolved) top.unresolved = true;
+      for (const n of invokedRoutines(r.code.toLowerCase(), byName.keys())) {
+        if (!seen.has(n)) next.add(n);
+      }
+    }
+    frontier = next;
+  }
+
+  const unknownCalls = [];
+  const scan = [code, ...[...seen].map((n) => byName.get(n)?.code || "")].join("\n;\n").toLowerCase();
+  EXEC_VERB.lastIndex = 0;
+  let em;
+  while ((em = EXEC_VERB.exec(scan)) !== null) {
+    const bare = em[1].split(".").pop();
+    if (!byName.has(bare)) unknownCalls.push(bare);
+  }
+
+  return { ...top, unknownCalls, definedRoutines: [...byName.keys()], invokedRoutines: [...seen] };
 }
 
 /**

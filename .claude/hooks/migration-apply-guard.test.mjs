@@ -801,6 +801,56 @@ function armAutopilot(stateDir, hoursFromNow) {
     r = apply("20990601000044_other_table", "UPDATE public.invoices SET total_profit = 1 WHERE id = 2;");
     ok(!isOneShotDeny(r), "round-23: the same column name on a different table is not the registered repair");
 
+    // ROUND 24 (Codex High). Round 23 made "defining a routine writes nothing"
+    // load-bearing, and that is exactly the sentence to attack: define the
+    // repair in a helper, run the helper, drop it. The file contains no
+    // apply-time UPDATE, every text layer sees nothing, and the column is
+    // rewritten anyway. A body is deferred only until something calls it.
+    {
+      const REPAIR = "UPDATE public.orders SET total_profit = 111 WHERE id = ANY(ARRAY[1,2]);";
+      const CALLED = [
+        ["a helper defined and SELECTed",
+         `CREATE FUNCTION public.tmp_fix() RETURNS void LANGUAGE plpgsql AS $$ BEGIN ${REPAIR} END; $$;\n` +
+         "SELECT public.tmp_fix();\nDROP FUNCTION public.tmp_fix();"],
+        ["a procedure defined and CALLed",
+         `CREATE PROCEDURE public.tmp_fix() LANGUAGE plpgsql AS $$ BEGIN ${REPAIR} END; $$;\nCALL public.tmp_fix();`],
+        ["a helper PERFORMed from a DO block",
+         `CREATE FUNCTION public.h() RETURNS void LANGUAGE plpgsql AS $$ BEGIN ${REPAIR} END; $$;\n` +
+         "DO $$ BEGIN PERFORM public.h(); END $$;"],
+        ["a helper that calls another helper",
+         `CREATE FUNCTION public.i() RETURNS void LANGUAGE plpgsql AS $$ BEGIN ${REPAIR} END; $$;\n` +
+         "CREATE FUNCTION public.o() RETURNS void LANGUAGE plpgsql AS $$ BEGIN PERFORM public.i(); END; $$;\n" +
+         "SELECT public.o();"],
+        ["a routine this migration never defines",
+         "CALL public.repair_all_the_profit();"],
+      ];
+      let idx = 0;
+      for (const [label, sql] of CALLED) {
+        r = apply(`20990601${String(50 + idx++).padStart(6, "0")}_r24`, sql);
+        ok(isDeny(r) && isOneShotDeny(r), `round-24: ${label} → denied`);
+      }
+    }
+
+    // …while the ordinary shape stays free. Every RPC migration in this
+    // repository defines a routine and grants EXECUTE on it; charging those for
+    // their bodies would demand an override on nearly all of them, and a guard
+    // that fires constantly is a guard someone turns off.
+    r = apply(
+      "20990601000060_define_and_grant",
+      "CREATE OR REPLACE FUNCTION public.recalc(p_id bigint) RETURNS void LANGUAGE plpgsql AS $$\n" +
+        "BEGIN UPDATE public.orders SET total_profit = compute_profit(p_id) WHERE id = p_id; END;\n$$;\n" +
+        "GRANT EXECUTE ON FUNCTION public.recalc(bigint) TO authenticated;",
+    );
+    ok(!isOneShotDeny(r), "round-24: defining a routine and granting EXECUTE is not running it");
+
+    r = apply(
+      "20990601000061_drop_and_redefine",
+      "DROP FUNCTION IF EXISTS public.recalc(bigint);\n" +
+        "CREATE FUNCTION public.recalc(p_id bigint) RETURNS void LANGUAGE plpgsql AS $$\n" +
+        "BEGIN UPDATE public.orders SET total_profit = compute_profit(p_id) WHERE id = p_id; END;\n$$;",
+    );
+    ok(!isOneShotDeny(r), "round-24: drop-and-redefine names the routine without calling it");
+
     // 4. ROUND 12 (Codex High) reversed this case. Round 8 let a one-shot
     //    through whenever the ledger already contained it, reasoning that such a
     //    database IS the population the repair was approved against. True at the

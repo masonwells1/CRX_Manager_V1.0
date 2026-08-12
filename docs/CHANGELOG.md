@@ -2,6 +2,49 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-12 — A body is deferred only until something calls it
+
+Closed the High finding from the round-24 adversarial review.
+
+Round 23 taught the write-target reader that a `CREATE FUNCTION` body defines
+behavior and writes nothing at apply time, while a `DO` block executes
+immediately. That distinction is correct and it opened a door:
+
+```sql
+CREATE FUNCTION tmp_fix() ... AS $$ UPDATE order_items SET total_price ... $$;
+SELECT tmp_fix();
+```
+
+The definition is deferred and the call reads like a query, so the analyzer saw
+zero apply-time writes while the migration rewrote the registered column.
+
+A body is deferred only until something invokes it. Routine bodies are no longer
+discarded — they are set aside, parsed as if running, and filed under the
+routine's name. Any body the migration actually invokes has its writes folded
+back in, transitively through helpers that call helpers. Defining a function is
+still free; defining one and running it is not.
+
+Two boundaries had to be drawn precisely, and both were drawn the strict way:
+
+**What counts as a call.** A name followed by `(` is a call in every executing
+position — `CALL f()`, `PERFORM f()`, `SELECT f()`, `SELECT * FROM f()`, an
+argument, a default. The single position where it is *not* a call is directly
+after the words `FUNCTION` or `PROCEDURE`, which is how `CREATE FUNCTION f(`,
+`GRANT EXECUTE ON FUNCTION f(`, `DROP FUNCTION f(` and `ALTER FUNCTION f(` all
+read. `DROP FUNCTION IF EXISTS f()` puts two words between the keyword and the
+name; reading that as a call charged plain drop-and-redefine — the most ordinary
+shape in this repository — for the body it was replacing, so the exclusion
+matches the optional `IF [NOT] EXISTS` too.
+
+**A call into a body this file does not contain.** `CALL do_the_repair()` names
+a routine already living in the database. Nothing in the submitted file says
+what it writes, and `CALL`/`PERFORM` exist only to run something for its effect,
+so the guard refuses rather than assuming it harmless. Measured before shipping
+the refusal: 16 of 881 migrations in the tree make such a call, so the strict
+reading is affordable.
+
+Suites: write-target reader 66 assertions, apply guard 164.
+
 ## 2026-08-12 — The replay guard stops reading SQL and starts reading what it writes
 
 Closed both High findings from the round-23 adversarial review.
@@ -51,22 +94,58 @@ turning its own cases red and nothing else, with both files restoring
 byte-identically. Approved-set suite 123 cases, apply guard 157 assertions, and
 a new 49-assertion suite for the write-target reader itself.
 
-## 2026-08-12 — The full-audit baseline now covers Wave A's self-test probes
+## 2026-08-12 — An aggregate allowance is a pool, so nine findings got pinned instead
 
-Merging `main` brought six Wave A migrations (`20260812010000` through
-`20260812060000`) under this branch's much stricter full audit for the first
-time — `main` still carries the short 349-line validator, so its own CI never
-measured them. Nine violations appeared. All nine are the same blind spot
-rather than new defects: every flagged `UPDATE` and every flagged function call
-sits inside a `DO $postcond$` self-test probe that always terminates with
-`PROBE_OK_ROLLBACK`, so nothing it writes survives; and the flagged dynamic SQL
-is `ALTER TABLE ... ADD CONSTRAINT` and `REVOKE`, never DML. Round 21's
-validator reports the identical nine, which rules out round 22 as the cause.
+Merging `main` brought the six Wave A migrations (now `20260813010000` through
+`20260813060000`) under this branch's much stricter full audit for the first
+time — `main` still carries the short 349-line validator, so its own CI has
+never measured them. Nine violations appeared, in five of the six files: 1, 1,
+1, 3 and 3. Round 21's validator reports the identical nine.
 
-The CI baseline moves 61 → 70 to admit exactly those, with the reason recorded
-at the call site. The real fix — letting the guard recognise a probe block that
-provably always rolls back, without that recognition becoming the twenty-third
-bypass — is tracked as follow-up work and is deliberately not attempted here.
+All nine were read at the cited line before anything was decided about them,
+and none is a defect. The flagged `UPDATE`s write rows the migration's own
+`DO $precond$`/`DO $postcond$` probe just created, inside a block that always
+terminates by rolling back. The flagged `EXECUTE format(...)` statements build
+`ALTER TABLE ... ADD CONSTRAINT`, `REVOKE ALL ON FUNCTION` and `SET LOCAL ROLE`
+— DDL and privilege changes, never DML. The flagged function calls are those
+same probes invoking the routine under test.
+
+The first attempt at this raised the CI aggregate from 61 to 70 to admit them,
+and that was the wrong instrument. **An aggregate is a pool.** Nine extra slots
+are not bound to the nine findings that justified them: when one of the old
+findings is later fixed its slot does not close, and a genuinely new violation
+can move into it while CI stays green. The number would have gone on describing
+a corpus that no longer existed.
+
+Each finding is now pinned to one file's exact bytes in
+`scripts/sql-audit-hash-exemptions.txt` — `<sha256> <basename> <count>`, hashed
+CR-stripped so a CRLF checkout and an LF checkout agree. Editing the file voids
+its row. No other file can consume it. A tenth violation in a file allowed nine
+still counts. And when a pinned file stops violating, the audit prints a
+`STALE EXEMPTIONS` block naming the row, so dead headroom gets removed instead
+of sitting there available to something else. The aggregate goes back to 61.
+
+CI also gains a second, deliberately independent step at zero tolerance,
+scanning only the migrations the change touched against the merge base. The
+aggregate scan answers "is the corpus getting worse overall" and structurally
+cannot answer "did *this* change add a violation" — the new step does.
+
+One reporting defect surfaced while proving it: the `VIOLATION:` block is
+printed as each file is scanned, before the per-file exemption is reconciled at
+the end of that file's pass, so the log showed findings above a total of zero
+and an exempted finding read exactly like a live one. Each exempted file now
+says so in the log.
+
+Seven mutations, each turning the verdict: emptying the manifest (9 count,
+exit 1), editing a pinned migration (its 3 count, 6 still exempt), retargeting a
+row to another basename, corrupting a hash, lowering a count below what the file
+produces (the extra 2 count, with a note), and raising it above (the stale
+block fires). Both files restore byte-identically.
+
+The real fix — teaching the guard to recognise a probe block that provably
+always rolls back — remains deliberately not attempted, because that recognition
+is itself a bypass surface and every round so far has been a bypass found in
+exactly that kind of leniency.
 
 ## 2026-08-12 — Quoted text is not proof, and an unfamiliar schema is not an exemption
 
@@ -359,6 +438,39 @@ authors toward the waiver for no safety gained.
 Three fixtures added: a DELETE hashing ids only (the bypass), a DELETE from a
 table with no material state (refused), and a correctly bound DELETE (passes).
 Mutating the substitution away turns the first two green, which is the point.
+
+## 2026-08-12 — Wave A re-stamped to 20260813: a concurrent apply moved the high-water under us
+
+Rename-only change. The six Wave A migrations move from `20260812010000`–`20260812060000` to
+`20260813010000`–`20260813060000`, order preserved. No SQL logic changed, no function body changed,
+nothing applied, no live data touched.
+
+PR #383 merged as `a7ae1cc2` with the six migrations deliberately parked. While it was in review a
+concurrent session applied two unrelated migrations, moving the live high-water from `20260812003315`
+to `20260812034951` (964 ledger rows, read via MCP `list_migrations`). Migrations are forward-only:
+`.claude/hooks/migration-ordering-lib.mjs` passes a candidate only when its stamp is `>=` the newest
+applied one, so three of the six were now numbered *behind* live and would have been refused at apply
+time. Worse, the first file's `20260812010000` prefix collided with the already-applied
+`20260812010000_blend_ticket_order_header_runtime_assert`.
+
+The round-1 stamps were chosen only just above the then-current high-water and were overtaken within
+hours by ordinary sibling traffic. These sit a full day above it instead. That buys headroom; it does
+not remove the obligation already written into the files to re-read `list_migrations` immediately
+before applying, because any later sibling apply can overtake them again.
+
+Every reference moved with the files: the `.gitattributes` LF pins (which are path-matched, so a
+stale entry would silently stop pinning line endings — the exact failure mode those lines exist to
+prevent), the path constants in `src/lib/waveAMoneyMigrations.test.ts`, the eight cross-reference
+comments inside the six files, the narrative rows in `docs/reference/migration-history.md`, and the
+comment references in `src/lib/db.ts`, `src/lib/db.test.ts` and `src/lib/rpcContracts.test.ts`. The
+round-1 entry in the history doc was left stating its original range, with a superseded-by note — it
+is a record of what happened, not a description of current state.
+
+The reason a rename is not automatically hash-safe here: these files pin function bodies by
+`md5(prosrc)`, so any edit landing inside a body invalidates its own assertion. Three of the eight
+stamp references looked like they might. Dollar-quote span analysis placed all three inside anonymous
+`$precond$`/`$postcond$` `DO` blocks, which PostgreSQL never stores in `pg_proc.prosrc`, and the
+remaining five are file-header comments. Checked before editing rather than after.
 
 ## 2026-08-12 — Wave A remediation round 4: the delivery guard would have aborted its own migration
 

@@ -116,7 +116,7 @@ export const RpcErrorCodes = {
   // post_invoice / post_invoice_group ship-now-price-later gate (sell-side roadmap #2)
   PRICING_INCOMPLETE: 'PRICING_INCOMPLETE',
   // post_invoice / post_invoice_group deliver-before-billing gate (Wave A fix #5,
-  // migration 20260812060000). A delivery-linked invoice cannot be posted until the
+  // migration 20260813060000). A delivery-linked invoice cannot be posted until the
   // delivery is completed — the same click that corrects it to what actually went out.
   DELIVERY_NOT_COMPLETED: 'DELIVERY_NOT_COMPLETED',
   DELIVERY_MISSING: 'DELIVERY_MISSING',

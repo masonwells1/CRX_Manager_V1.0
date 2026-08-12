@@ -600,6 +600,23 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
                 `(“${dynHit.slice(0, 80).replace(/\s+/g, " ")}${dynHit.length > 80 ? "…" : ""}”)`;
               break;
             }
+
+            // ROUND 24. Routine bodies defined in the submitted file are now
+            // followed wherever it calls them, so define-the-repair-and-run-it
+            // no longer reads as zero writes. What is left is a routine that
+            // already lives in the database: `CALL do_the_repair()` names a body
+            // this file does not contain, and no amount of reading the file will
+            // tell us what it writes. CALL and PERFORM exist only to run
+            // something for its effect, so an unreadable one is refused rather
+            // than assumed harmless — measured at 16 of 881 migrations here.
+            if (submitted.unknownCalls?.length && regTables.size) {
+              const names = [...new Set(submitted.unknownCalls)].sort();
+              matched =
+                `an apply-time call to ${names.map((n) => `${n}()`).join(", ")}, whose body is not ` +
+                `in this migration and so cannot be cleared against ${stem}.sql ` +
+                `(${[...regTables].sort().join(", ")})`;
+              break;
+            }
           } catch { /* a missing or unreadable file just means no body match */ }
         }
       }

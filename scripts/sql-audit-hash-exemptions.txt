@@ -1,0 +1,90 @@
+# SQL AUDIT — HASH-PINNED VIOLATION EXEMPTIONS (Codex Medium, round 24)
+#
+# Read by scripts/validate-sql-migrations.sh.
+#
+# WHY THIS FILE EXISTS
+#
+# CI runs the audit with --max-violations=61, an AGGREGATE allowance for the
+# legacy findings in migrations that were already applied live and so may not
+# be edited. An aggregate is a pool. When a new check starts firing on more of
+# that history, raising the number is the obvious move and the wrong one: the
+# corpus gains N free slots, and when one old finding is later fixed its slot
+# does not close — a genuinely new violation can take it while CI stays green.
+#
+# A row here pins one acknowledged finding to one file's exact bytes instead:
+#
+#   - the exemption applies only while the file still hashes to the recorded
+#     value, so any edit to it voids the exemption;
+#   - it applies only to that file, so no other migration can consume it;
+#   - it applies only up to <count>, so an additional violation in the same
+#     file still counts against the baseline;
+#   - and when the file stops violating, the audit prints a STALE EXEMPTIONS
+#     block naming the row, so it gets removed instead of lingering as headroom.
+#
+# FORMAT
+#
+#   <sha256>  <basename>  <count>   # <why this finding is acknowledged>
+#
+# The hash is sha256 over the file's bytes with every CR removed, so a CRLF
+# checkout on Windows and an LF checkout on Linux agree. Regenerate one with:
+#
+#   node -e "const{createHash}=require('crypto'),fs=require('fs');\
+#   process.stdout.write(createHash('sha256').update(Buffer.from(\
+#   fs.readFileSync(process.argv[1],'latin1').replace(/\r/g,''),'latin1')).digest('hex'))" \
+#   supabase/migrations/<file>.sql
+#
+# Adding a row is a reviewed decision, not routine upkeep. The right first move
+# for a new violation is to FIX it. A row here asserts two things, both of which
+# someone checked by reading the flagged lines: the finding is benign, and the
+# file is not this change's to repair — it is already applied live (AGENTS.md
+# forbids editing those), or it belongs to work that has already merged and the
+# correct fix is a validator change tracked separately.
+#
+# ---------------------------------------------------------------------------
+
+# --- Wave A self-test probes (merged in #383, re-stamped in #387) ------------
+#
+# These six migrations carry `DO $precond$` / `DO $postcond$` blocks that prove
+# their own effect against real rows and then roll the whole probe back. They
+# merged before this branch's stricter audit existed, and `main` still runs the
+# short 349-line validator, so main's own CI has never measured them — the nine
+# findings below appear the first time this branch's validator sees them, and
+# round 21's validator reports the identical nine.
+#
+# Every one was read at the cited line before being pinned:
+#   * the flagged UPDATEs write rows the probe itself created, inside a block
+#     that always terminates by rolling back, so nothing they write survives;
+#   * the flagged EXECUTE format(...) statements build `ALTER TABLE ... ADD
+#     CONSTRAINT` and `REVOKE ALL ON FUNCTION`, never DML;
+#   * the flagged function calls are those same probes invoking the routine
+#     they are testing.
+#
+# The real fix is to teach the guard to recognise a probe block that provably
+# always rolls back — deliberately NOT attempted here, because that recognition
+# is itself a bypass surface and every round so far has been a bypass found in
+# exactly that kind of leniency. Until it lands, these are pinned rather than
+# absorbed into the aggregate. Editing any of these files voids its row, and
+# the audit will name any row that stops firing.
+
+65608d0b488a95b8f9d84be8c1899bf8b4a3f51a9e5fbd056420050213bdde39  20260813020000_round_order_header_money.sql  1
+# ^ probe UPDATEs public.orders on its own probe row to prove the UPDATE leg of
+#   the rounding trigger; same savepoint, rolled back with the rest.
+
+8138e6917b4364f4940a9b69899a84b3792653cd4e4918e3b16feba890e0ed11  20260813030000_reject_non_finite_money_and_quantities.sql  1
+# ^ EXECUTE format(...) builds ALTER TABLE ... ADD CONSTRAINT ... CHECK for the
+#   finiteness constraint. DDL, not DML.
+
+7fd9c048b5cc24630901a4afc3173407e8555615f294de49109284768af84680  20260813040000_clamp_negative_commission_remainder.sql  1
+# ^ probe calls _insert_commissions_for_order() to prove the clamp; the call is
+#   the test, and its writes roll back.
+
+08ac5b021bada2f47be271256a5734687c16eb2ae8f964a20d352e92b37e4773  20260813050000_guard_job_commission_split_immutable.sql  3
+# ^ (a) EXECUTE format('SET LOCAL ROLE %I', ...) — a role switch, not a write;
+#   (b) probe calls correct_job_commission_split(); (c) probe UPDATEs
+#   public.jobs on its own probe row. All three inside the rolled-back block.
+
+7e4cdf38eaf6b3022583eba1b86492d67665e37b2e18847dec45797dc67c7881  20260813060000_require_completed_delivery_before_invoice_post.sql  3
+# ^ (a) two EXECUTE format(...) building REVOKE ALL ON FUNCTION for anon,
+#   authenticated, service_role and metabase_ro; (b) probe calls
+#   _post_invoice_impl_20260714() to prove the gate refuses; (c) probe UPDATEs
+#   public.deliveries status on its own probe delivery to drive the arms.

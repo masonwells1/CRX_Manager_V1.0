@@ -1,4 +1,4 @@
--- 20260812050000_guard_job_commission_split_immutable.sql
+-- 20260813050000_guard_job_commission_split_immutable.sql
 -- STATUS: PARKED DRAFT - NOT APPLIED
 --
 -- Wave A fix #4 of the 2026-08-09 ordering-cycle review.
