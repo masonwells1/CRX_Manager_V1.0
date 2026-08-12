@@ -136,6 +136,14 @@ rolled-back subtransaction, so it exercises the reconciliation for real on any d
 than skipping, and proves it left nothing behind by whole-row fingerprint, row count, and explicit
 absence of the synthetic ids.
 
+## 2026-08-12 — Live SQL maintenance producer: first Sol findings closed
+
+The first exact-head Sol pass found two candidate defects before push: a `DO` block could execute
+transaction control before its abort marker, and safe target-bound fixtures were re-blocked by the
+final default-deny loop. The producer now rejects `COMMIT` or `ROLLBACK` inside the special `DO`
+smoke form, recognizes already-vetted DML in its final pass, and executes 21 assertions directly
+against the pinned generated module, including both Sol reproductions.
+
 ## 2026-08-11 — A smoke selection that runs nothing no longer reports success
 
 Follow-up to the entry below, from its own adversarial review. Container-only chains are dropped

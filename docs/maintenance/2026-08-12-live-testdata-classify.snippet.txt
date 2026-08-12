@@ -146,7 +146,12 @@ export function classifySql(query) {
   // Fail closed for every other non-read statement. The explicit exceptions
   // are transaction control, temporary scratch tables, and structurally proven
   // rollback smoke batches.
-  for (const statement of normalizedStatements) {
+  for (let index = 0; index < normalizedStatements.length; index++) {
+    const statement = normalizedStatements[index];
+    // Every DML statement already passed through the persistent-target loop.
+    // Reaching here means it was an explicit pg_temp write or a target-bound
+    // E2E fixture, both of which are the intended safe exceptions.
+    if (dmlTarget(visibleStatements[index])) continue;
     if (/^(?:select|with|explain|show|values)\b/i.test(statement)) continue;
     if (/^(?:begin|rollback)(?:\s+(?:work|transaction))?$/i.test(statement)) continue;
     if (/^create\s+(?:temp|temporary)\b/i.test(statement)) continue;

@@ -161,7 +161,12 @@ function standaloneDoSmokeAbort(statements) {
   if (statements.length !== 1) return false;
   const statement = stripCommentsQuoteAware(statements[0]);
   const match = /^\s*do(?:\s+language\s+[a-z_][a-z0-9_]*)?\s*(\$[A-Za-z_0-9]*\$)([\s\S]*)\1\s*$/i.exec(statement);
-  return Boolean(match && hasActualSmokeRaise(match[2]));
+  if (!match) return false;
+  // A DO block may end its current transaction. Once it executes COMMIT, a
+  // later exception cannot undo the live write, so transaction control inside
+  // this special smoke form categorically disqualifies rollback proof.
+  if (/\b(?:commit|rollback)\b/i.test(keywordView(match[2]))) return false;
+  return hasActualSmokeRaise(match[2]);
 }
 
 function dmlTarget(statement) {
