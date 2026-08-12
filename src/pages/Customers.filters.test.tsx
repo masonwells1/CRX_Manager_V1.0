@@ -347,10 +347,13 @@ describe('Customers list filters', () => {
     expect(mockResetAssignmentKey).not.toHaveBeenCalled();
   });
 
-  it('refreshes the selection and reports no assignment when the exact customer set changed', async () => {
+  it('clears an ambiguous selection after an exact-set change so an inactive row cannot poison retries', async () => {
+    const refreshedBook = book.map((row) => (
+      row.id === 'c-2' ? { ...row, is_active: false } : row
+    ));
     mockTables(book, book.length, [
       { data: book, error: null, count: book.length },
-      { data: book, error: null, count: book.length },
+      { data: refreshedBook, error: null, count: refreshedBook.length },
     ]);
     mockRpc.mockResolvedValue({
       data: null,
@@ -365,7 +368,7 @@ describe('Customers list filters', () => {
 
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
       'error',
-      expect.stringMatching(/nothing was assigned.*refreshed selection/i),
+      expect.stringMatching(/nothing was assigned.*reselect active customers.*refreshed list/i),
     ));
     expect(mockRpc).toHaveBeenCalledWith('assign_customers_sales_rep', {
       p_customer_ids: ['c-1', 'c-2'],
@@ -373,10 +376,11 @@ describe('Customers list filters', () => {
       p_idempotency_key: 'assignment-key-1',
     });
     expect(mockToast).not.toHaveBeenCalledWith('success', expect.any(String));
-    expect(screen.getByText('2 selected')).toBeInTheDocument();
-    expect(screen.getByRole('dialog', { name: 'Assign sales representative' })).toBeInTheDocument();
+    expect(screen.queryByText(/selected$/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Assign sales representative' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Active Unassigned Farm')).not.toBeInTheDocument();
     expect(capturedChains.filter(({ table }) => table === 'customers')).toHaveLength(2);
-    expect(mockResetAssignmentKey).not.toHaveBeenCalled();
+    expect(mockResetAssignmentKey).toHaveBeenCalledTimes(1);
   });
 
   it('reports a required reload instead of claiming a refreshed selection when set-change recovery fails', async () => {
@@ -399,11 +403,11 @@ describe('Customers list filters', () => {
       'error',
       expect.stringMatching(/could not refresh.*reload/i),
     ));
-    expect(mockToast).not.toHaveBeenCalledWith('error', expect.stringMatching(/review the refreshed selection/i));
-    expect(screen.getByText('2 selected')).toBeInTheDocument();
-    expect(screen.getByRole('dialog', { name: 'Assign sales representative' })).toBeInTheDocument();
+    expect(mockToast).not.toHaveBeenCalledWith('error', expect.stringMatching(/reselect.*refreshed/i));
+    expect(screen.queryByText(/selected$/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Assign sales representative' })).not.toBeInTheDocument();
     expect(capturedChains.filter(({ table }) => table === 'customers')).toHaveLength(2);
-    expect(mockResetAssignmentKey).not.toHaveBeenCalled();
+    expect(mockResetAssignmentKey).toHaveBeenCalledTimes(1);
   });
 
   it('rotates the rejected key after a replay-payload mismatch so the same intent can retry', async () => {
