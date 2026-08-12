@@ -1086,9 +1086,11 @@ function isPgCronCommandWrite(rawStmt) {
 // any statement containing another EXECUTE token after the privilege keyword.
 function isExecutePrivilegeStatement(stmt) {
   const sql = String(stmt || "").trim();
-  const isPrivilegeHead =
-    /^GRANT\s+EXECUTE\s+ON\s+FUNCTION\b/i.test(sql) ||
-    /^REVOKE\s+EXECUTE\s+ON\s+FUNCTION\b/i.test(sql);
+  const directRoutinePrivilege =
+    /^(?:GRANT|REVOKE)(?:\s+GRANT\s+OPTION\s+FOR)?\s+EXECUTE\s+ON\s+(?:(?:FUNCTION|PROCEDURE|ROUTINE)\b|ALL\s+(?:FUNCTIONS|PROCEDURES|ROUTINES)\s+IN\s+SCHEMA\b)/i;
+  const defaultRoutinePrivilege =
+    /^ALTER\s+DEFAULT\s+PRIVILEGES\b[\s\S]*?\b(?:GRANT|REVOKE)(?:\s+GRANT\s+OPTION\s+FOR)?\s+EXECUTE\s+ON\s+(?:FUNCTIONS|ROUTINES)\b/i;
+  const isPrivilegeHead = directRoutinePrivilege.test(sql) || defaultRoutinePrivilege.test(sql);
   if (!isPrivilegeHead) return false;
   return (sql.match(/\bEXECUTE\b/gi) || []).length === 1;
 }
@@ -1724,7 +1726,10 @@ function hasPgCronJobIdentityChange(rawSql) {
     const changesIdentity = new RegExp(
       `^\\s*(?:RENAME\\s+TO\\b|SET\\s+SCHEMA\\b|` +
         `RENAME\\s+(?:COLUMN\\s+)?` +
-        `(?:"command"|command|${SQL_UNICODE_IDENTIFIER_PATTERN})\\s+TO\\b)`,
+        `(?:"command"|command|${SQL_UNICODE_IDENTIFIER_PATTERN})\\s+TO\\b|` +
+        `ALTER\\s+(?:COLUMN\\s+)?` +
+        `(?:"command"|command|${SQL_UNICODE_IDENTIFIER_PATTERN})\\s+` +
+        `(?:TYPE\\b|SET\\s+DATA\\s+TYPE\\b))`,
       "i"
     ).test(action);
     if (!changesIdentity) continue;
@@ -1925,6 +1930,102 @@ function readAttrsAndBody(text, fromIdx) {
   return null;
 }
 
+/** Return SECURITY DEFINER/INVOKER changes made by separate ALTER statements.
+ * PostgreSQL applies the last mode after CREATE, so looking only at the CREATE
+ * attributes would misclassify the final callable. Signature overloads are
+ * deliberately collapsed to the routine name: inspecting an extra same-named
+ * definition is safer than missing the elevated overload. */
+function alteredRoutineSecurityModes(structuralSql) {
+  const altered = [];
+  const head = new RegExp(
+    `\\bALTER\\s+(?:FUNCTION|ROUTINE)\\s+(?:IF\\s+EXISTS\\s+)?` +
+      `(${SQL_QUALIFIED_IDENTIFIER_PATTERN})\\s*\\(`,
+    "gi"
+  );
+  let match;
+  while ((match = head.exec(structuralSql)) !== null) {
+    const paramsOpen = head.lastIndex - 1;
+    const parsed = readBalancedParens(structuralSql, paramsOpen);
+    if (!parsed) {
+      altered.push({ name: null, signature: null, mode: "DEFINER", index: match.index });
+      break;
+    }
+    const terminator = structuralSql.indexOf(";", parsed.end);
+    const statementEnd = terminator === -1 ? structuralSql.length : terminator;
+    const mode = /^\s*SECURITY\s+(DEFINER|INVOKER)\b/i.exec(
+      structuralSql.slice(parsed.end, statementEnd)
+    );
+    if (mode) {
+      altered.push({
+        name: normalizedQualifiedIdentifier(match[1]),
+        signature: normalizedRoutineIdentityArgs(parsed.params, false),
+        mode: mode[1].toUpperCase(),
+        index: match.index,
+      });
+    }
+    head.lastIndex = terminator === -1 ? structuralSql.length : terminator + 1;
+  }
+  return altered;
+}
+
+function routineNamesMayMatch(left, right) {
+  if (left === null || right === null) return true;
+  if (left === right) return true;
+  return left.split(".").at(-1) === right.split(".").at(-1);
+}
+
+function beforeTopLevelDefault(argument) {
+  const text = String(argument || "");
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "(") { depth++; continue; }
+    if (text[i] === ")") { depth--; continue; }
+    if (depth !== 0) continue;
+    if (text[i] === "=") return text.slice(0, i).trim();
+    if (/^DEFAULT\b/i.test(text.slice(i)) && !/[\w$]/.test(text[i - 1] || "")) {
+      return text.slice(0, i).trim();
+    }
+  }
+  return text.trim();
+}
+
+/** Normalize CREATE parameters or ALTER identity arguments into a conservative
+ * comparable type list. An unusual unnamed multi-word CREATE type may refuse
+ * to match and require manual review; it cannot make a different overload look
+ * identical, which is the fail-closed direction needed here. */
+function normalizedRoutineIdentityArgs(argsText, createDefinition) {
+  const types = [];
+  for (const rawArgument of splitTopLevelArgs(argsText)) {
+    let argument = beforeTopLevelDefault(rawArgument);
+    const mode = /^(INOUT|IN|OUT|VARIADIC)\s+/i.exec(argument);
+    if (mode) {
+      if (/^OUT$/i.test(mode[1])) continue;
+      argument = argument.slice(mode[0].length).trim();
+    }
+    if (createDefinition) {
+      const named = new RegExp(`^${SQL_IDENTIFIER_PATTERN}\\s+`).exec(argument);
+      if (named) argument = argument.slice(named[0].length).trim();
+    }
+    if (!argument) return null;
+    types.push(
+      argument.toLowerCase().replace(/\s+/g, " ").replace(/\s*([(),.\[\]])\s*/g, "$1")
+    );
+  }
+  return types.join(",");
+}
+
+function routineAlterMatchesCreate(created, altered) {
+  return routineNamesMayMatch(created.name, altered.name) &&
+    created.signature !== null && altered.signature !== null &&
+    created.signature === altered.signature;
+}
+
+function routineAltersMatch(left, right) {
+  return routineNamesMayMatch(left.name, right.name) &&
+    left.signature !== null && right.signature !== null &&
+    left.signature === right.signature;
+}
+
 const violations = [];
 try {
   pgCronJobViewAliases = declaredPgCronJobViewAliases(content);
@@ -1937,13 +2038,18 @@ try {
   }
   if (hasPgCronJobIdentityChange(content)) {
     violations.push(
-      "This migration renames or moves cron.job, or renames its command column, so later scheduled " +
-      "SQL writes would no longer match the actor-binding reader. Keep cron.job.command at its " +
+      "This migration renames or moves cron.job, or renames its command column, or rewrites that " +
+      "column's type, so later scheduled SQL writes would no longer match the actor-binding reader. " +
+      "Keep cron.job.command at its " +
       "canonical identity, or add the file-level exempt marker (-- actor-binding-check: exempt) " +
       "and get a manual review."
     );
   }
   const masked = maskSqlNoise(content);
+  const alteredSecurityModes = masked === null
+    ? []
+    : alteredRoutineSecurityModes(masked);
+  const createdFunctions = [];
   if (masked !== null && hasExecuteSqlReadonlyOperatorAlias(masked)) {
     violations.push(
       "This migration aliases execute_sql_readonly behind a PostgreSQL operator, so later SQL text " +
@@ -2122,6 +2228,7 @@ try {
   let head;
   while (masked !== null && (head = fnHeadRe.exec(masked)) !== null) {
     const fnName = head[1];
+    const normalizedFnName = normalizedQualifiedIdentifier(fnName);
     const paramsOpen = fnHeadRe.lastIndex - 1;
     const parsed = readBalancedParens(masked, paramsOpen);
     if (!parsed) {
@@ -2145,6 +2252,11 @@ try {
     }
     const params = content.slice(paramsOpen + 1, parsed.end - 1);
     const maskedParams = parsed.params;
+    const createdFunction = {
+      name: normalizedFnName,
+      signature: normalizedRoutineIdentityArgs(maskedParams, true),
+    };
+    createdFunctions.push(createdFunction);
     const attrs = rest.attrs;
     const body = content.slice(rest.bodyStart, rest.bodyEnd);
     const maskedBody = masked.slice(rest.bodyStart, rest.bodyEnd);
@@ -2154,7 +2266,16 @@ try {
     // definitions independently instead of trusting the outer function's result.
 
     // Only SECURITY DEFINER functions can forge an actor with the owner's rights.
-    if (!/SECURITY\s+DEFINER/i.test(attrs)) continue;
+    // The mode may be attached later through ALTER FUNCTION/ROUTINE, so evaluate
+    // the final same-file mode rather than trusting CREATE attributes alone.
+    const laterSecurityModes = alteredSecurityModes.filter((altered) =>
+      altered.index > head.index && routineAlterMatchesCreate(createdFunction, altered)
+    );
+    const finalAlteredMode = laterSecurityModes.at(-1)?.mode;
+    const isSecurityDefiner = finalAlteredMode
+      ? finalAlteredMode === "DEFINER"
+      : /SECURITY\s+DEFINER/i.test(attrs);
+    if (!isSecurityDefiner) continue;
 
     // Static mutation keywords are readable after full noise masking. Also scan
     // the comment-only mask so executable strings passed to APIs such as
@@ -2180,6 +2301,22 @@ try {
       `Function ${fnName}: SECURITY DEFINER, mutates or executes dynamic SQL, and declares the forgeable actor parameter(s) ` +
       `[${actorParams.join(", ")}] but the body never raises ACTOR_MISMATCH — any authenticated caller ` +
       `can attribute the write to another user.`
+    );
+  }
+  for (const altered of alteredSecurityModes) {
+    if (altered.mode !== "DEFINER") continue;
+    const laterMode = alteredSecurityModes.findLast((candidate) =>
+      candidate.index > altered.index && routineAltersMatch(candidate, altered)
+    );
+    if (laterMode?.mode === "INVOKER") continue;
+    if (createdFunctions.some((created) => routineAlterMatchesCreate(created, altered))) {
+      continue;
+    }
+    violations.push(
+      `ALTER FUNCTION/ROUTINE ${altered.name ?? "with an opaque identifier"} changes a routine to ` +
+      `SECURITY DEFINER, but this migration does not include a readable CREATE FUNCTION body for ` +
+      `the actor-binding guard to verify. Include the complete definition, or add the file-level ` +
+      `exempt marker (-- actor-binding-check: exempt) and get a manual review.`
     );
   }
 } catch (err) {

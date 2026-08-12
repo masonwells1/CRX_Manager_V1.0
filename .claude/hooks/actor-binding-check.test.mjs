@@ -487,6 +487,13 @@ UPDATE cron.job SET payload = $job$${UNBOUND_DDL}$job$ WHERE jobid = 42;
 ALTER TABLE cron.job RENAME COLUMN payload TO command;`);
 ok(isDeny(r), "column-rename-update-restore cannot hide delayed actor-forgery SQL in cron.job");
 
+r = runHook(`ALTER TABLE cron.job ALTER COLUMN command TYPE varchar
+USING $job$${UNBOUND_DDL}$job$;`);
+ok(isDeny(r), "ALTER COLUMN USING cannot rewrite cron.job.command to delayed actor-forgery SQL");
+
+r = runHook(`ALTER TABLE public.job ALTER COLUMN command TYPE varchar USING command::varchar;`);
+ok(!isDeny(r), "an unrelated job table may still rewrite its command-named column");
+
 r = runHook(`ALTER TABLE "cron"."job" RENAME COLUMN "command" TO payload;`);
 ok(isDeny(r), "quoted physical cron.job command identity changes require manual review");
 
@@ -1586,6 +1593,16 @@ ok(!isDeny(r), "GRANT EXECUTE privilege syntax is not mistaken for runtime dynam
 r = runHook("REVOKE EXECUTE ON FUNCTION public.bound_actor(uuid) FROM PUBLIC, anon;");
 ok(!isDeny(r), "REVOKE EXECUTE privilege syntax is not mistaken for runtime dynamic SQL");
 
+r = runHook("GRANT EXECUTE ON PROCEDURE public.post_invoice(uuid) TO authenticated;");
+ok(!isDeny(r), "GRANT EXECUTE ON PROCEDURE is declarative privilege syntax");
+
+r = runHook("GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO service_role;");
+ok(!isDeny(r), "GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA is declarative privilege syntax");
+
+r = runHook(`ALTER DEFAULT PRIVILEGES IN SCHEMA public
+GRANT EXECUTE ON FUNCTIONS TO authenticated;`);
+ok(!isDeny(r), "ALTER DEFAULT PRIVILEGES GRANT EXECUTE is declarative privilege syntax");
+
 r = runHook(`CREATE TRIGGER trg_recalc_order_totals
 AFTER INSERT OR UPDATE ON public.order_items
 FOR EACH ROW EXECUTE FUNCTION public.recalc_order_totals();`);
@@ -2322,6 +2339,38 @@ ok(!isDeny(r), "a bound actor function may still use dynamic SQL");
 
 r = runHook(fn(MUTATION, "p_performed_by uuid", "SECURITY INVOKER"));
 ok(!isDeny(r), "SECURITY INVOKER function is out of scope (RLS still applies)");
+
+r = runHook(
+  fn(MUTATION, "p_performed_by uuid", "SECURITY INVOKER").replace("test_fn", "later_definer") +
+  "\nALTER FUNCTION public.later_definer(uuid) SECURITY DEFINER;"
+);
+ok(isDeny(r), "ALTER FUNCTION SECURITY DEFINER cannot elevate an unbound actor mutator past the guard");
+
+r = runHook(
+  fn(BOUND, "p_performed_by uuid", "SECURITY INVOKER").replace("test_fn", "bound_later_definer") +
+  "\nALTER ROUTINE public.bound_later_definer(uuid) SECURITY DEFINER;"
+);
+ok(!isDeny(r), "ALTER ROUTINE SECURITY DEFINER keeps a correctly bound actor mutator allowed");
+
+r = runHook(
+  fn("UPDATE invoices SET note = p_note;", "p_note text", "SECURITY INVOKER")
+    .replace("test_fn", "overloaded_actor") +
+  "\nALTER FUNCTION public.overloaded_actor(uuid) SECURITY DEFINER;"
+);
+ok(isDeny(r), "a readable safe overload cannot hide SECURITY DEFINER elevation of another signature");
+
+r = runHook(
+  fn(MUTATION, "p_performed_by uuid", "SECURITY INVOKER").replace("test_fn", "final_invoker") +
+  "\nALTER FUNCTION public.final_invoker(uuid) SECURITY DEFINER;" +
+  "\nALTER FUNCTION public.final_invoker(uuid) SECURITY INVOKER;"
+);
+ok(!isDeny(r), "a final ALTER FUNCTION SECURITY INVOKER remains outside the owner-rights guard");
+
+r = runHook(
+  fn(MUTATION, "p_performed_by uuid", "SECURITY DEFINER").replace("test_fn", "demoted_invoker") +
+  "\nALTER FUNCTION public.demoted_invoker(uuid) SECURITY INVOKER;"
+);
+ok(!isDeny(r), "ALTER FUNCTION SECURITY INVOKER overrides an earlier CREATE SECURITY DEFINER mode");
 
 r = runHook(fn(MUTATION, "p_performed_by uuid", ""));
 ok(!isDeny(r), "function with no SECURITY clause (invoker default) is out of scope");
