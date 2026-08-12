@@ -437,6 +437,86 @@ BEGIN
   END IF;
 END $$;`,
   },
+  {
+    name: 'rollback probe sentinel cannot hide in an unreachable IF branch',
+    expect: 'violation',
+    sql: `DO $$
+BEGIN
+  -- APPROVED_SET_DIGEST: ROLLBACK-PROBE (orders) - forged conditional sentinel
+  BEGIN
+    UPDATE public.orders SET total_profit = 0;
+    IF false THEN
+      RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'PROBE_OK_ROLLBACK';
+    END IF;
+  EXCEPTION
+    WHEN OTHERS THEN
+      IF SQLERRM <> 'PROBE_OK_ROLLBACK' THEN RAISE; END IF;
+  END;
+  IF EXISTS (SELECT 1 FROM public.orders WHERE total_profit = 0) THEN
+    RAISE EXCEPTION 'rollback did not hold';
+  END IF;
+END $$;`,
+  },
+  {
+    name: 'rollback probe sentinel cannot hide in an unreachable CASE branch',
+    expect: 'violation',
+    sql: `DO $$
+BEGIN
+  -- APPROVED_SET_DIGEST: ROLLBACK-PROBE (orders) - forged CASE sentinel
+  BEGIN
+    UPDATE public.orders SET total_profit = 0;
+    CASE
+      WHEN false THEN
+        RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'PROBE_OK_ROLLBACK';
+      ELSE NULL;
+    END CASE;
+  EXCEPTION
+    WHEN OTHERS THEN
+      IF SQLERRM <> 'PROBE_OK_ROLLBACK' THEN RAISE; END IF;
+  END;
+  IF EXISTS (SELECT 1 FROM public.orders WHERE total_profit = 0) THEN
+    RAISE EXCEPTION 'rollback did not hold';
+  END IF;
+END $$;`,
+  },
+  {
+    name: 'rollback probe residue assertion cannot hide behind IF false',
+    expect: 'violation',
+    sql: `DO $$
+BEGIN
+  -- APPROVED_SET_DIGEST: ROLLBACK-PROBE (orders) - forged conditional residue
+  BEGIN
+    UPDATE public.orders SET total_profit = 0;
+    RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'PROBE_OK_ROLLBACK';
+  EXCEPTION
+    WHEN OTHERS THEN
+      IF SQLERRM <> 'PROBE_OK_ROLLBACK' THEN RAISE; END IF;
+  END;
+  IF false THEN
+    RAISE EXCEPTION 'rollback did not hold';
+  END IF;
+END $$;`,
+  },
+  {
+    name: 'rollback probe sentinel cannot hide in a zero-iteration loop',
+    expect: 'violation',
+    sql: `DO $$
+BEGIN
+  -- APPROVED_SET_DIGEST: ROLLBACK-PROBE (orders) - forged loop sentinel
+  BEGIN
+    UPDATE public.orders SET total_profit = 0;
+    WHILE false LOOP
+      RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'PROBE_OK_ROLLBACK';
+    END LOOP;
+  EXCEPTION
+    WHEN OTHERS THEN
+      IF SQLERRM <> 'PROBE_OK_ROLLBACK' THEN RAISE; END IF;
+  END;
+  IF EXISTS (SELECT 1 FROM public.orders WHERE total_profit = 0) THEN
+    RAISE EXCEPTION 'rollback did not hold';
+  END IF;
+END $$;`,
+  },
   // ── must WARN (accepted, but never silent) ──────────────────────────────
   {
     name: 'waiver naming every table, backfilling a column this migration adds',

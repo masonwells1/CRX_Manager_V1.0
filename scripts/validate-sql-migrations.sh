@@ -936,6 +936,7 @@ for file in $ALL_SQL; do
             }
 
             if (!sentinel && FNR > last &&
+                control_depth == 0 &&
                 code ~ /^[[:space:]]*raise[[:space:]]+exception[[:space:]]+using[[:space:]]+errcode[[:space:]]*=[[:space:]]*,[[:space:]]*message[[:space:]]*=[[:space:]]*;[[:space:]]*$/ &&
                 l ~ sentinel_raw_re) {
               sentinel = FNR
@@ -969,10 +970,43 @@ for file in $ALL_SQL; do
               }
             }
 
-            if (probe_end && !probe_verify && depth == probe_depth - 1 &&
-                code ~ /^[[:space:]]*raise[[:space:]]+exception[[:space:]]*(,[^;]+)?;[[:space:]]*$/ &&
-                l ~ residue_raw_re) {
-              probe_verify = FNR
+            # The post-rollback evidence is a canonical, reachable assertion:
+            # IF a before/after comparison differs (or the exact probe row
+            # EXISTS), immediately RAISE, then close that IF. Merely placing a
+            # matching phrase under IF false/CASE/a zero-iteration LOOP is not
+            # proof that residue would abort the apply.
+            if (probe_end && !probe_verify && depth == probe_depth - 1) {
+              if (!residue_if && control_depth == 0 &&
+                  code ~ /^[[:space:]]*if[[:space:]]+.+[[:space:]]+then[[:space:]]*$/ &&
+                  code ~ /(is[[:space:]]+distinct[[:space:]]+from|exists[[:space:]]*\([[:space:]]*select)/ &&
+                  code !~ /(^|[^a-z0-9_])(false|true|null)([^a-z0-9_]|$)/) {
+                residue_if = FNR
+              } else if (residue_if && !residue_raise && control_depth == 1 &&
+                         code ~ /^[[:space:]]*raise[[:space:]]+exception[[:space:]]*(,[^;]+)?;[[:space:]]*$/ &&
+                         l ~ residue_raw_re) {
+                residue_raise = FNR
+              } else if (residue_if && code !~ /^[[:space:]]*$/ &&
+                         !(control_depth == 1 && code ~ /^[[:space:]]*end[[:space:]]+if;[[:space:]]*$/)) {
+                residue_if = 0
+                residue_raise = 0
+              }
+            }
+
+            # Track PL/pgSQL control flow opened after the marker. A sentinel
+            # is accepted only at local control depth zero. This prevents an
+            # unreachable IF/CASE/LOOP branch from pretending that every write
+            # necessarily reaches the rollback raise.
+            if (code ~ /^[[:space:]]*if[[:space:]]+.+[[:space:]]+then[[:space:]]*$/ ||
+                code ~ /^[[:space:]]*case([[:space:]]+.+)?[[:space:]]*$/ ||
+                code ~ /^[[:space:]]*(loop|while[[:space:]]+.+[[:space:]]+loop|for(each)?[[:space:]]+.+[[:space:]]+loop)[[:space:]]*$/) {
+              control_depth++
+            } else if (code ~ /^[[:space:]]*end[[:space:]]+(if|case|loop);[[:space:]]*$/) {
+              if (residue_if && residue_raise && control_depth == 1 &&
+                  code ~ /^[[:space:]]*end[[:space:]]+if;[[:space:]]*$/) {
+                probe_verify = FNR
+              }
+              control_depth--
+              if (control_depth < 0) control_depth = 0
             }
 
             if (code ~ /^[[:space:]]*end[[:space:]]*;[[:space:]]*$/) {
@@ -1000,11 +1034,11 @@ for file in $ALL_SQL; do
                 }
               }
             }
-            if (!why && !sentinel) why = "does not raise the exact PROBE_OK_ROLLBACK sentinel after every rewrite"
+            if (!why && !sentinel) why = "does not unconditionally raise the exact PROBE_OK_ROLLBACK sentinel after every rewrite"
             else if (!why && !probe_exception) why = "the sentinel block has no matching PL/pgSQL EXCEPTION clause"
             else if (!why && !probe_catch) why = "the sentinel block does not reject every error except the exact PROBE_OK_ROLLBACK sentinel"
             else if (!why && !probe_end) why = "the sentinel exception subtransaction has no matching END"
-            else if (!why && !probe_verify) why = "has no fail-closed residue assertion after the sentinel subtransaction closes"
+            else if (!why && !probe_verify) why = "has no reachable fail-closed residue assertion after the sentinel subtransaction closes"
 
             if (why) print "FAIL|" why
             else print "OK|" probe_begin "|" sentinel "|" probe_exception "|" probe_catch "|" probe_end "|" probe_verify
