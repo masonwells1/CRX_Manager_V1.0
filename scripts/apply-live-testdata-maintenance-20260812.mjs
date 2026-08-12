@@ -20,11 +20,11 @@ const SNIPPETS = {
 };
 
 const EXPECTED_INPUT_BLOB = "c8bec70830c643e474831985f5e6c3bd16630386";
-const EXPECTED_OUTPUT_BLOB = "41bc8d7fcb1a6f18ec9dda4f8b7dd7aef13c32e1";
+const EXPECTED_OUTPUT_BLOB = "b236ab1b6204d2fee17e5ce52ff06ad22a655632";
 const EXPECTED_SNIPPET_SHA256 = {
   constants: "0e34b0416e4ada8d15f4785498029a58d6fd9bfd9871def40d3b8e6f5f652e67",
-  helpers: "7fe02602a4f0085aa66a8bad9ab07958e85dabafa6879eac9caa99e52eea6ecc",
-  classify: "bebc10c2812b7e48d09dd15301af8341ff5f8b1e0ff5147acfd83ed6dd4db16c",
+  helpers: "4432d2b5a8a9104a9e3137ad601284d265b78b0a8f5d9619a567acd6c9d80f81",
+  classify: "ae4d467dd11a840a83d4d64946c73a27834da0dd6be249f5571e22d0760dfe52",
 };
 const APPROVAL = "--approved-by-mason=2026-08-12";
 

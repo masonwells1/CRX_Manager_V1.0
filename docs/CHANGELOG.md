@@ -173,6 +173,12 @@ activated by a statement-prefix allowlist; it inspects every executable statemen
 exception is considered. All three exact payloads are regressions, bringing the generated candidate
 suite to 40 cases.
 
+The sixth exact-head pass found that a structurally valid aborting `DO` block still was not rollback
+proof: PostgreSQL sequence operations such as `nextval` and `setval` survive both a raised exception
+and an outer transaction rollback. Raw `DO` blocks now fail closed categorically and must use the
+reviewed migration smoke harness instead. The obsolete abort-marker parser was removed, and four
+sequence reproductions bring the pinned generated-module suite to 43 cases.
+
 ## 2026-08-11 — A smoke selection that runs nothing no longer reports success
 
 Follow-up to the entry below, from its own adversarial review. Container-only chains are dropped

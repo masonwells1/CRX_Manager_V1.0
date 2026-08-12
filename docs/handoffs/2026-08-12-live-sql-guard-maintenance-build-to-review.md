@@ -4,7 +4,8 @@
 
 - Checkout: `C:\Users\mason\.codex\worktrees\weekly-audit-remediation\CRX_Manager`
 - Branch: `codex/harness-maintenance-producer-20260812`
-- Base verified before build: `origin/main` at `2837263d2a22eca71142bf77e449acbe2512e232`
+- Base verified before build: `origin/main` at `2837263d2a22eca71142bf77e449acbe2512e232`;
+  current `origin/main` `a7ae1cc22654d734627e0ea47d59bdae64374b4a` was merged into the branch.
 - Repository: `masonwells1/CRX_Manager_V1.0`
 - Production Supabase project: `rhyzpcqhnizqbxphqdkr` (no live write is part of this producer change)
 
@@ -18,10 +19,10 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
 
 - The current source blob is pinned to `c8bec70830c643e474831985f5e6c3bd16630386`.
 - `node scripts/apply-live-testdata-maintenance-20260812.mjs --verify` produced pinned output blob
-  `41bc8d7fcb1a6f18ec9dda4f8b7dd7aef13c32e1`, matched all three snippet SHA-256 values, and passed a
+  `b236ab1b6204d2fee17e5ce52ff06ad22a655632`, matched all three snippet SHA-256 values, and passed a
   Node module syntax check without changing the repository target.
-- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 40 assertions against the
-  generated module, including all ten defect classes found by the first five Sol reviews.
+- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 43 assertions against the
+  generated module, including all eleven defect classes found by the first six Sol reviews.
 - The write mode refused the dirty build worktree even with Mason's dated token.
 - Focused ESLint, TypeScript typecheck, agent-workflow tests, ledger check, and `git diff --check` passed.
 - The guarded commit suite passed lint, typecheck, production build, correction-guard tests,
@@ -35,7 +36,7 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
 
 ## NOT STARTED
 
-- Exact-head `gpt-5.6-sol` high review of this branch.
+- A clean exact-head `gpt-5.6-sol` high verdict for this branch.
 - Push, pull request, CodeRabbit/check review, merge, and post-merge verification.
 - Follow-up branch that runs the producer, adds red-to-green classifier regressions, removes the
   temporary producer, and completes its own exact-head review/pipeline.
@@ -65,6 +66,10 @@ any later live migration apply still requires the repository's current explicit 
   fresh exact-head review remains required.
 - The fifth exact-head Sol review found mutating RPCs nested in allowed `EXPLAIN ANALYZE`, temporary
   table creation, and `pg_temp` writes. Function scanning now runs for every executable statement;
+  a fresh exact-head review remains required.
+- The sixth exact-head Sol review found that PostgreSQL sequence changes survive transaction rollback,
+  so even a structurally valid aborting `DO` block was not safe. Raw `DO` blocks now fail closed
+  categorically, the obsolete marker parser was removed, and four sequence reproductions were added;
   a fresh exact-head review remains required.
 - GitHub checks and CodeRabbit must be complete and acceptable on the exact PR head.
 

@@ -27,12 +27,18 @@ export function classifySql(query) {
   const normalizedStatements = visibleKeywordStatements
     .map((statement) => statement.trim().replace(/\s+/g, " "))
     .filter(Boolean);
+  if (normalizedStatements.some((statement) => /^do\b/i.test(statement))) {
+    return {
+      block: true,
+      kind: "raw-mutation",
+      reason: "DO blocks can contain non-transactional side effects such as sequence changes, so they are never permitted through raw execute_sql. Use a reviewed migration smoke harness instead.",
+    };
+  }
   const hasCommitStmt = normalizedStatements.some((statement) => /^commit\b/i.test(statement));
   const txWrapped = normalizedStatements.length >= 2 &&
     /^begin(?:\s+(?:work|transaction))?$/i.test(normalizedStatements[0]) &&
     /^rollback(?:\s+(?:work|transaction))?$/i.test(normalizedStatements.at(-1));
-  const smokeAbort = standaloneDoSmokeAbort(statements);
-  const rolledBack = !hasCommitStmt && (txWrapped || smokeAbort);
+  const rolledBack = !hasCommitStmt && txWrapped;
 
   const hasRawDdl = DDL_STMT_RE.test(visibleKeywordText) ||
     GRANT_REVOKE_RE.test(visibleKeywordText) ||

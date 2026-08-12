@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { buildMaintainedSource } from "./apply-live-testdata-maintenance-20260812.mjs";
 
 const { output, blob } = buildMaintainedSource();
-assert.equal(blob, "41bc8d7fcb1a6f18ec9dda4f8b7dd7aef13c32e1", "pinned generated blob");
+assert.equal(blob, "b236ab1b6204d2fee17e5ce52ff06ad22a655632", "pinned generated blob");
 
 const scratch = mkdtempSync(path.join(tmpdir(), "crx-live-guard-candidate-test-"));
 try {
@@ -53,6 +53,10 @@ try {
     "EXPLAIN ANALYZE SELECT public.cancel_order('00000000-0000-0000-0000-000000000000')",
     "CREATE TEMP TABLE scratch AS SELECT public.cancel_order('00000000-0000-0000-0000-000000000000')",
     "INSERT INTO pg_temp.scratch SELECT public.cancel_order('00000000-0000-0000-0000-000000000000')",
+    "DO $$ BEGIN PERFORM nextval('invoice_number_seq'); RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'; END $$;",
+    "DO $$ BEGIN PERFORM setval('invoice_number_seq', 1); RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'; END $$;",
+    "BEGIN; DO $$ BEGIN PERFORM nextval('invoice_number_seq'); RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'; END $$; ROLLBACK;",
+    "BEGIN; DO $$ BEGIN PERFORM setval('invoice_number_seq', 1); RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'; END $$; ROLLBACK;",
   ];
   for (const sql of blocked) {
     assert.equal(classifySql(sql).block, true, `must block: ${sql}`);
@@ -63,7 +67,6 @@ try {
     "UPDATE pg_temp.some_log_table SET x = 1 WHERE id = 1",
     "CREATE TEMP TABLE scratch AS SELECT 1",
     "BEGIN; ALTER TABLE invoices ADD COLUMN x text; ROLLBACK;",
-    "DO $$ BEGIN PERFORM 1; RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'; END $$;",
   ];
   for (const sql of allowed) {
     assert.equal(classifySql(sql).block, false, `must allow: ${sql}`);

@@ -129,66 +129,6 @@ function keywordView(sql) {
   return out;
 }
 
-// Recognize the exact executable PL/pgSQL force-abort statement. Text inside
-// comments, string literals, quoted identifiers, or nested dollar literals
-// cannot qualify.
-function actualSmokeRaiseEnd(body) {
-  let i = 0;
-  while (i < body.length) {
-    if (body[i] === "'") {
-      const escaped = i > 0 && /[eE]/.test(body[i - 1]) && !/[A-Za-z0-9_$]/.test(body[i - 2] || "");
-      i = readQuoted(body, i, "'", escaped).end;
-      continue;
-    }
-    if (body[i] === '"') { i = readQuoted(body, i, '"').end; continue; }
-    if (body[i] === "-" && body[i + 1] === "-") {
-      const nl = body.indexOf("\n", i + 2);
-      i = nl === -1 ? body.length : nl + 1;
-      continue;
-    }
-    if (body[i] === "/" && body[i + 1] === "*") { i = skipTrivia(body, i); continue; }
-    const tag = body[i] === "$" ? dollarTagAt(body, i) : null;
-    if (tag) {
-      const close = body.indexOf(tag, i + tag.length);
-      i = close === -1 ? body.length : close + tag.length;
-      continue;
-    }
-    const word = /^[A-Za-z_][A-Za-z0-9_]*/.exec(body.slice(i));
-    if (!word) { i++; continue; }
-    i += word[0].length;
-    if (word[0].toLowerCase() !== "raise") continue;
-    i = skipTrivia(body, i);
-    const exception = /^[A-Za-z_][A-Za-z0-9_]*/.exec(body.slice(i));
-    if (!exception || exception[0].toLowerCase() !== "exception") continue;
-    i = skipTrivia(body, i + exception[0].length);
-    if ((body[i] === "e" || body[i] === "E") && body[i + 1] === "'") i++;
-    if (body[i] !== "'") continue;
-    const literal = readQuoted(body, i, "'");
-    if (literal.value.toUpperCase() === "SMOKE_PASS_ROLLBACK") return literal.end;
-    i = literal.end;
-  }
-  return -1;
-}
-
-// A DO abort is rollback proof only when it is the entire submitted batch.
-function standaloneDoSmokeAbort(statements) {
-  if (statements.length !== 1) return false;
-  const statement = stripCommentsQuoteAware(statements[0]);
-  const match = /^\s*do(?:\s+language\s+[a-z_][a-z0-9_]*)?\s*(\$[A-Za-z_0-9]*\$)([\s\S]*)\1\s*$/i.exec(statement);
-  if (!match) return false;
-  // A DO block may end its current transaction. Once it executes COMMIT, a
-  // later exception cannot undo the live write, so transaction control inside
-  // this special smoke form categorically disqualifies rollback proof.
-  const bodyKeywords = keywordView(match[2]);
-  if (/\b(?:commit|rollback|return|exit|continue)\b/i.test(bodyKeywords)) return false;
-  const markerEnd = actualSmokeRaiseEnd(match[2]);
-  if (markerEnd === -1) return false;
-  // The marker must be the final executable statement in the OUTER block.
-  // This excludes IF/CASE/LOOP branches and EXCEPTION handlers that could skip
-  // or catch it while allowing ordinary checks before an unconditional abort.
-  return /^;\s*end\s*;?$/i.test(keywordView(match[2].slice(markerEnd)).trim());
-}
-
 function dmlTargets(statement) {
   const matcher = new RegExp(DML_TARGET_RE.source, "gi");
   return [...keywordView(statement).matchAll(matcher)];
