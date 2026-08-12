@@ -1749,6 +1749,57 @@ r = runHook(fn(`
 `));
 ok(!isDeny(r), "the current-August stable v_actor refusal remains compatible");
 
+r = runHook(fn(`
+  DECLARE
+    v_actor uuid;
+  BEGIN
+    v_actor := auth.uid();
+    IF p_performed_by IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    ${MUTATION}
+  END
+`));
+ok(!isDeny(r), "an unconditional top-level auth.uid assignment remains compatible");
+
+r = runHook(fn(`
+  DECLARE
+    v_actor uuid;
+  BEGIN
+    IF false THEN
+      v_actor := auth.uid();
+    END IF;
+    IF p_performed_by IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    ${MUTATION}
+  END
+`));
+ok(isDeny(r), "a conditional auth.uid assignment cannot establish a stable identity binding");
+
+r = runHook(fn(`
+  BEGIN
+    IF p_created_by IS DISTINCT FROM auth.uid() THEN
+      RAISE EXCEPTION 'p_created_by does not match authenticated user';
+    END IF;
+    INSERT INTO financial_audit_log (actor_user_id) VALUES (p_approved_by);
+  END
+`, "p_created_by uuid, p_approved_by uuid"));
+ok(isDeny(r), "one guarded actor parameter cannot clear a second unguarded actor parameter");
+
+r = runHook(fn(`
+  BEGIN
+    IF p_created_by IS DISTINCT FROM auth.uid() THEN
+      RAISE EXCEPTION 'p_created_by does not match authenticated user';
+    END IF;
+    IF p_approved_by IS DISTINCT FROM auth.uid() THEN
+      RAISE EXCEPTION 'p_approved_by does not match authenticated user';
+    END IF;
+    INSERT INTO financial_audit_log (actor_user_id) VALUES (p_approved_by);
+  END
+`, "p_created_by uuid, p_approved_by uuid"));
+ok(!isDeny(r), "independent enforced refusals preserve multiple actor parameters");
+
 r = runHook(fn(
   'BEGIN\n' +
     'IF "p_actor[" IS DISTINCT FROM auth.uid() THEN\n' +

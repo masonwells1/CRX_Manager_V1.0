@@ -4,7 +4,7 @@ All significant development milestones, in reverse chronological order.
 
 ## 2026-08-11 — Require enforced legacy actor-refusal guards
 
-Closed the final exact-SHA actor-binding review blocker. The compatibility path
+Closed two subsequent exact-SHA actor-binding review blockers. The compatibility path
 for older CRX functions no longer accepts the message
 `<actor parameter> does not match authenticated user` as free-standing text.
 It now requires that exact declared actor parameter to be compared against
@@ -12,7 +12,13 @@ It now requires that exact declared actor parameter to be compared against
 non-reassigned local binding), requires that guard to be a top-level statement
 before every recognized mutation, rejects bodies whose exception handler could
 swallow the refusal, and requires the matching branch to execute a real
-`RAISE EXCEPTION`. Stable identity bindings also cannot be overwritten as a
+`RAISE EXCEPTION`. Stable identity bindings must be initialized
+unconditionally in the outer declaration section or by a top-level assignment;
+an assignment hidden behind an `IF`, loop, `CASE`, or nested block cannot prove
+the authenticated identity. When a function declares more than one
+actor-shaped parameter, every parameter must have its own enforced legacy
+refusal instead of one guarded parameter clearing the whole function. Stable
+identity bindings also cannot be overwritten as a
 `FOR`/`FOREACH` loop target, and quoted identifiers such as `"END LOOP"` are
 blanked before control-flow keywords are counted. The hook therefore denies the phrase when it appears in
 `RAISE NOTICE`, an assignment, unrelated data, an unconditional exception, an
@@ -21,10 +27,13 @@ identity variable that was overwritten. Nested, caught, post-mutation, or
 zero-iteration-loop exceptions cannot stand in for the direct refusal either.
 Existing direct, quoted-parameter, and current-August
 `v_actor := auth.uid()` refusal forms remain compatible. The focused real-hook
-suite passes 309 assertions. Fourteen isolated mutations across the repair each
+suite passes 313 assertions. Sixteen isolated mutations across the repair each
 failed on their owning regression before the production clause was restored;
 one additional procedure-call clause was removed when mutation testing proved
-it redundant with the earlier mutation-order gate.
+it redundant with the earlier mutation-order gate. Direct hook probes deny the
+conditional-binding and partially guarded multi-actor exploits while allowing
+their unconditional and fully guarded controls. All 30 current August
+migrations pass the repaired hook without a denial or internal error.
 
 ## 2026-08-11 — Close executable cross-migration cron.job view aliases
 

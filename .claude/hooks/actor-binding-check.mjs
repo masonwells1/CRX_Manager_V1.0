@@ -1212,18 +1212,29 @@ function identifierReferencePattern(name) {
 }
 
 /** A legacy guard may compare the actor parameter to a local v_actor-style
- * binding, but only when that local is initialized from auth.uid() exactly once
- * and is not overwritten through assignment or SELECT ... INTO. */
+ * binding, but only when that local is initialized unconditionally from
+ * auth.uid() exactly once and is not overwritten through assignment or
+ * SELECT ... INTO. */
 function stableAuthUidBindings(structuralBody, beforeIndex) {
   const prefix = structuralBody.slice(0, beforeIndex);
   const bindings = new Set();
+  const controlBody = blankQuotedControlIdentifiers(structuralBody);
+  if (controlBody === null) return bindings;
+  const outerBegin = /\bBEGIN\b/i.exec(controlBody);
+  if (!outerBegin) return bindings;
+  const hasOuterDeclare = /^\s*DECLARE\b/i.test(controlBody.slice(0, outerBegin.index));
   const bindingRe = new RegExp(
-    `(?:^|[;\\n]|\\bDECLARE\\b)\\s*(?!DECLARE\\b)([A-Za-z_][\\w$]*)` +
+    `(?:^|[;\\n]|\\bDECLARE\\b)\\s*` +
+      `(?!(?:DECLARE|BEGIN|IF|THEN|ELSE|LOOP|CASE|END)\\b)([A-Za-z_][\\w$]*)` +
       `(?:\\s+[^;\\n:=]+?)?\\s*:=\\s*auth\\s*\\.\\s*uid\\s*\\(\\s*\\)`,
     "gi"
   );
   let match;
   while ((match = bindingRe.exec(prefix)) !== null) {
+    const isOuterDeclarationInitializer = hasOuterDeclare && match.index < outerBegin.index;
+    const isTopLevelBodyAssignment = match.index >= outerBegin.index &&
+      isTopLevelPlpgsqlStatement(controlBody, match.index);
+    if (!isOuterDeclarationInitializer && !isTopLevelBodyAssignment) continue;
     const name = match[1];
     const ref = escapedRegexLiteral(name);
     const assignmentRe = new RegExp(
@@ -2060,7 +2071,7 @@ try {
     if (actorParams.length === 0) continue;
 
     const hasRecognizedActorRefusal = /ACTOR_MISMATCH/i.test(commentBlankedBody) ||
-      actorParams.some((actorParam) => hasEnforcedLegacyActorRefusal(body, actorParam));
+      actorParams.every((actorParam) => hasEnforcedLegacyActorRefusal(body, actorParam));
     if (hasRecognizedActorRefusal) continue;
 
     violations.push(
