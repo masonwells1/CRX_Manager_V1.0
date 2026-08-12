@@ -28,10 +28,11 @@ The original four implementation/test files remain the user-facing surface. The 
   - Added canonical validated URL state for list, applied criteria, rep, tier, crop, and search; refresh and browser Back/Forward restore the view.
   - Preserved synchronous row clearing, stale-response invalidation, admin-only rep filtering, and safe lookup fallbacks.
   - Prevented false-clear UI while tier/crop enrichment is pending.
+  - Sanitized failed-list toasts so raw database details remain in Sentry instead of appearing to users.
   - Bounded day lookbacks to 3,650 days so accepted input cannot overflow the RPC's PostgreSQL timestamp arithmetic.
   - Kept admin rep-filter URLs fail-closed while profile-option lookup is unavailable, so a deep-linked rep scope cannot be stripped and broadened to all reps.
 - `src/pages/CallLists.test.tsx`
-  - New coverage for all five reasons, fallbacks, role-invalid URLs, complete URL restoration/canonicalization, browser history, stale RPC races, draft/applied criteria, enrichment loading, rep-option failure/retry without scope broadening, touch and keyboard semantics, and the 3,650-day boundary.
+  - New coverage for all five reasons, fallbacks, role-invalid URLs, complete URL restoration/canonicalization, browser history, stale RPC races, draft/applied criteria, enrichment loading, rep-option failure/retry without scope broadening, sanitized backend failures, touch and keyboard semantics, and the 3,650-day boundary.
 
 Additional support files:
 
@@ -125,6 +126,7 @@ The original browser pass observed the assignment confirmation, URL canonicaliza
 - PR review also found that a valid tier restored from the URL could be hidden when no returned row currently had that tier, lapsed-product wording over-attributed aggregate revenue, the search input lacked its intended client bound, and atomic ownership changes no longer appeared in the user-facing activity feed. Fixed tier options, precise wording, and `maxLength=100` are implemented with regression tests. The audit fix is isolated in forward-only migration `20260811230423`; both final-path migration charters are CLEAN, while live apply and final exact-commit review remain pending.
 - A later thread-aware pass found three more valid P2s: ownership assignment did not advance `customers.updated_at`, a failed assignment-picker directory lookup looked like an empty rep list with no retry, and inactive-rep bookmarks could be canonicalized away and broaden the call-list scope. The timestamp update, fail-closed picker with retry, and inactive-labeled filter options are implemented with mutation-strength regression coverage. Corrected-body charters and runtime proofs are green; exact committed-SHA review still follows before release.
 - The post-push PR thread found one further P2 retry trap: a customer deactivated during an exact-set assignment could remain invisibly selected after refresh and make every retry fail. The exact-set recovery now clears the ambiguous selection, closes the modal, and rotates the rejected intent key after either refresh outcome. Regression tests cover the successful-refresh and failed-refresh branches; the proof harness also strips SQL comments before marker checks and inspects Git status before disposable writes.
+- The subsequent exact-SHA Sol gate returned CLEAN with no blocker/high finding and one actionable low-severity hardening note: raw Call Lists backend errors could reach user-facing toasts. The toast is now sanitized, the original exception still goes to Sentry, and a regression test proves internal relation details are not displayed. Because this edit changes the commit, the final exact-SHA gate is rerun before push.
 
 ## Explicit boundaries
 

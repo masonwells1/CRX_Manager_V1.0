@@ -192,12 +192,6 @@ function whyNowText(listKey: CallListKey, row: CallListRow): string {
   return 'Why now: This customer has no assigned sales representative.';
 }
 
-const errorMessage = (error: unknown): string => {
-  if (error instanceof Error) return error.message;
-  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') return error.message;
-  return 'We could not load this call list.';
-};
-
 function rowsOf<Row>(payload: CallListPayload<Row>, rpcName: string): Row[] {
   if (!Array.isArray(payload.rows)) throw new Error(`${rpcName} returned an invalid row list`);
   return payload.rows;
@@ -474,7 +468,7 @@ export default function CallLists() {
       setEnrichmentLoading(false);
       setLoadError(true);
       Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'CallLists.load', list: selectedList } });
-      toast('error', errorMessage(error));
+      toast('error', 'We could not load this call list. Please retry.');
     } finally {
       if (seq === requestSeq.current) setLoading(false);
     }

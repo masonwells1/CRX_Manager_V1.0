@@ -377,6 +377,19 @@ describe('Call Lists adoption workspace', () => {
     expect(await screen.findByText('North Farm')).toBeInTheDocument();
   });
 
+  it('keeps database details out of a failed-list toast while offering a retry', async () => {
+    rpcImplementations.get_call_list_prepay_prospects = async () => ({
+      data: null,
+      error: { message: 'relation private_internal_table does not exist' },
+    });
+
+    renderCallLists();
+
+    expect(await screen.findByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    expect(mockToast).toHaveBeenCalledWith('error', 'We could not load this call list. Please retry.');
+    expect(mockToast).not.toHaveBeenCalledWith('error', expect.stringContaining('private_internal_table'));
+  });
+
   it('restores the visible criterion draft when browser history changes the selected list', async () => {
     rpcRows.get_call_list_prepay_prospects = [baseRow({ prior_season_spend_cents: 100000, current_season_prepay_cents: 0 })];
     rpcRows.get_call_list_no_recent_contact = [baseRow({ days_since_last_interaction: 35 })];

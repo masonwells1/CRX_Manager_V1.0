@@ -10,6 +10,8 @@ PR review follow-up tightened the Call Lists tier URL restoration, capped search
 
 A final PR-thread pass closed one more retry trap: when exact-set validation reports that a selected customer became ineligible, Customers now clears the ambiguous selection, closes the assignment modal, and rotates the rejected intent key after the refresh attempt. An inactive row therefore cannot remain invisibly selected and make every retry fail. Regression coverage proves both successful-refresh and failed-refresh branches clear the selection. The disposable PostgreSQL proof now checks migration markers only after stripping SQL comments and performs the required read-only Git-status preflight before starting its isolated container.
 
+The exact-commit Sol gate returned clean with one actionable low-severity hardening note: Call Lists exposed raw backend error messages in its failure toast. The toast now uses a stable retry message while the original exception remains available to Sentry, and a regression test proves internal relation details never reach the user.
+
 ## 2026-08-11 — Let the order-totals trigger own the blend-ticket order header
 
 The validated whole-cent CHECK constraints now live on `orders.total_cost` and `orders.total_profit`
