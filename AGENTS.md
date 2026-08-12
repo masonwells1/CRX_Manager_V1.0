@@ -18,8 +18,14 @@ This is the shared, project-level contract for every coding agent in this reposi
 3. Read `docs/workflows/SAFE_DEVELOPMENT_RULES.md` for any multi-file, data, money, security, production, migration, permission, or customer-facing task.
 4. Read `docs/reference/gotchas.md` and the relevant file under `docs/workflows/` for the area being changed.
 5. Treat executable code, migrations, live read-only evidence, and current grants as stronger evidence than prose or old handoffs.
-6. For architecture, multi-file planning, workflow/migration tracing, difficult debugging, structural audits, or PR impact analysis, automatically use the local Graphify workflow (`npm run graph:refresh`, then the smallest useful `graphify explain` / `affected` / `path` / `query`) before broad source reading. Use it to narrow scope and save tokens; verify material edges in current source and live read-only evidence.
+6. For architecture, multi-file planning, workflow/migration tracing, difficult debugging, structural audits, or PR impact analysis, automatically follow the Graph-First Navigation policy below before broad source reading.
 7. Claude workflow logic lives under `.claude/`; Codex-facing skills under `.agents/` are generated adapters. Do not maintain two independent workflow implementations.
+
+## Graph-First Navigation
+
+For architecture, multi-file planning, workflow or migration tracing, difficult debugging, structural audits, and PR-impact analysis, Graphify is the default first-pass navigator. Load the `graphify` skill automatically and follow its freshness, focused-query, reporting, and result-persistence procedures before broad file exploration; do not require Mason to remember to request it. A simple documentation lookup, obvious single-file edit, or already-known exact file does not need a graph query. If Graphify is unavailable or its supported refresh path skips, continue with focused source inspection and report that limitation instead of blocking the task.
+
+Use the graph to choose the smallest source surface that can answer or implement the task. Raw source reads do not require Mason's explicit request: they are required whenever needed to edit safely, verify a material connection, review behavior, or conduct an audit. Current source, executable tests, migrations, and live read-only database evidence remain authoritative; Graphify identifies where to look and never proves current behavior or the live schema.
 
 ## Plan and Approval Gates
 
@@ -62,11 +68,14 @@ Never commit `.env` files or reveal keys. Never use `--no-verify`. Never use des
 - Mutating RPCs must accept and actually enforce `p_idempotency_key text DEFAULT NULL`.
 - `SECURITY DEFINER` functions normally must use `SET search_path = public, pg_temp` and deliberate grants. Per Mason's 2026-07-30 approval recorded in `docs/manual/DECISION_LOG.md`, an empty search path is allowed only as a narrow exception for a deliberately fully schema-qualified body with current source and migration-review proof.
 - Money must be exact whole cents. New money storage uses bigint cents. Existing PostgreSQL
-  numeric-dollar columns are a documented compatibility exception only: authoritative database
-  math must stay exact `numeric`, clean columns get finite whole-cent CHECKs, and dirty legacy
-  values are never widened or rewritten without approval. Authoritative TypeScript money math
-  converts decimal operands to integer cents before arithmetic; never use binary floating-point
-  rounding for money. See the 2026-08-10 decision in `docs/manual/DECISION_LOG.md`.
+  numeric-dollar storage may remain temporarily to avoid a risky unit rewrite, but it is an approved
+  compatibility exception only after authoritative database math is verified as exact `numeric`, all
+  existing values are finite whole cents, and an active finite whole-cent CHECK is present. Dirty or
+  unconstrained columns remain tracked findings and are never widened or rewritten without approval.
+  New or changed authoritative TypeScript
+  money math must parse decimal operands into integer cents before arithmetic; never introduce
+  binary floating-point rounding for money. See the 2026-08-10 decision in
+  `docs/manual/DECISION_LOG.md`.
 - Inventory and financial invariants belong in PostgreSQL RPCs/triggers, not only in React.
 - Use `src/lib/db.ts` as the only Supabase client.
 - Call `assertRpcResult()` after RPCs and `checkMutationResult()` after `.update()` or `.delete()`.

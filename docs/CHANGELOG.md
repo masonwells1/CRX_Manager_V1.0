@@ -820,9 +820,813 @@ Evaluated CodeRabbit's bigint-cents request on the canonical profit path and dec
   - `8dfbf176 docs: correct the live commission-basis mismatch count (10 -> 12)`
   - `908da7a3 fix(money): whole-cent canonical profit + commission basis from order header`
 - **Migrations touched** (git diff --name-only origin/main...HEAD):
+## 2026-08-12 — Wave A re-stamped to 20260813: a concurrent apply moved the high-water under us
+
+Rename-only change. The six Wave A migrations move from `20260812010000`–`20260812060000` to
+`20260813010000`–`20260813060000`, order preserved. No SQL logic changed, no function body changed,
+nothing applied, no live data touched.
+
+PR #383 merged as `a7ae1cc2` with the six migrations deliberately parked. While it was in review a
+concurrent session applied two unrelated migrations, moving the live high-water from `20260812003315`
+to `20260812034951` (964 ledger rows, read via MCP `list_migrations`). Migrations are forward-only:
+`.claude/hooks/migration-ordering-lib.mjs` passes a candidate only when its stamp is `>=` the newest
+applied one, so three of the six were now numbered *behind* live and would have been refused at apply
+time. Worse, the first file's `20260812010000` prefix collided with the already-applied
+`20260812010000_blend_ticket_order_header_runtime_assert`.
+
+The round-1 stamps were chosen only just above the then-current high-water and were overtaken within
+hours by ordinary sibling traffic. These sit a full day above it instead. That buys headroom; it does
+not remove the obligation already written into the files to re-read `list_migrations` immediately
+before applying, because any later sibling apply can overtake them again.
+
+Every reference moved with the files: the `.gitattributes` LF pins (which are path-matched, so a
+stale entry would silently stop pinning line endings — the exact failure mode those lines exist to
+prevent), the path constants in `src/lib/waveAMoneyMigrations.test.ts`, the eight cross-reference
+comments inside the six files, the narrative rows in `docs/reference/migration-history.md`, and the
+comment references in `src/lib/db.ts`, `src/lib/db.test.ts` and `src/lib/rpcContracts.test.ts`. The
+round-1 entry in the history doc was left stating its original range, with a superseded-by note — it
+is a record of what happened, not a description of current state.
+
+The reason a rename is not automatically hash-safe here: these files pin function bodies by
+`md5(prosrc)`, so any edit landing inside a body invalidates its own assertion. Three of the eight
+stamp references looked like they might. Dollar-quote span analysis placed all three inside anonymous
+`$precond$`/`$postcond$` `DO` blocks, which PostgreSQL never stores in `pg_proc.prosrc`, and the
+remaining five are file-header comments. Checked before editing rather than after.
+
+## 2026-08-12 — Wave A remediation round 4: the delivery guard would have aborted its own migration
+
+The adversarial review of round 3 returned BLOCKED with a single finding, confirmed against live and
+fixed here. The six migrations remain parked and unapplied.
+
+The new trigger-guard function was locked down with `REVOKE ALL … FROM PUBLIC` alone. That is not
+sufficient on this project and the consequence is not a loose grant — it is a migration that cannot
+succeed. `ALTER DEFAULT PRIVILEGES` in schema `public` grants EXECUTE on **new** functions to `anon`,
+`authenticated` and `service_role`, so a freshly created function lands carrying explicit per-role
+grants and revoking `PUBLIC` strips only the `PUBLIC` entry; this was re-confirmed read-only against
+`pg_default_acl` today and is the gotcha recorded on 2026-07-27. The same migration's postcondition
+then asserts that none of those three roles holds EXECUTE on the guard, so on first apply the
+assertion would have fired, the explicit transaction would have rolled back, and **both** the
+delivery-completion provenance guard and the delivery-before-billing gate would have failed to
+install. The named roles now go through the same `pg_roles`-guarded revoke loop this file already
+used for the inner posting implementation, with `PUBLIC` still revoked unconditionally as the widest
+grantee. A regression assertion covers it, confirmed red against the unfixed form.
+
+The comment introduced alongside the fix claimed the replay container carries none of the Supabase
+roles. That claim was not established — the harness restores into the `supabase/postgres` image —
+and it is also not the reason the loop is needed. The comment now states the reason that is actually
+load-bearing and verified: default privileges make the named grants real, the postcondition asserts
+their absence, and `REVOKE` errors on a role that does not exist, which is why the loop is guarded
+rather than naming the roles inline.
+
+## 2026-08-12 — Wave A remediation round 3: replay safety and a forgeable delivery status
+
+A second adversarial review, run against the exact committed diff of the entry below, returned
+BLOCKED with three further High findings. All three were confirmed against the real code. The six
+migrations remain parked and unapplied.
+
+**A replay could silently revert a later fix.** The precondition guards on the clamp and split-guard
+migrations accepted any function body that merely contained the Wave A marker token. A later
+migration fixing an authorization, audit or commission-math bug in one of those functions would keep
+that marker, pass the guard, and then be overwritten by the stale body this file installs — the
+guard that exists to prevent reverting later work did not prevent it. Each guard now accepts exactly
+two states, the pinned baseline body on first application or this file's own exact post-apply body on
+a genuine replay, and refuses anything else while printing the hash it found. Security context is
+pinned alongside the body: security mode, `search_path`, and function owner, so a body that matches
+but has been re-declared `SECURITY DEFINER` is refused rather than replayed over. This extends the
+self-pinning idiom `20260812020000` already established in this wave rather than adding a second one.
+
+**A replay could replace a stronger CHECK constraint with a weaker one.** The finiteness migration
+dropped and recreated thirty same-named constraints unconditionally, so a later migration
+strengthening one — tightening it to also reject `NaN`, the obvious follow-up — would be silently
+discarded on replay. One catalog-driven block now adds a constraint when absent, leaves it untouched
+when its normalized definition already matches, and aborts naming found-versus-expected otherwise.
+Nothing is dropped, which also closes the non-transactional window the file's header used to
+acknowledge; that header has been rewritten rather than left describing behavior the file no longer
+has.
+
+**The delivery-before-billing gate trusted a status anyone could write.** It proved a delivery read
+`completed`, not that the authoritative completion actually ran — and the ACL baseline grants
+`authenticated` UPDATE on deliveries while the status trigger permits `in_progress → completed`, so
+the row could be written directly through the API, skipping the delivered-quantity, inventory,
+order, invoice and audit reconciliation and billing the customer for the full ordered quantity. A
+`BEFORE UPDATE OF status` trigger now admits that transition only when the public completion wrapper
+has published that exact delivery id in a transaction-local setting, cleared on both the success and
+the error path. Binding to the row id rather than a boolean means one authorized completion cannot
+authorize a different delivery in the same transaction. The wrapper is the live body verbatim plus
+that handshake, and its established delivery-before-invoice lock order is unchanged. `app.admin_override`
+is deliberately **not** an exemption: a stuck delivery can no longer be repaired by hand-setting its
+status in the dashboard and must go through a reviewed RPC or migration. That is an operational
+trade-off, made knowingly — an escape hatch here would be an escape hatch from the reconciliation
+itself. A rolled-back probe proves both directions: the authorized path still completes, and a direct
+write is refused even with the override set.
+
+Reviewing the fix surfaced one more defect neither reviewer raised. These files now hash function
+bodies they install themselves, and live evidence confirms `prosrc` inherits whatever line endings
+the source file carried — one live function stores LF, another stores CRLF. Under a Windows checkout
+with `core.autocrlf=true` the applier would have installed CRLF bodies whose hash could never match
+an LF-computed pin, and every one of these migrations would have aborted at its own postcondition on
+a machine that merely checked the repo out differently. All six are now pinned to LF in
+`.gitattributes`, extending the section already there for the same reason.
+
+## 2026-08-12 — Wave A remediation: four blocking review findings closed
+
+The adversarial review on PR #383 returned BLOCKED with four High findings. All four were checked
+against the real code rather than dismissed as reviewer noise, all four were genuine, and this entry
+closes them. The six migrations remain parked and unapplied.
+
+**Correction receipts are bound to the request, not just the key.** `correct_job_commission_split`
+checked its idempotency key against `(key, operation)` alone, and returned any prior receipt before
+it had read the job, the replacement split, the reason, or the actor. A key replayed against a
+different job reported success and changed nothing. The receipt is now fingerprinted over actor,
+job, canonical replacement split and normalized reason, and the check happens only after the target
+row is read and locked, so a reused key carrying different intent raises `IDEMPOTENCY_INTENT_MISMATCH`
+instead of reporting a mutation that never happened. This follows the intent-binding pattern already
+live for the payout RPCs in `20260811130000` rather than introducing a second idiom.
+
+**A corrected split now reconciles the commission rows it invalidates.** The RPC updated
+`jobs.commission_split` and wrote one audit row, and never touched `commissions` at all — so after
+minting, an admin received `changed: true` while the existing rows still named the previous
+recipients. Corrections now reconcile every active row for the job in the same transaction. Rows
+that are paid, cancelled, or attached to a payout batch through `commission_payment_items` block the
+**entire** correction with a message naming what blocked it and how many; the split update does not
+land either. A partial rewrite is deliberately not an option, because it would leave the split
+disagreeing with the commissions — the exact inconsistency this work exists to remove. Recipient
+resolution and the remainder arithmetic were extracted into `_derive_job_commission_rows`, so a
+correction and a fresh mint cannot drift apart.
+
+**Order-header profit is derived, not independently rounded.** Rounding price, cost and profit
+separately let rounded profit differ from rounded price minus rounded cost, and header profit is the
+commission basis. Profit is now derived from the rounded components, matching the canonical
+line-item trigger in `20260809230500`. Where price or cost is absent there is nothing to derive
+from, so an existing profit is rounded and a missing one stays missing — never invented as zero. The
+file's own SCOPE note claimed independent rounding "keeps the header internally consistent"; that
+claim was wrong and has been rewritten.
+
+**All six files re-stamped above the live high-water.** They were numbered below the applied ledger's
+high-water mark, which creates out-of-order replay drift and is refused by the ordering guard. They
+now run `20260812010000`–`20260812060000`, with every reference updated repo-wide.
+
+Reviewing the fix surfaced one more defect that no local gate could have caught. The guard
+migration's behavioural probe had been tightened to require a live job already carrying commission
+rows, and production has none — every commission to date is order-based. The probe would have
+aborted the migration on every apply. It now seeds the rows it needs inside its own deliberately
+rolled-back subtransaction, so it exercises the reconciliation for real on any database state rather
+than skipping, and proves it left nothing behind by whole-row fingerprint, row count, and explicit
+absence of the synthetic ids.
+
+## 2026-08-11 — A smoke selection that runs nothing no longer reports success
+
+Follow-up to the entry below, from its own adversarial review. Container-only chains are dropped
+from a selection with an announced skip, but the runner then returned normally when that left
+nothing to run — so `run-smoke.mjs --spec trg_recalc_order_totals`, whose only match reaches the
+container-only chain through a `covers` entry, executed zero checks and exited 0. Anything shelling
+out and reading the exit code saw green for work that never happened, which is the exact failure
+class this runner exists to prevent. An empty runnable selection now exits 2 through the existing
+`fail()` path and names the prover command for each skipped chain. Covered by a regression test in
+`bugClassRegressionGuards.test.ts` that was confirmed red against the old behavior.
+
+## 2026-08-11 — Wave A second review pass: privilege postconditions made evaluation-order-safe
+
+The automated review on PR #383 flagged one genuine defect after the `origin/main` merge, and a
+sweep for the same defect class found five more instances it had not reported. Every privilege
+postcondition across the Wave A migrations guarded `has_function_privilege()` with a
+`role-exists AND privilege-check` predicate. PostgreSQL does not promise left-to-right evaluation
+of `AND`, so the planner may run the privilege lookup first and raise the very "role does not
+exist" error the guard was written to prevent. Two of the six instances had no guard at all.
+
+All six now use `CASE`, the documented construct with guaranteed evaluation order. The failure and
+the fix were both demonstrated read-only against live production: the old predicate raises
+`role "__cr_absent_role__" does not exist`, and the `CASE` form returns `false` for the same absent
+role while still evaluating the `PUBLIC` pseudo-role, which never appears in `pg_roles`.
+
+Production is unaffected either way — `anon`, `authenticated` and `service_role` all exist on
+Supabase. What this repairs is the plain-PostgreSQL replay/restore path these files claim to
+support, where the postcondition aborted on a role lookup instead of returning a grant verdict.
+
+Two further reported findings were checked and refuted, and the reviewer's proposed edits were not
+taken: the soft-deleted-delivery branch does **not** show the wrong instruction (`rpcCodeDetail`
+returns the database's own sentence and only falls back to "complete the delivery first" when that
+sentence is empty, which was confirmed by watching the real toast in the browser), and the
+changelog heading reported as a duplicate occurs exactly once. Nothing was merged, applied, or
+deployed by this pass.
+
+## 2026-08-11 — Wave A review pass: CodeRabbit findings resolved, two of them by correcting the reviewer
+
+Worked the automated review on PR #383 and fixed four real defects. Two more were reported and
+were wrong; both were checked against live production or a disposable PostgreSQL 17 rather than
+taken on faith, and the corrected form shipped instead. Nothing was merged, applied, or deployed.
+
+- **The delivery-gate error message reached the operator as raw database text.** `InvoiceDetail`
+  sent the posting error straight to the generic sanitizer, so the sentence the migration writes
+  specifically for the operator never appeared. Worse, both `DELIVERY_NOT_COMPLETED` variants —
+  "the delivery was deleted, void this bill" and "the delivery is merely unfinished, go complete
+  it" — collapsed into one canned string, so a user facing a deleted delivery was told to do the
+  one thing that cannot work. The mapper now passes the database's own sentence through and only
+  falls back to a canned line when the token is raised bare. Verified by execution: the assertions
+  are vitest inline snapshots, so the tool wrote the real returned strings into the test file
+  rather than the author asserting what they should be.
+- **Two migrations called `has_function_privilege()` on roles that may not exist.** That function
+  raises rather than returning false, so on any target without Supabase's `anon` /`authenticated` /
+  `service_role` — including the plain-PostgreSQL container the replay harness restores into — the
+  migration aborted on a role lookup. Now guarded on `pg_roles`.
+- **The reviewer's suggested fix for that would have gutted the widest check.** It proposed
+  filtering the grantee list against `pg_roles`, but `public` is a pseudo-role: it is not in
+  `pg_roles`, while `has_function_privilege('public', …)` works fine. That filter silently drops
+  the PUBLIC check — the one that matters most. Confirmed against live, then proven in a throwaway
+  container where the naive filter reported nothing and the shipped form correctly reported PUBLIC.
+- **An unconditional `REVOKE … FROM PUBLIC, anon, authenticated, service_role` had the same flaw,
+  and it failed open.** Proven in a disposable container: the old form errored on the missing role
+  and PUBLIC still held EXECUTE afterwards, because the whole statement aborted before revoking
+  anything. Split into an unconditional `FROM PUBLIC` plus one `pg_roles`-guarded loop over the
+  named roles, which also folds in the previously separate `metabase_ro` revoke.
+- **A precondition regex could never fire.** The commission-split immutability guard used a
+  capturing group for an optional `ONLY`, which makes `regexp_matches` return that group as
+  element 1 instead of the whole match — so the guard compared an empty string and passed
+  silently. Mutation-tested with a deliberately destructive writer: the old form counted zero
+  violations, the new non-capturing form counted one.
+- **A contract test declared an RPC shape neither the function nor the app uses.** The reviewer
+  called this migration drift; live `pg_proc.prosrc` on production settled it the other way — the
+  function reads exactly the keys the migration and `NewOrder.tsx` send, and the test was stale.
+  It had omitted `quantity` entirely, so a payload matching it would have sized every line at zero.
+- **Reference docs corrected.** Migration-history cross-references were renumbered (the reviewer
+  found four stale references; two more it missed were found and fixed). `CURRENT_STATE.md` and
+  `KNOWN_ISSUES.md` had duplicated and contradictory blocks from a merge, plus a source-gap entry
+  that is now closed — `git ls-tree` confirms every migration those documents reported as missing
+  from `main` is present. Both stamps were refreshed against a fresh read-only ledger read.
+
+The six Wave A migrations remain **local candidates, not applied**, confirmed absent from the live
+ledger by the same read. They are numbered below the current live high-water and must be renumbered
+forward before any apply is even proposed.
+
+## 2026-08-11 — Drop the pre-rename duplicate of the reconcile-snapshots migration
+
+The already-applied reconcile-pending-commission-snapshots migration was carried on the
+`claude/wave-a-money` branch under two filenames at once: the pre-rename
+`20260810183629_reconcile_pending_commission_snapshots.sql` and the post-rename
+`20260810235207_reconcile_pending_commission_snapshots.sql`. Both bodies are byte-identical
+after LF normalization, hashing to `a5b011eff14fc6bc0befb7a6043f772f0ff5f5bbbe05c649d53f9923bd8bf5bd`
+— the same SHA-256 that `docs/reference/migration-history.md` row 866 cites as the canonical body.
+The two files differed only in line endings.
+
+`origin/main` carries the post-rename name only; the file was deliberately renamed after the live
+apply, and `docs/audits/2026-08-10-codex-to-claude-team-board-closeout-handoff.md` records in terms
+that the pre-rename filename no longer exists. This branch still held the old name from an earlier
+source-recovery pass, so opening a pull request from it would have re-added a file `main` removed on
+purpose and left a second on-disk copy of a migration that is already live — the shape that reads as a
+pending change to the next agent inspecting the folder.
+
+Removal only: no SQL was edited, nothing was applied to or reverted from production, and the live
+ledger is untouched. `check:docs` moves from 881/881 to 880/880, PASS on both sides, because the
+"all migrations indexed" check counts the folder directly rather than a hand-maintained claim.
+
+Also in this branch's merge of `origin/main`: resolving `docs/reference/migration-history.md` against
+main's rows 868-871 renumbered the six Wave A rows to 872-877, and the row this branch had added for
+the pre-rename filename was dropped as a duplicate of main's row 866.
+
+## 2026-08-11 — Executable proof for the blend-ticket whole-cent fix, and the run-time gap it exposes
+
+The blend-ticket fix below was reviewed and applied, but the fractional-quantity path it repairs had
+never actually been executed anywhere. `scripts/smoke/prove-blend-ticket-fractional-cents.mjs` now runs
+it end to end in a disposable, network-isolated PostgreSQL 17 container built from the repository's own
+migrations, with a fixture blend ticket whose unit conversion yields a fractional quantity.
+
+Six stages. It reproduces the original failure against the pre-fix body from `20260714230200` and
+observes the live CHECK constraint reject the header write; applies
+`20260811200000_blend_ticket_order_whole_cent_totals` and watches its own `$verify$` post-condition
+block pass; re-runs the registered smoke chain to `SMOKE_PASS_ROLLBACK`, asserting whole-cent totals
+equal to the canonical sum of rounded lines; then mutates the schema twice to confirm the apply-time
+guard fails closed when the totals trigger is missing and when it is `REPLICA`-only. That second
+mutation matters: `tgenabled` has four states, and the widespread `<> 'D'` idiom waves through a
+replica-only trigger that never fires in an ordinary session. The migration rejects both.
+
+Both mutation stages apply the migration as a single transaction, so "fails closed" means the function
+body is also rolled back rather than left half-replaced.
+
+The harness refuses to run unless the post-fix function body on disk still md5-matches a **pinned
+snapshot** of that function read from production `pg_proc` on 2026-08-11. That is a historical reading,
+not a live one — the container runs with `--network none` and the harness never contacts production —
+so it catches the repository drifting off what was applied, not production changing underneath. The
+comment in the script carries the exact query to re-confirm current parity by hand. The smoke chain and
+fixture are registered in `smoke-specs.json` under `create_order_from_blend_ticket`, flagged
+`container_only` so `--all` and `--area` runs skip it with an announced reason instead of sending a
+fixture-seeding chain at whatever database `SUPABASE_DB_URL` points to.
+
+Stage six characterizes a residual defect the review pass did not surface: the trigger guarantee is
+**apply-time only**. With the fixed body in place and the trigger dropped afterwards, the RPC reports
+success and books a zero-value header — the read-back's `IF NOT FOUND` cannot catch it, because the
+order row exists by then regardless of whether the trigger ran. Nothing raises; only the smoke chain
+caught it. Reaching that state takes a deliberate schema change that the migration's own guard blocks
+at apply time, and production holds no blend tickets, so it is not firing — but the failure mode is
+silent wrong money, not an error, which makes it a **HIGH-severity open data-integrity gap**, not a
+footnote. It is tracked as **CRX-MONEY-001-R** in `docs/manual/KNOWN_ISSUES.md` with an owner,
+mitigation and standing detector; stage F of the prover is that detector. Closing it means asserting
+inside the RPC that the header was actually recalculated.
+## 2026-08-11 — Customer 360 pre-push adversarial fixes
+
+Closed all three medium-severity findings from the fresh Sol review of the Customer 360 adoption pack. Customer ownership assignment now uses a new admin-only atomic RPC instead of a separate active-rep read followed by a direct customer update: the RPC locks the target rep, rejects any missing/inactive customer from the exact selected set, rolls partial matches back, and binds idempotent retries to the actor, customer IDs, and target rep. The Customers UI retains truthful post-save refresh handling and has regression coverage for inactive targets, changed customer sets, ambiguous failures, and intent-scoped keys. Call Lists now keeps a requested `rep=` URL pending and blocks list loading when rep-option validation fails, so an error cannot broaden the admin's requested scope to all reps; retry preserves and restores the filter. The approved migration was submitted as `20260811122851_assign_customers_sales_rep` and applied live under Supabase-assigned/disk version `20260811183317`; live catalog and grant checks passed, and the schema registry, generated Supabase types, and `pg_proc` fixture were refreshed through the resulting 960-row ledger high-water. The registered rollback smoke passed against the exact migration in disposable PostgreSQL; its live rollback-only run remains separately guarded by the required `REAL-DATA-OK` authorization.
+
+PR review follow-up tightened the Call Lists tier URL restoration, capped search text at 100 characters, and corrected lapsed-product wording so only the named top product is attributed its measured prior revenue. It also identified real audit-visibility and freshness gaps: the atomic assignment RPC had bypassed `save_customer`, which normally advances `customers.updated_at` and records customer changes in `activity_feed`. Forward-only migration submitted as `20260811230423_log_customer_sales_rep_assignment.sql` preserves the live RPC's authorization, lock, exact-set, and replay behavior while advancing `updated_at` and adding one customer-scoped activity row per selected active customer in the same transaction. An exact count mismatch aborts the assignment and receipt together; exact replay cannot duplicate activity or touch the timestamp again. The file was forward-renamed from `20260811210357` after live high-water moved to `20260811220045`, then applied live and B7-renamed content-identically as `20260812003315_log_customer_sales_rep_assignment.sql`. Both final-path, content-bound `gpt-5.6-sol` high migration charters and the exact committed-SHA review returned CLEAN; the network-isolated PostgreSQL 17 harness mutation-tested timestamp advancement/rollback, activity de-duplication, and concurrent deactivation. Post-apply live reads confirmed ledger row 962, the intended catalog/grant/body guards, and a genuine schema-registry refresh through the new high-water.
+
+A final PR-thread pass closed one more retry trap: when exact-set validation reports that a selected customer became ineligible, Customers now clears the ambiguous selection, closes the assignment modal, and rotates the rejected intent key after the refresh attempt. An inactive row therefore cannot remain invisibly selected and make every retry fail. Regression coverage proves both successful-refresh and failed-refresh branches clear the selection. The disposable PostgreSQL proof now checks migration markers only after stripping SQL comments and performs the required read-only Git-status preflight before starting its isolated container.
+
+The exact-commit Sol gate returned clean with one actionable low-severity hardening note: Call Lists exposed raw backend error messages in its failure toast. The toast now uses a stable retry message while the original exception remains available to Sentry, and a regression test proves internal relation details never reach the user.
+
+## 2026-08-11 — Let the order-totals trigger own the blend-ticket order header
+
+The validated whole-cent CHECK constraints now live on `orders.total_cost` and `orders.total_profit`
+were violated by blend-ticket order creation, which finished by overwriting the order header with raw,
+unrounded price-times-converted-quantity sums. Any blend ticket whose unit conversion produced a
+fractional quantity would have had its entire completed-ticket-to-order transaction rejected and
+rolled back. Production holds no blend ticket that has produced an order, so nothing was ever lost:
+the defect was latent, not historical.
+
+`20260811200000_blend_ticket_order_whole_cent_totals.sql` re-emits the function from its already-applied
+source, whose body was md5-matched against live before editing, with exactly two deltas. The raw header
+overwrite is deleted, and the header is read back from the row the AFTER-ROW totals trigger has already
+written from the per-line values -- so there is now one source of truth for those four columns instead of
+two that disagreed about rounding. The two hand-maintained running totals that fed only the removed
+statement are dropped as dead code. Per-line money, actor binding, idempotency, SECURITY DEFINER,
+search path and grants are byte-identical to the applied source.
+
+Scope was narrowed after checking live rather than assuming. An earlier draft also rounded the per-line
+money in the order-items INSERT; live constraint state shows no whole-cent CHECK on that line total or
+its margin percentage, and the BEFORE-ROW rounding trigger derives line profit from pre-rounded
+components while discarding whatever the caller passes, so the line INSERT could never have failed and
+those changes were removed as redundant. Because the header is now written only by a trigger, a missing
+or disabled trigger would leave every blend-ticket order header at zero silently instead of raising, so
+the migration ends with a fail-closed post-condition block asserting the function has exactly one
+overload, that the totals trigger exists and is enabled, that the removed overwrite is genuinely absent
+from the stored source, and that the actor-binding and idempotency guards survived the re-emission.
+
+## 2026-08-11 — Commission-payout intent binding merged and applied live (PR #378)
+
+Closeout for the entry dated 2026-08-10 below, which is superseded on its two open points: the review
+rounds continued past the twelve recorded there and the final one returned a **clean** verdict — proof
+minted at head `4d45bcf0` against base `261d10bd`, `gpt-5.6-sol` at high effort, 2026-08-11 13:48 UTC —
+Mason gave explicit approval for both irreversible steps, PR #378 was merged to `main`, and migration
+`20260811130000_bind_commission_payout_idempotency_to_intent.sql` was applied to production through the
+governed `apply_migration` gate on 2026-08-11. It is recorded in the live ledger under ledger version
+`20260811183437` carrying the migration's own name — the apply tool stamps its own clock as the version,
+so the file's `20260811130000` timestamp is the name, not the ledger version.
+
+Verified against production after the apply, not inferred from the migration text:
+
+- **Catalog postconditions.** Each of the seven function names has exactly one overload; none of the four
+  internal helper functions survived the migration; all three public payout wrappers contain a call to
+  `check_idempotency_intent(`; `anon` cannot execute any of the three public entry points while
+  `authenticated` can; and none of `anon`, `authenticated` or `service_role` can execute any of the four
+  internal functions.
+- **Existing payout smoke chain.** `scripts/smoke/smoke-commission_payment_for_update_fix.sql` run against
+  production returned `SMOKE_PASS_ROLLBACK`, and this run took the new wrapper branch of its
+  implementation-identity scenario. Inside the rolled-back transaction it created a real payment batch with
+  matching items and an audit row, was refused on the duplicate as already sitting in a live payment, and
+  replayed a keyed create back to the same payment id with exactly one item.
+- **Intent binding itself, proven live.** The original intent-binding proof is a container harness and
+  cannot run against production, so a nine-assertion chain was written and run live, ending in the same
+  mandatory `SMOKE_PASS_ROLLBACK` so every effect was discarded. It observed: the receipt now carries the
+  acting admin's id and a 64-character fingerprint; an identical intent replays to the same payment id and
+  is insensitive to surrounding whitespace; changing the commission selection on a retained key raises
+  `IDEMPOTENCY_INTENT_MISMATCH`; changing the reference does the same; a NULL key raises
+  `IDEMPOTENCY_KEY_REQUIRED` and pays nothing; a legacy receipt with both binding columns still NULL fails
+  closed rather than replaying; a post replay aimed at a *different* payment raises
+  `IDEMPOTENCY_INTENT_MISMATCH` with that other payment left unposted; and a second active admin reusing
+  the first admin's key raises `IDEMPOTENCY_ACTOR_MISMATCH`.
+
+No live rows were altered: every scenario above ran inside a transaction that ends in a deliberate
+exception, which is how these chains prove both the behaviour and the rollback.
+
+That nine-assertion chain is no longer session-only. It is now checked in verbatim as
+`scripts/smoke/smoke-commission-payout-intent-binding-live.sql` and registered under the spec key
+`commission_payout_intent_binding_live`, so anyone can re-certify the binding against production with
+`node scripts/smoke/run-smoke.mjs --spec commission_payout_intent_binding_live`. The committed file — header
+comment and all — was executed against production on 2026-08-11 and returned
+`SMOKE_PASS_ROLLBACK (9/9 incl. cross-actor)`, with a follow-up count confirming no `[SMOKE]` customer,
+order, commission or receipt row survived. The container-only chain stays registered alongside it: it covers
+more cases (void, blank keys, cross-operation reuse, the unchanged guard surface), and this one covers what
+can actually be re-run live.
+
+## 2026-08-11 — Preserve the applied line-profit backfill without replaying it by default
+
+Added the exact source for live migration `20260810025159_backfill_stale_line_profit.sql`,
+closing the repository-to-ledger gap for the already-applied 37-line profit repair. Because
+that migration rewrote a production-specific business-row population, the post-baseline
+rebuild selector now reads a small one-shot registry and withholds the repair from default
+replay while reporting the omission on stderr. An explicit `--include-one-shot` escape hatch
+remains available only after the target population has been independently proven to match
+the population originally approved. After a restore proves it already contains the corrected
+values, `--one-shot-repair-plan` emits the reviewed ledger-repair commands needed to prevent a
+later unfiltered push from rediscovering the skipped rewrite. Focused tests prove the default
+quarantine, visible warning, registry/file correspondence, deliberate override, and durable
+ledger closeout path.
+
+## 2026-08-10 — Record the exact-whole-cent compatibility policy
+
+Recorded Mason's financial storage decision independently of the pricing implementation: new money
+storage uses bigint cents. Established PostgreSQL numeric-dollar storage may remain temporarily to
+avoid a risky unit rewrite, but it is approved only after exact numeric arithmetic, clean finite
+whole-cent values, and an active finite whole-cent CHECK are verified. Dirty or unconstrained
+columns remain tracked findings and may not be suppressed as accepted exceptions. Authoritative
+TypeScript money calculations and input-parsing paths that are added or changed must parse decimal
+operands into integer cents and may not introduce binary floating-point conversion, parsing,
+arithmetic, or rounding; display-only formatting from already-integer cents remains allowed. Updated
+required reviewer, workflow, architecture, operations, and audit-template guidance that still stated the superseded
+blanket bigint-only rule. The pre-existing `parseCents.ts` excess-precision truncation is recorded
+as open debt below rather than silently changing input behavior in this policy-only PR. The separate
+pricing implementation owns the money paths it changes; this PR changes no schema, data, or
+production behavior. Latest-head review also aligned the compliance/PDF reviewers, migration and RPC
+scaffolds, money hook message, inventory checklist, and required gotchas reference so none can
+override the fail-closed legacy-column approval gate. A final exact-head Sol review rejected the
+earlier "once clean" wording because it could hide dirty or unconstrained columns; the policy,
+review prompts, audit allowlists, and migration/RPC guidance now keep those columns visible until
+all three approval conditions are proven. A final current-head review also made the
+compliance reviewer reject raw use of the legacy cent parsers on inputs with more than two
+fractional digits unless an explicit exact rounding rule has been approved; the deterministic
+money-safety hook now gives the same qualified remediation instead of recommending the truncating
+helper by itself. The final exact-head review applied that same precision gate to the field-map UX
+loop prompt, which had still described the legacy parser as exact without qualifying its truncation.
+
+## 2026-08-10 — Declined the bigint-cents conversion and applied three whole-cent migrations live
+
+Evaluated CodeRabbit's bigint-cents request on the canonical profit path and declined the conversion, drafting three migrations that fix the underlying cent-scale defects instead. PostgreSQL `numeric` is exact decimal, not floating point, so the `AGENTS.md` money rule was never violated; converting `orders.total_profit`, `orders.total_cost`, `order_items.profit` and `order_items.net_margin` to bigint cents would reach `src/types/index.ts`, reporting, invoicing and commissions for no correctness gain. The real defects, confirmed from live function source, are that commission rows mint their basis from a stale pre-trigger profit value rather than the canonical order header, and that several creation paths store sub-cent money. Three migrations were written and then, on Mason's explicit in-chat approval, APPLIED LIVE to production on 2026-08-10 in order: `20260810150000` rebases the commission basis on the rounded order header and rounds `create_direct_order` money (ledger version `20260810152935`); `20260810150500` rounds `save_quote` `total_cost` and `quote_items` money (`20260810154721`); `20260810151000` adds whole-cent CHECK constraints to seven already-clean money columns, five more deferred behind a legacy backfill (`20260810155629`). All three ran end to end against a throwaway `postgres:17-alpine` first and every post-condition was mutation-tested to fail closed; each apply then passed the full proof gate, with both reviewer charters run as real `gpt-5.6-sol` high-effort Codex reviews returning CLEAN against the exact on-disk file hash. Post-apply live reads confirm every function body changed as written with `SECURITY DEFINER`, `search_path` and grants unchanged, and exactly the intended seven CHECK constraints present and validated with the five deferred columns still unconstrained. No live row was modified. The schema registry was rebuilt from live introspection afterwards. The three migrations are live in production; no application code has been pushed, merged, or deployed, so the repository and the deployed front end still lag the database. Deferred: the `_update_order_items_impl` `total_price` clobber is blocked on live-vs-disk function drift, and the quote-versus-order profit formula divergence is an owner decision.
+
+**Why this PR could not amend the contract itself.** The adversarial merge gate is handed `AGENTS.md` as ground truth. It saw code that deliberately keeps `numeric` dollars where the contract then said `bigint` cents and returned BLOCKERS citing the money line — a contract-versus-code conflict, not a code defect, and no amount of re-running clears it. Editing `AGENTS.md` inside the same diff does not clear it either: a change that authorizes itself is rejected on principle. The contract was therefore amended separately and first, by the policy-only PR recorded in the entry above, and this PR's diff no longer touches `AGENTS.md`. General mechanic: amend the contract first, then review, then land.
+
+- **Migrations carried by this PR** (all three already applied live):
   - `supabase/migrations/20260810150000_commission_basis_from_canonical_order_header.sql`
   - `supabase/migrations/20260810150500_save_quote_whole_cent_total_cost.sql`
   - `supabase/migrations/20260810151000_whole_cent_money_check_constraints.sql`
+
+## 2026-08-10 — Graphify-first agent navigation policy
+
+Made Graphify the explicit first-pass navigator for architecture, multi-file, workflow/migration,
+difficult-debugging, structural-audit, and PR-impact work. `AGENTS.md` now defines the shared routing,
+authority, and evidence boundaries; `CLAUDE.md` explicitly routes Claude through that policy. The shared
+Graphify skill carries the tool procedure: check graph freshness, query the smallest useful subgraph,
+use the generated report/visual index, minimize source reads, and preserve useful or corrected outcomes
+with `save-result`/`reflect`. Focused source and live read-only evidence remain mandatory for safe edits
+and material proof; Graphify is navigation, not authority. When Graphify is unavailable or its wrapper
+reports a supported skip, agents continue with focused source inspection and disclose the limitation.
+
+## 2026-08-10 — Spell out the whole-cent CHECK predicate and record which columns actually pass the gate
+
+Documentation-only follow-on to the exact-whole-cent compatibility policy above:
+no code, no schema, no migration, and no change to the `AGENTS.md` rule itself.
+
+That policy says a legacy `numeric` dollar column is an approved exception only
+once "an active finite whole-cent CHECK is present," but it never said what that
+CHECK is. Written from the description alone, the obvious constraint —
+`CHECK (col = ROUND(col, 2))` — **does not work**, and fails in the direction
+that looks safe. PostgreSQL `numeric` deliberately does not use IEEE-754 `NaN`
+semantics: so values stay sortable and indexable, it treats `NaN` as equal to
+`NaN` and greater than every finite value, which makes `'NaN' = ROUND('NaN', 2)`
+true. A rounding-only check therefore admits `NaN` while appearing to satisfy the
+gate. `docs/manual/DECISION_LOG.md` now carries the full predicate, both halves
+marked load-bearing, and the `<table>_<column>_whole_cents_chk` naming rule;
+`docs/workflows/SAFE_DEVELOPMENT_RULES.md` repeats it where the money rules live.
+
+Also recorded: never add one of these as `NOT VALID` over a column that still
+holds dirty rows. `NOT VALID` skips only the initial scan, and a CHECK is
+re-evaluated against the whole new row on every later UPDATE whatever column
+changed — so each legacy dirty row becomes permanently un-editable, invisibly,
+until someone tries to edit an old record.
+
+Finally, the per-column gate status, verified read-only against the live
+database on 2026-08-11: of the 12 order/quote/commission columns the 2026-08-10
+evaluation measured, **7 carry the constraint and 5 do not**, with the reason and
+status for each. Four of the five hold legacy fractional-cent rows and need a
+data repair that is a separate, unapproved decision; `orders.total_price` is
+clean but blocked because `_update_order_items_impl` overwrites it with the raw
+un-rounded line sum. The entry also names the legacy dollar columns outside that
+audit (`payments.amount`, the `commissions` amounts, `purchase_orders.total_cost`,
+the `products` price tiers and others) as unconstrained tracked debt, so the
+grandfathering is not misread as covering them.
+
+## 2026-08-10 — Agent toolchain refresh; removed the dead Codex Sentry connector
+
+Verified the Codex side of the harness end-to-end from a Claude Code desktop session and brought the local agent toolchain current. All three Codex model tiers were confirmed live by running each one (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`); `codex-review`, `codex-gauntlet` and `codex-build.mjs` pin model and reasoning effort explicitly and correctly. Codex CLI (0.147.0) and Claude Code (2.1.226) were already at the newest published versions; six other global CLIs were updated (npm 11→12, vercel 55→58, google-workspace-mcp 2→4, filesystem MCP server, sentry, @sentry/cli), after which a live `codex exec` run confirmed the major npm jump broke nothing.
+
+- **Removed `[mcp_servers.sentry]` from `.codex/config.toml`.** Its OAuth grant had been revoked server-side (`invalid_grant: Grant not found`), so every Codex run logged two refresh errors before doing any work. Sentry is not configured for Codex and nothing depends on it — the only `sentry` string in the Codex workflows is `src/lib/sentry`, an application source path, not this connector. Removed so a future OAuth error in a Codex run means something instead of being noise operators learn to scroll past. Verified after removal: `codex mcp list` shows Supabase only, and a live run returned the correct most-recent migration with zero *Sentry* OAuth errors. The retained Supabase entry still fails its own OAuth refresh on every run with the same `invalid_grant` — a separate, pre-existing defect this change neither fixed nor introduced, recorded in the new KNOWN_ISSUES entry below.
+- **`[mcp_servers.supabase]` deliberately kept**, including `read_only=true`. It is asserted by both `check-agent-workflows.mjs` and `check-agent-guidance.mjs`. An attempt to remove it as a second dead entry was reverted when that guard failed — see the new KNOWN_ISSUES entry, which records what that guard does and does not actually prove.
+- **`agent-pair-review.md` names no model or effort.** It reaches `gpt-5.6-sol` at high effort only by routing through `codex-review`; nothing enforces it. Filed as follow-up, not fixed here.
+
+## 2026-08-10 — Own-worktree containment compares paths case-insensitively on Windows
+
+Closed a narrower instance of the push block the 2026-08-09 own-worktree
+exemption was written to remove. That exemption keys its registry by a path
+string: `registeredWorktreeDirectories()` stored the repo-relative path using
+the casing `git worktree list --porcelain` printed, and `worktreeEntryKind()`
+built its lookup key from the casing the ignored-directory listing reported.
+Every other containment comparison in the checker routes through
+`containmentPathKey()`, which lowercases on win32 precisely so a containment
+decision cannot hinge on the casing Git happened to print — that Set
+round-trip was the one place that did not.
+
+On Windows the two casings can disagree, and when they did the membership
+lookup missed and a legitimate linked worktree of this same repository was
+classified as an embedded repository, failing the pre-push containment gate.
+It failed closed, so it over-blocked a push and never risked leaking a private
+artifact — a regression risk, not a security hole. Both the stored key and the
+lookup key now go through `containmentPathKey()`, preserving the existing
+`path.relative` and forward-slash conversion.
+
+New fixtures drive the disagreement from both sides against a real registered
+worktree: the registry casing skewed away from disk, and the ignored-listing
+casing skewed away from the registry. Each asserts the harness actually
+rewrote a path, so neither can pass vacuously. The first also asserts the
+correct fail-closed result on case-sensitive filesystems, where the two
+casings genuinely name two different directories; the second is Windows-only,
+because elsewhere the skewed path names a directory that does not exist.
+Reverting either half of the fix turned the suite red before restore.
+
+Codex's review of that fix raised two findings on PR #366, both real and both
+addressed in the same PR. First, folding case decides which registry key a
+candidate matches, and matching a key was the *only* thing granting the
+exemption. A Windows directory with per-directory case sensitivity enabled can
+hold `session` and `SESSION` at once — two different directories that fold to
+one key — so a foreign repository parked at the colliding name would have
+inherited a linked worktree's exemption and had its contents skipped instead of
+failing closed. `worktreeEntryKind()` now re-verifies the `.git` pointer file on
+the candidate directory itself before exempting it, which is the same two-signal
+rule the registry side already applied and does not depend on case semantics at
+all. A new fixture enables per-directory case sensitivity, builds both
+directories for real, and asserts the foreign one is still rejected; it skips
+where the filesystem cannot hold two case-distinct names. Removing the
+re-verification turned it red before restore.
+
+Second, every CI runner in this repository is `ubuntu-latest`, where
+`containmentPathKey()` is the identity function — so the Windows-only branches
+never executed and both production edits could have been reverted with CI still
+green. A `Phase 3C Containment (Windows)` job now runs this suite on
+`windows-latest`. The suite imports only Node builtins and sibling scripts, so
+that leg needs Git and Node but no `npm ci`.
+
+Standing that job up surfaced a pre-existing incompatibility between this suite
+and the hosted Windows runner, which points `TEMP` at an 8.3 short path
+(`C:\Users\RUNNER~1\...`). The suite builds its fixture repositories under
+`os.tmpdir()`, and Node's `realpathSync` keeps the short form while Git expands
+it, so a fixture root passed its own canonical check and then never equalled
+`git rev-parse --show-toplevel` — every canonical-root assertion failed. That
+was reproduced locally against a deliberately short-named directory before
+being fixed; the job now runs with `TMP`/`TEMP` set to `runner.temp`, a plain
+long path. The guard itself is unchanged: the fix corrects the test
+environment, not the check. The suite also pins the number of CI checkout steps
+so each new one gets a least-privilege review, and this job's checkout drops the
+GitHub token like the other four.
+
+Running on Windows for the first time then exposed a second dormant case. One
+assertion checks that a forbidden `private-artifacts` name fails closed before
+any reparse point is dereferenced, and it built that link as a junction aimed at
+a file. A junction is a directory-only reparse point, so aimed at a file it is a
+broken link Git cannot open (`could not open directory ... Not a directory`),
+the entry never reaches the name rule, and the assertion fails. It had gone
+unnoticed because it sat behind a Windows *file* symlink whose creation needs a
+privilege an ordinary account lacks — the resulting `EPERM` skipped the block on
+every Windows machine except an elevated CI runner. The junction case now stands
+in its own block and aims at a directory, so it executes on an ordinary Windows
+account too; it was confirmed red against the old shape and green against the new
+one on a non-elevated machine. The guard is again unchanged, and was verified
+directly: a junction pointing at a real directory of packets — the shape that
+could actually carry private data — was already rejected.
+
+Review of that fix then found a real hole in the exemption itself, and this one
+could hide private data rather than merely block a push. A linked worktree of
+this repository is recognised by a `.git` pointer file naming a directory inside
+this repository's worktree bookkeeping. That pointer was trusted on its face, so
+a *copy* of a genuine worktree's pointer file was equally convincing. Windows
+compares names case-insensitively by default, but a directory can opt in to
+per-directory case sensitivity, and one that has can hold `session` and
+`SESSION` as two different directories that the containment check folds to a
+single key. A foreign directory parked at the colliding name could copy the
+pointer next door and inherit the exemption — its private contents skipped. That was reproduced end to end before anything
+changed: a private packet passed the gate. The exemption now reads the backlink
+Git keeps in that bookkeeping directory and requires it to name the very
+directory being exempted. The comparison is made on filesystem identity rather
+than path text, because Node's `realpathSync` returns whatever casing it was
+handed on Windows while case-sensitive directories make two spellings genuinely
+two places; and it compares the backlink's parent *directory*, so hard-linking
+the pointer file — which would preserve the file's identity — fails too, NTFS
+having no way to hard-link a directory. Both attacks and both legitimate cases
+are now fixtures in the suite, each confirmed red against the previous shape.
+
+Raised by CodeRabbit on PR #359 and deferred there only because a new commit
+would have discarded that PR's banked Vercel status while the daily build
+quota was exhausted.
+
+## 2026-08-10 — Pending commission snapshots reconciled live (PR #372)
+
+Closed the last open item from the canonical-profit workstream. The 2026-08-09 line-profit backfill
+re-derived line profit from the order header but left a small set of *pending* commission snapshots
+holding the pre-backfill figures, so a commission that had not yet been paid could be computed from a
+stale basis. `reconcile_pending_commission_snapshots` repairs exactly that set and nothing else.
+
+**The write set was pinned before it could move.** The migration is forward-only and binds itself to a
+SHA-256 fingerprint of the approved target rows, recomputed from live data immediately before the apply
+and matched exactly — so the migration could not widen its own scope between review and execution. It
+locks orders before commissions, deletes nothing, and excludes paid, cancelled, deleted, batched, job,
+and application commissions. It fails closed on target-set, lifecycle, money-value, or postcondition
+drift. Target size: 11 snapshot rows across 10 orders. Per-row and aggregate money figures are
+deliberately withheld here — this repository is public.
+
+**Applied live 2026-08-10** after Mason's explicit approval in the active session, with both
+`gpt-5.6-sol` high-effort reviewer charters re-minted against this exact body and returning CLEAN.
+Supabase assigned ledger version `20260810235207`; the disk file was B7-renamed to match, body
+byte-identical. Live readback shows zero remaining eligible mismatches, and the registered
+`pending_commission_snapshot_reconcile` chain returned the exact terminal marker `SMOKE_PASS_ROLLBACK`.
+
+One deviation from the handoff's "preserve these files exactly": the smoke's `SMOKE_FAIL` message
+contained the literal text `snapshot(s)`, which the repository's live-data guard parses as a function
+call, blocking the whole chain from running through the sanctioned channel. The wording is now
+`snapshot rows`. Assertion logic and the terminal marker are untouched.
+
+**Generated-artifact closeout.** `.claude/schema-registry.json` was regenerated from live introspection,
+not stamped: `_meta.migrations_high_water` moves `20260810025159` → `20260810235207` and the applied-name
+list goes 947 → 951 distinct names. Every schema-shape section is byte-identical
+(`generated_columns`, `status_enums`, `check_constraints`, `not_null_columns`, `columns`, `sequences`,
+`tables_without_updated_at`) — as it must be, since this migration contains no DDL. The one section that
+moved is `skipped_constraints`, 187 → 194, and none of the seven additions come from this migration:
+they are the whole-cent money CHECKs from `20260810151000_whole_cent_money_check_constraints`, live since
+earlier the same day. The registry was stale against three migrations, not one. Those constraint
+definitions are recorded here because the registry describes *live* truth; their migration sources sit on
+a separate in-flight branch and are untouched by this change.
+## 2026-08-10 — Wave A of the ordering-cycle review: product cost is authoritative on direct orders
+
+First remediation wave from the 2026-08-09 ordering-cycle review (triage: 75 of 77 findings real). This slice closes the two highest-severity findings on the direct-order seam. **Written and reviewed; not yet applied live** — see the status line at the end of this entry for the current state.
+
+**The commission-basis hole.** `create_direct_order` took `unit_cost` from the request payload and used it verbatim to compute the profit that `_insert_commissions_for_order` turns into a commission liability. `NewOrder.tsx` exposed that same cost as an editable number input, so lowering it required no API access and no unusual privilege — a rep could raise their own commission by typing in the order form. Migration `20260812010000_wave_a_order_cost_authority_and_finiteness.sql` moves cost resolution inside the RPC: `products.current_cost` is authoritative, and a supplied `unit_cost` is validated and then discarded. This is the rule `bulk_import_order` has followed since `20260806000752`; the direct-order path was simply never brought in line. `convert_quote_to_order` was named in the original finding but is **not** touched — `save_quote` already overwrites every line's cost from the catalogue before conversion, so the basis it passes is server-computed. Both the review's own verifier and the independent Codex triage narrowed it the same way.
+
+**Non-finite values.** PostgreSQL `numeric` accepts `NaN`, `Infinity` and `-Infinity`, and the ordering comparisons are counter-intuitive: `NaN <= 0` is false, so a `NaN` quantity slipped past the skip-empty-line test, and `NaN` compares greater than every finite value, so `CHECK (quantity_prebooked >= 0)` passed as well. The value reached inventory and corrupted Net Position for every later quote and order of that product. The same pre-write pass now rejects non-finite (and negative) quantity, price and cost at the RPC boundary. Verified against live `pg_constraint` that this is a real gap and not already covered: the whole-cent CHECKs applied on 2026-08-10 protect `orders.total_cost`, `orders.total_profit` and `order_items.profit`, but **not** `orders.total_price`, `order_items.total_price`, `inventory.quantity_prebooked` or `commissions.commission_amount`.
+
+**The UI half shipped in the same change.** The Unit Cost field on `NewOrder.tsx` is now display-only. Left editable against the new server rule it would have shown a rep a per-line profit and margin the saved order does not have — no error, no toast, just a number that quietly stops meaning anything.
+
+- **Rounding, checked before adopting.** Per-unit rates are now rounded to two decimals before storage, matching the bulk-import precedent. Confirmed against live first: of the 602 products carrying a cost, zero hold a sub-cent value, and no existing order line holds a sub-cent rate. It is a no-op on current data and a guard going forward, not a silent re-pricing.
+- **Error tokens canonicalized.** The function raised the prose strings `Actor mismatch` and `Authentication required`; every other governed RPC raises `ACTOR_MISMATCH` / `AUTH_REQUIRED`, which `src/lib/db.ts` maps to a readable message. These two fell through to a generic error instead. A grep over `src/` confirmed no caller or test matched the old prose before changing it. The actor check itself is unchanged — a NULL `p_performed_by` is still accepted, deliberately, because tightening it would reject live callers.
+- **Reviewer findings actioned.** `rls-security-reviewer` and `migration-drift-reviewer` both ran and both returned zero blockers. Their substantive shared finding was that this migration had dropped proof scaffolding its predecessor carried, so it was restored: an overload-uniqueness assertion (a bare `SELECT … INTO` over multiple rows takes an arbitrary row without erroring, which would have silently validated the wrong function), the anon/PUBLIC/authenticated EXECUTE assertions, an assertion that the fix itself actually landed in the body, and a pre-apply `md5(prosrc)` pin against the live baseline so a concurrent session's change cannot be silently clobbered.
+- **Baseline dependency.** The live body of `create_direct_order` is *not* what an `origin/main` checkout rebuilds — three migrations applied to production on 2026-08-10 are still unmerged, on PR #371. This branch merges that work so the migration sits on its real baseline and a from-scratch rebuild is correct; Wave A therefore lands after #371.
+- **Schema registry** refreshed from live introspection (high-water `20260810155629`), which also cleared the REGISTRY-STALE block across the worktree fleet.
+
+## 2026-08-10 — Review fixes on the harness guards (PR #369)
+
+Six findings from the Codex and CodeRabbit reviews of PR #369, all in the pre-commit harness. Five are
+code fixes, each mutation-proved (break the fix, watch the new assertion go red):
+
+1. **A registry row the diff never mentions no longer reads as "nothing pending."** Every check in
+   `parkedDraftPathsFrom` ran inside the loop over changed paths, so a branch that registers pending SQL
+   in `migration-history.md` but never touches that SQL in the diff got a confident zero over a registry
+   the code had not read. The registry is now reconciled against the diff outside the loop; an
+   unaccounted row answers UNKNOWN, which sends the caller to a full scan.
+2. **An unreadable migration history over an empty diff is UNKNOWN too** — same loop, same blind spot.
+3. **Migration enumeration is index-scoped, not a directory listing.** The guard describes the commit
+   being created, so it must not see untracked or unstaged `.sql` files. Proved by planting an untracked
+   migration and confirming only a directory listing finds it.
+4. **The backup-staleness check no longer guesses at the main checkout.** It derived the checkout from
+   `dirname(<git-common-dir>)`, which under `--separate-git-dir` or in a bare repo lands on an unrelated
+   folder that could hold some other project's `backups/LATEST-OK.json`. It now asks Git, and rejects
+   layouts it cannot resolve rather than reporting a different database's backup as this one's.
+5. **Canonical blobs come from the index only** — no HEAD fallback (which would validate history the
+   commit deletes) and no working-tree fallback (which would certify bytes the commit omits).
+6. **Doc fix:** `docs/audits/2026-08-08-foundation-ultra-review.md` still read as if its five follow-up
+   migrations were unapplied and its §2 fixes were future work. All of it is live since 2026-08-09, and a
+   reader following the old text could have replayed or restamped shipped work. The stale passages are
+   now labelled SUPERSEDED with the live status verified by direct introspection. The one genuinely open
+   item — the historical fractional-cent repair, whose statement is commented out on purpose — is called
+   out as Mason's decision and was **not** run.
+
+Hook suites: `worktree-awareness-lib` 185 assertions, `session-staleness` 23 assertions, both green.
+
+## 2026-08-10 — Harness guards now validate the commit being created (PR #357)
+
+Resolved the review findings on the abandoned harness-permissions branch. The headline defect: the
+migration cross-reference guard hashed the **staged** SQL blob but parsed the **unstaged**
+`migration-history.md`, so a commit whose staged history carried an all-zero sha256 pin passed all 176
+assertions while the correct pin sat unstaged on disk — the guard blessed a commit it had never
+actually inspected. Both artifacts now come from one index-first reader. Mutation-proved in a
+throwaway setup: staged-wrong/disk-right is RED, staged-right/disk-wrong is GREEN, history restored
+byte-identical.
+
+Two further guard fixes, each proved against the pre-fix code rather than asserted:
+
+- **Backup-freshness false alarm.** `session-staleness.mjs` always preferred the canonical checkout's
+  `backups/LATEST-OK.json`, but `/backup-db` stamps that marker in whichever checkout it ran from. A
+  backup taken inside a worktree was therefore invisible, and every later session warned that the only
+  copy of production data was missing or stale — training the reader to ignore the one warning that
+  matters. Now newest-wins, which keeps the original protection (a stale worktree marker still loses
+  to a newer canonical one) without the false alarm. Before/after in a throwaway repo: canonical-old
+  plus worktree-fresh warned "2414 days old" before and is silent after; both-old still warns;
+  neither-present still warns. This deliberately **reverses a previously-asserted rule** — the FIX 3
+  case in `session-staleness.test.mjs` asserted "shared canonical marker wins over a conflicting
+  worktree-local marker". That assertion is replaced, not deleted: the suite now pins both halves of
+  newest-wins (a fresher worktree marker is not masked, and a stale worktree marker cannot fake a
+  stale backup when the canonical one is fresh). Mutation-proved — restoring canonical-always-wins
+  turns the suite RED.
+- **Dangling candidate registry.** `parkedDraftPathsFrom()` skipped a vanished path before consulting
+  history, so a LOCAL CANDIDATE pin naming SQL that is not on disk produced a confident zero with no
+  `unknownReason`. It now reports UNKNOWN for exactly that case; a retired `SUPERSEDED-` draft, which
+  is not in the registry, stays silent as before. The pre-commit cross-reference guard already caught
+  this at commit time, so nothing dangling could reach `main` — the gap was that `/fleet` and
+  SessionStart under-reported until someone tried to commit.
+
+One reported finding is **not actioned because it does not reproduce**: exercised against this head, a
+headerless branch candidate registered only by a matching sha256 pin *is* surfaced, and a mismatched
+pin sets `unknownReason`.
+
+Also retired two stale documentation claims. `docs/audits/2026-08-08-foundation-ultra-review.md` and
+`docs/reference/rpc-functions.md` still said the foundation-ultra-review migrations were unapplied
+candidates and instructed agents to restamp them. They are **applied live** — re-issued forward as
+`20260809170500`–`20260809170900`, ledger versions `20260809203222`, `20260809204044`, `20260809204435`,
+`20260809204855`, `20260809205423`, with per-migration proof in `migration-history.md` rows 857–861.
+The one deliberate exception is unchanged: the historical money repair inside `20260809170800` stays
+commented out, so the 49 pre-existing fractional-cent rows are untouched and restating them remains
+Mason's decision.
+
+## 2026-08-10 — Bound commission-payout idempotency to the actor and the intent (applied live 2026-08-11)
+
+The three commission payout RPCs — `create_commission_payment`, `post_commission_payment` and `void_commission_payment` — stored their retry receipts keyed on the operation and the key text alone. Nothing in the stored receipt recorded *who* was asking or *which* payment they had asked about — the key text the browser generated happened to contain a user id, but the server never read it, stored it or checked it against the caller — so a retry aimed at a different payment could be answered out of an earlier payment's cached success: the UI reports "posted", and the row the admin was actually looking at was never touched. Migration `20260811130000_bind_commission_payout_idempotency_to_intent.sql` binds every receipt to the acting user id and to a SHA-256 fingerprint of the request arguments, and fails closed — raising rather than replaying — whenever a reused key arrives carrying a different actor or a different fingerprint. Each RPC is split into a private implementation function with the binding check living in a thin public wrapper, so the check cannot be skipped by calling the inner function directly. The accounting body is moved, not retyped, so the money arithmetic cannot drift; the wrapper does normalize the free-text metadata it forwards — payment method, reference, notes and void reason are trimmed, and blank becomes NULL — so that the fingerprint and the row the payment stores can never disagree about what was asked for. This migration was **applied to production on 2026-08-11** with Mason's explicit approval, after the final review round returned clean; the closeout entry at the top of this file records what was observed live. The paragraphs below describe the change as it stood on 2026-08-10 and are left as written, except where they stated a review or approval status that has since been superseded.
+
+The client side had a matching defect that the server fix alone would not have cured. `useIdempotencyKey` retained exactly one key at a time, so an admin who started a payout on one payment, moved to a second, then came *back* to the first was issued a third, brand-new key for a request the server had already committed — the retry the key exists to make safe. It now retains one key per target in a Map, and clearing a key on success retires only that target's key rather than every unresolved retry the admin still has open. The commission payments page scopes its create-payment key to the sorted set of commissions being paid *and* to the payment method, date, reference and note, which replaced a reset-on-dialog-open that was destroying the only key capable of replaying an uncertain create. Reopening the dialog on the same commissions with the same payment details now replays the same request; changing the selection, or correcting any of those details, is a genuinely different request and mints a fresh key. The scope is what the key is derived from, so this recovery holds only while the page stays mounted — navigating away and back still loses the key, which is the codebase-wide remount gap recorded below as out of scope. Because a replay can return a payment that has since been voided, the success path now reads the payment's status back and warns — rather than congratulating — when the replayed payment is no longer live, and the ordinary failure toast now tells the admin a payment may exist and to check the list before creating another.
+
+Two accounting defects in the Reports commission run were fixed alongside. A recipient counter incremented *after* the RPC returned could not distinguish "committed but the response was lost" from "nothing happened", so an uncertain call silently vanished from the totals; an `attempted` counter now increments before the call. And the batch summary now confirms every batch it created is still live before claiming success, instead of reporting a payout that a concurrent void had already reversed.
+
+Twelve rounds of adversarial Codex review have run against this branch, and **no round has yet returned a clean verdict** — each one surfaced further findings, mostly ones the previous round's fix had exposed rather than introduced. Round 9 returned thirteen (4 HIGH, 3 MEDIUM, 6 LOW); nine were closed and four declined, and round 10 accepted all four declines. Round 10 returned six (3 HIGH, 1 MEDIUM, 2 LOW). Round 11 returned six more (1 HIGH, 1 MEDIUM, 2 LOW, 2 NIT), and its HIGH was a hole in the guard round 10 had just added. Round 12 returned five (1 HIGH, 1 MEDIUM, 3 LOW); three are fixed, one is declined with evidence, and the HIGH is the undecidable residual described under round 12 — it is now pinned by a proof case instead of claimed closed. "Closed" throughout means closed against the review that found it, not proven clean by a review that found nothing. The findings are getting narrower — rounds 7 and 8 were largely about the *guards*, whether a hostile future author could slip a body past the scanner, rather than about the payout behaviour itself — but rounds 9 and 10 were not only that: round 9's first finding was a live defect in the migration's own replay path that needed no hostile actor at all, and round 10's three HIGHs were all cases where the guard added to close a previous round's finding was itself fail-*open*. The standing "apply live without asking" migration authority was therefore **revoked for this change** — the merge and the live apply were both held for Mason's explicit OK, which he gave on 2026-08-11 after a later round finally returned clean. **Superseded:** review continued past round 12 and the final round returned a clean verdict; the closeout entry at the top of this file records the merge, the live apply and what was observed against production afterwards.
+
+- **Migration replay safety.** Each of the three rename blocks now inspects the live function definition before renaming. If the private implementation is missing but the wrapper survived, replaying the migration would have renamed the wrapper onto the implementation's name, leaving a function whose body calls itself — infinite recursion that every name, overload and grant postcondition would still have passed. The blocks raise instead.
+- **Test-quality repairs.** A source-scanning guard sliced its assertions from the first `toast('warning'` in the function; adding a warning to the success path silently re-pointed two pre-existing assertions away from the branch they were meant to guard. The slices are now anchored to the catch block. A second helper matched only the first function definition in a migration file and skipped the rest without failing — it now finds every definition by regex and asserts on all of them. A third guard, in the money/inventory gauntlet suite, was pinned to the old one-slot hook internals; it now asserts the per-target Map lookup, which is the property it was always meant to protect.
+- **Behaviour change: the idempotency key is now required.** All three payout RPCs previously accepted a call that omitted `p_idempotency_key`, and such a call ran the payout with no receipt and therefore no intent binding at all — an authenticated admin calling the RPC directly (PostgREST lets a defaulted argument be omitted) reached the money path unbound, which is the exact hole this change exists to close. The wrappers now raise `IDEMPOTENCY_KEY_REQUIRED` on a missing or whitespace-only key. Every *application* caller already sends one — the four call sites are `src/pages/CommissionPayments.tsx` (create, post, void) and `src/pages/Reports.tsx` (create) — so no screen changes; a direct API caller that omitted it would now be refused. Review caught one checked-in script that did omit it, `scripts/smoke/smoke-commission_payment_for_update_fix.sql`, which passed NULL twice and would have started failing the moment the migration landed; it is fixed in the same change, with a distinct key per scenario so that what rejects a call is the guard the scenario is about rather than a replay of the previous scenario's receipt.
+- **Post-side parity with the create side.** The post path now re-reads the payment's status after a success and warns instead of congratulating when the replayed payment has since been voided, and it no longer records an activity-feed entry for a posting that no longer stands. Its ordinary failure message says the payment may still have been posted and that pressing Post again is safe, rather than a flat "failed" that invites the admin to treat a committed posting as never having happened.
+- **Round-6 fixes.** The migration-scanning guard in the payout test suite was matching function definitions with regular expressions, so a `--` comment between the DDL keywords, an unqualified `CREATE FUNCTION`, a commented-out definition or one sitting inside a string literal could each hide or fake a definition; it was rewritten around a real SQL lexer that treats comments as whitespace, nests block comments, distinguishes `$1` from a dollar-quote tag, and anchors each body on its own `AS` so a routine-level `SET search_path = ''` is not mistaken for the function body. The rename blocks now match their identity markers against the body with comments stripped, so a function that merely *names* `check_idempotency()` in a comment cannot pose as the payout implementation. The required-key check gained a locale-independent second predicate, because `[[:space:]]` follows the database collation and a key of one non-breaking space would otherwise have been accepted as a real key on some clusters. On the client, the idempotency key is now derived with a mirror of Postgres `btrim(text)` rather than JavaScript `String.trim()` — trim strips tabs, newlines and Unicode spaces that btrim keeps, so the two normalizations disagreed and a retry the admin had not changed could come back refused as an intent mismatch — and the void key now moves with the void reason, which the server fingerprints, instead of with the payment row alone. A new source scan asserts that every payout call site in `src/` passes a non-null `p_idempotency_key`, which is the durable form of the type-level gap: the generated `src/types/supabase.ts` still reports the argument as optional and would lose any hand edit on the next regeneration.
+- **Round-7 fixes.** Three defects were in the guards themselves. `pg_proc.prosrc` keeps string literals as well as comments, so a body whose only mention of the contract markers sat inside a `RAISE NOTICE` still satisfied the rename's identity check; literals are now stripped too. Postgres block comments *nest* while the non-greedy strip stops at the first `*/`, which is the one direction in which stripping can *fabricate* a marker instead of removing one, so any body whose stripped form still carries a stray `/*` or `*/` is now refused outright. And the locale-independent blank-key predicate was not actually locale-independent: a bracket *range* like `[!-~]` is resolved through the active collating sequence exactly as `[[:space:]]` is, so it now carries an explicit `COLLATE "C"`. On the client, a binding refusal in the Reports quick-pay loop used to clear the *whole* map of retained keys, which undid the partial-batch protection — recipient A lands, recipient B is refused, and clearing throws away A's key too, so the retry sends A a new key, the server refuses A because its commissions are already in a live payment, and the loop dies before it ever reaches B; only the key actually refused is dropped now. The ordinary (non-binding) void failure reported a flat "Failed to void payment" over a list it had never refreshed, even though the RPC may have committed and lost its reply; it now refreshes first and says the void may still have gone through. The SQL lexer behind the migration-scanning guard gained three fixes of its own: a single-quoted `AS '…'` function body is now decoded and re-lexed rather than read as opaque text (a commented-out guard inside one satisfied a `.toContain()` while the live function was unguarded), quoted identifiers no longer yield SQL keywords to the scanner, and an unqualified `CREATE FUNCTION` following a *statement-level* `SET search_path` is refused rather than guessed at — distinguished from the routine-level clause that appears in hundreds of this repository's migrations by walking back to the statement boundary.
+- **Round-8 fixes.** The identity check that decides whether a live body may be renamed was reducing that body to code with a chain of `regexp_replace` strips, and a regex chain is unsound in the direction that matters: a dollar-quoted literal is invisible to a `'…'` pattern, a `--` inside a literal eats that literal's closing quote, an E-string's backslash-escaped quote breaks quote pairing, and — because Postgres block comments *nest* while a non-greedy `/\*.*?\*/` stops at the first close — a strip could *fabricate* a marker rather than remove one. It is now a character-loop lexer, `_crx_payout_code_only_20260809`, that knows each construct's real terminator and raises on anything it cannot terminate, so whatever it cannot read confidently is refused rather than passed; the helper is revoked from every browser-reachable role, dropped at the end of the migration, and a post-condition refuses if it survived. Three test-quality defects were fixed alongside. The migration suite's own reader used plain `indexOf` where the guards suite already had a real lexer, so the two could disagree about where a wrapper body began — both now share one module, `src/lib/sqlSourceLexer.ts`, and assertions about executable SQL run against a code-only view that blanks the literals a body prints, so `RAISE NOTICE 'FOR UPDATE OF c'` can no longer satisfy an assertion about a lock the function does not take. The scan that requires every `.rpc()` name to be a plain string literal was only looking at the first character after the parenthesis, so a name assembled from a literal plus an expression passed it while being invisible to the payout call-site scan; it now reads the whole literal — and doing so exposed a real blind spot, a cast-bearing call the payout scan could not see either, which is closed in the same shape. Finally, on the commission payments page, the three busy flags that disable the buttons moved into `finally` blocks (a throw from inside a recovery path had been able to leave a button disabled until a page reload), and a recovery path that refreshed the list loudly now refreshes quietly, so the generic "Failed to load" toast no longer stacks on top of the specific message that already explains what happened.
+- **Round-9 fixes.** The first was a real defect in the migration rather than in a guard. Each rename block skips the rename when the private implementation function already exists — the re-runnability path — and it also skipped the identity check along with it, so a re-run after a partially-applied migration, or any unrelated function that happened to occupy that name, would have been adopted as the payout implementation with nothing checked. The wrapper would then bind a receipt, call whatever was there, and report a successful payout for work the real implementation never did. Every block now holds the pre-existing body to exactly the same test, and the container proof exercises both directions: a wrong body under the implementation name is refused, and a genuine second application of the migration still succeeds. The identity check was also matching its two contract markers as bare substrings, so `fakecheck_idempotency(` and `archived_commission_payment_items` would each have satisfied it; the markers are now matched on identifier boundaries. A body carrying `standard_conforming_strings = off`, at the function level or the session level, is now refused outright rather than read under a quoting rule the lexer does not implement. Both lexers — the migration's own and the TypeScript one behind the source scans — read a dollar-quote tag the way Postgres actually defines it rather than as ASCII letters only, and they now agree on what counts as an identifier character, which they did not: where they disagreed, the scanner refused a body the database accepts. Both were widened in the fail-closed direction, since over-blanking loses a marker and refuses, while under-blanking reads a literal's contents as code and can count a hidden marker as a real guard. Two client defects were fixed as well: the commission payments list refresh could itself reject out of the recovery handler that awaited it — a network drop mid-recovery was enough — which skipped the specific "your payout may have gone through, reload and check" message and left the spinner up; and on Reports, the Mark Paid busy flag was cleared after the catch rather than in a `finally`, so a throw from the same refresh left the button disabled with no way back but a page reload. Four further findings were declined and the reasons recorded in review: one asks the dollar-quote reader to implement Postgres's opener rule for identifier boundaries, which would move it in the *unsafe* direction, and three are test-scanner durability items that presuppose a hostile future author rather than a runtime defect.
+- **Round-10 fixes.** Three of them were holes in the identity check itself, all in the fail-*open* direction. The lexer read a dollar-quote tag out of a fixed 256-character window; Postgres puts no length limit on a tag, so a legal tag longer than the window was not recognised at all, the `$` was emitted as ordinary code, and everything inside that literal — markers included — was read as executable SQL. The tag is now matched against the remainder of the source with no window. The two contract markers were anchored on a *blacklist* of boundary characters, `[^A-Za-z0-9_$]`, and a blacklist cannot be written correctly for this: Postgres allows letters with diacriticals and non-Latin letters in unquoted identifiers, so the `é` in `fakeécheck_idempotency()` counted as a boundary and a body calling an entirely different function satisfied the marker again. The boundary is now a whitelist of the ASCII characters that may legally abut a call or a table reference, so any character the list does not name fails closed. And `pg_proc.prosrc` is language-dependent — for a SQL-standard `BEGIN ATOMIC` body it is not the source at all, and for an internal or C function it is a symbol name — so the checker now demands the one language whose source the lexer is written to parse and refuses anything else instead of parsing a symbol name as PL/pgSQL. The fourth is the limit of what marker matching can prove: a body can carry both markers inside `IF false` and never execute either, so presence is not reachability. Rather than chase an undecidable property, the *state machine* is constrained. A new `_crx_payout_assert_replay_20260809` runs before the body check on every replay path and permits only the two states this migration can legitimately re-enter — a completed prior apply, where the public function is this migration's wrapper, or an apply interrupted between the rename and the wrapper, where the public function is absent. An implementation that exists while the public function is still unwrapped is refused as a state this migration did not produce. As round 11 found, the round-10 form of that check proved "this is the wrapper" by searching the public function's *raw* source for the implementation's name, which a comment could satisfy; that is corrected below. The residual gap is documented rather than papered over: beyond that check it is bounded by `CREATE` privilege on schema `public`, and an actor holding that could replace the wrapper itself, so no check here is the real boundary. Two documentation defects were fixed alongside — `scripts/smoke/smoke-specs.json` described the *opposite* of the migration's NULL-key behaviour, and the counts below were stale.
+- **Round-11 fixes.** The state check round 10 had just added was itself fail-open, in the same shape as the holes it was written to close. It proved "a prior apply completed" by searching the public function's *raw* source for the implementation's name — and raw source includes comments, so any function carrying `-- _create_commission_payment_intent_impl_20260809` in a comment declared the wrapper installed. Paired with a planted implementation whose contract markers sit in executable-but-unreachable code, which the body check cannot distinguish, the migration would have adopted a body that never pays anyone and wrapped it in a real receipt. The public function's source now goes through the same lexer as everything else before it is believed, so comments and literals are blanked; the wrapper's *executable* text must contain a call to the implementation, not merely name it in a comment; and it must likewise contain a call to `check_idempotency_intent()`, which this migration introduces and no implementation contains, so a bare passthrough cannot pose as the wrapper either. What that proves is lexical — that the calls are in the code rather than in a comment or a string — not that either one ever runs; see round 12. The same language guard applied to implementations now applies here, and the implementation's name is regex-escaped before it reaches the pattern. Two smaller repairs: the boundary whitelist was missing the backtick, which is a legal Postgres operator character — its absence could only ever have refused a genuine body, never admitted a hostile one, but a migration that refuses in production and applies in a container is its own kind of defect — and that whitelist now has one shared definition, `_crx_payout_bnd_20260809()`, read by both checkers, because a boundary set written twice is a boundary set that drifts. The tests that were supposed to cover this were the MEDIUM finding of the same round: the structural suite had affirmatively pinned the comment-reading behaviour it should have refused, and the proof suite exercised neither half of the rule. Three proof cases were added — the exact round-11 attack, a passthrough that calls the implementation without the wrapper's own marker, and a non-PL/pgSQL stub whose text satisfies both code predicates — and the structural assertions were rewritten against the new form. One knock-on: the codebase-wide mutating-RPC inventory reads a function's body with regular expressions, so the new check's own `check_idempotency_intent` *regex string* was read as a call to that mutating function and the read-only helper was flagged as an unclassified mutator. It is recorded in the inventory's exemption list beside its sibling, with the reason stated — the function is `STABLE`, returns void, writes nothing, has EXECUTE revoked from every application role, and is dropped before the migration finishes.
+- **Mutation-proven.** Per the standing rule that an untested guard is decoration, 92 deliberate mutants were introduced one at a time across two harnesses — 28 against the real-Postgres container proof and 64 against the source-scanning and page-behavioural suites, including the ones that break only on the A→B→A return trip, the one that lets the payout run with no key, the seven that put the identity lexer back to reading literals, dollar quotes, nested comments and quoted identifiers as code or tolerating an unterminated construct, the one that leaves the helper behind after the migration, the one that reverts the client key to `String.trim()`, the two that stop the shared lexer blanking body literals, the one that names a payout RPC by concatenation, the ones that move a busy flag back outside its `finally`, the four that undo the round-9 guards — the replay path adopting a body unchecked, the markers matched as substrings again, `standard_conforming_strings = off` tolerated, and either lexer's dollar-quote tag narrowed back to ASCII — the five that undo the round-10 guards — the dollar-tag scan re-bounded to a fixed window, the identifier boundary put back to an ASCII blacklist, `prosrc` read without checking the function's language, the replay-state check removed or reordered to run *after* the body check rather than before it, and the new helper left behind at the end of the migration — and the ones that undo the round-11 guards: the replay check reading raw source again, the wrapper's own marker requirement dropped, the language check on the public function removed, the implementation name reaching the regex engine unescaped, the backtick dropped from the boundary whitelist, and the shared boundary helper left behind or its post-condition removed. Every mutant turned its suite red. Five of them only went red after the guards they targeted were given assertions that could actually observe them, which is the point of running the harness rather than trusting the guard: the most recent survivor was a `toContain()` satisfied by *either* of the two paths that raise the same load-failure toast, so suppression could be dropped from one of them and the assertion still passed. The container proof itself proves the identity guard by behaviour rather than by text: it exercises the lexer directly against four code shapes that must survive, twelve never-executed constructs whose contents must not, and five unterminated constructs that must be refused, then plants twelve impostor bodies — markers hidden in a string literal, in nested-comment residue, in a dollar-quoted diagnostic, in a dollar-quoted diagnostic whose tag is 260 characters long, in a literal whose closing quote a `--` strip would eat, in an E-string with an escaped quote, in a literal holding a `*/`, as quoted identifiers, as the tails of longer ASCII identifiers, and as parts of longer non-ASCII identifiers, plus one that carries the real markers but turns `standard_conforming_strings` off and one that is not PL/pgSQL at all — and asserts the rename refuses all twelve while the genuine body still goes through. Six further bodies exercise the replay path specifically: one planted under the private implementation's name while the public function is still unwrapped, which has to be refused on the state before the markers are ever looked at; one swapped in underneath a genuinely completed apply, which the marker check has to catch on its own; one whose only mention of the implementation is a comment inside an otherwise-unwrapped public function, paired with a planted implementation whose markers sit in real executable text so the body check cannot save it; one that calls the implementation but is a bare passthrough rather than the wrapper; and one non-PL/pgSQL stub whose text satisfies both code predicates. The migration is then applied twice over to prove that same path still accepts the implementation it installed itself. The verification sweep run against this working tree: `tsc --noEmit` clean, `eslint` clean on all changed files, the full suite at 324 files / 4,408 tests passing (123 skipped) with no failures and no flake on the run, all 92 mutants killed, and `prove-commission-payout-intent-binding.mjs` returning PASS against a disposable Postgres 17 container.
+- **Round-12 fixes, and the limit this change stops at.** Round 12 returned five findings and re-opened round 11's HIGH: the replay check proves that a call to the implementation and a call to `check_idempotency_intent()` *occur* in the public function's executable text, which a body that parks both inside `IF false` satisfies while running neither. That is not closeable by a better text check — reachability is undecidable from source, and any predicate stated here is one the author of a planted body can read and satisfy. It is now pinned rather than argued about: a sixth proof case builds exactly that pair, asserts the migration adopts the planted body, and fails the moment a later change makes it refuse, so the claim in this file cannot drift away from what the code does. The barrier that actually stops the scenario is `CREATE` privilege on schema `public` — an actor who can install both of those functions can replace the wrapper the instant the migration finishes, with or without this check — and the check's real job is to stop the migration adopting a half-applied or hand-edited state by accident, which text matching does adequately. Two mechanical fixes landed alongside: the shared TypeScript lexer recognised double-quoted identifiers only *outside* a function body, so a quoted alias such as `AS "FOR UPDATE OF c"` survived the code-only view and could have satisfied a lock assertion after the real lock was deleted (it is blanked in that view now, which is the fail-closed direction), and the two public documents were rewritten where they said the wrapper must "actually call" the implementation. One round-12 finding was declined with evidence: the boundary whitelist was reported as missing `.`, which would have made the migration refuse a schema-qualified production body forever — the character is present, between `}` and the escaped quote.
+- **Deliberately not fixed here.** Idempotency keys are still lost on component remount codebase-wide; that classification was raised and accepted in review as out of scope for this change.
+- **Commits this session** (git log origin/main..HEAD):
+  - `e3dddf70 Bind commission payout idempotency to actor and intent`
+  - `c6b6be7a Record Section 7 commissions gauntlet refresh`
+  - `4fa7ec27 Close the DO-NOT-SHIP findings on payout intent binding`
+  - `17bc9815 Close the six findings from the payout intent-binding re-review`
+  - `af22dc16 Close round-3 review findings on payout intent binding`
+  - `054e2de4 Close round-4 review findings on payout intent binding`
+  - `c5fb7bf8 Close round-5 review findings on payout intent binding`
+  - `dbcdb4f6 Index migration 20260811130000 in migration-history`
+  - `d4b21b86 Close round-6 payout intent-binding findings`
+  - `ca8802fd Close round-7 payout intent-binding findings`
+  - `8c818619 Close round-8 payout intent-binding findings`
+  - `c22ff94d Close round-9 findings on the payout intent binding`
+  - `5c11b013 Close round-10 fail-open holes in the payout identity check`
+  - plus this commit, closing the round-11 findings and recording the work here.
+
+## 2026-08-09 — Team Board delegated completion shipped (database live, frontend merged via PR #351)
+
+Assigning a to-do to a teammate on the Team Board was effectively broken: the checkbox
+wrote straight to the table, and the creator-or-admin row policy silently rejected the
+assignee, so their click did nothing. Delegation is now governed by an RPC and the
+notification path is hardened.
+
+**Live database changes (owner-approved; applied and verified live on 2026-08-09/2026-08-10).** Both migrations below were already live before this entry was written. The PR carrying this entry (#372) recorded and re-verified that closeout only — it applied neither of these two migrations and mutated no live data through them.
+
+- `20260809130108_team_note_completion_rpc_and_assignment_notify` — adds
+  `complete_team_note(note_id, completed, idempotency_key)` as a SECURITY DEFINER function
+  with a pinned `search_path`, taking the actor from `auth.uid()` so it cannot be forged.
+  Authorization (creator, current assignee, or active admin) runs *before* the idempotency
+  replay, and the function reports the row's actual state so a no-op cannot rewrite
+  `completed_by`. Also adds the assignment trigger that files one `task_assigned`
+  notification, staying silent on self-assignment and unchanged assignees. Revoked from
+  PUBLIC and anon; granted to authenticated and the default `service_role` grant, while
+  runtime authorization still requires an active `auth.uid()` actor.
+- `20260810010308_active_team_note_assignment_actor` (authored as `20260809154649`) —
+  closes the gap review found afterwards: a deactivated profile whose token had not yet
+  expired could satisfy the legacy creator-only insert policy and make the owner-run
+  trigger notify an active teammate. Now the insert policy requires an active profile and
+  the trigger independently rejects an inactive effective actor. `tnotes_update` is
+  deliberately unchanged.
+
+Both migrations cleared the `rls-security-reviewer` and `migration-drift-reviewer` charters
+with CLEAN machine verdicts on the exact file content before apply, and both disk files were
+renamed content-identically to their server-assigned ledger versions.
+
+**Proven against live, by rollback-only probes rather than tests alone.** An active
+non-admin assignee completed a note they did not create, with `completed_by` stamped from
+`auth.uid()` and exactly one notification filed; an unrelated employee was refused with
+`NOT_AUTHORIZED_TO_COMPLETE`; a real deactivated profile was refused at the row-policy layer;
+and with that layer deliberately bypassed, the trigger's own guard raised `PROFILE_INACTIVE`.
+The normal assignment and completion path was re-checked afterwards and was unaffected.
+
+**Frontend (merged via PR #351; production rollout follows its Vercel deployment).** Team Board calls the
+RPC instead of writing the table, guards against double-submit, and maps the actionable runtime
+errors to specific messages. The checkbox is disabled with an explanatory tooltip for viewers who
+are not the creator, assignee, or an admin. Notification deep-links now route team notes to
+the board, and the deep-link fetch no longer waits on a populated list before resolving.
+
+**Post-apply closeout.** The full registered chain
+`scripts/smoke/smoke-complete-team-note-chain.sql` ran against live and reached exact
+`SMOKE_PASS_ROLLBACK`, proving the business path and fixture rollback. The schema registry
+was genuinely regenerated from live introspection through high-water `20260810025159`, and
+the generated TypeScript types match live. *(The registry has since been regenerated again,
+through high-water `20260810235207` — see the 2026-08-10 reconciliation entry at the top of
+this file. `20260810025159` is the high-water this Team Board closeout observed, not the
+current one.)*
 
 ## 2026-08-09 — Settled the canonical-profit question and applied the fix live
 
@@ -1046,53 +1850,14 @@ that fix (rebased onto the new `main`) plus the two Codex findings raised agains
 
 Coverage: apply-guard 79 assertions, ordering-lib 18, `agent-manifest-parity` clean.
 
-## 2026-08-09 — Team Board delegated completion shipped (database live, frontend in PR #351)
+## 2026-08-09 — Team Board delegated completion shipped (SUPERSEDED — see the entry above)
 
-Assigning a to-do to a teammate on the Team Board was effectively broken: the checkbox
-wrote straight to the table, and the creator-or-admin row policy silently rejected the
-assignee, so their click did nothing. Delegation is now governed by an RPC and the
-notification path is hardened.
-
-**Live database changes (owner-approved, applied this session).**
-
-- `20260809130108_team_note_completion_rpc_and_assignment_notify` — adds
-  `complete_team_note(note_id, completed, idempotency_key)` as a SECURITY DEFINER function
-  with a pinned `search_path`, taking the actor from `auth.uid()` so it cannot be forged.
-  Authorization (creator, current assignee, or active admin) runs *before* the idempotency
-  replay, and the function reports the row's actual state so a no-op cannot rewrite
-  `completed_by`. Also adds the assignment trigger that files one `task_assigned`
-  notification, staying silent on self-assignment and unchanged assignees. Revoked from
-  PUBLIC and anon; granted to authenticated only.
-- `20260810010308_active_team_note_assignment_actor` (authored as `20260809154649`) —
-  closes the gap review found afterwards: a deactivated profile whose token had not yet
-  expired could satisfy the legacy creator-only insert policy and make the owner-run
-  trigger notify an active teammate. Now the insert policy requires an active profile and
-  the trigger independently rejects an inactive effective actor. `tnotes_update` is
-  deliberately unchanged.
-
-Both migrations cleared the `rls-security-reviewer` and `migration-drift-reviewer` charters
-with CLEAN machine verdicts on the exact file content before apply, and both disk files were
-renamed content-identically to their server-assigned ledger versions.
-
-**Proven against live, by rollback-only probes rather than tests alone.** An active
-non-admin assignee completed a note they did not create, with `completed_by` stamped from
-`auth.uid()` and exactly one notification filed; an unrelated employee was refused with
-`NOT_AUTHORIZED_TO_COMPLETE`; a real deactivated profile was refused at the row-policy layer;
-and with that layer deliberately bypassed, the trigger's own guard raised `PROFILE_INACTIVE`.
-The normal assignment and completion path was re-checked afterwards and was unaffected.
-
-**Frontend (pushed to PR #351, not yet merged — users do not have it).** Team Board calls the
-RPC instead of writing the table, guards against double-submit, and maps six new error codes
-to specific messages. The checkbox is disabled with an explanatory tooltip for viewers who
-are not the creator, assignee, or an admin. Notification deep-links now route team notes to
-the board, and the deep-link fetch no longer waits on a populated list before resolving.
-
-**Not done.** The registered chain `scripts/smoke/smoke-complete-team-note-chain.sql` still
-needs its external `SMOKE_PASS_ROLLBACK` terminal; it is a manual `npm run smoke` spec, not
-CI. `.claude/schema-registry.json` was stale at `20260809130108` when this entry was first
-written; the merge into `main` on 2026-08-10 moved its high-water to `20260810010308` and
-added the two migrations below to its applied list. None of these changes alter a table,
-column, constraint, or enum, so no schema-shape section of that file moved.
+> **Superseded 2026-08-10.** This entry was written mid-flight, while PR #351 was still open and the
+> registered smoke chain had not yet returned its terminal marker. Both statements are now false: PR #351
+> merged on 2026-08-10 (merge commit `8dcb82fb`), and the chain reached exact `SMOKE_PASS_ROLLBACK` against
+> live. The accurate record of this work is the
+> **2026-08-09 — Team Board delegated completion shipped (database live, frontend merged via PR #351)**
+> entry earlier in this file. The stale text is removed rather than kept, so no reader can act on it.
 
 ## 2026-08-09 — Line-profit precision repair (live), dependency updates, and a public-repo disclosure guard
 
@@ -1259,6 +2024,22 @@ marks parked state unknown instead of silently reporting a clean zero.
 Final exact-head review hardening makes an explicit parked SQL header unable to bypass a stale
 history pin, and makes every linked worktree prefer the shared canonical backup marker over any
 conflicting local copy. This keeps both migration and backup status fail-closed and fleet-wide.
+
+**2026-08-10 merge reconciliation:** the four audit-time candidates were subsequently re-issued
+above the live high-water and applied through the governed migration pipeline on 2026-08-09. The
+SHA-pin coverage now uses repository fixtures; it no longer describes those applied files as parked.
+The final exact-SHA adversarial review also found and drove a fail-closed correction: unreadable
+worktree migration history now marks parked state unknown, and degraded disk discovery recognizes
+a matching history SHA pin instead of requiring an SQL status header. Shared regressions cover both
+paths, and the real fleet and SessionStart consumers still report zero parked migrations.
+After three normal pre-commit attempts exposed unrelated 5–15 second test timeouts under concurrent
+CRX worktree load, local Vitest concurrency was capped at two workers (CI keeps its isolated-runner
+default). The complete suite then passed all 323 files and 4,304 active tests without relaxing any
+individual timeout or skipping any test.
+The follow-up exact-SHA review then caught a timeout-scale regression in degraded migration discovery:
+the 600+ KiB history file was reparsed for every SQL file. Fallback classification now parses history
+once per worktree and reuses the structured result; a 867-file regression proves one parse and
+completion inside the SessionStart hook's 10-second budget.
 
 ## 2026-08-08 — PR #352 review hardening rounds: fixed Codex and CodeRabbit findings in…
 
@@ -8513,7 +9294,6 @@ Source: Mason's narrated ChemMan screen recordings (docs/walkthroughs/) -> gap a
 - Review-gate kills this run included: condensed loader PDF summing chemical amounts (double-strength risk), dead Save buttons, pan-erases-sketch, obstacle-mode boundary-drag/keyboard bypasses, wrong acres on printed maps, CSP-blocked legal lookup.
 - Tests at wrap: 3,351 passed / 117 skipped. Final whole-branch review satisfied by per-unit CLEAN verdicts covering 100% of the branch delta (every pushed line was verdicted; no unreviewed lines exist).
 
-
 ## 2026-07-11 — Mobile overhaul loop COMPLETE on feat/mobile-overhaul-2026-07 (6 commits, frontend-only): bottom nav + drawer, compact TopBar/scrollable Tabs/PageHeader, Jobs/Dispatch/Inventory/Receiving phone cards, Cockpit+Field Invoices 375px pass, full-screen modals + PWA polish. All gates green. Awaiting Mason 'push it'.
 
 Mobile overhaul loop COMPLETE on feat/mobile-overhaul-2026-07 (6 commits, frontend-only): bottom nav + drawer, compact TopBar/scrollable Tabs/PageHeader, Jobs/Dispatch/Inventory/Receiving phone cards, Cockpit+Field Invoices 375px pass, full-screen modals + PWA polish. All gates green. Awaiting Mason 'push it'.
@@ -8910,9 +9690,6 @@ Turned the previously read-only **Brand vs Generic** page into an admin CRUD man
 - **Proof:** typecheck + eslint + build clean · every-page render smoke · 4 behavioral tests (real render + click-through capturing the actual insert payload) · **rolled-back LIVE insert smoke** — both payload shapes accepted by the real `ingredient_map` schema (FK + NOT NULL), aborted, 0 rows persisted. `compliance-reviewer` CLEAN.
 - **Ship state:** committed to `fix/structure-wave-2026-07`, **not** pushed to `main`. Merging the branch to `main` deploys it (Vercel) — owner-gated.
 
-
-
-
 ## 2026-07-02 — Inventory-aware scheduling, Layer 2 (scheduled jobs reserve + draw against bookings)
 
 Scheduled field jobs now actually **reserve** the inventory they'll consume, instead of just showing a warning light. When a job is scheduled, each product on it becomes a real inventory hold (`hold_type='job'`, non-expiring), and if the job belongs to a planned booking (a quote), it **draws** against that booking so the same units are never counted or billed twice. Built file-only in the `feat/inventory-layer2` worktree, hardened over 5 Codex rounds, then applied live as one batch (14 migrations) on Mason's go-ahead.
@@ -8926,7 +9703,6 @@ Scheduled field jobs now actually **reserve** the inventory they'll consume, ins
 - **Final Codex push-gate (2026-07-03)** ran on the exact merge tip and surfaced 3 P1s. One was newly-caught and single-job-reachable — **`save_quote` let you un-check "Planned" on a booking a scheduled job was still drawing from**, which reopened the booking while the job kept consuming stock (double-count). Fixed + applied live as migration **`20260702183000`** (A3.10): `save_quote` now rejects the unplan with `BOOKING_HAS_JOB_RESERVATION` (verbatim reproduction + guard-only change; rls + drift reviewers clean; `plpgsql_check` clean; post-apply sweeps clean).
 - **Coordination fix — the deferred multi-job P1s are now CLOSED (2026-07-03, migration `20260703120000`, A3.11).** A post-fix Codex gate on `183000` confirmed the unplan guard but showed it was one facet of a broader gap: quote edits and job scheduling didn't coordinate their reservations. Built ONE designed fix — a coordinated allocator **`_sync_quote_job_reservations`** that rebuilds all of a quote's active jobs together, sharing the crop-drawable remainder and the order-prebooked coverage ONCE across sibling jobs (first-come-first-served). It closes all four open facets: multi-job sibling reallocation on cancel (#2), order coverage counted once not per-job (#3), a stale job draw when a quote's booked quantity grows (#4), and a TOCTOU race in the unplan guard (#5 — `save_quote` now locks the quote before checking). `_sync_job_holds` re-routes quote-linked jobs through it; `save_quote` re-syncs its jobs after every edit. For a single job it is arithmetically identical to the old formula, so nothing changes in the common one-job case. Warn-only. Proven before apply: `plpgsql_check` clean, a 5-scenario arithmetic replay of every Codex target, and a real rolled-back `[E2E]` end-to-end (two jobs share a booking of 100 → draws 60/40, holds 60/60 → cancel one → the sibling re-draws to 60); rls + drift reviewers + Codex all clean; post-apply sweeps clean. **No residual Layer 2 deferrals remain.**
 - **Two sell channels kept separate (2026-07-03, migration `20260703130000`, A3.12).** Owner clarified the business runs two channels off the same planned booking: **chemical sales** (product we deliver to the customer for them to apply) and **job applications** (product we apply for the customer). Both hold shed stock until fulfilled, for different reasons, so their reservations must **add up, never offset** — and Mason needs an accurate "what's scheduled for us to apply" count. A full-feature Codex push-gate over the whole feature surfaced three items: **#A** the job-reservation math was *shrinking* a job's shed reservation by whatever an order had already drawn (assuming the two channels shared stock) — under-counting the shed need; fixed so **a job reserves its full application demand** (draws still cap at the booking, so nothing is double-billed — only the reservation grew to be honest). **#C** restoring an old quote version didn't re-sync its jobs; fixed to call the coordinated allocator like a normal save. **#B** (relaxing the accept guard so a completed-job booking could be "accepted") was **deliberately dropped** — in this app "accept" means Convert-to-Order (a chemical sale), which is the wrong channel for a booking fulfilled by application; Codex confirmed it was both unreachable and semantically wrong. Such bookings safely stay open (fulfilled via the application invoices); a dedicated "close / mark fulfilled by application" action is a separate owner business-process decision. Proven before apply: `plpgsql_check` clean, and a real rolled-back `[E2E]` end-to-end (order 40 + booking 100 + job needing 80 → job reserves **80** full, draws 60); rls + drift reviewers + Codex clean (only a routine doc-count); post-apply sweeps clean. Frontend: the Inventory holds list now shows a **"Job"** badge and hides the (now server-rejected) Release button for job reservations, which release automatically via the job lifecycle.
-
 
 ## 2026-07-03 — Structure Wave-2: AR due-date/aging + configurable reminder + product-category two-axis remap (4 migrations APPLIED LIVE)
 

@@ -97,7 +97,10 @@ prompt instead of a diff scope, pass the prompt ALONE (omit the scope flag).
 
 The failure classes `AGENTS.md` keeps Codex pointed at:
 - (1) RLS / SECURITY DEFINER actor-forgery — authenticated-executable SECDEF mutators that never reference auth.uid()/a sound auth helper, trust a forgeable p_performed_by without an ACTOR_MISMATCH gate, or bind auth.uid() but don't role-gate vs the UI route.
-- (2) Money — parseFloat/float on *_cents, cents-vs-dollars mixups, money stored as anything but bigint cents.
+- (2) Money — binary-float conversion/parsing/arithmetic/rounding, cents-vs-dollars mixups, new money storage that is
+  not bigint cents, or legacy PostgreSQL numeric-dollar storage without verified exact `numeric`
+  arithmetic, clean finite whole-cent values, and an active finite whole-cent CHECK. Dirty or
+  unconstrained legacy columns stay reportable and must not be suppressed as approved exceptions.
 - (3) Idempotency — idempotency_keys lookups not scoped to operation= (key-only lookups return another op's cached row); RPCs that declare p_idempotency_key but ignore it.
 - (4) Migration drift — CHECK-constraint regressions (new list must be a superset), function-overload collisions, missing SET search_path = public, pg_temp, updated_at on tables that lack it.
 - (5) Lifecycle violations per CLAUDE.md (quote/order/delivery/invoice/return state machines).

@@ -2,15 +2,21 @@ import { useRef, useCallback } from 'react';
 import { generateIdempotencyKey } from '../lib/idempotency';
 
 /**
- * React hook for retry-safe idempotency keys.
+ * Provides a stable idempotency key for a single mutation intent.
  *
- * Generates a key once per action intent and persists it in a ref so that
- * if the user retries (network timeout, error), the SAME key is sent again.
- * The server deduplicates on the key, preventing duplicate mutations.
+ * The key is generated lazily on the first call to `getKey()` and remains
+ * stable across retries. This is critical for safe retry behavior: if a
+ * network error occurs after the server committed, retrying with the same key
+ * lets the server return the original result instead of duplicating the work.
  *
- * Call `getKey()` in your action handler — it returns the current key
- * (generating one on first call). Call `resetKey()` only after a
- * confirmed success to prepare for the next distinct action.
+ * Call `getKey()` in your action handler. Call `resetKey()` after a confirmed
+ * success or after the server proves the key is bound to a different payload.
+ *
+ * Pass `intentScope` when one mounted action can target different records or
+ * payloads. One key is retained per scope without embedding the payload in the
+ * generated key. Switching scopes mints a fresh key, while returning to a scope
+ * with an unresolved outcome reuses its original key. This preserves both
+ * customer-assignment intent rotation and commission-payout A → B → A replay.
  *
  * @example
  * const { getKey, resetKey } = useIdempotencyKey('complete_delivery', profile.id);
@@ -18,27 +24,27 @@ import { generateIdempotencyKey } from '../lib/idempotency';
  * async function handleComplete() {
  *   const key = getKey();
  *   await supabase.rpc('complete_delivery', { p_idempotency_key: key, ... });
- *   resetKey(); // call on success — next click is a new action
- *   // on error (caught upstream), key stays the same for retry
+ *   resetKey(); // confirmed success only
  * }
  */
-export function useIdempotencyKey(operation: string, userId: string) {
-  const keyRef = useRef<{ scope: string; key: string } | null>(null);
-  const scope = JSON.stringify([operation, userId]);
+export function useIdempotencyKey(operation: string, userId: string, intentScope = '') {
+  const keysRef = useRef(new Map<string, string>());
+  const scope = JSON.stringify([operation, userId, intentScope]);
 
   const getKey = useCallback((): string => {
-    if (!keyRef.current || keyRef.current.scope !== scope) {
-      keyRef.current = {
-        scope,
-        key: generateIdempotencyKey(operation, userId),
-      };
+    let key = keysRef.current.get(scope);
+    if (!key) {
+      key = generateIdempotencyKey(operation, userId);
+      keysRef.current.set(scope, key);
     }
-    return keyRef.current.key;
+    return key;
   }, [operation, scope, userId]);
 
+  // Retire only the current intent. Other unresolved scopes keep their replay
+  // keys in case the user returns to them before this component unmounts.
   const resetKey = useCallback((): void => {
-    keyRef.current = null;
-  }, []);
+    keysRef.current.delete(scope);
+  }, [scope]);
 
   return { getKey, resetKey };
 }

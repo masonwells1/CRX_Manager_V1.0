@@ -20,12 +20,28 @@
  * commit message.
  */
 import { describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MIGRATIONS_DIR = join(ROOT, 'supabase', 'migrations');
+
+/**
+ * The migration corpus (ascending chronological), read from disk ONCE at module
+ * load. `effectiveBody` runs once per guarded function and used to walk back
+ * through the 800+ migration files with a fresh `readFileSync` each time — the
+ * disk work was O(functions × files) and got billed to individual tests, which
+ * blew the 5s default timeout under the full parallel suite (150 files
+ * contending for one disk) while passing comfortably in isolation. Reading each
+ * file once makes the I/O O(files) total and keeps it outside any test's
+ * timeout budget; the per-function walk is then pure in-memory regex.
+ */
+const MIGRATION_FILES: { name: string; content: string }[] = readdirSync(MIGRATIONS_DIR)
+  .filter((f) => f.endsWith('.sql'))
+  .sort() // timestamp-prefixed → ascending chronological
+  .map((name) => ({ name, content: readFileSync(join(MIGRATIONS_DIR, name), 'utf8') }));
 
 /**
  * Latest disk definition per function NAME, merging OVERLOADS: each distinct
@@ -52,14 +68,10 @@ function argFingerprint(argText: string): string {
 function latestDiskDefinitions(): Map<string, { file: string; body: string }> {
   const perOverload = new Map<string, { fn: string; file: string; body: string }>();
   const tombstoned = new Set<string>();
-  const files = readdirSync(MIGRATIONS_DIR)
-    .filter((f) => f.endsWith('.sql'))
-    .sort()
-    .reverse();
+  const files = [...MIGRATION_FILES].reverse(); // newest → oldest
   const defRe = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?([A-Za-z_][A-Za-z0-9_]*)\s*\(/gi;
   const dropRe = /DROP\s+FUNCTION\s+(?:IF\s+EXISTS\s+)?(?:public\.)?([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)/gi;
-  for (const file of files) {
-    const content = readFileSync(join(MIGRATIONS_DIR, file), 'utf8');
+  for (const { name: file, content } of files) {
     let m: RegExpExecArray | null;
     while ((m = defRe.exec(content)) !== null) {
       const fnName = m[1].toLowerCase();
@@ -209,7 +221,7 @@ const REQUIRED_SMOKES = [
  * (the repo's wrap-and-rename hardening pattern, e.g. void_invoice 2026-07-20).
  */
 function effectiveBody(fn: string, defs: Map<string, { file: string; body: string }>): { files: string[]; body: string } {
-  const migFiles = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort();
+  const migFiles = MIGRATION_FILES; // ascending chronological, read once at module load
   const files: string[] = [];
   let body = '';
   const visited = new Set<string>();
@@ -218,12 +230,12 @@ function effectiveBody(fn: string, defs: Map<string, { file: string; body: strin
   function latestDefBefore(name: string, beforeIdx: number): { file: string; body: string } | null {
     const defRe = new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+(?:public\\.)?${name}\\s*\\(`, 'i');
     for (let i = beforeIdx - 1; i >= 0; i--) {
-      const c = readFileSync(join(MIGRATIONS_DIR, migFiles[i]), 'utf8');
+      const c = migFiles[i].content;
       const d = c.match(defRe);
       if (!d || d.index === undefined) continue;
       const after = c.slice(d.index);
       const bodyMatch = after.match(/AS\s+\$([A-Za-z_]*)\$([\s\S]*?)\$\1\$/);
-      return { file: migFiles[i], body: bodyMatch ? bodyMatch[2] : after };
+      return { file: migFiles[i].name, body: bodyMatch ? bodyMatch[2] : after };
     }
     return null;
   }
@@ -231,7 +243,7 @@ function effectiveBody(fn: string, defs: Map<string, { file: string; body: strin
   /** Resolve a name that has no disk CREATE via `ALTER FUNCTION <orig> RENAME TO <name>`. */
   function resolveRenamed(name: string): { file: string; body: string } | null {
     for (let i = migFiles.length - 1; i >= 0; i--) {
-      const content = readFileSync(join(MIGRATIONS_DIR, migFiles[i]), 'utf8');
+      const content = migFiles[i].content;
       const r = content.match(new RegExp(
         `ALTER\\s+FUNCTION\\s+public\\.([A-Za-z_][A-Za-z0-9_]*)\\s*\\([^)]*\\)\\s*RENAME\\s+TO\\s+${name}\\b`, 'i'
       ));
@@ -308,6 +320,19 @@ describe('Bug-class regression guards (2026-07-10..20 window)', () => {
 
   describe('fail-first smokes stay present and registered', () => {
     const specsRaw = readFileSync(join(ROOT, 'scripts', 'smoke', 'smoke-specs.json'), 'utf8');
+
+    it('fails loudly when only container-only smoke chains were selected', () => {
+      const result = spawnSync(
+        process.execPath,
+        ['scripts/smoke/run-smoke.mjs', '--spec', 'trg_recalc_order_totals'],
+        { cwd: ROOT, encoding: 'utf8', env: { ...process.env, SUPABASE_DB_URL: '' } }
+      );
+      const output = `${result.stdout}\n${result.stderr}`;
+
+      expect(result.status, output).not.toBe(0);
+      expect(output).toContain('node scripts/smoke/prove-blend-ticket-fractional-cents.mjs');
+    });
+
     for (const smoke of REQUIRED_SMOKES) {
       it(`${smoke} exists and is registered in smoke-specs.json`, () => {
         expect(existsSync(join(ROOT, 'scripts', 'smoke', smoke)), `${smoke} was deleted`).toBe(true);

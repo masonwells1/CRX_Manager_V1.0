@@ -66,9 +66,22 @@ const pending = listPostBaselineMigrations(
 );
 const { replay, quarantined } = partitionOneShot(pending, oneShotStems);
 const includeOneShot = process.argv.includes('--include-one-shot');
+const repairPlan = process.argv.includes('--one-shot-repair-plan');
 
-for (const name of includeOneShot ? pending : replay) {
-  console.log(path.posix.join('supabase', 'migrations', name));
+if (includeOneShot && repairPlan) {
+  throw new Error('--include-one-shot and --one-shot-repair-plan are mutually exclusive');
+}
+
+if (repairPlan) {
+  for (const name of quarantined) {
+    console.log(
+      `supabase migration repair ${name.slice(0, 14)} --status applied --db-url "$DATABASE_URL"`,
+    );
+  }
+} else {
+  for (const name of includeOneShot ? pending : replay) {
+    console.log(path.posix.join('supabase', 'migrations', name));
+  }
 }
 
 // stderr, not stdout: the plan on stdout must stay directly runnable, and a
@@ -80,11 +93,17 @@ if (quarantined.length > 0) {
     process.stderr.write(`  ${name}\n    ${registry.one_shot[name.slice(0, -4)]}\n`);
   }
   process.stderr.write(
-    includeOneShot
-      ? '  Replaying these rewrites rows on THIS database. Only do it against a ledger\n' +
-        '  you have proven matches the population the migration was approved against.\n\n'
-      : '  These edited data, not schema. After a restore the corrected values come back\n' +
-        '  with the DATA restore. Pass --include-one-shot only after proving the target\n' +
-        '  population matches the one each migration was approved against.\n\n',
+    repairPlan
+      ? '  Run this plan only AFTER independently proving the restored data already\n' +
+        '  contains every correction. It records the skipped versions so a later\n' +
+        '  unfiltered push cannot rediscover them.\n\n'
+      : includeOneShot
+        ? '  Replaying these rewrites rows on THIS database. Only do it against a ledger\n' +
+          '  you have proven matches the population the migration was approved against.\n\n'
+        : '  These edited data, not schema. After a restore the corrected values come back\n' +
+          '  with the DATA restore. Pass --include-one-shot only after proving the target\n' +
+          '  population matches the one each migration was approved against. After the\n' +
+          '  filtered push and data proof, run --one-shot-repair-plan so the skipped\n' +
+          '  versions cannot be rediscovered by a later unfiltered push.\n\n',
   );
 }

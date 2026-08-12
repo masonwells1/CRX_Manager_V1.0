@@ -282,7 +282,14 @@ describe('money and inventory gauntlet fixes', () => {
     expect(bulkImport).toContain('savePendingBulkPOIntents(localStorage, profile.id');
     expect(bulkImport).toContain('setUploadResults(failedCount === 0');
     expect(idempotency).toContain('const uuid = crypto.randomUUID()');
-    expect(idempotencyHook).toContain('keyRef.current.scope !== scope');
+    // The hook used to hold ONE key in one slot and compare its scope. That
+    // reissued correctly when the scope changed but could not replay a key on
+    // the way BACK to a row already acted on, so the retry the key exists to
+    // make safe became a brand-new request. Keys are now keyed by scope in a
+    // Map; the property this line has always guarded — a different scope never
+    // reuses another scope's key — is what the Map lookup asserts.
+    expect(idempotencyHook).toContain('let key = keysRef.current.get(scope)');
+    expect(idempotencyHook).toContain('keysRef.current.set(scope, key)');
     expect(bulkImport).not.toMatch(/\.from\(['"]purchase_orders['"]\)[\s\S]{0,250}\.(?:insert|update|delete|upsert)\(/);
     expect(detail).not.toMatch(/\.from\(['"]purchase_orders['"]\)[\s\S]{0,250}\.(?:insert|update|delete|upsert)\(/);
     expect(detail).toContain('Received line locked');
@@ -875,9 +882,21 @@ describe('money and inventory gauntlet fixes', () => {
       'prepay_applications',
     ]);
     const directMutations: string[] = [];
+    // The AST check below only ever fires when a call receiver's SOURCE TEXT
+    // contains `.from('<table>')` (or the double-quoted form). A receiver's text
+    // is always a substring of its file's text, so a file without that literal
+    // cannot produce a finding — skipping its TypeScript parse is exactly
+    // equivalent, not a narrowing of what this test asserts. It matters because
+    // parsing every file under src/ took ~1.5s alone and >22s under the full
+    // parallel suite, blowing this test's timeout on a machine-load flake.
+    const mutationLiterals = [...rpcOnlyTables].flatMap((table) => [
+      `.from('${table}')`,
+      `.from("${table}")`,
+    ]);
 
     for (const path of sourceFiles('src')) {
       const contents = source(path);
+      if (!mutationLiterals.some((literal) => contents.includes(literal))) continue;
       const ast = ts.createSourceFile(path, contents, ts.ScriptTarget.Latest, true);
       const visit = (node: ts.Node) => {
         if (
@@ -901,7 +920,9 @@ describe('money and inventory gauntlet fixes', () => {
     }
 
     expect(directMutations).toEqual([]);
-  }, 20_000);
+    // 60s: this test still reads every file under src/, and the suite runs 150
+    // files in parallel against one disk. 20s was not enough headroom under load.
+  }, 60_000);
 
   it('allows allocate_payment to replay a committed atomic claim without weakening legacy loser rollback', () => {
     expect(committedReplayGuard).toContain("NEW.operation = 'allocate_payment'");

@@ -125,6 +125,47 @@ assert.deepEqual(
   '--include-one-shot restores the withheld migrations to the plan',
 );
 
+const repairPlan = spawnSync(
+  process.execPath,
+  ['scripts/list-post-baseline-migrations.mjs', '--one-shot-repair-plan'],
+  { cwd: root, encoding: 'utf8' },
+);
+assert.equal(repairPlan.status, 0, repairPlan.stderr);
+assert.deepEqual(
+  repairPlan.stdout.trim().split(/\r?\n/).filter(Boolean),
+  expectedQuarantined.map(
+    (name) =>
+      `supabase migration repair ${name.slice(0, 14)} --status applied --db-url "$DATABASE_URL"`,
+  ),
+  'the recovery plan records every skipped version so later unfiltered pushes cannot rediscover it',
+);
+assert.equal(
+  repairPlan.stderr.includes('only AFTER independently proving the restored data'),
+  expectedQuarantined.length > 0,
+  'the executable repair plan must retain the data-proof warning',
+);
+
+const conflictingModes = spawnSync(
+  process.execPath,
+  [
+    'scripts/list-post-baseline-migrations.mjs',
+    '--include-one-shot',
+    '--one-shot-repair-plan',
+  ],
+  { cwd: root, encoding: 'utf8' },
+);
+assert.notEqual(conflictingModes.status, 0, 'conflicting one-shot modes must fail closed');
+assert.equal(
+  conflictingModes.stdout,
+  '',
+  'conflicting one-shot modes must be rejected before producing an executable plan',
+);
+assert.equal(
+  conflictingModes.stderr.includes('mutually exclusive'),
+  true,
+  'the failure must explain which modes conflict',
+);
+
 console.log(
   `POST_BASELINE_MIGRATIONS_PASS replay=${files.length} one_shot_withheld=${expectedQuarantined.length}`,
 );

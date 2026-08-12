@@ -51,7 +51,7 @@ These are mandatory safety rules for anyone (human or AI) making changes to CRX 
 | NEVER remove RLS policies from any table | Data exposed to unauthorized users |
 | NEVER expose `service_role` key in frontend code | Full database access to anyone with browser dev tools |
 | NEVER modify `financial_audit_log` records | Destroys the immutable audit trail required for financial compliance |
-| NEVER store money as floating point | Rounding errors in financial calculations. Use bigint cents. |
+| NEVER store or calculate money with binary floating point | Rounding errors in financial calculations. New storage uses bigint cents; documented legacy PostgreSQL numeric-dollar columns use exact `numeric`. |
 
 ### Business Logic
 | Rule | Consequence of breaking |
@@ -159,16 +159,42 @@ Before any schema change, follow `docs/workflows/DATABASE_CHANGE_CHECKLIST.md`:
 
 ## Money Handling
 
-All money in CRX Manager is stored as **bigint cents** (whole numbers, no decimals).
+New money storage in CRX Manager uses **bigint cents** (whole numbers, no decimals). Established
+PostgreSQL `numeric` dollar storage may remain temporarily to avoid a risky unit rewrite, but it is
+not an approved or suppressible compatibility exception until database math is verified as exact
+`numeric`, all existing values are finite whole cents, and an active finite whole-cent CHECK is
+present. Dirty or unconstrained columns remain tracked findings and are not rewritten without approval.
+
+**The "active finite whole-cent CHECK" above means exactly this predicate — write it in full:**
+
+```
+CHECK (col IS NULL OR (col = ROUND(col, 2) AND col > '-Infinity' AND col < 'Infinity'))
+```
+
+**Both halves are load-bearing; a `ROUND`-only check does NOT satisfy the rule.** PostgreSQL
+`numeric` deliberately does not use IEEE-754 NaN semantics — so values stay sortable and indexable,
+it treats `NaN` as equal to `NaN` and greater than every finite value. That makes
+`'NaN' = ROUND('NaN', 2)` true, so a rounding-only constraint lets `NaN` straight through. The
+`< 'Infinity'` bound is what rejects it. Name the constraint `<table>_<column>_whole_cents_chk`.
+
+**Never add one as `NOT VALID` over a column that still holds dirty rows.** `NOT VALID` only skips
+the initial scan; a CHECK is re-evaluated against the whole new row on every later UPDATE, whatever
+column changed, so each legacy dirty row becomes permanently un-editable. Repair the data first,
+then add the constraint `VALID`.
+
+Which columns are constrained today, which are deferred and why:
+`docs/manual/DECISION_LOG.md` (2026-08-10 entry).
 
 | Operation | How |
 |-----------|-----|
 | Store $25.50 | Store as `2550` (bigint cents) |
 | Display 2550 | Show as `$25.50` (divide by 100) |
-| User enters $25.50 | Convert to `2550` before saving (multiply by 100) |
+| User enters $25.50 | Parse the decimal text exactly to `2550` before saving; do not multiply a binary float by 100 |
 | Add $25.50 + $10.25 | Add `2550 + 1025 = 3575` (integer math) |
 
-**NEVER use floating point for money.** No `parseFloat()`, no `0.1 + 0.2` problems.
+**NEVER introduce binary floating-point money arithmetic.** New or changed TypeScript money paths
+parse decimal operands into integer cents before arithmetic. PostgreSQL legacy dollar paths use
+exact `numeric`, not `real` or `double precision`.
 
 ---
 

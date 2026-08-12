@@ -293,6 +293,89 @@ same transaction, and the admin role retains the ability to proceed. It must lan
   stays deployment-compatible, and the shared trigger writes `below_cost_approvals` atomically.
 
 ---
+## 2026-08-10 — Exact whole cents is the invariant; legacy numeric-dollar storage has a fail-closed approval gate
+
+**Source:** Mason's explicit 2026-08-10 project instruction, following the bigint-cents evaluation
+recorded in the 2026-08-09 changelog entry for canonical profit.
+
+**Decision.** New money storage remains bigint cents, but established PostgreSQL `numeric` dollar
+columns are not converted merely to satisfy the storage preference. PostgreSQL `numeric` is exact
+decimal; converting an established cluster is a coordinated unit change across database functions
+and UI readers, where one missed call site creates a 100x error. That storage type alone is not an
+approved exception. A legacy column becomes an approved compatibility exception only after its
+authoritative database arithmetic is verified as exact `numeric`, all existing values are verified
+as finite whole cents, and an active finite whole-cent CHECK is present. Dirty or unconstrained
+columns remain tracked findings and are not widened or rewritten without Mason's separate approval.
+
+**Operative rule.** The invariant is exact whole cents, not a blind type conversion. New database
+money columns use bigint cents. Legacy numeric-dollar storage may remain temporarily to avoid a
+risky unit rewrite, but it is not approved or suppressible until exact PostgreSQL `numeric`
+arithmetic, clean finite whole-cent values, and an active finite whole-cent CHECK are all verified.
+Dirty or unconstrained columns stay visible as tracked debt. New or changed authoritative TypeScript money math must
+parse decimal operands into integer cents before multiplying, dividing, rounding, or aggregating;
+do not introduce binary floating-point rounding. Existing helpers that still use binary conversion
+are migration work, not evidence that the old approach is acceptable. The server remains
+authoritative for persisted values.
+
+**The gate's "active finite whole-cent CHECK" is exactly this predicate.** Write it in full; the
+constraint is named `<table>_<column>_whole_cents_chk`.
+
+```sql
+CHECK (col IS NULL OR (col = ROUND(col, 2) AND col > '-Infinity' AND col < 'Infinity'))
+```
+
+**Both halves are load-bearing — a `ROUND`-only constraint does NOT clear the gate.** PostgreSQL
+`numeric` deliberately does not use IEEE-754 NaN semantics: so values stay sortable and indexable,
+it treats `NaN` as equal to `NaN` and greater than every finite value. `'NaN' = ROUND('NaN', 2)` is
+therefore TRUE, and a rounding-only check lets `NaN` straight through. The `< 'Infinity'` bound is
+what rejects it. This is the single easiest way to believe a column is gated when it is not.
+
+**Never add one as `NOT VALID` over a column that still holds dirty rows.** `NOT VALID` skips only
+the initial table scan. A CHECK is re-evaluated against the whole new row on every subsequent
+UPDATE, whatever column actually changed — so each legacy dirty row becomes permanently un-editable
+and the damage is invisible until a user tries to edit an old record. Repair the data first, then
+add the constraint `VALID` from the start.
+
+**Where each audited column stands.** Verified read-only against the live database on 2026-08-11.
+The 2026-08-10 order-profit evaluation measured 12 order/quote/commission columns; those are the
+only ones whose gate status is established. Other legacy dollar columns exist across the schema
+(`payments.amount`, `commission_payments.total_amount`, `commission_payment_items.amount`,
+`purchase_orders.total_cost`, the `products` price tiers, the `cost_history` snapshots and more).
+None of those are converted, and none are constrained — under the rule above they are unapproved
+tracked debt, not grandfathered. Extending the programme to them is unstarted work.
+
+**Gate satisfied — CHECK enforced (7):** `orders.total_cost`, `orders.total_profit`,
+`order_items.profit`, `quotes.total_price`, `quotes.total_profit`, `quote_items.total_price`,
+`quote_items.profit`.
+
+**Gate NOT satisfied — no CHECK, therefore not an approved exception (5):**
+
+| Column | Why deferred | Status |
+|---|---|---|
+| `order_items.total_price` | holds 35 of 288 legacy fractional-cent rows | awaiting data repair |
+| `quotes.total_cost` | holds 2 of 4 legacy fractional-cent rows | awaiting data repair |
+| `commissions.commission_amount` | holds 3 of 35 legacy fractional-cent rows | awaiting data repair |
+| `commissions.order_profit` | holds 3 of 35 legacy fractional-cent rows | awaiting data repair |
+| `orders.total_price` | data is clean; `_update_order_items_impl` overwrites it with the raw un-rounded line sum, so constraining it would reject ordinary edits | blocked on fixing that writer |
+
+Repairing the 43 dirty rows across the first four rewrites stored money and needs Mason's separate
+approval on its own migration — it is **not** covered by the 2026-08-10 decision.
+
+**Measured cost of the conversion that was declined** (live, 2026-08-10): 12 money columns, 46 live
+functions naming them, 101 functions touching those tables, 17 non-test `src/` files. Dollars→cents
+is a *unit* change and TypeScript sees `number` either way, so a single missed call site is a 100×
+error rather than a penny. It cannot be staged — database and UI must flip together — and the
+Supabase plan has no point-in-time recovery to roll back to.
+
+**General mechanic this established:** a change that departs from a written hard rule can never pass
+the adversarial review gate, because the reviewer is handed `AGENTS.md` as ground truth and will
+correctly block. Amending the rule **in the same diff does not clear it either** — measured on
+PR #371, where the original "red line bypassed" finding was replaced by a new HIGH objecting that
+the diff amends the very rule its own migrations rely on. That objection is structurally correct.
+Land the contract amendment as its own reviewed change first, then open the change that relies on it.
+
+---
+
 ## 2026-08-09 — The order header is the canonical profit; line profit is derived to match it
 
 **Source:** live measurement during the PR #354 takeover session, recorded in
@@ -904,15 +987,20 @@ reserved balance, not a patch) plus a fresh Codex-gated build.
 
 ---
 
-## Foundational (~2026-05, still current) — Core engineering invariants
+## Foundational (~2026-05) — Core engineering invariants; money storage clause superseded 2026-08-10
 
-**Decision:** Four rules fixed at the project's foundation and never revisited: (1) money is
-always `bigint` cents, never floating-point; (2) business invariants (balances, inventory,
+**Decision:** Four rules fixed at the project's foundation: (1) money used bigint cents and never
+floating-point; (2) business invariants (balances, inventory,
 state transitions) are enforced in Postgres RPCs/triggers/constraints, not React; (3)
 `src/lib/db.ts` is the only Supabase client, and `assertRpcResult()`/`checkMutationResult()`
 are mandatory after every RPC call/`.update()`/`.delete()`; (4) every mutating RPC accepts and
 actually enforces `p_idempotency_key text DEFAULT NULL` (added after repeated double-submit
 bugs, e.g. the 2026-07-10 `save_job_applied_record` fix).
+The first clause is superseded by the 2026-08-10 exact-whole-cent decision above: bigint cents
+remains mandatory for new storage, while legacy PostgreSQL numeric-dollar storage is approved only
+after exact arithmetic, clean finite whole-cent values, and an active finite whole-cent CHECK are
+verified. Dirty or unconstrained columns remain tracked findings. The other three rules remain
+current and unchanged.
 **Why:** these are the recurring bug classes (money bugs, invariant bypass via a second code
 path, double-submits from retries/flaky networks) that have cost the most rework historically.
 **What this forbids/implies:** any new RPC, migration, or money-touching code that violates

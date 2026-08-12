@@ -86,7 +86,10 @@ confirmed -> partially_fulfilled -> fulfilled -> cancelled -> voided
 ### Rules
 - Accounts receivable is tracked on `invoices` (`invoices.balance_cents`, GENERATED), NOT on the order. The order header has no `total_paid`/`balance_due` — those columns were dropped.
 - Commission records are created automatically during order creation.
-- Money is stored as bigint cents (display / 100, store * 100).
+- Money must remain exact whole cents: new storage uses bigint cents. Legacy PostgreSQL
+  numeric-dollar storage is approved only after exact `numeric` arithmetic, clean finite whole-cent
+  values, and an active finite whole-cent CHECK are verified; dirty or unconstrained columns remain
+  findings. Parse decimal input exactly instead of multiplying a binary float.
 - Always use `checkMutationResult()` after writes.
 - Always use `generateIdempotencyKey()` for order creation to prevent double-submissions.
 

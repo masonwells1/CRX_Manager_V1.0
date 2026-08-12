@@ -10,7 +10,7 @@
  *   - Frontend passes a number where RPC expects a string
  *   - Missing required parameters
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -24,24 +24,25 @@ interface ConvertQuoteToOrderParams {
   p_performed_by: string; // uuid
 }
 
+// The item shape below is the one the deployed `create_direct_order` actually
+// reads (verified 2026-08-11 against live `pg_proc.prosrc`: the function reads
+// exactly `product_id`, `product_name`, `quantity`, `price_per_unit`,
+// `unit_cost`, `unit_size`) and the one the sole production caller sends
+// (`src/pages/NewOrder.tsx`). It previously declared a wholly different set —
+// `current_cost`, `actual_rate`, `total_units_needed`, `total_price`,
+// `total_cost`, `profit`, `net_margin` — none of which the function reads, so
+// the contract test was guarding a payload nobody sends. Wave A fix #1 makes
+// product cost authoritative over the caller-supplied `unit_cost`, which is
+// precisely the field the stale shape omitted.
 interface CreateDirectOrderParams {
   p_customer_id: string;  // uuid
   p_items: Array<{
     product_id: string;
+    product_name: string;
+    quantity: number;
     price_per_unit: number;
-    current_cost: number;
-    actual_rate: number | null;
-    rate_unit: string | null;
-    oz_per_acre: number | null;
-    price_per_acre: number | null;
-    acres: number | null;
-    total_units_needed: number;
+    unit_cost: number;
     unit_size: number | null;
-    total_price: number;
-    total_cost: number;
-    profit: number;
-    net_margin: number;
-    notes: string | null;
   }>;
   p_commission_split: { splits: Array<{ recipient: string; recipient_user_id?: string | null; percentage: number }> } | null;
   p_performed_by: string;
@@ -246,20 +247,11 @@ describe('RPC contract: create_direct_order', () => {
       p_items: [
         {
           product_id: 'prod-uuid',
+          product_name: 'Roundup PowerMAX',
+          quantity: 25,
           price_per_unit: 20,
-          current_cost: 10,
-          actual_rate: 32,
-          rate_unit: 'fl oz',
-          oz_per_acre: 32,
-          price_per_acre: 5,
-          acres: 100,
-          total_units_needed: 25,
+          unit_cost: 10,
           unit_size: null,
-          total_price: 500,
-          total_cost: 250,
-          profit: 250,
-          net_margin: 50,
-          notes: null,
         },
       ],
       p_commission_split: {
@@ -268,7 +260,11 @@ describe('RPC contract: create_direct_order', () => {
       p_performed_by: 'user-uuid',
     });
     expect(params.p_items).toHaveLength(1);
-    expect(params.p_items[0].total_price).toBe(500);
+    // `quantity` is the field the function reads to size the line; the stale
+    // shape omitted it, so a payload matching the old declaration would have
+    // been read as quantity 0 and skipped entirely.
+    expect(params.p_items[0].quantity).toBe(25);
+    expect(params.p_items[0].unit_cost).toBe(10);
   });
 
   it('accepts null commission_split', () => {
@@ -1330,7 +1326,11 @@ describe('RPC contract: bulk_import_order', () => {
     expect(body).toContain('round(v_qty * v_price_per_unit, 2) - round(v_qty * v_cost_per_unit, 2)');
     expect(body).toContain('jsonb_to_recordset(v_normalized_items)');
     expect(body).toContain("'warnings', to_jsonb(v_warnings)");
-  });
+    // 60s (vs. the 5s default): the migration corpus is read once at module load,
+    // but this test still scans it, and the whole suite runs 150 files in parallel
+    // against one disk. Generous headroom keeps machine load from failing a test
+    // whose assertions are pure string matching.
+  }, 60_000);
 });
 
 describe('RPC contract: save_blend_recipe', () => {
@@ -1410,6 +1410,9 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   // types regenerated 2026-07-21): each declares p_idempotency_key and replays via
   // check_idempotency/save_idempotency.
   'approve_supplier_price_import',
+  // Customer 360 ownership assignment: payload-bound replay is serialized by
+  // check_idempotency before the target rep/customer rows are mutated.
+  'assign_customers_sales_rep',
   'batch_apply_all_prepayments',
   'batch_apply_prepayments',
   'batch_cancel_deliveries',
@@ -1738,25 +1741,40 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
 };
 
 /**
- * Migration files (name + content), read from disk ONCE and memoized.
+ * Migration files (name + content), read from disk ONCE at module load.
  *
- * Why the cache: `latestFunctionBody` is called once per covered RPC, and each
- * call used to re-`readdirSync` + re-`readFileSync` its way back through the
- * ~500+ migration files. That O(RPCs × files) synchronous disk I/O finishes in
- * ~2s when this file runs alone (warm cache, no contention) but blew the 5s
+ * Why read them once: `latestFunctionBody` is called once per covered RPC, and
+ * each call used to re-`readdirSync` + re-`readFileSync` its way back through
+ * the 800+ migration files. That O(RPCs × files) synchronous disk I/O finishes
+ * in ~2s when this file runs alone (warm cache, no contention) but blew the 5s
  * test timeout under the full parallel suite (150 files contending for CPU/disk)
  * — a perf flake, not a logic failure. Reading each file once makes the disk
  * work O(files) total; the per-RPC scan is then pure in-memory regex.
+ *
+ * Why EAGER (module scope) rather than lazy-memoized: with a lazy cache the
+ * whole directory read was billed to whichever test happened to touch it first,
+ * so that one test carried ~900ms warm and >13s under heavy machine load —
+ * enough to blow even a generous per-test timeout while every later test ran
+ * free. Doing it at import time keeps the cost outside any test's timeout
+ * budget and makes it independent of test ordering and `-t` filtering.
  */
-let _migrationFilesCache: { name: string; content: string }[] | null = null;
+const MIGRATION_FILES: { name: string; content: string }[] = readdirSync(MIGRATIONS_DIR)
+  .filter((f) => f.endsWith('.sql'))
+  .sort() // timestamp-prefixed → ascending chronological
+  .map((name) => ({ name, content: readFileSync(join(MIGRATIONS_DIR, name), 'utf8') }));
+
 function getMigrationFiles(): { name: string; content: string }[] {
-  if (_migrationFilesCache) return _migrationFilesCache;
-  _migrationFilesCache = readdirSync(MIGRATIONS_DIR)
-    .filter((f) => f.endsWith('.sql'))
-    .sort() // timestamp-prefixed → ascending chronological
-    .map((name) => ({ name, content: readFileSync(join(MIGRATIONS_DIR, name), 'utf8') }));
-  return _migrationFilesCache;
+  return MIGRATION_FILES;
 }
+
+// The cache above made the scan O(files), but the FIRST caller still paid the
+// whole ~900-file disk read inside whichever test happened to reach it first,
+// on that test's 5s default budget. Under full-suite contention that still
+// flaked (seen blocking a commit on 2026-08-10). Warming it here moves the I/O
+// outside every per-test budget, where it can have a timeout that fits it.
+beforeAll(() => {
+  getMigrationFiles();
+}, 60_000);
 
 /**
  * Returns the body of the LATEST migration definition of `rpc`, or null if no
@@ -2170,13 +2188,8 @@ function registryMigrationHighWater(): string {
 // Keep this set aligned with rows explicitly marked PENDING APPLY in
 // docs/reference/migration-history.md.
 //
-// Empty as of 2026-08-10, from two independent lines of work that both landed:
-// history rows 857-861 (the 2026-08-08 foundation ultra review migrations,
-// re-issued forward as 20260809170500-170900) applied live on 2026-08-09 and now
-// read APPLIED LIVE; and both Team Board delegation migrations applied live
-// 2026-08-09 under server-assigned ledger versions 20260809130108 and
-// 20260810010308. Nothing in this checkout is pending.
-const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([]);
+// No migration indexed by the current history is waiting on a live apply.
+const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>();
 
 /**
  * Explicitly pending migrations remain part of the contract inventory even
@@ -2246,6 +2259,14 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // MUTATING_RPCS_WITH_IDEMPOTENCY. This bucket remains for the normal pre-apply
   // window: an RPC introduced by a PR migration that is not yet live belongs
   // here until the next truthful live type regeneration.
+
+  // Wave A fix #4 (20260813050000, parked). It accepts p_idempotency_key and
+  // routes it through check_idempotency/save_idempotency, but it cannot appear
+  // in the generated types until the migration applies, so the inventory sees a
+  // mutator with no declared key. This is exactly the pre-apply window this
+  // bucket exists for; the staleness test above deletes it for us by failing the
+  // moment the RPC shows up in the generated types.
+  'correct_job_commission_split',
 ]);
 
 /**
@@ -2274,8 +2295,19 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
     'idempotency infrastructure helper (sections 2-6 closeout): binds a completed lifecycle result to its key; direct client EXECUTE is revoked',
   _claim_bound_lifecycle_idempotency:
     'idempotency infrastructure helper (sections 2-6 closeout): claims a bound lifecycle key for replay; direct client EXECUTE is revoked',
+  // Pruned on the 2026-08-11 merge of origin/main, per the standing rule below that a
+  // dead exemption silently pre-suppresses any future RPC reusing the name:
+  //   _guard_job_commission_split_immutable was pruned when its original timestamp
+  //     fell behind the registry high-water. Wave A remediation re-stamped it to
+  //     20260813050000, so it is pending/discovered again and is classified below.
+  //   _crx_payout_assert_impl_20260809 / _crx_payout_assert_replay_20260809 — 20260811130000
+  //     landed on main and applied live; it drops both helpers before finishing.
   _insert_commissions_for_job: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _insert_commissions_for_order: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
+  _guard_job_commission_split_immutable:
+    'trigger-only immutable-split guard; the idempotent correct_job_commission_split RPC owns the governed mutation and direct EXECUTE is revoked',
+  _guard_delivery_completion_authorized:
+    'trigger-only completion-provenance guard; public complete_delivery owns the idempotent, row-bound governed mutation and direct EXECUTE is revoked',
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',
   _recompute_po_on_order_for_products:
     'internal convergent PO-cache recomputation helper; trigger parents own the transaction and direct browser EXECUTE is revoked',
@@ -2287,6 +2319,8 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   _sync_quote_job_reservations: 'internal convergent reservation-sync helper called by parent RPCs',
   auto_expire_quotes: 'service-role maintenance sets only currently-expirable quote statuses',
   check_idempotency: 'idempotency infrastructure helper; mutation only purges an expired key',
+  check_idempotency_intent:
+    'idempotency infrastructure helper (Section 07 gauntlet finding 2); mutation only purges an expired key, and it raises rather than replays when the actor or request fingerprint differs; direct client EXECUTE is revoked',
   check_rate_limit: 'rate-limit counter intentionally records every invocation, including retries',
   check_remainder_reminders: 'maintenance reminder sweep uses persisted sent markers to deduplicate',
   check_unpriced_orders: 'cron reminder sweep uses persisted reminder and escalation sent markers',

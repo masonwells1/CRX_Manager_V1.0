@@ -10,7 +10,7 @@ import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
+import { supabase, sanitizeError, assertRpcResult, describePostInvoiceBlock } from '../lib/db';
 import { assertInvoiceSendable } from '../lib/invoiceSendDisposition';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey, getIdempotencyMismatchResult, isMissingIntentBindingColumn, legacyIntentChanged } from '../lib/idempotency';
@@ -922,7 +922,11 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
         extra: { context: invoice.invoice_group_id ? 'post_invoice_group' : 'post_invoice' },
       });
-      toast('error', sanitizeError(err));
+      // This is the single-invoice posting flow, so it must speak the same
+      // language as the batch screens: a deliberate billing gate explains what
+      // to do next, anything else falls through to sanitizeError.
+      const blocked = describePostInvoiceBlock(err);
+      toast('error', blocked ?? sanitizeError(err));
     }
     setPosting(false);
   };

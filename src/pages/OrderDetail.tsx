@@ -19,7 +19,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { notifyOrderStatusChange } from '../lib/notificationTriggers';
-import { supabase, checkMutationResult, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { supabase, checkMutationResult, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes, describePostInvoiceBlock } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { runCriticalAction } from '../lib/criticalAction';
@@ -1052,7 +1052,8 @@ export default function OrderDetail() {
         posted += target.selectedIds.length;
         delete postDraftKeysRef.current[target.key];
       } catch (err) {
-        if (hasRpcCode(err, RpcErrorCodes.PRICING_INCOMPLETE)) errors.push(`${target.label}: needs pricing first`);
+        const blocked = describePostInvoiceBlock(err);
+        if (blocked) errors.push(`${target.label}: ${blocked}`);
         else errors.push(`${target.label}: ${err instanceof Error ? err.message : 'failed to post'}`);
       }
     }
