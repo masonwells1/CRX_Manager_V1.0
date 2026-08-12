@@ -10834,6 +10834,18 @@ export type Database = {
         }
         Returns: Json
       }
+      _create_commission_payment_intent_impl_20260809: {
+        Args: {
+          p_commission_ids: string[]
+          p_idempotency_key?: string
+          p_notes: string
+          p_payment_date: string
+          p_payment_method: string
+          p_performed_by?: string
+          p_reference: string
+        }
+        Returns: string
+      }
       _create_invoice_for_unbilled_delivery_idem_impl_20260721: {
         Args: {
           p_delivery_id: string
@@ -10979,6 +10991,14 @@ export type Database = {
       _parse_pricing_margin_percent: {
         Args: { p_value: string }
         Returns: number
+      }
+      _post_commission_payment_intent_impl_20260809: {
+        Args: {
+          p_idempotency_key?: string
+          p_payment_id: string
+          p_performed_by?: string
+        }
+        Returns: Json
       }
       _post_deleted_delivery_recovery_invoice_20260719: {
         Args: { p_invoice_id: string }
@@ -11215,6 +11235,15 @@ export type Database = {
         }
         Returns: Json
       }
+      _void_commission_payment_intent_impl_20260809: {
+        Args: {
+          p_idempotency_key?: string
+          p_payment_id: string
+          p_performed_by?: string
+          p_reason: string
+        }
+        Returns: Json
+      }
       _void_invoice_group_guard_impl_20260720: {
         Args: {
           p_idempotency_key?: string
@@ -11390,6 +11419,14 @@ export type Database = {
         Args: { p_product_ids: string[] }
         Returns: undefined
       }
+      assign_customers_sales_rep: {
+        Args: {
+          p_customer_ids: string[]
+          p_idempotency_key?: string
+          p_sales_rep_id: string
+        }
+        Returns: Json
+      }
       assign_job_applicator: {
         Args: {
           p_applicator_id?: string
@@ -11544,6 +11581,15 @@ export type Database = {
       check_duplicate_delivery: { Args: { p_order_id: string }; Returns: Json }
       check_idempotency: {
         Args: { p_key: string; p_operation: string }
+        Returns: Json
+      }
+      check_idempotency_intent: {
+        Args: {
+          p_actor: string
+          p_fingerprint: string
+          p_key: string
+          p_operation: string
+        }
         Returns: Json
       }
       check_period_open: { Args: { p_date: string }; Returns: undefined }

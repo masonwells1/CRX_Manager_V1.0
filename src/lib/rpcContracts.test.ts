@@ -10,7 +10,7 @@
  *   - Frontend passes a number where RPC expects a string
  *   - Missing required parameters
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -1411,6 +1411,9 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   // types regenerated 2026-07-21): each declares p_idempotency_key and replays via
   // check_idempotency/save_idempotency.
   'approve_supplier_price_import',
+  // Customer 360 ownership assignment: payload-bound replay is serialized by
+  // check_idempotency before the target rep/customer rows are mutated.
+  'assign_customers_sales_rep',
   'batch_apply_all_prepayments',
   'batch_apply_prepayments',
   'batch_cancel_deliveries',
@@ -1755,6 +1758,15 @@ const MIGRATION_FILES: { name: string; content: string }[] = readdirSync(MIGRATI
 function getMigrationFiles(): { name: string; content: string }[] {
   return MIGRATION_FILES;
 }
+
+// The cache above made the scan O(files), but the FIRST caller still paid the
+// whole ~900-file disk read inside whichever test happened to reach it first,
+// on that test's 5s default budget. Under full-suite contention that still
+// flaked (seen blocking a commit on 2026-08-10). Warming it here moves the I/O
+// outside every per-test budget, where it can have a timeout that fits it.
+beforeAll(() => {
+  getMigrationFiles();
+}, 60_000);
 
 /**
  * Returns the body of the LATEST migration definition of `rpc`, or null if no
@@ -2168,9 +2180,8 @@ function registryMigrationHighWater(): string {
 // Keep this set aligned with rows explicitly marked PENDING APPLY in
 // docs/reference/migration-history.md.
 //
-// Empty as of 2026-08-10: the Team Board delegation migrations and the
-// foundation-review migrations are all applied live and documented below.
-const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([]);
+// No migration indexed by the current history is waiting on a live apply.
+const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>();
 
 /**
  * Explicitly pending migrations remain part of the contract inventory even
@@ -2279,6 +2290,8 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   _sync_quote_job_reservations: 'internal convergent reservation-sync helper called by parent RPCs',
   auto_expire_quotes: 'service-role maintenance sets only currently-expirable quote statuses',
   check_idempotency: 'idempotency infrastructure helper; mutation only purges an expired key',
+  check_idempotency_intent:
+    'idempotency infrastructure helper (Section 07 gauntlet finding 2); mutation only purges an expired key, and it raises rather than replays when the actor or request fingerprint differs; direct client EXECUTE is revoked',
   check_rate_limit: 'rate-limit counter intentionally records every invocation, including retries',
   check_remainder_reminders: 'maintenance reminder sweep uses persisted sent markers to deduplicate',
   check_unpriced_orders: 'cron reminder sweep uses persisted reminder and escalation sent markers',
@@ -2295,6 +2308,14 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   save_idempotency: 'idempotency infrastructure helper that stores the parent operation result',
   set_primary_customer_contact: 'convergent primary-contact promotion; replays settle to the same single-primary state; SECURITY INVOKER under customer RLS',
   settle_applied_record_acres: 'trigger-only derived-acre recomputation; direct client EXECUTE is revoked',
+  // trg_recalc_order_totals was listed here only for the pre-apply window: the
+  // inventory admits a discovered mutator whose defining migration is still
+  // ahead of the registry high-water. 20260809230500 is live and the registry
+  // was rebuilt from live introspection on 2026-08-10, so the function is no
+  // longer in the inventory at all and the exemption went stale. Its safety
+  // argument is unchanged and now recorded in migration-history row 862: it
+  // RETURNS trigger, so PostgreSQL refuses any direct call, and its
+  // recomputation of the order header from the current lines is convergent.
 };
 
 
