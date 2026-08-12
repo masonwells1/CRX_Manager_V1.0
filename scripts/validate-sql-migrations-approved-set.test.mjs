@@ -61,7 +61,25 @@ const ENUMERATED_HASH_EXPR =
   `encode(digest(string_agg(id::text || ':' || quote_id::text || ':' || customer_id::text` +
   ` || ':' || status::text || ':' || total_price::text || ':' || total_cost::text` +
   ` || ':' || total_profit::text || ':' || salesman_id::text` +
-  ` || ':' || coalesce(deleted_at::text, '') || ':' || pricing_status::text, ',' ORDER BY id), 'sha256'), 'hex')`;
+  ` || ':' || coalesce(deleted_at::text, '') || ':' || pricing_status::text` +
+  // Round 21 added lifecycle booleans to the material set, and `orders.is_planned`
+  // is one: a planned order flipped to real between the digest and the write is
+  // a different row in every way that matters. Enumerating by hand means
+  // keeping up with the registry — which is why the whole-row projection above
+  // is the shape the guard actually recommends.
+  ` || ':' || is_planned::text, ',' ORDER BY id), 'sha256'), 'hex')`;
+/**
+ * The enumeration with one lifecycle flag dropped (Codex High, round 21).
+ *
+ * Through round 20 `is_planned` was not counted as material, so this shape was
+ * accepted: an order could be flipped from planned to real between the approval
+ * and the apply and the digest still matched. An on/off flag is state, and a
+ * row whose state moved is not the row that was approved.
+ */
+const ENUMERATED_MINUS_FLAG_EXPR = ENUMERATED_HASH_EXPR.replace(
+  ` || ':' || is_planned::text`,
+  '',
+);
 /** A real hash, correctly assigned — but over a constant. Binds nothing. */
 const CONST_HASH_EXPR = `encode(digest('approved', 'sha256'), 'hex')`;
 /**
@@ -183,6 +201,24 @@ const CASES = [
     sql: `DO $$\nBEGIN\n  UPDATE\n    public.orders\n  SET total_profit = 0;\nEND $$;\n`,
   },
   {
+    // Comments and literals are not three independent removals. The scanner
+    // used to delete block comments first, so a `/*` living inside a `--`
+    // comment opened a block nothing ever closed and every following line was
+    // blanked — the money scanner went blind for the rest of the file.
+    name: 'a block-comment opener inside a line comment does not blind the scanner',
+    expect: 'violation',
+    sql: `-- see /* the ledger note\nUPDATE public.orders SET total_profit = 0;\n`,
+  },
+  {
+    // Same fail-open through the other channel: `/*` inside a string literal
+    // is data, not a comment opener.
+    name: 'a block-comment opener inside a string literal does not blind the scanner',
+    expect: 'violation',
+    sql:
+      `INSERT INTO public.activity_log (description) VALUES ('/*');\n` +
+      `UPDATE public.orders SET total_profit = 0;\n`,
+  },
+  {
     name: 'quoted identifiers: "public"."order_items"',
     expect: 'violation',
     sql: `UPDATE "public"."order_items" SET profit = 0;\n`,
@@ -218,18 +254,19 @@ const CASES = [
     // ids alone — the author can still waive it, loudly and by name.
     //
     // This fixture used idempotency_keys until round 20 widened "material" to
-    // include reference columns; `request_actor_id` now binds that table, so it
-    // no longer exercises the refusal. If a future round widens the definition
-    // again and this case starts reporting a missing column instead, that is
-    // the signal to move it to whatever table is genuinely unbindable — not to
-    // delete it. The refusal is the only thing standing between an id-only
-    // DELETE and a silent pass.
+    // include reference columns; `request_actor_id` now binds that table. It
+    // then used product_families until round 21 widened it again to lifecycle
+    // booleans, and `is_active` binds that one. Both moves were predicted here,
+    // and the instruction is unchanged: when a widening reaches this table,
+    // move the case to whatever table is genuinely unbindable — do not delete
+    // it. The refusal is the only thing standing between an id-only DELETE and
+    // a silent pass.
     name: 'DELETE from a table with no material before-values is refused outright',
     expect: 'violation',
     mustReport: 'no lifecycle or financial column',
     sql:
       `-- APPROVED_SET_DIGEST: ${HEX}\n` +
-      `${goodDeleteSetBlock({ material: false, table: 'product_families' })}\n`,
+      `${goodDeleteSetBlock({ material: false, table: 'unit_conversions' })}\n`,
   },
   {
     name: 'digest present only in a comment',
@@ -531,12 +568,76 @@ const CASES = [
     sql: `DELETE FROM public.rate_limit_log WHERE created_at < now();\n`,
   },
   {
-    // A table nobody has ever created is not in the registry, so default-deny
-    // cannot protect it. Asserted so the failure mode is a documented one:
-    // protection follows the registry, and a stale registry is a real gap.
-    name: 'a table absent from the schema registry is out of scope',
-    expect: 'silent',
+    // Through round 20 this case asserted the opposite — that a name the
+    // registry has never heard of was out of scope — and documented the stale
+    // registry as a known gap. Codex round 21 showed it was not a gap but the
+    // bypass: create an automatically updatable view over order_items, write
+    // through the view, and the protected rows change while the scan reads an
+    // unregistered name and asks for no digest. An unresolvable write target is
+    // now refused rather than ignored, so the assertion is inverted.
+    name: 'a write to a relation absent from the schema registry is refused',
+    expect: 'violation',
+    mustReport: 'not_a_real_crx_table',
     sql: `UPDATE public.not_a_real_crx_table SET x = 0;\n`,
+  },
+  {
+    // The bypass itself, spelled out. The view is created right here, which is
+    // exactly why creating it is no excuse.
+    name: 'writing through a view created in the same migration is refused',
+    expect: 'violation',
+    mustReport: 'which is a view',
+    sql:
+      `CREATE VIEW public.oi_shim AS SELECT * FROM public.order_items;\n` +
+      `UPDATE public.oi_shim SET profit = 0;\n`,
+  },
+  {
+    // Defining a view is not a write, so on its own it says nothing. This case
+    // exists to put the name into the repo-wide view index that the next case
+    // depends on.
+    name: 'defining a view is not itself a rewrite',
+    expect: 'silent',
+    sql: `CREATE OR REPLACE VIEW public.legacy_orders_v AS SELECT * FROM public.orders;\n`,
+  },
+  {
+    // And a view defined by ANOTHER migration is refused too — otherwise the
+    // bypass just splits across two files, which is why the view index is built
+    // over every migration rather than only the file being scanned.
+    name: 'writing through a view defined by another migration is refused',
+    expect: 'violation',
+    mustReport: 'which is a view',
+    sql: `UPDATE public.legacy_orders_v SET total_profit = 0;\n`,
+  },
+  {
+    // A scratch table the migration creates for itself holds no business rows,
+    // so binding it would be theatre. This is the line between fail-closed and
+    // unusable.
+    name: 'writing a scratch table this migration creates is not a rewrite',
+    expect: 'silent',
+    sql:
+      `CREATE TEMP TABLE ids_to_fix (id uuid);\n` +
+      `UPDATE ids_to_fix SET id = gen_random_uuid();\n`,
+  },
+  {
+    // `FOR UPDATE` is a lock strength, `GRANT ... UPDATE ON` is a privilege and
+    // `BEFORE INSERT OR UPDATE ON` is a trigger event. None of them names a
+    // write target, and reading the next token as one would turn every foreign
+    // key and trigger in the repo into a violation.
+    name: 'FOR UPDATE, GRANT UPDATE and trigger events are not write targets',
+    expect: 'silent',
+    sql:
+      `GRANT SELECT, UPDATE ON public.orders TO authenticated;\n` +
+      `CREATE TRIGGER t BEFORE INSERT OR UPDATE ON public.orders\n` +
+      `  FOR EACH ROW EXECUTE FUNCTION public.noop();\n` +
+      `DO $$\nDECLARE r record;\nBEGIN\n` +
+      `  SELECT * INTO r FROM public.orders WHERE stale FOR UPDATE SKIP LOCKED;\n` +
+      `END $$;\n`,
+  },
+  {
+    // Another schema is another concern. auth.users and storage.objects are not
+    // public business tables, and refusing them would make the guard noise.
+    name: 'a write into a non-public schema is out of scope',
+    expect: 'silent',
+    sql: `UPDATE auth.users SET raw_app_meta_data = '{}'::jsonb;\n`,
   },
   {
     // A plain INSERT adds rows; it rewrites no approved population. Flagging it
@@ -929,9 +1030,46 @@ const CASES = [
     // Without the lock the ids are a snapshot: a concurrent transaction can
     // change an approved row between the digest and the write, and the digest
     // that authorized the write no longer describes it.
+    name: 'a digest that omits a lifecycle flag does not bind the row',
+    expect: 'violation',
+    mustReport: 'is_planned',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\n` +
+      `${goodSetBlock({ bind: 'enumerated' }).replace(
+        ENUMERATED_HASH_EXPR,
+        ENUMERATED_MINUS_FLAG_EXPR,
+      )}\n`,
+  },
+  {
     name: 'the captured id set is not locked with FOR UPDATE',
     expect: 'violation',
     sql: `-- APPROVED_SET_DIGEST: ${HEX}\n${goodSetBlock({ lock: false })}\n`,
+  },
+  {
+    // The lock check used to search the capture statement as raw text, so any
+    // occurrence of the words satisfied it. A block comment is the cheapest
+    // possible decoy: it reads as documentation, takes no lock at all, and
+    // through round 20 it turned the whole guard off (Codex High, round 21).
+    name: 'FOR UPDATE inside a block comment is not a row lock',
+    expect: 'violation',
+    mustReport: 'captured without FOR UPDATE',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\n` +
+      `${goodSetBlock({ lock: false }).replace('ORDER BY id)', 'ORDER BY id /* FOR UPDATE */)')}\n`,
+  },
+  {
+    // Same decoy, carried in a string literal instead. Both channels have to
+    // be blanked by the same stateful scanner, or closing one just moves the
+    // bypass into the other.
+    name: 'FOR UPDATE inside a string literal is not a row lock',
+    expect: 'violation',
+    mustReport: 'captured without FOR UPDATE',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\n` +
+      `${goodSetBlock({ lock: false }).replace(
+        'WHERE stale ORDER BY id)',
+        `WHERE note <> 'FOR UPDATE' AND stale ORDER BY id)`,
+      )}\n`,
   },
   {
     // The set bounds the write from above but not from below. Without the

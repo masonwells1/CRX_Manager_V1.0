@@ -147,9 +147,31 @@ if (tables.length < 100) {
 process.stdout.write(tables.join('|'));
 " "${APPROVED_SET_EXEMPT_TABLES[*]}" "$APPROVED_SET_REGISTRY" 2>/dev/null || true)
 
+# ---- EVERY WRITE TARGET MUST RESOLVE (Codex High, round 21) ----------------
+# The scan above only ever emitted a rewrite when the target was a PROTECTED
+# table, so an unrecognized target was silently nothing. PostgreSQL will happily
+# write business rows through a name this list has never heard of: create an
+# automatically updatable view over order_items, update through the view, and
+# the underlying rows change while the scanner sees an unregistered name and
+# asks for no digest at all. Renaming the migration evades the apply-time guard
+# the same way.
+#
+# So resolution is now mandatory, and it needs the FULL registry — the protected
+# list has the exempt tables subtracted out of it, and a write to a queue or a
+# watchdog table is legitimately unbound, not unresolved.
+REGISTRY_TABLES=$(node -e "
+const fs = require('fs');
+const reg = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+const tables = Object.keys(reg.columns || {}).filter((n) => /^[a-z0-9_]+\$/.test(n)).sort();
+if (tables.length < 100) {
+  throw new Error('schema registry yielded only ' + tables.length + ' known tables');
+}
+process.stdout.write(tables.join('|'));
+" "$APPROVED_SET_REGISTRY" 2>/dev/null || true)
+
 # Fail closed. A guessed or empty list would turn the approved-set binding check
 # into a silent no-op — exactly the failure mode this replaced.
-if [ -z "$BUSINESS_ROW_TABLES" ]; then
+if [ -z "$BUSINESS_ROW_TABLES" ] || [ -z "$REGISTRY_TABLES" ]; then
   echo "❌ FATAL: could not derive the protected table set from $APPROVED_SET_REGISTRY"
   echo "   (needs a readable registry with a 'columns' map of at least 100 tables, and node on PATH)."
   echo "   The approved-set binding check is default-deny and must not run on a partial list."
@@ -201,7 +223,22 @@ const LIFECYCLE = /(^|_)(status|state|stage|phase)\$/;
 const REFERENCE = (c) => c !== 'id' && /_id\$/.test(c);
 // The by-whom columns that carry no \`_id\` suffix.
 const ACTOR = /^(created_by|updated_by|deleted_by|voided_by|approved_by|posted_by|performed_by|assigned_to|owner|recipient)\$/;
-const material = (c) => LIFECYCLE.test(c) || MONEY.test(c) || QUANTITY.test(c) || LIFECYCLE_AT.test(c) || REFERENCE(c) || ACTOR.test(c);
+// ---- LIFECYCLE BOOLEANS AND ROW VERSIONS (Codex High, round 21) ------------
+// Round 20 read lifecycle as a status word or a transition timestamp. Half the
+// lifecycle in this schema is neither: a customer is switched off with
+// \`is_active\`, finance charges are turned on with \`finance_charge_enabled\`, and
+// a service is retired the same way. An approval to rewrite a service rate or a
+// credit limit therefore survived the entity being deactivated — the digest
+// covered none of it. A boolean that says whether the row is live IS its state.
+// Concurrency stamps come along for the same reason: \`row_version\` exists
+// precisely so a writer can tell that someone else got there first, and a
+// before-state digest that ignores it is throwing away the one column designed
+// to catch exactly this.
+const LIFECYCLE_BOOL = /^(is|has|was|are|can)_[a-z0-9_]+\$/;
+const LIFECYCLE_FLAG = /(^|_)(active|enabled|disabled|archived|locked|hidden|published|confirmed|verified|suspended|blocked|void|voided|closed|approved|billable|taxable)\$/;
+const VERSION = /(^|_)(version|revision)\$/;
+const material = (c) => LIFECYCLE.test(c) || MONEY.test(c) || QUANTITY.test(c) || LIFECYCLE_AT.test(c) || REFERENCE(c) || ACTOR.test(c) ||
+  LIFECYCLE_BOOL.test(c) || LIFECYCLE_FLAG.test(c) || VERSION.test(c);
 const rows = [];
 for (const t of Object.keys(cols).sort()) {
   if (!/^[a-z0-9_]+\$/.test(t)) continue;
@@ -367,6 +404,41 @@ build_mutating_fn_index() {
             gsub(/(^|[^a-z0-9_])execute[ \t]+(function|procedure|on)([^a-z0-9_]|$)/, " x ", t)
             if (t ~ /(^|[^a-z0-9_])execute([^a-z0-9_]|$)/) { print f }
           }
+        }
+      ' 2>/dev/null | sort -u | tr '\n' '|' | sed 's/|$//')
+  return 0
+}
+
+# ---- EVERY VIEW THIS REPO HAS EVER DEFINED (Codex High, round 21) ----------
+# A view is a writable alias. PostgreSQL makes a single-table view over
+# order_items automatically updatable, so `UPDATE v SET total_profit = ...`
+# rewrites the protected rows while the scanner reads an unregistered name and
+# asks for no digest at all. Renaming the migration then walks past the
+# apply-time guard as well, because that guard matches the write statement.
+#
+# Indexed across ALL migrations, not just the file being scanned, for the same
+# reason the mutating-function index is: defining the view in one migration and
+# writing through it in the next would otherwise land in the gap between them.
+# The schema registry cannot substitute here — it does not distinguish a view
+# from a table, so a refreshed registry would quietly turn a view into a
+# recognized name and hand the bypass back.
+KNOWN_VIEWS_RE=""
+KNOWN_VIEWS_BUILT=false
+build_known_view_index() {
+  if [ "$KNOWN_VIEWS_BUILT" = true ]; then return 0; fi
+  KNOWN_VIEWS_BUILT=true
+  KNOWN_VIEWS_RE=$(find "$MIGRATION_DIR" -name '*.sql' -type f -print0 \
+    | xargs -0 awk '
+        {
+          l = tolower($0)
+          sub(/--.*/, "", l)
+          gsub(/"/, "", l)
+          if (l !~ /create[ \t]+(or[ \t]+replace[ \t]+)?(temp[ \t]+|temporary[ \t]+|recursive[ \t]+|materialized[ \t]+)*view[ \t]/) next
+          sub(/^.*view[ \t]+/, "", l)
+          sub(/^if[ \t]+not[ \t]+exists[ \t]+/, "", l)
+          sub(/[^a-z0-9_.].*$/, "", l)
+          sub(/^public\./, "", l)
+          if (l ~ /^[a-z_][a-z0-9_]*$/) print l
         }
       ' 2>/dev/null | sort -u | tr '\n' '|' | sed 's/|$//')
   return 0
@@ -669,26 +741,54 @@ $MIG_BASENAME
     # refusal — see MUTATING-FUNCTION INDEX above for why a call to a body that
     # writes a protected table cannot be bound to a digest.
     build_mutating_fn_index
-    SCAN_HITS=$(awk -v tables="$BUSINESS_ROW_TABLES" -v mutfns="$MUTATING_FNS_RE" '
+    build_known_view_index
+    SCAN_HITS=$(awk -v tables="$BUSINESS_ROW_TABLES" -v mutfns="$MUTATING_FNS_RE" \
+                    -v regtables="$REGISTRY_TABLES" -v knownviews="$KNOWN_VIEWS_RE" '
+      # ---- ONE SCANNER, ONE PASS (CodeRabbit Major, PR #364) -----------------
+      # Comments and literals are not three independent removals, and running
+      # them in sequence got the interleaving wrong in both directions. Block
+      # comments came out first, so `-- see /* note` opened a block comment that
+      # no `*/` ever closed and every following line was blanked — a fail-OPEN
+      # in the primary money scanner, hiding whatever rewrite came next. A `/*`
+      # inside a string literal did the same. Read left to right instead, once,
+      # and let whichever construct opens first own the text until it closes.
+      function strip_noise(s,   out, i, c, d, n, p, q) {
+        out = ""; i = 1; n = length(s)
+        while (i <= n) {
+          c = substr(s, i, 1)
+          d = substr(s, i, 2)
+          if (inblk > 0) {
+            if (d == "/*") { inblk++; i += 2; continue }
+            if (d == "*/") { inblk--; i += 2; continue }
+            i++; continue
+          }
+          if (instr) {
+            # `it'"'"''"'"'s` is one literal, not two. Reading the doubled quote
+            # as a close would put the rest of the literal back into the syntax
+            # stream, which is how a quoted UPDATE becomes a real one.
+            if (c == "'"'"'" && substr(s, i + 1, 1) == "'"'"'") { i += 2; continue }
+            # A backslash escapes the next character only in an E-string.
+            # Elsewhere PostgreSQL treats it as an ordinary character, and
+            # skipping it would eat the closing quote of a Windows path.
+            if (c == "\\" && estr) { i += 2; continue }
+            if (c == "'"'"'") { instr = 0; estr = 0 }
+            i++; continue
+          }
+          if (d == "/*") { inblk++; i += 2; out = out " "; continue }
+          if (d == "--") break
+          if (c == "'"'"'") {
+            p = substr(out, length(out), 1)
+            q = (length(out) > 1 ? substr(out, length(out) - 1, 1) : " ")
+            estr = (p == "e" && q !~ /[a-z0-9_]/)
+            instr = 1; out = out " "; i++; continue
+          }
+          out = out c; i++
+        }
+        return out
+      }
       {
         raw[FNR] = $0
-        line = tolower($0)
-        # Block comments first: a /* CREATE FUNCTION */ that survives here would
-        # pin the scanner in function-body mode and hide every later rewrite.
-        while (1) {
-          if (inblk) {
-            e = index(line, "*/")
-            if (e == 0) { line = ""; break }
-            line = substr(line, e + 2); inblk = 0
-          }
-          s = index(line, "/*")
-          if (s == 0) break
-          e = index(substr(line, s + 2), "*/")
-          if (e == 0) { line = substr(line, 1, s - 1); inblk = 1; break }
-          line = substr(line, 1, s - 1) " " substr(line, s + 2 + e + 1)
-        }
-        sub(/--.*/, "", line)
-        gsub(/'"'"'[^'"'"']*'"'"'/, " ", line)
+        line = strip_noise(tolower($0))
         # Drop quoting BEFORE normalizing, so "public"."orders" survives as one
         # dotted token instead of splitting into public . orders.
         gsub(/"/, "", line)
@@ -837,6 +937,39 @@ $MIG_BASENAME
         for (k = p - 1; k >= 1; k--) { if (tok[k] == ";") return tok[k + 1] }
         return tok[1]
       }
+      # ---- A WRITE TARGET THIS FILE CANNOT ACCOUNT FOR (Codex High, round 21) --
+      # Until now the scan only ever spoke up when the target was a PROTECTED
+      # table, so a name it did not recognize was silently nothing. That is the
+      # bypass: create an automatically updatable view over order_items, write
+      # through the view, and the protected rows change while the scanner sees an
+      # unregistered name and asks for no digest.
+      #
+      # Three outcomes, and the order matters. A view is refused outright, and
+      # being created in this same migration is NOT an excuse — that is precisely
+      # the attack. A table this migration creates for itself is fine: scratch
+      # rows are not business rows. Anything else is refused for being
+      # unaccounted-for, because a name nobody can resolve is exactly what an
+      # unbound rewrite of protected rows looks like from here.
+      function unresolved_write(t, kind, p) {
+        if (t == "") return
+        # A name qualified into another schema (auth., storage., cron.) is not a
+        # public business table and is out of scope for approved-set binding.
+        if (t ~ /\./) return
+        if (t !~ /^[a-z_][a-z0-9_]*$/) return
+        if (seen_unres[t]) return
+        seen_unres[t] = 1
+        if (knownviews != "" && t ~ ("^(" knownviews ")$")) {
+          printf "%d\t%s\t%s\t%s\t%s\t%s\n", tokln[p], t, "viewwrite", kind, "-", raw[tokln[p]]
+          return
+        }
+        if (made_view[t]) {
+          printf "%d\t%s\t%s\t%s\t%s\t%s\n", tokln[p], t, "viewwrite", kind, "-", raw[tokln[p]]
+          return
+        }
+        if (made_table[t]) return
+        if (regtables != "" && t ~ ("^(" regtables ")$")) return
+        printf "%d\t%s\t%s\t%s\t%s\t%s\n", tokln[p], t, "unresolved", kind, "-", raw[tokln[p]]
+      }
       END {
         # `UPDATE public . orders SET ...` is legal PostgreSQL, and so is the
         # same qualification broken across lines. The tokenizer keeps `.` as an
@@ -864,6 +997,30 @@ $MIG_BASENAME
         for (i = 1; i <= m; i++) { tok[i] = jtok[i]; tokln[i] = jtokln[i] }
         for (i = m + 1; i <= ntok; i++) { delete tok[i]; delete tokln[i] }
         ntok = m
+        # ---- WHAT THIS MIGRATION MAKES FOR ITSELF (Codex High, round 21) ----
+        # A write has to resolve to something before it can be judged, and the
+        # one honest reason a target is absent from the registry is that this
+        # migration just created it. A scratch table is fine: it holds no
+        # business rows and binding it would be theatre.
+        #
+        # A VIEW is deliberately NOT fine. That is the whole finding — an
+        # automatically updatable view over order_items is a writable alias for
+        # rows that DO need binding, and accepting it because the migration
+        # created it would hand back the bypass in the name of convenience.
+        for (i = 1; i <= ntok; i++) {
+          if (tok[i] != "create") continue
+          k = i + 1
+          while (tok[k] == "or" || tok[k] == "replace" || tok[k] == "temp" ||
+                 tok[k] == "temporary" || tok[k] == "unlogged" || tok[k] == "global" ||
+                 tok[k] == "local" || tok[k] == "materialized" || tok[k] == "recursive") k++
+          if (tok[k] != "table" && tok[k] != "view") continue
+          j = k + 1
+          if (tok[j] == "if" && tok[j + 1] == "not" && tok[j + 2] == "exists") j += 3
+          nm = tok[j]
+          sub(/^[a-z0-9_]+\./, "", nm)
+          if (nm == "") continue
+          if (tok[k] == "table") made_table[nm] = 1; else made_view[nm] = 1
+        }
         for (i = 1; i <= ntok; i++) {
           # Dynamic SQL: refused outright, no table needed. `EXECUTE FUNCTION`
           # / `EXECUTE PROCEDURE` (trigger bodies) and `... EXECUTE ON ...`
@@ -893,15 +1050,19 @@ $MIG_BASENAME
               continue
             }
           }
-          if (tok[i] == "truncate") {
+          if (tok[i] == "truncate" && tok[i - 1] != "grant" && tok[i - 1] != "revoke" &&
+              tok[i - 1] != ",") {
             j = i + 1
             if (tok[j] == "table") j++
             while (j <= ntok && tok[j] != ";") {
               if (tok[j] == "only") { j++; continue }
               tt = tok[j]
+              gsub(/"/, "", tt)
               sub(/^public\./, "", tt)
               if (tt ~ ("^(" tables ")$")) {
                 printf "%d\t%s\t%s\t%s\t%s\t%s\n", tokln[i], tt, "truncate", "-", "-", raw[tokln[i]]
+              } else {
+                unresolved_write(tt, "truncate", i)
               }
               if (tok[j + 1] == ",") { j += 2; continue }
               break
@@ -909,7 +1070,17 @@ $MIG_BASENAME
             continue
           }
           target = ""; kind = ""; setp = 0
-          if (tok[i] == "update" && tok[i - 1] != "do") {
+          # `UPDATE` is also a lock strength (`FOR UPDATE`, `FOR NO KEY UPDATE`),
+          # a privilege (`GRANT SELECT, UPDATE ON ...`), and a trigger event
+          # (`BEFORE INSERT OR UPDATE ON ...`). Reading the next token as a table
+          # in those spellings used to be harmless — an unrecognized name was
+          # silently nothing — but now an unrecognized name is a refusal, so the
+          # non-DML uses have to be excluded by name or every FK clause in the
+          # repo becomes a violation.
+          if (tok[i] == "update" && tok[i - 1] != "do" && tok[i - 1] != "for" &&
+              tok[i - 1] != "key" && tok[i - 1] != "on" && tok[i - 1] != "before" &&
+              tok[i - 1] != "after" && tok[i - 1] != "or" && tok[i - 1] != "grant" &&
+              tok[i - 1] != "revoke" && tok[i - 1] != "instead" && tok[i - 1] != ",") {
             j = i + 1
             if (tok[j] == "only") j++
             target = tok[j]; kind = "update"; setp = j + 1
@@ -934,12 +1105,15 @@ $MIG_BASENAME
             target = tok[j]; kind = "merge"; setp = j + 1
           }
           if (target == "") continue
+          gsub(/"/, "", target)
           sub(/^public\./, "", target)
           if (target ~ ("^(" tables ")$")) {
             sc = (setp ? set_cols(setp) : "")
             printf "%d\t%s\t%s\t%s\t%s\t%s\n", tokln[i], target, kind,
                    (sc == "" ? "-" : sc), bound_var(i), raw[tokln[i]]
+            continue
           }
+          unresolved_write(target, kind, i)
         }
       }
     ' "$file")
@@ -956,16 +1130,35 @@ $MIG_BASENAME
     # CRX writes dollar-quoted bodies everywhere, so this costs nothing and
     # closes the hole fail-closed.
     QUOTED_BODIES=$(awk '
-      { line = tolower($0)
-        while (1) {
-          if (inblk) { e = index(line, "*/"); if (e == 0) { line = ""; break }
-                       line = substr(line, e + 2); inblk = 0 }
-          s = index(line, "/*"); if (s == 0) break
-          e = index(substr(line, s + 2), "*/")
-          if (e == 0) { line = substr(line, 1, s - 1); inblk = 1; break }
-          line = substr(line, 1, s - 1) " " substr(line, s + 2 + e + 1)
+      # Comments out, literals KEPT — this detector exists to see `AS '"'"'`, so
+      # it is the one scanner that must not blank quoted text. It still has to
+      # read left to right: taking block comments out first meant a line ending
+      # `-- see /* note` opened a comment nothing closed, and every following
+      # line was blanked, which is a fail-OPEN for exactly the shape being
+      # hunted (CodeRabbit Major, PR #364).
+      function strip_comments(s,   out, i, c, d, n) {
+        out = ""; i = 1; n = length(s)
+        while (i <= n) {
+          c = substr(s, i, 1)
+          d = substr(s, i, 2)
+          if (inblk > 0) {
+            if (d == "/*") { inblk++; i += 2; continue }
+            if (d == "*/") { inblk--; i += 2; continue }
+            i++; continue
+          }
+          if (instr) {
+            if (c == "'"'"'" && substr(s, i + 1, 1) == "'"'"'") { out = out "  "; i += 2; continue }
+            if (c == "'"'"'") instr = 0
+            out = out c; i++; continue
+          }
+          if (d == "/*") { inblk++; i += 2; out = out " "; continue }
+          if (d == "--") break
+          if (c == "'"'"'") { instr = 1; out = out c; i++; continue }
+          out = out c; i++
         }
-        sub(/--.*/, "", line)
+        return out
+      }
+      { line = strip_comments(tolower($0))
         if (line ~ /create[ \t]+(or[ \t]+replace[ \t]+)?(function|procedure)[ \t]/) { pending = 1 }
         if (!pending) next
         # A dollar quote opens the body: this is the shape we want, stand down.
@@ -1002,7 +1195,9 @@ $MIG_BASENAME
     # also found.
     DYNAMIC_HITS=$(printf '%s\n' "$SCAN_HITS" | awk -F'\t' 'NF && $3 == "dynamic"')
     INDIRECT_HITS=$(printf '%s\n' "$SCAN_HITS" | awk -F'\t' 'NF && $3 == "indirect"')
-    REWRITES=$(printf '%s\n' "$SCAN_HITS" | awk -F'\t' 'NF && $3 != "dynamic" && $3 != "indirect"')
+    VIEWWRITE_HITS=$(printf '%s\n' "$SCAN_HITS" | awk -F'\t' 'NF && $3 == "viewwrite"')
+    UNRESOLVED_HITS=$(printf '%s\n' "$SCAN_HITS" | awk -F'\t' 'NF && $3 == "unresolved"')
+    REWRITES=$(printf '%s\n' "$SCAN_HITS" | awk -F'\t' 'NF && $3 != "dynamic" && $3 != "indirect" && $3 != "viewwrite" && $3 != "unresolved"')
 
     if [ -n "$DYNAMIC_HITS" ]; then
       echo "VIOLATION: $file"
@@ -1029,6 +1224,37 @@ $MIG_BASENAME
       echo "  a string assembled while it runs — so no digest can be shown to cover"
       echo "  them. Inline the DML here, written out literally, so it can be read"
       echo "  and bound to an approved set."
+      echo ""
+      VIOLATIONS=$((VIOLATIONS + 1))
+    fi
+
+    if [ -n "$VIEWWRITE_HITS" ]; then
+      echo "VIOLATION: $file"
+      echo "  Data written through a view:"
+      printf '%s\n' "$VIEWWRITE_HITS" | while IFS=$'\t' read -r v_ln v_rel v_kind v_cols v_var v_raw; do
+        echo "    line $v_ln: $v_kind on $v_rel, which is a view"
+      done
+      echo "  PostgreSQL makes a single-table view automatically updatable, so a"
+      echo "  write through one changes the underlying rows while this scan sees"
+      echo "  only the view's name — no protected table, no digest required. That"
+      echo "  is true even when this same migration creates the view. Write the"
+      echo "  base table directly so the rewrite can be read and bound."
+      echo ""
+      VIOLATIONS=$((VIOLATIONS + 1))
+    fi
+
+    if [ -n "$UNRESOLVED_HITS" ]; then
+      echo "VIOLATION: $file"
+      echo "  Write to a relation this validator cannot account for:"
+      printf '%s\n' "$UNRESOLVED_HITS" | while IFS=$'\t' read -r u_ln u_rel u_kind u_cols u_var u_raw; do
+        echo "    line $u_ln: $u_kind on $u_rel — not a known table in the schema"
+        echo "              registry, and not created by this migration"
+      done
+      echo "  A name nobody can resolve is indistinguishable from an unbound"
+      echo "  rewrite of protected rows, so it is refused rather than ignored."
+      echo "  If the relation is real, refresh the schema registry"
+      echo "  (/regen-schema-registry). If this migration creates it, create it"
+      echo "  as a TABLE before writing to it."
       echo ""
       VIOLATIONS=$((VIOLATIONS + 1))
     fi
@@ -1650,7 +1876,45 @@ $MIG_BASENAME
           for DIGEST_SET_VAR in $DIGEST_SET_VARS; do
           if [ -z "$SET_BIND_WHY" ] && [ "$COMPUTED" -eq 1 ] && [ -n "$DIGEST_SET_VAR" ]; then
             CAPTURE_STATUS=$(awk -v fl="$FIRST_REWRITE_LINE" -v var="$DIGEST_SET_VAR" '
-              { l = tolower($0); sub(/--.*/, "", l); all = all " " l; if (FNR < fl) buf = buf " " l }
+              # ---- A COMMENT IS NOT A ROW LOCK (Codex High, round 21) --------
+              # This check used to remove `--` comments and nothing else, then
+              # search the capture statement textually for FOR UPDATE. So
+              # `SELECT array_agg(...) /* FOR UPDATE */ FROM ...` satisfied it
+              # while taking no lock at all, and so did a string literal saying
+              # the same thing. Both decoys leave the approved rows unlocked
+              # between the digest and the write — the exact race the lock
+              # exists to close. Comments and quoted literals now come out
+              # through a stateful scanner, the same shape used by the
+              # apply-time guard: nesting is tracked, a literal is not read as
+              # syntax, and a `--` inside either is not read as a comment.
+              function strip_noise(s,   out, i, c, d, n) {
+                out = ""; i = 1; n = length(s)
+                while (i <= n) {
+                  c = substr(s, i, 1)
+                  d = substr(s, i, 2)
+                  if (blk > 0) {
+                    if (d == "/*") { blk++; i += 2; continue }
+                    if (d == "*/") { blk--; i += 2; continue }
+                    i++; continue
+                  }
+                  if (instr) {
+                    if (c == "'"'"'") {
+                      # Two in a row is an escaped quote INSIDE the literal, not
+                      # the end of it. Reading it as the end would put the rest
+                      # of the literal back into the syntax stream.
+                      if (substr(s, i + 1, 1) == "'"'"'") { i += 2; continue }
+                      instr = 0
+                    }
+                    i++; continue
+                  }
+                  if (d == "/*") { blk++; i += 2; out = out " "; continue }
+                  if (d == "--") break
+                  if (c == "'"'"'") { instr = 1; out = out " "; i++; continue }
+                  out = out c; i++
+                }
+                return out
+              }
+              { l = strip_noise(tolower($0)); all = all " " l; if (FNR < fl) buf = buf " " l }
               END {
                 # ---- ONE CAPTURE, NEVER REASSIGNED (Codex High, round 12) ----
                 # Everything downstream reasons about "the approved set" as if

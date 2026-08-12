@@ -2,6 +2,44 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-11 — A view is a writable alias, a comment is not a lock, and a flag is material
+
+Closed all three High findings from the round-21 adversarial review, plus one
+automated-review finding in the same defect class.
+
+**A view let a migration write protected rows under a name the guard never
+checked.** The scanner only demanded an approved-set digest when the write named
+a table it recognized; any other name was silently skipped. PostgreSQL makes a
+single-table view automatically updatable, so a migration could define a view
+over a protected table and rewrite it through that alias with no digest and no
+one-shot registration at all — and renaming the file walked past the apply-time
+guard too. The scanner now indexes every view this repository has ever defined,
+refuses any write through one, and refuses any write to a relation it cannot
+account for: not a known table, not created as a scratch table by the migration
+itself. Silence is no longer an outcome for a write it does not understand.
+
+**`/* FOR UPDATE */` satisfied the row-lock requirement.** The rows a migration
+is authorized to change must be locked when they are captured, or a concurrent
+change can land between the authorization and the write. That check searched the
+capture statement as plain text, so the words appearing in a block comment — or
+inside a string literal — passed it while no lock was taken. Both channels are
+now removed by the same scanner used elsewhere before the check runs.
+
+**Material state left lifecycle flags out.** The digest binds a row's material
+before-state so a stale authorization fails loudly, but the definition of
+material covered status, money, quantity, timestamps, ownership and actors — not
+plain on/off flags such as active, enabled, or archived, and not row-version
+columns. A customer deactivated between approval and apply, or an order flipped
+from planned to real, still matched. Those flags and version columns are material
+now.
+
+**One scanner, one pass.** Comments and quoted literals were being removed as
+three independent steps, and the order got the interleaving wrong in both
+directions: a `/*` inside a `--` comment opened a block nothing ever closed, and
+every following line went blank — the money scanner ran blind for the rest of the
+file. Stripping is now a single stateful pass that handles nesting, escapes and
+literals together, in the main scanner and in the function-body detector.
+
 ## 2026-08-11 — A comment is not a disguise, and a digest binds the whole row
 
 Closed both High findings from the round-20 adversarial review.
