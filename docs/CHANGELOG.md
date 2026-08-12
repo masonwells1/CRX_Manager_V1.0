@@ -75,6 +75,50 @@ Also in this branch's merge of `origin/main`: resolving `docs/reference/migratio
 main's rows 868-871 renumbered the six Wave A rows to 872-877, and the row this branch had added for
 the pre-rename filename was dropped as a duplicate of main's row 866.
 
+## 2026-08-11 — Executable proof for the blend-ticket whole-cent fix, and the run-time gap it exposes
+
+The blend-ticket fix below was reviewed and applied, but the fractional-quantity path it repairs had
+never actually been executed anywhere. `scripts/smoke/prove-blend-ticket-fractional-cents.mjs` now runs
+it end to end in a disposable, network-isolated PostgreSQL 17 container built from the repository's own
+migrations, with a fixture blend ticket whose unit conversion yields a fractional quantity.
+
+Six stages. It reproduces the original failure against the pre-fix body from `20260714230200` and
+observes the live CHECK constraint reject the header write; applies
+`20260811200000_blend_ticket_order_whole_cent_totals` and watches its own `$verify$` post-condition
+block pass; re-runs the registered smoke chain to `SMOKE_PASS_ROLLBACK`, asserting whole-cent totals
+equal to the canonical sum of rounded lines; then mutates the schema twice to confirm the apply-time
+guard fails closed when the totals trigger is missing and when it is `REPLICA`-only. That second
+mutation matters: `tgenabled` has four states, and the widespread `<> 'D'` idiom waves through a
+replica-only trigger that never fires in an ordinary session. The migration rejects both.
+
+Both mutation stages apply the migration as a single transaction, so "fails closed" means the function
+body is also rolled back rather than left half-replaced.
+
+The harness refuses to run unless the post-fix function body on disk still md5-matches a **pinned
+snapshot** of that function read from production `pg_proc` on 2026-08-11. That is a historical reading,
+not a live one — the container runs with `--network none` and the harness never contacts production —
+so it catches the repository drifting off what was applied, not production changing underneath. The
+comment in the script carries the exact query to re-confirm current parity by hand. The smoke chain and
+fixture are registered in `smoke-specs.json` under `create_order_from_blend_ticket`, flagged
+`container_only` so `--all` and `--area` runs skip it with an announced reason instead of sending a
+fixture-seeding chain at whatever database `SUPABASE_DB_URL` points to.
+
+Stage six characterizes a residual defect the review pass did not surface: the trigger guarantee is
+**apply-time only**. With the fixed body in place and the trigger dropped afterwards, the RPC reports
+success and books a zero-value header — the read-back's `IF NOT FOUND` cannot catch it, because the
+order row exists by then regardless of whether the trigger ran. Nothing raises; only the smoke chain
+caught it. Reaching that state takes a deliberate schema change that the migration's own guard blocks
+at apply time, and production holds no blend tickets, so it is not firing — but the failure mode is
+silent wrong money, not an error, which makes it a **HIGH-severity open data-integrity gap**, not a
+footnote. It is tracked as **CRX-MONEY-001-R** in `docs/manual/KNOWN_ISSUES.md` with an owner,
+mitigation and standing detector; stage F of the prover is that detector. Closing it means asserting
+inside the RPC that the header was actually recalculated.
+## 2026-08-11 — Customer 360 pre-push adversarial fixes
+
+Closed all three medium-severity findings from the fresh Sol review of the Customer 360 adoption pack. Customer ownership assignment now uses a new admin-only atomic RPC instead of a separate active-rep read followed by a direct customer update: the RPC locks the target rep, rejects any missing/inactive customer from the exact selected set, rolls partial matches back, and binds idempotent retries to the actor, customer IDs, and target rep. The Customers UI retains truthful post-save refresh handling and has regression coverage for inactive targets, changed customer sets, ambiguous failures, and intent-scoped keys. Call Lists now keeps a requested `rep=` URL pending and blocks list loading when rep-option validation fails, so an error cannot broaden the admin's requested scope to all reps; retry preserves and restores the filter. The approved migration was submitted as `20260811122851_assign_customers_sales_rep` and applied live under Supabase-assigned/disk version `20260811183317`; live catalog and grant checks passed, and the schema registry, generated Supabase types, and `pg_proc` fixture were refreshed through the resulting 960-row ledger high-water. The registered rollback smoke passed against the exact migration in disposable PostgreSQL; its live rollback-only run remains separately guarded by the required `REAL-DATA-OK` authorization.
+
+PR review follow-up tightened the Call Lists tier URL restoration, capped search text at 100 characters, and corrected lapsed-product wording so only the named top product is attributed its measured prior revenue. It also identified real audit-visibility and freshness gaps: the atomic assignment RPC had bypassed `save_customer`, which normally advances `customers.updated_at` and records customer changes in `activity_feed`. Forward-only migration `20260811230423_log_customer_sales_rep_assignment.sql` preserves the live RPC's authorization, lock, exact-set, and replay behavior while advancing `updated_at` and adding one customer-scoped activity row per updated customer in the same transaction. An exact count mismatch aborts the assignment and receipt together; exact replay cannot duplicate activity or touch the timestamp again. The file was forward-renamed from `20260811210357` after live high-water moved to `20260811220045`; no executable SQL changed in the rename. Both final-path, content-bound `gpt-5.6-sol` high migration charters returned CLEAN, and the network-isolated PostgreSQL 17 harness mutation-tests timestamp advancement and rollback. The exact committed-SHA review still follows after commit; live apply remains pending behind the guarded Supabase lane.
+
 ## 2026-08-11 — Let the order-totals trigger own the blend-ticket order header
 
 The validated whole-cent CHECK constraints now live on `orders.total_cost` and `orders.total_profit`
@@ -125,7 +169,7 @@ Verified against production after the apply, not inferred from the migration tex
   implementation-identity scenario. Inside the rolled-back transaction it created a real payment batch with
   matching items and an audit row, was refused on the duplicate as already sitting in a live payment, and
   replayed a keyed create back to the same payment id with exactly one item.
-- **Intent binding itself, proven live.** The checked-in intent-binding proof is a container harness and
+- **Intent binding itself, proven live.** The original intent-binding proof is a container harness and
   cannot run against production, so a nine-assertion chain was written and run live, ending in the same
   mandatory `SMOKE_PASS_ROLLBACK` so every effect was discarded. It observed: the receipt now carries the
   acting admin's id and a 64-character fingerprint; an identical intent replays to the same payment id and
@@ -138,6 +182,16 @@ Verified against production after the apply, not inferred from the migration tex
 
 No live rows were altered: every scenario above ran inside a transaction that ends in a deliberate
 exception, which is how these chains prove both the behaviour and the rollback.
+
+That nine-assertion chain is no longer session-only. It is now checked in verbatim as
+`scripts/smoke/smoke-commission-payout-intent-binding-live.sql` and registered under the spec key
+`commission_payout_intent_binding_live`, so anyone can re-certify the binding against production with
+`node scripts/smoke/run-smoke.mjs --spec commission_payout_intent_binding_live`. The committed file — header
+comment and all — was executed against production on 2026-08-11 and returned
+`SMOKE_PASS_ROLLBACK (9/9 incl. cross-actor)`, with a follow-up count confirming no `[SMOKE]` customer,
+order, commission or receipt row survived. The container-only chain stays registered alongside it: it covers
+more cases (void, blank keys, cross-operation reuse, the unchanged guard surface), and this one covers what
+can actually be re-run live.
 
 ## 2026-08-11 — Preserve the applied line-profit backfill without replaying it by default
 

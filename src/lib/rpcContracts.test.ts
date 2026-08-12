@@ -1407,6 +1407,9 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   // types regenerated 2026-07-21): each declares p_idempotency_key and replays via
   // check_idempotency/save_idempotency.
   'approve_supplier_price_import',
+  // Customer 360 ownership assignment: payload-bound replay is serialized by
+  // check_idempotency before the target rep/customer rows are mutated.
+  'assign_customers_sales_rep',
   'batch_apply_all_prepayments',
   'batch_apply_prepayments',
   'batch_cancel_deliveries',
@@ -2173,9 +2176,11 @@ function registryMigrationHighWater(): string {
 // Keep this set aligned with rows explicitly marked PENDING APPLY in
 // docs/reference/migration-history.md.
 //
-// Empty as of 2026-08-10: the Team Board delegation migrations and the
-// foundation-review migrations are all applied live and documented below.
-const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([]);
+// The customer assignment activity migration is reviewed and proven locally,
+// but remains pending the separately guarded live Supabase apply lane.
+const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>([
+  '20260811230423',
+]);
 
 /**
  * Explicitly pending migrations remain part of the contract inventory even
@@ -2279,12 +2284,14 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
     'idempotency infrastructure helper (sections 2-6 closeout): binds a completed lifecycle result to its key; direct client EXECUTE is revoked',
   _claim_bound_lifecycle_idempotency:
     'idempotency infrastructure helper (sections 2-6 closeout): claims a bound lifecycle key for replay; direct client EXECUTE is revoked',
-  _guard_job_commission_split_immutable:
-    'performs no DML at all (Wave A fix #4, 20260811050000, parked); it is classified as a mutator only because its refusal message names public.correct_job_commission_split so the office can see how to fix a wrong split, and the scanner reads that message text as a call. It RETURNS trigger, so PostgreSQL refuses any direct call, and every application-role EXECUTE is revoked. Pre-apply-window entry: prune it once the migration is at or below the registry high-water',
-  _crx_payout_assert_impl_20260809:
-    'read-only identity check used by 20260811130000 to decide whether a body may be renamed into the payout implementation slot; it writes nothing (the inventory sees its SELECT ... INTO local variables), every application-role EXECUTE is revoked, and the same migration drops it before finishing',
-  _crx_payout_assert_replay_20260809:
-    'read-only replay-state check used by 20260811130000 to decide whether an already-existing implementation may be adopted; it writes nothing (the inventory sees its SELECT ... INTO local variables, and reads the check_idempotency_intent name out of a REGEX STRING LITERAL as if it were a call), every application-role EXECUTE is revoked, and the same migration drops it before finishing',
+  // Pruned on the 2026-08-11 merge of origin/main, per the standing rule below that a
+  // dead exemption silently pre-suppresses any future RPC reusing the name:
+  //   _guard_job_commission_split_immutable — Wave A fix #4 (20260811050000) is still
+  //     unapplied, but live high-water has moved past it to 20260811220045, so its own
+  //     "prune once the migration is at or below the registry high-water" note now applies.
+  //     Re-add it if that migration is renumbered forward ahead of the high-water again.
+  //   _crx_payout_assert_impl_20260809 / _crx_payout_assert_replay_20260809 — 20260811130000
+  //     landed on main and applied live; it drops both helpers before finishing.
   _insert_commissions_for_job: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _insert_commissions_for_order: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',
