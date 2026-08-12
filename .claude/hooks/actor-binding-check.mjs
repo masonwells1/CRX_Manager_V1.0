@@ -1240,14 +1240,16 @@ function stableAuthUidBindings(structuralBody, beforeIndex) {
     if (!isOuterDeclarationInitializer && !isTopLevelBodyAssignment) continue;
     const name = match[1];
     const ref = escapedRegexLiteral(name);
+    const optionalBlockQualifier = `(?:[A-Za-z_][\\w$]*\\s*\\.\\s*)?`;
     const assignmentRe = new RegExp(
-      `(?:^|[;\\n]|\\bDECLARE\\b)\\s*${ref}` +
+      `(?:^|[;\\n]|\\bDECLARE\\b)\\s*${optionalBlockQualifier}${ref}` +
         `(?:\\s+[^;\\n:=]+?)?\\s*:=`,
       "gi"
     );
     const assignments = structuralBody.match(assignmentRe) || [];
     const equalsAssignmentRe = new RegExp(
-      `(?:^|[;\\n]|\\bBEGIN\\b|\\bTHEN\\b|\\bELSE\\b|\\bLOOP\\b)\\s*${ref}\\s*=(?!=)`,
+      `(?:^|[;\\n]|\\bBEGIN\\b|\\bTHEN\\b|\\bELSE\\b|\\bLOOP\\b)\\s*` +
+        `${optionalBlockQualifier}${ref}\\s*=(?!=)`,
       "i"
     );
     const intoRe = new RegExp(`\\bINTO\\s+(?:STRICT\\s+)?${ref}(?![\\w$])`, "i");

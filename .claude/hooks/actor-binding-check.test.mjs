@@ -2042,6 +2042,33 @@ r = runHook(fn(`
   DECLARE
     v_actor uuid := auth.uid();
   BEGIN
+    test_fn.v_actor := p_performed_by;
+    IF p_performed_by IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    ${MUTATION}
+  END
+`));
+ok(isDeny(r), "a function-block-qualified reassignment cannot preserve a stable auth.uid binding");
+
+r = runHook(fn(`
+  DECLARE
+    v_actor uuid := auth.uid();
+    v_note text;
+  BEGIN
+    test_fn.v_note := 'harmless';
+    IF p_performed_by IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    INSERT INTO financial_audit_log (actor_user_id) VALUES (v_actor);
+  END
+`));
+ok(!isDeny(r), "a harmless function-block-qualified assignment leaves the auth.uid binding stable");
+
+r = runHook(fn(`
+  DECLARE
+    v_actor uuid := auth.uid();
+  BEGIN
     v_actor = p_performed_by;
     IF p_performed_by IS DISTINCT FROM v_actor THEN
       RAISE EXCEPTION 'p_performed_by does not match authenticated user';

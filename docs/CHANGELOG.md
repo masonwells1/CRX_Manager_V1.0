@@ -56,6 +56,16 @@ plus a real two-migration persistent-view probe, deny unsafe actor DDL. The
 existing direct harmless `command` controls remain allowed, while harmless SQL
 through an unproven renamed column deliberately requires manual review.
 
+A subsequent exact-head review found that PostgreSQL's implicit function-block
+qualification could overwrite the otherwise stable identity local as
+`function_name.v_actor := p_performed_by` without matching the reassignment
+check. Stable identity bindings are now invalidated by both unqualified and
+block-qualified `:=` or legacy `=` assignments. The focused real-hook suite has
+319 passing assertions, including the unsafe qualified overwrite and a harmless
+qualified assignment to an unrelated local. Disabling the qualifier-aware
+clause makes the unsafe regression fail, proving that the new condition is
+load-bearing.
+
 ## 2026-08-11 — Close executable cross-migration cron.job view aliases
 
 Hardened the actor-binding SQL reader against persistent updatable aliases that
