@@ -2,29 +2,21 @@ import { useRef, useCallback } from 'react';
 import { generateIdempotencyKey } from '../lib/idempotency';
 
 /**
- * React hook for retry-safe idempotency keys.
+ * Provides a stable idempotency key for a single mutation intent.
  *
- * Generates a key once per action intent and persists it in a ref so that
- * if the user retries (network timeout, error), the SAME key is sent again.
- * The server deduplicates on the key, preventing duplicate mutations.
+ * The key is generated lazily on the first call to `getKey()` and remains
+ * stable across retries. This is critical for safe retry behavior: if a
+ * network error occurs after the server committed, retrying with the same key
+ * lets the server return the original result instead of duplicating the work.
  *
- * Call `getKey()` in your action handler — it returns the current key
- * (generating one on first call). Call `resetKey()` only after a
- * confirmed success to prepare for the next distinct action.
+ * Call `getKey()` in your action handler. Call `resetKey()` after a confirmed
+ * success or after the server proves the key is bound to a different payload.
  *
- * Pass `target` when one page fires the same operation at different rows (a
- * payment id, a job id). One key is retained PER target, so a retry after an
- * uncertain response replays the SAME key and the server can hand back the
- * original outcome, while switching rows still mints a fresh key. Callers that
- * instead call `resetKey()` when the user picks a row throw the retained key
- * away and turn every retry into a brand-new request the server then refuses.
- *
- * Per-target really means per-target: the keys live in a Map, not one slot, so
- * acting on row A, then row B, then row A again replays A's original key rather
- * than minting a third one. A single slot looks identical in the A-then-A and
- * A-then-B cases and only diverges on the return trip, which is exactly the
- * moment an admin is retrying something they are unsure about. The Map holds one
- * short string per row touched since mount and is discarded with the component.
+ * Pass `intentScope` when one mounted action can target different records or
+ * payloads. One key is retained per scope without embedding the payload in the
+ * generated key. Switching scopes mints a fresh key, while returning to a scope
+ * with an unresolved outcome reuses its original key. This preserves both
+ * customer-assignment intent rotation and commission-payout A → B → A replay.
  *
  * @example
  * const { getKey, resetKey } = useIdempotencyKey('complete_delivery', profile.id);
@@ -32,13 +24,12 @@ import { generateIdempotencyKey } from '../lib/idempotency';
  * async function handleComplete() {
  *   const key = getKey();
  *   await supabase.rpc('complete_delivery', { p_idempotency_key: key, ... });
- *   resetKey(); // call on success — next click is a new action
- *   // on error (caught upstream), key stays the same for retry
+ *   resetKey(); // confirmed success only
  * }
  */
-export function useIdempotencyKey(operation: string, userId: string, target = '') {
+export function useIdempotencyKey(operation: string, userId: string, intentScope = '') {
   const keysRef = useRef(new Map<string, string>());
-  const scope = JSON.stringify([operation, userId, target]);
+  const scope = JSON.stringify([operation, userId, intentScope]);
 
   const getKey = useCallback((): string => {
     let key = keysRef.current.get(scope);
@@ -49,8 +40,8 @@ export function useIdempotencyKey(operation: string, userId: string, target = ''
     return key;
   }, [operation, scope, userId]);
 
-  // Retires only the CURRENT scope's key. Clearing the whole Map would drop the
-  // retained keys of every other row the admin has an unresolved retry on.
+  // Retire only the current intent. Other unresolved scopes keep their replay
+  // keys in case the user returns to them before this component unmounts.
   const resetKey = useCallback((): void => {
     keysRef.current.delete(scope);
   }, [scope]);
