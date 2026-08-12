@@ -585,6 +585,7 @@ for file in $ALL_SQL; do
 
     if [ -n "$REWRITES" ]; then
       FIRST_REWRITE_LINE=$(printf '%s\n' "$REWRITES" | head -1 | cut -f1)
+      LAST_REWRITE_LINE=$(printf '%s\n' "$REWRITES" | tail -1 | cut -f1)
       REWRITE_TABLES=$(printf '%s\n' "$REWRITES" | cut -f2 | sort -u)
       # Alternation of the rewritten tables, and the union of the columns those
       # rewrites assign. The digest has to be shown to cover THIS material, so
@@ -599,6 +600,14 @@ for file in $ALL_SQL; do
       # An opt-out must NAME every business table it waives, so it cannot be a
       # blanket wave-through, and it is never silent — see the WARNING below.
       OPT_OUT=$(grep -iE 'APPROVED_SET_DIGEST:[[:space:]]*NOT-REQUIRED' "$file" | head -1 || true)
+
+      # A migration may execute a real behavioural probe against existing rows
+      # only when the writes live inside an always-aborted PL/pgSQL exception
+      # subtransaction and a post-rollback assertion proves no residue. This is
+      # deliberately a separate, explicit marker rather than another use of the
+      # new-column waiver: existing before-values do exist, but none are allowed
+      # to survive the probe. The shape is checked below and mutation-tested.
+      ROLLBACK_PROBE=$(grep -iE 'APPROVED_SET_DIGEST:[[:space:]]*ROLLBACK-PROBE' "$file" | head -1 || true)
 
       DIGEST_BOUND=0
       DIGEST_WHY=""
@@ -793,6 +802,76 @@ for file in $ALL_SQL; do
 
       if [ "$DIGEST_BOUND" -eq 1 ]; then
         : # bound to an approved-set digest, asserted fail-closed before the write
+      elif [ -n "$ROLLBACK_PROBE" ]; then
+        PROBE_MARKER_LINE=$(grep -inE 'APPROVED_SET_DIGEST:[[:space:]]*ROLLBACK-PROBE' "$file" | head -1 | cut -d: -f1)
+        PROBE_BEGIN_LINE=$(awk -v marker="$PROBE_MARKER_LINE" -v first="$FIRST_REWRITE_LINE" '
+          FNR <= marker || FNR >= first { next }
+          { l = tolower($0); sub(/--.*/, "", l) }
+          l ~ /^[[:space:]]*begin[[:space:]]*;?[[:space:]]*$/ { print FNR; exit }
+        ' "$file")
+        PROBE_SENTINEL_LINE=$(awk -v last="$LAST_REWRITE_LINE" '
+          FNR <= last { next }
+          { l = tolower($0); sub(/--.*/, "", l) }
+          l ~ /raise[[:space:]]+exception/ && l ~ /message[[:space:]]*=[[:space:]]*'"'"'probe_ok_rollback'"'"'/ { print FNR; exit }
+        ' "$file")
+        PROBE_EXCEPTION_LINE=$(awk -v sentinel="$PROBE_SENTINEL_LINE" '
+          FNR <= sentinel { next }
+          { l = tolower($0); sub(/--.*/, "", l) }
+          l ~ /^[[:space:]]*exception[[:space:]]*$/ { print FNR; exit }
+        ' "$file")
+        PROBE_CATCH_LINE=$(awk -v exception_line="$PROBE_EXCEPTION_LINE" '
+          FNR <= exception_line { next }
+          { l = tolower($0); sub(/--.*/, "", l) }
+          l ~ /sqlerrm[[:space:]]*<>[[:space:]]*'"'"'probe_ok_rollback'"'"'/ { print FNR; exit }
+        ' "$file")
+        PROBE_VERIFY_LINE=$(awk -v catch_line="$PROBE_CATCH_LINE" '
+          FNR <= catch_line { next }
+          { l = tolower($0); sub(/--.*/, "", l) }
+          l ~ /raise[[:space:]]+exception/ && l ~ /rollback did not hold/ { print FNR; exit }
+        ' "$file")
+
+        MISSING_TBL=""
+        while IFS= read -r r_tbl; do
+          [ -z "$r_tbl" ] && continue
+          if ! echo "$ROLLBACK_PROBE" | grep -qiE "(^|[^a-z0-9_])${r_tbl}([^a-z0-9_]|$)"; then
+            MISSING_TBL="$MISSING_TBL $r_tbl"
+          fi
+        done <<< "$REWRITE_TABLES"
+
+        PROBE_WHY=""
+        if [ -n "$MISSING_TBL" ]; then
+          PROBE_WHY="does not name every rewritten table (missing:$MISSING_TBL)"
+        elif [ -z "$PROBE_MARKER_LINE" ] || [ "$PROBE_MARKER_LINE" -ge "$FIRST_REWRITE_LINE" ]; then
+          PROBE_WHY="marker is not before the first rewrite"
+        elif [ -z "$PROBE_BEGIN_LINE" ]; then
+          PROBE_WHY="has no BEGIN subtransaction between the marker and first rewrite"
+        elif [ -z "$PROBE_SENTINEL_LINE" ]; then
+          PROBE_WHY="does not raise the exact PROBE_OK_ROLLBACK sentinel after every rewrite"
+        elif [ -z "$PROBE_EXCEPTION_LINE" ]; then
+          PROBE_WHY="has no PL/pgSQL EXCEPTION block after the sentinel"
+        elif [ -z "$PROBE_CATCH_LINE" ]; then
+          PROBE_WHY="does not reject every error except the exact PROBE_OK_ROLLBACK sentinel"
+        elif [ "$PROBE_EXCEPTION_LINE" -ge "$PROBE_CATCH_LINE" ]; then
+          PROBE_WHY="does not catch the sentinel through a PL/pgSQL EXCEPTION block"
+        elif [ -z "$PROBE_VERIFY_LINE" ]; then
+          PROBE_WHY="has no fail-closed post-rollback residue assertion"
+        fi
+
+        if [ -n "$PROBE_WHY" ]; then
+          echo "VIOLATION: $file"
+          echo "  APPROVED_SET_DIGEST: ROLLBACK-PROBE $PROBE_WHY."
+          echo "  A behavioural probe may waive a fixed approved-set digest only when all"
+          echo "  writes are inside one always-aborted exception subtransaction and a"
+          echo "  post-rollback assertion raises if any tested row changed."
+          echo ""
+          VIOLATIONS=$((VIOLATIONS + 1))
+        else
+          echo "WARNING: $file"
+          echo "  Business-row writes are an explicit, always-rolled-back behavioural probe:"
+          echo "  $ROLLBACK_PROBE"
+          echo ""
+          WARNINGS=$((WARNINGS + 1))
+        fi
       elif [ -n "$OPT_OUT" ]; then
         # The waiver has exactly one honest use: the migration is populating a
         # column IT JUST ADDED, so there is no pre-existing approved population
@@ -881,6 +960,7 @@ for file in $ALL_SQL; do
         echo "    -- APPROVED_SET_DIGEST: <sha256 of the sorted approved ids + before-values>"
         echo "    and, BEFORE the first write, recompute it and RAISE EXCEPTION on mismatch; OR"
         echo "    -- APPROVED_SET_DIGEST: NOT-REQUIRED (<tables>) - <why there is no before-value>"
+        echo "    -- APPROVED_SET_DIGEST: ROLLBACK-PROBE (<tables>) - <why every write is rolled back>"
         echo ""
         VIOLATIONS=$((VIOLATIONS + 1))
       fi

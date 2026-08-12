@@ -224,6 +224,13 @@ const ALIAS_SCOPED: Record<string, string> = {
  * name, so treating the referenced operation as an alias would be misleading.
  */
 const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
+  // 20260812154028 renamed the public create_direct_order body to this
+  // private implementation and put the below-cost approval wrapper at the
+  // original public name. Wave A replaces only the private body. Both layers
+  // are one logical mutation and therefore must share the public
+  // 'create_direct_order' cache namespace; direct EXECUTE on the implementation
+  // remains revoked from every application role.
+  _create_direct_order_below_cost_impl_20260810: ['create_direct_order'],
   // 20260730235031 RENAMED restore_quote_version to this owner impl and wrapped
   // it behind a new 5-arg restore_quote_version. The impl is the same logical
   // operation as its wrapper, not a second RPC, so it deliberately shares the

@@ -4,11 +4,10 @@
  *
  * NOT AUTHORITATIVE FOR PERSISTENCE. The server recalculates and persists all
  * quote line math in save_quote() (migration 20260528042000) — that is the
- * single source of truth for stored prices. These functions exist only for
- * unit-test coverage of the pricing rules and as a reference for live-preview
- * display math. They are NOT imported by QuoteBuilder's save payload, and new
- * code must NOT route persisted values through them — read the server-returned
- * values after save instead. (Foundation audit P2-E, 2026-05-28.)
+ * single source of truth for stored prices. These functions provide exact-cent
+ * live-preview math for QuoteBuilder, but the save payload is still only a
+ * request: callers must install the authoritative totals returned by save_quote
+ * after a successful save. (Foundation audit P2-E, 2026-05-28.)
  */
 import type { Product, UnitConversion } from '../types';
 
@@ -124,6 +123,30 @@ function roundedDecimalRatio(
 const centsToDollars = (cents: number): number => cents / 100;
 const ratioDollars = (numerators: number[], denominators: number[]): number =>
   centsToDollars(roundedDecimalRatio(numerators, denominators));
+
+/**
+ * Settle a product or ratio to whole-cent dollars using PostgreSQL-compatible
+ * decimal half-up rounding. Callers pass the original decimal operands so a
+ * binary-float intermediate cannot move an exact half-cent boundary.
+ */
+export function settleMoneyRatio(
+  numerators: number[],
+  denominators: number[] = [],
+): number {
+  return centsToDollars(roundedDecimalRatio(numerators, denominators));
+}
+
+/** Difference between two independently settled money expressions. */
+export function settleMoneyDifference(
+  minuendNumerators: number[],
+  subtrahendNumerators: number[],
+  minuendDenominators: number[] = [],
+  subtrahendDenominators: number[] = [],
+): number {
+  const minuendCents = roundedDecimalRatio(minuendNumerators, minuendDenominators);
+  const subtrahendCents = roundedDecimalRatio(subtrahendNumerators, subtrahendDenominators);
+  return centsToDollars(minuendCents - subtrahendCents);
+}
 
 /** Core pricing recalculation — pure function (no React deps) */
 export function recalcItem(

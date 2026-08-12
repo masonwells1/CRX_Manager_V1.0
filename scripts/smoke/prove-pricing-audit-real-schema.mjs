@@ -48,6 +48,8 @@ const unrelatedPendingMigrationExclusions = new Map([
   ['20260813050000_guard_job_commission_split_immutable.sql', 'Wave A money candidate'],
   ['20260813060000_require_completed_delivery_before_invoice_post.sql', 'Wave A money candidate'],
 ]);
+const pendingWaveAMigrations = [...unrelatedPendingMigrationExclusions.keys()]
+  .map((name) => path.join(migrationsDir, name));
 
 function docker(args, options = {}) {
   const result = spawnSync('docker', args, {
@@ -289,7 +291,7 @@ function proveNonEmptyApprovedSetDrift() {
 }
 
 try {
-  for (const file of [...appliedPricingMigrations, ...smokeFiles]) {
+  for (const file of [...appliedPricingMigrations, ...pendingWaveAMigrations, ...smokeFiles]) {
     assert.ok(readFileSync(file, 'utf8').length > 0, `missing required artifact ${file}`);
   }
 
@@ -398,6 +400,14 @@ try {
     'schema-only cent-repair path did not install its validated constraint',
   );
 
+  // The Wave A migration postconditions deliberately execute real allow and
+  // deny paths. A schema-only reconstruction has no office data to select, so
+  // install the smallest finite, whole-cent fixture set that can exercise those
+  // paths. The fixed ids keep failures reproducible. session_replication_role is
+  // used only while constructing the fixture: in particular, it preserves the
+  // historical NULL job-split shape that the new immutable-split guard must
+  // prove it can fill. Every migration and every behavioural probe below runs
+  // with ordinary triggers enabled.
   psql(
     `ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS banned_until timestamptz;
      CREATE TABLE IF NOT EXISTS auth.sessions (user_id uuid);
@@ -409,14 +419,109 @@ try {
     `INSERT INTO auth.users (id, email, raw_user_meta_data) VALUES
        ('00000000-0000-4000-8000-000000000001', 'pricing-admin@example.invalid', '{"full_name":"Below Cost Admin","role":"admin"}'),
        ('00000000-0000-4000-8000-000000000002', 'pricing-sales@example.invalid', '{"full_name":"Below Cost Sales","role":"sales_rep"}'),
-       ('00000000-0000-4000-8000-000000000003', 'pricing-backup-admin@example.invalid', '{"full_name":"Pricing Backup Admin","role":"admin"}')
+       ('00000000-0000-4000-8000-000000000003', 'pricing-backup-admin@example.invalid', '{"full_name":"Pricing Backup Admin","role":"admin"}'),
+       ('00000000-0000-4000-8000-000000000004', 'pricing-backup-sales@example.invalid', '{"full_name":"Pricing Backup Sales","role":"sales_rep"}')
      ON CONFLICT (id) DO NOTHING;
+
      INSERT INTO public.profiles (id, email, full_name, role, is_active) VALUES
        ('00000000-0000-4000-8000-000000000001', 'pricing-admin@example.invalid', 'Below Cost Admin', 'admin', true),
        ('00000000-0000-4000-8000-000000000002', 'pricing-sales@example.invalid', 'Below Cost Sales', 'sales_rep', true),
-       ('00000000-0000-4000-8000-000000000003', 'pricing-backup-admin@example.invalid', 'Pricing Backup Admin', 'admin', true)
+       ('00000000-0000-4000-8000-000000000003', 'pricing-backup-admin@example.invalid', 'Pricing Backup Admin', 'admin', true),
+       ('00000000-0000-4000-8000-000000000004', 'pricing-backup-sales@example.invalid', 'Pricing Backup Sales', 'sales_rep', true)
      ON CONFLICT (id) DO UPDATE
-       SET full_name = EXCLUDED.full_name, role = EXCLUDED.role, is_active = true;`,
+       SET full_name = EXCLUDED.full_name, role = EXCLUDED.role, is_active = true;
+
+     BEGIN;
+     SET LOCAL session_replication_role = replica;
+     INSERT INTO public.customers (id, farm_name)
+     VALUES ('00000000-0000-4000-9000-000000000010', '[CHAIN] Wave A proof customer');
+     INSERT INTO public.quotes (
+       id, quote_number, customer_id, created_by, status, commission_split
+     ) VALUES (
+       '00000000-0000-4000-9000-000000000011', '[CHAIN]-QUOTE',
+       '00000000-0000-4000-9000-000000000010',
+       '00000000-0000-4000-8000-000000000001', 'draft', NULL
+     );
+     INSERT INTO public.orders (
+       id, order_number, customer_id, status, pricing_status, order_date
+     ) VALUES (
+       '00000000-0000-4000-9000-000000000012', '[CHAIN]-ORDER',
+       '00000000-0000-4000-9000-000000000010', 'confirmed', 'priced', CURRENT_DATE
+     );
+     INSERT INTO public.jobs (
+       id, job_number, customer_id, job_date, quote_id, commission_split
+     ) VALUES
+       (
+         '00000000-0000-4000-9000-000000000013', '[CHAIN]-JOB-SET',
+         '00000000-0000-4000-9000-000000000010', CURRENT_DATE, NULL,
+         '{"splits":[{"recipient":"Below Cost Admin","recipient_user_id":"00000000-0000-4000-8000-000000000001","percentage":100}]}'::jsonb
+       ),
+       (
+         '00000000-0000-4000-9000-000000000014', '[CHAIN]-JOB-NULL',
+         '00000000-0000-4000-9000-000000000010', CURRENT_DATE,
+         '00000000-0000-4000-9000-000000000011', NULL
+       );
+     INSERT INTO public.deliveries (
+       id, delivery_number, order_id, customer_id, created_by,
+       scheduled_date, status, completed_at, signed_by
+     ) VALUES (
+       '00000000-0000-4000-9000-000000000015', '[CHAIN]-DELIVERY',
+       '00000000-0000-4000-9000-000000000012',
+       '00000000-0000-4000-9000-000000000010',
+       '00000000-0000-4000-8000-000000000001',
+       CURRENT_DATE, 'completed', now(), 'Below Cost Admin'
+     );
+     INSERT INTO public.invoices (
+       id, invoice_number, order_id, customer_id, delivery_id,
+       invoice_type, status, created_by, invoice_date,
+       total_amount_cents, total_cost_cents, pricing_pending
+     ) VALUES (
+       '00000000-0000-4000-9000-000000000016', '[CHAIN]-INVOICE',
+       '00000000-0000-4000-9000-000000000012',
+       '00000000-0000-4000-9000-000000000010',
+       '00000000-0000-4000-9000-000000000015',
+       'chemical_sale', 'draft',
+       '00000000-0000-4000-8000-000000000001', CURRENT_DATE,
+       0, 0, false
+     );
+     SET LOCAL session_replication_role = origin;
+     COMMIT;`,
+  );
+
+  // Prove the complete next ordered migration slice against the pricing schema,
+  // even though Wave A is deliberately absent from the captured live ledger.
+  // This catches name/body overlaps that isolated candidate proofs miss (for
+  // example, replacing a governed public wrapper instead of its private impl).
+  for (const file of pendingWaveAMigrations) {
+    try {
+      psql(`BEGIN;\n${normalizedSql(file)}\nCOMMIT;`);
+    } catch (error) {
+      throw new Error(`pending ordered migration failed: ${path.basename(file)}\n${error.message}`);
+    }
+  }
+  const waveAWrapperCompatibility = psql(
+    `\\pset tuples_only on
+     \\pset format unaligned
+     SELECT count(*)
+       FROM pg_proc wrapper
+       JOIN pg_namespace wrapper_ns ON wrapper_ns.oid = wrapper.pronamespace
+      WHERE wrapper_ns.nspname = 'public'
+        AND wrapper.proname = 'create_direct_order'
+        AND position('_begin_below_cost_money_write' in wrapper.prosrc) > 0
+        AND position('_create_direct_order_below_cost_impl_20260810' in wrapper.prosrc) > 0
+        AND EXISTS (
+          SELECT 1
+            FROM pg_proc impl
+            JOIN pg_namespace impl_ns ON impl_ns.oid = impl.pronamespace
+           WHERE impl_ns.nspname = 'public'
+             AND impl.proname = '_create_direct_order_below_cost_impl_20260810'
+             AND position('v_norm_items' in impl.prosrc) > 0
+        );`,
+  ).stdout.trim();
+  assert.equal(
+    waveAWrapperCompatibility,
+    '1',
+    'Wave A did not preserve the governed below-cost wrapper over its authoritative-cost implementation',
   );
 
   proveNonEmptyApprovedSetDrift();
@@ -441,8 +546,9 @@ try {
     `live_ledger_rows=${plan.ledger.live_ledger_rows} live_statement_hashes=${plan.ordered.length} ` +
     `recent_exact_sources=${plan.ordered.filter((entry) => entry.version >= exactLiveSourceRequiredSince).length} ` +
     `live_replayed=${replayedLiveMigrations} pricing_applied=${appliedPricingMigrations.length} ` +
+    `wave_a_pending_applied=${pendingWaveAMigrations.length} ` +
     `one_shot_data_exclusions=${oneShotDataReplayExclusions.size} ` +
-    'approved_set_empty=PASS cent_repair_empty=PASS approved_set_nonempty_drift=APPROVED_SET_DRIFTED ' +
+    'wave_a_below_cost_wrapper=PASS approved_set_empty=PASS cent_repair_empty=PASS approved_set_nonempty_drift=APPROVED_SET_DRIFTED ' +
     'smoke_below_cost_admin=SMOKE_PASS_ROLLBACK ' +
     'smoke_quote_lifecycle=SMOKE_PASS_ROLLBACK ' +
     'smoke_profitability_inventory=SMOKE_PASS_ROLLBACK residue=0',

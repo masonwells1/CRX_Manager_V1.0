@@ -97,8 +97,10 @@
 -- consumes the same helper, so correcting existing pending rows cannot fork the
 -- recipient resolution or arithmetic used by a fresh mint.
 --
--- NOTHING ELSE CHANGES: no signature, no volatility, no SECURITY DEFINER flag,
--- no search_path, no grant. The postcondition asserts every one of those.
+-- No signature, volatility, SECURITY DEFINER flag, or search_path changes. The
+-- only access change is an explicit hardening of the two SECURITY INVOKER mint
+-- helpers: application-role EXECUTE is removed and postgres retains the trusted
+-- internal call path. The postcondition asserts that boundary for all helpers.
 --
 -- BACKFILL: none, and deliberately. Rows that would have gone negative never
 -- reached the table — the constraint stopped them — so there is no bad data to
@@ -381,6 +383,15 @@ BEGIN
 END;
 $function$;
 
+-- These SECURITY INVOKER helpers mint commission rows only from trusted server
+-- functions. Historical function creation left service_role EXECUTE on two of
+-- them through the schema default privilege; revoke all application roles
+-- explicitly while preserving the internal postgres call path.
+REVOKE ALL ON FUNCTION public._insert_commissions_for_order(uuid, uuid, numeric, jsonb, date)
+  FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public._insert_commissions_for_order(uuid, uuid, numeric, jsonb, date)
+  TO postgres;
+
 -- =============================================================================
 -- Shared job-commission derivation.
 --
@@ -545,6 +556,11 @@ BEGIN
   RETURN v_count;
 END;
 $function$;
+
+REVOKE ALL ON FUNCTION public._insert_commissions_for_job(uuid, uuid, uuid, numeric, jsonb, date)
+  FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public._insert_commissions_for_job(uuid, uuid, uuid, numeric, jsonb, date)
+  TO postgres;
 
 -- =============================================================================
 -- 3 of 3 — public._save_invoice_scoped_impl  [SECURITY DEFINER]
@@ -1087,8 +1103,8 @@ BEGIN
   -- 2026-08-10: 32 orders and 4 jobs carry no commissions and 10 profiles are
   -- active, so in production both legs always run.
   -- --------------------------------------------------------------------------
-  SELECT jsonb_build_object('splits', jsonb_agg(
-           jsonb_build_object('recipient_user_id', s.id::text, 'percentage', 25)))
+  SELECT jsonb_build_object('splits', COALESCE(jsonb_agg(
+           jsonb_build_object('recipient_user_id', s.id::text, 'percentage', 25)), '[]'::jsonb))
     INTO v_split
     FROM (SELECT p.id FROM public.profiles p WHERE p.is_active = true ORDER BY p.id LIMIT 4) s;
 

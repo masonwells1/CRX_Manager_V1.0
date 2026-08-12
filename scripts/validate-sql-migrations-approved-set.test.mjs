@@ -61,6 +61,21 @@ BEGIN
   END IF;
 END $$;`;
 
+const GOOD_ROLLBACK_PROBE = `-- APPROVED_SET_DIGEST: ROLLBACK-PROBE (orders) - exact row is restored
+DO $$
+BEGIN
+  BEGIN
+    UPDATE public.orders SET total_profit = 0;
+    RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'PROBE_OK_ROLLBACK';
+  EXCEPTION
+    WHEN OTHERS THEN
+      IF SQLERRM <> 'PROBE_OK_ROLLBACK' THEN RAISE; END IF;
+  END;
+  IF EXISTS (SELECT 1 FROM public.orders WHERE total_profit = 0) THEN
+    RAISE EXCEPTION 'probe row changed — rollback did not hold';
+  END IF;
+END $$;`;
+
 const CASES = [
   // ── must VIOLATE ────────────────────────────────────────────────────────
   {
@@ -313,6 +328,40 @@ const CASES = [
     expect: 'violation',
     sql: `UPDATE public.vendor_payments SET amount_cents = 0;\n`,
   },
+  {
+    name: 'rollback probe marker must name every rewritten table',
+    expect: 'violation',
+    sql: GOOD_ROLLBACK_PROBE.replace('(orders)', '(invoices)'),
+  },
+  {
+    name: 'rollback probe must raise its sentinel after the final write',
+    expect: 'violation',
+    sql: GOOD_ROLLBACK_PROBE.replace(
+      "    RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'PROBE_OK_ROLLBACK';\n",
+      '',
+    ),
+  },
+  {
+    name: 'rollback probe must catch only the exact sentinel',
+    expect: 'violation',
+    sql: GOOD_ROLLBACK_PROBE.replace(
+      "      IF SQLERRM <> 'PROBE_OK_ROLLBACK' THEN RAISE; END IF;",
+      '      NULL;',
+    ),
+  },
+  {
+    name: 'rollback probe must prove no tested row survived changed',
+    expect: 'violation',
+    sql: GOOD_ROLLBACK_PROBE.replace(
+      "  IF EXISTS (SELECT 1 FROM public.orders WHERE total_profit = 0) THEN\n    RAISE EXCEPTION 'probe row changed — rollback did not hold';\n  END IF;\n",
+      '',
+    ),
+  },
+  {
+    name: 'rollback probe marker cannot waive an earlier rewrite',
+    expect: 'violation',
+    sql: `UPDATE public.orders SET total_profit = 1;\n${GOOD_ROLLBACK_PROBE}`,
+  },
 
   // ── must WARN (accepted, but never silent) ──────────────────────────────
   {
@@ -322,6 +371,11 @@ const CASES = [
       `-- APPROVED_SET_DIGEST: NOT-REQUIRED (orders) - backfills a column this migration adds\n` +
       `ALTER TABLE public.orders ADD COLUMN total_profit bigint;\n` +
       `UPDATE public.orders SET total_profit = 0;\n`,
+  },
+  {
+    name: 'explicit always-rolled-back probe with a residue assertion',
+    expect: 'warning',
+    sql: GOOD_ROLLBACK_PROBE,
   },
 
   // ── must PASS silently ──────────────────────────────────────────────────
@@ -400,7 +454,7 @@ function classify(output, fileName) {
     }
     if (
       lines[i].startsWith('WARNING:') &&
-      /Business-row rewrite WAIVED out of approved-set binding/.test(block)
+      /Business-row rewrite WAIVED out of approved-set binding|Business-row writes are an explicit, always-rolled-back behavioural probe/.test(block)
     ) {
       return 'warning';
     }
@@ -448,6 +502,10 @@ function run() {
 
   // The exemption is an exact-byte proof, not a filename allowlist. A single
   // appended comment must break the live hash and reactivate the normal guard.
+  // That second invocation needs only the mutated live file; rescanning every
+  // synthetic case again adds minutes without testing another condition.
+  for (const name of names) rmSync(join(migrations, name), { force: true });
+  rmSync(join(migrations, PRE_CUTOFF), { force: true });
   writeFileSync(join(migrations, EXACT_LIVE_APPLIED), `${exactLiveSql}\n-- mutation\n`, 'utf8');
   const mutated = spawnSync(BASH, [SCRIPT, '--max-violations=999'], {
     cwd: dir,

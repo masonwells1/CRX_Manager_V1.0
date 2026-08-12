@@ -36,17 +36,13 @@
 --      frontend writes. Chasing individual writers is a bigger diff with a worse
 --      guarantee.
 --
---   2. create_order_from_blend_ticket CANNOT be safely rewritten right now. Its
---      live body (md5 19e08adc9d62e13b7482210f6167734d, 10064 chars) matches NO
---      tracked migration on disk. All 8 on-disk definitions were extracted and
---      hashed; the newest (20260714230200_blend_ticket_order_lifecycle.sql) is
---      9812 chars and no migration after that date so much as mentions the
---      function, so the live body was changed outside the migration trail. A
---      CREATE OR REPLACE written against the newest disk copy would silently
---      revert 252 characters of untracked live behaviour. This is the same
---      disk-vs-live drift already recorded for _update_order_items_impl in
---      docs/reference/migration-history.md, and it is tracked as an open issue
---      rather than resolved here.
+--   2. Since this draft was first written, 20260811200000 and 20260812010000
+--      re-emitted create_order_from_blend_ticket from captured live source and
+--      made that writer consume the canonical header produced by order-item
+--      triggers. This migration therefore no longer depends on its old raw
+--      header assignment. The orders trigger remains the shared boundary for
+--      every other present and future writer, and the precondition below pins
+--      the newer blend-ticket writer so the ordered chain cannot regress it.
 --
 -- The trigger closes the defect WITHOUT needing to read or trust that body.
 --
@@ -242,25 +238,20 @@ BEGIN
     RAISE EXCEPTION 'PRECOND: orders_total_profit_whole_cents_chk is missing or not validated';
   END IF;
 
-  -- THE TRIGGER BELOW IS COLUMN-SCOPED, so it closes the defect only if the real
-  -- writer actually names those columns in its SET list. That cannot be taken on
-  -- faith: the live create_order_from_blend_ticket body matches no tracked
-  -- migration (see the note above), so its disk copy is not evidence of what runs.
-  -- Asserted against the LIVE body instead. Read from live pg_proc while writing
-  -- this file (md5 19e08adc9d62e13b7482210f6167734d, 10064 chars) and confirmed to
-  -- contain all three assignments. Matching the assignments rather than pinning
-  -- the whole-body md5 is deliberate: an md5 pin would block this fix on any
-  -- unrelated future edit to a 10KB function, whereas these three patterns are
-  -- exactly the property the fix depends on. If a later edit moves the header
-  -- write off these columns, this fails closed and says so.
+  -- The later blend-ticket repairs already removed the raw header overwrite and
+  -- now prove the canonical order-item trigger result at runtime. Pin that exact
+  -- ordered predecessor and its load-bearing tokens so this migration cannot be
+  -- applied against the stale writer it was originally drafted around, or
+  -- against a later unreviewed edit.
   IF NOT EXISTS (
     SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE n.nspname = 'public' AND p.proname = 'create_order_from_blend_ticket'
-      AND p.prosrc LIKE '%total_price = v_total_price%'
-      AND p.prosrc LIKE '%total_cost = v_total_cost%'
-      AND p.prosrc LIKE '%total_profit = v_total_price - v_total_cost%'
+      AND md5(p.prosrc) = '344532c6522cce26857ce4ffd9597125'
+      AND p.prosrc NOT LIKE '%SET total_price = v_total_price%'
+      AND p.prosrc LIKE '%SELECT COALESCE(o.total_price, 0),%'
+      AND p.prosrc LIKE '%ORDER_HEADER_NOT_RECALCULATED%'
   ) THEN
-    RAISE EXCEPTION 'PRECOND: the live create_order_from_blend_ticket no longer writes the order header through total_price/total_cost/total_profit. A column-scoped trigger would not intercept it — re-read that function before applying.';
+    RAISE EXCEPTION 'PRECOND: create_order_from_blend_ticket is not the exact canonical-header predecessor expected by this ordered migration — re-diff before applying.';
   END IF;
 END;
 $precond$;
@@ -578,6 +569,7 @@ BEGIN
   IF v_probe_id IS NULL THEN
     RAISE NOTICE 'POSTCOND: no customer row available to source an FK from — rounding probe SKIPPED (structural proofs still ran)';
   ELSE
+    -- APPROVED_SET_DIGEST: ROLLBACK-PROBE (orders) - the only UPDATE targets the probe row inserted in this exception subtransaction; PROBE_OK_ROLLBACK always removes it and the exact id is checked afterward
     BEGIN
       INSERT INTO public.orders (
         order_number, customer_id, total_price, total_cost, total_profit
@@ -655,6 +647,9 @@ BEGIN
         RAISE NOTICE 'POSTCOND: rounding/derivation probe passed on INSERT (100.005/33.333/66.667 -> 100.01/33.33/66.68) and on UPDATE (77.777/44.444/55.555 -> %/%/%); probe row rolled back',
           v_stored_price, v_stored_cost, v_stored_profit;
     END;
+    IF EXISTS (SELECT 1 FROM public.orders WHERE id = v_probe_order_id) THEN
+      RAISE EXCEPTION 'POSTCOND: the probe order still exists — the rollback did not hold';
+    END IF;
   END IF;
 END;
 $postcond$;

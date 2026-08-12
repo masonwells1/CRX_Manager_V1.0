@@ -86,36 +86,56 @@
 -- every historical order line for it was written at cost 0, so this reproduces
 -- current behaviour rather than changing it.
 
--- Precondition: pin the exact live body this migration expects to replace. The
--- three 2026-08-10 migrations are applied to production, so the body on live is
--- NOT the one an origin/main checkout would rebuild. Without this pin an
--- unconditional CREATE OR REPLACE would silently clobber a change made by a
--- concurrent session against the same function (the known pending-migration
--- overlap trap). md5 read from live pg_proc immediately before writing this file.
+-- Precondition: pin both halves of the live below-cost architecture this
+-- migration extends. The public function is now a governed wrapper installed by
+-- 20260812154028; the original business implementation was renamed behind it.
+-- Replacing the public function would silently remove the below-cost approval
+-- wall, so Wave A replaces only the private implementation and proves that the
+-- wrapper it delegates through is still the exact expected body.
 DO $precond$
 DECLARE
-  v_count integer;
-  v_md5 text;
+  v_public_count integer;
+  v_private_count integer;
+  v_public_md5 text;
+  v_private_md5 text;
 BEGIN
-  SELECT count(*) INTO v_count
+  SELECT count(*) INTO v_public_count
   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
   WHERE n.nspname = 'public' AND p.proname = 'create_direct_order';
 
-  IF v_count <> 1 THEN
-    RAISE EXCEPTION 'PRECOND: expected exactly 1 create_direct_order, found %', v_count;
+  IF v_public_count <> 1 THEN
+    RAISE EXCEPTION 'PRECOND: expected exactly 1 public create_direct_order wrapper, found %', v_public_count;
   END IF;
 
-  SELECT md5(p.prosrc) INTO v_md5
+  SELECT count(*) INTO v_private_count
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public'
+    AND p.proname = '_create_direct_order_below_cost_impl_20260810';
+
+  IF v_private_count <> 1 THEN
+    RAISE EXCEPTION 'PRECOND: expected exactly 1 private create_direct_order implementation, found %', v_private_count;
+  END IF;
+
+  SELECT md5(p.prosrc) INTO v_public_md5
   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
   WHERE n.nspname = 'public' AND p.proname = 'create_direct_order';
 
-  IF v_md5 <> 'c761f4c46dc12ea07efd74af5b2ada54' THEN
-    RAISE EXCEPTION 'PRECOND: create_direct_order body is not the expected baseline (got md5 %). It changed after this migration was written — re-diff before applying.', v_md5;
+  IF v_public_md5 <> 'f18495ee041dafa152e736ce93c0452f' THEN
+    RAISE EXCEPTION 'PRECOND: public create_direct_order wrapper is not the expected below-cost baseline (got md5 %). Re-diff before applying.', v_public_md5;
+  END IF;
+
+  SELECT md5(p.prosrc) INTO v_private_md5
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public'
+    AND p.proname = '_create_direct_order_below_cost_impl_20260810';
+
+  IF v_private_md5 <> 'c761f4c46dc12ea07efd74af5b2ada54' THEN
+    RAISE EXCEPTION 'PRECOND: private create_direct_order implementation is not the expected baseline (got md5 %). Re-diff before applying.', v_private_md5;
   END IF;
 END;
 $precond$;
 
-CREATE OR REPLACE FUNCTION public.create_direct_order(
+CREATE OR REPLACE FUNCTION public._create_direct_order_below_cost_impl_20260810(
   p_customer_id uuid,
   p_order_date date,
   p_order_name text DEFAULT NULL::text,
@@ -366,52 +386,83 @@ BEGIN
 END;
 $function$;
 
-COMMENT ON FUNCTION public.create_direct_order(uuid, date, text, text, jsonb, uuid, text, text) IS
-  'Creates a confirmed order directly. Cost is authoritative from products.current_cost — a caller-supplied unit_cost is validated but never used (Wave A, ordering-cycle review 2026-08-09). Non-finite quantity/price/cost values are rejected at the boundary.';
+COMMENT ON FUNCTION public._create_direct_order_below_cost_impl_20260810(uuid, date, text, text, jsonb, uuid, text, text) IS
+  'Private create_direct_order implementation behind the governed below-cost wrapper. Cost is authoritative from products.current_cost; caller-supplied cost is validated but never used.';
 
 -- Postcondition: the replacement must not have silently dropped SECURITY DEFINER
 -- or the pinned search_path. An ALTER FUNCTION elsewhere can change an attribute
 -- without touching the body, so assert on the catalogue rather than the source.
 DO $postcond$
 DECLARE
-  v_count integer;
-  v_secdef boolean;
-  v_config text[];
-  v_src text;
+  v_public_count integer;
+  v_private_count integer;
+  v_public_secdef boolean;
+  v_public_config text[];
+  v_public_src text;
+  v_private_secdef boolean;
+  v_private_config text[];
+  v_private_src text;
 BEGIN
   -- Overload uniqueness FIRST. A bare SELECT ... INTO over several rows takes an
   -- arbitrary row without erroring, so every check below would silently inspect
   -- the wrong function if a second overload existed. This is also the failure the
   -- signature was written to avoid, so it is worth asserting rather than assuming.
-  SELECT count(*) INTO v_count
+  SELECT count(*) INTO v_public_count
   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
   WHERE n.nspname = 'public' AND p.proname = 'create_direct_order';
 
-  IF v_count <> 1 THEN
-    RAISE EXCEPTION 'POSTCOND: expected exactly 1 create_direct_order, found % — a second overload was created', v_count;
+  IF v_public_count <> 1 THEN
+    RAISE EXCEPTION 'POSTCOND: expected exactly 1 public create_direct_order wrapper, found %', v_public_count;
   END IF;
 
   SELECT p.prosecdef, p.proconfig, p.prosrc
-    INTO v_secdef, v_config, v_src
+    INTO v_public_secdef, v_public_config, v_public_src
   FROM pg_proc p
   JOIN pg_namespace n ON n.oid = p.pronamespace
   WHERE n.nspname = 'public'
     AND p.proname = 'create_direct_order';
 
-  IF NOT COALESCE(v_secdef, false) THEN
-    RAISE EXCEPTION 'POSTCOND: create_direct_order lost SECURITY DEFINER';
+  IF NOT COALESCE(v_public_secdef, false) THEN
+    RAISE EXCEPTION 'POSTCOND: public create_direct_order wrapper lost SECURITY DEFINER';
   END IF;
-  IF v_config IS NULL OR NOT ('search_path=public, pg_temp' = ANY (v_config)) THEN
-    RAISE EXCEPTION 'POSTCOND: create_direct_order lost its pinned search_path (got %)', v_config;
+  IF v_public_config IS NULL OR NOT ('search_path=public, pg_temp' = ANY (v_public_config)) THEN
+    RAISE EXCEPTION 'POSTCOND: public create_direct_order wrapper lost its pinned search_path (got %)', v_public_config;
+  END IF;
+  IF v_public_src NOT LIKE '%_begin_below_cost_money_write%'
+     OR v_public_src NOT LIKE '%_create_direct_order_below_cost_impl_20260810%' THEN
+    RAISE EXCEPTION 'POSTCOND: public create_direct_order no longer enforces and delegates through the below-cost wrapper';
+  END IF;
+
+  SELECT count(*) INTO v_private_count
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public'
+    AND p.proname = '_create_direct_order_below_cost_impl_20260810';
+
+  IF v_private_count <> 1 THEN
+    RAISE EXCEPTION 'POSTCOND: expected exactly 1 private create_direct_order implementation, found %', v_private_count;
+  END IF;
+
+  SELECT p.prosecdef, p.proconfig, p.prosrc
+    INTO v_private_secdef, v_private_config, v_private_src
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public'
+    AND p.proname = '_create_direct_order_below_cost_impl_20260810';
+
+  IF NOT COALESCE(v_private_secdef, false) THEN
+    RAISE EXCEPTION 'POSTCOND: private create_direct_order implementation lost SECURITY DEFINER';
+  END IF;
+  IF v_private_config IS NULL OR NOT ('search_path=public, pg_temp' = ANY (v_private_config)) THEN
+    RAISE EXCEPTION 'POSTCOND: private create_direct_order implementation lost its pinned search_path (got %)', v_private_config;
   END IF;
 
   -- The security fix itself actually landed. A clobbered or partial apply would
   -- otherwise pass every attribute check above while leaving the caller-supplied
   -- cost in place.
-  IF v_src NOT LIKE '%v_norm_items%' THEN
+  IF v_private_src NOT LIKE '%v_norm_items%' THEN
     RAISE EXCEPTION 'POSTCOND: the WAVE-A normalization pass is missing — caller-supplied cost may still be authoritative';
   END IF;
-  IF v_src NOT LIKE '%v_canonical_profit%' THEN
+  IF v_private_src NOT LIKE '%v_canonical_profit%' THEN
     RAISE EXCEPTION 'POSTCOND: DELTA-A (canonical commission basis) was lost by this replacement';
   END IF;
 
@@ -431,10 +482,10 @@ BEGIN
   -- may run the privilege lookup before the existence test and re-raise exactly
   -- the error the guard exists to prevent. CASE is the documented construct with
   -- guaranteed ordering.
-  IF CASE
+  IF (CASE
        WHEN NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN false
        ELSE has_function_privilege('anon', 'public.create_direct_order(uuid, date, text, text, jsonb, uuid, text, text)', 'EXECUTE')
-     END THEN
+     END) THEN
     RAISE EXCEPTION 'POSTCOND: anon must not hold EXECUTE on create_direct_order';
   END IF;
   IF has_function_privilege('public', 'public.create_direct_order(uuid, date, text, text, jsonb, uuid, text, text)', 'EXECUTE') THEN
@@ -442,11 +493,33 @@ BEGIN
   END IF;
   -- Fail-closed on the positive half: where the `authenticated` role does not
   -- exist the grant genuinely is not held, and that is what this must report.
-  IF NOT CASE
+  IF NOT (CASE
        WHEN NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN false
        ELSE has_function_privilege('authenticated', 'public.create_direct_order(uuid, date, text, text, jsonb, uuid, text, text)', 'EXECUTE')
-     END THEN
+     END) THEN
     RAISE EXCEPTION 'POSTCOND: authenticated lost EXECUTE on create_direct_order';
+  END IF;
+
+  IF has_function_privilege('public', 'public._create_direct_order_below_cost_impl_20260810(uuid, date, text, text, jsonb, uuid, text, text)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'POSTCOND: PUBLIC must not execute the private create_direct_order implementation';
+  END IF;
+  IF (CASE
+       WHEN NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN false
+       ELSE has_function_privilege('anon', 'public._create_direct_order_below_cost_impl_20260810(uuid, date, text, text, jsonb, uuid, text, text)', 'EXECUTE')
+     END) THEN
+    RAISE EXCEPTION 'POSTCOND: anon must not execute the private create_direct_order implementation';
+  END IF;
+  IF (CASE
+       WHEN NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN false
+       ELSE has_function_privilege('authenticated', 'public._create_direct_order_below_cost_impl_20260810(uuid, date, text, text, jsonb, uuid, text, text)', 'EXECUTE')
+     END) THEN
+    RAISE EXCEPTION 'POSTCOND: authenticated must not execute the private create_direct_order implementation';
+  END IF;
+  IF (CASE
+       WHEN NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN false
+       ELSE has_function_privilege('service_role', 'public._create_direct_order_below_cost_impl_20260810(uuid, date, text, text, jsonb, uuid, text, text)', 'EXECUTE')
+     END) THEN
+    RAISE EXCEPTION 'POSTCOND: service_role must not execute the private create_direct_order implementation';
   END IF;
 END;
 $postcond$;

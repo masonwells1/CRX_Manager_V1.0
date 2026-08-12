@@ -49,7 +49,13 @@ import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { formatUSD, formatCents } from '../lib/money';
-import { catalogPricePerAcre, validateCommissionSplits } from '../lib/quoteCalc';
+import {
+  catalogPricePerAcre,
+  computeQuoteTotals,
+  settleMoneyDifference,
+  settleMoneyRatio,
+  validateCommissionSplits,
+} from '../lib/quoteCalc';
 import { buildCommissionSplitPatch, nextLoadedSplitSnapshot } from '../lib/commissionSplitConcurrency';
 import {
   buildRowVersionPatch,
@@ -107,9 +113,6 @@ interface LocalSection {
 
 type CalcMode = 'rate_acres' | 'units_direct';
 
-/** Settle a money figure to whole cents — see the boundary note in quoteCalc.ts. */
-const round2 = (n: number): number => Math.round(n * 100) / 100;
-
 // Keeps the reason-bearing retry key safely below PostgreSQL B-tree entry limits.
 // The server independently fingerprints the full request, so the exact reason
 // remains bound to the idempotency receipt rather than being trusted from the key.
@@ -163,6 +166,49 @@ interface DrawRow {
   remaining: number;
   qty: string;
   unit: string | null;
+}
+
+interface QuoteTotals {
+  totalPrice: number;
+  totalCost: number;
+  totalProfit: number;
+  totalMarginPct: number;
+}
+
+interface AuthoritativeTotalsSnapshot {
+  calculationKey: string;
+  totals: QuoteTotals;
+}
+
+function quoteCalculationKey(sections: LocalSection[]): string {
+  return JSON.stringify(sections.map((section) => ({
+    key: section._key,
+    items: section.items.map((item) => ({
+      key: item._key,
+      productId: item.product_id,
+      mode: item.calc_mode,
+      pricePerUnit: item.price_per_unit,
+      priceOverride: item.price_override,
+      currentCost: item.current_cost,
+      actualRate: item.actual_rate,
+      rateUnit: item.rate_unit,
+      acres: item.acres,
+      totalUnits: item.total_units_needed,
+      totalPrice: item.total_price,
+      profit: item.profit,
+    })),
+  })));
+}
+
+function parseServerQuoteTotals(value: unknown): QuoteTotals | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const totalPrice = Number(record.total_price);
+  const totalCost = Number(record.total_cost);
+  const totalProfit = Number(record.total_profit);
+  const totalMarginPct = Number(record.total_margin_pct);
+  if (![totalPrice, totalCost, totalProfit, totalMarginPct].every(Number.isFinite)) return null;
+  return { totalPrice, totalCost, totalProfit, totalMarginPct };
 }
 
 let keyCounter = 0;
@@ -379,6 +425,7 @@ export default function QuoteBuilder() {
   const [wasPlanned, setWasPlanned] = useState(false);
 
   const [sections, setSections] = useState<LocalSection[]>([makeEmptySection(1)]);
+  const [authoritativeTotals, setAuthoritativeTotals] = useState<AuthoritativeTotalsSnapshot | null>(null);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
@@ -1129,8 +1176,11 @@ export default function QuoteBuilder() {
         // Settled revenue minus settled extended cost -- the SAME boundary
         // save_quote and the report RPCs use, so the quote on screen matches
         // the quote that gets stored and converted. (Codex round 41.)
-        const totalPrice = round2(pricePerUnit * totalInventoryUnits);
-        const profit = totalPrice - round2(currentCost * totalInventoryUnits);
+        const totalPrice = settleMoneyRatio([pricePerUnit, totalInventoryUnits]);
+        const profit = settleMoneyDifference(
+          [pricePerUnit, totalInventoryUnits],
+          [currentCost, totalInventoryUnits],
+        );
         const netMargin = totalPrice > 0 ? profit / totalPrice : 0;
 
         // Back-calculate oz/acre and $/acre if acres provided
@@ -1140,7 +1190,7 @@ export default function QuoteBuilder() {
         if (acres > 0 && inventoryUnitFactorOz > 0) {
           const totalOz = totalInventoryUnits * inventoryUnitFactorOz;
           ozPerAcre = Math.round((totalOz / acres) * 100) / 100;
-          pricePerAcre = Math.round((totalPrice / acres) * 100) / 100;
+          pricePerAcre = settleMoneyRatio([totalPrice], [acres]);
         }
 
         return {
@@ -1169,11 +1219,24 @@ export default function QuoteBuilder() {
         : 0;
 
       const pricePerAcre = inventoryUnitFactorOz > 0
-        ? pricePerUnit * (rateInOz / inventoryUnitFactorOz)
+        ? settleMoneyRatio(
+            [pricePerUnit, actualRate, rateUnitFactorOz],
+            [inventoryUnitFactorOz],
+          )
         : 0;
-      // Same settled boundary as the units_direct branch above.
-      const totalPrice = round2(pricePerUnit * totalInventoryUnits);
-      const profit = totalPrice - round2(currentCost * totalInventoryUnits);
+      // Use the original decimal operands so the binary-float division used for
+      // display quantity cannot move an exact half-cent money boundary.
+      const moneyDenominators = [inventoryUnitFactorOz];
+      const totalPrice = settleMoneyRatio(
+        [pricePerUnit, acres, actualRate, rateUnitFactorOz],
+        moneyDenominators,
+      );
+      const profit = settleMoneyDifference(
+        [pricePerUnit, acres, actualRate, rateUnitFactorOz],
+        [currentCost, acres, actualRate, rateUnitFactorOz],
+        moneyDenominators,
+        moneyDenominators,
+      );
       const netMargin = totalPrice > 0 ? profit / totalPrice : 0;
 
       return {
@@ -1378,25 +1441,13 @@ export default function QuoteBuilder() {
     });
   };
 
-  const totals = useMemo(() => {
-    let totalPrice = 0;
-    let totalCost = 0;
-    let totalProfit = 0;
-    sections.forEach((sec) => {
-      sec.items.forEach((item) => {
-        totalPrice += item.total_price;
-        totalCost += item.current_cost * (item.total_units_needed || 0);
-        totalProfit += item.profit;
-      });
-    });
-    const totalMarginPct = totalPrice > 0 ? (totalProfit / totalPrice) * 100 : 0;
-    return {
-      totalPrice: Math.round(totalPrice * 100) / 100,
-      totalCost: Math.round(totalCost * 100) / 100,
-      totalProfit: Math.round(totalProfit * 100) / 100,
-      totalMarginPct: Math.round(totalMarginPct * 100) / 100,
-    };
+  const calculationKey = useMemo(() => quoteCalculationKey(sections), [sections]);
+  const localTotals = useMemo(() => {
+    return computeQuoteTotals(sections.flatMap((section) => section.items));
   }, [sections]);
+  const totals = authoritativeTotals?.calculationKey === calculationKey
+    ? authoritativeTotals.totals
+    : localTotals;
 
   const saveQuote = async (newStatus?: QuoteStatus): Promise<string | null> => {
     if (!customerId) {
@@ -1624,6 +1675,7 @@ export default function QuoteBuilder() {
 
     try {
       const idemKey = getSaveQuoteIdempotencyKey();
+      const savedCalculationKey = calculationKey;
       const { data, error } = await supabase.rpc('save_quote', {
         p_quote_id: ((quoteId && isEditing) ? quoteId : null) as string,
         p_quote_payload: quotePayload as Json,
@@ -1670,7 +1722,12 @@ export default function QuoteBuilder() {
         commission_split?: CommissionSplit | null;
         row_version?: unknown;
         item_ids?: Record<string, string> | null;
+        server_totals?: unknown;
       }>(data, 'save_quote');
+      const serverTotals = parseServerQuoteTotals(result.server_totals);
+      setAuthoritativeTotals(serverTotals
+        ? { calculationKey: savedCalculationKey, totals: serverTotals }
+        : null);
       // Install the ids save_quote just wrote. This page never refetches, so
       // without this a line added in this session stays id-less and every later
       // save re-sends it as new -- which, for two new lines of one product,

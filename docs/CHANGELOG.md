@@ -2,6 +2,34 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-12 — Completed pricing-audit release repairs: preserved below-cost wrapper…
+
+Completed pricing-audit release repairs: preserved below-cost wrapper compatibility through pending Wave A migrations, added fail-closed rollback-probe validation, switched QuoteBuilder to exact decimal money and authoritative server totals, and proved the captured-live migration chain plus full app suite.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `aa062d24 feat: complete pricing audit rollout`
+  - `2fd01956 Merge remote-tracking branch 'origin/main' into codex/finish-pricing-audit-20260810`
+  - `f4d3d4b5 Harden pricing audit retry and proof guards`
+  - `45c8acf5 Close final pricing and migration-review gaps`
+  - `9b722997 security(perms): drop tracked recursive Read grant above the checkout`
+  - `585eb281 Fail closed on quote lifecycle signature skew`
+  - `4b78bddf Close remaining pricing review gaps`
+  - `04a739a4 Reject fractional-cent pricing before approval`
+  - `5d6220da chore(db): restore applied stale-profit migration source`
+  - `f7ee2cd8 Keep approved below-cost sales lifecycle-safe`
+  - `f52e8c85 Rebase pricing migrations onto live money guards`
+  - `594d5e94 Merge live whole-cent migration source`
+  - `72380487 Checkpoint pricing enforcement before live-source merge`
+  - `ca0fa4de Merge origin/main into the whole-cent branch`
+  - `fdfd782d Close below-cost review blockers`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260812010000_blend_ticket_order_header_runtime_assert.sql`
+  - `supabase/migrations/20260812011000_restore_quote_version_whole_cent_money.sql`
+  - `supabase/migrations/20260812145628_snapshot_cost_reporting.sql`
+  - `supabase/migrations/20260812151606_quote_items_cost_at_quote_snapshot.sql`
+  - `supabase/migrations/20260812154028_enforce_below_cost_admin_approval.sql`
+  - `supabase/migrations/20260812154757_repair_historical_order_line_cents.sql`
+
 ## 2026-08-12 — Pricing audit and exact historical-cent repair applied live
 
 Recovered the power-interrupted pricing finish from checkpoint commit `f4d3d4b5`, reconciled the
@@ -34,6 +62,24 @@ replay likewise names the six unrelated Wave A candidates explicitly, proves the
 and ordered above the captured high-water, and still fails closed on any unlisted migration. The
 idempotency inventory now also classifies those candidates' two trigger-only guards and their
 idempotent admin correction RPC, preserving the fail-closed contract test during the pre-apply window.
+
+Final release review extended the captured-live disposable proof through all six still-unapplied Wave A
+migrations instead of checking them one at a time. That ordered proof exposed and fixed a stale
+`create_direct_order` replacement that would have removed the live below-cost wrapper, a stale
+blend-ticket predecessor pin, client-role EXECUTE grants on private commission minting helpers, two
+empty/probe authentication defects, and incomplete rollback-only approved-set classification. The SQL
+guard now has an explicit fail-closed `ROLLBACK-PROBE` exemption whose marker, sentinel, exact catch,
+table scope, and residue assertion are mutation-tested; all 50 adversarial cases pass. The final
+968-row reconstruction applies all six future migrations in order, exercises commission-split and
+delivery-before-invoice allow/deny paths, reruns all three pricing rollback smokes, and leaves zero
+residue. These six files remain intentionally unapplied and are not included in the live schema
+registry high-water.
+
+The same review found the Quote Builder preview used binary floating-point rounding and ignored the
+authoritative `server_totals` returned by `save_quote`. Quote calculations now settle decimal operands
+through exact integer-ratio math (`$1.01 x 18.50 = $18.69`), and the saved response becomes the displayed
+source of truth until the user changes an input. A rendered regression proves the server-returned
+price, cost, profit, and margin replace the local preview after save.
 
 ## 2026-08-10 — Pricing audit follow-through: cost snapshots and report unification…
 

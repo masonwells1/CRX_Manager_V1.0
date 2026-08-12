@@ -406,6 +406,47 @@ describe('QuoteBuilder', () => {
     vi.unstubAllGlobals();
   });
 
+  it('installs the authoritative server totals returned by save_quote', async () => {
+    const { quote, product, section, item } = makeQuoteFixture('draft', 7);
+    mockFrom.mockImplementation((table: string) => buildChain({
+      data: table === 'quotes'
+        ? quote
+        : table === 'quote_sections'
+          ? [section]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : [],
+      error: null,
+    }));
+    mockRpc.mockImplementation((name: string) => Promise.resolve(name === 'save_quote'
+      ? {
+          data: {
+            quote_id: quote.id,
+            row_version: 8,
+            server_totals: {
+              total_price: 19.99,
+              total_cost: 11.11,
+              total_profit: 8.88,
+              total_margin_pct: 44.42,
+            },
+          },
+          error: null,
+        }
+      : { data: null, error: null }));
+
+    renderQuoteBuilder(quote.id);
+    fireEvent.click(await screen.findByText('Save Draft'));
+
+    await waitFor(() => expect(screen.getByText('$19.99')).toBeInTheDocument());
+    expect(screen.getByText('$11.11')).toBeInTheDocument();
+    expect(screen.getByText('$8.88')).toBeInTheDocument();
+    expect(screen.getByText('44.4%')).toBeInTheDocument();
+  });
+
   it('preserves a stale edit until Reload Quote replaces it and sends the refreshed version on the next save', async () => {
     const quote = { id: 'quote-stale', quote_number: 'Q-stale', customer_id: 'customer-1', tier: 1, valid_days: 30, header_notes: 'Original header', footer_notes: '', status: 'draft', is_planned: false, commission_split: { splits: [] }, row_version: 7, created_at: '2026-07-25T00:00:00.000Z' };
     const reloadedQuote = { ...quote, header_notes: 'Newer header', row_version: 8 };

@@ -7,6 +7,8 @@ import {
   computeQuoteTotals,
   validateCommissionSplits,
   convertToGlLb,
+  settleMoneyDifference,
+  settleMoneyRatio,
   type CalcItem,
   type CalcMode,
 } from './quoteCalc';
@@ -163,6 +165,11 @@ describe('getConversionFactor', () => {
 // ---------------------------------------------------------------------------
 
 describe('recalcItem', () => {
+  it('settles the Quote Builder 1.01 x 18.50 regression to PostgreSQL whole cents', () => {
+    expect(settleMoneyRatio([1.01, 18.5])).toBe(18.69);
+    expect(settleMoneyDifference([1.01, 18.5], [0.5, 18.5])).toBe(9.44);
+  });
+
   it('calculates correctly for liquid product: 32 fl oz/acre on 100 acres at $20/gal', () => {
     const product = makeProduct({
       tier1_price: 20,
