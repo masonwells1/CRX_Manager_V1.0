@@ -20,6 +20,7 @@
  * commit message.
  */
 import { describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -319,6 +320,19 @@ describe('Bug-class regression guards (2026-07-10..20 window)', () => {
 
   describe('fail-first smokes stay present and registered', () => {
     const specsRaw = readFileSync(join(ROOT, 'scripts', 'smoke', 'smoke-specs.json'), 'utf8');
+
+    it('fails loudly when only container-only smoke chains were selected', () => {
+      const result = spawnSync(
+        process.execPath,
+        ['scripts/smoke/run-smoke.mjs', '--spec', 'trg_recalc_order_totals'],
+        { cwd: ROOT, encoding: 'utf8', env: { ...process.env, SUPABASE_DB_URL: '' } }
+      );
+      const output = `${result.stdout}\n${result.stderr}`;
+
+      expect(result.status, output).not.toBe(0);
+      expect(output).toContain('node scripts/smoke/prove-blend-ticket-fractional-cents.mjs');
+    });
+
     for (const smoke of REQUIRED_SMOKES) {
       it(`${smoke} exists and is registered in smoke-specs.json`, () => {
         expect(existsSync(join(ROOT, 'scripts', 'smoke', smoke)), `${smoke} was deleted`).toBe(true);

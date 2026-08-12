@@ -2,6 +2,17 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-11 — A smoke selection that runs nothing no longer reports success
+
+Follow-up to the entry below, from its own adversarial review. Container-only chains are dropped
+from a selection with an announced skip, but the runner then returned normally when that left
+nothing to run — so `run-smoke.mjs --spec trg_recalc_order_totals`, whose only match reaches the
+container-only chain through a `covers` entry, executed zero checks and exited 0. Anything shelling
+out and reading the exit code saw green for work that never happened, which is the exact failure
+class this runner exists to prevent. An empty runnable selection now exits 2 through the existing
+`fail()` path and names the prover command for each skipped chain. Covered by a regression test in
+`bugClassRegressionGuards.test.ts` that was confirmed red against the old behavior.
+
 ## 2026-08-11 — Executable proof for the blend-ticket whole-cent fix, and the run-time gap it exposes
 
 The blend-ticket fix below was reviewed and applied, but the fractional-quantity path it repairs had
