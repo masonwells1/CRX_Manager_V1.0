@@ -32,24 +32,25 @@ interface ConvertQuoteToOrderParams {
   p_performed_by: string; // uuid
 }
 
+// The item shape below is the one the deployed `create_direct_order` actually
+// reads (verified 2026-08-11 against live `pg_proc.prosrc`: the function reads
+// exactly `product_id`, `product_name`, `quantity`, `price_per_unit`,
+// `unit_cost`, `unit_size`) and the one the sole production caller sends
+// (`src/pages/NewOrder.tsx`). It previously declared a wholly different set —
+// `current_cost`, `actual_rate`, `total_units_needed`, `total_price`,
+// `total_cost`, `profit`, `net_margin` — none of which the function reads, so
+// the contract test was guarding a payload nobody sends. Wave A fix #1 makes
+// product cost authoritative over the caller-supplied `unit_cost`, which is
+// precisely the field the stale shape omitted.
 interface CreateDirectOrderParams {
   p_customer_id: string;  // uuid
   p_items: Array<{
     product_id: string;
+    product_name: string;
+    quantity: number;
     price_per_unit: number;
-    current_cost: number;
-    actual_rate: number | null;
-    rate_unit: string | null;
-    oz_per_acre: number | null;
-    price_per_acre: number | null;
-    acres: number | null;
-    total_units_needed: number;
+    unit_cost: number;
     unit_size: number | null;
-    total_price: number;
-    total_cost: number;
-    profit: number;
-    net_margin: number;
-    notes: string | null;
   }>;
   p_commission_split: { splits: Array<{ recipient: string; recipient_user_id?: string | null; percentage: number }> } | null;
   p_performed_by: string;
@@ -254,20 +255,11 @@ describe('RPC contract: create_direct_order', () => {
       p_items: [
         {
           product_id: 'prod-uuid',
+          product_name: 'Roundup PowerMAX',
+          quantity: 25,
           price_per_unit: 20,
-          current_cost: 10,
-          actual_rate: 32,
-          rate_unit: 'fl oz',
-          oz_per_acre: 32,
-          price_per_acre: 5,
-          acres: 100,
-          total_units_needed: 25,
+          unit_cost: 10,
           unit_size: null,
-          total_price: 500,
-          total_cost: 250,
-          profit: 250,
-          net_margin: 50,
-          notes: null,
         },
       ],
       p_commission_split: {
@@ -276,7 +268,11 @@ describe('RPC contract: create_direct_order', () => {
       p_performed_by: 'user-uuid',
     });
     expect(params.p_items).toHaveLength(1);
-    expect(params.p_items[0].total_price).toBe(500);
+    // `quantity` is the field the function reads to size the line; the stale
+    // shape omitted it, so a payload matching the old declaration would have
+    // been read as quantity 0 and skipped entirely.
+    expect(params.p_items[0].quantity).toBe(25);
+    expect(params.p_items[0].unit_cost).toBe(10);
   });
 
   it('accepts null commission_split', () => {
@@ -2259,6 +2255,14 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // MUTATING_RPCS_WITH_IDEMPOTENCY. This bucket remains for the normal pre-apply
   // window: an RPC introduced by a PR migration that is not yet live belongs
   // here until the next truthful live type regeneration.
+
+  // Wave A fix #4 (20260812050000, parked). It accepts p_idempotency_key and
+  // routes it through check_idempotency/save_idempotency, but it cannot appear
+  // in the generated types until the migration applies, so the inventory sees a
+  // mutator with no declared key. This is exactly the pre-apply window this
+  // bucket exists for; the staleness test above deletes it for us by failing the
+  // moment the RPC shows up in the generated types.
+  'correct_job_commission_split',
 ]);
 
 /**
@@ -2285,8 +2289,19 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
     'idempotency infrastructure helper (sections 2-6 closeout): binds a completed lifecycle result to its key; direct client EXECUTE is revoked',
   _claim_bound_lifecycle_idempotency:
     'idempotency infrastructure helper (sections 2-6 closeout): claims a bound lifecycle key for replay; direct client EXECUTE is revoked',
+  // Pruned on the 2026-08-11 merge of origin/main, per the standing rule below that a
+  // dead exemption silently pre-suppresses any future RPC reusing the name:
+  //   _guard_job_commission_split_immutable was pruned when its original timestamp
+  //     fell behind the registry high-water. Wave A remediation re-stamped it to
+  //     20260812050000, so it is pending/discovered again and is classified below.
+  //   _crx_payout_assert_impl_20260809 / _crx_payout_assert_replay_20260809 — 20260811130000
+  //     landed on main and applied live; it drops both helpers before finishing.
   _insert_commissions_for_job: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _insert_commissions_for_order: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
+  _guard_job_commission_split_immutable:
+    'trigger-only immutable-split guard; the idempotent correct_job_commission_split RPC owns the governed mutation and direct EXECUTE is revoked',
+  _guard_delivery_completion_authorized:
+    'trigger-only completion-provenance guard; public complete_delivery owns the idempotent, row-bound governed mutation and direct EXECUTE is revoked',
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',
   _recompute_po_on_order_for_products:
     'internal convergent PO-cache recomputation helper; trigger parents own the transaction and direct browser EXECUTE is revoked',

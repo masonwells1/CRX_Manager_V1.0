@@ -62,7 +62,7 @@ import Badge from '../components/ui/Badge';
 import PageHeader from '../components/ui/PageHeader';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
-import { supabase, supabaseUntyped, assertRpcResult, hasRpcCode, RpcErrorCodes, sanitizeError } from '../lib/db';
+import { supabase, supabaseUntyped, assertRpcResult, describePostInvoiceBlock, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
@@ -1038,8 +1038,9 @@ export default function OfficeCockpit() {
               .throwOnError();
             posted += 1;
           } catch (err: unknown) {
-            if (hasRpcCode(err, RpcErrorCodes.PRICING_INCOMPLETE)) {
-              failures.push(`${inv.invoice_number}: needs pricing first`);
+            const blocked = describePostInvoiceBlock(err);
+            if (blocked) {
+              failures.push(`${inv.invoice_number}: ${blocked}`);
             } else {
               failures.push(`${inv.invoice_number}: ${sanitizeError(err)}`);
             }
