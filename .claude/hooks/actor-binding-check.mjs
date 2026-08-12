@@ -1254,8 +1254,26 @@ function stableAuthUidBindings(structuralBody, beforeIndex) {
 /** A compatible legacy guard must be an unconditional top-level statement in
  * the function's outer BEGIN block. An IF nested in a loop, CASE, or secondary
  * BEGIN may never run (or may sit inside an exception-handled sub-block). */
-function isTopLevelPlpgsqlStatement(structuralBody, beforeIndex) {
-  const prefix = structuralBody.slice(0, beforeIndex);
+function blankQuotedControlIdentifiers(text) {
+  const source = String(text || "");
+  let out = "";
+  let i = 0;
+  while (i < source.length) {
+    if (source[i] !== '"') {
+      out += source[i];
+      i++;
+      continue;
+    }
+    const end = scanQuoted(source, i);
+    if (end === -1) return null;
+    out += " ".repeat(end - i);
+    i = end;
+  }
+  return out;
+}
+
+function isTopLevelPlpgsqlStatement(controlBody, beforeIndex) {
+  const prefix = controlBody.slice(0, beforeIndex);
   const tokenRe = /\bEND\s+IF\b|\bEND\s+LOOP\b|\bEND\s+CASE\b|\bBEGIN\b|\bEND\b|\bIF\b|\bLOOP\b|\bCASE\b/gi;
   let beginDepth = 0;
   let ifDepth = 0;
@@ -1328,22 +1346,27 @@ function hasLegacyRaiseException(rawAction, structuralAction, actorParam) {
 function hasEnforcedLegacyActorRefusal(body, actorParam) {
   const structuralBody = maskSqlForCallNames(body);
   if (structuralBody === null) return false;
+  // maskSqlForCallNames deliberately preserves quoted identifiers for relation
+  // parsing. They are data to every control-flow read below: an alias named
+  // "END LOOP" must not pop a real loop frame or seed a fake IF match.
+  const controlBody = blankQuotedControlIdentifiers(structuralBody);
+  if (controlBody === null) return false;
   // A function-level or nested exception handler can catch the refusal and let
   // execution continue to the mutation. Legacy compatibility therefore stays
   // fail-closed for every body containing an EXCEPTION WHEN clause.
-  if (/\bEXCEPTION\s+WHEN\b/i.test(structuralBody)) return false;
+  if (/\bEXCEPTION\s+WHEN\b/i.test(controlBody)) return false;
   const ifRe = /\bIF\b[\s\S]*?\bTHEN\b[\s\S]*?\bEND\s+IF\b/gi;
   let block;
-  while ((block = ifRe.exec(structuralBody)) !== null) {
+  while ((block = ifRe.exec(controlBody)) !== null) {
     const then = /\bTHEN\b/i.exec(block[0]);
     const endIf = /\bEND\s+IF\b/i.exec(block[0]);
     if (!then || !endIf || endIf.index <= then.index) continue;
-    const condition = block[0].slice(2, then.index);
+    const condition = structuralBody.slice(block.index + 2, block.index + then.index);
     const actionStart = block.index + then.index + then[0].length;
     const actionEnd = block.index + endIf.index;
     const bindings = stableAuthUidBindings(structuralBody, block.index);
-    if (!isTopLevelPlpgsqlStatement(structuralBody, block.index)) continue;
-    if (hasRecognizedMutationBefore(structuralBody, block.index)) continue;
+    if (!isTopLevelPlpgsqlStatement(controlBody, block.index)) continue;
+    if (hasRecognizedMutationBefore(controlBody, block.index)) continue;
     if (!hasExactLegacyMismatchCondition(condition, actorParam, bindings)) continue;
     if (hasLegacyRaiseException(
       body.slice(actionStart, actionEnd),

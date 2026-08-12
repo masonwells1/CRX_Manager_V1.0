@@ -1862,6 +1862,46 @@ r = runHook(fn(`
 ok(isDeny(r), "a legacy guard inside a zero-iteration loop does not count");
 
 r = runHook(fn(`
+  DECLARE
+    v_row record;
+  BEGIN
+    FOR v_row IN SELECT 1 AS "END LOOP" WHERE false LOOP
+      IF p_performed_by IS DISTINCT FROM auth.uid() THEN
+        RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+      END IF;
+    END LOOP;
+    ${MUTATION}
+  END
+`));
+ok(isDeny(r), "a quoted END LOOP alias cannot cancel an enclosing zero-iteration loop");
+
+r = runHook(fn(`
+  DECLARE
+    "END IF" boolean := false;
+  BEGIN
+    IF p_performed_by IS DISTINCT FROM auth.uid() THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    ${MUTATION}
+  END
+`));
+ok(!isDeny(r), "a harmless quoted END IF identifier does not corrupt top-level guard depth");
+
+r = runHook(fn(`
+  BEGIN
+    CASE "END CASE"
+      WHEN 0 THEN
+        IF p_performed_by IS DISTINCT FROM auth.uid() THEN
+          RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+        END IF;
+      ELSE NULL;
+    END CASE;
+    ${MUTATION}
+  END
+`, '"END CASE" integer, p_performed_by uuid'));
+ok(isDeny(r), "a quoted END CASE parameter cannot cancel an enclosing CASE branch");
+
+r = runHook(fn(`
   BEGIN
     ${MUTATION}
     IF p_performed_by IS DISTINCT FROM auth.uid() THEN
