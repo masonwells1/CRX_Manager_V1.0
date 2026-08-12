@@ -240,6 +240,17 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // the public save_purchase_order RPC and intentionally shares its one cache
   // namespace rather than creating an unreachable internal-operation cache.
   _save_purchase_order_ascii_identity_impl: ['save_purchase_order'],
+  // Direct EXECUTE is revoked. This IS the original public restore_quote_version
+  // body: it was renamed to a private owner impl and the public name became a
+  // delegating wrapper, so the function that performs the operation-scoped
+  // lookup no longer carries the public name. It deliberately keeps reading and
+  // writing the `restore_quote_version` cache — giving the owner impl its own
+  // namespace would strand every idempotency key already written under the
+  // public operation, so a client retry would re-execute the restore instead of
+  // replaying it. It entered this test's scope on 2026-08-12 when the recovered
+  // 20260812011000 and 20260812115236 became the first disk migrations to define
+  // the function under its private name.
+  _restore_quote_version_owner_impl: ['restore_quote_version'],
   // Direct EXECUTE is revoked (service_role only). This IS the original
   // public convert_quote_to_order body: migration 20260730235031 renamed it
   // with `ALTER FUNCTION ... RENAME TO _convert_quote_to_order_owner_impl`
@@ -406,6 +417,81 @@ function latestDiskDefinitions(): Map<string, DiskFnDef> {
   return latest;
 }
 
+/**
+ * `ALTER FUNCTION x(...) RENAME TO y` → y's body is x's latest CREATE *before*
+ * that file. 20260812115237 renames each public money RPC to a private
+ * `_..._below_cost_impl_20260810` and re-creates the public name as a wrapper,
+ * so the impl has no CREATE of its own and is invisible to a CREATE-only scan.
+ */
+function renameSources(): Map<string, { fromName: string; fileIdx: number }> {
+  const map = new Map<string, { fromName: string; fileIdx: number }>();
+  const re =
+    /ALTER\s+FUNCTION\s+(?:public\.)?([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*RENAME\s+TO\s+(?:public\.)?([A-Za-z_][A-Za-z0-9_]*)/gi;
+  const files = readdirSync(MIGRATIONS_DIR)
+    .filter((f) => f.endsWith('.sql'))
+    .sort();
+  for (let i = 0; i < files.length; i++) {
+    const content = readFileSync(join(MIGRATIONS_DIR, files[i]), 'utf8');
+    let m: RegExpExecArray | null;
+    re.lastIndex = 0;
+    while ((m = re.exec(content)) !== null) {
+      map.set(m[2].toLowerCase(), { fromName: m[1], fileIdx: i });
+    }
+  }
+  return map;
+}
+
+/** Latest CREATE body of `fn` among files[0..maxIdx], following renames. */
+function resolveBody(fn: string, maxIdx?: number, seen = new Set<string>()): string | null {
+  const files = readdirSync(MIGRATIONS_DIR)
+    .filter((f) => f.endsWith('.sql'))
+    .sort();
+  const upTo = maxIdx === undefined ? files.length - 1 : maxIdx;
+  const sigRe = new RegExp(
+    `CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+(?:public\\.)?${fn}\\s*\\(`,
+    'i',
+  );
+  for (let i = upTo; i >= 0; i--) {
+    const content = readFileSync(join(MIGRATIONS_DIR, files[i]), 'utf8');
+    const sigIdx = content.search(sigRe);
+    if (sigIdx === -1) continue;
+    const after = content.slice(sigIdx);
+    const bodyMatch = after.match(/AS\s+\$([A-Za-z_]*)\$([\s\S]*?)\$\1\$/);
+    return bodyMatch ? bodyMatch[2] : after;
+  }
+  const key = fn.toLowerCase();
+  const edge = renameSources().get(key);
+  if (edge && !seen.has(key)) {
+    seen.add(key);
+    // Strictly BEFORE the renaming file: that same file re-creates the old
+    // public name as the wrapper, and resolving to it would loop.
+    return resolveBody(edge.fromName, edge.fileIdx - 1, seen);
+  }
+  return null;
+}
+
+/**
+ * Bodies reachable from `entry` by direct `public.<fn>(` calls, entry first.
+ * Depth-bounded and cycle-guarded.
+ */
+function delegationChain(entry: string, depth = 4): string[] {
+  const bodies: string[] = [];
+  const seen = new Set<string>();
+  const walk = (fn: string, left: number) => {
+    const key = fn.toLowerCase();
+    if (left < 0 || seen.has(key)) return;
+    seen.add(key);
+    const body = resolveBody(fn);
+    if (body === null) return;
+    bodies.push(body);
+    const callRe = /\bpublic\.([A-Za-z_][A-Za-z0-9_]*)\s*\(/gi;
+    let m: RegExpExecArray | null;
+    while ((m = callRe.exec(body)) !== null) walk(m[1], left - 1);
+  };
+  walk(entry, depth);
+  return bodies;
+}
+
 /** All idempotency operation literals appearing in a function body. */
 function operationLiterals(body: string): string[] {
   const out: string[] = [];
@@ -455,9 +541,23 @@ describe('Idempotency operation literals in latest disk migrations', () => {
 
   it('regression guard: restore_quote_version lookup stays scoped to its own operation', () => {
     // Codex 2026-06-08 LOW — the lookup originally filtered on the key only.
-    const def = defs.get('restore_quote_version');
-    expect(def).toBeDefined();
-    expect(def!.body).toMatch(/operation\s*=\s*'restore_quote_version'/i);
+    //
+    // The public function no longer performs the lookup itself. 20260812115237
+    // (live 2026-08-12) renamed it to a private below-cost impl and re-created
+    // the public name as a thin delegating wrapper, and the lookup now sits
+    // further down the same chain. Asserting on the wrapper body alone would
+    // fail; asserting on the owner impl alone would pass even if the wrapper
+    // stopped reaching it. So walk the chain from the public entry point and
+    // require BOTH that the scoped lookup is reachable and that no reachable
+    // body touching idempotency_keys is scoped to a different operation.
+    const chain = delegationChain('restore_quote_version');
+    expect(chain.length).toBeGreaterThan(1);
+    expect(chain.some((b) => /operation\s*=\s*'restore_quote_version'/i.test(b))).toBe(true);
+    const foreign = chain
+      .filter((b) => /idempotency_keys/i.test(b))
+      .flatMap((b) => operationLiterals(b))
+      .filter((lit) => lit !== 'restore_quote_version');
+    expect(foreign).toEqual([]);
   });
 
   it('disk scan found a meaningful number of function definitions (sanity)', () => {

@@ -2,6 +2,71 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-12 — Six migrations were running in production with no file in the repository
+
+Recovered and landed. **Nothing is applied by this change and no live behaviour changes** — all six
+were already live before the first line of this entry was written. What changes is that `main` now
+describes production again.
+
+**What went wrong.** Six migrations were applied to the live database on 2026-08-12 by concurrent
+sessions that never landed their files. No branch, no worktree and no pull request carried them. For
+part of that day, six migrations touching order money, quote cost, report math and a new
+approval table were running against production and **no one could review them**, because the SQL
+existed nowhere except inside the database. A clean rebuild from `main` would have produced a schema
+without them. This is the same class of gap PR #371 closed on 2026-08-11; it reopened the next day,
+six files wide.
+
+**Why the files are trustworthy.** They are not reconstructions. Rebuilding a migration from live
+`pg_proc.prosrc` loses the header, the preconditions and the review history, and produces a file
+nobody actually reviewed. Instead each file is the exact `apply_migration` payload recovered verbatim
+from the applying session's transcript. Fidelity was then proven rather than asserted: function
+bodies extracted from the recovered text were md5-compared against live `pg_proc.prosrc` and matched
+exactly, at identical length, for `_guard_below_cost_approval_immutable`,
+`_resnapshot_order_item_cost_on_product_change`, `_snapshot_quote_item_cost` and
+`_guard_quote_item_cost_snapshot`. `bash scripts/validate-sql-migrations.sh --changed-only` reports
+0 violations across the six.
+
+**One deliberate exception to that fidelity, and it is the only one.** `20260812115238` is published
+with its approved preimage removed: the applied payload embedded a 35-row map of live order-line
+identifiers with their prices and profit, and this repository is public. Nothing else in that file
+changed, its SHA-256 `APPROVED_SET_DIGEST` still binds the exact preimage, and no reachable code path
+is affected — an empty database returns early before the map is read, and an already-repaired
+database (which is every database that now exists, including production) raises
+`APPROVED_SET_DRIFTED` before the map is read. The only branch that reads the map now fails closed
+with `APPROVED_SET_WITHHELD` instead of running on a partial map. The file defines no functions, so
+the md5 fidelity proof above is unaffected.
+
+**What the six do**, in apply order (full detail in `docs/reference/migration-history.md`, rows
+878-883):
+
+- `20260812010000` — blend-ticket order creation now proves its own order header at run time, not
+  just at apply time. A dropped or repointed totals trigger would previously have left a zero header
+  and still returned success.
+- `20260812011000` — quote-version restore normalizes constrained snapshot money to whole cents and
+  rejects non-finite values before the first write, so a historical snapshot holding a fractional
+  cent can no longer make a version permanently un-restorable.
+- `20260812115235` — every order-basis report now derives line cost from the immutable as-of-sale
+  snapshot instead of the mutable product cost or the stored order header, so editing a product cost
+  no longer rewrites the margin on sales already made. Unpriced rush lines are excluded from
+  profit-bearing aggregations so they cannot show up as a phantom loss.
+- `20260812115236` — adds `quote_items.cost_at_quote_cents`. A quote's line cost no longer drifts:
+  re-saving an old quote to fix a note used to silently reprice its cost, profit and margin at
+  today's catalog cost, and that drifted cost then followed the quote into the order.
+- `20260812115237` — adds `below_cost_approvals` (with RLS) and moves the below-cost sale check out
+  of the browser and into the database for the seven sell-side write paths. The browser
+  confirmation was never an authorization boundary; a direct API caller skipped it.
+- `20260812115238` — the one live-data correction in the group, approved by Mason in chat on
+  2026-08-12: rounds the historical order lines that still carried fractions of a cent, recomputes
+  the affected order headers, and installs the whole-cent rule as a validated constraint.
+  Per-line and per-order figures are deliberately withheld from this public repository.
+
+Also in this change: the six files are pinned `text eol=lf` in `.gitattributes` — several carry md5
+pins computed against the live catalog, and a Windows checkout under `core.autocrlf=true` would
+install bytes those pins were never computed against.
+
+**Prevention is not addressed here.** Nothing in this change stops the next session from applying a
+migration without landing its file. That gap is recorded in `docs/manual/KNOWN_ISSUES.md`.
+
 ## 2026-08-12 — Wave A re-stamped to 20260813: a concurrent apply moved the high-water under us
 
 Rename-only change. The six Wave A migrations move from `20260812010000`–`20260812060000` to

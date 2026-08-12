@@ -1791,6 +1791,80 @@ function bodyUsesIdempotency(body: string): boolean {
   return /idempotency_keys|check_idempotency|save_idempotency|_claim_bound_lifecycle_idempotency|_bind_completed_lifecycle_idempotency/i.test(body);
 }
 
+/**
+ * `ALTER FUNCTION x(...) RENAME TO y` → y's body is x's latest CREATE *before*
+ * that file. Built once, ascending, so a later rename of the same name wins.
+ *
+ * This exists because 20260812115237 (live 2026-08-12) renames each public
+ * money RPC to a private `_..._below_cost_impl_20260810` and re-CREATEs the
+ * public name as a thin wrapper. The impl therefore has NO `CREATE FUNCTION`
+ * of its own anywhere on disk — searching for one finds nothing, and a body
+ * scan that stops there would conclude the idempotency block had vanished.
+ */
+const RENAME_SOURCES: Map<string, { fromName: string; fileIdx: number }> = (() => {
+  const map = new Map<string, { fromName: string; fileIdx: number }>();
+  const re =
+    /ALTER\s+FUNCTION\s+(?:public\.)?([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*RENAME\s+TO\s+(?:public\.)?([A-Za-z_][A-Za-z0-9_]*)/gi;
+  const files = getMigrationFiles();
+  for (let i = 0; i < files.length; i++) {
+    let m: RegExpExecArray | null;
+    re.lastIndex = 0;
+    while ((m = re.exec(files[i].content)) !== null) {
+      map.set(m[2].toLowerCase(), { fromName: m[1], fileIdx: i });
+    }
+  }
+  return map;
+})();
+
+/** Latest CREATE body of `rpc` among files[0..maxIdx], following renames. */
+function resolveFunctionBody(rpc: string, maxIdx?: number, seen = new Set<string>()): string | null {
+  const files = getMigrationFiles();
+  const upTo = maxIdx === undefined ? files.length - 1 : maxIdx;
+  const sigRe = new RegExp(
+    `CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+(?:public\\.)?${rpc}\\s*\\(`,
+    'i',
+  );
+  for (let i = upTo; i >= 0; i--) {
+    const sigIdx = files[i].content.search(sigRe);
+    if (sigIdx === -1) continue;
+    const after = files[i].content.slice(sigIdx);
+    const bodyMatch = after.match(/AS\s+\$([A-Za-z_]*)\$([\s\S]*?)\$\1\$/);
+    return bodyMatch ? bodyMatch[2] : after;
+  }
+  const key = rpc.toLowerCase();
+  const edge = RENAME_SOURCES.get(key);
+  if (edge && !seen.has(key)) {
+    seen.add(key);
+    // Strictly BEFORE the renaming file: the same file usually re-CREATEs the
+    // old public name as the wrapper, and resolving to that would loop.
+    return resolveFunctionBody(edge.fromName, edge.fileIdx - 1, seen);
+  }
+  return null;
+}
+
+/**
+ * True when this body — or any function it delegates to — handles idempotency.
+ *
+ * A thin wrapper that passes p_idempotency_key straight through to a private
+ * impl is still covered; the guard's real target is an RPC that DECLARES the
+ * parameter and then drops it on the floor, which is unchanged by delegation.
+ * Depth-bounded and cycle-guarded.
+ */
+function usesIdempotencyThroughDelegates(body: string, depth = 0, seen = new Set<string>()): boolean {
+  if (bodyUsesIdempotency(body)) return true;
+  if (depth >= 3) return false;
+  const callRe = /\bpublic\.([A-Za-z_][A-Za-z0-9_]*)\s*\(/gi;
+  let m: RegExpExecArray | null;
+  while ((m = callRe.exec(body)) !== null) {
+    const callee = m[1].toLowerCase();
+    if (seen.has(callee)) continue;
+    seen.add(callee);
+    const calleeBody = resolveFunctionBody(callee);
+    if (calleeBody && usesIdempotencyThroughDelegates(calleeBody, depth + 1, seen)) return true;
+  }
+  return false;
+}
+
 describe('Idempotency BODY verification (reads migration SQL)', () => {
   it('every covered RPC body actually reads/writes idempotency_keys (not just declares the param)', () => {
     const offenders: string[] = [];
@@ -1798,7 +1872,7 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
       if (rpc in IDEMPOTENCY_BODY_EXEMPT) continue;
       const body = latestFunctionBody(rpc);
       if (body === null) continue; // defined in a consolidated file; existence covered elsewhere
-      if (!bodyUsesIdempotency(body)) offenders.push(rpc);
+      if (!usesIdempotencyThroughDelegates(body)) offenders.push(rpc);
     }
     // If this fails, the listed RPCs declare p_idempotency_key but never use it.
     // Either add the canonical idempotency block to the SQL, or (if genuinely
@@ -2300,6 +2374,8 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   // Trigger-only helpers whose migrations are now at or below the live registry
   // high-water are absent from generated client types and this inventory. Keeping
   // dead exemptions would silently pre-suppress any future RPC reusing a name.
+  _enforce_below_cost_line:
+    'trigger-only below-cost guard installed by 20260812115237 (RETURNS trigger, so PostgreSQL refuses any direct call; EXECUTE revoked from PUBLIC, anon and authenticated). It rejects a below-cost line unless the caller is an active admin with a fresh reason, and its one INSERT is the immutable approval-audit row for the money write in the same transaction — replaying the write replays the whole transaction, so the audit row cannot be orphaned or duplicated independently of it.',
   _sync_job_holds: 'internal convergent hold-sync helper; direct client EXECUTE is revoked',
   _sync_planned_holds: 'internal convergent hold-sync helper called within parent transactions',
   _sync_quote_job_reservations: 'internal convergent reservation-sync helper called by parent RPCs',
