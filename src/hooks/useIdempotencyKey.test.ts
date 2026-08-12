@@ -117,6 +117,24 @@ describe('useIdempotencyKey', () => {
     expect(keyA2!).toBe(keyA1!);
   });
 
+  it('rotates on an explicit payload intent without embedding that payload in the key', () => {
+    const { result, rerender } = renderHook(
+      ({ intentScope }) => useIdempotencyKey('assign_customers_sales_rep', 'admin-1', intentScope),
+      { initialProps: { intentScope: 'rep-a|customer-1' } },
+    );
+
+    let firstKey: string;
+    act(() => { firstKey = result.current.getKey(); });
+    rerender({ intentScope: 'rep-b|customer-1,customer-2' });
+
+    let secondKey: string;
+    act(() => { secondKey = result.current.getKey(); });
+
+    expect(secondKey!).not.toBe(firstKey!);
+    expect(secondKey!).toMatch(/^assign_customers_sales_rep:admin-1:/);
+    expect(secondKey!).not.toContain('customer-1');
+  });
+
   it('simulates retry scenario: error keeps same key, success resets', () => {
     const { result } = renderHook(() => useIdempotencyKey('complete_delivery', 'driver-3'));
 
