@@ -38,11 +38,16 @@ export function classifySql(query) {
       reason: "DO blocks can contain non-transactional side effects such as sequence changes, so they are never permitted through raw execute_sql. Use a reviewed migration smoke harness instead.",
     };
   }
-  const hasCommitStmt = normalizedStatements.some((statement) => /^commit\b/i.test(statement));
   const txWrapped = normalizedStatements.length >= 2 &&
     /^begin(?:\s+(?:work|transaction))?$/i.test(normalizedStatements[0]) &&
     /^rollback(?:\s+(?:work|transaction))?$/i.test(normalizedStatements.at(-1));
-  const rolledBack = !hasCommitStmt && txWrapped;
+  // Rollback proof is exactly one outer transaction. Any intermediate boundary
+  // can commit/end it, terminate it before later SQL, or replace it with a decoy
+  // transaction whose final ROLLBACK proves nothing about the earlier effects.
+  const hasIntermediateTransactionBoundary = normalizedStatements
+    .slice(1, -1)
+    .some((statement) => /^(?:begin|start\s+transaction|commit|end|rollback|abort|prepare\s+transaction)\b/i.test(statement));
+  const rolledBack = txWrapped && !hasIntermediateTransactionBoundary;
 
   const hasRawDdl = DDL_STMT_RE.test(visibleKeywordText) ||
     GRANT_REVOKE_RE.test(visibleKeywordText) ||

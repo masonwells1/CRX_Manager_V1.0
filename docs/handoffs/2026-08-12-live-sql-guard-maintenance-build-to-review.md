@@ -19,10 +19,10 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
 
 - The current source blob is pinned to `c8bec70830c643e474831985f5e6c3bd16630386`.
 - `node scripts/apply-live-testdata-maintenance-20260812.mjs --verify` produced pinned output blob
-  `089ae2171bd2a5d048bd281dd27ea8c4a0b086ea`, matched all three snippet SHA-256 values, and passed a
+  `69190a0c2f01bd70fc6f4e05b8ce8eef49ec8b4e`, matched all three snippet SHA-256 values, and passed a
   Node module syntax check without changing the repository target.
-- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 49 assertions against the
-  generated module, including all thirteen classifier defect classes found by the first eight Sol reviews.
+- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 51 assertions against the
+  generated module, including all fourteen classifier defect classes found by the first nine Sol reviews.
 - The write mode refused the dirty build worktree even with Mason's dated token.
 - Focused ESLint, TypeScript typecheck, agent-workflow tests, ledger check, and `git diff --check` passed.
 - The guarded commit suite passed lint, typecheck, production build, correction-guard tests,
@@ -81,6 +81,10 @@ any later live migration apply still requires the repository's current explicit 
   splitting, dollar bodies, comments, and DML discovery, with the exact exploit pinned. The same pass
   saw stale Wave A names only because current main advanced during review; merging current main
   restored its already-reviewed `20260813…` names. A fresh exact-head review remains required.
+- The ninth exact-head Sol review found that `END` can commit the outer transaction and an intermediate
+  `ROLLBACK` can end it before later SQL, while a decoy final transaction still satisfied the wrapper
+  shape. Rollback proof now rejects every intermediate transaction boundary or alias, with both exact
+  RLS-disabling payloads pinned. A fresh exact-head review remains required.
 - GitHub checks and CodeRabbit must be complete and acceptable on the exact PR head.
 
 ## FIRST ACTION

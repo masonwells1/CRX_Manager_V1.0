@@ -226,6 +226,13 @@ blanking, comments, and DML discovery all use the same escape-aware rules. The e
 bringing the generated-module suite to 49 cases. Current main was merged at the same time so this
 branch preserves PR #387's already-reviewed `20260813…` Wave A names rather than reversing them.
 
+The ninth exact-head pass found two ways to forge rollback proof with transaction boundaries. `END`
+is PostgreSQL's alias for `COMMIT`, and an intermediate `ROLLBACK` can terminate the protected
+transaction before later SQL; in both cases a decoy `BEGIN; ROLLBACK` at the end still satisfied the
+old first/last shape. Rollback smoke now requires exactly one outer transaction and rejects every
+intermediate `BEGIN`, `START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK`, `ABORT`, or
+`PREPARE TRANSACTION`. Both exact RLS-disabling payloads are pinned, bringing the suite to 51 cases.
+
 ## 2026-08-11 — A smoke selection that runs nothing no longer reports success
 
 Follow-up to the entry below, from its own adversarial review. Container-only chains are dropped
