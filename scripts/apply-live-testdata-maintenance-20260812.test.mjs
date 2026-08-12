@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { buildMaintainedSource } from "./apply-live-testdata-maintenance-20260812.mjs";
 
 const { output, blob } = buildMaintainedSource();
-assert.equal(blob, "9e566b17ccd1ce11e31ea17e8e268a31fd7b134a", "pinned generated blob");
+assert.equal(blob, "9e75044cb0e30fa8fdfe7b6ff19b77600ef6ccc5", "pinned generated blob");
 
 const scratch = mkdtempSync(path.join(tmpdir(), "crx-live-guard-candidate-test-"));
 try {
@@ -31,6 +31,13 @@ try {
     "SELECT preview_product_cost_basis_changes('00000000-0000-0000-0000-000000000000')",
     "DO $$ BEGIN UPDATE customers SET phone='owned' WHERE id=1; COMMIT; RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'; END $$;",
     "DO $$ BEGIN UPDATE customers SET phone='owned' WHERE id=1; ROLLBACK; RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'; END $$;",
+    "DO $$ BEGIN IF false THEN RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'; END IF; UPDATE customers SET phone='owned' WHERE id=1; END $$;",
+    "DO $$ BEGIN UPDATE customers SET phone='owned' WHERE id=1; BEGIN RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'; EXCEPTION WHEN OTHERS THEN NULL; END; END $$;",
+    "DO $$ BEGIN RETURN; RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'; END $$;",
+    "UPDATE customers SET phone='owned' WHERE id=1 AND '[E2E]'='[E2E]'",
+    "DELETE FROM customers WHERE id=1 AND '[E2E]'='[E2E]'",
+    "VALUES (public.cancel_order('00000000-0000-0000-0000-000000000000'))",
+    "WITH source AS (SELECT 1 AS x) SELECT x INTO public.guard_bypass FROM source",
   ];
   for (const sql of blocked) {
     assert.equal(classifySql(sql).block, true, `must block: ${sql}`);

@@ -122,7 +122,7 @@ function keywordView(sql) {
 // Recognize the exact executable PL/pgSQL force-abort statement. Text inside
 // comments, string literals, quoted identifiers, or nested dollar literals
 // cannot qualify.
-function hasActualSmokeRaise(body) {
+function actualSmokeRaiseEnd(body) {
   let i = 0;
   while (i < body.length) {
     if (body[i] === "'") { i = readQuoted(body, i, "'").end; continue; }
@@ -150,10 +150,10 @@ function hasActualSmokeRaise(body) {
     if ((body[i] === "e" || body[i] === "E") && body[i + 1] === "'") i++;
     if (body[i] !== "'") continue;
     const literal = readQuoted(body, i, "'");
-    if (literal.value.toUpperCase() === "SMOKE_PASS_ROLLBACK") return true;
+    if (literal.value.toUpperCase() === "SMOKE_PASS_ROLLBACK") return literal.end;
     i = literal.end;
   }
-  return false;
+  return -1;
 }
 
 // A DO abort is rollback proof only when it is the entire submitted batch.
@@ -165,8 +165,14 @@ function standaloneDoSmokeAbort(statements) {
   // A DO block may end its current transaction. Once it executes COMMIT, a
   // later exception cannot undo the live write, so transaction control inside
   // this special smoke form categorically disqualifies rollback proof.
-  if (/\b(?:commit|rollback)\b/i.test(keywordView(match[2]))) return false;
-  return hasActualSmokeRaise(match[2]);
+  const bodyKeywords = keywordView(match[2]);
+  if (/\b(?:commit|rollback|return|exit|continue)\b/i.test(bodyKeywords)) return false;
+  const markerEnd = actualSmokeRaiseEnd(match[2]);
+  if (markerEnd === -1) return false;
+  // The marker must be the final executable statement in the OUTER block.
+  // This excludes IF/CASE/LOOP branches and EXCEPTION handlers that could skip
+  // or catch it while allowing ordinary checks before an unconditional abort.
+  return /^;\s*end\s*;?$/i.test(keywordView(match[2].slice(markerEnd)).trim());
 }
 
 function dmlTarget(statement) {
@@ -185,9 +191,13 @@ function isSyntheticE2ETarget(statement, target) {
     return /\bvalues\s*\([^;]*'\[E2E\][^']*'/i.test(source);
   }
   if (verb !== "update" && verb !== "delete from") return false;
-  const whereIndex = keywordView(source).search(/\bwhere\b/i);
+  const sourceKeywords = keywordView(source);
+  const whereIndex = sourceKeywords.search(/\bwhere\b/i);
   if (whereIndex === -1) return false;
   const predicate = source.slice(whereIndex);
   if (/\bor\b/i.test(keywordView(predicate))) return false;
-  return /(?:=\s*'\[E2E\][^']*'|\b(?:like|ilike)\s*'\[E2E\]%')/i.test(predicate);
+  const beforeWhere = sourceKeywords.slice(0, whereIndex);
+  if (verb === "update" && /\bfrom\b/i.test(beforeWhere)) return false;
+  if (verb === "delete from" && /\busing\b/i.test(beforeWhere)) return false;
+  return /(?:\b[a-z_][a-z0-9_]*|"(?:[^"]|"")+")\s*(?:=\s*'\[E2E\][^']*'|\b(?:like|ilike)\s*'\[E2E\]%')/i.test(predicate);
 }

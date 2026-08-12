@@ -20,11 +20,11 @@ const SNIPPETS = {
 };
 
 const EXPECTED_INPUT_BLOB = "c8bec70830c643e474831985f5e6c3bd16630386";
-const EXPECTED_OUTPUT_BLOB = "9e566b17ccd1ce11e31ea17e8e268a31fd7b134a";
+const EXPECTED_OUTPUT_BLOB = "9e75044cb0e30fa8fdfe7b6ff19b77600ef6ccc5";
 const EXPECTED_SNIPPET_SHA256 = {
-  constants: "5a33d6b7e24b488eaae8614d1adb46788e3ba2de51bcb192053a4cbab1e06d3a",
-  helpers: "d4bd193c2f196bbe5d6d3e2ca83c97e83992c38079ade2ec56a83114fbee8e22",
-  classify: "44b907116829fcaf9df392545555e32a10066ddc4f1feb66734cf60c46d726a6",
+  constants: "0e34b0416e4ada8d15f4785498029a58d6fd9bfd9871def40d3b8e6f5f652e67",
+  helpers: "096cd0f0359f05029189fdc7b99ffa99a29fd8f843756190c983216b7b692feb",
+  classify: "629d38fe1ade2c1733abb31fd4713a81bdf2d0218e22ce88cf59d4898328f4f4",
 };
 const APPROVAL = "--approved-by-mason=2026-08-12";
 
@@ -35,6 +35,8 @@ const OLD_CONSTANTS = [
 ].join("\n");
 const OLD_PREFIX = "const READONLY_FN_PREFIX_RE = /^(?:get|list|find|search|count|calc|calculate|compute|report|fetch|lookup|has|is|can|preview|estimate|summarize|derive)_/;";
 const NEW_PREFIX = "const READONLY_FN_PREFIX_RE = /^(?:get|list|find|search|count|calc|calculate|compute|report|fetch|lookup|has|is|can|estimate|summarize|derive)_/;";
+const OLD_FUNCTION_GATE = "  if (!/\\bselect\\b/i.test(text)) return null;\n";
+const NEW_FUNCTION_GATE = "  if (!/^\\s*(?:select|values|with)\\b/i.test(text)) return null;\n";
 const CLASSIFY_START = "export function classifySql(query) {";
 const CLASSIFY_END = "// ── Destructive-migration classifier (Mason's settled 2026-07-13 policy) ─────";
 
@@ -89,6 +91,7 @@ export function buildMaintainedSource() {
 
   let output = replaceExactly(input, OLD_CONSTANTS, snippets.constants, "DDL constants");
   output = replaceExactly(output, OLD_PREFIX, NEW_PREFIX, "read-only RPC prefix");
+  output = replaceExactly(output, OLD_FUNCTION_GATE, NEW_FUNCTION_GATE, "SELECT-only function gate");
   output = replaceExactly(output, `\n${CLASSIFY_START}`, `\n${snippets.helpers}\n\n${CLASSIFY_START}`, "helper insertion point");
   const start = output.indexOf(CLASSIFY_START);
   const end = output.indexOf(CLASSIFY_END, start);

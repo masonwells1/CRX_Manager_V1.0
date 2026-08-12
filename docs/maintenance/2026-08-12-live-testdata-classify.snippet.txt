@@ -55,13 +55,15 @@ export function classifySql(query) {
     };
   }
 
-  const rpc = findNonReadFunctionCall(visibleKeywordText);
-  if (rpc) {
-    return {
-      block: true,
-      kind: "rpc-via-select",
-      reason: `This statement invokes "${rpc}()", which is not a known read-only function — calling an application RPC changes live data even when the statement starts with SELECT. Use the app, or get Mason's explicit REAL-DATA-OK.`,
-    };
+  for (const statement of visibleKeywordStatements) {
+    const rpc = findNonReadFunctionCall(statement);
+    if (rpc) {
+      return {
+        block: true,
+        kind: "rpc-via-select",
+        reason: `This statement invokes "${rpc}()", which is not a known read-only function — calling an application RPC changes live data even when wrapped in SELECT, VALUES, or WITH. Use the app or the governed path.`,
+      };
+    }
   }
 
   // Bind every fixture exemption to the DML statement and the target row. A

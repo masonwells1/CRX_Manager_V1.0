@@ -18,10 +18,10 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
 
 - The current source blob is pinned to `c8bec70830c643e474831985f5e6c3bd16630386`.
 - `node scripts/apply-live-testdata-maintenance-20260812.mjs --verify` produced pinned output blob
-  `9e566b17ccd1ce11e31ea17e8e268a31fd7b134a`, matched all three snippet SHA-256 values, and passed a
+  `9e75044cb0e30fa8fdfe7b6ff19b77600ef6ccc5`, matched all three snippet SHA-256 values, and passed a
   Node module syntax check without changing the repository target.
-- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 21 assertions against the
-  generated module, including the two defects found by the first Sol review.
+- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 28 assertions against the
+  generated module, including all six defects found by the first two Sol reviews.
 - The write mode refused the dirty build worktree even with Mason's dated token.
 - Focused ESLint, TypeScript typecheck, agent-workflow tests, ledger check, and `git diff --check` passed.
 - The guarded commit suite passed lint, typecheck, production build, correction-guard tests,
@@ -54,6 +54,9 @@ any later live migration apply still requires the repository's current explicit 
 - The producer branch must receive an exact-head clean Sol proof before push/merge.
 - The first exact-head Sol review returned blockers (unsafe transaction control in a `DO` smoke and
   safe E2E writes re-blocked by the final deny loop); both were repaired and require a fresh review.
+- The second exact-head Sol review returned four more blockers (conditional/caught aborts,
+  literal-only E2E predicates, `VALUES`-invoked mutators, and CTE `SELECT INTO`); all four were
+  reproduced, repaired, and require another fresh exact-head review.
 - GitHub checks and CodeRabbit must be complete and acceptable on the exact PR head.
 
 ## FIRST ACTION

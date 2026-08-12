@@ -144,6 +144,14 @@ final default-deny loop. The producer now rejects `COMMIT` or `ROLLBACK` inside 
 smoke form, recognizes already-vetted DML in its final pass, and executes 21 assertions directly
 against the pinned generated module, including both Sol reproductions.
 
+The second exact-head Sol pass found four more bypasses before push: conditional or caught abort
+markers, literal-vs-literal E2E predicates, custom mutators invoked through `VALUES`, and CTE-wrapped
+`SELECT INTO`. Rollback proof now requires the marker to be the final executable statement in the
+outer `DO` block and rejects transaction control or earlier exits; E2E writes require a real column
+predicate without `OR` or joined-table broadening; custom calls are scanned per `SELECT`, `VALUES`,
+or `WITH` statement; and persistent `SELECT INTO` is detected behind CTEs. The generated candidate
+suite now covers 28 allow/deny cases including every Sol reproduction from both passes.
+
 ## 2026-08-11 — A smoke selection that runs nothing no longer reports success
 
 Follow-up to the entry below, from its own adversarial review. Container-only chains are dropped
