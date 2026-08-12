@@ -929,6 +929,72 @@ function armAutopilot(stateDir, hoursFromNow) {
       ok(!isOneShotDeny(r), `round-25: ${label} → not a replay`);
     }
 
+    // ROUND 26 (Codex High). Round 25 treated `format(...)` as a readable
+    // operand, on the reasoning that its placeholders were handled. They were
+    // handled only where a placeholder names the RELATION, after a write verb
+    // the scanner had already recognised in the literal. A placeholder can just
+    // as easily split the verb itself, and then the literal contains no write
+    // verb at all — so the reader produced neither a target nor `unresolved`,
+    // and round 25's whole inversion never fired. `format` is now unreadable in
+    // every shape, which costs the column-level precision of a constant format
+    // string and keeps the refusal.
+    {
+      let idx = 0;
+      for (const [label, sql] of [
+        ["a placeholder splitting the write verb in half",
+         "DO $$ BEGIN EXECUTE format('UP%sATE public.orders SET total_profit = 0', 'D'); END $$;"],
+        ["a placeholder standing in for the verb entirely",
+         "DO $$ BEGIN EXECUTE format('%s public.orders SET total_profit = 0', 'UPDATE'); END $$;"],
+        ["a placeholder standing in for the table name",
+         "DO $$ BEGIN EXECUTE format('UPDATE public.%I SET total_profit = 0', 'orders'); END $$;"],
+        ["a placeholder splitting the schema-qualified identifier",
+         "DO $$ BEGIN EXECUTE format('UPDATE pub%sic.orders SET total_profit = 0', 'l'); END $$;"],
+        ["concatenation inside the format string, splitting the verb",
+         "DO $$ BEGIN EXECUTE FORMAT('UPD' || '%sTE public.orders SET total_profit = 0', 'A'); END $$;"],
+        ["a constant format string, which is now unresolved rather than precise",
+         "DO $$ BEGIN EXECUTE format('UPDATE public.orders SET total_profit = 0'); END $$;"],
+        ["the same split verb reached through a defined helper body",
+         "CREATE FUNCTION public.r26() RETURNS void LANGUAGE plpgsql AS $$\n" +
+         "BEGIN EXECUTE format('UP%sATE public.orders SET total_profit = 0', 'D'); END; $$;\n" +
+         "SELECT public.r26();"],
+      ]) {
+        r = apply(`20990601${String(120 + idx++).padStart(6, "0")}_r26`, sql);
+        ok(isDeny(r) && isOneShotDeny(r), `round-26: ${label} → denied`);
+      }
+    }
+
+    let idx3 = 0;
+    for (const [label, sql] of [
+      // A plain string literal is still readable — narrowing the rule to
+      // `format` must not turn every EXECUTE into a refusal.
+      ["a plain literal EXECUTE that only reads is still read, not refused",
+       "DO $$ BEGIN EXECUTE 'SELECT count(*) FROM public.orders'; END $$;"],
+      // Making `format` unreadable must not make it guilty everywhere. Outside
+      // an EXECUTE operand it is an ordinary value expression and stays silent.
+      ["format used to build an identifier, with no statement in it at all",
+       "SELECT format('%I_%s', 'orders', 'backup') AS proposed_name;"],
+    ]) {
+      r = apply(`20990601${String(140 + (idx3 += 1)).padStart(6, "0")}_r26ok`, sql);
+      ok(!isOneShotDeny(r), `round-26: ${label} → not a replay`);
+    }
+
+    // The price of the narrowing, stated rather than hidden: an EXECUTE whose
+    // operand is a format call now reaches the override prompt even when the
+    // statement it assembles only reads. The reader cannot tell the two apart
+    // without evaluating the placeholders, and round 25 settled which way it
+    // guesses. This test exists so that cost cannot be paid by accident — if a
+    // later round makes reads precise again, it must delete this line
+    // deliberately, and prove the split-verb attacks above still deny.
+    r = apply("20990601150000_r26cost",
+      "DO $$ DECLARE c text := 'total_profit';\n" +
+      "BEGIN EXECUTE format('SELECT %I FROM public.orders', c); END $$;");
+    ok(isOneShotDeny(r), "round-26: even a format-assembled READ asks for an override — the accepted cost");
+
+    // And the registered repair itself must still read exactly as it did — the
+    // inversion is worthless if it refuses the one migration it exists to guard.
+    r = apply(STEM, ONE_SHOT_SQL);
+    ok(isOneShotDeny(r), "round-26: the registered one-shot is still recognised as itself");
+
     // 4. ROUND 12 (Codex High) reversed this case. Round 8 let a one-shot
     //    through whenever the ledger already contained it, reasoning that such a
     //    database IS the population the repair was approved against. True at the

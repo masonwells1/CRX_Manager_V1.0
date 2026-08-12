@@ -9,6 +9,58 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-12 — A change may not write the list that exempts it
+
+**Source:** round 26 of adversarial review on PR #364 (two High findings).
+
+**Background.** The zero-tolerance migration scan in CI trusts two manifests: a grandfather list of
+migrations whose historical violations are accepted, and a sha256-pinned list of audit exemptions.
+Both are ordinary tracked files, living in the same repository as the migration being judged. A
+branch could therefore add its own new migration's basename or hash to one of them and buy itself a
+clean scan. The gate and the thing the gate judges were writable by the same hand.
+
+**Decision.** A gate a candidate can widen is not a gate, so the loophole is closed in two halves,
+because either half alone still leaves a way through:
+
+- The **changed-only scan ignores both manifests entirely.** Nothing legitimate is lost: a new
+  migration was never in the grandfather list to begin with, and an old one cannot appear in a change
+  at all, since editing an applied migration is forbidden outright. The manifests exist so the
+  aggregate full-corpus scan can hold a baseline over history, and history is not what the
+  changed-only path measures. The ignore is gated on the scan mode actually in effect, **not** on the
+  `--changed-only` flag: when the base ref is missing the flag stays set while the scan silently
+  becomes a full one, and a full scan of all history without its baseline is thousands of
+  unactionable violations, which is how a guard gets switched off.
+- **CI rejects a change that exempts a migration the same change adds or modifies.** The rule is
+  deliberately *not* "these files may never grow" — recording a pre-existing finding in a file this
+  change does not touch is legitimate bookkeeping, and the sha256 pin keeps it honest, since the row
+  dies the moment that file is edited. Splitting the attack across two PRs does not work either: the
+  row must carry the file's hash, and the changed-only scan rejects the migration on the PR that
+  introduces it, before any hash exists to record.
+
+**Also settled here:** the round-25 inversion had a blind spot, and closing it costs precision that
+is recorded rather than hidden. A `format` placeholder can split the write verb itself —
+`format('UP%sATE …', 'D')` runs an UPDATE that no literal in it spells — so the reader produced
+neither a target nor `unresolved` and the inversion never fired. `format` is now unreadable as an
+`EXECUTE` operand **in every shape**, which means an `EXECUTE` whose operand is a format call reaches
+the override prompt even when the statement it assembles only reads. A test pins that cost in place
+so a later round must pay it back deliberately rather than by accident. `format` used as an ordinary
+value expression is untouched.
+
+Friction was measured across the whole corpus first, by running the reader over all 882 migrations
+under both rules: 11 mention `EXECUTE format`, and **8 change classification**. Each of those eight
+assembles a `SET LOCAL`, a `REVOKE`, an `ALTER TABLE … ADD CONSTRAINT` or a `CREATE SEQUENCE` — none
+writes a row — and three are still parked awaiting apply, so whoever applies them meets the prompt.
+That is accepted. An allowlist of leading statement keywords would remove the noise and open a new
+attack surface (positional placeholders ahead of the verb, a comment before it, a placeholder inside
+the keyword), and that surface is what produced the previous nine rounds. **If a later round wants to
+widen this, widen it there and re-measure — do not restore `format` as a readable operand.**
+
+**The operative rule for future agents.** Never let a check read its own verdict from a file the
+change under review can write. When a manifest must exist, either exclude it from the path that
+judges new work, or pin every row to a content hash and reject rows a change grants itself.
+
+---
+
 ## 2026-08-12 — A guard that reads SQL must fail closed on what it cannot read
 
 **Source:** rounds 17–25 of adversarial review on PR #364, and the pattern across all of them.

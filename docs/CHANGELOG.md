@@ -2,6 +2,89 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-12 — Two gates that could be opened from the inside
+
+The round-26 review found the round-25 inversion had a blind spot, and found a
+second gate that a change could unlock for itself. Both are the same shape: a
+check whose input the thing being checked gets to write.
+
+**A format placeholder can split the write verb itself.** Round 25 treated
+`format(...)` as readable, reasoning that its placeholders were already handled.
+They were handled in one position only — where a placeholder names the
+*relation*, after a write verb the scanner had already found in the literal. But
+`format('UP%sATE public.order_items SET total_price = 0', 'D')` runs an UPDATE
+while no literal in it contains the word. The reader found no write verb, so it
+produced neither a target nor `unresolved`, and the whole round-25 inversion
+never fired. `format` is no longer readable in any shape.
+
+That costs precision, and the cost is recorded rather than hidden: an `EXECUTE`
+whose operand is a format call now reaches the override prompt even when the
+statement it assembles only reads. Telling the two apart means evaluating the
+placeholders, and round 25 settled which way this reader guesses.
+
+The cost was measured across the whole corpus before shipping, by running the
+reader over all 882 migrations under both the old rule and the new one. Eleven
+mention `EXECUTE format` at all; **eight change classification** and would now
+reach the override prompt:
+
+    20260209200000_tier1_audit_fixes
+    20260332800000_fix_pg_temp_search_path_all_functions
+    20260526151856_execute_full_codebase_ultra_review
+    20260718225511_supplier_price_evidence_phase1b
+    20260718230000_supplier_price_evidence_phase1b
+    20260813030000_reject_non_finite_money_and_quantities
+    20260813050000_guard_job_commission_split_immutable
+    20260813060000_require_completed_delivery_before_invoice_post
+
+Every one of them assembles a `SET LOCAL`, a `REVOKE`, an `ALTER TABLE … ADD
+CONSTRAINT` or a `CREATE SEQUENCE` — none writes a row. The last three are still
+parked awaiting apply, so whoever applies them will meet the prompt; a live apply
+already requires a human, and this is the same human being shown one more thing.
+
+The obvious way to soften that is an allowlist of leading statement keywords that
+cannot write, and it is deliberately **not** taken here. A keyword allowlist is a
+new attack surface — positional placeholders ahead of the verb, a comment before
+it, a placeholder inside the keyword — and that surface is what produced the last
+nine review rounds. Under one percent of the corpus reaching a prompt that fails
+toward a person is the cheaper side of that trade.
+
+The prompt only appears at all while a one-shot repair is registered, and the
+registered repair itself was re-checked: it still reads as exactly
+`order_items.total_price`, unchanged by this rule. A test pins the precision cost
+in place so a later round cannot pay it back by accident.
+
+**The zero-tolerance migration scan could be waved off by the migration.** The
+changed-only scan runs with a zero violation baseline precisely so that any
+finding is a regression. It also trusted two ordinary tracked files — the
+approved-set grandfather list and the sha256 audit exemptions — which live in the
+same repository as the migration being judged. Adding your own migration's
+basename or hash to either bought a clean scan. A gate the candidate can widen is
+not a gate.
+
+Closed in two halves, because either alone leaves a way through:
+
+- The changed-only scan ignores both manifests. Nothing is lost: a new migration
+  was never in the grandfather list, and an old one cannot legitimately appear in
+  a change at all, since editing an applied migration is forbidden outright. The
+  manifests exist to hold a baseline over history, and history is not what this
+  path measures. The ignore is gated on the scan mode actually in effect, not on
+  the flag — a missing base ref leaves the flag set while the scan quietly
+  becomes a full one, and a full scan stripped of its baseline is thousands of
+  unactionable violations, which is how a guard gets switched off.
+- CI rejects a change that exempts a migration the same change adds or modifies.
+  Not "the manifests may never grow" — recording a pre-existing finding in a file
+  the change does not touch is legitimate bookkeeping, and the sha256 pin makes it
+  honest, since the row dies the moment that file is edited. Landing the migration
+  first and exempting it later does not work either: the row must carry the file's
+  hash, and the changed-only scan rejects the migration on the PR that introduces
+  it, before any hash exists to record.
+
+Proof: 194 assertions through the migration guard (+11 this round, 7 attacks
+covering split verbs, split identifiers, concatenation inside the format string
+and a constant format string, plus the two freedoms and the recorded cost), and
+four new cases on the validator pairing a full scan against a changed-only scan
+over the same bytes — a regression in either direction fails.
+
 ## 2026-08-12 — The replay guard stops guessing: an unreadable write now refuses
 
 Closed the round-25 adversarial review, and closed the reason there kept being

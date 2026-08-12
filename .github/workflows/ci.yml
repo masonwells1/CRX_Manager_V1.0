@@ -154,6 +154,69 @@ jobs:
         # of failing on 61 legacy findings.
         run: bash scripts/validate-sql-migrations.sh --changed-only --max-violations=61
 
+      - name: Reject self-granted exemptions
+        # The two manifests the validator trusts — the approved-set grandfather
+        # list and the sha256 audit exemptions — are ordinary tracked files, so
+        # a branch could add its own new migration to either and buy itself a
+        # pass on the zero-tolerance scan above. The validator already ignores
+        # both on the changed-only path; this is the other half.
+        #
+        # The rule is not "these files may never grow". Recording a PRE-EXISTING
+        # finding in a migration this change does not touch is legitimate
+        # bookkeeping, and the sha256 pin makes it honest — the row dies the
+        # moment that file is edited. What is never legitimate is one change
+        # both introducing a file and exempting it. So: an added row may not
+        # name a migration this same change adds or modifies.
+        #
+        # That closes the attack exactly. Landing the unsafe migration first and
+        # exempting it later does not work either: the row must carry the file's
+        # hash, and the changed-only scan rejects the migration on the PR that
+        # introduces it, before any hash exists to record.
+        run: |
+          set -uo pipefail
+          BASE="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$BASE" ]; then
+            BASE="$(git merge-base origin/main HEAD)"
+          fi
+          echo "Comparing against $BASE"
+          {
+            echo "--- CHANGED ---"
+            git diff --name-only "$BASE...HEAD"
+            echo "--- ADDED-ROWS ---"
+            git diff --unified=0 "$BASE...HEAD" -- \
+              scripts/approved-set-grandfathered.txt \
+              scripts/sql-audit-hash-exemptions.txt
+          } | node -e '
+            const fs = require("fs");
+            const path = require("path");
+            const lines = fs.readFileSync(0, "utf8").split(/\r?\n/);
+            const cut = lines.indexOf("--- ADDED-ROWS ---");
+            const touched = new Set(
+              lines.slice(lines.indexOf("--- CHANGED ---") + 1, cut)
+                .filter((l) => l.startsWith("supabase/migrations/"))
+                .map((l) => path.basename(l))
+            );
+            const bad = [];
+            let added = 0;
+            for (const l of lines.slice(cut + 1)) {
+              if (!l.startsWith("+") || l.startsWith("+++")) continue;
+              const row = l.slice(1).trim();
+              if (!row || row.startsWith("#")) continue;
+              added += 1;
+              const m = row.match(/^[0-9a-f]{64}\s+(\S+)/);
+              if (m && touched.has(m[1])) bad.push(m[1]);
+            }
+            console.log(`${added} exemption row(s) added; ${touched.size} migration file(s) touched.`);
+            if (bad.length) {
+              for (const b of bad) {
+                console.log(`::error::${b} is added or modified by this change AND granted an exemption by it.`);
+              }
+              console.log("A change may not exempt a migration it introduces. Fix the violation instead.");
+              process.exit(1);
+            }
+            console.log("No migration exempts itself.");
+          '
+
   lint-typecheck-test:
     name: Lint, Type Check, Test, Build
     runs-on: ubuntu-latest

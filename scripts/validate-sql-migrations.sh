@@ -764,6 +764,36 @@ for (const f of fs.readFileSync(0, 'utf8').split(/\r?\n/).filter(Boolean)) {
 process.stdout.write(out.join('\n'));
 " "$SQL_AUDIT_EXEMPTIONS" 2>/dev/null || true)
 
+# ROUND 26. Both manifests above are written by the same branch they judge, so
+# on the changed-only path they are an unlocked door: add the new migration's
+# basename to the grandfather list, or its hash and violation count to the
+# exemptions list, and the zero-tolerance scan waves the migration through. That
+# is self-authorization, and a gate a candidate can widen is not a gate.
+#
+# The changed-only scan therefore ignores both. Nothing is lost by it. A NEW
+# migration is not in the grandfather manifest to begin with, and an OLD one
+# cannot legitimately appear in a change at all — editing an applied migration is
+# forbidden outright. The manifests exist so the aggregate full-corpus scan can
+# hold a baseline over history; history is not what this path measures.
+#
+# The companion half of this rule lives in CI, which rejects any ADDITION to
+# either manifest relative to the merge base. Both halves are needed: this one
+# stops a candidate exempting itself, that one stops a candidate quietly
+# widening the baseline the full scan trusts.
+#
+# Gated on SCAN_MODE, not on CHANGED_ONLY. When the base ref is missing the flag
+# stays true while the scan silently becomes a FULL one, and a full scan over all
+# of history without its baseline is thousands of legacy violations — a red build
+# nobody can act on, which is how a guard gets switched off.
+case "$SCAN_MODE" in changed-only*) SCAN_IS_CHANGED_ONLY=true ;; *) SCAN_IS_CHANGED_ONLY=false ;; esac
+if [ "$SCAN_IS_CHANGED_ONLY" = true ]; then
+  GRANDFATHERED=""
+  EXEMPT_ROWS=""
+  echo "NOTE: changed-only scan ignores the grandfather and hash-exemption manifests"
+  echo "      (a change may not exempt itself); CI separately rejects additions to them."
+  echo ""
+fi
+
 EXEMPTED_TOTAL=0
 EXEMPT_STALE=""
 

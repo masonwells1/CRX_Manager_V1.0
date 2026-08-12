@@ -470,10 +470,32 @@ function targetsFromCode(code, literals) {
   //
   // The fragments cannot be usefully reassembled — `EXECUTE v_sql` builds the
   // text somewhere else entirely. So the operand is judged instead of the
-  // pieces: a single complete literal (optionally wrapped in `format(...)`, whose
-  // placeholders are already handled below) is readable, and anything else —
+  // pieces: a single complete literal is readable, and anything else —
   // concatenation, a variable, a function result — is unresolvable and refuses.
-  const EXEC_OPERAND_READABLE = /^''\s*$|^format\s*\(\s*''\s*[,)]/;
+  //
+  // ROUND 26. `format(...)` used to count as readable, on the reasoning that its
+  // placeholders were caught further down. They were caught only in the position
+  // where a placeholder names the *relation*, after a write verb the scanner had
+  // already recognised. A placeholder can also split the verb itself:
+  //
+  //   EXECUTE format('UP%sATE public.order_items SET total_price = 0', 'D')
+  //
+  // PostgreSQL runs an UPDATE; no single literal contains the word. So format is
+  // no longer readable in any shape. A constant format string loses only the
+  // column-level precision of the target and keeps the refusal, since an
+  // unresolved operand refuses against any registered one-shot's tables — the
+  // strictly safer direction.
+  //
+  // Measured over all 882 migrations in this tree, under both rules: 11 mention
+  // `EXECUTE format`, and 8 change classification. All eight assemble a SET
+  // LOCAL, a REVOKE, an ALTER TABLE ... ADD CONSTRAINT or a CREATE SEQUENCE, so
+  // none of them writes a row; they now reach the override prompt, which is the
+  // accepted cost. An allowlist of leading statement keywords would silence them
+  // and open a fresh attack surface — a positional placeholder ahead of the verb,
+  // a comment before it, a placeholder inside the keyword itself — which is the
+  // surface that produced the previous nine review rounds. Widen there and
+  // re-measure if it ever becomes worth it; do not make `format` readable again.
+  const EXEC_OPERAND_READABLE = /^''\s*$/;
   const EXEC_STMT = /\bexecute\s+/g;
   let xm;
   while ((xm = EXEC_STMT.exec(s)) !== null) {

@@ -23,6 +23,29 @@ const HEX = 'a'.repeat(64);
 const OTHER_HEX = 'b'.repeat(64);
 
 /**
+ * process.env with every GIT_* variable stripped.
+ *
+ * This test runs inside the pre-commit hook, and git exports GIT_DIR,
+ * GIT_INDEX_FILE and friends to its hooks. A child `git` inheriting those
+ * ignores its own cwd and operates on the REAL repository instead of the
+ * fixture — `git init` in a temp directory then reinitialises the live repo,
+ * which sets core.bare=true on the shared config and breaks every worktree and
+ * every session on the machine until someone notices. That is not theoretical:
+ * it happened once from a sibling test (fixed in #333) and once from this one.
+ *
+ * Every subprocess below gets this env, not `process.env` — including the bash
+ * scans, since the validator itself shells out to git on the changed-only path.
+ * Identity is still passed per invocation with `-c`; never `git config --global`.
+ *
+ * @returns {NodeJS.ProcessEnv} the environment, with GIT_* removed
+ */
+function envWithoutGit() {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(([k]) => !k.toUpperCase().startsWith('GIT_')),
+  );
+}
+
+/**
  * A digest block that is genuinely fail-closed: computed, compared, aborts.
  *
  * sha256 via encode(digest(...), 'hex'), not md5 — the declared digest is 64
@@ -1676,7 +1699,7 @@ function runEditedGrandfather() {
   const res = spawnSync('bash', [SCRIPT, '--max-violations=999'], {
     cwd: dir,
     encoding: 'utf8',
-    env: { ...process.env },
+    env: envWithoutGit(),
   });
   const out = `${res.stdout || ''}\n${res.stderr || ''}`;
   rmSync(dir, { recursive: true, force: true });
@@ -1686,6 +1709,107 @@ function runEditedGrandfather() {
   return [
     `  an edited grandfathered migration is back in force\n    expected violation, got ${got}`,
   ];
+}
+
+/**
+ * ROUND 26 (Codex High). Both manifests the validator trusts — the approved-set
+ * grandfather list and the sha256 audit exemptions — are ordinary tracked files
+ * in the same repository as the migration being judged. On the changed-only
+ * path, which runs with a ZERO violation baseline precisely so any finding is a
+ * regression, that made them an unlocked door: add your own migration's
+ * basename or hash and the scan waves it through. A gate the candidate can
+ * widen is not a gate.
+ *
+ * Testing that directly is impossible from a fixture — the manifests resolve
+ * from the SCRIPT's own directory, not the fixture's, so a test cannot write to
+ * them without editing the real repo. It does not need to. The property under
+ * test is that the changed-only scan ignores the manifest, and the real
+ * manifest supplies a real entry: the same byte-exact grandfathered migration
+ * that the full scan is required to stay silent about must be REPORTED when it
+ * arrives as a change.
+ *
+ * The pairing is what makes this meaningful. Only the mode differs between the
+ * two runs, so a regression in either direction fails: dropping the ignore
+ * makes the changed-only run silent, and applying it too broadly makes the full
+ * run violate.
+ *
+ * @returns {string[]} failure descriptions, empty when the guard behaved
+ */
+function runChangedOnlyIgnoresManifests() {
+  const dir = mkdtempSync(join(tmpdir(), 'crx-approved-set-changed-'));
+  const failures = [];
+  // Never `git config --global` here, and never run git against the real
+  // checkout: an earlier version of a sibling test set core.bare on the shared
+  // repository and broke every session on the machine. Identity is passed per
+  // invocation, and every path below is inside the temp directory.
+  const git = (...args) =>
+    spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], {
+      cwd: dir,
+      encoding: 'utf8',
+      env: envWithoutGit(),
+    });
+  try {
+    const migrations = join(dir, 'supabase', 'migrations');
+    mkdirSync(migrations, { recursive: true });
+    writeOneShotRegistry(dir, [GRANDFATHERED.replace(/\.sql$/, '')]);
+
+    git('init');
+    // An empty base commit, so the grandfathered migration below is entirely
+    // new work on this branch — the exact shape of a candidate change.
+    git('commit', '--allow-empty', '-m', 'base');
+    const base = (git('rev-parse', 'HEAD').stdout || '').trim();
+    if (!/^[0-9a-f]{7,}$/.test(base)) {
+      return ['  changed-only manifest test could not create a git fixture — skipped nothing, FAILED'];
+    }
+    writeFileSync(join(migrations, GRANDFATHERED), GRANDFATHERED_BODY, 'utf8');
+
+    const runScan = (extra) => {
+      const res = spawnSync('bash', [SCRIPT, ...extra], { cwd: dir, encoding: 'utf8', env: envWithoutGit() });
+      return `${res.stdout || ''}\n${res.stderr || ''}`;
+    };
+
+    // 1. Full scan: history is history, and the manifest silences it.
+    const full = classify(runScan(['--max-violations=999']), GRANDFATHERED);
+    if (full === 'violation') {
+      failures.push(
+        '  a grandfathered migration is still silent on a FULL scan\n' +
+          `    expected no violation, got ${full}`,
+      );
+    }
+
+    // 2. Changed-only scan: the same bytes, arriving as a change, are judged on
+    //    their own merits. This is the assertion the round-26 fix exists for.
+    const changedOut = runScan(['--changed-only', `--base=${base}`]);
+    const changed = classify(changedOut, GRANDFATHERED);
+    if (changed !== 'violation') {
+      failures.push(
+        '  round-26: a change may not exempt itself via the grandfather manifest\n' +
+          `    expected violation on --changed-only, got ${changed}\n` +
+          changedOut.split('\n').slice(0, 25).map((l) => `      | ${l}`).join('\n'),
+      );
+    }
+    if (!changedOut.includes('changed-only scan ignores the grandfather')) {
+      failures.push('  round-26: the changed-only scan does not say that it ignored the manifests');
+    }
+
+    // 3. And the fallback must NOT inherit the ignore. When the base ref is
+    //    missing the flag stays set while the scan silently becomes a full one,
+    //    and a full scan of all history without its baseline is thousands of
+    //    unactionable violations — which is how a guard gets switched off.
+    const fallback = runScan(['--changed-only', '--base=refs/heads/no-such-ref-here', '--max-violations=999']);
+    if (!fallback.includes('running FULL scan instead')) {
+      failures.push('  round-26: a missing base ref no longer falls back to a full scan');
+    }
+    if (fallback.includes('changed-only scan ignores the grandfather')) {
+      failures.push('  round-26: the full-scan fallback wrongly dropped the manifests');
+    }
+    if (classify(fallback, GRANDFATHERED) === 'violation') {
+      failures.push('  round-26: the full-scan fallback lost the grandfather manifest');
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  return failures;
 }
 
 function run() {
@@ -1721,7 +1845,7 @@ function run() {
   const res = spawnSync('bash', [SCRIPT, '--max-violations=999'], {
     cwd: dir,
     encoding: 'utf8',
-    env: { ...process.env },
+    env: envWithoutGit(),
   });
   const out = `${res.stdout || ''}\n${res.stderr || ''}`;
 
@@ -1760,6 +1884,7 @@ function run() {
 
   rmSync(dir, { recursive: true, force: true });
   failures.push(...runEditedGrandfather());
+  failures.push(...runChangedOnlyIgnoresManifests());
 
   if (failures.length > 0) {
     console.error(`❌ approved-set guard: ${failures.length} case(s) behaved wrong\n`);
@@ -1768,7 +1893,7 @@ function run() {
     console.error(out);
     process.exit(1);
   }
-  console.log(`✅ approved-set guard: ${CASES.length + 3} mutation cases behaved correctly`);
+  console.log(`✅ approved-set guard: ${CASES.length + 7} mutation cases behaved correctly`);
 }
 
 run();
