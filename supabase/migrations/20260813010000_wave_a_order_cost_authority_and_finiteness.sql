@@ -127,36 +127,41 @@ BEGIN
   WHERE n.nspname = 'public'
     AND p.proname = '_create_direct_order_below_cost_impl_20260810';
 
-  -- Three accepted states, matching what 020000/030000/040000 each do for their
-  -- own targets. Before this change 010000 accepted only the first, which made it
-  -- the one file in the wave that could not survive being re-run: an apply
-  -- interrupted after the CREATE OR REPLACE would leave a body that its own
-  -- precondition then refuses, needing a human to re-derive a hash before
-  -- anything could move again.
+  -- ONLY the pinned baseline may proceed. An earlier draft of this file also
+  -- accepted any body containing this migration's two marker variables, so that
+  -- a re-run could pass as a no-op re-assertion. That was unsafe, and the reason
+  -- is worth recording so it is not re-added: a later security or money fix to
+  -- this same function would naturally keep both markers, so the structural test
+  -- would accept the NEWER body and this file would then overwrite it with its
+  -- own older text — silently, and in a SECURITY DEFINER money writer.
   --
-  -- The replay branch is detected STRUCTURALLY rather than by a second md5. A
-  -- post-apply hash can only be obtained by applying, so writing one here from a
-  -- local calculation would be asserting a value nobody has observed — precisely
-  -- the habit that produced the assertions this wave has spent two sessions
-  -- unpicking. The two markers below are the pair this file's own postcondition
-  -- already relies on, so the replay test and the success test agree by
-  -- construction.
+  -- The obvious repair is to pin the exact post-apply md5 instead. That hash can
+  -- only be obtained by applying, and the catalog stores prosrc verbatim (line
+  -- endings included), so writing a locally computed literal here would assert a
+  -- value nobody has observed — the exact habit that produced the four refusals
+  -- this wave exists to fix.
   --
-  -- Of that pair, v_norm_items is the one doing the discriminating. Read from
-  -- live 2026-08-13, the pre-apply baseline ALREADY contains v_canonical_profit
-  -- (it arrived with the earlier DELTA-A commission-basis change) and does NOT
-  -- contain v_norm_items, which this migration introduces. The AND is kept
-  -- rather than testing v_norm_items alone because the replay branch should mean
-  -- "this migration's whole body is present", not "one token from it is"; the
-  -- baseline is excluded either way, and it is matched by the first branch
-  -- before this one is ever evaluated.
-  IF v_md5 = 'c761f4c46dc12ea07efd74af5b2ada54' THEN
-    RAISE NOTICE 'PRECOND: impl matches the pinned pre-apply baseline — first application may proceed';
-  ELSIF v_impl_src LIKE '%v_norm_items%' AND v_impl_src LIKE '%v_canonical_profit%' THEN
-    RAISE NOTICE 'PRECOND: impl already carries this migration''s normalization and canonical-basis passes [md5 %] — replay may proceed as a no-op re-assertion', v_md5;
-  ELSE
-    RAISE EXCEPTION 'PRECOND: _create_direct_order_below_cost_impl_20260810 is neither the expected baseline nor this migration''s own output (got md5 %). It changed after this migration was retargeted — re-diff before applying.', v_md5;
+  -- Carrying the pre-apply hash forward to a postcondition equality check was
+  -- also considered and rejected: it only works if the whole migration runs in
+  -- one transaction, and that could not be verified from here without applying.
+  --
+  -- So this migration is deliberately single-shot. It applies against the state
+  -- it was written for, and refuses anything else. A refusal writes nothing and
+  -- names what to check. Losing re-runnability costs one human diff; getting the
+  -- replay test wrong costs a silently reverted money fix.
+  --
+  -- Read from live 2026-08-13, the pre-apply baseline ALREADY contains
+  -- v_canonical_profit (it arrived with the earlier DELTA-A commission-basis
+  -- change) and does NOT contain v_norm_items, which this migration introduces.
+  -- That is what distinguishes "not yet applied" from "already applied" below.
+  IF v_md5 <> 'c761f4c46dc12ea07efd74af5b2ada54' THEN
+    IF v_impl_src LIKE '%v_norm_items%' AND v_impl_src LIKE '%v_canonical_profit%' THEN
+      RAISE EXCEPTION 'PRECOND: _create_direct_order_below_cost_impl_20260810 already carries this migration''s markers [md5 %], so this looks like a re-run. It is refused on purpose: this file cannot tell its own output apart from its output plus a later fix, and re-applying would discard that fix. If a re-apply is genuinely needed, diff the live body against this file by hand first.', v_md5;
+    END IF;
+    RAISE EXCEPTION 'PRECOND: _create_direct_order_below_cost_impl_20260810 is not the body this migration was written against [expected md5 c761f4c46dc12ea07efd74af5b2ada54, got %]. It changed after this migration was retargeted — re-diff before applying.', v_md5;
   END IF;
+
+  RAISE NOTICE 'PRECOND: impl matches the pinned pre-apply baseline — first application may proceed';
 
   -- The wrapper must still exist AND still route here. If a later session
   -- re-inlined the body or pointed create_direct_order at something else, then

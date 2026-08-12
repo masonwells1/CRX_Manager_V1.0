@@ -18,9 +18,14 @@ now assert that the wrapper still declares below-cost operation context, so if t
 removed this retarget stops rather than proceeding into a shape it no longer fits. The file also now
 emits the `REVOKE` its postcondition asserts: `CREATE OR REPLACE` preserves the existing ACL, so
 asserting an owner-only grant state without revoking anything was an assertion with nothing behind
-it. Finally its replay guard is structural instead of a single pinned `md5` — it accepts either the
-pinned pre-apply baseline or its own output, detected by the normalization pass the migration itself
-introduces. A one-valued pin cannot tell "already applied" apart from "someone else changed it".
+it. Finally the file is deliberately single-shot: only the pinned pre-apply baseline may proceed. A
+draft that also accepted "any body carrying this migration's marker variables" as a replay was
+withdrawn after adversarial review — a later security or money fix to the same function would keep
+those markers too, so the structural test would have accepted the newer body and this file would
+have overwritten it with its own older text, silently, in a `SECURITY DEFINER` money writer. Pinning
+the post-apply hash instead is not honestly available: obtaining it requires applying. A re-run now
+aborts and names what to diff, which costs one human comparison; the alternative cost a reverted
+money fix nobody would have seen.
 
 `20260813020000` — the `create_order_from_blend_ticket` precondition is removed rather than
 corrected. It was vacuous in both directions: the concurrent fix to that function no longer updates
