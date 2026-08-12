@@ -2168,6 +2168,52 @@ r = runHook(fn(`
   DECLARE
     v_actor uuid := auth.uid();
   BEGIN
+    "v_actor" := p_performed_by;
+    IF p_performed_by IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    ${MUTATION}
+  END
+`));
+ok(isDeny(r), "a quoted spelling cannot hide an auth.uid binding overwrite");
+
+r = runHook(fn(`
+  DECLARE
+    v_actor uuid := auth.uid();
+  BEGIN
+    U&"\\0076_actor" := p_performed_by;
+    IF p_performed_by IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    ${MUTATION}
+  END
+`));
+ok(isDeny(r), "a Unicode spelling cannot hide an auth.uid binding overwrite");
+
+r = runHook(fn(`
+  BEGIN
+    IF p_performed_by <> auth.uid() THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    ${MUTATION}
+  END
+`));
+ok(isDeny(r), "a null-unsafe <> comparison cannot satisfy the legacy guard");
+
+r = runHook(fn(`
+  BEGIN
+    IF p_performed_by != auth.uid() THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    ${MUTATION}
+  END
+`));
+ok(isDeny(r), "a null-unsafe != comparison cannot satisfy the legacy guard");
+
+r = runHook(fn(`
+  DECLARE
+    v_actor uuid := auth.uid();
+  BEGIN
     test_fn.v_actor := p_performed_by;
     IF p_performed_by IS DISTINCT FROM v_actor THEN
       RAISE EXCEPTION 'p_performed_by does not match authenticated user';

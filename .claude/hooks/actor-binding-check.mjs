@@ -1259,7 +1259,7 @@ function stableAuthUidBindings(structuralBody, beforeIndex) {
       isTopLevelPlpgsqlStatement(controlBody, match.index);
     if (!isOuterDeclarationInitializer && !isTopLevelBodyAssignment) continue;
     const name = match[1];
-    const ref = escapedRegexLiteral(name);
+    const ref = identifierReferencePattern(name);
     // PL/pgSQL permits a local to be qualified by its function/block label,
     // and that label follows the full PostgreSQL identifier grammar. Treat
     // quoted and Unicode-escaped qualifiers as assignments too; otherwise
@@ -1282,10 +1282,31 @@ function stableAuthUidBindings(structuralBody, beforeIndex) {
       `\\b(?:FOR|FOREACH)\\b\\s+[^;]*?${ref}[^;]*?\\bIN\\b`,
       "i"
     );
+    // PostgreSQL decodes U&"..." identifiers before resolving a PL/pgSQL
+    // variable. This reader deliberately treats that spelling as opaque, so a
+    // Unicode-escaped assignment target cannot preserve a trusted local bind.
+    const opaqueUnicodeTarget =
+      `(?:${SQL_IDENTIFIER_PATTERN}\\s*\\.\\s*)?${SQL_UNICODE_IDENTIFIER_PATTERN}`;
+    const opaqueUnicodeAssignmentRe = new RegExp(
+      `(?:^|[;\\n]|\\bDECLARE\\b|\\bBEGIN\\b|\\bTHEN\\b|\\bELSE\\b|\\bLOOP\\b)\\s*` +
+        `${opaqueUnicodeTarget}(?:\\s+[^;\\n:=]+?)?\\s*(?::=|=(?!=))`,
+      "i"
+    );
+    const opaqueUnicodeIntoRe = new RegExp(
+      `\\bINTO\\s+(?:STRICT\\s+)?${opaqueUnicodeTarget}`,
+      "i"
+    );
+    const opaqueUnicodeLoopTargetRe = new RegExp(
+      `\\b(?:FOR|FOREACH)\\b\\s+${opaqueUnicodeTarget}[^;]*?\\bIN\\b`,
+      "i"
+    );
     if (assignments.length === 1 &&
         !equalsAssignmentRe.test(structuralBody) &&
         !intoRe.test(structuralBody) &&
-        !loopTargetRe.test(structuralBody)) {
+        !loopTargetRe.test(structuralBody) &&
+        !opaqueUnicodeAssignmentRe.test(structuralBody) &&
+        !opaqueUnicodeIntoRe.test(structuralBody) &&
+        !opaqueUnicodeLoopTargetRe.test(structuralBody)) {
       bindings.add(name);
     }
   }
@@ -1350,7 +1371,7 @@ function hasRecognizedMutationBefore(structuralBody, beforeIndex) {
 
 function hasExactLegacyMismatchCondition(condition, actorParam, identityBindings) {
   const actor = identifierReferencePattern(actorParam);
-  const operator = "(?:IS\\s+DISTINCT\\s+FROM|<>|!=)";
+  const operator = "IS\\s+DISTINCT\\s+FROM";
   const identities = [
     "auth\\s*\\.\\s*uid\\s*\\(\\s*\\)",
     ...Array.from(identityBindings, identifierReferencePattern),
