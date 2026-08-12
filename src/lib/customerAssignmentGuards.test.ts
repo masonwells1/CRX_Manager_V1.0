@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 const root = process.cwd();
 const migration = readFileSync(join(
   root,
-  'supabase/migrations/20260811230423_log_customer_sales_rep_assignment.sql',
+  'supabase/migrations/20260812003315_log_customer_sales_rep_assignment.sql',
 ), 'utf8').replace(/\r\n/g, '\n');
 
 const functionBodyMatch = migration.match(
