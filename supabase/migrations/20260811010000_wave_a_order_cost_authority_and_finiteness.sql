@@ -418,22 +418,34 @@ BEGIN
   -- CREATE OR REPLACE preserves ACLs, so this should be a no-op — but this is a
   -- SECURITY DEFINER mutator and the B9 incident was exactly an unnoticed anon
   -- grant. Assert it rather than trust it.
-  -- Each NAMED-role check is guarded by an EXISTS on pg_roles, the same form the
-  -- sibling 20260811060000 already uses. has_function_privilege() RAISES for a
-  -- role that does not exist rather than returning false, so an unguarded call
-  -- turns a replay target that lacks Supabase's roles into a "role does not
-  -- exist" abort instead of a real grant verdict. The PUBLIC check below is
-  -- deliberately left UNGUARDED: PUBLIC is a pseudo-role and never appears in
-  -- pg_roles, so an EXISTS guard there would silently skip it forever.
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon')
-     AND has_function_privilege('anon', 'public.create_direct_order(uuid, date, text, text, jsonb, uuid, text, text)', 'EXECUTE') THEN
+  -- Each NAMED-role check is guarded on pg_roles, the same intent the sibling
+  -- 20260811060000 already carries. has_function_privilege() RAISES for a role
+  -- that does not exist rather than returning false, so an unguarded call turns a
+  -- replay target that lacks Supabase's roles into a "role does not exist" abort
+  -- instead of a real grant verdict. The PUBLIC check below is deliberately left
+  -- UNGUARDED: PUBLIC is a pseudo-role and never appears in pg_roles, so an
+  -- EXISTS guard there would silently skip it forever.
+  --
+  -- The guard is a CASE, not `EXISTS (...) AND has_function_privilege(...)`.
+  -- PostgreSQL does not promise left-to-right evaluation of AND, so the planner
+  -- may run the privilege lookup before the existence test and re-raise exactly
+  -- the error the guard exists to prevent. CASE is the documented construct with
+  -- guaranteed ordering.
+  IF CASE
+       WHEN NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN false
+       ELSE has_function_privilege('anon', 'public.create_direct_order(uuid, date, text, text, jsonb, uuid, text, text)', 'EXECUTE')
+     END THEN
     RAISE EXCEPTION 'POSTCOND: anon must not hold EXECUTE on create_direct_order';
   END IF;
   IF has_function_privilege('public', 'public.create_direct_order(uuid, date, text, text, jsonb, uuid, text, text)', 'EXECUTE') THEN
     RAISE EXCEPTION 'POSTCOND: PUBLIC must not hold EXECUTE on create_direct_order';
   END IF;
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated')
-     AND NOT has_function_privilege('authenticated', 'public.create_direct_order(uuid, date, text, text, jsonb, uuid, text, text)', 'EXECUTE') THEN
+  -- Fail-closed on the positive half: where the `authenticated` role does not
+  -- exist the grant genuinely is not held, and that is what this must report.
+  IF NOT CASE
+       WHEN NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN false
+       ELSE has_function_privilege('authenticated', 'public.create_direct_order(uuid, date, text, text, jsonb, uuid, text, text)', 'EXECUTE')
+     END THEN
     RAISE EXCEPTION 'POSTCOND: authenticated lost EXECUTE on create_direct_order';
   END IF;
 END;

@@ -908,7 +908,18 @@ BEGIN
              unnest(ARRAY['anon', 'authenticated', 'public']) AS g
        WHERE n.nspname = 'public'
          AND p.proname IN ('_insert_commissions_for_order', '_insert_commissions_for_job', '_save_invoice_scoped_impl')
-         AND has_function_privilege(g, p.oid, 'EXECUTE')
+         -- CASE, not a bare AND. has_function_privilege() RAISES for a role that
+         -- does not exist, and PostgreSQL does not promise left-to-right AND
+         -- evaluation, so a plain-Postgres replay target without Supabase's roles
+         -- would abort on the role lookup instead of reporting a grant. PUBLIC is
+         -- a pseudo-role and never appears in pg_roles, so it is exempted from the
+         -- existence test rather than dropped from the check entirely.
+         AND CASE
+               WHEN g <> 'public'
+                    AND NOT EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname = g)
+                 THEN false
+               ELSE has_function_privilege(g, p.oid, 'EXECUTE')
+             END
     ) x;
   IF v_unexpected IS NOT NULL THEN
     RAISE EXCEPTION 'POSTCOND: EXECUTE on a commission-minting helper is held by: %. This migration must not have widened access.', v_unexpected;

@@ -681,7 +681,18 @@ BEGIN
          unnest(ARRAY['anon', 'authenticated', 'public', 'service_role']) AS g
    WHERE n.nspname = 'public'
      AND p.proname = '_guard_job_commission_split_immutable'
-     AND has_function_privilege(g, p.oid, 'EXECUTE');
+     -- CASE, not a bare AND. has_function_privilege() RAISES for a role that does
+     -- not exist, and PostgreSQL does not promise left-to-right AND evaluation, so
+     -- a plain-Postgres replay target without Supabase's roles would abort on the
+     -- role lookup instead of reporting a grant. PUBLIC is a pseudo-role and never
+     -- appears in pg_roles, so it is exempted from the existence test rather than
+     -- dropped from the check entirely.
+     AND CASE
+           WHEN g <> 'public'
+                AND NOT EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname = g)
+             THEN false
+           ELSE has_function_privilege(g, p.oid, 'EXECUTE')
+         END;
   IF v_unexpected IS NOT NULL THEN
     RAISE EXCEPTION 'POSTCOND: EXECUTE on the guard function is still held by: %', v_unexpected;
   END IF;
@@ -792,16 +803,30 @@ BEGIN
          unnest(ARRAY['anon', 'public', 'service_role']) AS g
    WHERE n.nspname = 'public'
      AND p.proname = 'correct_job_commission_split'
-     AND has_function_privilege(g, p.oid, 'EXECUTE');
+     -- CASE, not a bare AND — see the guard-function check above for why.
+     AND CASE
+           WHEN g <> 'public'
+                AND NOT EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname = g)
+             THEN false
+           ELSE has_function_privilege(g, p.oid, 'EXECUTE')
+         END;
   IF v_unexpected IS NOT NULL THEN
     RAISE EXCEPTION 'POSTCOND: EXECUTE on the correction RPC is held by: %', v_unexpected;
   END IF;
 
+  -- The positive half. Same CASE guard, and deliberately fail-closed: on a target
+  -- where the `authenticated` role does not exist the capability genuinely is not
+  -- reachable, so this must report that in the POSTCOND sentence below rather than
+  -- abort on an opaque role lookup.
   SELECT count(*) INTO v_count
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public'
      AND p.proname = 'correct_job_commission_split'
-     AND has_function_privilege('authenticated', p.oid, 'EXECUTE');
+     AND CASE
+           WHEN NOT EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname = 'authenticated')
+             THEN false
+           ELSE has_function_privilege('authenticated', p.oid, 'EXECUTE')
+         END;
   IF v_count <> 1 THEN
     RAISE EXCEPTION 'POSTCOND: authenticated cannot EXECUTE the correction RPC, so no admin could reach it from the app';
   END IF;

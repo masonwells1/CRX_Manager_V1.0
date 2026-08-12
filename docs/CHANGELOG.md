@@ -2,6 +2,31 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-11 — Wave A second review pass: privilege postconditions made evaluation-order-safe
+
+The automated review on PR #383 flagged one genuine defect after the `origin/main` merge, and a
+sweep for the same defect class found five more instances it had not reported. Every privilege
+postcondition across the Wave A migrations guarded `has_function_privilege()` with a
+`role-exists AND privilege-check` predicate. PostgreSQL does not promise left-to-right evaluation
+of `AND`, so the planner may run the privilege lookup first and raise the very "role does not
+exist" error the guard was written to prevent. Two of the six instances had no guard at all.
+
+All six now use `CASE`, the documented construct with guaranteed evaluation order. The failure and
+the fix were both demonstrated read-only against live production: the old predicate raises
+`role "__cr_absent_role__" does not exist`, and the `CASE` form returns `false` for the same absent
+role while still evaluating the `PUBLIC` pseudo-role, which never appears in `pg_roles`.
+
+Production is unaffected either way — `anon`, `authenticated` and `service_role` all exist on
+Supabase. What this repairs is the plain-PostgreSQL replay/restore path these files claim to
+support, where the postcondition aborted on a role lookup instead of returning a grant verdict.
+
+Two further reported findings were checked and refuted, and the reviewer's proposed edits were not
+taken: the soft-deleted-delivery branch does **not** show the wrong instruction (`rpcCodeDetail`
+returns the database's own sentence and only falls back to "complete the delivery first" when that
+sentence is empty, which was confirmed by watching the real toast in the browser), and the
+changelog heading reported as a duplicate occurs exactly once. Nothing was merged, applied, or
+deployed by this pass.
+
 ## 2026-08-11 — Wave A review pass: CodeRabbit findings resolved, two of them by correcting the reviewer
 
 Worked the automated review on PR #383 and fixed four real defects. Two more were reported and
