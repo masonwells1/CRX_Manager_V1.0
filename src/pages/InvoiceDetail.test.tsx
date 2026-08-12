@@ -2,14 +2,16 @@
  * InvoiceDetail.test.tsx — Tests for the invoice detail/edit page
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 
-const { mockFrom, mockRpc, mockToast, mockNavigate } = vi.hoisted(() => ({
+const { mockFrom, mockRpc, mockToast, mockNavigate, intentKeys, nextIntentKey } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
   mockRpc: vi.fn().mockImplementation(() => Promise.resolve({ data: null, error: null })),
   mockToast: vi.fn(),
   mockNavigate: vi.fn(),
+  intentKeys: new Map<string, string>(),
+  nextIntentKey: { value: 0 },
 }));
 
 function buildChain(result: { data: unknown; error: unknown }): Record<string, unknown> {
@@ -66,7 +68,21 @@ vi.mock('react-router-dom', async () => {
 });
 
 vi.mock('../hooks/useIdempotencyKey', () => ({
-  useIdempotencyKey: () => ({ getKey: () => 'test-idem-key', resetKey: vi.fn() }),
+  useIdempotencyKey: (operation: string, userId: string, intentScope = '') => {
+    const scope = JSON.stringify([operation, userId, intentScope]);
+    return {
+      getKey: () => {
+        let key = intentKeys.get(scope);
+        if (!key) {
+          nextIntentKey.value += 1;
+          key = `test-idem-key-${nextIntentKey.value}`;
+          intentKeys.set(scope, key);
+        }
+        return key;
+      },
+      resetKey: () => { intentKeys.delete(scope); },
+    };
+  },
 }));
 
 vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn() }));
@@ -112,8 +128,94 @@ function mockIntentAwareRpc(result: { data: unknown; error: unknown }) {
 describe('InvoiceDetail', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    intentKeys.clear();
+    nextIntentKey.value = 0;
     mockFrom.mockImplementation(() => buildChain({ data: [], error: null }));
     mockRpc.mockImplementation(() => Promise.resolve({ data: null, error: null }));
+  });
+
+  function setupPostedInvoiceWithCredit() {
+    const invoice = {
+      id: 'inv-credit-target', invoice_number: 'INV-CREDIT-TARGET', status: 'posted',
+      invoice_type: 'chemical_sale', customer_id: 'cust-credit', total_amount_cents: 10000,
+      paid_amount_cents: 0, prepay_applied_cents: 0, credit_applied_cents: 0,
+      balance_cents: 10000, invoice_date: '2026-03-15', due_date: '2026-03-01',
+      created_at: '2026-03-15T00:00:00Z',
+    };
+    let creditBalanceCents = -5000;
+    let invoiceCalls = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'invoices') {
+        invoiceCalls += 1;
+        const credits = [{ id: 'memo-1', invoice_number: 'CM-0001', balance_cents: creditBalanceCents }];
+        return buildChain({ data: invoiceCalls <= 2 ? invoice : credits, error: null });
+      }
+      return buildChain({ data: [], error: null });
+    });
+    return { setCreditBalanceCents: (value: number) => { creditBalanceCents = value; } };
+  }
+
+  it('reuses the unresolved Apply Credit key after a lost response and close/reopen of the same intent', async () => {
+    const creditState = setupPostedInvoiceWithCredit();
+    let applyCalls = 0;
+    mockRpc.mockImplementation((name: string) => {
+      if (name !== 'apply_credit_memo_to_invoice') return Promise.resolve({ data: null, error: null });
+      applyCalls += 1;
+      if (applyCalls === 1) creditState.setCreditBalanceCents(-2000);
+      return Promise.resolve(applyCalls === 1
+        ? { data: null, error: { message: 'network response lost after commit' } }
+        : { data: { application_id: 'application-1' }, error: null });
+    });
+
+    renderInvoiceDetail('inv-credit-target');
+    await screen.findAllByText('INV-CREDIT-TARGET');
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Credit' }));
+    await screen.findByRole('dialog', { name: 'Apply Credit Memo' });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Apply Credit' }).slice(-1)[0]);
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'network response lost after commit'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Apply Credit Memo' })).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Credit' }));
+    await screen.findByRole('dialog', { name: 'Apply Credit Memo' });
+    expect(screen.getByLabelText('Credit Memo')).toBeDisabled();
+    expect(screen.getByLabelText('Amount to apply ($)')).toBeDisabled();
+    expect(screen.getByLabelText('Amount to apply ($)')).toHaveValue(50);
+    expect(screen.getByText(/previous response was not confirmed/i)).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Apply Credit' }).slice(-1)[0]);
+
+    await waitFor(() => expect(applyCalls).toBe(2));
+    const calls = mockRpc.mock.calls.filter(([name]) => name === 'apply_credit_memo_to_invoice');
+    expect(calls).toHaveLength(2);
+    expect(calls[0][1]).toEqual(expect.objectContaining({
+      p_credit_memo_id: 'memo-1', p_target_invoice_id: 'inv-credit-target', p_amount_cents: 5000,
+    }));
+    expect(calls[1][1].p_idempotency_key).toBe(calls[0][1].p_idempotency_key);
+  });
+
+  it('blocks Escape, backdrop, X, and Cancel while Apply Credit is submitting', async () => {
+    setupPostedInvoiceWithCredit();
+    let resolveApply!: (value: { data: unknown; error: unknown }) => void;
+    const pendingApply = new Promise<{ data: unknown; error: unknown }>((resolve) => { resolveApply = resolve; });
+    mockRpc.mockImplementation((name: string) => name === 'apply_credit_memo_to_invoice'
+      ? pendingApply
+      : Promise.resolve({ data: null, error: null }));
+
+    renderInvoiceDetail('inv-credit-target');
+    await screen.findAllByText('INV-CREDIT-TARGET');
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Credit' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Apply Credit Memo' });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Apply Credit' }).slice(-1)[0]);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled());
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    fireEvent.click(dialog.firstElementChild as Element);
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('dialog', { name: 'Apply Credit Memo' })).toBeInTheDocument();
+
+    await act(async () => { resolveApply({ data: { application_id: 'application-1' }, error: null }); });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Apply Credit Memo' })).not.toBeInTheDocument());
   });
 
   it('fetches invoice data on mount', () => {
