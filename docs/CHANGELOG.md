@@ -167,6 +167,12 @@ only for an actual `E`-prefixed literal, and the generated suite exercises the e
 prefix before `DROP`, `TRUNCATE`, `GRANT`, `INSERT`, `UPDATE`, and `DELETE`. It now covers 37 direct
 candidate cases.
 
+The fifth exact-head pass found nested mutating RPCs could still execute inside otherwise allowed
+`EXPLAIN ANALYZE`, `CREATE TEMP … AS`, and `pg_temp` DML. The custom-function scanner is no longer
+activated by a statement-prefix allowlist; it inspects every executable statement before any safe
+exception is considered. All three exact payloads are regressions, bringing the generated candidate
+suite to 40 cases.
+
 ## 2026-08-11 — A smoke selection that runs nothing no longer reports success
 
 Follow-up to the entry below, from its own adversarial review. Container-only chains are dropped

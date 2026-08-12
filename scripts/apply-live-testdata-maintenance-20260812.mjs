@@ -20,7 +20,7 @@ const SNIPPETS = {
 };
 
 const EXPECTED_INPUT_BLOB = "c8bec70830c643e474831985f5e6c3bd16630386";
-const EXPECTED_OUTPUT_BLOB = "78a25a8b01635bf86d9bc7a857f703479f3be500";
+const EXPECTED_OUTPUT_BLOB = "41bc8d7fcb1a6f18ec9dda4f8b7dd7aef13c32e1";
 const EXPECTED_SNIPPET_SHA256 = {
   constants: "0e34b0416e4ada8d15f4785498029a58d6fd9bfd9871def40d3b8e6f5f652e67",
   helpers: "7fe02602a4f0085aa66a8bad9ab07958e85dabafa6879eac9caa99e52eea6ecc",
@@ -36,7 +36,7 @@ const OLD_CONSTANTS = [
 const OLD_PREFIX = "const READONLY_FN_PREFIX_RE = /^(?:get|list|find|search|count|calc|calculate|compute|report|fetch|lookup|has|is|can|preview|estimate|summarize|derive)_/;";
 const NEW_PREFIX = "const READONLY_FN_PREFIX_RE = /^(?:get|list|find|search|count|calc|calculate|compute|report|fetch|lookup|has|is|can|estimate|summarize|derive)_/;";
 const OLD_FUNCTION_GATE = "  if (!/\\bselect\\b/i.test(text)) return null;\n";
-const NEW_FUNCTION_GATE = "  if (!/^\\s*(?:select|values|with)\\b/i.test(text)) return null;\n";
+const NEW_FUNCTION_GATE = "";
 const CLASSIFY_START = "export function classifySql(query) {";
 const CLASSIFY_END = "// ── Destructive-migration classifier (Mason's settled 2026-07-13 policy) ─────";
 

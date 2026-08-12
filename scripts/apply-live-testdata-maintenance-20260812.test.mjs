@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { buildMaintainedSource } from "./apply-live-testdata-maintenance-20260812.mjs";
 
 const { output, blob } = buildMaintainedSource();
-assert.equal(blob, "78a25a8b01635bf86d9bc7a857f703479f3be500", "pinned generated blob");
+assert.equal(blob, "41bc8d7fcb1a6f18ec9dda4f8b7dd7aef13c32e1", "pinned generated blob");
 
 const scratch = mkdtempSync(path.join(tmpdir(), "crx-live-guard-candidate-test-"));
 try {
@@ -50,6 +50,9 @@ try {
     "SELECT E'foo\\''; INSERT INTO customers (name) VALUES ('owned')",
     "SELECT E'foo\\''; UPDATE customers SET phone='owned' WHERE id=1",
     "SELECT E'foo\\''; DELETE FROM customers WHERE id=1",
+    "EXPLAIN ANALYZE SELECT public.cancel_order('00000000-0000-0000-0000-000000000000')",
+    "CREATE TEMP TABLE scratch AS SELECT public.cancel_order('00000000-0000-0000-0000-000000000000')",
+    "INSERT INTO pg_temp.scratch SELECT public.cancel_order('00000000-0000-0000-0000-000000000000')",
   ];
   for (const sql of blocked) {
     assert.equal(classifySql(sql).block, true, `must block: ${sql}`);
