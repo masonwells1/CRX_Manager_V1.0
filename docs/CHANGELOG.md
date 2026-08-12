@@ -26,6 +26,38 @@ Actor-binding fresh repair cycle: fixed pre-guard exits, quoted qualifier rebind
   - `supabase/migrations/20260812030000_reject_non_finite_money_and_quantities.sql`
   - `supabase/migrations/20260812050000_guard_job_commission_split_immutable.sql`
   - `supabase/migrations/20260812060000_require_completed_delivery_before_invoice_post.sql`
+## 2026-08-12 — Wave A re-stamped to 20260813: a concurrent apply moved the high-water under us
+
+Rename-only change. The six Wave A migrations move from `20260812010000`–`20260812060000` to
+`20260813010000`–`20260813060000`, order preserved. No SQL logic changed, no function body changed,
+nothing applied, no live data touched.
+
+PR #383 merged as `a7ae1cc2` with the six migrations deliberately parked. While it was in review a
+concurrent session applied two unrelated migrations, moving the live high-water from `20260812003315`
+to `20260812034951` (964 ledger rows, read via MCP `list_migrations`). Migrations are forward-only:
+`.claude/hooks/migration-ordering-lib.mjs` passes a candidate only when its stamp is `>=` the newest
+applied one, so three of the six were now numbered *behind* live and would have been refused at apply
+time. Worse, the first file's `20260812010000` prefix collided with the already-applied
+`20260812010000_blend_ticket_order_header_runtime_assert`.
+
+The round-1 stamps were chosen only just above the then-current high-water and were overtaken within
+hours by ordinary sibling traffic. These sit a full day above it instead. That buys headroom; it does
+not remove the obligation already written into the files to re-read `list_migrations` immediately
+before applying, because any later sibling apply can overtake them again.
+
+Every reference moved with the files: the `.gitattributes` LF pins (which are path-matched, so a
+stale entry would silently stop pinning line endings — the exact failure mode those lines exist to
+prevent), the path constants in `src/lib/waveAMoneyMigrations.test.ts`, the eight cross-reference
+comments inside the six files, the narrative rows in `docs/reference/migration-history.md`, and the
+comment references in `src/lib/db.ts`, `src/lib/db.test.ts` and `src/lib/rpcContracts.test.ts`. The
+round-1 entry in the history doc was left stating its original range, with a superseded-by note — it
+is a record of what happened, not a description of current state.
+
+The reason a rename is not automatically hash-safe here: these files pin function bodies by
+`md5(prosrc)`, so any edit landing inside a body invalidates its own assertion. Three of the eight
+stamp references looked like they might. Dollar-quote span analysis placed all three inside anonymous
+`$precond$`/`$postcond$` `DO` blocks, which PostgreSQL never stores in `pg_proc.prosrc`, and the
+remaining five are file-header comments. Checked before editing rather than after.
 
 ## 2026-08-12 — Wave A remediation round 4: the delivery guard would have aborted its own migration
 

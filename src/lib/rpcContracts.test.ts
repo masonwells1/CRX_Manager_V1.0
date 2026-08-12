@@ -2248,7 +2248,7 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // window: an RPC introduced by a PR migration that is not yet live belongs
   // here until the next truthful live type regeneration.
 
-  // Wave A fix #4 (20260812050000, parked). It accepts p_idempotency_key and
+  // Wave A fix #4 (20260813050000, parked). It accepts p_idempotency_key and
   // routes it through check_idempotency/save_idempotency, but it cannot appear
   // in the generated types until the migration applies, so the inventory sees a
   // mutator with no declared key. This is exactly the pre-apply window this
@@ -2285,7 +2285,7 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   // dead exemption silently pre-suppresses any future RPC reusing the name:
   //   _guard_job_commission_split_immutable was pruned when its original timestamp
   //     fell behind the registry high-water. Wave A remediation re-stamped it to
-  //     20260812050000, so it is pending/discovered again and is classified below.
+  //     20260813050000, so it is pending/discovered again and is classified below.
   //   _crx_payout_assert_impl_20260809 / _crx_payout_assert_replay_20260809 — 20260811130000
   //     landed on main and applied live; it drops both helpers before finishing.
   _insert_commissions_for_job: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',

@@ -3,7 +3,7 @@
 --   and rollback-only SET LOCAL proof setup. complete_delivery binds auth.uid()
 --   and raises ACTOR_MISMATCH before mutation; manual actor-binding review
 --   completed 2026-08-12.
--- 20260812060000_require_completed_delivery_before_invoice_post.sql
+-- 20260813060000_require_completed_delivery_before_invoice_post.sql
 -- STATUS: PARKED DRAFT - NOT APPLIED.
 -- Reviewed three times by both reviewers (RLS/security and migration-drift);
 -- every round of findings is folded in. The precondition block was dry-run
