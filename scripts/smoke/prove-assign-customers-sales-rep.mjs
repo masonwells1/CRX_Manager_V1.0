@@ -13,7 +13,7 @@ const MIGRATION = path.join(
   ROOT,
   'supabase',
   'migrations',
-  '20260811230423_log_customer_sales_rep_assignment.sql',
+  '20260812003315_log_customer_sales_rep_assignment.sql',
 );
 const SMOKE = path.join(ROOT, 'scripts', 'smoke', 'smoke-assign-customers-sales-rep.sql');
 const PASS_TOKEN = 'SMOKE_PASS_ROLLBACK';

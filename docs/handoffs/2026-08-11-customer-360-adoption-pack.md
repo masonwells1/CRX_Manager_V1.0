@@ -1,10 +1,12 @@
 # Customer 360 Adoption Pack — Morning Handoff
 
-**Status:** The recovered Sol findings are fixed, the original approved migration is live as server/disk version `20260811183317`, and the subsequent PR-review fixes are regression-tested and browser-rendered. The pending activity/timestamp migration was forward-renamed to `20260811230423` after live high-water moved to `20260811220045`; both final-path migration charters and the full local verification barrier are green. A fresh fetch confirms the branch includes current `origin/main` through `f1a5c683` with no rebase needed; exact committed-SHA review still follows before any guarded apply. This handoff does not claim final release eligibility while that gate remains.
+**Status:** Customer 360 merged through protected PR #381 and its non-destructive activity/timestamp follow-up is live as server/disk B7 version `20260812003315` (submitted as `20260811230423`). Both final-path migration charters, the exact committed-SHA Sol gate, disposable PostgreSQL proof, live catalog/grant/body verification, and genuine schema-registry refresh are green. PR #381 merged at the older reviewed head while two final client/proof fixes were still local, so those isolated changes are now in follow-up PR #385 with a separate exact-SHA CLEAN verdict; its GitHub/Vercel/CodeRabbit checks remain the only release gate still in progress at this handoff update.
 
-**Branch:** `codex/customer-360-adoption-pack`
+**Current closeout branch:** `codex/customer-360-post-merge-fixes` (PR #385)
 
-**Starting base:** `adfef797978645506775b5a8f8fc5bfdd9101d96`
+**Original pack starting base:** `adfef797978645506775b5a8f8fc5bfdd9101d96`
+
+**Follow-up base:** `d3429e4f6c0ac6ba0ee0bae977a81e4de326273a` (PR #381 merge commit)
 
 `origin/main` moved repeatedly during the run. The first move was incorporated by rebase before the feature push; later movement was integrated additively to avoid rewriting the published branch. The final pre-commit fetch reports `0 behind / 10 ahead` against current `origin/main` (`f1a5c683`).
 
@@ -37,12 +39,12 @@ The original four implementation/test files remain the user-facing surface. The 
 Additional support files:
 
 - `supabase/migrations/20260811183317_assign_customers_sales_rep.sql` — applied-live admin-only atomic RPC with target-row locking, exact-set rollback, payload-bound replay, and narrow execute grants; submitted as `20260811122851` and B7-renamed content-identically to the server-assigned version.
-- `supabase/migrations/20260811230423_log_customer_sales_rep_assignment.sql` — forward-only PR-review follow-up with both final-path migration charters CLEAN and live apply still pending; preserves the RPC contract while advancing `customers.updated_at` and adding one customer-scoped activity row per committed assignment, with exact audit-count rollback and replay de-duplication.
+- `supabase/migrations/20260812003315_log_customer_sales_rep_assignment.sql` — applied-live, content-identical B7 rename of submitted follow-up `20260811230423`; preserves the RPC contract while advancing `customers.updated_at` and adding one customer-scoped activity row per committed assignment, with exact audit-count rollback and replay de-duplication.
 - `scripts/smoke/smoke-assign-customers-sales-rep.sql` and `scripts/smoke/smoke-specs.json` — registered rollback-only denial, partial-set, success, and replay proof.
 - `scripts/smoke/prove-assign-customers-sales-rep.mjs` — network-isolated PostgreSQL 17 harness for the exact follow-up migration, activity-row count/replay de-duplication, rollback residue, and concurrent rep deactivation.
 - `src/hooks/useIdempotencyKey.ts` and test — rotates the retry key when the assignment intent changes without embedding customer data in the key.
 - `src/lib/customerAssignmentGuards.test.ts` and `src/lib/db.ts` — migration contract tests and typed RPC error codes.
-- `.claude/schema-registry.json`, `src/types/supabase.ts`, and `src/lib/rpcFixtureLiveDiff.test.ts` — genuinely regenerated from the 960-row live ledger/high-water after apply.
+- `.claude/schema-registry.json` — genuinely regenerated from all six live introspection queries through 962 rows/high-water `20260812003315`. The migration changed only a function body, so generated Supabase types are structurally unchanged; live verification also confirmed the checked-in `pg_proc` fixture remains at 566 distinct public function names and its verification stamp was advanced.
 - `docs/reference/rpc-functions.md`, `docs/reference/migration-history.md`, and `docs/CHANGELOG.md` — applied-live RPC/migration record.
 
 ## Test-first and architecture evidence
@@ -68,18 +70,18 @@ Additional support files:
 | Build | Pass after rebase — 4,253 modules; PWA generated |
 | Agent workflow guards | Pass — `npm run test:agent-workflows` |
 | Correction guards | Pass after power recovery — every registered safety harness |
-| Documentation drift | Pass locally; fresh read-only live ledger check found 961 rows/high-water `20260811220045`, and the pending target is absent |
+| Documentation drift | Pass locally before apply; post-apply canonical docs now record 962 rows/high-water `20260812003315` and the B7 disk filename |
 | Strict SQL migration validation | Pass after recovered-Sol fix — one changed migration, 0 violations, 0 warnings |
 | Disposable exact migration apply | Pass again after recovered-Sol fix in PostgreSQL 17, including executable-source/security postflight |
 | Rollback smoke | Pass — `SMOKE_PASS_ROLLBACK`, post-state `0 assignments / 0 receipts` |
 | Concurrent replay | Pass — changed-payload reuse rejected, committed state `2 assignments / 1 receipt` |
 | Concurrent rep deactivation | Pass after recovered-Sol fix — assignment blocked behind the profile update, then rejected `ASSIGNMENT_SALES_REP_INACTIVE`; no receipt or customer write |
 | Live apply and catalog/grant verification | Pass — server version `20260811183317`; one overload, `SECURITY DEFINER`, pinned search path, no PUBLIC/anon EXECUTE |
-| Live schema/type fixture gates | Pass — refreshed through 960 rows/high-water `20260811183437`, then contracts and full post-rebase tests passed |
+| Live schema/type fixture gates | Pass — real six-query registry refresh through 962 rows/high-water `20260812003315`; no schema/signature change and live public function-name count remains 566 |
 | Final staged-snapshot Sol re-review | Pass — terminal CLEAN after the live-state documentation corrections |
-| Follow-up migration Sol charters | Pass — both final-path, content-bound `gpt-5.6-sol` high charters returned CLEAN for `20260811230423` |
+| Follow-up migration Sol charters | Pass — both final-path, content-bound `gpt-5.6-sol` high charters returned CLEAN for submitted migration `20260811230423` |
 | Follow-up disposable proof | Pass — exact migration parsed/applied in PostgreSQL 17; timestamps advanced on success and rolled back on failure, activity delta was `2`, replay de-duplicated, deactivation lock rejected assignment, and post-state was `0 assignments / 0 activity / 0 receipts` |
-| Follow-up live apply | Pending until the committed-SHA review and fresh pre-apply ledger/proof checks pass |
+| Follow-up live apply | Pass — Supabase assigned version `20260812003315`; ledger row 962, catalog/grants/body and registry refresh verified read-only |
 
 The expected `ErrorBoundary.test.tsx` throw traces and jsdom canvas-not-implemented notices appeared during the green full suite; they are intentional test output, not failures.
 
@@ -122,19 +124,19 @@ The original browser pass observed the assignment confirmation, URL canonicaliza
 - Fixes now implemented: fail-closed rep validation, atomic database assignment with target-row locking and exact-set rollback, retry-safe UI reconciliation, and dedicated regression/smoke coverage.
 - After power recovery, Sol found two further P2 client retry defects and one P2 proof weakness: failed exact-set recovery claimed a refresh that might not have happened; replay-payload mismatch retained a permanently rejected key; and the lock/postflight test could match comments rather than executable `FOR SHARE` SQL. Sol also flagged one P3 handoff wording error.
 - Those findings are fixed: truthfully branched recovery messaging, confirmed-no-op key rotation, comment-stripped executable-source guards for active admin and the exact rep lock, pinned SECURITY DEFINER/search-path postflight assertions, corrected handoff wording, focused tests, exact migration reapply, rollback smoke, and concurrent rep-deactivation proof.
-- The final staged-snapshot Sol re-review returned CLEAN. A separate exact committed-SHA review still follows after commit, as required by the push guard.
-- PR review also found that a valid tier restored from the URL could be hidden when no returned row currently had that tier, lapsed-product wording over-attributed aggregate revenue, the search input lacked its intended client bound, and atomic ownership changes no longer appeared in the user-facing activity feed. Fixed tier options, precise wording, and `maxLength=100` are implemented with regression tests. The audit fix is isolated in forward-only migration `20260811230423`; both final-path migration charters are CLEAN, while live apply and final exact-commit review remain pending.
-- A later thread-aware pass found three more valid P2s: ownership assignment did not advance `customers.updated_at`, a failed assignment-picker directory lookup looked like an empty rep list with no retry, and inactive-rep bookmarks could be canonicalized away and broaden the call-list scope. The timestamp update, fail-closed picker with retry, and inactive-labeled filter options are implemented with mutation-strength regression coverage. Corrected-body charters and runtime proofs are green; exact committed-SHA review still follows before release.
+- The final staged-snapshot Sol re-review returned CLEAN, and the later exact committed-SHA review also returned CLEAN before the protected push.
+- PR review also found that a valid tier restored from the URL could be hidden when no returned row currently had that tier, lapsed-product wording over-attributed aggregate revenue, the search input lacked its intended client bound, and atomic ownership changes no longer appeared in the user-facing activity feed. Fixed tier options, precise wording, and `maxLength=100` are implemented with regression tests. The audit fix was isolated in submitted migration `20260811230423`, applied live as `20260812003315`; both final-path migration charters and the exact committed-SHA review are CLEAN.
+- A later thread-aware pass found three more valid P2s: ownership assignment did not advance `customers.updated_at`, a failed assignment-picker directory lookup looked like an empty rep list with no retry, and inactive-rep bookmarks could be canonicalized away and broaden the call-list scope. The timestamp update, fail-closed picker with retry, and inactive-labeled filter options are implemented with mutation-strength regression coverage. Corrected-body charters, runtime proofs, and the exact committed-SHA review are green.
 - The post-push PR thread found one further P2 retry trap: a customer deactivated during an exact-set assignment could remain invisibly selected after refresh and make every retry fail. The exact-set recovery now clears the ambiguous selection, closes the modal, and rotates the rejected intent key after either refresh outcome. Regression tests cover the successful-refresh and failed-refresh branches; the proof harness also strips SQL comments before marker checks and inspects Git status before disposable writes.
 - The subsequent exact-SHA Sol gate returned CLEAN with no blocker/high finding and one actionable low-severity hardening note: raw Call Lists backend errors could reach user-facing toasts. The toast is now sanitized, the original exception still goes to Sentry, and a regression test proves internal relation details are not displayed. Because this edit changes the commit, the final exact-SHA gate is rerun before push.
 
 ## Explicit boundaries
 
-- No frontend push, PR, merge, deployment, edge-function change, or business-row mutation has occurred from this branch. The separately approved non-destructive migration apply is recorded immediately below.
-- Mason approved the non-destructive migration apply in chat. It applied live as server version `20260811183317`; its catalog/grant shape was verified read-only. The same exact migration passed rollback and concurrency proof in disposable PostgreSQL. The registered live rollback smoke is still pending because the production-action guard requires Mason's separate literal `REAL-DATA-OK` authorization.
+- PR #381 merged and its normal Vercel deployment checks passed. Follow-up PR #385 carries only the two fixes that were still local when #381 merged; it remains unmerged until its own required checks and CodeRabbit review finish.
+- Mason approved the non-destructive migration apply in chat. The original RPC migration applied as server/disk version `20260811183317`; the activity/timestamp follow-up applied as server/disk version `20260812003315`. Both catalog/grant shapes were verified read-only, and the exact follow-up passed rollback and concurrency proof in disposable PostgreSQL. No business-row backfill ran. The registered live rollback smoke is still pending because the production-action guard requires Mason's separate literal `REAL-DATA-OK` authorization.
 - No secrets were read, changed, or committed.
 - Browser screenshots and route fixtures under `output/` are ignored local evidence, not release artifacts.
-- Production behavior is not claimed verified because deployment was intentionally outside this run.
+- The merged frontend deployment is verified at the platform/check level and the affected flows were browser-rendered against isolated mock responses. A real-customer production assignment smoke was not run because it would mutate live business rows and requires separate `REAL-DATA-OK` authorization.
 
 ## Parked recommendation — next slice only
 
@@ -142,4 +144,4 @@ Build the Customer Overview interaction slice next: add an explicit **Edit** act
 
 ## Morning next action
 
-Commit through hooks, run the exact-SHA Sol/push proof, and push through the protected PR path. Run the registered live rollback smoke only after the separate `REAL-DATA-OK` authorization.
+Finish PR #385's required checks and CodeRabbit review, merge it through the protected path, and verify the production app shell/affected routes. Run the registered live rollback smoke only after separate `REAL-DATA-OK` authorization.
