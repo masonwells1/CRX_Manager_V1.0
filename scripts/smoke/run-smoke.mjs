@@ -85,10 +85,41 @@ function loadSpecs() {
     if (badAreas.length) {
       fail(`spec "${key}" has unknown area tag(s): ${badAreas.join(', ')} (valid: ${[...VALID_AREAS].join(', ')})`);
     }
+    // A chain that seeds its own customer/order fixtures cannot run against the
+    // live database. Marking that in prose only is not a guard (CodeRabbit, PR
+    // #384): --all and --area would still select it. Must be a real boolean.
+    if ('container_only' in spec && typeof spec.container_only !== 'boolean') {
+      fail(`spec "${key}" has a non-boolean "container_only" (expected true/false)`);
+    }
+    if (spec.container_only && !spec.container_prover) {
+      fail(`spec "${key}" is container_only but names no "container_prover" to run instead`);
+    }
     const file = path.join(SMOKE_DIR, spec.chain);
     if (!existsSync(file)) fail(`spec "${key}" points at a missing chain file: ${spec.chain}`);
+    if (spec.container_prover) {
+      const prover = path.join(SMOKE_DIR, spec.container_prover);
+      if (!existsSync(prover)) {
+        fail(`spec "${key}" points at a missing container prover: ${spec.container_prover}`);
+      }
+    }
   }
   return specs;
+}
+
+/**
+ * Drop container-only chains from a bulk selection (--all / --area). Explicit
+ * --spec selection is handled separately: naming one by hand should fail loudly
+ * rather than silently no-op.
+ */
+function dropContainerOnly(selected) {
+  const skipped = [];
+  for (const [key, spec] of [...selected]) {
+    if (spec.container_only) {
+      selected.delete(key);
+      skipped.push([key, spec]);
+    }
+  }
+  return skipped;
 }
 
 function parseArgs(argv) {
@@ -135,6 +166,9 @@ function printList(specs) {
     console.log(`    chain:  ${spec.chain}`);
     console.log(`    covers: ${spec.covers.join(', ')}`);
     console.log(`    area:   ${spec.area.join(', ')}`);
+    if (spec.container_only) {
+      console.log(`    NOTE:   CONTAINER ONLY — not run by --all/--area; use node scripts/smoke/${spec.container_prover}`);
+    }
     console.log(`    ${spec.description}\n`);
   }
   console.log(
@@ -220,7 +254,21 @@ function main() {
           'declaring it fixed - add one (see scripts/smoke/README.md).'
         );
       }
-      for (const [k, v] of sel) selected.set(k, v);
+      // Naming a container-only chain BY ITS KEY is a mistake worth stopping on.
+      // Reaching it only through the covers array is not: `--spec check_idempotency`
+      // legitimately means "run the chains that exercise this RPC", and two
+      // runnable chains also cover it — hard-failing there would refuse the whole
+      // run over a chain the caller never asked for. Those get the bulk skip below.
+      for (const [k, v] of sel) {
+        if (v.container_only && args.specs.includes(k)) {
+          fail(
+            `spec "${k}" is container-only and cannot run against a live database:\n` +
+            `${v.chain} seeds its own fixture rows, which the LIVE-DATA GUARD refuses.\n` +
+            `Run it with:  node scripts/smoke/${v.container_prover}`
+          );
+        }
+        selected.set(k, v);
+      }
     }
     for (const areaName of args.areas) {
       let hit = false;
@@ -232,6 +280,18 @@ function main() {
       }
       if (!hit) fail(`no spec is tagged with area "${areaName}" (see scripts/test-areas.json for the vocabulary)`);
     }
+  }
+
+  // Bulk selection never runs a container-only chain. Announce every skip:
+  // a silently shrunk run reads as "everything passed" when it did not.
+  for (const [key, spec] of dropContainerOnly(selected)) {
+    console.log(
+      `[smoke] ${key} SKIPPED — container-only; run: node scripts/smoke/${spec.container_prover}`
+    );
+  }
+  if (selected.size === 0) {
+    console.log('\nNothing left to run after container-only skips.');
+    return;
   }
 
   const dbUrl = process.env.SUPABASE_DB_URL;
