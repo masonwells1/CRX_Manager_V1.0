@@ -22,38 +22,56 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## OPEN 2026-08-12 — repository/production gap reopened: below-cost approval SQL is live but not in the repo
+## OPEN 2026-08-12 — repository/production gap reopened: SIX applied migrations exist nowhere in the repo
 
 **Severity: HIGH. Not a live outage — the code works. The problem is that its source does not exist
-anywhere in version control.**
+anywhere in version control, so nobody can review the SQL that is running in production.**
 
-Migration `20260812115237_enforce_below_cost_admin_approval` is **applied live**, recorded in
-`supabase_migrations.schema_migrations` as ledger version `20260812154028`. Its file is absent from
-`origin/main`, absent from all sixteen other pushed branches, and absent from every local worktree
-under `C:\CRX_Manager` (searched by both identifier and filename, 2026-08-12).
+The newest migration on `origin/main` that is both present and applied is
+`20260812003315_log_customer_sales_rep_assignment`. **Six migrations were applied live after it, and
+none of their files exist on `main`, on any of the sixteen other pushed branches, or in any local
+worktree under `C:\CRX_Manager`** — searched by both filename and by the identifiers they install,
+2026-08-12:
 
-What it installed, confirmed live by `pg_proc` read on 2026-08-12:
+| ledger version | submitted name |
+|---|---|
+| `20260812034831` | `20260812010000_blend_ticket_order_header_runtime_assert` |
+| `20260812034951` | `20260812011000_restore_quote_version_whole_cent_money` |
+| `20260812145628` | `20260812115235_snapshot_cost_reporting` |
+| `20260812151606` | `20260812115236_quote_items_cost_at_quote_snapshot` |
+| `20260812154028` | `20260812115237_enforce_below_cost_admin_approval` |
+| `20260812154757` | `20260812115238_repair_historical_order_line_cents` |
+
+Live high-water at the time of this reading: `20260812154757`, 968 ledger rows.
+
+The largest of the six by blast radius is `20260812115237_enforce_below_cost_admin_approval`. Confirmed
+live by `pg_proc` read on 2026-08-12 it installed
 `public._create_direct_order_below_cost_impl_20260810` (md5 `c761f4c46dc12ea07efd74af5b2ada54`,
-7692 chars), plus a below-cost approval gate — the marker `_begin_below_cost_money_write` now appears
-in eleven public wrapper functions including `create_direct_order`, `save_quote`, `save_invoice`,
-`convert_quote_to_order`, `update_order_items`, `price_order` and `bulk_import_order`.
+7692 chars) plus a below-cost approval gate: the marker `_begin_below_cost_money_write` now appears in
+**eleven** public wrapper functions, including `create_direct_order`, `save_quote`, `save_invoice`,
+`convert_quote_to_order`, `update_order_items`, `price_order` and `bulk_import_order`. Two others touch
+money directly — a `quote_items.cost_at_quote_cents` snapshot column (see the entry below) and a
+historical order-line cents repair, which by its name restated stored money.
 
 This is the same class of gap that was closed on 2026-08-11 by PR #371 for the whole-cent migrations
-(entry above). It reopened the next day on a different path. **Consequence:** anyone replaying `main`
-into a fresh database gets a schema without the below-cost gate, and any migration written against
-the live shape will fail there. Wave A migration `20260813010000` is exactly such a migration — it
-retargets onto this impl, and its precondition fails closed if the impl is absent, which is correct
-behaviour but means the file cannot be replayed from `main` alone.
+(entry above). It reopened the next day, wider. **Consequence:** anyone replaying `main` into a fresh
+database gets a schema without any of the six, and any migration written against the live shape will
+fail there. Wave A migration `20260813010000` is exactly such a migration — it retargets onto the
+below-cost impl, and its precondition fails closed if that impl is absent, which is correct behaviour
+but means the file cannot be replayed from `main` alone.
 
-**Owner decision needed (Mason):** whichever session applied this needs to push the file and land it
-on `main`. Until it does, `main` does not describe production. Nobody should reconstruct the SQL from
-live `prosrc` and commit that as if it were the original — the header comments, preconditions and
-review history would be lost, and a re-derived file is not the file that was reviewed.
+**Owner decision needed (Mason):** whichever sessions applied these need to push their files and land
+them on `main`. Until they do, `main` does not describe production. Nobody should reconstruct the SQL
+from live `prosrc` and commit that as if it were the original — the header comments, preconditions and
+review history would be lost, and a re-derived file is not the file that was reviewed. If the original
+files are genuinely gone, that is a separate and worse problem than a missing push, and it should be
+recorded as such rather than papered over with a reconstruction.
 
-**Found by:** the migration-drift review of Wave A round 5, then independently confirmed against the
-live ledger and `pg_proc` rather than taken on trust. (The reviewer named a branch
-`codex/finish-pricing-audit-20260810` as the carrier; that branch does not exist on the remote. The
-underlying finding — live is ahead of `main` — is correct; the attribution was not.)
+**Found by:** the migration-drift review of Wave A round 5, then independently confirmed and widened
+against the live ledger, `pg_proc` and every remote branch rather than taken on trust. (The reviewer
+reported one branch, `codex/finish-pricing-audit-20260810`, as the carrier of one missing migration.
+That branch does not exist on the remote and the real gap is six files with no carrier at all. The
+underlying finding — live is ahead of `main` — was correct; the attribution and the scope were not.)
 
 ## OPEN 2026-08-12 — `quote_items.cost_at_quote_cents` is live but undeclared in the registry and types
 

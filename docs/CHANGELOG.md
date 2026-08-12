@@ -42,8 +42,13 @@ change: it would strand every idempotency key written under the old literal, so 
 re-execute and duplicate an order. It is also registered in `MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY`
 in `src/lib/rpcContracts.test.ts`, which becomes inert once the migration applies.
 
-The drift review of this round returned no blockers. Two of its findings are owner-facing rather than
-code fixes and are recorded in `docs/manual/KNOWN_ISSUES.md`.
+The drift review of this round returned no blockers. Its findings are owner-facing rather than code
+fixes and are recorded in `docs/manual/KNOWN_ISSUES.md`. The first is material and was widened during
+verification: the review reported one applied-but-unpushed migration and named a carrier branch that
+does not exist. Checking the live ledger against every remote branch found **six** migrations applied
+on 2026-08-12 whose files are on no branch and in no worktree. `main` does not currently describe
+production. That is somebody else's session to close, not this wave's, but no one should be planning
+against `main` as if it were accurate until it is.
 
 ## 2026-08-12 — Wave A re-stamped to 20260813: a concurrent apply moved the high-water under us
 
