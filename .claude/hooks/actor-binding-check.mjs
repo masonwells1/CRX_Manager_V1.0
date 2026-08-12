@@ -1237,13 +1237,53 @@ function stableAuthUidBindings(structuralBody, beforeIndex) {
       "i"
     );
     const intoRe = new RegExp(`\\bINTO\\s+(?:STRICT\\s+)?${ref}(?![\\w$])`, "i");
+    const loopTargetRe = new RegExp(
+      `\\b(?:FOR|FOREACH)\\b\\s+[^;]*?${ref}[^;]*?\\bIN\\b`,
+      "i"
+    );
     if (assignments.length === 1 &&
         !equalsAssignmentRe.test(structuralBody) &&
-        !intoRe.test(structuralBody)) {
+        !intoRe.test(structuralBody) &&
+        !loopTargetRe.test(structuralBody)) {
       bindings.add(name);
     }
   }
   return bindings;
+}
+
+/** A compatible legacy guard must be an unconditional top-level statement in
+ * the function's outer BEGIN block. An IF nested in a loop, CASE, or secondary
+ * BEGIN may never run (or may sit inside an exception-handled sub-block). */
+function isTopLevelPlpgsqlStatement(structuralBody, beforeIndex) {
+  const prefix = structuralBody.slice(0, beforeIndex);
+  const tokenRe = /\bEND\s+IF\b|\bEND\s+LOOP\b|\bEND\s+CASE\b|\bBEGIN\b|\bEND\b|\bIF\b|\bLOOP\b|\bCASE\b/gi;
+  let beginDepth = 0;
+  let ifDepth = 0;
+  let loopDepth = 0;
+  let caseDepth = 0;
+  let token;
+  while ((token = tokenRe.exec(prefix)) !== null) {
+    const keyword = token[0].toUpperCase().replace(/\s+/g, " ");
+    if (keyword === "END IF") { ifDepth--; continue; }
+    if (keyword === "END LOOP") { loopDepth--; continue; }
+    if (keyword === "END CASE") { caseDepth--; continue; }
+    if (keyword === "BEGIN") { beginDepth++; continue; }
+    if (keyword === "IF") { ifDepth++; continue; }
+    if (keyword === "LOOP") { loopDepth++; continue; }
+    if (keyword === "CASE") { caseDepth++; continue; }
+    if (keyword === "END") {
+      // SQL CASE expressions close with bare END; nested PL/pgSQL blocks do too.
+      if (caseDepth > 0) caseDepth--;
+      else beginDepth--;
+    }
+    if (beginDepth < 0 || ifDepth < 0 || loopDepth < 0 || caseDepth < 0) return false;
+  }
+  return beginDepth === 1 && ifDepth === 0 && loopDepth === 0 && caseDepth === 0;
+}
+
+function hasRecognizedMutationBefore(structuralBody, beforeIndex) {
+  return /\b(?:INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM|MERGE\s+INTO|TRUNCATE\b|EXECUTE\b|CALL\b|PERFORM\b)/i
+    .test(structuralBody.slice(0, beforeIndex));
 }
 
 function hasExactLegacyMismatchCondition(condition, actorParam, identityBindings) {
@@ -1288,6 +1328,10 @@ function hasLegacyRaiseException(rawAction, structuralAction, actorParam) {
 function hasEnforcedLegacyActorRefusal(body, actorParam) {
   const structuralBody = maskSqlForCallNames(body);
   if (structuralBody === null) return false;
+  // A function-level or nested exception handler can catch the refusal and let
+  // execution continue to the mutation. Legacy compatibility therefore stays
+  // fail-closed for every body containing an EXCEPTION WHEN clause.
+  if (/\bEXCEPTION\s+WHEN\b/i.test(structuralBody)) return false;
   const ifRe = /\bIF\b[\s\S]*?\bTHEN\b[\s\S]*?\bEND\s+IF\b/gi;
   let block;
   while ((block = ifRe.exec(structuralBody)) !== null) {
@@ -1298,6 +1342,8 @@ function hasEnforcedLegacyActorRefusal(body, actorParam) {
     const actionStart = block.index + then.index + then[0].length;
     const actionEnd = block.index + endIf.index;
     const bindings = stableAuthUidBindings(structuralBody, block.index);
+    if (!isTopLevelPlpgsqlStatement(structuralBody, block.index)) continue;
+    if (hasRecognizedMutationBefore(structuralBody, block.index)) continue;
     if (!hasExactLegacyMismatchCondition(condition, actorParam, bindings)) continue;
     if (hasLegacyRaiseException(
       body.slice(actionStart, actionEnd),

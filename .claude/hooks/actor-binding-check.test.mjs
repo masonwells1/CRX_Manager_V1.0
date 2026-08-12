@@ -1728,10 +1728,12 @@ r = runHook(fn(BOUND));
 ok(!isDeny(r), "body raising ACTOR_MISMATCH is allowed");
 
 r = runHook(fn(`
-  IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM auth.uid() THEN
-    RAISE EXCEPTION 'p_performed_by does not match authenticated user';
-  END IF;
-  ${MUTATION}
+  BEGIN
+    IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM auth.uid() THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    ${MUTATION}
+  END
 `));
 ok(!isDeny(r), "the current-main actor-specific authenticated-user refusal remains compatible");
 
@@ -1748,10 +1750,12 @@ r = runHook(fn(`
 ok(!isDeny(r), "the current-August stable v_actor refusal remains compatible");
 
 r = runHook(fn(
-  'IF "p_actor[" IS DISTINCT FROM auth.uid() THEN\n' +
+  'BEGIN\n' +
+    'IF "p_actor[" IS DISTINCT FROM auth.uid() THEN\n' +
     "  RAISE EXCEPTION 'p_actor[ does not match authenticated user';\n" +
     "END IF;\n" +
-    'INSERT INTO financial_audit_log (actor_user_id) VALUES ("p_actor[");',
+    'INSERT INTO financial_audit_log (actor_user_id) VALUES ("p_actor[");\n' +
+    'END',
   '"p_actor[" uuid'
 ));
 ok(!isDeny(r), "a metacharacter actor name can use an enforced authenticated-user refusal");
@@ -1816,6 +1820,84 @@ r = runHook(fn(`
   ${MUTATION}
 `));
 ok(isDeny(r), "a legacy exception hidden behind a nested false branch does not count");
+
+r = runHook(fn(`
+  BEGIN
+    BEGIN
+      IF p_performed_by IS DISTINCT FROM auth.uid() THEN
+        RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+      END IF;
+    EXCEPTION WHEN OTHERS THEN
+      NULL;
+    END;
+    ${MUTATION}
+  END
+`));
+ok(isDeny(r), "a swallowed legacy exception cannot satisfy actor binding");
+
+r = runHook(fn(`
+  BEGIN
+    IF p_performed_by IS DISTINCT FROM auth.uid() THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    RETURN;
+  EXCEPTION WHEN OTHERS THEN
+    ${MUTATION}
+  END
+`));
+ok(isDeny(r), "an exception handler cannot turn a top-level refusal into a forged mutation");
+
+r = runHook(fn(`
+  DECLARE
+    v_iteration integer;
+  BEGIN
+    FOR v_iteration IN 1..0 LOOP
+      IF p_performed_by IS DISTINCT FROM auth.uid() THEN
+        RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+      END IF;
+    END LOOP;
+    ${MUTATION}
+  END
+`));
+ok(isDeny(r), "a legacy guard inside a zero-iteration loop does not count");
+
+r = runHook(fn(`
+  BEGIN
+    ${MUTATION}
+    IF p_performed_by IS DISTINCT FROM auth.uid() THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+  END
+`));
+ok(isDeny(r), "a legacy guard after a recognized mutation does not dominate it");
+
+r = runHook(fn(`
+  DECLARE
+    v_actor uuid := auth.uid();
+  BEGIN
+    FOREACH v_actor IN ARRAY ARRAY[p_performed_by] LOOP
+      NULL;
+    END LOOP;
+    IF p_performed_by IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    ${MUTATION}
+  END
+`));
+ok(isDeny(r), "a FOREACH loop target cannot overwrite a stable auth.uid binding");
+
+r = runHook(fn(`
+  DECLARE
+    v_actor uuid := auth.uid();
+  BEGIN
+    CALL public.overwrite_actor(v_actor);
+    IF p_performed_by IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    ${MUTATION}
+  END
+`));
+ok(isDeny(r), "a CALL argument cannot be assumed to preserve a stable auth.uid binding");
 
 r = runHook(fn(`
   DECLARE

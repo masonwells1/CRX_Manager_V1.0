@@ -9,15 +9,21 @@ for older CRX functions no longer accepts the message
 `<actor parameter> does not match authenticated user` as free-standing text.
 It now requires that exact declared actor parameter to be compared against
 `auth.uid()` inside a simple mismatch `IF` (directly or through one stable,
-non-reassigned local binding) and requires the matching branch to execute a real
-`RAISE EXCEPTION`. The hook therefore denies the phrase when it appears in
+non-reassigned local binding), requires that guard to be a top-level statement
+before every recognized mutation, rejects bodies whose exception handler could
+swallow the refusal, and requires the matching branch to execute a real
+`RAISE EXCEPTION`. Stable identity bindings also cannot be overwritten as a
+`FOR`/`FOREACH` loop target. The hook therefore denies the phrase when it appears in
 `RAISE NOTICE`, an assignment, unrelated data, an unconditional exception, an
 always-false condition, a comparison for another parameter, or behind a local
-identity variable that was overwritten. A nested unreachable exception cannot
-stand in for the direct refusal either. Existing direct, quoted-parameter, and
-current-August `v_actor := auth.uid()` refusal forms remain compatible. The
-focused real-hook suite passes 300 assertions, and nine isolated mutations each
-failed on its owning regression before the production clause was restored.
+identity variable that was overwritten. Nested, caught, post-mutation, or
+zero-iteration-loop exceptions cannot stand in for the direct refusal either.
+Existing direct, quoted-parameter, and current-August
+`v_actor := auth.uid()` refusal forms remain compatible. The focused real-hook
+suite passes 306 assertions. Thirteen isolated mutations across the repair each
+failed on their owning regression before the production clause was restored;
+one additional procedure-call clause was removed when mutation testing proved
+it redundant with the earlier mutation-order gate.
 
 ## 2026-08-11 — Close executable cross-migration cron.job view aliases
 
