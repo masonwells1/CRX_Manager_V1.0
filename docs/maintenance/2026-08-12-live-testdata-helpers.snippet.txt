@@ -46,6 +46,14 @@ function dollarTagAt(sql, index) {
   return match?.[0] || null;
 }
 
+function lineCommentEnd(sql, index) {
+  const carriageReturn = sql.indexOf("\r", index);
+  const newline = sql.indexOf("\n", index);
+  if (carriageReturn === -1) return newline === -1 ? sql.length : newline;
+  if (newline === -1) return carriageReturn;
+  return Math.min(carriageReturn, newline);
+}
+
 // Split only on terminators outside comments, quotes, and dollar bodies.
 function topLevelStatements(sql) {
   const statements = [];
@@ -59,8 +67,8 @@ function topLevelStatements(sql) {
     }
     if (sql[i] === '"') { i = readQuoted(sql, i, '"').end; continue; }
     if (sql[i] === "-" && sql[i + 1] === "-") {
-      const nl = sql.indexOf("\n", i + 2);
-      i = nl === -1 ? sql.length : nl + 1;
+      const end = lineCommentEnd(sql, i + 2);
+      i = end === sql.length ? end : end + 1;
       continue;
     }
     if (sql[i] === "/" && sql[i + 1] === "*") { i = skipTrivia(sql, i); continue; }
@@ -104,8 +112,7 @@ function keywordView(sql) {
       continue;
     }
     if (src[i] === "-" && src[i + 1] === "-") {
-      const nl = src.indexOf("\n", i + 2);
-      const end = nl === -1 ? src.length : nl;
+      const end = lineCommentEnd(src, i + 2);
       out += " ".repeat(end - i);
       i = end;
       continue;

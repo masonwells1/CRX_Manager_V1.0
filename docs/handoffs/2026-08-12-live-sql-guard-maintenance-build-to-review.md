@@ -19,10 +19,10 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
 
 - The current source blob is pinned to `c8bec70830c643e474831985f5e6c3bd16630386`.
 - `node scripts/apply-live-testdata-maintenance-20260812.mjs --verify` produced pinned output blob
-  `b236ab1b6204d2fee17e5ce52ff06ad22a655632`, matched all three snippet SHA-256 values, and passed a
+  `ff34a9cf06441c777547925fa0ee9feaee8b3730`, matched all three snippet SHA-256 values, and passed a
   Node module syntax check without changing the repository target.
-- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 43 assertions against the
-  generated module, including all eleven defect classes found by the first six Sol reviews.
+- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 48 assertions against the
+  generated module, including all twelve defect classes found by the first seven Sol reviews.
 - The write mode refused the dirty build worktree even with Mason's dated token.
 - Focused ESLint, TypeScript typecheck, agent-workflow tests, ledger check, and `git diff --check` passed.
 - The guarded commit suite passed lint, typecheck, production build, correction-guard tests,
@@ -71,6 +71,10 @@ any later live migration apply still requires the repository's current explicit 
   so even a structurally valid aborting `DO` block was not safe. Raw `DO` blocks now fail closed
   categorically, the obsolete marker parser was removed, and four sequence reproductions were added;
   a fresh exact-head review remains required.
+- The seventh exact-head Sol review found that both line-comment scanners recognized `\n` but not a
+  lone `\r`, allowing destructive SQL after that PostgreSQL line ending to remain hidden. Both now
+  stop at the earliest `\r` or `\n`, with five destructive/DML/RPC reproductions; a fresh exact-head
+  review remains required.
 - GitHub checks and CodeRabbit must be complete and acceptable on the exact PR head.
 
 ## FIRST ACTION

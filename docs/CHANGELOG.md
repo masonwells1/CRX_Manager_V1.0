@@ -179,6 +179,12 @@ and an outer transaction rollback. Raw `DO` blocks now fail closed categorically
 reviewed migration smoke harness instead. The obsolete abort-marker parser was removed, and four
 sequence reproductions bring the pinned generated-module suite to 43 cases.
 
+The seventh exact-head pass found a platform-independent line-ending bypass: both comment scanners
+stopped `--` comments only at `\n`, while PostgreSQL also ends them at a lone `\r`. An attacker could
+therefore hide a following mutation, destructive DDL, grant, or mutating RPC from the candidate.
+Both scanners now stop at the earliest `\r` or `\n`; five exact payloads bring the pinned suite to
+48 cases.
+
 ## 2026-08-11 — A smoke selection that runs nothing no longer reports success
 
 Follow-up to the entry below, from its own adversarial review. Container-only chains are dropped

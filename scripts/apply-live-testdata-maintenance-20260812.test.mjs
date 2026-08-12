@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { buildMaintainedSource } from "./apply-live-testdata-maintenance-20260812.mjs";
 
 const { output, blob } = buildMaintainedSource();
-assert.equal(blob, "b236ab1b6204d2fee17e5ce52ff06ad22a655632", "pinned generated blob");
+assert.equal(blob, "ff34a9cf06441c777547925fa0ee9feaee8b3730", "pinned generated blob");
 
 const scratch = mkdtempSync(path.join(tmpdir(), "crx-live-guard-candidate-test-"));
 try {
@@ -57,6 +57,11 @@ try {
     "DO $$ BEGIN PERFORM setval('invoice_number_seq', 1); RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'; END $$;",
     "BEGIN; DO $$ BEGIN PERFORM nextval('invoice_number_seq'); RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'; END $$; ROLLBACK;",
     "BEGIN; DO $$ BEGIN PERFORM setval('invoice_number_seq', 1); RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'; END $$; ROLLBACK;",
+    "SELECT 1 -- comment\r; UPDATE customers SET phone='owned' WHERE id=1",
+    "SELECT 1 -- comment\r; DELETE FROM customers WHERE id=1",
+    "SELECT 1 -- comment\r; DROP TABLE public.customers",
+    "SELECT 1 -- comment\r; GRANT ALL ON public.customers TO anon",
+    "SELECT 1 -- comment\r; SELECT public.cancel_order('00000000-0000-0000-0000-000000000000')",
   ];
   for (const sql of blocked) {
     assert.equal(classifySql(sql).block, true, `must block: ${sql}`);
