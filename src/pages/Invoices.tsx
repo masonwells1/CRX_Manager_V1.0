@@ -7,7 +7,7 @@ import Badge from '../components/ui/Badge';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { supabase, sanitizeError, assertRpcResult, describePostInvoiceBlock } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -265,8 +265,9 @@ export default function Invoices() {
             delete postKeysRef.current[target.key];
           } catch (err: unknown) {
             failedIds.push(...target.selectedIds);
-            if (hasRpcCode(err, RpcErrorCodes.PRICING_INCOMPLETE)) {
-              failures.push(`${target.label}: needs pricing first`);
+            const blocked = describePostInvoiceBlock(err);
+            if (blocked) {
+              failures.push(`${target.label}: ${blocked}`);
             } else {
               failures.push(`${target.label}: ${sanitizeError(err)}`);
             }

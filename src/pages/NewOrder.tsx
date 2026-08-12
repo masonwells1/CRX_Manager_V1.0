@@ -885,6 +885,12 @@ export default function NewOrder() {
                       </div>
                     </div>
 
+                    {/* Wave A (ordering-cycle review 2026-08-09): unit cost is
+                        display-only. create_direct_order now resolves cost from
+                        products.current_cost and discards whatever the payload
+                        carries, so an editable field here would show the rep a
+                        profit and margin the saved order will not have. Read the
+                        catalogue value, do not let it be typed over. */}
                     <div>
                       <label className="block text-xs font-medium text-secondary mb-1">
                         Unit Cost
@@ -893,10 +899,9 @@ export default function NewOrder() {
                         type="number"
                         step="0.01"
                         value={item.unit_cost || ''}
-                        disabled={priceLater}
-                        onChange={(e) =>
-                          updateItem(item._key, 'unit_cost', parseFloat(e.target.value) || 0)
-                        }
+                        disabled
+                        readOnly
+                        title="Cost comes from the product catalog and cannot be edited here. Update the product to change it."
                       />
                     </div>
                     </>)}

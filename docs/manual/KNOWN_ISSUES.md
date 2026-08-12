@@ -2,6 +2,8 @@
 
 **Last verified: 2026-08-12 UTC, post-apply.** Live ledger high-water is `20260812003315` at 962 rows, carrying submitted name `20260811230423_log_customer_sales_rep_assignment`. The Customer 360 assignment RPC is live with atomic customer timestamp/activity logging, one overload, the reviewed security/search-path/grant shape, and no table, column, enum, generated-column, signature, or public-function-name-count change. The schema registry was genuinely refreshed through the same high-water. Ledger versions are UTC and Supabase applies may assign a version different from the submitted filename, so match the recorded name when reconciling an apply. The historical Team Board, money, and commission-payout details below remain separately dated evidence rather than claims that their older high-waters are current.
 
+**Branch `claude/wave-a-money` — six unapplied migration candidates.** That branch carries six local migration files prefixed `20260811…` that are **not applied**, confirmed absent from the ledger by a read-only re-read on 2026-08-11 at the then-current high-water `20260811220045` / 961 rows. Nothing in this document describes state they created. All six sit *below* the live high-water — now `20260812003315` — and must be renumbered forward before any apply is even considered.
+
 **Repository/production gap on the whole-cent migrations: CLOSED 2026-08-11.** History rows 868–870 (`20260810150000`, `20260810150500`, `20260810151000`; ledger versions `20260810152935`, `20260810154721`, `20260810155629`) were applied live before they existed on `main`. **PR #371 landed as merge `465458a0`**, bringing those three plus `20260811200000_blend_ticket_order_whole_cent_totals` (applied live as ledger `20260811220045`) onto `main`. Disk and production now agree on all four — independently re-verified against live `pg_proc` on 2026-08-11.
 The remaining fractional historical rows described below are still tracked data debt and were not rewritten by that repository closeout.
 
@@ -152,28 +154,27 @@ Delivery: the browser changes that call the RPC and open assignment notification
 > `20260811200000`. Kept for history; the authoritative status is the header line at the top
 > of this file. The "Closes when PR #371 lands" paragraph below was written before it merged.
 
-
-Raised by Codex (P1) on PR #372 and **verified**: the schema registry records
+Raised by Codex (P1) on PR #372 and verified at the time: the schema registry recorded
 `20260810150000_commission_basis_from_canonical_order_header`,
 `20260810150500_save_quote_whole_cent_total_cost`, and
-`20260810151000_whole_cent_money_check_constraints` as applied — they genuinely are, live
-since 2026-08-10 — but `git ls-tree` finds none of the three `.sql` files on `main`.
+`20260810151000_whole_cent_money_check_constraints` as applied — they genuinely were, live
+since 2026-08-10 — but `git ls-tree` found none of the three `.sql` files on `main`. A clean
+baseline replay or disaster-recovery rebuild driven from `supabase/migrations/` would have
+silently omitted the canonical commission basis, the save-quote whole-cent total cost, and
+all seven whole-cent money CHECK constraints, while the registry asserted they were present.
+Nothing was ever wrong on live; the gap was between live and the repository's ability to
+reconstruct it.
 
-**Why it matters:** a clean baseline replay or a disaster-recovery rebuild driven from
-`supabase/migrations/` would silently omit the canonical commission basis, the save-quote
-whole-cent total cost, and all seven whole-cent money CHECK constraints — while the registry
-asserts they are present. Nothing is wrong on live; the gap is between live and the
-repository's ability to reconstruct it.
+**Closed by PR #371** (merge commit `465458a0`), the home of all three files (history rows
+868–870). `git ls-tree -r origin/main supabase/migrations/` on 2026-08-11 returns all three,
+along with `20260810025159_backfill_stale_line_profit` and
+`20260810235207_reconcile_pending_commission_snapshots`, which the header of this document
+had separately reported as missing. `supabase/migrations/` on `main` is a complete
+reconstruction source again for everything dated 2026-08-10.
 
-**This is not caused by the registry refresh.** The source gap already existed on `main`;
-regenerating the registry from live only made it visible. Leaving the registry stale
-instead would have been a second, worse inaccuracy.
-
-**Closes when PR #371 lands.** That PR is the home of all three files (history rows 868–870)
-and this entry lives on its branch; the gap is closed the moment it merges. Until then, treat
-`supabase/migrations/` on `main` as an incomplete reconstruction source for anything dated
-2026-08-10 15:00 UTC or later, and prefer the live ledger. PR #372 deliberately did not copy
-the files in: duplicating an open PR's migrations would collide when #371 merges.
+**Standing lesson, hit three times before it closed:** a session that applies a migration
+live and does not land its file leaves production ahead of the repository, and no existing
+check warns about it.
 
 ---
 

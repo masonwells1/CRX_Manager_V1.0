@@ -2,6 +2,127 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-12 — Wave A remediation round 4: the delivery guard would have aborted its own migration
+
+The adversarial review of round 3 returned BLOCKED with a single finding, confirmed against live and
+fixed here. The six migrations remain parked and unapplied.
+
+The new trigger-guard function was locked down with `REVOKE ALL … FROM PUBLIC` alone. That is not
+sufficient on this project and the consequence is not a loose grant — it is a migration that cannot
+succeed. `ALTER DEFAULT PRIVILEGES` in schema `public` grants EXECUTE on **new** functions to `anon`,
+`authenticated` and `service_role`, so a freshly created function lands carrying explicit per-role
+grants and revoking `PUBLIC` strips only the `PUBLIC` entry; this was re-confirmed read-only against
+`pg_default_acl` today and is the gotcha recorded on 2026-07-27. The same migration's postcondition
+then asserts that none of those three roles holds EXECUTE on the guard, so on first apply the
+assertion would have fired, the explicit transaction would have rolled back, and **both** the
+delivery-completion provenance guard and the delivery-before-billing gate would have failed to
+install. The named roles now go through the same `pg_roles`-guarded revoke loop this file already
+used for the inner posting implementation, with `PUBLIC` still revoked unconditionally as the widest
+grantee. A regression assertion covers it, confirmed red against the unfixed form.
+
+The comment introduced alongside the fix claimed the replay container carries none of the Supabase
+roles. That claim was not established — the harness restores into the `supabase/postgres` image —
+and it is also not the reason the loop is needed. The comment now states the reason that is actually
+load-bearing and verified: default privileges make the named grants real, the postcondition asserts
+their absence, and `REVOKE` errors on a role that does not exist, which is why the loop is guarded
+rather than naming the roles inline.
+
+## 2026-08-12 — Wave A remediation round 3: replay safety and a forgeable delivery status
+
+A second adversarial review, run against the exact committed diff of the entry below, returned
+BLOCKED with three further High findings. All three were confirmed against the real code. The six
+migrations remain parked and unapplied.
+
+**A replay could silently revert a later fix.** The precondition guards on the clamp and split-guard
+migrations accepted any function body that merely contained the Wave A marker token. A later
+migration fixing an authorization, audit or commission-math bug in one of those functions would keep
+that marker, pass the guard, and then be overwritten by the stale body this file installs — the
+guard that exists to prevent reverting later work did not prevent it. Each guard now accepts exactly
+two states, the pinned baseline body on first application or this file's own exact post-apply body on
+a genuine replay, and refuses anything else while printing the hash it found. Security context is
+pinned alongside the body: security mode, `search_path`, and function owner, so a body that matches
+but has been re-declared `SECURITY DEFINER` is refused rather than replayed over. This extends the
+self-pinning idiom `20260812020000` already established in this wave rather than adding a second one.
+
+**A replay could replace a stronger CHECK constraint with a weaker one.** The finiteness migration
+dropped and recreated thirty same-named constraints unconditionally, so a later migration
+strengthening one — tightening it to also reject `NaN`, the obvious follow-up — would be silently
+discarded on replay. One catalog-driven block now adds a constraint when absent, leaves it untouched
+when its normalized definition already matches, and aborts naming found-versus-expected otherwise.
+Nothing is dropped, which also closes the non-transactional window the file's header used to
+acknowledge; that header has been rewritten rather than left describing behavior the file no longer
+has.
+
+**The delivery-before-billing gate trusted a status anyone could write.** It proved a delivery read
+`completed`, not that the authoritative completion actually ran — and the ACL baseline grants
+`authenticated` UPDATE on deliveries while the status trigger permits `in_progress → completed`, so
+the row could be written directly through the API, skipping the delivered-quantity, inventory,
+order, invoice and audit reconciliation and billing the customer for the full ordered quantity. A
+`BEFORE UPDATE OF status` trigger now admits that transition only when the public completion wrapper
+has published that exact delivery id in a transaction-local setting, cleared on both the success and
+the error path. Binding to the row id rather than a boolean means one authorized completion cannot
+authorize a different delivery in the same transaction. The wrapper is the live body verbatim plus
+that handshake, and its established delivery-before-invoice lock order is unchanged. `app.admin_override`
+is deliberately **not** an exemption: a stuck delivery can no longer be repaired by hand-setting its
+status in the dashboard and must go through a reviewed RPC or migration. That is an operational
+trade-off, made knowingly — an escape hatch here would be an escape hatch from the reconciliation
+itself. A rolled-back probe proves both directions: the authorized path still completes, and a direct
+write is refused even with the override set.
+
+Reviewing the fix surfaced one more defect neither reviewer raised. These files now hash function
+bodies they install themselves, and live evidence confirms `prosrc` inherits whatever line endings
+the source file carried — one live function stores LF, another stores CRLF. Under a Windows checkout
+with `core.autocrlf=true` the applier would have installed CRLF bodies whose hash could never match
+an LF-computed pin, and every one of these migrations would have aborted at its own postcondition on
+a machine that merely checked the repo out differently. All six are now pinned to LF in
+`.gitattributes`, extending the section already there for the same reason.
+
+## 2026-08-12 — Wave A remediation: four blocking review findings closed
+
+The adversarial review on PR #383 returned BLOCKED with four High findings. All four were checked
+against the real code rather than dismissed as reviewer noise, all four were genuine, and this entry
+closes them. The six migrations remain parked and unapplied.
+
+**Correction receipts are bound to the request, not just the key.** `correct_job_commission_split`
+checked its idempotency key against `(key, operation)` alone, and returned any prior receipt before
+it had read the job, the replacement split, the reason, or the actor. A key replayed against a
+different job reported success and changed nothing. The receipt is now fingerprinted over actor,
+job, canonical replacement split and normalized reason, and the check happens only after the target
+row is read and locked, so a reused key carrying different intent raises `IDEMPOTENCY_INTENT_MISMATCH`
+instead of reporting a mutation that never happened. This follows the intent-binding pattern already
+live for the payout RPCs in `20260811130000` rather than introducing a second idiom.
+
+**A corrected split now reconciles the commission rows it invalidates.** The RPC updated
+`jobs.commission_split` and wrote one audit row, and never touched `commissions` at all — so after
+minting, an admin received `changed: true` while the existing rows still named the previous
+recipients. Corrections now reconcile every active row for the job in the same transaction. Rows
+that are paid, cancelled, or attached to a payout batch through `commission_payment_items` block the
+**entire** correction with a message naming what blocked it and how many; the split update does not
+land either. A partial rewrite is deliberately not an option, because it would leave the split
+disagreeing with the commissions — the exact inconsistency this work exists to remove. Recipient
+resolution and the remainder arithmetic were extracted into `_derive_job_commission_rows`, so a
+correction and a fresh mint cannot drift apart.
+
+**Order-header profit is derived, not independently rounded.** Rounding price, cost and profit
+separately let rounded profit differ from rounded price minus rounded cost, and header profit is the
+commission basis. Profit is now derived from the rounded components, matching the canonical
+line-item trigger in `20260809230500`. Where price or cost is absent there is nothing to derive
+from, so an existing profit is rounded and a missing one stays missing — never invented as zero. The
+file's own SCOPE note claimed independent rounding "keeps the header internally consistent"; that
+claim was wrong and has been rewritten.
+
+**All six files re-stamped above the live high-water.** They were numbered below the applied ledger's
+high-water mark, which creates out-of-order replay drift and is refused by the ordering guard. They
+now run `20260812010000`–`20260812060000`, with every reference updated repo-wide.
+
+Reviewing the fix surfaced one more defect that no local gate could have caught. The guard
+migration's behavioural probe had been tightened to require a live job already carrying commission
+rows, and production has none — every commission to date is order-based. The probe would have
+aborted the migration on every apply. It now seeds the rows it needs inside its own deliberately
+rolled-back subtransaction, so it exercises the reconciliation for real on any database state rather
+than skipping, and proves it left nothing behind by whole-row fingerprint, row count, and explicit
+absence of the synthetic ids.
+
 ## 2026-08-11 — A smoke selection that runs nothing no longer reports success
 
 Follow-up to the entry below, from its own adversarial review. Container-only chains are dropped
@@ -12,6 +133,104 @@ out and reading the exit code saw green for work that never happened, which is t
 class this runner exists to prevent. An empty runnable selection now exits 2 through the existing
 `fail()` path and names the prover command for each skipped chain. Covered by a regression test in
 `bugClassRegressionGuards.test.ts` that was confirmed red against the old behavior.
+
+## 2026-08-11 — Wave A second review pass: privilege postconditions made evaluation-order-safe
+
+The automated review on PR #383 flagged one genuine defect after the `origin/main` merge, and a
+sweep for the same defect class found five more instances it had not reported. Every privilege
+postcondition across the Wave A migrations guarded `has_function_privilege()` with a
+`role-exists AND privilege-check` predicate. PostgreSQL does not promise left-to-right evaluation
+of `AND`, so the planner may run the privilege lookup first and raise the very "role does not
+exist" error the guard was written to prevent. Two of the six instances had no guard at all.
+
+All six now use `CASE`, the documented construct with guaranteed evaluation order. The failure and
+the fix were both demonstrated read-only against live production: the old predicate raises
+`role "__cr_absent_role__" does not exist`, and the `CASE` form returns `false` for the same absent
+role while still evaluating the `PUBLIC` pseudo-role, which never appears in `pg_roles`.
+
+Production is unaffected either way — `anon`, `authenticated` and `service_role` all exist on
+Supabase. What this repairs is the plain-PostgreSQL replay/restore path these files claim to
+support, where the postcondition aborted on a role lookup instead of returning a grant verdict.
+
+Two further reported findings were checked and refuted, and the reviewer's proposed edits were not
+taken: the soft-deleted-delivery branch does **not** show the wrong instruction (`rpcCodeDetail`
+returns the database's own sentence and only falls back to "complete the delivery first" when that
+sentence is empty, which was confirmed by watching the real toast in the browser), and the
+changelog heading reported as a duplicate occurs exactly once. Nothing was merged, applied, or
+deployed by this pass.
+
+## 2026-08-11 — Wave A review pass: CodeRabbit findings resolved, two of them by correcting the reviewer
+
+Worked the automated review on PR #383 and fixed four real defects. Two more were reported and
+were wrong; both were checked against live production or a disposable PostgreSQL 17 rather than
+taken on faith, and the corrected form shipped instead. Nothing was merged, applied, or deployed.
+
+- **The delivery-gate error message reached the operator as raw database text.** `InvoiceDetail`
+  sent the posting error straight to the generic sanitizer, so the sentence the migration writes
+  specifically for the operator never appeared. Worse, both `DELIVERY_NOT_COMPLETED` variants —
+  "the delivery was deleted, void this bill" and "the delivery is merely unfinished, go complete
+  it" — collapsed into one canned string, so a user facing a deleted delivery was told to do the
+  one thing that cannot work. The mapper now passes the database's own sentence through and only
+  falls back to a canned line when the token is raised bare. Verified by execution: the assertions
+  are vitest inline snapshots, so the tool wrote the real returned strings into the test file
+  rather than the author asserting what they should be.
+- **Two migrations called `has_function_privilege()` on roles that may not exist.** That function
+  raises rather than returning false, so on any target without Supabase's `anon` /`authenticated` /
+  `service_role` — including the plain-PostgreSQL container the replay harness restores into — the
+  migration aborted on a role lookup. Now guarded on `pg_roles`.
+- **The reviewer's suggested fix for that would have gutted the widest check.** It proposed
+  filtering the grantee list against `pg_roles`, but `public` is a pseudo-role: it is not in
+  `pg_roles`, while `has_function_privilege('public', …)` works fine. That filter silently drops
+  the PUBLIC check — the one that matters most. Confirmed against live, then proven in a throwaway
+  container where the naive filter reported nothing and the shipped form correctly reported PUBLIC.
+- **An unconditional `REVOKE … FROM PUBLIC, anon, authenticated, service_role` had the same flaw,
+  and it failed open.** Proven in a disposable container: the old form errored on the missing role
+  and PUBLIC still held EXECUTE afterwards, because the whole statement aborted before revoking
+  anything. Split into an unconditional `FROM PUBLIC` plus one `pg_roles`-guarded loop over the
+  named roles, which also folds in the previously separate `metabase_ro` revoke.
+- **A precondition regex could never fire.** The commission-split immutability guard used a
+  capturing group for an optional `ONLY`, which makes `regexp_matches` return that group as
+  element 1 instead of the whole match — so the guard compared an empty string and passed
+  silently. Mutation-tested with a deliberately destructive writer: the old form counted zero
+  violations, the new non-capturing form counted one.
+- **A contract test declared an RPC shape neither the function nor the app uses.** The reviewer
+  called this migration drift; live `pg_proc.prosrc` on production settled it the other way — the
+  function reads exactly the keys the migration and `NewOrder.tsx` send, and the test was stale.
+  It had omitted `quantity` entirely, so a payload matching it would have sized every line at zero.
+- **Reference docs corrected.** Migration-history cross-references were renumbered (the reviewer
+  found four stale references; two more it missed were found and fixed). `CURRENT_STATE.md` and
+  `KNOWN_ISSUES.md` had duplicated and contradictory blocks from a merge, plus a source-gap entry
+  that is now closed — `git ls-tree` confirms every migration those documents reported as missing
+  from `main` is present. Both stamps were refreshed against a fresh read-only ledger read.
+
+The six Wave A migrations remain **local candidates, not applied**, confirmed absent from the live
+ledger by the same read. They are numbered below the current live high-water and must be renumbered
+forward before any apply is even proposed.
+
+## 2026-08-11 — Drop the pre-rename duplicate of the reconcile-snapshots migration
+
+The already-applied reconcile-pending-commission-snapshots migration was carried on the
+`claude/wave-a-money` branch under two filenames at once: the pre-rename
+`20260810183629_reconcile_pending_commission_snapshots.sql` and the post-rename
+`20260810235207_reconcile_pending_commission_snapshots.sql`. Both bodies are byte-identical
+after LF normalization, hashing to `a5b011eff14fc6bc0befb7a6043f772f0ff5f5bbbe05c649d53f9923bd8bf5bd`
+— the same SHA-256 that `docs/reference/migration-history.md` row 866 cites as the canonical body.
+The two files differed only in line endings.
+
+`origin/main` carries the post-rename name only; the file was deliberately renamed after the live
+apply, and `docs/audits/2026-08-10-codex-to-claude-team-board-closeout-handoff.md` records in terms
+that the pre-rename filename no longer exists. This branch still held the old name from an earlier
+source-recovery pass, so opening a pull request from it would have re-added a file `main` removed on
+purpose and left a second on-disk copy of a migration that is already live — the shape that reads as a
+pending change to the next agent inspecting the folder.
+
+Removal only: no SQL was edited, nothing was applied to or reverted from production, and the live
+ledger is untouched. `check:docs` moves from 881/881 to 880/880, PASS on both sides, because the
+"all migrations indexed" check counts the folder directly rather than a hand-maintained claim.
+
+Also in this branch's merge of `origin/main`: resolving `docs/reference/migration-history.md` against
+main's rows 868-871 renumbered the six Wave A rows to 872-877, and the row this branch had added for
+the pre-rename filename was dropped as a duplicate of main's row 866.
 
 ## 2026-08-11 — Executable proof for the blend-ticket whole-cent fix, and the run-time gap it exposes
 
@@ -572,6 +791,21 @@ they are the whole-cent money CHECKs from `20260810151000_whole_cent_money_check
 earlier the same day. The registry was stale against three migrations, not one. Those constraint
 definitions are recorded here because the registry describes *live* truth; their migration sources sit on
 a separate in-flight branch and are untouched by this change.
+## 2026-08-10 — Wave A of the ordering-cycle review: product cost is authoritative on direct orders
+
+First remediation wave from the 2026-08-09 ordering-cycle review (triage: 75 of 77 findings real). This slice closes the two highest-severity findings on the direct-order seam. **Written and reviewed; not yet applied live** — see the status line at the end of this entry for the current state.
+
+**The commission-basis hole.** `create_direct_order` took `unit_cost` from the request payload and used it verbatim to compute the profit that `_insert_commissions_for_order` turns into a commission liability. `NewOrder.tsx` exposed that same cost as an editable number input, so lowering it required no API access and no unusual privilege — a rep could raise their own commission by typing in the order form. Migration `20260812010000_wave_a_order_cost_authority_and_finiteness.sql` moves cost resolution inside the RPC: `products.current_cost` is authoritative, and a supplied `unit_cost` is validated and then discarded. This is the rule `bulk_import_order` has followed since `20260806000752`; the direct-order path was simply never brought in line. `convert_quote_to_order` was named in the original finding but is **not** touched — `save_quote` already overwrites every line's cost from the catalogue before conversion, so the basis it passes is server-computed. Both the review's own verifier and the independent Codex triage narrowed it the same way.
+
+**Non-finite values.** PostgreSQL `numeric` accepts `NaN`, `Infinity` and `-Infinity`, and the ordering comparisons are counter-intuitive: `NaN <= 0` is false, so a `NaN` quantity slipped past the skip-empty-line test, and `NaN` compares greater than every finite value, so `CHECK (quantity_prebooked >= 0)` passed as well. The value reached inventory and corrupted Net Position for every later quote and order of that product. The same pre-write pass now rejects non-finite (and negative) quantity, price and cost at the RPC boundary. Verified against live `pg_constraint` that this is a real gap and not already covered: the whole-cent CHECKs applied on 2026-08-10 protect `orders.total_cost`, `orders.total_profit` and `order_items.profit`, but **not** `orders.total_price`, `order_items.total_price`, `inventory.quantity_prebooked` or `commissions.commission_amount`.
+
+**The UI half shipped in the same change.** The Unit Cost field on `NewOrder.tsx` is now display-only. Left editable against the new server rule it would have shown a rep a per-line profit and margin the saved order does not have — no error, no toast, just a number that quietly stops meaning anything.
+
+- **Rounding, checked before adopting.** Per-unit rates are now rounded to two decimals before storage, matching the bulk-import precedent. Confirmed against live first: of the 602 products carrying a cost, zero hold a sub-cent value, and no existing order line holds a sub-cent rate. It is a no-op on current data and a guard going forward, not a silent re-pricing.
+- **Error tokens canonicalized.** The function raised the prose strings `Actor mismatch` and `Authentication required`; every other governed RPC raises `ACTOR_MISMATCH` / `AUTH_REQUIRED`, which `src/lib/db.ts` maps to a readable message. These two fell through to a generic error instead. A grep over `src/` confirmed no caller or test matched the old prose before changing it. The actor check itself is unchanged — a NULL `p_performed_by` is still accepted, deliberately, because tightening it would reject live callers.
+- **Reviewer findings actioned.** `rls-security-reviewer` and `migration-drift-reviewer` both ran and both returned zero blockers. Their substantive shared finding was that this migration had dropped proof scaffolding its predecessor carried, so it was restored: an overload-uniqueness assertion (a bare `SELECT … INTO` over multiple rows takes an arbitrary row without erroring, which would have silently validated the wrong function), the anon/PUBLIC/authenticated EXECUTE assertions, an assertion that the fix itself actually landed in the body, and a pre-apply `md5(prosrc)` pin against the live baseline so a concurrent session's change cannot be silently clobbered.
+- **Baseline dependency.** The live body of `create_direct_order` is *not* what an `origin/main` checkout rebuilds — three migrations applied to production on 2026-08-10 are still unmerged, on PR #371. This branch merges that work so the migration sits on its real baseline and a from-scratch rebuild is correct; Wave A therefore lands after #371.
+- **Schema registry** refreshed from live introspection (high-water `20260810155629`), which also cleared the REGISTRY-STALE block across the worktree fleet.
 
 ## 2026-08-10 — Review fixes on the harness guards (PR #369)
 
