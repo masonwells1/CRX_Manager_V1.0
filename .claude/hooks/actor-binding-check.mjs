@@ -1240,7 +1240,12 @@ function stableAuthUidBindings(structuralBody, beforeIndex) {
     if (!isOuterDeclarationInitializer && !isTopLevelBodyAssignment) continue;
     const name = match[1];
     const ref = escapedRegexLiteral(name);
-    const optionalBlockQualifier = `(?:[A-Za-z_][\\w$]*\\s*\\.\\s*)?`;
+    // PL/pgSQL permits a local to be qualified by its function/block label,
+    // and that label follows the full PostgreSQL identifier grammar. Treat
+    // quoted and Unicode-escaped qualifiers as assignments too; otherwise
+    // `"fn".v_actor := ...` can overwrite the trusted auth.uid() binding while
+    // evading the reassignment count.
+    const optionalBlockQualifier = `(?:${SQL_IDENTIFIER_PATTERN}\\s*\\.\\s*)?`;
     const assignmentRe = new RegExp(
       `(?:^|[;\\n]|\\bDECLARE\\b)\\s*${optionalBlockQualifier}${ref}` +
         `(?:\\s+[^;\\n:=]+?)?\\s*:=`,

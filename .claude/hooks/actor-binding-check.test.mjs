@@ -2079,6 +2079,32 @@ ok(isDeny(r), "a function-block-qualified reassignment cannot preserve a stable 
 r = runHook(fn(`
   DECLARE
     v_actor uuid := auth.uid();
+  BEGIN
+    "test_fn".v_actor := p_performed_by;
+    IF p_performed_by IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    ${MUTATION}
+  END
+`));
+ok(isDeny(r), "a quoted function-block qualifier cannot hide an auth.uid binding overwrite");
+
+r = runHook(fn(`
+  DECLARE
+    v_actor uuid := auth.uid();
+  BEGIN
+    U&"\\0074est_fn".v_actor := p_performed_by;
+    IF p_performed_by IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    ${MUTATION}
+  END
+`));
+ok(isDeny(r), "a Unicode function-block qualifier cannot hide an auth.uid binding overwrite");
+
+r = runHook(fn(`
+  DECLARE
+    v_actor uuid := auth.uid();
     v_note text;
   BEGIN
     test_fn.v_note := 'harmless';

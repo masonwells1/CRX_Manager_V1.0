@@ -206,6 +206,15 @@ bind `auth.uid()` and raise `ACTOR_MISMATCH` before mutation; the finiteness fil
 defines no function. All 36 current August migrations therefore pass without
 weakening the reader's indirect-SQL refusal.
 
+Fresh-cycle review round one found the same local-overwrite attack through a
+quoted function/block qualifier: PostgreSQL resolves `"function_name".v_actor`
+like the unquoted form, but the reassignment scan previously recognized only
+bare identifiers. The scan now reuses the reader's full PostgreSQL identifier
+grammar, so ordinary, quoted, and Unicode-escaped block qualifiers all
+invalidate the trusted local. The focused suite has 323 passing assertions;
+the quoted exploit failed before the repair and passes after it, alongside a
+Unicode-qualified regression. All 36 current August migrations still pass.
+
 ## 2026-08-11 — Close executable cross-migration cron.job view aliases
 
 Hardened the actor-binding SQL reader against persistent updatable aliases that
