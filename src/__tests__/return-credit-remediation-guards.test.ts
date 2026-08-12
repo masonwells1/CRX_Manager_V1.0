@@ -111,7 +111,7 @@ describe('return/credit remediation durable guards', () => {
       expect(sha256(bodyFor(migration, name))).toBe(expectedHash(signature));
     }
     expect(sha256(bodyFor(migration, '_reverse_credit_memo_application')))
-      .toBe('b3bf82b5d5fad141137cd1c5184259d21e0dbd18bedfcc9717d6d4f06f55da39');
+      .toBe('44cba939419c2e6e823d58ca8fd8eea430fa04954b72e73763b7f4741a20d1f3');
   });
 
   it.each([
@@ -154,7 +154,20 @@ describe('return/credit remediation durable guards', () => {
     const original = bodyFor(migration, '_reverse_credit_memo_application');
     const mutated = original.replace('i.due_date < CURRENT_DATE', 'false');
     expect(mutated).not.toBe(original);
-    expect(sha256(mutated)).not.toBe('b3bf82b5d5fad141137cd1c5184259d21e0dbd18bedfcc9717d6d4f06f55da39');
+    expect(sha256(mutated)).not.toBe('44cba939419c2e6e823d58ca8fd8eea430fa04954b72e73763b7f4741a20d1f3');
+  });
+
+  it('mutation-kills reversal helper idempotency exemption and actor validation', () => {
+    const original = bodyFor(migration, '_reverse_credit_memo_application');
+    for (const [from, to] of [
+      ['-- idempotency-body-check: exempt', '-- exemption removed'],
+      ['IF v_session_actor IS NULL THEN', 'IF false THEN'],
+      ['p_actor IS NULL OR p_actor IS DISTINCT FROM v_session_actor', 'false'],
+    ]) {
+      const mutated = original.replace(from, to);
+      expect(mutated).not.toBe(original);
+      expect(sha256(mutated)).not.toBe('44cba939419c2e6e823d58ca8fd8eea430fa04954b72e73763b7f4741a20d1f3');
+    }
   });
 
   it('mutation-kills the narrowly scoped transition override and restoration', () => {

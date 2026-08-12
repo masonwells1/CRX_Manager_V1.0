@@ -322,7 +322,19 @@ SET search_path = public, pg_temp
 AS $function$
 DECLARE
   v_previous_admin_override text := current_setting('app.admin_override', true);
+  v_session_actor uuid := auth.uid();
 BEGIN
+  -- idempotency-body-check: exempt
+  -- Internal helper: idempotency is owned by each public SECDEF caller. Keep
+  -- the inherited service_role grant, but do not let a direct caller forge the
+  -- actor written to the immutable reversal ledger.
+  IF v_session_actor IS NULL THEN
+    RAISE EXCEPTION 'AUTH_REQUIRED';
+  END IF;
+  IF p_actor IS NULL OR p_actor IS DISTINCT FROM v_session_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+
   PERFORM public._reverse_credit_memo_application_status_impl_20260812(
     p_application_id, p_actor, p_actor_role, p_reason
   );

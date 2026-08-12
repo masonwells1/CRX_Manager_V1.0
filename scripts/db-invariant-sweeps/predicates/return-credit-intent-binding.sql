@@ -78,7 +78,7 @@ SELECT 'return-credit-reversal:due-date-status' AS violation_key,
    SELECT 1
      FROM pg_proc p
     WHERE p.oid = to_regprocedure('public._reverse_credit_memo_application(uuid,uuid,text,text)')
-      AND encode(sha256(convert_to(replace(p.prosrc, E'\r\n', E'\n'), 'UTF8')), 'hex') = 'b3bf82b5d5fad141137cd1c5184259d21e0dbd18bedfcc9717d6d4f06f55da39'
+      AND encode(sha256(convert_to(replace(p.prosrc, E'\r\n', E'\n'), 'UTF8')), 'hex') = '44cba939419c2e6e823d58ca8fd8eea430fa04954b72e73763b7f4741a20d1f3'
       AND p.prosecdef
       AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
       AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')
