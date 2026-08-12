@@ -19,10 +19,10 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
 
 - The current source blob is pinned to `c8bec70830c643e474831985f5e6c3bd16630386`.
 - `node scripts/apply-live-testdata-maintenance-20260812.mjs --verify` produced pinned output blob
-  `ff34a9cf06441c777547925fa0ee9feaee8b3730`, matched all three snippet SHA-256 values, and passed a
+  `089ae2171bd2a5d048bd281dd27ea8c4a0b086ea`, matched all three snippet SHA-256 values, and passed a
   Node module syntax check without changing the repository target.
-- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 48 assertions against the
-  generated module, including all twelve defect classes found by the first seven Sol reviews.
+- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 49 assertions against the
+  generated module, including all thirteen classifier defect classes found by the first eight Sol reviews.
 - The write mode refused the dirty build worktree even with Mason's dated token.
 - Focused ESLint, TypeScript typecheck, agent-workflow tests, ledger check, and `git diff --check` passed.
 - The guarded commit suite passed lint, typecheck, production build, correction-guard tests,
@@ -75,6 +75,12 @@ any later live migration apply still requires the repository's current explicit 
   lone `\r`, allowing destructive SQL after that PostgreSQL line ending to remain hidden. Both now
   stop at the earliest `\r` or `\n`, with five destructive/DML/RPC reproductions; a fresh exact-head
   review remains required.
+- The eighth exact-head Sol review found that the new escape-aware statement scanner still delegated
+  dollar-body removal to the legacy non-escape-aware scanner, so ordinary strings could manufacture a
+  fake dollar span around a CTE `DELETE`. The classifier now uses one escape-aware scanner path for
+  splitting, dollar bodies, comments, and DML discovery, with the exact exploit pinned. The same pass
+  saw stale Wave A names only because current main advanced during review; merging current main
+  restored its already-reviewed `20260813…` names. A fresh exact-head review remains required.
 - GitHub checks and CodeRabbit must be complete and acceptable on the exact PR head.
 
 ## FIRST ACTION

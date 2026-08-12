@@ -3,7 +3,11 @@ export function classifySql(query) {
   if (!q) return { block: false };
 
   const statements = topLevelStatements(q);
-  const visibleStatements = statements.map((statement) => stripDollarQuoted(statement));
+  // topLevelStatements() and keywordView() share the same escape-aware quote,
+  // comment, and dollar-body rules. Do not hand this security path back to the
+  // legacy dollar-stripper: two scanners with different string semantics let
+  // one ordinary string manufacture a fake dollar span around real SQL.
+  const visibleStatements = statements;
   const visibleKeywordStatements = visibleStatements.map((statement) => keywordView(statement));
   const visibleKeywordText = visibleKeywordStatements.join(";\n");
 
@@ -77,10 +81,11 @@ export function classifySql(query) {
   // scratch targets. Persistent E2E fixtures must use the app/RPC path, where
   // authorization, invariants, and teardown identity are structural.
   const persistentDml = [];
-  for (const statement of visibleStatements) {
+  for (let index = 0; index < visibleStatements.length; index++) {
+    const statement = visibleStatements[index];
     for (const target of dmlTargets(statement)) {
       if (isPgTempTarget(target)) continue;
-      persistentDml.push({ statement: stripCommentsQuoteAware(statement), target });
+      persistentDml.push({ statement: visibleKeywordStatements[index], target });
     }
   }
   const guardedDmlText = persistentDml.map(({ statement }) => statement).join(";\n");

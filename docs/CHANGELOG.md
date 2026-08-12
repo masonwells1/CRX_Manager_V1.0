@@ -218,6 +218,14 @@ therefore hide a following mutation, destructive DDL, grant, or mutating RPC fro
 Both scanners now stop at the earliest `\r` or `\n`; five exact payloads bring the pinned suite to
 48 cases.
 
+The eighth exact-head pass found a split-brain lexer: the new escape-aware statement scanner still
+delegated dollar-body removal to the legacy scanner, whose ordinary-string handling was not
+escape-aware. An `E'…'` string could therefore manufacture a fake `$tag$…$tag$` span around a CTE
+`DELETE`. The classifier no longer uses that legacy scanner path; statement splitting, dollar-body
+blanking, comments, and DML discovery all use the same escape-aware rules. The exact payload is pinned,
+bringing the generated-module suite to 49 cases. Current main was merged at the same time so this
+branch preserves PR #387's already-reviewed `20260813…` Wave A names rather than reversing them.
+
 ## 2026-08-11 — A smoke selection that runs nothing no longer reports success
 
 Follow-up to the entry below, from its own adversarial review. Container-only chains are dropped
