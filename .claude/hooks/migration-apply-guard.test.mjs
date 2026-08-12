@@ -677,12 +677,28 @@ function armAutopilot(stateDir, hoursFromNow) {
     );
     ok(isDeny(r) && isOneShotDeny(r), "round-22: CTE + ONLY + alias combined → still denied");
 
-    // The normalization must not turn the guard blunt. A write to the same
-    // column of the same table on a DIFFERENT population is a different repair,
-    // and refusing it would put an override prompt in front of every future
-    // migration that touches orders.total_profit.
+    // REVERSED IN ROUND 23, DELIBERATELY. This assertion used to read
+    // `ok(!isOneShotDeny(r), ...)`, on the reasoning that a write to the same
+    // column on a DIFFERENT population is a different repair, and that refusing
+    // it "would put an override prompt in front of every future migration that
+    // touches orders.total_profit."
+    //
+    // The row-set binding is exactly what round 23 broke: `WHERE id = ANY(...)`
+    // is text, and `SET total_price = (total_price)` under a fresh name walked
+    // through every text check while writing the same rows. Distinguishing
+    // repairs by their WHERE clause is the same losing race one level down.
+    //
+    // The friction argument was also measured and does not hold. 29 migrations
+    // in this repository write order_items.total_price, but almost all do it
+    // inside a CREATE FUNCTION body, which writes nothing when the migration
+    // applies. Counting only apply-time writes, ZERO of the 881 non-registered
+    // migrations overlap the registered repair's targets. So the guard now
+    // refuses on the write target regardless of population, the operator
+    // records a digest-bound override for a genuinely different repair, and the
+    // measured cost of that across the repo's entire history is nothing.
     r = apply("20990601000011_different_population", "UPDATE public.orders SET total_profit = 1 WHERE id = 999;");
-    ok(!isOneShotDeny(r), "round-22: the same column on a different row set is not a replay");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-23: the same apply-time write target is a replay even on a different row set");
 
     // 3e. …and the CTE matters in the other direction, which is the one that was
     //     actually open. Wrapping the SUBMITTED write in a CTE never evaded
@@ -714,6 +730,76 @@ function armAutopilot(stateDir, hoursFromNow) {
       path.join(tmp, "supabase", "migrations", `${STEM}.sql`),
       `CREATE TEMP TABLE approved_ids (id int);\n${ONE_SHOT_SQL}\nDROP TABLE approved_ids;\n`,
     );
+
+    // 3f. ROUND 23 (Codex High). The three checks above compare TEXT, and the
+    //     set of texts performing one write is infinite, so each round found
+    //     another spelling. The reported break was a single pair of
+    //     parentheses: `SET total_profit = (total_profit)` under a fresh name.
+    //     Normalizing parentheses would have invited round 24, so the guard now
+    //     also compares what the SQL WRITES when it applies — every case below
+    //     changes the text and none of them change the write.
+    let labelIdx = 0;
+    for (const [label, sql] of [
+      ["parenthesized self-assignment (the reported break)",
+        "UPDATE public.orders SET total_profit = (total_profit) WHERE id = 2;"],
+      ["doubled parentheses",
+        "UPDATE public.orders SET total_profit = ((total_profit)) WHERE id = 2;"],
+      ["a redundant cast on the value",
+        "UPDATE public.orders SET total_profit = total_profit::numeric WHERE id = 2;"],
+      ["quoted identifiers",
+        'UPDATE public."orders" SET "total_profit" = 1 WHERE id = 2;'],
+      ["a comment wedged inside the SET clause",
+        "UPDATE public.orders SET /* nothing to see */ total_profit = 1 WHERE id = 2;"],
+      ["the write buried in a DO block",
+        "DO $$ BEGIN UPDATE public.orders SET total_profit = 1 WHERE id = 2; END $$;"],
+      ["an upsert reaching the column through ON CONFLICT",
+        "INSERT INTO public.orders (id) VALUES (2) ON CONFLICT (id) DO UPDATE SET total_profit = 1;"],
+      ["the tuple form of SET",
+        "UPDATE public.orders SET (total_profit) = ROW(1) WHERE id = 2;"],
+      ["a whole-row delete, which takes the column with it",
+        "DELETE FROM public.orders WHERE id = 2;"],
+      ["dynamic SQL naming the table in a literal",
+        "DO $$ BEGIN EXECUTE 'UPDATE public.orders SET total_profit = 1'; END $$;"],
+      ["dynamic SQL choosing the table at runtime",
+        "DO $$ BEGIN EXECUTE format('UPDATE %I SET total_profit = 1', v_t); END $$;"],
+    ]) {
+      r = apply(`20990601${String(20 + labelIdx++).padStart(6, "0")}_r23`, sql);
+      ok(isDeny(r) && isOneShotDeny(r), `round-23: ${label} → still denied`);
+    }
+
+    // The semantic layer must stay a scalpel. A migration that DEFINES a
+    // routine writing the same column writes nothing when it applies — 29
+    // migrations here do exactly that — and counting them would put an override
+    // prompt in front of nearly every RPC change, which is how a guard gets
+    // switched off.
+    //
+    // The body below writes the registered COLUMN but is not the registered
+    // STATEMENT, so the text layers have nothing to match and this case tests
+    // the semantic layer on its own. (A routine body that did quote the
+    // registered statement verbatim is still refused by the round-20 shared-
+    // statement check, which cannot tell a routine body from a DO body — that
+    // is pre-existing behavior and deliberately not relaxed here.)
+    r = apply(
+      "20990601000040_defines_a_writer",
+      "CREATE OR REPLACE FUNCTION public.recalc(p_id bigint) RETURNS void LANGUAGE plpgsql AS $$\n" +
+        "BEGIN UPDATE public.orders SET total_profit = compute_profit(p_id) WHERE id = p_id; END;\n$$;",
+    );
+    ok(!isOneShotDeny(r), "round-23: defining a function that writes the column is not an apply-time replay");
+
+    r = apply("20990601000041_grants", "GRANT UPDATE ON public.orders TO authenticated;");
+    ok(!isOneShotDeny(r), "round-23: granting UPDATE on the table is not a write");
+
+    r = apply(
+      "20990601000042_trigger",
+      "CREATE TRIGGER t AFTER UPDATE OF total_profit ON public.orders FOR EACH ROW EXECUTE FUNCTION f();",
+    );
+    ok(!isOneShotDeny(r), "round-23: a trigger definition naming the column is not a write");
+
+    r = apply("20990601000043_other_column", "UPDATE public.orders SET status = 'x' WHERE id = 2;");
+    ok(!isOneShotDeny(r), "round-23: a different column of the same table is not the registered repair");
+
+    r = apply("20990601000044_other_table", "UPDATE public.invoices SET total_profit = 1 WHERE id = 2;");
+    ok(!isOneShotDeny(r), "round-23: the same column name on a different table is not the registered repair");
 
     // 4. ROUND 12 (Codex High) reversed this case. Round 8 let a one-shot
     //    through whenever the ledger already contained it, reasoning that such a

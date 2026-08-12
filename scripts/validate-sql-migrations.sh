@@ -2450,6 +2450,47 @@ $MIG_BASENAME
           }
         ' "$file" | sort -u)
 
+        # A NO-OP `ADD COLUMN` IS NOT AN ADDED COLUMN (Codex High, round 23).
+        # The scan above accepts `ADD COLUMN IF NOT EXISTS total_profit` as
+        # proof the migration adds that column. On a column that already
+        # exists the ALTER does nothing at all, so the very next statement
+        # rewrites a pre-existing money population under a waiver that claims
+        # there was nothing there to protect:
+        #
+        #   -- APPROVED_SET_DIGEST: NOT-REQUIRED (orders)
+        #   ALTER TABLE public.orders ADD COLUMN IF NOT EXISTS total_profit numeric;
+        #   UPDATE public.orders SET total_profit = 0;
+        #
+        # The file alone cannot tell the two apart — whether the column is new
+        # is a fact about the database, not about this text. So the claim is
+        # checked against the trusted base: a column the schema registry
+        # already lists is not one this migration adds, and drops out of the
+        # added set, which puts its rewrite back under the digest requirement.
+        # Fails closed — if the registry cannot be read, nothing counts as
+        # added and every waived column is refused.
+        if [ -n "$ADDED_COLS" ]; then
+          ADDED_COLS=$(printf '%s\n' "$ADDED_COLS" | node -e "
+const fs = require('fs');
+const reg = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+const cols = reg.columns || {};
+const known = (t, c) => {
+  const v = cols[t];
+  if (!v) return false;                       // not in the trusted base
+  const list = Array.isArray(v) ? v : Object.keys(v);
+  return list.includes(c);
+};
+const out = [];
+for (const line of fs.readFileSync(0, 'utf8').split(/\r?\n/)) {
+  if (!line.trim()) continue;
+  const [t, c] = line.split('\t');
+  if (!t || !c) continue;
+  if (known(t, c)) continue;                  // pre-existing: the ALTER is a no-op
+  out.push(t + '\t' + c);
+}
+process.stdout.write(out.join('\n'));
+" "$APPROVED_SET_REGISTRY" 2>/dev/null || true)
+        fi
+
         MISSING_TBL=""
         UNADDED_TBL=""
         while IFS=$'\t' read -r r_ln r_tbl r_kind r_cols r_var r_raw; do
@@ -2483,6 +2524,8 @@ $MIG_BASENAME
           echo "  APPROVED_SET_DIGEST: NOT-REQUIRED is only for backfilling a column this"
           echo "  migration adds. These writes hit columns it does not add:$UNADDED_TBL"
           echo "  Pre-existing values are being rewritten — bind them with an approved-set digest."
+          echo "  Note: an ADD COLUMN IF NOT EXISTS on a column the schema registry"
+          echo "  already lists does nothing, so it does not make that column new."
           echo ""
           VIOLATIONS=$((VIOLATIONS + 1))
         else

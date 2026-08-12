@@ -2,6 +2,55 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-12 — The replay guard stops reading SQL and starts reading what it writes
+
+Closed both High findings from the round-23 adversarial review.
+
+**A no-op `ADD COLUMN IF NOT EXISTS` counted as an added column.** The validator
+treated any `ADD COLUMN` as introducing a new column, so naming a column that
+already exists — where `IF NOT EXISTS` makes the statement do nothing —
+manufactured an "added column" the write rules then exempted. The added-column
+set is now filtered against the schema registry: a column the registry already
+lists is not an addition. It fails closed, so an unreadable or absent registry
+exempts nothing.
+
+**Twenty-three rounds of text matching ended the way text matching ends.** The
+one-shot replay check asked whether the submitted SQL *looked like* the repair
+that already ran — a normalized name match, whole-body containment, and a shared
+write statement. Round 23 submitted `SET total_price = (total_price)` under a
+fresh timestamped name. One pair of parentheses; three checks walked past. Each
+of the last several rounds has been the same shape at a different spelling, and
+normalizing parentheses would only have set the terms for round 24: the set of
+texts performing one write is infinite.
+
+So the guard now also answers a finite question — which `(table, column)` pairs
+does this SQL write **when it applies**? Parentheses, aliases, casing, comments,
+CTEs, quoting, upserts and `DO` blocks all change the text and none of them
+change the answer. The load-bearing distinction is apply-time versus deferred: a
+`CREATE FUNCTION` body defines behavior and writes nothing at apply time, while
+a `DO` block executes immediately.
+
+That distinction is also what makes the check affordable. A table+column
+fingerprint was rejected in an earlier round as too noisy, on the stated grounds
+that it would flag every future migration touching the same column. Measured,
+that reasoning was counting function bodies: 29 migrations write the registered
+column, but almost all do it inside a routine body. Counting only apply-time
+writes, **zero of the other 881 migrations in the tree overlap the registered
+repair's targets** — the semantic check costs the repository nothing. Where a
+target cannot be resolved statically (`EXECUTE format('UPDATE %I ...', v_t)`) or
+the SQL will not parse, it refuses rather than passing quietly.
+
+The text checks stay as the first layer; either layer is enough to refuse. The
+round-22 case asserting that "the same column on a different row set is not a
+replay" is deliberately reversed, with the reasoning recorded at the assertion:
+distinguishing repairs by their `WHERE` clause is the same losing race one level
+down.
+
+Both fixes are mutation-tested — five separate breaks of the new layer, each
+turning its own cases red and nothing else, with both files restoring
+byte-identically. Approved-set suite 123 cases, apply guard 157 assertions, and
+a new 49-assertion suite for the write-target reader itself.
+
 ## 2026-08-12 — The full-audit baseline now covers Wave A's self-test probes
 
 Merging `main` brought six Wave A migrations (`20260812010000` through

@@ -527,6 +527,29 @@ const CASES = [
       `DELETE FROM public.invoice_items WHERE id IS NOT NULL;\n`,
   },
   {
+    // Codex High, round 23. `IF NOT EXISTS` on a column that already exists is
+    // a no-op, so the migration adds nothing while claiming the waiver that is
+    // only honest when it adds the column. Whether the column is new is a fact
+    // about the database, so the claim is checked against the schema registry.
+    name: 'ADD COLUMN IF NOT EXISTS on a pre-existing column is not an added column',
+    expect: 'violation',
+    sql:
+      `-- APPROVED_SET_DIGEST: NOT-REQUIRED (orders) - backfills a column this migration adds\n` +
+      `ALTER TABLE public.orders ADD COLUMN IF NOT EXISTS total_profit numeric;\n` +
+      `UPDATE public.orders SET total_profit = 0;\n`,
+  },
+  {
+    // The same evasion with the harmless-column pairing: one genuinely new
+    // column earns the waiver, a no-op ALTER smuggles the money column in.
+    name: 'a real ADD COLUMN cannot carry a no-op IF NOT EXISTS alongside it',
+    expect: 'violation',
+    sql:
+      `-- APPROVED_SET_DIGEST: NOT-REQUIRED (orders) - backfills columns this migration adds\n` +
+      `ALTER TABLE public.orders ADD COLUMN backfill_note_cents bigint;\n` +
+      `ALTER TABLE public.orders ADD COLUMN IF NOT EXISTS total_profit numeric;\n` +
+      `UPDATE public.orders SET backfill_note_cents = 0, total_profit = 0;\n`,
+  },
+  {
     name: 'inventory is covered, not just the ordering tables',
     expect: 'violation',
     sql: `UPDATE public.inventory SET quantity_on_hand = 0;\n`,
@@ -539,12 +562,15 @@ const CASES = [
 
   // ── must WARN (accepted, but never silent) ──────────────────────────────
   {
+    // The column must be one the trusted base does not already have, or the
+    // ALTER would fail at apply time and the waiver would be a fiction. See
+    // the round-23 case below.
     name: 'waiver naming every table, backfilling a column this migration adds',
     expect: 'warning',
     sql:
       `-- APPROVED_SET_DIGEST: NOT-REQUIRED (orders) - backfills a column this migration adds\n` +
-      `ALTER TABLE public.orders ADD COLUMN total_profit bigint;\n` +
-      `UPDATE public.orders SET total_profit = 0;\n`,
+      `ALTER TABLE public.orders ADD COLUMN margin_review_cents bigint;\n` +
+      `UPDATE public.orders SET margin_review_cents = 0;\n`,
   },
 
   // ── must PASS silently ──────────────────────────────────────────────────

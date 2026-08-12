@@ -25,6 +25,7 @@ import { flagActive } from "./autopilot-lib.mjs";
 import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
 import { sessionProofDirs } from "./codex-push-lib.mjs";
 import { checkMigrationOrdering } from "./migration-ordering-lib.mjs";
+import { applyTimeWriteTargets, overlappingTargets } from "./apply-time-dml-lib.mjs";
 
 const REQUIRED_CODEX_MODEL = "gpt-5.6-sol";
 const REQUIRED_CODEX_EFFORT = "high";
@@ -432,11 +433,24 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
     // normalization cannot make two genuinely different repairs collide — it
     // only removes spellings that PostgreSQL itself treats as identical.
     //
-    // Deliberately NOT a table+column fingerprint. That would also match any
-    // future migration touching the same column of the same table, and this
-    // hook refuses on a match — turning every later legitimate write to
-    // orders.total_profit into an override prompt. The registered statements
-    // carry their own `WHERE id = ANY(...)` binding, which is specific enough.
+    // Normalization is the FIRST layer, not the only one. Every round of this
+    // has the same shape — the guard asks "does this text look like the repair
+    // we already ran?", and the next round finds another spelling that reads
+    // differently and runs identically. Round 23 turned `SET total_price =
+    // total_price` into `SET total_price = (total_price)`, and normalizing
+    // parentheses would just invite round 24. The semantic layer below asks the
+    // smaller, finite question instead: what does this SQL WRITE when it
+    // applies? These checks run together; either one is enough to refuse.
+    //
+    // An earlier version of this comment rejected a table+column fingerprint as
+    // too noisy, on the grounds that it "would also match any future migration
+    // touching the same column of the same table". That was measured and is
+    // wrong, because it counted function bodies. 29 migrations here write
+    // order_items.total_price — but almost all of them do it inside a
+    // `CREATE FUNCTION` body, which writes nothing at apply time. Separating
+    // apply-time writes from deferred ones, ZERO of the other 881 migrations in
+    // this repository overlap the registered repair's targets. The fingerprint
+    // costs no friction at all.
     const norm = (s) => stripComments(s)
       .toLowerCase()
       .replace(/\s+/g, " ")
@@ -489,6 +503,20 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
       .filter((st) => st.length >= 40);
 
     const normQuery = norm(migQuery);
+
+    // WHAT THE SUBMITTED SQL ACTUALLY WRITES, as (table, column) pairs, counting
+    // only statements that execute when the migration applies. Computed once;
+    // see apply-time-dml-lib.mjs for why deferred routine bodies are excluded.
+    let submitted = { targets: new Set(), dynamicWrites: [], unresolved: false };
+    try {
+      submitted = applyTimeWriteTargets(migQuery);
+    } catch {
+      // A parse this module cannot handle must not silently mean "writes
+      // nothing". Treat it as unresolvable so the semantic check below refuses
+      // rather than waving the migration through.
+      submitted = { targets: new Set(), dynamicWrites: [], unresolved: true };
+    }
+
     const ledgerHas = (stem) => {
       const version = (stem.match(/\d{14}/) || [])[0];
       return appliedNames.some((n) => n.includes(stem) || (version && n.includes(version)));
@@ -519,6 +547,57 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
               matched =
                 `a write statement carried over from ${stem}.sql on disk ` +
                 `(“${shared.slice(0, 80)}${shared.length > 80 ? "…" : ""}”)`;
+              break;
+            }
+
+            // SEMANTIC LAYER (Codex High, round 23). The three checks above all
+            // compare TEXT, and the set of texts that perform one write is
+            // infinite. This one compares what the two files DO at apply time.
+            // Rewording, re-parenthesizing, aliasing, re-casing, or re-commenting
+            // the registered repair changes every text comparison and changes
+            // nothing here.
+            const registered = applyTimeWriteTargets(readFileSync(filePath, "utf8"));
+
+            // A registered one-shot whose own targets cannot be read statically
+            // gives this layer nothing to compare against. Rather than pass
+            // quietly, treat any apply-time write in the submitted SQL as
+            // needing the override. Nothing in the registry does this today, so
+            // it costs nothing until someone registers dynamic SQL — at which
+            // point a prompt is the correct outcome.
+            if (registered.unresolved && submitted.targets.size) {
+              matched =
+                `an apply-time write that cannot be cleared against ${stem}.sql, whose own ` +
+                `write target is decided at runtime`;
+              break;
+            }
+            if (registered.targets.size === 0) continue;
+
+            const hits = overlappingTargets(submitted.targets, registered.targets);
+            if (hits.length) {
+              matched =
+                `the columns it writes when it applies — ${[...new Set(hits)].sort().join(", ")} — ` +
+                `which is what ${stem}.sql already wrote`;
+              break;
+            }
+
+            // A write whose relation is chosen at runtime (`EXECUTE format(
+            // 'UPDATE %I ...', v_table)`) cannot be cleared statically, and
+            // neither can SQL this module failed to parse. Both fail toward
+            // refusing: an override prompt costs one message, a missed replay
+            // costs a money population.
+            const regTables = new Set([...registered.targets].map((t) => t.split(".")[0]));
+            if (submitted.unresolved && regTables.size) {
+              matched =
+                `an apply-time write whose target table is decided at runtime, which cannot be ` +
+                `ruled out against ${stem}.sql (${[...regTables].sort().join(", ")})`;
+              break;
+            }
+            const dynHit = submitted.dynamicWrites.find((lit) =>
+              [...regTables].some((t) => new RegExp(`\\b${t}\\b`, "i").test(lit)));
+            if (dynHit) {
+              matched =
+                `a dynamically executed write naming a table ${stem}.sql wrote ` +
+                `(“${dynHit.slice(0, 80).replace(/\s+/g, " ")}${dynHit.length > 80 ? "…" : ""}”)`;
               break;
             }
           } catch { /* a missing or unreadable file just means no body match */ }
