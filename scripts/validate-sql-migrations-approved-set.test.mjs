@@ -362,6 +362,24 @@ const CASES = [
     expect: 'violation',
     sql: `UPDATE public.orders SET total_profit = 1;\n${GOOD_ROLLBACK_PROBE}`,
   },
+  {
+    name: 'rollback probe cannot borrow a later exception block for an escaped rewrite',
+    expect: 'violation',
+    sql: `-- APPROVED_SET_DIGEST: ROLLBACK-PROBE (orders) - forged scope
+DO $$
+BEGIN
+  UPDATE public.orders SET total_profit = 0;
+  BEGIN
+    RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'PROBE_OK_ROLLBACK';
+  EXCEPTION
+    WHEN OTHERS THEN
+      IF SQLERRM <> 'PROBE_OK_ROLLBACK' THEN RAISE; END IF;
+  END;
+  IF false THEN
+    RAISE EXCEPTION 'forged residue check — rollback did not hold';
+  END IF;
+END $$;`,
+  },
 
   // ── must WARN (accepted, but never silent) ──────────────────────────────
   {

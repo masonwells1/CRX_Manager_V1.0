@@ -804,30 +804,111 @@ for file in $ALL_SQL; do
         : # bound to an approved-set digest, asserted fail-closed before the write
       elif [ -n "$ROLLBACK_PROBE" ]; then
         PROBE_MARKER_LINE=$(grep -inE 'APPROVED_SET_DIGEST:[[:space:]]*ROLLBACK-PROBE' "$file" | head -1 | cut -d: -f1)
-        PROBE_BEGIN_LINE=$(awk -v marker="$PROBE_MARKER_LINE" -v first="$FIRST_REWRITE_LINE" '
-          FNR <= marker || FNR >= first { next }
-          { l = tolower($0); sub(/--.*/, "", l) }
-          l ~ /^[[:space:]]*begin[[:space:]]*;?[[:space:]]*$/ { print FNR; exit }
-        ' "$file")
-        PROBE_SENTINEL_LINE=$(awk -v last="$LAST_REWRITE_LINE" '
-          FNR <= last { next }
-          { l = tolower($0); sub(/--.*/, "", l) }
-          l ~ /raise[[:space:]]+exception/ && l ~ /message[[:space:]]*=[[:space:]]*'"'"'probe_ok_rollback'"'"'/ { print FNR; exit }
-        ' "$file")
-        PROBE_EXCEPTION_LINE=$(awk -v sentinel="$PROBE_SENTINEL_LINE" '
-          FNR <= sentinel { next }
-          { l = tolower($0); sub(/--.*/, "", l) }
-          l ~ /^[[:space:]]*exception[[:space:]]*$/ { print FNR; exit }
-        ' "$file")
-        PROBE_CATCH_LINE=$(awk -v exception_line="$PROBE_EXCEPTION_LINE" '
-          FNR <= exception_line { next }
-          { l = tolower($0); sub(/--.*/, "", l) }
-          l ~ /sqlerrm[[:space:]]*<>[[:space:]]*'"'"'probe_ok_rollback'"'"'/ { print FNR; exit }
-        ' "$file")
-        PROBE_VERIFY_LINE=$(awk -v catch_line="$PROBE_CATCH_LINE" '
-          FNR <= catch_line { next }
-          { l = tolower($0); sub(/--.*/, "", l) }
-          l ~ /raise[[:space:]]+exception/ && l ~ /rollback did not hold/ { print FNR; exit }
+        REWRITE_LINES=$(printf '%s\n' "$REWRITES" | cut -f1 | tr '\n' ' ')
+
+        # Match the actual PL/pgSQL block that owns the sentinel. Simple line
+        # ordering is not enough: an UPDATE can sit outside a later
+        # BEGIN/EXCEPTION block, while that unrelated block supplies the
+        # sentinel and catch tokens. Such an UPDATE would survive. Record the
+        # active BEGIN ancestry at every rewrite, identify the sentinel's own
+        # block, and require that block to be an ancestor of every rewrite.
+        # The residue assertion must then run after that exact block closes, in
+        # its parent scope. Non-canonical one-line block syntax fails closed.
+        PROBE_SCOPE=$(awk \
+          -v marker="$PROBE_MARKER_LINE" \
+          -v first="$FIRST_REWRITE_LINE" \
+          -v last="$LAST_REWRITE_LINE" \
+          -v rewrite_lines="$REWRITE_LINES" '
+          BEGIN {
+            count = split(rewrite_lines, listed, /[[:space:]]+/)
+            expected = 0
+            for (i = 1; i <= count; i++) {
+              if (listed[i] ~ /^[0-9]+$/) {
+                rewrites[listed[i]] = 1
+                expected++
+              }
+            }
+          }
+          {
+            # The marker starts a self-contained canonical proof region. Ignore
+            # earlier function bodies and DO-block control flow: their BEGINs,
+            # CASE ENDs, and exception handlers are unrelated to this waiver
+            # and would corrupt the local ancestry stack.
+            if (FNR <= marker) next
+            l = tolower($0)
+            sub(/--.*/, "", l)
+
+            if (l ~ /^[[:space:]]*begin[[:space:]]*;?[[:space:]]*$/) {
+              depth++
+              begin_at[depth] = FNR
+              in_handler[depth] = 0
+              next
+            }
+
+            if (FNR in rewrites) {
+              seen++
+              path[FNR] = "|"
+              for (i = 1; i <= depth; i++) path[FNR] = path[FNR] begin_at[i] "|"
+            }
+
+            if (!sentinel && FNR > last &&
+                l ~ /raise[[:space:]]+exception/ &&
+                l ~ /message[[:space:]]*=[[:space:]]*'"'"'probe_ok_rollback'"'"'/) {
+              sentinel = FNR
+              probe_depth = depth
+              probe_begin = begin_at[depth]
+            }
+
+            if (l ~ /^[[:space:]]*exception[[:space:]]*$/) {
+              in_handler[depth] = 1
+              if (sentinel && !probe_exception && depth == probe_depth && FNR > sentinel) {
+                probe_exception = FNR
+              }
+              next
+            }
+
+            if (probe_exception && !probe_catch && depth == probe_depth &&
+                l ~ /sqlerrm[[:space:]]*<>[[:space:]]*'"'"'probe_ok_rollback'"'"'/) {
+              probe_catch = FNR
+            }
+
+            if (probe_end && !probe_verify && depth == probe_depth - 1 &&
+                l ~ /raise[[:space:]]+exception/ && l ~ /rollback did not hold/) {
+              probe_verify = FNR
+            }
+
+            if (l ~ /^[[:space:]]*end[[:space:]]*;[[:space:]]*$/) {
+              if (sentinel && probe_exception && !probe_end && depth == probe_depth) {
+                probe_end = FNR
+              }
+              delete begin_at[depth]
+              delete in_handler[depth]
+              depth--
+            }
+          }
+          END {
+            why = ""
+            if (seen != expected) why = "could not map every rewrite into a PL/pgSQL block"
+            else if (!probe_begin || probe_begin <= marker || probe_begin >= first)
+              why = "the sentinel block does not begin between the marker and first rewrite"
+            else {
+              for (line in rewrites) {
+                needle = "|" probe_begin "|"
+                if (index(path[line], needle) == 0) {
+                  why = "a rewrite escapes the sentinel exception subtransaction"
+                  break
+                }
+              }
+            }
+            if (!why && !sentinel) why = "does not raise the exact PROBE_OK_ROLLBACK sentinel after every rewrite"
+            else if (!why && !probe_exception) why = "the sentinel block has no matching PL/pgSQL EXCEPTION clause"
+            else if (!why && !probe_catch) why = "the sentinel block does not reject every error except the exact PROBE_OK_ROLLBACK sentinel"
+            else if (!why && !probe_end) why = "the sentinel exception subtransaction has no matching END"
+            else if (!why && !probe_verify) why = "has no fail-closed residue assertion after the sentinel subtransaction closes"
+
+            if (why) print "FAIL|" why
+            else print "OK|" probe_begin "|" sentinel "|" probe_exception "|" probe_catch "|" probe_end "|" probe_verify
+          }
         ' "$file")
 
         MISSING_TBL=""
@@ -843,18 +924,8 @@ for file in $ALL_SQL; do
           PROBE_WHY="does not name every rewritten table (missing:$MISSING_TBL)"
         elif [ -z "$PROBE_MARKER_LINE" ] || [ "$PROBE_MARKER_LINE" -ge "$FIRST_REWRITE_LINE" ]; then
           PROBE_WHY="marker is not before the first rewrite"
-        elif [ -z "$PROBE_BEGIN_LINE" ]; then
-          PROBE_WHY="has no BEGIN subtransaction between the marker and first rewrite"
-        elif [ -z "$PROBE_SENTINEL_LINE" ]; then
-          PROBE_WHY="does not raise the exact PROBE_OK_ROLLBACK sentinel after every rewrite"
-        elif [ -z "$PROBE_EXCEPTION_LINE" ]; then
-          PROBE_WHY="has no PL/pgSQL EXCEPTION block after the sentinel"
-        elif [ -z "$PROBE_CATCH_LINE" ]; then
-          PROBE_WHY="does not reject every error except the exact PROBE_OK_ROLLBACK sentinel"
-        elif [ "$PROBE_EXCEPTION_LINE" -ge "$PROBE_CATCH_LINE" ]; then
-          PROBE_WHY="does not catch the sentinel through a PL/pgSQL EXCEPTION block"
-        elif [ -z "$PROBE_VERIFY_LINE" ]; then
-          PROBE_WHY="has no fail-closed post-rollback residue assertion"
+        elif [[ "$PROBE_SCOPE" == FAIL\|* ]]; then
+          PROBE_WHY=${PROBE_SCOPE#FAIL|}
         fi
 
         if [ -n "$PROBE_WHY" ]; then
