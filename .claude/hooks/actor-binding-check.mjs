@@ -253,8 +253,28 @@ function isDynamicSqlStatement(stmt, rawStmt = stmt) {
     DECLARATION_INIT_RE.test(stmt) ||
     /\bSELECT\b[\s\S]*\bINTO\b/i.test(stmt) ||
     /\bVALUES\b[\s\S]*\bINTO\b/i.test(stmt) ||
+    /\bCOPY\b[\s\S]*\bPROGRAM\b/i.test(stmt) ||
+    /\bOPERATOR\s*\(/i.test(stmt) ||
     isPgCronCall(rawStmt) ||
     isPgCronCommandWrite(rawStmt);
+}
+
+/** A user-defined operator can be an alias for the reviewed SQL executor and
+ * later receive text without looking like a callable. Refuse creation of that
+ * alias at the identity boundary; future SQL can use the symbolic operator
+ * spelling, which cannot be tied back to its procedure lexically. */
+function hasExecuteSqlReadonlyOperatorAlias(structuralSql) {
+  const sql = String(structuralSql || "");
+  const executor =
+    `(?:(?:"public"|public)\\s*\\.\\s*)?(?:"execute_sql_readonly"|execute_sql_readonly)`;
+  const opaqueUnicodeExecutor =
+    `(?:${SQL_UNICODE_IDENTIFIER_PATTERN}(?:\\s*\\.\\s*${SQL_IDENTIFIER_PATTERN})?|` +
+      `${SQL_IDENTIFIER_PATTERN}\\s*\\.\\s*${SQL_UNICODE_IDENTIFIER_PATTERN})`;
+  return new RegExp(
+    `\\bCREATE\\s+OPERATOR\\s+[^;]*?\\([^;]*?` +
+      `\\b(?:FUNCTION|PROCEDURE)\\s*=\\s*(?:${executor}|${opaqueUnicodeExecutor})(?![\\w$])`,
+    "i"
+  ).test(sql);
 }
 
 /** Mask data strings and comments but retain quoted identifiers. The main SQL
@@ -1863,6 +1883,14 @@ try {
     );
   }
   const masked = maskSqlNoise(content);
+  if (masked !== null && hasExecuteSqlReadonlyOperatorAlias(masked)) {
+    violations.push(
+      "This migration aliases execute_sql_readonly behind a PostgreSQL operator, so later SQL text " +
+      "would cross the owner-executing boundary without a recognizable callable name. Keep the " +
+      "executor directly named, or add the file-level exempt marker " +
+      "(-- actor-binding-check: exempt) and get a manual review."
+    );
+  }
   if (masked === null) {
     if (sawOpaqueFunctionCallable) {
       violations.push(

@@ -327,6 +327,63 @@ r = runHook(`SELECT public.actor_sql_alias($outer$
 $outer$);`);
 ok(isDeny(r), "an unknown callable cannot receive function-bearing SQL without manual review");
 
+r = runHook(`CREATE OPERATOR public.## (
+  RIGHTARG = text,
+  FUNCTION = public.execute_sql_readonly
+);
+SELECT OPERATOR(public.##) $outer$
+  SELECT cron.schedule('operator-delayed-actor-ddl', '* * * * *',
+    $job$${UNBOUND_DDL}$job$)
+$outer$;`);
+ok(isDeny(r), "an operator alias cannot pass function-bearing SQL to a protected executor");
+
+r = runHook(`CREATE OPERATOR public.## (
+  RIGHTARG = text,
+  FUNCTION = public.execute_sql_readonly
+);`);
+ok(isDeny(r), "creating an operator alias for the protected executor fails closed before later use");
+
+r = runHook(`DO $do$ BEGIN
+  EXECUTE $ddl$CREATE OPERATOR public.## (
+    RIGHTARG = text,
+    FUNCTION = public.execute_sql_readonly
+  )$ddl$;
+END $do$;`);
+ok(isDeny(r), "dynamic SQL cannot create an operator alias for the protected executor");
+
+r = runHook(`CREATE OPERATOR public.## (
+  RIGHTARG = text,
+  FUNCTION = U&"\\0070ublic".U&"\\0065xecute_sql_readonly"
+);`);
+ok(isDeny(r), "a Unicode executor identity cannot hide behind an operator alias");
+
+r = runHook(`CREATE OPERATOR public.## (
+  RIGHTARG = text,
+  FUNCTION = public.store_documentation
+);`);
+ok(!isDeny(r), "an operator definition for an unrelated function is not an executor identity alias");
+
+r = runHook(`SELECT OPERATOR(public.##) $query$SELECT 1$query$;`);
+ok(!isDeny(r), "an operator expression without function-bearing SQL remains outside this guard");
+
+r = runHook(`COPY (SELECT $outer$
+  SELECT cron.schedule('program-delayed-actor-ddl', '* * * * *',
+    $job$${UNBOUND_DDL}$job$)
+$outer$) TO PROGRAM 'psql';`);
+ok(isDeny(r), "COPY TO PROGRAM cannot receive function-bearing SQL for an external executor");
+
+r = runHook(`COPY (SELECT 1) TO PROGRAM $program$
+  psql -c "SELECT cron.schedule('program-command-actor-ddl', '* * * * *',
+    '${UNBOUND_DDL}')"
+$program$;`);
+ok(isDeny(r), "a COPY PROGRAM command cannot embed function-bearing SQL for psql");
+
+r = runHook(`COPY (SELECT 1) TO PROGRAM 'gzip > /tmp/export.gz';`);
+ok(!isDeny(r), "a COPY PROGRAM command without function-bearing SQL remains outside this guard");
+
+r = runHook(`COPY (SELECT $data$ordinary export data$data$) TO STDOUT;`);
+ok(!isDeny(r), "ordinary COPY data without a PROGRAM sink remains allowed");
+
 r = runHook(`SELECT public.actor_sql_alias('connection-name', $outer$${UNBOUND_DDL}$outer$);`);
 ok(isDeny(r), "a later positional argument cannot hide function-bearing SQL");
 

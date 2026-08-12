@@ -215,6 +215,19 @@ invalidate the trusted local. The focused suite has 323 passing assertions;
 the quoted exploit failed before the repair and passes after it, alongside a
 Unicode-qualified regression. All 36 current August migrations still pass.
 
+Review round two found two non-callable execution boundaries. A migration could
+hide `execute_sql_readonly(text)` behind a user-defined PostgreSQL operator, or
+place function-bearing SQL directly in a `COPY ... TO PROGRAM` command for an
+external `psql` process. Creating an operator alias for the protected executor
+now fails closed, and function-bearing literals in explicit operator expressions
+or `COPY PROGRAM` statements enter the same runtime-SQL review boundary as
+callables. Operator-alias discovery also inspects direct dynamic SQL and fails
+closed on Unicode-escaped handler identities. The focused suite has 333 passing
+assertions. Both exploit probes were confirmed red before the repair and green
+after it; unrelated operators, harmless operator payloads, ordinary `COPY`, and
+harmless program commands stay compatible. All 36 current August migrations
+still pass without an internal reader error.
+
 ## 2026-08-11 — Close executable cross-migration cron.job view aliases
 
 Hardened the actor-binding SQL reader against persistent updatable aliases that
