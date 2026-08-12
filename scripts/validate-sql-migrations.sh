@@ -804,6 +804,10 @@ for file in $ALL_SQL; do
         : # bound to an approved-set digest, asserted fail-closed before the write
       elif [ -n "$ROLLBACK_PROBE" ]; then
         PROBE_MARKER_LINE=$(grep -inE 'APPROVED_SET_DIGEST:[[:space:]]*ROLLBACK-PROBE' "$file" | head -1 | cut -d: -f1)
+        PROBE_BODY_LINE=$(awk -v marker="$PROBE_MARKER_LINE" '
+          FNR < marker && tolower($0) ~ /^[[:space:]]*do[[:space:]]+\$([a-z_][a-z0-9_]*)?\$[[:space:]]*$/ { body = FNR }
+          END { print body + 0 }
+        ' "$file")
         REWRITE_LINES=$(printf '%s\n' "$REWRITES" | cut -f1 | tr '\n' ' ')
 
         # Match the actual PL/pgSQL block that owns the sentinel. Simple line
@@ -816,10 +820,17 @@ for file in $ALL_SQL; do
         # its parent scope. Non-canonical one-line block syntax fails closed.
         PROBE_SCOPE=$(awk \
           -v marker="$PROBE_MARKER_LINE" \
+          -v body="$PROBE_BODY_LINE" \
           -v first="$FIRST_REWRITE_LINE" \
           -v last="$LAST_REWRITE_LINE" \
           -v rewrite_lines="$REWRITE_LINES" '
           BEGIN {
+            apos = sprintf("%c", 39)
+            marker_re = "^[[:space:]]*--[[:space:]]*approved_set_digest:[[:space:]]*rollback-probe([^a-z0-9_]|$)"
+            sentinel_raw_re = "^[[:space:]]*raise[[:space:]]+exception[[:space:]]+using[[:space:]]+errcode[[:space:]]*=[[:space:]]*" apos "p0001" apos ",[[:space:]]*message[[:space:]]*=[[:space:]]*" apos "probe_ok_rollback" apos ";[[:space:]]*(--.*)?$"
+            catch_one_raw_re = "^[[:space:]]*if[[:space:]]+sqlerrm[[:space:]]*<>[[:space:]]*" apos "probe_ok_rollback" apos "[[:space:]]+then[[:space:]]+raise;[[:space:]]+end[[:space:]]+if;[[:space:]]*(--.*)?$"
+            catch_start_raw_re = "^[[:space:]]*if[[:space:]]+sqlerrm[[:space:]]*<>[[:space:]]*" apos "probe_ok_rollback" apos "[[:space:]]+then[[:space:]]*(--.*)?$"
+            residue_raw_re = "^[[:space:]]*raise[[:space:]]+exception[[:space:]]+" apos "([^" apos "]|" apos apos ")*rollback did not hold([^" apos "]|" apos apos ")*" apos "([[:space:]]*,[^;]+)?;[[:space:]]*(--.*)?$"
             count = split(rewrite_lines, listed, /[[:space:]]+/)
             expected = 0
             for (i = 1; i <= count; i++) {
@@ -829,16 +840,89 @@ for file in $ALL_SQL; do
               }
             }
           }
+          # Return the executable portion of one PL/pgSQL source line. Literal
+          # state is carried across lines, so proof phrases inside either
+          # single-quoted or nested dollar-quoted text cannot impersonate an
+          # executable RAISE. The outer DO dollar quote opened before the
+          # marker is intentionally outside this local proof-region lexer.
+          function code_only(line,   out, i, j, c, n, tag, rest) {
+            out = ""
+            i = 1
+            n = length(line)
+            while (i <= n) {
+              if (block_comment) {
+                j = index(substr(line, i), "*/")
+                if (!j) return out
+                i += j + 1
+                block_comment = 0
+                continue
+              }
+              if (dollar_tag != "") {
+                if (substr(line, i, length(dollar_tag)) == dollar_tag) {
+                  i += length(dollar_tag)
+                  dollar_tag = ""
+                } else i++
+                continue
+              }
+              if (single_quote) {
+                c = substr(line, i, 1)
+                if (c == apos && substr(line, i + 1, 1) == apos) i += 2
+                else if (c == apos) { single_quote = 0; i++ }
+                else i++
+                continue
+              }
+
+              if (substr(line, i, 2) == "--") break
+              if (substr(line, i, 2) == "/*") {
+                block_comment = 1
+                i += 2
+                continue
+              }
+              c = substr(line, i, 1)
+              if (c == apos) {
+                single_quote = 1
+                i++
+                continue
+              }
+              if (c == "$") {
+                rest = substr(line, i + 1)
+                j = index(rest, "$")
+                if (j > 0 && substr(rest, 1, j - 1) !~ /[[:space:]$]/) {
+                  tag = "$" substr(rest, 1, j)
+                  # `$1` is a parameter; a dollar-quote tag has a closing `$`.
+                  # Over-accepting an invalid digit-first tag only blanks text,
+                  # which is the fail-closed direction for this proof check.
+                  dollar_tag = tag
+                  i += length(tag)
+                  continue
+                }
+              }
+              out = out c
+              i++
+            }
+            return out
+          }
           {
+            # Start immediately inside the owning DO body. This lets the local
+            # lexer carry nested literal/comment state up to the marker without
+            # mistaking the outer DO dollar delimiter for inert SQL text.
+            if (FNR <= body) next
+            l = tolower($0)
+            marker_was_quoted = (dollar_tag != "" || single_quote || block_comment)
+            code = code_only(l)
+
+            if (FNR == marker) {
+              marker_valid = (!marker_was_quoted && l ~ marker_re)
+              next
+            }
+
             # The marker starts a self-contained canonical proof region. Ignore
             # earlier function bodies and DO-block control flow: their BEGINs,
             # CASE ENDs, and exception handlers are unrelated to this waiver
             # and would corrupt the local ancestry stack.
-            if (FNR <= marker) next
-            l = tolower($0)
-            sub(/--.*/, "", l)
+            if (FNR < marker) next
 
-            if (l ~ /^[[:space:]]*begin[[:space:]]*;?[[:space:]]*$/) {
+            if (code ~ /^[[:space:]]*begin[[:space:]]*;?[[:space:]]*$/) {
               depth++
               begin_at[depth] = FNR
               in_handler[depth] = 0
@@ -852,14 +936,14 @@ for file in $ALL_SQL; do
             }
 
             if (!sentinel && FNR > last &&
-                l ~ /raise[[:space:]]+exception/ &&
-                l ~ /message[[:space:]]*=[[:space:]]*'"'"'probe_ok_rollback'"'"'/) {
+                code ~ /^[[:space:]]*raise[[:space:]]+exception[[:space:]]+using[[:space:]]+errcode[[:space:]]*=[[:space:]]*,[[:space:]]*message[[:space:]]*=[[:space:]]*;[[:space:]]*$/ &&
+                l ~ sentinel_raw_re) {
               sentinel = FNR
               probe_depth = depth
               probe_begin = begin_at[depth]
             }
 
-            if (l ~ /^[[:space:]]*exception[[:space:]]*$/) {
+            if (code ~ /^[[:space:]]*exception[[:space:]]*$/) {
               in_handler[depth] = 1
               if (sentinel && !probe_exception && depth == probe_depth && FNR > sentinel) {
                 probe_exception = FNR
@@ -867,17 +951,31 @@ for file in $ALL_SQL; do
               next
             }
 
-            if (probe_exception && !probe_catch && depth == probe_depth &&
-                l ~ /sqlerrm[[:space:]]*<>[[:space:]]*'"'"'probe_ok_rollback'"'"'/) {
-              probe_catch = FNR
+            if (probe_exception && !probe_catch && depth == probe_depth && in_handler[depth]) {
+              if (code ~ /^[[:space:]]*if[[:space:]]+sqlerrm[[:space:]]*<>[[:space:]]+then[[:space:]]+raise;[[:space:]]+end[[:space:]]+if;[[:space:]]*$/ &&
+                  l ~ catch_one_raw_re) {
+                probe_catch = FNR
+              } else if (!catch_if &&
+                         code ~ /^[[:space:]]*if[[:space:]]+sqlerrm[[:space:]]*<>[[:space:]]+then[[:space:]]*$/ &&
+                         l ~ catch_start_raw_re) {
+                catch_if = FNR
+              } else if (catch_if && !catch_raise && code ~ /^[[:space:]]*raise;[[:space:]]*$/) {
+                catch_raise = FNR
+              } else if (catch_if && catch_raise && code ~ /^[[:space:]]*end[[:space:]]+if;[[:space:]]*$/) {
+                probe_catch = FNR
+              } else if (catch_if && code !~ /^[[:space:]]*$/) {
+                catch_if = 0
+                catch_raise = 0
+              }
             }
 
             if (probe_end && !probe_verify && depth == probe_depth - 1 &&
-                l ~ /raise[[:space:]]+exception/ && l ~ /rollback did not hold/) {
+                code ~ /^[[:space:]]*raise[[:space:]]+exception[[:space:]]*(,[^;]+)?;[[:space:]]*$/ &&
+                l ~ residue_raw_re) {
               probe_verify = FNR
             }
 
-            if (l ~ /^[[:space:]]*end[[:space:]]*;[[:space:]]*$/) {
+            if (code ~ /^[[:space:]]*end[[:space:]]*;[[:space:]]*$/) {
               if (sentinel && probe_exception && !probe_end && depth == probe_depth) {
                 probe_end = FNR
               }
@@ -888,7 +986,9 @@ for file in $ALL_SQL; do
           }
           END {
             why = ""
-            if (seen != expected) why = "could not map every rewrite into a PL/pgSQL block"
+            if (!body || body >= marker) why = "the marker is not inside a recognizable DO body"
+            else if (!marker_valid) why = "the rollback-probe marker is quoted, commented out, or malformed"
+            else if (seen != expected) why = "could not map every rewrite into a PL/pgSQL block"
             else if (!probe_begin || probe_begin <= marker || probe_begin >= first)
               why = "the sentinel block does not begin between the marker and first rewrite"
             else {

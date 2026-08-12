@@ -61,9 +61,9 @@ BEGIN
   END IF;
 END $$;`;
 
-const GOOD_ROLLBACK_PROBE = `-- APPROVED_SET_DIGEST: ROLLBACK-PROBE (orders) - exact row is restored
-DO $$
+const GOOD_ROLLBACK_PROBE = `DO $$
 BEGIN
+  -- APPROVED_SET_DIGEST: ROLLBACK-PROBE (orders) - exact row is restored
   BEGIN
     UPDATE public.orders SET total_profit = 0;
     RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'PROBE_OK_ROLLBACK';
@@ -365,9 +365,9 @@ const CASES = [
   {
     name: 'rollback probe cannot borrow a later exception block for an escaped rewrite',
     expect: 'violation',
-    sql: `-- APPROVED_SET_DIGEST: ROLLBACK-PROBE (orders) - forged scope
-DO $$
+    sql: `DO $$
 BEGIN
+  -- APPROVED_SET_DIGEST: ROLLBACK-PROBE (orders) - forged scope
   UPDATE public.orders SET total_profit = 0;
   BEGIN
     RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'PROBE_OK_ROLLBACK';
@@ -380,7 +380,63 @@ BEGIN
   END IF;
 END $$;`,
   },
+  {
+    name: 'rollback probe proof phrases inside dollar-quoted text are not executable raises',
+    expect: 'violation',
+    sql: `DO $$
+BEGIN
+  -- APPROVED_SET_DIGEST: ROLLBACK-PROBE (orders) - forged quoted proof
+  BEGIN
+    UPDATE public.orders SET total_profit = 0;
+    PERFORM $message$RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'PROBE_OK_ROLLBACK'$message$;
+  EXCEPTION
+    WHEN OTHERS THEN
+      IF SQLERRM <> 'PROBE_OK_ROLLBACK' THEN RAISE; END IF;
+  END;
+  PERFORM $message$RAISE EXCEPTION 'rollback did not hold'$message$;
+END $$;`,
+  },
 
+  {
+    name: 'rollback probe proof phrases inside multiline dollar-quoted text are not executable raises',
+    expect: 'violation',
+    sql: `DO $$
+BEGIN
+  -- APPROVED_SET_DIGEST: ROLLBACK-PROBE (orders) - forged multiline quoted proof
+  BEGIN
+    UPDATE public.orders SET total_profit = 0;
+    PERFORM $message$
+      RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'PROBE_OK_ROLLBACK'
+    $message$;
+  EXCEPTION
+    WHEN OTHERS THEN
+      IF SQLERRM <> 'PROBE_OK_ROLLBACK' THEN RAISE; END IF;
+  END;
+  PERFORM $message$
+    RAISE EXCEPTION 'rollback did not hold'
+  $message$;
+END $$;`,
+  },
+  {
+    name: 'rollback probe catch must rethrow every non-sentinel error',
+    expect: 'violation',
+    sql: `DO $$
+BEGIN
+  -- APPROVED_SET_DIGEST: ROLLBACK-PROBE (orders) - forged swallowing catch
+  BEGIN
+    UPDATE public.orders SET total_profit = 0;
+    RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'PROBE_OK_ROLLBACK';
+  EXCEPTION
+    WHEN OTHERS THEN
+      IF SQLERRM <> 'PROBE_OK_ROLLBACK' THEN
+        NULL;
+      END IF;
+  END;
+  IF EXISTS (SELECT 1 FROM public.orders WHERE total_profit = 0) THEN
+    RAISE EXCEPTION 'rollback did not hold';
+  END IF;
+END $$;`,
+  },
   // ── must WARN (accepted, but never silent) ──────────────────────────────
   {
     name: 'waiver naming every table, backfilling a column this migration adds',
