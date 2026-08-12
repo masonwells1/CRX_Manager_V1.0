@@ -419,7 +419,7 @@ BEGIN
   -- SECURITY DEFINER mutator and the B9 incident was exactly an unnoticed anon
   -- grant. Assert it rather than trust it.
   -- Each NAMED-role check is guarded on pg_roles, the same intent the sibling
-  -- 20260812060000 already carries. has_function_privilege() RAISES for a role
+  -- 20260813060000 already carries. has_function_privilege() RAISES for a role
   -- that does not exist rather than returning false, so an unguarded call turns a
   -- replay target that lacks Supabase's roles into a "role does not exist" abort
   -- instead of a real grant verdict. The PUBLIC check below is deliberately left

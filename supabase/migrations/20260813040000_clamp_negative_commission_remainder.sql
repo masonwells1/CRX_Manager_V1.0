@@ -124,7 +124,7 @@ BEGIN
   -- pinned baseline (first apply) and the pinned post-apply body (genuine replay).
   --
   -- The post-apply hashes below are md5 values of the exact LF-normalized
-  -- $function$ sources in this file. As with 20260812020000, pg_proc.prosrc is
+  -- $function$ sources in this file. As with 20260813020000, pg_proc.prosrc is
   -- what is pinned; the POSTCOND reasserts the same four hashes after DDL.
   -- ---------------------------------------------------------------------------
 
