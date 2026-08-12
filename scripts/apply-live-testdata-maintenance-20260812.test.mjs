@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { buildMaintainedSource } from "./apply-live-testdata-maintenance-20260812.mjs";
 
 const { output, blob } = buildMaintainedSource();
-assert.equal(blob, "4badea7a706e9206bd532f0a8c974544c1edef3c", "pinned generated blob");
+assert.equal(blob, "42744c543162402148a73155bc7ac9168de81f5f", "pinned generated blob");
 
 const scratch = mkdtempSync(path.join(tmpdir(), "crx-live-guard-candidate-test-"));
 try {
@@ -69,6 +69,7 @@ try {
     "SELECT 1 AS open$x$; TRUNCATE public.customers; SELECT 1 AS close$x$;",
     "SELECT 1 /* x */ -- comment\r; ALTER TABLE public.customers DISABLE ROW LEVEL SECURITY;",
     "SELECT 1 /* x */ -- comment\r; DELETE FROM customers WHERE id=1;",
+    "BEGIN; CREATE FUNCTION pg_temp.get_pwn() RETURNS bigint LANGUAGE sql AS $$ SELECT setval('invoice_number_seq', 1) $$; SELECT pg_temp.get_pwn(); ROLLBACK;",
   ];
   for (const sql of blocked) {
     assert.equal(classifySql(sql).block, true, `must block: ${sql}`);

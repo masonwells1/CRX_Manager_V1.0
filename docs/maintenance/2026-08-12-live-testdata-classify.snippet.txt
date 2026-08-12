@@ -31,6 +31,15 @@ export function classifySql(query) {
   const normalizedStatements = visibleKeywordStatements
     .map((statement) => statement.trim().replace(/\s+/g, " "))
     .filter(Boolean);
+  if (normalizedStatements.some((statement) =>
+    /^create(?:\s+or\s+replace)?\s+(?:function|procedure)\b/i.test(statement)
+  )) {
+    return {
+      block: true,
+      kind: "raw-mutation",
+      reason: "Function and procedure definitions can hide non-transactional side effects such as sequence changes, so they are never permitted through raw execute_sql. Use the reviewed migration smoke harness instead.",
+    };
+  }
   if (normalizedStatements.some((statement) => /^do\b/i.test(statement))) {
     return {
       block: true,

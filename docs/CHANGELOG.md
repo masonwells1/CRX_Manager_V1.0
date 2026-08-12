@@ -242,6 +242,14 @@ at a valid token boundary with PostgreSQL's empty-or-identifier tag grammar. Fou
 payloads are pinned, bringing the generated-module suite to 55 cases; the producer's helper SHA-256
 and generated Git blob were re-bound to the corrected source.
 
+The eleventh exact-head pass found that a rollback-wrapped temporary function with a trusted `get_`
+name could hide `setval()` or `nextval()` inside its dollar-quoted body, execute the function, and be
+classified as allowed. Rolling back removes the temporary function but does not undo PostgreSQL
+sequence changes, so the smoke boundary was still fail-open. Raw function and procedure definitions
+now fail closed categorically, matching the existing raw-`DO` rule and requiring the reviewed
+migration smoke harness instead. The exact `pg_temp.get_pwn()` sequence payload is pinned, bringing
+the generated-module suite to 56 cases; the classifier SHA-256 and generated Git blob were re-bound.
+
 ## 2026-08-11 — A smoke selection that runs nothing no longer reports success
 
 Follow-up to the entry below, from its own adversarial review. Container-only chains are dropped
