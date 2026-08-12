@@ -2,6 +2,39 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-12 — Replaced rollback-probe heuristic trust with fail-closed filename plus…
+
+Replaced rollback-probe heuristic trust with fail-closed filename plus LF-normalized SHA-256 binding for the three exact reviewed Wave A probe migrations; unregistered, renamed, or modified probes now fail before structural checks, with 63 mutation cases and captured-live replay green.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `5224ad3f Require reachable rollback probe proof`
+  - `eb4e34c2 Reject quoted rollback probe proof tokens`
+  - `f4172d5e Harden rollback probe scope validation`
+  - `81240c6f Close pricing release proof and exact money gaps`
+  - `aa062d24 feat: complete pricing audit rollout`
+  - `2fd01956 Merge remote-tracking branch 'origin/main' into codex/finish-pricing-audit-20260810`
+  - `f4d3d4b5 Harden pricing audit retry and proof guards`
+  - `45c8acf5 Close final pricing and migration-review gaps`
+  - `9b722997 security(perms): drop tracked recursive Read grant above the checkout`
+  - `585eb281 Fail closed on quote lifecycle signature skew`
+  - `4b78bddf Close remaining pricing review gaps`
+  - `04a739a4 Reject fractional-cent pricing before approval`
+  - `5d6220da chore(db): restore applied stale-profit migration source`
+  - `f7ee2cd8 Keep approved below-cost sales lifecycle-safe`
+  - `f52e8c85 Rebase pricing migrations onto live money guards`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260812010000_blend_ticket_order_header_runtime_assert.sql`
+  - `supabase/migrations/20260812011000_restore_quote_version_whole_cent_money.sql`
+  - `supabase/migrations/20260812145628_snapshot_cost_reporting.sql`
+  - `supabase/migrations/20260812151606_quote_items_cost_at_quote_snapshot.sql`
+  - `supabase/migrations/20260812154028_enforce_below_cost_admin_approval.sql`
+  - `supabase/migrations/20260812154757_repair_historical_order_line_cents.sql`
+  - `supabase/migrations/20260813010000_wave_a_order_cost_authority_and_finiteness.sql`
+  - `supabase/migrations/20260813020000_round_order_header_money.sql`
+  - `supabase/migrations/20260813040000_clamp_negative_commission_remainder.sql`
+  - `supabase/migrations/20260813050000_guard_job_commission_split_immutable.sql`
+  - `supabase/migrations/20260813060000_require_completed_delivery_before_invoice_post.sql`
+
 ## 2026-08-12 — Closed the exact-commit reviewers' rollback-probe reachability finding:…
 
 Closed the exact-commit reviewers' rollback-probe reachability finding: sentinels must be outside conditional/CASE/loop control flow and residue proof must be a reachable canonical before/after or EXISTS assertion; 58 mutation cases and the full captured-live replay pass.

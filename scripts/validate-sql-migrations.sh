@@ -136,6 +136,29 @@ for (const row of snapshot.entries || []) {
 }
 " "$APPROVED_SET_LIVE_LEDGER" 2>/dev/null || true)
 
+# A ROLLBACK-PROBE waiver executes real business-row writes while a migration
+# is being applied. PL/pgSQL has too many legal formatting and control-flow
+# forms for a regex parser to prove arbitrary new probe code safe. Keep the
+# structural checks below as defense in depth, but authorize the exemption only
+# for exact, separately reviewed artifacts. The hash is over LF-normalized
+# bytes and is bound to the migration filename. Any source edit or new probe
+# fails closed until this deliberately small registry is updated through the
+# same migration-review gate. This is an artifact allowlist, not a syntax bet.
+approved_rollback_probe_hash() {
+  case "$1" in
+    20260813020000_round_order_header_money.sql)
+      printf '%s\n' '6e4ebcc72758c6c78bc0acc07632b45e197c93c7edcaf2cc6d23d19ca907e720'
+      ;;
+    20260813050000_guard_job_commission_split_immutable.sql)
+      printf '%s\n' 'ea3026e9b38e0b317fb2850f76312f7a0b722299bc15ed4ed4c0aae8262785de'
+      ;;
+    20260813060000_require_completed_delivery_before_invoice_post.sql)
+      printf '%s\n' 'ffc173f569f5c14dc73ac8b6bd2dff36077358a35f8d013e8c310d1432f4632c'
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 BUSINESS_ROW_TABLES=$(node -e "
 const fs = require('fs');
 const reg = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
@@ -803,6 +826,21 @@ for file in $ALL_SQL; do
       if [ "$DIGEST_BOUND" -eq 1 ]; then
         : # bound to an approved-set digest, asserted fail-closed before the write
       elif [ -n "$ROLLBACK_PROBE" ]; then
+        PROBE_FILE_NAME=$(basename "$file")
+        PROBE_EXPECTED_HASH=$(approved_rollback_probe_hash "$PROBE_FILE_NAME" 2>/dev/null || true)
+        PROBE_ACTUAL_HASH=$(sed 's/\r$//' "$file" | sha256sum | awk '{ print $1 }')
+        if [ -z "$PROBE_EXPECTED_HASH" ] || [ "$PROBE_ACTUAL_HASH" != "$PROBE_EXPECTED_HASH" ]; then
+          echo "VIOLATION: $file"
+          echo "  APPROVED_SET_DIGEST: ROLLBACK-PROBE is not an exact reviewed artifact."
+          echo "  Business-row probe waivers are filename + LF-normalized SHA-256 bound;"
+          echo "  arbitrary PL/pgSQL control flow is not approved by syntax heuristics alone."
+          echo "  Expected: ${PROBE_EXPECTED_HASH:-<unregistered>}"
+          echo "  Actual:   $PROBE_ACTUAL_HASH"
+          echo ""
+          VIOLATIONS=$((VIOLATIONS + 1))
+          continue
+        fi
+
         PROBE_MARKER_LINE=$(grep -inE 'APPROVED_SET_DIGEST:[[:space:]]*ROLLBACK-PROBE' "$file" | head -1 | cut -d: -f1)
         PROBE_BODY_LINE=$(awk -v marker="$PROBE_MARKER_LINE" '
           FNR < marker && tolower($0) ~ /^[[:space:]]*do[[:space:]]+\$([a-z_][a-z0-9_]*)?\$[[:space:]]*$/ { body = FNR }
