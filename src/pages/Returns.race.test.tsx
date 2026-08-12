@@ -46,17 +46,21 @@ vi.mock('../components/ui/Toast', () => ({ useToast: () => ({ toast: mockToast }
 vi.mock('../hooks/useIdempotencyKey', () => ({
   useIdempotencyKey: (operation: string, userId: string, intentScope = '') => {
     const scope = JSON.stringify([operation, userId, intentScope]);
+    const getFor = (dynamicIntentScope: string) => JSON.stringify([operation, userId, dynamicIntentScope]);
+    const getOrCreate = (keyScope: string) => {
+      let key = intentKeys.get(keyScope);
+      if (!key) {
+        nextIntentKey.value += 1;
+        key = `return-idem-${nextIntentKey.value}`;
+        intentKeys.set(keyScope, key);
+      }
+      return key;
+    };
     return {
-      getKey: () => {
-        let key = intentKeys.get(scope);
-        if (!key) {
-          nextIntentKey.value += 1;
-          key = `return-idem-${nextIntentKey.value}`;
-          intentKeys.set(scope, key);
-        }
-        return key;
-      },
+      getKey: () => getOrCreate(scope),
       resetKey: () => { intentKeys.delete(scope); },
+      getKeyFor: (dynamicIntentScope: string) => getOrCreate(getFor(dynamicIntentScope)),
+      resetKeyFor: (dynamicIntentScope: string) => { intentKeys.delete(getFor(dynamicIntentScope)); },
     };
   },
 }));
@@ -159,6 +163,72 @@ describe('Returns detail loading', () => {
     expect(calls[1][1].p_idempotency_key).toBe(calls[0][1].p_idempotency_key);
     expect(calls[1][1].p_return).toEqual(calls[0][1].p_return);
     expect(calls[1][1].p_items).toEqual(calls[0][1].p_items);
+  });
+
+  it('retires a definitively refused Create Return key and unlocks the payload', async () => {
+    setupCreateReturnData();
+    let createCalls = 0;
+    mockRpc.mockImplementation((name: string) => {
+      if (name !== 'create_return') return Promise.resolve({ data: null, error: null });
+      createCalls += 1;
+      return Promise.resolve(createCalls === 1
+        ? { data: null, error: { code: 'P0001', message: 'RETURN_QUANTITY_EXCEEDS_DELIVERED' } }
+        : { data: { return_id: 'return-2', return_number: 'RMA-2', item_count: 1 }, error: null });
+    });
+
+    render(<Returns />);
+    await screen.findByText('No returns yet');
+    const dialog = await fillCreateReturn();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create Return' }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'RETURN_QUANTITY_EXCEEDS_DELIVERED'));
+    await waitFor(() => expect(within(dialog).getByLabelText('Notes (Optional)')).toBeEnabled());
+    fireEvent.change(within(dialog).getByLabelText('Notes (Optional)'), { target: { value: 'corrected payload' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create Return' }));
+
+    await waitFor(() => expect(createCalls).toBe(2));
+    const calls = mockRpc.mock.calls.filter(([name]) => name === 'create_return');
+    expect(calls[1][1].p_idempotency_key).not.toBe(calls[0][1].p_idempotency_key);
+    expect(calls[1][1].p_return.notes).toBe('corrected payload');
+  });
+
+  it('scopes Cancel Return keys to the exact normalized reason', async () => {
+    const returns = [{
+      id: 'return-cancel-uuid', return_number: 'RMA-CANCEL', customer: { farm_name: 'Farm C' },
+      order: { order_number: 'ORD-C' }, requested_by: null, items: [], status: 'requested',
+      reason: 'defective', total_credit_cents: 100, requested_at: '2026-07-25T00:00:00Z',
+    }];
+    mockFrom.mockImplementation((table: string) => table === 'returns'
+      ? buildChain({ data: returns, error: null })
+      : buildChain({ data: [], error: null }));
+    let cancelCalls = 0;
+    mockRpc.mockImplementation((name: string) => {
+      if (name !== 'cancel_return') return Promise.resolve({ data: null, error: null });
+      cancelCalls += 1;
+      return Promise.resolve(cancelCalls < 3
+        ? { data: null, error: { message: 'network response lost after commit' } }
+        : { data: { was_received: false, reversed_count: 0, skipped_count: 0 }, error: null });
+    });
+
+    render(<Returns />);
+    await screen.findByText('RMA-CANCEL');
+    fireEvent.click(screen.getByRole('button', { name: /RMA-CANCEL/ }));
+    await screen.findByRole('heading', { name: 'Return: RMA-CANCEL' });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    const modal = await screen.findByRole('dialog', { name: 'Cancel Return' });
+    const reason = within(modal).getByLabelText('Reason *');
+    fireEvent.change(reason, { target: { value: '  Exact reason  ' } });
+    fireEvent.click(within(modal).getByRole('button', { name: 'Cancel Return' }));
+    await waitFor(() => expect(cancelCalls).toBe(1));
+    fireEvent.click(within(modal).getByRole('button', { name: 'Cancel Return' }));
+    await waitFor(() => expect(cancelCalls).toBe(2));
+    fireEvent.change(reason, { target: { value: 'Different reason' } });
+    fireEvent.click(within(modal).getByRole('button', { name: 'Cancel Return' }));
+    await waitFor(() => expect(cancelCalls).toBe(3));
+
+    const calls = mockRpc.mock.calls.filter(([name]) => name === 'cancel_return');
+    expect(calls[1][1].p_idempotency_key).toBe(calls[0][1].p_idempotency_key);
+    expect(calls[2][1].p_idempotency_key).not.toBe(calls[0][1].p_idempotency_key);
+    expect(calls.map(([, args]) => args.p_reason)).toEqual(['Exact reason', 'Exact reason', 'Different reason']);
   });
 
   it('reconciles a pre-migration Create Return receipt from mismatch details', async () => {

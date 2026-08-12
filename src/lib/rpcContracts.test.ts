@@ -2295,6 +2295,8 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   _guard_delivery_completion_authorized:
     'trigger-only completion-provenance guard; public complete_delivery owns the idempotent, row-bound governed mutation and direct EXECUTE is revoked',
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',
+  snapshot_invoice_line_shares_on_post:
+    'trigger-only append helper; the posting transaction owns idempotency, and the reversal wrapper suppresses only its own status restoration before restoring the transaction-local flag',
   _recompute_po_on_order_for_products:
     'internal convergent PO-cache recomputation helper; trigger parents own the transaction and direct browser EXECUTE is revoked',
   // Trigger-only helpers whose migrations are now at or below the live registry

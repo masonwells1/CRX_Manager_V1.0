@@ -42,6 +42,16 @@ function waitForDatabase() {
   }
   throw new Error(`disposable PostgreSQL failed readiness: ${docker(['logs', NAME], { allowFailure: true }).stderr}`);
 }
+function sanitizeCliOutput(value) {
+  let safe = String(value || '');
+  for (const secret of [process.env.SUPABASE_ACCESS_TOKEN, process.env.SUPABASE_DB_PASSWORD]) {
+    if (secret) safe = safe.split(secret).join('[REDACTED]');
+  }
+  return safe
+    .replace(/(postgres(?:ql)?:\/\/[^:\s/]+:)[^@\s]+@/gi, '$1[REDACTED]@')
+    .replace(/\b(?:sbp|sb_secret)_[A-Za-z0-9._-]+\b/g, '[REDACTED]')
+    .slice(0, 4000);
+}
 function refreshLiveSchema() {
   const commonDir = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: ROOT, encoding: 'utf8' });
   if (commonDir.status !== 0) throw new Error(`cannot locate linked checkout: ${commonDir.stderr}`);
@@ -51,7 +61,9 @@ function refreshLiveSchema() {
     ['db', 'dump', '--linked', '--workdir', linkedRoot, '--schema', 'public,auth', '--file', LIVE_SCHEMA, '--keep-comments'],
     { cwd: ROOT, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
   );
-  if (dump.status !== 0) throw new Error(`fresh read-only live schema dump failed: ${dump.stderr || dump.stdout}`);
+  if (dump.status !== 0) {
+    throw new Error(`fresh read-only live schema dump failed: ${sanitizeCliOutput(dump.stderr || dump.stdout)}`);
+  }
 }
 try {
   assert.ok(readFileSync(CANDIDATE, 'utf8').length > 0, 'candidate migration is missing');
@@ -130,7 +142,8 @@ try {
   assert.notEqual(smoke.status, 0, 'canonical return-credit smoke committed instead of forcing rollback');
   assert.match(output, /SMOKE_PASS_ROLLBACK/, `canonical smoke did not reach SMOKE_PASS_ROLLBACK:\n${output}`);
   assert.equal(psqlValue("SELECT count(*) FROM public.customers WHERE farm_name LIKE '[SMOKE] Return Credit Farm %';"), '0', 'customer fixture residue remained');
-  assert.equal(psqlValue("SELECT count(*) FROM public.returns WHERE return_number LIKE 'SMK-RMA-%';"), '0', 'return fixture residue remained');
+  assert.equal(psqlValue("SELECT count(*) FROM public.returns WHERE return_number LIKE 'SMK-%';"), '0', 'return fixture residue remained');
+  assert.equal(psqlValue("SELECT count(*) FROM public.invoices WHERE invoice_number LIKE 'SMK-RCC-%';"), '0', 'invoice fixture residue remained');
   assert.equal(psqlValue("SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key LIKE 'smk-rcc-%';"), '0', 'receipt residue remained');
   console.log(`RETURN_CREDIT_REAL_SCHEMA_PASS source=fresh-live-read-only-schema candidate_migrations=${migrations.length} invariant_violations=0 smoke=SMOKE_PASS_ROLLBACK residue=0`);
 } catch (error) {

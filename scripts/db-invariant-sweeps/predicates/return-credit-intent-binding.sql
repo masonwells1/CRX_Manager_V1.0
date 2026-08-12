@@ -78,7 +78,23 @@ SELECT 'return-credit-reversal:due-date-status' AS violation_key,
    SELECT 1
      FROM pg_proc p
     WHERE p.oid = to_regprocedure('public._reverse_credit_memo_application(uuid,uuid,text,text)')
-      AND encode(sha256(convert_to(replace(p.prosrc, E'\r\n', E'\n'), 'UTF8')), 'hex') = '44cba939419c2e6e823d58ca8fd8eea430fa04954b72e73763b7f4741a20d1f3'
+      AND encode(sha256(convert_to(replace(p.prosrc, E'\r\n', E'\n'), 'UTF8')), 'hex') = '744c48493d549f9bc2297270bfdc0977935a4f29ed44fe2e336c8a6fce6ecbf8'
+      AND p.prosecdef
+      AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+      AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')
+      AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')
+      AND has_function_privilege('service_role', p.oid, 'EXECUTE')
+ )
+
+UNION ALL
+
+SELECT 'return-credit-reversal:snapshot-suppression' AS violation_key,
+       'split post snapshot trigger no longer has the exact reviewed reversal-only suppression guard' AS reason
+ WHERE NOT EXISTS (
+   SELECT 1
+     FROM pg_proc p
+    WHERE p.oid = to_regprocedure('public.snapshot_invoice_line_shares_on_post()')
+      AND encode(sha256(convert_to(replace(p.prosrc, E'\r\n', E'\n'), 'UTF8')), 'hex') = 'f12078a7b476444df206f0e9baa21fff26ee5cda9ef6a96dabf772909984f42a'
       AND p.prosecdef
       AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
       AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')

@@ -56,8 +56,18 @@ row("live DB migration count", "live", "skipped", "SKIP",
 // missing terminal status cannot survive an ordinary docs check.
 const returnsDocLine = databaseSchema.split(/\r?\n/).find((line) => line.startsWith("- `returns` -")) || "";
 const returnsColumns = new Set(schemaRegistry.columns?.returns || []);
-const returnsStatuses = schemaRegistry.status_enums?.["returns.status"] || [];
-const documentedStatus = `status: ${returnsStatuses.join("/")}`;
+const returnsStatuses = schemaRegistry.status_enums?.["returns.status"];
+const hasReturnsStatuses = Array.isArray(returnsStatuses) && returnsStatuses.length > 0;
+const documentedStatuses = (returnsDocLine.match(/\bstatus:\s*([^,]+)/)?.[1] || "")
+  .split("/")
+  .map((status) => status.trim())
+  .filter(Boolean);
+const statusMatches = hasReturnsStatuses
+  && documentedStatuses.length === returnsStatuses.length
+  && documentedStatuses.every((status, index) => status === returnsStatuses[index]);
+const documentedStatus = hasReturnsStatuses
+  ? `status: ${returnsStatuses.join("/")}`
+  : "status: <missing from schema registry>";
 const requiredReturnsColumns = [
   "reason", "reason_notes", "total_credit_cents", "credit_invoice_id",
   "cancelled_at", "cancelled_by", "cancellation_reason", "credited_by",
@@ -69,8 +79,10 @@ const staleReturnsColumns = ["return_type", "reason_category"].filter(
   (column) => !returnsColumns.has(column) && new RegExp(`\\b${column}\\b`).test(returnsDocLine),
 );
 row("Returns schema reference", documentedStatus, returnsDocLine || "missing",
-  returnsDocLine.includes(documentedStatus) && missingReturnsColumns.length === 0 && staleReturnsColumns.length === 0 ? "PASS" : "FAIL",
+  statusMatches && missingReturnsColumns.length === 0 && staleReturnsColumns.length === 0 ? "PASS" : "FAIL",
   [
+    !hasReturnsStatuses ? "missing live status enum: returns.status" : "",
+    hasReturnsStatuses && !statusMatches ? "documented status values do not exactly match live returns.status" : "",
     missingReturnsColumns.length ? `missing live columns: ${missingReturnsColumns.join(", ")}` : "",
     staleReturnsColumns.length ? `stale non-columns: ${staleReturnsColumns.join(", ")}` : "",
   ].filter(Boolean).join("; "));

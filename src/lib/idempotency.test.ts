@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generateIdempotencyKey, getIdempotencyBindingRejection, getIdempotencyMismatchResult, isMissingIntentBindingColumn, legacyIntentChanged } from './idempotency';
+import { generateIdempotencyKey, getIdempotencyBindingRejection, getIdempotencyMismatchResult, isDefinitiveRpcRejection, isMissingIntentBindingColumn, legacyIntentChanged } from './idempotency';
 
 describe('generateIdempotencyKey', () => {
   it('returns a string with the correct format', () => {
@@ -117,6 +117,15 @@ describe('getIdempotencyBindingRejection', () => {
     // A substring must not be enough — only the exact refusal codes count.
     expect(getIdempotencyBindingRejection({ message: 'wrapped: IDEMPOTENCY_INTENT_MISMATCH' })).toBeNull();
     expect(getIdempotencyBindingRejection({})).toBeNull();
+  });
+});
+
+describe('isDefinitiveRpcRejection', () => {
+  it('distinguishes server refusals from transport-uncertain failures', () => {
+    expect(isDefinitiveRpcRejection({ code: 'P0001', message: 'AMOUNT_EXCEEDS_CREDIT' })).toBe(true);
+    expect(isDefinitiveRpcRejection({ code: '42501', message: 'denied' })).toBe(true);
+    expect(isDefinitiveRpcRejection({ code: '', message: 'TypeError: Failed to fetch' })).toBe(false);
+    expect(isDefinitiveRpcRejection(new TypeError('Failed to fetch'))).toBe(false);
   });
 });
 

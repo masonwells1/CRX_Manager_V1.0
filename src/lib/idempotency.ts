@@ -44,6 +44,17 @@ export function legacyIntentChanged(
 }
 
 /**
+ * PostgREST supplies a nonblank database/error code only after the server has
+ * returned a definitive refusal. Fetch/transport failures have no code, so
+ * their commit outcome remains uncertain and the retry key must be retained.
+ */
+export function isDefinitiveRpcRejection(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' && code.trim().length > 0;
+}
+
+/**
  * Why a retained idempotency key was refused by the intent-binding guard.
  * 'intent'  — the key already committed a request that this one cannot be
  *             proven identical to (a different request, or a pre-migration

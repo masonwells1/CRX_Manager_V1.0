@@ -7,9 +7,11 @@ const root = process.cwd();
 const migration = readFileSync(path.join(root, 'supabase/migrations/20260812130145_bind_return_receipts_to_intent_and_restore_overdue.sql'), 'utf8');
 const predicate = readFileSync(path.join(root, 'scripts/db-invariant-sweeps/predicates/return-credit-intent-binding.sql'), 'utf8');
 const lifecyclePredicate = readFileSync(path.join(root, 'scripts/db-invariant-sweeps/predicates/returns-lifecycle-rpc-owned.sql'), 'utf8');
-const returnsSource = readFileSync(path.join(root, 'src/pages/Returns.tsx'), 'utf8');
-const invoiceSource = readFileSync(path.join(root, 'src/pages/InvoiceDetail.tsx'), 'utf8');
+const returnsSource = readFileSync(path.join(root, 'src/pages/Returns.tsx'), 'utf8').replace(/\r\n/g, '\n');
+const invoiceSource = readFileSync(path.join(root, 'src/pages/InvoiceDetail.tsx'), 'utf8').replace(/\r\n/g, '\n');
 const schemaDoc = readFileSync(path.join(root, 'docs/reference/database-schema.md'), 'utf8');
+const rpcDoc = readFileSync(path.join(root, 'docs/reference/rpc-functions.md'), 'utf8');
+const docDriftCheck = readFileSync(path.join(root, 'scripts/check-doc-drift.mjs'), 'utf8');
 const smoke = readFileSync(path.join(root, 'scripts/smoke/smoke-return-credit-chain.sql'), 'utf8');
 const realSchemaProver = readFileSync(path.join(root, 'scripts/smoke/verify-return-credit-real-schema.mjs'), 'utf8');
 
@@ -43,6 +45,8 @@ function expectedHash(signature: string): string {
 }
 
 function assertFrontendGuards(returnsText: string, invoiceText: string) {
+  returnsText = returnsText.replace(/\r\n/g, '\n');
+  invoiceText = invoiceText.replace(/\r\n/g, '\n');
   expect(returnsText).toContain("const returnIntentScope = activeReturn?.id || ''");
   for (const operation of ['approve_return', 'reject_return', 'cancel_return', 'receive_return', 'issue_return_credit']) {
     expect(returnsText).toContain(`useIdempotencyKey('${operation}', profile?.id || '', returnIntentScope)`);
@@ -53,7 +57,11 @@ function assertFrontendGuards(returnsText: string, invoiceText: string) {
   expect(returnsText).toContain('setUnresolvedCreateIntent({');
   expect(returnsText).toContain('disabled={createPayloadLocked}');
   expect(returnsText).toContain('committedCreateResultFromIntentMismatch(error)');
-  expect(returnsText).toContain('setUnresolvedCreateIntent(null)');
+  expect(returnsText).toContain('if (isDefinitiveRpcRejection(error))');
+  expect(returnsText).toContain('createIdem.resetKey();\n              setUnresolvedCreateIntent(null);');
+  expect(returnsText).toContain('createIdem.resetKey();\n        setUnresolvedCreateIntent(null);');
+  expect(returnsText).toContain('cancelIdem.getKeyFor(cancelScope)');
+  expect(returnsText).toContain('JSON.stringify([activeReturn.id, reason.trim()])');
   expect(invoiceText).toContain('Number.isInteger(applyCreditAmountCents) ? applyCreditAmountCents : null');
   expect(invoiceText).toContain('closeDisabled={applyingCredit}');
   expect(invoiceText).toContain('disabled={applyingCredit}>Cancel</Button>');
@@ -61,6 +69,9 @@ function assertFrontendGuards(returnsText: string, invoiceText: string) {
   expect(invoiceText).toContain('setUnresolvedApplyCreditIntent({');
   expect(invoiceText).toContain('setApplyCreditAmount((unresolved.amountCents / 100).toFixed(2))');
   expect(invoiceText).toContain('setUnresolvedApplyCreditIntent(null)');
+  expect(invoiceText).toContain('if (isDefinitiveRpcRejection(err))');
+  expect(invoiceText).toContain('applyCreditIdem.resetKey();\n        setUnresolvedApplyCreditIntent(null);');
+  expect(invoiceText).toContain('applyCreditIdem.resetKey();\n      setUnresolvedApplyCreditIntent(null);');
   expect(invoiceText).not.toContain('applyCreditIdem.resetKey();\n    setShowApplyCreditModal(true)');
 }
 
@@ -73,9 +84,16 @@ function assertExecutableProofGuards(smokeText: string, proverText: string) {
     'explicit reversal restored past-due invoice to %, expected overdue',
     'corrected-forward reversal restored invoice to %, expected posted',
     'unapply restored past-due invoice to %, expected overdue',
+    'reversal created an extra post snapshot (count %)',
+    'corrected-forward reversal created an extra post snapshot (count %)',
+    'governed product pricing apply failed',
     'SMOKE_PASS_ROLLBACK',
   ]) expect(smokeText).toContain(anchor);
+  expect(smokeText).not.toContain('ALTER TABLE public.products DISABLE TRIGGER');
   expect(proverText).toContain("assert.match(output, /SMOKE_PASS_ROLLBACK/");
+  expect(proverText).toContain('sanitizeCliOutput');
+  expect(proverText).toContain("return_number LIKE 'SMK-%'");
+  expect(proverText).toContain("invoice_number LIKE 'SMK-RCC-%'");
   expect(proverText).toContain("receipt residue remained");
   expect(proverText).toContain("--schema', 'public,auth'");
 }
@@ -97,6 +115,16 @@ function assertLifecycleInvariantComposition(predicateText: string) {
   ]) expect(predicateText).toContain(anchor);
 }
 
+function assertReturnsDocGuards(checkText: string, rpcText: string) {
+  for (const anchor of [
+    'Array.isArray(returnsStatuses) && returnsStatuses.length > 0',
+    'documentedStatuses.length === returnsStatuses.length',
+    'documentedStatuses.every((status, index) => status === returnsStatuses[index])',
+  ]) expect(checkText).toContain(anchor);
+  expect(rpcText).toContain('**WRITTEN, NOT APPLIED LIVE:**');
+  expect(rpcText).toContain('20260812130145_bind_return_receipts_to_intent_and_restore_overdue.sql');
+}
+
 describe('return/credit remediation durable guards', () => {
   it('pins every public SQL wrapper to the exact reviewed body', () => {
     const signatures: Record<string, string> = {
@@ -111,7 +139,9 @@ describe('return/credit remediation durable guards', () => {
       expect(sha256(bodyFor(migration, name))).toBe(expectedHash(signature));
     }
     expect(sha256(bodyFor(migration, '_reverse_credit_memo_application')))
-      .toBe('44cba939419c2e6e823d58ca8fd8eea430fa04954b72e73763b7f4741a20d1f3');
+      .toBe('744c48493d549f9bc2297270bfdc0977935a4f29ed44fe2e336c8a6fce6ecbf8');
+    expect(sha256(bodyFor(migration, 'snapshot_invoice_line_shares_on_post')))
+      .toBe('f12078a7b476444df206f0e9baa21fff26ee5cda9ef6a96dabf772909984f42a');
   });
 
   it.each([
@@ -131,22 +161,26 @@ describe('return/credit remediation durable guards', () => {
 
   it('mutation-kills every frontend intent and submit-lock guard', () => {
     assertFrontendGuards(returnsSource, invoiceSource);
-    const mutations: Array<[string, string]> = [
-      [returnsSource.replace("const returnIntentScope = activeReturn?.id || ''", "const returnIntentScope = ''"), invoiceSource],
-      [returnsSource.replace('JSON.stringify([returnPayload, itemsPayload])', 'JSON.stringify([returnPayload])'), invoiceSource],
-      [returnsSource.replace('setUnresolvedCreateIntent({', 'void ({'), invoiceSource],
-      [returnsSource.split('disabled={createPayloadLocked}').join('disabled={creating}'), invoiceSource],
-      [returnsSource.replace('committedCreateResultFromIntentMismatch(error)', 'null'), invoiceSource],
-      [returnsSource.replace('setUnresolvedCreateIntent(null)', '// keep stale create intent'), invoiceSource],
-      [returnsSource, invoiceSource.replace('closeDisabled={applyingCredit}', 'closeDisabled={false}')],
-      [returnsSource, invoiceSource.replace('Number.isInteger(applyCreditAmountCents) ? applyCreditAmountCents : null', 'null')],
-      [returnsSource, invoiceSource.replace('setShowApplyCreditModal(true);', 'applyCreditIdem.resetKey();\n    setShowApplyCreditModal(true);')],
-      [returnsSource, invoiceSource.split('disabled={applyingCredit || Boolean(unresolvedApplyCreditIntent)}').join('disabled={applyingCredit}')],
-      [returnsSource, invoiceSource.replace('setApplyCreditAmount((unresolved.amountCents / 100).toFixed(2))', "setApplyCreditAmount('0.01')")],
-      [returnsSource, invoiceSource.replace('setUnresolvedApplyCreditIntent(null)', '// keep stale intent')],
+    const mutations: Array<[string, string, string]> = [
+      ['return scope', returnsSource.replace("const returnIntentScope = activeReturn?.id || ''", "const returnIntentScope = ''"), invoiceSource],
+      ['create payload scope', returnsSource.replace('JSON.stringify([returnPayload, itemsPayload])', 'JSON.stringify([returnPayload])'), invoiceSource],
+      ['create unresolved state', returnsSource.replace('setUnresolvedCreateIntent({', 'void ({'), invoiceSource],
+      ['create input lock', returnsSource.split('disabled={createPayloadLocked}').join('disabled={creating}'), invoiceSource],
+      ['legacy create reconciliation', returnsSource.replace('committedCreateResultFromIntentMismatch(error)', 'null'), invoiceSource],
+      ['create definitive unlock', returnsSource.replace('if (isDefinitiveRpcRejection(error))', 'if (false)'), invoiceSource],
+      ['cancel exact scope', returnsSource.replace('cancelIdem.getKeyFor(cancelScope)', 'cancelIdem.getKey()'), invoiceSource],
+      ['apply close lock', returnsSource, invoiceSource.replace('closeDisabled={applyingCredit}', 'closeDisabled={false}')],
+      ['integer cents scope', returnsSource, invoiceSource.replace('Number.isInteger(applyCreditAmountCents) ? applyCreditAmountCents : null', 'null')],
+      ['no reset on reopen', returnsSource, invoiceSource.replace('setShowApplyCreditModal(true);', 'applyCreditIdem.resetKey();\n    setShowApplyCreditModal(true);')],
+      ['apply input lock', returnsSource, invoiceSource.split('disabled={applyingCredit || Boolean(unresolvedApplyCreditIntent)}').join('disabled={applyingCredit}')],
+      ['restore exact amount', returnsSource, invoiceSource.replace('setApplyCreditAmount((unresolved.amountCents / 100).toFixed(2))', "setApplyCreditAmount('0.01')")],
+      ['clear apply success', returnsSource, invoiceSource.replace('applyCreditIdem.resetKey();\n      setUnresolvedApplyCreditIntent(null);', 'applyCreditIdem.resetKey();\n      // keep stale intent')],
+      ['apply definitive unlock', returnsSource, invoiceSource.replace('if (isDefinitiveRpcRejection(err))', 'if (false)')],
     ];
-    for (const [mutatedReturns, mutatedInvoice] of mutations) {
-      expect(() => assertFrontendGuards(mutatedReturns, mutatedInvoice)).toThrow();
+    for (const [label, mutatedReturns, mutatedInvoice] of mutations) {
+      let killed = false;
+      try { assertFrontendGuards(mutatedReturns, mutatedInvoice); } catch { killed = true; }
+      expect(killed, `mutation survived: ${label}`).toBe(true);
     }
   });
 
@@ -154,7 +188,7 @@ describe('return/credit remediation durable guards', () => {
     const original = bodyFor(migration, '_reverse_credit_memo_application');
     const mutated = original.replace('i.due_date < CURRENT_DATE', 'false');
     expect(mutated).not.toBe(original);
-    expect(sha256(mutated)).not.toBe('44cba939419c2e6e823d58ca8fd8eea430fa04954b72e73763b7f4741a20d1f3');
+    expect(sha256(mutated)).not.toBe('744c48493d549f9bc2297270bfdc0977935a4f29ed44fe2e336c8a6fce6ecbf8');
   });
 
   it('mutation-kills reversal helper idempotency exemption and actor validation', () => {
@@ -166,7 +200,19 @@ describe('return/credit remediation durable guards', () => {
     ]) {
       const mutated = original.replace(from, to);
       expect(mutated).not.toBe(original);
-      expect(sha256(mutated)).not.toBe('44cba939419c2e6e823d58ca8fd8eea430fa04954b72e73763b7f4741a20d1f3');
+      expect(sha256(mutated)).not.toBe('744c48493d549f9bc2297270bfdc0977935a4f29ed44fe2e336c8a6fce6ecbf8');
+    }
+  });
+
+  it('mutation-kills reversal-only split snapshot suppression', () => {
+    const original = bodyFor(migration, 'snapshot_invoice_line_shares_on_post');
+    for (const [from, to] of [
+      ["current_setting('app.credit_reversal_status', true) = 'true'", 'false'],
+      ['RETURN NEW;', 'NULL;'],
+    ]) {
+      const mutated = original.replace(from, to);
+      expect(mutated).not.toBe(original);
+      expect(sha256(mutated)).not.toBe('f12078a7b476444df206f0e9baa21fff26ee5cda9ef6a96dabf772909984f42a');
     }
   });
 
@@ -199,6 +245,7 @@ describe('return/credit remediation durable guards', () => {
       "has_function_privilege('authenticated', p.oid, 'EXECUTE') = v_authenticated_execute",
       "has_function_privilege('service_role', p.oid, 'EXECUTE')",
       "NOT has_function_privilege('anon', p.oid, 'EXECUTE')",
+      'IF v_src IS NULL',
     ];
     for (const anchor of anchors) {
       expect(migration).toContain(anchor);
@@ -218,12 +265,22 @@ describe('return/credit remediation durable guards', () => {
       'explicit reversal restored past-due invoice to %, expected overdue',
       'corrected-forward reversal restored invoice to %, expected posted',
       'unapply restored past-due invoice to %, expected overdue',
+      'reversal created an extra post snapshot (count %)',
+      'corrected-forward reversal created an extra post snapshot (count %)',
+      'governed product pricing apply failed',
       'SMOKE_PASS_ROLLBACK',
     ]) {
       const mutated = smoke.split(anchor).join('__REMOVED_GUARD__');
       expect(() => assertExecutableProofGuards(mutated, realSchemaProver)).toThrow();
     }
-    for (const anchor of ["assert.match(output, /SMOKE_PASS_ROLLBACK/", 'receipt residue remained', "--schema', 'public,auth'"]) {
+    for (const anchor of [
+      "assert.match(output, /SMOKE_PASS_ROLLBACK/",
+      'sanitizeCliOutput',
+      "return_number LIKE 'SMK-%'",
+      "invoice_number LIKE 'SMK-RCC-%'",
+      'receipt residue remained',
+      "--schema', 'public,auth'",
+    ]) {
       const mutated = realSchemaProver.split(anchor).join('__REMOVED_GUARD__');
       expect(() => assertExecutableProofGuards(smoke, mutated)).toThrow();
     }
@@ -247,6 +304,22 @@ describe('return/credit remediation durable guards', () => {
       expect(schemaDoc).toMatch(new RegExp(`\\b${column}\\b`));
     }
     expect(schemaDoc).not.toContain('return_type, reason_category');
+  });
+
+  it('fails closed when the Returns status registry or exact retry rollout state drifts', () => {
+    for (const anchor of [
+      'Array.isArray(returnsStatuses) && returnsStatuses.length > 0',
+      'documentedStatuses.length === returnsStatuses.length',
+      'documentedStatuses.every((status, index) => status === returnsStatuses[index])',
+    ]) {
+      expect(() => assertReturnsDocGuards(docDriftCheck.replace(anchor, '__REMOVED_GUARD__'), rpcDoc)).toThrow();
+    }
+    for (const anchor of [
+      '**WRITTEN, NOT APPLIED LIVE:**',
+      '20260812130145_bind_return_receipts_to_intent_and_restore_overdue.sql',
+    ]) {
+      expect(() => assertReturnsDocGuards(docDriftCheck, rpcDoc.replace(anchor, '__REMOVED_GUARD__'))).toThrow();
+    }
   });
 
   it('covers every intended wrapper in the guard fixture', () => {

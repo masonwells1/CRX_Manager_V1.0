@@ -39,7 +39,8 @@ BEGIN
       ('cancel_return', to_regprocedure('public.cancel_return(uuid,text,uuid,text)'), '3af6073d9e608274dba2b183d02c918b', true),
       ('receive_return', to_regprocedure('public.receive_return(uuid,uuid,text)'), 'c43084461f30b9305bd0bb19f6605d89', true),
       ('issue_return_credit', to_regprocedure('public.issue_return_credit(uuid,uuid,text)'), '1e9647da071aa1a53f3add5e38515da8', true),
-      ('_reverse_credit_memo_application', to_regprocedure('public._reverse_credit_memo_application(uuid,uuid,text,text)'), '96662c1913666a49b778973ca881d8d6', false)
+      ('_reverse_credit_memo_application', to_regprocedure('public._reverse_credit_memo_application(uuid,uuid,text,text)'), '96662c1913666a49b778973ca881d8d6', false),
+      ('snapshot_invoice_line_shares_on_post', to_regprocedure('public.snapshot_invoice_line_shares_on_post()'), 'fa8e3f801f1f78c68dc07be8f9c6caa5', false)
     ) AS expected(name, signature, body_md5, authenticated_execute)
   LOOP
     IF v_sig IS NULL THEN
@@ -307,6 +308,78 @@ BEGIN
 END;
 $function$;
 
+-- A reversal is not a new posting event. Keep the existing split validation
+-- and append-only snapshot body byte-for-byte except for this transaction-local
+-- suppression guard, which the shared reversal boundary brackets below.
+CREATE OR REPLACE FUNCTION public.snapshot_invoice_line_shares_on_post()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+DECLARE
+  v_item_cnt   int;
+  v_share_cnt  int;
+  v_share_sum  bigint;
+BEGIN
+  -- idempotency-body-check: exempt
+  -- Trigger-only append helper. The posting transaction owns idempotency.
+  IF current_setting('app.credit_reversal_status', true) = 'true' THEN
+    RETURN NEW;
+  END IF;
+  IF NEW.status = 'posted'
+     AND OLD.status IS DISTINCT FROM 'posted'
+     AND NEW.field_app_billing_set_id IS NOT NULL THEN
+    SELECT count(*) INTO v_item_cnt FROM invoice_items WHERE invoice_id = NEW.id;
+    SELECT count(ils.id), COALESCE(SUM(ils.amount_cents), 0)
+      INTO v_share_cnt, v_share_sum
+      FROM invoice_items ii
+      JOIN invoice_line_shares ils ON ils.invoice_item_id = ii.id
+     WHERE ii.invoice_id = NEW.id;
+    IF v_share_cnt <> v_item_cnt THEN
+      RAISE EXCEPTION 'SPLIT_POST_MALFORMED: invoice % has % line item(s) but % line share(s) — the per-line split was corrupted; edit it via the Split Billing editor and re-save before posting',
+        NEW.id, v_item_cnt, v_share_cnt USING ERRCODE = 'internal_error';
+    END IF;
+    IF v_share_sum IS DISTINCT FROM COALESCE(NEW.total_amount_cents, 0) THEN
+      RAISE EXCEPTION 'SPLIT_POST_TOTAL_MISMATCH: invoice % line shares sum to % but the header total is % — refusing to post a malformed split',
+        NEW.id, v_share_sum, NEW.total_amount_cents USING ERRCODE = 'internal_error';
+    END IF;
+    IF EXISTS (
+      SELECT 1 FROM invoice_items ii
+      JOIN invoice_line_shares ils ON ils.invoice_item_id = ii.id
+      WHERE ii.invoice_id = NEW.id
+        AND COALESCE(ii.extended_cents, 0) IS DISTINCT FROM COALESCE(ils.amount_cents, 0)
+    ) THEN
+      RAISE EXCEPTION 'SPLIT_POST_ITEM_SHARE_MISMATCH: invoice % has a line item whose amount no longer matches its per-line split share — refusing to post a tampered split',
+        NEW.id USING ERRCODE = 'internal_error';
+    END IF;
+    INSERT INTO invoice_line_share_snapshots (
+      invoice_id, billing_line_id, customer_id, split_micro_pct,
+      allocated_quantity, allocated_acres, unit_price_cents, amount_cents,
+      line_kind, product_id, application_service_id, line_description,
+      base_unit_price_cents, base_price_source, split_mode, price_mode,
+      split_override_reason, price_override_reason, calculation_hash, vector_hash,
+      snapshot_reason
+    )
+    SELECT NEW.id, ils.billing_line_id, ils.customer_id, ils.split_micro_pct,
+           ils.allocated_quantity, ils.allocated_acres, ils.unit_price_cents, ils.amount_cents,
+           bl.line_kind, ii.product_id, bl.application_service_id,
+           COALESCE(NULLIF(ii.description, ''), bl.description),
+           ils.base_unit_price_cents, ils.base_price_source, ils.split_mode, ils.price_mode,
+           ils.split_override_reason, ils.price_override_reason, ils.calculation_hash, ils.vector_hash,
+           'post'
+      FROM invoice_line_shares ils
+      JOIN invoice_items ii ON ii.id = ils.invoice_item_id
+      LEFT JOIN field_app_billing_lines bl ON bl.id = ils.billing_line_id
+     WHERE ii.invoice_id = NEW.id;
+  END IF;
+  RETURN NEW;
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.snapshot_invoice_line_shares_on_post() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.snapshot_invoice_line_shares_on_post() TO postgres, service_role;
+
 -- Keep the shared reversal boundary and its callers, but correct the target
 -- invoice's restored open status after the existing ledger/money body runs.
 CREATE OR REPLACE FUNCTION public._reverse_credit_memo_application(
@@ -322,6 +395,7 @@ SET search_path = public, pg_temp
 AS $function$
 DECLARE
   v_previous_admin_override text := current_setting('app.admin_override', true);
+  v_previous_reversal_status text := current_setting('app.credit_reversal_status', true);
   v_session_actor uuid := auth.uid();
 BEGIN
   -- idempotency-body-check: exempt
@@ -335,16 +409,17 @@ BEGIN
     RAISE EXCEPTION 'ACTOR_MISMATCH';
   END IF;
 
-  PERFORM public._reverse_credit_memo_application_status_impl_20260812(
-    p_application_id, p_actor, p_actor_role, p_reason
-  );
-
-  -- This trusted re-derivation can legitimately move an overdue invoice back
-  -- to posted after its due date was corrected forward. Keep the existing
-  -- global transition matrix closed and scope its established override to
-  -- this one status-only UPDATE, restoring the caller's prior setting.
-  PERFORM set_config('app.admin_override', 'true', true);
+  PERFORM set_config('app.credit_reversal_status', 'true', true);
   BEGIN
+    PERFORM public._reverse_credit_memo_application_status_impl_20260812(
+      p_application_id, p_actor, p_actor_role, p_reason
+    );
+
+    -- This trusted re-derivation can legitimately move an overdue invoice back
+    -- to posted after its due date was corrected forward. Keep the existing
+    -- global transition matrix closed and scope its established override to
+    -- this one status-only UPDATE, restoring the caller's prior setting.
+    PERFORM set_config('app.admin_override', 'true', true);
     UPDATE public.invoices i
        SET status = CASE
          WHEN i.due_date < CURRENT_DATE THEN 'overdue'
@@ -358,9 +433,11 @@ BEGIN
        AND i.balance_cents > 0;
   EXCEPTION WHEN OTHERS THEN
     PERFORM set_config('app.admin_override', COALESCE(v_previous_admin_override, ''), true);
+    PERFORM set_config('app.credit_reversal_status', COALESCE(v_previous_reversal_status, ''), true);
     RAISE;
   END;
   PERFORM set_config('app.admin_override', COALESCE(v_previous_admin_override, ''), true);
+  PERFORM set_config('app.credit_reversal_status', COALESCE(v_previous_reversal_status, ''), true);
 END;
 $function$;
 
@@ -414,7 +491,8 @@ BEGIN
        AND pg_get_userbyid(p.proowner) = 'postgres'
        AND p.prosecdef
        AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[];
-    IF v_src NOT LIKE '%check_idempotency_intent%'
+    IF v_src IS NULL
+       OR v_src NOT LIKE '%check_idempotency_intent%'
        OR v_src NOT LIKE '%request_actor_id%'
        OR v_src NOT LIKE '%request_fingerprint%'
        OR NOT has_function_privilege('authenticated', v_sig, 'EXECUTE')
@@ -456,9 +534,25 @@ BEGIN
   IF v_sig IS NULL OR v_src NOT LIKE '%due_date < CURRENT_DATE%'
      OR v_src NOT LIKE '%THEN ''overdue''%'
      OR v_src NOT LIKE '%ELSE ''posted''%'
+     OR v_src NOT LIKE '%app.credit_reversal_status%'
      OR has_function_privilege('authenticated', v_sig, 'EXECUTE')
      OR NOT has_function_privilege('service_role', v_sig, 'EXECUTE') THEN
     RAISE EXCEPTION '_reverse_credit_memo_application failed restored-status or ACL postcondition';
+  END IF;
+
+  v_sig := to_regprocedure('public.snapshot_invoice_line_shares_on_post()');
+  IF v_sig IS NULL OR NOT EXISTS (
+    SELECT 1 FROM pg_proc p
+     WHERE p.oid = v_sig
+       AND pg_get_userbyid(p.proowner) = 'postgres'
+       AND p.prosecdef
+       AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+       AND p.prosrc LIKE '%app.credit_reversal_status%'
+       AND p.prosrc LIKE '%INSERT INTO invoice_line_share_snapshots%'
+  ) OR has_function_privilege('anon', v_sig, 'EXECUTE')
+     OR has_function_privilege('authenticated', v_sig, 'EXECUTE')
+     OR NOT has_function_privilege('service_role', v_sig, 'EXECUTE') THEN
+    RAISE EXCEPTION 'snapshot_invoice_line_shares_on_post failed reversal-suppression or ACL postcondition';
   END IF;
 END
 $verify$;

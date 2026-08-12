@@ -67,6 +67,9 @@ DECLARE
   v_reject_return_id uuid;
   v_cancel_return_id uuid;
   v_target_invoice_id uuid;
+  v_target_invoice_item_id uuid;
+  v_billing_set_id uuid;
+  v_billing_line_id uuid;
   v_application_id uuid;
   v_credit_id    uuid;
   v_credit_id2   uuid;
@@ -123,16 +126,44 @@ BEGIN
   VALUES ('[SMOKE] Wrong Return Credit Farm ' || v_suffix)
   RETURNING id INTO v_other_customer_id;
 
-  -- Synthetic fixture only: current production requires product creation as a
-  -- pricing-free shell followed by a persisted preview/change-set workflow.
-  -- A rollback-only smoke cannot manufacture that durable workflow without
-  -- obscuring the return proof, so disable only the governed-pricing creation
-  -- trigger for this row and restore it before any business path runs.
-  EXECUTE 'ALTER TABLE public.products DISABLE TRIGGER trigger_y_require_governed_product_pricing';
-  INSERT INTO products (product_name, current_cost)
-  VALUES ('[SMOKE] RCC Herbicide ' || v_suffix, 5.00)
+  -- Create a pricing-free product shell, then establish its cost through the
+  -- same governed preview/apply RPC path used by the app. This keeps the smoke
+  -- independent of live catalog contents without disabling product triggers or
+  -- touching an existing business row. Everything remains rollback-scoped.
+  INSERT INTO products (product_name)
+  VALUES ('[SMOKE] RCC Governed Product ' || v_suffix)
   RETURNING id INTO v_product_id;
-  EXECUTE 'ALTER TABLE public.products ENABLE TRIGGER trigger_y_require_governed_product_pricing';
+
+  v_res := public.preview_product_pricing_changes(
+    'product_page',
+    NULL,
+    jsonb_build_array(jsonb_build_object(
+      'product_id', v_product_id,
+      'row_version', 1,
+      'pricing_mode', 'price_driven',
+      'new_cost', '5.00',
+      'tier1_price', '10.00',
+      'tier2_price', '10.00',
+      'tier3_price', '10.00'
+    )),
+    v_admin,
+    'smoke-rcc-pricing-preview-' || v_suffix
+  );
+  IF v_res->>'status' IS DISTINCT FROM 'previewed'
+     OR (v_res->>'apply_allowed')::boolean IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: governed product pricing preview failed: %', v_res;
+  END IF;
+
+  v_res2 := public.apply_product_pricing_change_set(
+    (v_res->>'change_set_id')::uuid,
+    v_res->>'request_fingerprint',
+    v_admin,
+    'smoke-rcc-pricing-apply-' || v_suffix
+  );
+  SELECT current_cost INTO v_qty FROM products WHERE id = v_product_id;
+  IF v_qty IS DISTINCT FROM 5.00::numeric THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: governed product pricing apply failed: %', v_res2;
+  END IF;
 
   -- Inventory row at 'Main Warehouse' so receive_return exercises the real
   -- restock branch (it LEFT JOINs inventory on that exact location and only
@@ -713,14 +744,42 @@ BEGIN
   -- 8b. Apply Credit lost-response replay + both shared reversal callers.
   -- The first exact retry stands in for "commit succeeded, response lost".
   -- --------------------------------------------------------------------
+  INSERT INTO field_app_billing_sets (created_by)
+  VALUES (v_admin)
+  RETURNING id INTO v_billing_set_id;
+  INSERT INTO field_app_billing_lines (
+    billing_set_id, line_kind, description, source_quantity,
+    source_unit_price_cents, source_line_cents
+  ) VALUES (
+    v_billing_set_id, 'chemical', '[SMOKE] reversal snapshot sentinel', 1, 5000, 5000
+  ) RETURNING id INTO v_billing_line_id;
   INSERT INTO invoices (
     invoice_number, customer_id, invoice_type, status, invoice_date, due_date,
-    total_amount_cents, created_by
+    total_amount_cents, created_by, field_app_billing_set_id
   ) VALUES (
     'SMK-RCC-TARGET-' || v_suffix, v_customer_id, 'chemical_sale', 'draft',
-    CURRENT_DATE, CURRENT_DATE - 1, 5000, v_admin
+    CURRENT_DATE, CURRENT_DATE - 1, 5000, v_admin, v_billing_set_id
   ) RETURNING id INTO v_target_invoice_id;
+  INSERT INTO invoice_items (
+    invoice_id, product_id, description, quantity, unit_price_cents,
+    extended_cents, cost_cents, billing_line_id
+  ) VALUES (
+    v_target_invoice_id, v_product_id, '[SMOKE] reversal snapshot sentinel',
+    1, 5000, 5000, 0, v_billing_line_id
+  ) RETURNING id INTO v_target_invoice_item_id;
+  INSERT INTO invoice_line_shares (
+    billing_line_id, invoice_item_id, customer_id, split_mode,
+    split_micro_pct, allocated_quantity, base_unit_price_cents,
+    base_price_source, price_mode, unit_price_cents, amount_cents,
+    calculation_hash, vector_hash, created_by
+  ) VALUES (
+    v_billing_line_id, v_target_invoice_item_id, v_customer_id, 'field_default',
+    100000000, 1, 5000, 'manual', 'default', 5000, 5000,
+    'smoke-calculation', 'smoke-vector', v_admin
+  );
   UPDATE invoices SET status = 'posted', posted_at = now() WHERE id = v_target_invoice_id;
+  SELECT count(*) INTO v_n FROM invoice_line_share_snapshots WHERE invoice_id = v_target_invoice_id;
+  IF v_n <> 1 THEN RAISE EXCEPTION 'SMOKE_FAIL: initial post produced % split snapshots, expected 1', v_n; END IF;
 
   v_application_id := apply_credit_memo_to_invoice(
     v_credit_id2, v_target_invoice_id, 5000, v_admin,
@@ -745,6 +804,8 @@ BEGIN
   IF v_status <> 'overdue' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: explicit reversal restored past-due invoice to %, expected overdue', v_status;
   END IF;
+  SELECT count(*) INTO v_n FROM invoice_line_share_snapshots WHERE invoice_id = v_target_invoice_id;
+  IF v_n <> 1 THEN RAISE EXCEPTION 'SMOKE_FAIL: reversal created an extra post snapshot (count %)', v_n; END IF;
 
   -- A corrected-forward due date makes overdue -> posted a valid re-derivation.
   -- The helper must cross the existing transition trigger only through its
@@ -765,6 +826,8 @@ BEGIN
   IF v_status <> 'posted' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: corrected-forward reversal restored invoice to %, expected posted', v_status;
   END IF;
+  SELECT count(*) INTO v_n FROM invoice_line_share_snapshots WHERE invoice_id = v_target_invoice_id;
+  IF v_n <> 1 THEN RAISE EXCEPTION 'SMOKE_FAIL: corrected-forward reversal created an extra post snapshot (count %)', v_n; END IF;
 
   UPDATE invoices SET due_date = CURRENT_DATE - 1 WHERE id = v_target_invoice_id;
   v_application_id := apply_credit_memo_to_invoice(

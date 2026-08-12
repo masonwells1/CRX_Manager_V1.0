@@ -20,6 +20,7 @@ import { Sentry } from '../lib/sentry';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { isDefinitiveRpcRejection } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { ProductOptionDetails, normalizeReturnPolicy, productOptionLabel, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
 import { ReturnDetailItems } from '../components/returns/ReturnDetailItems';
@@ -392,7 +393,13 @@ export default function Returns() {
         });
         if (error) {
           const committedResult = committedCreateResultFromIntentMismatch(error);
-          if (committedResult === null) throw mapReturnPolicyRpcError(error);
+          if (committedResult === null) {
+            if (isDefinitiveRpcRejection(error)) {
+              createIdem.resetKey();
+              setUnresolvedCreateIntent(null);
+            }
+            throw mapReturnPolicyRpcError(error);
+          }
           data = committedResult;
           error = null;
         }
@@ -517,7 +524,8 @@ export default function Returns() {
     }
     await runCriticalAction({
       action: async () => {
-        const cancelKey = cancelIdem.getKey();
+        const cancelScope = JSON.stringify([activeReturn.id, reason.trim()]);
+        const cancelKey = cancelIdem.getKeyFor(cancelScope);
         const { data, error } = await supabase.rpc('cancel_return', {
           p_return_id: activeReturn.id,
           p_reason: reason,
@@ -525,7 +533,7 @@ export default function Returns() {
           p_idempotency_key: cancelKey,
         });
         if (error) throw mapReturnPolicyRpcError(error);
-        cancelIdem.resetKey();
+        cancelIdem.resetKeyFor(cancelScope);
         const result = assertRpcResult<{ was_received: boolean; reversed_count: number; skipped_count: number }>(data, 'cancel_return');
         if (result.was_received && result.reversed_count > 0) {
           toast('info', `Inventory restock reversed for ${result.reversed_count} item(s).`);

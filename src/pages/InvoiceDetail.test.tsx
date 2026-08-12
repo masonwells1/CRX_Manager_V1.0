@@ -2,7 +2,7 @@
  * InvoiceDetail.test.tsx — Tests for the invoice detail/edit page
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 
 const { mockFrom, mockRpc, mockToast, mockNavigate, intentKeys, nextIntentKey } = vi.hoisted(() => ({
@@ -70,17 +70,21 @@ vi.mock('react-router-dom', async () => {
 vi.mock('../hooks/useIdempotencyKey', () => ({
   useIdempotencyKey: (operation: string, userId: string, intentScope = '') => {
     const scope = JSON.stringify([operation, userId, intentScope]);
+    const getFor = (dynamicIntentScope: string) => JSON.stringify([operation, userId, dynamicIntentScope]);
+    const getOrCreate = (keyScope: string) => {
+      let key = intentKeys.get(keyScope);
+      if (!key) {
+        nextIntentKey.value += 1;
+        key = `test-idem-key-${nextIntentKey.value}`;
+        intentKeys.set(keyScope, key);
+      }
+      return key;
+    };
     return {
-      getKey: () => {
-        let key = intentKeys.get(scope);
-        if (!key) {
-          nextIntentKey.value += 1;
-          key = `test-idem-key-${nextIntentKey.value}`;
-          intentKeys.set(scope, key);
-        }
-        return key;
-      },
+      getKey: () => getOrCreate(scope),
       resetKey: () => { intentKeys.delete(scope); },
+      getKeyFor: (dynamicIntentScope: string) => getOrCreate(getFor(dynamicIntentScope)),
+      resetKeyFor: (dynamicIntentScope: string) => { intentKeys.delete(getFor(dynamicIntentScope)); },
     };
   },
 }));
@@ -191,6 +195,33 @@ describe('InvoiceDetail', () => {
       p_credit_memo_id: 'memo-1', p_target_invoice_id: 'inv-credit-target', p_amount_cents: 5000,
     }));
     expect(calls[1][1].p_idempotency_key).toBe(calls[0][1].p_idempotency_key);
+  });
+
+  it('retires a definitively refused Apply Credit key and unlocks its inputs', async () => {
+    setupPostedInvoiceWithCredit();
+    let applyCalls = 0;
+    mockRpc.mockImplementation((name: string) => {
+      if (name !== 'apply_credit_memo_to_invoice') return Promise.resolve({ data: null, error: null });
+      applyCalls += 1;
+      return Promise.resolve(applyCalls === 1
+        ? { data: null, error: { code: 'P0001', message: 'AMOUNT_EXCEEDS_CREDIT' } }
+        : { data: { application_id: 'application-2' }, error: null });
+    });
+
+    renderInvoiceDetail('inv-credit-target');
+    await screen.findAllByText('INV-CREDIT-TARGET');
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Credit' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Apply Credit Memo' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Apply Credit' }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', 'AMOUNT_EXCEEDS_CREDIT'));
+    await waitFor(() => expect(screen.getByLabelText('Amount to apply ($)')).toBeEnabled());
+    fireEvent.change(screen.getByLabelText('Amount to apply ($)'), { target: { value: '20.00' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Apply Credit' }));
+
+    await waitFor(() => expect(applyCalls).toBe(2));
+    const calls = mockRpc.mock.calls.filter(([name]) => name === 'apply_credit_memo_to_invoice');
+    expect(calls[1][1].p_idempotency_key).not.toBe(calls[0][1].p_idempotency_key);
+    expect(calls[1][1].p_amount_cents).toBe(2000);
   });
 
   it('blocks Escape, backdrop, X, and Cancel while Apply Credit is submitting', async () => {

@@ -169,6 +169,7 @@ Migrations `20260714220000` through `20260714224000` preserve existing public si
 - *Blend propagation:* the `CREATE OR REPLACE create_application_record_from_blend_ticket` in the same migration adds an auto-INSERT into `application_record_lots` from `blend_ticket_products.lot_number` (case-insensitive dedup, skips null product / blank lot) — body otherwise reproduced verbatim from live; no new overload.
 
 ## Returns & Credits
+- **WRITTEN, NOT APPLIED LIVE:** The retry-binding behavior below requires migration `20260812130145_bind_return_receipts_to_intent_and_restore_overdue.sql`. Fresh approval and post-apply verification are still required.
 - `create_return(p_return, p_items, p_idempotency_key)` — creates one source-bound return; the required retry receipt is bound to the authenticated actor and exact header/ordered-line JSON payload.
 - `approve_return()` — approve a return request; retry is bound to the authenticated actor and exact return id.
 - `reject_return()` — reject a requested return; retry is bound to the authenticated actor and exact return id.
