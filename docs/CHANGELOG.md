@@ -2,6 +2,67 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-12 — The replay guard stops guessing: an unreadable write now refuses
+
+Closed the round-25 adversarial review, and closed the reason there kept being
+another round.
+
+Twenty-five rounds of review on this guard found, over and over, the same defect
+wearing a new hat: one more way to spell a write that the reader scored as zero
+writes and waved through. Parentheses, an alias, a cast, a CTE, an upsert, a
+view, a deferred function body, a routine that lives only in the database. Each
+round patched the spelling. None of them touched why the spellings kept working.
+
+The reason is the default. The reader asked "does this write anything?" and,
+whenever it did not recognise the construct, answered "no" and passed it on.
+That is fail-open by construction, and no amount of review exhausts it, because
+SQL has more ways to write a row than a reviewer has rounds.
+
+**The default is now inverted.** A write verb the reader can see but cannot pin
+to a relation sets `unresolved`, which routes to the override prompt rather than
+through it. An unanticipated construct now fails toward a human.
+
+Being that strict is affordable here for a specific structural reason: the
+semantic layer runs only inside the one-shot comparison loop, and only when a
+registered one-shot repair exists with non-empty targets. Ordinary migrations
+never reach it. Measured across the whole migration corpus before shipping, 32
+files trip either new rule at all — and each pays nothing unless it *also*
+collides with a registered repair's tables. Three earlier drafts of the rule were
+thrown away because the same measurement said they would refuse every migration
+in the tree; a plpgsql `DECLARE` block emits statements led by arbitrary variable
+names, which killed the obvious keyword-allowlist design outright.
+
+The four constructs found this round are closed with it:
+
+- **An overload can no longer hide a mutating twin.** Routine bodies were filed
+  first-definition-wins, so a harmless `helper()` shadowed a mutating
+  `helper(integer)` and `SELECT helper(1)` resolved to the empty body. Choosing
+  the true overload needs argument type resolution this module cannot do
+  honestly, so it unions every body that could be the callee — over-reporting
+  only, never under.
+- **Routines run for effect are found in every executing position**, not only
+  after `CALL` and `PERFORM`: `SELECT f()`, `SELECT * FROM f()`, and inside
+  bodies already folded in, since a helper may itself call something that only
+  exists in the database. The list of names that look like calls but are not —
+  SQL keywords, type names in a cast, PostgreSQL's own functions — is explicit
+  rather than a `pg_*` prefix rule, because a prefix rule is an escape hatch.
+- **A column type change is a whole-column rewrite.** `ALTER COLUMN total_price
+  TYPE numeric USING round(total_price)` re-performs a rounding repair without
+  containing a single write verb, because `USING` may be any expression at all.
+- **`COPY` is a write.**
+
+Guarding the guard against itself mattered as much as the rule. A bare write verb
+with no relation after it is *usually* an unread write, but not always: a row
+lock (`FOR UPDATE`), a trigger's timing and column list, a foreign-key action, a
+policy's applicability, a privilege, and a rule all carry one legitimately. Those
+are enumerated and stay silent — the first draft of the inversion refused the
+registered repair itself, which would have blocked every migration in the repo.
+
+Proof: 183 assertions end-to-end through the migration guard, 19 of them new this
+round — 12 attacks that must refuse and 7 freedoms that must not. A six-mutant
+battery disables each new rule in turn and every one of the six goes red, with
+the source restored byte-for-byte afterward.
+
 ## 2026-08-12 — A body is deferred only until something calls it
 
 Closed the High finding from the round-24 adversarial review.

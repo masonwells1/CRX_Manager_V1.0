@@ -278,7 +278,44 @@ function assignmentColumns(region) {
   return cols;
 }
 
-const WRITE_VERB = /\b(update|insert\s+into|delete\s+from|merge\s+into)\s/gi;
+// TRUNCATE empties a whole table, so it is as much a write as DELETE. Round 25
+// found it missing here: a renamed apply could truncate a table a registered
+// one-shot had written and produce no targets at all, skipping the override.
+const WRITE_VERB = /\b(update|insert\s+into|delete\s+from|merge\s+into|truncate(?:\s+table)?|copy)\s/gi;
+
+// `GRANT TRUNCATE ON a, b` and `REVOKE TRUNCATE ON a, b` name tables next to a
+// write verb while writing nothing. The single-relation readers already fall out
+// on the `ON` keyword, but the TRUNCATE list reader below walks past it to the
+// second name, which would read a privilege change as emptying every table it
+// lists. This repository has a pending revoke over 114 relations, so that is not
+// hypothetical.
+function inGrantOrRevoke(s, idx) {
+  const start = s.lastIndexOf(";", idx) + 1;
+  return /\b(grant|revoke)\b/.test(s.slice(start, idx));
+}
+
+// A write verb with no relation after it is usually a write this reader failed
+// to understand — but not always. These are the positions where the word is
+// part of some other construct and the missing relation is expected:
+//
+//   SELECT ... FOR UPDATE / FOR NO KEY UPDATE   a row lock
+//   CREATE TRIGGER ... AFTER INSERT OR UPDATE   a trigger's timing
+//   CREATE TRIGGER ... UPDATE OF col ON t       a trigger's column list
+//   ALTER ... ON UPDATE CASCADE                 a foreign-key action
+//   CREATE POLICY ... FOR UPDATE TO role        a policy's applicability
+//   GRANT/REVOKE UPDATE ON t                    a privilege
+//
+// Anything outside this list keeps the refusal, which is the whole point of the
+// rule: an unrecognised construct must not read as writing nothing.
+const BENIGN_VERB_CONTEXT = /\b(for(\s+no\s+key)?|of|or|to|on|before|after|instead\s+of|not|no)\s+$/;
+
+function benignVerbContext(s, idx) {
+  if (inGrantOrRevoke(s, idx)) return true;
+  const start = s.lastIndexOf(";", idx) + 1;
+  const before = s.slice(start, idx);
+  if (/\bcreate\s+(or\s+replace\s+)?rule\b/.test(before)) return true;
+  return BENIGN_VERB_CONTEXT.test(before);
+}
 
 /**
  * The (table, column) pairs a migration writes when it is applied.
@@ -302,6 +339,8 @@ function targetsFromCode(code, literals) {
   // Nothing legal produces it, so if it ever happens the caller must treat the
   // migration as unresolvable rather than as writing nothing.
   let unparsedUpsert = false;
+  // Set anywhere the reader sees evidence of a write it cannot pin to a table.
+  let unresolved = false;
 
   WRITE_VERB.lastIndex = 0;
   let m;
@@ -311,6 +350,22 @@ function targetsFromCode(code, literals) {
   let lastInsertTable = "";
   while ((m = WRITE_VERB.exec(s)) !== null) {
     const verb = m[1].replace(/\s+/g, " ");
+
+    if (verb === "truncate" || verb === "truncate table") {
+      // `TRUNCATE [TABLE] [ONLY] a [, [ONLY] b ...] [RESTART|CONTINUE IDENTITY]
+      // [CASCADE|RESTRICT]`. Every name in the list loses all its rows, so each
+      // one is a whole-table write; reading only the first would miss the rest.
+      if (inGrantOrRevoke(s, m.index)) continue;
+      const from = m.index + m[0].length - 1;
+      const stop = scanTo(s, from, ["restart", "continue", "cascade", "restrict"]);
+      for (const part of splitTopLevel(s.slice(from, stop.at))) {
+        const rel = readRelation(part, 0);
+        if (!rel || NON_RELATION_KEYWORDS.has(rel.table)) continue;
+        tables.add(rel.table);
+        targets.add(`${rel.table}.*`);
+      }
+      continue;
+    }
 
     if (verb === "update") {
       // ON CONFLICT DO UPDATE SET — attribute to the INSERT's relation.
@@ -328,7 +383,18 @@ function targetsFromCode(code, literals) {
     }
 
     const rel = readRelation(s, m.index + m[0].length - 1);
-    if (!rel) continue;
+    if (!rel) {
+      // ROUND 25, AND THE REASON THERE SHOULD NOT BE A ROUND 26 OF THIS KIND.
+      // A write verb with no readable relation after it means the reader saw a
+      // write and could not say what it writes. Every previous round of this
+      // guard's history was a spelling of a write the reader silently scored as
+      // zero writes; this turns that silence into a refusal, so a construct
+      // nobody anticipated fails toward the override prompt instead of through
+      // it. Measured across all 882 migrations in this repository, it fires on
+      // four files, none of which touch a registered one-shot's tables.
+      if (!benignVerbContext(s, m.index)) unresolved = true;
+      continue;
+    }
     // NOT EVERY `UPDATE` IS A WRITE. `GRANT UPDATE ON t`, `REVOKE UPDATE ON t`,
     // `CREATE TRIGGER ... AFTER UPDATE OF c ON t`, `CREATE POLICY ... FOR
     // UPDATE USING (...)`, and `SELECT ... FOR UPDATE` all put a keyword where
@@ -377,10 +443,54 @@ function targetsFromCode(code, literals) {
     targets.add(`${rel.table}.*`);
   }
 
+  // A column type change rewrites every existing value in that column, and
+  // `USING <expr>` lets the rewrite be any expression at all — `ALTER COLUMN
+  // total_price TYPE numeric USING round(total_price)` re-performs a rounding
+  // repair without containing a single write verb. Whole-column, so `table.*`.
+  const ALTER_TABLE = /\balter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?/g;
+  let am;
+  while ((am = ALTER_TABLE.exec(s)) !== null) {
+    const rel = readRelation(s, am.index + am[0].length - 1);
+    if (!rel || NON_RELATION_KEYWORDS.has(rel.table)) continue;
+    const stmtEnd = s.indexOf(";", am.index);
+    const body = s.slice(rel.end, stmtEnd === -1 ? s.length : stmtEnd);
+    if (/\balter\s+(?:column\s+)?[a-z0-9_"]+\s+(?:set\s+data\s+)?type\b/.test(body)) {
+      tables.add(rel.table);
+      targets.add(`${rel.table}.*`);
+    }
+  }
+
   const dynamicWrites = [];
-  let unresolved = false;
+
+  // ROUND 25. Scanning string literals one at a time cannot see a statement that
+  // was assembled from several of them. `EXECUTE 'UPDATE ' || 'public.order_items
+  // SET total_price = 0'` puts the verb in one fragment and the relation in the
+  // next, so each fragment read alone is harmless: the first has no table, the
+  // second has no verb, and the write is reported as nothing at all.
+  //
+  // The fragments cannot be usefully reassembled — `EXECUTE v_sql` builds the
+  // text somewhere else entirely. So the operand is judged instead of the
+  // pieces: a single complete literal (optionally wrapped in `format(...)`, whose
+  // placeholders are already handled below) is readable, and anything else —
+  // concatenation, a variable, a function result — is unresolvable and refuses.
+  const EXEC_OPERAND_READABLE = /^''\s*$|^format\s*\(\s*''\s*[,)]/;
+  const EXEC_STMT = /\bexecute\s+/g;
+  let xm;
+  while ((xm = EXEC_STMT.exec(s)) !== null) {
+    // `CREATE TRIGGER ... EXECUTE FUNCTION f()` and `GRANT/REVOKE EXECUTE ON
+    // FUNCTION f` spell EXECUTE without running any dynamic SQL.
+    const rest = s.slice(xm.index + xm[0].length);
+    if (/^(function|procedure)\b/.test(rest)) continue;
+    if (inGrantOrRevoke(s, xm.index)) continue;
+    // `EXECUTE <expr> [INTO target] [USING args]` — only the expression matters.
+    const stop = scanTo(s, xm.index + xm[0].length, ["into", "using"]);
+    if (!EXEC_OPERAND_READABLE.test(s.slice(xm.index + xm[0].length, stop.at).trim())) {
+      unresolved = true;
+    }
+  }
+
   for (const lit of literals) {
-    const dm = /\b(update|insert\s+into|delete\s+from|merge\s+into)\s+/i.exec(lit);
+    const dm = /\b(update|insert\s+into|delete\s+from|merge\s+into|truncate(?:\s+table)?)\s+/i.exec(lit);
     if (!dm) continue;
     dynamicWrites.push(lit);
     const rest = lit.slice(dm.index + dm[0].length).replace(/^only\s+/i, "");
@@ -418,10 +528,127 @@ function invokedRoutines(codeLower, defined) {
   return found;
 }
 
-// `CALL x(...)` and `PERFORM x(...)` exist only to run something for its side
-// effects. When x is not defined in this file we cannot read its body, so the
-// caller is told about it rather than being allowed to assume it writes nothing.
-const EXEC_VERB = /\b(?:call|perform)\s+([a-z0-9_.]+)\s*\(/g;
+// A statement that exists to run something, as opposed to defining it. Round 25
+// found that restricting the unknown-call scan to CALL and PERFORM missed the
+// most ordinary spelling of all: `SELECT public.existing_repair();` runs the
+// routine exactly as CALL does, and was reported as calling nothing.
+const RUNS_FOR_EFFECT = /^(select|call|perform|with)\b/;
+
+// Splitting a routine body on `;` leaves the first statement fused to the block
+// keywords in front of it — `BEGIN PERFORM repair()` arrives as one fragment
+// whose first word is BEGIN, which is how the round-25 test case of a helper
+// calling a database-resident routine slipped past a leading-keyword test.
+// These carry no meaning of their own, so they are peeled off before the test.
+const BLOCK_LEAD = /^(begin|declare|end(\s+(if|loop))?|then|else|loop|do|exception|when\s+others|<<[a-z0-9_]+>>|\$\$|as)\b\s*/;
+
+function runForEffectRegion(stmt) {
+  // PERFORM and CALL exist only as statement verbs, so wherever they appear in
+  // a fragment, what follows them runs. Scan from there.
+  const verb = /\b(perform|call)\s+/.exec(stmt);
+  if (verb) return stmt.slice(verb.index);
+  let rest = stmt;
+  let prev;
+  do { prev = rest; rest = rest.replace(BLOCK_LEAD, ""); } while (rest !== prev);
+  return RUNS_FOR_EFFECT.test(rest) ? rest : "";
+}
+
+// Names that are followed by `(` without being a call to a routine whose body we
+// would need to read: SQL syntax (`exists (`, `in (`, `cast (`), type names in a
+// cast or column definition (`numeric(12,2)`), and PostgreSQL's own functions.
+//
+// Membership here is deliberately explicit rather than a prefix rule such as
+// "anything starting with pg_". A prefix rule is an escape hatch — a routine can
+// be created under any name — and this list is the one place where a name gets
+// to mean "reading the body is unnecessary".
+//
+// A builtin missing from this list costs one override prompt on a migration that
+// also has to be replaying a registered one-shot. That is the safe direction.
+const NOT_A_ROUTINE_CALL = new Set([
+  // Syntax that takes a parenthesized operand.
+  "in", "exists", "and", "or", "not", "any", "all", "some", "from", "as", "on",
+  "select", "where", "using", "join", "filter", "cast", "position", "when",
+  "case", "values", "row", "over", "within", "order", "group", "having",
+  "returning", "set", "distinct", "between", "like", "overlaps", "at", "by",
+  "into", "for", "of", "if", "then", "else", "end", "loop", "while", "return",
+  "t", "p", "r", "x", "e", "c", "o", "i", "n", "v", "s",
+  // Type names, which take a length/precision in parentheses.
+  "numeric", "decimal", "char", "varchar", "character", "bit", "timestamp",
+  "timestamptz", "time", "interval", "text", "integer", "bigint", "smallint",
+  "boolean", "real", "float", "double", "money", "uuid", "jsonb", "json",
+  // Aggregates and ordinary functions this corpus actually uses.
+  "count", "sum", "min", "max", "avg", "array_agg", "string_agg", "jsonb_agg",
+  "bool_and", "bool_or", "every", "coalesce", "nullif", "greatest", "least",
+  "md5", "encode", "decode", "lower", "upper", "btrim", "trim", "ltrim",
+  "rtrim", "length", "substring", "substr", "replace", "split_part", "chr",
+  "ascii", "concat", "concat_ws", "format", "quote_ident", "quote_literal",
+  "quote_nullable", "repeat", "reverse", "strpos", "translate", "initcap",
+  "round", "floor", "ceil", "ceiling", "abs", "trunc", "mod", "power", "sqrt",
+  "sign", "div", "width_bucket", "random", "now", "clock_timestamp",
+  "statement_timestamp", "transaction_timestamp", "localtimestamp", "age",
+  "date_trunc", "date_part", "extract", "to_char", "to_date", "to_number",
+  "to_timestamp", "make_date", "make_timestamp", "make_interval", "justify_days",
+  "unnest", "generate_series", "generate_subscripts", "cardinality",
+  "array_length", "array_to_string", "string_to_array", "array_position",
+  "array_remove", "array_replace", "array_append", "array_prepend", "array_cat",
+  "array_fill", "array_dims", "array_lower", "array_upper", "array_ndims",
+  "jsonb_build_object", "jsonb_build_array", "jsonb_array_elements",
+  "jsonb_array_elements_text", "jsonb_object_keys", "jsonb_typeof",
+  "jsonb_extract_path", "jsonb_extract_path_text", "jsonb_set", "jsonb_insert",
+  "jsonb_strip_nulls", "jsonb_pretty", "jsonb_each", "jsonb_each_text",
+  "jsonb_array_length", "jsonb_populate_record", "to_jsonb", "to_json",
+  "json_build_object", "json_build_array", "json_array_elements",
+  "row_to_json", "row_number", "rank", "dense_rank", "lag", "lead",
+  "first_value", "last_value", "nth_value", "ntile",
+  "current_setting", "set_config", "current_user", "session_user",
+  "current_database", "current_schema", "version", "txid_current",
+  "pg_backend_pid", "pg_sleep", "pg_typeof", "pg_get_expr", "pg_get_functiondef",
+  "pg_get_function_identity_arguments", "pg_get_function_result",
+  "pg_get_function_arguments", "pg_get_triggerdef", "pg_get_constraintdef",
+  "pg_get_indexdef", "pg_get_viewdef", "pg_get_userbyid", "pg_get_serial_sequence",
+  "pg_total_relation_size", "pg_relation_size", "pg_size_pretty",
+  "pg_notify", "pg_advisory_lock", "pg_advisory_xact_lock", "pg_try_advisory_lock",
+  "to_regclass", "to_regproc", "to_regprocedure", "to_regtype", "to_regnamespace",
+  "has_table_privilege", "has_column_privilege", "has_function_privilege",
+  "has_schema_privilege", "has_sequence_privilege", "has_database_privilege",
+  "pg_has_role", "acldefault", "makeaclitem", "pg_catalog",
+  "aclexplode", "obj_description", "col_description", "shobj_description",
+  "gen_random_uuid", "uuid_generate_v4", "nextval", "currval", "setval",
+  "lpad", "rpad", "regexp_replace", "regexp_match", "regexp_matches",
+  "regexp_split_to_array", "regexp_split_to_table", "starts_with",
+  "is_admin", "auth", "uid", "jwt", "role",
+]);
+
+/**
+ * Routines this code runs for effect whose bodies are not in `defined`.
+ *
+ * Their bodies live in the database, so no reading of this file can say what
+ * they write. The caller refuses rather than assuming they write nothing.
+ */
+// Positions where `name (` is a relation or an alias rather than a call. A
+// write's target table (`INSERT INTO public.commissions (…)`) and a set-returning
+// function's column alias (`… AS ta(attnum)`) both look exactly like a call, and
+// reading them as one charged two migrations for routines that do not exist.
+// `FROM` is deliberately absent: `SELECT * FROM do_the_repair()` IS a call.
+const NOT_A_CALL_HERE = /\b(insert\s+into|update|delete\s+from|merge\s+into|truncate(\s+table)?|copy|into|as|references|table)\s+(only\s+)?(if\s+(not\s+)?exists\s+)?(?:[a-z0-9_]+\.)?$/;
+
+function unknownCallsIn(codeLower, defined) {
+  const out = new Set();
+  for (const raw of codeLower.split(";")) {
+    const stmt = runForEffectRegion(raw.trim());
+    if (!stmt) continue;
+    const re = /(^|[^a-z0-9_.])((?:[a-z0-9_]+\.)?)([a-z0-9_]+)\s*\(/g;
+    let mm;
+    while ((mm = re.exec(stmt)) !== null) {
+      const nameStart = mm.index + mm[1].length + mm[2].length;
+      const before = stmt.slice(0, nameStart);
+      if (NOT_A_CALL.test(before) || NOT_A_CALL_HERE.test(before)) continue;
+      const name = mm[3];
+      if (defined.has(name) || NOT_A_ROUTINE_CALL.has(name)) continue;
+      out.add(name);
+    }
+  }
+  return out;
+}
 
 /**
  * The (table, column) pairs a migration writes when it is applied.
@@ -437,9 +664,20 @@ export function applyTimeWriteTargets(sql) {
   const { code, literals, routines } = applyTimeCode(sql || "");
   const top = targetsFromCode(code, literals);
 
+  // ROUND 25. A name maps to a LIST of bodies, not one. PostgreSQL allows any
+  // number of routines to share a name and differ only by argument types, and a
+  // migration may also drop and redefine one. Keeping the first definition and
+  // discarding the rest let a harmless `helper()` shadow a mutating
+  // `helper(integer)`: `SELECT helper(1)` resolved to the empty body and the
+  // migration read as writing nothing.
+  //
+  // Picking the right overload means type-resolving the arguments, which is
+  // more than this module can do honestly. It unions them instead — every body
+  // that could be the one being called is counted, which can only over-report.
   const byName = new Map();
   for (const r of routines) {
-    if (!byName.has(r.name)) byName.set(r.name, r);
+    if (!byName.has(r.name)) byName.set(r.name, []);
+    byName.get(r.name).push(r);
   }
 
   // Fold in every invoked body, then anything those bodies invoke, until the
@@ -451,28 +689,26 @@ export function applyTimeWriteTargets(sql) {
     for (const name of frontier) {
       if (seen.has(name)) continue;
       seen.add(name);
-      const r = byName.get(name);
-      if (!r) continue;
-      const inner = targetsFromCode(r.code, r.literals);
-      for (const t of inner.targets) top.targets.add(t);
-      for (const t of inner.tables) top.tables.add(t);
-      top.dynamicWrites.push(...inner.dynamicWrites);
-      if (inner.unresolved) top.unresolved = true;
-      for (const n of invokedRoutines(r.code.toLowerCase(), byName.keys())) {
-        if (!seen.has(n)) next.add(n);
+      for (const r of byName.get(name) || []) {
+        const inner = targetsFromCode(r.code, r.literals);
+        for (const t of inner.targets) top.targets.add(t);
+        for (const t of inner.tables) top.tables.add(t);
+        top.dynamicWrites.push(...inner.dynamicWrites);
+        if (inner.unresolved) top.unresolved = true;
+        for (const n of invokedRoutines(r.code.toLowerCase(), byName.keys())) {
+          if (!seen.has(n)) next.add(n);
+        }
       }
     }
     frontier = next;
   }
 
-  const unknownCalls = [];
-  const scan = [code, ...[...seen].map((n) => byName.get(n)?.code || "")].join("\n;\n").toLowerCase();
-  EXEC_VERB.lastIndex = 0;
-  let em;
-  while ((em = EXEC_VERB.exec(scan)) !== null) {
-    const bare = em[1].split(".").pop();
-    if (!byName.has(bare)) unknownCalls.push(bare);
-  }
+  // Routines run for effect whose bodies are not in this file. Scanned across
+  // the top-level code and every body folded in above, because a defined helper
+  // may itself call something that only exists in the database.
+  const bodies = [...seen].flatMap((n) => (byName.get(n) || []).map((r) => r.code));
+  const scan = [code, ...bodies].join("\n;\n").toLowerCase();
+  const unknownCalls = [...unknownCallsIn(scan, new Set(byName.keys()))];
 
   return { ...top, unknownCalls, definedRoutines: [...byName.keys()], invokedRoutines: [...seen] };
 }

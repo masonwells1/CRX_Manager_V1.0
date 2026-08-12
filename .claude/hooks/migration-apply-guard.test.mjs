@@ -851,6 +851,84 @@ function armAutopilot(stateDir, hoursFromNow) {
     );
     ok(!isOneShotDeny(r), "round-24: drop-and-redefine names the routine without calling it");
 
+    // ROUND 25 (Codex High, two findings). Every round so far found one more
+    // spelling of a write that the reader scored as zero writes, so this round
+    // fixes the six it named AND changes the default: a write verb the reader
+    // cannot pin to a table now refuses instead of passing silently. These run
+    // end to end through the guard, not against the parser, because that is
+    // where a regression would actually bite.
+    {
+      let idx = 0;
+      for (const [label, sql] of [
+        // Finding 1 — the statement is assembled from fragments, so no single
+        // literal contains both the verb and the table.
+        ["dynamic SQL concatenated from two literals",
+         "DO $$ BEGIN EXECUTE 'UPDATE ' || 'public.orders SET total_profit = 1'; END $$;"],
+        ["dynamic SQL built into a variable first",
+         "DO $$ DECLARE v text := 'UPDATE public.orders SET total_profit = 1';\n" +
+         "BEGIN EXECUTE v; END $$;"],
+        ["dynamic SQL returned by a function call",
+         "DO $$ BEGIN EXECUTE public.build_repair_sql(); END $$;"],
+        // Finding 2a — a harmless overload shadowing a mutating one.
+        ["a harmless overload hiding a mutating one of the same name",
+         "CREATE FUNCTION public.helper() RETURNS void LANGUAGE sql AS $$ SELECT 1; $$;\n" +
+         "CREATE FUNCTION public.helper(p int) RETURNS void LANGUAGE plpgsql AS $$\n" +
+         "BEGIN UPDATE public.orders SET total_profit = 9 WHERE id = p; END; $$;\n" +
+         "SELECT public.helper(1);"],
+        ["the same shadowing with the mutating overload declared first",
+         "CREATE FUNCTION public.helper(p int) RETURNS void LANGUAGE plpgsql AS $$\n" +
+         "BEGIN UPDATE public.orders SET total_profit = 9 WHERE id = p; END; $$;\n" +
+         "CREATE FUNCTION public.helper() RETURNS void LANGUAGE sql AS $$ SELECT 1; $$;\n" +
+         "SELECT public.helper();"],
+        // Finding 2b — SELECT runs a routine exactly as CALL does.
+        ["a pre-existing routine invoked with SELECT rather than CALL",
+         "SELECT public.repair_all_the_profit();"],
+        ["a pre-existing routine invoked from the FROM clause",
+         "SELECT * FROM public.repair_all_the_profit();"],
+        ["a pre-existing routine invoked from inside a defined helper",
+         "CREATE FUNCTION public.w() RETURNS void LANGUAGE plpgsql AS $$\n" +
+         "BEGIN PERFORM public.repair_all_the_profit(); END; $$;\nSELECT public.w();"],
+        // TRUNCATE — absent from the write-verb set entirely until this round.
+        ["TRUNCATE, which empties every column at once",
+         "TRUNCATE TABLE public.orders;"],
+        ["TRUNCATE reaching the table from the second position of a list",
+         "TRUNCATE TABLE public.scratch_pad, public.orders RESTART IDENTITY CASCADE;"],
+        // A column type change rewrites values without any write verb.
+        ["a column type change rewriting the values through USING",
+         "ALTER TABLE public.orders ALTER COLUMN total_profit TYPE numeric USING round(total_profit);"],
+        // The new default: a write shape the reader cannot resolve.
+        ["a write verb whose relation the reader cannot read",
+         "DO $$ BEGIN UPDATE (public.orders) SET total_profit = 1; END $$;"],
+      ]) {
+        r = apply(`20990601${String(70 + idx++).padStart(6, "0")}_r25`, sql);
+        ok(isDeny(r) && isOneShotDeny(r), `round-25: ${label} → denied`);
+      }
+    }
+
+    let idx2 = 0;
+    // …and the shapes that must stay free. The first two are not hypothetical:
+    // a REVOKE TRUNCATE over 114 relations is queued in this repository, and
+    // reading its relation list as a truncation would have refused it.
+    for (const [label, sql] of [
+      ["revoking the TRUNCATE privilege is not a truncation",
+       "REVOKE TRUNCATE ON public.orders FROM authenticated;"],
+      ["granting TRUNCATE over a list is not a truncation",
+       "GRANT TRUNCATE ON public.scratch_pad, public.orders TO service_role;"],
+      ["SELECT ... FOR UPDATE is a row lock, not a write",
+       "SELECT id FROM public.orders WHERE id = 2 FOR UPDATE;"],
+      ["a trigger fired BEFORE INSERT OR UPDATE is a definition, not a write",
+       "CREATE TRIGGER t2 BEFORE INSERT OR UPDATE ON public.orders FOR EACH ROW EXECUTE FUNCTION f();"],
+      ["adding a column does not rewrite the existing ones",
+       "ALTER TABLE public.orders ADD COLUMN note text;"],
+      ["reading the table with built-in functions is not a call to an unknown routine",
+       "SELECT count(*), md5(string_agg(id::text, ',')) FROM public.orders;"],
+      ["a set-returning function's column alias is not a routine call",
+       "SELECT * FROM unnest(ARRAY[1,2]) AS ta(n);"],
+    ]) {
+      r = apply(`20990601${String(90 + (idx2 += 1)).padStart(6, "0")}_r25ok`, sql);
+      ok(!isOneShotDeny(r), `round-25: ${label} → not a replay`);
+    }
+
     // 4. ROUND 12 (Codex High) reversed this case. Round 8 let a one-shot
     //    through whenever the ledger already contained it, reasoning that such a
     //    database IS the population the repair was approved against. True at the

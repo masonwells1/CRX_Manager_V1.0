@@ -9,6 +9,40 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-12 — A guard that reads SQL must fail closed on what it cannot read
+
+**Source:** rounds 17–25 of adversarial review on PR #364, and the pattern across all of them.
+
+**Background.** The one-shot replay guard reads a submitted migration and asks which
+`(table, column)` pairs it writes at apply time, so a repair that already ran cannot be re-run under
+a new name. Nine consecutive review rounds each found the same defect in a new costume: one more way
+to spell a write that the reader did not recognise. On an unrecognised construct the reader answered
+"writes nothing" and passed the migration through. That default is fail-open, and it cannot be
+exhausted by review — SQL has more ways to write a row than a reviewer has rounds.
+
+**Decision.** The default is inverted. A write verb the reader can see but cannot bind to a relation
+now reports `unresolved`, which routes to the human override prompt instead of past it. Novel
+constructs fail toward a person.
+
+**Why this is affordable, and the condition under which it stops being affordable.** The semantic
+layer runs *only* inside the one-shot comparison loop, and only when a registered one-shot repair
+exists with non-empty write targets. Ordinary migrations never reach it. Friction was measured on
+the entire migration corpus before the rule shipped: 32 files trip either strict rule, and each pays
+nothing unless it also collides with a registered repair's tables. **If the registry ever grows to
+cover a broad set of hot tables, re-measure before assuming this is still free.**
+
+**The operative rule for future agents.** Do not "fix" friction from this guard by restoring the
+permissive default. The refusal is the feature. Widen the enumerated benign contexts (row locks,
+trigger timing and column lists, foreign-key actions, policy applicability, privileges, rules) or
+teach the reader the specific construct — and measure the change across the whole corpus before
+shipping it, because three drafts of this same rule were discarded for refusing every migration in
+the tree.
+
+**Also settled here:** a guard rule is not shipped until a mutation battery has broken it on purpose
+and watched a test go red. Six mutants, six kills, source restored byte-for-byte.
+
+---
+
 ## 2026-08-10 — Data migrations bind approval to a digest, not to row counts
 
 **Source:** Codex exact-SHA review of PR #364, 2026-08-10 (`CODEX_PROOF_VERDICT: BLOCKERS`, finding 1).
