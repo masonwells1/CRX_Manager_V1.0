@@ -152,6 +152,15 @@ predicate without `OR` or joined-table broadening; custom calls are scanned per 
 or `WITH` statement; and persistent `SELECT INTO` is detected behind CTEs. The generated candidate
 suite now covers 28 allow/deny cases including every Sol reproduction from both passes.
 
+The third exact-head pass proved that trying to preserve a regex-based persistent `[E2E]` exemption
+was itself unsafe: negation could invert a seemingly positive predicate, a marker in a non-identity
+insert column could bless a real entity, and a safe first CTE write could hide a later mass delete.
+The raw SQL connector now has the simpler enforceable boundary: production reads, explicit
+`pg_temp` scratch writes, and structurally proven rollback smoke only. Persistent E2E fixtures must
+use the governed app/RPC path. Every DML operation in a statement is enumerated, so a safe first CTE
+cannot hide a second mutation. The generated suite now covers 31 cases including all third-pass
+reproductions and the deliberate denial of persistent E2E raw writes.
+
 ## 2026-08-11 — A smoke selection that runs nothing no longer reports success
 
 Follow-up to the entry below, from its own adversarial review. Container-only chains are dropped

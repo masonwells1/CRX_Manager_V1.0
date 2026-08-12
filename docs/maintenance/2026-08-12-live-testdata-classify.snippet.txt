@@ -66,15 +66,16 @@ export function classifySql(query) {
     }
   }
 
-  // Bind every fixture exemption to the DML statement and the target row. A
-  // comment, SET value, unrelated SELECT, or OR-broadened predicate cannot
-  // exempt a persistent write.
+  // Raw execute_sql is a read/analysis surface, not a fixture writer. Enumerate
+  // EVERY DML operation in every statement and allow only explicit pg_temp
+  // scratch targets. Persistent E2E fixtures must use the app/RPC path, where
+  // authorization, invariants, and teardown identity are structural.
   const persistentDml = [];
   for (const statement of visibleStatements) {
-    const target = dmlTarget(statement);
-    if (!target || isPgTempTarget(statement)) continue;
-    if (isSyntheticE2ETarget(statement, target)) continue;
-    persistentDml.push({ statement: stripCommentsQuoteAware(statement), target });
+    for (const target of dmlTargets(statement)) {
+      if (isPgTempTarget(target)) continue;
+      persistentDml.push({ statement: stripCommentsQuoteAware(statement), target });
+    }
   }
   const guardedDmlText = persistentDml.map(({ statement }) => statement).join(";\n");
 
@@ -127,8 +128,7 @@ export function classifySql(query) {
   }
 
   // Static table inventories drift. Any remaining persistent DML fails closed,
-  // while explicit pg_temp scratch work and target-bound E2E fixtures remain
-  // available for safe analysis.
+  // while explicit pg_temp scratch work remains available for safe analysis.
   for (const { target } of persistentDml) {
     const verb = target[1].toLowerCase();
     if (verb === "merge into") {
@@ -141,7 +141,7 @@ export function classifySql(query) {
     return {
       block: true,
       kind: verb === "insert into" ? "real-insert" : verb === "update" ? "real-update" : "real-delete",
-      reason: `This ${verb.toUpperCase()} targets a persistent live table through raw execute_sql. Only explicit pg_temp scratch data or a target-bound [E2E] fixture is allowed.`,
+      reason: `This ${verb.toUpperCase()} targets a persistent live table through raw execute_sql. Only explicit pg_temp scratch data is allowed; use the app/RPC fixture path for [E2E] entities.`,
     };
   }
 
@@ -150,10 +150,9 @@ export function classifySql(query) {
   // rollback smoke batches.
   for (let index = 0; index < normalizedStatements.length; index++) {
     const statement = normalizedStatements[index];
-    // Every DML statement already passed through the persistent-target loop.
-    // Reaching here means it was an explicit pg_temp write or a target-bound
-    // E2E fixture, both of which are the intended safe exceptions.
-    if (dmlTarget(visibleStatements[index])) continue;
+    // Every DML operation already passed through the persistent-target loop.
+    // Reaching here means every target in this statement was explicit pg_temp.
+    if (dmlTargets(visibleStatements[index]).length > 0) continue;
     if (/^(?:select|with|explain|show|values)\b/i.test(statement)) continue;
     if (/^(?:begin|rollback)(?:\s+(?:work|transaction))?$/i.test(statement)) continue;
     if (/^create\s+(?:temp|temporary)\b/i.test(statement)) continue;

@@ -175,29 +175,11 @@ function standaloneDoSmokeAbort(statements) {
   return /^;\s*end\s*;?$/i.test(keywordView(match[2].slice(markerEnd)).trim());
 }
 
-function dmlTarget(statement) {
-  return DML_TARGET_RE.exec(keywordView(statement));
+function dmlTargets(statement) {
+  const matcher = new RegExp(DML_TARGET_RE.source, "gi");
+  return [...keywordView(statement).matchAll(matcher)];
 }
 
-function isPgTempTarget(statement) {
-  const target = dmlTarget(statement);
-  return Boolean(target && /^(?:pg_temp|pg_temp_\d+)$/i.test(target[2] || ""));
-}
-
-function isSyntheticE2ETarget(statement, target) {
-  const source = stripCommentsQuoteAware(statement).slice(target.index);
-  const verb = target[1].toLowerCase();
-  if (verb === "insert into") {
-    return /\bvalues\s*\([^;]*'\[E2E\][^']*'/i.test(source);
-  }
-  if (verb !== "update" && verb !== "delete from") return false;
-  const sourceKeywords = keywordView(source);
-  const whereIndex = sourceKeywords.search(/\bwhere\b/i);
-  if (whereIndex === -1) return false;
-  const predicate = source.slice(whereIndex);
-  if (/\bor\b/i.test(keywordView(predicate))) return false;
-  const beforeWhere = sourceKeywords.slice(0, whereIndex);
-  if (verb === "update" && /\bfrom\b/i.test(beforeWhere)) return false;
-  if (verb === "delete from" && /\busing\b/i.test(beforeWhere)) return false;
-  return /(?:\b[a-z_][a-z0-9_]*|"(?:[^"]|"")+")\s*(?:=\s*'\[E2E\][^']*'|\b(?:like|ilike)\s*'\[E2E\]%')/i.test(predicate);
+function isPgTempTarget(target) {
+  return /^(?:pg_temp|pg_temp_\d+)$/i.test(target?.[2] || "");
 }

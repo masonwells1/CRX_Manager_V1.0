@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { buildMaintainedSource } from "./apply-live-testdata-maintenance-20260812.mjs";
 
 const { output, blob } = buildMaintainedSource();
-assert.equal(blob, "9e75044cb0e30fa8fdfe7b6ff19b77600ef6ccc5", "pinned generated blob");
+assert.equal(blob, "f6e850e6fafb70fd5ca28e98ad9e8683081653c2", "pinned generated blob");
 
 const scratch = mkdtempSync(path.join(tmpdir(), "crx-live-guard-candidate-test-"));
 try {
@@ -38,6 +38,12 @@ try {
     "DELETE FROM customers WHERE id=1 AND '[E2E]'='[E2E]'",
     "VALUES (public.cancel_order('00000000-0000-0000-0000-000000000000'))",
     "WITH source AS (SELECT 1 AS x) SELECT x INTO public.guard_bypass FROM source",
+    "INSERT INTO customers (name) VALUES ('[E2E] Farm Alpha')",
+    "UPDATE customers SET phone = '555' WHERE name LIKE '[E2E]%'",
+    "DELETE FROM customers WHERE name ILIKE '[E2E]%'",
+    "DELETE FROM customers WHERE NOT (name ILIKE '[E2E]%')",
+    "INSERT INTO customers (name, notes) VALUES ('Real Customer', '[E2E] marker')",
+    "WITH seed AS (INSERT INTO customers (name) VALUES ('[E2E] probe') RETURNING id) DELETE FROM customers WHERE id IS NOT NULL",
   ];
   for (const sql of blocked) {
     assert.equal(classifySql(sql).block, true, `must block: ${sql}`);
@@ -45,9 +51,6 @@ try {
 
   const allowed = [
     "SELECT * FROM customers WHERE id = 1",
-    "INSERT INTO customers (name) VALUES ('[E2E] Farm Alpha')",
-    "UPDATE customers SET phone = '555' WHERE name LIKE '[E2E]%'",
-    "DELETE FROM customers WHERE name ILIKE '[E2E]%'",
     "UPDATE pg_temp.some_log_table SET x = 1 WHERE id = 1",
     "CREATE TEMP TABLE scratch AS SELECT 1",
     "BEGIN; ALTER TABLE invoices ADD COLUMN x text; ROLLBACK;",
