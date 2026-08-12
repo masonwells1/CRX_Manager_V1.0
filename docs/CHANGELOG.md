@@ -2,6 +2,19 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-12 — Restore a governed maintenance path for the live SQL safety boundary
+
+The weekly adversarial review confirmed two active fail-open paths in the live SQL classifier, but
+the repository's direct-write guard also made its documented "reviewed maintenance workflow"
+impossible: the former governed producer was removed and no replacement existed. This change adds a
+single-purpose, one-use producer for the exact reviewed classifier repair. It accepts no arbitrary
+path or patch, verifies the current input Git blob, verifies three checked-in source snippets by
+SHA-256, builds one pinned output blob, refuses dirty/detached/protected branches, and requires
+Mason's dated approval token before writing. The producer itself does not activate the repair; it
+must first pass an exact-head Sol review and the normal protected pull-request pipeline. The follow-up
+change will run the producer on a feature branch, add the red-to-green regression tests, and remove
+the temporary producer after use.
+
 ## 2026-08-11 — A smoke selection that runs nothing no longer reports success
 
 Follow-up to the entry below, from its own adversarial review. Container-only chains are dropped
