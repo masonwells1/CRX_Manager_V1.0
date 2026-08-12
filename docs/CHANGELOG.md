@@ -70,6 +70,45 @@ all 24 current August migrations pass. The compatibility path accepts
 canonical `ACTOR_MISMATCH` token, but still rejects comments and a refusal that
 names a different actor parameter.
 
+## 2026-08-11 — Executable proof for the blend-ticket whole-cent fix, and the run-time gap it exposes
+
+The blend-ticket fix below was reviewed and applied, but the fractional-quantity path it repairs had
+never actually been executed anywhere. `scripts/smoke/prove-blend-ticket-fractional-cents.mjs` now runs
+it end to end in a disposable, network-isolated PostgreSQL 17 container built from the repository's own
+migrations, with a fixture blend ticket whose unit conversion yields a fractional quantity.
+
+Six stages. It reproduces the original failure against the pre-fix body from `20260714230200` and
+observes the live CHECK constraint reject the header write; applies
+`20260811200000_blend_ticket_order_whole_cent_totals` and watches its own `$verify$` post-condition
+block pass; re-runs the registered smoke chain to `SMOKE_PASS_ROLLBACK`, asserting whole-cent totals
+equal to the canonical sum of rounded lines; then mutates the schema twice to confirm the apply-time
+guard fails closed when the totals trigger is missing and when it is `REPLICA`-only. That second
+mutation matters: `tgenabled` has four states, and the widespread `<> 'D'` idiom waves through a
+replica-only trigger that never fires in an ordinary session. The migration rejects both.
+
+Both mutation stages apply the migration as a single transaction, so "fails closed" means the function
+body is also rolled back rather than left half-replaced.
+
+The harness refuses to run unless the post-fix function body on disk still md5-matches a **pinned
+snapshot** of that function read from production `pg_proc` on 2026-08-11. That is a historical reading,
+not a live one — the container runs with `--network none` and the harness never contacts production —
+so it catches the repository drifting off what was applied, not production changing underneath. The
+comment in the script carries the exact query to re-confirm current parity by hand. The smoke chain and
+fixture are registered in `smoke-specs.json` under `create_order_from_blend_ticket`, flagged
+`container_only` so `--all` and `--area` runs skip it with an announced reason instead of sending a
+fixture-seeding chain at whatever database `SUPABASE_DB_URL` points to.
+
+Stage six characterizes a residual defect the review pass did not surface: the trigger guarantee is
+**apply-time only**. With the fixed body in place and the trigger dropped afterwards, the RPC reports
+success and books a zero-value header — the read-back's `IF NOT FOUND` cannot catch it, because the
+order row exists by then regardless of whether the trigger ran. Nothing raises; only the smoke chain
+caught it. Reaching that state takes a deliberate schema change that the migration's own guard blocks
+at apply time, and production holds no blend tickets, so it is not firing — but the failure mode is
+silent wrong money, not an error, which makes it a **HIGH-severity open data-integrity gap**, not a
+footnote. It is tracked as **CRX-MONEY-001-R** in `docs/manual/KNOWN_ISSUES.md` with an owner,
+mitigation and standing detector; stage F of the prover is that detector. Closing it means asserting
+inside the RPC that the header was actually recalculated.
+
 ## 2026-08-11 — Customer 360 pre-push adversarial fixes
 
 Closed all three medium-severity findings from the fresh Sol review of the Customer 360 adoption pack. Customer ownership assignment now uses a new admin-only atomic RPC instead of a separate active-rep read followed by a direct customer update: the RPC locks the target rep, rejects any missing/inactive customer from the exact selected set, rolls partial matches back, and binds idempotent retries to the actor, customer IDs, and target rep. The Customers UI retains truthful post-save refresh handling and has regression coverage for inactive targets, changed customer sets, ambiguous failures, and intent-scoped keys. Call Lists now keeps a requested `rep=` URL pending and blocks list loading when rep-option validation fails, so an error cannot broaden the admin's requested scope to all reps; retry preserves and restores the filter. The approved migration was submitted as `20260811122851_assign_customers_sales_rep` and applied live under Supabase-assigned/disk version `20260811183317`; live catalog and grant checks passed, and the schema registry, generated Supabase types, and `pg_proc` fixture were refreshed through the resulting 960-row ledger high-water. The registered rollback smoke passed against the exact migration in disposable PostgreSQL; its live rollback-only run remains separately guarded by the required `REAL-DATA-OK` authorization.

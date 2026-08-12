@@ -2,7 +2,7 @@
 
 **Last verified: 2026-08-11 UTC, post-deploy.** Live ledger high-water is `20260810235207` (`20260810183629_reconcile_pending_commission_snapshots`, B7-renamed on disk to the assigned version) at 958 ledger rows — the reconciliation that closed out the stale line-profit backfill, applied and verified live on 2026-08-10 with the registered smoke returning exact `SMOKE_PASS_ROLLBACK`. Ledger versions are UTC, which is why this stamp can read a day ahead of the local session date. The prior high-water `20260810025159` (`20260810022500_backfill_stale_line_profit`) was the money-workstream migration applied after the Team Board work. The 2026-08-09 post-apply verification that the rest of this header describes ended at `20260810010308` (`active_team_note_assignment_actor`); every ledger entry past it was applied live by separate 2026-08-10 sessions and is described in its own entry rather than here. Both Team Board migrations are live and now represented on disk: `20260809130108` added the governed `complete_team_note` RPC and assignment-notification trigger, and `20260810010308` closed the inactive-actor path in the insert policy and trigger. The full rollback-only business chain reached exact `SMOKE_PASS_ROLLBACK`; the compatible frontend was carried by PR #351 (merge commit `8dcb82fb`). Closeout PR #372 merged as `261d10bd` on 2026-08-11, Vercel reported the production deployment successful, and `/team-board` returned HTTP 200 with the app shell.
 
-**Repository lags production on the three whole-cent migrations.** History rows 868–870 (`20260810150000`, `20260810150500`, `20260810151000`; ledger versions `20260810152935`, `20260810154721`, `20260810155629`) are **applied live** but absent from `main` until PR #371 lands — see the dedicated entry below.
+**Repository/production gap on the whole-cent migrations: CLOSED 2026-08-11.** History rows 868–870 (`20260810150000`, `20260810150500`, `20260810151000`; ledger versions `20260810152935`, `20260810154721`, `20260810155629`) were applied live before they existed on `main`. **PR #371 landed as merge `465458a0`**, bringing those three plus `20260811200000_blend_ticket_order_whole_cent_totals` (applied live as ledger `20260811220045`) onto `main`. Disk and production now agree on all four — independently re-verified against live `pg_proc` on 2026-08-11.
 
 **2026-08-10 money re-measure (read-only, live).** Whole-cent conformance by column, which is what history rows 868–870 are scoped against: `orders.total_price` 0 dirty, `orders.total_cost` 0, `orders.total_profit` 0, `order_items.profit` 0, `quotes.total_price` 0, `quotes.total_profit` 0, `quote_items.total_price` 0, `quote_items.profit` 0 — and still dirty: **`order_items.total_price` 35/288, `quotes.total_cost` 2/4, `commissions.commission_amount` 3/35, `commissions.order_profit` 3/35.** The `order_items` figure moved 46 → 35 because `20260810025159` (above) backfilled stale line profit through the canonical trigger; the 3 fractional `commissions` rows are unchanged and still deliberately unrepaired. **43 dirty rows remain and repairing them rewrites stored money — still Mason's separate decision, still not done.** Under the 2026-08-10 fail-closed money policy those columns are tracked debt, not an approved exception.
 
@@ -19,7 +19,7 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## OPEN 2026-08-10 — blend-ticket order creation can be rejected by the new whole-cent CHECKs
+## FIXED LIVE 2026-08-11 — blend-ticket order creation could be rejected by the whole-cent CHECKs
 
 **Severity: latent, not currently firing.** `create_order_from_blend_ticket` accumulates `v_total_price` and `v_total_cost` as raw `price * converted_quantity` products and writes them, plus `total_price - total_cost`, straight to `orders` with **no rounding** (live body confirmed 2026-08-10; `orders` has no BEFORE-UPDATE rounding trigger — only status/lineage/commission-stamp triggers). History row 870 added `orders_total_cost_whole_cents_chk` and `orders_total_profit_whole_cents_chk`, both live and `convalidated`. A blend ticket whose unit conversion yields a fractional quantity therefore produces a sub-cent total and the final write is **rejected**, rolling back the whole RPC and failing order creation from `BlendTicketDetail` with a raw constraint error.
 
@@ -27,7 +27,47 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 **Found by:** Codex P1 on PR #371, verified independently against live `pg_proc`, `pg_trigger` and `pg_constraint` rather than taken on trust.
 
-**Fix:** round the two accumulators at the write, matching what `trg_recalc_order_totals` already does on every other order path. Tracked in the Wave A ordering-cycle branch; until it lands, do not create the first blend ticket.
+**Fixed by** `20260811200000_blend_ticket_order_whole_cent_totals` (PR #371, merge `465458a0`), **applied live
+2026-08-11 as ledger version `20260811220045`**. The fix deletes the raw header write rather than rounding it:
+`after_order_items_change` → `trg_recalc_order_totals` has already written all four header columns from the
+per-line values, rounding each on the way in, so the RPC now reads that canonical header back and returns it.
+Rounding the accumulators instead would have kept two independent computations of the same number in the
+codebase. The migration carries an apply-time `$verify$` block asserting exactly one overload and that
+`after_order_items_change` is present, enabled, bound to `trg_recalc_order_totals()` and fires on INSERT.
+
+**Proved by execution, not review alone.** `scripts/smoke/prove-blend-ticket-fractional-cents.mjs` runs the
+whole thing in a network-isolated disposable PostgreSQL 17 container: it reproduces the CHECK violation
+against the pre-fix body from `20260714230200`, applies `20260811200000` verbatim, and re-runs the chain to
+`SMOKE_PASS_ROLLBACK` with whole-cent totals equal to the canonical sum-of-rounded-lines. It refuses to run
+unless the post-fix body on disk still md5-matches the **pinned 2026-08-11 production snapshot** of that
+function — a historical reading, not a live one: the prover's container runs with `--network none` and never
+contacts production, so the match proves the repo has not drifted off what was applied, not that production
+is unchanged since. Both mutation stages apply the migration as a single transaction and confirm it fails
+closed **and rolls back** when the trigger is missing **and** when it is `REPLICA`-only — the latter is the
+case a `tgenabled <> 'D'` check would wave through, because a replica-only trigger never fires in an origin
+session.
+
+### OPEN — residual run-time gap (CRX-MONEY-001-R): the trigger guarantee is APPLY-time only
+
+**Severity: HIGH if it ever fires — silent wrong money, no error.** There is no run-time equivalent of the
+apply-time check. The fixed body reads the header back with `SELECT … INTO v_total_price` followed by
+`IF NOT FOUND`, but the `orders` row always exists by that point, so `FOUND` is true even when the trigger
+never ran. Stage F of the prover characterizes this: with the fixed body in place and
+`after_order_items_change` dropped, the RPC **reports success and books a zero-value header** — nothing
+raises, and only the smoke chain catches it.
+
+- **Owner:** Mason to schedule; unassigned until then. Not scheduled into a current branch.
+- **Trigger condition:** requires the recalculation trigger to be dropped or disabled. It cannot occur on
+  its own, and `20260811200000`'s `$verify$` block blocks the migration path into that state.
+- **Mitigation (the fix, when scheduled):** assert inside `create_order_from_blend_ticket` that the header
+  it read back is non-zero and equals the sum of rounded line values, and raise instead of returning.
+  Same shape applies to every RPC that reads a trigger-maintained header back.
+- **Monitoring until then:** `scripts/smoke/prove-blend-ticket-fractional-cents.mjs` stage F is the standing
+  detector and fails the prover if the behavior changes. A live-side check —
+  `orders` rows where `total_price = 0` but priced `order_items` exist — is the query to run if a
+  blend-ticket order ever looks wrong; production currently holds **0** blend tickets, so there is nothing
+  to watch yet.
+- **Do not** treat the apply-time guard as run-time protection.
 
 ---
 
@@ -105,7 +145,12 @@ Delivery: the browser changes that call the RPC and open assignment notification
 
 ---
 
-## OPEN 2026-08-10 — three migrations are live but their source files are not yet on `main`
+## CLOSED 2026-08-11 — three migrations are live but their source files are not yet on `main`
+
+> **Closed by PR #371 (merge `465458a0`).** All three files are on `main`, alongside
+> `20260811200000`. Kept for history; the authoritative status is the header line at the top
+> of this file. The "Closes when PR #371 lands" paragraph below was written before it merged.
+
 
 Raised by Codex (P1) on PR #372 and **verified**: the schema registry records
 `20260810150000_commission_basis_from_canonical_order_header`,
