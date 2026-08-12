@@ -40,6 +40,14 @@ export function classifySql(query) {
       reason: "Function and procedure definitions can hide non-transactional side effects such as sequence changes, so they are never permitted through raw execute_sql. Use the reviewed migration smoke harness instead.",
     };
   }
+
+  if (COPY_RE.test(visibleKeywordText)) {
+    return {
+      block: true,
+      kind: "raw-mutation",
+      reason: "COPY can read or write server files or launch a server-side program, and those external effects are not made safe by transaction rollback. Use a reviewed, purpose-built maintenance path instead.",
+    };
+  }
   if (normalizedStatements.some((statement) => /^do\b/i.test(statement))) {
     return {
       block: true,
@@ -182,8 +190,8 @@ export function classifySql(query) {
   }
 
   // Fail closed for every other non-read statement. The explicit exceptions
-  // are transaction control, temporary scratch tables, and structurally proven
-  // rollback smoke batches.
+  // are transaction control, temporary scratch tables, and an explicit list
+  // of transaction-safe commands inside structurally proven rollback batches.
   for (let index = 0; index < normalizedStatements.length; index++) {
     const statement = normalizedStatements[index];
     // Every DML operation already passed through the persistent-target loop.
@@ -192,7 +200,7 @@ export function classifySql(query) {
     if (/^(?:select|with|explain|show|values)\b/i.test(statement)) continue;
     if (/^(?:begin|rollback)(?:\s+(?:work|transaction))?$/i.test(statement)) continue;
     if (/^create\s+(?:temp|temporary)\s+table\b/i.test(statement)) continue;
-    if (rolledBack) continue;
+    if (rolledBack && isRollbackSafeSmokeStatement(statement)) continue;
     return {
       block: true,
       kind: "raw-mutation",

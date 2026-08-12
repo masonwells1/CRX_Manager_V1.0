@@ -158,3 +158,10 @@ function tempBaseTableName(statement) {
   const match = /^\s*create\s+(?:temp|temporary)\s+table(?:\s+if\s+not\s+exists)?\s+(?:(?:"?(?:pg_temp|pg_temp_\d+)"?)\s*\.\s*)?"?([a-z_][a-z0-9_$]*)"?/i.exec(statement);
   return match?.[1]?.toLowerCase() || null;
 }
+
+function isRollbackSafeSmokeStatement(statement) {
+  // Keep this list narrow and object-specific. A transaction wrapper does not
+  // make commands with server, filesystem, process, subscription, or sequence
+  // side effects safe merely because their catalog changes roll back.
+  return /^(?:create(?:\s+or\s+replace)?\s+(?:(?:unique\s+)?index|table|view|materialized\s+view|type|domain|schema|policy|trigger|rule)\b|alter\s+(?:table|index|view|materialized\s+view|type|domain|schema|policy|trigger|rule|default\s+privileges)\b|drop\s+(?:index|table|view|materialized\s+view|type|domain|schema|policy|trigger|rule)\b|grant\b|revoke\b|comment\s+on\b|set\s+local\b|set\s+constraints\b)/i.test(statement);
+}

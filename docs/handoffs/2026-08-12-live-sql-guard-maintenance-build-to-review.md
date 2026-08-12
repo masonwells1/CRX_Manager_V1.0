@@ -19,10 +19,10 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
 
 - The current source blob is pinned to `c8bec70830c643e474831985f5e6c3bd16630386`.
 - `node scripts/apply-live-testdata-maintenance-20260812.mjs --verify` produced pinned output blob
-  `ba035e09a48eb830696260892855ee638092cbaf`, matched all three snippet SHA-256 values, and passed a
+  `d15d0c77077e50648ce785c306a8832d34a097a9`, matched all three snippet SHA-256 values, and passed a
   Node module syntax check without changing the repository target.
-- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 60 assertions against the
-  generated module, including all classifier defect classes found by the first twelve Sol reviews.
+- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 64 assertions against the
+  generated module, including all classifier defect classes found by the first thirteen Sol reviews.
 - The write mode refused the dirty build worktree even with Mason's dated token.
 - Current recovery proof passed ESLint, TypeScript typecheck, production build, all 4,466 executed
   Vitest assertions (123 skipped), all agent-workflow tests, agent health, dependency integrity,
@@ -105,6 +105,12 @@ any later live migration apply still requires the repository's current explicit 
   only after the batch creates that exact base temp table, and any intervening schema operation clears
   every exemption. The exact Unicode, temp-view, standalone-temp-target, and table-to-view replacement
   payloads are pinned. A fresh exact-head review remains required.
+- The thirteenth exact-head Sol review found that the remaining blanket rollback exemption admitted
+  `COPY ... TO PROGRAM` and server-file export even though transaction rollback cannot undo their
+  external effects. `COPY` now fails closed categorically, and the blanket exemption is replaced by
+  an object-specific allowlist of transaction-safe schema and `SET LOCAL` smoke statements. Both
+  exact `COPY` forms plus an unrecognized rollback-wrapped command are pinned. A fresh exact-head
+  review remains required.
 - GitHub checks and CodeRabbit must be complete and acceptable on the exact PR head.
 
 ## FIRST ACTION
