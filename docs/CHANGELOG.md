@@ -2,6 +2,23 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-12 — The full-audit baseline now covers Wave A's self-test probes
+
+Merging `main` brought six Wave A migrations (`20260812010000` through
+`20260812060000`) under this branch's much stricter full audit for the first
+time — `main` still carries the short 349-line validator, so its own CI never
+measured them. Nine violations appeared. All nine are the same blind spot
+rather than new defects: every flagged `UPDATE` and every flagged function call
+sits inside a `DO $postcond$` self-test probe that always terminates with
+`PROBE_OK_ROLLBACK`, so nothing it writes survives; and the flagged dynamic SQL
+is `ALTER TABLE ... ADD CONSTRAINT` and `REVOKE`, never DML. Round 21's
+validator reports the identical nine, which rules out round 22 as the cause.
+
+The CI baseline moves 61 → 70 to admit exactly those, with the reason recorded
+at the call site. The real fix — letting the guard recognise a probe block that
+provably always rolls back, without that recognition becoming the twenty-third
+bypass — is tracked as follow-up work and is deliberately not attempted here.
+
 ## 2026-08-12 — Quoted text is not proof, and an unfamiliar schema is not an exemption
 
 Closed all three High findings from the round-22 adversarial review of the same
