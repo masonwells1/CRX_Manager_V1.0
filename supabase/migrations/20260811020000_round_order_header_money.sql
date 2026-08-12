@@ -426,13 +426,21 @@ BEGIN
   -- half unasserted. EXECUTE on a trigger function is checked at CREATE TRIGGER
   -- time rather than at fire time, so the practical blast radius of a stray grant
   -- is small — but "small" is a reason to assert it cheaply, not to skip it.
+  -- The `g = 'public' OR EXISTS (... pg_roles ...)` filter is load-bearing twice
+  -- over. has_function_privilege() RAISES for a role that does not exist rather
+  -- than returning false, so on a replay target lacking Supabase's roles the
+  -- unguarded form aborted on a role lookup instead of reporting a grant. But
+  -- PUBLIC is a pseudo-role and never appears in pg_roles, so filtering the
+  -- array against pg_roles alone would silently DROP the PUBLIC grantee — the
+  -- widest one — from a check whose whole point is that all four are asserted.
   SELECT string_agg(g, ', ' ORDER BY g) INTO v_unexpected
   FROM unnest(ARRAY['anon', 'public', 'authenticated', 'service_role']) AS g
-  WHERE EXISTS (
-    SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-    WHERE n.nspname = 'public' AND p.proname = '_round_money_to_whole_cents'
-      AND has_function_privilege(g, p.oid, 'EXECUTE')
-  );
+  WHERE (g = 'public' OR EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname = g))
+    AND EXISTS (
+      SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = '_round_money_to_whole_cents'
+        AND has_function_privilege(g, p.oid, 'EXECUTE')
+    );
 
   IF v_unexpected IS NOT NULL THEN
     RAISE EXCEPTION 'POSTCOND: EXECUTE on _round_money_to_whole_cents is still held by: %. The REVOKE above names anon, authenticated, service_role and PUBLIC; every one of them must come back denied.', v_unexpected;

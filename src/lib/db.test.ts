@@ -9,6 +9,7 @@ import {
   checkMutationResult,
   assertRpcResult,
   hasRpcCode,
+  describePostInvoiceBlock,
   rpcAuthErrorMessage,
   RpcErrorCodes,
 } from './db';
@@ -135,5 +136,46 @@ describe('rpcAuthErrorMessage', () => {
   it('leaves unrelated RPC failures available for their normal handling', () => {
     expect(rpcAuthErrorMessage({ message: 'Billing splits must total 100%' })).toBeNull();
     expect(rpcAuthErrorMessage(null)).toBeNull();
+  });
+});
+
+describe('describePostInvoiceBlock', () => {
+  // The three sentences below are copied verbatim from the RAISE EXCEPTION
+  // lines in 20260811060000_require_completed_delivery_before_invoice_post.sql
+  // (lines 776, 779, 786) with the % placeholders filled in. Two of them are
+  // DELIVERY_NOT_COMPLETED but prescribe OPPOSITE actions — void vs complete —
+  // so the mapper must pass the database's own sentence through rather than
+  // collapse both to one canned string.
+  const DELETED_DELIVERY =
+    'DELIVERY_NOT_COMPLETED: delivery D-42 for invoice INV-1002 has been deleted, so nothing was delivered against this bill. Void this invoice instead of posting it.';
+  const CANCELLED_DELIVERY =
+    'DELIVERY_NOT_COMPLETED: delivery D-43 for invoice INV-1003 is "cancelled", not completed. Complete the delivery first — that same step also corrects this invoice to the quantities actually delivered. If the delivery was cancelled or voided, void this invoice rather than posting it.';
+  const MISSING_DELIVERY =
+    'DELIVERY_MISSING: invoice INV-1001 points at delivery 77, which no longer exists. A bill whose delivery record is gone must not be posted.';
+
+  it('tells the operator to VOID when the delivery was deleted', () => {
+    expect(describePostInvoiceBlock({ code: 'P0001', message: DELETED_DELIVERY })).toMatchInlineSnapshot(`"delivery D-42 for invoice INV-1002 has been deleted, so nothing was delivered against this bill. Void this invoice instead of posting it."`);
+  });
+
+  it('tells the operator to COMPLETE when the delivery is merely unfinished', () => {
+    expect(describePostInvoiceBlock({ code: 'P0001', message: CANCELLED_DELIVERY })).toMatchInlineSnapshot(`"delivery D-43 for invoice INV-1003 is "cancelled", not completed. Complete the delivery first — that same step also corrects this invoice to the quantities actually delivered. If the delivery was cancelled or voided, void this invoice rather than posting it."`);
+  });
+
+  it('explains a missing delivery record', () => {
+    expect(describePostInvoiceBlock(new Error(MISSING_DELIVERY))).toMatchInlineSnapshot(`"invoice INV-1001 points at delivery 77, which no longer exists. A bill whose delivery record is gone must not be posted."`);
+  });
+
+  it('falls back to a canned sentence when the token is raised bare', () => {
+    expect(describePostInvoiceBlock({ message: 'DELIVERY_NOT_COMPLETED' })).toMatchInlineSnapshot(`"complete the delivery first"`);
+    expect(describePostInvoiceBlock({ message: 'DELIVERY_MISSING' })).toMatchInlineSnapshot(`"its delivery record is missing — void this draft"`);
+  });
+
+  it('maps the pricing gate', () => {
+    expect(describePostInvoiceBlock(new Error('PRICING_INCOMPLETE: 3 lines unpriced'))).toMatchInlineSnapshot(`"needs pricing first"`);
+  });
+
+  it('returns null for anything that is not a deliberate billing gate', () => {
+    expect(describePostInvoiceBlock(new Error('some unrelated database failure'))).toBeNull();
+    expect(describePostInvoiceBlock(null)).toBeNull();
   });
 });

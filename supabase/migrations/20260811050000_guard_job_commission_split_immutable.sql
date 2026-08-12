@@ -304,10 +304,18 @@ BEGIN
     END IF;
   END LOOP;
 
-  -- regexp_matches with no capture group returns the whole match as element 1.
+  -- The `ONLY` group MUST stay non-capturing. regexp_matches returns the whole
+  -- match as element 1 only when the pattern has NO capture group; add one and
+  -- m[1] becomes that group instead. With a capturing `(ONLY\s+)?` the real
+  -- writers — which say `UPDATE jobs`, not `UPDATE ONLY jobs` — yield
+  -- m[1] = NULL, so `m[1] !~* ...` evaluates to NULL, the WHERE drops every row,
+  -- v_count stays 0, and this precondition passes without ever inspecting a
+  -- statement. A guard that cannot fail is worse than no guard, because it is
+  -- billed as protection. Proven by mutation: with the capturing form a writer
+  -- assigning `commission_split = 0` slips through; with `(?:...)` it RAISEs.
   SELECT count(*) INTO v_count
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace,
-         LATERAL regexp_matches(p.prosrc, 'UPDATE\s+(ONLY\s+)?[a-z_."%]*\mjobs\M[^;]*\mset\M[^;]*\mcommission_split\s*=[^;]*;', 'gi') AS m
+         LATERAL regexp_matches(p.prosrc, 'UPDATE\s+(?:ONLY\s+)?[a-z_."%]*\mjobs\M[^;]*\mset\M[^;]*\mcommission_split\s*=[^;]*;', 'gi') AS m
    WHERE n.nspname = 'public'
      AND p.proname IN ('transfer_job_to_invoice', '_save_field_app_split_invoice_impl')
      AND m[1] !~* 'commission_split\s*=\s*COALESCE\s*\(\s*commission_split';

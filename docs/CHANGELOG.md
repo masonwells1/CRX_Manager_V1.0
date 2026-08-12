@@ -2,6 +2,54 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-11 — Wave A review pass: CodeRabbit findings resolved, two of them by correcting the reviewer
+
+Worked the automated review on PR #383 and fixed four real defects. Two more were reported and
+were wrong; both were checked against live production or a disposable PostgreSQL 17 rather than
+taken on faith, and the corrected form shipped instead. Nothing was merged, applied, or deployed.
+
+- **The delivery-gate error message reached the operator as raw database text.** `InvoiceDetail`
+  sent the posting error straight to the generic sanitizer, so the sentence the migration writes
+  specifically for the operator never appeared. Worse, both `DELIVERY_NOT_COMPLETED` variants —
+  "the delivery was deleted, void this bill" and "the delivery is merely unfinished, go complete
+  it" — collapsed into one canned string, so a user facing a deleted delivery was told to do the
+  one thing that cannot work. The mapper now passes the database's own sentence through and only
+  falls back to a canned line when the token is raised bare. Verified by execution: the assertions
+  are vitest inline snapshots, so the tool wrote the real returned strings into the test file
+  rather than the author asserting what they should be.
+- **Two migrations called `has_function_privilege()` on roles that may not exist.** That function
+  raises rather than returning false, so on any target without Supabase's `anon` /`authenticated` /
+  `service_role` — including the plain-PostgreSQL container the replay harness restores into — the
+  migration aborted on a role lookup. Now guarded on `pg_roles`.
+- **The reviewer's suggested fix for that would have gutted the widest check.** It proposed
+  filtering the grantee list against `pg_roles`, but `public` is a pseudo-role: it is not in
+  `pg_roles`, while `has_function_privilege('public', …)` works fine. That filter silently drops
+  the PUBLIC check — the one that matters most. Confirmed against live, then proven in a throwaway
+  container where the naive filter reported nothing and the shipped form correctly reported PUBLIC.
+- **An unconditional `REVOKE … FROM PUBLIC, anon, authenticated, service_role` had the same flaw,
+  and it failed open.** Proven in a disposable container: the old form errored on the missing role
+  and PUBLIC still held EXECUTE afterwards, because the whole statement aborted before revoking
+  anything. Split into an unconditional `FROM PUBLIC` plus one `pg_roles`-guarded loop over the
+  named roles, which also folds in the previously separate `metabase_ro` revoke.
+- **A precondition regex could never fire.** The commission-split immutability guard used a
+  capturing group for an optional `ONLY`, which makes `regexp_matches` return that group as
+  element 1 instead of the whole match — so the guard compared an empty string and passed
+  silently. Mutation-tested with a deliberately destructive writer: the old form counted zero
+  violations, the new non-capturing form counted one.
+- **A contract test declared an RPC shape neither the function nor the app uses.** The reviewer
+  called this migration drift; live `pg_proc.prosrc` on production settled it the other way — the
+  function reads exactly the keys the migration and `NewOrder.tsx` send, and the test was stale.
+  It had omitted `quantity` entirely, so a payload matching it would have sized every line at zero.
+- **Reference docs corrected.** Migration-history cross-references were renumbered (the reviewer
+  found four stale references; two more it missed were found and fixed). `CURRENT_STATE.md` and
+  `KNOWN_ISSUES.md` had duplicated and contradictory blocks from a merge, plus a source-gap entry
+  that is now closed — `git ls-tree` confirms every migration those documents reported as missing
+  from `main` is present. Both stamps were refreshed against a fresh read-only ledger read.
+
+The six Wave A migrations remain **local candidates, not applied**, confirmed absent from the live
+ledger by the same read. They are numbered below the current live high-water and must be renumbered
+forward before any apply is even proposed.
+
 ## 2026-08-11 — Drop the pre-rename duplicate of the reconcile-snapshots migration
 
 The already-applied reconcile-pending-commission-snapshots migration was carried on the
@@ -349,18 +397,6 @@ First remediation wave from the 2026-08-09 ordering-cycle review (triage: 75 of 
 - **Reviewer findings actioned.** `rls-security-reviewer` and `migration-drift-reviewer` both ran and both returned zero blockers. Their substantive shared finding was that this migration had dropped proof scaffolding its predecessor carried, so it was restored: an overload-uniqueness assertion (a bare `SELECT … INTO` over multiple rows takes an arbitrary row without erroring, which would have silently validated the wrong function), the anon/PUBLIC/authenticated EXECUTE assertions, an assertion that the fix itself actually landed in the body, and a pre-apply `md5(prosrc)` pin against the live baseline so a concurrent session's change cannot be silently clobbered.
 - **Baseline dependency.** The live body of `create_direct_order` is *not* what an `origin/main` checkout rebuilds — three migrations applied to production on 2026-08-10 are still unmerged, on PR #371. This branch merges that work so the migration sits on its real baseline and a from-scratch rebuild is correct; Wave A therefore lands after #371.
 - **Schema registry** refreshed from live introspection (high-water `20260810155629`), which also cleared the REGISTRY-STALE block across the worktree fleet.
-
-## 2026-08-10 — Declined the bigint-cents conversion and applied three whole-cent migrations live
-
-Evaluated CodeRabbit's bigint-cents request on the canonical profit path and declined the conversion, drafting three migrations that fix the underlying cent-scale defects instead. PostgreSQL numeric is exact decimal, not floating point, so the AGENTS.md money rule was never violated; converting orders.total_profit, orders.total_cost, order_items.profit and order_items.net_margin to bigint cents would reach src/types/index.ts, reporting, invoicing and commissions for no correctness gain. The real defects, confirmed from live function source, are that commission rows mint their basis from a stale pre-trigger profit value rather than the canonical order header, and that several creation paths store sub-cent money. Three migrations were written and then, on Mason's explicit in-chat approval, APPLIED LIVE to production on 2026-08-10 in order: 20260810150000 rebases the commission basis on the rounded order header and rounds create_direct_order money (ledger version 20260810152935); 20260810150500 rounds save_quote total_cost and quote_items money (20260810154721); 20260810151000 adds whole-cent CHECK constraints to seven already-clean money columns, five more deferred behind a legacy backfill (20260810155629). All three ran end to end against a throwaway postgres:17-alpine first and every post-condition was mutation-tested to fail closed; each apply then passed the full proof gate, with both reviewer charters run as real gpt-5.6-sol high-effort Codex reviews returning CLEAN against the exact on-disk file hash. Post-apply live reads confirm every function body changed as written with SECURITY DEFINER, search_path and grants unchanged, and exactly the intended seven CHECK constraints present and validated with the five deferred columns still unconstrained. No live row was modified. The schema registry was rebuilt from live introspection afterwards. Nothing has been pushed, merged, or deployed. Deferred: the _update_order_items_impl total_price clobber is blocked on live-vs-disk function drift, and the quote-versus-order profit formula divergence is an owner decision.
-
-- **Commits this session** (git log origin/main..HEAD):
-  - `8dfbf176 docs: correct the live commission-basis mismatch count (10 -> 12)`
-  - `908da7a3 fix(money): whole-cent canonical profit + commission basis from order header`
-- **Migrations touched** (git diff --name-only origin/main...HEAD):
-  - `supabase/migrations/20260810150000_commission_basis_from_canonical_order_header.sql`
-  - `supabase/migrations/20260810150500_save_quote_whole_cent_total_cost.sql`
-  - `supabase/migrations/20260810151000_whole_cent_money_check_constraints.sql`
 
 ## 2026-08-10 — Review fixes on the harness guards (PR #369)
 

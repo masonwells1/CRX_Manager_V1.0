@@ -819,22 +819,34 @@ $function$;
 -- in its two SECURITY DEFINER callers, so any client role holding EXECUTE here
 -- would skip those as well as reaching this gate. Costs nothing, and closes the
 -- incident B7/B8/B9 shape by construction instead of by inspection.
-REVOKE ALL ON FUNCTION public._post_invoice_impl_20260714(uuid, text)
-  FROM PUBLIC, anon, authenticated, service_role;
+-- PUBLIC is revoked unconditionally: it is a pseudo-role, it always resolves, and
+-- it is the widest grantee, so it must never be skipped by a role-existence test.
+REVOKE ALL ON FUNCTION public._post_invoice_impl_20260714(uuid, text) FROM PUBLIC;
 
--- metabase_ro is the reporting login. The postcondition below ASSERTS it holds no
--- EXECUTE here, so the remediation has to cover it too — an assertion broader
--- than its remedy aborts the migration where it could simply have fixed the
--- problem. It is not in the REVOKE above because REVOKE cannot be conditional and
--- the role may legitimately have been retired, so it is done here guarded on
--- pg_roles. No-op today: the live ACL is `postgres=X/postgres` and nothing else.
-DO $revoke_reporting$
+-- Every NAMED role goes through one pg_roles-guarded loop, because REVOKE cannot
+-- be made conditional and it ERRORS on a role that does not exist. Naming
+-- anon/authenticated/service_role directly in the REVOKE above made this file
+-- abort on a role lookup on any target lacking Supabase's roles — including the
+-- plain-Postgres container the replay harness restores into, which is the very
+-- shape the postcondition below documents. metabase_ro, the reporting login,
+-- belongs in the same loop: the postcondition ASSERTS it holds no EXECUTE here,
+-- and an assertion broader than its remedy aborts the migration where it could
+-- simply have fixed the problem. All four are no-ops today — the live ACL was
+-- read as `postgres=X/postgres` and nothing else on 2026-08-11.
+DO $revoke_named_roles$
+DECLARE
+  v_role text;
 BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'metabase_ro') THEN
-    EXECUTE 'REVOKE ALL ON FUNCTION public._post_invoice_impl_20260714(uuid, text) FROM metabase_ro';
-  END IF;
+  FOREACH v_role IN ARRAY ARRAY['anon', 'authenticated', 'service_role', 'metabase_ro'] LOOP
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_role) THEN
+      EXECUTE format(
+        'REVOKE ALL ON FUNCTION public._post_invoice_impl_20260714(uuid, text) FROM %I',
+        v_role
+      );
+    END IF;
+  END LOOP;
 END;
-$revoke_reporting$;
+$revoke_named_roles$;
 
 DO $postcond$
 DECLARE

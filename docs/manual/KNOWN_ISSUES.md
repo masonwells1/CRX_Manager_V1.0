@@ -1,16 +1,17 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-08-11 (UTC), third read.** Live ledger high-water is **`20260810235207`**, **958 ledger rows / 951 distinct names** — re-read live at 2026-08-11 04:31 UTC (2026-08-10 23:31 America/Chicago) and **unchanged** from the second read below. The stamp advances to the UTC date because the branch `claude/wave-a-money` now carries local migration candidates prefixed `20260811…`; those files are numbered forward past the live high-water and are **not applied**, so nothing in this document describes state they created. The second read's figures were identical and are kept here for continuity. (The earlier stamp on this line read `20260810155629` / 957 rows, taken right after this session's three whole-cent applies; a fourth migration landed live from a concurrent session between the two reads.) Ledger versions are UTC, which is why some stamps read a day ahead of the local session date. Of the earlier `20260810` rows, `20260810000427` is the assigned version for merged file `20260809230500_single_canonical_line_profit.sql` (history row 862), and `20260810010308_active_team_note_assignment_actor` now has its file in `origin/main` via PR #351.
+**Last verified: 2026-08-11 (UTC), fourth read.** Live ledger high-water is **`20260811220045`**, **961 ledger rows / 954 distinct names** — re-read live on 2026-08-11 and **moved** since the third read below (`20260810235207` / 958 / 951). The three new rows were applied live on 2026-08-11 by concurrent sessions: `20260811183317` (`20260811122851_assign_customers_sales_rep`), `20260811183437` (`20260811130000_bind_commission_payout_idempotency_to_intent`) and `20260811220045` (`20260811200000_blend_ticket_order_whole_cent_totals`). Branch `claude/wave-a-money` carries six local migration candidates prefixed `20260811…` that are **not applied** — confirmed absent from the ledger by the same read — so nothing in this document describes state they created; they now sit *below* the live high-water and must be renumbered forward before any apply. Ledger versions are UTC, which is why some stamps read a day ahead of the local session date. Of the earlier `20260810` rows, `20260810000427` is the assigned version for merged file `20260809230500_single_canonical_line_profit.sql` (history row 862), and `20260810010308_active_team_note_assignment_actor` has its file in `origin/main` via PR #351.
 
-**Two live rows still have no file in `origin/main` (2026-08-10).**
-1. `20260810025159_backfill_stale_line_profit` (commit `a0a69a62`), sitting on the unmerged branch `claude/session-orchestration-setup-d73e6c`. This is a milder form of the `20260809130108` problem below: the file exists in git, so a rebuild is recoverable, but **live is ahead of `main` and will stay ahead until that branch merges.** Whoever owns that branch should land it.
-2. `20260810235207` / name `20260810183629_reconcile_pending_commission_snapshots` — **the file existed nowhere in git at all**, on no remote ref, no local branch and nowhere on disk, and it had already mutated real commission money. This is the full `20260809130108` failure mode, not the milder one. **Recovered 2026-08-10** by reading the applied SQL back out of `supabase_migrations.schema_migrations.statements` and verifying the decoded text against an independently computed live md5 (`b14d3dd7f8c5aa8fecd0549886d8bbb3`); the file is byte-for-byte what production ran. It is committed on branch `claude/wave-a-money` (history row 871) and this gap closes when that branch merges. **Standing lesson, now hit three times:** a session that applies a migration live and does not land its file leaves production ahead of the repository, and no existing check warns about it.
+**Two live rows had no file in `origin/main` (2026-08-10) — RESOLVED 2026-08-11.**
+1. `20260810025159_backfill_stale_line_profit` (commit `a0a69a62`) sat on the unmerged branch `claude/session-orchestration-setup-d73e6c`. The file existed in git, so a rebuild was recoverable, but live was ahead of `main`. That branch has since landed; the file is on `origin/main`.
+2. `20260810235207` / name `20260810183629_reconcile_pending_commission_snapshots` — **the file existed nowhere in git at all**, on no remote ref, no local branch and nowhere on disk, and it had already mutated real commission money. **Recovered 2026-08-10** by reading the applied SQL back out of `supabase_migrations.schema_migrations.statements` and verifying the decoded text against an independently computed live md5 (`b14d3dd7f8c5aa8fecd0549886d8bbb3`); the file is byte-for-byte what production ran, and it is now on `origin/main`.
 
-**2026-08-10 money re-measure (read-only, live).** Whole-cent conformance by column, which is what history rows 865–867 are scoped against: `orders.total_price` 0 dirty, `orders.total_cost` 0, `orders.total_profit` 0, `order_items.profit` 0, `quotes.total_price` 0, `quotes.total_profit` 0, `quote_items.total_price` 0, `quote_items.profit` 0 — and still dirty: **`order_items.total_price` 35/288, `quotes.total_cost` 2/4, `commissions.commission_amount` 3/35, `commissions.order_profit` 3/35.** The `order_items` figure moved 46 → 35 because `20260810025159` (above) backfilled stale line profit through the canonical trigger; the 3 fractional `commissions` rows are unchanged and still deliberately unrepaired. **43 dirty rows remain and repairing them rewrites stored money — still Mason's separate decision, still not done.**
+**Both gaps verified closed** with `git ls-tree -r origin/main supabase/migrations/` on 2026-08-11. **Standing lesson, now hit three times:** a session that applies a migration live and does not land its file leaves production ahead of the repository, and no existing check warns about it.
 
 **2026-08-10 commission-basis measurement, correctly characterized.** **12 of 35** order commissions have `order_profit ≠ orders.total_profit` (exact `IS DISTINCT FROM`; an earlier pass this session compared cent-rounded values and reported 10, hiding three sub-cent rows). Do not read that as a live emergency: **8 are `pending` with a gap of exactly $0.01 and 3 are `pending` with a sub-cent gap** (the disclosed backfill residual from `a0a69a62` on the branch above, which deliberately did not rewrite commission rows), and the **1 materially larger gap is on a `cancelled` row** (dollar figure deliberately withheld — this repository is public; it is in the access-controlled session record). The underlying mint-time code defect is real and confirmed from live function source — `_convert_quote_to_order_owner_impl` and `create_direct_order` mint from a cached/local profit after the item triggers already rewrote the canonical header — and history row 865 is the fix, **applied live 2026-08-10**. It stops future drift; it does not repair the present rows, and the measurement above is the pre-fix state.
 
 **Previously (2026-08-09).** Live ledger high-water was **`20260809130108`** (`team_note_completion_rpc_and_assignment_notify`, 946 ledger rows), applied 2026-08-09 13:01 UTC from a concurrent session; that migration has **no file in this repository** (see the closing note in `docs/reference/migration-history.md`). The 2026-08-09 re-read covered the live ledger, the section-2 counts in `CURRENT_STATE.md`, and all 27 standing invariant sweep predicates: 26 CLEAN and one violation, `fin-money-whole-cents` at exactly 49 rows (3 `commissions` + 46 `order_items`) — the documented, deliberately-unrepaired set described below. The five foundation-ultra-review migrations (history rows 857–861, re-issued forward as `20260809170500`–`20260809170900`) **APPLIED LIVE 2026-08-09, 20:32–20:54 UTC**, each behind its own freshly minted migration-apply-guard proof with both required reviewers clean, and each followed by a live post-apply read; Supabase assigned ledger versions `20260809203222`, `20260809204044`, `20260809204435`, `20260809204855`, `20260809205423` in file order. A 21:15 UTC re-measure confirms no stored money was restated: fractional-cent rows remain exactly 46 + 3 = 49 and `order_items.profit` holds 0 fractional rows. **`20260809170900` applied against the blocking escalation recorded below** — see that entry for what happened and the decision now owed by Mason. Everything below this line carries its 2026-08-07 verification unless dated otherwise.
+
 **2026-08-11 post-deploy closeout, carried in from `origin/main`.** Live ledger high-water is `20260810235207` (`20260810183629_reconcile_pending_commission_snapshots`, B7-renamed on disk to the assigned version) at 958 ledger rows — the reconciliation that closed out the stale line-profit backfill, applied and verified live on 2026-08-10 with the registered smoke returning exact `SMOKE_PASS_ROLLBACK`. Ledger versions are UTC, which is why this stamp can read a day ahead of the local session date. The prior high-water `20260810025159` (`20260810022500_backfill_stale_line_profit`) was the money-workstream migration applied after the Team Board work. The 2026-08-09 post-apply verification that the rest of this header describes ended at `20260810010308` (`active_team_note_assignment_actor`); every ledger entry past it was applied live by separate 2026-08-10 sessions and is described in its own entry rather than here. Both Team Board migrations are live and now represented on disk: `20260809130108` added the governed `complete_team_note` RPC and assignment-notification trigger, and `20260810010308` closed the inactive-actor path in the insert policy and trigger. The full rollback-only business chain reached exact `SMOKE_PASS_ROLLBACK`; the compatible frontend was carried by PR #351 (merge commit `8dcb82fb`). Closeout PR #372 merged as `261d10bd` on 2026-08-11, Vercel reported the production deployment successful, and `/team-board` returned HTTP 200 with the app shell.
 
 **Repository lags production on the three whole-cent migrations.** History rows 868–870 (`20260810150000`, `20260810150500`, `20260810151000`; ledger versions `20260810152935`, `20260810154721`, `20260810155629`) are **applied live** but absent from `main` until PR #371 lands — see the dedicated entry below.
@@ -116,29 +117,29 @@ Delivery: the browser changes that call the RPC and open assignment notification
 
 ---
 
-## OPEN 2026-08-10 — three migrations are live but their source files are not yet on `main`
+## RESOLVED 2026-08-11 — the three live whole-cent migrations are now on `main`
 
-Raised by Codex (P1) on PR #372 and **verified**: the schema registry records
+Raised by Codex (P1) on PR #372 and verified at the time: the schema registry recorded
 `20260810150000_commission_basis_from_canonical_order_header`,
 `20260810150500_save_quote_whole_cent_total_cost`, and
-`20260810151000_whole_cent_money_check_constraints` as applied — they genuinely are, live
-since 2026-08-10 — but `git ls-tree` finds none of the three `.sql` files on `main`.
+`20260810151000_whole_cent_money_check_constraints` as applied — they genuinely were, live
+since 2026-08-10 — but `git ls-tree` found none of the three `.sql` files on `main`. A clean
+baseline replay or disaster-recovery rebuild driven from `supabase/migrations/` would have
+silently omitted the canonical commission basis, the save-quote whole-cent total cost, and
+all seven whole-cent money CHECK constraints, while the registry asserted they were present.
+Nothing was ever wrong on live; the gap was between live and the repository's ability to
+reconstruct it.
 
-**Why it matters:** a clean baseline replay or a disaster-recovery rebuild driven from
-`supabase/migrations/` would silently omit the canonical commission basis, the save-quote
-whole-cent total cost, and all seven whole-cent money CHECK constraints — while the registry
-asserts they are present. Nothing is wrong on live; the gap is between live and the
-repository's ability to reconstruct it.
+**Closed by PR #371** (merge commit `465458a0`), the home of all three files (history rows
+868–870). `git ls-tree -r origin/main supabase/migrations/` on 2026-08-11 returns all three,
+along with `20260810025159_backfill_stale_line_profit` and
+`20260810235207_reconcile_pending_commission_snapshots`, which the header of this document
+had separately reported as missing. `supabase/migrations/` on `main` is a complete
+reconstruction source again for everything dated 2026-08-10.
 
-**This is not caused by the registry refresh.** The source gap already existed on `main`;
-regenerating the registry from live only made it visible. Leaving the registry stale
-instead would have been a second, worse inaccuracy.
-
-**Closes when PR #371 lands.** That PR is the home of all three files (history rows 868–870)
-and this entry lives on its branch; the gap is closed the moment it merges. Until then, treat
-`supabase/migrations/` on `main` as an incomplete reconstruction source for anything dated
-2026-08-10 15:00 UTC or later, and prefer the live ledger. PR #372 deliberately did not copy
-the files in: duplicating an open PR's migrations would collide when #371 merges.
+**Standing lesson, hit three times before it closed:** a session that applies a migration
+live and does not land its file leaves production ahead of the repository, and no existing
+check warns about it.
 
 ---
 

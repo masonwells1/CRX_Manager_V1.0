@@ -24,24 +24,25 @@ interface ConvertQuoteToOrderParams {
   p_performed_by: string; // uuid
 }
 
+// The item shape below is the one the deployed `create_direct_order` actually
+// reads (verified 2026-08-11 against live `pg_proc.prosrc`: the function reads
+// exactly `product_id`, `product_name`, `quantity`, `price_per_unit`,
+// `unit_cost`, `unit_size`) and the one the sole production caller sends
+// (`src/pages/NewOrder.tsx`). It previously declared a wholly different set —
+// `current_cost`, `actual_rate`, `total_units_needed`, `total_price`,
+// `total_cost`, `profit`, `net_margin` — none of which the function reads, so
+// the contract test was guarding a payload nobody sends. Wave A fix #1 makes
+// product cost authoritative over the caller-supplied `unit_cost`, which is
+// precisely the field the stale shape omitted.
 interface CreateDirectOrderParams {
   p_customer_id: string;  // uuid
   p_items: Array<{
     product_id: string;
+    product_name: string;
+    quantity: number;
     price_per_unit: number;
-    current_cost: number;
-    actual_rate: number | null;
-    rate_unit: string | null;
-    oz_per_acre: number | null;
-    price_per_acre: number | null;
-    acres: number | null;
-    total_units_needed: number;
+    unit_cost: number;
     unit_size: number | null;
-    total_price: number;
-    total_cost: number;
-    profit: number;
-    net_margin: number;
-    notes: string | null;
   }>;
   p_commission_split: { splits: Array<{ recipient: string; recipient_user_id?: string | null; percentage: number }> } | null;
   p_performed_by: string;
@@ -246,20 +247,11 @@ describe('RPC contract: create_direct_order', () => {
       p_items: [
         {
           product_id: 'prod-uuid',
+          product_name: 'Roundup PowerMAX',
+          quantity: 25,
           price_per_unit: 20,
-          current_cost: 10,
-          actual_rate: 32,
-          rate_unit: 'fl oz',
-          oz_per_acre: 32,
-          price_per_acre: 5,
-          acres: 100,
-          total_units_needed: 25,
+          unit_cost: 10,
           unit_size: null,
-          total_price: 500,
-          total_cost: 250,
-          profit: 250,
-          net_margin: 50,
-          notes: null,
         },
       ],
       p_commission_split: {
@@ -268,7 +260,11 @@ describe('RPC contract: create_direct_order', () => {
       p_performed_by: 'user-uuid',
     });
     expect(params.p_items).toHaveLength(1);
-    expect(params.p_items[0].total_price).toBe(500);
+    // `quantity` is the field the function reads to size the line; the stale
+    // shape omitted it, so a payload matching the old declaration would have
+    // been read as quantity 0 and skipped entirely.
+    expect(params.p_items[0].quantity).toBe(25);
+    expect(params.p_items[0].unit_cost).toBe(10);
   });
 
   it('accepts null commission_split', () => {
