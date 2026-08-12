@@ -66,6 +66,16 @@ qualified assignment to an unrelated local. Disabling the qualifier-aware
 clause makes the unsafe regression fail, proving that the new condition is
 load-bearing.
 
+The next exact-head review found an early-exit variant: a branch could evaluate
+`RETURN helper(p_performed_by)` before the legacy mismatch guard, allowing the
+helper to perform a definer-privileged write and skip the guard entirely. The
+legacy compatibility path now rejects any pre-guard `RETURN`, `EXIT`, or
+`CONTINUE` rather than attempting to prove arbitrary exit expressions harmless.
+The focused real-hook suite has 321 passing assertions, including the unsafe
+early helper return and a compatible return after the authenticated-actor guard.
+Removing the exit tokens makes the unsafe assertion fail, mutation-proving the
+new condition.
+
 ## 2026-08-11 — Close executable cross-migration cron.job view aliases
 
 Hardened the actor-binding SQL reader against persistent updatable aliases that

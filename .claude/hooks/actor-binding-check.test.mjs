@@ -1998,6 +1998,31 @@ r = runHook(fn(`
 ok(isDeny(r), "a legacy guard after a recognized mutation does not dominate it");
 
 r = runHook(fn(`
+  BEGIN
+    IF p_performed_by IS NOT NULL THEN
+      RETURN public.record_actor(p_performed_by);
+    END IF;
+    IF p_performed_by IS DISTINCT FROM auth.uid() THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    ${MUTATION}
+    RETURN '{}'::jsonb;
+  END
+`));
+ok(isDeny(r), "an early RETURN through a side-effecting helper cannot bypass actor binding");
+
+r = runHook(fn(`
+  BEGIN
+    IF p_performed_by IS DISTINCT FROM auth.uid() THEN
+      RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+    END IF;
+    ${MUTATION}
+    RETURN '{}'::jsonb;
+  END
+`));
+ok(!isDeny(r), "a RETURN after the actor guard and mutation remains compatible");
+
+r = runHook(fn(`
   DECLARE
     v_actor uuid := auth.uid();
   BEGIN

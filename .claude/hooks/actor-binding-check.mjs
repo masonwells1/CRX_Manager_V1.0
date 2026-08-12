@@ -1316,7 +1316,10 @@ function isTopLevelPlpgsqlStatement(controlBody, beforeIndex) {
 }
 
 function hasRecognizedMutationBefore(structuralBody, beforeIndex) {
-  return /\b(?:INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM|MERGE\s+INTO|TRUNCATE\b|EXECUTE\b|CALL\b|PERFORM\b)/i
+  // A pre-guard control-flow exit can skip the identity check after evaluating
+  // a side-effecting expression (for example RETURN helper(p_performed_by)).
+  // Treat exits as disqualifying rather than trying to prove expressions pure.
+  return /\b(?:INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM|MERGE\s+INTO|TRUNCATE\b|EXECUTE\b|CALL\b|PERFORM\b|RETURN\b|EXIT\b|CONTINUE\b)/i
     .test(structuralBody.slice(0, beforeIndex));
 }
 
