@@ -31,7 +31,7 @@
  * "area" array (see scripts/test-areas.json for the area vocabulary).
  *
  * Exit codes: 0 = all PASS (or list/print-only mode), 1 = any FAIL,
- *             2 = usage / spec-registry error.
+ *             2 = usage / selection / spec-registry error.
  */
 
 import { readFileSync, existsSync } from 'node:fs';
@@ -107,9 +107,8 @@ function loadSpecs() {
 }
 
 /**
- * Drop container-only chains from a bulk selection (--all / --area). Explicit
- * --spec selection is handled separately: naming one by hand should fail loudly
- * rather than silently no-op.
+ * Drop container-only chains from any selection that can include them. Naming
+ * one by key is handled separately: that should fail before reaching this skip.
  */
 function dropContainerOnly(selected) {
   const skipped = [];
@@ -282,16 +281,20 @@ function main() {
     }
   }
 
-  // Bulk selection never runs a container-only chain. Announce every skip:
+  // This runner never runs a container-only chain. Announce every skip:
   // a silently shrunk run reads as "everything passed" when it did not.
-  for (const [key, spec] of dropContainerOnly(selected)) {
+  const skipped = dropContainerOnly(selected);
+  for (const [key, spec] of skipped) {
     console.log(
       `[smoke] ${key} SKIPPED — container-only; run: node scripts/smoke/${spec.container_prover}`
     );
   }
   if (selected.size === 0) {
-    console.log('\nNothing left to run after container-only skips.');
-    return;
+    fail(
+      'nothing ran: every selected smoke chain was skipped because it is container-only.\n' +
+      'Run the skipped chain(s) in their disposable containers instead:\n' +
+      skipped.map(([key, spec]) => `  ${key}: node scripts/smoke/${spec.container_prover}`).join('\n')
+    );
   }
 
   const dbUrl = process.env.SUPABASE_DB_URL;
