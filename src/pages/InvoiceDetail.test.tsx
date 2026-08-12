@@ -341,7 +341,13 @@ describe('InvoiceDetail', () => {
 });
 
 describe('InvoiceDetail — chemical-sale payment terms', () => {
-  const setupInvoice = (status: string, payment_terms: string | null = null, due_date: string | null = null, customerPaymentTerms: string | null = null) => {
+  const setupInvoice = (
+    status: string,
+    payment_terms: string | null = null,
+    due_date: string | null = null,
+    customerPaymentTerms: string | null = null,
+    invoiceItems: unknown[] = [],
+  ) => {
     let invoiceCalls = 0;
     const invoice = {
       id: 'inv-terms',
@@ -370,6 +376,9 @@ describe('InvoiceDetail — chemical-sale payment terms', () => {
       if (table === 'customers' && customerPaymentTerms !== null) {
         return buildChain({ data: { payment_terms: customerPaymentTerms }, error: null });
       }
+      if (table === 'invoice_items') {
+        return buildChain({ data: invoiceItems, error: null });
+      }
       return buildChain({ data: [], error: null });
     });
   };
@@ -396,6 +405,56 @@ describe('InvoiceDetail — chemical-sale payment terms', () => {
       const saveCall = mockRpc.mock.calls.find(([name]) => name === 'save_invoice');
       expect(saveCall?.[1].p_invoice).toHaveProperty('due_date', null);
     });
+  });
+
+  it('prompts on the server locked-cost challenge and retries with the same idempotency key', async () => {
+    setupInvoice('draft', 'Net 30', null, null, [{
+      id: 'line-1',
+      product_id: 'product-1',
+      product: { product_name: 'Server Cost Product' },
+      description: 'Server Cost Product',
+      quantity: 1,
+      unit_price_cents: 900,
+      extended_cents: 900,
+      cost_cents: 800,
+      sort_order: 0,
+    }]);
+    renderInvoiceDetail('inv-terms');
+    await waitFor(() => expect(screen.getAllByText('INV-TERMS').length).toBeGreaterThan(0));
+    mockRpc.mockClear();
+    mockToast.mockClear();
+
+    let saveAttempts = 0;
+    mockRpc.mockImplementation((name: string) => {
+      if (name !== 'save_invoice') return Promise.resolve({ data: null, error: null });
+      saveAttempts += 1;
+      if (saveAttempts === 1) {
+        return Promise.resolve({
+          data: null,
+          error: {
+            message: 'BELOW_COST_REASON_REQUIRED:{"product_name":"Server Cost Product","unit_price_cents":900,"locked_unit_cost_cents":1000}',
+          },
+        });
+      }
+      return Promise.resolve({ data: 'inv-terms', error: null });
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByRole('heading', { name: 'Selling below cost' })).toBeInTheDocument();
+    expect(screen.getByText(/Server Cost Product: price \$9\.00 is below cost \$10\.00/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Reason (required)'), {
+      target: { value: 'Price match approved by manager' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Approve Below-Cost Sale' }));
+
+    await waitFor(() => expect(saveAttempts).toBe(2));
+    const saveCalls = mockRpc.mock.calls.filter(([name]) => name === 'save_invoice');
+    expect(saveCalls).toHaveLength(2);
+    expect(saveCalls[0][1].p_idempotency_key).toBe('test-idem-key');
+    expect(saveCalls[1][1].p_idempotency_key).toBe('test-idem-key');
+    expect(saveCalls[0][1].p_items[0].below_cost_reason).toBeNull();
+    expect(saveCalls[1][1].p_items[0].below_cost_reason).toBe('Price match approved by manager');
+    expect(mockToast).toHaveBeenCalledWith('success', 'Invoice saved');
   });
 
   it('clears custom terms and explicitly clears due_date when switching to customer default', async () => {

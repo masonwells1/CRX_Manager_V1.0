@@ -253,17 +253,6 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // the public save_purchase_order RPC and intentionally shares its one cache
   // namespace rather than creating an unreachable internal-operation cache.
   _save_purchase_order_ascii_identity_impl: ['save_purchase_order'],
-  // Direct EXECUTE is revoked (service_role only). This IS the original
-  // public convert_quote_to_order body: migration 20260730235031 renamed it
-  // with `ALTER FUNCTION ... RENAME TO _convert_quote_to_order_owner_impl`
-  // (line 986) and created a new public wrapper that delegates to it, so both
-  // layers read and write the one 'convert_quote_to_order' cache on purpose —
-  // a replay through the wrapper must find the result the impl saved. Giving
-  // the impl its own namespace would strand that cache. The shape is
-  // pre-existing and unchanged; it entered this test's scope only because
-  // migration 20260810150000 is the first to CREATE the function under its
-  // post-rename name (the rename itself defined no function body on disk).
-  _convert_quote_to_order_owner_impl: ['convert_quote_to_order'],
   // Owner-only implementation used by the public standalone/group posting
   // wrappers; all layers intentionally share the public post_invoice cache.
   _post_invoice_impl_20260714: ['post_invoice'],
@@ -472,8 +461,8 @@ describe('Idempotency operation literals in latest disk migrations', () => {
 
   it('regression guard: restore_quote_version lookup stays scoped to its own operation', () => {
     // Codex 2026-06-08 LOW — the lookup originally filtered on the key only.
-    // 20260810180002 wraps the function for below-cost approval and renames
-    // the idempotent body emitted by 20260810180001. Pin both halves so the
+    // Applied ledger version 20260812154028 wraps the function for below-cost
+    // approval and renames the idempotent body emitted by 20260812151606. Pin both halves so the
     // disk scanner does not mistake the intentionally thin public wrapper for
     // loss of operation scoping.
     const wrapper = defs.get('restore_quote_version');
@@ -481,16 +470,32 @@ describe('Idempotency operation literals in latest disk migrations', () => {
     expect(wrapper!.body).toContain('_restore_quote_version_below_cost_impl_20260810');
 
     const snapshotMigration = readFileSync(
-      join(MIGRATIONS_DIR, '20260810180001_quote_items_cost_at_quote_snapshot.sql'),
+      join(MIGRATIONS_DIR, '20260812151606_quote_items_cost_at_quote_snapshot.sql'),
       'utf8'
     );
     const enforcementMigration = readFileSync(
-      join(MIGRATIONS_DIR, '20260810180002_enforce_below_cost_admin_approval.sql'),
+      join(MIGRATIONS_DIR, '20260812154028_enforce_below_cost_admin_approval.sql'),
       'utf8'
     );
     expect(snapshotMigration).toMatch(
       /CREATE OR REPLACE FUNCTION public\._restore_quote_version_owner_impl[\s\S]*?operation\s*=\s*'restore_quote_version'/i
     );
+    const restoreBody = snapshotMigration.match(
+      /CREATE OR REPLACE FUNCTION public\._restore_quote_version_owner_impl[\s\S]*?AS \$function\$([\s\S]*?)\$function\$;/i
+    )?.[1];
+    expect(restoreBody).toBeDefined();
+    const firstDestructiveWrite = restoreBody!.indexOf('DELETE FROM quote_sections');
+    expect(firstDestructiveWrite).toBeGreaterThan(0);
+    for (const guardedField of [
+      'QUOTE_SNAPSHOT_MONEY_NOT_FINITE: field quotes.total_price',
+      'QUOTE_SNAPSHOT_MONEY_NOT_FINITE: field quotes.total_profit',
+      'QUOTE_SNAPSHOT_MONEY_NOT_FINITE: field quote_items.profit',
+      'QUOTE_SNAPSHOT_MONEY_NOT_FINITE: field quote_items.total_price',
+    ]) {
+      const guardIndex = restoreBody!.indexOf(guardedField);
+      expect(guardIndex).toBeGreaterThan(0);
+      expect(guardIndex).toBeLessThan(firstDestructiveWrite);
+    }
     expect(enforcementMigration).toMatch(
       /ALTER FUNCTION public\.restore_quote_version[\s\S]*?RENAME TO _restore_quote_version_below_cost_impl_20260810/i
     );

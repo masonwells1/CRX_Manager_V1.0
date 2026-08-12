@@ -1,24 +1,8 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-08-10, post-apply.** Live ledger high-water is **`20260810155629`**, **957 ledger rows**, re-read live 2026-08-10 after this session's three whole-cent applies. Ledger versions are UTC, which is why some stamps read a day ahead of the local session date. Of the earlier `20260810` rows, `20260810000427` is the assigned version for merged file `20260809230500_single_canonical_line_profit.sql` (history row 862), and `20260810010308_active_team_note_assignment_actor` now has its file in `origin/main` via PR #351. **One live row still has no file in `origin/main`:** `20260810025159_backfill_stale_line_profit` (commit `a0a69a62`), sitting on the unmerged branch `claude/session-orchestration-setup-d73e6c`. This is a milder form of the `20260809130108` problem below: the file exists in git, so a rebuild is recoverable, but **live is ahead of `main` and will stay ahead until that branch merges.** Whoever owns that branch should land it.
+**Last verified: 2026-08-12 UTC, live post-apply recheck.** Live ledger high-water is `20260812154757` (`20260812115238_repair_historical_order_line_cents`) at 968 rows. The four pricing/cent-repair statements match their B7-renamed repository sources byte-for-byte, and the schema registry was genuinely regenerated from live through that high-water. The 2026-08-09 Team Board migrations and frontend closeout remain live as recorded below.
 
-**2026-08-10 money re-measure (read-only, live).** Whole-cent conformance by column, which is what history rows 865–867 are scoped against: `orders.total_price` 0 dirty, `orders.total_cost` 0, `orders.total_profit` 0, `order_items.profit` 0, `quotes.total_price` 0, `quotes.total_profit` 0, `quote_items.total_price` 0, `quote_items.profit` 0 — and still dirty: **`order_items.total_price` 35/288, `quotes.total_cost` 2/4, `commissions.commission_amount` 3/35, `commissions.order_profit` 3/35.** The `order_items` figure moved 46 → 35 because `20260810025159` (above) backfilled stale line profit through the canonical trigger; the 3 fractional `commissions` rows are unchanged and still deliberately unrepaired. **43 dirty rows remain and repairing them rewrites stored money — still Mason's separate decision, still not done.**
-
-**2026-08-10 commission-basis measurement, correctly characterized.** **12 of 35** order commissions have `order_profit ≠ orders.total_profit` (exact `IS DISTINCT FROM`; an earlier pass this session compared cent-rounded values and reported 10, hiding three sub-cent rows). Do not read that as a live emergency: **8 are `pending` with a gap of exactly $0.01 and 3 are `pending` with a sub-cent gap** (the disclosed backfill residual from `a0a69a62` on the branch above, which deliberately did not rewrite commission rows), and the **1 materially larger gap is on a `cancelled` row** (dollar figure deliberately withheld — this repository is public; it is in the access-controlled session record). The underlying mint-time code defect is real and confirmed from live function source — `_convert_quote_to_order_owner_impl` and `create_direct_order` mint from a cached/local profit after the item triggers already rewrote the canonical header — and history row 865 is the fix, **applied live 2026-08-10**. It stops future drift; it does not repair the present rows, and the measurement above is the pre-fix state.
-
-**Previously (2026-08-09).** Live ledger high-water was **`20260809130108`** (`team_note_completion_rpc_and_assignment_notify`, 946 ledger rows), applied 2026-08-09 13:01 UTC from a concurrent session; that migration has **no file in this repository** (see the closing note in `docs/reference/migration-history.md`). The 2026-08-09 re-read covered the live ledger, the section-2 counts in `CURRENT_STATE.md`, and all 27 standing invariant sweep predicates: 26 CLEAN and one violation, `fin-money-whole-cents` at exactly 49 rows (3 `commissions` + 46 `order_items`) — the documented, deliberately-unrepaired set described below. The five foundation-ultra-review migrations (history rows 857–861, re-issued forward as `20260809170500`–`20260809170900`) **APPLIED LIVE 2026-08-09, 20:32–20:54 UTC**, each behind its own freshly minted migration-apply-guard proof with both required reviewers clean, and each followed by a live post-apply read; Supabase assigned ledger versions `20260809203222`, `20260809204044`, `20260809204435`, `20260809204855`, `20260809205423` in file order. A 21:15 UTC re-measure confirms no stored money was restated: fractional-cent rows remain exactly 46 + 3 = 49 and `order_items.profit` holds 0 fractional rows. **`20260809170900` applied against the blocking escalation recorded below** — see that entry for what happened and the decision now owed by Mason. Everything below this line carries its 2026-08-07 verification unless dated otherwise.
-
-**Pricing-audit migrations are still unapplied.** The three local files `20260810180000`–`20260810180002` have been rebased and replayed against the already-live whole-cent function bodies and constraints; both rollback smokes pass on a fresh production-schema disposable clone with zero residue. Exact-SHA adversarial review and explicit live-apply approval remain open. The former `20260810135537`, `20260810135538`, and `20260810144144` stamps are stale and must not be applied.
-**Last verified: 2026-08-12 UTC, post-apply.** Live ledger high-water is `20260812003315` at 962 rows, carrying submitted name `20260811230423_log_customer_sales_rep_assignment`. The Customer 360 assignment RPC is live with atomic customer timestamp/activity logging, one overload, the reviewed security/search-path/grant shape, and no table, column, enum, generated-column, signature, or public-function-name-count change. The schema registry was genuinely refreshed through the same high-water. Ledger versions are UTC and Supabase applies may assign a version different from the submitted filename, so match the recorded name when reconciling an apply. The historical Team Board, money, and commission-payout details below remain separately dated evidence rather than claims that their older high-waters are current.
-
-**Branch `claude/wave-a-money` — six unapplied migration candidates.** That branch carries six local migration files prefixed `20260811…` that are **not applied**, confirmed absent from the ledger by a read-only re-read on 2026-08-11 at the then-current high-water `20260811220045` / 961 rows. Nothing in this document describes state they created. All six sit *below* the live high-water — now `20260812003315` — and must be renumbered forward before any apply is even considered.
-
-**Repository/production gap on the whole-cent migrations: CLOSED 2026-08-11.** History rows 868–870 (`20260810150000`, `20260810150500`, `20260810151000`; ledger versions `20260810152935`, `20260810154721`, `20260810155629`) were applied live before they existed on `main`. **PR #371 landed as merge `465458a0`**, bringing those three plus `20260811200000_blend_ticket_order_whole_cent_totals` (applied live as ledger `20260811220045`) onto `main`. Disk and production now agree on all four — independently re-verified against live `pg_proc` on 2026-08-11.
-The remaining fractional historical rows described below are still tracked data debt and were not rewritten by that repository closeout.
-
-**2026-08-10 money re-measure (read-only, live).** Whole-cent conformance by column, which is what history rows 868–870 are scoped against: `orders.total_price` 0 dirty, `orders.total_cost` 0, `orders.total_profit` 0, `order_items.profit` 0, `quotes.total_price` 0, `quotes.total_profit` 0, `quote_items.total_price` 0, `quote_items.profit` 0 — and still dirty: **`order_items.total_price` 35/288, `quotes.total_cost` 2/4, `commissions.commission_amount` 3/35, `commissions.order_profit` 3/35.** The `order_items` figure moved 46 → 35 because `20260810025159` (above) backfilled stale line profit through the canonical trigger; the 3 fractional `commissions` rows are unchanged and still deliberately unrepaired. **43 dirty rows remain and repairing them rewrites stored money — still Mason's separate decision, still not done.** Under the 2026-08-10 fail-closed money policy those columns are tracked debt, not an approved exception.
-
-**2026-08-10 commission-basis measurement, correctly characterized.** **12 of 35** order commissions have `order_profit ≠ orders.total_profit` (exact `IS DISTINCT FROM`; an earlier pass this session compared cent-rounded values and reported 10, hiding three sub-cent rows). Do not read that as a live emergency: **8 are `pending` with a gap of exactly $0.01 and 3 are `pending` with a sub-cent gap** (the disclosed backfill residual from `a0a69a62`, which deliberately did not rewrite commission rows), and the **1 materially larger gap is on a `cancelled` row** (dollar figure deliberately withheld — this repository is public; it is in the access-controlled session record). The underlying mint-time code defect is real and confirmed from live function source — `_convert_quote_to_order_owner_impl` and `create_direct_order` mint from a cached/local profit after the item triggers already rewrote the canonical header — and history row 868 is the fix, **applied live 2026-08-10**. It stops future drift; it does not repair the present rows, and the measurement above is the pre-fix state.
+**DATABASE GATE CLOSED — four-migration pricing/cent-repair rollout is live.** Supabase assigned versions `20260812145628`, `20260812151606`, `20260812154028`, and `20260812154757` to submitted migrations `20260812115235`–`20260812115238`. Each apply followed a fresh exact-byte dual-review proof and immediate ledger comparison. The first migration-3 attempt failed on an unavailable optional `extensions.moddatetime()` function and rolled back completely at 966 ledger rows; the source was changed to the existing `public.update_updated_at()` convention, revalidated/reviewed, and then applied successfully. Before the final durable repair, a rollback-only production execution repaired exactly 35 lines, validated the constraint, deliberately aborted, and restored the exact 16-order digest `0f8ccef3bf6d3291c654d5abb24a151e16ad759851f5eddfc65d1585d7f5b7db`. Post-apply reads show zero dirty order-line prices, a validated `order_items_total_price_whole_cents_chk`, zero order-header rollup mismatches, RLS on `below_cost_approvals`, all three below-cost line triggers, and no direct app-role DML grants on protected line tables. Remaining work is the post-apply sweep/smoke/preflight packet and reviewed PR delivery; the database apply itself is complete.
 
 **2026-08-09 historical baseline.** The live re-read then covered the ledger, `CURRENT_STATE.md` counts, and all 27 invariant predicates: 26 CLEAN and the documented `fin-money-whole-cents` historical-data violation. The five foundation-ultra-review migrations applied later that day as ledger versions `20260809203222` through `20260809205423`. The formerly missing Team Board migration file and history row are now reconciled on PR #351.
 
@@ -283,167 +267,6 @@ own work in the two largest docs. See
 `docs/audits/2026-08-04-test-coverage-analysis.md` for the session that surfaced
 these.
 
-## OPEN — the Profitability tabs still read stored profit; wire them AFTER the migration applies
-
-**Found 2026-08-09** (Codex, PR #350 round 39). `20260810180000` rewrites
-`get_profitability_report` onto the `cost_at_time_cents` basis, but nothing calls it:
-`Reports.tsx` still computes the customer, product and monthly Profitability tabs from direct
-queries over `orders.total_profit` / `order_items.profit` (`fetchCustomerProfitability` and
-siblings, ~lines 161-239). Until the caller is switched, **those tabs keep showing the stale
-margins the migration exists to replace** — the server-side fix is real but unreached.
-
-**The ordering is deliberate, and it matters.** The caller must land only *after* the migration is
-applied. Wired first, the tabs would call an RPC the live database does not have and break
-outright. That is why the switch was cut from #350 — a PR that ships the migration PARKED cannot
-also ship its caller.
-
-**Do this once `20260810180000` is applied live** (one small follow-up PR):
-1. Switch the three Profitability sub-fetchers in `Reports.tsx` to `get_profitability_report`.
-2. Re-add its `QUEUED_MIGRATION_FUNCTIONS` entry (removed for the same reason) and the
-   `rpcFixtureLiveDiff.test.ts` fixture — that test file currently carries an empty list with a
-   comment pointing here.
-3. Verify a real range in the UI against the same range from the RPC before calling it done.
-
-Until step 1 lands, treat the Profitability tabs as **not yet fixed**, whatever the changelog says
-about the report unification.
-
-## OPEN — the two invoice-basis profit reports disagree on which invoices count
-
-**Found 2026-08-09** (Codex, PR #350 round 38). `get_bottom_line_pnl`
-(`20260216200000_reporting_rpcs.sql:309`) counts `i.status = 'posted'` alone, while
-`get_monthly_summary` counts `'posted'` and `'overdue'`. An overdue invoice is a posted sale that
-went past due, so the bottom line silently drops those sales' revenue *and* cost. Pre-existing and
-independent of returns.
-
-**What it forced in #350.** The return-COGS reversal has to write against a sale the reports
-actually counted. Admitting `'overdue'` would mean that for a credited overdue sale the bottom line
-excludes the original COGS but includes the credit memo's negative COGS — **inflating profit**. So
-the reversal is gated on `'posted'` alone, the intersection of the two predicates. The accepted
-residual: for a credited overdue sale no reversal is written, so `get_monthly_summary` keeps the
-original cost and *understates* profit. Conservative on purpose — of the two available errors, the
-one that flatters the books is the one to avoid.
-
-**Fix when taken up:** re-emit `get_bottom_line_pnl` to include `'overdue'`, so both reports share
-one inclusion rule; then widen the reversal gate to match and the residual disappears. Not done in
-#350 because neither report is otherwise touched by it, and a session that cannot apply migrations
-cannot verify a reporting change against live data.
-
-## FIX WRITTEN / NOT LIVE — `update_order_items` trusts a browser-supplied cost on a product swap
-
-**Found 2026-08-09** (Codex, PR #350 round 39). When a product's catalog cost changes after
-`OrderDetail` loads but before a product-swap edit commits, `update_order_items` writes the
-browser's now-stale `cost_per_unit` and derives line profit, header profit and pending commissions
-from it — while the re-snapshot trigger independently stamps the *current* catalog cost into
-`cost_at_time_cents`, which is what the rewritten reports read. The edit commits two conflicting
-cost bases.
-
-**Fix written 2026-08-10:** `20260810180002_enforce_below_cost_admin_approval.sql` routes
-`update_order_items` through the shared server wall. Its trigger locks `products.current_cost`,
-replaces the browser value, and derives `cost_per_unit`, `cost_at_time_cents`, line profit and
-margin from that one value before the existing header/commission recomputation. The exact-SHA
-review then closed two further gaps: app roles lose direct write privileges on all three sell-side
-line tables, and the late guard repeats the canonical whole-cent settlement after replacing cost.
-The same migration closes the direct-RPC below-cost bypass and makes approval active-admin-only
-with an immutable same-transaction audit. A later exact-SHA review expanded the wall to Quote
-conversion, partial draw-down, version restore, and duplication; context-free below-cost line
-writes now fail closed, and unknown historical cost is rejected rather than converted to zero.
-This remains an open production risk until the replacement
-exact-SHA review is clean and the migration is applied live.
-
-## OPEN — per-unit cost columns cannot carry an exact extended cost
-
-**Found 2026-08-09** (Codex, PR #350 rounds 40-41). Three separate findings share one root: costs
-are stored as an integer **per-unit** value (`order_items.cost_at_time_cents`,
-`invoice_items.cost_cents`) which the rollups multiply by the row's full quantity. Whenever the
-true extended cost is not an exact multiple of that quantity, no integer per-unit value can
-represent it.
-
-Where it currently bites:
-
-- **Partial booking draws.** `draw_down_quote` averages the cost of several quote lines of one
-  product and settles that average to cents. Two units backed by $1.00 and $1.01 average to $1.005,
-  round to $1.01, and a full draw records $2.02 of order COGS where the quote carried $2.01. The
-  settle-at-source choice is deliberate (round 23) — it keeps the order header, line profit,
-  commissions and the reports on ONE number, which is worth more than the cent — but it does mean a
-  drawn booking can differ by a cent from the same booking converted whole.
-- **Capped return reversals** (PR #361) needed a two-row split to express a capped total exactly,
-  for the same reason.
-
-**Fix when taken up:** store an extended cost per line (or allocate across source snapshots when a
-line is created from several) rather than deriving everything from a per-unit integer. That is a
-schema change touching orders, invoices and every rollup — its own project, not a rider on a
-pricing PR. Until then, expect sub-cent-per-line divergence only on fractional or mixed-cost lines,
-always bounded by one cent per line.
-
-## OPEN — order headers recompute profit on the unrounded basis
-
-**Found 2026-08-09** (Codex, PR #350 round 36). `after_order_items_change`
-(`20260209200000_tier1_audit_fixes.sql`) recomputes an order header's profit from
-`cost_per_unit * total_units_needed` **unrounded**, while the reports — and, since PR #350, the
-quote functions — use settled revenue minus settled extended cost. On a fractional-quantity line
-whose extension lands on a half-cent (0.5 units at $0.02 against $0.01), the quote, the line, the
-reports and the commission all record $0.00 profit while the order header records $0.01.
-
-**This predates PR #350** — the trigger disagreed with the reports before that PR too. What
-changed is that quotes now agree with the reports, which makes the header the odd one out and the
-disagreement easier to hit.
-
-**Deliberately not fixed in #350.** `after_order_items_change` fires on every `order_items` write,
-so re-emitting it moves numbers on every order in the system. That deserves its own migration with
-its own review and a live before/after on real orders — not a rider on the cost-snapshot PR, and
-certainly not from a session that cannot apply migrations at all (see the entry below).
-
-**Fix when taken up:** re-emit the trigger to subtract per-line `ROUND(cost * qty, 2)` from the
-stored line totals, matching the boundary in `save_quote` and the report RPCs.
-
-**Related, same family (found 2026-08-09, Codex PR #350 round 41):** `draw_down_quote` averages the
-snapshots of several quote lines of one product and settles that *per-unit* average to cents before
-extending it. One unit at $1.00 and one at $1.01 average to $1.005, round to $1.01, and a full draw
-books $2.02 of order COGS where the quote carried $2.01. Settling once at the source is what keeps
-the order internally consistent (round 23), so the residual is a ≤1c disagreement between the quote
-and an order drawn from it, only on mixed-cost lines of one product.
-
-Both are the same root limitation: **cost is stored per-unit as integer cents while quantities are
-fractional**, so no per-unit integer can represent an exact extended total. Patching either site in
-isolation moves the inconsistency rather than removing it. The real fix is to decide, once, whether
-a line's authoritative cost is the per-unit stamp or the extended amount, and make every consumer
-read the same one — a deliberate change with a live before/after, not a rider on a pricing PR.
-
-## OPEN — live migrations cannot be applied from a remote (web) session
-
-**Found 2026-08-09** while trying to apply the three pricing migrations from PR #350.
-
-`migration-apply-guard` requires a proof minted by `scripts/write-apply-proofs.mjs`, which
-resolves the Codex CLI **only** from `/root/.local/share/OpenAI/Codex/bin` and refuses PATH
-shims and env overrides by design — so a fake reviewer cannot mint proof. A Claude-Code-on-the-web
-container has no Codex CLI installed at that path, so the script exits with
-"No proof minted — PARK the migration for Mason rather than self-certifying" and the apply is
-blocked. This is the guard working as intended, not a bug in it; the gap is that a remote session
-can write and review a migration but can never apply one.
-
-**Consequence:** any migration authored in a remote session must be applied from Mason's machine
-(or any environment with the trusted Codex CLI). Plan remote sessions to end at PARKED, and do not
-promise an apply from one.
-
-**The same session also cannot MERGE a risky PR.** `pr-merge-guard` shells out to `gh`, which a
-web container does not have, so it denies the merge fail-closed (`spawnSync gh ENOENT`) — and even
-with `gh` installed, a money/`_cents`/migration diff additionally requires a fresh exact-SHA
-`write-codex-push-proof.mjs` run, which needs the same missing Codex CLI. So a remote session can
-take a risky branch all the way to green CI but cannot land it. Confirmed 2026-08-09 on PR #350:
-all ten checks green, merge denied. Land it from Mason's machine.
-
-**Two lesser things found on the same path**, both worth knowing before the next attempt:
-- The applied-migration snapshot (`.claude/session-state/applied-migrations.json`) is gitignored
-  and per-checkout, so a fresh container always lacks it and the ordering guard abstains until it
-  is refreshed. Refresh is read-only: query `supabase_migrations.schema_migrations` via the
-  Supabase MCP and pipe the JSON into `scripts/refresh-applied-migrations.mjs`. The full ledger
-  (946 rows as of this date) exceeds the MCP result limit — request it as a single `json_agg` and
-  pipe the saved tool-result file, rather than paging it through the session.
-- The live-data guard rejects `xpath()` and `pg_get_userbyid()` as "not known read-only", so the
-  usual one-query row-count and ownership introspection tricks fail. Exact per-table counts can
-  still be had with a plain `UNION ALL`/summed-subquery over `count(*)`, and ownership via a join
-  to `pg_roles` instead of `pg_get_userbyid`.
-
 ## OPEN — the push guard AND the memory backup still refuse web/mobile sessions that install a credential-proxy rewrite
 
 **Found 2026-08-05 by Codex on PR #313 (P2), reproduced and confirmed the same day. Needs an owner decision; see "the decision this needs" below. Codex found the second instance (`backup-claude-memory`) on the same PR after the first was parked — see "Second instance" below.**
@@ -699,11 +522,6 @@ It is forward-only: applying it moved no live money. At the time this section wa
 written, the one-time repair of the 37 stale lines was commented out and still a
 separate, untaken decision.
 
-**Update 2026-08-10:** the separately approved backfill is now live at ledger
-version `20260810025159`. A fresh read found zero stale line-profit rows and one
-remaining order-header-versus-lines mismatch (the deliberately out-of-scope
-stale-header case). The source migration is on open PR #364 and must land there;
-do not recreate or modify that sibling session's file from this branch.
 > **Closed 2026-08-10 — the repair was approved and applied; the two paragraphs
 > that followed here are superseded.** Mason approved the repair, and it went
 > live as its own forward-only migration,

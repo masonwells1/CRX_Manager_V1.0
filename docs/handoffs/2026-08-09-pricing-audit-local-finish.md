@@ -5,13 +5,19 @@ PR #361. That session could not merge or apply migrations; a local session with 
 
 Read this file, then `docs/manual/KNOWN_ISSUES.md` (five new entries at the top are from this work).
 
+> **LIVE CLOSEOUT — 2026-08-12.** The four-migration database rollout described by this historical
+> handoff is complete. Submitted migrations `20260812115235`–`20260812115238` are live as assigned
+> versions `20260812145628`, `20260812151606`, `20260812154028`, and `20260812154757`. Current disk
+> filenames use those assigned versions. Do not follow the old pending-apply instructions below;
+> use `docs/manual/CURRENT_STATE.md` and `docs/reference/migration-history.md` for current state.
+
 > **Local takeover update — 2026-08-10.** The historical state below is retained for provenance,
 > but it is no longer the execution state. PR #350 conflicted with current `main`; the branch was
 > refreshed and all local gates passed. The required fresh exact-SHA review then failed closed on
 > the intentionally deferred server-side below-cost wall, the related `update_order_items` cost
 > trust, and exact commercial metrics in the public audit. Those blockers are now being repaired
 > on `codex/finish-pricing-audit-20260810`, including new local migration
-> `20260810180002_enforce_below_cost_admin_approval.sql`. Nothing from this takeover has been
+> `20260812115237_enforce_below_cost_admin_approval.sql`. Nothing from this takeover has been
 > pushed, merged, or applied live at the time of this note. Do not run the old two-migration apply
 > list without reconciling this update and a fresh live ledger.
 
@@ -81,8 +87,8 @@ gh pr merge 350 --squash                     # no --auto
 ### 2. Apply the two migrations, in this order
 
 ```
-supabase/migrations/20260810180000_snapshot_cost_reporting.sql
-supabase/migrations/20260810180001_quote_items_cost_at_quote_snapshot.sql
+supabase/migrations/20260812145628_snapshot_cost_reporting.sql
+supabase/migrations/20260812151606_quote_items_cost_at_quote_snapshot.sql
 ```
 
 First refresh the applied-migration snapshot (a fresh checkout never has it, and the ordering guard
@@ -97,7 +103,7 @@ node scripts/refresh-applied-migrations.mjs < rows.json
 The full ledger is ~946 rows and exceeds the MCP result limit — request it as a single `json_agg`
 and pipe the saved tool-result file rather than paging it through the session.
 
-**`20260810180001` is broader than when it was first reviewed.** Besides the quote cost snapshot it
+**`20260812115236` is broader than when it was first reviewed.** Besides the quote cost snapshot it
 now also:
 - re-emits `duplicate_quote` (costs a duplicated quote on today's basis instead of copying the
   source's, so a copy no longer carries two conflicting cost bases), and
@@ -117,7 +123,7 @@ node scripts/db-invariant-sweeps/run-sweeps.mjs   # then run each printed query;
 
 ### 4. Follow-up PR: wire the Profitability tabs
 
-`20260810180000` rewrites `get_profitability_report`, **but nothing calls it** — `Reports.tsx` still
+`20260812115235` rewrites `get_profitability_report`, **but nothing calls it** — `Reports.tsx` still
 computes the customer/product/monthly Profitability tabs from direct queries over
 `orders.total_profit` / `order_items.profit`. Until this lands, **those tabs still show the stale
 margins the migration exists to replace**, whatever the changelog says.

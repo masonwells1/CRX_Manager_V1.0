@@ -115,6 +115,26 @@ APPROVED_SET_EXEMPT_TABLES=(
 # tree of synthetic migrations). Resolving it from cwd would have made the
 # guard collapse to "cannot derive" the moment it was aimed anywhere else.
 APPROVED_SET_REGISTRY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.claude/schema-registry.json"
+APPROVED_SET_LIVE_LEDGER="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/smoke/pricing-audit-live-ledger.json"
+
+# Exact live-statement hashes let an already-applied immutable migration remain
+# byte-for-byte historical without weakening the forward guard. A migration is
+# skipped only when its assigned version is present in the captured live ledger
+# AND its normalized repository bytes still equal Supabase's stored statement.
+# Any edit, even a comment, breaks the hash and puts the file straight back
+# through the ordinary approved-set scanner. Missing/unreadable snapshot data is
+# safe: the map stays empty and nothing is exempted.
+APPROVED_SET_LIVE_HASHES=$(node -e "
+const fs = require('fs');
+const p = process.argv[1];
+if (!fs.existsSync(p)) process.exit(0);
+const snapshot = JSON.parse(fs.readFileSync(p, 'utf8'));
+for (const row of snapshot.entries || []) {
+  if (/^[0-9]{14}$/.test(row.version) && /^[0-9a-f]{64}$/.test(row.statement_sha256)) {
+    process.stdout.write(row.version + '\\t' + row.statement_sha256 + '\\n');
+  }
+}
+" "$APPROVED_SET_LIVE_LEDGER" 2>/dev/null || true)
 
 BUSINESS_ROW_TABLES=$(node -e "
 const fs = require('fs');
@@ -398,6 +418,16 @@ for file in $ALL_SQL; do
   MIG_BASENAME=$(basename "$file")
   MIG_STAMP="${MIG_BASENAME%%_*}"
   if [[ "$MIG_STAMP" =~ ^[0-9]{14}$ ]] && [ "$MIG_STAMP" -ge "$APPROVED_SET_CUTOFF" ]; then
+    EXACT_LIVE_APPLIED=0
+    EXPECTED_LIVE_SHA=$(printf '%s\n' "$APPROVED_SET_LIVE_HASHES" \
+      | awk -F'\t' -v version="$MIG_STAMP" '$1 == version { print $2; exit }')
+    if [ -n "$EXPECTED_LIVE_SHA" ]; then
+      LOCAL_NORMALIZED_SHA=$(sed 's/\r$//' "$file" | sha256sum | awk '{ print $1 }')
+      if [ "$LOCAL_NORMALIZED_SHA" = "$EXPECTED_LIVE_SHA" ]; then
+        EXACT_LIVE_APPLIED=1
+      fi
+    fi
+
     # Find UPDATE/DELETE against a business table that is NOT inside a function
     # body. A DO $$ ... $$ block is deliberately NOT treated as a function body:
     # that is exactly where one-shot backfills live.
@@ -544,6 +574,14 @@ for file in $ALL_SQL; do
         }
       }
     ' "$file")
+
+    # Applied migrations are immutable. When this exact source is independently
+    # pinned to Supabase's stored live statement, it is historical evidence,
+    # not a pending rewrite. A one-byte mutation makes this false and the full
+    # guard below runs normally.
+    if [ "$EXACT_LIVE_APPLIED" -eq 1 ]; then
+      REWRITES=""
+    fi
 
     if [ -n "$REWRITES" ]; then
       FIRST_REWRITE_LINE=$(printf '%s\n' "$REWRITES" | head -1 | cut -f1)

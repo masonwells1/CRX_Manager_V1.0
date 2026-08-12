@@ -663,6 +663,79 @@ export type Database = {
         }
         Relationships: []
       }
+      below_cost_approvals: {
+        Row: {
+          actor_user_id: string
+          created_at: string
+          entity_id: string
+          entity_type: string
+          id: string
+          line_id: string
+          locked_unit_cost_cents: number
+          operation: string
+          product_id: string | null
+          quantity: number
+          reason: string
+          total_shortfall_cents: number
+          unit_price_cents: number
+          updated_at: string
+        }
+        Insert: {
+          actor_user_id: string
+          created_at?: string
+          entity_id: string
+          entity_type: string
+          id?: string
+          line_id: string
+          locked_unit_cost_cents: number
+          operation: string
+          product_id?: string | null
+          quantity: number
+          reason: string
+          total_shortfall_cents: number
+          unit_price_cents: number
+          updated_at?: string
+        }
+        Update: {
+          actor_user_id?: string
+          created_at?: string
+          entity_id?: string
+          entity_type?: string
+          id?: string
+          line_id?: string
+          locked_unit_cost_cents?: number
+          operation?: string
+          product_id?: string | null
+          quantity?: number
+          reason?: string
+          total_shortfall_cents?: number
+          unit_price_cents?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "below_cost_approvals_actor_user_id_fkey"
+            columns: ["actor_user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "below_cost_approvals_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "below_cost_approvals_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "view_unmigrated_products"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       blend_recipe_items: {
         Row: {
           created_at: string
@@ -10708,6 +10781,15 @@ export type Database = {
         }
         Returns: Json
       }
+      _begin_below_cost_money_write: {
+        Args: { p_operation: string; p_payload: Json; p_performed_by: string }
+        Returns: undefined
+      }
+      _below_cost_reason_from_json: { Args: { p_value: Json }; Returns: string }
+      _below_cost_reason_from_text: {
+        Args: { p_value: string }
+        Returns: string
+      }
       _bind_completed_lifecycle_idempotency: {
         Args: {
           p_contract: string
@@ -10718,6 +10800,22 @@ export type Database = {
           p_response: Json
         }
         Returns: undefined
+      }
+      _bulk_import_order_below_cost_impl_20260810: {
+        Args: {
+          p_customer_id: string
+          p_idempotency_key?: string
+          p_items: Json
+          p_notes?: string
+          p_order_date: string
+          p_order_number: string
+          p_status: string
+          p_total_cost: number
+          p_total_margin_pct: number
+          p_total_price: number
+          p_total_profit: number
+        }
+        Returns: Json
       }
       _calculate_product_pricing: {
         Args: {
@@ -10829,6 +10927,15 @@ export type Database = {
         }
         Returns: Json
       }
+      _convert_quote_to_order_below_cost_impl_20260810: {
+        Args: {
+          p_expected_row_version?: number
+          p_idempotency_key?: string
+          p_performed_by?: string
+          p_quote_id: string
+        }
+        Returns: Json
+      }
       _convert_quote_to_order_owner_impl: {
         Args: {
           p_idempotency_key?: string
@@ -10848,6 +10955,19 @@ export type Database = {
           p_reference: string
         }
         Returns: string
+      }
+      _create_direct_order_below_cost_impl_20260810: {
+        Args: {
+          p_customer_id: string
+          p_customer_po_number?: string
+          p_idempotency_key?: string
+          p_items?: Json
+          p_notes?: string
+          p_order_date: string
+          p_order_name?: string
+          p_performed_by?: string
+        }
+        Returns: Json
       }
       _create_invoice_for_unbilled_delivery_idem_impl_20260721: {
         Args: {
@@ -10905,6 +11025,17 @@ export type Database = {
         }
         Returns: Json
       }
+      _create_rush_order_below_cost_impl_20260810: {
+        Args: {
+          p_customer_id: string
+          p_customer_po_number?: string
+          p_idempotency_key?: string
+          p_items?: Json
+          p_notes?: string
+          p_performed_by?: string
+        }
+        Returns: Json
+      }
       _create_split_invoices_from_order_provenance_impl_20260719: {
         Args: {
           p_idempotency_key?: string
@@ -10921,6 +11052,23 @@ export type Database = {
           p_performed_by?: string
         }
         Returns: number
+      }
+      _draw_down_quote_below_cost_impl_20260810: {
+        Args: {
+          p_draws: Json
+          p_idempotency_key?: string
+          p_performed_by?: string
+          p_quote_id: string
+        }
+        Returns: Json
+      }
+      _duplicate_quote_below_cost_impl_20260810: {
+        Args: {
+          p_idempotency_key?: string
+          p_performed_by: string
+          p_source_quote_id: string
+        }
+        Returns: Json
       }
       _format_pricing_dollars: { Args: { p_cents: number }; Returns: string }
       _format_pricing_margin_percent: {
@@ -11031,6 +11179,15 @@ export type Database = {
         Args: { p_idempotency_key?: string; p_invoice_id: string }
         Returns: undefined
       }
+      _price_order_below_cost_impl_20260810: {
+        Args: {
+          p_idempotency_key?: string
+          p_items?: Json
+          p_order_id: string
+          p_performed_by?: string
+        }
+        Returns: Json
+      }
       _product_cost_basis_row_required: {
         Args: {
           p_effect: Json
@@ -11058,6 +11215,16 @@ export type Database = {
       }
       _require_auth: { Args: never; Returns: string }
       _resolve_product_cost_basis_row: { Args: { p_row: Json }; Returns: Json }
+      _restore_quote_version_below_cost_impl_20260810: {
+        Args: {
+          p_expected_row_version?: number
+          p_idempotency_key?: string
+          p_performed_by: string
+          p_quote_id: string
+          p_version_id: string
+        }
+        Returns: Json
+      }
       _restore_quote_version_owner_impl: {
         Args: {
           p_idempotency_key?: string
@@ -11110,6 +11277,10 @@ export type Database = {
         }
         Returns: Json
       }
+      _save_invoice_below_cost_impl_20260810: {
+        Args: { p_idempotency_key?: string; p_invoice: Json; p_items?: Json }
+        Returns: string
+      }
       _save_invoice_governed_split_guard_impl_20260720: {
         Args: { p_idempotency_key?: string; p_invoice: Json; p_items?: Json }
         Returns: string
@@ -11153,6 +11324,16 @@ export type Database = {
           p_performed_by: string
           p_po_id: string
           p_po_payload: Json
+        }
+        Returns: Json
+      }
+      _save_quote_below_cost_impl_20260810: {
+        Args: {
+          p_idempotency_key?: string
+          p_performed_by: string
+          p_quote_id: string
+          p_quote_payload: Json
+          p_sections: Json
         }
         Returns: Json
       }
@@ -11228,6 +11409,15 @@ export type Database = {
       _sync_quote_job_reservations: {
         Args: { p_actor: string; p_quote_id: string }
         Returns: undefined
+      }
+      _update_order_items_below_cost_impl_20260810: {
+        Args: {
+          p_idempotency_key?: string
+          p_items: Json
+          p_order_id: string
+          p_performed_by: string
+        }
+        Returns: Json
       }
       _update_order_items_impl: {
         Args: {
@@ -11759,6 +11949,7 @@ export type Database = {
       }
       convert_quote_to_order: {
         Args: {
+          p_below_cost_reason?: string
           p_expected_row_version?: number
           p_idempotency_key?: string
           p_performed_by?: string
@@ -12098,6 +12289,7 @@ export type Database = {
       }
       draw_down_quote: {
         Args: {
+          p_below_cost_reason?: string
           p_draws: Json
           p_idempotency_key?: string
           p_performed_by?: string
@@ -12107,6 +12299,7 @@ export type Database = {
       }
       duplicate_quote: {
         Args: {
+          p_below_cost_reason?: string
           p_idempotency_key?: string
           p_performed_by: string
           p_source_quote_id: string
@@ -12735,11 +12928,7 @@ export type Database = {
         Returns: Json
       }
       get_profitability_report: {
-        Args: {
-          p_end_date?: string
-          p_group_by: string
-          p_start_date?: string
-        }
+        Args: { p_end_date?: string; p_group_by: string; p_start_date?: string }
         Returns: {
           group_key: string
           margin_pct: number
@@ -13638,6 +13827,7 @@ export type Database = {
       }
       restore_quote_version: {
         Args: {
+          p_below_cost_reason?: string
           p_expected_row_version?: number
           p_idempotency_key?: string
           p_performed_by: string

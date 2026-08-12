@@ -9,23 +9,22 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
-## 2026-08-10 — Exact whole cents is the invariant; legacy numeric-dollar columns are a compatibility exception
+## 2026-08-10 — Exact whole cents is the invariant; legacy numeric-dollar storage has a fail-closed approval gate
 
 **Source:** `docs/audits/2026-08-10-order-profit-bigint-cents-evaluation.md`, the owner-approved
 live apply recorded in migration-history row 867, and the exact-SHA review of the pricing finish
 branch on 2026-08-10.
 
-**Decision.** New money storage remains bigint cents, but the existing Order/Quote cluster is not
-converted from PostgreSQL `numeric` dollars. PostgreSQL `numeric` is exact decimal; converting this
-established cluster would be a coordinated unit change across dozens of database functions and UI
-readers, where one missed call site creates a 100x error. The accepted compatibility path is exact
-numeric-dollar storage plus validated finite whole-cent CHECKs on every clean column. Dirty legacy
-columns remain explicitly deferred until Mason separately approves rewriting those rows.
+**Decision.** New money storage remains bigint cents. Existing PostgreSQL `numeric`-dollar storage
+may remain only where authoritative arithmetic is exact decimal, every existing value is finite and
+whole-cent, and an active validated finite whole-cent CHECK makes future violations fail closed.
+Dirty or unconstrained legacy columns remain tracked findings and are never widened, rewritten, or
+treated as an exception without Mason's explicit approval. This contract landed independently in
+PR #374 before the pricing implementation relied on it.
 
 **Operative rule.** The invariant is exact whole cents, not a blind type conversion. New database
-money columns use bigint cents. A legacy numeric-dollar column may remain only under this documented
-exception, must use exact PostgreSQL `numeric` arithmetic, and must receive the finite whole-cent
-CHECK as soon as its existing rows are clean. Browser preview math must convert the decimal operands
+money columns use bigint cents. A legacy numeric-dollar column may remain only while it satisfies the
+approval gate above; merely being old does not exempt it. Browser preview math must convert decimal operands
 to integer cents before multiplying, dividing, rounding, or aggregating; binary `Math.round` money
 is not permitted. The server remains authoritative for persisted Quote values.
 
@@ -245,15 +244,15 @@ below-cost approval as a UI confirmation, which a direct RPC caller bypasses and
 increase mid-transaction can defeat (Codex round 4, PR #350). **The policy is settled: make it a
 wall — enforce it server-side — but admins can still sell under cost.**
 
-**Status: IMPLEMENTED LOCALLY ON THE PR #350 FINISH BRANCH; NOT LIVE UNTIL MIGRATION APPLY.**
-`20260810180002_enforce_below_cost_admin_approval.sql` adds the shared PostgreSQL wall, immutable
+**Status: APPLIED LIVE 2026-08-12 as ledger version `20260812154028` (submitted as `20260812115237`).**
+`20260812154028_enforce_below_cost_admin_approval.sql` adds the shared PostgreSQL wall, immutable
 same-transaction approval audit, active-admin exception, and authoritative cost handling for
 `update_order_items` / `price_order`. The browser still provides the early explanation and reason
 prompt, but sales reps can no longer approve. Direct app-role INSERT/UPDATE/DELETE on the three
 sell-side line tables is revoked so PostgREST cannot walk around the RPC wall; owner-run SECURITY
 DEFINER workflows retain their governed write paths. The late cost guard also re-settles extended
-revenue and profit to whole cents so it cannot undo the canonical rounding trigger. Until that migration is applied, production retains
-the prior UI-only behavior; do not describe the server wall as live from source alone.
+revenue and profit to whole cents so it cannot undo the canonical rounding trigger. Live postflight
+confirmed RLS, all three enforcement triggers, and no direct app-role DML on the protected line tables.
 
 The operative rule is: the money-write RPCs must reject a below-cost line unless an
 approval reason is supplied, with the check performed against the locked product cost inside the

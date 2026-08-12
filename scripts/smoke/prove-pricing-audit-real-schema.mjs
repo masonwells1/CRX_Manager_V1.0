@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 /**
- * Network-isolated PostgreSQL 17 proof for the parked pricing-audit migrations.
- * Restores the supported baseline, replays the ledger-selected migrations
- * through 20260810180002, executes the registered rollback smokes, and always
- * removes its disposable container. It never reads a database URL.
+ * Network-isolated PostgreSQL 17 proof for the applied pricing-audit migrations.
+ * Restores the supported baseline, replays the exact captured live ledger in
+ * assigned-version order through the captured high-water. The snapshot pins every
+ * post-baseline ledger row to Supabase's stored SQL hash; the current release
+ * tail is also required to match repository source byte-for-byte. The proof
+ * runs the registered rollback smokes and always removes its disposable
+ * container. It never reads a database URL.
  */
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readFileSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,21 +20,33 @@ const NAME = `crx-pricing-audit-${process.pid}-${Date.now().toString(36)}`;
 const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE = path.join(ROOT, 'supabase', 'baselines');
 const migrationsDir = path.join(ROOT, 'supabase', 'migrations');
-const candidates = [
-  '20260810180000_snapshot_cost_reporting.sql',
-  '20260810180001_quote_items_cost_at_quote_snapshot.sql',
-  '20260810180002_enforce_below_cost_admin_approval.sql',
+const ledgerSnapshotFile = path.join(ROOT, 'scripts', 'smoke', 'pricing-audit-live-ledger.json');
+const schemaRegistryFile = path.join(ROOT, '.claude', 'schema-registry.json');
+const exactLiveSourceRequiredSince = '20260809130108';
+const appliedPricingMigrations = [
+  '20260812145628_snapshot_cost_reporting.sql',
+  '20260812151606_quote_items_cost_at_quote_snapshot.sql',
+  '20260812154028_enforce_below_cost_admin_approval.sql',
+  '20260812154757_repair_historical_order_line_cents.sql',
 ].map((name) => path.join(migrationsDir, name));
 const smokeFiles = [
   'smoke-below-cost-admin-wall.sql',
   'smoke-below-cost-quote-lifecycle.sql',
   'smoke-remaining-money-inventory-hardening.sql',
 ].map((name) => path.join(ROOT, 'scripts', 'smoke', name));
-const unrelatedReplayExclusions = new Map([
+const oneShotDataReplayExclusions = new Map([
   [
-    path.join(migrationsDir, '20260810010308_active_team_note_assignment_actor.sql'),
-    'already-live Team Board follow-up is pinned to an exact live predecessor body hash that the July baseline does not reconstruct',
+    '20260810025159',
+    'already-live row rewrite is registered as one-shot data; a schema-only disposable has no approved production population to rewrite',
   ],
+]);
+const unrelatedPendingMigrationExclusions = new Map([
+  ['20260813010000_wave_a_order_cost_authority_and_finiteness.sql', 'Wave A money candidate'],
+  ['20260813020000_round_order_header_money.sql', 'Wave A money candidate'],
+  ['20260813030000_reject_non_finite_money_and_quantities.sql', 'Wave A money candidate'],
+  ['20260813040000_clamp_negative_commission_remainder.sql', 'Wave A money candidate'],
+  ['20260813050000_guard_job_commission_split_immutable.sql', 'Wave A money candidate'],
+  ['20260813060000_require_completed_delivery_before_invoice_post.sql', 'Wave A money candidate'],
 ]);
 
 function docker(args, options = {}) {
@@ -85,25 +101,147 @@ function waitForDatabase() {
   throw new Error(`disposable PostgreSQL failed readiness: ${logs.stderr || logs.stdout}`);
 }
 
+function normalizedSql(file) {
+  return readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+}
+
+function sourceFingerprint(file) {
+  const sql = normalizedSql(file);
+  return {
+    bytes: Buffer.byteLength(sql, 'utf8'),
+    sha256: createHash('sha256').update(sql, 'utf8').digest('hex'),
+  };
+}
+
+function resolveLiveSource(entry, migrationNames) {
+  const submittedFilename = /^\d{14}_.+/.test(entry.name) ? `${entry.name}.sql` : null;
+  const suffix = entry.name.replace(/^\d{14}_/, '');
+  const candidatesForEntry = new Set([
+    submittedFilename,
+    `${entry.version}_${suffix}.sql`,
+    ...migrationNames.filter((name) => name.startsWith(`${entry.version}_`)),
+  ].filter(Boolean));
+  const matches = [...candidatesForEntry].filter((name) => migrationNames.includes(name));
+  assert.equal(
+    matches.length,
+    1,
+    `live migration ${entry.version}/${entry.name} must resolve to exactly one immutable repository source`,
+  );
+  return path.join(migrationsDir, matches[0]);
+}
+
 function selectedMigrations() {
+  const ledger = JSON.parse(readFileSync(ledgerSnapshotFile, 'utf8'));
+  const registry = JSON.parse(readFileSync(schemaRegistryFile, 'utf8'));
+  assert.equal(ledger.project_id, 'rhyzpcqhnizqbxphqdkr', 'live-ledger snapshot targets the wrong project');
+  assert.equal(
+    ledger.baseline_high_water,
+    '20260727174805',
+    'live-ledger snapshot no longer matches the restored baseline',
+  );
+  assert.equal(ledger.entries.length, 54, 'captured post-baseline live ledger row count drifted');
+  assert.equal(
+    ledger.entries.at(-1)?.version,
+    ledger.live_high_water,
+    'captured live high-water is not the final ordered ledger entry',
+  );
+  assert.equal(
+    registry._meta?.migrations_high_water,
+    ledger.live_high_water,
+    'schema registry and captured live ledger high-water differ; refresh both before proving pricing',
+  );
+
+  const appliedNames = new Set(registry._meta?.applied_migration_names ?? []);
+  const migrationNames = readdirSync(migrationsDir)
+    .filter((name) => /^\d{14}_.+\.sql$/.test(name))
+    .sort();
+  for (const [filename, purpose] of unrelatedPendingMigrationExclusions) {
+    assert.ok(migrationNames.includes(filename), `${purpose} exclusion is missing: ${filename}`);
+    const stem = path.basename(filename, '.sql');
+    assert.ok(!appliedNames.has(stem), `${purpose} exclusion is now applied and must join the captured ledger: ${filename}`);
+    assert.ok(
+      filename.slice(0, 14) > ledger.live_high_water,
+      `${purpose} exclusion is not ordered above the captured live high-water: ${filename}`,
+    );
+  }
+  const ordered = ledger.entries.map((entry, index) => {
+    if (index > 0) {
+      assert.ok(
+        ledger.entries[index - 1].version < entry.version,
+        `captured live ledger is not strictly ordered at ${entry.version}`,
+      );
+    }
+    assert.ok(appliedNames.has(entry.name), `schema registry is missing live migration ${entry.name}`);
+    assert.match(entry.statement_sha256, /^[0-9a-f]{64}$/, `${entry.version} has an invalid live SQL hash`);
+    assert.ok(entry.statement_bytes > 0, `${entry.version} has an invalid live SQL byte length`);
+    const file = resolveLiveSource(entry, migrationNames);
+    const fingerprint = sourceFingerprint(file);
+    if (entry.version >= exactLiveSourceRequiredSince) {
+      assert.equal(
+        fingerprint.bytes,
+        entry.statement_bytes,
+        `${path.basename(file)} byte length differs from Supabase's stored live statement`,
+      );
+      assert.equal(
+        fingerprint.sha256,
+        entry.statement_sha256,
+        `${path.basename(file)} SHA-256 differs from Supabase's stored live statement`,
+      );
+    }
+    return { ...entry, file };
+  });
+
+  for (const version of [
+    ...oneShotDataReplayExclusions.keys(),
+  ]) {
+    assert.ok(ordered.some((entry) => entry.version === version), `replay exclusion ${version} is not live`);
+  }
+
+  const oneShotRegistry = JSON.parse(
+    readFileSync(path.join(BASELINE, 'one-shot-migrations.json'), 'utf8'),
+  ).one_shot ?? {};
+  for (const version of oneShotDataReplayExclusions.keys()) {
+    const entry = ordered.find((candidate) => candidate.version === version);
+    const stem = path.basename(entry.file, '.sql');
+    assert.equal(
+      typeof oneShotRegistry[stem],
+      'string',
+      `${stem} is excluded as one-shot data but is absent from the one-shot registry`,
+    );
+  }
+
   const result = spawnSync(process.execPath, ['scripts/list-post-baseline-migrations.mjs'], {
     cwd: ROOT,
     encoding: 'utf8',
   });
   if (result.status !== 0) throw new Error(result.stderr);
-  const migrations = result.stdout
+  const selected = result.stdout
     .split(/\r?\n/)
     .filter(Boolean)
-    .map((relative) => path.join(ROOT, relative));
-  const finalIndex = migrations.indexOf(candidates.at(-1));
-  assert.notEqual(finalIndex, -1, 'final pricing migration is absent from the ledger-selected replay');
-  const throughPricing = migrations.slice(0, finalIndex + 1);
-  for (const excluded of unrelatedReplayExclusions.keys()) {
-    assert.ok(throughPricing.includes(excluded), `expected replay exclusion is absent: ${excluded}`);
-  }
-  const selected = throughPricing.filter((migration) => !unrelatedReplayExclusions.has(migration));
-  assert.deepEqual(selected.slice(-3), candidates, 'pricing migrations must be the final ordered replay slice');
-  return selected;
+    .map((relative) => path.basename(relative))
+    .sort();
+  const expectedSelected = [
+    ...ordered
+      .filter((entry) => !oneShotDataReplayExclusions.has(entry.version))
+      .map((entry) => path.basename(entry.file)),
+    ...unrelatedPendingMigrationExclusions.keys(),
+  ].sort();
+  assert.deepEqual(
+    selected,
+    expectedSelected,
+    'post-baseline selector contains an unknown pending migration or omits a captured live/candidate source',
+  );
+
+  return { ledger, ordered };
+}
+
+function recordLedgerEntry(entry) {
+  const name = entry.name.replaceAll("'", "''");
+  psql(
+    `INSERT INTO supabase_migrations.schema_migrations (version, name, statements)
+     VALUES ('${entry.version}', '${name}', ARRAY[]::text[])
+     ON CONFLICT (version) DO NOTHING;`,
+  );
 }
 
 function expectRollbackMarker(file) {
@@ -114,7 +252,6 @@ function expectRollbackMarker(file) {
 }
 
 function proveNonEmptyApprovedSetDrift() {
-  const snapshot = path.basename(candidates[1]);
   const result = psql(
     `BEGIN;
      INSERT INTO public.customers (farm_name)
@@ -142,7 +279,7 @@ function proveNonEmptyApprovedSetDrift() {
        :'proof_quote_id', :'proof_section_id', :'proof_product_id', 0, 1,
        1, 1, 1, 0, 0, NULL
      );
-     \\i /tmp/${snapshot}
+     ${normalizedSql(appliedPricingMigrations[1])}
      ROLLBACK;`,
     { allowFailure: true },
   );
@@ -152,7 +289,7 @@ function proveNonEmptyApprovedSetDrift() {
 }
 
 try {
-  for (const file of [...candidates, ...smokeFiles]) {
+  for (const file of [...appliedPricingMigrations, ...smokeFiles]) {
     assert.ok(readFileSync(file, 'utf8').length > 0, `missing required artifact ${file}`);
   }
 
@@ -210,15 +347,56 @@ try {
   );
   apply('20260727174805_migration_history.sql');
 
-  const migrations = selectedMigrations();
-  for (const [index, migration] of migrations.entries()) {
-    const name = `migration-${index}.sql`;
-    copy(migration, name);
+  const plan = selectedMigrations();
+  let replayedLiveMigrations = 0;
+  for (const [index, entry] of plan.ordered.entries()) {
+    if (
+      oneShotDataReplayExclusions.has(entry.version)
+    ) {
+      recordLedgerEntry(entry);
+      continue;
+    }
     // Supabase applies each migration in its own transaction. Mirror that
     // contract so SET LOCAL, transaction-scoped advisory locks, and explicit
-    // LOCK TABLE guards execute exactly as they do in the managed runner.
-    psql(`BEGIN;\n\\i /tmp/${name}\nCOMMIT;`);
+    // LOCK TABLE guards execute exactly as they do in the managed runner. Feed
+    // canonical LF bytes directly so Windows checkout line endings cannot
+    // change pg_proc.prosrc hashes inside the disposable database.
+    psql(`BEGIN;\n${normalizedSql(entry.file)}\nCOMMIT;`);
+    recordLedgerEntry(entry);
+    replayedLiveMigrations += 1;
   }
+
+  const reconstructedLedger = psql(
+    `\\pset tuples_only on
+     \\pset format unaligned
+     SELECT count(*) || ':' || max(version)
+       FROM supabase_migrations.schema_migrations;`,
+  ).stdout.trim();
+  assert.equal(
+    reconstructedLedger,
+    `${plan.ledger.live_ledger_rows}:${plan.ledger.live_high_water}`,
+    'reconstructed disposable ledger does not match the captured live count/high-water',
+  );
+
+  // The four pricing/cent-repair migrations are part of the captured live
+  // ledger above and were replayed in their server-assigned order. The repair
+  // takes its schema-only no-op path in this data-free reconstruction and must
+  // still install its validated constraint.
+  const centRepairConstraint = psql(
+    `\\pset tuples_only on
+     \\pset format unaligned
+     SELECT count(*)
+       FROM pg_constraint
+      WHERE conrelid = 'public.order_items'::regclass
+        AND conname = 'order_items_total_price_whole_cents_chk'
+        AND contype = 'c'
+        AND convalidated;`,
+  ).stdout.trim();
+  assert.equal(
+    centRepairConstraint,
+    '1',
+    'schema-only cent-repair path did not install its validated constraint',
+  );
 
   psql(
     `ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS banned_until timestamptz;
@@ -241,7 +419,6 @@ try {
        SET full_name = EXCLUDED.full_name, role = EXCLUDED.role, is_active = true;`,
   );
 
-  for (const candidate of candidates) copy(candidate, path.basename(candidate));
   proveNonEmptyApprovedSetDrift();
   for (const file of smokeFiles) {
     copy(file, path.basename(file));
@@ -260,9 +437,12 @@ try {
   assert.equal(residue, '0', 'rollback smoke/proof fixtures left durable residue');
 
   console.log(
-    `PRICING_AUDIT_REAL_SCHEMA_PASS migrations=${migrations.length} ` +
-    `unrelated_live_bound_exclusions=${unrelatedReplayExclusions.size} ` +
-    'approved_set_empty=PASS approved_set_nonempty_drift=APPROVED_SET_DRIFTED ' +
+    `PRICING_AUDIT_CAPTURED_LIVE_LEDGER_SCHEMA_PASS captured_live_high_water=${plan.ledger.live_high_water} ` +
+    `live_ledger_rows=${plan.ledger.live_ledger_rows} live_statement_hashes=${plan.ordered.length} ` +
+    `recent_exact_sources=${plan.ordered.filter((entry) => entry.version >= exactLiveSourceRequiredSince).length} ` +
+    `live_replayed=${replayedLiveMigrations} pricing_applied=${appliedPricingMigrations.length} ` +
+    `one_shot_data_exclusions=${oneShotDataReplayExclusions.size} ` +
+    'approved_set_empty=PASS cent_repair_empty=PASS approved_set_nonempty_drift=APPROVED_SET_DRIFTED ' +
     'smoke_below_cost_admin=SMOKE_PASS_ROLLBACK ' +
     'smoke_quote_lifecycle=SMOKE_PASS_ROLLBACK ' +
     'smoke_profitability_inventory=SMOKE_PASS_ROLLBACK residue=0',

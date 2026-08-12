@@ -79,14 +79,18 @@ for (const doc of manualDocs) {
 
 // HARD freshness gate (2026-07-16 scaffolding review): the two docs that describe
 // LIVE state must not claim a "Last verified" date OLDER than the newest migration
-// on disk. A migration dated after the stamp means the schema/behavior changed
+// dated on or before today. A migration dated after the stamp means the schema/behavior changed
 // after the doc was last checked — so its freshness promise is stale. This is the
 // forcing function the manual layer lacked: within 48h of shipping, KNOWN_ISSUES
 // listed an applied-live fix as "parked" while claiming same-day re-verification.
 // Bump the stamp ONLY after actually re-reading the doc against live state.
+// Future-dated migration files are intentionally excluded until their calendar day:
+// parked migrations may reserve a future ordering slot, and a document cannot truthfully
+// claim a future verification date merely because such a file exists on disk.
+const todayMigDate = new Date().toISOString().slice(0, 10).replaceAll("-", "");
 const newestMigDate = migrations
   .map((name) => name.match(/^(\d{8})/)?.[1])
-  .filter(Boolean)
+  .filter((date) => date && date <= todayMigDate)
   .sort()
   .at(-1); // YYYYMMDD of the newest migration
 for (const doc of ["CURRENT_STATE.md", "KNOWN_ISSUES.md"]) {

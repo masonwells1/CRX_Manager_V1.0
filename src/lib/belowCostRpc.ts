@@ -42,7 +42,11 @@ export function invoiceBelowCostValues(
  * The database migration must therefore land before this browser bundle.
  */
 export async function callBelowCostAwareRpc(
-  functionName: string,
+  functionName:
+    | 'convert_quote_to_order'
+    | 'draw_down_quote'
+    | 'duplicate_quote'
+    | 'restore_quote_version',
   args: Record<string, unknown>,
   belowCostReason: string | null = null,
 ) {
@@ -50,7 +54,19 @@ export async function callBelowCostAwareRpc(
     ...args,
     p_below_cost_reason: belowCostReason,
   };
-  return supabaseUntyped.rpc(functionName, currentArgs);
+  // Keep every RPC name as a complete literal at the call site. Repository
+  // contract scanners deliberately reject computed names because a dynamic
+  // dispatch could hide a money mutation from idempotency/security coverage.
+  switch (functionName) {
+    case 'convert_quote_to_order':
+      return supabaseUntyped.rpc('convert_quote_to_order', currentArgs);
+    case 'draw_down_quote':
+      return supabaseUntyped.rpc('draw_down_quote', currentArgs);
+    case 'duplicate_quote':
+      return supabaseUntyped.rpc('duplicate_quote', currentArgs);
+    case 'restore_quote_version':
+      return supabaseUntyped.rpc('restore_quote_version', currentArgs);
+  }
 }
 
 /** Parse the database's locked live-price/cost detail for the approval modal. */

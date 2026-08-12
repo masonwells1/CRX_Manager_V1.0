@@ -11,13 +11,14 @@
  * Each fixture is a synthetic migration written into a scratch directory, run
  * through the real script, and classified by what the script printed for it.
  */
-import { existsSync, mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+const ROOT = join(HERE, '..');
 const SCRIPT = join(HERE, 'validate-sql-migrations.sh');
 const GIT_BASH = 'C:\\Program Files\\Git\\bin\\bash.exe';
 const BASH = process.platform === 'win32' && existsSync(GIT_BASH) ? GIT_BASH : 'bash';
@@ -384,6 +385,7 @@ const CASES = [
 const IN_FORCE = 29990101;
 // A stamp before the cutoff: history, never retro-checked.
 const PRE_CUTOFF = '20260101000001_pre_cutoff.sql';
+const EXACT_LIVE_APPLIED = '20260810235207_reconcile_pending_commission_snapshots.sql';
 
 function classify(output, fileName) {
   const lines = output.split(/\r?\n/);
@@ -420,6 +422,8 @@ function run() {
   // The same rewrite, stamped before the cutoff, must stay silent: applied
   // history cannot be edited, so retro-checking it would only produce noise.
   writeFileSync(join(migrations, PRE_CUTOFF), `UPDATE public.orders SET total_profit = 0;\n`, 'utf8');
+  const exactLiveSql = readFileSync(join(ROOT, 'supabase', 'migrations', EXACT_LIVE_APPLIED), 'utf8');
+  writeFileSync(join(migrations, EXACT_LIVE_APPLIED), exactLiveSql, 'utf8');
 
   const res = spawnSync(BASH, [SCRIPT, '--max-violations=999'], {
     cwd: dir,
@@ -437,6 +441,24 @@ function run() {
   if (preGot !== 'silent') {
     failures.push(`  pre-cutoff migration is history\n    expected silent, got ${preGot}`);
   }
+  const exactLiveGot = classify(out, EXACT_LIVE_APPLIED);
+  if (exactLiveGot !== 'silent') {
+    failures.push(`  exact live-applied source is immutable history\n    expected silent, got ${exactLiveGot}`);
+  }
+
+  // The exemption is an exact-byte proof, not a filename allowlist. A single
+  // appended comment must break the live hash and reactivate the normal guard.
+  writeFileSync(join(migrations, EXACT_LIVE_APPLIED), `${exactLiveSql}\n-- mutation\n`, 'utf8');
+  const mutated = spawnSync(BASH, [SCRIPT, '--max-violations=999'], {
+    cwd: dir,
+    encoding: 'utf8',
+    env: { ...process.env },
+  });
+  const mutatedOut = `${mutated.stdout || ''}\n${mutated.stderr || ''}`;
+  const mutatedGot = classify(mutatedOut, EXACT_LIVE_APPLIED);
+  if (mutatedGot !== 'violation') {
+    failures.push(`  mutated live-applied source loses exact-hash exemption\n    expected violation, got ${mutatedGot}`);
+  }
 
   // Git Bash can release its Windows cwd handle a fraction after spawnSync
   // returns. Retry cleanup so a transient handle does not turn correct guard
@@ -450,7 +472,7 @@ function run() {
     console.error(out);
     process.exit(1);
   }
-  console.log(`✅ approved-set guard: ${CASES.length + 1} mutation cases behaved correctly`);
+  console.log(`✅ approved-set guard: ${CASES.length + 3} mutation cases behaved correctly`);
 }
 
 run();

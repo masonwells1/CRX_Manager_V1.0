@@ -159,7 +159,7 @@ DROP TRIGGER IF EXISTS z_below_cost_approvals_updated_at
 
 CREATE TRIGGER z_below_cost_approvals_updated_at
   BEFORE UPDATE ON public.below_cost_approvals
-  FOR EACH ROW EXECUTE FUNCTION extensions.moddatetime('updated_at');
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
 
 -- Extract the single-line marker written by src/lib/internalNotes.ts. The
 -- browser strips any old marker before appending a fresh one, so this returns

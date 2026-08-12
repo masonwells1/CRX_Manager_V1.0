@@ -1,4 +1,4 @@
--- 20260810180000 — snapshot-cost report unification
+-- 20260812115235 — snapshot-cost report unification
 --
 -- WHY: report surfaces disagreed on what a line "cost". Some RPCs read the
 -- MUTABLE order_items.cost_per_unit (drifts when a product cost is edited

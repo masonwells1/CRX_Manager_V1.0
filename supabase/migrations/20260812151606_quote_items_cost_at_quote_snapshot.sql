@@ -1,4 +1,4 @@
--- 20260810180001 — quote_items.cost_at_quote_cents snapshot (quote-time cost drift)
+-- 20260812115236 — quote_items.cost_at_quote_cents snapshot (quote-time cost drift)
 --
 -- Defect: a quote's line cost drifts after the quote is written. save_quote's
 -- recompute CTE priced cc from LIVE products.current_cost on EVERY save, and the
@@ -1044,6 +1044,30 @@ BEGIN
   IF v_snapshot IS NULL THEN
     RAISE EXCEPTION 'Version not found: %', p_version_id;
   END IF;
+
+  -- Preserve the newer live restore safeguard from
+  -- 20260812011000_restore_quote_version_whole_cent_money. This pricing
+  -- migration re-emits the same owner implementation to add quote-time cost
+  -- snapshots, so it must reject non-finite constrained money before the first
+  -- destructive restore write rather than silently replacing that live guard.
+  IF (v_snapshot->'quote'->>'total_price')::numeric::text IN ('NaN', 'Infinity', '-Infinity') THEN
+    RAISE EXCEPTION 'QUOTE_SNAPSHOT_MONEY_NOT_FINITE: field quotes.total_price in version % is non-finite', p_version_id;
+  END IF;
+  IF (v_snapshot->'quote'->>'total_profit')::numeric::text IN ('NaN', 'Infinity', '-Infinity') THEN
+    RAISE EXCEPTION 'QUOTE_SNAPSHOT_MONEY_NOT_FINITE: field quotes.total_profit in version % is non-finite', p_version_id;
+  END IF;
+  FOR v_section IN SELECT * FROM jsonb_array_elements(v_snapshot->'sections')
+  LOOP
+    FOR v_item IN SELECT * FROM jsonb_array_elements(v_section->'items')
+    LOOP
+      IF (v_item->>'profit')::numeric::text IN ('NaN', 'Infinity', '-Infinity') THEN
+        RAISE EXCEPTION 'QUOTE_SNAPSHOT_MONEY_NOT_FINITE: field quote_items.profit in version % is non-finite', p_version_id;
+      END IF;
+      IF (v_item->>'total_price')::numeric::text IN ('NaN', 'Infinity', '-Infinity') THEN
+        RAISE EXCEPTION 'QUOTE_SNAPSHOT_MONEY_NOT_FINITE: field quote_items.total_price in version % is non-finite', p_version_id;
+      END IF;
+    END LOOP;
+  END LOOP;
 
   -- Delete existing sections (cascades to items via ON DELETE CASCADE)
   DELETE FROM quote_sections WHERE quote_id = p_quote_id;
@@ -2164,6 +2188,12 @@ BEGIN
       AND position('crx.quote_cost_snapshot_passthrough' in p.prosrc) > 0
       AND position('total_price = ROUND((v_snapshot->''quote''->>''total_price'')::numeric, 2)' in p.prosrc) > 0
       AND position('ROUND((v_item->>''profit'')::numeric, 2)' in p.prosrc) > 0
+      -- Preserve the newer live non-finite restore guard when re-emitting the
+      -- owner implementation for quote-time cost snapshots.
+      AND position('QUOTE_SNAPSHOT_MONEY_NOT_FINITE: field quotes.total_price' in p.prosrc) > 0
+      AND position('QUOTE_SNAPSHOT_MONEY_NOT_FINITE: field quotes.total_profit' in p.prosrc) > 0
+      AND position('QUOTE_SNAPSHOT_MONEY_NOT_FINITE: field quote_items.profit' in p.prosrc) > 0
+      AND position('QUOTE_SNAPSHOT_MONEY_NOT_FINITE: field quote_items.total_price' in p.prosrc) > 0
   ) THEN
     RAISE EXCEPTION 'verify failed: restore_quote_version owner impl not snapshot-aware';
   END IF;
