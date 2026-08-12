@@ -90,9 +90,12 @@
 -- remainder at all. That branch is preserved EXACTLY as it was — it is written
 -- out first so it wins before either clamped branch is considered.
 --
--- Each replacement below is the live body with ONLY the reconciliation CASE
--- expression rewritten. The three statements were produced mechanically from the
--- tracked source files, not retyped.
+-- The order helper and invoice-save replacement below are their live bodies with
+-- ONLY the reconciliation CASE expression rewritten. The job helper's same CASE
+-- is extracted into `_derive_job_commission_rows`, then the minting function calls
+-- that shared derivation. The immediately following split-correction migration
+-- consumes the same helper, so correcting existing pending rows cannot fork the
+-- recipient resolution or arithmetic used by a fresh mint.
 --
 -- NOTHING ELSE CHANGES: no signature, no volatility, no SECURITY DEFINER flag,
 -- no search_path, no grant. The postcondition asserts every one of those.
@@ -332,29 +335,34 @@ END;
 $function$;
 
 -- =============================================================================
--- 2 of 3 — public._insert_commissions_for_job
--- Mints commissions when a field job is invoiced.
+-- Shared job-commission derivation.
+--
+-- Fresh minting below and audited split correction in the next Wave A migration
+-- both consume this function. Keeping recipient resolution, split percentages,
+-- and remainder arithmetic here prevents those two money paths from drifting.
 -- =============================================================================
-CREATE OR REPLACE FUNCTION public._insert_commissions_for_job(
-  p_job_id uuid, p_invoice_id uuid, p_customer_id uuid, p_profit numeric,
-  p_commission_split jsonb, p_commission_date date DEFAULT CURRENT_DATE)
-RETURNS integer
+CREATE OR REPLACE FUNCTION public._derive_job_commission_rows(
+  p_profit numeric,
+  p_commission_split jsonb
+)
+RETURNS TABLE (
+  split_ordinal bigint,
+  recipient text,
+  recipient_user_id uuid,
+  split_percentage numeric,
+  commission_amount numeric
+)
 LANGUAGE plpgsql
 SET search_path TO 'public', 'pg_temp'
 AS $function$
-DECLARE
-  v_count int := 0;
 BEGIN
   IF p_commission_split IS NULL OR NOT (p_commission_split ? 'splits') THEN
-    RETURN 0;
+    RETURN;
   END IF;
 
   PERFORM public.validate_commission_split_json(p_commission_split);
 
-  INSERT INTO public.commissions (
-    job_id, invoice_id, customer_id, recipient, recipient_user_id, split_percentage,
-    commission_amount, order_profit, order_date, status
-  )
+  RETURN QUERY
   WITH split_rows AS (
     SELECT
       s, ord,
@@ -425,14 +433,66 @@ BEGIN
       END AS reconciled_amount
     FROM split_rows sr
   )
-  SELECT p_job_id, p_invoice_id, p_customer_id,
+  SELECT
+    c.rn,
     COALESCE(
       (SELECT p.full_name FROM public.profiles p WHERE p.id = c.resolved_user_id),
       c.recipient
     ),
     c.resolved_user_id,
-    c.percentage, c.reconciled_amount, COALESCE(p_profit, 0), p_commission_date, 'pending'
-  FROM calculated c;
+    c.percentage,
+    c.reconciled_amount
+  FROM calculated c
+  ORDER BY c.rn;
+END;
+$function$;
+
+COMMENT ON FUNCTION public._derive_job_commission_rows(numeric, jsonb) IS
+  'Canonical field-job commission row derivation shared by fresh minting and audited split correction. Resolves recipients and reconciles exact numeric-dollar amounts without a second arithmetic implementation.';
+
+REVOKE ALL ON FUNCTION public._derive_job_commission_rows(numeric, jsonb)
+  FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public._derive_job_commission_rows(numeric, jsonb)
+  TO postgres;
+
+-- =============================================================================
+-- 2 of 3 — public._insert_commissions_for_job
+-- Mints commissions when a field job is invoiced.
+-- =============================================================================
+CREATE OR REPLACE FUNCTION public._insert_commissions_for_job(
+  p_job_id uuid, p_invoice_id uuid, p_customer_id uuid, p_profit numeric,
+  p_commission_split jsonb, p_commission_date date DEFAULT CURRENT_DATE)
+RETURNS integer
+LANGUAGE plpgsql
+SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_count int := 0;
+BEGIN
+  IF p_commission_split IS NULL OR NOT (p_commission_split ? 'splits') THEN
+    RETURN 0;
+  END IF;
+
+  -- WAVE-A-CLAMP-2026-08-09. The clamp itself lives in the shared derivation
+  -- helper above; this marker is retained because the migration's replay and
+  -- postcondition checks deliberately identify every replaced public body.
+  INSERT INTO public.commissions (
+    job_id, invoice_id, customer_id, recipient, recipient_user_id, split_percentage,
+    commission_amount, order_profit, order_date, status
+  )
+  SELECT
+    p_job_id,
+    p_invoice_id,
+    p_customer_id,
+    d.recipient,
+    d.recipient_user_id,
+    d.split_percentage,
+    d.commission_amount,
+    COALESCE(p_profit, 0),
+    p_commission_date,
+    'pending'
+  FROM public._derive_job_commission_rows(p_profit, p_commission_split) d
+  ORDER BY d.split_ordinal;
 
   GET DIAGNOSTICS v_count = ROW_COUNT;
   RETURN v_count;
@@ -840,13 +900,14 @@ DECLARE
   v_sum numeric;
 BEGIN
   -- --------------------------------------------------------------------------
-  -- Structural proofs: shape, security context, and grants for all three.
+  -- Structural proofs: shape, security context, and grants for the three
+  -- replaced functions plus the shared job-row derivation helper.
   -- --------------------------------------------------------------------------
   FOR v_src, v_config IN
     SELECT p.prosrc, p.proconfig
       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
      WHERE n.nspname = 'public'
-       AND p.proname IN ('_insert_commissions_for_order', '_insert_commissions_for_job', '_save_invoice_scoped_impl')
+       AND p.proname IN ('_insert_commissions_for_order', '_insert_commissions_for_job', '_derive_job_commission_rows', '_save_invoice_scoped_impl')
   LOOP
     IF position('WAVE-A-CLAMP-2026-08-09' in v_src) = 0 THEN
       RAISE EXCEPTION 'POSTCOND: a replaced function does not carry the Wave A clamp marker';
@@ -862,9 +923,16 @@ BEGIN
   SELECT count(*) INTO v_count
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public'
-     AND p.proname IN ('_insert_commissions_for_order', '_insert_commissions_for_job', '_save_invoice_scoped_impl');
-  IF v_count <> 3 THEN
-    RAISE EXCEPTION 'POSTCOND: expected exactly 3 functions across the three names, found % — an overload was created instead of a replacement', v_count;
+     AND p.proname IN ('_insert_commissions_for_order', '_insert_commissions_for_job', '_derive_job_commission_rows', '_save_invoice_scoped_impl');
+  IF v_count <> 4 THEN
+    RAISE EXCEPTION 'POSTCOND: expected exactly 4 functions across the four names, found % — an overload was created instead of a replacement', v_count;
+  END IF;
+
+  SELECT p.prosrc INTO v_src
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname = '_insert_commissions_for_job';
+  IF v_src NOT LIKE '%public._derive_job_commission_rows(p_profit, p_commission_split)%' THEN
+    RAISE EXCEPTION 'POSTCOND: fresh job minting does not call the shared job-commission derivation helper';
   END IF;
 
   -- No function on live may still carry the unclamped expression.
@@ -892,6 +960,12 @@ BEGIN
   END IF;
   SELECT p.prosecdef INTO v_secdef
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname = '_derive_job_commission_rows';
+  IF v_secdef THEN
+    RAISE EXCEPTION 'POSTCOND: _derive_job_commission_rows became SECURITY DEFINER';
+  END IF;
+  SELECT p.prosecdef INTO v_secdef
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public' AND p.proname = '_save_invoice_scoped_impl';
   IF NOT v_secdef THEN
     RAISE EXCEPTION 'POSTCOND: _save_invoice_scoped_impl lost SECURITY DEFINER — the invoice save path would start failing under RLS';
@@ -907,7 +981,7 @@ BEGIN
         JOIN pg_namespace n ON n.oid = p.pronamespace,
              unnest(ARRAY['anon', 'authenticated', 'public']) AS g
        WHERE n.nspname = 'public'
-         AND p.proname IN ('_insert_commissions_for_order', '_insert_commissions_for_job', '_save_invoice_scoped_impl')
+         AND p.proname IN ('_insert_commissions_for_order', '_insert_commissions_for_job', '_derive_job_commission_rows', '_save_invoice_scoped_impl')
          -- CASE, not a bare AND. has_function_privilege() RAISES for a role that
          -- does not exist, and PostgreSQL does not promise left-to-right AND
          -- evaluation, so a plain-Postgres replay target without Supabase's roles

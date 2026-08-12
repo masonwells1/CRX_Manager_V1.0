@@ -1,4 +1,4 @@
--- 20260811060000_require_completed_delivery_before_invoice_post.sql
+-- 20260812060000_require_completed_delivery_before_invoice_post.sql
 -- STATUS: PARKED DRAFT - NOT APPLIED.
 -- Reviewed three times by both reviewers (RLS/security and migration-drift);
 -- every round of findings is folded in. The precondition block was dry-run

@@ -2,6 +2,52 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-12 — Wave A remediation: four blocking review findings closed
+
+The adversarial review on PR #383 returned BLOCKED with four High findings. All four were checked
+against the real code rather than dismissed as reviewer noise, all four were genuine, and this entry
+closes them. The six migrations remain parked and unapplied.
+
+**Correction receipts are bound to the request, not just the key.** `correct_job_commission_split`
+checked its idempotency key against `(key, operation)` alone, and returned any prior receipt before
+it had read the job, the replacement split, the reason, or the actor. A key replayed against a
+different job reported success and changed nothing. The receipt is now fingerprinted over actor,
+job, canonical replacement split and normalized reason, and the check happens only after the target
+row is read and locked, so a reused key carrying different intent raises `IDEMPOTENCY_INTENT_MISMATCH`
+instead of reporting a mutation that never happened. This follows the intent-binding pattern already
+live for the payout RPCs in `20260811130000` rather than introducing a second idiom.
+
+**A corrected split now reconciles the commission rows it invalidates.** The RPC updated
+`jobs.commission_split` and wrote one audit row, and never touched `commissions` at all — so after
+minting, an admin received `changed: true` while the existing rows still named the previous
+recipients. Corrections now reconcile every active row for the job in the same transaction. Rows
+that are paid, cancelled, or attached to a payout batch through `commission_payment_items` block the
+**entire** correction with a message naming what blocked it and how many; the split update does not
+land either. A partial rewrite is deliberately not an option, because it would leave the split
+disagreeing with the commissions — the exact inconsistency this work exists to remove. Recipient
+resolution and the remainder arithmetic were extracted into `_derive_job_commission_rows`, so a
+correction and a fresh mint cannot drift apart.
+
+**Order-header profit is derived, not independently rounded.** Rounding price, cost and profit
+separately let rounded profit differ from rounded price minus rounded cost, and header profit is the
+commission basis. Profit is now derived from the rounded components, matching the canonical
+line-item trigger in `20260809230500`. Where price or cost is absent there is nothing to derive
+from, so an existing profit is rounded and a missing one stays missing — never invented as zero. The
+file's own SCOPE note claimed independent rounding "keeps the header internally consistent"; that
+claim was wrong and has been rewritten.
+
+**All six files re-stamped above the live high-water.** They were numbered below the applied ledger's
+high-water mark, which creates out-of-order replay drift and is refused by the ordering guard. They
+now run `20260812010000`–`20260812060000`, with every reference updated repo-wide.
+
+Reviewing the fix surfaced one more defect that no local gate could have caught. The guard
+migration's behavioural probe had been tightened to require a live job already carrying commission
+rows, and production has none — every commission to date is order-based. The probe would have
+aborted the migration on every apply. It now seeds the rows it needs inside its own deliberately
+rolled-back subtransaction, so it exercises the reconciliation for real on any database state rather
+than skipping, and proves it left nothing behind by whole-row fingerprint, row count, and explicit
+absence of the synthetic ids.
+
 ## 2026-08-11 — A smoke selection that runs nothing no longer reports success
 
 Follow-up to the entry below, from its own adversarial review. Container-only chains are dropped
@@ -480,7 +526,7 @@ a separate in-flight branch and are untouched by this change.
 
 First remediation wave from the 2026-08-09 ordering-cycle review (triage: 75 of 77 findings real). This slice closes the two highest-severity findings on the direct-order seam. **Written and reviewed; not yet applied live** — see the status line at the end of this entry for the current state.
 
-**The commission-basis hole.** `create_direct_order` took `unit_cost` from the request payload and used it verbatim to compute the profit that `_insert_commissions_for_order` turns into a commission liability. `NewOrder.tsx` exposed that same cost as an editable number input, so lowering it required no API access and no unusual privilege — a rep could raise their own commission by typing in the order form. Migration `20260811010000_wave_a_order_cost_authority_and_finiteness.sql` moves cost resolution inside the RPC: `products.current_cost` is authoritative, and a supplied `unit_cost` is validated and then discarded. This is the rule `bulk_import_order` has followed since `20260806000752`; the direct-order path was simply never brought in line. `convert_quote_to_order` was named in the original finding but is **not** touched — `save_quote` already overwrites every line's cost from the catalogue before conversion, so the basis it passes is server-computed. Both the review's own verifier and the independent Codex triage narrowed it the same way.
+**The commission-basis hole.** `create_direct_order` took `unit_cost` from the request payload and used it verbatim to compute the profit that `_insert_commissions_for_order` turns into a commission liability. `NewOrder.tsx` exposed that same cost as an editable number input, so lowering it required no API access and no unusual privilege — a rep could raise their own commission by typing in the order form. Migration `20260812010000_wave_a_order_cost_authority_and_finiteness.sql` moves cost resolution inside the RPC: `products.current_cost` is authoritative, and a supplied `unit_cost` is validated and then discarded. This is the rule `bulk_import_order` has followed since `20260806000752`; the direct-order path was simply never brought in line. `convert_quote_to_order` was named in the original finding but is **not** touched — `save_quote` already overwrites every line's cost from the catalogue before conversion, so the basis it passes is server-computed. Both the review's own verifier and the independent Codex triage narrowed it the same way.
 
 **Non-finite values.** PostgreSQL `numeric` accepts `NaN`, `Infinity` and `-Infinity`, and the ordering comparisons are counter-intuitive: `NaN <= 0` is false, so a `NaN` quantity slipped past the skip-empty-line test, and `NaN` compares greater than every finite value, so `CHECK (quantity_prebooked >= 0)` passed as well. The value reached inventory and corrupted Net Position for every later quote and order of that product. The same pre-write pass now rejects non-finite (and negative) quantity, price and cost at the RPC boundary. Verified against live `pg_constraint` that this is a real gap and not already covered: the whole-cent CHECKs applied on 2026-08-10 protect `orders.total_cost`, `orders.total_profit` and `order_items.profit`, but **not** `orders.total_price`, `order_items.total_price`, `inventory.quantity_prebooked` or `commissions.commission_amount`.
 

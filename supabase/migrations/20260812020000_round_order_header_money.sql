@@ -1,7 +1,7 @@
 -- STATUS: PARKED DRAFT - NOT APPLIED
--- Wave A (ordering-cycle review 2026-08-09) — round the order header's cost and
--- profit at the canonical point, so the 2026-08-10 whole-cent CHECKs cannot be
--- tripped by a writer that stores a raw un-rounded value.
+-- Wave A (ordering-cycle review 2026-08-09) — round the order header's price and
+-- cost at the canonical point, then derive profit from those rounded components,
+-- so whole-cent CHECKs and the commission basis stay exact.
 --
 -- THE DEFECT
 -- 20260810151000 added validated CHECK constraints requiring whole cents on
@@ -51,14 +51,19 @@
 -- The trigger closes the defect WITHOUT needing to read or trust that body.
 --
 -- SCOPE
---   * Rounds orders.total_cost and orders.total_profit — the two columns that
---     carry a whole-cent CHECK and can therefore hard-abort a write.
---   * ALSO rounds orders.total_price, which carries no whole-cent CHECK. Fixing
---     only the two constrained columns would trade a loud failure for a quiet
---     inconsistency: on the blend-ticket path the header would then store a
---     rounded cost and profit beside a RAW price, so total_price - total_cost
---     would no longer equal total_profit. Rounding all three keeps the header
---     internally consistent.
+--   * Rounds orders.total_price and orders.total_cost first, then DERIVES
+--     orders.total_profit from those rounded components. total_cost and
+--     total_profit carry whole-cent CHECKs; total_price does not, but it is the
+--     revenue side of the identity and therefore must be rounded at the same
+--     boundary.
+--   * This is deliberately the same rule as the canonical order-item trigger in
+--     20260809230500_single_canonical_line_profit.sql: stored profit is an
+--     output of rounded revenue minus rounded cost, never a third independent
+--     caller input. Independently rounding all three can create a one-cent
+--     contradiction and would make the commission basis wrong.
+--   * NULL handling fails closed without inventing zero. When either component
+--     is NULL there is nothing sound to derive from, so a non-NULL existing
+--     total_profit is only rounded to whole cents and otherwise remains NULL.
 --
 --     CORRECTED CLAIM — read this before assuming total_price is inert. An
 --     earlier draft of this header said the ordinary path already writes
@@ -98,22 +103,20 @@
 --     20260810151000 (whether orders.total_price should carry its own
 --     whole-cent CHECK). It does not add that constraint. It only stops the
 --     column from drifting sub-cent going forward.
---   * RESIDUAL, disclosed rather than hidden: rounding the three columns
---     independently is not the same as deriving profit. Where a writer sets
---     profit = price - cost and BOTH are sub-cent, ROUND(price) - ROUND(cost) can
---     differ from ROUND(price - cost) by one cent (e.g. 0.005 - 0.004: 0.01 - 0.00
---     = 0.01, but ROUND(0.001) = 0.00). Deriving total_profit from the rounded
---     pair — as the order_items branch already does for lines — would close that
---     last cent, but it would also DISCARD any total_profit a writer set
---     deliberately, across every writer of the header. That is a money-semantics
---     change needing its own evidence and Mason's decision, so it is deliberately
---     NOT done here. The gap it leaves is at most one cent, and only on a path
---     that until now aborted outright.
+--   * PROFIT IS DERIVED, not independently rounded. The owner settled the money
+--     semantics after review: once price and cost are rounded, total_profit is
+--     their exact difference. A caller's third value cannot contradict the two
+--     authoritative components or move the commission basis by one cent.
+--   * NULL handling is fail-closed without inventing zero. If either component is
+--     NULL, there is no complete identity to derive; a non-NULL total_profit is
+--     rounded as the least-surprising compatibility behavior, and NULL remains
+--     NULL. A future schema change that wants NULL to mean zero must make that
+--     business decision explicitly rather than smuggling it into this trigger.
 --   * total_margin_pct is a percentage, not money, and is excluded — matching the
 --     existing exclusion of order_items.net_margin. Note this means a header
 --     written by the blend-ticket path keeps a margin percentage computed from
 --     the pre-rounding numbers; it is a derived display figure, and correcting it
---     belongs with the derive-profit decision above.
+--     remains a separate display-accuracy change.
 --
 -- NO-OP ON EXISTING DATA. This migration rewrites nothing. It installs a trigger
 -- and touches no committed row. For total_cost and total_profit it cannot ever
@@ -211,8 +214,8 @@ BEGIN
   -- trade: a replay that legitimately needs re-running is unaffected, and a
   -- re-run that would destroy newer work stops instead.
   IF v_src LIKE '%ELSIF TG_TABLE_NAME = ''orders'' THEN%' THEN
-    IF v_md5 <> 'e61ee67a52e23defb6deeb6629247d6d' THEN
-      RAISE EXCEPTION 'PRECOND: _round_money_to_whole_cents already carries the orders branch, so this migration has run before — but the body is NOT the one this file installs (got md5 %, expected e61ee67a52e23defb6deeb6629247d6d). A later migration has edited this function. Re-running this file would REVERT that work. Stop and re-diff.', v_md5;
+    IF v_md5 <> '71a66b7a69ab6984efa17ec79bc9e4a5' THEN
+      RAISE EXCEPTION 'PRECOND: _round_money_to_whole_cents already carries the orders branch, so this migration has run before — but the body is NOT the one this file installs (got md5 %, expected 71a66b7a69ab6984efa17ec79bc9e4a5). A later migration has edited this function. Re-running this file would REVERT that work. Stop and re-diff.', v_md5;
     END IF;
     RAISE NOTICE 'PRECOND: _round_money_to_whole_cents already carries the orders branch and matches the post-apply body pin — this migration has run before; the CREATE OR REPLACE below is a no-op re-assertion';
   ELSIF v_md5 <> '17955b2eace3c566b23f506118770f9b' THEN
@@ -310,18 +313,24 @@ BEGIN
       NEW.commission_amount := ROUND(NEW.commission_amount, 2);
     END IF;
   ELSIF TG_TABLE_NAME = 'orders' THEN
-    -- NEW 2026-08-11 (Wave A). All three header money columns. total_cost and
-    -- total_profit carry whole-cent CHECKs and are what this migration exists to
-    -- keep satisfiable; total_price carries none, and is included so the header
-    -- cannot end up with a rounded cost and profit beside a raw price. See the
-    -- SCOPE note for the residual one-cent identity gap this does NOT close.
+    -- NEW 2026-08-11 (Wave A). Round the two authoritative components first,
+    -- then derive profit from them. This mirrors the already-live canonical
+    -- order-item rule in 20260809230500_single_canonical_line_profit.sql and
+    -- prevents independent rounding from creating a one-cent contradiction in
+    -- the commission basis.
     IF NEW.total_price IS NOT NULL THEN
       NEW.total_price := ROUND(NEW.total_price, 2);
     END IF;
     IF NEW.total_cost IS NOT NULL THEN
       NEW.total_cost := ROUND(NEW.total_cost, 2);
     END IF;
-    IF NEW.total_profit IS NOT NULL THEN
+
+    -- Fail closed on incomplete inputs: a NULL component gives us nothing sound
+    -- to subtract. Never invent zero. Preserve a supplied/existing profit only
+    -- by rounding it; if it is NULL too, leave it NULL.
+    IF NEW.total_price IS NOT NULL AND NEW.total_cost IS NOT NULL THEN
+      NEW.total_profit := ROUND(NEW.total_price, 2) - ROUND(NEW.total_cost, 2);
+    ELSIF NEW.total_profit IS NOT NULL THEN
       NEW.total_profit := ROUND(NEW.total_profit, 2);
     END IF;
   END IF;
@@ -334,10 +343,10 @@ COMMENT ON FUNCTION public._round_money_to_whole_cents() IS
   'order_items.total_price and commissions.commission_amount to whole cents '
   '(2dp, half-up), DERIVES order_items.profit as rounded line revenue minus '
   'rounded line cost so that the sum of a header''s lines equals the header '
-  'exactly, and rounds all three orders header money columns (total_price, '
-  'total_cost, total_profit) so a writer that stores a raw value cannot trip the '
-  'whole-cent CHECKs on the latter two or leave the header internally '
-  'inconsistent. net_margin and total_margin_pct are percentages and are '
+  'exactly, and rounds orders.total_price / orders.total_cost before DERIVING '
+  'orders.total_profit as their difference. If either component is NULL, a '
+  'non-NULL profit is rounded but never derived from an invented zero. '
+  'net_margin and total_margin_pct are percentages and are '
   'deliberately excluded. Added 2026-08-08; profit made derived 2026-08-09; '
   'orders branch added 2026-08-11.';
 
@@ -402,8 +411,8 @@ BEGIN
   IF v_src NOT LIKE '%NEW.total_cost := ROUND(NEW.total_cost, 2)%' THEN
     RAISE EXCEPTION 'POSTCOND: the new orders branch is missing';
   END IF;
-  IF v_src NOT LIKE '%NEW.total_profit := ROUND(NEW.total_profit, 2)%' THEN
-    RAISE EXCEPTION 'POSTCOND: the orders total_profit rounding is missing';
+  IF v_src NOT LIKE '%NEW.total_profit := ROUND(NEW.total_price, 2) - ROUND(NEW.total_cost, 2)%' THEN
+    RAISE EXCEPTION 'POSTCOND: the orders total_profit derivation is missing';
   END IF;
 
   -- Security shape. A trigger function must NOT be SECURITY DEFINER (it runs with
@@ -594,17 +603,9 @@ BEGIN
       IF v_stored_cost IS DISTINCT FROM 33.33 THEN
         RAISE EXCEPTION 'POSTCOND: total_cost 33.333 stored as % (expected 33.33)', v_stored_cost;
       END IF;
-      IF v_stored_profit IS DISTINCT FROM 66.67 THEN
-        RAISE EXCEPTION 'POSTCOND: total_profit 66.667 stored as % (expected 66.67)', v_stored_profit;
+      IF v_stored_profit IS DISTINCT FROM 66.68 THEN
+        RAISE EXCEPTION 'POSTCOND: total_profit was stored as % (expected derived 100.01 - 33.33 = 66.68)', v_stored_profit;
       END IF;
-
-      -- NOTE on the values above: 100.01 - 33.33 = 66.68, not the 66.67 asserted
-      -- for total_profit. That is correct and deliberate, not an arithmetic slip.
-      -- This trigger rounds each of the three columns independently; it does not
-      -- re-derive profit from the rounded pair. The SCOPE section at the top of
-      -- this file states that residual explicitly and explains why deriving
-      -- profit is a separate, evidence-gated decision. The probe is written to
-      -- exhibit the gap rather than hide it behind values that happen to agree.
 
       -- UPDATE leg. The production defect exists on both paths and INSERT alone
       -- does not prove UPDATE — a column-scoped trigger fires on UPDATE only when
@@ -628,8 +629,8 @@ BEGIN
       IF v_stored_cost IS DISTINCT FROM 44.44 THEN
         RAISE EXCEPTION 'POSTCOND: on UPDATE, total_cost 44.444 stored as % (expected 44.44)', v_stored_cost;
       END IF;
-      IF v_stored_profit IS DISTINCT FROM 55.56 THEN
-        RAISE EXCEPTION 'POSTCOND: on UPDATE, total_profit 55.555 stored as % (expected 55.56)', v_stored_profit;
+      IF v_stored_profit IS DISTINCT FROM 33.34 THEN
+        RAISE EXCEPTION 'POSTCOND: on UPDATE, total_profit was stored as % (expected derived 77.78 - 44.44 = 33.34)', v_stored_profit;
       END IF;
 
       -- Success path: raise a sentinel purely to undo the INSERT.
@@ -637,7 +638,7 @@ BEGIN
     EXCEPTION
       WHEN check_violation THEN
         -- orders carries several CHECKs — five at this migration's apply time,
-        -- seven once the sibling 20260811030000 adds its two finiteness checks.
+        -- seven once the sibling 20260812030000 adds its two finiteness checks.
         -- Reporting every 23514 as "the trigger did not fire" would be a confident
         -- wrong diagnosis on a money path, so the real constraint name and message
         -- are carried through instead of discarded.
@@ -651,7 +652,7 @@ BEGIN
         -- v_stored_* hold the UPDATE leg's values here, since the UPDATE ran last.
         -- The INSERT leg's values are not re-reported; if it had failed, one of the
         -- assertions above would have raised and this line would never be reached.
-        RAISE NOTICE 'POSTCOND: rounding probe passed on INSERT (100.005/33.333/66.667 -> 100.01/33.33/66.67) and on UPDATE (77.777/44.444/55.555 -> %/%/%); probe row rolled back',
+        RAISE NOTICE 'POSTCOND: rounding/derivation probe passed on INSERT (100.005/33.333/66.667 -> 100.01/33.33/66.68) and on UPDATE (77.777/44.444/55.555 -> %/%/%); probe row rolled back',
           v_stored_price, v_stored_cost, v_stored_profit;
     END;
   END IF;

@@ -1,4 +1,4 @@
--- 20260811050000_guard_job_commission_split_immutable.sql
+-- 20260812050000_guard_job_commission_split_immutable.sql
 -- STATUS: PARKED DRAFT - NOT APPLIED
 --
 -- Wave A fix #4 of the 2026-08-09 ordering-cycle review.
@@ -160,19 +160,26 @@
 -- at all, so an ordinary save never reaches this guard. The precondition asserts
 -- that too.
 --
--- NO LIVE MONEY MOVES. This migration adds two functions and a trigger. It writes
--- no business rows. The postcondition's behavioural probe runs inside a
--- subtransaction that is deliberately rolled back, and the rollback is then PROVEN
--- rather than assumed: every commission split on the table is hashed in id order
--- before and after the probe, and the two hashes must match.
+-- NO LIVE MONEY MOVES AT APPLY. This migration adds two functions and a trigger.
+-- Production can legitimately have no job-based commission rows yet, so the
+-- postcondition cannot borrow one to prove reconciliation. Its behavioural probe
+-- therefore inserts two synthetic pending, unbatched commission rows for its probe
+-- job, uses them to exercise both the paid-row refusal and a real reconciliation,
+-- and writes the correction's normal audit row and idempotency receipt. Every one
+-- of those writes lives inside one deliberately rolled-back subtransaction. The
+-- rollback is then PROVEN rather than assumed: every commission split is hashed in
+-- id order; every commission row for the probe job is hashed whole and counted
+-- before any seeding and after rollback; and the synthetic row ids must no longer
+-- exist. The before/after fingerprints and counts must match exactly.
 --
--- Stated plainly because it is the one thing that probe does beyond reading: to
--- prove the admin correction really is recorded, it calls the correction RPC once
--- as a real admin, which rewrites one split and inserts one `financial_audit_log`
--- row. Both are inside the rolled-back subtransaction, so neither survives. The
--- fingerprint covers the split; the audit row is undone by the same rollback. The
--- probe also forges `request.jwt.claims` locally to stand in for a signed-in
--- session — that GUC is transaction-local too, and is cleared before the block ends.
+-- Stated plainly because these writes are intentionally conspicuous: to prove the
+-- admin correction really is recorded and reconciled, the probe calls the RPC as a
+-- real admin, rewrites one split, rewrites and/or soft-deletes its safe pending
+-- commission rows, writes one `financial_audit_log` row, and binds an idempotency receipt.
+-- It then proves exact replay and changed-job rejection. All of that is inside the
+-- rolled-back subtransaction, so none survives. The probe also forges
+-- `request.jwt.claims` locally to stand in for a signed-in session — that GUC is
+-- transaction-local too, and is cleared before the block ends.
 
 SET statement_timeout = '60s';
 SET lock_timeout = '10s';
@@ -343,16 +350,23 @@ BEGIN
     RAISE EXCEPTION 'PRECOND: expected both commission_split writers to be SECURITY DEFINER owned by %, found % that are. Applying anyway would break invoicing.', v_owner, v_count;
   END IF;
 
-  -- The correction RPC borrows four things from the existing database rather than
+  -- The correction RPC borrows six things from the existing database rather than
   -- reimplementing them. Assert every one is present BEFORE the guard installs,
   -- because a guard that freezes the column while its correction path is broken is
   -- the exact outcome Mason rejected.
   SELECT count(*) INTO v_count
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public'
-     AND p.proname IN ('validate_commission_split_json', 'is_admin', 'check_idempotency', 'save_idempotency');
-  IF v_count <> 4 THEN
-    RAISE EXCEPTION 'PRECOND: the correction RPC depends on validate_commission_split_json, is_admin, check_idempotency and save_idempotency; found % of 4.', v_count;
+     AND p.proname IN (
+       'validate_commission_split_json',
+       'commission_split_with_recipient_ids',
+       '_derive_job_commission_rows',
+       'is_admin',
+       'check_idempotency_intent',
+       'save_idempotency'
+     );
+  IF v_count <> 6 THEN
+    RAISE EXCEPTION 'PRECOND: the correction RPC depends on validate_commission_split_json, commission_split_with_recipient_ids, _derive_job_commission_rows, is_admin, check_idempotency_intent and save_idempotency; found % of 6.', v_count;
   END IF;
 
   -- The audit row uses two values that live behind CHECK constraints. If either is
@@ -483,9 +497,19 @@ CREATE TRIGGER trg_guard_job_commission_split_immutable
 --                                       so both paths reject the same bad shapes.
 --   * p_idempotency_key               — CRX hard rule for mutating RPCs; a retried
 --                                       click replays the first result instead of
---                                       filing a second correction.
+--                                       filing a second correction. The receipt is
+--                                       bound to actor + job + normalized reason +
+--                                       canonical replacement split, matching the
+--                                       payout RPCs' established intent-binding
+--                                       pattern.
+--   * commission reconciliation       — every active row for the job is locked;
+--                                       paid, cancelled, or payout-linked rows
+--                                       block the whole correction. Otherwise the
+--                                       pending rows are rebuilt in place from the
+--                                       same shared derivation used by fresh mints.
 --   * financial_audit_log             — old and new value, actor, reason, in the
---                                       same transaction as the write.
+--                                       same transaction as the write, including
+--                                       reconciliation row counts.
 --
 -- SECURITY DEFINER is required, not preferred: `authenticated` holds no INSERT on
 -- `financial_audit_log` (only `postgres` does), so a caller-rights function could
@@ -504,13 +528,23 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $function$
 DECLARE
-  v_actor      uuid;
-  v_prior      jsonb;
-  v_job        public.jobs%ROWTYPE;
-  v_old_split  jsonb;
-  v_new_stored jsonb;
-  v_audit_id   uuid;
-  v_result     jsonb;
+  v_actor                       uuid;
+  v_replay                      jsonb;
+  v_fingerprint                 text;
+  v_job                         public.jobs%ROWTYPE;
+  v_old_split                   jsonb;
+  v_requested_split             jsonb;
+  v_new_stored                  jsonb;
+  v_audit_id                    uuid;
+  v_result                      jsonb;
+  v_blocked_total               integer := 0;
+  v_blocked_paid                integer := 0;
+  v_blocked_cancelled           integer := 0;
+  v_blocked_payout              integer := 0;
+  v_commission_updated          integer := 0;
+  v_commission_inserted         integer := 0;
+  v_commission_soft_deleted     integer := 0;
+  v_commission_reconciled       integer := 0;
 BEGIN
   -- WAVE-A-JOBSPLIT-CORRECTION-2026-08-11 (asserted by the postcondition block of
   -- this migration — do not rename it without updating that assertion).
@@ -539,26 +573,61 @@ BEGIN
       USING ERRCODE = 'P0001';
   END IF;
 
+  -- Canonicalize the replacement before validating, comparing, fingerprinting,
+  -- or writing it. This is the same id-first enrichment the jobs trigger would
+  -- perform, so semantically identical payloads bind to the same stored intent.
+  v_requested_split := public.commission_split_with_recipient_ids(p_new_split);
   -- Raises COMMISSION_SPLIT_INVALID on a bad shape, duplicate recipient,
   -- out-of-range percentage, or a total that is not 100.
-  PERFORM public.validate_commission_split_json(p_new_split);
+  PERFORM public.validate_commission_split_json(v_requested_split);
 
-  v_prior := public.check_idempotency(p_idempotency_key, 'correct_job_commission_split');
-  IF v_prior IS NOT NULL THEN
-    RETURN v_prior;
-  END IF;
-
+  -- Read and lock the mutation target before checking a receipt. The applied
+  -- payout intent-binding migration follows the same ordering principle: fully
+  -- resolve the request payload first, then fingerprint and check it. A key can
+  -- therefore never report success for a job that this call did not even read.
   SELECT * INTO v_job FROM public.jobs WHERE id = p_job_id FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'JOB_NOT_FOUND: %', p_job_id USING ERRCODE = 'P0001';
   END IF;
   v_old_split := v_job.commission_split;
 
-  IF v_old_split IS NOT DISTINCT FROM p_new_split THEN
+  -- Intent = authenticated actor + target job + canonical replacement split +
+  -- normalized human reason. p_performed_by is deliberately omitted because the
+  -- guard above constrains it to {NULL, v_actor}, so it carries no additional
+  -- mutation information. jsonb::text is canonical key ordering in PostgreSQL.
+  v_fingerprint := encode(
+    extensions.digest(
+      convert_to(jsonb_build_object(
+        'actor_id', v_actor,
+        'job_id', p_job_id,
+        'new_split', v_requested_split,
+        'reason', btrim(p_reason)
+      )::text, 'UTF8'),
+      'sha256'
+    ),
+    'hex'
+  );
+
+  v_replay := public.check_idempotency_intent(
+    p_idempotency_key,
+    'correct_job_commission_split',
+    v_actor,
+    v_fingerprint
+  );
+  IF v_replay IS NOT NULL THEN
+    IF v_replay -> 'result' IS NULL
+       OR jsonb_typeof(v_replay -> 'result') = 'null' THEN
+      RAISE EXCEPTION 'IDEMPOTENCY_RESULT_INVALID';
+    END IF;
+    RETURN v_replay -> 'result';
+  END IF;
+
+  IF v_old_split IS NOT DISTINCT FROM v_requested_split THEN
     v_result := jsonb_build_object(
       'job_id', p_job_id,
       'changed', false,
       'commission_split', v_old_split,
+      'commission_rows_reconciled', 0,
       'message', 'Commission split already matches the requested value; nothing was changed.'
     );
     -- Guarded because p_idempotency_key defaults to NULL and save_idempotency
@@ -566,8 +635,64 @@ BEGIN
     -- which returns NULL. Same shape as complete_team_note.
     IF p_idempotency_key IS NOT NULL THEN
       PERFORM public.save_idempotency(p_idempotency_key, 'correct_job_commission_split', v_result);
+      UPDATE public.idempotency_keys
+         SET request_fingerprint = v_fingerprint,
+             request_actor_id = v_actor
+       WHERE idempotency_key = p_idempotency_key
+         AND operation = 'correct_job_commission_split';
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'IDEMPOTENCY_RECEIPT_MISSING';
+      END IF;
     END IF;
     RETURN v_result;
+  END IF;
+
+  -- Lock every active commission row before classifying it. This serializes the
+  -- correction against payout creation/status changes: no row can cross from
+  -- safe to paid/batched between this check and the rewrite.
+  PERFORM 1
+    FROM public.commissions c
+   WHERE c.job_id = p_job_id
+     AND c.deleted_at IS NULL
+   ORDER BY c.id
+   FOR UPDATE OF c;
+
+  SELECT
+    count(*) FILTER (
+      WHERE c.status IS DISTINCT FROM 'pending'
+         OR EXISTS (
+              SELECT 1
+                FROM public.commission_payment_items cpi
+               WHERE cpi.commission_id = c.id
+            )
+    ),
+    count(*) FILTER (WHERE c.status = 'paid'),
+    count(*) FILTER (WHERE c.status = 'cancelled'),
+    count(*) FILTER (
+      WHERE EXISTS (
+        SELECT 1
+          FROM public.commission_payment_items cpi
+         WHERE cpi.commission_id = c.id
+      )
+    )
+  INTO
+    v_blocked_total,
+    v_blocked_paid,
+    v_blocked_cancelled,
+    v_blocked_payout
+  FROM public.commissions c
+  WHERE c.job_id = p_job_id
+    AND c.deleted_at IS NULL;
+
+  IF v_blocked_total > 0 THEN
+    RAISE EXCEPTION
+      'COMMISSION_CORRECTION_BLOCKED: % active commission row(s) block job % correction [already paid=%, cancelled=%, attached to payout batch=%]. No split or commission row was changed.',
+      v_blocked_total,
+      p_job_id,
+      v_blocked_paid,
+      v_blocked_cancelled,
+      v_blocked_payout
+      USING ERRCODE = 'P0001';
   END IF;
 
   -- Transaction-local, and bound to THIS job id. The guard trigger accepts the
@@ -576,13 +701,166 @@ BEGIN
   PERFORM set_config('crx.job_split_correction_authorized', p_job_id::text, true);
 
   UPDATE public.jobs
-     SET commission_split = p_new_split,
+     SET commission_split = v_requested_split,
          updated_at       = now(),
          updated_by       = v_actor
    WHERE id = p_job_id
   RETURNING commission_split INTO v_new_stored;
 
   PERFORM set_config('crx.job_split_correction_authorized', '', true);
+
+  -- Reconcile each invoice-generation independently. Recipient resolution and
+  -- amount arithmetic come exclusively from _derive_job_commission_rows(), the
+  -- same function used by _insert_commissions_for_job in the immediately prior
+  -- Wave A migration. Existing safe rows are updated in deterministic order;
+  -- an expanded split inserts only the extra rows; a smaller split soft-deletes
+  -- only the surplus pending, unbatched rows. No paid/cancelled/payout-linked row
+  -- can reach this point because the all-or-nothing gate above already refused.
+  WITH existing_rows AS (
+    SELECT
+      c.id,
+      c.invoice_id,
+      c.customer_id,
+      c.order_profit,
+      c.order_date,
+      row_number() OVER (
+        PARTITION BY c.invoice_id, c.customer_id, c.order_profit, c.order_date
+        ORDER BY c.created_at, c.id
+      ) AS split_ordinal
+    FROM public.commissions c
+    WHERE c.job_id = p_job_id
+      AND c.deleted_at IS NULL
+  ),
+  generations AS (
+    SELECT DISTINCT invoice_id, customer_id, order_profit, order_date
+    FROM existing_rows
+  ),
+  desired_rows AS (
+    SELECT
+      g.invoice_id,
+      g.customer_id,
+      g.order_profit,
+      g.order_date,
+      d.split_ordinal,
+      d.recipient,
+      d.recipient_user_id,
+      d.split_percentage,
+      d.commission_amount
+    FROM generations g
+    CROSS JOIN LATERAL public._derive_job_commission_rows(
+      g.order_profit,
+      v_new_stored
+    ) d
+  )
+  UPDATE public.commissions c
+     SET recipient = d.recipient,
+         recipient_user_id = d.recipient_user_id,
+         split_percentage = d.split_percentage,
+         commission_amount = d.commission_amount
+    FROM existing_rows e
+    JOIN desired_rows d
+      ON d.invoice_id IS NOT DISTINCT FROM e.invoice_id
+     AND d.customer_id IS NOT DISTINCT FROM e.customer_id
+     AND d.order_profit IS NOT DISTINCT FROM e.order_profit
+     AND d.order_date IS NOT DISTINCT FROM e.order_date
+     AND d.split_ordinal = e.split_ordinal
+   WHERE c.id = e.id;
+  GET DIAGNOSTICS v_commission_updated = ROW_COUNT;
+
+  WITH existing_counts AS (
+    SELECT
+      c.invoice_id,
+      c.customer_id,
+      c.order_profit,
+      c.order_date,
+      count(*)::bigint AS row_count
+    FROM public.commissions c
+    WHERE c.job_id = p_job_id
+      AND c.deleted_at IS NULL
+    GROUP BY c.invoice_id, c.customer_id, c.order_profit, c.order_date
+  ),
+  desired_rows AS (
+    SELECT
+      g.invoice_id,
+      g.customer_id,
+      g.order_profit,
+      g.order_date,
+      d.split_ordinal,
+      d.recipient,
+      d.recipient_user_id,
+      d.split_percentage,
+      d.commission_amount
+    FROM existing_counts g
+    CROSS JOIN LATERAL public._derive_job_commission_rows(
+      g.order_profit,
+      v_new_stored
+    ) d
+    WHERE d.split_ordinal > g.row_count
+  )
+  INSERT INTO public.commissions (
+    job_id,
+    invoice_id,
+    customer_id,
+    recipient,
+    recipient_user_id,
+    split_percentage,
+    commission_amount,
+    order_profit,
+    order_date,
+    status
+  )
+  SELECT
+    p_job_id,
+    d.invoice_id,
+    d.customer_id,
+    d.recipient,
+    d.recipient_user_id,
+    d.split_percentage,
+    d.commission_amount,
+    d.order_profit,
+    d.order_date,
+    'pending'
+  FROM desired_rows d
+  ORDER BY d.invoice_id NULLS FIRST, d.customer_id, d.order_profit, d.order_date, d.split_ordinal;
+  GET DIAGNOSTICS v_commission_inserted = ROW_COUNT;
+
+  WITH ranked_rows AS (
+    SELECT
+      c.id,
+      c.order_profit,
+      row_number() OVER (
+        PARTITION BY c.invoice_id, c.customer_id, c.order_profit, c.order_date
+        ORDER BY c.created_at, c.id
+      ) AS split_ordinal
+    FROM public.commissions c
+    WHERE c.job_id = p_job_id
+      AND c.deleted_at IS NULL
+  ),
+  desired_counts AS (
+    SELECT
+      r.order_profit,
+      count(d.split_ordinal)::bigint AS row_count
+    FROM (
+      SELECT DISTINCT order_profit
+      FROM ranked_rows
+    ) r
+    LEFT JOIN LATERAL public._derive_job_commission_rows(
+      r.order_profit,
+      v_new_stored
+    ) d ON true
+    GROUP BY r.order_profit
+  )
+  UPDATE public.commissions c
+     SET deleted_at = now()
+    FROM ranked_rows r
+    JOIN desired_counts d
+      ON d.order_profit IS NOT DISTINCT FROM r.order_profit
+   WHERE c.id = r.id
+     AND r.split_ordinal > d.row_count;
+  GET DIAGNOSTICS v_commission_soft_deleted = ROW_COUNT;
+
+  v_commission_reconciled :=
+    v_commission_updated + v_commission_inserted + v_commission_soft_deleted;
 
   -- v_new_stored, not p_new_split: trg_stamp_commission_split_recipient_ids runs
   -- after the guard and enriches recipient ids, so the stored value is what was
@@ -593,8 +871,21 @@ BEGIN
   ) VALUES (
     'split_modified', 'split', p_job_id, v_actor, 'admin',
     jsonb_build_object('commission_split', v_old_split),
-    jsonb_build_object('commission_split', v_new_stored),
-    'Job commission split corrected by admin. Reason: ' || btrim(p_reason)
+    jsonb_build_object(
+      'commission_split', v_new_stored,
+      'commission_rows_rewritten', v_commission_updated,
+      'commission_rows_inserted', v_commission_inserted,
+      'commission_rows_soft_deleted', v_commission_soft_deleted,
+      'commission_rows_reconciled', v_commission_reconciled
+    ),
+    format(
+      'Job commission split corrected by admin; %s commission row(s) reconciled (%s rewritten, %s inserted, %s soft-deleted). Reason: %s',
+      v_commission_reconciled,
+      v_commission_updated,
+      v_commission_inserted,
+      v_commission_soft_deleted,
+      btrim(p_reason)
+    )
   )
   RETURNING id INTO v_audit_id;
 
@@ -602,10 +893,22 @@ BEGIN
     'job_id', p_job_id,
     'changed', true,
     'commission_split', v_new_stored,
-    'audit_log_id', v_audit_id
+    'audit_log_id', v_audit_id,
+    'commission_rows_rewritten', v_commission_updated,
+    'commission_rows_inserted', v_commission_inserted,
+    'commission_rows_soft_deleted', v_commission_soft_deleted,
+    'commission_rows_reconciled', v_commission_reconciled
   );
   IF p_idempotency_key IS NOT NULL THEN
     PERFORM public.save_idempotency(p_idempotency_key, 'correct_job_commission_split', v_result);
+    UPDATE public.idempotency_keys
+       SET request_fingerprint = v_fingerprint,
+           request_actor_id = v_actor
+     WHERE idempotency_key = p_idempotency_key
+       AND operation = 'correct_job_commission_split';
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'IDEMPOTENCY_RECEIPT_MISSING';
+    END IF;
   END IF;
   RETURN v_result;
 END;
@@ -632,11 +935,27 @@ DECLARE
   v_blocked boolean := false;
   v_fp_before text;
   v_fp_after text;
+  v_commission_fp_before text;
+  v_commission_fp_after text;
   v_applier text;
   v_admin_id uuid;
+  v_admin_name text;
+  v_non_admin_id uuid;
+  v_original_split jsonb;
+  v_probe_split jsonb;
   v_audit_before int;
   v_audit_after int;
+  v_commission_before int;
+  v_commission_after int;
+  v_commission_rows_before int;
+  v_commission_rows_after int;
+  v_expected_active_after int;
+  v_expected_soft_deleted int;
+  v_seeded_commission_count int;
+  v_seeded_commission_ids uuid[];
+  v_idempotency_key text;
   v_rpc_result jsonb;
+  v_replay_result jsonb;
   v_leaked_guc text;
 BEGIN
   -- --------------------------------------------------------------------------
@@ -772,7 +1091,7 @@ BEGIN
     RAISE EXCEPTION 'POSTCOND: the correction RPC must be SECURITY DEFINER — authenticated holds no INSERT on financial_audit_log, so a caller-rights function could not write the audit row';
   END IF;
 
-  -- The four behaviours the RPC is trusted for, asserted against its own body so a
+  -- The behaviours the RPC is trusted for, asserted against its own body so a
   -- future edit cannot quietly drop one and still pass the shape checks.
   IF v_src !~ 'is_admin\s*\(' THEN
     RAISE EXCEPTION 'POSTCOND: the correction RPC no longer checks is_admin()';
@@ -782,6 +1101,16 @@ BEGIN
   END IF;
   IF v_src !~ 'check_idempotency' OR v_src !~ 'save_idempotency' THEN
     RAISE EXCEPTION 'POSTCOND: the correction RPC declares p_idempotency_key but does not both check and save it';
+  END IF;
+  IF v_src !~ 'check_idempotency_intent'
+     OR v_src !~ 'request_fingerprint'
+     OR v_src !~ 'request_actor_id' THEN
+    RAISE EXCEPTION 'POSTCOND: the correction RPC no longer binds its idempotency receipt to actor and mutation fingerprint';
+  END IF;
+  IF v_src !~ '_derive_job_commission_rows'
+     OR v_src !~ 'commission_payment_items'
+     OR v_src !~ 'deleted_at IS NULL' THEN
+    RAISE EXCEPTION 'POSTCOND: the correction RPC lost its shared commission derivation, payout attachment gate, or soft-delete scope';
   END IF;
   IF v_src !~ 'financial_audit_log' THEN
     RAISE EXCEPTION 'POSTCOND: the correction RPC no longer writes a financial_audit_log row';
@@ -848,20 +1177,128 @@ BEGIN
     INTO v_fp_before
     FROM public.jobs;
 
-  SELECT id INTO v_job_id FROM public.jobs WHERE commission_split IS NOT NULL ORDER BY id LIMIT 1;
+  -- Pick any already-snapshotted job. The probe seeds the commission rows it needs
+  -- inside the rolled-back scope below, so selection does not depend on production
+  -- having minted its first job-based commission yet.
+  SELECT j.id, j.commission_split INTO v_job_id, v_original_split
+    FROM public.jobs j
+   WHERE j.commission_split IS NOT NULL
+   ORDER BY j.id
+   LIMIT 1;
   SELECT id INTO v_null_job_id FROM public.jobs WHERE commission_split IS NULL ORDER BY id LIMIT 1;
 
   -- Both row shapes must exist or the proof is incomplete. A money guard does not
   -- get installed on the strength of a skipped test, so this is a hard failure
   -- rather than a notice.
   IF v_job_id IS NULL THEN
-    RAISE EXCEPTION 'POSTCOND PROBE: no job row carries a commission split, so the refuse path cannot be exercised here. Do not install this guard without watching it refuse a write.';
+    RAISE EXCEPTION 'POSTCOND PROBE: no job has a set commission split, so the immutable-rewrite and correction paths cannot be exercised. Do not install this money guard on a skipped test.';
   END IF;
   IF v_null_job_id IS NULL THEN
     RAISE EXCEPTION 'POSTCOND PROBE: every job row already carries a commission split, so the invoicing fill path cannot be exercised here. Do not install this guard without watching the invoicing path still succeed.';
   END IF;
 
+  SELECT md5(coalesce(string_agg(c.id::text || '=' || md5(to_jsonb(c)::text), '|' ORDER BY c.id), 'EMPTY'))
+    INTO v_commission_fp_before
+    FROM public.commissions c
+   WHERE c.job_id = v_job_id;
+
+  SELECT count(*) INTO v_commission_rows_before
+    FROM public.commissions c
+   WHERE c.job_id = v_job_id;
+
+  -- The successful correction needs a replacement that is guaranteed to differ
+  -- from the stored value. Empty an already-populated split; if the selected job
+  -- already carries the empty sentinel, replace it with the active admin at 100%.
+  -- Both shapes derive at most one desired row per generation, so the two seeded
+  -- rows below exercise a deterministic rewrite/soft-delete reconciliation.
+  SELECT p.id, p.full_name INTO v_admin_id, v_admin_name
+    FROM public.profiles p
+   WHERE p.role = 'admin'
+     AND p.is_active = true
+     AND NULLIF(btrim(p.full_name), '') IS NOT NULL
+   ORDER BY p.id
+   LIMIT 1;
+  IF v_admin_id IS NULL THEN
+    RAISE EXCEPTION 'POSTCOND PROBE: no active named admin profile exists, so the correction path cannot be exercised. Do not install this guard without watching an admin correction succeed.';
+  END IF;
+
+  IF v_original_split IS DISTINCT FROM '{"splits":[]}'::jsonb THEN
+    v_probe_split := '{"splits":[]}'::jsonb;
+  ELSE
+    v_probe_split := jsonb_build_object(
+      'splits',
+      jsonb_build_array(jsonb_build_object(
+        'recipient', v_admin_name,
+        'recipient_user_id', v_admin_id,
+        'percentage', 100
+      ))
+    );
+  END IF;
+
+  v_idempotency_key := 'probe-job-split-' || gen_random_uuid()::text;
+
   BEGIN
+    -- Seed exactly two pending, unbatched rows in one synthetic generation. These
+    -- rows are deliberately inserted only after the whole-row fingerprint/count
+    -- above. Leg (g1) flips one exact seeded id to paid; its nested rollback
+    -- restores pending. Leg (g2) must then reconcile both rows for real.
+    WITH inserted AS (
+      INSERT INTO public.commissions (
+        job_id,
+        customer_id,
+        recipient,
+        recipient_user_id,
+        split_percentage,
+        commission_amount,
+        order_profit,
+        order_date,
+        status
+      )
+      SELECT
+        j.id,
+        j.customer_id,
+        v_admin_name,
+        v_admin_id,
+        50,
+        50.00,
+        100.00,
+        CURRENT_DATE,
+        'pending'
+      FROM public.jobs j
+      CROSS JOIN generate_series(1, 2)
+      WHERE j.id = v_job_id
+      RETURNING id
+    )
+    SELECT array_agg(id ORDER BY id), count(*)::integer
+      INTO v_seeded_commission_ids, v_seeded_commission_count
+      FROM inserted;
+
+    IF v_seeded_commission_count <> 2
+       OR cardinality(v_seeded_commission_ids) <> 2 THEN
+      RAISE EXCEPTION 'POSTCOND PROBE: synthetic commission seeding created % row(s), expected exactly 2', v_seeded_commission_count;
+    END IF;
+
+    SELECT count(*) INTO v_commission_before
+      FROM public.commissions c
+     WHERE c.job_id = v_job_id
+       AND c.deleted_at IS NULL;
+
+    -- There is one existing generation at minimum (the seed). The chosen target
+    -- produces zero or one desired row per generation, never an expansion, so every
+    -- active row must be either rewritten or soft-deleted and no insert is expected.
+    SELECT count(*) INTO v_expected_active_after
+      FROM (
+        SELECT DISTINCT c.invoice_id, c.customer_id, c.order_profit, c.order_date
+          FROM public.commissions c
+         WHERE c.job_id = v_job_id
+           AND c.deleted_at IS NULL
+      ) g
+      CROSS JOIN LATERAL public._derive_job_commission_rows(
+        g.order_profit,
+        v_probe_split
+      ) d;
+    v_expected_soft_deleted := v_commission_before - v_expected_active_after;
+
     -- (a) a rewrite of an already-set split must be refused, even for the owner
     BEGIN
       UPDATE public.jobs
@@ -970,17 +1407,17 @@ BEGIN
     -- request.jwt.claims, so forging that GUC locally is exactly what an ordinary
     -- signed-in session presents to the RPC.
     -- ------------------------------------------------------------------------
-    SELECT id INTO v_admin_id
+    SELECT id INTO v_non_admin_id
       FROM public.profiles
      WHERE role = 'sales_rep' AND is_active = true
      ORDER BY id LIMIT 1;
-    IF v_admin_id IS NULL THEN
-      v_admin_id := gen_random_uuid();
+    IF v_non_admin_id IS NULL THEN
+      v_non_admin_id := gen_random_uuid();
       RAISE NOTICE 'POSTCOND PROBE: no active sales_rep profile exists, so the non-admin refusal is proven with an unknown user id instead. Same code path (is_admin() false), one step less faithful.';
     END IF;
     v_blocked := false;
     BEGIN
-      EXECUTE format('SET LOCAL request.jwt.claims = %L', json_build_object('sub', v_admin_id)::text);
+      EXECUTE format('SET LOCAL request.jwt.claims = %L', json_build_object('sub', v_non_admin_id)::text);
       PERFORM public.correct_job_commission_split(
         v_job_id, '{"splits":[]}'::jsonb, 'probe: non-admin must be refused'
       );
@@ -1002,27 +1439,135 @@ BEGIN
     -- is written in the same transaction, and the authorization GUC is cleared
     -- before the function returns.
     -- ------------------------------------------------------------------------
-    SELECT id INTO v_admin_id
-      FROM public.profiles
-     WHERE role = 'admin' AND is_active = true
-     ORDER BY id LIMIT 1;
-    IF v_admin_id IS NULL THEN
-      RAISE EXCEPTION 'POSTCOND PROBE: no active admin profile exists, so the correction path cannot be exercised. Do not install this guard without watching an admin correction succeed.';
+    -- (g1) A paid row blocks the ENTIRE correction. Flip an exact synthetic row,
+    -- not whichever production row happens to sort first. The status flip and the
+    -- refused call share a nested subtransaction, so catching the expected error
+    -- restores the seed row to pending before the success leg below.
+    v_blocked := false;
+    BEGIN
+      UPDATE public.commissions
+         SET status = 'paid'
+       WHERE id = v_seeded_commission_ids[1];
+      GET DIAGNOSTICS v_count = ROW_COUNT;
+      IF v_count <> 1 THEN
+        RAISE EXCEPTION 'POSTCOND PROBE: paid-row setup touched % synthetic commission rows rather than 1', v_count;
+      END IF;
+
+      EXECUTE format('SET LOCAL request.jwt.claims = %L', json_build_object('sub', v_admin_id)::text);
+      PERFORM public.correct_job_commission_split(
+        v_job_id,
+        v_probe_split,
+        'probe: paid commission must block the whole correction',
+        v_admin_id,
+        v_idempotency_key || '-blocked'
+      );
+      RAISE EXCEPTION 'POSTCOND PROBE: the correction accepted an already-paid commission row';
+    EXCEPTION
+      WHEN OTHERS THEN
+        IF position('COMMISSION_CORRECTION_BLOCKED:' in SQLERRM) <> 1
+           OR position('already paid=1' in SQLERRM) = 0
+           OR position('cancelled=0' in SQLERRM) = 0
+           OR position('attached to payout batch=0' in SQLERRM) = 0 THEN
+          RAISE;
+        END IF;
+        v_blocked := true;
+    END;
+    IF NOT v_blocked THEN
+      RAISE EXCEPTION 'POSTCOND PROBE: the paid-commission all-or-nothing gate did not run';
     END IF;
 
+    SELECT count(*) INTO v_count
+      FROM public.commissions c
+     WHERE c.id = ANY(v_seeded_commission_ids)
+       AND c.status = 'pending'
+       AND c.deleted_at IS NULL
+       AND NOT EXISTS (
+         SELECT 1
+           FROM public.commission_payment_items cpi
+          WHERE cpi.commission_id = c.id
+       );
+    IF v_count <> 2 THEN
+      RAISE EXCEPTION 'POSTCOND PROBE: the paid-row refusal did not restore both synthetic rows to pending and unbatched [found %]', v_count;
+    END IF;
+
+    -- (g2) AN ADMIN CORRECTION SUCCEEDS, RECONCILES EVERY SAFE ROW, LEAVES ONE
+    -- audit record, and writes an actor+intent-bound receipt. The replacement is
+    -- guaranteed to differ from the stored split and derives at most one row per
+    -- generation, so every active row must be rewritten or soft-deleted.
     SELECT count(*) INTO v_audit_before
       FROM public.financial_audit_log
      WHERE entity_id = v_job_id AND operation_type = 'split_modified';
 
     EXECUTE format('SET LOCAL request.jwt.claims = %L', json_build_object('sub', v_admin_id)::text);
     v_rpc_result := public.correct_job_commission_split(
-      v_job_id, '{"splits":[]}'::jsonb, 'probe: admin correction must succeed and be recorded'
+      v_job_id,
+      v_probe_split,
+      'probe: admin correction must succeed and be recorded',
+      v_admin_id,
+      v_idempotency_key
     );
-    PERFORM set_config('request.jwt.claims', '', true);
 
     IF coalesce((v_rpc_result ->> 'changed')::boolean, false) IS NOT TRUE THEN
       RAISE EXCEPTION 'POSTCOND PROBE: the admin correction reported no change [%]', v_rpc_result;
     END IF;
+    IF (v_rpc_result ->> 'commission_rows_reconciled')::integer <> v_commission_before
+       OR (v_rpc_result ->> 'commission_rows_rewritten')::integer <> v_expected_active_after
+       OR (v_rpc_result ->> 'commission_rows_inserted')::integer <> 0
+       OR (v_rpc_result ->> 'commission_rows_soft_deleted')::integer <> v_expected_soft_deleted THEN
+      RAISE EXCEPTION 'POSTCOND PROBE: reconciliation counts were total=% rewritten=% inserted=% soft-deleted=%; expected total=% rewritten=% inserted=0 soft-deleted=%',
+        v_rpc_result ->> 'commission_rows_reconciled',
+        v_rpc_result ->> 'commission_rows_rewritten',
+        v_rpc_result ->> 'commission_rows_inserted',
+        v_rpc_result ->> 'commission_rows_soft_deleted',
+        v_commission_before,
+        v_expected_active_after,
+        v_expected_soft_deleted;
+    END IF;
+
+    SELECT count(*) INTO v_commission_after
+      FROM public.commissions c
+     WHERE c.job_id = v_job_id
+       AND c.deleted_at IS NULL;
+    IF v_commission_after <> v_expected_active_after THEN
+      RAISE EXCEPTION 'POSTCOND PROBE: correction left % active commission row(s), expected %', v_commission_after, v_expected_active_after;
+    END IF;
+
+    -- Exact same actor+job+split+reason must replay the original receipt without
+    -- another audit or rewrite.
+    v_replay_result := public.correct_job_commission_split(
+      v_job_id,
+      v_probe_split,
+      'probe: admin correction must succeed and be recorded',
+      v_admin_id,
+      v_idempotency_key
+    );
+    IF v_replay_result IS DISTINCT FROM v_rpc_result THEN
+      RAISE EXCEPTION 'POSTCOND PROBE: exact-intent replay returned a different receipt [% vs %]', v_replay_result, v_rpc_result;
+    END IF;
+
+    -- Same key, different job = a different mutation intent and must fail closed.
+    v_blocked := false;
+    BEGIN
+      PERFORM public.correct_job_commission_split(
+        v_null_job_id,
+        v_probe_split,
+        'probe: admin correction must succeed and be recorded',
+        v_admin_id,
+        v_idempotency_key
+      );
+      RAISE EXCEPTION 'POSTCOND PROBE: one idempotency key reported success for a different job';
+    EXCEPTION
+      WHEN OTHERS THEN
+        IF SQLERRM <> 'IDEMPOTENCY_INTENT_MISMATCH' THEN
+          RAISE;
+        END IF;
+        v_blocked := true;
+    END;
+    IF NOT v_blocked THEN
+      RAISE EXCEPTION 'POSTCOND PROBE: changed-intent idempotency refusal did not run';
+    END IF;
+
+    PERFORM set_config('request.jwt.claims', '', true);
 
     SELECT count(*) INTO v_audit_after
       FROM public.financial_audit_log
@@ -1051,6 +1596,27 @@ BEGIN
     FROM public.jobs;
   IF v_fp_after IS DISTINCT FROM v_fp_before THEN
     RAISE EXCEPTION 'POSTCOND: the probe changed live commission splits — the rollback did not hold [% -> %]', v_fp_before, v_fp_after;
+  END IF;
+
+  SELECT md5(coalesce(string_agg(c.id::text || '=' || md5(to_jsonb(c)::text), '|' ORDER BY c.id), 'EMPTY'))
+    INTO v_commission_fp_after
+    FROM public.commissions c
+   WHERE c.job_id = v_job_id;
+  SELECT count(*) INTO v_commission_rows_after
+    FROM public.commissions c
+   WHERE c.job_id = v_job_id;
+
+  IF v_commission_rows_after IS DISTINCT FROM v_commission_rows_before THEN
+    RAISE EXCEPTION 'POSTCOND: the probe changed the commission-row count for its job — the rollback did not hold [% -> %]', v_commission_rows_before, v_commission_rows_after;
+  END IF;
+  IF v_commission_fp_after IS DISTINCT FROM v_commission_fp_before THEN
+    RAISE EXCEPTION 'POSTCOND: the probe changed commission rows for its job — the rollback did not hold [% -> %]', v_commission_fp_before, v_commission_fp_after;
+  END IF;
+  SELECT count(*) INTO v_count
+    FROM public.commissions c
+   WHERE c.id = ANY(v_seeded_commission_ids);
+  IF v_count <> 0 THEN
+    RAISE EXCEPTION 'POSTCOND: % synthetic commission row(s) survived the probe rollback', v_count;
   END IF;
 END;
 $postcond$;

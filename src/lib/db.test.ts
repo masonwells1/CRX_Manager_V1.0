@@ -141,7 +141,7 @@ describe('rpcAuthErrorMessage', () => {
 
 describe('describePostInvoiceBlock', () => {
   // The three sentences below are copied verbatim from the RAISE EXCEPTION
-  // lines in 20260811060000_require_completed_delivery_before_invoice_post.sql
+  // lines in 20260812060000_require_completed_delivery_before_invoice_post.sql
   // (lines 776, 779, 786) with the % placeholders filled in. Two of them are
   // DELIVERY_NOT_COMPLETED but prescribe OPPOSITE actions — void vs complete —
   // so the mapper must pass the database's own sentence through rather than
