@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { buildMaintainedSource } from "./apply-live-testdata-maintenance-20260812.mjs";
 
 const { output, blob } = buildMaintainedSource();
-assert.equal(blob, "f6e850e6fafb70fd5ca28e98ad9e8683081653c2", "pinned generated blob");
+assert.equal(blob, "78a25a8b01635bf86d9bc7a857f703479f3be500", "pinned generated blob");
 
 const scratch = mkdtempSync(path.join(tmpdir(), "crx-live-guard-candidate-test-"));
 try {
@@ -44,6 +44,12 @@ try {
     "DELETE FROM customers WHERE NOT (name ILIKE '[E2E]%')",
     "INSERT INTO customers (name, notes) VALUES ('Real Customer', '[E2E] marker')",
     "WITH seed AS (INSERT INTO customers (name) VALUES ('[E2E] probe') RETURNING id) DELETE FROM customers WHERE id IS NOT NULL",
+    "SELECT E'foo\\''; DROP TABLE public.customers",
+    "SELECT E'foo\\''; TRUNCATE public.customers",
+    "SELECT E'foo\\''; GRANT ALL ON public.customers TO anon",
+    "SELECT E'foo\\''; INSERT INTO customers (name) VALUES ('owned')",
+    "SELECT E'foo\\''; UPDATE customers SET phone='owned' WHERE id=1",
+    "SELECT E'foo\\''; DELETE FROM customers WHERE id=1",
   ];
   for (const sql of blocked) {
     assert.equal(classifySql(sql).block, true, `must block: ${sql}`);

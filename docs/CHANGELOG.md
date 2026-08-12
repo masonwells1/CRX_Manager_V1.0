@@ -161,6 +161,12 @@ use the governed app/RPC path. Every DML operation in a statement is enumerated,
 cannot hide a second mutation. The generated suite now covers 31 cases including all third-pass
 reproductions and the deliberate denial of persistent E2E raw writes.
 
+The fourth exact-head pass found that valid PostgreSQL `E'…'` escape strings could desynchronize the
+new scanner and hide any following mutation. All single-quote scans now recognize backslash escapes
+only for an actual `E`-prefixed literal, and the generated suite exercises the exact escape-string
+prefix before `DROP`, `TRUNCATE`, `GRANT`, `INSERT`, `UPDATE`, and `DELETE`. It now covers 37 direct
+candidate cases.
+
 ## 2026-08-11 — A smoke selection that runs nothing no longer reports success
 
 Follow-up to the entry below, from its own adversarial review. Container-only chains are dropped

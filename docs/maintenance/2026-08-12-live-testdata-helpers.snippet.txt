@@ -1,7 +1,12 @@
-function readQuoted(sql, start, quote) {
+function readQuoted(sql, start, quote, escapeBackslash = false) {
   let i = start + 1;
   let value = "";
   while (i < sql.length) {
+    if (escapeBackslash && sql[i] === "\\" && i + 1 < sql.length) {
+      value += sql.slice(i, i + 2);
+      i += 2;
+      continue;
+    }
     if (sql[i] === quote && sql[i + 1] === quote) {
       value += quote;
       i += 2;
@@ -47,7 +52,11 @@ function topLevelStatements(sql) {
   let start = 0;
   let i = 0;
   while (i < sql.length) {
-    if (sql[i] === "'") { i = readQuoted(sql, i, "'").end; continue; }
+    if (sql[i] === "'") {
+      const escaped = i > 0 && /[eE]/.test(sql[i - 1]) && !/[A-Za-z0-9_$]/.test(sql[i - 2] || "");
+      i = readQuoted(sql, i, "'", escaped).end;
+      continue;
+    }
     if (sql[i] === '"') { i = readQuoted(sql, i, '"').end; continue; }
     if (sql[i] === "-" && sql[i + 1] === "-") {
       const nl = sql.indexOf("\n", i + 2);
@@ -82,7 +91,8 @@ function keywordView(sql) {
   let i = 0;
   while (i < src.length) {
     if (src[i] === "'") {
-      const quoted = readQuoted(src, i, "'");
+      const escaped = i > 0 && /[eE]/.test(src[i - 1]) && !/[A-Za-z0-9_$]/.test(src[i - 2] || "");
+      const quoted = readQuoted(src, i, "'", escaped);
       out += " ".repeat(quoted.end - i);
       i = quoted.end;
       continue;
@@ -125,7 +135,11 @@ function keywordView(sql) {
 function actualSmokeRaiseEnd(body) {
   let i = 0;
   while (i < body.length) {
-    if (body[i] === "'") { i = readQuoted(body, i, "'").end; continue; }
+    if (body[i] === "'") {
+      const escaped = i > 0 && /[eE]/.test(body[i - 1]) && !/[A-Za-z0-9_$]/.test(body[i - 2] || "");
+      i = readQuoted(body, i, "'", escaped).end;
+      continue;
+    }
     if (body[i] === '"') { i = readQuoted(body, i, '"').end; continue; }
     if (body[i] === "-" && body[i + 1] === "-") {
       const nl = body.indexOf("\n", i + 2);
