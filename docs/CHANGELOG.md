@@ -2,6 +2,49 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-12 — Wave A round 5: four migrations self-aborted, all for the same reason
+
+The 2026-08-12 apply attempt refused four of the six Wave A migrations. Nothing was written to the
+live database, and nothing is applied by this change either — these are file fixes only.
+
+All four failures were one defect wearing four costumes: **an assertion broader than its own
+remedy**. A migration that asserts a state it never enforces is a migration that aborts itself on
+first apply. Each file is now scoped to what it actually does.
+
+`20260813010000` — the rewrite is retargeted off `public.create_direct_order` and onto
+`_create_direct_order_below_cost_impl_20260810`. Rewriting the wrapper would have silently deleted
+the below-cost approval gate a concurrent session installed there. Both the pre- and postcondition
+now assert that the wrapper still declares below-cost operation context, so if that gate is ever
+removed this retarget stops rather than proceeding into a shape it no longer fits. The file also now
+emits the `REVOKE` its postcondition asserts: `CREATE OR REPLACE` preserves the existing ACL, so
+asserting an owner-only grant state without revoking anything was an assertion with nothing behind
+it. Finally its replay guard is structural instead of a single pinned `md5` — it accepts either the
+pinned pre-apply baseline or its own output, detected by the normalization pass the migration itself
+introduces. A one-valued pin cannot tell "already applied" apart from "someone else changed it".
+
+`20260813020000` — the `create_order_from_blend_ticket` precondition is removed rather than
+corrected. It was vacuous in both directions: the concurrent fix to that function no longer updates
+order headers at all, and a `prosrc LIKE` was only ever evidence about prose. The remedy here is a
+table-attached `BEFORE INSERT OR UPDATE` trigger, which covers every writer regardless of its name,
+and what proves it works is the behavioural probe already in the postcondition. Two stale claims in
+the file's own prose are corrected in the same pass: the live open writer is `_update_order_items_impl`,
+and `BEFORE INSERT OR UPDATE OF (columns)` fires on *every* insert — the column list restricts the
+update event only, never the insert.
+
+`20260813040000` — same assertion-without-remedy defect, same fix: emit `REVOKE ALL` on
+`_save_invoice_scoped_impl`.
+
+Two test registries move with the retarget. `_create_direct_order_below_cost_impl_20260810` is
+registered in `src/lib/rpcIdempotencyScope.test.ts` as sharing the public `create_direct_order`
+operation literal — the guard flags a mismatch between function name and operation literal, and here
+the mismatch is the correct state. Renaming the literal to match the function is the dangerous
+change: it would strand every idempotency key written under the old literal, so a client retry would
+re-execute and duplicate an order. It is also registered in `MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY`
+in `src/lib/rpcContracts.test.ts`, which becomes inert once the migration applies.
+
+The drift review of this round returned no blockers. Two of its findings are owner-facing rather than
+code fixes and are recorded in `docs/manual/KNOWN_ISSUES.md`.
+
 ## 2026-08-12 — Wave A re-stamped to 20260813: a concurrent apply moved the high-water under us
 
 Rename-only change. The six Wave A migrations move from `20260812010000`–`20260812060000` to
