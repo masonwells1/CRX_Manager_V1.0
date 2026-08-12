@@ -444,6 +444,155 @@ build_known_view_index() {
   return 0
 }
 
+# ---- DOLLAR-QUOTED TEXT IS NOT PROOF (Codex High, round 22) -----------------
+# Every proof scanner below reads the migration line by line and strips only
+# `--` comments, so it cannot tell code from a string that is shaped like code.
+# PostgreSQL's dollar quoting makes that a working bypass, because the decoy
+# needs no escaping and reads exactly like the real thing:
+#
+#   DO $$
+#   BEGIN
+#     PERFORM $decoy$ IF v_actual IS DISTINCT FROM '<approved digest>'
+#                     THEN RAISE EXCEPTION 'drift'; END IF; $decoy$;
+#     UPDATE public.orders SET total_profit = 0;   -- bound to nothing
+#   END $$;
+#
+# The digest scan stops at the FIRST occurrence of the hex, finds a canonical
+# mismatch test on that line, prints `ok` and exits — while the statement that
+# actually runs is a bare UPDATE. The same trick supplies a fake GET DIAGNOSTICS
+# row-count assertion and a fake capture.
+#
+# So the proof scanners no longer read the file. They read this: a copy in which
+# every dollar-quoted region that is NOT executable code has its contents
+# replaced by spaces, newlines preserved so every line number stays valid.
+#
+#   executable = top-level SQL, plus the body of a top-level DO
+#   inert      = a CREATE FUNCTION body, a dollar-quoted literal, and any tag
+#                nested inside a DO body (nothing nested is ever executed here;
+#                dynamic SQL is refused separately)
+#
+# Both directions fail closed. The WRITE scanner keeps reading the raw file, so
+# a write hidden in a string is still counted as a write (over-approximation).
+# The PROOF scanners read the blanked copy, so text nobody can classify as
+# executable can never supply proof (under-approximation).
+dq_proof_text() {
+  awk '
+    # The tag of a dollar-quote delimiter starting at p, or "@" when the
+    # character is not one. "" is a real tag: it is the `$$` delimiter.
+    function dqtag(s, p, n,   j, ch, tag) {
+      tag = ""
+      j = p + 1
+      while (j <= n) {
+        ch = substr(s, j, 1)
+        if (ch == "$") return tag
+        if (ch !~ /[A-Za-z0-9_]/) return "@"
+        if (tag == "" && ch ~ /[0-9]/) return "@"   # $1 is a parameter, not a tag
+        tag = tag ch
+        j++
+      }
+      return "@"
+    }
+    function emit(c) { if (c == "\n") { print line; line = "" } else line = line c }
+    function blankrun(s, p, len,   j, ch) {
+      for (j = p; j < p + len; j++) { ch = substr(s, j, 1); emit(ch == "\n" ? "\n" : " ") }
+    }
+    function copyrun(s, p, len,   j) { for (j = p; j < p + len; j++) emit(substr(s, j, 1)) }
+    { src = src $0 "\n" }
+    END {
+      n = length(src)
+      depth = 0; head = ""; word = ""; line = ""
+      i = 1
+      while (i <= n) {
+        c = substr(src, i, 1)
+        # Inside an inert region only its OWN tag closes it — that is exactly
+        # PostgreSQL: in `$$ ... $x$ ... $$` the inner tag is body text.
+        if (depth > 0 && !keepd[depth]) {
+          if (c == "$") {
+            tag = dqtag(src, i, n)
+            if (tag != "@" && tag == tagd[depth]) {
+              blankrun(src, i, length(tag) + 2); i += length(tag) + 2; depth--
+              continue
+            }
+          }
+          emit(c == "\n" ? "\n" : " ")
+          i++
+          continue
+        }
+        # Executable region: lex enough that quoted text cannot be mistaken for
+        # a delimiter, and that a comment cannot supply the statement keyword.
+        if (c == "-" && substr(src, i, 2) == "--") {
+          j = index(substr(src, i), "\n")
+          len = (j == 0) ? n - i + 1 : j - 1
+          copyrun(src, i, len); i += len; word = ""
+          continue
+        }
+        if (c == "/" && substr(src, i, 2) == "/*") {
+          d = 0; j = i
+          while (j <= n) {
+            if (substr(src, j, 2) == "/*") { d++; j += 2; continue }
+            if (substr(src, j, 2) == "*/") { d--; j += 2; if (d == 0) break; continue }
+            j++
+          }
+          copyrun(src, i, j - i); i = j; word = ""
+          continue
+        }
+        if (c == "\047" || c == "\"") {
+          q = c; j = i + 1
+          while (j <= n) {
+            if (substr(src, j, 1) == q) {
+              if (substr(src, j + 1, 1) == q) { j += 2; continue }   # doubled = escaped
+              j++; break
+            }
+            j++
+          }
+          copyrun(src, i, j - i); i = j; word = ""
+          continue
+        }
+        if (c == "$") {
+          tag = dqtag(src, i, n)
+          if (tag != "@") {
+            len = length(tag) + 2
+            if (depth > 0 && tag == tagd[depth]) {          # closes the DO body
+              copyrun(src, i, len); i += len; depth--; word = ""
+              continue
+            }
+            depth++
+            tagd[depth] = tag
+            # Only a top-level DO body is executable. Anything opened deeper is
+            # a literal inside one, and a CREATE FUNCTION body is code this
+            # migration defines rather than code it runs.
+            keepd[depth] = (depth == 1 && head == "do") ? 1 : 0
+            if (keepd[depth]) copyrun(src, i, len); else blankrun(src, i, len)
+            i += len; word = ""
+            continue
+          }
+        }
+        emit(c)
+        # First word of the current top-level statement, which is what decides
+        # whether the next dollar quote is a DO body.
+        if (depth == 0) {
+          if (c ~ /[A-Za-z0-9_]/) word = word c
+          else {
+            if (word != "" && head == "") head = tolower(word)
+            word = ""
+            if (c == ";") head = ""
+          }
+        }
+        i++
+      }
+      if (line != "") print line
+    }
+  ' "$1"
+}
+
+# One reused scratch file for the blanked proof copy. The scanners take it as a
+# FILE rather than on a pipe deliberately: several of them `exit` on their first
+# match, and under `set -o pipefail` a writer killed by SIGPIPE would abort the
+# whole validator.
+PROOF_TMP=""
+cleanup_proof_tmp() { if [ -n "$PROOF_TMP" ]; then rm -f "$PROOF_TMP"; fi; }
+trap cleanup_proof_tmp EXIT
+
 SCAN_MODE="full"
 DELETED=""
 if [ "$CHANGED_ONLY" = true ]; then
@@ -950,11 +1099,36 @@ $MIG_BASENAME
       # rows are not business rows. Anything else is refused for being
       # unaccounted-for, because a name nobody can resolve is exactly what an
       # unbound rewrite of protected rows looks like from here.
-      function unresolved_write(t, kind, p) {
+      function unresolved_write(t, kind, p,   sch) {
         if (t == "") return
-        # A name qualified into another schema (auth., storage., cron.) is not a
-        # public business table and is out of scope for approved-set binding.
-        if (t ~ /\./) return
+        # A NAME IN ANOTHER SCHEMA IS NOT AUTOMATICALLY OUT OF SCOPE
+        # (Codex High, round 22). Through round 21 ANY dotted name returned here
+        # unexamined, on the reasoning that `auth.` / `storage.` are not business
+        # tables. But the caller has already stripped `public.`, so every name
+        # still carrying a dot reached this line — including one pointing at a
+        # schema the attacker just created:
+        #
+        #   CREATE SCHEMA repair;
+        #   CREATE VIEW repair.orders_v AS SELECT * FROM public.orders;
+        #   UPDATE repair.orders_v SET total_profit = 0;
+        #
+        # PostgreSQL makes that view automatically updatable, so protected rows
+        # change while the round-21 view refusal never sees a bare name to match.
+        # The schema qualifier WAS the bypass, not a reason to stop looking.
+        #
+        # So only the fixed set of Supabase/PostgreSQL infrastructure schemas is
+        # exempt, and an unrecognized schema is refused for being
+        # unaccounted-for. Measured across all 876 migrations, the only schemas
+        # any write actually names are public (stripped by the caller), storage,
+        # and auth — so this costs the existing repository nothing.
+        if (t ~ /\./) {
+          sch = t; sub(/\..*$/, "", sch)
+          if (sch ~ /^(auth|storage|cron|net|extensions|graphql|graphql_public|realtime|supabase_functions|supabase_migrations|vault|pgsodium|pgbouncer|information_schema|pg_catalog|pg_temp|pg_toast)$/) return
+          if (seen_unres[t]) return
+          seen_unres[t] = 1
+          printf "%d\t%s\t%s\t%s\t%s\t%s\n", tokln[p], t, "unresolved", kind, "-", raw[tokln[p]]
+          return
+        }
         if (t !~ /^[a-z_][a-z0-9_]*$/) return
         if (seen_unres[t]) return
         seen_unres[t] = 1
@@ -1364,6 +1538,14 @@ $MIG_BASENAME
       elif [ -n "$DELETE_UNBINDABLE" ]; then
         DIGEST_WHY="this migration DELETEs rows from$DELETE_UNBINDABLE, and the schema registry records no lifecycle or financial column on that table for the digest to bind. A DELETE assigns no columns, so an id-only digest still matches after the row's status or money has moved, and the approved set would certify destroying a row that is no longer the row that was approved. Either delete through a migration that can bind material before-values, or waive it with an APPROVED_SET_DIGEST: NOT-REQUIRED marker that names that table and says why it carries no material state."
       elif [ -n "$DIGEST_HEX" ]; then
+        # Everything from here down is PROOF reading, so it reads the copy with
+        # inert dollar-quoted text blanked (see dq_proof_text). Line numbers are
+        # preserved, so every message below still points at the real file.
+        if [ -z "$PROOF_TMP" ]; then
+          PROOF_TMP=$(mktemp)
+        fi
+        dq_proof_text "$file" > "$PROOF_TMP"
+        PROOF_FILE="$PROOF_TMP"
         # Where is that hex first compared for INEQUALITY in executable sql?
         # Only a mismatch operator counts. `IF actual = '<approved>' THEN RAISE`
         # reads like a guard and is the exact inversion of one: it aborts when
@@ -1436,7 +1618,7 @@ $MIG_BASENAME
             else { print FNR "\t\tok" }
             exit
           }
-        ' "$file")
+        ' "$PROOF_FILE")
         DIGEST_CMP_STATUS=$(printf '%s' "$DIGEST_CMP" | cut -f3)
         DIGEST_EXEC_LINE=$(printf '%s' "$DIGEST_CMP" | cut -f1)
         DIGEST_VAR=$(printf '%s' "$DIGEST_CMP" | cut -f2)
@@ -1456,7 +1638,7 @@ $MIG_BASENAME
         esac
         DIGEST_MENTION_LINE=$(awk -v hex="$DIGEST_HEX" '
           { l = tolower($0); sub(/--.*/, "", l); if (index(l, hex) > 0) { print FNR; exit } }
-        ' "$file")
+        ' "$PROOF_FILE")
         if [ -n "$DIGEST_CMP_WHY" ]; then
           DIGEST_WHY="$DIGEST_CMP_WHY"
         elif [ -z "$DIGEST_EXEC_LINE" ] && [ -n "$DIGEST_MENTION_LINE" ]; then
@@ -1696,7 +1878,7 @@ $MIG_BASENAME
                 }
                 print "OK\t" substr(pairs, 2)
               }
-            ' "$file")
+            ' "$PROOF_FILE")
             case "$DIGEST_SRC_WHY" in
               OK*)
                 DIGEST_SET_PAIRS=$(printf '%s' "$DIGEST_SRC_WHY" | cut -f2)
@@ -1802,7 +1984,7 @@ $MIG_BASENAME
                 if (depth == 1 && w[i] == "raise" && w[i + 1] == "exception") { print "yes"; exit }
               }
             }
-          ' "$file" | grep -c yes || true)
+          ' "$PROOF_FILE" | grep -c yes || true)
 
           # ---- SAME-SET BINDING (Codex High, round 10, finding 2) ------------
           # Everything above proves the digest is real, fail-closed, and covers
@@ -1950,7 +2132,7 @@ $MIG_BASENAME
                 if (nagg) { print "no-agg"; exit }
                 print "no-capture"
               }
-            ' "$file")
+            ' "$PROOF_FILE")
             case "$CAPTURE_STATUS" in
               OK) ;;
               reassigned*)
@@ -2129,7 +2311,7 @@ $MIG_BASENAME
                 if (polarity) { print "polarity"; exit }
                 print "no-assert"
               }
-            ' "$file")
+            ' "$PROOF_FILE")
             case "$COUNT_STATUS" in
               OK) ;;
               no-count)

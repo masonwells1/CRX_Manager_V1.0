@@ -2,6 +2,43 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-12 — Quoted text is not proof, and an unfamiliar schema is not an exemption
+
+Closed all three High findings from the round-22 adversarial review of the same
+guard.
+
+**A guard parked inside a string was accepted as a guard that runs.** The
+approved-set proof scanners removed `--` comments before reading, and nothing
+else. PostgreSQL's dollar quoting made that a working bypass: a digest
+comparison written inside `$tag$ ... $tag$` — as a literal assigned to a
+variable, or as the body of a function that is defined and never called — was
+found by the scanner, matched the canonical fail-closed shape, and satisfied the
+requirement, while the statement that actually executed was a bare rewrite bound
+to nothing. The proof scanners now read a copy of the migration in which every
+inert dollar-quoted region has been blanked, newlines preserved so every message
+still points at the real line. Executable means top-level SQL plus the body of a
+top-level `DO`; anything else in dollar quotes is text, and text is not proof.
+The write scanners still read the raw file on purpose — a rewrite hidden in a
+function body is a different finding, and it is already refused elsewhere.
+
+**Inventing a schema was enough to leave the guard's jurisdiction.** Any
+schema-qualified name that was not `public` was treated as somebody else's
+problem, on the assumption that it belonged to Supabase infrastructure. A
+migration could therefore create its own schema, define a view there over
+protected rows, and rewrite them through it with no digest at all. The exemption
+is now a fixed allowlist of PostgreSQL and Supabase infrastructure schemas;
+every other qualified name is unresolved and refused. Measured across every
+migration in the tree, the only schemas any write actually names are `public`,
+`storage` and `auth`, so the narrower rule costs the repository nothing.
+
+**A registered one-shot repair could be replayed.** Closed in the apply guard,
+with the test suite as the record.
+
+Each fix is mutation-tested: breaking it turns exactly its own cases red and
+nothing else, and the guard restores byte-identically afterwards. Approved-set
+suite 121 cases, apply guard 141 assertions, and the full audit is unchanged
+from the CI baseline at 876 files scanned.
+
 ## 2026-08-11 — A view is a writable alias, a comment is not a lock, and a flag is material
 
 Closed all three High findings from the round-21 adversarial review, plus one

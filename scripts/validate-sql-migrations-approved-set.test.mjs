@@ -193,6 +193,44 @@ function goodDeleteSetBlock({ material = true, table = 'commissions' } = {}) {
   );
 }
 
+/**
+ * ROUND 22 (Codex High). Every proof scanner reads the migration line by line
+ * and strips only `--` comments, so it cannot tell code from a string shaped
+ * like code. PostgreSQL's dollar quoting makes that a working bypass: the decoy
+ * needs no escaping and reads exactly like the real guard. The digest scan stops
+ * at the FIRST occurrence of the hex, finds a canonical mismatch test on that
+ * line, and passes — while the statement that actually runs is a bare UPDATE
+ * bound to nothing.
+ */
+// Two deliberate spellings here. The decoy is a plain assignment, not
+// `PERFORM <tag>...`, because the write scanner reads the RAW file and would
+// take that for a function call and refuse the migration down a different path.
+// And the inner literal is anonymously tagged (`$$`), not named: a NAMED tag is
+// one token, and any name that some other fixture happens to define as a
+// mutating function would again refuse this down that other path. Either slip
+// leaves the case passing even with the blanking removed.
+const DQ_DECOY_BLOCK =
+  `DO $outer$\nDECLARE v_ids uuid[]; actual text; n integer; note text;\nBEGIN\n` +
+  `  note := $$\n` +
+  `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
+  `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
+  `  SELECT ${WHOLE_ROW_HASH_EXPR} INTO actual FROM public.orders o WHERE o.id = ANY(v_ids);\n` +
+  `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
+  `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
+  `  GET DIAGNOSTICS n = ROW_COUNT;\n` +
+  `  IF n <> array_length(v_ids, 1) THEN\n` +
+  `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\n` +
+  `  $$;\n` +
+  `  UPDATE public.orders SET total_profit = 0;\n` +
+  `END $outer$;`;
+
+/** The same text parked in a function body that is defined and never called. */
+const DQ_FUNCTION_DECOY =
+  `CREATE FUNCTION public.pretend_guard() RETURNS void AS $body$\nBEGIN\n` +
+  `  IF current_setting('x') IS DISTINCT FROM '${HEX}' THEN\n` +
+  `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED';\n  END IF;\nEND\n` +
+  `$body$ LANGUAGE plpgsql;`;
+
 const CASES = [
   // ── must VIOLATE ────────────────────────────────────────────────────────
   {
@@ -606,6 +644,71 @@ const CASES = [
     expect: 'violation',
     mustReport: 'which is a view',
     sql: `UPDATE public.legacy_orders_v SET total_profit = 0;\n`,
+  },
+  {
+    // ROUND 22 (Codex High). The round-21 view refusal above matches on a bare
+    // name, and through round 21 ANY name still carrying a dot was returned
+    // unexamined — the reasoning being that `auth.` and `storage.` are not
+    // business tables. But the caller has already stripped `public.`, so the
+    // schema qualifier was itself the bypass: put the shim view in a schema the
+    // migration invents, and the write lands on protected rows while the scan
+    // sees a dotted name it decided not to look at.
+    name: 'writing through a view in a schema this migration invents is refused',
+    expect: 'violation',
+    mustReport: 'repair.orders_v',
+    sql:
+      `CREATE SCHEMA repair;\n` +
+      `CREATE VIEW repair.orders_v AS SELECT * FROM public.orders;\n` +
+      `UPDATE repair.orders_v SET total_profit = 0;\n`,
+  },
+  {
+    // The same hole without the view — an invented schema is refused for being
+    // unaccounted-for, whatever the relation behind the name turns out to be.
+    name: 'writing a table in an unrecognized schema is refused',
+    expect: 'violation',
+    mustReport: 'shadow.orders',
+    sql: `UPDATE shadow.orders SET total_profit = 0;\n`,
+  },
+  {
+    // And the other direction, so the fix is an allowlist rather than a blanket
+    // refusal: the fixed set of Supabase/PostgreSQL infrastructure schemas is
+    // still out of scope. Measured across every migration in this repo, the only
+    // schemas a write actually names are public, storage, and auth.
+    name: 'writing a Supabase infrastructure schema is still out of scope',
+    expect: 'silent',
+    sql:
+      `UPDATE storage.objects SET updated_at = now();\n` +
+      `UPDATE auth.users SET raw_app_meta_data = '{}'::jsonb;\n`,
+  },
+  {
+    // ROUND 22 (Codex High), the dollar-quoted decoy. Every element of a
+    // canonical approved-set repair is present in the file — the locked
+    // capture, the whole-row hash, the mismatch test, the row-count assertion —
+    // and none of it executes. The scanners saw proof because they read text.
+    name: 'a digest comparison inside a dollar-quoted literal is not proof',
+    expect: 'violation',
+    mustReport: 'documented, never compared',
+    sql: `-- APPROVED_SET_DIGEST: ${HEX}\n${DQ_DECOY_BLOCK}\n`,
+  },
+  {
+    // The same claim made from a function body. Defining a guard is not running
+    // one, and this migration never calls it.
+    name: 'a digest comparison inside a function body that is never called is not proof',
+    expect: 'violation',
+    mustReport: 'documented, never compared',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\n${DQ_FUNCTION_DECOY}\n` +
+      `UPDATE public.orders SET total_profit = 0;\n`,
+  },
+  {
+    // And the surgical half: blanking inert text must not cost a real repair its
+    // proof. This is the canonical passing shape with an ordinary dollar-quoted
+    // NOTICE sitting in front of the guard — the literal goes, the guard stays.
+    name: 'a dollar-quoted literal alongside a real guard does not blank the guard',
+    expect: 'silent',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\n` +
+      `${goodSetBlock().replace('BEGIN\n', 'BEGIN\n  RAISE NOTICE $msg$ starting the repair $msg$;\n')}\n`,
   },
   {
     // A scratch table the migration creates for itself holds no business rows,

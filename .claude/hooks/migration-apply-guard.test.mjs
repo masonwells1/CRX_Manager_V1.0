@@ -648,6 +648,73 @@ function armAutopilot(stateDir, hoursFromNow) {
     r = apply("20990601000005_unrelated_index", "CREATE INDEX IF NOT EXISTS idx_orders_scratch ON public.orders (id);");
     ok(!isOneShotDeny(r), "round-20: an unrelated statement against the same table is not a replay");
 
+    // 3d. ROUND 22 (Codex High). Rounds 20-21 compared collapsed whitespace with
+    //     comments removed, which still left three spellings that change no rows
+    //     and break every comparison. Each one below rewrites the registered
+    //     money repair into text PostgreSQL treats as identical, under a fresh
+    //     caller-controlled name — so before this round each walked past the
+    //     one-shot override the same way the block comment did in round 20.
+    r = apply("20990601000006_only_replay", "UPDATE ONLY public.orders SET total_profit = 1 WHERE id = 2;");
+    ok(isDeny(r) && isOneShotDeny(r), "round-22: ONLY inserted before the target → still denied");
+
+    r = apply("20990601000007_aliased_replay", "UPDATE public.orders o SET total_profit = 1 WHERE o.id = 2;");
+    ok(isDeny(r) && isOneShotDeny(r), "round-22: a table alias on the target and its column → still denied");
+
+    r = apply("20990601000008_as_aliased_replay", "UPDATE public.orders AS o SET total_profit = 1 WHERE o.id = 2;");
+    ok(isDeny(r) && isOneShotDeny(r), "round-22: the same alias spelled with AS → still denied");
+
+    r = apply(
+      "20990601000009_cte_replay",
+      "WITH approved AS (SELECT 2 AS id) UPDATE public.orders SET total_profit = 1 WHERE id = 2;",
+    );
+    ok(isDeny(r) && isOneShotDeny(r), "round-22: the money write wrapped behind a leading CTE → still denied");
+
+    // …and all three normalizations together, which is what an author actually
+    // reaching for the bypass would submit.
+    r = apply(
+      "20990601000010_combined_replay",
+      "WITH approved AS (SELECT 2 AS id) UPDATE ONLY public.orders AS o SET total_profit = 1 WHERE o.id = 2;",
+    );
+    ok(isDeny(r) && isOneShotDeny(r), "round-22: CTE + ONLY + alias combined → still denied");
+
+    // The normalization must not turn the guard blunt. A write to the same
+    // column of the same table on a DIFFERENT population is a different repair,
+    // and refusing it would put an override prompt in front of every future
+    // migration that touches orders.total_profit.
+    r = apply("20990601000011_different_population", "UPDATE public.orders SET total_profit = 1 WHERE id = 999;");
+    ok(!isOneShotDeny(r), "round-22: the same column on a different row set is not a replay");
+
+    // 3e. …and the CTE matters in the other direction, which is the one that was
+    //     actually open. Wrapping the SUBMITTED write in a CTE never evaded
+    //     anything — the registered write is still a substring of it. But when
+    //     the REGISTERED FILE carries the CTE, its statement no longer starts
+    //     with a write verb, so it was dropped from the comparison set entirely
+    //     and padding on both sides defeated whole-body containment too. The
+    //     write verb is now found at paren depth zero instead of assumed first.
+    writeFileSync(
+      path.join(tmp, "supabase", "migrations", `${STEM}.sql`),
+      "CREATE TEMP TABLE approved_ids (id int);\n" +
+        "WITH approved AS (SELECT 2 AS id) UPDATE public.orders SET total_profit = 1 WHERE id = 2;\n" +
+        "DROP TABLE approved_ids;\n",
+    );
+    r = apply(
+      "20990601000012_cte_registered_file",
+      "CREATE TABLE IF NOT EXISTS public.scratch_note2 (id int);\n" +
+        "UPDATE public.orders SET total_profit = 1 WHERE id = 2;\n" +
+        "ANALYZE public.orders;",
+    );
+    ok(
+      isDeny(r) && isOneShotDeny(r),
+      "round-22: a registered write wrapped in a CTE is still matched when it is replayed bare",
+    );
+
+    // Put the fixture back so the cases below see the file they were written
+    // against rather than this one.
+    writeFileSync(
+      path.join(tmp, "supabase", "migrations", `${STEM}.sql`),
+      `CREATE TEMP TABLE approved_ids (id int);\n${ONE_SHOT_SQL}\nDROP TABLE approved_ids;\n`,
+    );
+
     // 4. ROUND 12 (Codex High) reversed this case. Round 8 let a one-shot
     //    through whenever the ledger already contained it, reasoning that such a
     //    database IS the population the repair was approved against. True at the

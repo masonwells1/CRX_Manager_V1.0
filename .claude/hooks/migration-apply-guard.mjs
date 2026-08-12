@@ -415,10 +415,61 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
       }
       return acc;
     };
+    // SEMANTICALLY-INERT SYNTAX IS NORMALIZED AWAY (Codex High, round 22).
+    // Rounds 20-21 compared collapsed whitespace and stripped comments, which
+    // left three spellings that change no rows but break every comparison
+    // below. Re-submitting the registered money repair as any of them, under a
+    // fresh timestamped name, walked past the one-shot override exactly as the
+    // block comment did in round 20:
+    //
+    //   UPDATE ONLY public.orders SET ...        -- ONLY is a no-op here
+    //   UPDATE public.orders o SET ...           -- an alias renames nothing
+    //   UPDATE orders SET ... WHERE o.id = ...   -- qualifier on the column
+    //
+    // So the qualifier prefixes (`public.`, `o.`) come off, `ONLY` comes off,
+    // and a table alias standing between the target and SET/WHERE comes off.
+    // Both sides of every comparison run through this same function, so the
+    // normalization cannot make two genuinely different repairs collide — it
+    // only removes spellings that PostgreSQL itself treats as identical.
+    //
+    // Deliberately NOT a table+column fingerprint. That would also match any
+    // future migration touching the same column of the same table, and this
+    // hook refuses on a match — turning every later legitimate write to
+    // orders.total_profit into an override prompt. The registered statements
+    // carry their own `WHERE id = ANY(...)` binding, which is specific enough.
     const norm = (s) => stripComments(s)
       .toLowerCase()
       .replace(/\s+/g, " ")
+      // `public.orders` -> `orders`, `o.id` -> `id`. Requires a letter or
+      // underscore start so a numeric literal like `1.5` is never touched.
+      .replace(/\b[a-z_][a-z0-9_]*\s*\.\s*(?=[a-z_"*])/g, "")
+      .replace(/\b(update|delete from|insert into|merge into) only /g, "$1 ")
+      .replace(/\bupdate ("?[a-z0-9_]+"?) (?:as )?[a-z0-9_]+ set\b/g, "update $1 set")
+      .replace(
+        /\bdelete from ("?[a-z0-9_]+"?) (?:as )?[a-z0-9_]+ (where|using|returning)\b/g,
+        "delete from $1 $2",
+      )
+      .replace(/\s+/g, " ")
       .trim();
+
+    // A LEADING CTE IS STILL THE SAME WRITE (Codex High, round 22).
+    // writeStatements() below keeps only fragments that START with a write
+    // verb, so wrapping the registered UPDATE in `WITH x AS (...) UPDATE ...`
+    // dropped it from the comparison set entirely. Find the write verb at
+    // paren depth 0 instead and compare from there, so the CTE prefix is
+    // ignored rather than being a way out.
+    const writeCore = (st) => {
+      let depth = 0;
+      for (let i = 0; i < st.length; i += 1) {
+        const ch = st[i];
+        if (ch === "(") { depth += 1; continue; }
+        if (ch === ")") { depth -= 1; continue; }
+        if (depth !== 0) continue;
+        if (i > 0 && /[a-z0-9_]/.test(st[i - 1])) continue;
+        if (/^(insert into|update|delete from|merge into) /.test(st.slice(i))) return st.slice(i);
+      }
+      return "";
+    };
 
     // WHOLE-BODY CONTAINMENT IS NOT THE ONLY TEST (Codex High, round 20).
     // Both substring comparisons below ask whether one body wholly contains the
@@ -434,8 +485,8 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
     // would match half the repository and turn this into noise.
     const writeStatements = (normalized) => normalized
       .split(";")
-      .map((st) => st.trim())
-      .filter((st) => st.length >= 40 && /^(insert|update|delete|merge)\s/.test(st));
+      .map((st) => writeCore(st.trim()))
+      .filter((st) => st.length >= 40);
 
     const normQuery = norm(migQuery);
     const ledgerHas = (stem) => {
