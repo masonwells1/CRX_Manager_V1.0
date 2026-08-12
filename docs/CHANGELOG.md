@@ -197,6 +197,15 @@ early helper return and a compatible return after the authenticated-actor guard.
 Removing the exit tokens makes the unsafe assertion fail, mutation-proving the
 new condition.
 
+After merging current `origin/main`, the fail-closed dynamic-SQL boundary also
+required manual review for three newly parked Wave A migrations. Each now carries
+the repository's explicit actor-binding exemption marker with its narrow reason:
+fixed identifier-only constraint DDL, rollback-only role/claim setup, or guarded
+role revokes. The two files that define actor-taking SECURITY DEFINER functions
+bind `auth.uid()` and raise `ACTOR_MISMATCH` before mutation; the finiteness file
+defines no function. All 36 current August migrations therefore pass without
+weakening the reader's indirect-SQL refusal.
+
 ## 2026-08-11 — Close executable cross-migration cron.job view aliases
 
 Hardened the actor-binding SQL reader against persistent updatable aliases that

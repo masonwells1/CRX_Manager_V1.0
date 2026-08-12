@@ -1,3 +1,8 @@
+-- actor-binding-check: exempt
+--   REASON: this parked migration's only dynamic SQL is a fixed ALTER TABLE ADD
+--   CONSTRAINT format template whose substitutions are identifiers drawn from
+--   the literal VALUES list below. It creates no function and declares no actor
+--   parameter; manual actor-binding review completed 2026-08-12.
 -- STATUS: PARKED DRAFT - NOT APPLIED
 -- Wave A (ordering-cycle review 2026-08-09) — reject NaN / Infinity / -Infinity
 -- on every remaining numeric money and quantity column.
