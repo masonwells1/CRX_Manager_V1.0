@@ -46,7 +46,11 @@ function dollarTagAt(sql, index) {
   // identifier or keyword to be separated by whitespace. A `$tag$` embedded
   // in identifiers such as `open$x$` is ordinary identifier text, not a body
   // delimiter. Tags are empty or follow unquoted-identifier grammar.
-  if (index > 0 && /[A-Za-z0-9_$]/.test(sql[index - 1])) return null;
+  const previous = sql[index - 1] || "";
+  // PostgreSQL accepts high-bit characters in unquoted identifiers. Treat
+  // every non-ASCII predecessor conservatively as identifier text; a false
+  // negative here fails closed later, while a false dollar body fails open.
+  if (index > 0 && (/[A-Za-z0-9_$]/.test(previous) || previous.charCodeAt(0) >= 0x80)) return null;
   const match = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(index));
   return match?.[0] || null;
 }
@@ -148,4 +152,9 @@ function dmlTargets(statement) {
 
 function isPgTempTarget(target) {
   return /^(?:pg_temp|pg_temp_\d+)$/i.test(target?.[2] || "");
+}
+
+function tempBaseTableName(statement) {
+  const match = /^\s*create\s+(?:temp|temporary)\s+table(?:\s+if\s+not\s+exists)?\s+(?:(?:"?(?:pg_temp|pg_temp_\d+)"?)\s*\.\s*)?"?([a-z_][a-z0-9_$]*)"?/i.exec(statement);
+  return match?.[1]?.toLowerCase() || null;
 }

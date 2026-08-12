@@ -15,6 +15,14 @@ must first pass an exact-head Sol review and the normal protected pull-request p
 change will run the producer on a feature branch, add the red-to-green regression tests, and remove
 the temporary producer after use.
 
+Twelve exact-head adversarial passes have progressively hardened the candidate before activation. The
+latest pass closed a Unicode identifier boundary that could conceal destructive SQL and removed the
+unsafe assumption that any `pg_temp`-qualified DML is harmless: PostgreSQL temporary views can be
+updatable proxies for persistent tables. The candidate now permits temporary DML only for a base temp
+table created earlier in the same batch, clears that exemption after any intervening schema operation,
+and pins the exact Unicode, temp-view, standalone-target, and table-to-view replacement exploits in the
+60-assertion generated-module harness.
+
 ## 2026-08-12 — Wave A re-stamped to 20260813: a concurrent apply moved the high-water under us
 
 Rename-only change. The six Wave A migrations move from `20260812010000`–`20260812060000` to

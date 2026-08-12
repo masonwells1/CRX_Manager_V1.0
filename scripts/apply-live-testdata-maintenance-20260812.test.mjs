@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { buildMaintainedSource } from "./apply-live-testdata-maintenance-20260812.mjs";
 
 const { output, blob } = buildMaintainedSource();
-assert.equal(blob, "42744c543162402148a73155bc7ac9168de81f5f", "pinned generated blob");
+assert.equal(blob, "ba035e09a48eb830696260892855ee638092cbaf", "pinned generated blob");
 
 const scratch = mkdtempSync(path.join(tmpdir(), "crx-live-guard-candidate-test-"));
 try {
@@ -70,6 +70,10 @@ try {
     "SELECT 1 /* x */ -- comment\r; ALTER TABLE public.customers DISABLE ROW LEVEL SECURITY;",
     "SELECT 1 /* x */ -- comment\r; DELETE FROM customers WHERE id=1;",
     "BEGIN; CREATE FUNCTION pg_temp.get_pwn() RETURNS bigint LANGUAGE sql AS $$ SELECT setval('invoice_number_seq', 1) $$; SELECT pg_temp.get_pwn(); ROLLBACK;",
+    "SELECT 1 AS é$x$; DELETE FROM public.customers WHERE id = 1; SELECT 1 AS é$x$;",
+    "CREATE TEMP VIEW customer_passthrough AS SELECT * FROM public.customers; UPDATE pg_temp.customer_passthrough SET phone = 'owned' WHERE id = 1;",
+    "CREATE TEMP TABLE customer_passthrough AS SELECT 1; DROP TABLE pg_temp.customer_passthrough; CREATE TEMP VIEW customer_passthrough AS SELECT * FROM public.customers; UPDATE pg_temp.customer_passthrough SET phone = 'owned' WHERE id = 1;",
+    "UPDATE pg_temp.some_log_table SET x = 1 WHERE id = 1",
   ];
   for (const sql of blocked) {
     assert.equal(classifySql(sql).block, true, `must block: ${sql}`);
@@ -77,12 +81,13 @@ try {
 
   const allowed = [
     "SELECT * FROM customers WHERE id = 1",
-    "UPDATE pg_temp.some_log_table SET x = 1 WHERE id = 1",
+    "CREATE TEMP TABLE some_log_table AS SELECT 1 AS id, 0 AS x; UPDATE pg_temp.some_log_table SET x = 1 WHERE id = 1",
     "CREATE TEMP TABLE scratch AS SELECT 1",
     "BEGIN; ALTER TABLE invoices ADD COLUMN x text; ROLLBACK;",
   ];
   for (const sql of allowed) {
-    assert.equal(classifySql(sql).block, false, `must allow: ${sql}`);
+    const result = classifySql(sql);
+    assert.equal(result.block, false, `must allow: ${sql}; got ${JSON.stringify(result)}`);
   }
 
   process.stdout.write(`live-testdata maintenance candidate: ${blocked.length + allowed.length} assertions passed\n`);

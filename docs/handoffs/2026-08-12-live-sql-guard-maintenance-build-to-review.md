@@ -19,10 +19,10 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
 
 - The current source blob is pinned to `c8bec70830c643e474831985f5e6c3bd16630386`.
 - `node scripts/apply-live-testdata-maintenance-20260812.mjs --verify` produced pinned output blob
-  `42744c543162402148a73155bc7ac9168de81f5f`, matched all three snippet SHA-256 values, and passed a
+  `ba035e09a48eb830696260892855ee638092cbaf`, matched all three snippet SHA-256 values, and passed a
   Node module syntax check without changing the repository target.
-- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 56 assertions against the
-  generated module, including all classifier defect classes found by the first eleven Sol reviews.
+- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 60 assertions against the
+  generated module, including all classifier defect classes found by the first twelve Sol reviews.
 - The write mode refused the dirty build worktree even with Mason's dated token.
 - Current recovery proof passed ESLint, TypeScript typecheck, production build, all 4,466 executed
   Vitest assertions (123 skipped), all agent-workflow tests, agent health, dependency integrity,
@@ -98,6 +98,13 @@ any later live migration apply still requires the repository's current explicit 
   hide and execute a non-transactional `setval()`/`nextval()` call in its dollar body. Raw function and
   procedure definitions now fail closed categorically, and the exact sequence payload is pinned as the
   56th generated-module assertion. A fresh exact-head review remains required.
+- The twelfth exact-head Sol review found two more fail-open paths: PostgreSQL accepts non-ASCII
+  characters in unquoted identifiers, so a Unicode identifier could manufacture a fake dollar-body
+  span; and an updatable `pg_temp` view can forward DML into a persistent table. Dollar-tag boundaries
+  now conservatively treat every non-ASCII predecessor as identifier text. Temporary DML is exempted
+  only after the batch creates that exact base temp table, and any intervening schema operation clears
+  every exemption. The exact Unicode, temp-view, standalone-temp-target, and table-to-view replacement
+  payloads are pinned. A fresh exact-head review remains required.
 - GitHub checks and CodeRabbit must be complete and acceptable on the exact PR head.
 
 ## FIRST ACTION

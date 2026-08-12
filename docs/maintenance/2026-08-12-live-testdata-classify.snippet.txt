@@ -95,11 +95,22 @@ export function classifySql(query) {
   // scratch targets. Persistent E2E fixtures must use the app/RPC path, where
   // authorization, invariants, and teardown identity are structural.
   const persistentDml = [];
+  const safeTempTables = new Set();
   for (let index = 0; index < visibleStatements.length; index++) {
     const statement = visibleStatements[index];
+    const keywordStatement = visibleKeywordStatements[index];
+    const createdTempTable = tempBaseTableName(keywordStatement);
+    if (createdTempTable) {
+      safeTempTables.add(createdTempTable);
+    } else if (/^\s*(?:create|alter|drop)\b/i.test(keywordStatement)) {
+      // A view, rule, trigger, rename, or replacement can turn a previously
+      // safe temp-table name into a path back to persistent data. Forget all
+      // prior exemptions whenever any other schema operation intervenes.
+      safeTempTables.clear();
+    }
     for (const target of dmlTargets(statement)) {
-      if (isPgTempTarget(target)) continue;
-      persistentDml.push({ statement: visibleKeywordStatements[index], target });
+      if (isPgTempTarget(target) && safeTempTables.has(target[3].toLowerCase())) continue;
+      persistentDml.push({ statement: keywordStatement, target });
     }
   }
   const guardedDmlText = persistentDml.map(({ statement }) => statement).join(";\n");
@@ -180,7 +191,7 @@ export function classifySql(query) {
     if (dmlTargets(visibleStatements[index]).length > 0) continue;
     if (/^(?:select|with|explain|show|values)\b/i.test(statement)) continue;
     if (/^(?:begin|rollback)(?:\s+(?:work|transaction))?$/i.test(statement)) continue;
-    if (/^create\s+(?:temp|temporary)\b/i.test(statement)) continue;
+    if (/^create\s+(?:temp|temporary)\s+table\b/i.test(statement)) continue;
     if (rolledBack) continue;
     return {
       block: true,
