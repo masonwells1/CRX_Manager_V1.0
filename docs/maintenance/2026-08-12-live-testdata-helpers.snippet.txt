@@ -23,8 +23,8 @@ function skipTrivia(sql, start) {
   for (;;) {
     while (/\s/.test(sql[i] || "")) i++;
     if (sql[i] === "-" && sql[i + 1] === "-") {
-      const nl = sql.indexOf("\n", i + 2);
-      i = nl === -1 ? sql.length : nl + 1;
+      const end = lineCommentEnd(sql, i + 2);
+      i = end === sql.length ? end : end + 1;
       continue;
     }
     if (sql[i] === "/" && sql[i + 1] === "*") {
@@ -42,7 +42,12 @@ function skipTrivia(sql, start) {
 }
 
 function dollarTagAt(sql, index) {
-  const match = /^\$[A-Za-z_0-9]*\$/.exec(sql.slice(index));
+  // PostgreSQL requires a dollar-quoted string that follows an unquoted
+  // identifier or keyword to be separated by whitespace. A `$tag$` embedded
+  // in identifiers such as `open$x$` is ordinary identifier text, not a body
+  // delimiter. Tags are empty or follow unquoted-identifier grammar.
+  if (index > 0 && /[A-Za-z0-9_$]/.test(sql[index - 1])) return null;
+  const match = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(index));
   return match?.[0] || null;
 }
 

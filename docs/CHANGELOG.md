@@ -233,6 +233,15 @@ old first/last shape. Rollback smoke now requires exactly one outer transaction 
 intermediate `BEGIN`, `START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK`, `ABORT`, or
 `PREPARE TRANSACTION`. Both exact RLS-disabling payloads are pinned, bringing the suite to 51 cases.
 
+The tenth exact-head pass found two lexer mismatches with PostgreSQL. The trivia skipper still ended
+line comments only at `\n` even though the statement and keyword scanners already honored a lone
+`\r`, and the dollar-tag recognizer treated `$tag$` embedded in an unquoted identifier as the start
+of a dollar-quoted body. Either mismatch could hide destructive SQL from later classifier passes.
+All lexer paths now share the carriage-return comment boundary, and a dollar tag is recognized only
+at a valid token boundary with PostgreSQL's empty-or-identifier tag grammar. Four exact destructive
+payloads are pinned, bringing the generated-module suite to 55 cases; the producer's helper SHA-256
+and generated Git blob were re-bound to the corrected source.
+
 ## 2026-08-11 — A smoke selection that runs nothing no longer reports success
 
 Follow-up to the entry below, from its own adversarial review. Container-only chains are dropped

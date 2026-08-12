@@ -5,7 +5,7 @@
 - Checkout: `C:\Users\mason\.codex\worktrees\weekly-audit-remediation\CRX_Manager`
 - Branch: `codex/harness-maintenance-producer-20260812`
 - Base verified before build: `origin/main` at `2837263d2a22eca71142bf77e449acbe2512e232`;
-  current `origin/main` `a7ae1cc22654d734627e0ea47d59bdae64374b4a` was merged into the branch.
+  current `origin/main` `a44fc2f52a95d815e2873536a6ff4204d84851c2` is contained in the branch.
 - Repository: `masonwells1/CRX_Manager_V1.0`
 - Production Supabase project: `rhyzpcqhnizqbxphqdkr` (no live write is part of this producer change)
 
@@ -19,14 +19,18 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
 
 - The current source blob is pinned to `c8bec70830c643e474831985f5e6c3bd16630386`.
 - `node scripts/apply-live-testdata-maintenance-20260812.mjs --verify` produced pinned output blob
-  `69190a0c2f01bd70fc6f4e05b8ce8eef49ec8b4e`, matched all three snippet SHA-256 values, and passed a
+  `4badea7a706e9206bd532f0a8c974544c1edef3c`, matched all three snippet SHA-256 values, and passed a
   Node module syntax check without changing the repository target.
-- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 51 assertions against the
-  generated module, including all fourteen classifier defect classes found by the first nine Sol reviews.
+- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 55 assertions against the
+  generated module, including all classifier defect classes found by the first ten Sol reviews.
 - The write mode refused the dirty build worktree even with Mason's dated token.
-- Focused ESLint, TypeScript typecheck, agent-workflow tests, ledger check, and `git diff --check` passed.
-- The guarded commit suite passed lint, typecheck, production build, correction-guard tests,
-  documentation drift, dependency integrity, containment, and workflow-map generation.
+- Current recovery proof passed ESLint, TypeScript typecheck, production build, all 4,466 executed
+  Vitest assertions (123 skipped), all agent-workflow tests, agent health, dependency integrity,
+  focused producer verification, the 55-case candidate harness, and `git diff --check`.
+- `check-doc-drift.mjs` reports only the pre-existing `origin/main` freshness mismatch: the two live
+  manual docs are stamped 2026-08-12 while two deliberately parked and unapplied migration filenames
+  are future-stamped 20260813. The hook treats this check as non-blocking; the migrations remain parked
+  and the docs were not given a false future live-verification date.
 
 ## WRITTEN, NOT PROVEN
 
@@ -85,6 +89,11 @@ any later live migration apply still requires the repository's current explicit 
   `ROLLBACK` can end it before later SQL, while a decoy final transaction still satisfied the wrapper
   shape. Rollback proof now rejects every intermediate transaction boundary or alias, with both exact
   RLS-disabling payloads pinned. A fresh exact-head review remains required.
+- The tenth exact-head Sol review found that the trivia skipper ignored a lone `\r` line-comment
+  terminator and that `$tag$` embedded inside an unquoted identifier was mistaken for a dollar-body
+  delimiter. The lexer paths now share the carriage-return boundary, dollar tags require a valid token
+  boundary and PostgreSQL identifier grammar, and four exact destructive payloads are pinned. A fresh
+  exact-head review remains required.
 - GitHub checks and CodeRabbit must be complete and acceptable on the exact PR head.
 
 ## FIRST ACTION
