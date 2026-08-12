@@ -7,7 +7,7 @@ import ConfirmModal from '../ui/ConfirmModal';
 import MobileCardList from '../ui/MobileCardList';
 import MultiSelectDropdown, { type MultiSelectOption } from '../jobs/MultiSelectDropdown';
 import { useToast } from '../ui/Toast';
-import { supabase, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../../lib/db';
+import { supabase, sanitizeError, assertRpcResult, describePostInvoiceBlock } from '../../lib/db';
 import { assertInvoiceSendable } from '../../lib/invoiceSendDisposition';
 import { Sentry } from '../../lib/sentry';
 import { runCriticalAction } from '../../lib/criticalAction';
@@ -416,8 +416,9 @@ export default function FieldInvoicesUnpostedPanel() {
             posted += 1;
             delete postKeysRef.current[keyId];
           } catch (err: unknown) {
-            if (hasRpcCode(err, RpcErrorCodes.PRICING_INCOMPLETE)) {
-              failures.push(`${group.label}: needs pricing first`);
+            const blocked = describePostInvoiceBlock(err);
+            if (blocked) {
+              failures.push(`${group.label}: ${blocked}`);
             } else {
               failures.push(`${group.label}: ${sanitizeError(err)}`);
             }
@@ -439,11 +440,12 @@ export default function FieldInvoicesUnpostedPanel() {
             posted += 1;
             delete postKeysRef.current[target.id];
           } catch (err: unknown) {
-            // PRICING_INCOMPLETE is the common, expected reason a field invoice
-            // can't post yet — show plain English instead of the raw code.
-            // (Mirrors OrderDetail's Post-All handling.)
-            if (hasRpcCode(err, RpcErrorCodes.PRICING_INCOMPLETE)) {
-              failures.push(`${target.invoice_number}: needs pricing first`);
+            // Needs-pricing and needs-delivery are the common, expected reasons a
+            // field invoice can't post yet — show plain English instead of the raw
+            // code. (Shared wording via describePostInvoiceBlock.)
+            const blocked = describePostInvoiceBlock(err);
+            if (blocked) {
+              failures.push(`${target.invoice_number}: ${blocked}`);
             } else {
               failures.push(`${target.invoice_number}: ${sanitizeError(err)}`);
             }
