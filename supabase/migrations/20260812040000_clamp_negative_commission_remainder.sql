@@ -113,14 +113,19 @@ DECLARE
   v_md5 text;
   v_src text;
   v_secdef boolean;
+  v_config text[];
 BEGIN
   -- ---------------------------------------------------------------------------
   -- Each function is pinned by md5(prosrc) against the value read from live on
-  -- 2026-08-10. If a later migration edits one of these bodies, re-running this
-  -- file would REVERT that work, so the apply is refused instead.
+  -- 2026-08-10 and the exact post-apply body this file installs. A marker is
+  -- not a replay proof: a later migration naturally keeps the marker while
+  -- changing the body, and accepting it would let this stale CREATE OR REPLACE
+  -- silently REVERT that later work. The only accepted states are therefore the
+  -- pinned baseline (first apply) and the pinned post-apply body (genuine replay).
   --
-  -- A re-run of THIS file is allowed: the marker token below identifies a body
-  -- that already carries the clamp, and CREATE OR REPLACE is idempotent.
+  -- The post-apply hashes below are md5 values of the exact LF-normalized
+  -- $function$ sources in this file. As with 20260812020000, pg_proc.prosrc is
+  -- what is pinned; the POSTCOND reasserts the same four hashes after DDL.
   -- ---------------------------------------------------------------------------
 
   -- _insert_commissions_for_order -------------------------------------------
@@ -135,13 +140,19 @@ BEGIN
   -- proved the name is unique in public, and a signature literal for a function
   -- that had been re-declared would abort with a raw cast error before any of
   -- the readable messages below could fire.
-  SELECT md5(p.prosrc), p.prosrc INTO v_md5, v_src
+  SELECT md5(p.prosrc), p.prosrc, p.prosecdef, p.proconfig
+    INTO v_md5, v_src, v_secdef, v_config
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public' AND p.proname = '_insert_commissions_for_order';
-  IF position('WAVE-A-CLAMP-2026-08-09' in v_src) > 0 THEN
-    RAISE NOTICE 'PRECOND: _insert_commissions_for_order already carries the Wave A clamp — this migration has run before; re-applying is a no-op';
-  ELSIF v_md5 <> '9f1a3c7af994b768bb0a76debc186350' THEN
-    RAISE EXCEPTION 'PRECOND: _insert_commissions_for_order body is not the pinned baseline (got md5 %, expected 9f1a3c7af994b768bb0a76debc186350) and does not already carry the clamp. It changed after this migration was written — re-diff before applying.', v_md5;
+  IF v_secdef OR v_config IS NULL OR NOT ('search_path=public, pg_temp' = ANY(v_config)) THEN
+    RAISE EXCEPTION 'PRECOND: _insert_commissions_for_order no longer has its pinned SECURITY INVOKER/search_path context [SECURITY DEFINER %, config %]. Replaying this file could change a later security fix.', v_secdef, v_config;
+  END IF;
+  IF v_md5 = '9f1a3c7af994b768bb0a76debc186350' THEN
+    RAISE NOTICE 'PRECOND: _insert_commissions_for_order matches the pinned baseline — first application may proceed';
+  ELSIF v_md5 = '42b511d845c0ea150cfd61ed781d966c' THEN
+    RAISE NOTICE 'PRECOND: _insert_commissions_for_order matches this migration''s exact post-apply body — replay may proceed as a no-op re-assertion';
+  ELSE
+    RAISE EXCEPTION 'PRECOND: _insert_commissions_for_order has changed after this migration was written [got md5 %, expected baseline 9f1a3c7af994b768bb0a76debc186350 or post-apply 42b511d845c0ea150cfd61ed781d966c]. Replaying would REVERT later work; re-diff before applying.', v_md5;
   END IF;
   IF position('WAVE-A-CLAMP-2026-08-09' in v_src) = 0
      AND position('UNBOUNDED PRECEDING AND 1 PRECEDING' in v_src) = 0 THEN
@@ -156,13 +167,43 @@ BEGIN
     RAISE EXCEPTION 'PRECOND: expected exactly 1 _insert_commissions_for_job, found %', v_count;
   END IF;
 
-  SELECT md5(p.prosrc), p.prosrc INTO v_md5, v_src
+  SELECT md5(p.prosrc), p.prosrc, p.prosecdef, p.proconfig
+    INTO v_md5, v_src, v_secdef, v_config
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public' AND p.proname = '_insert_commissions_for_job';
-  IF position('WAVE-A-CLAMP-2026-08-09' in v_src) > 0 THEN
-    RAISE NOTICE 'PRECOND: _insert_commissions_for_job already carries the Wave A clamp — re-applying is a no-op';
-  ELSIF v_md5 <> 'c23fd25cf213da9ee832a1764369ac77' THEN
-    RAISE EXCEPTION 'PRECOND: _insert_commissions_for_job body is not the pinned baseline (got md5 %, expected c23fd25cf213da9ee832a1764369ac77) and does not already carry the clamp. Re-diff before applying.', v_md5;
+  IF v_secdef OR v_config IS NULL OR NOT ('search_path=public, pg_temp' = ANY(v_config)) THEN
+    RAISE EXCEPTION 'PRECOND: _insert_commissions_for_job no longer has its pinned SECURITY INVOKER/search_path context [SECURITY DEFINER %, config %]. Replaying this file could change a later security fix.', v_secdef, v_config;
+  END IF;
+  IF v_md5 = 'c23fd25cf213da9ee832a1764369ac77' THEN
+    RAISE NOTICE 'PRECOND: _insert_commissions_for_job matches the pinned baseline — first application may proceed';
+  ELSIF v_md5 = '4616a2444837c25b9766469722ce477a' THEN
+    RAISE NOTICE 'PRECOND: _insert_commissions_for_job matches this migration''s exact post-apply body — replay may proceed as a no-op re-assertion';
+  ELSE
+    RAISE EXCEPTION 'PRECOND: _insert_commissions_for_job has changed after this migration was written [got md5 %, expected baseline c23fd25cf213da9ee832a1764369ac77 or post-apply 4616a2444837c25b9766469722ce477a]. Replaying would REVERT later work; re-diff before applying.', v_md5;
+  END IF;
+
+  -- _derive_job_commission_rows is introduced by this migration, so the first
+  -- application accepts its absence. Once it exists, however, it is just as
+  -- vulnerable to a stale CREATE OR REPLACE as the three older functions above.
+  SELECT count(*) INTO v_count
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname = '_derive_job_commission_rows';
+  IF v_count = 0 THEN
+    RAISE NOTICE 'PRECOND: _derive_job_commission_rows is absent — first application may create it';
+  ELSIF v_count <> 1 THEN
+    RAISE EXCEPTION 'PRECOND: expected zero or one _derive_job_commission_rows, found %. An overload makes replay unsafe.', v_count;
+  ELSE
+    SELECT md5(p.prosrc), p.prosecdef, p.proconfig
+      INTO v_md5, v_secdef, v_config
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'public' AND p.proname = '_derive_job_commission_rows';
+    IF v_secdef OR v_config IS NULL OR NOT ('search_path=public, pg_temp' = ANY(v_config)) THEN
+      RAISE EXCEPTION 'PRECOND: _derive_job_commission_rows no longer has this migration''s SECURITY INVOKER/search_path context [SECURITY DEFINER %, config %]. Replaying could change a later security fix.', v_secdef, v_config;
+    END IF;
+    IF v_md5 <> 'cf0fa9a7085fc523873581478d199f29' THEN
+      RAISE EXCEPTION 'PRECOND: _derive_job_commission_rows has changed after this migration was written [got md5 %, expected post-apply cf0fa9a7085fc523873581478d199f29]. Replaying would REVERT later work; re-diff before applying.', v_md5;
+    END IF;
+    RAISE NOTICE 'PRECOND: _derive_job_commission_rows matches this migration''s exact post-apply body — replay may proceed';
   END IF;
 
   -- _save_invoice_scoped_impl -----------------------------------------------
@@ -173,16 +214,22 @@ BEGIN
     RAISE EXCEPTION 'PRECOND: expected exactly 1 _save_invoice_scoped_impl, found %', v_count;
   END IF;
 
-  SELECT md5(p.prosrc), p.prosrc, p.prosecdef INTO v_md5, v_src, v_secdef
+  SELECT md5(p.prosrc), p.prosrc, p.prosecdef, p.proconfig
+    INTO v_md5, v_src, v_secdef, v_config
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public' AND p.proname = '_save_invoice_scoped_impl';
   IF NOT v_secdef THEN
     RAISE EXCEPTION 'PRECOND: _save_invoice_scoped_impl is expected to be SECURITY DEFINER on live and is not. Something else changed it — stop.';
   END IF;
-  IF position('WAVE-A-CLAMP-2026-08-09' in v_src) > 0 THEN
-    RAISE NOTICE 'PRECOND: _save_invoice_scoped_impl already carries the Wave A clamp — re-applying is a no-op';
-  ELSIF v_md5 <> '45e63ffc8e821467bcca056cad535163' THEN
-    RAISE EXCEPTION 'PRECOND: _save_invoice_scoped_impl body is not the pinned baseline (got md5 %, expected 45e63ffc8e821467bcca056cad535163) and does not already carry the clamp. This is a 17k-character SECURITY DEFINER money RPC — re-diff before applying.', v_md5;
+  IF v_config IS NULL OR NOT ('search_path=public, pg_temp' = ANY(v_config)) THEN
+    RAISE EXCEPTION 'PRECOND: _save_invoice_scoped_impl no longer has its pinned search_path [config %]. Replaying this SECURITY DEFINER money RPC could change a later security fix.', v_config;
+  END IF;
+  IF v_md5 = '45e63ffc8e821467bcca056cad535163' THEN
+    RAISE NOTICE 'PRECOND: _save_invoice_scoped_impl matches the pinned baseline — first application may proceed';
+  ELSIF v_md5 = '6c3f064160e177b551a42f68717da055' THEN
+    RAISE NOTICE 'PRECOND: _save_invoice_scoped_impl matches this migration''s exact post-apply body — replay may proceed as a no-op re-assertion';
+  ELSE
+    RAISE EXCEPTION 'PRECOND: _save_invoice_scoped_impl has changed after this migration was written [got md5 %, expected baseline 45e63ffc8e821467bcca056cad535163 or post-apply 6c3f064160e177b551a42f68717da055]. Replaying this SECURITY DEFINER money RPC would REVERT later work; re-diff before applying.', v_md5;
   END IF;
 
   -- The clamp leans on compute_commission_amount never returning a negative
@@ -928,6 +975,22 @@ BEGIN
     RAISE EXCEPTION 'POSTCOND: expected exactly 4 functions across the four names, found % — an overload was created instead of a replacement', v_count;
   END IF;
 
+  -- The replay precondition accepts only these exact post-apply bodies. Assert
+  -- them immediately after DDL as well, so a changed delimiter/body cannot leave
+  -- a future replay pin detached from what this file actually installed.
+  SELECT count(*) INTO v_count
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public'
+     AND (
+       (p.proname = '_insert_commissions_for_order' AND md5(p.prosrc) = '42b511d845c0ea150cfd61ed781d966c')
+       OR (p.proname = '_insert_commissions_for_job' AND md5(p.prosrc) = '4616a2444837c25b9766469722ce477a')
+       OR (p.proname = '_derive_job_commission_rows' AND md5(p.prosrc) = 'cf0fa9a7085fc523873581478d199f29')
+       OR (p.proname = '_save_invoice_scoped_impl' AND md5(p.prosrc) = '6c3f064160e177b551a42f68717da055')
+     );
+  IF v_count <> 4 THEN
+    RAISE EXCEPTION 'POSTCOND: one or more Wave A commission functions do not match this migration''s pinned post-apply body. Do not leave a replay guard attached to unknown function text.';
+  END IF;
+
   SELECT p.prosrc INTO v_src
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
    WHERE n.nspname = 'public' AND p.proname = '_insert_commissions_for_job';
@@ -973,13 +1036,13 @@ BEGIN
 
   -- CREATE OR REPLACE preserves grants, but these are money-minting helpers, so
   -- "should" is not good enough. None of them may be reachable by a browser
-  -- session token (anon / authenticated) or by PUBLIC.
+  -- session token (anon / authenticated), service_role, or by PUBLIC.
   SELECT string_agg(x.who || ' -> ' || x.fn, ', ') INTO v_unexpected
     FROM (
       SELECT g AS who, p.proname AS fn
         FROM pg_proc p
         JOIN pg_namespace n ON n.oid = p.pronamespace,
-             unnest(ARRAY['anon', 'authenticated', 'public']) AS g
+             unnest(ARRAY['anon', 'authenticated', 'service_role', 'public']) AS g
        WHERE n.nspname = 'public'
          AND p.proname IN ('_insert_commissions_for_order', '_insert_commissions_for_job', '_derive_job_commission_rows', '_save_invoice_scoped_impl')
          -- CASE, not a bare AND. has_function_privilege() RAISES for a role that

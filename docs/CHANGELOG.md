@@ -2,6 +2,56 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-12 — Wave A remediation round 3: replay safety and a forgeable delivery status
+
+A second adversarial review, run against the exact committed diff of the entry below, returned
+BLOCKED with three further High findings. All three were confirmed against the real code. The six
+migrations remain parked and unapplied.
+
+**A replay could silently revert a later fix.** The precondition guards on the clamp and split-guard
+migrations accepted any function body that merely contained the Wave A marker token. A later
+migration fixing an authorization, audit or commission-math bug in one of those functions would keep
+that marker, pass the guard, and then be overwritten by the stale body this file installs — the
+guard that exists to prevent reverting later work did not prevent it. Each guard now accepts exactly
+two states, the pinned baseline body on first application or this file's own exact post-apply body on
+a genuine replay, and refuses anything else while printing the hash it found. Security context is
+pinned alongside the body: security mode, `search_path`, and function owner, so a body that matches
+but has been re-declared `SECURITY DEFINER` is refused rather than replayed over. This extends the
+self-pinning idiom `20260812020000` already established in this wave rather than adding a second one.
+
+**A replay could replace a stronger CHECK constraint with a weaker one.** The finiteness migration
+dropped and recreated thirty same-named constraints unconditionally, so a later migration
+strengthening one — tightening it to also reject `NaN`, the obvious follow-up — would be silently
+discarded on replay. One catalog-driven block now adds a constraint when absent, leaves it untouched
+when its normalized definition already matches, and aborts naming found-versus-expected otherwise.
+Nothing is dropped, which also closes the non-transactional window the file's header used to
+acknowledge; that header has been rewritten rather than left describing behavior the file no longer
+has.
+
+**The delivery-before-billing gate trusted a status anyone could write.** It proved a delivery read
+`completed`, not that the authoritative completion actually ran — and the ACL baseline grants
+`authenticated` UPDATE on deliveries while the status trigger permits `in_progress → completed`, so
+the row could be written directly through the API, skipping the delivered-quantity, inventory,
+order, invoice and audit reconciliation and billing the customer for the full ordered quantity. A
+`BEFORE UPDATE OF status` trigger now admits that transition only when the public completion wrapper
+has published that exact delivery id in a transaction-local setting, cleared on both the success and
+the error path. Binding to the row id rather than a boolean means one authorized completion cannot
+authorize a different delivery in the same transaction. The wrapper is the live body verbatim plus
+that handshake, and its established delivery-before-invoice lock order is unchanged. `app.admin_override`
+is deliberately **not** an exemption: a stuck delivery can no longer be repaired by hand-setting its
+status in the dashboard and must go through a reviewed RPC or migration. That is an operational
+trade-off, made knowingly — an escape hatch here would be an escape hatch from the reconciliation
+itself. A rolled-back probe proves both directions: the authorized path still completes, and a direct
+write is refused even with the override set.
+
+Reviewing the fix surfaced one more defect neither reviewer raised. These files now hash function
+bodies they install themselves, and live evidence confirms `prosrc` inherits whatever line endings
+the source file carried — one live function stores LF, another stores CRLF. Under a Windows checkout
+with `core.autocrlf=true` the applier would have installed CRLF bodies whose hash could never match
+an LF-computed pin, and every one of these migrations would have aborted at its own postcondition on
+a machine that merely checked the repo out differently. All six are now pinned to LF in
+`.gitattributes`, extending the section already there for the same reason.
+
 ## 2026-08-12 — Wave A remediation: four blocking review findings closed
 
 The adversarial review on PR #383 returned BLOCKED with four High findings. All four were checked

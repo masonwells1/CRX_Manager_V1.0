@@ -127,225 +127,97 @@
 SET lock_timeout = '3s';
 SET statement_timeout = '60s';
 
--- RE-RUNNABLE BY CONSTRUCTION. PostgreSQL has no `ADD CONSTRAINT IF NOT EXISTS`,
--- so a bare ADD makes the file one-shot: if the apply were ever interrupted part
--- way — a lock timeout on table four, a dirty row, a dropped connection — the
--- retry would hard-fail on the constraints that DID land, and someone would have
--- to hand-unpick a half-applied schema at exactly the wrong moment. Each ADD is
--- therefore preceded by DROP CONSTRAINT IF EXISTS on the same name. The DROP is a
--- catalogue edit only: it never touches a row, and the ADD that follows one
--- statement later re-validates the same predicate over the same data. This also
--- makes the file safe to replay against a disaster-recovery restore whose dump
--- already carries these constraints.
+-- REPLAY-SAFE WITHOUT REPLACING LATER WORK. PostgreSQL has no `ADD CONSTRAINT
+-- IF NOT EXISTS`, so the first apply must still add each absent CHECK. A prior
+-- version achieved that by dropping every same-named CHECK and recreating it.
+-- That was unsafe: a later migration could strengthen (for example, to reject
+-- NaN explicitly) one of these checks under the same name, and replaying this
+-- file would silently put the weaker predicate back.
 --
--- CORRECTED CLAIM (security review, 2026-08-10). An earlier draft of this header
--- said there is "no window in which bad data could be written". That overstated
--- it, and contradicted this file's own reasoning about SET vs SET LOCAL directly
--- above — which is that we must NOT assume the applier wraps the file in one
--- transaction. Both cannot be true. Stated accurately:
---   * If the applier DOES wrap the file (the Supabase runner does), every
---     DROP/ADD pair is atomic with the rest and there is genuinely no window.
---   * If it does NOT, a failure landing between a DROP and its ADD — and with
---     lock_timeout at 3s against an ACCESS EXCLUSIVE request, a contended apply
---     failing is a realistic outcome, not a hypothetical — leaves that one
---     column's constraint dropped until the file is re-run.
--- Exposure on the FIRST apply is nil either way, because the DROPs are all no-ops
--- against a database that has never carried these constraints. The window exists
--- only on a retry or a DR replay against a database that already has them, and it
--- closes as soon as the file is re-run. An explicit BEGIN/COMMIT around the 30
--- statements was considered and REJECTED: if the applier already opened a
--- transaction, the inner COMMIT would commit ITS transaction early and silently
--- split the migration, which is a worse failure than the one it would prevent.
+-- The one catalog-driven block below accepts only two states per constraint:
+--   * absent                 -> add this exact finiteness CHECK;
+--   * same normalized CHECK  -> leave it untouched on replay.
+-- Any other definition aborts before an ALTER TABLE runs. The normalization
+-- lower-cases and removes only whitespace and redundant parentheses, which are
+-- the non-semantic forms pg_get_constraintdef() rewrites. It retains the column,
+-- operators, literals, casts, and boolean words, so a stronger or different
+-- predicate does not compare equal by accident. No DROP is performed, therefore
+-- the old non-transactional DROP/ADD exposure no longer exists.
+DO $finiteness$
+DECLARE
+  v_table text;
+  v_column text;
+  v_constraint text;
+  v_found_def text;
+  v_expected_def text;
+  v_found_normalized text;
+  v_expected_normalized text;
+BEGIN
+  FOR v_table, v_column, v_constraint IN
+    VALUES
+      ('quote_items', 'price_per_unit', 'quote_items_price_per_unit_finite_chk'),
+      ('quote_items', 'current_cost', 'quote_items_current_cost_finite_chk'),
+      ('quote_items', 'actual_rate', 'quote_items_actual_rate_finite_chk'),
+      ('quote_items', 'oz_per_acre', 'quote_items_oz_per_acre_finite_chk'),
+      ('quote_items', 'price_per_acre', 'quote_items_price_per_acre_finite_chk'),
+      ('quote_items', 'acres', 'quote_items_acres_finite_chk'),
+      ('quote_items', 'total_units_needed', 'quote_items_total_units_needed_finite_chk'),
+      ('quote_items', 'net_margin', 'quote_items_net_margin_finite_chk'),
+      ('quote_items', 'price_override', 'quote_items_price_override_finite_chk'),
+      ('quotes', 'total_cost', 'quotes_total_cost_finite_chk'),
+      ('quotes', 'total_margin_pct', 'quotes_total_margin_pct_finite_chk'),
+      ('orders', 'total_price', 'orders_total_price_finite_chk'),
+      ('orders', 'total_margin_pct', 'orders_total_margin_pct_finite_chk'),
+      ('order_items', 'price_per_unit', 'order_items_price_per_unit_finite_chk'),
+      ('order_items', 'cost_per_unit', 'order_items_cost_per_unit_finite_chk'),
+      ('order_items', 'total_units_needed', 'order_items_total_units_needed_finite_chk'),
+      ('order_items', 'total_price', 'order_items_total_price_finite_chk'),
+      ('order_items', 'net_margin', 'order_items_net_margin_finite_chk'),
+      ('order_items', 'quantity_delivered', 'order_items_quantity_delivered_finite_chk'),
+      ('order_items', 'quantity_remaining', 'order_items_quantity_remaining_finite_chk'),
+      ('order_items', 'actual_rate', 'order_items_actual_rate_finite_chk'),
+      ('order_items', 'acres', 'order_items_acres_finite_chk'),
+      ('order_items', 'suggested_price', 'order_items_suggested_price_finite_chk'),
+      ('inventory', 'quantity_available', 'inventory_quantity_available_finite_chk'),
+      ('inventory', 'quantity_prebooked', 'inventory_quantity_prebooked_finite_chk'),
+      ('inventory', 'quantity_on_order', 'inventory_quantity_on_order_finite_chk'),
+      ('inventory', 'reorder_point', 'inventory_reorder_point_finite_chk'),
+      ('inventory', 'min_stock_level', 'inventory_min_stock_level_finite_chk'),
+      ('commissions', 'commission_amount', 'commissions_commission_amount_finite_chk'),
+      ('commissions', 'order_profit', 'commissions_order_profit_finite_chk')
+  LOOP
+    v_expected_def := format(
+      'CHECK (%1$I IS NULL OR (%1$I > ''-Infinity''::numeric AND %1$I < ''Infinity''::numeric))',
+      v_column
+    );
 
--- ---------------------------------------------------------------------------
--- quote_items — the nine columns save_quote can store from client input
--- ---------------------------------------------------------------------------
-ALTER TABLE public.quote_items DROP CONSTRAINT IF EXISTS quote_items_price_per_unit_finite_chk;
-ALTER TABLE public.quote_items
-  ADD CONSTRAINT quote_items_price_per_unit_finite_chk
-  CHECK (price_per_unit IS NULL OR (price_per_unit > '-Infinity'::numeric AND price_per_unit < 'Infinity'::numeric));
+    SELECT pg_get_constraintdef(c.oid)
+      INTO v_found_def
+      FROM pg_constraint c
+      JOIN pg_class t ON t.oid = c.conrelid
+      JOIN pg_namespace n ON n.oid = t.relnamespace
+     WHERE n.nspname = 'public'
+       AND t.relname = v_table
+       AND c.conname = v_constraint;
 
-ALTER TABLE public.quote_items DROP CONSTRAINT IF EXISTS quote_items_current_cost_finite_chk;
-ALTER TABLE public.quote_items
-  ADD CONSTRAINT quote_items_current_cost_finite_chk
-  CHECK (current_cost IS NULL OR (current_cost > '-Infinity'::numeric AND current_cost < 'Infinity'::numeric));
+    IF v_found_def IS NULL THEN
+      EXECUTE format(
+        'ALTER TABLE public.%1$I ADD CONSTRAINT %2$I CHECK (%3$I IS NULL OR (%3$I > ''-Infinity''::numeric AND %3$I < ''Infinity''::numeric))',
+        v_table, v_constraint, v_column
+      );
+      CONTINUE;
+    END IF;
 
-ALTER TABLE public.quote_items DROP CONSTRAINT IF EXISTS quote_items_actual_rate_finite_chk;
-ALTER TABLE public.quote_items
-  ADD CONSTRAINT quote_items_actual_rate_finite_chk
-  CHECK (actual_rate IS NULL OR (actual_rate > '-Infinity'::numeric AND actual_rate < 'Infinity'::numeric));
-
-ALTER TABLE public.quote_items DROP CONSTRAINT IF EXISTS quote_items_oz_per_acre_finite_chk;
-ALTER TABLE public.quote_items
-  ADD CONSTRAINT quote_items_oz_per_acre_finite_chk
-  CHECK (oz_per_acre IS NULL OR (oz_per_acre > '-Infinity'::numeric AND oz_per_acre < 'Infinity'::numeric));
-
-ALTER TABLE public.quote_items DROP CONSTRAINT IF EXISTS quote_items_price_per_acre_finite_chk;
-ALTER TABLE public.quote_items
-  ADD CONSTRAINT quote_items_price_per_acre_finite_chk
-  CHECK (price_per_acre IS NULL OR (price_per_acre > '-Infinity'::numeric AND price_per_acre < 'Infinity'::numeric));
-
-ALTER TABLE public.quote_items DROP CONSTRAINT IF EXISTS quote_items_acres_finite_chk;
-ALTER TABLE public.quote_items
-  ADD CONSTRAINT quote_items_acres_finite_chk
-  CHECK (acres IS NULL OR (acres > '-Infinity'::numeric AND acres < 'Infinity'::numeric));
-
-ALTER TABLE public.quote_items DROP CONSTRAINT IF EXISTS quote_items_total_units_needed_finite_chk;
-ALTER TABLE public.quote_items
-  ADD CONSTRAINT quote_items_total_units_needed_finite_chk
-  CHECK (total_units_needed IS NULL OR (total_units_needed > '-Infinity'::numeric AND total_units_needed < 'Infinity'::numeric));
-
-ALTER TABLE public.quote_items DROP CONSTRAINT IF EXISTS quote_items_net_margin_finite_chk;
-ALTER TABLE public.quote_items
-  ADD CONSTRAINT quote_items_net_margin_finite_chk
-  CHECK (net_margin IS NULL OR (net_margin > '-Infinity'::numeric AND net_margin < 'Infinity'::numeric));
-
-ALTER TABLE public.quote_items DROP CONSTRAINT IF EXISTS quote_items_price_override_finite_chk;
-ALTER TABLE public.quote_items
-  ADD CONSTRAINT quote_items_price_override_finite_chk
-  CHECK (price_override IS NULL OR (price_override > '-Infinity'::numeric AND price_override < 'Infinity'::numeric));
-
--- ---------------------------------------------------------------------------
--- quotes — total_price and total_profit already carry whole-cent CHECKs
--- ---------------------------------------------------------------------------
-ALTER TABLE public.quotes DROP CONSTRAINT IF EXISTS quotes_total_cost_finite_chk;
-ALTER TABLE public.quotes
-  ADD CONSTRAINT quotes_total_cost_finite_chk
-  CHECK (total_cost IS NULL OR (total_cost > '-Infinity'::numeric AND total_cost < 'Infinity'::numeric));
-
-ALTER TABLE public.quotes DROP CONSTRAINT IF EXISTS quotes_total_margin_pct_finite_chk;
-ALTER TABLE public.quotes
-  ADD CONSTRAINT quotes_total_margin_pct_finite_chk
-  CHECK (total_margin_pct IS NULL OR (total_margin_pct > '-Infinity'::numeric AND total_margin_pct < 'Infinity'::numeric));
-
--- ---------------------------------------------------------------------------
--- orders — total_cost and total_profit already carry whole-cent CHECKs.
--- total_price gets finiteness only. It is deliberately NOT whole-cent
--- constrained here, and the reason has just shifted: until 20260812020000, the
--- blocker was that _update_order_items_impl writes the raw un-rounded line sum,
--- so a whole-cent CHECK would have aborted the ordinary order-editing path. Its
--- sibling in this same wave installs trg_orders_round_money, which intercepts
--- exactly that write — so the mechanical blocker is now gone. What remains is
--- that adding the constraint is a separate money decision deferred by
--- 20260810151000 and never approved, and this file adds finiteness only. Left
--- open on purpose, not by oversight.
--- ---------------------------------------------------------------------------
-ALTER TABLE public.orders DROP CONSTRAINT IF EXISTS orders_total_price_finite_chk;
-ALTER TABLE public.orders
-  ADD CONSTRAINT orders_total_price_finite_chk
-  CHECK (total_price IS NULL OR (total_price > '-Infinity'::numeric AND total_price < 'Infinity'::numeric));
-
-ALTER TABLE public.orders DROP CONSTRAINT IF EXISTS orders_total_margin_pct_finite_chk;
-ALTER TABLE public.orders
-  ADD CONSTRAINT orders_total_margin_pct_finite_chk
-  CHECK (total_margin_pct IS NULL OR (total_margin_pct > '-Infinity'::numeric AND total_margin_pct < 'Infinity'::numeric));
-
--- ---------------------------------------------------------------------------
--- order_items — profit already carries a whole-cent CHECK.
---
--- acres / actual_rate / suggested_price were missed by the first draft of this
--- migration and added after review. They are the SAME pair this file's own
--- argument is built on for quote_items, on the downstream table that
--- _convert_quote_to_order_owner_impl and bulk_import_order copy quote values
--- into. No frontend writer touches order_items today (every src/ call site on
--- that table is a .select), so this is defense in depth rather than a currently
--- open hole — but leaving the identical pair unguarded one table over would
--- have been an arbitrary line.
--- ---------------------------------------------------------------------------
-ALTER TABLE public.order_items DROP CONSTRAINT IF EXISTS order_items_price_per_unit_finite_chk;
-ALTER TABLE public.order_items
-  ADD CONSTRAINT order_items_price_per_unit_finite_chk
-  CHECK (price_per_unit IS NULL OR (price_per_unit > '-Infinity'::numeric AND price_per_unit < 'Infinity'::numeric));
-
-ALTER TABLE public.order_items DROP CONSTRAINT IF EXISTS order_items_cost_per_unit_finite_chk;
-ALTER TABLE public.order_items
-  ADD CONSTRAINT order_items_cost_per_unit_finite_chk
-  CHECK (cost_per_unit IS NULL OR (cost_per_unit > '-Infinity'::numeric AND cost_per_unit < 'Infinity'::numeric));
-
-ALTER TABLE public.order_items DROP CONSTRAINT IF EXISTS order_items_total_units_needed_finite_chk;
-ALTER TABLE public.order_items
-  ADD CONSTRAINT order_items_total_units_needed_finite_chk
-  CHECK (total_units_needed IS NULL OR (total_units_needed > '-Infinity'::numeric AND total_units_needed < 'Infinity'::numeric));
-
-ALTER TABLE public.order_items DROP CONSTRAINT IF EXISTS order_items_total_price_finite_chk;
-ALTER TABLE public.order_items
-  ADD CONSTRAINT order_items_total_price_finite_chk
-  CHECK (total_price IS NULL OR (total_price > '-Infinity'::numeric AND total_price < 'Infinity'::numeric));
-
-ALTER TABLE public.order_items DROP CONSTRAINT IF EXISTS order_items_net_margin_finite_chk;
-ALTER TABLE public.order_items
-  ADD CONSTRAINT order_items_net_margin_finite_chk
-  CHECK (net_margin IS NULL OR (net_margin > '-Infinity'::numeric AND net_margin < 'Infinity'::numeric));
-
-ALTER TABLE public.order_items DROP CONSTRAINT IF EXISTS order_items_quantity_delivered_finite_chk;
-ALTER TABLE public.order_items
-  ADD CONSTRAINT order_items_quantity_delivered_finite_chk
-  CHECK (quantity_delivered IS NULL OR (quantity_delivered > '-Infinity'::numeric AND quantity_delivered < 'Infinity'::numeric));
-
-ALTER TABLE public.order_items DROP CONSTRAINT IF EXISTS order_items_quantity_remaining_finite_chk;
-ALTER TABLE public.order_items
-  ADD CONSTRAINT order_items_quantity_remaining_finite_chk
-  CHECK (quantity_remaining IS NULL OR (quantity_remaining > '-Infinity'::numeric AND quantity_remaining < 'Infinity'::numeric));
-
-ALTER TABLE public.order_items DROP CONSTRAINT IF EXISTS order_items_actual_rate_finite_chk;
-ALTER TABLE public.order_items
-  ADD CONSTRAINT order_items_actual_rate_finite_chk
-  CHECK (actual_rate IS NULL OR (actual_rate > '-Infinity'::numeric AND actual_rate < 'Infinity'::numeric));
-
-ALTER TABLE public.order_items DROP CONSTRAINT IF EXISTS order_items_acres_finite_chk;
-ALTER TABLE public.order_items
-  ADD CONSTRAINT order_items_acres_finite_chk
-  CHECK (acres IS NULL OR (acres > '-Infinity'::numeric AND acres < 'Infinity'::numeric));
-
-ALTER TABLE public.order_items DROP CONSTRAINT IF EXISTS order_items_suggested_price_finite_chk;
-ALTER TABLE public.order_items
-  ADD CONSTRAINT order_items_suggested_price_finite_chk
-  CHECK (suggested_price IS NULL OR (suggested_price > '-Infinity'::numeric AND suggested_price < 'Infinity'::numeric));
-
--- ---------------------------------------------------------------------------
--- inventory — a NaN here poisons Net Position for every later quote and order
--- of that product, which is the highest-blast-radius case in this migration.
--- reorder_point / min_stock_level were added after review: a NaN in either
--- makes `quantity_available < reorder_point` permanently false, silently
--- disabling the below-reorder alert for that product forever.
--- ---------------------------------------------------------------------------
-ALTER TABLE public.inventory DROP CONSTRAINT IF EXISTS inventory_quantity_available_finite_chk;
-ALTER TABLE public.inventory
-  ADD CONSTRAINT inventory_quantity_available_finite_chk
-  CHECK (quantity_available IS NULL OR (quantity_available > '-Infinity'::numeric AND quantity_available < 'Infinity'::numeric));
-
-ALTER TABLE public.inventory DROP CONSTRAINT IF EXISTS inventory_quantity_prebooked_finite_chk;
-ALTER TABLE public.inventory
-  ADD CONSTRAINT inventory_quantity_prebooked_finite_chk
-  CHECK (quantity_prebooked IS NULL OR (quantity_prebooked > '-Infinity'::numeric AND quantity_prebooked < 'Infinity'::numeric));
-
-ALTER TABLE public.inventory DROP CONSTRAINT IF EXISTS inventory_quantity_on_order_finite_chk;
-ALTER TABLE public.inventory
-  ADD CONSTRAINT inventory_quantity_on_order_finite_chk
-  CHECK (quantity_on_order IS NULL OR (quantity_on_order > '-Infinity'::numeric AND quantity_on_order < 'Infinity'::numeric));
-
-ALTER TABLE public.inventory DROP CONSTRAINT IF EXISTS inventory_reorder_point_finite_chk;
-ALTER TABLE public.inventory
-  ADD CONSTRAINT inventory_reorder_point_finite_chk
-  CHECK (reorder_point IS NULL OR (reorder_point > '-Infinity'::numeric AND reorder_point < 'Infinity'::numeric));
-
-ALTER TABLE public.inventory DROP CONSTRAINT IF EXISTS inventory_min_stock_level_finite_chk;
-ALTER TABLE public.inventory
-  ADD CONSTRAINT inventory_min_stock_level_finite_chk
-  CHECK (min_stock_level IS NULL OR (min_stock_level > '-Infinity'::numeric AND min_stock_level < 'Infinity'::numeric));
-
--- ---------------------------------------------------------------------------
--- commissions — what a poisoned profit basis ultimately turns into
--- ---------------------------------------------------------------------------
-ALTER TABLE public.commissions DROP CONSTRAINT IF EXISTS commissions_commission_amount_finite_chk;
-ALTER TABLE public.commissions
-  ADD CONSTRAINT commissions_commission_amount_finite_chk
-  CHECK (commission_amount IS NULL OR (commission_amount > '-Infinity'::numeric AND commission_amount < 'Infinity'::numeric));
-
-ALTER TABLE public.commissions DROP CONSTRAINT IF EXISTS commissions_order_profit_finite_chk;
-ALTER TABLE public.commissions
-  ADD CONSTRAINT commissions_order_profit_finite_chk
-  CHECK (order_profit IS NULL OR (order_profit > '-Infinity'::numeric AND order_profit < 'Infinity'::numeric));
+    v_found_normalized := regexp_replace(lower(v_found_def), '[[:space:]()]', '', 'g');
+    v_expected_normalized := regexp_replace(lower(v_expected_def), '[[:space:]()]', '', 'g');
+    IF v_found_normalized IS DISTINCT FROM v_expected_normalized THEN
+      RAISE EXCEPTION
+        'PRECOND: constraint %.% differs from this migration''s finiteness check. Found: %. Expected: %. Refusing to replace a possibly stronger later constraint.',
+        v_table, v_constraint, v_found_def, v_expected_def;
+    END IF;
+  END LOOP;
+END;
+$finiteness$;
 
 -- ---------------------------------------------------------------------------
 -- Postcondition

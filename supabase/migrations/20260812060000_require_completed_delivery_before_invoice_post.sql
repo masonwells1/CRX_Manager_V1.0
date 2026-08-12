@@ -140,24 +140,24 @@
 -- GRANT before row security is consulted, so no client role can write
 -- `invoices.status` at all. Every posting path is a function call.
 --
--- WHAT THIS FIX DOES NOT REACH, stated because it is the honest limit.
--- The gate asks whether the delivery says 'completed'. It cannot ask whether the
--- delivery was completed THROUGH the proper path. Verified live 2026-08-11:
--- `deliveries` does grant UPDATE to `authenticated` (unlike `invoices`), and the
--- `del_update` policy admits an admin, a sales rep, or the assigned driver. The
--- transition trigger `_enforce_delivery_status_transition` still fires on such a
--- write and confines it to the legal moves, but in_progress -> completed IS a
--- legal move. So an admin or sales rep can flip a delivery to 'completed'
--- directly through PostgREST, skipping `_complete_delivery_authorized_impl` and
--- therefore skipping the quantity correction. The bill would then post against a
--- delivery that genuinely reads completed, at ordered quantity.
--- That path exists today and is not made worse here: today the same bill can be
--- posted with the delivery still sitting at 'scheduled', which is strictly worse.
--- Closing it properly means a trigger on `invoices` refusing a move to 'posted'
--- while the linked delivery is not completed, which turns this procedural gate
--- into a structural one. Both reviewers independently pointed at that as the next
--- step; `_enforce_invoice_status_transition` is the natural home for it. Left as
--- a separate change with its own review.
+-- CLOSE THE DELIVERY-SIDE BYPASS TOO. The invoice gate is sound only when
+-- `completed` means the authoritative completion RPC ran. `deliveries` grants
+-- UPDATE to authenticated users and its lifecycle trigger deliberately permits
+-- in_progress -> completed, which had let a PostgREST PATCH forge that status
+-- while skipping the quantity, inventory, order, invoice, and audit work in
+-- `_complete_delivery_authorized_impl`.
+--
+-- This migration adds a BEFORE UPDATE OF status guard. The public
+-- complete_delivery wrapper writes a transaction-local GUC carrying the exact
+-- delivery id only while it delegates to the authoritative implementation; the
+-- guard accepts a transition into completed only when that id matches OLD.id.
+-- A boolean would let one authorized completion bless a different row in the same
+-- transaction, so it is deliberately row-bound. `app.admin_override` is NOT an
+-- exemption: it exists to steer old lifecycle transitions in this file's probe,
+-- but allowing it here would again permit a dashboard repair to create a completed
+-- delivery with none of completion's financial side effects. The operational
+-- trade-off is explicit: a stuck delivery must be repaired through a reviewed RPC
+-- or migration, not by directly setting status = completed in the dashboard.
 -- The other route around the gate is not a bypass but an escape hatch working as
 -- designed: cancel the scheduled delivery, which auto-cancels its draft, then
 -- hand-bill the whole order through `_create_invoice_from_order_impl_20260718`.
@@ -279,9 +279,13 @@
 -- is touched, a rolled-back transaction still burns the value and production may
 -- show a small gap in a generated number. That is cosmetic and expected.
 --
--- The probe forges two transaction-local settings and clears both:
+-- The probe uses three transaction-local settings and clears all three:
 --   * `request.jwt.claims` stands in for a signed-in admin session.
---   * `app.admin_override` is set ONLY around the delivery-status UPDATEs. The
+--   * `app.admin_override` is set ONLY around the delivery-status UPDATEs that
+--     move a row away from completed or into in_progress. It does NOT bypass the
+--     new completion-provenance guard. The authorized RPC itself sets and clears
+--     `crx.delivery_completion_authorized` around its own completed transition.
+--     The old lifecycle trigger
 --     live trigger `_enforce_delivery_status_transition` allows just
 --     scheduled -> in_progress/cancelled and in_progress -> completed/cancelled;
 --     every move this probe needs (completed -> scheduled, cancelled ->
@@ -312,6 +316,9 @@ DECLARE
   v_count int;
   v_md5   text;
   v_names text;
+  v_completion_md5 text;
+  v_completion_config text[];
+  v_completion_secdef boolean;
 BEGIN
   -- The function being replaced must exist exactly once. A second overload would
   -- mean the CREATE OR REPLACE below silently creates a THIRD, leaving an
@@ -381,6 +388,40 @@ BEGIN
     RAISE EXCEPTION 'PRECOND C: the delivery-before-billing gate is ALREADY installed [live md5 %]. This migration is a no-op and re-applying it would overwrite the current live body with the 2026-08-11 copy. Skip it.', v_md5;
   ELSE
     RAISE EXCEPTION 'PRECOND D: the live body of _post_invoice_impl_20260714 has drifted [md5 % , expected 9479af0a5477e89266e0264da44c766c]. Re-read the live body, rebase this replacement onto it, and update this hash — do not apply a stale copy over someone else''s change.', v_md5;
+  END IF;
+
+  -- This file also re-emits the narrow public completion wrapper so it can set
+  -- the row-bound authorization GUC before the already-locked delivery reaches
+  -- the authoritative implementation. Pin the current wrapper first: without
+  -- this, an unrelated later completion fix could be silently reverted even
+  -- though the invoice-posting body above was still unchanged.
+  SELECT count(*) INTO v_count
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname = 'complete_delivery';
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'PRECOND DELIVERY-A: expected exactly 1 public.complete_delivery, found %. Re-emitting a wrapper with an overload is unsafe.', v_count;
+  END IF;
+  SELECT md5(p.prosrc), p.proconfig, p.prosecdef
+    INTO v_completion_md5, v_completion_config, v_completion_secdef
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname = 'complete_delivery';
+  IF v_completion_md5 <> 'a1e9a043f27d3566f8ecf6d5e3a809ab'
+     OR NOT v_completion_secdef
+     OR v_completion_config IS NULL
+     OR NOT ('search_path=public, pg_temp' = ANY(v_completion_config)) THEN
+    RAISE EXCEPTION 'PRECOND DELIVERY-B: complete_delivery has drifted from the pinned authorization/preflight wrapper [md5 %, SECURITY DEFINER %, config %]. Rebase the provenance handshake onto the current completion path; do not overwrite it.', v_completion_md5, v_completion_secdef, v_completion_config;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'public' AND p.proname = '_guard_delivery_completion_authorized'
+  ) OR EXISTS (
+    SELECT 1 FROM pg_trigger t
+     WHERE t.tgrelid = 'public.deliveries'::regclass
+       AND NOT t.tgisinternal
+       AND t.tgname = 'trg_guard_delivery_completion_authorized'
+  ) THEN
+    RAISE EXCEPTION 'PRECOND DELIVERY-C: a delivery-completion provenance guard already exists. This migration is intentionally one-shot; re-diff rather than replacing a later guard.';
   END IF;
 
   -- Every posting path must funnel through the function being gated. Two callers
@@ -722,6 +763,143 @@ END;
 $precond$;
 
 -- ---------------------------------------------------------------------------
+-- Delivery-completion provenance. `completed` is an authoritative business
+-- event, not a status a table writer may forge. The trigger stays SECURITY
+-- INVOKER so it sees the transaction-local authorization set by the public RPC;
+-- a SECURITY DEFINER trigger would turn an owner exemption into a bypass.
+-- ---------------------------------------------------------------------------
+CREATE FUNCTION public._guard_delivery_completion_authorized()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public, pg_temp
+AS $function$
+BEGIN
+  -- WAVE-A-DELIVERY-COMPLETION-AUTH-2026-08-12.
+  -- A no-op update of an already-completed row is not a completion transition.
+  -- For an actual move into completed, the public complete_delivery wrapper sets
+  -- this exact delivery id immediately before it invokes the authoritative
+  -- implementation and clears it before returning. A row-bound value is required:
+  -- a boolean would let one authorized completion bless another delivery in the
+  -- same transaction.
+  IF NEW.status = 'completed'
+     AND NEW.status IS DISTINCT FROM OLD.status
+     AND current_setting('crx.delivery_completion_authorized', true) IS DISTINCT FROM OLD.id::text THEN
+    RAISE EXCEPTION 'DELIVERY_COMPLETION_RPC_REQUIRED: delivery % may enter completed only through public.complete_delivery. A direct status update skips delivered-quantity, inventory, order, invoice, and audit reconciliation.', OLD.id
+      USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NEW;
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public._guard_delivery_completion_authorized() FROM PUBLIC;
+
+CREATE TRIGGER trg_guard_delivery_completion_authorized
+  BEFORE UPDATE OF status ON public.deliveries
+  FOR EACH ROW EXECUTE FUNCTION public._guard_delivery_completion_authorized();
+
+-- Keep the current authorization + period-preflight wrapper intact, adding only
+-- the row-bound handoff. It locks the delivery before this handoff; the inner
+-- implementation retains its established delivery -> invoice lock order.
+CREATE OR REPLACE FUNCTION public.complete_delivery(
+  p_delivery_id uuid,
+  p_signed_by text,
+  p_performed_by uuid DEFAULT NULL::uuid,
+  p_quantities jsonb DEFAULT NULL::jsonb,
+  p_issue_type text DEFAULT NULL::text,
+  p_issue_notes text DEFAULT NULL::text,
+  p_idempotency_key text DEFAULT NULL::text,
+  p_completed_at timestamptz DEFAULT NULL::timestamptz
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO public, pg_temp
+AS $function$
+DECLARE
+  v_actor uuid := auth.uid();
+  v_actor_role text;
+  v_delivery record;
+  v_existing jsonb;
+  v_effective_completion_date date;
+  v_result jsonb;
+BEGIN
+  IF v_actor IS NULL THEN
+    RAISE EXCEPTION 'AUTH_REQUIRED';
+  END IF;
+
+  IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+
+  SELECT id, assigned_driver
+    INTO v_delivery
+    FROM public.deliveries
+   WHERE id = p_delivery_id
+   FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Delivery not found: %', p_delivery_id;
+  END IF;
+
+  SELECT role
+    INTO v_actor_role
+    FROM public.profiles
+   WHERE id = v_actor
+     AND is_active = true;
+
+  IF v_actor_role IS NULL OR NOT (
+    v_actor_role IN ('admin', 'sales_rep')
+    OR (v_actor_role = 'driver' AND v_actor = v_delivery.assigned_driver)
+  ) THEN
+    RAISE EXCEPTION 'Not authorized to complete this delivery';
+  END IF;
+
+  -- Preserve committed replay even if the historical business date has since
+  -- moved into a closed period. No mutation occurs on this branch.
+  IF p_idempotency_key IS NOT NULL THEN
+    v_existing := public.check_idempotency(
+      p_idempotency_key,
+      'complete_delivery'
+    );
+    IF v_existing IS NOT NULL THEN
+      RETURN v_existing;
+    END IF;
+  END IF;
+
+  v_effective_completion_date := COALESCE(
+    (p_completed_at AT TIME ZONE 'America/Chicago')::date,
+    (now() AT TIME ZONE 'America/Chicago')::date
+  );
+
+  PERFORM public.check_period_open(v_effective_completion_date);
+
+  -- WAVE-A-DELIVERY-COMPLETION-AUTH-2026-08-12. The guard accepts only this
+  -- row id, never a general-purpose boolean or an app.admin_override escape.
+  PERFORM set_config('crx.delivery_completion_authorized', p_delivery_id::text, true);
+  BEGIN
+    v_result := public._complete_delivery_period_preflight_impl(
+      p_delivery_id,
+      p_signed_by,
+      p_performed_by,
+      p_quantities,
+      p_issue_type,
+      p_issue_notes,
+      p_idempotency_key,
+      p_completed_at
+    );
+  EXCEPTION WHEN OTHERS THEN
+    -- Clear before re-raising so a caller that catches the RPC error inside a
+    -- larger transaction cannot inherit authorization for another statement.
+    PERFORM set_config('crx.delivery_completion_authorized', '', true);
+    RAISE;
+  END;
+  PERFORM set_config('crx.delivery_completion_authorized', '', true);
+  RETURN v_result;
+END;
+$function$;
+
+-- ---------------------------------------------------------------------------
 -- The gate. This is the live body read from production on 2026-08-11 with the
 -- WAVE-A-DELIVERY-BEFORE-BILLING block inserted and NOTHING else changed.
 -- ---------------------------------------------------------------------------
@@ -864,6 +1042,9 @@ DECLARE
   v_row_del_after  text;
   v_blocked     boolean;
   v_status      text;
+  v_signed_by   text;
+  v_completion_result jsonb;
+  v_completion_setting text;
 BEGIN
   -- Shape checks first: the gate is worthless if the function lost its elevated
   -- rights or its pinned search_path in the replace.
@@ -940,6 +1121,71 @@ BEGIN
     RAISE EXCEPTION 'POSTCOND: anon, authenticated or service_role can still EXECUTE _post_invoice_impl_20260714 directly despite the REVOKE above. This is the INNER implementation — the customer-scope and idempotency-payload-binding checks live in its two callers, so a direct grant would skip them as well as reaching this gate. A SECURITY DEFINER money function must never be client-callable.';
   END IF;
 
+  -- Delivery-completion provenance is structural as well as behavioural below:
+  -- pin the trigger's caller-rights mode, its row/BEFORE/UPDATE OF status shape,
+  -- and the wrapper's set-and-clear handoff. A missing pin here would turn a
+  -- later edit into a silent direct-completion bypass.
+  SELECT count(*) INTO v_count
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public'
+     AND p.proname = '_guard_delivery_completion_authorized'
+     AND NOT p.prosecdef
+     AND p.proconfig @> ARRAY['search_path=public, pg_temp']
+     AND position('WAVE-A-DELIVERY-COMPLETION-AUTH-2026-08-12' in p.prosrc) > 0
+     AND position('crx.delivery_completion_authorized' in p.prosrc) > 0
+     AND position('OLD.id::text' in p.prosrc) > 0;
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'POSTCOND: delivery-completion provenance guard is missing its SECURITY INVOKER row-bound handshake';
+  END IF;
+
+  SELECT count(*) INTO v_count
+    FROM pg_trigger t
+   WHERE t.tgrelid = 'public.deliveries'::regclass
+     AND NOT t.tgisinternal
+     AND t.tgname = 'trg_guard_delivery_completion_authorized'
+     AND t.tgfoid = 'public._guard_delivery_completion_authorized()'::regprocedure
+     AND t.tgenabled = 'O'
+     AND (t.tgtype & 1) <> 0
+     AND (t.tgtype & 2) <> 0
+     AND (t.tgtype & 16) <> 0
+     AND (t.tgtype & 4) = 0
+     AND (
+       SELECT string_agg(a.attname, ',' ORDER BY a.attnum)
+         FROM generate_subscripts(t.tgattr, 1) AS s
+         JOIN pg_attribute a ON a.attrelid = t.tgrelid AND a.attnum = t.tgattr[s]
+     ) = 'status';
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'POSTCOND: trg_guard_delivery_completion_authorized is missing, disabled, not BEFORE UPDATE OF status, or bound to the wrong function';
+  END IF;
+
+  SELECT count(*) INTO v_count
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public'
+     AND p.proname = '_guard_delivery_completion_authorized'
+     AND NOT EXISTS (
+       SELECT 1 FROM pg_roles r
+        WHERE r.rolname IN ('anon', 'authenticated', 'service_role')
+          AND has_function_privilege(r.oid, p.oid, 'EXECUTE')
+     );
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'POSTCOND: a client role can EXECUTE the delivery-completion guard directly; trigger helpers must remain private.';
+  END IF;
+
+  SELECT count(*) INTO v_count
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public'
+     AND p.proname = 'complete_delivery'
+     AND p.pronargs = 8
+     AND p.prosecdef
+     AND p.proconfig @> ARRAY['search_path=public, pg_temp']
+     AND position('WAVE-A-DELIVERY-COMPLETION-AUTH-2026-08-12' in p.prosrc) > 0
+     AND position('set_config(''crx.delivery_completion_authorized'', p_delivery_id::text, true)' in p.prosrc) > 0
+     AND position('set_config(''crx.delivery_completion_authorized'', '''', true)' in p.prosrc) > 0
+     AND position('public._complete_delivery_period_preflight_impl' in p.prosrc) > 0;
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'POSTCOND: complete_delivery lost its row-bound completion handoff, its clear, or its existing authorization/preflight delegation';
+  END IF;
+
   -- --------------------------------------------------------------------------
   -- Behavioural probe. Everything written below is rolled back. The rollback is
   -- proven row-by-row on the two rows the probe writes; the whole-table sweep at
@@ -962,7 +1208,7 @@ BEGIN
   -- guard refuses a move to 'completed' when signed_by is blank, and the
   -- accounting-period guard refuses any status move touching a CLOSED period —
   -- either one would abort the probe for a reason unrelated to billing.
-  SELECT i.id, i.delivery_id INTO v_invoice_id, v_delivery_id
+  SELECT i.id, i.delivery_id, d.signed_by INTO v_invoice_id, v_delivery_id, v_signed_by
     FROM public.invoices i
     JOIN public.deliveries d ON d.id = i.delivery_id
     LEFT JOIN public.orders o ON o.id = i.order_id
@@ -1073,11 +1319,66 @@ BEGIN
       END IF;
     END LOOP;
 
-    -- (b) A soft-deleted delivery must refuse even while its status reads
-    -- 'completed'. Without this arm the gate would pass a bill for a delivery the
-    -- office had already retracted.
+    -- (b) COMPLETION PROVENANCE, BOTH DIRECTIONS. First move to in_progress with
+    -- the existing lifecycle-only override, then prove a direct completed write
+    -- is refused even while that override is set. `app.admin_override` must not
+    -- be an escape hatch for a completion that skips reconciliation.
     PERFORM set_config('app.admin_override', 'true', true);
-    UPDATE public.deliveries SET status = 'completed', deleted_at = now() WHERE id = v_delivery_id;
+    UPDATE public.deliveries SET status = 'in_progress' WHERE id = v_delivery_id;
+    PERFORM set_config('app.admin_override', 'false', true);
+
+    v_blocked := false;
+    BEGIN
+      PERFORM set_config('app.admin_override', 'true', true);
+      UPDATE public.deliveries SET status = 'completed' WHERE id = v_delivery_id;
+      PERFORM set_config('app.admin_override', 'false', true);
+      RAISE EXCEPTION 'POSTCOND PROBE: a direct delivery status update reached completed despite the provenance guard';
+    EXCEPTION
+      WHEN OTHERS THEN
+        PERFORM set_config('app.admin_override', 'false', true);
+        IF position('DELIVERY_COMPLETION_RPC_REQUIRED:' in SQLERRM) <> 1 THEN RAISE; END IF;
+        v_blocked := true;
+    END;
+    IF NOT v_blocked THEN
+      RAISE EXCEPTION 'POSTCOND PROBE: the direct-completion refuse path did not run';
+    END IF;
+
+    SELECT status INTO v_status FROM public.deliveries WHERE id = v_delivery_id;
+    IF v_status IS DISTINCT FROM 'in_progress' THEN
+      RAISE EXCEPTION 'POSTCOND PROBE: the refused direct completion left delivery % at "%" rather than in_progress', v_delivery_id, v_status;
+    END IF;
+
+    -- The positive direction uses the public RPC, not a manually-set GUC. It
+    -- traverses the authoritative completion path (including its existing
+    -- delivery-before-invoice lock order), then proves the wrapper cleared its
+    -- row-bound authorization before a later statement can inherit it.
+    v_completion_result := public.complete_delivery(
+      v_delivery_id,
+      v_signed_by,
+      v_admin_id,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+    );
+    IF v_completion_result->>'delivery_id' IS DISTINCT FROM v_delivery_id::text THEN
+      RAISE EXCEPTION 'POSTCOND PROBE: complete_delivery returned an unexpected receipt [%] for delivery %', v_completion_result, v_delivery_id;
+    END IF;
+    SELECT status INTO v_status FROM public.deliveries WHERE id = v_delivery_id;
+    IF v_status IS DISTINCT FROM 'completed' THEN
+      RAISE EXCEPTION 'POSTCOND PROBE: authorized complete_delivery left delivery % at "%" rather than completed', v_delivery_id, v_status;
+    END IF;
+    v_completion_setting := current_setting('crx.delivery_completion_authorized', true);
+    IF v_completion_setting IS NOT NULL AND v_completion_setting <> '' THEN
+      RAISE EXCEPTION 'POSTCOND PROBE: complete_delivery returned with crx.delivery_completion_authorized still set to %, so a later statement could inherit authorization', v_completion_setting;
+    END IF;
+
+    -- (c) A soft-deleted delivery must refuse even while its status reads
+    -- completed. The row is already authoritatively completed above, so this
+    -- arm does not need (and must not fake) a second completed transition.
+    PERFORM set_config('app.admin_override', 'true', true);
+    UPDATE public.deliveries SET deleted_at = now() WHERE id = v_delivery_id;
     PERFORM set_config('app.admin_override', 'false', true);
 
     v_blocked := false;
@@ -1086,8 +1387,6 @@ BEGIN
       RAISE EXCEPTION 'POSTCOND PROBE: the gate ALLOWED a post against a soft-deleted delivery';
     EXCEPTION
       WHEN OTHERS THEN
-        -- Same narrowing as arm (a): exact prefix, and DELIVERY_MISSING is not
-        -- an acceptable outcome here because the probe never removes the row.
         IF position('DELIVERY_NOT_COMPLETED:' in SQLERRM) <> 1 THEN RAISE; END IF;
         v_blocked := true;
     END;
@@ -1095,12 +1394,12 @@ BEGIN
       RAISE EXCEPTION 'POSTCOND PROBE: the soft-delete refuse path did not run';
     END IF;
 
-    -- (c) THE ALLOW ARM. Restore the delivery and post for real, with the override
-    -- OFF so this is an ordinary post. A gate that only ever refuses is
+    -- (d) THE BILLING ALLOW ARM. Restore the delivery and post for real, with the
+    -- override OFF so this is an ordinary post. A gate that only ever refuses is
     -- indistinguishable from a broken function, so normal billing is proven to
     -- still work before this migration is allowed to stand.
     PERFORM set_config('app.admin_override', 'true', true);
-    UPDATE public.deliveries SET status = 'completed', deleted_at = NULL WHERE id = v_delivery_id;
+    UPDATE public.deliveries SET deleted_at = NULL WHERE id = v_delivery_id;
     PERFORM set_config('app.admin_override', 'false', true);
 
     BEGIN
@@ -1121,11 +1420,13 @@ BEGIN
 
     PERFORM set_config('request.jwt.claims', '', true);
     PERFORM set_config('app.admin_override', 'false', true);
+    PERFORM set_config('crx.delivery_completion_authorized', '', true);
     RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'PROBE_OK_ROLLBACK';
   EXCEPTION
     WHEN OTHERS THEN
       PERFORM set_config('request.jwt.claims', '', true);
       PERFORM set_config('app.admin_override', 'false', true);
+      PERFORM set_config('crx.delivery_completion_authorized', '', true);
       IF SQLERRM <> 'PROBE_OK_ROLLBACK' THEN RAISE; END IF;
   END;
 

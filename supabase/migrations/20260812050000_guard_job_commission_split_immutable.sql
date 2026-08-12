@@ -189,6 +189,11 @@ DECLARE
   v_count int;
   v_src text;
   v_owner text;
+  v_name text;
+  v_md5 text;
+  v_secdef boolean;
+  v_config text[];
+  v_function_owner text;
 BEGIN
   -- This migration must be applied by the database owner, not by an API role.
   -- The postcondition probe fills a NULL split to prove the invoicing path still
@@ -392,14 +397,57 @@ BEGIN
     END IF;
   END;
 
-  -- Idempotent re-run.
+  -- Replay safety pins the complete function body, not just its marker. A later
+  -- correction would naturally retain WAVE-A-JOBSPLIT-FREEZE-2026-08-09, and a
+  -- marker-only NOTICE would then let this migration replace that newer work.
+  -- Both functions are first introduced here, so each may be absent on a first
+  -- application (or after an interrupted non-transactional attempt). Once one
+  -- exists, only this exact post-apply body and security context are accepted.
+  FOR v_name, v_md5, v_secdef, v_config, v_function_owner IN
+    SELECT p.proname, md5(p.prosrc), p.prosecdef, p.proconfig, r.rolname
+      FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+      JOIN pg_roles r ON r.oid = p.proowner
+     WHERE n.nspname = 'public'
+       AND p.proname IN ('_guard_job_commission_split_immutable', 'correct_job_commission_split')
+  LOOP
+    IF v_function_owner IS DISTINCT FROM v_owner THEN
+      RAISE EXCEPTION 'PRECOND: % is now owned by %, not the public.jobs owner %. Replaying could overwrite a governed function under the wrong owner.', v_name, v_function_owner, v_owner;
+    END IF;
+    IF v_config IS NULL OR NOT ('search_path=public, pg_temp' = ANY(v_config)) THEN
+      RAISE EXCEPTION 'PRECOND: % lost its pinned search_path [config %]. Replaying could overwrite a later security fix.', v_name, v_config;
+    END IF;
+
+    IF v_name = '_guard_job_commission_split_immutable' THEN
+      IF v_secdef THEN
+        RAISE EXCEPTION 'PRECOND: _guard_job_commission_split_immutable became SECURITY DEFINER. That would make its caller check decorative; do not replay over it.';
+      END IF;
+      IF v_md5 <> 'a7f35f20abba77c38c542f6ff0524430' THEN
+        RAISE EXCEPTION 'PRECOND: _guard_job_commission_split_immutable has changed after this migration was written [got md5 %, expected post-apply a7f35f20abba77c38c542f6ff0524430]. Replaying would REVERT later work; re-diff before applying.', v_md5;
+      END IF;
+    ELSE
+      IF NOT v_secdef THEN
+        RAISE EXCEPTION 'PRECOND: correct_job_commission_split lost SECURITY DEFINER. Replaying could overwrite a later authorization fix.';
+      END IF;
+      IF v_md5 <> '0bf3f0dee2644bfc2ae642dd00119f96' THEN
+        RAISE EXCEPTION 'PRECOND: correct_job_commission_split has changed after this migration was written [got md5 %, expected post-apply 0bf3f0dee2644bfc2ae642dd00119f96]. Replaying would REVERT later work; re-diff before applying.', v_md5;
+      END IF;
+    END IF;
+    RAISE NOTICE 'PRECOND: % matches this migration''s exact post-apply body and security context — replay may proceed', v_name;
+  END LOOP;
+
   SELECT count(*) INTO v_count
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-   WHERE n.nspname = 'public'
-     AND p.proname = '_guard_job_commission_split_immutable'
-     AND position('WAVE-A-JOBSPLIT-FREEZE-2026-08-09' in p.prosrc) > 0;
-  IF v_count > 0 THEN
-    RAISE NOTICE 'PRECOND: the job commission-split freeze is already installed — re-applying is a no-op';
+   WHERE n.nspname = 'public' AND p.proname = '_guard_job_commission_split_immutable';
+  IF v_count NOT IN (0, 1) THEN
+    RAISE EXCEPTION 'PRECOND: expected zero or one _guard_job_commission_split_immutable, found %. An overload makes replay unsafe.', v_count;
+  END IF;
+
+  SELECT count(*) INTO v_count
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname = 'correct_job_commission_split';
+  IF v_count NOT IN (0, 1) THEN
+    RAISE EXCEPTION 'PRECOND: expected zero or one correct_job_commission_split, found %. An overload makes replay unsafe.', v_count;
   END IF;
 END;
 $precond$;
@@ -994,6 +1042,18 @@ BEGIN
     RAISE EXCEPTION 'POSTCOND: expected exactly 1 _guard_job_commission_split_immutable, found % — an overload was created instead of a replacement', v_count;
   END IF;
 
+  SELECT count(*) INTO v_count
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    JOIN pg_class j ON j.oid = 'public.jobs'::regclass
+   WHERE n.nspname = 'public'
+     AND p.proname = '_guard_job_commission_split_immutable'
+     AND md5(p.prosrc) = 'a7f35f20abba77c38c542f6ff0524430'
+     AND p.proowner = j.relowner;
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'POSTCOND: the commission-split guard does not match this migration''s pinned body and public.jobs owner. Do not leave a replay pin attached to unknown function text or ownership.';
+  END IF;
+
   SELECT string_agg(g, ', ') INTO v_unexpected
     FROM pg_proc p
     JOIN pg_namespace n ON n.oid = p.pronamespace,
@@ -1121,6 +1181,18 @@ BEGIN
    WHERE n.nspname = 'public' AND p.proname = 'correct_job_commission_split';
   IF v_count <> 1 THEN
     RAISE EXCEPTION 'POSTCOND: expected exactly 1 correct_job_commission_split, found % — an overload would make the reachable version ambiguous', v_count;
+  END IF;
+
+  SELECT count(*) INTO v_count
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    JOIN pg_class j ON j.oid = 'public.jobs'::regclass
+   WHERE n.nspname = 'public'
+     AND p.proname = 'correct_job_commission_split'
+     AND md5(p.prosrc) = '0bf3f0dee2644bfc2ae642dd00119f96'
+     AND p.proowner = j.relowner;
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'POSTCOND: the correction RPC does not match this migration''s pinned body and public.jobs owner. Do not leave a replay pin attached to unknown function text or ownership.';
   END IF;
 
   -- authenticated must hold EXECUTE (otherwise the capability Mason asked for does
