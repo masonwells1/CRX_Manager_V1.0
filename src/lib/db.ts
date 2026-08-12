@@ -115,6 +115,11 @@ export const RpcErrorCodes = {
   QUOTE_ALREADY_CONVERTED: 'QUOTE_ALREADY_CONVERTED',
   // post_invoice / post_invoice_group ship-now-price-later gate (sell-side roadmap #2)
   PRICING_INCOMPLETE: 'PRICING_INCOMPLETE',
+  // post_invoice / post_invoice_group deliver-before-billing gate (Wave A fix #5,
+  // migration 20260812060000). A delivery-linked invoice cannot be posted until the
+  // delivery is completed — the same click that corrects it to what actually went out.
+  DELIVERY_NOT_COMPLETED: 'DELIVERY_NOT_COMPLETED',
+  DELIVERY_MISSING: 'DELIVERY_MISSING',
   // price_order (sell-side roadmap #2 v2)
   INVALID_PRICE: 'INVALID_PRICE',
   ALREADY_PRICED: 'ALREADY_PRICED',
@@ -285,25 +290,70 @@ export type RpcErrorCode = (typeof RpcErrorCodes)[keyof typeof RpcErrorCodes];
  * positives if the token appears inside a user-supplied note or another
  * error's text.
  */
-export function hasRpcCode(err: unknown, code: RpcErrorCode): boolean {
-  // A raised RPC error reaches the client in two shapes: a real `Error`, OR a
-  // plain Supabase/PostgREST error OBJECT `{ code, message, details, hint }`
-  // (NOT an Error instance) when the caller `throw`s the `{ error }` from
-  // `supabase.rpc(...)`. Read `.message` off either; only fall back to String()
-  // for genuinely message-less values (so a plain object never stringifies to
-  // "[object Object]" and silently fails the token match).
-  let message: string;
-  if (err instanceof Error) {
-    message = err.message;
-  } else if (err && typeof err === 'object' && typeof (err as { message?: unknown }).message === 'string') {
-    message = (err as { message: string }).message;
-  } else {
-    message = String(err ?? '');
+// A raised RPC error reaches the client in two shapes: a real `Error`, OR a
+// plain Supabase/PostgREST error OBJECT `{ code, message, details, hint }`
+// (NOT an Error instance) when the caller `throw`s the `{ error }` from
+// `supabase.rpc(...)`. Read `.message` off either; only fall back to String()
+// for genuinely message-less values (so a plain object never stringifies to
+// "[object Object]" and silently fails the token match).
+function rpcErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (err && typeof err === 'object' && typeof (err as { message?: unknown }).message === 'string') {
+    return (err as { message: string }).message;
   }
-  // Match: exact "TOKEN", "TOKEN:rest", or "TOKEN rest"
-  return message === code
-    || message.startsWith(`${code}:`)
-    || message.startsWith(`${code} `);
+  return String(err ?? '');
+}
+
+export function hasRpcCode(err: unknown, code: RpcErrorCode): boolean {
+  return rpcCodeDetail(err, code) !== null;
+}
+
+/**
+ * The human suffix the database attached to an RPC error token, `''` when the
+ * token was raised bare, or `null` when this error is not that token at all.
+ *
+ * Same prefix rules as `hasRpcCode` — exact `TOKEN`, `TOKEN:rest`, or
+ * `TOKEN rest` — so `hasRpcCode` is just "did this return a string".
+ * Prefer this over `message.includes(token)`, which false-positives if the
+ * token appears inside a user-supplied note or another error's text.
+ */
+export function rpcCodeDetail(err: unknown, code: RpcErrorCode): string | null {
+  const message = rpcErrorMessage(err);
+  if (message === code) return '';
+  if (message.startsWith(`${code}:`) || message.startsWith(`${code} `)) {
+    return message.slice(code.length + 1).trim();
+  }
+  return null;
+}
+
+/**
+ * Plain-English reason a post_invoice / post_invoice_group call was refused by
+ * one of the deliberate billing gates, or `null` if the failure was something
+ * else (which the caller should surface through `sanitizeError`).
+ *
+ * These are expected refusals, not faults: the office sees what to do next
+ * rather than a raw database token. Every posting UI routes through here —
+ * Invoices, InvoiceDetail, OfficeCockpit, OrderDetail and the field panel — so
+ * the wording cannot drift between them.
+ *
+ * The delivery gates raise a different instruction per case: an in-flight
+ * delivery should be completed, but a deleted, cancelled or voided one can
+ * never be completed and the invoice must be voided instead. So we pass the
+ * database's own sentence through rather than collapsing every refusal to one
+ * fixed phrase — advice the operator cannot act on reads as a broken screen and
+ * invites them to retry forever. The short fallbacks apply only if the token
+ * ever arrives bare.
+ */
+export function describePostInvoiceBlock(err: unknown): string | null {
+  if (hasRpcCode(err, RpcErrorCodes.PRICING_INCOMPLETE)) return 'needs pricing first';
+
+  const notCompleted = rpcCodeDetail(err, RpcErrorCodes.DELIVERY_NOT_COMPLETED);
+  if (notCompleted !== null) return notCompleted || 'complete the delivery first';
+
+  const missing = rpcCodeDetail(err, RpcErrorCodes.DELIVERY_MISSING);
+  if (missing !== null) return missing || 'its delivery record is missing — void this draft';
+
+  return null;
 }
 
 /**
