@@ -40,6 +40,14 @@ ok(isDeny(r), "DC start_process with a force-push command is denied");
 r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: 123, input: "rm -rf src\n" } });
 ok(isDeny(r), "DC interact_with_process feeding rm -rf src is denied");
 
+r = runHook({
+  tool_name: "mcp__Desktop_Commander__start_process",
+  tool_input: {
+    command: "[IO.File]::WriteAllText('scripts/apply-live-testdata-maintenance-20260812.mjs','owned'); node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
+  },
+});
+ok(isDeny(r), "DC start_process cannot route around the exact producer invocation gate");
+
 // ── start_process: benign command allowed (silent) ─────────────────────────
 r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: "npm run build" } });
 eq(r.status, 0, "DC start_process benign command exits 0");
