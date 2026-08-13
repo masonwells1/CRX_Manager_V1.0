@@ -16,6 +16,87 @@
 -- prompt, but can never round a sub-cent effective price up past catalog cost.
 -- No existing business row is rewritten by this migration.
 
+-- Fail closed before replacing the private money/inventory implementation. The
+-- approved predecessor is the exact live catalog shape measured read-only on
+-- 2026-08-13 after PR #388: one private implementation and one governed public
+-- wrapper, with their complete bodies, owners, security modes, search paths and
+-- ACLs pinned below. A concurrent forward fix must be reconciled, never erased.
+DO $preflight$
+DECLARE
+  v_impl_total integer;
+  v_impl_exact integer;
+  v_wrapper_total integer;
+  v_wrapper_exact integer;
+BEGIN
+  SELECT count(*) INTO v_impl_total
+    FROM pg_catalog.pg_proc AS p
+   WHERE p.pronamespace = 'public'::regnamespace
+     AND p.proname = '_draw_down_quote_below_cost_impl_20260810';
+
+  SELECT count(*) INTO v_impl_exact
+    FROM pg_catalog.pg_proc AS p
+    JOIN pg_catalog.pg_roles AS owner_role ON owner_role.oid = p.proowner
+    JOIN pg_catalog.pg_language AS lang ON lang.oid = p.prolang
+   WHERE p.pronamespace = 'public'::regnamespace
+     AND p.proname = '_draw_down_quote_below_cost_impl_20260810'
+     AND p.proargtypes = '2950 3802 2950 25'::oidvector
+     AND p.pronargdefaults = 2
+     AND p.prorettype = 'jsonb'::regtype
+     AND lang.lanname = 'plpgsql'
+     AND owner_role.rolname = 'postgres'
+     AND p.prosecdef
+     AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+     AND octet_length(p.prosrc) = 15019
+     AND encode(
+           extensions.digest(convert_to(p.prosrc, 'UTF8'), 'sha256'),
+           'hex'
+         ) = '26b7a461a1e4f99b1783d7d38788e361031756000abf80a5e97efdb7da37cc64'
+     AND p.proacl @> ARRAY['postgres=X/postgres']::aclitem[]
+     AND p.proacl <@ ARRAY['postgres=X/postgres']::aclitem[];
+
+  SELECT count(*) INTO v_wrapper_total
+    FROM pg_catalog.pg_proc AS p
+   WHERE p.pronamespace = 'public'::regnamespace
+     AND p.proname = 'draw_down_quote';
+
+  SELECT count(*) INTO v_wrapper_exact
+    FROM pg_catalog.pg_proc AS p
+    JOIN pg_catalog.pg_roles AS owner_role ON owner_role.oid = p.proowner
+    JOIN pg_catalog.pg_language AS lang ON lang.oid = p.prolang
+   WHERE p.pronamespace = 'public'::regnamespace
+     AND p.proname = 'draw_down_quote'
+     AND p.proargtypes = '2950 3802 2950 25 25'::oidvector
+     AND p.pronargdefaults = 3
+     AND p.prorettype = 'jsonb'::regtype
+     AND lang.lanname = 'plpgsql'
+     AND owner_role.rolname = 'postgres'
+     AND p.prosecdef
+     AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+     AND octet_length(p.prosrc) = 292
+     AND encode(
+           extensions.digest(convert_to(p.prosrc, 'UTF8'), 'sha256'),
+           'hex'
+         ) = 'f842e27fb5d4e73395bb0b1d70f0f3cdf41481ba1977b70552194c899bf74d05'
+     AND p.proacl @> ARRAY[
+           'postgres=X/postgres',
+           'authenticated=X/postgres',
+           'service_role=X/postgres'
+         ]::aclitem[]
+     AND p.proacl <@ ARRAY[
+           'postgres=X/postgres',
+           'authenticated=X/postgres',
+           'service_role=X/postgres'
+         ]::aclitem[];
+
+  IF v_impl_total <> 1 OR v_impl_exact <> 1
+     OR v_wrapper_total <> 1 OR v_wrapper_exact <> 1 THEN
+    RAISE EXCEPTION
+      'DRAW_DOWN_CENT_ALLOCATION_PRECONDITION_DRIFTED: impl total/exact %/%, wrapper total/exact %/%',
+      v_impl_total, v_impl_exact, v_wrapper_total, v_wrapper_exact;
+  END IF;
+END
+$preflight$;
+
 CREATE OR REPLACE FUNCTION public._draw_down_quote_below_cost_impl_20260810(
   p_quote_id uuid,
   p_draws jsonb,
@@ -452,32 +533,76 @@ REVOKE ALL ON FUNCTION public._draw_down_quote_below_cost_impl_20260810(
 
 DO $postflight$
 DECLARE
+  v_impl_total integer;
   v_impl_count integer;
+  v_wrapper_total integer;
   v_wrapper_count integer;
 BEGIN
+  SELECT count(*) INTO v_impl_total
+  FROM pg_catalog.pg_proc AS p
+  WHERE p.pronamespace = 'public'::regnamespace
+    AND p.proname = '_draw_down_quote_below_cost_impl_20260810';
+
   SELECT count(*) INTO v_impl_count
-  FROM pg_proc p
+  FROM pg_catalog.pg_proc AS p
+  JOIN pg_catalog.pg_roles AS owner_role ON owner_role.oid = p.proowner
+  JOIN pg_catalog.pg_language AS lang ON lang.oid = p.prolang
   WHERE p.pronamespace = 'public'::regnamespace
     AND p.proname = '_draw_down_quote_below_cost_impl_20260810'
     AND p.proargtypes = '2950 3802 2950 25'::oidvector
+    AND p.pronargdefaults = 2
+    AND p.prorettype = 'jsonb'::regtype
+    AND lang.lanname = 'plpgsql'
+    AND owner_role.rolname = 'postgres'
     AND p.prosecdef
-    AND p.proconfig @> ARRAY['search_path=public, pg_temp']::text[]
-    AND position('v_booked_price_total' IN p.prosrc) > 0
-    AND position('v_consumed_before' IN p.prosrc) > 0;
+    AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+    AND octet_length(p.prosrc) = 13223
+    AND encode(
+          extensions.digest(convert_to(p.prosrc, 'UTF8'), 'sha256'),
+          'hex'
+        ) = '514c4859719a4de2fb24ba7ebdc776297df20caa70354adb626960f58ea1c0f2'
+    AND p.proacl @> ARRAY['postgres=X/postgres']::aclitem[]
+    AND p.proacl <@ ARRAY['postgres=X/postgres']::aclitem[];
+
+  SELECT count(*) INTO v_wrapper_total
+  FROM pg_catalog.pg_proc AS p
+  WHERE p.pronamespace = 'public'::regnamespace
+    AND p.proname = 'draw_down_quote';
 
   SELECT count(*) INTO v_wrapper_count
-  FROM pg_proc p
+  FROM pg_catalog.pg_proc AS p
+  JOIN pg_catalog.pg_roles AS owner_role ON owner_role.oid = p.proowner
+  JOIN pg_catalog.pg_language AS lang ON lang.oid = p.prolang
   WHERE p.pronamespace = 'public'::regnamespace
     AND p.proname = 'draw_down_quote'
     AND p.proargtypes = '2950 3802 2950 25 25'::oidvector
+    AND p.pronargdefaults = 3
+    AND p.prorettype = 'jsonb'::regtype
+    AND lang.lanname = 'plpgsql'
+    AND owner_role.rolname = 'postgres'
     AND p.prosecdef
-    AND p.proconfig @> ARRAY['search_path=public, pg_temp']::text[]
-    AND position('_draw_down_quote_below_cost_impl_20260810' IN p.prosrc) > 0;
+    AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+    AND octet_length(p.prosrc) = 292
+    AND encode(
+          extensions.digest(convert_to(p.prosrc, 'UTF8'), 'sha256'),
+          'hex'
+        ) = 'f842e27fb5d4e73395bb0b1d70f0f3cdf41481ba1977b70552194c899bf74d05'
+    AND p.proacl @> ARRAY[
+          'postgres=X/postgres',
+          'authenticated=X/postgres',
+          'service_role=X/postgres'
+        ]::aclitem[]
+    AND p.proacl <@ ARRAY[
+          'postgres=X/postgres',
+          'authenticated=X/postgres',
+          'service_role=X/postgres'
+        ]::aclitem[];
 
-  IF v_impl_count <> 1 OR v_wrapper_count <> 1 THEN
+  IF v_impl_total <> 1 OR v_impl_count <> 1
+     OR v_wrapper_total <> 1 OR v_wrapper_count <> 1 THEN
     RAISE EXCEPTION
-      'DRAW_DOWN_CENT_ALLOCATION_POSTFLIGHT_FAILED: impl %, wrapper %',
-      v_impl_count, v_wrapper_count;
+      'DRAW_DOWN_CENT_ALLOCATION_POSTFLIGHT_FAILED: impl total/exact %/%, wrapper total/exact %/%',
+      v_impl_total, v_impl_count, v_wrapper_total, v_wrapper_count;
   END IF;
 
   IF EXISTS (

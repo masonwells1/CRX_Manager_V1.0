@@ -48,6 +48,8 @@ ok(checkDangerousCommand("git filter-branch --force"), "filter-branch blocked");
 ok(checkDangerousCommand("rm -rf /etc"), "rm -rf /etc blocked (outside scratch allowlist)");
 ok(checkDangerousCommand("npm run nuke"), "npm run nuke blocked (literal script name)");
 ok(checkDangerousCommand('psql -c "DROP TABLE customers;"'), "psql DROP TABLE blocked");
+ok(checkDangerousCommand('supabase db query "DROP TABLE customers;"'), "Supabase db query DROP TABLE blocked");
+ok(checkDangerousCommand('supabase db execute "TRUNCATE customers;"'), "Supabase db execute TRUNCATE blocked");
 ok(!checkDangerousCommand("npm run build"), "npm run build allowed");
 ok(!checkDangerousCommand("git status"), "git status allowed");
 ok(!checkDangerousCommand("git push origin feature/x"), "ordinary feature push allowed");
@@ -163,10 +165,27 @@ ok(!checkDangerousCommand("cat .env.example"), "reading .env.example is not a wr
     ok(checkOneShotReplayCommand("Get-Content renamed-copy.sql | psql", tmp), "renamed byte-identical one-shot file is blocked");
     ok(checkOneShotReplayCommand(`psql -c \"${sql}\"`, tmp), "pasted full one-shot body is blocked");
     ok(checkOneShotReplayCommand(`supabase sql --file supabase/migrations/${stem}.sql`, tmp), "Supabase CLI one-shot replay is blocked");
+    ok(
+      checkOneShotReplayCommand(`supabase db query --linked --file supabase/migrations/${stem}.sql`, tmp),
+      "Supabase db query one-shot replay is blocked",
+    );
+    ok(
+      checkOneShotReplayCommand(`supabase db execute --file supabase/migrations/${stem}.sql`, tmp),
+      "Supabase db execute one-shot replay is blocked",
+    );
     eq(checkOneShotReplayCommand('psql -c "select 1"', tmp), null, "unrelated read-only psql command stays allowed");
+    eq(
+      checkOneShotReplayCommand('supabase db query --linked "select 1"', tmp),
+      null,
+      "unrelated read-only Supabase db query stays allowed",
+    );
 
     writeFileSync(path.join(baselineDir, "one-shot-migrations.json"), "not json");
     ok(checkOneShotReplayCommand('psql -c "select 1"', tmp), "unreadable one-shot registry fails closed for database execution");
+    ok(
+      checkOneShotReplayCommand('supabase db query --linked "select 1"', tmp),
+      "unreadable one-shot registry also fails closed for Supabase db query",
+    );
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

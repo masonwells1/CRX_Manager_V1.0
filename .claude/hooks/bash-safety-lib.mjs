@@ -98,7 +98,7 @@ export function checkAskCommand(cmd) {
 // since the original file ran it as a second, independent condition).
 export function checkDestructiveSql(cmd) {
   const text = String(cmd || "");
-  if (/\b(?:DROP\s+TABLE|DROP\s+SCHEMA|TRUNCATE)\b/i.test(text) && /(psql|supabase\s+sql|--?c\s)/i.test(text)) {
+  if (/\b(?:DROP\s+TABLE|DROP\s+SCHEMA|TRUNCATE)\b/i.test(text) && /(psql|supabase\s+(?:sql|db\s+(?:execute|query))|--?c\s)/i.test(text)) {
     return "Blocked destructive SQL via psql/supabase. Add a migration instead.";
   }
   return null;
@@ -119,7 +119,7 @@ export function checkDestructiveSql(cmd) {
 // the guard exactly when an operator is about to execute SQL.
 export function checkOneShotReplayCommand(cmd, cwd) {
   const text = String(cmd || "");
-  if (!text || !/\b(?:psql|supabase\s+(?:sql|db\s+execute))\b/i.test(text)) return null;
+  if (!text || !/\b(?:psql|supabase\s+(?:sql|db\s+(?:execute|query)))\b/i.test(text)) return null;
 
   const base = cwd || process.cwd();
   const registryPath = path.join(base, "supabase", "baselines", "one-shot-migrations.json");

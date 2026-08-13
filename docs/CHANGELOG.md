@@ -35,6 +35,20 @@ rollback-probe waiver remains fail-closed: the validator's filename plus
 LF-normalized SHA-256 binding was refreshed to those merged bytes, while the
 mutation suite continues to reject renamed or modified copies.
 
+The first exact-commit review then found three release blockers, all closed
+before push. The one-shot migration shell guard now recognizes the repository's
+real `supabase db query` and `supabase db execute` SQL paths (including renamed
+or pasted one-shot bodies and fail-closed registry errors). The multi-price draw
+migration now fingerprints the complete live predecessor and public-wrapper
+catalog topology before `CREATE OR REPLACE`, then fingerprints the complete
+installed body afterward, so a concurrent money, inventory, authorization or
+ACL change cannot be overwritten. Finally, the historical cent-repair rollback
+prover now supports the published privacy-preserving migration that derives its
+approved rows under lock instead of requiring the private applied-payload map.
+Focused proof passed 91 hook assertions and 7 migration/prover tests; the full
+captured 970-row schema replay also passed with all rollback smokes and zero
+residue.
+
 ## 2026-08-12 — Six migrations were running in production with no file in the repository
 
 Recovered and landed. **Nothing is applied by this change and no live behaviour changes** — all six

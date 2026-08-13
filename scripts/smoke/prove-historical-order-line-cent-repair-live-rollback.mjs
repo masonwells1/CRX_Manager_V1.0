@@ -51,24 +51,11 @@ assert.match(
   new RegExp(`^-- APPROVED_SET_DIGEST: ${EXPECTED_DIGEST}$`, 'm'),
   'migration is not bound to the approved live snapshot digest',
 );
-const approvedRowsMatch = migration.match(
-  /v_approved jsonb := \$approved_rows\$\s*([\s\S]*?)\s*\$approved_rows\$/,
+assert.match(
+  migration,
+  /SELECT jsonb_agg\([\s\S]*?INTO v_approved[\s\S]*?total_price IS DISTINCT FROM ROUND\(oi\.total_price, 2\)/,
+  'public replay migration no longer derives the approved dirty-row population under lock',
 );
-assert.ok(approvedRowsMatch, 'migration approved-row map is not readable');
-const approvedRows = JSON.parse(approvedRowsMatch[1]);
-assert.equal(approvedRows.length, 35, 'migration approved-row map must contain 35 rows');
-const approvedOrderIds = [...new Set(approvedRows.map((row) => row.order_id))].sort();
-assert.equal(approvedOrderIds.length, 16, 'migration approved-row map must cover 16 orders');
-for (const orderId of approvedOrderIds) {
-  assert.match(
-    orderId,
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
-    'migration approved-row map contains an invalid order id',
-  );
-}
-const approvedOrderValues = approvedOrderIds
-  .map((orderId) => `('${orderId}'::uuid)`)
-  .join(',\n        ');
 
 const tempDir = mkdtempSync(path.join(tmpdir(), 'crx-cent-repair-proof-'));
 const proofFile = path.join(tempDir, 'proof.sql');
@@ -132,8 +119,11 @@ COMMIT;
   assert.match(rehearsalOutput, new RegExp(PASS_TOKEN), 'migration did not reach rollback pass marker');
 
   const rollbackState = liveQuery(`
-    WITH approved_orders(order_id) AS (
-      VALUES ${approvedOrderValues}
+    WITH approved_orders AS (
+      SELECT DISTINCT oi.order_id
+        FROM public.order_items AS oi
+       WHERE oi.total_price IS NOT NULL
+         AND oi.total_price IS DISTINCT FROM ROUND(oi.total_price, 2)
     ), snapshot_rows AS (
       SELECT 'L'::text AS row_kind,
              oi.id,
@@ -198,6 +188,7 @@ COMMIT;
          WHERE total_price IS NOT NULL
            AND total_price IS DISTINCT FROM ROUND(total_price, 2)
       ),
+      'approved_order_count', (SELECT count(*) FROM approved_orders),
       'constraint_count', (
         SELECT count(*)
           FROM pg_constraint
@@ -211,6 +202,7 @@ COMMIT;
   assert.deepEqual(
     state,
     {
+      approved_order_count: 16,
       constraint_count: 0,
       dirty_lines: 35,
       snapshot_digest: EXPECTED_DIGEST,
