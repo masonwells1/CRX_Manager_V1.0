@@ -56,7 +56,10 @@ export function syncPendingActions(
 ): Promise<OfflineSyncResult> {
   if (activeSync) {
     if (activeSync.userId === currentUserId && !options.force) return activeSync.promise;
-    return activeSync.promise.then(() => syncPendingActions(currentUserId, options));
+    return activeSync.promise.then(
+      () => syncPendingActions(currentUserId, options),
+      () => syncPendingActions(currentUserId, options),
+    );
   }
 
   const promise: Promise<OfflineSyncResult> = processPendingActions(currentUserId, options).finally(() => {

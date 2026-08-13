@@ -507,6 +507,21 @@ describe('syncPendingActions', () => {
     expect(mockRpc).toHaveBeenCalledTimes(2);
   });
 
+  it('still starts a queued replay after the active replay rejects', async () => {
+    let rejectFirstRead: (reason?: unknown) => void = () => {};
+    mockGetPendingActions
+      .mockReturnValueOnce(new Promise((_resolve, reject) => { rejectFirstRead = reject; }))
+      .mockResolvedValueOnce([]);
+
+    const first = syncPendingActions('user-1');
+    const second = syncPendingActions('user-2');
+
+    rejectFirstRead(new Error('IndexedDB unavailable'));
+    await expect(first).rejects.toThrow('IndexedDB unavailable');
+    await expect(second).resolves.toEqual(EMPTY_RESULT);
+    expect(mockGetPendingActions).toHaveBeenCalledTimes(2);
+  });
+
   it('queues a forced same-user replay behind a non-forced active replay', async () => {
     mockGetPendingActions
       .mockResolvedValueOnce([makeAction()])
