@@ -198,7 +198,7 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | quote_sections | All authenticated | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) |
 | quote_product_draws | Admin / Sales Rep | - (SECDEF RPCs only) | - (SECDEF RPCs only) | - (SECDEF RPCs only) |
 | quote_items | All authenticated | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) |
-| quote_versions | All authenticated | Admin / Sales Rep (quote owner) | - | - |
+| quote_versions | All authenticated | - (create_quote_version RPC only, since 20260813080000) | - | - |
 | orders | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | order_items | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | inventory | Admin / Sales Rep / Driver | Admin | Admin | Admin |

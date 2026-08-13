@@ -1,0 +1,182 @@
+-- predicate: quote-versions-rpc-owned
+-- CRX-SEC-1 (found 2026-08-13 by the exact-SHA adversarial review of PR #389).
+-- public.quote_versions.snapshot_data is an AUTHORITATIVE cost source: since
+-- 20260812115236, restoring a version stamps quote_items.cost_at_quote_cents
+-- from snapshot_data.sections[].items[].current_cost, convert_quote_to_order copies that
+-- into order_items.cost_per_unit / cost_at_time_cents, and canonical profit and
+-- commissions derive from there. So any client-writable path into this table is
+-- a path into commission money, and the below-cost approval trigger does not
+-- catch it — that trigger compares SALE PRICE to LIVE cost and understating the
+-- historical cost basis only raises apparent margin.
+--
+-- The write boundary this predicate defends, installed by 20260813080000:
+--   * no INSERT/UPDATE/DELETE/FOR ALL policy on quote_versions;
+--   * no direct INSERT/UPDATE/DELETE/TRUNCATE privilege for anon/authenticated
+--     (TRUNCATE matters independently — RLS policies do not apply to it at all);
+--   * SELECT and qversions_select preserved, because version history must keep
+--     rendering and this predicate must not pass by having broken reads;
+--   * the owner-side writer _create_quote_version_owner_impl stays a
+--     search_path-pinned SECURITY DEFINER owned by an RLS-bypassing role and
+--     stays uncallable by anon/authenticated — it is what holds the
+--     crx.quote_cost_snapshot_passthrough that makes snapshot_data trusted;
+--   * the two public entry points stay authenticated-only.
+--
+-- SCOPE: this is a BROWSER-role boundary. service_role keeps full write access,
+-- as it does on every table; "RPC-owned" means no anon/authenticated path.
+--
+-- Historical catch: CRX-SEC-1, 2026-08-13. No evidence of exploitation: at
+-- discovery every existing snapshot cost line parsed as a number and none sat
+-- below half the product's current catalog cost. That is a check against
+-- TODAY's cost, not proof no forged row was ever written.
+-- Contract: EXPECT ZERO rows. Any row means the forged-version path is open
+-- again, or that it was "closed" by breaking the legitimate one.
+
+SELECT 'quote_versions:external-mutation-policy' AS violation_key,
+       'public.quote_versions must not have an INSERT/UPDATE/DELETE/FOR ALL policy; versions are created only by create_quote_version' AS reason
+ WHERE EXISTS (
+   SELECT 1
+     FROM pg_policy p
+    WHERE p.polrelid = 'public.quote_versions'::regclass
+      AND p.polcmd IN ('a', 'w', 'd', '*')
+ )
+
+UNION ALL
+
+SELECT 'quote_versions:browser-mutation-privilege' AS violation_key,
+       'anon/authenticated must not hold direct INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER, or REFERENCES on public.quote_versions' AS reason
+ WHERE has_table_privilege('authenticated', 'public.quote_versions', 'INSERT')
+    OR has_table_privilege('authenticated', 'public.quote_versions', 'UPDATE')
+    OR has_table_privilege('authenticated', 'public.quote_versions', 'DELETE')
+    OR has_table_privilege('authenticated', 'public.quote_versions', 'TRUNCATE')
+    OR has_table_privilege('authenticated', 'public.quote_versions', 'TRIGGER')
+    OR has_table_privilege('authenticated', 'public.quote_versions', 'REFERENCES')
+    OR has_table_privilege('anon', 'public.quote_versions', 'INSERT')
+    OR has_table_privilege('anon', 'public.quote_versions', 'UPDATE')
+    OR has_table_privilege('anon', 'public.quote_versions', 'DELETE')
+    OR has_table_privilege('anon', 'public.quote_versions', 'TRUNCATE')
+    OR has_table_privilege('anon', 'public.quote_versions', 'TRIGGER')
+    OR has_table_privilege('anon', 'public.quote_versions', 'REFERENCES')
+
+UNION ALL
+
+-- REVOKE ... ON TABLE removes table-level ACLs only, and has_table_privilege
+-- reports only table-level. A column grant on snapshot_data alone reopens the
+-- whole money path while every check above still passes. has_any_column_privilege
+-- supports INSERT/UPDATE/REFERENCES (and SELECT); DELETE/TRUNCATE/TRIGGER are
+-- table-only privileges and are already covered above.
+SELECT 'quote_versions:column-mutation-privilege' AS violation_key,
+       'anon/authenticated must not hold a COLUMN-level INSERT, UPDATE or REFERENCES on public.quote_versions — a column grant survives REVOKE ... ON TABLE' AS reason
+ WHERE has_any_column_privilege('authenticated', 'public.quote_versions', 'INSERT')
+    OR has_any_column_privilege('authenticated', 'public.quote_versions', 'UPDATE')
+    OR has_any_column_privilege('authenticated', 'public.quote_versions', 'REFERENCES')
+    OR has_any_column_privilege('anon', 'public.quote_versions', 'INSERT')
+    OR has_any_column_privilege('anon', 'public.quote_versions', 'UPDATE')
+    OR has_any_column_privilege('anon', 'public.quote_versions', 'REFERENCES')
+
+UNION ALL
+
+SELECT 'quote_versions:read-path-regressed' AS violation_key,
+       'authenticated lost SELECT or qversions_select was removed — the write boundary must not be satisfied by breaking version history' AS reason
+ WHERE NOT has_table_privilege('authenticated', 'public.quote_versions', 'SELECT')
+    OR NOT EXISTS (
+      SELECT 1
+        FROM pg_policy p
+       WHERE p.polrelid = 'public.quote_versions'::regclass
+         AND p.polname = 'qversions_select'
+         AND p.polcmd = 'r'
+    )
+
+UNION ALL
+
+SELECT 'quote_versions:rls-disabled' AS violation_key,
+       'row level security must remain enabled on public.quote_versions' AS reason
+ WHERE NOT EXISTS (
+   SELECT 1
+     FROM pg_class c
+    WHERE c.oid = 'public.quote_versions'::regclass
+      AND c.relrowsecurity
+ )
+
+UNION ALL
+
+-- 20260813080000 asserts FORCE ROW LEVEL SECURITY is OFF and depends on it: the
+-- INSERT policy is gone, so if a later migration turns FORCE on, the owner-side
+-- writer stops being exempt from policies and version creation dies in
+-- production. Without this branch the sweep would report the invariant healthy.
+SELECT 'quote_versions:force-rls-enabled' AS violation_key,
+       'FORCE ROW LEVEL SECURITY must stay off on public.quote_versions — with no INSERT policy left, forcing it would break the owner-side writer' AS reason
+ WHERE EXISTS (
+   SELECT 1
+     FROM pg_class c
+    WHERE c.oid = 'public.quote_versions'::regclass
+      AND c.relforcerowsecurity
+ )
+
+UNION ALL
+
+SELECT '_create_quote_version_owner_impl(uuid, uuid, text, text)' AS violation_key,
+       'the owner-side version writer must remain exactly one search_path-pinned SECURITY DEFINER owned by an RLS-bypassing role' AS reason
+ WHERE (
+   SELECT count(*)
+     FROM pg_proc p
+    WHERE p.pronamespace = 'public'::regnamespace
+      AND p.proname = '_create_quote_version_owner_impl'
+ ) <> 1
+    OR NOT EXISTS (
+      SELECT 1
+        FROM pg_proc p
+        JOIN pg_roles r ON r.oid = p.proowner
+       WHERE p.pronamespace = 'public'::regnamespace
+         AND p.proname = '_create_quote_version_owner_impl'
+         AND p.prosecdef
+         AND r.rolbypassrls
+         AND EXISTS (
+           SELECT 1
+             FROM unnest(coalesce(p.proconfig, '{}'::text[])) AS config(value)
+            WHERE replace(config.value, ' ', '') = 'search_path=public,pg_temp'
+         )
+    )
+
+UNION ALL
+
+-- rolbypassrls bypasses POLICIES, not GRANTS. Dropping qversions_insert removed
+-- the policy the owner never needed; a future blanket "revoke writes on
+-- quote_versions" that catches the owner role too would silently remove the LAST
+-- write path, with every other branch here still returning zero rows.
+SELECT '_create_quote_version_owner_impl:lost-insert-grant' AS violation_key,
+       'the role that owns the version writer must still hold INSERT on public.quote_versions — bypassing RLS does not grant privileges' AS reason
+ WHERE EXISTS (
+   SELECT 1
+     FROM pg_proc p
+     JOIN pg_roles r ON r.oid = p.proowner
+    WHERE p.pronamespace = 'public'::regnamespace
+      AND p.proname = '_create_quote_version_owner_impl'
+      AND NOT has_table_privilege(r.rolname, 'public.quote_versions', 'INSERT')
+ )
+
+UNION ALL
+
+SELECT '_create_quote_version_owner_impl:external-execute' AS violation_key,
+       'anon/authenticated must not hold EXECUTE on the owner-side version writer — it carries the snapshot passthrough' AS reason
+ WHERE has_function_privilege(
+         'authenticated', 'public._create_quote_version_owner_impl(uuid,uuid,text,text)', 'EXECUTE')
+    OR has_function_privilege(
+         'anon', 'public._create_quote_version_owner_impl(uuid,uuid,text,text)', 'EXECUTE')
+
+UNION ALL
+
+SELECT 'create_quote_version(uuid, uuid, text, text, bigint)' AS violation_key,
+       'create_quote_version must stay authenticated-callable and never anon-callable' AS reason
+ WHERE NOT has_function_privilege(
+         'authenticated', 'public.create_quote_version(uuid,uuid,text,text,bigint)', 'EXECUTE')
+    OR has_function_privilege(
+         'anon', 'public.create_quote_version(uuid,uuid,text,text,bigint)', 'EXECUTE')
+
+UNION ALL
+
+SELECT 'restore_quote_version(uuid, uuid, uuid, text, bigint, text)' AS violation_key,
+       'restore_quote_version must stay authenticated-callable and never anon-callable' AS reason
+ WHERE NOT has_function_privilege(
+         'authenticated', 'public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)', 'EXECUTE')
+    OR has_function_privilege(
+         'anon', 'public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)', 'EXECUTE');

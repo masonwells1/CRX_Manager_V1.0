@@ -2,6 +2,54 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-13 — A sales rep could write their own cost basis into commission money (CRX-SEC-1)
+
+Found by the exact-SHA adversarial review of PR #389 — the first review any human or reviewer had
+given the SQL that went live on 2026-08-12, because until that PR the files existed nowhere but
+inside the database. **NOT YET APPLIED.** This change adds the fix and its proofs to the repository;
+nothing in the live database moves until the migration is applied and approved separately.
+
+**The hole.** `quote_versions` stores a snapshot of a quote each time a version is created. Its
+insert rule checked only *who owns the quote* — never what was in the snapshot — and the table still
+carried a raw write grant for every signed-in user. So a sales rep could write a version row of their
+own construction onto their own quote, straight past the app.
+
+That became a money problem the day before. Since `20260812115236`, restoring a version copies the
+cost figures out of that snapshot onto the quote's lines, converting the quote to an order freezes
+those costs into the order permanently, and profit, margin reporting and commission all derive from
+there. Understating a cost raises apparent profit, and the below-cost approval guard cannot catch it:
+that guard compares the *sale price* against the *live* product cost, so lowering the recorded cost
+only makes the line look more profitable and the guard never fires.
+
+**No evidence anyone did it.** Verified read-only at discovery and again on 2026-08-13: every cost
+line in every existing snapshot parses as a number against a real product, and none sits below half
+that product's current cost. That is a check against today's cost, not proof no forged row was ever
+written.
+
+**The fix** (`20260813080000`) takes the same shape as the returns boundary from `20260715203911`:
+drop the ownership-only insert rule, and revoke the direct write privileges — insert, update, delete,
+truncate, trigger and references — from PUBLIC, `anon` and `authenticated`. Writes go through the
+existing RPC, which builds the snapshot server-side. Truncate is revoked deliberately and separately:
+insert rules do not apply to truncate at all, so the grant alone let any signed-in caller empty the
+table. Reading is untouched, and the migration fails if reading breaks — a boundary that also broke
+version history would be a regression, not a fix.
+
+It refuses to apply to a database it does not recognise: preconditions check the writer is still the
+one RLS-bypassing function it expects, that no second writer exists, that each function has exactly
+one version at exactly the expected signature, and that no snapshot already carries a suspicious cost
+basis. Where a check cannot see something — a function body stored in a form its source scan cannot
+read — it aborts rather than assume the answer.
+
+**Three companion artifacts**, the standard pattern here: a standing drift check that fails if the
+boundary is ever reopened *or* if it is "closed" by breaking the legitimate writer; a rolled-back
+behavioural proof that runs as a real signed-in admin and refuses to run at all until the migration
+has applied, because its steps are genuine write attempts; and a shape test over all three.
+
+**Also in this change**, from the same review: the idempotency guard credited a wrapper for calling a
+compliant delegate without checking it actually forwarded the key, so a wrapper handing its delegate
+nothing was marked compliant while every retry re-ran the money write. The guard now reads the real
+argument list. Mutation-tested in both directions; no existing RPC regressed.
+
 ## 2026-08-12 — Six migrations were running in production with no file in the repository
 
 Recovered and landed. **Nothing is applied by this change and no live behaviour changes** — all six
@@ -81,9 +129,14 @@ production as it already stands; none is caused by landing the files.** Three he
   therefore fail with a generic error and no path forward. Sales at or above cost are unaffected —
   the guard returns early before any of this is reached.
 - **Confirmed — a quote carrying the same product on two lines cannot be re-saved.** `save_quote`
-  identifies existing lines by id, but the QuoteBuilder payload
-  (`src/pages/QuoteBuilder.tsx`) omits `id` and `client_key` entirely, so every line arrives
-  unidentified and two lines of one product are unresolvable. The resulting
+  matches each incoming line to its prior line by id, and when the id is absent falls back to
+  matching on this quote's own `product_id`. That fallback deliberately refuses two cases rather than
+  guess: more than one unidentified payload line competing for the same product's history, or prior
+  lines of that product recorded at different costs. Both refusals are correct in isolation — picking
+  one would let iteration order decide which line keeps its recorded cost basis. The problem is that
+  the QuoteBuilder payload (`src/pages/QuoteBuilder.tsx`) omits `id` and `client_key` entirely, so
+  every line arrives unidentified and the fallback is the only path available. A quote already
+  carrying two lines of one product therefore always lands on the first refusal. The resulting
   `QUOTE_ITEM_AMBIGUOUS_COST` tells the user to reload the quote, which cannot help, because the
   reload strips the ids again. New quotes are unaffected; the guard only engages where prior lines of
   that product already exist. No quote in the live database is currently shaped this way, so this is

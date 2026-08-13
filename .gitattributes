@@ -57,6 +57,12 @@ supabase/migrations/20260813040000_clamp_negative_commission_remainder.sql text 
 supabase/migrations/20260813050000_guard_job_commission_split_immutable.sql text eol=lf
 supabase/migrations/20260813060000_require_completed_delivery_before_invoice_post.sql text eol=lf
 
+# CRX-SEC-1. This one pins no md5, but it is pinned for the apply path: the
+# migration-apply-guard proof binds a hash of the exact bytes handed to the
+# applier, so a CRLF checkout would mint a proof that no longer matches the file
+# under review.
+supabase/migrations/20260813080000_lock_quote_versions_writes_to_rpc.sql text eol=lf
+
 # Generated clean-rebuild baselines are hash-verified release artifacts.
 supabase/baselines/*.sql  text eol=lf
 supabase/baselines/*.json text eol=lf

@@ -148,11 +148,11 @@ const RLS_ACCESS_MATRIX: TableRLSContract[] = [
   {
     table: 'quote_versions',
     access: {
-      admin:     { SELECT: 'all', INSERT: 'all', UPDATE: 'none', DELETE: 'none' },
-      sales_rep: { SELECT: 'all', INSERT: 'own', UPDATE: 'none', DELETE: 'none' },
+      admin:     { SELECT: 'all', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
+      sales_rep: { SELECT: 'all', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
       driver:    { SELECT: 'none', INSERT: 'none', UPDATE: 'none', DELETE: 'none' },
     },
-    notes: 'Versions are append-only snapshots; never updated or deleted. Office-only reads since 20260727231652 — snapshot_data carries full quote pricing.',
+    notes: 'Versions are append-only snapshots; never updated or deleted. Office-only reads since 20260727231652 — snapshot_data carries full quote pricing. Writes are RPC-only through create_quote_version since 20260813080000 (CRX-SEC-1): the old qversions_insert policy checked only quote OWNERSHIP, not the payload, so a rep could insert a self-authored snapshot on their own quote. That stopped being cosmetic when 20260812115236 made snapshot_data an authoritative cost source — restore stamps quote_items.cost_at_quote_cents from snapshot_data.sections[].items[].current_cost, convert_quote_to_order copies it into the order\'s immutable cost snapshot, and profit and commissions derive from there. The below-cost approval trigger does not catch it: that trigger compares SALE PRICE to LIVE cost, and understating the historical cost basis only raises apparent margin. No evidence of exploitation at discovery: every existing snapshot cost line parsed as a number and none sat below half its product\'s current cost — a check against TODAY\'s cost, not proof no forged row was ever written. Enforced live by privilege, not policy: the direct INSERT/UPDATE/DELETE/TRUNCATE/TRIGGER/REFERENCES grants are revoked from PUBLIC, anon and authenticated (PUBLIC matters — a grant held there reaches every role), and the standing predicate quote-versions-rpc-owned.sql fails if any of them returns, including a column-level grant that survives a table-level revoke. service_role keeps full write access, as on every table.',
   },
 
   // ─── Pricing / Margin ───────────────────────────────────────────────

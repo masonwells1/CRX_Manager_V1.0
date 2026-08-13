@@ -1843,27 +1843,120 @@ function resolveFunctionBody(rpc: string, maxIdx?: number, seen = new Set<string
 }
 
 /**
+ * The argument list of a call whose opening paren sits at `open - 1`, matched
+ * with balanced parens so a nested call or a cast does not truncate it.
+ * Single-quoted literals are skipped so a `')'` inside a message cannot close
+ * the list early. Returns null if the call is never closed.
+ */
+function callArgumentList(body: string, open: number): string | null {
+  let depth = 1;
+  let inLiteral = false;
+  for (let i = open; i < body.length; i++) {
+    const ch = body[i];
+    if (inLiteral) {
+      if (ch === "'") inLiteral = false;
+      continue;
+    }
+    if (ch === "'") {
+      inLiteral = true;
+    } else if (ch === '(') {
+      depth++;
+    } else if (ch === ')') {
+      depth--;
+      if (depth === 0) return body.slice(open, i);
+    }
+  }
+  return null;
+}
+
+/**
+ * Names that carry the caller's idempotency key inside `body`: the parameter
+ * itself, plus any local assigned from it (`v_key := p_idempotency_key;` and
+ * `v_key := coalesce(p_idempotency_key, ...)`).
+ */
+function idempotencyKeyNames(body: string): string[] {
+  const names = ['p_idempotency_key'];
+  const re = /\b([A-Za-z_][A-Za-z0-9_]*)\s*:=\s*([^;]*)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body)) !== null) {
+    if (/\bp_idempotency_key\b/i.test(m[2]) && !names.includes(m[1].toLowerCase())) {
+      names.push(m[1].toLowerCase());
+    }
+  }
+  return names;
+}
+
+/**
  * True when this body — or any function it delegates to — handles idempotency.
  *
  * A thin wrapper that passes p_idempotency_key straight through to a private
  * impl is still covered; the guard's real target is an RPC that DECLARES the
  * parameter and then drops it on the floor, which is unchanged by delegation.
  * Depth-bounded and cycle-guarded.
+ *
+ * A delegate is only credited when the CALL SITE actually forwards the key.
+ * Without that check the guard credits `public._impl(p_order_id, NULL)` — the
+ * wrapper declares p_idempotency_key, drops it on the floor, and the delegate's
+ * own idempotency block makes the whole chain look covered while every call
+ * claims a fresh key. That is exactly the failure this suite exists to catch,
+ * so it must not be reachable through one level of indirection.
  */
 function usesIdempotencyThroughDelegates(body: string, depth = 0, seen = new Set<string>()): boolean {
   if (bodyUsesIdempotency(body)) return true;
   if (depth >= 3) return false;
+  const keyNames = idempotencyKeyNames(body);
   const callRe = /\bpublic\.([A-Za-z_][A-Za-z0-9_]*)\s*\(/gi;
   let m: RegExpExecArray | null;
   while ((m = callRe.exec(body)) !== null) {
     const callee = m[1].toLowerCase();
     if (seen.has(callee)) continue;
+    const args = callArgumentList(body, m.index + m[0].length);
+    if (args === null) continue;
+    const forwardsKey = keyNames.some((name) => new RegExp(`\\b${name}\\b`, 'i').test(args));
+    if (!forwardsKey) continue;
     seen.add(callee);
     const calleeBody = resolveFunctionBody(callee);
     if (calleeBody && usesIdempotencyThroughDelegates(calleeBody, depth + 1, seen)) return true;
   }
   return false;
 }
+
+describe('Idempotency delegate credit (mutation guard for the guard itself)', () => {
+  // save_job is the anchor: a separate test below proves its own body handles
+  // idempotency, so any wrapper that genuinely forwards the key to it is
+  // covered and any wrapper that does not must NOT be.
+  const wrap = (args: string, prelude = '') =>
+    `DECLARE v_res jsonb; BEGIN ${prelude} v_res := public.save_job(${args}); RETURN v_res; END;`;
+
+  it('credits a wrapper that forwards the key', () => {
+    expect(usesIdempotencyThroughDelegates(wrap('p_payload, p_idempotency_key'))).toBe(true);
+  });
+
+  it('credits a wrapper that forwards a local assigned from the key', () => {
+    expect(
+      usesIdempotencyThroughDelegates(
+        wrap('p_payload, v_key', 'v_key := coalesce(p_idempotency_key, NULL);'),
+      ),
+    ).toBe(true);
+  });
+
+  it('is not fooled by a nested call in an earlier argument', () => {
+    expect(
+      usesIdempotencyThroughDelegates(wrap("coalesce(p_payload, '{}'::jsonb), p_idempotency_key")),
+    ).toBe(true);
+  });
+
+  it('REFUSES a wrapper that declares the key and passes NULL instead', () => {
+    // The whole point. Before 2026-08-13 this returned true: the delegate's own
+    // idempotency block was credited without ever checking the call site, so a
+    // wrapper could drop the key on the floor and still pass this suite.
+    expect(usesIdempotencyThroughDelegates(wrap('p_payload, NULL'))).toBe(false);
+  });
+
+  it('REFUSES a wrapper that omits the key argument entirely', () => {
+    expect(usesIdempotencyThroughDelegates(wrap('p_payload'))).toBe(false);
+  });
+});
 
 describe('Idempotency BODY verification (reads migration SQL)', () => {
   it('every covered RPC body actually reads/writes idempotency_keys (not just declares the param)', () => {
