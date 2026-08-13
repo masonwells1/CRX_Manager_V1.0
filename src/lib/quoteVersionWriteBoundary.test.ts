@@ -252,8 +252,18 @@ describe('quote_versions write boundary — migration', () => {
     // Table-level has_table_privilege is not enough either: a grant of INSERT on
     // a SINGLE COLUMN of the rewriting relation is enough to drive the rewrite,
     // and the table-level test returns false for it.
-    expect(migration).toMatch(/has_any_column_privilege\('authenticated', v\.oid, 'INSERT'\)/);
-    expect(migration).toMatch(/has_any_column_privilege\('anon', v\.oid, 'INSERT'\)/);
+    expect(migration).toMatch(/has_any_column_privilege\('authenticated', rr\.relid, 'INSERT'\)/);
+    expect(migration).toMatch(/has_any_column_privilege\('anon', rr\.relid, 'INSERT'\)/);
+
+    // And the walk must be RECURSIVE, not one hop. A view B over view A over
+    // quote_versions carries its pg_depend edge to A, not to the table, so a
+    // single hop never reaches B — while B can still be auto-updatable and a
+    // write through it is permission-checked as B's owner. That is this check's
+    // own hole one level further out, and an earlier draft had it. UNION rather
+    // than UNION ALL is what makes the walk terminate on a rule cycle, so pin
+    // that too: UNION ALL here would hang the apply instead of failing it.
+    expect(migrationCode).toMatch(/WITH RECURSIVE rewrite_reachable AS/);
+    expect(migrationCode).not.toMatch(/rewrite_reachable AS \([\s\S]{0,400}?UNION ALL/);
   });
 
   it('fails closed rather than open when it cannot see a routine body', () => {
@@ -357,6 +367,17 @@ describe('quote_versions write boundary — standing predicate', () => {
       // `authenticated` — the role a logged-in browser session carries — was
       // unwatched on this signature by every predicate in the sweep.
       '_restore_quote_version_owner_impl:external-execute',
+      // ...and its own overload count, for the same reason the two entry points
+      // have one: the branch above names ONE signature, so a second overload of
+      // this name is unwatched by it, and on this project a new function is born
+      // EXECUTE-able by the API roles.
+      '_restore_quote_version_owner_impl:overload-count',
+      // One layer further in than the entry point: 20260812115237 renamed the old
+      // restore_quote_version to this and rebuilt the public name as a wrapper
+      // that runs the below-cost approval check FIRST. The gate lives in the
+      // wrapper, so anything able to call this directly restores a stored cost
+      // basis with that check skipped.
+      '_restore_quote_version_below_cost_impl_20260810:external-execute',
       // These six mirror assertions the migration makes exactly once, at apply
       // time. Without them the predicate describes only the table and its three
       // named routines, and a NEW writer or a NEW rewrite path could reopen the

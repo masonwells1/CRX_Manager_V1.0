@@ -274,6 +274,27 @@ SELECT 'restore_quote_version(uuid, uuid, uuid, text, bigint, text)' AS violatio
 
 UNION ALL
 
+-- The owner-side restore implementation gets the same exactly-one-overload pin
+-- the two entry points and the owner-side WRITER got, for the identical reason
+-- and closing the identical gap: the branch that follows names ONE signature,
+-- so a second overload of this name is unwatched by it. On this project a newly
+-- created function is born EXECUTE-able by the API roles, so that second
+-- overload is browser-callable from the moment it exists — and this is the
+-- routine that stamps a stored snapshot back onto a quote as its cost basis.
+-- Without this count, the signature-pinned branch below would keep reporting
+-- clean while the cost-basis hole this whole file exists to close was reopened
+-- one signature over.
+SELECT '_restore_quote_version_owner_impl:overload-count' AS violation_key,
+       'public._restore_quote_version_owner_impl must have exactly one overload — a new signature is born EXECUTE-able by the API roles and is not covered by the signature-pinned branch below' AS reason
+ WHERE (
+   SELECT count(*)
+     FROM pg_proc p
+    WHERE p.pronamespace = 'public'::regnamespace
+      AND p.proname = '_restore_quote_version_owner_impl'
+ ) <> 1
+
+UNION ALL
+
 -- The restore path has an owner-side implementation too, and nothing anywhere
 -- pinned its EXECUTE. It is the routine that READS a snapshot back onto the
 -- quote as a cost basis, so a browser role calling it directly skips
@@ -300,6 +321,34 @@ SELECT '_restore_quote_version_owner_impl:external-execute' AS violation_key,
 
 UNION ALL
 
+-- One layer FURTHER IN than the branch above, and the reason it earns its own
+-- pin rather than being folded into it. 20260812115237 renamed the pre-existing
+-- restore_quote_version out of the way to
+-- `_restore_quote_version_below_cost_impl_20260810(uuid, uuid, uuid, text,
+-- bigint)` and rebuilt the public entry point as a thin wrapper that calls
+-- `_begin_below_cost_money_write` FIRST and then delegates to it. So the
+-- below-cost approval gate lives in the wrapper, not in the implementation:
+-- anything that can call the implementation directly performs a restore with
+-- the approval check skipped entirely. That migration revokes it from PUBLIC,
+-- anon, authenticated and service_role and grants only postgres — this branch
+-- makes that standing instead of one-shot.
+SELECT '_restore_quote_version_below_cost_impl_20260810:external-execute' AS violation_key,
+       'anon/authenticated must not hold EXECUTE on the renamed below-cost restore implementation — it is the layer BELOW the approval gate, so calling it directly restores a stored cost basis without the below-cost check the public wrapper performs' AS reason
+ WHERE CASE
+         WHEN to_regprocedure('public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)') IS NULL
+           -- Unresolvable means unverifiable; unverifiable reports as drift.
+           -- Same trade as the two branches above. A rename or a signature
+           -- change here also means the wrapper above it no longer resolves,
+           -- which is worth a look regardless of privileges.
+           THEN true
+         ELSE has_function_privilege(
+                'authenticated', 'public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)', 'EXECUTE')
+           OR has_function_privilege(
+                'anon', 'public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)', 'EXECUTE')
+       END
+
+UNION ALL
+
 -- The six branches below mirror assertions that 20260813080000 makes exactly
 -- ONCE, at apply time. Everything above this line describes the table and its
 -- three named routines; nothing above notices a NEW writer or a NEW rewrite path
@@ -309,26 +358,43 @@ UNION ALL
 
 SELECT 'quote_versions:rewrite-path-writable' AS violation_key,
        'a relation carrying a rewrite rule over public.quote_versions (a view, or a rule on an ordinary table) is writable by anon/authenticated — a rewritten write is permission-checked as the OWNER of the rewriting relation, so the table-level revoke does not cover it' AS reason
+-- RECURSIVE, matching the postcondition in 20260813080000 rather than the
+-- single hop this branch originally used. One hop finds only relations that
+-- rewrite DIRECTLY onto quote_versions. A view B defined over view A over
+-- quote_versions carries its dependency on A, not on the table, so a one-hop
+-- scan skips B entirely — while B can still be auto-updatable, and a write
+-- through it is permission-checked as B's owner. That is this branch's own hole,
+-- one level further out. UNION (not UNION ALL) deduplicates against everything
+-- already produced, so the walk terminates even if a pair of rules on ordinary
+-- tables points at each other.
+--
+-- No relkind filter, deliberately: a RULE on an ordinary table reaches this
+-- table exactly as a view does. Column-granular for the same reason the
+-- base-table branch above is.
  WHERE EXISTS (
+   WITH RECURSIVE rewrite_reachable AS (
+     SELECT 'public.quote_versions'::regclass AS relid
+     UNION
+     SELECT v.oid
+       FROM rewrite_reachable rr
+       JOIN pg_depend d ON d.refclassid = 'pg_class'::regclass
+                       AND d.refobjid = rr.relid
+                       AND d.classid = 'pg_rewrite'::regclass
+       JOIN pg_rewrite w ON w.oid = d.objid
+       JOIN pg_class v ON v.oid = w.ev_class
+      WHERE v.oid <> rr.relid
+   )
    SELECT 1
-     FROM pg_depend d
-     JOIN pg_rewrite w ON w.oid = d.objid
-     JOIN pg_class v ON v.oid = w.ev_class
-    WHERE d.refclassid = 'pg_class'::regclass
-      AND d.refobjid = 'public.quote_versions'::regclass
-      AND d.classid = 'pg_rewrite'::regclass
-      -- No relkind filter, deliberately: a RULE on an ordinary table reaches
-      -- this table exactly as a view does. Column-granular for the same reason
-      -- the base-table branch above is.
-      AND v.oid <> 'public.quote_versions'::regclass
-      AND (has_any_column_privilege('authenticated', v.oid, 'INSERT')
-        OR has_any_column_privilege('authenticated', v.oid, 'UPDATE')
-        OR has_any_column_privilege('authenticated', v.oid, 'REFERENCES')
-        OR has_table_privilege('authenticated', v.oid, 'DELETE')
-        OR has_any_column_privilege('anon', v.oid, 'INSERT')
-        OR has_any_column_privilege('anon', v.oid, 'UPDATE')
-        OR has_any_column_privilege('anon', v.oid, 'REFERENCES')
-        OR has_table_privilege('anon', v.oid, 'DELETE'))
+     FROM rewrite_reachable rr
+    WHERE rr.relid <> 'public.quote_versions'::regclass
+      AND (has_any_column_privilege('authenticated', rr.relid, 'INSERT')
+        OR has_any_column_privilege('authenticated', rr.relid, 'UPDATE')
+        OR has_any_column_privilege('authenticated', rr.relid, 'REFERENCES')
+        OR has_table_privilege('authenticated', rr.relid, 'DELETE')
+        OR has_any_column_privilege('anon', rr.relid, 'INSERT')
+        OR has_any_column_privilege('anon', rr.relid, 'UPDATE')
+        OR has_any_column_privilege('anon', rr.relid, 'REFERENCES')
+        OR has_table_privilege('anon', rr.relid, 'DELETE'))
  )
 
 UNION ALL
