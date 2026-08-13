@@ -34,6 +34,12 @@ Sol-high proof before either write mode can run. Twenty-two counted producer ass
 next pass found PostgreSQL's optional `ONLY` keyword could hide persistent targets from CTE-wrapped
 `UPDATE`, `DELETE`, and `MERGE`. Target enumeration now accepts `ONLY`, and any `WITH` statement that still
 contains an unaccounted DML verb fails closed. Three exact regressions pin those forms.
+After the corrected producer received a clean exact-head review, its pinned bootstrap installed the outer
+protections. The producer now recognizes the complete reviewed pre-install or post-install blob pair, so the
+focused harness remains repeatable after protection without accepting a mixed or stale state. The owning
+production-guard suite executes that focused harness and proves an invocation without exact-head proof is denied;
+the risky-path suite also pins the producer's exact-review classification. Rollback attempts every protected-file
+restore and reports any incomplete restoration without hiding the original failure.
 Earlier passes closed a Unicode identifier boundary that could conceal destructive SQL and removed the
 unsafe assumption that any `pg_temp`-qualified DML is harmless: PostgreSQL temporary views can be
 updatable proxies for persistent tables. The candidate now permits temporary DML only for a base temp

@@ -25,6 +25,8 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
   against the generated module plus 22 counted producer assertions, including cross-platform line-ending
   normalization and all classifier defect
   classes found by the first twenty-two Sol reviews.
+- The focused producer harness also passes after the exact pinned protections are installed, and the standard
+  production-guard suite executes it while separately proving that an invocation without exact-head proof is denied.
 - The write mode refused the dirty build worktree even with Mason's dated token.
 - Current recovery proof passed ESLint, TypeScript typecheck, production build, all 4,466 executed
   Vitest assertions (123 skipped), all agent-workflow tests, agent health, dependency integrity,

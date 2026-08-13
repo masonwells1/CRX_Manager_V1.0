@@ -373,6 +373,7 @@ const RISKY_PATH_RES = [
   /(^|\/)scripts\/run-claude-review\.mjs$/i,
   /(^|\/)scripts\/write-codex-push-proof\.mjs$/i,
   /(^|\/)scripts\/overnight-codex-gate\.mjs$/i,
+  /(^|\/)scripts\/apply-live-testdata-maintenance-20260812\.mjs$/i,
   /(^|\/)package\.json$/i,
   // Reviewer charters are executable review instructions for the migration
   // proof gate (write-apply-proofs runs each .claude/agents/<reviewer>.md as a
