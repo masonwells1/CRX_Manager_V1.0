@@ -37,6 +37,16 @@ idempotency key before the new snapshot arrives; the UI and handler refuse a
 resolution while loading or after a load error. A deferred-refresh regression
 proves that no stale resolution RPC can be sent.
 
+The last exact-head review also closed a privilege-analysis bypass in the
+private-helper compatibility path. PostgreSQL default, schema-wide, and
+inherited-role grants make a static grant history insufficient proof that a
+`SECURITY DEFINER` routine is unreachable by a client. The narrow compatibility
+path now requires an explicit `PUBLIC`, `anon`, and `authenticated` revoke;
+rejects later schema-wide or untrusted-role grants; and permits only explicit
+`postgres`/`service_role` regrants for known internal helpers. Regressions cover
+the `anon` default grant and a later schema-wide authenticated grant. The
+focused hook suite now passes 383 assertions.
+
 ## 2026-08-12 — Actor-binding routine modes use exact schema identity
 
 Fresh adversarial review found that a later `ALTER FUNCTION ... SECURITY

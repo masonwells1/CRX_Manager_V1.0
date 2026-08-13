@@ -2415,7 +2415,7 @@ REVOKE ALL ON PROCEDURE public.test_proc(uuid) FROM PUBLIC, anon, authenticated,
 GRANT EXECUTE ON PROCEDURE public.test_proc(uuid) TO postgres;`
 );
 r = runHook(INTERNAL_ONLY_PROC);
-ok(!isDeny(r), "an explicitly non-authenticated internal procedure keeps its caller-owned actor contract");
+ok(!isDeny(r), "an internal procedure with every client role revoked keeps its caller-owned actor contract");
 
 r = runHook(`${INTERNAL_ONLY_PROC}
 GRANT EXECUTE ON PROCEDURE public.test_proc(uuid) TO authenticated;`);
@@ -2424,6 +2424,10 @@ ok(isDeny(r), "a later authenticated grant reopens an internal procedure to acto
 r = runHook(`${INTERNAL_ONLY_PROC}
 GRANT EXECUTE ON PROCEDURE public.test_proc(uuid) TO U&"\\0061uthenticated";`);
 ok(isDeny(r), "a Unicode-escaped authenticated procedure grant remains under actor binding review");
+
+r = runHook(`${INTERNAL_ONLY_PROC}
+GRANT EXECUTE ON PROCEDURE public.test_proc(uuid) TO office_workers;`);
+ok(isDeny(r), "an unrecognized role grant remains under actor binding review");
 
 const INTERNAL_ONLY_FN = fn(MUTATION).replace(
   /;$/,
@@ -2434,6 +2438,17 @@ GRANT EXECUTE ON FUNCTION public.test_fn(uuid) TO postgres;`
 r = runHook(`${INTERNAL_ONLY_FN}
 GRANT EXECUTE ON FUNCTION public.test_fn(uuid) TO U&"\\0061uthenticated";`);
 ok(isDeny(r), "a Unicode-escaped authenticated function grant cannot bypass actor binding review");
+
+r = runHook(fn(MUTATION).replace(
+  /;$/,
+  `;
+REVOKE ALL ON FUNCTION public.test_fn(uuid) FROM PUBLIC, authenticated;`
+));
+ok(isDeny(r), "revoking only PUBLIC and authenticated cannot hide an anon-callable actor mutator");
+
+r = runHook(`${INTERNAL_ONLY_FN}
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO authenticated;`);
+ok(isDeny(r), "a schema-wide authenticated grant cannot hide an unbound actor mutator");
 
 r = runHook(proc(`
   BEGIN

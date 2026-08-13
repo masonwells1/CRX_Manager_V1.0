@@ -2085,11 +2085,10 @@ function routineAltersMatch(left, right) {
     left.signature === right.signature;
 }
 
-/** A SECURITY DEFINER routine cannot be called directly by an authenticated
- * user when its own migration explicitly revokes both PUBLIC and authenticated
- * EXECUTE, with no later grant restoring either. This narrow final-grant fence
- * lets an internal helper keep its caller-owned actor contract; ambiguous,
- * unqualified, quoted, missing, or later-regranted forms remain fail-closed. */
+/** A SECURITY DEFINER routine can be treated as an internal helper only when
+ * its final local ACL explicitly excludes every browser-client role and any later
+ * grant is limited to Supabase's non-client execution principals. Unknown,
+ * schema-wide, quoted, or role-membership-sensitive grants remain fail-closed. */
 function routineExplicitlyNonAuthenticated(structuralSql, fromIndex, routineName) {
   const normalized = normalizedQualifiedIdentifier(routineName);
   if (!/^[a-z_][\w$]*\.[a-z_][\w$]*$/.test(normalized)) return false;
@@ -2105,12 +2104,17 @@ function routineExplicitlyNonAuthenticated(structuralSql, fromIndex, routineName
   let revoke;
   while ((revoke = revokeRe.exec(tail)) !== null) {
     const roles = revoke[1].toLowerCase();
-    if (/\bpublic\b/.test(roles) && /\bauthenticated\b/.test(roles)) {
+    if (/\bpublic\b/.test(roles) && /\banon\b/.test(roles) && /\bauthenticated\b/.test(roles)) {
       revocationEnd = revokeRe.lastIndex;
     }
   }
   if (revocationEnd === -1) return false;
   const later = tail.slice(revocationEnd);
+  const schemaGrantRe = new RegExp(
+    `\\bGRANT\\s+EXECUTE\\s+ON\\s+ALL\\s+(?:FUNCTIONS|PROCEDURES|ROUTINES)\\s+IN\\s+SCHEMA\\s+${escapedRegexLiteral(schema)}\\b`,
+    "i"
+  );
+  if (schemaGrantRe.test(later)) return false;
   const grantRe = new RegExp(
     `\\bGRANT\\s+EXECUTE\\s+ON\\s+${routineHead}\\s+TO\\s+([^;]+);`,
     "gi"
@@ -2120,8 +2124,9 @@ function routineExplicitlyNonAuthenticated(structuralSql, fromIndex, routineName
     // PostgreSQL decodes U&"..." role identifiers before grant resolution.
     // Do not attempt a partial decoder here: an opaque grantee might be the
     // authenticated role, so it must keep the routine under actor review.
-    if (/U&\s*"/i.test(grant[1])) return false;
-    if (/\b(?:public|authenticated)\b/i.test(grant[1])) return false;
+    if (/U&\s*"|"/.test(grant[1])) return false;
+    const roles = grant[1].split(",").map((role) => role.trim().toLowerCase());
+    if (roles.length === 0 || roles.some((role) => !/^(?:postgres|service_role)$/.test(role))) return false;
   }
   return true;
 }
