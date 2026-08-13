@@ -235,4 +235,88 @@ SELECT 'restore_quote_version(uuid, uuid, uuid, text, bigint, text)' AS violatio
                 'authenticated', 'public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)', 'EXECUTE')
            OR has_function_privilege(
                 'anon', 'public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)', 'EXECUTE')
-       END;
+       END
+
+UNION ALL
+
+-- The four branches below mirror assertions that 20260813080000 makes exactly
+-- ONCE, at apply time. Everything above this line describes the table and its
+-- three named routines; nothing above notices a NEW writer or a NEW rewrite path
+-- appearing afterwards, which is precisely how this boundary would be reopened
+-- without touching anything the earlier branches watch. A one-shot POSTCOND is
+-- not a guard, it is a receipt; these make the same claims standing.
+
+SELECT 'quote_versions:rewrite-path-writable' AS violation_key,
+       'a relation carrying a rewrite rule over public.quote_versions (a view, or a rule on an ordinary table) is writable by anon/authenticated — a rewritten write is permission-checked as the OWNER of the rewriting relation, so the table-level revoke does not cover it' AS reason
+ WHERE EXISTS (
+   SELECT 1
+     FROM pg_depend d
+     JOIN pg_rewrite w ON w.oid = d.objid
+     JOIN pg_class v ON v.oid = w.ev_class
+    WHERE d.refclassid = 'pg_class'::regclass
+      AND d.refobjid = 'public.quote_versions'::regclass
+      AND d.classid = 'pg_rewrite'::regclass
+      -- No relkind filter, deliberately: a RULE on an ordinary table reaches
+      -- this table exactly as a view does. Column-granular for the same reason
+      -- the base-table branch above is.
+      AND v.oid <> 'public.quote_versions'::regclass
+      AND (has_any_column_privilege('authenticated', v.oid, 'INSERT')
+        OR has_any_column_privilege('authenticated', v.oid, 'UPDATE')
+        OR has_any_column_privilege('authenticated', v.oid, 'REFERENCES')
+        OR has_table_privilege('authenticated', v.oid, 'DELETE')
+        OR has_any_column_privilege('anon', v.oid, 'INSERT')
+        OR has_any_column_privilege('anon', v.oid, 'UPDATE')
+        OR has_any_column_privilege('anon', v.oid, 'REFERENCES')
+        OR has_table_privilege('anon', v.oid, 'DELETE'))
+ )
+
+UNION ALL
+
+-- KNOWN LIMIT of the two writer branches below, stated where it is checked: both
+-- read prosrc, which is BLANK for a BEGIN ATOMIC routine rather than NULL. A
+-- writer with such a body is invisible to them and would scan clean. This branch
+-- is what keeps that failure closed instead of open.
+SELECT 'quote_versions:writer-scan-blinded' AS violation_key,
+       'a routine with a BEGIN ATOMIC body exists, so the two prosrc-based writer scans below cannot see every writer of public.quote_versions — re-review those routines by hand' AS reason
+ WHERE EXISTS (
+   SELECT 1
+     FROM pg_proc p
+     JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+      AND p.prosqlbody IS NOT NULL
+ )
+
+UNION ALL
+
+-- Scope, anchoring and the schema-qualified carve-out are all copied verbatim
+-- from 20260813080000's PRECOND scans, and must stay that way: an unanchored
+-- LIKE matches `updated_at`, and a bare proname carve-out excuses a same-named
+-- impostor parked in another schema.
+SELECT 'quote_versions:non-bypassing-writer' AS violation_key,
+       'another routine writes public.quote_versions without bypassing RLS — with the mutation policies dropped it is either already broken, or it is reaching the table by a path this boundary did not account for' AS reason
+ WHERE EXISTS (
+   SELECT 1
+     FROM pg_proc p
+     JOIN pg_namespace n ON n.oid = p.pronamespace
+     JOIN pg_roles r ON r.oid = p.proowner
+    WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+      AND NOT (p.prosecdef AND r.rolbypassrls)
+      AND NOT (n.nspname = 'public' AND p.proname = '_create_quote_version_owner_impl')
+      AND p.prosrc ~* '(insert\s+into|update|delete\s+from|merge\s+into)\s+(only\s+)?("?public"?\s*\.\s*)?"?quote_versions\M'
+ )
+
+UNION ALL
+
+SELECT 'quote_versions:second-authoritative-writer' AS violation_key,
+       'a second RLS-bypassing routine writes public.quote_versions — snapshot_data is an authoritative cost basis and this boundary is reasoned around exactly one author of it' AS reason
+ WHERE EXISTS (
+   SELECT 1
+     FROM pg_proc p
+     JOIN pg_namespace n ON n.oid = p.pronamespace
+     JOIN pg_roles r ON r.oid = p.proowner
+    WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+      AND p.prosecdef
+      AND r.rolbypassrls
+      AND NOT (n.nspname = 'public' AND p.proname = '_create_quote_version_owner_impl')
+      AND p.prosrc ~* '(insert\s+into|update|delete\s+from|merge\s+into)\s+(only\s+)?("?public"?\s*\.\s*)?"?quote_versions\M'
+ );

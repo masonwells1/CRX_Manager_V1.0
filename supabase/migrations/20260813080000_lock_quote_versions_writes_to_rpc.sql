@@ -177,7 +177,9 @@ SET LOCAL lock_timeout = '10s';
 DO $precond$
 DECLARE
   v_count int;
-  v_unknown int;
+  v_unrestorable int;
+  v_exotic int;
+  v_unchecked int;
   v_forced boolean;
   v_enabled boolean;
   v_check text;
@@ -458,66 +460,112 @@ BEGIN
                   ELSE '[]'::jsonb END) AS itm
   ),
   -- The casts are guarded and materialised so a malformed value yields NULL
-  -- (counted as unevaluable) instead of aborting the apply with a bare cast
+  -- (routed to a bucket below) instead of aborting the apply with a bare cast
   -- error that says nothing about what was wrong.
   parsed AS MATERIALIZED (
-    -- Matches what ::numeric accepts, minus NaN/Infinity. An earlier, narrower
-    -- pattern rejected exponent form (1e-5, 1E+2), a bare leading dot (.5) and a
-    -- leading plus (+3) — all of which the restore path's own
-    -- (v_item->>'current_cost')::numeric accepts happily. Reporting those as
+    -- Matches the DECIMAL forms ::numeric accepts, minus NaN/Infinity. An
+    -- earlier, narrower pattern rejected exponent form (1e-5, 1E+2), a bare
+    -- leading dot (.5) and a leading plus (+3) — all of which the restore path's
+    -- own (v_item->>'current_cost')::numeric accepts happily. Reporting those as
     -- "unevaluable" described a legitimate serialisation as corruption, and
     -- described a genuinely forged '1e-5' as unreadable rather than as the
-    -- forgery it is. NaN and Infinity stay excluded on purpose: they are not
-    -- usable cost bases and belong in the unevaluable bucket.
-    SELECT CASE WHEN cost_text ~ '^\s*[-+]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][-+]?[0-9]+)?\s*$'
+    -- forgery it is. NaN and Infinity stay excluded on purpose: both survive a
+    -- <= 0 test but die at ROUND(...)::bigint, so neither is a restorable cost
+    -- basis. The exponent is bounded to 4 digits: an unbounded one matches
+    -- '1e300000', which then raises 22003 out of the cast below and aborts the
+    -- apply with a numeric-overflow error instead of the diagnosis this scan
+    -- exists to print. Such a string breaks restore too, so bounding it loses
+    -- no coverage — it only keeps the failure legible.
+    SELECT cost_text,
+           CASE WHEN cost_text ~ '^\s*[-+]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][-+]?[0-9]{1,4})?\s*$'
                 THEN btrim(cost_text)::numeric
            END AS cost_num,
+           -- PostgreSQL 16 extended numeric_in to accept non-decimal integer
+           -- literals and digit-group underscores, and this database is 17.6.
+           -- Verified read-only on live before writing this:
+           --   '0x64'::numeric = 100, '0o10'::numeric = 8, '0b101'::numeric = 5,
+           --   '1_0'::numeric = 10, '0.0_1'::numeric = 0.01.
+           -- Every one of those is accepted by the restore path's own cast and
+           -- rejected by the decimal pattern above, so without this branch a
+           -- forged one-cent basis written as '0.0_1' would land in the
+           -- unreadable bucket rather than the forged one. Treated as blocking
+           -- in its own right: QuoteBuilder serialises this field with
+           -- JSON.stringify, which cannot emit either form, so its presence is
+           -- hand-crafted JSON regardless of what the value works out to.
+           (cost_text !~ '^\s*[-+]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][-+]?[0-9]{1,4})?\s*$'
+            AND (cost_text ~ '_' OR cost_text ~* '^\s*[-+]?0[xob]')) AS cost_exotic,
            CASE WHEN product_id_text ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
                 THEN product_id_text::uuid
            END AS product_uuid
       FROM lines
      WHERE cost_text IS NOT NULL
+  ),
+  -- One bucket per line, evaluated in priority order, so the counts below are
+  -- provably disjoint and no line can be double-reported or quietly reclassified
+  -- between two FILTER clauses.
+  classified AS MATERIALIZED (
+    SELECT p.cost_num,
+           pr.current_cost,
+           CASE
+             WHEN p.cost_exotic                                   THEN 'exotic'
+             WHEN p.product_uuid IS NULL OR pr.id IS NULL         THEN 'unrestorable'
+             WHEN p.cost_num IS NULL                              THEN 'unparseable'
+             WHEN pr.current_cost IS NULL OR pr.current_cost <= 0 THEN 'no_basis'
+             ELSE 'evaluable'
+           END AS bucket
+      FROM parsed p
+      LEFT JOIN public.products pr ON pr.id = p.product_uuid
   )
-  SELECT
-    count(*) FILTER (
-      WHERE p.cost_num IS NULL
-         OR p.product_uuid IS NULL
-         OR pr.id IS NULL
-         OR pr.current_cost IS NULL
-         OR pr.current_cost <= 0),
-    count(*) FILTER (
-      WHERE p.cost_num IS NOT NULL
-        AND pr.current_cost IS NOT NULL
-        AND pr.current_cost > 0
-        AND p.cost_num < pr.current_cost / 2)
-    INTO v_unknown, v_count
-    FROM parsed p
-    LEFT JOIN public.products pr ON pr.id = p.product_uuid;
+  SELECT count(*) FILTER (WHERE bucket = 'unrestorable'),
+         count(*) FILTER (WHERE bucket = 'exotic'),
+         count(*) FILTER (WHERE bucket IN ('unparseable', 'no_basis')),
+         count(*) FILTER (WHERE bucket = 'evaluable'
+                            AND cost_num < current_cost / 2)
+    INTO v_unrestorable, v_exotic, v_unchecked, v_count
+    FROM classified;
 
   -- A LEFT JOIN, not an inner one, and no positive-cost filter on the product:
   -- an inner join would silently DROP a snapshot line pointing at a deleted or
-  -- zero-cost product, which is exactly where a forged line would hide. Restore
-  -- never consults the product row at all, so an unevaluable line is still
-  -- fully restorable. Refuse to seal what cannot be checked.
-  -- NOTICE, not EXCEPTION — and that is a deliberate reversal.
+  -- zero-cost product, which is exactly where a forged line would hide.
   --
-  -- v_unknown counts lines this scan cannot judge: a deleted product, a
-  -- discontinued product now carrying a zero catalog cost, a cost string that is
-  -- not a finite number. None of those is evidence of forgery, and every one of
-  -- them is an ordinary state of a three-year-old catalog. Aborting on them
-  -- meant a routine data condition could block a SECURITY migration — and the
-  -- consequence of not applying is that the forged-snapshot write path stays
-  -- open, which is strictly worse than sealing over a line nobody can classify.
+  -- Only ONE of the four buckets is advisory, and the split is what makes that
+  -- safe. An earlier revision downgraded the whole unevaluable set to a NOTICE
+  -- on the argument that an aged catalog produces such lines routinely. That
+  -- argument holds for exactly one of its members:
   --
-  -- Sealing does not make an unevaluable line any more frozen than it already
-  -- is: the row is written, restore never consults the product row (see the
-  -- LEFT JOIN note above), and its cost basis behaves identically whether or not
-  -- this migration runs. Applying costs nothing here; refusing costs the fix.
+  --   unrestorable (ADVISORY) — the product_id is malformed or names a row that
+  --     no longer exists. quote_items.product_id is NOT NULL REFERENCES
+  --     products(id), so restoring such a line dies on the foreign key. The line
+  --     is not a forgery vector because it cannot be restored at all, and a
+  --     deleted product really is an ordinary state of an old catalog.
   --
-  -- It is still reported, loudly and with a count, so the follow-up review is a
-  -- recorded obligation rather than a silent omission.
-  IF v_unknown > 0 THEN
-    RAISE NOTICE 'PRECOND (advisory, not blocking): % existing quote_versions snapshot line(s) cannot be evaluated — a non-numeric cost, a malformed or unknown product_id, or a product with no usable catalog cost. Restore would still stamp them into quote_items.cost_at_quote_cents. The boundary is being sealed anyway (an unevaluable line is no less frozen without this migration, and leaving the write path open is the worse trade). REVIEW THESE ROWS BY HAND after the apply.', v_unknown;
+  --   unparseable / no_basis (BLOCKING) — the product resolves, so restore
+  --     succeeds; it never consults the catalog row and validates only the
+  --     snapshot's own value. A cost string this scan cannot read, or a live
+  --     catalog cost of NULL or zero that leaves nothing to compare against,
+  --     means the line is fully restorable and completely unverified. Sealing
+  --     over it would freeze a cost basis nobody checked.
+  --
+  --   exotic (BLOCKING) — see the cost_exotic note above.
+  --
+  -- Measured read-only against live before this split was written: 5 snapshot
+  -- lines exist in total and every one of these buckets is empty, so blocking
+  -- costs nothing at apply time today and buys a real assertion tomorrow.
+  --
+  -- The advisory count is reported via NOTICE, which the Supabase apply channel
+  -- does not surface. That is acceptable only because this bucket is now the
+  -- one class that cannot be restored; the classes that carry risk raise
+  -- instead, and an EXCEPTION does come back through the apply channel.
+  IF v_unrestorable > 0 THEN
+    RAISE NOTICE 'PRECOND (advisory, not blocking): % existing quote_versions snapshot line(s) name a product that no longer exists or a malformed product_id. quote_items.product_id is NOT NULL REFERENCES products(id), so restore would fail on the foreign key rather than stamp a cost basis — these lines are not a forgery vector. Sealing the boundary anyway.', v_unrestorable;
+  END IF;
+
+  IF v_exotic > 0 THEN
+    RAISE EXCEPTION 'PRECOND: % existing quote_versions snapshot line(s) carry a cost written as a non-decimal or underscore-grouped numeric literal (0x.., 0o.., 0b.., or 1_0). PostgreSQL 16+ accepts these, so restore would stamp them, but JSON.stringify cannot emit them — their presence means the snapshot was hand-crafted rather than written by the app. Investigate those rows before applying.', v_exotic;
+  END IF;
+
+  IF v_unchecked > 0 THEN
+    RAISE EXCEPTION 'PRECOND: % existing quote_versions snapshot line(s) are restorable but unverifiable — either the cost string is not a finite decimal number this scan can read, or the product resolves but carries no usable catalog cost to compare against. Restore does not consult the catalog, so it would stamp these into quote_items.cost_at_quote_cents unchallenged. Review them by hand before applying; sealing the boundary would freeze an unchecked cost basis in place.', v_unchecked;
   END IF;
 
   IF v_count > 0 THEN
@@ -677,14 +725,38 @@ BEGIN
   END IF;
 
   -- KNOWN LIMIT, asserted rather than silently assumed: every check above is
-  -- table- and routine-scoped. A write routed through an auto-updatable VIEW
-  -- over quote_versions would bypass all of them — for a view without
-  -- security_invoker, base-table permissions AND RLS are evaluated as the VIEW
-  -- OWNER, so authenticated holding INSERT on such a view keeps the
-  -- forged-snapshot path fully open with every other check here passing. No
-  -- such object exists today (no CREATE VIEW over quote_versions anywhere in
-  -- supabase/migrations/), so this is a gap in the proof rather than a known
-  -- hole. Fail closed if one ever appears.
+  -- table- and routine-scoped. A write reaching quote_versions through the
+  -- QUERY REWRITER would bypass all of them. Two shapes do that, and both are
+  -- found by the same pg_rewrite dependency edge:
+  --
+  --   a VIEW (auto-updatable, or carrying an INSTEAD OF trigger) — without
+  --     security_invoker, base-table permissions AND row-level security are
+  --     evaluated as the VIEW OWNER, so authenticated holding INSERT on the view
+  --     keeps the forged-snapshot path fully open with every check above green;
+  --
+  --   a RULE on an ORDINARY TABLE (relkind 'r'/'p') — e.g. CREATE RULE ... DO
+  --     ALSO INSERT INTO quote_versions. Rule-expanded queries are permission-
+  --     checked as the owner of the table carrying the rule, so a postgres-owned
+  --     rule on any browser-writable table reopens the path identically. An
+  --     earlier revision filtered relkind IN ('v','m') and threw this case away.
+  --
+  -- So: no relkind filter at all, only the self-exclusion. Materialized views
+  -- accept no DML and are inert here, but cost nothing to leave in.
+  --
+  -- Privileges are tested at COLUMN granularity for the same reason the base
+  -- table is (see the has_any_column_privilege block above): a grant on
+  -- snapshot_data alone leaves has_table_privilege false and would have passed.
+  -- DELETE and TRUNCATE have no column form and stay table-level.
+  --
+  -- No such object exists today (no CREATE VIEW and no CREATE RULE over
+  -- quote_versions anywhere in supabase/migrations/), so this is a gap in the
+  -- proof rather than a known hole. Fail closed if one ever appears.
+  --
+  -- Still NOT covered, stated plainly: a view whose INSTEAD OF trigger writes
+  -- quote_versions without the view definition referencing it leaves no
+  -- pg_depend edge for this scan to find. At apply time the two PRECOND prosrc
+  -- scans above do catch such a trigger function; afterwards, nothing here does.
+  -- That is the standing sweep predicate's job, not this one-shot block's.
   IF EXISTS (
     SELECT 1
       FROM pg_depend d
@@ -693,17 +765,52 @@ BEGIN
      WHERE d.refclassid = 'pg_class'::regclass
        AND d.refobjid = 'public.quote_versions'::regclass
        AND d.classid = 'pg_rewrite'::regclass
-       AND v.relkind IN ('v', 'm')
        AND v.oid <> 'public.quote_versions'::regclass
-       AND (has_table_privilege('authenticated', v.oid, 'INSERT')
-         OR has_table_privilege('authenticated', v.oid, 'UPDATE')
+       AND (has_any_column_privilege('authenticated', v.oid, 'INSERT')
+         OR has_any_column_privilege('authenticated', v.oid, 'UPDATE')
+         OR has_any_column_privilege('authenticated', v.oid, 'REFERENCES')
          OR has_table_privilege('authenticated', v.oid, 'DELETE')
-         OR has_table_privilege('anon', v.oid, 'INSERT')
-         OR has_table_privilege('anon', v.oid, 'UPDATE')
+         OR has_any_column_privilege('anon', v.oid, 'INSERT')
+         OR has_any_column_privilege('anon', v.oid, 'UPDATE')
+         OR has_any_column_privilege('anon', v.oid, 'REFERENCES')
          OR has_table_privilege('anon', v.oid, 'DELETE'))
   ) THEN
-    RAISE EXCEPTION 'POSTCOND: a view or materialized view over public.quote_versions is writable by an external API role. The table-level revoke does not cover it — an auto-updatable view without security_invoker evaluates base-table permissions as the VIEW OWNER, so this re-opens the forged-snapshot path.';
+    RAISE EXCEPTION 'POSTCOND: a relation carrying a rewrite rule over public.quote_versions (a view, or a rule on an ordinary table) is writable by an external API role. The table-level revoke does not cover it — a rewritten write is permission-checked as the OWNER of the rewriting relation, so this re-opens the forged-snapshot path.';
   END IF;
+
+  -- quote_versions must not be a partition or an inheritance child: an INSERT
+  -- aimed at the PARENT routes rows in while only the parent's privileges are
+  -- checked, which every test above would miss. Verified read-only on live
+  -- before writing this — pg_inherits has no row for it and relispartition is
+  -- false — so this asserts a fact rather than fixing one.
+  IF EXISTS (
+    SELECT 1 FROM pg_inherits WHERE inhrelid = 'public.quote_versions'::regclass
+  ) THEN
+    RAISE EXCEPTION 'POSTCOND: public.quote_versions is now an inheritance/partition child. A write aimed at the parent bypasses every privilege check in this migration.';
+  END IF;
+
+  -- KNOWN LIMIT, deliberately NOT asserted here. Everything above constrains the
+  -- table as it exists; none of it constrains what a re-created table would come
+  -- back as. Read live read-only while writing this — pg_default_acl carries two
+  -- entries for tables in schema public:
+  --
+  --   grantor supabase_admin: anon=arwdDxtm, authenticated=arwdDxtm, service_role
+  --   grantor postgres:       anon=rm,       authenticated=arwdDxtm, service_role
+  --
+  -- So a DROP + CREATE of quote_versions returns a table that authenticated can
+  -- write in full (and anon too, if supabase_admin creates it), with every
+  -- assertion in this block still green. 20260526151856 revoked the default
+  -- table writes from anon under the postgres grantor only; authenticated was
+  -- never covered, and the supabase_admin entry was never touched.
+  --
+  -- This is NOT asserted because it is a project-wide default that governs every
+  -- table in public, not a property of quote_versions — raising on it here would
+  -- abort a scoped security migration over a pre-existing global condition it
+  -- neither caused nor can safely fix. Narrowing those defaults changes the
+  -- privileges every future table is born with and belongs in its own reviewed
+  -- migration. Containment today is the standing rule that a new table ships RLS
+  -- and policies in the same migration; that is defence in depth, not a
+  -- substitute. Recorded here so the gap is visible rather than assumed away.
 END;
 $postcond$;
 

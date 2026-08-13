@@ -1906,6 +1906,34 @@ function firstArgument(args: string): string {
  *
  * Only identity-preserving wrappers are unwrapped, and only through their FIRST
  * argument, which is where coalesce/nullif carry the value.
+ *
+ * KNOWN LIMIT, recorded because an automated reviewer raised the narrower half
+ * of it on 2026-08-13 and the narrower half is not where the give actually is.
+ *
+ * The reviewer's point was that `coalesce(p_idempotency_key, gen_random_uuid())`
+ * is not identity-preserving: on a NULL input it mints a fresh key, so a retry
+ * claims a new idempotency record instead of replaying. That is true as stated.
+ * It is also not the failure this guard exists to stop, for two reasons. A NULL
+ * key is the caller declining idempotency — the parameter is
+ * `DEFAULT NULL` — and forwarding NULL unchanged replays exactly as poorly, so
+ * the coalesce costs a junk row, not a lost replay. And `trim`/`nullif` are
+ * deterministic in the caller's key, so both attempts of a retry normalise
+ * identically and still collide as intended.
+ *
+ * The real give is one level up, in `usesIdempotencyThroughDelegates`:
+ * `forwardsKey` is a word-boundary regex over the delegate's raw argument text,
+ * so ANY argument merely CONTAINING the token — `CASE WHEN p_idempotency_key IS
+ * NULL THEN gen_random_uuid()::text ELSE ... END` — satisfies it without ever
+ * reaching this function. Tightening `rhsIsKeyAlias` therefore does not close
+ * what the reviewer described; it only narrows a branch that, measured against
+ * the corpus on 2026-08-13, matches nothing: 52 routines wrap the key inline in
+ * a condition or a call argument, and ZERO assign a wrapped key to a local,
+ * which is the only shape that reaches this function at all.
+ *
+ * Left as is deliberately. Tightening `forwardsKey` into a real expression
+ * analysis is the fix that would matter, and it is a change to a guard covering
+ * 52 live call sites — worth doing on its own evidence, not folded into a
+ * security PR as a drive-by.
  */
 function rhsIsKeyAlias(rhs: string): boolean {
   let s = rhs.trim().replace(/;+\s*$/, '').trim();

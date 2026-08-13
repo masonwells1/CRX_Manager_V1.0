@@ -52,6 +52,14 @@ const statements = (sql: string) =>
     .map((statement) => statement.replace(/\s+/g, ' ').trim())
     .filter(Boolean);
 
+/**
+ * The migration with `--` comment lines removed, for assertions that a given
+ * SQL shape is ABSENT. Matching absence against the raw text is a trap this
+ * file has already hit once: the migration explains in prose why a filter was
+ * removed, so banning the shape outright also bans its own explanation.
+ */
+const migrationCode = migration.replace(/^[ \t]*--.*$/gm, '');
+
 const tableRevokes = statements(migration).filter(
   (statement) => /^REVOKE/i.test(statement) && /ON TABLE public\.quote_versions/i.test(statement),
 );
@@ -136,22 +144,49 @@ describe('quote_versions write boundary — migration', () => {
     // zero-cost product — exactly where a forged line would hide. Restore never
     // consults the product row, so such a line is still fully restorable.
     expect(migration).toContain('LEFT JOIN public.products pr');
-    expect(migration).toMatch(/PRECOND \(advisory, not blocking\): % existing quote_versions snapshot line\(s\) cannot be evaluated/);
+    expect(migration).toMatch(
+      /PRECOND \(advisory, not blocking\): % existing quote_versions snapshot line\(s\) name a product that no longer exists/,
+    );
   });
 
-  it('reports unevaluable lines but still seals the boundary', () => {
-    // Deliberate reversal, and the direction matters. v_unknown counts lines
-    // this scan cannot JUDGE — a deleted product, a discontinued one now at
-    // zero catalog cost, a cost string that is not a finite number. None of
-    // those is evidence of forgery and every one is an ordinary state of an
-    // aged catalog. Aborting on them let a routine data condition block a
-    // SECURITY fix, which leaves the forged-snapshot write path OPEN — strictly
-    // worse than sealing over a line nobody can classify, since such a line is
-    // no less frozen without this migration. So: NOTICE, never EXCEPTION.
-    const unknownBlock = migration.match(/IF v_unknown > 0 THEN[\s\S]*?END IF;/);
-    expect(unknownBlock).not.toBeNull();
-    expect(unknownBlock![0]).toContain('RAISE NOTICE');
-    expect(unknownBlock![0]).not.toContain('RAISE EXCEPTION');
+  it('blocks on every unevaluable class except the one the FK already protects', () => {
+    // This replaces a single v_unknown bucket that was advisory for ALL of it.
+    // The reasoning that produced that bucket was sound but too coarse: it
+    // argued that a line nobody can classify is no less frozen without this
+    // migration, so aborting on one would let routine catalog decay block a
+    // SECURITY fix. True for exactly ONE of the classes it lumped together.
+    //
+    //   unrestorable — product row gone or product_id malformed. Advisory, and
+    //     provably so: quote_items.product_id is NOT NULL REFERENCES
+    //     products(id), so a restore of such a line dies on the foreign key
+    //     before it can stamp any cost basis. Not a forgery vector.
+    //   exotic — cost written as 0x../0o../0b../1_0. PostgreSQL 16+ parses
+    //     these; JSON.stringify cannot emit them. Their presence is itself
+    //     evidence the snapshot was hand-crafted. Must block.
+    //   unchecked — restorable, but the cost is unreadable or the product
+    //     carries no catalog cost to compare against. Restore does not consult
+    //     the catalog, so sealing here freezes an unverified cost basis. Blocks.
+    //
+    // Measured read-only against live before this split was written: all three
+    // buckets are empty, so blocking costs nothing at apply time and buys a
+    // real assertion the day it stops being empty.
+    const advisory = migration.match(/IF v_unrestorable > 0 THEN[\s\S]*?END IF;/);
+    expect(advisory).not.toBeNull();
+    expect(advisory![0]).toContain('RAISE NOTICE');
+    expect(advisory![0]).not.toContain('RAISE EXCEPTION');
+
+    for (const blocking of ['v_exotic', 'v_unchecked']) {
+      const block = migration.match(new RegExp(`IF ${blocking} > 0 THEN[\\s\\S]*?END IF;`));
+      expect(block, `${blocking} must have a reporting branch`).not.toBeNull();
+      expect(block![0]).toContain('RAISE EXCEPTION');
+      expect(block![0]).not.toContain('RAISE NOTICE');
+    }
+
+    // Disjointness is what makes those counts trustworthy. A chain of
+    // independent boolean FILTERs would let one line land in two buckets and be
+    // both advisory and blocking at once; a single CASE cannot.
+    expect(migration).toContain('END AS bucket');
+    expect(migration).toMatch(/count\(\*\) FILTER \(WHERE bucket = 'unrestorable'\)/);
   });
 
   it('still aborts on the forgery signature itself', () => {
@@ -188,8 +223,20 @@ describe('quote_versions write boundary — migration', () => {
     // forged-snapshot path fully open with every other assertion passing. No
     // such object exists today; this closes the gap in the proof, not a hole.
     expect(migration).toContain('pg_rewrite');
-    expect(migration).toMatch(/v\.relkind IN \('v', 'm'\)/);
     expect(migration).toContain('is writable by an external API role');
+
+    // The scan must NOT narrow to relkind IN ('v','m'). A rewrite RULE can be
+    // attached to an ordinary table ('r') or a partitioned one ('p'), and such a
+    // write is permission-checked as the owner of the rule-carrying table —
+    // the same hole a view opens, in an object the view filter walks straight
+    // past. An earlier draft carried that filter; this pins its removal.
+    expect(migrationCode).not.toMatch(/relkind\s*(=|IN\b)/);
+
+    // Table-level has_table_privilege is not enough either: a grant of INSERT on
+    // a SINGLE COLUMN of the rewriting relation is enough to drive the rewrite,
+    // and the table-level test returns false for it.
+    expect(migration).toMatch(/has_any_column_privilege\('authenticated', v\.oid, 'INSERT'\)/);
+    expect(migration).toMatch(/has_any_column_privilege\('anon', v\.oid, 'INSERT'\)/);
   });
 
   it('fails closed rather than open when it cannot see a routine body', () => {
@@ -281,6 +328,16 @@ describe('quote_versions write boundary — standing predicate', () => {
       '_create_quote_version_owner_impl:lost-insert-grant',
       'create_quote_version(uuid, uuid, text, text, bigint)',
       'restore_quote_version(uuid, uuid, uuid, text, bigint, text)',
+      // These four mirror assertions the migration makes exactly once, at apply
+      // time. Without them the predicate describes only the table and its three
+      // named routines, and a NEW writer or a NEW rewrite path could reopen the
+      // boundary afterwards without disturbing anything the other branches
+      // watch. Pinned here so the standing guard cannot quietly shrink back to
+      // the one-shot set.
+      'quote_versions:rewrite-path-writable',
+      'quote_versions:writer-scan-blinded',
+      'quote_versions:non-bypassing-writer',
+      'quote_versions:second-authoritative-writer',
     ]) {
       expect(predicate).toContain(`'${key}' AS violation_key`);
     }
