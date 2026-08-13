@@ -620,5 +620,20 @@ BEGIN
   IF has_function_privilege('public', 'public._create_direct_order_below_cost_impl_20260810(uuid, date, text, text, jsonb, uuid, text, text)', 'EXECUTE') THEN
     RAISE EXCEPTION 'POSTCOND: PUBLIC must not hold EXECUTE on _create_direct_order_below_cost_impl_20260810';
   END IF;
+  -- The four named-role checks above cannot see an explicit grant to any OTHER
+  -- role, and such a grant would reach the impl and bypass the wrapper just the
+  -- same. Sweep the whole ACL: no grantee other than the owner may hold
+  -- EXECUTE. A NULL ACL expands to its default (owner + PUBLIC), so this also
+  -- fails closed if the REVOKEs above ever stop leaving an explicit ACL behind.
+  IF EXISTS (
+    SELECT 1
+    FROM pg_proc p
+    CROSS JOIN LATERAL aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) AS acl(grantor, grantee, privilege_type, is_grantable)
+    WHERE p.oid = 'public._create_direct_order_below_cost_impl_20260810(uuid, date, text, text, jsonb, uuid, text, text)'::regprocedure
+      AND acl.privilege_type = 'EXECUTE'
+      AND acl.grantee <> p.proowner
+  ) THEN
+    RAISE EXCEPTION 'POSTCOND: a non-owner role holds EXECUTE on _create_direct_order_below_cost_impl_20260810 — it would bypass the below-cost wrapper';
+  END IF;
 END;
 $postcond$;

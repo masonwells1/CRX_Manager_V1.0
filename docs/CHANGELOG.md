@@ -4,8 +4,11 @@ All significant development milestones, in reverse chronological order.
 
 ## 2026-08-12 — Wave A round 5: four migrations self-aborted, all for the same reason
 
-The 2026-08-12 apply attempt refused four of the six Wave A migrations. Nothing was written to the
-live database, and nothing is applied by this change either — these are file fixes only.
+The 2026-08-12 Wave A apply attempt refused four of the six Wave A migrations. That rejected
+attempt wrote nothing to the live database, and this change applies none of those migrations either
+— these are file fixes only. (This statement is about the Wave A attempt alone; it does not cover
+the six unrelated migrations applied live on 2026-08-12 from another session, described at the end
+of this entry.)
 
 All four failures were one defect wearing four costumes: **an assertion broader than its own
 remedy**. A migration that asserts a state it never enforces is a migration that aborts itself on
