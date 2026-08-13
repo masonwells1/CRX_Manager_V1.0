@@ -461,7 +461,15 @@ BEGIN
   -- (counted as unevaluable) instead of aborting the apply with a bare cast
   -- error that says nothing about what was wrong.
   parsed AS MATERIALIZED (
-    SELECT CASE WHEN cost_text ~ '^\s*-?[0-9]+(\.[0-9]+)?\s*$'
+    -- Matches what ::numeric accepts, minus NaN/Infinity. An earlier, narrower
+    -- pattern rejected exponent form (1e-5, 1E+2), a bare leading dot (.5) and a
+    -- leading plus (+3) — all of which the restore path's own
+    -- (v_item->>'current_cost')::numeric accepts happily. Reporting those as
+    -- "unevaluable" described a legitimate serialisation as corruption, and
+    -- described a genuinely forged '1e-5' as unreadable rather than as the
+    -- forgery it is. NaN and Infinity stay excluded on purpose: they are not
+    -- usable cost bases and belong in the unevaluable bucket.
+    SELECT CASE WHEN cost_text ~ '^\s*[-+]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][-+]?[0-9]+)?\s*$'
                 THEN btrim(cost_text)::numeric
            END AS cost_num,
            CASE WHEN product_id_text ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
@@ -491,8 +499,25 @@ BEGIN
   -- zero-cost product, which is exactly where a forged line would hide. Restore
   -- never consults the product row at all, so an unevaluable line is still
   -- fully restorable. Refuse to seal what cannot be checked.
+  -- NOTICE, not EXCEPTION — and that is a deliberate reversal.
+  --
+  -- v_unknown counts lines this scan cannot judge: a deleted product, a
+  -- discontinued product now carrying a zero catalog cost, a cost string that is
+  -- not a finite number. None of those is evidence of forgery, and every one of
+  -- them is an ordinary state of a three-year-old catalog. Aborting on them
+  -- meant a routine data condition could block a SECURITY migration — and the
+  -- consequence of not applying is that the forged-snapshot write path stays
+  -- open, which is strictly worse than sealing over a line nobody can classify.
+  --
+  -- Sealing does not make an unevaluable line any more frozen than it already
+  -- is: the row is written, restore never consults the product row (see the
+  -- LEFT JOIN note above), and its cost basis behaves identically whether or not
+  -- this migration runs. Applying costs nothing here; refusing costs the fix.
+  --
+  -- It is still reported, loudly and with a count, so the follow-up review is a
+  -- recorded obligation rather than a silent omission.
   IF v_unknown > 0 THEN
-    RAISE EXCEPTION 'PRECOND: % existing quote_versions snapshot line(s) cannot be evaluated — a non-numeric cost, a malformed or unknown product_id, or a product with no usable catalog cost. Restore would still stamp them into quote_items.cost_at_quote_cents. Review them by hand before sealing the boundary.', v_unknown;
+    RAISE NOTICE 'PRECOND (advisory, not blocking): % existing quote_versions snapshot line(s) cannot be evaluated — a non-numeric cost, a malformed or unknown product_id, or a product with no usable catalog cost. Restore would still stamp them into quote_items.cost_at_quote_cents. The boundary is being sealed anyway (an unevaluable line is no less frozen without this migration, and leaving the write path open is the worse trade). REVIEW THESE ROWS BY HAND after the apply.', v_unknown;
   END IF;
 
   IF v_count > 0 THEN
@@ -631,6 +656,53 @@ BEGIN
 
   IF NOT has_table_privilege(v_owner, 'public.quote_versions', 'INSERT') THEN
     RAISE EXCEPTION 'POSTCOND: the definer owner (%) no longer holds INSERT on public.quote_versions — version creation is broken', v_owner;
+  END IF;
+
+  -- The SCOPE claim in this file's header says service_role keeps full write
+  -- access. That was prose; this makes it an assertion.
+  --
+  -- The risk it closes is specific. REVOKE ... FROM PUBLIC removes only what
+  -- PUBLIC held, but a role whose privilege came THROUGH PUBLIC loses it as a
+  -- side effect, with every other check in this block still green — the failure
+  -- would surface weeks later as a bare permission-denied in an edge function or
+  -- a backfill, with no migration in the blame path. Read live before writing
+  -- this: quote_versions carries service_role=arwdDxtm/postgres as a direct
+  -- grant and has no PUBLIC entry at all, so the REVOKE provably cannot reach
+  -- it. Asserting it anyway costs one comparison and converts a fact that
+  -- happens to be true today into one that cannot quietly stop being true.
+  IF NOT has_table_privilege('service_role', 'public.quote_versions', 'INSERT')
+     OR NOT has_table_privilege('service_role', 'public.quote_versions', 'UPDATE')
+     OR NOT has_table_privilege('service_role', 'public.quote_versions', 'DELETE') THEN
+    RAISE EXCEPTION 'POSTCOND: service_role lost a write privilege on public.quote_versions. This migration is a BROWSER-role boundary and must not touch the service key — any edge function or backfill that writes version rows is now broken.';
+  END IF;
+
+  -- KNOWN LIMIT, asserted rather than silently assumed: every check above is
+  -- table- and routine-scoped. A write routed through an auto-updatable VIEW
+  -- over quote_versions would bypass all of them — for a view without
+  -- security_invoker, base-table permissions AND RLS are evaluated as the VIEW
+  -- OWNER, so authenticated holding INSERT on such a view keeps the
+  -- forged-snapshot path fully open with every other check here passing. No
+  -- such object exists today (no CREATE VIEW over quote_versions anywhere in
+  -- supabase/migrations/), so this is a gap in the proof rather than a known
+  -- hole. Fail closed if one ever appears.
+  IF EXISTS (
+    SELECT 1
+      FROM pg_depend d
+      JOIN pg_rewrite w ON w.oid = d.objid
+      JOIN pg_class v ON v.oid = w.ev_class
+     WHERE d.refclassid = 'pg_class'::regclass
+       AND d.refobjid = 'public.quote_versions'::regclass
+       AND d.classid = 'pg_rewrite'::regclass
+       AND v.relkind IN ('v', 'm')
+       AND v.oid <> 'public.quote_versions'::regclass
+       AND (has_table_privilege('authenticated', v.oid, 'INSERT')
+         OR has_table_privilege('authenticated', v.oid, 'UPDATE')
+         OR has_table_privilege('authenticated', v.oid, 'DELETE')
+         OR has_table_privilege('anon', v.oid, 'INSERT')
+         OR has_table_privilege('anon', v.oid, 'UPDATE')
+         OR has_table_privilege('anon', v.oid, 'DELETE'))
+  ) THEN
+    RAISE EXCEPTION 'POSTCOND: a view or materialized view over public.quote_versions is writable by an external API role. The table-level revoke does not cover it — an auto-updatable view without security_invoker evaluates base-table permissions as the VIEW OWNER, so this re-opens the forged-snapshot path.';
   END IF;
 END;
 $postcond$;

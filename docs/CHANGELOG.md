@@ -85,7 +85,7 @@ with `APPROVED_SET_WITHHELD` instead of running on a partial map. The file defin
 the md5 fidelity proof above is unaffected.
 
 **What the six do**, in apply order (full detail in `docs/reference/migration-history.md`, rows
-878-883):
+880-885):
 
 - `20260812010000` — blend-ticket order creation now proves its own order header at run time, not
   just at apply time. A dropped or repointed totals trigger would previously have left a zero header

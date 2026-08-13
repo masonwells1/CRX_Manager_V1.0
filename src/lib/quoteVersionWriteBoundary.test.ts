@@ -131,12 +131,65 @@ describe('quote_versions write boundary — migration', () => {
     expect(migration).toContain("nullif(itm.value ->> 'current_cost', '')");
   });
 
-  it('refuses snapshot lines it cannot evaluate instead of skipping them', () => {
+  it('counts snapshot lines it cannot evaluate instead of skipping them', () => {
     // An inner join to products silently DROPS a line pointing at a deleted or
     // zero-cost product — exactly where a forged line would hide. Restore never
     // consults the product row, so such a line is still fully restorable.
     expect(migration).toContain('LEFT JOIN public.products pr');
-    expect(migration).toMatch(/PRECOND: % existing quote_versions snapshot line\(s\) cannot be evaluated/);
+    expect(migration).toMatch(/PRECOND \(advisory, not blocking\): % existing quote_versions snapshot line\(s\) cannot be evaluated/);
+  });
+
+  it('reports unevaluable lines but still seals the boundary', () => {
+    // Deliberate reversal, and the direction matters. v_unknown counts lines
+    // this scan cannot JUDGE — a deleted product, a discontinued one now at
+    // zero catalog cost, a cost string that is not a finite number. None of
+    // those is evidence of forgery and every one is an ordinary state of an
+    // aged catalog. Aborting on them let a routine data condition block a
+    // SECURITY fix, which leaves the forged-snapshot write path OPEN — strictly
+    // worse than sealing over a line nobody can classify, since such a line is
+    // no less frozen without this migration. So: NOTICE, never EXCEPTION.
+    const unknownBlock = migration.match(/IF v_unknown > 0 THEN[\s\S]*?END IF;/);
+    expect(unknownBlock).not.toBeNull();
+    expect(unknownBlock![0]).toContain('RAISE NOTICE');
+    expect(unknownBlock![0]).not.toContain('RAISE EXCEPTION');
+  });
+
+  it('still aborts on the forgery signature itself', () => {
+    // The other half of that reversal, and the half that must NOT soften.
+    // v_count is the below-half-cost signature — the thing this file exists to
+    // refuse sealing in. Downgrading this one to a notice would turn the
+    // exploitation check into decoration.
+    const forgedBlock = migration.match(/IF v_count > 0 THEN[\s\S]*?END IF;/);
+    expect(forgedBlock).not.toBeNull();
+    expect(forgedBlock![0]).toContain('RAISE EXCEPTION');
+  });
+
+  // NOTE on the service_role token in the next test: it is SQL assertion text
+  // being matched inside a migration file, never a credential this bundle
+  // holds or sends. The frontend rule is unchanged — the browser uses the anon
+  // key only, and nothing here reads or ships a service key.
+  it('asserts the service key keeps its writes rather than claiming it in prose', () => {
+    // REVOKE ... FROM PUBLIC removes only what PUBLIC held, but a role whose
+    // privilege came THROUGH PUBLIC loses it as a side effect — surfacing weeks
+    // later as a bare permission-denied in an edge function, with no migration
+    // in the blame path. This is a BROWSER-role boundary and must not touch the
+    // service key. Live reads it as a direct grant today, so the assertion is a
+    // no-op that cannot quietly stop being one.
+    expect(migration).toMatch(
+      /has_table_privilege\(\s*'service_role',\s*'public\.quote_versions',\s*'INSERT'\s*\)/,
+    );
+    expect(migration).toContain('lost a write privilege on public.quote_versions');
+  });
+
+  it('fails closed if a writable view is ever layered over the table', () => {
+    // Every other check here is table- and routine-scoped. An auto-updatable
+    // VIEW without security_invoker evaluates base-table permissions AND RLS as
+    // the VIEW OWNER, so `authenticated` holding INSERT on such a view keeps the
+    // forged-snapshot path fully open with every other assertion passing. No
+    // such object exists today; this closes the gap in the proof, not a hole.
+    expect(migration).toContain('pg_rewrite');
+    expect(migration).toMatch(/v\.relkind IN \('v', 'm'\)/);
+    expect(migration).toContain('is writable by an external API role');
   });
 
   it('fails closed rather than open when it cannot see a routine body', () => {

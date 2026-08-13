@@ -128,13 +128,20 @@ SELECT 'quote_versions:force-rls-enabled' AS violation_key,
 UNION ALL
 
 SELECT '_create_quote_version_owner_impl(uuid, uuid, text, text)' AS violation_key,
-       'the owner-side version writer must remain exactly one search_path-pinned SECURITY DEFINER owned by an RLS-bypassing role' AS reason
+       'the owner-side version writer must remain exactly one search_path-pinned SECURITY DEFINER owned by an RLS-bypassing role, at the pinned signature' AS reason
  WHERE (
    SELECT count(*)
      FROM pg_proc p
     WHERE p.pronamespace = 'public'::regnamespace
       AND p.proname = '_create_quote_version_owner_impl'
  ) <> 1
+    -- Counting by proname alone is not enough. Adding an argument (say
+    -- p_below_cost_reason) keeps the count at 1 while moving the routine to a
+    -- signature none of the EXECUTE branches below name — and the new signature
+    -- inherits the database's default EXECUTE grant to anon/authenticated. Pin
+    -- the signature here so a re-signature reports as drift rather than sliding
+    -- through every branch in this file.
+    OR to_regprocedure('public._create_quote_version_owner_impl(uuid,uuid,text,text)') IS NULL
     OR NOT EXISTS (
       SELECT 1
         FROM pg_proc p
@@ -182,13 +189,20 @@ UNION ALL
 -- `authenticated` disappearing from a Supabase project is not a drift this
 -- predicate could usefully survive, and the sweep already fails loudly if it
 -- happens.
+--
+-- Every one of these branches resolves to `true` when the routine is missing.
+-- An earlier version returned `false` here on the theory that the
+-- exactly-one-writer branch above already reports absence — that was wrong, and
+-- it was the one fail-OPEN hole in this file: a re-signature kept that branch's
+-- count at 1 while nulling the lookup here, so the sweep reported clean on a
+-- routine that had just inherited a default EXECUTE grant. Unresolvable means
+-- unverifiable; unverifiable reports as drift. Duplicate noise on a genuine drop
+-- is the correct trade against a silent pass.
 SELECT '_create_quote_version_owner_impl:external-execute' AS violation_key,
        'anon/authenticated must not hold EXECUTE on the owner-side version writer — it is the sole author of the snapshot_data the restore path trusts as a cost basis' AS reason
  WHERE CASE
          WHEN to_regprocedure('public._create_quote_version_owner_impl(uuid,uuid,text,text)') IS NULL
-           -- Absence is already reported by the exactly-one-writer branch above;
-           -- reporting it twice would just add noise to the same finding.
-           THEN false
+           THEN true
          ELSE has_function_privilege(
                 'authenticated', 'public._create_quote_version_owner_impl(uuid,uuid,text,text)', 'EXECUTE')
            OR has_function_privilege(
