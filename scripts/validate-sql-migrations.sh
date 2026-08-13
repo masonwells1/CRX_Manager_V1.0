@@ -153,7 +153,7 @@ approved_rollback_probe_hash() {
       printf '%s\n' 'ea3026e9b38e0b317fb2850f76312f7a0b722299bc15ed4ed4c0aae8262785de'
       ;;
     20260813060000_require_completed_delivery_before_invoice_post.sql)
-      printf '%s\n' 'ffc173f569f5c14dc73ac8b6bd2dff36077358a35f8d013e8c310d1432f4632c'
+      printf '%s\n' '80bf4d99f4603f0b5daf64c481bc3bbc1579874219d69cc5847af2b10903e56a'
       ;;
     *) return 1 ;;
   esac

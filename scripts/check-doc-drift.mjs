@@ -16,6 +16,8 @@ const migrations = readdirSync(path.join(ROOT, "supabase", "migrations")).filter
 const history = read("docs/reference/migration-history.md");
 const routes = read("docs/reference/pages-routes.md");
 const app = read("src/App.tsx");
+const databaseSchema = read("docs/reference/database-schema.md");
+const schemaRegistry = JSON.parse(read(".claude/schema-registry.json"));
 
 const historyClaim = history.match(
   /^#\s*Migration History\s*\((\d+)\s+(?:migrations?|migration-history entries)\)/m,
@@ -48,6 +50,42 @@ row("pages-routes route count", routeClaim ?? "missing", routeRows,
 
 row("live DB migration count", "live", "skipped", "SKIP",
   "plain Node check is local-only; verify via the read-only Supabase connector when current live state matters");
+
+// Returns is a high-risk money/inventory lifecycle row. Keep its concise doc
+// entry tied to the live-generated registry so stale invented fields or a
+// missing terminal status cannot survive an ordinary docs check.
+const returnsDocLine = databaseSchema.split(/\r?\n/).find((line) => line.startsWith("- `returns` -")) || "";
+const returnsColumns = new Set(schemaRegistry.columns?.returns || []);
+const returnsStatuses = schemaRegistry.status_enums?.["returns.status"];
+const hasReturnsStatuses = Array.isArray(returnsStatuses) && returnsStatuses.length > 0;
+const documentedStatuses = (returnsDocLine.match(/\bstatus:\s*([^,]+)/)?.[1] || "")
+  .split("/")
+  .map((status) => status.trim())
+  .filter(Boolean);
+const statusMatches = hasReturnsStatuses
+  && documentedStatuses.length === returnsStatuses.length
+  && documentedStatuses.every((status, index) => status === returnsStatuses[index]);
+const documentedStatus = hasReturnsStatuses
+  ? `status: ${returnsStatuses.join("/")}`
+  : "status: <missing from schema registry>";
+const requiredReturnsColumns = [
+  "reason", "reason_notes", "total_credit_cents", "credit_invoice_id",
+  "cancelled_at", "cancelled_by", "cancellation_reason", "credited_by",
+];
+const missingReturnsColumns = requiredReturnsColumns.filter(
+  (column) => !returnsColumns.has(column) || !new RegExp(`\\b${column}\\b`).test(returnsDocLine),
+);
+const staleReturnsColumns = ["return_type", "reason_category"].filter(
+  (column) => !returnsColumns.has(column) && new RegExp(`\\b${column}\\b`).test(returnsDocLine),
+);
+row("Returns schema reference", documentedStatus, returnsDocLine || "missing",
+  statusMatches && missingReturnsColumns.length === 0 && staleReturnsColumns.length === 0 ? "PASS" : "FAIL",
+  [
+    !hasReturnsStatuses ? "missing live status enum: returns.status" : "",
+    hasReturnsStatuses && !statusMatches ? "documented status values do not exactly match live returns.status" : "",
+    missingReturnsColumns.length ? `missing live columns: ${missingReturnsColumns.join(", ")}` : "",
+    staleReturnsColumns.length ? `stale non-columns: ${staleReturnsColumns.join(", ")}` : "",
+  ].filter(Boolean).join("; "));
 
 // Every hook wired in settings.json must be documented in agent-guardrails.md,
 // so the doc future agents are routed to can never silently fall behind the guard net.

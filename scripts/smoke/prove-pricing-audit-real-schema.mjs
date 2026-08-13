@@ -53,7 +53,7 @@ const oneShotDataReplayExclusions = new Map([
   ],
 ]);
 const pendingCandidateMigrationExclusions = new Map([
-  ['20260813010000_wave_a_order_cost_authority_and_finiteness.sql', 'Wave A money candidate'],
+  ['20260813015000_wave_a_order_cost_authority_and_finiteness.sql', 'Wave A money candidate'],
   ['20260813020000_round_order_header_money.sql', 'Wave A money candidate'],
   ['20260813030000_reject_non_finite_money_and_quantities.sql', 'Wave A money candidate'],
   ['20260813040000_clamp_negative_commission_remainder.sql', 'Wave A money candidate'],
@@ -157,7 +157,7 @@ function selectedMigrations() {
     '20260727174805',
     'live-ledger snapshot no longer matches the restored baseline',
   );
-  assert.equal(ledger.entries.length, 54, 'captured post-baseline live ledger row count drifted');
+  assert.equal(ledger.entries.length, 56, 'captured post-baseline live ledger row count drifted');
   assert.equal(
     ledger.entries.at(-1)?.version,
     ledger.live_high_water,

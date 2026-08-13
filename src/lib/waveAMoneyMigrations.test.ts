@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
 const ORDER_COST_PATH =
-  'supabase/migrations/20260813010000_wave_a_order_cost_authority_and_finiteness.sql';
+  'supabase/migrations/20260813015000_wave_a_order_cost_authority_and_finiteness.sql';
 const ROUND_HEADER_PATH =
   'supabase/migrations/20260813020000_round_order_header_money.sql';
 const COMMISSION_MATH_PATH =

@@ -169,12 +169,15 @@ Migrations `20260714220000` through `20260714224000` preserve existing public si
 - *Blend propagation:* the `CREATE OR REPLACE create_application_record_from_blend_ticket` in the same migration adds an auto-INSERT into `application_record_lots` from `blend_ticket_products.lot_number` (case-insensitive dedup, skips null product / blank lot) — body otherwise reproduced verbatim from live; no new overload.
 
 ## Returns & Credits
-- `approve_return()` — approve a return request
-- `receive_return()` — receive returned items, update inventory
-- `issue_return_credit()` — issue credit memo for a return, integrated with AR
+- **APPLIED LIVE 2026-08-12:** The retry-binding behavior below is live via migration `20260812130145_bind_return_receipts_to_intent_and_restore_overdue.sql` (ledger version `20260812212323`, matched on name). Post-apply catalog, invariant, and rollback-only smoke verification passed; see migration-history row 878.
+- `create_return(p_return, p_items, p_idempotency_key)` — creates one source-bound return; the required retry receipt is bound to the authenticated actor and exact header/ordered-line JSON payload.
+- `approve_return()` — approve a return request; retry is bound to the authenticated actor and exact return id.
+- `reject_return()` — reject a requested return; retry is bound to the authenticated actor and exact return id.
+- `receive_return()` — receive returned items and update inventory; retry is bound to the authenticated actor and exact return id.
+- `issue_return_credit()` — issue a server-derived credit memo for a return, integrated with AR; retry is bound to the authenticated actor and exact return id.
 - `create_prepay_credit()` — create prepay credit for a customer
 - `reconcile_prepay_balances()` — reconcile prepay balances across all customers
-- `cancel_return(p_return_id, p_reason, p_performed_by, p_idempotency_key)` → jsonb — admin/sales_rep, strict-actor. Cancels a return at any non-terminal stage (requested/approved/received → cancelled); brackets the status write with `app.admin_override`.
+- `cancel_return(p_return_id, p_reason, p_performed_by, p_idempotency_key)` → jsonb — admin/sales_rep, strict-actor. Cancels a return at any non-terminal stage (requested/approved/received → cancelled); brackets the status write with `app.admin_override`; retry is bound to the authenticated actor, exact return id, and exact reason text.
 - `create_prepay_check_splits(p_customer_id, p_reference_number, p_splits, p_performed_by, p_idempotency_key, p_expected_total_cents DEFAULT NULL)` → jsonb — records one customer check split into multiple labeled prepay buckets; the trailing default preserves old/stale client calls while current clients assert the independent check total.
 - `edit_prepay_credit(p_credit_id, p_new_balance_cents, p_reference_number, p_bucket_label, p_notes, p_performed_by, p_idempotency_key)` → jsonb — admin-only, strict-actor edit of a prepay credit (balance/reference/label).
 - `delete_prepay_credit(p_credit_id, p_reason, p_performed_by, p_idempotency_key)` → jsonb — admin-only, strict-actor soft-delete/void of a prepay credit.

@@ -108,9 +108,10 @@
 --     'completed'. Unchanged here; the precondition asserts its check is still
 --     in place so the two paths cannot drift apart.
 --   * `void_payment`, `_reverse_credit_memo_application`, `reverse_write_off` —
---     reversal paths that can only move an ALREADY-PAID invoice back to
---     'posted' (`status IN ('paid','posted')`, `status = 'paid'` and
---     `v_old_status = 'paid'` respectively, all verified live 2026-08-11). A
+--     reversal paths that cannot move a draft invoice to an open status
+--     (`status IN ('paid','posted')`, the exact due-date-aware wrapper/private
+--     topology installed by 20260812130145, and `v_old_status = 'paid'`
+--     respectively). A
 --     draft can never reach them: they run off a payment, credit-memo
 --     application or write-off, none of which can exist on an unposted invoice.
 --     The precondition asserts all three keep that paid-guard.
@@ -481,21 +482,25 @@ BEGIN
   END IF;
 
   -- The three functions that can write ''posted'' WITHOUT promoting a draft are
-  -- reversal paths: they re-open an ALREADY-PAID invoice after a payment void, a
-  -- credit-memo reversal or a write-off reversal. Verified live 2026-08-11, each
-  -- is gated on the invoice already being ''paid'', so a draft can never reach
-  -- them. They assign the value through a CASE/variable, which the literal scan
-  -- below cannot see — hence asserted here by name. If one of them loses its
-  -- paid-guard it becomes a second promotion path and this gate stops being
-  -- complete.
+  -- reversal paths: they re-open an invoice after a payment void, a credit-memo
+  -- reversal or a write-off reversal. The return-credit remediation at
+  -- 20260812130145 deliberately replaced the middle function with an exact
+  -- wrapper that accepts paid/posted/overdue, calls the exact legacy paid-only
+  -- implementation, then re-derives posted/overdue only for the same already-open
+  -- target. The exact public/private topology is pinned below; merely matching
+  -- the wider status IN text would fail open if the wrapper were rewritten.
+  -- They assign the value through a CASE/variable, which the literal scan below
+  -- cannot see — hence asserted here by name. If one loses its safe topology it
+  -- becomes a second promotion path and this gate stops being complete.
   -- Asserted in the INVERTED form, for the reason spelled out at PRECOND F. An
   -- earlier revision counted the definitions that MATCHED their paid-guard and
   -- required 3. Two reviewers independently showed that passes in exactly the
   -- case it was written for: give `void_payment` a second overload, strip the
   -- paid-guard from ONLY that one, and the guarded overload still supplies the
   -- row, so count(DISTINCT proname) is still 3 while an unguarded promotion path
-  -- exists on live. Count the definitions that FAIL their guard and require
-  -- ZERO; assert existence separately so deleting one cannot pass vacuously.
+  -- exists on live. Count the definitions that FAIL their guard/topology and
+  -- require ZERO; assert existence separately so deleting one cannot pass
+  -- vacuously.
   -- This repo has carried money-function overloads before. Verified live
   -- 2026-08-11 all three currently have exactly one definition each, so the
   -- overload case is latent — but the whole point of the assertion is to hold
@@ -505,10 +510,45 @@ BEGIN
    WHERE n.nspname = 'public'
      AND p.proname IN ('void_payment', '_reverse_credit_memo_application', 'reverse_write_off')
      AND NOT ((p.proname = 'void_payment'                      AND p.prosrc ~* 'status\s+IN\s*\(\s*''paid''')
-           OR (p.proname = '_reverse_credit_memo_application'  AND p.prosrc ~* 'status\s*=\s*''paid''')
+           OR (p.proname = '_reverse_credit_memo_application' AND (
+                 -- Legacy production shape, before 20260812130145.
+                 (md5(p.prosrc) = '96662c1913666a49b778973ca881d8d6'
+                  AND p.prosrc ~* 'status\s*=\s*''paid''')
+                 OR
+                 -- Forward-replay shape after 20260812130145. Pin the exact
+                 -- wrapper and exact renamed legacy implementation plus their
+                 -- owner/security/search-path/ACL boundaries. This recognizes
+                 -- the wider paid/posted/overdue wrapper without accepting a
+                 -- same-text but draft-promoting rewrite.
+                 (encode(sha256(convert_to(replace(p.prosrc, E'\r\n', E'\n'), 'UTF8')), 'hex') =
+                    '744c48493d549f9bc2297270bfdc0977935a4f29ed44fe2e336c8a6fce6ecbf8'
+                  AND pg_get_userbyid(p.proowner) = 'postgres'
+                  AND p.prosecdef
+                  AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+                  AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')
+                  AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')
+                  AND has_function_privilege('service_role', p.oid, 'EXECUTE')
+                  AND (SELECT count(*) FROM pg_proc p2
+                        WHERE p2.pronamespace = 'public'::regnamespace
+                          AND p2.proname = '_reverse_credit_memo_application_status_impl_20260812') = 1
+                  AND EXISTS (
+                    SELECT 1
+                      FROM pg_proc p2
+                     WHERE p2.oid = to_regprocedure(
+                       'public._reverse_credit_memo_application_status_impl_20260812(uuid,uuid,text,text)'
+                     )
+                       AND md5(p2.prosrc) = '96662c1913666a49b778973ca881d8d6'
+                       AND pg_get_userbyid(p2.proowner) = 'postgres'
+                       AND p2.prosecdef
+                       AND p2.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+                       AND has_function_privilege('postgres', p2.oid, 'EXECUTE')
+                       AND NOT has_function_privilege('anon', p2.oid, 'EXECUTE')
+                       AND NOT has_function_privilege('authenticated', p2.oid, 'EXECUTE')
+                       AND NOT has_function_privilege('service_role', p2.oid, 'EXECUTE')
+                  ))))
            OR (p.proname = 'reverse_write_off'                 AND p.prosrc ~* 'v_old_status\s*=\s*''paid'''));
   IF v_count <> 0 THEN
-    RAISE EXCEPTION 'PRECOND G: % definition[s] among the 3 reversal writers [void_payment, _reverse_credit_memo_application, reverse_write_off] no longer gate their move to ''posted'' on the invoice already being paid. One of them could now promote a DRAFT, which would bypass this gate entirely. Re-derive before applying.', v_count;
+    RAISE EXCEPTION 'PRECOND G: % definition[s] among the 3 reversal writers [void_payment, _reverse_credit_memo_application, reverse_write_off] no longer retain the exact reviewed no-draft-promotion guard/topology. One of them could now promote a DRAFT, which would bypass this gate entirely. Re-derive before applying.', v_count;
   END IF;
   SELECT count(DISTINCT p.proname) INTO v_count
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace

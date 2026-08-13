@@ -1,9 +1,9 @@
 {
   "project_id": "rhyzpcqhnizqbxphqdkr",
-  "captured_at": "2026-08-12T10:58:11.8864432-05:00",
+  "captured_at": "2026-08-13T01:40:57.7354338-05:00",
   "baseline_high_water": "20260727174805",
-  "live_high_water": "20260812154757",
-  "live_ledger_rows": 968,
+  "live_high_water": "20260813011751",
+  "live_ledger_rows": 970,
   "entries": [
     { "version": "20260727231652", "name": "quote_and_rate_reads_office_only", "statement_bytes": 25206, "statement_sha256": "00f656d6bc6d43f6827b60cb33768465f883571521c1ba83e83c06e75fe49d86" },
     { "version": "20260728182141", "name": "20260728123224_secdef_pricing_reads_office_only", "statement_bytes": 10157, "statement_sha256": "36efb3eacd4c5ffe5196e340428539877b4516aa1a3948276451e0e0fe5006fe" },
@@ -58,6 +58,8 @@
     { "version": "20260812145628", "name": "20260812115235_snapshot_cost_reporting", "statement_bytes": 41707, "statement_sha256": "a8835f7eb172f7f37d1f4d4227e29f44d8effdb86cc8f7dc7dd6f680a96ba07f" },
     { "version": "20260812151606", "name": "20260812115236_quote_items_cost_at_quote_snapshot", "statement_bytes": 109191, "statement_sha256": "32dbf78a2efcd4c7e4f9f98fb7657ec472f6f6f0ff7a5cf811b7f028d21b9a08" },
     { "version": "20260812154028", "name": "20260812115237_enforce_below_cost_admin_approval", "statement_bytes": 43213, "statement_sha256": "250e1bea81571eafc7402af7516d6a1833e778c70e03a359fa4be77bdeff49ba" },
-    { "version": "20260812154757", "name": "20260812115238_repair_historical_order_line_cents", "statement_bytes": 18770, "statement_sha256": "7498b0befab4cd6355560cf9dc29c270a3e0098d2327d24d7eb7ab13d0d927ca" }
+    { "version": "20260812154757", "name": "20260812115238_repair_historical_order_line_cents", "statement_bytes": 18770, "statement_sha256": "7498b0befab4cd6355560cf9dc29c270a3e0098d2327d24d7eb7ab13d0d927ca" },
+    { "version": "20260812212323", "name": "20260812130145_bind_return_receipts_to_intent_and_restore_overdue", "statement_bytes": 30231, "statement_sha256": "acb747b244fb2afe59ce98e9ba165e35acbba02fdb58d11ca60eea6008537a15" },
+    { "version": "20260813011751", "name": "20260813070000_pin_return_idempotency_helper_contract", "statement_bytes": 2043, "statement_sha256": "5121eb23cbb1c564e1de411266ee46fca2e6d09c40882c40b46fcb343903f984" }
   ]
 }

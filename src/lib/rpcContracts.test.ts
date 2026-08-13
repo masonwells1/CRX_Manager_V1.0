@@ -2372,6 +2372,13 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   _insert_commissions_for_job: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _insert_commissions_for_order: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',
+  // Pruned on 2026-08-12 when 20260812130145 applied live (ledger version
+  // 20260812212323) and the registry high-water moved past it:
+  //   snapshot_invoice_line_shares_on_post — a trigger-returning function never
+  //     reaches the generated client types, so it left the discovered inventory
+  //     the moment its migration stopped being newer than the high-water. It is
+  //     not exempt from anything now; it is simply no longer discovered, and a
+  //     dead entry would silently pre-suppress any future RPC reusing the name.
   _recompute_po_on_order_for_products:
     'internal convergent PO-cache recomputation helper; trigger parents own the transaction and direct browser EXECUTE is revoked',
   _sync_job_holds: 'internal convergent hold-sync helper; direct client EXECUTE is revoked',

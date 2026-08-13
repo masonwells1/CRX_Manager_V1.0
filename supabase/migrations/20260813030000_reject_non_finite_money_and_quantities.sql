@@ -21,7 +21,7 @@
 -- the overlap makes these constraints redundant.
 --
 -- 20260805220757 closed this at the bulk_import_order boundary, and
--- 20260813010000 closes it at the create_direct_order boundary. Both are
+-- 20260813015000 closes it at the create_direct_order boundary. Both are
 -- per-RPC. The columns themselves were still unguarded, so any OTHER writer
 -- could still land a non-finite value.
 --
@@ -45,7 +45,7 @@
 -- including the frontend and any future RPC, and cannot be bypassed by adding a
 -- caller — the same argument 20260809170800 made for the rounding trigger.
 --
--- ERROR-MESSAGE QUALITY, STATED HONESTLY. 20260813010000 adds an actionable
+-- ERROR-MESSAGE QUALITY, STATED HONESTLY. 20260813015000 adds an actionable
 -- ITEM_INVALID at the create_direct_order boundary, and that is the only RPC
 -- with such a boundary check. Two other writers get the raw constraint name
 -- instead, and no boundary check is added for them here:

@@ -50,7 +50,7 @@ supabase/migrations/20260812154757_repair_historical_order_line_cents.sql text e
 # checkout under core.autocrlf=true would install CRLF bodies whose md5 can never
 # match an LF-computed pin, and every one of these migrations would abort at its
 # own POSTCOND on a machine that merely checked the repo out differently.
-supabase/migrations/20260813010000_wave_a_order_cost_authority_and_finiteness.sql text eol=lf
+supabase/migrations/20260813015000_wave_a_order_cost_authority_and_finiteness.sql text eol=lf
 supabase/migrations/20260813020000_round_order_header_money.sql text eol=lf
 supabase/migrations/20260813030000_reject_non_finite_money_and_quantities.sql text eol=lf
 supabase/migrations/20260813040000_clamp_negative_commission_remainder.sql text eol=lf

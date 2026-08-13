@@ -13,7 +13,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, assertRpcResult, describePostInvoiceBlock } from '../lib/db';
 import { assertInvoiceSendable } from '../lib/invoiceSendDisposition';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { generateIdempotencyKey, getIdempotencyMismatchResult, isMissingIntentBindingColumn, legacyIntentChanged } from '../lib/idempotency';
+import { generateIdempotencyKey, getIdempotencyMismatchResult, isDefinitiveRpcRejection, isMissingIntentBindingColumn, legacyIntentChanged } from '../lib/idempotency';
 import { parseDollarsToCents } from '../lib/parseCents';
 import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
 import { downloadInvoicePdf, generateInvoicePdf, deriveFieldAppAppliedAcres, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
@@ -105,7 +105,6 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   // idempotency cache hits resolve correctly.
   const payIdem = useIdempotencyKey('allocate_payment', profile?.id || '');
   const reverseWoIdem = useIdempotencyKey('reverse_write_off', profile?.id || '');
-  const applyCreditIdem = useIdempotencyKey('apply_credit_memo_to_invoice', profile?.id || '');
   // #27: reverse "Transfer to Scheduling" — push a job-built field invoice back to
   // its source job. This is the editor a TRANSFERRED field invoice actually opens in
   // (a transferred invoice has a job_id but NO field_app_locations, so the #24
@@ -216,6 +215,23 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   const [selectedCreditId, setSelectedCreditId] = useState('');
   const [applyCreditAmount, setApplyCreditAmount] = useState('');
   const [applyingCredit, setApplyingCredit] = useState(false);
+  const [unresolvedApplyCreditIntent, setUnresolvedApplyCreditIntent] = useState<{
+    creditMemoId: string;
+    creditMemoNumber: string;
+    targetInvoiceId: string;
+    amountCents: number;
+  } | null>(null);
+  const applyCreditAmountCents = parseDollarsToCents(applyCreditAmount);
+  const applyCreditIntentScope = JSON.stringify([
+    selectedCreditId,
+    id || '',
+    Number.isInteger(applyCreditAmountCents) ? applyCreditAmountCents : null,
+  ]);
+  const applyCreditIdem = useIdempotencyKey(
+    'apply_credit_memo_to_invoice',
+    profile?.id || '',
+    applyCreditIntentScope,
+  );
 
   // Parent order context
   const [parentOrder, setParentOrder] = useState<{ id: string; order_number: string } | null>(null);
@@ -1149,14 +1165,31 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       .is('deleted_at', null)
       .order('invoice_date', { ascending: true });
     if (error) { toast('error', sanitizeError(error)); return; }
-    const credits = (data || []) as Array<{ id: string; invoice_number: string; balance_cents: number }>;
+    let credits = (data || []) as Array<{ id: string; invoice_number: string; balance_cents: number }>;
+    const unresolved = unresolvedApplyCreditIntent?.targetInvoiceId === id
+      ? unresolvedApplyCreditIntent
+      : null;
+    if (unresolved) {
+      const currentMemo = credits.find((credit) => credit.id === unresolved.creditMemoId);
+      if (!currentMemo) {
+        credits = [{
+          id: unresolved.creditMemoId,
+          invoice_number: unresolved.creditMemoNumber,
+          balance_cents: -unresolved.amountCents,
+        }, ...credits];
+      }
+      setAvailableCredits(credits);
+      setSelectedCreditId(unresolved.creditMemoId);
+      setApplyCreditAmount((unresolved.amountCents / 100).toFixed(2));
+      setShowApplyCreditModal(true);
+      return;
+    }
     if (credits.length === 0) { toast('info', 'This customer has no available credit memos to apply'); return; }
     const first = credits[0];
     setAvailableCredits(credits);
     setSelectedCreditId(first.id);
     // default the amount to the smaller of the credit's available balance and what this invoice owes
     setApplyCreditAmount((Math.min(-first.balance_cents, invoice.balance_cents || 0) / 100).toFixed(2));
-    applyCreditIdem.resetKey();
     setShowApplyCreditModal(true);
   };
 
@@ -1165,6 +1198,14 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     if (amountCents <= 0) { toast('error', 'Enter a valid amount to apply'); return; }
     if (!selectedCreditId) { toast('error', 'Select a credit memo to apply'); return; }
     if (!profile) { toast('error', 'Cannot apply credit — profile not loaded. Please refresh.'); return; }
+    const creditMemoNumber = availableCredits.find((credit) => credit.id === selectedCreditId)?.invoice_number
+      || selectedCreditId;
+    setUnresolvedApplyCreditIntent({
+      creditMemoId: selectedCreditId,
+      creditMemoNumber,
+      targetInvoiceId: id!,
+      amountCents,
+    });
     setApplyingCredit(true);
     try {
       const key = applyCreditIdem.getKey();
@@ -1178,12 +1219,17 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       if (error) throw error;
       assertRpcResult(data, 'apply_credit_memo_to_invoice');
       applyCreditIdem.resetKey();
+      setUnresolvedApplyCreditIntent(null);
       toast('success', `Applied ${fmt(amountCents)} credit to this invoice`);
       setShowApplyCreditModal(false);
       setSelectedCreditId('');
       setApplyCreditAmount('');
       if (id) fetchInvoice(id);
     } catch (err: unknown) {
+      if (isDefinitiveRpcRejection(err)) {
+        applyCreditIdem.resetKey();
+        setUnresolvedApplyCreditIntent(null);
+      }
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'apply_credit_memo_to_invoice' } });
       toast('error', sanitizeError(err));
     }
@@ -2129,12 +2175,19 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       </Modal>
 
       {/* Apply Credit Memo Modal (credit-memo apply, 2026-07-10) */}
-      <Modal open={showApplyCreditModal} onClose={() => setShowApplyCreditModal(false)} title="Apply Credit Memo">
+      <Modal
+        open={showApplyCreditModal}
+        onClose={() => { if (!applyingCredit) setShowApplyCreditModal(false); }}
+        title="Apply Credit Memo"
+        closeDisabled={applyingCredit}
+      >
         <div className="space-y-4">
           <div>
             <label className="text-sm font-medium text-nav-dark">Credit Memo</label>
             <select
+              aria-label="Credit Memo"
               value={selectedCreditId}
+              disabled={applyingCredit || Boolean(unresolvedApplyCreditIntent)}
               onChange={(e) => {
                 const c = availableCredits.find((x) => x.id === e.target.value);
                 setSelectedCreditId(e.target.value);
@@ -2154,12 +2207,18 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
             onChange={(e) => setApplyCreditAmount(e.target.value)}
             min={0}
             step={0.01}
+            disabled={applyingCredit || Boolean(unresolvedApplyCreditIntent)}
           />
+          {unresolvedApplyCreditIntent && (
+            <p className="text-xs text-amber-700">
+              The previous response was not confirmed. Retry this exact memo and amount so the server can replay the original result safely.
+            </p>
+          )}
           <p className="text-xs text-gray-500">
             This invoice owes {fmt(invoice?.balance_cents || 0)}. Applying a credit lowers the balance — it doesn&apos;t move money.
           </p>
           <div className="flex justify-end gap-3">
-            <Button variant="ghost" onClick={() => setShowApplyCreditModal(false)}>Cancel</Button>
+            <Button variant="ghost" onClick={() => setShowApplyCreditModal(false)} disabled={applyingCredit}>Cancel</Button>
             <Button onClick={handleApplyCredit} loading={applyingCredit} disabled={!selectedCreditId}>Apply Credit</Button>
           </div>
         </div>
