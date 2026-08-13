@@ -29,7 +29,11 @@ import { generateIdempotencyKey } from '../lib/idempotency';
  */
 export function useIdempotencyKey(operation: string, userId: string, intentScope = '') {
   const keysRef = useRef(new Map<string, string>());
-  const scope = JSON.stringify([operation, userId, intentScope]);
+  const scopedKey = useCallback(
+    (scopeValue: string) => JSON.stringify([operation, userId, scopeValue]),
+    [operation, userId],
+  );
+  const scope = scopedKey(intentScope);
 
   const getKey = useCallback((): string => {
     let key = keysRef.current.get(scope);
@@ -46,5 +50,22 @@ export function useIdempotencyKey(operation: string, userId: string, intentScope
     keysRef.current.delete(scope);
   }, [scope]);
 
-  return { getKey, resetKey };
+  // Some intents (for example a free-text cancellation reason) are available
+  // only at submit time. Keep the same per-scope map semantics without making
+  // the caller wait for a render before it can safely obtain the exact key.
+  const getKeyFor = useCallback((scopeValue: string): string => {
+    const dynamicScope = scopedKey(scopeValue);
+    let key = keysRef.current.get(dynamicScope);
+    if (!key) {
+      key = generateIdempotencyKey(operation, userId);
+      keysRef.current.set(dynamicScope, key);
+    }
+    return key;
+  }, [operation, scopedKey, userId]);
+
+  const resetKeyFor = useCallback((scopeValue: string): void => {
+    keysRef.current.delete(scopedKey(scopeValue));
+  }, [scopedKey]);
+
+  return { getKey, resetKey, getKeyFor, resetKeyFor };
 }

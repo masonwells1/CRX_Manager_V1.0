@@ -474,12 +474,17 @@
     },
     "issue_return_credit": {
       "chain": "smoke-return-credit-chain.sql",
-      "description": "THE canonical return->credit chain: a real authenticated admin is denied direct returns INSERT, create_return derives immutable lines from delivered order items, and direct return_items mutation is denied -> parent source retarget is blocked -> approve -> receive/restock -> void/cancel refuse the received return even with non-restock line flags -> issue a posted credit memo -> stable replay -> statement single-count -> unapply -> re-issue; only the exact verified production source-free RMA remains finishable while every other source-free row is rejected even if backdated.",
+      "container_prover": "verify-return-credit-real-schema.mjs",
+      "description": "THE canonical return->credit chain: direct return writes are denied; all six return RPC receipts bind actor plus exact return/create payload with exact replay and changed-actor/target/payload refusal; source-derived create -> approve/reject/cancel/receive -> issue credit -> statement single-count -> unapply/re-issue; Apply Credit lost-response retry creates one application; explicit reversal and memo unapply immediately restore a past-due target to overdue; only the exact verified production source-free RMA remains finishable.",
       "covers": [
         "create_return",
         "approve_return",
+        "reject_return",
+        "cancel_return",
         "receive_return",
         "issue_return_credit",
+        "apply_credit_memo_to_invoice",
+        "reverse_credit_memo_application",
         "void_order",
         "cancel_order",
         "get_customer_statement",
@@ -487,7 +492,9 @@
       ],
       "area": [
         "billing",
-        "inventory"
+        "inventory",
+        "idempotency",
+        "security"
       ]
     },
     "cancel_return": {

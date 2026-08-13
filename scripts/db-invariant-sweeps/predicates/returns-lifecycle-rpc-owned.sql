@@ -28,7 +28,11 @@ fn AS (
          p.prosrc
     FROM pg_proc p
    WHERE p.pronamespace = 'public'::regnamespace
-     AND p.proname IN ('approve_return', 'cancel_return')
+     AND p.proname IN (
+       'approve_return', 'cancel_return',
+       '_approve_return_intent_impl_20260812',
+       '_cancel_return_intent_impl_20260812'
+     )
 )
 SELECT 'returns:trg_return_lifecycle_rpc_owned' AS violation_key,
        'return lifecycle trigger is missing, disabled, or not attached as a BEFORE UPDATE/DELETE guard' AS reason
@@ -64,8 +68,14 @@ SELECT 'approve_return(uuid, uuid, text)' AS violation_key,
      FROM fn
     WHERE signature = 'approve_return(uuid,uuid,text)'
       AND prosrc LIKE '%p_approved_by IS DISTINCT FROM v_actor%'
-      AND prosrc NOT LIKE '%p_approved_by IS NOT NULL AND%'
-      AND prosrc LIKE '%approved_by = v_actor%'
+      AND prosrc LIKE '%_approve_return_intent_impl_20260812%'
+      AND EXISTS (
+        SELECT 1 FROM fn impl
+         WHERE impl.signature = '_approve_return_intent_impl_20260812(uuid,uuid,text)'
+           AND impl.prosrc LIKE '%p_approved_by IS DISTINCT FROM v_actor%'
+           AND impl.prosrc NOT LIKE '%p_approved_by IS NOT NULL AND%'
+           AND impl.prosrc LIKE '%approved_by = v_actor%'
+      )
  )
 
 UNION ALL
@@ -77,9 +87,15 @@ SELECT 'cancel_return(uuid, text, uuid, text)' AS violation_key,
      FROM fn
     WHERE signature = 'cancel_return(uuid,text,uuid,text)'
       AND prosrc LIKE '%p_performed_by IS DISTINCT FROM v_actor%'
-      AND prosrc NOT LIKE '%p_performed_by IS NOT NULL AND%'
-      AND prosrc LIKE '%cancelled_by = v_actor%'
-      AND prosrc LIKE '%performed_by, notes%'
+      AND prosrc LIKE '%_cancel_return_intent_impl_20260812%'
+      AND EXISTS (
+        SELECT 1 FROM fn impl
+         WHERE impl.signature = '_cancel_return_intent_impl_20260812(uuid,text,uuid,text)'
+           AND impl.prosrc LIKE '%p_performed_by IS DISTINCT FROM v_actor%'
+           AND impl.prosrc NOT LIKE '%p_performed_by IS NOT NULL AND%'
+           AND impl.prosrc LIKE '%cancelled_by = v_actor%'
+           AND impl.prosrc LIKE '%performed_by, notes%'
+      )
  )
 
 UNION ALL

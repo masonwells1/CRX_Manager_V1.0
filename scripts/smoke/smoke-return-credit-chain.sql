@@ -51,6 +51,7 @@
 DO $smoke$
 DECLARE
   v_admin        uuid;
+  v_admin2       uuid;
   v_suffix       text := substr(md5(random()::text), 1, 8);
   v_customer_id  uuid;
   v_other_customer_id uuid;
@@ -63,6 +64,13 @@ DECLARE
   v_return_id    uuid;
   v_legacy_return_id uuid;
   v_future_unlinked_return_id uuid;
+  v_reject_return_id uuid;
+  v_cancel_return_id uuid;
+  v_target_invoice_id uuid;
+  v_target_invoice_item_id uuid;
+  v_billing_set_id uuid;
+  v_billing_line_id uuid;
+  v_application_id uuid;
   v_credit_id    uuid;
   v_credit_id2   uuid;
   v_credit_num   text;
@@ -70,6 +78,7 @@ DECLARE
   v_res          jsonb;
   v_res2         jsonb;
   v_qty          numeric;
+  v_inventory_before_receive numeric;
   v_n            int;
   v_credit_rows  int;
   v_total_rows   int;
@@ -80,6 +89,8 @@ DECLARE
   v_by           uuid;
   v_ts           timestamptz;
   v_reason       text;
+  v_create_header jsonb;
+  v_create_items jsonb;
 BEGIN
   -- --------------------------------------------------------------------
   -- 0. Preconditions + auth as a real active admin
@@ -97,6 +108,12 @@ BEGIN
   IF v_admin IS NULL THEN
     RAISE EXCEPTION 'SMOKE_SETUP: no active admin profile found';
   END IF;
+  SELECT id INTO v_admin2 FROM profiles
+  WHERE role = 'admin' AND is_active = true AND id <> v_admin
+  ORDER BY created_at LIMIT 1;
+  IF v_admin2 IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: a second active admin is required for actor-binding proof';
+  END IF;
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
 
@@ -110,9 +127,44 @@ BEGIN
   VALUES ('[SMOKE] Wrong Return Credit Farm ' || v_suffix)
   RETURNING id INTO v_other_customer_id;
 
+  -- Create a pricing-free product shell, then establish its cost through the
+  -- same governed preview/apply RPC path used by the app. This keeps the smoke
+  -- independent of live catalog contents without disabling product triggers or
+  -- touching an existing business row. Everything remains rollback-scoped.
   INSERT INTO products (product_name)
-  VALUES ('[SMOKE] RCC Herbicide ' || v_suffix)
+  VALUES ('[SMOKE] RCC Governed Product ' || v_suffix)
   RETURNING id INTO v_product_id;
+
+  v_res := public.preview_product_pricing_changes(
+    'product_page',
+    NULL,
+    jsonb_build_array(jsonb_build_object(
+      'product_id', v_product_id,
+      'row_version', 1,
+      'pricing_mode', 'price_driven',
+      'new_cost', '5.00',
+      'tier1_price', '10.00',
+      'tier2_price', '10.00',
+      'tier3_price', '10.00'
+    )),
+    v_admin,
+    'smoke-rcc-pricing-preview-' || v_suffix
+  );
+  IF v_res->>'status' IS DISTINCT FROM 'previewed'
+     OR (v_res->>'apply_allowed')::boolean IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: governed product pricing preview failed: %', v_res;
+  END IF;
+
+  v_res2 := public.apply_product_pricing_change_set(
+    (v_res->>'change_set_id')::uuid,
+    v_res->>'request_fingerprint',
+    v_admin,
+    'smoke-rcc-pricing-apply-' || v_suffix
+  );
+  SELECT current_cost INTO v_qty FROM products WHERE id = v_product_id;
+  IF v_qty IS DISTINCT FROM 5.00::numeric THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: governed product pricing apply failed: %', v_res2;
+  END IF;
 
   -- Inventory row at 'Main Warehouse' so receive_return exercises the real
   -- restock branch (it LEFT JOINs inventory on that exact location and only
@@ -158,9 +210,18 @@ BEGIN
     (v_delivery_id, v_order_item_1, v_product_id, 10, 10, 'gal'),
     (v_delivery_id, v_order_item_2, v_product_id, 5, 5, 'gal');
   UPDATE deliveries SET status = 'in_progress' WHERE id = v_delivery_id;
-  UPDATE deliveries
-     SET status = 'completed', completed_at = now(), signed_by = '[SMOKE] RCC Receiver'
-   WHERE id = v_delivery_id;
+  -- Use the canonical completion boundary. The later completed-delivery posting
+  -- guard makes this mandatory and deliberately rejects a direct status write;
+  -- running the real RPC also exercises its inventory/order/audit reconciliation.
+  v_res := public.complete_delivery(
+    v_delivery_id, '[SMOKE] RCC Receiver', v_admin,
+    NULL, NULL, NULL, 'smk-rcc-complete-' || v_suffix, now()
+  );
+  IF v_res->>'delivery_id' IS DISTINCT FROM v_delivery_id::text THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: canonical complete_delivery returned an unexpected receipt: %', v_res;
+  END IF;
+  SELECT quantity_available INTO v_inventory_before_receive
+    FROM inventory WHERE id = v_inventory_id;
 
   -- The migration closes both layers: there is no INSERT/FOR ALL RLS policy,
   -- and authenticated has no inherited direct INSERT table privilege.
@@ -234,12 +295,11 @@ BEGIN
 
   -- Caller-supplied product/price fields are deliberately false. The RPC must
   -- ignore them and derive two restockable lines worth $150 from the order.
-  v_res := create_return(
-    jsonb_build_object(
-      'customer_id', v_customer_id, 'order_id', v_order_id,
-      'reason', 'overstock'
-    ),
-    jsonb_build_array(
+  v_create_header := jsonb_build_object(
+    'customer_id', v_customer_id, 'order_id', v_order_id,
+    'reason', 'overstock'
+  );
+  v_create_items := jsonb_build_array(
       jsonb_build_object(
         'order_item_id', v_order_item_1, 'product_id', gen_random_uuid(),
         'quantity', 10, 'unit_price_cents', 1,
@@ -250,7 +310,10 @@ BEGIN
         'quantity', 5, 'unit_price_cents', 1,
         'condition', 'unopened', 'restock', true, 'sort_order', 1
       )
-    ),
+    );
+  v_res := create_return(
+    v_create_header,
+    v_create_items,
     'smk-rcc-' || v_suffix || '-create'
   );
   v_return_id := (v_res->>'return_id')::uuid;
@@ -267,6 +330,43 @@ BEGIN
   IF v_n <> 2 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: create_return did not preserve authoritative order-line source (rows=%)', v_n;
   END IF;
+
+  -- Exact create retry represents a committed request whose response was lost.
+  -- It must return the same receipt without another header or line set.
+  v_res2 := create_return(v_create_header, v_create_items, 'smk-rcc-' || v_suffix || '-create');
+  IF (v_res2->>'return_id')::uuid IS DISTINCT FROM v_return_id THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: exact create retry returned a different return: %', v_res2;
+  END IF;
+  SELECT count(*) INTO v_n FROM returns WHERE customer_id = v_customer_id AND order_id = v_order_id;
+  IF v_n <> 1 THEN RAISE EXCEPTION 'SMOKE_FAIL: exact create retry produced % return headers', v_n; END IF;
+
+  BEGIN
+    PERFORM create_return(
+      v_create_header || jsonb_build_object('notes', 'changed payload'),
+      v_create_items,
+      'smk-rcc-' || v_suffix || '-create'
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: changed create payload reused a committed key';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'IDEMPOTENCY_INTENT_MISMATCH%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: changed create payload raised %, expected IDEMPOTENCY_INTENT_MISMATCH', v_reason;
+    END IF;
+  END;
+
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_admin2, 'role', 'authenticated')::text, true);
+  BEGIN
+    PERFORM create_return(v_create_header, v_create_items, 'smk-rcc-' || v_suffix || '-create');
+    RAISE EXCEPTION 'SMOKE_FAIL: another actor reused a committed create key';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'IDEMPOTENCY_ACTOR_MISMATCH%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: changed actor raised %, expected IDEMPOTENCY_ACTOR_MISMATCH', v_reason;
+    END IF;
+  END;
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
 
   IF EXISTS (
     SELECT 1 FROM pg_policy
@@ -326,6 +426,51 @@ BEGIN
   IF v_status <> 'approved' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: return status after approve = %, expected approved', v_status;
   END IF;
+  v_res2 := approve_return(v_return_id, v_admin, 'smk-rcc-' || v_suffix || '-approve');
+  IF v_res2 IS DISTINCT FROM v_res THEN RAISE EXCEPTION 'SMOKE_FAIL: approve exact replay changed result'; END IF;
+  BEGIN
+    PERFORM approve_return(gen_random_uuid(), v_admin, 'smk-rcc-' || v_suffix || '-approve');
+    RAISE EXCEPTION 'SMOKE_FAIL: approve key accepted another return';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'IDEMPOTENCY_INTENT_MISMATCH%' THEN RAISE EXCEPTION 'SMOKE_FAIL: approve mismatch raised %', v_reason; END IF;
+  END;
+
+  -- Exercise the two other requested-stage wrappers without bypassing their
+  -- public transition paths. These synthetic headers are transaction-local.
+  PERFORM set_config('app.return_rpc', 'true', true);
+  INSERT INTO returns (return_number, customer_id, order_id, reason, requested_by, status)
+  VALUES ('SMK-REJECT-' || v_suffix, v_customer_id, v_order_id, 'overstock', v_admin, 'requested')
+  RETURNING id INTO v_reject_return_id;
+  INSERT INTO returns (return_number, customer_id, order_id, reason, requested_by, status)
+  VALUES ('SMK-CANCEL-' || v_suffix, v_customer_id, v_order_id, 'overstock', v_admin, 'requested')
+  RETURNING id INTO v_cancel_return_id;
+  PERFORM set_config('app.return_rpc', 'false', true);
+
+  v_res := reject_return(v_reject_return_id, v_admin, 'smk-rcc-' || v_suffix || '-reject');
+  v_res2 := reject_return(v_reject_return_id, v_admin, 'smk-rcc-' || v_suffix || '-reject');
+  IF v_res2 IS DISTINCT FROM v_res THEN RAISE EXCEPTION 'SMOKE_FAIL: reject exact replay changed result'; END IF;
+  BEGIN
+    PERFORM reject_return(v_cancel_return_id, v_admin, 'smk-rcc-' || v_suffix || '-reject');
+    RAISE EXCEPTION 'SMOKE_FAIL: reject key accepted another return';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'IDEMPOTENCY_INTENT_MISMATCH%' THEN RAISE EXCEPTION 'SMOKE_FAIL: reject mismatch raised %', v_reason; END IF;
+  END;
+
+  v_res := cancel_return(v_cancel_return_id, 'exact smoke reason', v_admin, 'smk-rcc-' || v_suffix || '-cancel');
+  v_res2 := cancel_return(v_cancel_return_id, 'exact smoke reason', v_admin, 'smk-rcc-' || v_suffix || '-cancel');
+  IF v_res2 IS DISTINCT FROM v_res THEN RAISE EXCEPTION 'SMOKE_FAIL: cancel exact replay changed result'; END IF;
+  BEGIN
+    PERFORM cancel_return(v_cancel_return_id, 'changed reason', v_admin, 'smk-rcc-' || v_suffix || '-cancel');
+    RAISE EXCEPTION 'SMOKE_FAIL: cancel key accepted changed reason';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'IDEMPOTENCY_INTENT_MISMATCH%' THEN RAISE EXCEPTION 'SMOKE_FAIL: cancel mismatch raised %', v_reason; END IF;
+  END;
 
   PERFORM set_config('app.admin_override', 'true', true);
   UPDATE orders SET status = 'partially_fulfilled' WHERE id = v_order_id;
@@ -343,8 +488,9 @@ BEGIN
   END IF;
 
   SELECT quantity_available INTO v_qty FROM inventory WHERE id = v_inventory_id;
-  IF v_qty IS DISTINCT FROM 115 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: inventory after restock = %, expected 115 (100 + 10 + 5)', v_qty;
+  IF v_qty IS DISTINCT FROM v_inventory_before_receive + 15 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: inventory after restock = %, expected baseline % + 15',
+      v_qty, v_inventory_before_receive;
   END IF;
   SELECT count(*) INTO v_n FROM inventory_transactions
   WHERE product_id = v_product_id AND transaction_type = 'returned';
@@ -362,6 +508,17 @@ BEGIN
   IF v_n <> 0 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: % returned inventory transaction(s) lost actor attribution', v_n;
   END IF;
+
+  v_res2 := receive_return(v_return_id, v_admin, 'smk-rcc-' || v_suffix || '-receive');
+  IF v_res2 IS DISTINCT FROM v_res THEN RAISE EXCEPTION 'SMOKE_FAIL: receive exact replay changed result'; END IF;
+  BEGIN
+    PERFORM receive_return(gen_random_uuid(), v_admin, 'smk-rcc-' || v_suffix || '-receive');
+    RAISE EXCEPTION 'SMOKE_FAIL: receive key accepted another return';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'IDEMPOTENCY_INTENT_MISMATCH%' THEN RAISE EXCEPTION 'SMOKE_FAIL: receive mismatch raised %', v_reason; END IF;
+  END;
   SELECT count(*) INTO v_n FROM return_items
   WHERE return_id = v_return_id AND restocked = false;
   IF v_n <> 0 THEN
@@ -404,8 +561,9 @@ BEGIN
    WHERE return_id = v_return_id;
   UPDATE orders SET status = 'fulfilled' WHERE id = v_order_id;
   SELECT quantity_available INTO v_qty FROM inventory WHERE id = v_inventory_id;
-  IF v_qty IS DISTINCT FROM 115 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: rejected order void changed inventory to %, expected 115', v_qty;
+  IF v_qty IS DISTINCT FROM v_inventory_before_receive + 15 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: rejected order void changed inventory to %, expected baseline % + 15',
+      v_qty, v_inventory_before_receive;
   END IF;
 
   -- A return may be received before its source order is later voided. Credit
@@ -506,6 +664,14 @@ BEGIN
   IF v_n <> 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: replay created a duplicate credit memo (count = %)', v_n;
   END IF;
+  BEGIN
+    PERFORM issue_return_credit(gen_random_uuid(), v_admin, 'smk-rcc-' || v_suffix || '-issue');
+    RAISE EXCEPTION 'SMOKE_FAIL: issue-credit key accepted another return';
+  EXCEPTION WHEN OTHERS THEN
+    v_reason := SQLERRM;
+    IF v_reason LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_reason NOT LIKE 'IDEMPOTENCY_INTENT_MISMATCH%' THEN RAISE EXCEPTION 'SMOKE_FAIL: issue-credit mismatch raised %', v_reason; END IF;
+  END;
 
   -- --------------------------------------------------------------------
   -- 6. Statement: the credit appears EXACTLY ONCE (the B2 double-count class)
@@ -585,6 +751,126 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: statement after re-issue: credit_rows=%, total_rows=%, sum=% (expected 1/1/-15000)',
       v_credit_rows, v_total_rows, v_stmt_sum;
   END IF;
+
+  -- --------------------------------------------------------------------
+  -- 8b. Apply Credit lost-response replay + both shared reversal callers.
+  -- The first exact retry stands in for "commit succeeded, response lost".
+  -- --------------------------------------------------------------------
+  INSERT INTO field_app_billing_sets (created_by)
+  VALUES (v_admin)
+  RETURNING id INTO v_billing_set_id;
+  INSERT INTO field_app_billing_lines (
+    billing_set_id, line_kind, description, source_quantity,
+    source_unit_price_cents, source_line_cents
+  ) VALUES (
+    v_billing_set_id, 'chemical', '[SMOKE] reversal snapshot sentinel', 1, 5000, 5000
+  ) RETURNING id INTO v_billing_line_id;
+  INSERT INTO invoices (
+    invoice_number, customer_id, invoice_type, status, invoice_date, due_date,
+    total_amount_cents, created_by, field_app_billing_set_id
+  ) VALUES (
+    'SMK-RCC-TARGET-' || v_suffix, v_customer_id, 'chemical_sale', 'draft',
+    CURRENT_DATE, CURRENT_DATE - 1, 5000, v_admin, v_billing_set_id
+  ) RETURNING id INTO v_target_invoice_id;
+  INSERT INTO invoice_items (
+    invoice_id, product_id, description, quantity, unit_price_cents,
+    extended_cents, cost_cents, billing_line_id
+  ) VALUES (
+    v_target_invoice_id, v_product_id, '[SMOKE] reversal snapshot sentinel',
+    1, 5000, 5000, 0, v_billing_line_id
+  ) RETURNING id INTO v_target_invoice_item_id;
+  INSERT INTO invoice_line_shares (
+    billing_line_id, invoice_item_id, customer_id, split_mode,
+    split_micro_pct, allocated_quantity, base_unit_price_cents,
+    base_price_source, price_mode, unit_price_cents, amount_cents,
+    calculation_hash, vector_hash, created_by
+  ) VALUES (
+    v_billing_line_id, v_target_invoice_item_id, v_customer_id, 'field_default',
+    100000000, 1, 5000, 'manual', 'default', 5000, 5000,
+    'smoke-calculation', 'smoke-vector', v_admin
+  );
+  UPDATE invoices SET status = 'posted', posted_at = now() WHERE id = v_target_invoice_id;
+  SELECT count(*) INTO v_n FROM invoice_line_share_snapshots WHERE invoice_id = v_target_invoice_id;
+  IF v_n <> 1 THEN RAISE EXCEPTION 'SMOKE_FAIL: initial post produced % split snapshots, expected 1', v_n; END IF;
+
+  v_application_id := apply_credit_memo_to_invoice(
+    v_credit_id2, v_target_invoice_id, 5000, v_admin,
+    'smk-rcc-' || v_suffix || '-apply-lost-response'
+  );
+  v_uuid := apply_credit_memo_to_invoice(
+    v_credit_id2, v_target_invoice_id, 5000, v_admin,
+    'smk-rcc-' || v_suffix || '-apply-lost-response'
+  );
+  IF v_uuid IS DISTINCT FROM v_application_id THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: lost-response Apply Credit retry returned another application';
+  END IF;
+  SELECT count(*) INTO v_n FROM credit_memo_applications
+   WHERE credit_memo_id = v_credit_id2 AND target_invoice_id = v_target_invoice_id;
+  IF v_n <> 1 THEN RAISE EXCEPTION 'SMOKE_FAIL: lost-response Apply Credit retry created % applications', v_n; END IF;
+
+  v_res := reverse_credit_memo_application(
+    v_application_id, '[SMOKE] explicit reversal', v_admin,
+    'smk-rcc-' || v_suffix || '-reverse-application'
+  );
+  SELECT status INTO v_status FROM invoices WHERE id = v_target_invoice_id;
+  IF v_status <> 'overdue' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: explicit reversal restored past-due invoice to %, expected overdue', v_status;
+  END IF;
+  SELECT count(*) INTO v_n FROM invoice_line_share_snapshots WHERE invoice_id = v_target_invoice_id;
+  IF v_n <> 1 THEN RAISE EXCEPTION 'SMOKE_FAIL: reversal created an extra post snapshot (count %)', v_n; END IF;
+
+  -- A corrected-forward due date makes overdue -> posted a valid re-derivation.
+  -- The helper must cross the existing transition trigger only through its
+  -- narrowly scoped trusted override, then restore that setting immediately.
+  v_application_id := apply_credit_memo_to_invoice(
+    v_credit_id2, v_target_invoice_id, 5000, v_admin,
+    'smk-rcc-' || v_suffix || '-apply-before-forward-due-reversal'
+  );
+  UPDATE invoices
+     SET due_date = CURRENT_DATE + 7,
+         status = 'overdue'
+   WHERE id = v_target_invoice_id;
+  v_res := reverse_credit_memo_application(
+    v_application_id, '[SMOKE] corrected-forward due date', v_admin,
+    'smk-rcc-' || v_suffix || '-reverse-forward-due'
+  );
+  SELECT status INTO v_status FROM invoices WHERE id = v_target_invoice_id;
+  IF v_status <> 'posted' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: corrected-forward reversal restored invoice to %, expected posted', v_status;
+  END IF;
+  SELECT count(*) INTO v_n FROM invoice_line_share_snapshots WHERE invoice_id = v_target_invoice_id;
+  IF v_n <> 1 THEN RAISE EXCEPTION 'SMOKE_FAIL: corrected-forward reversal created an extra post snapshot (count %)', v_n; END IF;
+
+  UPDATE invoices SET due_date = CURRENT_DATE - 1 WHERE id = v_target_invoice_id;
+  v_application_id := apply_credit_memo_to_invoice(
+    v_credit_id2, v_target_invoice_id, 5000, v_admin,
+    'smk-rcc-' || v_suffix || '-apply-before-unapply'
+  );
+  v_res := unapply_credit_memo(
+    v_credit_id2, '[SMOKE] unapply with active application', v_admin,
+    'smk-rcc-' || v_suffix || '-unapply-with-application'
+  );
+  SELECT status INTO v_status FROM invoices WHERE id = v_target_invoice_id;
+  IF v_status <> 'overdue' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: unapply restored past-due invoice to %, expected overdue', v_status;
+  END IF;
+  SELECT count(*) INTO v_n FROM credit_memo_applications
+   WHERE credit_memo_id = v_credit_id2 AND reversed_at IS NULL;
+  IF v_n <> 0 THEN RAISE EXCEPTION 'SMOKE_FAIL: unapply left % active credit applications', v_n; END IF;
+
+  SELECT count(*) INTO v_n
+    FROM idempotency_keys
+   WHERE request_actor_id = v_admin
+     AND request_fingerprint ~ '^[0-9a-f]{64}$'
+     AND (idempotency_key, operation) IN (
+       ('smk-rcc-' || v_suffix || '-create', 'create_return'),
+       ('smk-rcc-' || v_suffix || '-approve', 'approve_return'),
+       ('smk-rcc-' || v_suffix || '-reject', 'reject_return'),
+       ('smk-rcc-' || v_suffix || '-cancel', 'cancel_return'),
+       ('smk-rcc-' || v_suffix || '-receive', 'receive_return'),
+       ('smk-rcc-' || v_suffix || '-issue', 'issue_return_credit')
+     );
+  IF v_n <> 6 THEN RAISE EXCEPTION 'SMOKE_FAIL: only % of six return receipts carry actor+fingerprint binding', v_n; END IF;
 
   -- --------------------------------------------------------------------
   -- 9. One-time legacy compatibility is pinned to the exact production RMA
