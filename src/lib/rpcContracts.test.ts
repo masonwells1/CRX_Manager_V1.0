@@ -2295,6 +2295,13 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   _guard_delivery_completion_authorized:
     'trigger-only completion-provenance guard; public complete_delivery owns the idempotent, row-bound governed mutation and direct EXECUTE is revoked',
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',
+  // Pruned on 2026-08-12 when 20260812130145 applied live (ledger version
+  // 20260812212323) and the registry high-water moved past it:
+  //   snapshot_invoice_line_shares_on_post — a trigger-returning function never
+  //     reaches the generated client types, so it left the discovered inventory
+  //     the moment its migration stopped being newer than the high-water. It is
+  //     not exempt from anything now; it is simply no longer discovered, and a
+  //     dead entry would silently pre-suppress any future RPC reusing the name.
   _recompute_po_on_order_for_products:
     'internal convergent PO-cache recomputation helper; trigger parents own the transaction and direct browser EXECUTE is revoked',
   // Trigger-only helpers whose migrations are now at or below the live registry

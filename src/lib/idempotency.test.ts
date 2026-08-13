@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generateIdempotencyKey, getIdempotencyBindingRejection, getIdempotencyMismatchResult, isMissingIntentBindingColumn, legacyIntentChanged } from './idempotency';
+import { generateIdempotencyKey, getIdempotencyBindingRejection, getIdempotencyMismatchResult, isDefinitiveRpcRejection, isMissingIntentBindingColumn, legacyIntentChanged } from './idempotency';
 
 describe('generateIdempotencyKey', () => {
   it('returns a string with the correct format', () => {
@@ -117,6 +117,38 @@ describe('getIdempotencyBindingRejection', () => {
     // A substring must not be enough — only the exact refusal codes count.
     expect(getIdempotencyBindingRejection({ message: 'wrapped: IDEMPOTENCY_INTENT_MISMATCH' })).toBeNull();
     expect(getIdempotencyBindingRejection({})).toBeNull();
+  });
+});
+
+describe('isDefinitiveRpcRejection', () => {
+  it('distinguishes server refusals from transport-uncertain failures', () => {
+    expect(isDefinitiveRpcRejection({ code: 'P0001', message: 'AMOUNT_EXCEEDS_CREDIT' })).toBe(true);
+    expect(isDefinitiveRpcRejection({ code: '42501', message: 'denied' })).toBe(true);
+    expect(isDefinitiveRpcRejection({ code: 'PGRST116', message: 'not singular' })).toBe(true);
+    expect(isDefinitiveRpcRejection({ code: 'ECONNRESET', message: 'socket closed after commit' })).toBe(false);
+    expect(isDefinitiveRpcRejection({ code: 'ETIMEDOUT', message: 'response timed out after commit' })).toBe(false);
+    expect(isDefinitiveRpcRejection({ code: 'ETIME', message: 'runtime timeout' })).toBe(false);
+    expect(isDefinitiveRpcRejection({ code: 'P0001', message: 'IDEMPOTENCY_RESULT_INVALID' })).toBe(false);
+    expect(isDefinitiveRpcRejection({ code: 'P0001', message: 'IDEMPOTENCY_RECEIPT_MISSING' })).toBe(false);
+    expect(isDefinitiveRpcRejection({ code: '', message: 'TypeError: Failed to fetch' })).toBe(false);
+    expect(isDefinitiveRpcRejection(new TypeError('Failed to fetch'))).toBe(false);
+  });
+
+  it('treats connection-outcome-unknown codes as uncertain, not a definitive refusal', () => {
+    // Class 08 (connection_exception): the link can drop after the server
+    // already committed, so these must never retire the idempotency key.
+    expect(isDefinitiveRpcRejection({ code: '08000', message: 'connection exception' })).toBe(false);
+    expect(isDefinitiveRpcRejection({ code: '08006', message: 'connection failure' })).toBe(false);
+    expect(isDefinitiveRpcRejection({ code: '08007', message: 'transaction resolution unknown' })).toBe(false);
+    expect(isDefinitiveRpcRejection({ code: '08p01', message: 'protocol violation' })).toBe(false);
+    // Individually ambiguous codes inside otherwise-definitive classes.
+    expect(isDefinitiveRpcRejection({ code: '40003', message: 'statement completion unknown' })).toBe(false);
+    expect(isDefinitiveRpcRejection({ code: '57P01', message: 'terminating connection' })).toBe(false);
+    // PGRST0xx are connection/pool-level failures, not statement refusals.
+    expect(isDefinitiveRpcRejection({ code: 'PGRST001', message: 'could not connect to database' })).toBe(false);
+    // A same-class code NOT on the ambiguous list stays a definitive refusal.
+    expect(isDefinitiveRpcRejection({ code: '40001', message: 'serialization failure' })).toBe(true);
+    expect(isDefinitiveRpcRejection({ code: 'PGRST301', message: 'JWT expired' })).toBe(true);
   });
 });
 
