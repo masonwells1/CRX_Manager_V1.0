@@ -17,13 +17,13 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
 
 ## PROVEN
 
-- The producer constants pin the complete artifact mapping: input blob `c8bec70830c643e474831985f5e6c3bd16630386`; output blob `3ed5d18111a21f4949b392ff162fa347b1b1fdce`; constants SHA-256 `99deb8f5560797e1d461e400759efb4d145544e15347569c7755fa32b8b62839`; helpers SHA-256 `6e50bf618da817403e36e74e09b350536f713f93b2c9ebf269fe1475a592e19c`; classifier SHA-256 `e4d217fffe784f6d38a25cae6856c2e37c9704a042972a06a9e273a7610a295f`.
+- The producer constants pin the complete artifact mapping: input blob `c8bec70830c643e474831985f5e6c3bd16630386`; output blob `bda5a0b744ac28dbd2059b38cd2bdf0e5890e31f`; constants SHA-256 `a8ab856dd6cd28089f60c00584a4bfc0b288a839246c80020d32681f790838a0`; helpers SHA-256 `6e50bf618da817403e36e74e09b350536f713f93b2c9ebf269fe1475a592e19c`; classifier SHA-256 `524e38a342f48e113821377434032b79fd76ace4db3fb1f268d637a3ec4cc8c4`.
 - `node scripts/apply-live-testdata-maintenance-20260812.mjs --verify` produced pinned output blob
-  `3ed5d18111a21f4949b392ff162fa347b1b1fdce`, matched all three snippet SHA-256 values, and passed a
+  `bda5a0b744ac28dbd2059b38cd2bdf0e5890e31f`, matched all three snippet SHA-256 values, and passed a
   Node module syntax check without changing the repository target.
-- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 74 classifier assertions
+- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 75 classifier assertions
   against the generated module plus three producer-status assertions, including all classifier defect
-  classes found by the first seventeen Sol reviews.
+  classes found by the first eighteen Sol reviews.
 - The write mode refused the dirty build worktree even with Mason's dated token.
 - Current recovery proof passed ESLint, TypeScript typecheck, production build, all 4,466 executed
   Vitest assertions (123 skipped), all agent-workflow tests, agent health, dependency integrity,
@@ -136,6 +136,10 @@ any later live migration apply still requires the repository's current explicit 
   rejects all `EXPLAIN` statements rather than approximating PostgreSQL's option grammar. Table CTAS,
   materialized-view CTAS, option-bearing, and prepared-command forms are pinned. A fresh exact-head
   review remains required.
+- The eighteenth exact-head Sol review found that PostgreSQL permits `MERGE` without optional `INTO`,
+  so a `WITH` statement could hide a persistent `WHEN MATCHED THEN DELETE` from the target scanner.
+  The matcher now recognizes both grammar forms, the persistent-merge classifier handles both captured
+  verbs, and the exact customer-delete payload is pinned. A fresh exact-head review remains required.
 - GitHub checks and CodeRabbit must be complete and acceptable on the exact PR head.
 
 ## FIRST ACTION

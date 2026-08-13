@@ -193,7 +193,7 @@ export function classifySql(query) {
   // while explicit pg_temp scratch work remains available for safe analysis.
   for (const { target } of persistentDml) {
     const verb = target[1].toLowerCase();
-    if (verb === "merge into") {
+    if (verb === "merge" || verb === "merge into") {
       return {
         block: true,
         kind: "real-merge",

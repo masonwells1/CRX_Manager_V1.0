@@ -28,7 +28,7 @@ assert.deepEqual(
 );
 
 const { output, blob } = buildMaintainedSource();
-assert.equal(blob, "3ed5d18111a21f4949b392ff162fa347b1b1fdce", "pinned generated blob");
+assert.equal(blob, "bda5a0b744ac28dbd2059b38cd2bdf0e5890e31f", "pinned generated blob");
 
 const scratch = mkdtempSync(path.join(tmpdir(), "crx-live-guard-candidate-test-"));
 try {
@@ -45,6 +45,7 @@ try {
     "UPDATE profiles SET role = 'admin' WHERE id = '00000000-0000-0000-0000-000000000000'",
     "INSERT INTO some_log_table (x) VALUES (1)",
     "MERGE INTO invoices i USING source_rows s ON i.id=s.id WHEN MATCHED THEN UPDATE SET total_cents=1",
+    "WITH source AS (SELECT '00000000-0000-0000-0000-000000000000'::uuid AS id) MERGE public.customers AS c USING source AS s ON c.id = s.id WHEN MATCHED THEN DELETE",
     "SELECT * INTO public.guard_bypass FROM public.profiles",
     "COMMENT ON TABLE public.profiles IS 'raw change'",
     "SELECT preview_product_cost_basis_changes('00000000-0000-0000-0000-000000000000')",

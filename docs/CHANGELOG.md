@@ -13,12 +13,12 @@ SHA-256, builds one pinned output blob, refuses dirty/detached/protected branche
 Mason's dated approval token before writing. The producer itself does not activate the repair; it
 must first pass an exact-head Sol review and the normal protected pull-request pipeline. The follow-up
 change will run the producer on a feature branch and remove the temporary producer after use; the
-generated-module regression harness is already checked in and exercises 74 classifier cases. PR
+generated-module regression harness is already checked in and exercises 75 classifier cases. PR
 review also moved the tracked-and-untracked dirty-worktree check ahead of every temporary or target
 write, so verification mode follows the same fail-closed cleanliness contract as write mode.
 
-Seventeen exact-head adversarial passes have progressively hardened the candidate before activation. The
-latest pass closed a Unicode identifier boundary that could conceal destructive SQL and removed the
+Eighteen exact-head adversarial passes have progressively hardened the candidate before activation. Earlier
+passes closed a Unicode identifier boundary that could conceal destructive SQL and removed the
 unsafe assumption that any `pg_temp`-qualified DML is harmless: PostgreSQL temporary views can be
 updatable proxies for persistent tables. The candidate now permits temporary DML only for a base temp
 table created earlier in the same batch, clears that exemption after any intervening schema operation,
@@ -30,7 +30,8 @@ scanner also distinguishes a table declaration from a function call without hidi
 Unicode-escaped SQL identifiers now fail closed because the database decodes them after the guard's
 raw-text classification. An `IF NOT EXISTS` CTAS no longer earns a temp-write exemption because it can
 be a no-op behind a same-named updatable view. `EXPLAIN` now fails closed because its `ANALYZE` form
-executes the wrapped command. The 74-assertion generated-module harness pins the exact
+executes the wrapped command. The eighteenth pass closed PostgreSQL's optional-`INTO` `MERGE` grammar,
+including the exact `WITH ... MERGE customers ... WHEN MATCHED THEN DELETE` payload. The 75-assertion generated-module harness pins the exact
 Unicode identifier, temp-view, standalone-target, table-to-view replacement, server-program,
 server-file, cloned-default, encoded-function, view-collision, and unrecognized-command cases.
 

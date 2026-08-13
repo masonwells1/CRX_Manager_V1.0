@@ -6,4 +6,4 @@ const COMMENT_ON_RE = /^\s*comment\s+on\b/i;
 const SELECT_INTO_PERSISTENT_RE =
   /\bselect\b[\s\S]*?\binto\s+(?!(?:temp(?:orary)?\s+|(?:pg_temp|pg_temp_\d+)\s*\.))/i;
 const DML_TARGET_RE =
-  /\b(insert\s+into|update|delete\s+from|merge\s+into)\s+(?:(?:"?([a-z_][a-z0-9_]*)"?\s*\.\s*)?)"?([a-z_][a-z0-9_]*)"?/i;
+  /\b(insert\s+into|update|delete\s+from|merge(?:\s+into)?)\s+(?:(?:"?([a-z_][a-z0-9_]*)"?\s*\.\s*)?)"?([a-z_][a-z0-9_]*)"?/i;
