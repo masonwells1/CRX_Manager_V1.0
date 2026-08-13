@@ -6,6 +6,11 @@ assert.deepEqual(
   { pass: true },
   'the terminal PostgreSQL pass raise must be accepted',
 );
+assert.deepEqual(
+  interpretResult('psql:C:\\CRX_Manager\\scripts\\smoke\\chain.sql:42: ERROR:  SMOKE_PASS_ROLLBACK restore quote'),
+  { pass: true },
+  'a Windows absolute psql path must still recognize the terminal pass raise',
+);
 
 const quotedPass = interpretResult(
   'psql:chain.sql:42: ERROR:  SMOKE_FAIL expected SMOKE_PASS_ROLLBACK but write was rejected',
