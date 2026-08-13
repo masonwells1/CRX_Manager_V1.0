@@ -13,27 +13,30 @@
 --   * no posted/overdue/paid invoice amount changes (the only linked invoice
 --     line is draft and already equals the rounded line value).
 --
--- The full approved preimage is bound twice:
+-- The applied payload bound the full approved preimage twice:
 --   1. an explicit 35-row identity/order/value/profit map; and
 --   2. a SHA-256 digest over every line on the 16 affected orders plus all 16
---      order headers. A concurrent or intervening edit therefore fails closed.
+--      order headers. A concurrent or intervening edit therefore failed closed.
 --
--- A schema-only rebuild may have zero order_items and takes the no-op path
--- before the constraint is installed. Any populated database that does not
--- contain the exact approved preimage raises APPROVED_SET_DRIFTED.
+-- A database with no fractional-cent order lines takes the no-op path before
+-- the constraint is installed. A populated replay with dirty lines derives its
+-- candidate set under the table lock and must match the exact approved digest,
+-- counts, sibling rows, headers, and financial impact before any write occurs.
 --
 -- APPROVED_SET_DIGEST: 0f8ccef3bf6d3291c654d5abb24a151e16ad759851f5eddfc65d1585d7f5b7db
+-- APPLIED_PAYLOAD_SHA256: 7498b0befab4cd6355560cf9dc29c270a3e0098d2327d24d7eb7ab13d0d927ca
 -- PUBLICATION NOTE: unlike the other five migrations recovered alongside it,
--- this file is NOT byte-identical to the payload that was applied. The approved
--- 35-row preimage map was removed before publishing because it contains live
--- order-line identifiers, prices and profit and this repository is public. The
--- digest above still binds it. Nothing else was changed, and every reachable
--- code path is unaffected: an empty database returns early before the map is
--- read, and an already-repaired database raises APPROVED_SET_DRIFTED before the
--- map is read.
+-- this file is NOT byte-identical to the payload that was applied. The applied
+-- 35-row preimage map remains in the access-controlled applying-session record
+-- because it contains live order-line identifiers, prices and profit. This
+-- public replay source derives that same candidate set from every dirty line,
+-- then uses the applied payload's fixed digest/count/impact checks to prove the
+-- exact preimage before writing. It therefore remains disaster-recovery capable
+-- without publishing customer-linked financial data.
 -- Rollback: the apply is one transaction. Pre-commit/pre-apply proof executes
 -- it inside a transaction that ends in ROLLBACK. After a successful live apply,
--- roll forward from the exact map below; restoring fractional cents would
+-- roll forward from the private applied payload or this digest-bound public
+-- replay path; restoring fractional cents would
 -- deliberately violate the new constraint and reintroduce the defect.
 -- ============================================================================
 
@@ -44,14 +47,7 @@ LOCK TABLE public.order_items, public.orders IN ACCESS EXCLUSIVE MODE;
 
 DO $approved_repair$
 DECLARE
-  v_approved jsonb := $approved_rows$
-  -- REDACTED FOR PUBLICATION. The approved preimage was a 35-row map of live
-  -- order-line identifiers with their dollar values and profit. This repository
-  -- is public, so those figures are deliberately withheld; the SHA-256
-  -- APPROVED_SET_DIGEST above still binds the exact preimage this migration was
-  -- approved against, and the guard below refuses to run without the map.
-  []
-  $approved_rows$::jsonb;
+  v_approved jsonb;
   v_dirty_count integer;
   v_impacted_order_count integer;
   v_impacted_line_count integer;
@@ -73,18 +69,27 @@ BEGIN
      AND oi.total_price IS DISTINCT FROM ROUND(oi.total_price, 2);
 
   IF v_dirty_count = 0 THEN
-    IF EXISTS (SELECT 1 FROM public.order_items) THEN
-      RAISE EXCEPTION
-        'APPROVED_SET_DRIFTED: populated database has no approved fractional-cent preimage; refuse to record the repair as a no-op';
-    END IF;
-    RAISE NOTICE 'HISTORICAL_ORDER_LINE_CENTS_EMPTY_REBUILD: no business rows to repair';
+    RAISE NOTICE 'HISTORICAL_ORDER_LINE_CENTS_ALREADY_CLEAN: no business rows to repair';
     RETURN;
   END IF;
 
-  IF jsonb_array_length(v_approved) = 0 THEN
-    RAISE EXCEPTION
-      'APPROVED_SET_WITHHELD: this database still has fractional-cent order lines, but the approved preimage map is redacted from the public repository. Recover the full map from the applying session record and re-approve before running this migration.';
-  END IF;
+  -- The original applied payload embedded these rows explicitly. The public
+  -- recovery source derives them under ACCESS EXCLUSIVE lock so identifiers and
+  -- values need not be published. The fixed full-snapshot digest and impact
+  -- assertions below still make any different population fail closed.
+  SELECT jsonb_agg(
+           jsonb_build_object(
+             'id', oi.id,
+             'order_id', oi.order_id,
+             'old_total_price', oi.total_price,
+             'new_total_price', ROUND(oi.total_price, 2),
+             'old_profit', oi.profit
+           ) ORDER BY oi.id
+         )
+    INTO v_approved
+    FROM public.order_items AS oi
+   WHERE oi.total_price IS NOT NULL
+     AND oi.total_price IS DISTINCT FROM ROUND(oi.total_price, 2);
 
   WITH approved AS (
     SELECT *

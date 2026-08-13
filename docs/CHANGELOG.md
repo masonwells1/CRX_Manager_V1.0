@@ -16,25 +16,28 @@ existed nowhere except inside the database. A clean rebuild from `main` would ha
 without them. This is the same class of gap PR #371 closed on 2026-08-11; it reopened the next day,
 six files wide.
 
-**Why the files are trustworthy.** They are not reconstructions. Rebuilding a migration from live
-`pg_proc.prosrc` loses the header, the preconditions and the review history, and produces a file
-nobody actually reviewed. Instead each file is the exact `apply_migration` payload recovered verbatim
-from the applying session's transcript. Fidelity was then proven rather than asserted: function
+**Why the files are trustworthy.** Rebuilding a migration from live `pg_proc.prosrc` loses the
+header, the preconditions and the review history, and produces a file nobody actually reviewed. Five
+files are therefore the exact `apply_migration` payloads recovered verbatim from the applying
+sessions' transcripts. The sixth is the explicitly documented public replay form below. Fidelity was
+then proven rather than asserted: function
 bodies extracted from the recovered text were md5-compared against live `pg_proc.prosrc` and matched
 exactly, at identical length, for `_guard_below_cost_approval_immutable`,
 `_resnapshot_order_item_cost_on_product_change`, `_snapshot_quote_item_cost` and
 `_guard_quote_item_cost_snapshot`. `bash scripts/validate-sql-migrations.sh --changed-only` reports
 0 violations across the six.
 
-**One deliberate exception to that fidelity, and it is the only one.** `20260812115238` is published
-with its approved preimage removed: the applied payload embedded a 35-row map of live order-line
-identifiers with their prices and profit, and this repository is public. Nothing else in that file
-changed, its SHA-256 `APPROVED_SET_DIGEST` still binds the exact preimage, and no reachable code path
-is affected — an empty database returns early before the map is read, and an already-repaired
-database (which is every database that now exists, including production) raises
-`APPROVED_SET_DRIFTED` before the map is read. The only branch that reads the map now fails closed
-with `APPROVED_SET_WITHHELD` instead of running on a partial map. The file defines no functions, so
-the md5 fidelity proof above is unaffected.
+**One deliberate exception to byte fidelity, and it is the only one.** `20260812115238` is published
+without its explicit approved preimage: the applied payload embedded a 35-row map of live order-line
+identifiers with their prices and profit, and this repository is public. The exact applied payload is
+retained in the access-controlled applying-session record and is bound here by SHA-256
+`7498b0befab4cd6355560cf9dc29c270a3e0098d2327d24d7eb7ab13d0d927ca`. The public replay source derives every
+currently fractional line under the same `ACCESS EXCLUSIVE` lock, then requires the original fixed
+SHA-256 full-snapshot digest, row/order/sibling counts, and financial-impact checks to match before
+writing. An older backup with the approved preimage can therefore replay safely, a different dirty
+set fails closed, and an already-clean database installs or retains the validated constraint without
+publishing customer-linked financial data. The file defines no functions, so the md5 fidelity proof
+above is unaffected.
 
 **What the six do**, in apply order (full detail in `docs/reference/migration-history.md`, rows
 878-883):
