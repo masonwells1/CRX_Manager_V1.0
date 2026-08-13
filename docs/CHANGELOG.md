@@ -2,6 +2,20 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-13 — Actor-binding guard covers procedures and cron schema identity
+
+Fresh review of the cross-schema repair found two additional HIGH bypasses. A
+caller-accessible `SECURITY DEFINER PROCEDURE` could mutate with a forged actor
+because the write-time reader inspected functions only, and a migration could
+temporarily rename the `cron` schema, rewrite `cron_shadow.job.command`, then
+restore the name outside the delayed-SQL reader. Function and procedure
+definitions now share the same actor-binding analysis; later `ALTER FUNCTION`,
+`ALTER PROCEDURE`, and `ALTER ROUTINE` security modes use the same exact
+schema/signature identity. Renames involving the canonical `cron` schema are
+refused before its command table can become invisible. Eight regressions cover
+both exploit paths plus unrelated-schema, bound-procedure, and invoker-demotion
+controls. The full focused hook suite now passes 370 assertions.
+
 ## 2026-08-12 — Actor-binding routine modes use exact schema identity
 
 Fresh adversarial review found that a later `ALTER FUNCTION ... SECURITY

@@ -31,6 +31,10 @@ function fn(body, params = "p_performed_by uuid", security = "SECURITY DEFINER")
   return `CREATE OR REPLACE FUNCTION public.test_fn(${params}) RETURNS jsonb LANGUAGE plpgsql ${security} SET search_path TO 'public', 'pg_temp' AS $function$\n${body}\n$function$;`;
 }
 
+function proc(body, params = "p_performed_by uuid", security = "SECURITY DEFINER") {
+  return `CREATE OR REPLACE PROCEDURE public.test_proc(${params}) LANGUAGE plpgsql ${security} SET search_path TO 'public', 'pg_temp' AS $procedure$\n${body}\n$procedure$;`;
+}
+
 const MUTATION = "INSERT INTO financial_audit_log (actor_user_id) VALUES (p_performed_by);";
 const BOUND = `
   v_actor := auth.uid();
@@ -476,6 +480,17 @@ ALTER TABLE cron.job_shadow RENAME TO job;`);
 ok(isDeny(r), "rename-update-restore cannot hide delayed actor-forgery SQL in cron.job");
 ok(r.stdout.includes("renames or moves cron.job, or renames its command column"),
   "the cron table rename reaches the dedicated identity-change guard");
+
+r = runHook(`ALTER SCHEMA cron RENAME TO cron_shadow;
+UPDATE cron_shadow.job SET command = $job$${UNBOUND_DDL}$job$ WHERE jobid = 42;
+ALTER SCHEMA cron_shadow RENAME TO cron;`);
+ok(isDeny(r), "schema-rename-update-restore cannot hide delayed actor-forgery SQL in cron.job");
+
+r = runHook(`ALTER SCHEMA "cron" RENAME TO cron_shadow;`);
+ok(isDeny(r), "a quoted cron schema cannot be renamed past the name-bound reader");
+
+r = runHook(`ALTER SCHEMA public RENAME TO public_archive;`);
+ok(!isDeny(r), "an unrelated schema rename remains allowed");
 
 r = runHook(`ALTER TABLE cron.job SET SCHEMA archive;
 UPDATE archive.job SET command = $job$${UNBOUND_DDL}$job$ WHERE jobid = 42;
@@ -2358,6 +2373,29 @@ r = runHook(
   "\nALTER FUNCTION public.overloaded_actor(uuid) SECURITY DEFINER;"
 );
 ok(isDeny(r), "a readable safe overload cannot hide SECURITY DEFINER elevation of another signature");
+
+r = runHook(proc(MUTATION));
+ok(isDeny(r), "an unbound SECURITY DEFINER procedure cannot forge its actor parameter");
+
+r = runHook(
+  proc(MUTATION).replace("test_proc", "wrapped_actor_proc") +
+  "\n" +
+  fn("CALL public.wrapped_actor_proc(p_performed_by);", "p_performed_by uuid", "SECURITY INVOKER")
+    .replace("test_fn", "wrapped_actor_fn")
+);
+ok(isDeny(r), "an invoker function wrapper cannot hide an unbound SECURITY DEFINER procedure");
+
+r = runHook("ALTER PROCEDURE public.existing_actor_proc(uuid) SECURITY DEFINER;");
+ok(isDeny(r), "ALTER PROCEDURE cannot elevate an existing unreadable routine past the guard");
+
+r = runHook(proc(BOUND));
+ok(!isDeny(r), "a correctly bound SECURITY DEFINER procedure remains allowed");
+
+r = runHook(
+  proc(MUTATION, "p_performed_by uuid", "SECURITY DEFINER").replace("test_proc", "demoted_proc") +
+  "\nALTER PROCEDURE public.demoted_proc(uuid) SECURITY INVOKER;"
+);
+ok(!isDeny(r), "ALTER PROCEDURE SECURITY INVOKER can demote a readable procedure safely");
 
 r = runHook(
   fn(MUTATION, "p_performed_by uuid", "SECURITY DEFINER")

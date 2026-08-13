@@ -4,19 +4,19 @@
 //
 // THE GAP THIS CLOSES
 //   Two sweep predicates (predicates/actor-forgery.sql and
-//   predicates/actor-forgery-fin-audit.sql) find SECURITY DEFINER functions that
+//   predicates/actor-forgery-fin-audit.sql) find SECURITY DEFINER routines that
 //   trust a caller-supplied actor parameter — but they only run against the LIVE
 //   catalog, i.e. AFTER the migration has been applied. Between writing the
 //   migration and applying it there was no gate at all, so the forgery shipped
 //   first and was detected second. This hook moves the same check to write time.
 //
 // WHAT IT BLOCKS
-//   A migration file that CREATEs or REPLACEs a SECURITY DEFINER function which
+//   A migration file that CREATEs or REPLACEs a SECURITY DEFINER routine which
 //     (a) declares an actor-shaped parameter — p_<something>by, p_actor*, p_user*
 //         (e.g. p_performed_by, p_created_by, p_actor_id, p_user_id), AND
 //     (b) MUTATES (INSERT / UPDATE / DELETE) in its body, AND
 //     (c) never raises the canonical ACTOR_MISMATCH token.
-//   Under SECURITY DEFINER the function runs with the owner's privileges, so an
+//   Under SECURITY DEFINER the routine runs with the owner's privileges, so an
 //   unbound actor parameter lets any authenticated caller attribute a write to
 //   somebody else — the exact class fixed for link_blend_ticket_to_order /
 //   unlink_blend_ticket_from_order in migration 20260617171500 (Live Foundation
@@ -151,7 +151,7 @@ if (/--\s*actor-binding-check:\s*exempt/i.test(content)) {
   out("allow");
 }
 
-// Locate each CREATE [OR REPLACE] FUNCTION header. The parameter list is then
+// Locate each CREATE [OR REPLACE] FUNCTION/PROCEDURE header. The parameter list is then
 // read with a BALANCED-paren scan rather than a [^)]* capture, because a real
 // parameter list contains parens — numeric(12,2), varchar(50), timestamp(3).
 // A naive capture stops at the first inner ')' and silently truncates the list,
@@ -162,8 +162,9 @@ const SQL_IDENTIFIER_PATTERN =
   `(?:${SQL_UNICODE_IDENTIFIER_PATTERN}|"(?:[^"]|"")*"|[A-Za-z_][\\w$]*)`;
 const SQL_QUALIFIED_IDENTIFIER_PATTERN =
   `${SQL_IDENTIFIER_PATTERN}(?:\\s*\\.\\s*${SQL_IDENTIFIER_PATTERN})*`;
-const fnHeadRe = new RegExp(
-  `CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+(${SQL_QUALIFIED_IDENTIFIER_PATTERN})\\s*\\(`,
+const routineHeadRe = new RegExp(
+  `CREATE\\s+(?:OR\\s+REPLACE\\s+)?(?:FUNCTION|PROCEDURE)\\s+` +
+    `(${SQL_QUALIFIED_IDENTIFIER_PATTERN})\\s*\\(`,
   "gi"
 );
 
@@ -1714,6 +1715,20 @@ function hasExecuteSqlReadonlyIdentityChange(rawSql) {
 function hasPgCronJobIdentityChange(rawSql) {
   const callableSql = maskSqlForCallNames(String(rawSql || ""), true);
   if (callableSql === null) return false;
+  const alterSchema = new RegExp(
+    `\\bALTER\\s+SCHEMA\\s+(?:IF\\s+EXISTS\\s+)?` +
+      `(${SQL_IDENTIFIER_PATTERN})\\s+RENAME\\s+TO\\s+(${SQL_IDENTIFIER_PATTERN})`,
+    "gi"
+  );
+  let schemaMatch;
+  while ((schemaMatch = alterSchema.exec(callableSql)) !== null) {
+    const from = normalizedQualifiedIdentifier(schemaMatch[1]);
+    const to = normalizedQualifiedIdentifier(schemaMatch[2]);
+    // Unicode-escaped names are opaque until PostgreSQL decodes them. A rename
+    // involving an opaque identity could move the canonical cron schema, so it
+    // requires the explicit reviewed-exemption path.
+    if (from === null || to === null || from === "cron" || to === "cron") return true;
+  }
   const alterTable = new RegExp(
     `\\bALTER\\s+TABLE\\s+(?:IF\\s+EXISTS\\s+)?(?:ONLY\\s+)?` +
       `(${SQL_QUALIFIED_IDENTIFIER_PATTERN})(?:\\s*\\*)?\\s+`,
@@ -1938,7 +1953,7 @@ function readAttrsAndBody(text, fromIdx) {
 function alteredRoutineSecurityModes(structuralSql) {
   const altered = [];
   const head = new RegExp(
-    `\\bALTER\\s+(?:FUNCTION|ROUTINE)\\s+(?:IF\\s+EXISTS\\s+)?` +
+    `\\bALTER\\s+(?:FUNCTION|PROCEDURE|ROUTINE)\\s+(?:IF\\s+EXISTS\\s+)?` +
       `(${SQL_QUALIFIED_IDENTIFIER_PATTERN})\\s*\\(`,
     "gi"
   );
@@ -2041,8 +2056,9 @@ try {
   }
   if (hasPgCronJobIdentityChange(content)) {
     violations.push(
-      "This migration renames or moves cron.job, or renames its command column, or rewrites that " +
-      "column's type, so later scheduled SQL writes would no longer match the actor-binding reader. " +
+      "This migration renames the cron schema, renames or moves cron.job, or renames its command " +
+      "column, or rewrites that column's type, so later scheduled SQL writes would no longer match " +
+      "the actor-binding reader. " +
       "Keep cron.job.command at its " +
       "canonical identity, or add the file-level exempt marker (-- actor-binding-check: exempt) " +
       "and get a manual review."
@@ -2052,7 +2068,7 @@ try {
   const alteredSecurityModes = masked === null
     ? []
     : alteredRoutineSecurityModes(masked);
-  const createdFunctions = [];
+  const createdRoutines = [];
   if (masked !== null && hasExecuteSqlReadonlyOperatorAlias(masked)) {
     violations.push(
       "This migration aliases execute_sql_readonly behind a PostgreSQL operator, so later SQL text " +
@@ -2229,14 +2245,14 @@ try {
 
   if (masked !== null) checkDynamicDdl(0, masked.length);
   let head;
-  while (masked !== null && (head = fnHeadRe.exec(masked)) !== null) {
-    const fnName = head[1];
-    const normalizedFnName = normalizedQualifiedIdentifier(fnName);
-    const paramsOpen = fnHeadRe.lastIndex - 1;
+  while (masked !== null && (head = routineHeadRe.exec(masked)) !== null) {
+    const routineName = head[1];
+    const normalizedRoutineName = normalizedQualifiedIdentifier(routineName);
+    const paramsOpen = routineHeadRe.lastIndex - 1;
     const parsed = readBalancedParens(masked, paramsOpen);
     if (!parsed) {
       violations.push(
-        `Function ${fnName}: could not parse its parameter list (unbalanced parentheses, ` +
+        `Routine ${routineName}: could not parse its parameter list (unbalanced parentheses, ` +
         `unterminated string/comment/dollar-quote?) — the actor-binding guard cannot inspect it. ` +
         `Simplify the signature, or if it is genuinely valid SQL the lexer mishandles, add the ` +
         `exempt marker and get a manual review.`
@@ -2246,7 +2262,7 @@ try {
     const rest = readAttrsAndBody(masked, parsed.end);
     if (!rest) {
       violations.push(
-        `Function ${fnName}: could not parse its AS $tag$...$tag$ body — the actor-binding guard ` +
+        `Routine ${routineName}: could not parse its AS $tag$...$tag$ body — the actor-binding guard ` +
         `cannot verify its SECURITY DEFINER attributes or actor binding. Simplify the definition, ` +
         `or if it is genuinely valid SQL the lexer mishandles, add the exempt marker and get a ` +
         `manual review.`
@@ -2255,11 +2271,11 @@ try {
     }
     const params = content.slice(paramsOpen + 1, parsed.end - 1);
     const maskedParams = parsed.params;
-    const createdFunction = {
-      name: normalizedFnName,
+    const createdRoutine = {
+      name: normalizedRoutineName,
       signature: normalizedRoutineIdentityArgs(maskedParams, true),
     };
-    createdFunctions.push(createdFunction);
+    createdRoutines.push(createdRoutine);
     const attrs = rest.attrs;
     const body = content.slice(rest.bodyStart, rest.bodyEnd);
     const maskedBody = masked.slice(rest.bodyStart, rest.bodyEnd);
@@ -2268,11 +2284,11 @@ try {
     // from the current regex position lets the next iteration inspect those
     // definitions independently instead of trusting the outer function's result.
 
-    // Only SECURITY DEFINER functions can forge an actor with the owner's rights.
-    // The mode may be attached later through ALTER FUNCTION/ROUTINE, so evaluate
+    // Only SECURITY DEFINER routines can forge an actor with the owner's rights.
+    // The mode may be attached later through ALTER FUNCTION/PROCEDURE/ROUTINE, so evaluate
     // the final same-file mode rather than trusting CREATE attributes alone.
     const laterSecurityModes = alteredSecurityModes.filter((altered) =>
-      altered.index > head.index && routineAlterMatchesCreate(createdFunction, altered)
+      altered.index > head.index && routineAlterMatchesCreate(createdRoutine, altered)
     );
     const finalAlteredMode = laterSecurityModes.at(-1)?.mode;
     const isSecurityDefiner = finalAlteredMode
@@ -2301,7 +2317,7 @@ try {
     if (hasRecognizedActorRefusal) continue;
 
     violations.push(
-      `Function ${fnName}: SECURITY DEFINER, mutates or executes dynamic SQL, and declares the forgeable actor parameter(s) ` +
+      `Routine ${routineName}: SECURITY DEFINER, mutates or executes dynamic SQL, and declares the forgeable actor parameter(s) ` +
       `[${actorParams.join(", ")}] but the body never raises ACTOR_MISMATCH — any authenticated caller ` +
       `can attribute the write to another user.`
     );
@@ -2312,12 +2328,12 @@ try {
       candidate.index > altered.index && routineAltersMatch(candidate, altered)
     );
     if (laterMode?.mode === "INVOKER") continue;
-    if (createdFunctions.some((created) => routineAlterMatchesCreate(created, altered))) {
+    if (createdRoutines.some((created) => routineAlterMatchesCreate(created, altered))) {
       continue;
     }
     violations.push(
-      `ALTER FUNCTION/ROUTINE ${altered.name ?? "with an opaque identifier"} changes a routine to ` +
-      `SECURITY DEFINER, but this migration does not include a readable CREATE FUNCTION body for ` +
+      `ALTER FUNCTION/PROCEDURE/ROUTINE ${altered.name ?? "with an opaque identifier"} changes a routine to ` +
+      `SECURITY DEFINER, but this migration does not include a readable CREATE routine body for ` +
       `the actor-binding guard to verify. Include the complete definition, or add the file-level ` +
       `exempt marker (-- actor-binding-check: exempt) and get a manual review.`
     );
@@ -2331,7 +2347,7 @@ try {
 if (violations.length > 0) {
   out("block",
     "ACTOR BINDING VIOLATION: " + violations.join(" | ") +
-    " A SECURITY DEFINER function that takes a caller-supplied actor id MUST bind it to auth.uid() " +
+    " A SECURITY DEFINER routine that takes a caller-supplied actor id MUST bind it to auth.uid() " +
     "before using it: v_actor := auth.uid(); IF p_performed_by IS DISTINCT FROM v_actor THEN " +
     "RAISE EXCEPTION 'ACTOR_MISMATCH: ...'; END IF; -- and stamp every downstream actor column from " +
     "v_actor, not from the parameter. This is the link_blend_ticket_to_order class fixed by migration " +
