@@ -178,9 +178,12 @@ describe('quote_versions write boundary — migration', () => {
     // written without hyphens into the advisory 'unrestorable' bucket, whose
     // NOTICE the Supabase apply channel does not surface — while restore would
     // have resolved it happily and stamped its cost basis into canonical profit
-    // and commission money. QuoteBuilder serialises this field from a uuid the
-    // database emitted, which is always canonical, so a non-canonical form is
-    // hand-crafted JSON whatever it resolves to. It blocks.
+    // and commission money. It blocks, and the reason is server-side rather than
+    // a claim about the browser: snapshot_data is built by
+    // _create_quote_version_owner_impl with jsonb_build_object from the typed
+    // quote_items.product_id UUID column, and PostgreSQL renders a uuid in
+    // exactly one form. A non-canonical spelling cannot come out of the
+    // legitimate writer whatever a client sent in.
     expect(migration).toContain('AS product_id_exotic');
     expect(migration).toContain('p.cost_exotic OR p.product_id_exotic');
     // Normalize-then-test: strip braces and hyphens before checking for 32 hex
@@ -211,8 +214,12 @@ describe('quote_versions write boundary — migration', () => {
     //     land here — see the classification test above.
     //   exotic — a cost written as 0x../0o../0b../1_0, or a product_id in a
     //     non-canonical-but-castable form. PostgreSQL parses both and restore
-    //     would accept both; JSON.stringify emits neither. Their presence is
-    //     itself evidence the snapshot was hand-crafted. Must block.
+    //     would accept both. Neither can come out of the legitimate writer:
+    //     _create_quote_version_owner_impl builds snapshot_data server-side with
+    //     jsonb_build_object from the typed current_cost and product_id columns,
+    //     so the rendering is plain decimal and canonical dashed uuid. Their
+    //     presence is itself evidence the row was written around that function.
+    //     Must block.
     //   unchecked — the cost string is unreadable, or the product carries no
     //     catalog cost to compare against. Neither can be cleared by the scan,
     //     and sealing here would freeze an unverified cost basis inside the new
@@ -412,6 +419,81 @@ describe('quote_versions write boundary — migration', () => {
       /REVOKE EXECUTE ON FUNCTION public\._create_quote_version_owner_impl\(uuid, uuid, text, text\)\s+FROM PUBLIC, anon, authenticated;/,
     );
   });
+
+  it('seals the restore side, not only the write side', () => {
+    // Sealing quote_versions against forged WRITES while a browser role can call
+    // a restore implementation directly would close the front door and leave the
+    // back one ajar: the public restore_quote_version is a thin wrapper that runs
+    // the below-cost approval check and then delegates, so the gate lives in the
+    // wrapper and anything reaching an implementation directly restores a stored
+    // cost basis with that check skipped.
+    //
+    // The whole block was previously unpinned — it could have been deleted
+    // wholesale and this suite would still have gone green.
+    const precond = migration.match(
+      /-- Overload counts first[\s\S]*?RAISE EXCEPTION 'PRECOND: a browser role can execute a restore-side implementation[\s\S]*?END IF;/,
+    );
+    expect(precond).not.toBeNull();
+    const block = precond![0];
+
+    // Exactly two implementations, counted BEFORE the signature-pinned checks —
+    // an overload would sit outside every assertion that follows.
+    expect(block).toContain("'_restore_quote_version_owner_impl',");
+    expect(block).toContain("'_restore_quote_version_below_cost_impl_20260810'");
+    expect(block).toMatch(/IF v_count <> 2 THEN/);
+
+    // Both signatures must resolve, or the privilege checks below silently
+    // evaluate against nothing.
+    expect(block).toContain(
+      "to_regprocedure('public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)') IS NULL",
+    );
+    expect(block).toContain(
+      "to_regprocedure('public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)') IS NULL",
+    );
+
+    // Four privilege checks: two roles across two implementations. `anon` alone
+    // is what the global anon-exec-secdef predicate already covers, so dropping
+    // `authenticated` here would silently reduce this to a duplicate of it —
+    // and `authenticated` is the role a logged-in browser session carries.
+    expect(block.match(/has_function_privilege\('authenticated'/g) ?? []).toHaveLength(2);
+    expect(block.match(/has_function_privilege\('anon'/g) ?? []).toHaveLength(2);
+  });
+
+  it('corrects the restore-side grants rather than only refusing over them', () => {
+    // No-ops on the database as read today, and deliberately so: the create-side
+    // implementation got a defensive revoke while the restore side got only an
+    // assertion that aborts the apply. A file that refuses to apply over a
+    // condition it can perfectly well correct just makes the next person hand-fix
+    // it under time pressure.
+    expect(migration).toMatch(
+      /REVOKE EXECUTE ON FUNCTION public\._restore_quote_version_owner_impl\(uuid, uuid, uuid, text\)\s+FROM PUBLIC, anon, authenticated;/,
+    );
+    expect(migration).toMatch(
+      /REVOKE EXECUTE ON FUNCTION public\._restore_quote_version_below_cost_impl_20260810\(uuid, uuid, uuid, text, bigint\)\s+FROM PUBLIC, anon, authenticated;/,
+    );
+    // service_role must NOT appear in either revoke. It holds EXECUTE on the
+    // owner-side implementation today and this file's declared scope is the
+    // browser roles; sweeping it up here would be an undeclared behaviour change.
+    const restoreRevokes =
+      migration.match(/REVOKE EXECUTE ON FUNCTION public\._restore_quote_version[\s\S]*?;/g) ?? [];
+    expect(restoreRevokes).toHaveLength(2);
+    for (const stmt of restoreRevokes) {
+      expect(stmt).not.toContain('service_role');
+    }
+  });
+
+  it('pins both public entry points as SECURITY DEFINER', () => {
+    // The hinge the whole fix swings on. After the REVOKEs, `authenticated` holds
+    // no direct write privilege on quote_versions, so the only remaining path is
+    // these two wrappers running as their privileged owner. A SECURITY INVOKER
+    // rebuild — the default, and therefore what an incomplete CREATE OR REPLACE
+    // silently produces — would execute with the caller's revoked privileges and
+    // break create/restore for every user.
+    const secdef = migration.match(/AND p\.proname IN \('create_quote_version', 'restore_quote_version'\)[\s\S]*?END IF;/);
+    expect(secdef).not.toBeNull();
+    expect(secdef![0]).toContain('NOT p.prosecdef');
+    expect(secdef![0]).toContain('PRECOND:');
+  });
 });
 
 describe('quote_versions write boundary — standing predicate', () => {
@@ -451,6 +533,14 @@ describe('quote_versions write boundary — standing predicate', () => {
       // wrapper, so anything able to call this directly restores a stored cost
       // basis with that check skipped.
       '_restore_quote_version_below_cost_impl_20260810:external-execute',
+      // ...and its overload count, the last one in this chain to get one. The
+      // branch above names ONE signature, (uuid,uuid,uuid,text,bigint), so a
+      // second overload of this name sits outside it — born EXECUTE-able by the
+      // API roles, and sitting BELOW the below-cost approval gate exactly as the
+      // pinned one does. Both independent reviewers found this gap on the same
+      // round; it is the B9 shape, where a guard stayed green while the hole it
+      // watched was reopened one signature over.
+      '_restore_quote_version_below_cost_impl_20260810:overload-count',
       // These six mirror assertions the migration makes exactly once, at apply
       // time. Without them the predicate describes only the table and its three
       // named routines, and a NEW writer or a NEW rewrite path could reopen the
@@ -634,5 +724,24 @@ describe('quote_versions write boundary — behavioural smoke', () => {
 
   it('never lets a SMOKE_FAIL be swallowed by its own handler', () => {
     expect(smoke.match(/IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;/g) ?? []).toHaveLength(4);
+  });
+
+  it('counts row-count movement in the one direction that proves a leak', () => {
+    // This smoke runs against the live database while real sessions are working.
+    // A strict before/after equality therefore fails whenever a legitimate
+    // create_quote_version lands in another session between the two counts —
+    // office traffic, not a boundary failure. Every write attempted in the
+    // denial steps is a DELETE, an UPDATE, a TRUNCATE or an INSERT that must have
+    // been refused, so the only count movement that is evidence of a leak is a
+    // count that FELL; the forged INSERT succeeding is already caught by its own
+    // SMOKE_FAIL the moment the statement fails to raise.
+    //
+    // Pinned because the asymmetry is the kind of thing a later reader "tidies"
+    // back to <> for looking sloppy, reintroducing the flake — and because a
+    // slip in the other direction (> instead of <) would make the assertion
+    // vacuous while still looking deliberate.
+    expect(smoke).toContain('IF v_after < v_before THEN');
+    expect(smoke).not.toContain('IF v_after <> v_before THEN');
+    expect(smoke).toMatch(/SMOKE_FAIL: quote_versions row count FELL/);
   });
 });

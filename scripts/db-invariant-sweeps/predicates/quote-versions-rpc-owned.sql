@@ -11,7 +11,9 @@
 --
 -- The write boundary this predicate defends, installed by 20260813080000:
 --   * no INSERT/UPDATE/DELETE/FOR ALL policy on quote_versions;
---   * no direct INSERT/UPDATE/DELETE/TRUNCATE privilege for anon/authenticated
+--   * no direct INSERT/UPDATE/DELETE/TRUNCATE/TRIGGER/REFERENCES privilege for
+--     anon/authenticated — six, which is the full write-capable set minus
+--     MAINTAIN, deliberately kept and explained at the migration's REVOKE.
 --     (TRUNCATE matters independently — RLS policies do not apply to it at all);
 --   * SELECT and qversions_select preserved, because version history must keep
 --     rendering and this predicate must not pass by having broken reads;
@@ -345,6 +347,27 @@ SELECT '_restore_quote_version_owner_impl:external-execute' AS violation_key,
            OR has_function_privilege(
                 'anon', 'public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)', 'EXECUTE')
        END
+
+UNION ALL
+
+-- The below-cost implementation gets the exactly-one-overload pin for the same
+-- reason the four routines above it got one, and it is the last routine in this
+-- chain that was still missing it. The branch that follows names ONE signature
+-- — `(uuid, uuid, uuid, text, bigint)` — so a SECOND overload of this name is
+-- invisible to it. On this project a newly created function is born
+-- EXECUTE-able by the API roles, so that second overload would be callable from
+-- a browser session the moment it existed, and it would sit BELOW the
+-- below-cost approval gate exactly as the pinned one does. Without this count
+-- the whole sweep would keep reporting clean while the deepest layer of the
+-- boundary was reopened one signature over. That is the B9 shape verbatim.
+SELECT '_restore_quote_version_below_cost_impl_20260810:overload-count' AS violation_key,
+       'public._restore_quote_version_below_cost_impl_20260810 must have exactly one overload — a new signature is born EXECUTE-able by the API roles, sits below the below-cost approval gate, and is not covered by the signature-pinned branch below' AS reason
+ WHERE (
+   SELECT count(*)
+     FROM pg_proc p
+    WHERE p.pronamespace = 'public'::regnamespace
+      AND p.proname = '_restore_quote_version_below_cost_impl_20260810'
+ ) <> 1
 
 UNION ALL
 
