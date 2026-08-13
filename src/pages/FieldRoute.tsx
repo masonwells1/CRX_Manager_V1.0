@@ -10,7 +10,7 @@
  * Additive surface — never edits DeliveryDetail.tsx. Tapping a stop opens the
  * per-stop runner (/my-route/:id). See docs/roadmap/field-mode-build-plan.md.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Truck, Wifi, WifiOff, ChevronRight, RefreshCw, PackageCheck, AlertTriangle } from 'lucide-react';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -65,8 +65,10 @@ export default function FieldRoute() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [queueSummary, setQueueSummary] = useState<OfflineQueueSummary>(EMPTY_QUEUE_SUMMARY);
+  const stopRequestSequence = useRef(0);
 
   const fetchStops = useCallback(async () => {
+    const requestSequence = ++stopRequestSequence.current;
     setLoading(true);
     setLoadError(false);
     // No app-side filter: del_select RLS scopes a driver to their assigned rows
@@ -78,6 +80,8 @@ export default function FieldRoute() {
       .in('status', OPEN_STATUSES)
       .order('scheduled_date', { ascending: true })
       .order('scheduled_time', { ascending: true, nullsFirst: false });
+
+    if (requestSequence !== stopRequestSequence.current) return;
 
     if (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', page: 'field-route' } });
@@ -97,7 +101,10 @@ export default function FieldRoute() {
   }, []);
 
   useEffect(() => {
-    fetchStops();
+    void fetchStops();
+    return () => {
+      stopRequestSequence.current += 1;
+    };
   }, [fetchStops]);
 
   useEffect(() => {
