@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import assert from "node:assert/strict";
+import strictAssert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,6 +15,18 @@ import {
   normalizeLineEndings,
   worktreeEntriesFromStatus,
 } from "./apply-live-testdata-maintenance-20260812.mjs";
+
+let assertionCount = 0;
+const assert = new Proxy(strictAssert, {
+  get(target, property, receiver) {
+    const assertion = Reflect.get(target, property, receiver);
+    if (typeof assertion !== "function") return assertion;
+    return (...args) => {
+      assertionCount += 1;
+      return Reflect.apply(assertion, target, args);
+    };
+  },
+});
 
 assert.deepEqual(
   worktreeEntriesFromStatus("## codex/maintenance...origin/codex/maintenance\n"),
@@ -92,6 +104,7 @@ assert.equal(exactHeadProofValid(exactProof, "head", "base", proofNow), true, "f
 assert.equal(exactHeadProofValid(exactProof, "other", "base", proofNow), false, "wrong HEAD proof is rejected");
 assert.equal(exactHeadProofValid(exactProof, "head", "other", proofNow), false, "wrong base proof is rejected");
 assert.equal(exactHeadProofValid({ ...exactProof, timestamp: "2026-08-13T04:00:00.000Z" }, "head", "base", proofNow), false, "stale proof is rejected");
+const producerAssertions = assertionCount;
 process.stdout.write(`producer protection candidate blobs: ${JSON.stringify(producerProtection.blobs)}\n`);
 for (const [name, source] of Object.entries(producerProtection.outputs)) {
   const sourcePath = path.join(scratch, `${name}.mjs`);
@@ -199,7 +212,7 @@ try {
   }
 
   process.stdout.write(
-    `live-testdata maintenance candidate: ${blocked.length + allowed.length} classifier assertions + 24 producer assertions passed\n`,
+    `live-testdata maintenance candidate: ${blocked.length + allowed.length} classifier assertions + ${producerAssertions} producer assertions passed\n`,
   );
 } finally {
   rmSync(scratch, { recursive: true, force: true });

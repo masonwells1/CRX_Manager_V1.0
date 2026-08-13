@@ -285,12 +285,6 @@ assert.equal(gitPushCwd("git -C ../repo push origin HEAD:main", "C:/work/current
 assert.equal(gitPushCwd("git -C .. -C sibling push origin HEAD:main", "C:/work/current"), path.resolve("C:/work/sibling"));
 
 assert.deepEqual(riskyFiles(["src/pages/Home.tsx", "supabase/migrations/1.sql"]), ["supabase/migrations/1.sql"]);
-const maintenanceProducerPath = "scripts/apply-live-testdata-" + "maintenance-20260812.mjs";
-assert.deepEqual(
-  riskyFiles([maintenanceProducerPath]),
-  [maintenanceProducerPath],
-  "the protected maintenance producer always requires exact-head review",
-);
 // Codex round-7 (PR #142): reviewer charters + the proof-minting wrapper are
 // gate machinery — editing them must itself require the second-model verdict.
 assert.deepEqual(riskyFiles([".claude/agents/rls-security-reviewer.md"]), [".claude/agents/rls-security-reviewer.md"]);

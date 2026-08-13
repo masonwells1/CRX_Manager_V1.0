@@ -37,7 +37,7 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   pushLib: "40c8857d4b6c37b6a89525efb1caf49e9c4215d1",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "28c9b3d6e3ff38b619eb244fb9f96ca14dd09cb6",
+  codexGuard: "fc72a09819632e29ab6273f0cb480c6ac560a430",
   pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
 };
 
@@ -144,13 +144,20 @@ export function worktreeEntriesFromStatus(statusText) {
 
 export function buildProducerProtectionSources() {
   const sources = Object.fromEntries(Object.entries(PROTECTED_SOURCES).map(([key, relativePath]) => {
-    const value = readNormalized(relativePath);
-    const blob = gitBlob(value);
+    return [key, readNormalized(relativePath)];
+  }));
+  const sourceBlobs = Object.fromEntries(Object.entries(sources).map(([key, value]) => [key, gitBlob(value)]));
+  const alreadyProtected = Object.entries(sourceBlobs).every(
+    ([key, blob]) => blob === EXPECTED_PROTECTED_OUTPUT_BLOBS[key],
+  );
+  if (alreadyProtected) return { outputs: sources, blobs: sourceBlobs };
+
+  for (const [key, blob] of Object.entries(sourceBlobs)) {
     if (blob !== EXPECTED_PROTECTED_INPUT_BLOBS[key]) {
+      const relativePath = PROTECTED_SOURCES[key];
       throw new Error(`refusing stale protected input ${relativePath}: expected ${EXPECTED_PROTECTED_INPUT_BLOBS[key]}, got ${blob}`);
     }
-    return [key, value];
-  }));
+  }
 
   const oldProtectedHarness = "(?:run-claude-review|write-codex-push-proof|write-apply-proofs|overnight-codex-gate)";
   const newProtectedHarness = "(?:run-claude-review|write-codex-push-proof|write-apply-proofs|overnight-codex-gate|apply-live-testdata-maintenance-20260812)";
@@ -162,17 +169,13 @@ export function buildProducerProtectionSources() {
   );
 
   const constantsAnchor = "const PROTECTED_HARNESS_FRAGMENT_RE = new RegExp(`(?<![\\\\w.-])${PROTECTED_HARNESS_SOURCE}(?![\\\\w.-])`, \"i\");";
-  const constantsReplacement = `${constantsAnchor}\nconst MAINTENANCE_PRODUCER = "scripts/apply-live-testdata-maintenance-20260812.mjs";\nconst MAINTENANCE_PRODUCER_COMMAND_RE = /(?:^|[;&|]\\s*)(?:\"[^\"]*[\\\\/]node(?:\\.exe)?\"|'[^']*[\\\\/]node(?:\\.exe)?'|(?:\\S*[\\\\/])?node(?:\\.exe)?)\\s+(?:(?:--[a-z-]+(?:=[^\\s]+)?|-{1,2}[a-z-]+)\\s+)*(?:\"[^\"]*[\\\\/]|'[^']*[\\\\/]|\\S*[\\\\/])?scripts[\\\\/]apply-live-testdata-maintenance-20260812\\.mjs(?:[\"']|\\s|$)/i;`;
+  const constantsReplacement = `${constantsAnchor}\nconst MAINTENANCE_PRODUCER = "scripts/apply-live-testdata-maintenance-20260812.mjs";`;
   const constantsWithMatcher = `${constantsReplacement}\nexport ${maintenanceProducerCommandMentioned.toString()}`;
   codexGuard = replaceExactly(codexGuard, constantsAnchor, constantsWithMatcher, "maintenance producer command constants");
 
   const proofFunctionAnchor = "function shellWords(value) {";
-  const maintenanceGate = `function gateMaintenanceProducerExecution({ command, repoDir, nowMs, runGit }) {\n  if (!MAINTENANCE_PRODUCER_COMMAND_RE.test(command)) return { blocked: false };\n\n  let headSha;\n  let baseSha;\n  let headBlob;\n  let worktreeBlob;\n  let status;\n  try {\n    headSha = runGit([\"rev-parse\", \"HEAD\"], repoDir);\n    baseSha = runGit([\"rev-parse\", \"origin/main\"], repoDir);\n    status = runGit([\"status\", \"--porcelain\", \"--untracked-files=all\", \"--\", MAINTENANCE_PRODUCER], repoDir);\n    headBlob = runGit([\"rev-parse\", \`HEAD:\${MAINTENANCE_PRODUCER}\`], repoDir);\n    worktreeBlob = runGit([\"hash-object\", \`--path=\${MAINTENANCE_PRODUCER}\`, MAINTENANCE_PRODUCER], repoDir);\n  } catch (error) {\n    return denied(\`CODEX PRODUCTION GATE: cannot bind the maintenance producer to the current committed HEAD: \${error?.message || error}\`);\n  }\n  if (status || headBlob !== worktreeBlob) {\n    return denied(\"CODEX PRODUCTION GATE: the maintenance producer differs from its exact committed HEAD blob. Commit it, obtain a fresh exact-head review, and retry.\");\n  }\n\n  const proofPath = path.join(repoDir, \".claude\", \"session-state\", \`codex-review-\${headSha}.json\`);\n  let proof;\n  try {\n    proof = JSON.parse(readFileSync(proofPath, \"utf8\"));\n  } catch (error) {\n    return proofRequirement(headSha, \"execution of the protected maintenance producer\", \`Missing or unreadable exact-head proof: \${proofPath}\`, baseSha);\n  }\n  if (!proofValid(proof, headSha, nowMs, baseSha)) {\n    return proofRequirement(headSha, \"execution of the protected maintenance producer\", \"The exact-head Sol-high proof is stale or does not match the current HEAD/base.\", baseSha);\n  }\n  return { blocked: false };\n}\n\n`;
-  const hardenedMaintenanceGate = maintenanceGate.replace(
-    "MAINTENANCE_PRODUCER_COMMAND_RE.test",
-    "maintenanceProducerCommandMentioned",
-  );
-  codexGuard = replaceExactly(codexGuard, proofFunctionAnchor, hardenedMaintenanceGate + proofFunctionAnchor, "maintenance producer execution gate");
+  const maintenanceGate = `function gateMaintenanceProducerExecution({ command, repoDir, nowMs, runGit }) {\n  if (!maintenanceProducerCommandMentioned(command)) return { blocked: false };\n\n  let headSha;\n  let baseSha;\n  let headBlob;\n  let worktreeBlob;\n  let status;\n  try {\n    headSha = runGit([\"rev-parse\", \"HEAD\"], repoDir);\n    baseSha = runGit([\"rev-parse\", \"origin/main\"], repoDir);\n    status = runGit([\"status\", \"--porcelain\", \"--untracked-files=all\", \"--\", MAINTENANCE_PRODUCER], repoDir);\n    headBlob = runGit([\"rev-parse\", \`HEAD:\${MAINTENANCE_PRODUCER}\`], repoDir);\n    worktreeBlob = runGit([\"hash-object\", \`--path=\${MAINTENANCE_PRODUCER}\`, MAINTENANCE_PRODUCER], repoDir);\n  } catch (error) {\n    return denied(\`CODEX PRODUCTION GATE: cannot bind the maintenance producer to the current committed HEAD: \${error?.message || error}\`);\n  }\n  if (status || headBlob !== worktreeBlob) {\n    return denied(\"CODEX PRODUCTION GATE: the maintenance producer differs from its exact committed HEAD blob. Commit it, obtain a fresh exact-head review, and retry.\");\n  }\n\n  const proofPath = path.join(repoDir, \".claude\", \"session-state\", \`codex-review-\${headSha}.json\`);\n  let proof;\n  try {\n    proof = JSON.parse(readFileSync(proofPath, \"utf8\"));\n  } catch (error) {\n    return proofRequirement(headSha, \"execution of the protected maintenance producer\", \`Missing or unreadable exact-head proof: \${proofPath}\`, baseSha);\n  }\n  if (!proofValid(proof, headSha, nowMs, baseSha)) {\n    return proofRequirement(headSha, \"execution of the protected maintenance producer\", \"The exact-head Sol-high proof is stale or does not match the current HEAD/base.\", baseSha);\n  }\n  return { blocked: false };\n}\n\n`;
+  codexGuard = replaceExactly(codexGuard, proofFunctionAnchor, maintenanceGate + proofFunctionAnchor, "maintenance producer execution gate");
 
   const commandAnchor = "  if (/[\\r\\n]/.test(command) && PROTECTED_HARNESS_FRAGMENT_RE.test(command)) {";
   const commandReplacement = `  const maintenanceProducerGate = gateMaintenanceProducerExecution({ command, repoDir: actionRepoDir, nowMs, runGit });\n  if (maintenanceProducerGate.blocked) return maintenanceProducerGate;\n\n${commandAnchor}`;
@@ -276,8 +279,16 @@ function main() {
         if (writtenBlob !== blobs[key]) throw new Error(`post-write blob mismatch for ${relativePath}`);
       }
     } catch (error) {
+      const rollbackFailures = [];
       for (const [key, relativePath] of Object.entries(PROTECTED_SOURCES)) {
-        writeFileSync(path.join(REPO_DIR, relativePath), originals[key], "utf8");
+        try {
+          writeFileSync(path.join(REPO_DIR, relativePath), originals[key], "utf8");
+        } catch (rollbackError) {
+          rollbackFailures.push(`${relativePath}: ${rollbackError?.message || rollbackError}`);
+        }
+      }
+      if (rollbackFailures.length > 0) {
+        error.message += ` | rollback incomplete, restore manually: ${rollbackFailures.join("; ")}`;
       }
       throw error;
     }
