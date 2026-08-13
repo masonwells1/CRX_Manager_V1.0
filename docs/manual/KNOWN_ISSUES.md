@@ -22,6 +22,32 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-08-12 — six migrations applied live on 2026-08-12 have no file on `main`
+
+**Severity: MATERIAL — `main` cannot currently reconstruct production schema.** Six migrations
+were applied live on 2026-08-12 from another session and their files are absent from
+`origin/main` (verified by `git ls-tree` against the live ledger on 2026-08-13):
+
+| Submitted name | Ledger version |
+|---|---|
+| `20260812010000_blend_ticket_order_header_runtime_assert` | `20260812034831` |
+| `20260812011000_restore_quote_version_whole_cent_money` | `20260812034951` |
+| `20260812115235_snapshot_cost_reporting` | `20260812145628` |
+| `20260812115236_quote_items_cost_at_quote_snapshot` | `20260812151606` |
+| `20260812115237_enforce_below_cost_admin_approval` | `20260812154028` |
+| `20260812115238_repair_historical_order_line_cents` | `20260812154757` |
+
+The files have since been **recovered onto remote branches** (`recovery/live-no-file-six` and
+`claude/recover-applied-migrations-20260812`), so they are no longer file-less — but until a
+recovery PR merges, do not plan against `main`'s `supabase/migrations/` as a complete
+reconstruction source for 2026-08-12. Closeout: land the recovery branch onto `main` through the
+normal PR pipeline (the recovery session owns it), then re-verify with `git ls-tree` against the
+ledger and close this entry. `20260812130145_bind_return_receipts_to_intent_and_restore_overdue`
+and `20260813070000_pin_return_idempotency_helper_contract` from the same window are already on
+`main` and are not part of this gap.
+
+---
+
 ## OPEN 2026-08-12 — `20260813060000`'s guarded-function set has a fragile membership rule
 
 **Severity: LOW, but it is a live tripwire on an unapplied file.** The delivery-before-billing
