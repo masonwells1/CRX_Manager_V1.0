@@ -68,7 +68,6 @@ supabase/migrations/20260813090000_restrict_restore_quote_owner_impl.sql text eo
 # under review.
 supabase/migrations/20260813080000_lock_quote_versions_writes_to_rpc.sql text eol=lf
 supabase/migrations/20260813161614_restrict_draw_down_quote_owner.sql text eol=lf
-supabase/migrations/20260813170000_quarantine_legacy_quote_version_restore.sql text eol=lf
 
 # Generated clean-rebuild baselines are hash-verified release artifacts.
 supabase/baselines/*.sql  text eol=lf

@@ -67,7 +67,15 @@
 --   * leave qversions_select and the authenticated SELECT grant untouched, so
 --     version history keeps rendering;
 --   * re-state the intended callable boundary on create_quote_version and
---     restore_quote_version.
+--     restore_quote_version;
+--   * under the same ACCESS EXCLUSIVE lock, record every version that predates
+--     this browser-write cutover in a private immutable quarantine table and
+--     make the governed restore wrapper reject those unverifiable snapshots.
+--
+-- The capture and the boundary are deliberately ONE transaction. A concurrent
+-- server-side version creation either commits before the lock and joins the
+-- quarantined legacy set, or waits until this migration commits and remains
+-- restorable. A separate follow-up migration cannot make that distinction.
 --
 -- Verified live on 2026-08-13 before this file was written:
 --   * public.quote_versions has relrowsecurity = true and relforcerowsecurity =
@@ -254,28 +262,20 @@
 -- to avoid sealing a bad basis in place), but the first move on seeing one is to
 -- read the flagged rows, not to assume an attack.
 --
--- TRANSACTION SHAPE. This file relies on the applier wrapping the whole thing in
--- one transaction, so a failing postcondition rolls the REVOKEs back. The
--- Supabase apply path does that. Every precondition that can be checked before
--- the first write is therefore stated as a PRECOND, not left to POSTCOND.
+-- TRANSACTION SHAPE. This file relies on the governed Supabase applier wrapping
+-- the whole migration in one transaction. That is now a correctness property,
+-- not merely rollback convenience: the ACCESS EXCLUSIVE lock must span legacy
+-- id capture, the write-boundary change, wrapper replacement, postconditions and
+-- the ledger stamp. Every precondition that can be checked before the first
+-- write is therefore stated as a PRECOND, not left to POSTCOND.
 --
--- Nothing IN this file enforces that, and it cannot: a migration cannot open its
--- own transaction on this path. So state the consequence rather than assume the
--- shape holds. On a hypothetical statement-at-a-time applier, a failing
--- POSTCOND would leave the DROP POLICY and the REVOKEs in place while no ledger
--- row is written at all — the applier records a migration only after it
--- succeeds, so a failure leaves no "failed" row behind, just an absence. That
--- direction is safe — the boundary ends up tighter, never looser — but the
--- repository would then disagree with the database about whether this applied.
---
--- If that ever happens, re-running is the intended recovery and the PRECONDs are
--- built for it: the policy check treats an already-absent qversions_insert as an
--- explicit replay branch and proceeds as a no-op re-assertion, and the remaining
--- assertions pin things this migration does not change (RLS on, the read policy
--- present, one overload each, the definer owner still holding INSERT and
--- rolbypassrls), all of which still hold afterwards. Read the live ACL first
--- anyway, to confirm the partial state is the one described here rather than a
--- third party's change.
+-- Nothing IN this file can create that outer transaction; the approved applier
+-- owns it. Do not run this file statement-by-statement. A partial execution is
+-- deliberately NOT replay-tolerant now that the private quarantine relation is
+-- part of the boundary. If an unsupported runner ever creates partial state,
+-- stop, inspect the live table/policy/function/ACL shape, and repair it through a
+-- separately reviewed recovery migration rather than blindly re-running this
+-- artifact.
 --
 -- OUT OF SCOPE, REPORTED SEPARATELY: this blanket-grant shape is not unique to
 -- this table. Most public tables still grant TRUNCATE to `authenticated`, and
@@ -286,9 +286,10 @@
 -- write access to quote_versions, exactly as they do on every other table.
 -- "RPC-owned" means no anon/authenticated path, not that no role can write.
 --
--- NO BUSINESS DATA IS WRITTEN OR DELETED BY THIS MIGRATION. It changes
--- privileges and one policy only. It does READ quote_versions.snapshot_data in
--- the precondition, to prove no forged snapshot is already sitting there.
+-- NO SNAPSHOT PAYLOAD IS REWRITTEN OR DELETED BY THIS MIGRATION. It does insert
+-- one private quarantine metadata row for every quote-version id visible under
+-- the cutover lock. It also reads quote_versions.snapshot_data in the
+-- precondition, to prove no detectable forged snapshot is already sitting there.
 
 -- SET LOCAL, not SET: this runs on a pooled connection, and a session-level
 -- value would leak onto whatever unrelated work reuses that connection next.
@@ -432,6 +433,18 @@ BEGIN
   END IF;
   IF to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)') IS NULL THEN
     RAISE EXCEPTION 'PRECOND: restore_quote_version does not have signature (uuid,uuid,uuid,text,bigint,text); the statements below would not match.';
+  END IF;
+
+  IF (SELECT md5(p.prosrc)
+        FROM pg_proc p
+       WHERE p.oid = 'public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)'::regprocedure)
+       <> '322a16413d9ec087ebff86b7ba3bd82c' THEN
+    RAISE EXCEPTION 'PRECOND: restore_quote_version body changed. The atomic quarantine wrapper replacement was reviewed against a different predecessor.';
+  END IF;
+
+  IF to_regclass('public.quote_version_restore_quarantine') IS NOT NULL
+     OR to_regprocedure('public._guard_quote_version_restore_quarantine_immutable()') IS NOT NULL THEN
+    RAISE EXCEPTION 'PRECOND: quote-version restore quarantine objects already exist. Re-review instead of merging two independently-created boundaries.';
   END IF;
 
   -- The restore side's two implementations must not be callable by a browser
@@ -913,6 +926,51 @@ $precond$;
 -- The fix.
 -- ---------------------------------------------------------------------------
 
+-- Freeze the exact cutover before either the legacy population or the browser
+-- write boundary changes. The lock is held through transaction commit.
+LOCK TABLE public.quote_versions IN ACCESS EXCLUSIVE MODE;
+
+CREATE TABLE public.quote_version_restore_quarantine (
+  version_id uuid PRIMARY KEY
+    REFERENCES public.quote_versions(id) ON DELETE CASCADE,
+  quarantined_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+  reason text NOT NULL DEFAULT 'pre_rpc_owned_snapshot'
+    CHECK (reason = 'pre_rpc_owned_snapshot')
+);
+
+COMMENT ON TABLE public.quote_version_restore_quarantine IS
+  'Quote versions captured atomically before the RPC-only write boundary; view-only and never restorable.';
+
+ALTER TABLE public.quote_version_restore_quarantine ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.quote_version_restore_quarantine FORCE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.quote_version_restore_quarantine
+  FROM PUBLIC, anon, authenticated, service_role;
+
+INSERT INTO public.quote_version_restore_quarantine (version_id)
+SELECT qv.id
+FROM public.quote_versions qv
+ORDER BY qv.id;
+
+CREATE FUNCTION public._guard_quote_version_restore_quarantine_immutable()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $function$
+BEGIN
+  RAISE EXCEPTION 'QUOTE_VERSION_RESTORE_QUARANTINE_IMMUTABLE';
+END;
+$function$;
+
+CREATE TRIGGER guard_quote_version_restore_quarantine_immutable
+BEFORE UPDATE OR DELETE ON public.quote_version_restore_quarantine
+FOR EACH ROW
+EXECUTE FUNCTION public._guard_quote_version_restore_quarantine_immutable();
+
+REVOKE ALL ON FUNCTION public._guard_quote_version_restore_quarantine_immutable()
+  FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public._guard_quote_version_restore_quarantine_immutable()
+  TO postgres;
+
 DROP POLICY IF EXISTS qversions_insert ON public.quote_versions;
 
 -- If this REVOKE ever appears to do nothing, the cause is almost certainly the
@@ -1006,10 +1064,68 @@ REVOKE EXECUTE ON FUNCTION public._restore_quote_version_owner_impl(uuid, uuid, 
 REVOKE EXECUTE ON FUNCTION public._restore_quote_version_below_cost_impl_20260810(uuid, uuid, uuid, text, bigint)
   FROM PUBLIC, anon, authenticated;
 
+-- Install the restore denial in the SAME transaction as the capture and write
+-- revoke. There is no window where the boundary has moved but the legacy set is
+-- not yet enforced.
+CREATE OR REPLACE FUNCTION public.restore_quote_version(
+  p_quote_id uuid,
+  p_version_id uuid,
+  p_performed_by uuid,
+  p_idempotency_key text DEFAULT NULL,
+  p_expected_row_version bigint DEFAULT NULL,
+  p_below_cost_reason text DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+BEGIN
+  PERFORM public._begin_below_cost_money_write(
+    'restore_quote_version', p_performed_by,
+    jsonb_build_object('below_cost_reason', p_below_cost_reason)
+  );
+
+  IF EXISTS (
+    SELECT 1
+    FROM public.quote_version_restore_quarantine q
+    WHERE q.version_id = p_version_id
+  ) THEN
+    RAISE EXCEPTION 'QUOTE_VERSION_RESTORE_QUARANTINED';
+  END IF;
+
+  RETURN public._restore_quote_version_below_cost_impl_20260810(
+    p_quote_id, p_version_id, p_performed_by, p_idempotency_key,
+    p_expected_row_version
+  );
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.restore_quote_version(
+  uuid, uuid, uuid, text, bigint, text
+) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.restore_quote_version(
+  uuid, uuid, uuid, text, bigint, text
+) TO authenticated, service_role;
+
 DO $postcond$
 DECLARE
   v_owner name;
+  v_wrapper regprocedure := to_regprocedure(
+    'public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)'
+  );
+  v_source text;
+  v_quarantine_rel record;
+  v_quarantine_guard regprocedure := to_regprocedure(
+    'public._guard_quote_version_restore_quarantine_immutable()'
+  );
 BEGIN
+  SELECT p.prosrc INTO v_source FROM pg_proc p WHERE p.oid = v_wrapper;
+  SELECT c.relrowsecurity, c.relforcerowsecurity, c.relowner
+    INTO v_quarantine_rel
+    FROM pg_class c
+   WHERE c.oid = 'public.quote_version_restore_quarantine'::regclass;
+
   IF EXISTS (
     SELECT 1 FROM pg_policy p
      WHERE p.polrelid = 'public.quote_versions'::regclass
@@ -1031,6 +1147,71 @@ BEGIN
      OR has_table_privilege('anon', 'public.quote_versions', 'TRIGGER')
      OR has_table_privilege('anon', 'public.quote_versions', 'REFERENCES') THEN
     RAISE EXCEPTION 'POSTCOND: public.quote_versions remains directly mutable by an external API role';
+  END IF;
+
+  IF v_wrapper IS NULL
+     OR position('QUOTE_VERSION_RESTORE_QUARANTINED' in v_source) = 0
+     OR position('quote_version_restore_quarantine' in v_source) = 0
+     OR position('quote_version_restore_quarantine' in v_source)
+        > position('_restore_quote_version_below_cost_impl_20260810' in v_source)
+     OR NOT (SELECT p.prosecdef FROM pg_proc p WHERE p.oid = v_wrapper)
+     OR (SELECT p.proconfig FROM pg_proc p WHERE p.oid = v_wrapper)
+        IS DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
+     OR (SELECT p.proowner FROM pg_proc p WHERE p.oid = v_wrapper)
+        <> 'postgres'::regrole THEN
+    RAISE EXCEPTION 'POSTCOND: restore wrapper does not enforce the atomic legacy quarantine';
+  END IF;
+
+  IF NOT v_quarantine_rel.relrowsecurity
+     OR NOT v_quarantine_rel.relforcerowsecurity
+     OR v_quarantine_rel.relowner <> 'postgres'::regrole
+     OR EXISTS (
+       SELECT 1 FROM pg_policies
+       WHERE schemaname = 'public'
+         AND tablename = 'quote_version_restore_quarantine'
+     )
+     OR has_table_privilege('anon', 'public.quote_version_restore_quarantine', 'SELECT')
+     OR has_table_privilege('anon', 'public.quote_version_restore_quarantine', 'INSERT')
+     OR has_table_privilege('authenticated', 'public.quote_version_restore_quarantine', 'SELECT')
+     OR has_table_privilege('authenticated', 'public.quote_version_restore_quarantine', 'INSERT')
+     OR has_table_privilege('service_role', 'public.quote_version_restore_quarantine', 'SELECT')
+     OR has_table_privilege('service_role', 'public.quote_version_restore_quarantine', 'INSERT') THEN
+    RAISE EXCEPTION 'POSTCOND: quote-version restore quarantine table is exposed';
+  END IF;
+
+  IF v_quarantine_guard IS NULL
+     OR (SELECT p.proconfig FROM pg_proc p WHERE p.oid = v_quarantine_guard)
+        IS DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
+     OR position('QUOTE_VERSION_RESTORE_QUARANTINED' in v_source) = 0
+     OR position('QUOTE_VERSION_RESTORE_QUARANTINE_IMMUTABLE' in
+       (SELECT p.prosrc FROM pg_proc p WHERE p.oid = v_quarantine_guard)) = 0
+     OR has_function_privilege('anon', v_quarantine_guard, 'EXECUTE')
+     OR has_function_privilege('authenticated', v_quarantine_guard, 'EXECUTE')
+     OR has_function_privilege('service_role', v_quarantine_guard, 'EXECUTE')
+     OR NOT has_function_privilege('postgres', v_quarantine_guard, 'EXECUTE')
+     OR NOT EXISTS (
+       SELECT 1
+       FROM pg_trigger t
+       WHERE t.tgrelid = 'public.quote_version_restore_quarantine'::regclass
+         AND t.tgname = 'guard_quote_version_restore_quarantine_immutable'
+         AND t.tgfoid = v_quarantine_guard
+         AND t.tgenabled IN ('O', 'A')
+         AND NOT t.tgisinternal
+     ) THEN
+    RAISE EXCEPTION 'POSTCOND: quote-version restore quarantine is mutable or unenforced';
+  END IF;
+
+  -- Because the ACCESS EXCLUSIVE lock remains held, every row visible here is a
+  -- pre-boundary row. A server writer that was waiting on the lock cannot insert
+  -- until after this transaction commits.
+  IF EXISTS (
+    SELECT 1
+    FROM public.quote_versions qv
+    LEFT JOIN public.quote_version_restore_quarantine q
+      ON q.version_id = qv.id
+    WHERE q.version_id IS NULL
+  ) THEN
+    RAISE EXCEPTION 'POSTCOND: a pre-boundary quote version escaped the atomic quarantine capture';
   END IF;
 
   -- has_table_privilege reports only the TABLE-level ACL, so a column-level

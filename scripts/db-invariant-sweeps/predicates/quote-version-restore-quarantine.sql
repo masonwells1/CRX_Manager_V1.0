@@ -1,5 +1,5 @@
 -- predicate: quote-version-restore-quarantine
--- Installed by 20260813170000. Before quote_versions became RPC-owned, a
+-- Installed atomically by 20260813080000. Before quote_versions became RPC-owned, a
 -- browser could author plausible snapshot money that no heuristic can prove
 -- came from the server. Those rows remain readable history but may never reach
 -- the authoritative restore path.

@@ -68,7 +68,10 @@ const pendingCandidateMigrationExclusions = new Map([
   ['20260813040000_clamp_negative_commission_remainder.sql', 'Wave A money candidate'],
   ['20260813050000_guard_job_commission_split_immutable.sql', 'Wave A money candidate'],
   ['20260813060000_require_completed_delivery_before_invoice_post.sql', 'Wave A money candidate'],
-  ['20260813080000_lock_quote_versions_writes_to_rpc.sql', 'CRX-SEC-1 quote-version write boundary'],
+  [
+    '20260813080000_lock_quote_versions_writes_to_rpc.sql',
+    'CRX-SEC-1 atomic quote-version write boundary and legacy restore quarantine',
+  ],
   [
     '20260813090000_restrict_restore_quote_owner_impl.sql',
     'restore follow-up: keep the owner implementation behind governed wrappers',
@@ -76,10 +79,6 @@ const pendingCandidateMigrationExclusions = new Map([
   [
     '20260813161614_restrict_draw_down_quote_owner.sql',
     'draw-down follow-up: require quote ownership and reject soft-deleted bookings',
-  ],
-  [
-    '20260813170000_quarantine_legacy_quote_version_restore.sql',
-    'restore follow-up: quarantine every version created before the RPC-only write boundary',
   ],
 ]);
 const pendingCandidateMigrations = [...pendingCandidateMigrationExclusions.keys()]

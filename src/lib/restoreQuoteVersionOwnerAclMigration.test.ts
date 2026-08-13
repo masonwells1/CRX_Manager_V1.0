@@ -12,7 +12,7 @@ describe('restore quote owner implementation ACL migration', () => {
   it('pins the exact governed wrapper chain before changing permissions', () => {
     expect(sql).toContain("md5(v_owner_body) <> 'd8408e3b19b536f1210e51da3970272e'");
     expect(sql).toContain("<> 'd533d681ebc6ceb94338cd6f77220d71'");
-    expect(sql).toContain("<> '322a16413d9ec087ebff86b7ba3bd82c'");
+    expect(sql).toContain("<> '4fe0225d760b58b88a6874afe75b758a'");
     expect(sql).toContain("<> '712235d2f7d428c885044af57f9fce13'");
     expect(sql).toContain("v_check_body !~ 'IDEMPOTENCY_CROSS_OP_KEY_REUSE'");
     expect(sql).toContain("v_check_body !~ 'v_existing.operation IS DISTINCT FROM p_operation'");

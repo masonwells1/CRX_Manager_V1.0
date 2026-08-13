@@ -1,7 +1,7 @@
--- CONTAINER-ONLY rollback smoke for 20260813170000.
+-- CONTAINER-ONLY rollback smoke for the quarantine integrated into 20260813080000.
 --
 -- The captured-ledger prover inserts version ...0017 before applying the
--- pending RPC-only write boundary and quarantine migration. This chain proves:
+-- pending atomic RPC-only write boundary and quarantine capture. This chain proves:
 --   * that pre-boundary version is present in the private quarantine table;
 --   * the real authenticated restore RPC rejects it before changing the quote;
 --   * a version created afterward through the authoritative RPC is not

@@ -87,7 +87,7 @@ BEGIN
   IF (SELECT md5(p.prosrc) FROM pg_proc p WHERE p.oid = v_below_cost_impl)
        <> 'd533d681ebc6ceb94338cd6f77220d71'
      OR (SELECT md5(p.prosrc) FROM pg_proc p WHERE p.oid = v_public_wrapper)
-       <> '322a16413d9ec087ebff86b7ba3bd82c' THEN
+       <> '4fe0225d760b58b88a6874afe75b758a' THEN
     RAISE EXCEPTION 'RESTORE_OWNER_ACL_DRIFT: governed restore wrapper changed';
   END IF;
 
@@ -166,7 +166,7 @@ BEGIN
      OR (SELECT md5(p.prosrc) FROM pg_proc p WHERE p.oid = v_below_cost_impl)
        <> 'd533d681ebc6ceb94338cd6f77220d71'
      OR (SELECT md5(p.prosrc) FROM pg_proc p WHERE p.oid = v_public_wrapper)
-       <> '322a16413d9ec087ebff86b7ba3bd82c'
+       <> '4fe0225d760b58b88a6874afe75b758a'
      OR has_function_privilege('anon', v_public_wrapper, 'EXECUTE')
      OR NOT has_function_privilege('authenticated', v_public_wrapper, 'EXECUTE')
      OR NOT has_function_privilege('service_role', v_public_wrapper, 'EXECUTE')
