@@ -11,6 +11,9 @@ const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const EXTENSIONS = path.join(ROOT, 'supabase', 'baselines', '20260727174805_extensions.sql');
 const CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260812130145_bind_return_receipts_to_intent_and_restore_overdue.sql');
 const HELPER_GUARD = path.join(ROOT, 'supabase', 'migrations', '20260813070000_pin_return_idempotency_helper_contract.sql');
+const FORWARD_COMPATIBILITY_REPLAY = [
+  '20260813060000_require_completed_delivery_before_invoice_post.sql',
+].map((name) => path.join(ROOT, 'supabase', 'migrations', name));
 const SMOKE = path.join(ROOT, 'scripts', 'smoke', 'smoke-return-credit-chain.sql');
 const PREDICATE = path.join(ROOT, 'scripts', 'db-invariant-sweeps', 'predicates', 'return-credit-intent-binding.sql');
 const LIFECYCLE_PREDICATE = path.join(ROOT, 'scripts', 'db-invariant-sweeps', 'predicates', 'returns-lifecycle-rpc-owned.sql');
@@ -34,6 +37,7 @@ function psqlValue(sql) {
 }
 function copy(local, name) { docker(['cp', local, `${NAME}:/tmp/${name}`]); }
 function apply(name, user) { psql(`BEGIN;\n\\i /tmp/${name}\nCOMMIT;`, { user }); }
+function applyStandalone(name, user) { psql(`\\i /tmp/${name}`, { user }); }
 function wait(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
 function waitForDatabase() {
   for (let attempt = 0; attempt < 90; attempt += 1) {
@@ -73,6 +77,9 @@ function refreshLiveSchema() {
 try {
   assert.ok(readFileSync(CANDIDATE, 'utf8').length > 0, 'candidate migration is missing');
   assert.ok(readFileSync(HELPER_GUARD, 'utf8').length > 0, 'helper guard migration is missing');
+  for (const migration of FORWARD_COMPATIBILITY_REPLAY) {
+    assert.ok(readFileSync(migration, 'utf8').length > 0, `forward replay migration is missing: ${path.basename(migration)}`);
+  }
   assert.match(readFileSync(SMOKE, 'utf8'), /SMOKE_PASS_ROLLBACK/, 'canonical smoke lacks its rollback marker');
   refreshLiveSchema();
   docker(['run', '-d', '--name', NAME, '--network', 'none', '--tmpfs', '/var/lib/postgresql/data:rw,noexec,nosuid,size=1024m', '-e', 'POSTGRES_PASSWORD=postgres', IMAGE]);
@@ -97,6 +104,134 @@ try {
     copy(CANDIDATE, 'candidate.sql');
     apply('candidate.sql');
     migrations.push(CANDIDATE);
+  }
+  // 060000 carries an apply-time behavioural probe that requires one active
+  // admin and one postable delivery-linked draft. The live-schema dump is
+  // intentionally schema-only, so create an isolated synthetic row chain.
+  // The disposable container is destroyed in finally; no production row is read
+  // or written and none of these fixed UUIDs can leave residue.
+  psql(`
+    INSERT INTO auth.users (id, email, created_at, updated_at, raw_user_meta_data)
+    VALUES (
+      '00000000-0000-4000-8000-000000000091',
+      'forward-replay-admin@example.invalid', now(), now(),
+      '{"full_name":"Forward Replay Admin","role":"admin"}'::jsonb
+    );
+    -- handle_new_user creates the matching active admin profile from metadata.
+    -- Do not update that row afterward: the profile-role lock correctly refuses
+    -- out-of-session identity edits even in this disposable database.
+    SELECT set_config(
+      'request.jwt.claims',
+      '{"sub":"00000000-0000-4000-8000-000000000091","role":"authenticated"}',
+      false
+    );
+    INSERT INTO public.customers (id, farm_name)
+    VALUES ('00000000-0000-4000-8000-000000000092', '[SMOKE] Forward Replay Farm');
+    INSERT INTO public.products (id, product_name, unit_size)
+    VALUES (
+      '00000000-0000-4000-8000-000000000093', '[SMOKE] Forward Replay Product', 'GL'
+    );
+    DO $fixture_pricing$
+    DECLARE
+      v_preview jsonb;
+    BEGIN
+      v_preview := public.preview_product_pricing_changes(
+        'product_page', NULL,
+        jsonb_build_array(jsonb_build_object(
+          'product_id', '00000000-0000-4000-8000-000000000093',
+          'row_version', 1, 'pricing_mode', 'price_driven',
+          'new_cost', '6.00', 'tier1_price', '10.00',
+          'tier2_price', '10.00', 'tier3_price', '10.00'
+        )),
+        '00000000-0000-4000-8000-000000000091',
+        'smk-forward-replay-pricing-preview'
+      );
+      PERFORM public.apply_product_pricing_change_set(
+        (v_preview->>'change_set_id')::uuid,
+        v_preview->>'request_fingerprint',
+        '00000000-0000-4000-8000-000000000091',
+        'smk-forward-replay-pricing-apply'
+      );
+    END
+    $fixture_pricing$;
+    INSERT INTO public.inventory (
+      product_id, location, quantity_available, quantity_prebooked, unit_size
+    ) VALUES (
+      '00000000-0000-4000-8000-000000000093', 'Main Warehouse', 50, 1, 'GL'
+    );
+    INSERT INTO public.orders (
+      id, order_number, customer_id, salesman_id, order_date, status, booking_draw
+    ) VALUES (
+      '00000000-0000-4000-8000-000000000094', 'SMK-FORWARD-REPLAY',
+      '00000000-0000-4000-8000-000000000092',
+      '00000000-0000-4000-8000-000000000091', current_date, 'confirmed', false
+    );
+    INSERT INTO public.order_items (
+      id, order_id, product_id, product_name, price_per_unit, cost_per_unit,
+      total_units_needed, total_price, profit, net_margin,
+      quantity_delivered, quantity_remaining, unit_size
+    ) VALUES (
+      '00000000-0000-4000-8000-000000000095',
+      '00000000-0000-4000-8000-000000000094',
+      '00000000-0000-4000-8000-000000000093', '[SMOKE] Forward Replay Product',
+      10, 6, 1, 10, 4, 40, 0, 1, 'GL'
+    );
+    INSERT INTO public.deliveries (
+      id, delivery_number, order_id, customer_id, scheduled_date, status, created_by
+    ) VALUES (
+      '00000000-0000-4000-8000-000000000096', 'SMK-FORWARD-REPLAY-D',
+      '00000000-0000-4000-8000-000000000094',
+      '00000000-0000-4000-8000-000000000092', current_date, 'scheduled',
+      '00000000-0000-4000-8000-000000000091'
+    );
+    INSERT INTO public.delivery_items (
+      delivery_id, order_item_id, product_id, quantity, quantity_delivered, unit_size
+    ) VALUES (
+      '00000000-0000-4000-8000-000000000096',
+      '00000000-0000-4000-8000-000000000095',
+      '00000000-0000-4000-8000-000000000093', 1, 1, 'GL'
+    );
+    UPDATE public.invoices
+       SET delivery_id = '00000000-0000-4000-8000-000000000096'
+     WHERE order_id = '00000000-0000-4000-8000-000000000094'
+       AND status = 'draft';
+    UPDATE public.deliveries
+       SET status = 'in_progress'
+     WHERE id = '00000000-0000-4000-8000-000000000096';
+    UPDATE public.deliveries
+       SET status = 'completed', completed_at = now(), signed_by = '[SMOKE] Forward Replay Receiver'
+     WHERE id = '00000000-0000-4000-8000-000000000096';
+    INSERT INTO public.invoices (
+      id, invoice_number, customer_id, order_id, delivery_id, invoice_type,
+      status, invoice_date, due_date, total_amount_cents, total_cost_cents,
+      created_by
+    ) VALUES (
+      '00000000-0000-4000-8000-000000000097', 'SMK-FORWARD-REPLAY-I',
+      '00000000-0000-4000-8000-000000000092',
+      '00000000-0000-4000-8000-000000000094',
+      '00000000-0000-4000-8000-000000000096', 'chemical_sale',
+      'draft', current_date, current_date + 30, 1000, 600,
+      '00000000-0000-4000-8000-000000000091'
+    );
+    INSERT INTO public.invoice_items (
+      invoice_id, product_id, description, quantity, unit_price_cents,
+      extended_cents, cost_cents
+    ) VALUES (
+      '00000000-0000-4000-8000-000000000097',
+      '00000000-0000-4000-8000-000000000093', '[SMOKE] Forward Replay Product',
+      1, 1000, 1000, 600
+    );
+    SELECT set_config('request.jwt.claims', '', false);
+  `);
+  // Targeted rebuild-order proof for the one later migration that inspects the
+  // reversal helper. The five earlier Wave A files are unrelated parked drafts
+  // with independent stale preconditions; treating them as apply-ready here
+  // would silently widen this remediation. This file remains unapplied live.
+  for (const migration of FORWARD_COMPATIBILITY_REPLAY) {
+    const name = path.basename(migration);
+    copy(migration, name);
+    applyStandalone(name);
+    migrations.push(migration);
   }
   copy(HELPER_GUARD, 'helper-guard.sql');
   apply('helper-guard.sql');

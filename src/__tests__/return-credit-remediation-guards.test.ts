@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 const root = process.cwd();
 const migration = readFileSync(path.join(root, 'supabase/migrations/20260812130145_bind_return_receipts_to_intent_and_restore_overdue.sql'), 'utf8');
 const helperGuardMigration = readFileSync(path.join(root, 'supabase/migrations/20260813070000_pin_return_idempotency_helper_contract.sql'), 'utf8');
+const completedDeliveryMigration = readFileSync(path.join(root, 'supabase/migrations/20260813060000_require_completed_delivery_before_invoice_post.sql'), 'utf8');
 const predicate = readFileSync(path.join(root, 'scripts/db-invariant-sweeps/predicates/return-credit-intent-binding.sql'), 'utf8');
 const lifecyclePredicate = readFileSync(path.join(root, 'scripts/db-invariant-sweeps/predicates/returns-lifecycle-rpc-owned.sql'), 'utf8');
 const returnsSource = readFileSync(path.join(root, 'src/pages/Returns.tsx'), 'utf8').replace(/\r\n/g, '\n');
@@ -92,6 +93,9 @@ function assertExecutableProofGuards(smokeText: string, proverText: string) {
     'reversal created an extra post snapshot (count %)',
     'corrected-forward reversal created an extra post snapshot (count %)',
     'governed product pricing apply failed',
+    'canonical complete_delivery returned an unexpected receipt',
+    'inventory after restock = %, expected baseline % + 15',
+    'rejected order void changed inventory to %, expected baseline % + 15',
     'SMOKE_PASS_ROLLBACK',
   ]) expect(smokeText).toContain(anchor);
   expect(smokeText).not.toContain('ALTER TABLE public.products DISABLE TRIGGER');
@@ -105,7 +109,26 @@ function assertExecutableProofGuards(smokeText: string, proverText: string) {
   expect(proverText).toContain('const preApplyViolations = psqlValue');
   expect(proverText).toContain("if (preApplyViolations !== '0')");
   expect(proverText).toContain('RETURN_CREDIT_POSTAPPLY_LIVE_PASS');
+  expect(proverText).toContain('const FORWARD_COMPATIBILITY_REPLAY = [');
+  expect(proverText).toContain("'20260813060000_require_completed_delivery_before_invoice_post.sql'");
+  expect(proverText).toContain('for (const migration of FORWARD_COMPATIBILITY_REPLAY)');
+  expect(proverText).toContain("'smk-forward-replay-pricing-apply'");
+  expect(proverText).toContain('applyStandalone(name)');
   expect(proverText).toContain("apply('helper-guard.sql')");
+}
+
+function assertCompletedDeliveryForwardReplayContract(sql: string) {
+  for (const anchor of [
+    "md5(p.prosrc) = '96662c1913666a49b778973ca881d8d6'",
+    "'744c48493d549f9bc2297270bfdc0977935a4f29ed44fe2e336c8a6fce6ecbf8'",
+    "p2.proname = '_reverse_credit_memo_application_status_impl_20260812') = 1",
+    "to_regprocedure(\n                       'public._reverse_credit_memo_application_status_impl_20260812(uuid,uuid,text,text)'",
+    "pg_get_userbyid(p2.proowner) = 'postgres'",
+    'AND p2.prosecdef',
+    "p2.proconfig = ARRAY['search_path=public, pg_temp']::text[]",
+    "has_function_privilege('postgres', p2.oid, 'EXECUTE')",
+    "NOT has_function_privilege('service_role', p2.oid, 'EXECUTE')",
+  ]) expect(sql).toContain(anchor);
 }
 
 function assertInvariantGuards(predicateText: string) {
@@ -285,6 +308,9 @@ describe('return/credit remediation durable guards', () => {
       'reversal created an extra post snapshot (count %)',
       'corrected-forward reversal created an extra post snapshot (count %)',
       'governed product pricing apply failed',
+      'canonical complete_delivery returned an unexpected receipt',
+      'inventory after restock = %, expected baseline % + 15',
+      'rejected order void changed inventory to %, expected baseline % + 15',
       'SMOKE_PASS_ROLLBACK',
     ]) {
       const mutated = smoke.split(anchor).join('__REMOVED_GUARD__');
@@ -346,6 +372,24 @@ describe('return/credit remediation durable guards', () => {
       expect(helperGuardMigration).toContain(anchor);
       expect(sha256(helperGuardMigration.replace(anchor, '__REMOVED_GUARD__')))
         .not.toBe(sha256(helperGuardMigration));
+    }
+  });
+
+  it('mutation-kills every later-migration forward-replay topology pin', () => {
+    assertCompletedDeliveryForwardReplayContract(completedDeliveryMigration);
+    for (const anchor of [
+      "md5(p.prosrc) = '96662c1913666a49b778973ca881d8d6'",
+      "'744c48493d549f9bc2297270bfdc0977935a4f29ed44fe2e336c8a6fce6ecbf8'",
+      "p2.proname = '_reverse_credit_memo_application_status_impl_20260812') = 1",
+      "pg_get_userbyid(p2.proowner) = 'postgres'",
+      'AND p2.prosecdef',
+      "p2.proconfig = ARRAY['search_path=public, pg_temp']::text[]",
+      "has_function_privilege('postgres', p2.oid, 'EXECUTE')",
+      "NOT has_function_privilege('service_role', p2.oid, 'EXECUTE')",
+    ]) {
+      expect(() => assertCompletedDeliveryForwardReplayContract(
+        completedDeliveryMigration.replace(anchor, '__REMOVED_GUARD__'),
+      )).toThrow();
     }
   });
 

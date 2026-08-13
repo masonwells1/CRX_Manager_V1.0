@@ -78,6 +78,7 @@ DECLARE
   v_res          jsonb;
   v_res2         jsonb;
   v_qty          numeric;
+  v_inventory_before_receive numeric;
   v_n            int;
   v_credit_rows  int;
   v_total_rows   int;
@@ -209,9 +210,18 @@ BEGIN
     (v_delivery_id, v_order_item_1, v_product_id, 10, 10, 'gal'),
     (v_delivery_id, v_order_item_2, v_product_id, 5, 5, 'gal');
   UPDATE deliveries SET status = 'in_progress' WHERE id = v_delivery_id;
-  UPDATE deliveries
-     SET status = 'completed', completed_at = now(), signed_by = '[SMOKE] RCC Receiver'
-   WHERE id = v_delivery_id;
+  -- Use the canonical completion boundary. The later completed-delivery posting
+  -- guard makes this mandatory and deliberately rejects a direct status write;
+  -- running the real RPC also exercises its inventory/order/audit reconciliation.
+  v_res := public.complete_delivery(
+    v_delivery_id, '[SMOKE] RCC Receiver', v_admin,
+    NULL, NULL, NULL, 'smk-rcc-complete-' || v_suffix, now()
+  );
+  IF v_res->>'delivery_id' IS DISTINCT FROM v_delivery_id::text THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: canonical complete_delivery returned an unexpected receipt: %', v_res;
+  END IF;
+  SELECT quantity_available INTO v_inventory_before_receive
+    FROM inventory WHERE id = v_inventory_id;
 
   -- The migration closes both layers: there is no INSERT/FOR ALL RLS policy,
   -- and authenticated has no inherited direct INSERT table privilege.
@@ -478,8 +488,9 @@ BEGIN
   END IF;
 
   SELECT quantity_available INTO v_qty FROM inventory WHERE id = v_inventory_id;
-  IF v_qty IS DISTINCT FROM 115 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: inventory after restock = %, expected 115 (100 + 10 + 5)', v_qty;
+  IF v_qty IS DISTINCT FROM v_inventory_before_receive + 15 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: inventory after restock = %, expected baseline % + 15',
+      v_qty, v_inventory_before_receive;
   END IF;
   SELECT count(*) INTO v_n FROM inventory_transactions
   WHERE product_id = v_product_id AND transaction_type = 'returned';
@@ -550,8 +561,9 @@ BEGIN
    WHERE return_id = v_return_id;
   UPDATE orders SET status = 'fulfilled' WHERE id = v_order_id;
   SELECT quantity_available INTO v_qty FROM inventory WHERE id = v_inventory_id;
-  IF v_qty IS DISTINCT FROM 115 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: rejected order void changed inventory to %, expected 115', v_qty;
+  IF v_qty IS DISTINCT FROM v_inventory_before_receive + 15 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: rejected order void changed inventory to %, expected baseline % + 15',
+      v_qty, v_inventory_before_receive;
   END IF;
 
   -- A return may be received before its source order is later voided. Credit
