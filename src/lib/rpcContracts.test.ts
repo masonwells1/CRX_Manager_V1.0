@@ -2329,6 +2329,23 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // bucket exists for; the staleness test above deletes it for us by failing the
   // moment the RPC shows up in the generated types.
   'correct_job_commission_split',
+
+  // Wave A fix #1 (20260813010000, parked). Owner-only implementation half of
+  // the public create_direct_order RPC, after a sibling session split that
+  // function into a below-cost-approval wrapper plus this impl. It declares
+  // p_idempotency_key and routes it through check_idempotency/save_idempotency
+  // under the public 'create_direct_order' operation, so replay safety is real
+  // and shared with the wrapper.
+  //
+  // Two ways this entry differs from the one above, recorded so nobody has to
+  // re-derive them. (1) It is not merely pre-apply: the impl is deliberately
+  // owner-only and never PostgREST-exposed, so it can never appear in the
+  // generated types and the staleness test above will never retire it for us.
+  // (2) Once this migration is applied and the registry high-water passes
+  // 20260813010000, the impl also drops out of the discovered inventory
+  // entirely, at which point this entry is inert. Delete it then; it is not
+  // load-bearing after apply.
+  '_create_direct_order_below_cost_impl_20260810',
 ]);
 
 /**

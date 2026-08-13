@@ -26,6 +26,96 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## FILES CLOSED / PREVENTION OPEN 2026-08-12 — repository/production gap reopened: SIX applied migrations existed nowhere in the repo
+
+**Severity: HIGH when found. Never a live outage — the code works. The problem was that its source did
+not exist anywhere in version control, so nobody could review the SQL running in production.** The
+**files** side is closed by the same change that carries this entry (see the resolution below); the
+**prevention** side is still open and is the reason this entry stays in the file.
+
+The newest migration on `origin/main` that is both present and applied is
+`20260812003315_log_customer_sales_rep_assignment`. **Six migrations were applied live after it, and
+none of their files exist on `main`, on any of the sixteen other pushed branches, or in any local
+worktree under `C:\CRX_Manager`** — searched by both filename and by the identifiers they install,
+2026-08-12:
+
+| ledger version | submitted name |
+|---|---|
+| `20260812034831` | `20260812010000_blend_ticket_order_header_runtime_assert` |
+| `20260812034951` | `20260812011000_restore_quote_version_whole_cent_money` |
+| `20260812145628` | `20260812115235_snapshot_cost_reporting` |
+| `20260812151606` | `20260812115236_quote_items_cost_at_quote_snapshot` |
+| `20260812154028` | `20260812115237_enforce_below_cost_admin_approval` |
+| `20260812154757` | `20260812115238_repair_historical_order_line_cents` |
+
+Live high-water at the time of this reading: `20260812154757`, 968 ledger rows.
+
+The largest of the six by blast radius is `20260812115237_enforce_below_cost_admin_approval`. Confirmed
+live by `pg_proc` read on 2026-08-12 it installed
+`public._create_direct_order_below_cost_impl_20260810` (md5 `c761f4c46dc12ea07efd74af5b2ada54`,
+7692 chars) plus a below-cost approval gate: the marker `_begin_below_cost_money_write` now appears in
+**eleven** public wrapper functions, including `create_direct_order`, `save_quote`, `save_invoice`,
+`convert_quote_to_order`, `update_order_items`, `price_order` and `bulk_import_order`. Two others touch
+money directly — a `quote_items.cost_at_quote_cents` snapshot column (see the entry below) and a
+historical order-line cents repair, which by its name restated stored money.
+
+This is the same class of gap that was closed on 2026-08-11 by PR #371 for the whole-cent migrations
+(entry above). It reopened the next day, wider. **Consequence while it was open:** anyone replaying
+`main` into a fresh database got a schema without any of the six, and any migration written against the
+live shape failed there. Wave A migration `20260813010000` is exactly such a migration — it retargets
+onto the below-cost impl and its precondition fails closed if that impl is absent, which is correct
+behaviour but made the file unreplayable from `main` alone. That is why the Wave A repairs and this
+recovery ship as **one** change: `20260813010000` names
+`_create_direct_order_below_cost_impl_20260810`, which exists in the repository only once the recovered
+`20260812115237` is on disk, so either half landing alone leaves a self-inconsistent tree.
+
+**Resolution of the files side.** All six were recovered as the exact `apply_migration` payloads from
+the applying sessions' transcripts and land in the same change as this entry, as history rows 878-883.
+They were deliberately **not** reconstructed from live `prosrc` — that loses the header comments,
+preconditions and review history, and a re-derived file is not the file that was reviewed. Fidelity was
+proven rather than asserted: function bodies extracted from the recovered text md5-match live
+`pg_proc.prosrc` exactly, at identical length.
+
+**Prevention is still OPEN, and it is the real issue.** Nothing stops the next session from applying a
+migration and never landing its file. This is the third occurrence (2026-08-09, 2026-08-11 via PR #371,
+2026-08-12), and the only current defence is that somebody notices. The durable fix — a hard check that
+reconciles the live ledger against tracked files and fails when they disagree — is not written.
+
+**Found by:** the migration-drift review of Wave A round 5, then independently confirmed and widened
+against the live ledger, `pg_proc` and every remote branch rather than taken on trust. (The reviewer
+reported one branch, `codex/finish-pricing-audit-20260810`, as the carrier of one missing migration.
+That branch does not exist on the remote and the real gap is six files with no carrier at all. The
+underlying finding — live is ahead of `main` — was correct; the attribution and the scope were not.)
+
+## OPEN 2026-08-12 — `quote_items.cost_at_quote_cents` is live but undeclared in the registry and types
+
+**Severity: MED. Silent drift, not a failure.** The column exists live as `bigint` on `quote_items`
+(read-only `information_schema` check, 2026-08-12). It appears in neither
+`.claude/schema-registry.json` nor the `QuoteItem` interface in `src/types/index.ts`.
+
+Type drift of this kind is invisible until something reads the field: the registry-aware hooks
+validate against a schema that does not mention the column, and TypeScript will reject any code that
+tries to use it. Not caused by the Wave A files and not fixed by them. Refresh the registry from
+introspection and add the field to `QuoteItem` after the Wave A apply, so a single refresh covers
+both.
+
+## OPEN 2026-08-12 — `20260813060000`'s guarded-function set has a fragile membership rule
+
+**Severity: LOW, but it is a live tripwire on an unapplied file.** The delivery-before-billing
+migration `20260813060000` asserts over a set of four function names. `_save_invoice_scoped_impl`
+qualifies for that set only because the string `'posted'` appears in its body — and in the current
+body it appears inside a **code comment**, not in executable SQL. `20260813040000`, which rewrites
+that function, deliberately preserves the comment.
+
+The migration is therefore one comment edit away from silently dropping a function out of its own
+assertion set. Nothing is wrong today and the two files are consistent as written; this is recorded
+so that whoever next edits `_save_invoice_scoped_impl` knows that deleting an innocuous-looking
+comment changes what `20260813060000` checks. The durable fix is to select that set by a structural
+property rather than a substring match, which is a rewrite of an unapplied file and not worth doing
+mid-wave.
+
+---
+
 ## FIXED LIVE 2026-08-11 — blend-ticket order creation could be rejected by the whole-cent CHECKs
 
 **Severity: latent, not currently firing.** `create_order_from_blend_ticket` accumulates `v_total_price` and `v_total_cost` as raw `price * converted_quantity` products and writes them, plus `total_price - total_cost`, straight to `orders` with **no rounding** (live body confirmed 2026-08-10; `orders` has no BEFORE-UPDATE rounding trigger — only status/lineage/commission-stamp triggers). History row 870 added `orders_total_cost_whole_cents_chk` and `orders_total_profit_whole_cents_chk`, both live and `convalidated`. A blend ticket whose unit conversion yields a fractional quantity therefore produces a sub-cent total and the final write is **rejected**, rolling back the whole RPC and failing order creation from `BlendTicketDetail` with a raw constraint error.

@@ -278,6 +278,23 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // both intentionally share the wrapper's single 'save_field_app_split_invoice' cache
   // namespace, exactly like the save_purchase_order pair above.
   _save_field_app_split_invoice_impl: ['save_field_app_split_invoice'],
+  // Direct EXECUTE is revoked (migration 20260813010000 emits the REVOKE; live
+  // ACL was already owner-only). Implementation half of the public
+  // create_direct_order RPC: a sibling session split that function into a
+  // SECURITY DEFINER wrapper, which declares below-cost operation context via
+  // _begin_below_cost_money_write, and this impl, which does the work. Both
+  // layers intentionally share the one public 'create_direct_order' cache, for
+  // the same reason as the convert_quote_to_order pair above — a retry through
+  // the wrapper must find the result the impl saved.
+  //
+  // Renaming the operation to this function's own name would be the DANGEROUS
+  // change here, not the safe one: every idempotency key already recorded under
+  // 'create_direct_order' would be stranded, so the first client retry after the
+  // change would re-execute instead of returning its cached result, and create a
+  // duplicate order. The shape is pre-existing; it entered this test's scope
+  // only because 20260813010000 is the first on-disk migration to CREATE the
+  // function under its post-split name.
+  _create_direct_order_below_cost_impl_20260810: ['create_direct_order'],
 };
 
 /**
