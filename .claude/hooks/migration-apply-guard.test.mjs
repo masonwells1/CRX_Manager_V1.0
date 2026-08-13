@@ -700,6 +700,36 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(isDeny(r) && isOneShotDeny(r),
       "round-23: the same apply-time write target is a replay even on a different row set");
 
+    // ROUND 31. The review asked for parenthesized predicates to be canonicalized
+    // before the text comparison — `WHERE (id = 2)` reads differently from
+    // `WHERE id = 2` and applies identically. Normalizing them is the round-24
+    // the comment above declines to invite: there is no finite set of spellings
+    // for an arbitrary predicate, and each new one is another round.
+    //
+    // It does not need normalizing, because the predicate stopped being load
+    // bearing in round 23. The target layer refuses any apply-time write to the
+    // registered repair's table and column whatever rows it selects, so every
+    // re-spelling of the WHERE clause is already denied by the layer that does
+    // not care how it is spelled. These cases pin that: if someone ever
+    // reintroduces population matching, they go red here rather than shipping a
+    // guard that a pair of parentheses walks through.
+    for (const [label, predicate] of [
+      ["parenthesized", "WHERE (id = 2)"],
+      ["doubly parenthesized", "WHERE ((id = 2))"],
+      ["parens and padding", "WHERE (  id   =   2  )"],
+      ["commuted operands", "WHERE 2 = id"],
+      ["an equivalent set form", "WHERE id IN (2)"],
+      ["a tautology conjunct", "WHERE id = 2 AND true"],
+      ["no predicate at all", ""],
+    ]) {
+      r = apply(
+        `20990601000011_paren_${label.replace(/[^a-z]+/g, "_")}`,
+        `UPDATE public.orders SET total_profit = 1 ${predicate};`,
+      );
+      ok(isDeny(r) && isOneShotDeny(r),
+        `round-31: a replay spelled with ${label} is denied on the write target, not the predicate text`);
+    }
+
     // 3e. …and the CTE matters in the other direction, which is the one that was
     //     actually open. Wrapping the SUBMITTED write in a CTE never evaded
     //     anything — the registered write is still a substring of it. But when
@@ -1378,6 +1408,51 @@ function armAutopilot(stateDir, hoursFromNow) {
     // 12 every one of these ran against the primary registry and passed.
     r = runFrom(primary, STEM);
     ok(!isOneShotDeny(r), "round-12 control: from the primary checkout the empty registry genuinely says nothing");
+
+    // ROUND 31. Round 12 moved the one-shot EVIDENCE to the active checkout but
+    // left the override — the release valve — pinned to the primary. The deny
+    // text above tells the operator to run
+    // `f.writeFileSync('.claude/session-state/one-shot-replay-override.json', …)`,
+    // a RELATIVE path that lands in the worktree they are standing in, and the
+    // guard then looked somewhere else. So the documented way to authorize a
+    // reviewed replay could not authorize one from a worktree at all.
+    const ovIn = (dir) => path.join(dir, ".claude", "session-state", "one-shot-replay-override.json");
+    const writeOverride = (dir, extra = {}) =>
+      writeFileSync(ovIn(dir), JSON.stringify({
+        migration: STEM,
+        queryHash: sha(SQL),
+        project: "x",
+        issuedAt: new Date().toISOString(),
+        ...extra,
+      }));
+
+    writeOverride(worktree);
+    r = runFrom(worktree, STEM);
+    ok(!isOneShotDeny(r), "round-31: an override written where the guard TELLS the operator to write it releases the apply");
+
+    // …and it is still one shot. The release above must have spent it.
+    r = runFrom(worktree, STEM);
+    ok(isOneShotDeny(r), "round-31: the worktree override was consumed by the apply it released");
+    ok(!existsSync(ovIn(worktree)), "round-31: consuming the worktree override deleted it");
+
+    // Both checkouts holding one is ambiguous: spending either leaves the other
+    // live for the rest of its window, so one authorization could release two
+    // applies. Refuse instead of picking.
+    writeOverride(primary);
+    writeOverride(worktree);
+    r = runFrom(worktree, STEM);
+    ok(isDeny(r) && isOneShotDeny(r), "round-31: an override in BOTH checkouts refuses rather than choosing one");
+    ok(r.stdout.includes("more than one checkout"), "round-31: the refusal says why it would not choose");
+    ok(existsSync(ovIn(primary)) && existsSync(ovIn(worktree)),
+      "round-31: the ambiguous refusal spends NEITHER override — it never claimed one");
+    rmSync(ovIn(worktree), { force: true });
+
+    // The primary checkout is still honoured, so this widens the lookup without
+    // dropping the behaviour it had. A sibling worktree is NOT in the set: that
+    // is the boundary Codex blocked the proof fix over, and it is unchanged here
+    // because proofDirs is the primary plus THIS session's checkout, nothing else.
+    r = runFrom(worktree, STEM);
+    ok(!isOneShotDeny(r), "round-31: an override in the primary checkout still releases the apply");
   } finally {
     // Detach the worktree admin files before deleting, or git leaves the
     // fixture repo pointing at a path that no longer exists.

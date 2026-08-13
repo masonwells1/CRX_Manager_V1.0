@@ -11,7 +11,7 @@
  * Each fixture is a synthetic migration written into a scratch directory, run
  * through the real script, and classified by what the script printed for it.
  */
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,8 +56,14 @@ function envWithoutGit() {
  * The hashed material is `id || ':' || total_profit` — the row identity AND the
  * before-value of the column being rewritten. Identity alone is not an approved
  * set: a population with the same ids but different money would still pass.
+ *
+ * `total_profit` is wrapped in coalesce because round 31 made an un-wrapped
+ * nullable operand its own violation: `x || NULL` is NULL and string_agg SKIPS
+ * NULL inputs, so a row with an unset value drops out of the digest entirely.
+ * Every fixture below is meant to fail for the ONE reason it is named after, so
+ * the shared expression has to be null-safe or the round-31 message masks them.
  */
-const HASH_EXPR = `encode(digest(string_agg(id::text || ':' || total_profit::text, ',' ORDER BY id), 'sha256'), 'hex')`;
+const HASH_EXPR = `encode(digest(string_agg(id::text || ':' || coalesce(total_profit::text, ''), ',' ORDER BY id), 'sha256'), 'hex')`;
 /**
  * The canonical full before-state (Codex High, round 20).
  *
@@ -81,16 +87,16 @@ const WHOLE_ROW_HASH_EXPR =
  * material column `orders` carries, per .claude/schema-registry.json.
  */
 const ENUMERATED_HASH_EXPR =
-  `encode(digest(string_agg(id::text || ':' || quote_id::text || ':' || customer_id::text` +
-  ` || ':' || status::text || ':' || total_price::text || ':' || total_cost::text` +
-  ` || ':' || total_profit::text || ':' || salesman_id::text` +
-  ` || ':' || coalesce(deleted_at::text, '') || ':' || pricing_status::text` +
+  `encode(digest(string_agg(id::text || ':' || coalesce(quote_id::text, '') || ':' || coalesce(customer_id::text, '')` +
+  ` || ':' || coalesce(status::text, '') || ':' || coalesce(total_price::text, '') || ':' || coalesce(total_cost::text, '')` +
+  ` || ':' || coalesce(total_profit::text, '') || ':' || coalesce(salesman_id::text, '')` +
+  ` || ':' || coalesce(deleted_at::text, '') || ':' || coalesce(pricing_status::text, '')` +
   // Round 21 added lifecycle booleans to the material set, and `orders.is_planned`
   // is one: a planned order flipped to real between the digest and the write is
   // a different row in every way that matters. Enumerating by hand means
   // keeping up with the registry — which is why the whole-row projection above
   // is the shape the guard actually recommends.
-  ` || ':' || is_planned::text, ',' ORDER BY id), 'sha256'), 'hex')`;
+  ` || ':' || coalesce(is_planned::text, ''), ',' ORDER BY id), 'sha256'), 'hex')`;
 /**
  * The enumeration with one lifecycle flag dropped (Codex High, round 21).
  *
@@ -100,7 +106,7 @@ const ENUMERATED_HASH_EXPR =
  * row whose state moved is not the row that was approved.
  */
 const ENUMERATED_MINUS_FLAG_EXPR = ENUMERATED_HASH_EXPR.replace(
-  ` || ':' || is_planned::text`,
+  ` || ':' || coalesce(is_planned::text, '')`,
   '',
 );
 /** A real hash, correctly assigned — but over a constant. Binds nothing. */
@@ -824,6 +830,56 @@ const CASES = [
       `  NEW.updated_at = now();\n  RETURN NEW;\nEND $$;\n` +
       `CREATE TRIGGER t_touch_r28 BEFORE UPDATE ON public.crm_contacts\n` +
       `  FOR EACH ROW EXECUTE FUNCTION public.touch_r28();\n`,
+  },
+  {
+    // ROUND 30 (Codex High), the other half of the same finding. The mutating
+    // index was built one level deep: a function was indexed if its OWN body
+    // spelled DML on a protected table, or ran dynamic SQL. A wrapper whose
+    // body only PERFORMs a mutator spells neither, so it was never indexed —
+    // and a top-level call to it asked for no digest and no one-shot
+    // registration while the rewrite happened underneath. Wrapping is free and
+    // one line long, which is what made this the cheapest bypass on the board.
+    //
+    // The fix walks the call graph backwards from every known mutator, so
+    // "calls something that writes" is itself writing, to any depth.
+    name: 'a top-level call to a wrapper around a mutator is refused',
+    expect: 'violation',
+    mustReport: 'wrap_r30',
+    sql:
+      `CREATE FUNCTION public.mut_r30() RETURNS void LANGUAGE plpgsql AS $$\nBEGIN\n` +
+      `  UPDATE public.order_items SET profit = (profit);\nEND $$;\n` +
+      `CREATE FUNCTION public.wrap_r30() RETURNS void LANGUAGE plpgsql AS $$\nBEGIN\n` +
+      `  PERFORM public.mut_r30();\nEND $$;\n` +
+      `SELECT public.wrap_r30();\n`,
+  },
+  {
+    // Depth is not the boundary — one level of wrapping would just become two.
+    name: 'a wrapper around a wrapper is refused just the same',
+    expect: 'violation',
+    mustReport: 'outer_r30',
+    sql:
+      `CREATE FUNCTION public.inner_r30() RETURNS void LANGUAGE plpgsql AS $$\nBEGIN\n` +
+      `  UPDATE public.order_items SET profit = (profit);\nEND $$;\n` +
+      `CREATE FUNCTION public.mid_r30() RETURNS void LANGUAGE plpgsql AS $$\nBEGIN\n` +
+      `  PERFORM public.inner_r30();\nEND $$;\n` +
+      `CREATE FUNCTION public.outer_r30() RETURNS void LANGUAGE plpgsql AS $$\nBEGIN\n` +
+      `  PERFORM public.mid_r30();\nEND $$;\n` +
+      `SELECT public.outer_r30();\n`,
+  },
+  {
+    // The boundary that keeps the closure affordable: it spreads along call
+    // edges out of KNOWN mutators only. A helper that writes nothing protected
+    // is not a mutator, so calling it — or calling something that calls it —
+    // stays free. Without this the rule degenerates into "any migration that
+    // calls any function is a violation".
+    name: 'a wrapper around a helper that writes nothing protected stays silent',
+    expect: 'silent',
+    sql:
+      `CREATE FUNCTION public.plain_r30() RETURNS integer LANGUAGE sql AS $$\n` +
+      `  SELECT 1;\n$$;\n` +
+      `CREATE FUNCTION public.wrapplain_r30() RETURNS integer LANGUAGE plpgsql AS $$\nBEGIN\n` +
+      `  RETURN public.plain_r30();\nEND $$;\n` +
+      `SELECT public.wrapplain_r30();\n`,
   },
   {
     // ROUND 22 (Codex High), the dollar-quoted decoy. Every element of a
@@ -1767,6 +1823,40 @@ const CASES = [
       `CREATE TEMP TABLE scratch_r29 (id integer, amt numeric);\n` +
       `ALTER TABLE scratch_r29 ALTER COLUMN amt TYPE numeric(12,2) USING round(amt, 2);\n`,
   },
+  {
+    // ROUND 31 (Codex High). Everything above proves the repair rewrote exactly
+    // the rows it hashed — for the table the UPDATE names. Triggers were
+    // invisible, so this block, which is airtight by every earlier rule, fired
+    // trg_recalc_order_totals underneath and rewrote public.orders: rows never
+    // captured, never hashed, and not counted by the ROW_COUNT assertion.
+    name: 'round-31: a trigger cascade out of the repaired table is reported',
+    expect: 'violation',
+    mustReport: 'trg_recalc_order_totals',
+    sql: fanoutBlock('order_items', 'total_price'),
+  },
+  {
+    name: 'round-31: the cascade report names the table that gets rewritten',
+    expect: 'violation',
+    mustReport: 'rewrites orders',
+    sql: fanoutBlock('order_items', 'total_price'),
+  },
+  {
+    // The control the two cases above are worthless without. Byte-identical
+    // shape on a table nothing cascades out of: if this also violated, the pair
+    // would be proving that the fixture is malformed, not that the fan-out gate
+    // works.
+    name: 'round-31: the same shape on a table with no cascade stays silent',
+    expect: 'silent',
+    sql: fanoutBlock('orders', 'total_profit'),
+  },
+  {
+    // One trigger, three targets. The message only has to name one of them to
+    // be actionable, but the migration must not pass.
+    name: 'round-31: a trigger that rewrites three tables is reported',
+    expect: 'violation',
+    mustReport: '_receiving_records_before_delete',
+    sql: fanoutBlock('receiving_records', 'quantity'),
+  },
 ];
 
 // A stamp no real migration uses, so these fixtures are never mistaken for
@@ -1793,6 +1883,36 @@ const GRANDFATHERED_BODY = readFileSync(
  * CRX-SEC-001). Content decides now, so this must be caught.
  */
 const BACKDATED = '20260101000001_backdated.sql';
+
+/**
+ * A repair that satisfies every approved-set rule EXCEPT, possibly, the round-31
+ * trigger fan-out one: captured id set, whole-row digest over those ids,
+ * fail-closed comparison before the write, row-count assertion after it.
+ *
+ * The table is the only variable, which is what makes the fan-out cases
+ * meaningful — a violation can then only be about what the triggers on that
+ * table do, because nothing else about the fixture changed.
+ *
+ * @param {string} table the table being repaired
+ * @param {string} col the column it assigns
+ * @returns {string} the migration body
+ */
+function fanoutBlock(table, col) {
+  return (
+    `-- APPROVED_SET_DIGEST: ${HEX}\n` +
+    `DO $$\nDECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
+    `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
+    `    FROM (SELECT id FROM public.${table} WHERE stale ORDER BY id FOR UPDATE) s;\n` +
+    `  SELECT encode(digest(string_agg(o.id::text || ':' || to_jsonb(o.*)::text, ',' ORDER BY o.id), 'sha256'), 'hex')\n` +
+    `    INTO actual FROM public.${table} o WHERE o.id = ANY(v_ids);\n` +
+    `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
+    `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
+    `  UPDATE public.${table} SET ${col} = 0 WHERE id = ANY(v_ids);\n` +
+    `  GET DIAGNOSTICS n = ROW_COUNT;\n` +
+    `  IF n <> array_length(v_ids, 1) THEN\n` +
+    `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\nEND $$;\n`
+  );
+}
 
 /**
  * The reported block for one file, so a case can assert WHAT the guard said and
@@ -1981,6 +2101,115 @@ function runChangedOnlyIgnoresManifests() {
   return failures;
 }
 
+/**
+ * ROUND 31 (Codex High), the half the cases above cannot reach: what the guard
+ * does when the trigger fan-out manifest cannot answer.
+ *
+ * The manifest resolves from the SCRIPT's directory, so a fixture cannot vary
+ * it — and must not try. A sibling test once wrote to shared state during a run
+ * and left the machine broken; and a battery that dies mid-case would leave the
+ * REAL manifest holding whatever the last mutation put in it, which is a
+ * sabotaged guard that still looks green. So the script and the four files it
+ * resolves beside itself are MIRRORED into a temp tree, and every mutation
+ * happens to the copy. The repo is never written to.
+ *
+ * The property under test is that unknown means refused. A manifest that has
+ * never heard of a table, one whose trigger body PostgreSQL stores parsed
+ * rather than as source (BEGIN ATOMIC, so prosrc reads blank), a truncated
+ * scan, and an unreadable file all mean the same thing: nobody can say what
+ * fires on that table. Assuming "nothing" there is exactly the round-31 hole,
+ * one level up.
+ *
+ * The last case is the mutant. With the fan-out emptied, the order_items attack
+ * must SURVIVE — otherwise the four cases above prove nothing about this gate,
+ * only that something somewhere objected.
+ *
+ * @returns {string[]} failure descriptions, empty when the guard behaved
+ */
+function runTriggerFanoutFailsClosed() {
+  const root = mkdtempSync(join(tmpdir(), 'crx-fanout-manifest-'));
+  const failures = [];
+  try {
+    const mirror = join(root, 'scripts');
+    mkdirSync(mirror, { recursive: true });
+    mkdirSync(join(root, '.claude'), { recursive: true });
+    for (const f of ['validate-sql-migrations.sh', 'approved-set-grandfathered.txt',
+                     'sql-audit-hash-exemptions.txt', 'trigger-fanout.json']) {
+      copyFileSync(join(HERE, f), join(mirror, f));
+    }
+    copyFileSync(
+      join(HERE, '..', '.claude', 'schema-registry.json'),
+      join(root, '.claude', 'schema-registry.json'),
+    );
+    const mirroredScript = join(mirror, 'validate-sql-migrations.sh');
+    const manifestPath = join(mirror, 'trigger-fanout.json');
+    const live = JSON.parse(readFileSync(manifestPath, 'utf8'));
+
+    const runWith = (manifest, sql) => {
+      const dir = mkdtempSync(join(tmpdir(), 'crx-fanout-case-'));
+      try {
+        mkdirSync(join(dir, 'supabase', 'migrations'), { recursive: true });
+        const name = `${IN_FORCE}999999_fanout.sql`;
+        writeFileSync(join(dir, 'supabase', 'migrations', name), sql, 'utf8');
+        writeOneShotRegistry(dir, [name.replace(/\.sql$/, '')]);
+        writeFileSync(manifestPath, manifest, 'utf8');
+        const res = spawnSync('bash', [mirroredScript, '--max-violations=999'], {
+          cwd: dir, encoding: 'utf8', env: envWithoutGit(),
+        });
+        return { out: `${res.stdout || ''}\n${res.stderr || ''}`, name };
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
+
+    const expect = (label, manifest, sql, wanted) => {
+      const { out, name } = runWith(manifest, sql);
+      const got = classify(out, name);
+      if (wanted === null) {
+        if (got === 'violation') {
+          failures.push(`  round-31 ${label}\n    expected no violation, got ${got}\n` +
+            blockFor(out, name).split('\n').map((l) => `      | ${l}`).join('\n'));
+        }
+        return;
+      }
+      if (got !== 'violation' || !blockFor(out, name).includes(wanted)) {
+        failures.push(`  round-31 ${label}\n    expected a violation saying ${JSON.stringify(wanted)}, got ${got}\n` +
+          blockFor(out, name).split('\n').map((l) => `      | ${l}`).join('\n'));
+      }
+    };
+
+    const json = (o) => `${JSON.stringify(o, null, 2)}\n`;
+    const orders = fanoutBlock('orders', 'total_profit');
+
+    const unscanned = structuredClone(live);
+    unscanned.tables_scanned = unscanned.tables_scanned.filter((t) => t !== 'orders');
+    delete unscanned.fanout.order_items;
+    expect('a table missing from the manifest is refused, not assumed clean',
+      json(unscanned), orders, 'does not cover orders');
+
+    const opaque = structuredClone(live);
+    opaque.opaque_on_tables = ['orders'];
+    expect('a trigger body PostgreSQL will not show us is refused',
+      json(opaque), orders, 'does not cover orders');
+
+    const truncated = structuredClone(live);
+    truncated.tables_scanned = truncated.tables_scanned.slice(0, 20);
+    expect('a truncated scan is rejected rather than trusted',
+      json(truncated), orders, 'does not cover orders');
+
+    expect('an unreadable manifest refuses every table',
+      'not json at all\n', orders, 'does not cover orders');
+
+    const gutted = structuredClone(live);
+    gutted.fanout = {};
+    expect('MUTANT: with the fan-out emptied the order_items attack survives',
+      json(gutted), fanoutBlock('order_items', 'total_price'), null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+  return failures;
+}
+
 function run() {
   const dir = mkdtempSync(join(tmpdir(), 'crx-approved-set-'));
   const migrations = join(dir, 'supabase', 'migrations');
@@ -2054,6 +2283,7 @@ function run() {
   rmSync(dir, { recursive: true, force: true });
   failures.push(...runEditedGrandfather());
   failures.push(...runChangedOnlyIgnoresManifests());
+  failures.push(...runTriggerFanoutFailsClosed());
 
   if (failures.length > 0) {
     console.error(`❌ approved-set guard: ${failures.length} case(s) behaved wrong\n`);
@@ -2062,7 +2292,7 @@ function run() {
     console.error(out);
     process.exit(1);
   }
-  console.log(`✅ approved-set guard: ${CASES.length + 7} mutation cases behaved correctly`);
+  console.log(`✅ approved-set guard: ${CASES.length + 12} mutation cases behaved correctly`);
 }
 
 run();

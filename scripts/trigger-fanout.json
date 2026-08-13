@@ -1,0 +1,266 @@
+{
+  "_meta": {
+    "generated_at": "2026-08-13T00:00:00Z",
+    "generator": "scripts/generate-trigger-fanout.mjs",
+    "source_project": "rhyzpcqhnizqbxphqdkr",
+    "purpose": "Live triggers that rewrite a different table than the one written. The approved-set gate in scripts/validate-sql-migrations.sh folds each target into the set of tables a bulk repair must capture, hash and count.",
+    "scope": "UPDATE/DELETE/MERGE only — an INSERT creates rows no before-state digest could cover.",
+    "regenerate": "node scripts/generate-trigger-fanout.mjs --from-introspection <payload.json>"
+  },
+  "tables_scanned": [
+    "accounting_periods",
+    "activity_feed",
+    "allocation_sets",
+    "app_settings",
+    "application_record_fields",
+    "application_record_lots",
+    "application_records",
+    "application_services",
+    "applicator_licenses",
+    "ar_reminder_tracking",
+    "backup_runs",
+    "backup_snapshots",
+    "below_cost_approvals",
+    "blend_recipe_items",
+    "blend_recipes",
+    "blend_ticket_fields",
+    "blend_ticket_images",
+    "blend_ticket_products",
+    "blend_ticket_to_order_items",
+    "blend_tickets",
+    "commission_payment_items",
+    "commission_payments",
+    "commissions",
+    "cost_history",
+    "credit_memo_applications",
+    "customer_addresses",
+    "customer_application_rates",
+    "customer_contacts",
+    "customer_documents",
+    "customer_facts",
+    "customer_interactions",
+    "customers",
+    "cycle_count_items",
+    "cycle_counts",
+    "deliveries",
+    "delivery_items",
+    "delivery_photos",
+    "delivery_remainders",
+    "email_log",
+    "external_identities",
+    "failed_notifications",
+    "field_app_billing_lines",
+    "field_app_billing_sets",
+    "field_app_location_shares",
+    "field_app_locations",
+    "field_billing_defaults",
+    "field_crop_history",
+    "field_obstacles",
+    "field_polygons",
+    "fields",
+    "finance_charges",
+    "financial_audit_log",
+    "ground_crew_members",
+    "ground_crews",
+    "idempotency_keys",
+    "ingredient_map",
+    "integrity_alerts",
+    "integrity_negative_baseline",
+    "interaction_transcripts",
+    "inventory",
+    "inventory_holds",
+    "inventory_transactions",
+    "invoice_delivery_recovery_capabilities",
+    "invoice_items",
+    "invoice_line_allocations",
+    "invoice_line_share_snapshots",
+    "invoice_line_shares",
+    "invoice_shares",
+    "invoices",
+    "job_applied_info",
+    "job_applied_record_crew",
+    "job_applied_record_fields",
+    "job_applied_records",
+    "job_attachments",
+    "job_batches",
+    "job_chemicals",
+    "job_dispatch_preservation",
+    "job_field_shares",
+    "job_fields",
+    "job_loader_worksheets",
+    "job_location_dispatches",
+    "job_notifications",
+    "job_product_draws",
+    "job_tag_assignments",
+    "job_tags",
+    "jobs",
+    "legacy_vendor_resolution",
+    "note_activity_log",
+    "note_tags",
+    "notifications",
+    "ocr_processing_queue",
+    "offline_action_receipts",
+    "order_item_field_allocations",
+    "order_items",
+    "order_line_allocations",
+    "order_shares",
+    "orders",
+    "payments",
+    "prepay_applications",
+    "prepay_credits",
+    "pricing_change_set_preview_rows",
+    "pricing_change_set_rows",
+    "pricing_change_sets",
+    "pricing_workbook_export_rows",
+    "pricing_workbook_exports",
+    "product_cost_basis",
+    "product_cost_basis_change_rows",
+    "product_cost_basis_rollout",
+    "product_families",
+    "product_info_change_set_rows",
+    "product_label_drafts",
+    "product_supplier_links",
+    "products",
+    "profile_public_directory",
+    "profiles",
+    "purchase_order_import_intents",
+    "purchase_order_items",
+    "purchase_orders",
+    "quote_items",
+    "quote_pdf_templates",
+    "quote_product_draws",
+    "quote_sections",
+    "quote_templates",
+    "quote_versions",
+    "quotes",
+    "rate_limit_log",
+    "rate_limits",
+    "rebate_claim_counters",
+    "rebate_claims",
+    "rebate_programs",
+    "receiving_photos",
+    "receiving_records",
+    "return_items",
+    "returns",
+    "rup_sales_records",
+    "split_invoice_creation_claims",
+    "split_invoice_mutation_claims",
+    "split_invoice_provenance",
+    "supplier_price_import_rows",
+    "supplier_price_imports",
+    "supplier_price_observations",
+    "team_note_attachments",
+    "team_note_comments",
+    "team_note_tags",
+    "team_notes",
+    "unit_conversions",
+    "user_list_settings",
+    "vehicles",
+    "vendor_alias_stage_receipts",
+    "vendor_aliases",
+    "vendor_bills",
+    "vendor_payments",
+    "vendors",
+    "warehouses",
+    "watchdog_flag_dismissals",
+    "watchdog_flags",
+    "write_offs"
+  ],
+  "opaque_on_tables": [],
+  "fanout": {
+    "blend_ticket_products": [
+      {
+        "target": "blend_tickets",
+        "via": "touch_blend_ticket_product_parent_version"
+      }
+    ],
+    "customer_contacts": [
+      {
+        "target": "customers",
+        "via": "sync_primary_contact_to_customer"
+      }
+    ],
+    "customers": [
+      {
+        "target": "customer_contacts",
+        "via": "sync_customer_to_primary_contact"
+      }
+    ],
+    "invoices": [
+      {
+        "target": "blend_tickets",
+        "via": "sync_blend_ticket_payment_status"
+      }
+    ],
+    "job_fields": [
+      {
+        "target": "job_dispatch_preservation",
+        "via": "_sync_job_location_dispatch_on_field_insert"
+      }
+    ],
+    "jobs": [
+      {
+        "target": "job_location_dispatches",
+        "via": "_close_job_location_dispatch_on_job_terminal"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "_sync_job_location_dispatch_on_applicator_change"
+      }
+    ],
+    "order_items": [
+      {
+        "target": "orders",
+        "via": "trg_recalc_order_totals"
+      }
+    ],
+    "prepay_applications": [
+      {
+        "target": "prepay_credits",
+        "via": "_recompute_prepay_credit_balance"
+      }
+    ],
+    "products": [
+      {
+        "target": "product_cost_basis",
+        "via": "guard_product_cost_basis_unit_change"
+      },
+      {
+        "target": "product_cost_basis",
+        "via": "sync_legacy_product_cost_basis"
+      }
+    ],
+    "profiles": [
+      {
+        "target": "profile_public_directory",
+        "via": "sync_profile_public_directory"
+      }
+    ],
+    "purchase_orders": [
+      {
+        "target": "idempotency_keys",
+        "via": "_invalidate_deleted_purchase_order_retry_state"
+      }
+    ],
+    "quotes": [
+      {
+        "target": "inventory_holds",
+        "via": "release_holds_on_quote_status_change"
+      }
+    ],
+    "receiving_records": [
+      {
+        "target": "inventory",
+        "via": "_receiving_records_before_delete"
+      },
+      {
+        "target": "purchase_order_items",
+        "via": "_receiving_records_before_delete"
+      },
+      {
+        "target": "purchase_orders",
+        "via": "_receiving_records_before_delete"
+      }
+    ]
+  }
+}

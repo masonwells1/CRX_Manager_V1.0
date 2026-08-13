@@ -83,8 +83,13 @@
 #   (b) probe calls correct_job_commission_split(); (c) probe UPDATEs
 #   public.jobs on its own probe row. All three inside the rolled-back block.
 
-7e4cdf38eaf6b3022583eba1b86492d67665e37b2e18847dec45797dc67c7881  20260813060000_require_completed_delivery_before_invoice_post.sql  3
+23f8ac26c6d18a6b1d609bad531dbb593a1679de33aa39ac3821fad1765c0a3a  20260813060000_require_completed_delivery_before_invoice_post.sql  3
 # ^ (a) two EXECUTE format(...) building REVOKE ALL ON FUNCTION for anon,
-#   authenticated, service_role and metabase_ro; (b) probe calls
-#   _post_invoice_impl_20260714() to prove the gate refuses; (c) probe UPDATEs
-#   public.deliveries status on its own probe delivery to drive the arms.
+#   authenticated, service_role and metabase_ro, plus one setting the probe's
+#   own JWT claims; (b) probe calls _post_invoice_impl_20260714() to prove the
+#   gate refuses, and complete_delivery() to drive it; (c) probe UPDATEs
+#   public.deliveries status and deleted_at on its own probe delivery.
+#   Re-pinned round 30: this file is owned by origin/main, and the merge of
+#   #388 rewrote it after round 24 pinned it. A stale pin is not a loophole —
+#   it fails CLOSED, counting all three findings — but it makes the manifest
+#   claim something untrue, so it is corrected rather than left to rot.

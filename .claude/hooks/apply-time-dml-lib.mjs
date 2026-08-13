@@ -152,6 +152,31 @@ export function applyTimeCode(sql, depth = 0) {
         lit += sql[i];
         i += 1;
       }
+      // ROUND 31. A routine body may legally be a plain single-quoted string
+      // rather than a `$$` block. Read as an ordinary literal, the body of
+      //
+      //   CREATE FUNCTION f() ... AS 'UPDATE public.order_items SET ...'
+      //
+      // was reported as an apply-time dynamic write, so deploying a function
+      // that changes no rows demanded a one-shot money-repair override. It is
+      // the same deferral the `$$` branch above already makes, so make it here
+      // too: file the text under the routine's name, to be folded back in only
+      // if this migration goes on to call it. The test is narrower than the
+      // `$$` branch's — an exact CREATE FUNCTION/PROCEDURE head — because at
+      // this point in a statement a quote can also be a COMMENT's text or a
+      // SET's value, and neither is a body.
+      const head = code.slice(stmtStart).trim().toLowerCase();
+      if (/^create\s+(or\s+replace\s+)?(function|procedure)\b/.test(head)) {
+        const named = /\b(?:function|procedure)\s+([A-Za-z0-9_.]+)/.exec(head);
+        const bare = named ? named[1].split(".").pop() : "";
+        if (bare) {
+          const inner = applyTimeCode(lit, depth + 1);
+          routines.push({ name: bare, code: inner.code, literals: inner.literals });
+          routines.push(...inner.routines);
+          code += "''";
+          continue;
+        }
+      }
       literals.push(lit);
       code += "''";
       continue;
@@ -614,7 +639,49 @@ function invokedRoutines(codeLower, defined) {
 // found that restricting the unknown-call scan to CALL and PERFORM missed the
 // most ordinary spelling of all: `SELECT public.existing_repair();` runs the
 // routine exactly as CALL does, and was reported as calling nothing.
-const RUNS_FOR_EFFECT = /^(select|call|perform|with)\b/;
+//
+// ROUND 30 widened it again, for the same reason one step further out: a routine
+// runs wherever a statement runs it, not only where the statement BEGINS with a
+// verb that runs. The review's probe of
+//
+//     INSERT INTO scratch VALUES (public.wrapper());
+//
+// was reported as calling nothing at all. Its head is INSERT, so this test
+// failed and the entire statement — operands included — went unread. PostgreSQL
+// evaluates those operands while the migration applies, so a database-resident
+// wrapper called from one of them executes unseen, and the migration is charged
+// only with the scratch write it declares. That is a way through both new
+// guards, since the apply guard fails closed on this inventory.
+//
+// Every head listed here is a statement whose operand expressions are evaluated
+// at apply time. Definition verbs are deliberately absent: a policy's USING, a
+// column DEFAULT, a trigger's WHEN and a routine's body are all deferred until
+// something later fires them, and reading them here would charge a migration for
+// writes it does not perform. The three definition statements that DO evaluate
+// an expression while applying are handled separately below.
+const RUNS_FOR_EFFECT =
+  /^(select|call|perform|with|do|values|insert|update|delete|merge|refresh|explain)\b/;
+
+// `CREATE TABLE ... AS SELECT` and `CREATE MATERIALIZED VIEW ... AS SELECT`
+// evaluate their query as they apply. Plain `CREATE VIEW ... AS SELECT` is
+// excluded on purpose — defining a view runs nothing.
+const CREATE_RUNS_QUERY =
+  /^create\s+(or\s+replace\s+)?(global\s+|local\s+)?(temp\w*\s+|unlogged\s+)?(table|materialized\s+view)\b/;
+const AS_QUERY = /\bas\s+(select|with|values)\b/;
+
+// An expression index evaluates its expression per row as the index is built.
+// The leading `CREATE [UNIQUE] INDEX [CONCURRENTLY] [IF NOT EXISTS] [name] ON
+// [ONLY] <table> [USING <method>]` is stripped rather than matched around,
+// because once the ON keyword is behind us `<table> (` is indistinguishable from
+// a call — and so is the access method in `USING btree (col)`.
+const INDEX_PREFIX =
+  /^create\s+(unique\s+)?index\s+(concurrently\s+)?(if\s+not\s+exists\s+)?([a-z0-9_."]+\s+)?on\s+(only\s+)?[a-z0-9_."]+\s*(using\s+[a-z0-9_]+\s*)?/;
+
+// `ALTER TABLE ... ALTER COLUMN ... TYPE ... USING <expr>` runs <expr> once per
+// existing row. Round 29 taught the approved-set scanner to read that shape as a
+// rewrite; this teaches the analyzer to read the call inside it. Scoped to ALTER
+// TABLE so that `ALTER POLICY ... USING (...)`, which is deferred, stays out.
+const RETYPE_USING = /\busing\s/;
 
 // Splitting a routine body on `;` leaves the first statement fused to the block
 // keywords in front of it — `BEGIN PERFORM repair()` arrives as one fragment
@@ -622,6 +689,24 @@ const RUNS_FOR_EFFECT = /^(select|call|perform|with)\b/;
 // calling a database-resident routine slipped past a leading-keyword test.
 // These carry no meaning of their own, so they are peeled off before the test.
 const BLOCK_LEAD = /^(begin|declare|end(\s+(if|loop))?|then|else|loop|do|exception|when\s+others|<<[a-z0-9_]+>>|\$\$|as)\b\s*/;
+
+// ROUND 31. Peeling the block keywords off the FRONT only reaches a statement
+// that happens to sit at the start of its fragment. A control structure puts
+// one further in:
+//
+//   DO $$ BEGIN IF true THEN SELECT public.existing_repair(); END IF; END $$;
+//
+// splits to a fragment reading `IF true THEN SELECT ...`. `IF` is not a running
+// verb and is not a block lead — a condition sits between it and the statement —
+// so the region came back empty and the resident routine was reported as never
+// called. THEN, ELSE and LOOP each introduce a statement, and `FOR ... IN` is
+// followed by a query that runs, so a running verb immediately after any of them
+// is scanned from there.
+//
+// This cannot reach into a definition: the create/alter branches below return
+// their own executing tail and never fall through to here, so a CHECK holding a
+// CASE ... THEN, or a policy's USING, still contributes nothing.
+const CONTROL_INTRO = /\b(?:then|else|loop|\bin)\s+/g;
 
 function runForEffectRegion(stmt) {
   // PERFORM and CALL exist only as statement verbs, so wherever they appear in
@@ -631,7 +716,33 @@ function runForEffectRegion(stmt) {
   let rest = stmt;
   let prev;
   do { prev = rest; rest = rest.replace(BLOCK_LEAD, ""); } while (rest !== prev);
-  return RUNS_FOR_EFFECT.test(rest) ? rest : "";
+  if (RUNS_FOR_EFFECT.test(rest)) return rest;
+  // The definition verbs that still evaluate an expression as they apply. Each
+  // returns only its executing TAIL, never the whole statement: read from the
+  // head, the target table's own name would be charged as a call.
+  if (/^create\b/.test(rest)) {
+    const idx = INDEX_PREFIX.exec(rest);
+    if (idx) return rest.slice(idx[0].length);
+    if (CREATE_RUNS_QUERY.test(rest)) {
+      const as = AS_QUERY.exec(rest);
+      if (as) return rest.slice(as.index + as[0].length - as[1].length);
+    }
+    return "";
+  }
+  if (/^alter\s+table\b/.test(rest)) {
+    const using = RETYPE_USING.exec(rest);
+    if (using) return rest.slice(using.index);
+    return "";
+  }
+  // A statement introduced by a control structure rather than beginning the
+  // fragment. Reached only when the fragment is not a definition.
+  CONTROL_INTRO.lastIndex = 0;
+  let intro;
+  while ((intro = CONTROL_INTRO.exec(rest)) !== null) {
+    const tail = rest.slice(intro.index + intro[0].length);
+    if (RUNS_FOR_EFFECT.test(tail)) return tail;
+  }
+  return "";
 }
 
 // ROUND 29. The verbs that begin a statement PostgreSQL will run. Used to tell
@@ -665,6 +776,9 @@ const NOT_A_ROUTINE_CALL = new Set([
   "select", "where", "using", "join", "filter", "cast", "position", "when",
   "case", "values", "row", "over", "within", "order", "group", "having",
   "returning", "set", "distinct", "between", "like", "overlaps", "at", "by",
+  // `ON CONFLICT (v) DO UPDATE` — reachable only since round 30 taught this scan
+  // to read INSERT statements, and `conflict (` is not a routine.
+  "conflict", "nothing", "each", "lateral", "tablesample", "grouping",
   "into", "for", "of", "if", "then", "else", "end", "loop", "while", "return",
   "t", "p", "r", "x", "e", "c", "o", "i", "n", "v", "s",
   // Type names, which take a length/precision in parentheses.
@@ -709,9 +823,26 @@ const NOT_A_ROUTINE_CALL = new Set([
   "pg_has_role", "acldefault", "makeaclitem", "pg_catalog",
   "aclexplode", "obj_description", "col_description", "shobj_description",
   "gen_random_uuid", "uuid_generate_v4", "nextval", "currval", "setval",
+  // ROUND 30. Reading INSERT/UPDATE/DELETE operands reaches expressions that
+  // were never scanned before, and these are the builtins the existing 884
+  // migrations actually call from one. Measured, not guessed: without them the
+  // widening charged five migrations for routines PostgreSQL and PostGIS ship.
+  // Still an explicit list and not an `st_`/`pg_` prefix rule, for the reason
+  // given above — a prefix is an escape hatch anyone can name themselves into.
+  "gen_random_bytes", "hashtext", "digest", "convert_to", "convert_from",
+  "st_area", "st_collect", "st_collectionextract", "st_force2d",
+  "st_geomfromgeojson", "st_isempty", "st_makevalid", "st_multi",
+  "st_setsrid", "st_unaryunion",
   "lpad", "rpad", "regexp_replace", "regexp_match", "regexp_matches",
   "regexp_split_to_array", "regexp_split_to_table", "starts_with",
   "is_admin", "auth", "uid", "jwt", "role",
+  // ROUND 31. Reading statements introduced by a control structure reaches four
+  // migrations that guard a repair behind the plpgsql_check static analyzer —
+  // `IF EXISTS (...) THEN SELECT count(*) ... FROM plpgsql_check_function(...)`.
+  // The call is real and was genuinely missed before; the routine is shipped by
+  // the plpgsql_check extension and only reports on a function's source, so it
+  // is named here rather than charged as a resident routine of unknown effect.
+  "plpgsql_check_function",
 ]);
 
 /**
@@ -732,13 +863,19 @@ function unknownCallsIn(codeLower, defined) {
   for (const raw of codeLower.split(";")) {
     const stmt = runForEffectRegion(raw.trim());
     if (!stmt) continue;
-    const re = /(^|[^a-z0-9_.])((?:[a-z0-9_]+\.)?)([a-z0-9_]+)\s*\(/g;
+    // The name boundary is a LOOKBEHIND, not a consumed character. Round 30: it
+    // used to consume the delimiter, so in `VALUES (public.wrapper())` the match
+    // on `values (` ate the open paren and left `public.wrapper(` with no
+    // separator in front of it to match against. The very next call — the one
+    // that mattered — was invisible, and only when it sat immediately inside
+    // another call's parentheses, which is exactly where an argument sits.
+    const re = /(?<![a-z0-9_.])((?:[a-z0-9_]+\.)?)([a-z0-9_]+)\s*\(/g;
     let mm;
     while ((mm = re.exec(stmt)) !== null) {
-      const nameStart = mm.index + mm[1].length + mm[2].length;
+      const nameStart = mm.index + mm[1].length;
       const before = stmt.slice(0, nameStart);
       if (NOT_A_CALL.test(before) || NOT_A_CALL_HERE.test(before)) continue;
-      const name = mm[3];
+      const name = mm[2];
       if (defined.has(name) || NOT_A_ROUTINE_CALL.has(name)) continue;
       out.add(name);
     }

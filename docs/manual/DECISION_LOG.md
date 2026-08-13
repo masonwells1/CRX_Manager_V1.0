@@ -247,17 +247,39 @@ to a **digest of the sorted approved record ids plus the material before-values*
 stored cents), asserted before the write. Row counts, order counts and similar cardinalities may
 accompany that digest but may never be the only thing standing between an approval and a write.
 
-**Enforcement (hard, not prose).** `scripts/validate-sql-migrations.sh` now fails any migration
-stamped `20260810025160` or later that contains a top-level `UPDATE`/`DELETE` against a business-row
-table unless the file either (a) carries `-- APPROVED_SET_DIGEST: <64 hex>` *and* asserts that same
-hex in executable SQL before the write, or (b) explicitly waives it with
-`-- APPROVED_SET_DIGEST: NOT-REQUIRED - <reason>` for the case where there is no before-value to
-protect (backfilling a column the same migration just added). Rewrites inside a function body are
-runtime logic and are not checked. The gate is scoped by **timestamp, not an allowlist**, so it needs
-no maintenance; the cutoff sits one second past the already-applied
-`20260810025159_backfill_stale_line_profit.sql`, which `AGENTS.md` forbids editing, so that migration
-stays history and **every** migration written from here on is in force. This is the deterministic
-replay/baseline guard Codex asked for in place of editing applied SQL.
+**Enforcement (hard, not prose).** `scripts/validate-sql-migrations.sh` fails any in-force migration
+that contains a top-level `UPDATE`/`DELETE` against a business-row table unless the file either
+(a) carries `-- APPROVED_SET_DIGEST: <64 hex>` *and* asserts that same hex in executable SQL before
+the write, or (b) explicitly waives it with `-- APPROVED_SET_DIGEST: NOT-REQUIRED - <reason>` naming
+every table it waives, for the case where there is no before-value to protect (backfilling a column
+the same migration just added). Rewrites inside a function body are runtime logic and are not
+checked. This is the deterministic replay/baseline guard Codex asked for in place of editing applied
+SQL.
+
+**Scoping is by manifest, not by timestamp (round 14, `CRX-SEC-001`).** The first cut exempted
+anything stamped before `20260810025160`, one second past the already-applied
+`20260810025159_backfill_stale_line_profit.sql`. That made the guard switch itself off by the input
+it was guarding: writing a new migration with an old-looking filename put it on the history side and
+it was never scanned at all. History is now an explicit content-checked list —
+`scripts/approved-set-grandfathered.txt` — so the same bytes under an unapproved name are in force,
+and editing a grandfathered file puts it back in force. On the `--changed-only` path the manifest is
+deliberately ignored (round 26): a candidate change may not exempt itself by adding its own name to
+a file in the same commit.
+
+**The protected set and the trigger graph are both generated, never hand-kept.** The list of
+business-row tables and their material before-value columns is derived from
+`.claude/schema-registry.json`, so a new status or money column is protected the moment it exists;
+the derivation fails closed (the validator refuses to run at all on a partial list). Since round 31
+a second manifest, `scripts/trigger-fanout.json`, records which live triggers rewrite a *different*
+table than the one being written — regenerate it with `node scripts/generate-trigger-fanout.mjs
+--from-introspection <payload.json>`. Without it an approved repair on `order_items` looked airtight
+while `trg_recalc_order_totals` fired underneath and rewrote money on `orders`: rows never captured,
+never hashed, and not counted by the row-count assertion. Cascade targets are now folded into the
+set the repair must bind, and a table the manifest cannot speak for — absent from its scan, or
+carrying a trigger body PostgreSQL stores parsed rather than as source — is refused rather than
+assumed clean. **Cost, accepted:** a bulk repair on a table with a cascading trigger can no longer
+be written in the one-table shape at all; it must be restructured or waived with a marker naming
+both tables.
 
 **Hardened after review (same day).** The first cut of that guard did not enforce what it claimed,
 and a round-3 Codex review (`CRX-GUARD-001`) was right to say so. Three bypasses, all now closed:

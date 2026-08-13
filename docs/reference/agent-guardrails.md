@@ -205,6 +205,89 @@ CONSTRAINT` and `ADD COLUMN` stay silent, as does a retype of a table the migrat
 itself created. Measured cost across all 882 migrations is zero: every one of the
 thirteen `ALTER COLUMN` usages in the repository is a NOT NULL or DEFAULT change.
 
+**A routine runs wherever a statement runs it (round 30).** Both money guards were
+reading one level too shallow, in the same direction, and a single migration
+exercised both holes at once: define a mutator and a one-line wrapper around it,
+then write `INSERT INTO scratch VALUES (public.wrapper());`. The analyzer reported
+`targets=["scratch.*"], unknownCalls=[], unresolved=false` and the SQL validator
+reported nothing, while PostgreSQL performed the protected rewrite — no override
+prompt, no approved-set digest.
+
+In the **apply-time analyzer** two independent defects produced it. The statement
+had to BEGIN with a verb that runs (`SELECT`/`CALL`/`PERFORM`/`WITH`), so anything
+headed `INSERT`/`UPDATE`/`DELETE`/`MERGE` was discarded whole, operands included;
+and the call-name pattern CONSUMED the character in front of the name, so in
+`VALUES (public.wrapper())` the match on `values (` ate the open paren and left the
+next call with no separator to match against — a call sitting immediately inside
+another call's parentheses, which is exactly where an argument sits, was unreadable
+even once the statement was scanned. The head test now admits every statement that
+evaluates an expression, and the definition verbs that still evaluate one contribute
+only their executing TAIL (`CREATE TABLE/MATERIALIZED VIEW … AS <query>`, `CREATE
+INDEX … (<expr>)`, `ALTER TABLE … USING <expr>`) so the target table's own name is
+never charged as a call; the name boundary is a lookbehind. A stored expression — a
+view body, a policy predicate, a column `DEFAULT` — is still quiet, because storing
+is not running. Reading operands reaches builtins no scan had touched before, so the
+PostgreSQL and PostGIS names the corpus actually calls from one are listed
+explicitly rather than by an `st_`/`pg_` prefix rule, which anyone could name
+themselves into. Measured over all 884 migrations, **one** file changes
+classification and it is a genuine apply-time reach; it was already `unresolved`, so
+the cost is zero new prompts.
+
+**A trigger rewrite is still a rewrite (round 31).** Every rule above proves a repair
+rewrote exactly the rows it hashed — for the table the `UPDATE` names. Triggers were
+invisible to all of them, so a repair on `order_items` that captured an id set, hashed
+those rows, compared fail-closed and asserted the row count read as airtight while
+`trg_recalc_order_totals` fired underneath and rewrote money on `orders`: rows never
+captured, never hashed, not counted. A text scanner cannot know the live trigger graph,
+so the graph is checked in as `scripts/trigger-fanout.json` (13 source tables, 17
+cascade edges), generated from the live catalog by `scripts/generate-trigger-fanout.mjs`
+and folded into the rewrite set before any other check runs — so a cascade target picks
+up material-column binding, the per-table captured set, and the one-table-per-repair
+rule with no new machinery. `UPDATE`/`DELETE`/`MERGE` only: an `INSERT` creates rows no
+before-state digest could have covered. Fan-out is refused per table when unknown, not
+assumed empty — a table absent from the manifest scan, or carrying a trigger body
+PostgreSQL stores parsed rather than as source (`BEGIN ATOMIC`, where `prosrc` reads
+blank), fails closed with a regenerate message; an unreadable manifest refuses every
+table. One hop, not the transitive closure, and that is sufficient: a second hop is only
+reachable through a first-hop target, which either counts here or is already rewritten
+directly, and either way the migration is at two tables and refused. **Cost:** a repair
+on a table with a cascading trigger can no longer take the one-table shape at all — it
+must be restructured, or waived with a `NOT-REQUIRED` marker naming both tables.
+
+The other four round-31 findings were all the same species of blind spot in the digest
+reader. A `RAISE` parked inside `WHILE false LOOP` counted as the abort because reaching
+it was measured by `IF` nesting alone (the digest-side twin of a round-30 fix, in a
+second `awk` implementation the first fix never reached). A whole-row projection excused
+the entire column-coverage check on the strength of its *shape*, so
+`to_jsonb(x.*)` over `CROSS JOIN LATERAL (SELECT 1) x` bound nothing but ids — the alias
+must now be the rewritten table or an alias declared on it. And a hand-enumerated
+payload touching one nullable column carved an arbitrary subset out of the proof:
+`x || NULL` is `NULL` and `string_agg` *skips* `NULL` inputs, so every row with an unset
+value dropped out of the digest while still passing the count assertion. Every top-level
+`||` operand must now be one that cannot be `NULL` — the row id, a whole-row projection,
+or a value wrapped in `coalesce`/`concat_ws`.
+
+In the **SQL validator** the mutating-function index was non-transitive: a function
+was indexed only if its own body spelled DML on a protected table or ran dynamic
+SQL, so a wrapper that merely `PERFORM`s a mutator was never indexed and a top-level
+call to it demanded no digest. The index now closes over the call graph — the awk
+pass emits `F`/`M`/`C` records and a downstream `node` step walks backwards from
+every known mutator, marking callers to any depth. The closure runs downstream on
+purpose: `find … | xargs` may split the 884-file list across several awk processes,
+and a closure computed per batch would silently lose every edge whose two ends
+landed in different batches. It spreads out of KNOWN mutators only, so calling a
+helper that writes nothing protected stays free. Measured: 12 functions join the
+index (246 → 258) and **zero** new violations appear — every corpus-wide occurrence
+of those 12 names is a `GRANT`/`REVOKE`/`DROP`/`COMMENT`, a `CREATE TRIGGER …
+EXECUTE FUNCTION` clause, a quoted literal, a comment, or a call inside another
+routine's body, and no migration that attaches one of the six newly-indexed trigger
+functions writes that trigger's table at top level. The `--max-violations=61`
+baseline in `.github/workflows/ci.yml` is unchanged.
+
+Tests: 15 attack shapes and 12 quiet shapes in `apply-time-dml-lib.test.mjs`, and
+three transitive-wrapper cases in `validate-sql-migrations-approved-set.test.mjs`.
+Both were run against the pre-fix code and both go red there.
+
 **Refresh schema registry after schema changes:** `node scripts/regenerate-schema-registry.mjs` (or ask Claude Code to do it via Supabase MCP).
 
 **Shared guidance:** edit `AGENTS.md` intentionally. `CLAUDE.md` imports it and contains only Claude-specific routing. Verify with `npm run check:agent-guidance`.

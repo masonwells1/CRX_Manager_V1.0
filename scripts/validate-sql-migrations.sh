@@ -201,6 +201,55 @@ if [ -z "$BUSINESS_ROW_TABLES" ] || [ -z "$REGISTRY_TABLES" ]; then
   exit 1
 fi
 
+# ---- A TRIGGER REWRITE IS STILL A REWRITE (Codex High, round 31) -----------
+# Everything above proves that a repair rewrote exactly the rows it hashed — for
+# the table named in the UPDATE. Triggers were invisible to it, so:
+#
+#   UPDATE public.order_items SET total_price = 0 WHERE id = ANY(v_ids);
+#
+# read as fully bound while `trg_recalc_order_totals` fired underneath and
+# rewrote public.orders. Those order rows were never captured, never hashed, and
+# are not counted by the ROW_COUNT assertion: an approved repair on a child
+# table silently rewrote authoritative money on its parent with no proof at all.
+#
+# A text scanner cannot know the live trigger graph, so the graph is checked in
+# (scripts/trigger-fanout.json, written by scripts/generate-trigger-fanout.mjs
+# from the live catalog) and each cascade target is folded into the set of
+# tables the repair has to bind. UPDATE/DELETE/MERGE only: an INSERT creates
+# rows that did not exist when the digest was taken, so no before-state digest
+# could have covered them.
+#
+# Resolved relative to THIS SCRIPT for the same reason the registry is.
+TRIGGER_FANOUT_MANIFEST="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/trigger-fanout.json"
+
+# One node call, three sections, so a missing or unparseable manifest leaves all
+# three empty at once and the per-table check below treats every table as
+# unscanned. Prefixes are colon-delimited because a bare identifier cannot hold
+# a colon.
+TRIGGER_FANOUT_RAW=$(node -e "
+const fs = require('fs');
+const m = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+const ok = (n) => typeof n === 'string' && /^[a-z0-9_]+\$/.test(n);
+const scanned = (m.tables_scanned || []).filter(ok);
+if (scanned.length < 100) {
+  throw new Error('trigger fan-out manifest scanned only ' + scanned.length + ' tables');
+}
+const out = [];
+for (const n of scanned) out.push('s:' + n);
+for (const n of (m.opaque_on_tables || []).filter(ok)) out.push('o:' + n);
+for (const [src, rows] of Object.entries(m.fanout || {})) {
+  if (!ok(src)) continue;
+  for (const r of rows || []) {
+    if (ok(r && r.target) && ok(r && r.via)) out.push('e:' + src + ' ' + r.target + ' ' + r.via);
+  }
+}
+process.stdout.write(out.join('\n'));
+" "$TRIGGER_FANOUT_MANIFEST" 2>/dev/null || true)
+
+TRIGGER_FANOUT_SCANNED=$(printf '%s\n' "$TRIGGER_FANOUT_RAW" | sed -n 's/^s://p')
+TRIGGER_FANOUT_OPAQUE=$(printf '%s\n' "$TRIGGER_FANOUT_RAW" | sed -n 's/^o://p')
+TRIGGER_FANOUT_PAIRS=$(printf '%s\n' "$TRIGGER_FANOUT_RAW" | sed -n 's/^e://p')
+
 # ---- MATERIAL BEFORE-VALUES PER TABLE (Codex High, round 15) ---------------
 # An UPDATE names the columns it assigns, so the approved-set digest can be
 # required to cover them. A DELETE names none. Round 14 therefore asked a
@@ -357,6 +406,95 @@ fi
 # so no static check can show the digest covers the rows it touches. Inline the
 # DML so it can be read and bound, or split the helper into its own migration
 # that does not call it.
+#
+# ROUND 30 (Codex High). The index was not TRANSITIVE. It asked only whether a
+# body spells DML on a protected table, so one level of indirection walked past
+# it untouched:
+#
+#   -- migration A
+#   CREATE FUNCTION _mutate() ... AS $x$ BEGIN UPDATE public.orders ...; END $x$;
+#   CREATE FUNCTION _wrap()   ... AS $y$ BEGIN PERFORM _mutate();     END $y$;
+#   -- migration B
+#   SELECT _wrap();
+#
+# `_mutate` was indexed and `_wrap` was not, so B's call was read as a call to
+# an ordinary read-only helper and no approved-set digest was ever demanded —
+# while PostgreSQL performed the whole protected rewrite. Any depth of wrapping
+# worked, and the wrapper did not even have to live in the same migration.
+#
+# The index is therefore closed transitively: a function that calls a mutating
+# function IS a mutating function. The closure runs over the union of records
+# from every awk process rather than inside one, because `xargs` may split the
+# migration list across several — a closure computed per batch would silently
+# lose every edge whose two ends landed in different batches, which is the same
+# failure this fix exists to remove.
+# ---- ONE LEXER, SHARED (round 31, Codex High) -------------------------------
+# `strip_noise` lived inside the primary scanner and the mutating-function index
+# had its OWN, cruder copy: `sub(/--.*/)`, blank quoted literals, and no block
+# comment handling whatever. That is the exact naive sequence the comment on the
+# scanner's version says not to write, reintroduced twenty lines away.
+#
+# It was not merely imprecise. The index tracks a function body by DOLLAR QUOTE,
+# so a `$x$` sitting inside a block comment was read as a live opening tag:
+#
+#   /* CREATE FUNCTION fake() RETURNS void LANGUAGE plpgsql AS $x$ */
+#   CREATE FUNCTION public._real() ... AS $f$ BEGIN UPDATE public.orders ...; END $f$;
+#   SELECT public._real();
+#
+# The commented-out decoy claimed the body, `_real` never entered the index, and
+# its call at the bottom read as an ordinary call to a read-only helper — so a
+# rewrite of a protected table was demanded of no digest at all. Two lexers is
+# the defect; one is the fix. Defined here as a shell variable and interpolated
+# into both awk programs, because awk has no include and a second copy is how
+# this happened the first time.
+AWK_STRIP_NOISE=$(cat <<'AWK_SN'
+      # Comments and literals are not three independent removals, and running
+      # them in sequence got the interleaving wrong in both directions. Block
+      # comments came out first, so `-- see /* note` opened a block comment that
+      # no `*/` ever closed and every following line was blanked — a fail-OPEN
+      # in the primary money scanner, hiding whatever rewrite came next. A `/*`
+      # inside a string literal did the same. Read left to right instead, once,
+      # and let whichever construct opens first own the text until it closes.
+      #
+      # Callers must clear inblk/instr/estr at FNR == 1: an unterminated
+      # construct at the end of one file must not blank the start of the next.
+      function strip_noise(s,   out, i, c, d, n, p, q) {
+        out = ""; i = 1; n = length(s)
+        while (i <= n) {
+          c = substr(s, i, 1)
+          d = substr(s, i, 2)
+          if (inblk > 0) {
+            if (d == "/*") { inblk++; i += 2; continue }
+            if (d == "*/") { inblk--; i += 2; continue }
+            i++; continue
+          }
+          if (instr) {
+            # `it''s` is one literal, not two. Reading the doubled quote
+            # as a close would put the rest of the literal back into the syntax
+            # stream, which is how a quoted UPDATE becomes a real one.
+            if (c == "'" && substr(s, i + 1, 1) == "'") { i += 2; continue }
+            # A backslash escapes the next character only in an E-string.
+            # Elsewhere PostgreSQL treats it as an ordinary character, and
+            # skipping it would eat the closing quote of a Windows path.
+            if (c == "\\" && estr) { i += 2; continue }
+            if (c == "'") { instr = 0; estr = 0 }
+            i++; continue
+          }
+          if (d == "/*") { inblk++; i += 2; out = out " "; continue }
+          if (d == "--") break
+          if (c == "'") {
+            p = substr(out, length(out), 1)
+            q = (length(out) > 1 ? substr(out, length(out) - 1, 1) : " ")
+            estr = (p == "e" && q !~ /[a-z0-9_]/)
+            instr = 1; out = out " "; i++; continue
+          }
+          out = out c; i++
+        }
+        return out
+      }
+AWK_SN
+)
+
 MUTATING_FNS_RE=""
 MUTATING_FNS_BUILT=false
 build_mutating_fn_index() {
@@ -364,13 +502,22 @@ build_mutating_fn_index() {
   MUTATING_FNS_BUILT=true
   MUTATING_FNS_RE=$(find "$MIGRATION_DIR" -name '*.sql' -type f -print0 \
     | xargs -0 awk -v tables="$BUSINESS_ROW_TABLES" '
-        # Per-file reset: an unterminated body must not leak into the next file.
-        FNR == 1 { infn = 0; curfn = ""; tag = "" }
+        '"$AWK_STRIP_NOISE"'
+        # Per-file reset: an unterminated body — or an unterminated block comment
+        # or string literal — must not leak into the next file.
+        FNR == 1 { infn = 0; curfn = ""; tag = ""; inblk = 0; instr = 0; estr = 0 }
         {
-          l = tolower($0)
-          sub(/--.*/, "", l)
-          gsub(/'"'"'[^'"'"']*'"'"'/, " ", l)
+          l = strip_noise(tolower($0))
           gsub(/"/, "", l)
+          # ROUND 31 (Codex High). `CREATE FUNCTION public . _fix()` is legal, and
+          # the name was extracted by truncating at the first character outside
+          # [a-z0-9_.] — which is the space. The function was therefore indexed
+          # under the name `public`, `_fix` never entered the index at all, and
+          # its call read as a call to an ordinary read-only helper while it
+          # rewrote a protected table. The body already gets this treatment
+          # further down; the NAME did not. Weld qualified names back together
+          # before anything reads one, so both halves see the same spelling.
+          gsub(/[ \t]*\.[ \t]*/, ".", l)
           if (!infn) {
             if (l !~ /create[ \t]+(or[ \t]+replace[ \t]+)?function[ \t]/) next
             f = l
@@ -397,6 +544,10 @@ build_mutating_fn_index() {
         }
         END {
           for (f in buf) {
+            # ROUND 30. Records, not verdicts. `F` names a function this batch
+            # defines, `M` one whose own body mutates, `C` a call edge. The
+            # transitive closure runs downstream over every batch at once.
+            print "F\t" f
             # `UPDATE public . orders` is legal, and the body arrives here with
             # its newlines already flattened to spaces, so a qualification split
             # by either would not match `(public\.)?` and the helper would look
@@ -404,8 +555,21 @@ build_mutating_fn_index() {
             # weld the pieces of a qualified name back together first.
             b = buf[f]
             gsub(/[ \t]*\.[ \t]*/, ".", b)
+            # Every `name(` in the body is emitted as a call edge. Which of those
+            # names is really a function is decided downstream by intersecting
+            # with the F set, so a type modifier like `numeric(12,2)` or a
+            # builtin simply has no F record to match and drops out.
+            e = b
+            gsub(/[ \t]+\(/, "(", e)
+            ne = split(e, part, /\(/)
+            for (pi = 1; pi < ne; pi++) {
+              nm = part[pi]
+              sub(/^.*[^a-z0-9_.]/, "", nm)
+              sub(/^.*\./, "", nm)
+              if (nm ~ /^[a-z_][a-z0-9_]*$/ && nm != f) print "C\t" f "\t" nm
+            }
             if (b ~ ("(^|[^a-z0-9_])(update|merge[ \t]+into|delete[ \t]+from|insert[ \t]+into|truncate([ \t]+table)?)[ \t]+(only[ \t]+)?(public\\.)?(" tables ")([^a-z0-9_]|$)")) {
-              print f
+              print "M\t" f
               continue
             }
             # A body containing dynamic SQL counts too, and it has to, because
@@ -425,9 +589,40 @@ build_mutating_fn_index() {
             # ask whether any EXECUTE survives.
             t = b
             gsub(/(^|[^a-z0-9_])execute[ \t]+(function|procedure|on)([^a-z0-9_]|$)/, " x ", t)
-            if (t ~ /(^|[^a-z0-9_])execute([^a-z0-9_]|$)/) { print f }
+            if (t ~ /(^|[^a-z0-9_])execute([^a-z0-9_]|$)/) { print "M\t" f }
           }
         }
+      ' 2>/dev/null | node -e '
+      const lines = require("fs").readFileSync(0, "utf8").split(/\r?\n/);
+      const defined = new Set(), mutating = new Set(), callersOf = new Map();
+      for (const ln of lines) {
+        if (!ln) continue;
+        const p = ln.split("\t");
+        if (p[0] === "F") defined.add(p[1]);
+        else if (p[0] === "M") mutating.add(p[1]);
+        else if (p[0] === "C" && p[1] && p[2] && p[1] !== p[2]) {
+          if (!callersOf.has(p[2])) callersOf.set(p[2], new Set());
+          callersOf.get(p[2]).add(p[1]);
+        }
+      }
+      // A function that calls a mutating function is itself mutating. Walk the
+      // call graph BACKWARDS from every known mutator, marking callers, to
+      // whatever depth the wrapping goes. Only defined functions are marked, so
+      // an edge to a builtin or a type modifier leads nowhere.
+      //
+      // Indented deliberately: a line starting with `}` in column 0 sits inside
+      // a shell function, and anything reading this file by brace depth — the
+      // test harness does — would take it for the function`s own closing brace.
+      const queue = [...mutating];
+      while (queue.length) {
+        for (const caller of callersOf.get(queue.pop()) || []) {
+          if (defined.has(caller) && !mutating.has(caller)) {
+            mutating.add(caller);
+            queue.push(caller);
+          }
+        }
+      }
+      process.stdout.write([...mutating].filter((n) => defined.has(n)).sort().join("\n"));
       ' 2>/dev/null | sort -u | tr '\n' '|' | sed 's/|$//')
   return 0
 }
@@ -984,47 +1179,9 @@ $MIG_BASENAME
     SCAN_HITS=$(awk -v tables="$BUSINESS_ROW_TABLES" -v mutfns="$MUTATING_FNS_RE" \
                     -v regtables="$REGISTRY_TABLES" -v knownviews="$KNOWN_VIEWS_RE" '
       # ---- ONE SCANNER, ONE PASS (CodeRabbit Major, PR #364) -----------------
-      # Comments and literals are not three independent removals, and running
-      # them in sequence got the interleaving wrong in both directions. Block
-      # comments came out first, so `-- see /* note` opened a block comment that
-      # no `*/` ever closed and every following line was blanked — a fail-OPEN
-      # in the primary money scanner, hiding whatever rewrite came next. A `/*`
-      # inside a string literal did the same. Read left to right instead, once,
-      # and let whichever construct opens first own the text until it closes.
-      function strip_noise(s,   out, i, c, d, n, p, q) {
-        out = ""; i = 1; n = length(s)
-        while (i <= n) {
-          c = substr(s, i, 1)
-          d = substr(s, i, 2)
-          if (inblk > 0) {
-            if (d == "/*") { inblk++; i += 2; continue }
-            if (d == "*/") { inblk--; i += 2; continue }
-            i++; continue
-          }
-          if (instr) {
-            # `it'"'"''"'"'s` is one literal, not two. Reading the doubled quote
-            # as a close would put the rest of the literal back into the syntax
-            # stream, which is how a quoted UPDATE becomes a real one.
-            if (c == "'"'"'" && substr(s, i + 1, 1) == "'"'"'") { i += 2; continue }
-            # A backslash escapes the next character only in an E-string.
-            # Elsewhere PostgreSQL treats it as an ordinary character, and
-            # skipping it would eat the closing quote of a Windows path.
-            if (c == "\\" && estr) { i += 2; continue }
-            if (c == "'"'"'") { instr = 0; estr = 0 }
-            i++; continue
-          }
-          if (d == "/*") { inblk++; i += 2; out = out " "; continue }
-          if (d == "--") break
-          if (c == "'"'"'") {
-            p = substr(out, length(out), 1)
-            q = (length(out) > 1 ? substr(out, length(out) - 1, 1) : " ")
-            estr = (p == "e" && q !~ /[a-z0-9_]/)
-            instr = 1; out = out " "; i++; continue
-          }
-          out = out c; i++
-        }
-        return out
-      }
+      # Shared with the mutating-function index since round 31 — see ONE LEXER,
+      # SHARED above for why this is a variable and not a second copy.
+      '"$AWK_STRIP_NOISE"'
       {
         raw[FNR] = $0
         line = strip_noise(tolower($0))
@@ -1660,6 +1817,59 @@ $MIG_BASENAME
     fi
 
     if [ -n "$REWRITES" ]; then
+      # ---- FOLD IN WHAT THE TRIGGERS REWRITE (Codex High, round 31) --------
+      # See the manifest block near the top of this script. A cascade target is
+      # appended as a synthetic rewrite row so that EVERY existing mechanism
+      # applies to it unchanged: its material columns join the union the digest
+      # must cover, it joins the per-table captured set, and it counts toward
+      # the one-table-per-repair rule.
+      #
+      # Only cascade targets that are themselves protected are folded in — a
+      # trigger appending to a log or queue table is legitimately unbound, the
+      # same way a direct write to one is.
+      #
+      # One hop, not the transitive closure. A second hop can only be reached
+      # through a first-hop target, and a first-hop target is either folded in
+      # here (making this at least two tables, which is already refused below)
+      # or skipped because the migration rewrites it directly (making it at
+      # least two tables by itself). So no chain that would pass can hide behind
+      # the missing hops.
+      CASCADE_UNKNOWN=""
+      CASCADE_WHY=""
+      DIRECT_TABLES=$(printf '%s\n' "$REWRITES" | cut -f2 | sort -u)
+      while IFS= read -r c_src; do
+        if [ -z "$c_src" ]; then
+          continue
+        fi
+        # Fail closed per table, not globally: a manifest that predates this
+        # table cannot say what fires on it, and a trigger body PostgreSQL
+        # stores parsed rather than as source (BEGIN ATOMIC) cannot be read at
+        # all. Either way the answer is unknown, and unknown is refused —
+        # without wedging migrations on tables the manifest does cover.
+        if ! printf '%s\n' "$TRIGGER_FANOUT_SCANNED" | grep -qx "$c_src" \
+           || printf '%s\n' "$TRIGGER_FANOUT_OPAQUE" | grep -qx "$c_src"; then
+          CASCADE_UNKNOWN="$CASCADE_UNKNOWN $c_src"
+          continue
+        fi
+        while IFS=' ' read -r f_src f_tgt f_via; do
+          if [ -z "$f_src" ] || [ "$f_src" != "$c_src" ]; then
+            continue
+          fi
+          if printf '%s\n' "$DIRECT_TABLES" | grep -qx "$f_tgt"; then
+            continue
+          fi
+          if ! printf '%s\n' "$BUSINESS_ROW_TABLES" | tr '|' '\n' | grep -qx "$f_tgt"; then
+            continue
+          fi
+          c_line=$(printf '%s\n' "$REWRITES" | awk -F'\t' -v t="$c_src" '$2 == t { print $1; exit }')
+          REWRITES="$REWRITES
+$c_line	$f_tgt	cascade	-	-	trigger $f_via on $c_src"
+          if [ -z "$CASCADE_WHY" ]; then
+            CASCADE_WHY="the write to $c_src at line $c_line fires the trigger function $f_via, which rewrites $f_tgt. Those $f_tgt rows are not in the captured id set, are not in the digest, and are not counted by the ROW_COUNT assertion, so this repair would rewrite them with no approval covering them at all. An approved-set repair binds ONE table; rewrite $f_tgt through its own migration, or waive it with an APPROVED_SET_DIGEST: NOT-REQUIRED marker that names both $c_src and $f_tgt and says why the cascade needs no approval."
+          fi
+        done <<< "$TRIGGER_FANOUT_PAIRS"
+      done <<< "$DIRECT_TABLES"
+
       FIRST_REWRITE_LINE=$(printf '%s\n' "$REWRITES" | head -1 | cut -f1)
       REWRITE_TABLES=$(printf '%s\n' "$REWRITES" | cut -f2 | sort -u)
       # Alternation of the rewritten tables, and the union of the columns those
@@ -1753,7 +1963,14 @@ $MIG_BASENAME
       # is refused instead, exactly as the second predicate was in round 10: one
       # rewritten table, one digest, one comparison. A repair spanning two
       # tables is two migrations, each binding its own approved population.
-      if [ "$REWRITE_TABLE_COUNT" -gt 1 ]; then
+      if [ -n "$CASCADE_UNKNOWN" ]; then
+        DIGEST_WHY="the trigger fan-out manifest (scripts/trigger-fanout.json) does not cover$CASCADE_UNKNOWN, so what a write to that table cascades into is unknown. A trigger that rewrites a second table does it outside the captured id set, outside the digest and outside the ROW_COUNT assertion, so an unknown fan-out is refused rather than assumed empty. Regenerate the manifest with scripts/generate-trigger-fanout.mjs."
+      # A cascade is reported on its own terms rather than through the
+      # one-table-per-repair message below, which would otherwise leave the
+      # author hunting for a second table their migration never names.
+      elif [ -n "$CASCADE_WHY" ]; then
+        DIGEST_WHY="$CASCADE_WHY"
+      elif [ "$REWRITE_TABLE_COUNT" -gt 1 ]; then
         DIGEST_WHY="this migration rewrites $REWRITE_TABLE_COUNT business tables in one file ($REWRITE_TABLES_ONE_LINE). An approved-set repair binds ONE table to ONE digest and ONE fail-closed comparison; with several, the guard cannot tell which comparison governs which digest, and dropping one table's comparison leaves its rows unprotected while the other table's check still passes. Split this into one migration per table."
       # ---- A DELETE WITH NOTHING TO BIND IS REFUSED (Codex High, round 15) --
       # The generic digest path proves "these exact rows, in this exact state,
@@ -1951,6 +2168,88 @@ $MIG_BASENAME
                 sub(/.*[ \t(]/, "", v)
                 return v
               }
+              # ---- THE PROJECTION MUST BE THE REWRITTEN ROW (Codex High, r31) --
+              # A whole-row projection excuses the entire column-coverage check,
+              # and it was accepted on the strength of its SHAPE alone: any alias
+              # would do. So a join could park the projection on something that
+              # is not the rewritten table at all —
+              #
+              #   SELECT encode(digest(string_agg(o.id::text || <sep> ||
+              #                        to_jsonb(x.*)::text, ...)))
+              #     FROM public.orders o CROSS JOIN LATERAL (SELECT 1) x
+              #    WHERE o.id = ANY(v_ids);
+              #
+              # — where every rewritten column is excused by a projection of a
+              # constant row and the digest binds nothing but the ids. The alias
+              # now has to be the rewritten table itself, or an alias declared ON
+              # it in the same statement.
+              function wr_alias_ok(span, stmt, tbl,   rest, a) {
+                rest = span
+                while (match(rest, /(to_jsonb|to_json|row_to_json|hstore)[ \t]*\([ \t]*[a-z0-9_]+\.\*/) > 0) {
+                  a = substr(rest, RSTART, RLENGTH)
+                  rest = substr(rest, RSTART + RLENGTH)
+                  sub(/\.\*$/, "", a)
+                  sub(/^.*[( \t]/, "", a)
+                  if (a == tbl) return 1
+                  if (stmt ~ ("(^|[^a-z0-9_.])(public\\.)?" tbl "([ \t]+as)?[ \t]+" a "([^a-z0-9_]|$)")) return 1
+                }
+                return 0
+              }
+              # ---- A ROW THAT HASHES TO NULL IS NOT HASHED (Codex High, r31) ---
+              # In SQL any concatenation with NULL is NULL, and string_agg SKIPS
+              # NULL inputs rather than aggregating them. So a hand-enumerated
+              # payload that touches one nullable column —
+              #
+              #   string_agg(id::text || <sep> || deleted_at::text || ..., ...)
+              #
+              # — silently drops every row whose deleted_at is unset OUT of the
+              # digest entirely. Those rows are inside the captured id set, pass
+              # the count assertion, and are rewritten with nothing about their
+              # before-state ever hashed. Choosing a nullable column is enough to
+              # carve an arbitrary subset out of the proof.
+              #
+              # The first top-level comma ends the aggregated expression; the
+              # delimiter and ORDER BY follow it.
+              function agg_payload(str,   i, ch, depth, start, n) {
+                if (match(str, /(^|[^a-z0-9_.])string_agg[ \t]*\(/) == 0) return ""
+                start = RSTART + RLENGTH
+                depth = 1
+                n = length(str)
+                for (i = start; i <= n; i++) {
+                  ch = substr(str, i, 1)
+                  if (ch == "(") depth++
+                  else if (ch == ")") { depth--; if (depth == 0) break }
+                  else if (ch == "," && depth == 1) break
+                }
+                return substr(str, start, i - start)
+              }
+              # Every top-level `||` operand has to be one that cannot be NULL:
+              # the row id (a primary key), a whole-row projection, or a value
+              # the author wrapped in coalesce/concat_ws. Callers pass
+              # literal-stripped text, so quoted separators arrive blank and are
+              # skipped.
+              function nullsafe(pay,   i, n, ch, depth, cur, parts, np, j, t) {
+                np = 0; cur = ""; depth = 0; n = length(pay)
+                for (i = 1; i <= n; i++) {
+                  ch = substr(pay, i, 1)
+                  if (ch == "(") depth++
+                  if (ch == ")") depth--
+                  if (depth == 0 && ch == "|" && substr(pay, i + 1, 1) == "|") {
+                    parts[++np] = cur; cur = ""; i++; continue
+                  }
+                  cur = cur ch
+                }
+                parts[++np] = cur
+                for (j = 1; j <= np; j++) {
+                  t = parts[j]
+                  gsub(/[ \t]+/, "", t)
+                  if (t == "") continue
+                  if (t ~ /^([a-z0-9_]+\.)?id(::[a-z0-9_]+)*$/) continue
+                  if (t ~ /^(coalesce|concat_ws|concat|quote_nullable|to_jsonb|to_json|row_to_json|hstore)\(/) continue
+                  return 0
+                }
+                return 1
+              }
               FNR >= fl { next }
               { l = tolower($0); sub(/--.*/, "", l); buf = buf " " l }
               END {
@@ -1992,6 +2291,9 @@ $MIG_BASENAME
                   if (span == "") { print "has no parsable hash-call arguments"; exit }
                   if (span !~ /(^|[^a-z0-9_.])string_agg[ \t]*\(/) {
                     print "does not hash a string_agg() over the affected rows — a digest that is not an ordered aggregate of those rows is not a digest OF them"; exit
+                  }
+                  if (!nullsafe(agg_payload(span))) {
+                    print "builds the hashed value by concatenating something that can be NULL — in SQL any concatenation with NULL is NULL and string_agg() skips NULL inputs, so every row with an unset value in that expression drops OUT of the digest while still passing the count assertion, and is rewritten with nothing about it ever hashed. Hash to_jsonb(<alias>.*) over the rewritten table, or wrap each value in coalesce()"; exit
                   }
                   if (!tok_in(span, "id")) {
                     print "does not cover the row ids inside the hashed expression"; exit
@@ -2078,19 +2380,20 @@ $MIG_BASENAME
                 # split() hands back a trailing empty field and a plain
                 # `ntbl == 1` would never be true for a single-table repair.
                 nrealtbl = 0
-                for (k = 1; k <= ntbl; k++) if (tb[k] != "") nrealtbl++
+                wrtbl = ""
+                for (k = 1; k <= ntbl; k++) if (tb[k] != "") { nrealtbl++; wrtbl = tb[k] }
+                # The alias inside the projection has to be the rewritten table
+                # or an alias declared on it — see THE PROJECTION MUST BE THE
+                # REWRITTEN ROW above.
                 wholerow = 0
-                if (nrealtbl == 1 && (spanall ~ /(to_jsonb|to_json|row_to_json|hstore)[ \t]*\([ \t]*[a-z0-9_]+\.\*/ ||
-                                      spanall ~ /\([ \t]*[a-z0-9_]+\.\*[ \t]*\)[ \t]*::/)) {
-                  wholerow = 1
-                }
+                if (nrealtbl == 1 && wr_alias_ok(spanall, stmtall, wrtbl)) wholerow = 1
                 missc = ""
                 for (k = 1; k <= ncol; k++) {
                   if (c[k] == "") continue
                   if (!tok_in(spanall, c[k])) missc = missc " " c[k]
                 }
                 if (missc != "" && !wholerow) {
-                  print "leaves the rewritten column(s)" missc " outside the hashed expression — every column the migration assigns has to be covered, not just one of them. Hash to_jsonb(<alias>.*) to bind the whole row at once"; exit
+                  print "leaves the rewritten column(s)" missc " outside the hashed expression — every column the migration assigns has to be covered, not just one of them. Hash to_jsonb(<alias>.*), where <alias> is the rewritten table itself, to bind the whole row at once"; exit
                 }
                 # One captured set PER TABLE, reported as "table=var" pairs so the
                 # caller can hold every write on a table to the set for it.
@@ -2191,7 +2494,7 @@ $MIG_BASENAME
             END {
               gsub(/[^a-z0-9_]+/, " ", buf)
               n = split(buf, w, / +/)
-              started = 0; depth = 0
+              started = 0; depth = 0; nested = 0
               for (i = 1; i <= n; i++) {
                 # Anything ahead of the comparison IF is not inside its branch.
                 if (!started) {
@@ -2199,6 +2502,28 @@ $MIG_BASENAME
                   if (w[i] == "if") { started = 1; depth = 1 }
                   continue
                 }
+                # A BLOCK THAT NEVER RUNS IS NOT AN ABORT (Codex High, round 31).
+                # Reaching the RAISE was measured by IF nesting alone, so a RAISE
+                # parked inside a block that never iterates counted as the abort:
+                #
+                #   IF actual IS DISTINCT FROM <approved hex> THEN
+                #     WHILE false LOOP
+                #       RAISE EXCEPTION APPROVED_SET_DRIFTED ...;
+                #     END LOOP;
+                #   END IF;
+                #
+                # The branch falls straight through to the write. A LOOP or CASE
+                # opened inside the branch must now close before a RAISE counts.
+                # A CASE *expression* ends with a bare END rather than END CASE,
+                # so one in this branch leaves the nesting open and the migration
+                # is reported: a false alarm, not a hole, and this branch is a
+                # single RAISE in every real repair.
+                if (w[i] == "end" && (w[i + 1] == "loop" || w[i + 1] == "case")) {
+                  if (nested > 0) nested--
+                  i++
+                  continue
+                }
+                if (w[i] == "loop" || w[i] == "case") { nested++; continue }
                 if (w[i] == "end" && w[i + 1] == "if") {
                   depth--
                   if (depth <= 0) exit
@@ -2206,8 +2531,8 @@ $MIG_BASENAME
                   continue
                 }
                 if (w[i] == "if") { depth++; continue }
-                if (depth == 1 && (w[i] == "else" || w[i] == "elsif" || w[i] == "elseif")) exit
-                if (depth == 1 && w[i] == "raise" && w[i + 1] == "exception") { print "yes"; exit }
+                if (depth == 1 && nested == 0 && (w[i] == "else" || w[i] == "elsif" || w[i] == "elseif")) exit
+                if (depth == 1 && nested == 0 && w[i] == "raise" && w[i + 1] == "exception") { print "yes"; exit }
               }
             }
           ' "$PROOF_FILE" | grep -c yes || true)
@@ -2336,10 +2661,20 @@ $MIG_BASENAME
                 # answer here is the same as for digests and for multi-table
                 # repairs — refuse the shape. One capture, one digest, one
                 # comparison, and the variable is never written again.
+                #
+                # ROUND 31 (Codex High). An ELEMENT write is a write, and none of
+                # them were counted: `v_ids[1] := <some other id>` puts a subscript
+                # between the name and the `:=`, so the pattern below matched
+                # nothing and the approved set could be edited id by id after the
+                # digest had already passed. Every write reachable to the digest
+                # comparison had been closed except the narrowest one. A subscript
+                # cannot contain `=`, so it can be skipped over without needing to
+                # parse what is inside it.
                 m = split(all, at, /;/)
                 for (i = 1; i <= m; i++) {
                   s = at[i]
-                  if (s ~ ("into[ \t]+(strict[ \t]+)?" var "([^a-z0-9_]|$)") || s ~ (var "[ \t]*:="))
+                  if (s ~ ("into[ \t]+(strict[ \t]+)?" var "([^a-z0-9_]|$)") ||
+                      s ~ (var "[ \t]*(\\[[^=]*\\][ \t]*)*:="))
                     assigns++
                 }
                 if (assigns > 1) { print "reassigned\t" assigns; exit }
@@ -2373,7 +2708,7 @@ $MIG_BASENAME
           fi
 
           if [ -z "$SET_BIND_WHY" ] && [ "$COMPUTED" -eq 1 ] && [ -n "$DIGEST_SET_VAR" ]; then
-            COUNT_STATUS=$(awk -v var="$DIGEST_SET_VAR" -v Q="'" '
+            COUNT_STATUS=$(awk -v var="$DIGEST_SET_VAR" -v Q="'" -v tables="$BUSINESS_ROW_TABLES" '
               function strip(l,   out, a, b, c, m, p) {
                 l = tolower(l)
                 out = ""
@@ -2451,18 +2786,41 @@ $MIG_BASENAME
               # on the assertion line itself read as an abort while being
               # unreachable. Walking words puts every nested block exactly where
               # it opens and closes.
-              function raise_at_depth1(from,   j, b, nn, w, k, depth, started) {
+              # ROUND 31 (Codex High). Reaching the RAISE was read as depth of IF
+              # nesting alone, so a RAISE wrapped in a block that never iterates
+              # counted as an abort:
+              #
+              #   IF actual IS DISTINCT FROM <approved hex> THEN
+              #     WHILE false LOOP
+              #       RAISE EXCEPTION APPROVED_SET_DRIFTED ...;
+              #     END LOOP;
+              #   END IF;
+              #
+              # The mismatch arm is entered and nothing happens — the same shape
+              # round 19 closed for `IF false THEN RAISE`, rebuilt out of a loop.
+              # So LOOP and CASE count as nesting too, and the RAISE has to sit
+              # outside all of it. A CASE *expression* closes with a bare END
+              # rather than END CASE, so one in this branch leaves the nesting
+              # open and the migration is reported: a false alarm, not a hole,
+              # and this branch is a single RAISE in every real repair.
+              function raise_at_depth1(from,   j, b, nn, w, k, depth, started, nested) {
                 b = ""
                 for (j = from; j <= n; j++) b = b " " ln[j]
                 gsub(/[^a-z0-9_]+/, " ", b)
                 nn = split(b, w, / +/)
-                started = 0; depth = 0
+                started = 0; depth = 0; nested = 0
                 for (k = 1; k <= nn; k++) {
                   if (!started) {
                     if (w[k] == "end" && w[k + 1] == "if") { k++; continue }
                     if (w[k] == "if") { started = 1; depth = 1 }
                     continue
                   }
+                  if (w[k] == "end" && (w[k + 1] == "loop" || w[k + 1] == "case")) {
+                    if (nested > 0) nested--
+                    k++
+                    continue
+                  }
+                  if (w[k] == "loop" || w[k] == "case") { nested++; continue }
                   if (w[k] == "end" && w[k + 1] == "if") {
                     depth--
                     if (depth <= 0) return 0
@@ -2471,8 +2829,8 @@ $MIG_BASENAME
                   }
                   if (w[k] == "if") { depth++; continue }
                   # The ELSE arm is not the mismatch arm (round 13).
-                  if (depth == 1 && (w[k] == "else" || w[k] == "elsif" || w[k] == "elseif")) return 0
-                  if (depth == 1 && w[k] == "raise" && w[k + 1] == "exception") return 1
+                  if (depth == 1 && nested == 0 && (w[k] == "else" || w[k] == "elsif" || w[k] == "elseif")) return 0
+                  if (depth == 1 && nested == 0 && w[k] == "raise" && w[k + 1] == "exception") return 1
                 }
                 return 0
               }
@@ -2489,6 +2847,43 @@ $MIG_BASENAME
                   na += gsub(("into[ \t]+(strict[ \t]+)?" v "([^a-z0-9_]|$)"), " @ ", c)
                 }
                 return na
+              }
+              # ---- ROW_COUNT BELONGS TO THE LAST STATEMENT (Codex High, r31) --
+              # Every check above treats the counter as though it measured the
+              # protected write. It does not. ROW_COUNT is a property of the most
+              # recent statement the engine ran, whatever that was, so one
+              # statement slipped in between detaches the measurement from the
+              # write without touching anything the earlier rounds look at:
+              #
+              #   UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);
+              #   PERFORM 1 FROM unnest(v_ids);
+              #   GET DIAGNOSTICS n = ROW_COUNT;
+              #   IF n <> array_length(v_ids, 1) THEN RAISE EXCEPTION ...
+              #
+              # `unnest` returns exactly array_length(v_ids, 1) rows, so `n` is
+              # the approved count by construction and the assertion compares it
+              # with itself — the round-19 defect again, rebuilt out of an extra
+              # statement instead of an extra assignment. The UPDATE meanwhile
+              # may have touched no rows at all and the migration reports success.
+              #
+              # So the statement immediately before the GET DIAGNOSTICS has to be
+              # DML on a protected table. Statements are split on `;` and empty
+              # chunks skipped, which is what lets a comment or a blank line sit
+              # between the write and its measurement; anything that executes may
+              # not.
+              function dml_precedes(gline,   j, s, nc, ch, k, last) {
+                s = ""
+                for (j = 1; j <= gline; j++) s = s " " ln[j]
+                if (match(s, /get[ \t]+diagnostics/)) s = substr(s, 1, RSTART - 1)
+                nc = split(s, ch, /;/)
+                for (k = nc; k >= 1; k--) {
+                  last = ch[k]
+                  gsub(/[ \t]+/, " ", last)
+                  gsub(/^ +| +$/, "", last)
+                  if (last == "") continue
+                  return (last ~ ("(^|[^a-z0-9_])(update|merge[ \t]+into|delete[ \t]+from|insert[ \t]+into|truncate([ \t]+table)?)[ \t]+(only[ \t]+)?(public\\.)?(" tables ")([^a-z0-9_]|$)"))
+                }
+                return 0
               }
               { ln[FNR] = strip($0); n = FNR }
               END {
@@ -2530,8 +2925,17 @@ $MIG_BASENAME
                     if (assign_count(v, i) != 1) reasg = 1
                   }
                   if (reasg) { reassigned = 1; continue }
+                  # ...and it must have measured the WRITE, not whatever ran last.
+                  detached = 0
+                  for (v in rcln) {
+                    if (ln[i] !~ ("(^|[^a-z0-9_])" v "([^a-z0-9_]|$)")) continue
+                    if (rcln[v] >= i) continue
+                    if (!dml_precedes(rcln[v])) detached = 1
+                  }
+                  if (detached) { intervening = 1; continue }
                   if (raise_at_depth1(i)) { print "OK"; exit }
                 }
+                if (intervening) { print "intervening-statement"; exit }
                 if (reassigned) { print "reassigned-count"; exit }
                 if (operand) { print "unbound-count"; exit }
                 if (polarity) { print "polarity"; exit }
@@ -2542,6 +2946,8 @@ $MIG_BASENAME
               OK) ;;
               no-count)
                 SET_BIND_WHY="the writes never capture GET DIAGNOSTICS <n> = ROW_COUNT, so a rewrite that silently touched fewer rows than were approved would still report success" ;;
+              intervening-statement)
+                SET_BIND_WHY="another statement runs between the protected write and the GET DIAGNOSTICS that is supposed to measure it. ROW_COUNT reports the LAST statement the engine ran, not the write, so the counter holds that statement's row count — a PERFORM over the approved ids, for example, makes the assertion compare the approved count with itself while the write may have touched no rows at all. Put GET DIAGNOSTICS <n> = ROW_COUNT immediately after the write, with nothing executable between them" ;;
               reassigned-count)
                 SET_BIND_WHY="the row count it compares is assigned more than once before the assertion, so what the assertion reads is whatever was written last — a later \`<n> := array_length($DIGEST_SET_VAR, 1)\` turns the check into the approved count compared with itself. Let exactly one GET DIAGNOSTICS <n> = ROW_COUNT assign it, and give a second write its own counter" ;;
               unbound-count)

@@ -414,4 +414,159 @@ eq(T(null), [], "a null body does not throw");
     "round-29: format() is still not readable");
 }
 
+
+// ------------------- ROUND 30: a routine runs wherever a statement runs it
+// The bypass the round-30 review submitted, reproduced exactly:
+//
+//   Migration A defines a mutator and a thin wrapper around it.
+//   Migration B runs `INSERT INTO scratch VALUES (public.wrapper());`
+//
+// Migration B was reported as `targets=["scratch.*"], unknownCalls=[]` — the
+// wrapper was invisible, so no override and no approved-set digest was asked
+// for while PostgreSQL performed the protected rewrite.
+//
+// TWO separate defects produced it, and only fixing both closes the hole:
+//
+//   1. The statement had to BEGIN with a verb that runs (SELECT/CALL/PERFORM/
+//      WITH). An INSERT was discarded whole, operands included. But a routine
+//      runs wherever a statement runs it, not only where the statement starts.
+//   2. The call-name pattern CONSUMED the character in front of the name. In
+//      `VALUES (public.wrapper())` the match on `values (` ate the open paren,
+//      so `public.wrapper(` had no separator left to match against. A call
+//      sitting immediately inside another call's parentheses — which is
+//      precisely where an ARGUMENT sits — was unreadable even once the
+//      statement was scanned.
+//
+// The wrapper is deliberately NOT defined in the analysed SQL here. A resident
+// routine is the whole point: its body is in the database, this file cannot
+// read it, and the only safe answer is to refuse.
+{
+  const SCRATCH = "CREATE TABLE public.scratch(v int);\n";
+  const refuses = (sql) => {
+    const r = applyTimeWriteTargets(sql);
+    // `unknownCalls` is an ARRAY. Asking it for `.size` yields undefined, which
+    // reads as false and quietly passes every one of these.
+    return r.unresolved || r.unknownCalls.length > 0;
+  };
+
+  // Each of these executes a database-resident routine as it applies.
+  for (const [label, sql] of [
+    ["INSERT ... VALUES", `${SCRATCH}INSERT INTO public.scratch VALUES (public.wrapper());`],
+    ["INSERT (cols) VALUES", `${SCRATCH}INSERT INTO public.scratch (v) VALUES (public.wrapper());`],
+    ["INSERT ... SELECT", `${SCRATCH}INSERT INTO public.scratch SELECT public.wrapper();`],
+    ["INSERT ... ON CONFLICT DO UPDATE",
+      `${SCRATCH}INSERT INTO public.scratch VALUES (1) ON CONFLICT (v) DO UPDATE SET v = public.wrapper();`],
+    ["UPDATE ... SET", `${SCRATCH}UPDATE public.scratch SET v = public.wrapper();`],
+    ["UPDATE ... WHERE", `${SCRATCH}UPDATE public.scratch SET v = 1 WHERE public.wrapper() > 0;`],
+    ["DELETE ... WHERE", `${SCRATCH}DELETE FROM public.scratch WHERE v = public.wrapper();`],
+    ["MERGE ... UPDATE SET",
+      `${SCRATCH}MERGE INTO public.scratch t USING (SELECT 1 x) s ON t.v = s.x WHEN MATCHED THEN UPDATE SET v = public.wrapper();`],
+    ["bare VALUES", "VALUES (public.wrapper());"],
+    ["CREATE TABLE AS", "CREATE TABLE public.t2 AS SELECT public.wrapper() AS v;"],
+    ["CREATE MATERIALIZED VIEW", "CREATE MATERIALIZED VIEW public.mv AS SELECT public.wrapper() AS v;"],
+    ["ALTER TABLE ... USING", `${SCRATCH}ALTER TABLE public.scratch ALTER COLUMN v TYPE bigint USING public.wrapper();`],
+    ["CREATE INDEX on an expression", `${SCRATCH}CREATE INDEX ix ON public.scratch (public.wrapper());`],
+    ["CREATE INDEX ... USING btree (expr)", `${SCRATCH}CREATE INDEX ix ON public.scratch USING btree (public.wrapper(v));`],
+    ["SELECT (the shape that always worked)", "SELECT public.wrapper();"],
+  ]) {
+    ok(refuses(sql), `round-30: a resident routine run by ${label} fails closed`);
+  }
+
+  // The reproducer verbatim, checked in full: the scratch write is still
+  // reported AND the wrapper is now named, so the refusal can explain itself.
+  const repro = applyTimeWriteTargets(`${SCRATCH}INSERT INTO public.scratch VALUES (public.wrapper());`);
+  ok(repro.targets.has("scratch.*"), "round-30: the INSERT's own write is still reported");
+  ok(repro.unknownCalls.includes("wrapper"),
+    "round-30: the resident routine is named in unknownCalls");
+
+  // THE OTHER DIRECTION, AND THE REASON THIS IS AFFORDABLE. Reading operands
+  // reaches expressions no scan touched before, so the quiet cases matter as
+  // much as the loud ones: if any of these turns red, ordinary schema work
+  // starts demanding overrides and the guard gets switched off. Measured over
+  // all 884 migrations in this tree, the widening changed exactly one file's
+  // classification, and that one was a genuine apply-time reach.
+  for (const [label, sql] of [
+    ["a plain CREATE TABLE", "CREATE TABLE public.t3 (v numeric(12,2), w varchar(20));"],
+    ["a view definition", "CREATE VIEW public.v1 AS SELECT public.wrapper() AS v;"],
+    ["a policy predicate", "CREATE POLICY p ON public.scratch USING (public.wrapper());"],
+    ["a column DEFAULT", "CREATE TABLE public.t4 (v int DEFAULT public.wrapper());"],
+    ["a plain index", `${SCRATCH}CREATE INDEX ix2 ON public.scratch (v);`],
+    ["a plain btree index", `${SCRATCH}CREATE INDEX ix3 ON public.scratch USING btree (v);`],
+    ["an index over a builtin", `${SCRATCH}CREATE INDEX ix4 ON public.scratch (lower(v::text));`],
+    ["ADD CONSTRAINT ... CHECK", `${SCRATCH}ALTER TABLE public.scratch ADD CONSTRAINT c CHECK (v > 0);`],
+    ["SET DEFAULT", `${SCRATCH}ALTER TABLE public.scratch ALTER COLUMN v SET DEFAULT 0;`],
+    ["a foreign key", `${SCRATCH}ALTER TABLE public.scratch ADD CONSTRAINT fk FOREIGN KEY (v) REFERENCES public.other(id);`],
+    ["an INSERT of literals", `${SCRATCH}INSERT INTO public.scratch (v) VALUES (1), (2);`],
+    ["an UPDATE using only builtins", `${SCRATCH}UPDATE public.scratch SET v = round(v, 2) WHERE v IS NOT NULL;`],
+  ]) {
+    ok(!refuses(sql), `round-30: ${label} asks for nothing`);
+  }
+
+  // A view and a policy are stored, not run — but writing THROUGH the view at
+  // apply time still runs whatever the view's expression calls.
+  ok(refuses("CREATE VIEW public.v2 AS SELECT public.wrapper() AS v;\nINSERT INTO public.v2 VALUES (public.wrapper());"),
+    "round-30: storing an expression is quiet; executing it is not");
+}
+
+// ------------------- ROUND 31: a control structure still runs its statements
+{
+  const refuses = (sql) => {
+    const r = applyTimeWriteTargets(sql);
+    return r.unresolved || r.unknownCalls.length > 0;
+  };
+
+  // Peeling block keywords off the FRONT of a fragment only reaches a statement
+  // that begins it. `IF <cond> THEN <stmt>` puts a condition in between, so the
+  // executing statement was never read and the resident routine it calls was
+  // reported as never called.
+  for (const [label, sql] of [
+    ["IF ... THEN SELECT", "DO $$ BEGIN IF true THEN SELECT public.wrapper(); END IF; END $$;"],
+    ["IF ... THEN INSERT", "DO $$ BEGIN IF true THEN INSERT INTO public.scratch VALUES (public.wrapper()); END IF; END $$;"],
+    ["ELSE arm", "DO $$ BEGIN IF false THEN NULL; ELSE SELECT public.wrapper(); END IF; END $$;"],
+    ["ELSIF arm", "DO $$ BEGIN IF false THEN NULL; ELSIF true THEN SELECT public.wrapper(); END IF; END $$;"],
+    ["WHILE ... LOOP body", "DO $$ BEGIN WHILE true LOOP SELECT public.wrapper(); END LOOP; END $$;"],
+    ["FOR ... IN <query>", "DO $$ DECLARE r record; BEGIN FOR r IN SELECT public.wrapper() LOOP NULL; END LOOP; END $$;"],
+    ["EXCEPTION ... THEN", "DO $$ BEGIN NULL; EXCEPTION WHEN others THEN SELECT public.wrapper(); END $$;"],
+    ["CASE ... THEN in a running statement", "DO $$ BEGIN SELECT CASE WHEN true THEN public.wrapper() END; END $$;"],
+  ]) {
+    ok(refuses(sql), `round-31: a resident routine run from ${label} fails closed`);
+  }
+
+  // The definition branches return their own executing tail and never fall
+  // through to the control-structure scan, so an expression that is STORED by a
+  // definition — a CHECK's CASE, a policy's USING, a column DEFAULT — must stay
+  // quiet exactly as it did before.
+  for (const [label, sql] of [
+    ["a CHECK holding a CASE", "CREATE TABLE public.t5 (v int, CONSTRAINT c CHECK (CASE WHEN v > 0 THEN public.wrapper() ELSE 0 END > 0));"],
+    ["a policy predicate with a CASE", "CREATE POLICY p2 ON public.scratch USING (CASE WHEN true THEN public.wrapper() ELSE false END);"],
+    ["a view body with a CASE", "CREATE VIEW public.v3 AS SELECT CASE WHEN true THEN public.wrapper() END AS v;"],
+    ["a column DEFAULT with a CASE", "CREATE TABLE public.t6 (v int DEFAULT (CASE WHEN true THEN public.wrapper() ELSE 0 END));"],
+  ]) {
+    ok(!refuses(sql), `round-31: ${label} is stored, not run`);
+  }
+
+  // A routine body may legally be a single-quoted string instead of `$$`.
+  // Deploying it runs nothing, so it must not be charged as a dynamic write —
+  // which is what demanded a one-shot money-repair override for an ordinary
+  // function deployment.
+  const quoted = applyTimeWriteTargets(
+    "CREATE FUNCTION public.f31() RETURNS void LANGUAGE sql AS 'UPDATE public.order_items SET total_price = 0';");
+  eq(quoted.dynamicWrites.length, 0, "round-31: a single-quoted routine body is not an apply-time write");
+  ok(!quoted.unresolved, "round-31: defining a routine from a quoted body resolves");
+  eq([...quoted.targets].length, 0, "round-31: defining a routine writes nothing");
+
+  // ...but calling it in the same migration folds the body back in, exactly as
+  // the `$$` path does.
+  const called = applyTimeWriteTargets(
+    "CREATE FUNCTION public.f31() RETURNS void LANGUAGE sql AS 'UPDATE public.order_items SET total_price = 0';\n" +
+    "SELECT public.f31();");
+  ok([...called.targets].some((t) => t.startsWith("order_items.")),
+    "round-31: calling the quoted-body routine reports its write");
+
+  // A quote that is NOT a body must keep its old handling.
+  const comment = applyTimeWriteTargets(
+    "COMMENT ON FUNCTION public.f31() IS 'this used to UPDATE public.order_items';");
+  eq([...comment.targets].length, 0, "round-31: a COMMENT's text writes nothing");
+}
+
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

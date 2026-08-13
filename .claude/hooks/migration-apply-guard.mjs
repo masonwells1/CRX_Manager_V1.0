@@ -642,7 +642,41 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
       // target project and carry a fresh timestamp, and it is CONSUMED on
       // sight — deleted before the verdict is decided, so it authorizes one
       // apply attempt whether that attempt is then accepted or refused.
-      const ovPath = path.join(stateDir, "one-shot-replay-override.json");
+      // ROUND 31. The override was read from `stateDir` — the PRIMARY checkout,
+      // because CLAUDE_PROJECT_DIR is pinned there even when the session works
+      // in a linked worktree. That is the same mismatch the proof lookup above
+      // was fixed for on 2026-07-29: an operator authorizing a replay from the
+      // worktree that actually holds the migration wrote a perfectly good
+      // override somewhere this guard never looked, and the apply was refused no
+      // matter how deliberate the authorization. Refusing is the safe direction,
+      // so this is friction rather than a hole — but it is friction on the path
+      // an operator only reaches when a money replay genuinely has to happen,
+      // which is the worst possible place to make someone fight the tooling.
+      //
+      // So the override resolves over `proofDirs`: the primary checkout plus
+      // THIS session's own worktree, and nothing else. That is the same trust
+      // boundary the proofs use and it is deliberately narrower than "any
+      // worktree" — a sibling session's override must not authorize this apply.
+      //
+      // ONE OVERRIDE, OR NONE. If both checkouts hold one, this refuses instead
+      // of picking. Spending one would leave the other sitting there valid for
+      // the rest of its window, ready to release a second apply — the exact
+      // multiple-release the claim-and-consume machinery below exists to
+      // prevent, reintroduced at the level of which file to open. Ambiguous
+      // authorization is not authorization.
+      const ovCandidates = proofDirs.map((d) => path.join(d, "one-shot-replay-override.json"));
+      const ovPresent = ovCandidates.filter((p) => existsSync(p));
+      if (ovPresent.length > 1) {
+        out("block",
+          `ONE-SHOT REPLAY GUARD: a replay override exists in more than one checkout ` +
+          `(${ovPresent.join(", ")}). Consuming one would leave the other valid for the rest of ` +
+          `its window, so a single authorization could release a second apply — refusing rather ` +
+          `than choosing.\n\n` +
+          `Delete all but the one you meant, then retry.`);
+      }
+      // With none present this is the primary checkout's path, exactly as before,
+      // so the no-override path is unchanged.
+      const ovPath = ovPresent[0] || ovCandidates[0];
       const OVERRIDE_MAX_AGE_MS = 30 * 60 * 1000;
       const OVERRIDE_MAX_SKEW_MS = 60 * 1000;
       let overrideOk = false;
