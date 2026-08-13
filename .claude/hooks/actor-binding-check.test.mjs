@@ -2360,6 +2360,30 @@ r = runHook(
 ok(isDeny(r), "a readable safe overload cannot hide SECURITY DEFINER elevation of another signature");
 
 r = runHook(
+  fn(MUTATION, "p_performed_by uuid", "SECURITY DEFINER")
+    .replace("public.test_fn", "public.shared_name") +
+  "\n" +
+  fn("NULL;", "p_actor_id uuid", "SECURITY INVOKER")
+    .replace("public.test_fn", "private.shared_name") +
+  "\nALTER FUNCTION private.shared_name(uuid) SECURITY INVOKER;"
+);
+ok(isDeny(r), "an unrelated cross-schema invoker ALTER cannot demote an unbound SECURITY DEFINER mutator");
+
+r = runHook(
+  fn("NULL;", "p_actor_id uuid", "SECURITY INVOKER")
+    .replace("public.test_fn", "public.shared_name") +
+  "\nALTER FUNCTION private.shared_name(uuid) SECURITY DEFINER;"
+);
+ok(isDeny(r), "a readable cross-schema invoker cannot hide SECURITY DEFINER elevation of an existing routine");
+
+r = runHook(
+  fn(MUTATION, "p_performed_by uuid", "SECURITY DEFINER")
+    .replace("public.test_fn", "public.unqualified_mode") +
+  "\nALTER FUNCTION unqualified_mode(uuid) SECURITY INVOKER;"
+);
+ok(isDeny(r), "an unqualified ALTER cannot ambiguously demote a schema-qualified SECURITY DEFINER mutator");
+
+r = runHook(
   fn(MUTATION, "p_performed_by uuid", "SECURITY INVOKER").replace("test_fn", "final_invoker") +
   "\nALTER FUNCTION public.final_invoker(uuid) SECURITY DEFINER;" +
   "\nALTER FUNCTION public.final_invoker(uuid) SECURITY INVOKER;"

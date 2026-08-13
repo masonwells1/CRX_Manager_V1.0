@@ -1969,9 +1969,12 @@ function alteredRoutineSecurityModes(structuralSql) {
 }
 
 function routineNamesMayMatch(left, right) {
-  if (left === null || right === null) return true;
-  if (left === right) return true;
-  return left.split(".").at(-1) === right.split(".").at(-1);
+  // A SECURITY mode change may reduce risk only when both sides identify the
+  // same schema-qualified routine. PostgreSQL search_path makes unqualified
+  // names ambiguous, and a shared basename across schemas is not an identity.
+  if (left === null || right === null) return false;
+  if (!left.includes(".") || !right.includes(".")) return false;
+  return left === right;
 }
 
 function beforeTopLevelDefault(argument) {
