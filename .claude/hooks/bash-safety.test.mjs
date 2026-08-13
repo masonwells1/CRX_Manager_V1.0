@@ -11,11 +11,13 @@ import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  checkMaintenanceProducerInvocation,
   checkDangerousCommand,
   checkCommandDeep,
   checkMigrationModify,
   checkOneShotReplayCommand,
   extractNpmRunNames,
+  maintenanceProducerCommandMentioned,
   resolveNpmScriptChain,
   readPackageScripts,
 } from "./bash-safety-lib.mjs";
@@ -56,6 +58,29 @@ ok(!checkDangerousCommand("git push origin feature/x"), "ordinary feature push a
 ok(!checkDangerousCommand(""), "empty command allowed");
 ok(!checkDangerousCommand(null), "null command allowed (no throw)");
 
+// ── maintenance producer: current outer shell guard closes the pre-bootstrap
+//    TOCTOU gap before the generated production-action guard is installed. ──
+for (const command of [
+  "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
+  "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12",
+  "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --protect-producer",
+]) {
+  eq(checkMaintenanceProducerInvocation(command), null, `exact producer invocation allowed by shell guard: ${command}`);
+}
+for (const command of [
+  "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify; Write-Output chained",
+  "[IO.File]::WriteAllText('scripts/apply-live-testdata-maintenance-20260812.mjs','owned'); node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
+  "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify --unknown",
+  "node scripts/apply-live-testdata-maintenance-20260812.mjs --protect-producer --approved-by-mason=2026-08-12",
+  "node \"scripts/apply-live-testdata-maintenance-20260812.mjs\" --verify",
+  "node scripts\\apply-live-testdata-maintenance-20260812.mjs --verify",
+  "cmd /c node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
+  "env FLAG=1 node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
+]) {
+  ok(maintenanceProducerCommandMentioned(command), `producer spelling recognized by shell guard: ${command}`);
+  ok(checkDangerousCommand(command), `non-literal producer invocation denied by shell guard: ${command}`);
+}
+
 // ── net-new: shell-redirect .env write (2026-07-13, shared with mcp-tool-guard) ──
 ok(checkDangerousCommand("echo SECRET=x > .env"), "shell-redirect write to .env blocked");
 ok(checkDangerousCommand("echo SECRET=x >> .env.local"), "shell-redirect append to .env.local blocked");
@@ -92,6 +117,7 @@ ok(!checkDangerousCommand("cat .env.example"), "reading .env.example is not a wr
       scripts: {
         safe: "vite build",
         dangerous: "git push --force origin main",
+        producer: "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
         "chain:a": "npm run chain:b",
         "chain:b": "npm run chain:c",
         "chain:c": "rm -rf src",
@@ -117,6 +143,7 @@ ok(!checkDangerousCommand("cat .env.example"), "reading .env.example is not a wr
 
     ok(!checkCommandDeep("npm run safe", tmp), "npm run safe stays allowed");
     ok(checkCommandDeep("npm run dangerous", tmp), "npm run dangerous is caught via its resolved script body");
+    ok(checkCommandDeep("npm run producer", tmp), "producer invocation hidden in an npm script is denied");
     ok(
       checkCommandDeep("npm run chain:a", tmp),
       "a dangerous command hidden 2 levels deep behind chained npm scripts is caught (FIX 2)"
@@ -205,6 +232,15 @@ ok(!r.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs allows np
 r = runHook({ tool_name: "Bash", tool_input: { command: "git push --force origin main" } });
 eq(r.status, 0, "bash-safety.mjs exits 0 on dangerous command");
 ok(r.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs denies a force push");
+
+r = runHook({
+  tool_name: "PowerShell",
+  tool_input: {
+    command: "[IO.File]::WriteAllText('scripts/apply-live-testdata-maintenance-20260812.mjs','owned'); node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
+  },
+});
+eq(r.status, 0, "bash-safety.mjs exits 0 after denying a chained producer rewrite");
+ok(r.stdout.includes('"permissionDecision":"deny"'), "current shell guard denies the exact producer TOCTOU reproduction");
 
 for (const command of [
   "git push origin feature/test --force",

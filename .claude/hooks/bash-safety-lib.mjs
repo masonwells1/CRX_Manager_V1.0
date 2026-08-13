@@ -14,6 +14,27 @@ import { readFileSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 
+const MAINTENANCE_PRODUCER_NAME = "apply-live-testdata-maintenance-20260812.mjs";
+const MAINTENANCE_PRODUCER_ALLOWED_COMMANDS = new Set([
+  "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
+  "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12",
+  "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --protect-producer",
+]);
+
+export function maintenanceProducerCommandMentioned(command) {
+  const compact = String(command || "")
+    .toLowerCase()
+    .replace(/[\s\\/"'`^]/g, "");
+  return compact.includes(MAINTENANCE_PRODUCER_NAME);
+}
+
+export function checkMaintenanceProducerInvocation(command) {
+  const value = String(command || "").trim();
+  if (!maintenanceProducerCommandMentioned(value)) return null;
+  if (MAINTENANCE_PRODUCER_ALLOWED_COMMANDS.has(value)) return null;
+  return "Blocked maintenance producer invocation. Use one exact repository-relative node command only; chaining, wrappers, substitutions, alternate spellings, reordered or unknown arguments, and indirect writers are denied.";
+}
+
 // Ordered [pattern, reason] checks. First match wins. Verbatim from the
 // original bash-safety.mjs inline table (2026-07 extraction), plus one addition
 // marked below.
@@ -184,6 +205,8 @@ export function checkOneShotReplayCommand(cmd, cwd) {
 export function checkDangerousCommand(cmd) {
   const text = String(cmd || "");
   if (!text) return null;
+  const producerReason = checkMaintenanceProducerInvocation(text);
+  if (producerReason) return producerReason;
   for (const [re, reason] of DANGEROUS_CMD_CHECKS) {
     if (re.test(text)) return reason;
   }
@@ -300,6 +323,9 @@ export function checkCommandDeep(cmd, cwd) {
   const seen = new Set();
   for (const name of names) {
     for (const resolved of resolveNpmScriptChain(scripts, name, 0, 3, seen)) {
+      if (maintenanceProducerCommandMentioned(resolved)) {
+        return "Blocked indirect maintenance producer invocation. Run the exact repository-relative node command directly; npm scripts and lifecycle wrappers are denied.";
+      }
       // Run BOTH check families on the resolved body — a script that rewrites an
       // existing migration is as dangerous as one that force-pushes (Codex P1
       // 2026-07-13: only checkDangerousCommand ran here, so npm indirection
