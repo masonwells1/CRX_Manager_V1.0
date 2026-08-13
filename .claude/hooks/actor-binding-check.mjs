@@ -1364,6 +1364,35 @@ function isTopLevelPlpgsqlStatement(controlBody, beforeIndex) {
   return beginDepth === 1 && ifDepth === 0 && loopDepth === 0 && caseDepth === 0;
 }
 
+/** An exception handler catches an actor refusal only when it belongs to the
+ * routine's outer BEGIN block. Nested handlers are ordinary local cleanup and
+ * must not make an already-proven outer identity guard unreadable. */
+function hasOuterExceptionHandler(controlBody) {
+  const tokenRe = /\bEND\s+IF\b|\bEND\s+LOOP\b|\bEND\s+CASE\b|\bBEGIN\b|\bEND\b|\bIF\b|\bLOOP\b|\bCASE\b|\bEXCEPTION\s+WHEN\b/gi;
+  let beginDepth = 0;
+  let ifDepth = 0;
+  let loopDepth = 0;
+  let caseDepth = 0;
+  let token;
+  while ((token = tokenRe.exec(controlBody)) !== null) {
+    const keyword = token[0].toUpperCase().replace(/\s+/g, " ");
+    if (keyword === "BEGIN") { beginDepth++; continue; }
+    if (keyword === "END IF") { ifDepth--; continue; }
+    if (keyword === "END LOOP") { loopDepth--; continue; }
+    if (keyword === "END CASE") { caseDepth--; continue; }
+    if (keyword === "IF") { ifDepth++; continue; }
+    if (keyword === "LOOP") { loopDepth++; continue; }
+    if (keyword === "CASE") { caseDepth++; continue; }
+    if (keyword === "EXCEPTION WHEN" && beginDepth === 1 && ifDepth === 0 && loopDepth === 0 && caseDepth === 0) return true;
+    if (keyword === "END") {
+      if (caseDepth > 0) caseDepth--;
+      else beginDepth--;
+    }
+    if (beginDepth < 0 || ifDepth < 0 || loopDepth < 0 || caseDepth < 0) return true;
+  }
+  return false;
+}
+
 function hasRecognizedMutationBefore(structuralBody, beforeIndex) {
   // A pre-guard control-flow exit can skip the identity check after evaluating
   // a side-effecting expression (for example RETURN helper(p_performed_by)).
@@ -1374,22 +1403,33 @@ function hasRecognizedMutationBefore(structuralBody, beforeIndex) {
 
 function hasExactLegacyMismatchCondition(condition, actorParam, identityBindings) {
   const actor = identifierReferencePattern(actorParam);
-  const operator = "IS\\s+DISTINCT\\s+FROM";
+  // A nullable actor may deliberately be omitted by established callers. The
+  // plain `<>` form is safe only when the same top-level condition first proves
+  // the parameter non-null; without that prefix it remains null-unsafe and is
+  // refused by this exact-condition parser.
+  const distinctOperator = "IS\\s+DISTINCT\\s+FROM";
   const identities = [
     "auth\\s*\\.\\s*uid\\s*\\(\\s*\\)",
     ...Array.from(identityBindings, identifierReferencePattern),
   ];
   return identities.some((identity) => {
-    const mismatch = `(?:${actor}\\s*${operator}\\s*${identity}|` +
-      `${identity}\\s*${operator}\\s*${actor})`;
-    return new RegExp(
-      `^\\s*(?:${actor}\\s+IS\\s+NOT\\s+NULL\\s+AND\\s+)?${mismatch}\\s*$`,
+    const distinctMismatch = `(?:${actor}\\s*${distinctOperator}\\s*${identity}|` +
+      `${identity}\\s*${distinctOperator}\\s*${actor})`;
+    const explicitNullableMismatch = `(?:${actor}\\s*<>\\s*${identity}|` +
+      `${identity}\\s*<>\\s*${actor})`;
+    const optionalNullCheck = new RegExp(
+      `^\\s*(?:${actor}\\s+IS\\s+NOT\\s+NULL\\s+AND\\s+)?${distinctMismatch}\\s*$`,
       "i"
-    ).test(condition);
+    );
+    const requiredNullCheck = new RegExp(
+      `^\\s*${actor}\\s+IS\\s+NOT\\s+NULL\\s+AND\\s+${explicitNullableMismatch}\\s*$`,
+      "i"
+    );
+    return optionalNullCheck.test(condition) || requiredNullCheck.test(condition);
   });
 }
 
-function hasLegacyRaiseException(rawAction, structuralAction, actorParam) {
+function hasActorMismatchRaiseException(rawAction, structuralAction, actorParam) {
   const phrase = new RegExp(
     `(?:^|[^\\w$])${escapedRegexLiteral(actorParam)}` +
       `\\s+does\\s+not\\s+match\\s+authenticated\\s+user\\b`,
@@ -1403,15 +1443,17 @@ function hasLegacyRaiseException(rawAction, structuralAction, actorParam) {
     if (structuralAction.slice(0, raise.index).trim() !== "" ||
         structuralAction.slice(statementEnd + 1).trim() !== "") continue;
     const rawStatement = blankComments(rawAction.slice(raise.index, statementEnd));
-    if (phrase.test(rawStatement)) return true;
+    if (/ACTOR_MISMATCH/i.test(rawStatement) || phrase.test(rawStatement)) return true;
   }
   return false;
 }
 
-/** Preserve compatibility with the established CRX refusal message without
- * accepting the message as inert NOTICE/data text. This intentionally accepts
- * only the simple, reviewable IF mismatch THEN RAISE EXCEPTION shape. */
-function hasEnforcedLegacyActorRefusal(body, actorParam) {
+/** Each forgeable actor parameter needs its own unconditional, reviewable
+ * auth.uid()-identity refusal. A bare ACTOR_MISMATCH token is not sufficient:
+ * one parameter can be guarded while a second parameter is written downstream.
+ * The established CRX legacy phrase remains compatible, but only inside the
+ * same simple IF mismatch THEN RAISE EXCEPTION shape. */
+function hasEnforcedActorRefusal(body, actorParam) {
   const structuralBody = maskSqlForCallNames(body);
   if (structuralBody === null) return false;
   // maskSqlForCallNames deliberately preserves quoted identifiers for relation
@@ -1419,10 +1461,9 @@ function hasEnforcedLegacyActorRefusal(body, actorParam) {
   // "END LOOP" must not pop a real loop frame or seed a fake IF match.
   const controlBody = blankQuotedControlIdentifiers(structuralBody);
   if (controlBody === null) return false;
-  // A function-level or nested exception handler can catch the refusal and let
-  // execution continue to the mutation. Legacy compatibility therefore stays
-  // fail-closed for every body containing an EXCEPTION WHEN clause.
-  if (/\bEXCEPTION\s+WHEN\b/i.test(controlBody)) return false;
+  // Only an outer handler can catch the top-level actor refusal. Nested handlers
+  // are scoped to their own blocks and cannot bypass the already-run guard.
+  if (hasOuterExceptionHandler(controlBody)) return false;
   const ifRe = /\bIF\b[\s\S]*?\bTHEN\b[\s\S]*?\bEND\s+IF\b/gi;
   let block;
   while ((block = ifRe.exec(controlBody)) !== null) {
@@ -1436,7 +1477,7 @@ function hasEnforcedLegacyActorRefusal(body, actorParam) {
     if (!isTopLevelPlpgsqlStatement(controlBody, block.index)) continue;
     if (hasRecognizedMutationBefore(controlBody, block.index)) continue;
     if (!hasExactLegacyMismatchCondition(condition, actorParam, bindings)) continue;
-    if (hasLegacyRaiseException(
+    if (hasActorMismatchRaiseException(
       body.slice(actionStart, actionEnd),
       structuralBody.slice(actionStart, actionEnd),
       actorParam
@@ -2044,6 +2085,43 @@ function routineAltersMatch(left, right) {
     left.signature === right.signature;
 }
 
+/** A SECURITY DEFINER routine cannot be called directly by an authenticated
+ * user when its own migration explicitly revokes both PUBLIC and authenticated
+ * EXECUTE, with no later grant restoring either. This narrow final-grant fence
+ * lets an internal helper keep its caller-owned actor contract; ambiguous,
+ * unqualified, quoted, missing, or later-regranted forms remain fail-closed. */
+function routineExplicitlyNonAuthenticated(structuralSql, fromIndex, routineName) {
+  const normalized = normalizedQualifiedIdentifier(routineName);
+  if (!/^[a-z_][\w$]*\.[a-z_][\w$]*$/.test(normalized)) return false;
+  const [schema, name] = normalized.split(".");
+  const exactName = `${escapedRegexLiteral(schema)}\\s*\\.\\s*${escapedRegexLiteral(name)}`;
+  const routineHead = `(?:FUNCTION|PROCEDURE|ROUTINE)\\s+${exactName}\\s*\\([^;]*?\\)`;
+  const tail = structuralSql.slice(fromIndex);
+  const revokeRe = new RegExp(
+    `\\bREVOKE\\s+ALL\\s+ON\\s+${routineHead}\\s+FROM\\s+([^;]+);`,
+    "gi"
+  );
+  let revocationEnd = -1;
+  let revoke;
+  while ((revoke = revokeRe.exec(tail)) !== null) {
+    const roles = revoke[1].toLowerCase();
+    if (/\bpublic\b/.test(roles) && /\bauthenticated\b/.test(roles)) {
+      revocationEnd = revokeRe.lastIndex;
+    }
+  }
+  if (revocationEnd === -1) return false;
+  const later = tail.slice(revocationEnd);
+  const grantRe = new RegExp(
+    `\\bGRANT\\s+EXECUTE\\s+ON\\s+${routineHead}\\s+TO\\s+([^;]+);`,
+    "gi"
+  );
+  let grant;
+  while ((grant = grantRe.exec(later)) !== null) {
+    if (/\b(?:public|authenticated)\b/i.test(grant[1])) return false;
+  }
+  return true;
+}
+
 const violations = [];
 try {
   pgCronJobViewAliases = declaredPgCronJobViewAliases(content);
@@ -2301,24 +2379,34 @@ try {
     // cron.schedule remain visible. This intentionally accepts false positives:
     // if a definer function with a forgeable actor parameter contains mutation
     // text anywhere outside a comment, it must bind the actor or use exemption.
-    const commentBlankedBody = blankComments(body);
-    const hasMutation = /\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM)\b/i.test(maskedBody) ||
-      /\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM)\b/i.test(commentBlankedBody) ||
-      /\bEXECUTE\b/i.test(maskedBody);
-    if (!hasMutation) continue;
-
     const actorParams = splitTopLevelArgs(maskedParams, blankComments(params))
       .map(paramName)
       .filter((n) => ACTOR_PARAM_RE.test(n));
     if (actorParams.length === 0) continue;
 
-    const hasRecognizedActorRefusal = /ACTOR_MISMATCH/i.test(commentBlankedBody) ||
-      actorParams.every((actorParam) => hasEnforcedLegacyActorRefusal(body, actorParam));
+    if (routineExplicitlyNonAuthenticated(masked, head.index, routineName)) continue;
+
+    const commentBlankedBody = blankComments(body);
+    const actorParamReference = actorParams.map(identifierReferencePattern).join("|");
+    const actorForwardedInvocation = new RegExp(
+      `\\b(?:CALL|PERFORM)\\b[^;]*?(?:${actorParamReference})`,
+      "i"
+    );
+    const hasMutation = /\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM)\b/i.test(maskedBody) ||
+      /\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM)\b/i.test(commentBlankedBody) ||
+      /\bEXECUTE\b/i.test(maskedBody) ||
+      actorForwardedInvocation.test(maskedBody) ||
+      actorForwardedInvocation.test(commentBlankedBody);
+    if (!hasMutation) continue;
+
+    const hasRecognizedActorRefusal = actorParams.every((actorParam) =>
+      hasEnforcedActorRefusal(body, actorParam)
+    );
     if (hasRecognizedActorRefusal) continue;
 
     violations.push(
       `Routine ${routineName}: SECURITY DEFINER, mutates or executes dynamic SQL, and declares the forgeable actor parameter(s) ` +
-      `[${actorParams.join(", ")}] but the body never raises ACTOR_MISMATCH — any authenticated caller ` +
+      `[${actorParams.join(", ")}] but the body does not prove an ACTOR_MISMATCH refusal for every parameter — any authenticated caller ` +
       `can attribute the write to another user.`
     );
   }

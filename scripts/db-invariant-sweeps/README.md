@@ -23,7 +23,7 @@ This runner makes those queries **standing executable gates** that run **before*
   (other teams/agents can drop a new `.sql` file in and it's picked up automatically), runs each one
   read-only, subtracts `allowlist.json`, and exits non-zero on any unallowlisted violation.
 - `predicates/*.sql` — one file per invariant class. Each returns **rows = violations** and must output
-  a stable **`violation_key`** column (a function identity like `fn_name(arg types)`).
+  a stable **`violation_key`** column (a routine identity like `fn_name(arg types)`).
 - `allowlist.json` — per-predicate exemptions, each with a dated justification.
 
 ### Predicates shipped
@@ -32,8 +32,8 @@ This runner makes those queries **standing executable gates** that run **before*
 |---|---|---|
 | `anon-exec-secdef.sql` | (a) every anon-executable SECDEF | only the documented RLS-helper / trigger / sequence / self-gating-report set (allowlist) |
 | `ungated-secdef-mutators.sql` | (b) authenticated SECDEF that mutates and references no auth.uid()/role helper | **zero** (the round-2 definitive predicate, standing) |
-| `actor-forgery.sql` | (c) actor-param role-check/COALESCE without ACTOR_MISMATCH | over-broad by design; allowlist semantic-safe |
-| `actor-forgery-fin-audit.sql` | (i) actor param referenced inside a `financial_audit_log` INSERT without ACTOR_MISMATCH (blind-spot closer for (c)) | over-broad by design; allowlist verified attribution-only |
+| `actor-forgery.sql` | (c) function/procedure actor-param role-check/COALESCE without ACTOR_MISMATCH | over-broad by design; allowlist semantic-safe |
+| `actor-forgery-fin-audit.sql` | (i) function/procedure actor param referenced inside a `financial_audit_log` INSERT without ACTOR_MISMATCH (blind-spot closer for (c)) | over-broad by design; allowlist verified attribution-only |
 | `auth-bound-role-ungated.sql` | (d) auth.uid()-bound mutator with no role check (the `create_direct_order` W1 variant) | **zero** |
 | `secdef-searchpath.sql` | (e) SECDEF missing `search_path` | **zero** (no allowlist case) |
 | `overloads.sql` | (f) public proname with >1 signature | **zero** (no allowlist case) |

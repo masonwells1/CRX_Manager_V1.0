@@ -1,5 +1,5 @@
 -- predicate (c): actor-forgery   (over-broad BY DESIGN — allowlist the semantic-safe ones)
--- authenticated-executable SECDEF functions that take an actor-shaped parameter (p_%by / p_actor% / p_user%)
+-- authenticated-executable SECDEF routines that take an actor-shaped parameter (p_%by / p_actor% / p_user%)
 -- AND appear to role-check or COALESCE that parameter, WITHOUT raising the canonical ACTOR_MISMATCH token.
 -- Would have caught (the recurring six-date actor-forgery class): save_blend_ticket (2026-06-08),
 --   cancel_return (2026-06-08), restore_cancelled_order/restore_cancelled_delivery (2026-06-08),
@@ -22,7 +22,7 @@ WITH cand AS (
   CROSS JOIN LATERAL unnest(coalesce(p.proargnames, '{}'::text[])) AS a(argname)
   WHERE p.pronamespace = 'public'::regnamespace
     AND p.prosecdef
-    AND p.prokind = 'f'
+    AND p.prokind IN ('f', 'p')
     AND p.prorettype <> 'pg_catalog.trigger'::regtype
     AND has_function_privilege('authenticated', p.oid, 'EXECUTE')
     AND a.argname ~* '^p_\w*by$|^p_actor|^p_user'

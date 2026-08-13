@@ -37,11 +37,13 @@ function proc(body, params = "p_performed_by uuid", security = "SECURITY DEFINER
 
 const MUTATION = "INSERT INTO financial_audit_log (actor_user_id) VALUES (p_performed_by);";
 const BOUND = `
+  BEGIN
   v_actor := auth.uid();
   IF p_performed_by IS DISTINCT FROM v_actor THEN
     RAISE EXCEPTION 'ACTOR_MISMATCH: p_performed_by must equal auth.uid()';
   END IF;
   INSERT INTO financial_audit_log (actor_user_id) VALUES (v_actor);
+  END;
 `;
 
 // ── scope: only migration .sql files ───────────────────────────────────────
@@ -1919,6 +1921,33 @@ ok(!isDeny(r), "the current-August stable v_actor refusal remains compatible");
 
 r = runHook(fn(`
   DECLARE
+    v_actor uuid := auth.uid();
+  BEGIN
+    IF p_performed_by IS NOT NULL AND p_performed_by <> v_actor THEN
+      RAISE EXCEPTION 'ACTOR_MISMATCH';
+    END IF;
+    INSERT INTO financial_audit_log (actor_user_id) VALUES (v_actor);
+  END
+`));
+ok(!isDeny(r), "an explicit nullable actor guard may use <> after its non-null check");
+
+r = runHook(fn(`
+  BEGIN
+    IF p_performed_by IS DISTINCT FROM auth.uid() THEN
+      RAISE EXCEPTION 'ACTOR_MISMATCH';
+    END IF;
+    BEGIN
+      PERFORM public.cleanup_after_write();
+    EXCEPTION WHEN OTHERS THEN
+      NULL;
+    END;
+    INSERT INTO financial_audit_log (actor_user_id) VALUES (p_performed_by);
+  END
+`));
+ok(!isDeny(r), "a nested handler after an outer actor refusal does not create a false denial");
+
+r = runHook(fn(`
+  DECLARE
     v_actor uuid;
   BEGIN
     v_actor := auth.uid();
@@ -2345,10 +2374,12 @@ r = runHook(fn(
 ok(isDeny(r), "a refusal naming a different actor parameter does not satisfy the guard");
 
 r = runHook(fn(`
+  BEGIN
   IF p_performed_by IS DISTINCT FROM auth.uid() THEN
     RAISE EXCEPTION 'ACTOR_MISMATCH';
   END IF;
   EXECUTE 'SELECT 1';
+  END;
 `));
 ok(!isDeny(r), "a bound actor function may still use dynamic SQL");
 
@@ -2376,6 +2407,48 @@ ok(isDeny(r), "a readable safe overload cannot hide SECURITY DEFINER elevation o
 
 r = runHook(proc(MUTATION));
 ok(isDeny(r), "an unbound SECURITY DEFINER procedure cannot forge its actor parameter");
+
+const INTERNAL_ONLY_PROC = proc(MUTATION).replace(
+  /;$/,
+  `;
+REVOKE ALL ON PROCEDURE public.test_proc(uuid) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON PROCEDURE public.test_proc(uuid) TO postgres;`
+);
+r = runHook(INTERNAL_ONLY_PROC);
+ok(!isDeny(r), "an explicitly non-authenticated internal procedure keeps its caller-owned actor contract");
+
+r = runHook(`${INTERNAL_ONLY_PROC}
+GRANT EXECUTE ON PROCEDURE public.test_proc(uuid) TO authenticated;`);
+ok(isDeny(r), "a later authenticated grant reopens an internal procedure to actor binding review");
+
+r = runHook(proc(`
+  BEGIN
+  IF p_created_by IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  INSERT INTO financial_audit_log (actor_user_id) VALUES (p_approved_by);
+  END;
+`, "p_created_by uuid, p_approved_by uuid"));
+ok(isDeny(r), "one canonical ACTOR_MISMATCH guard cannot clear a second procedure actor parameter");
+
+r = runHook(proc(`
+  BEGIN
+  IF p_created_by IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  IF p_approved_by IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  INSERT INTO financial_audit_log (actor_user_id) VALUES (p_approved_by);
+  END;
+`, "p_created_by uuid, p_approved_by uuid"));
+ok(!isDeny(r), "independent canonical actor refusals keep a procedure allowed");
+
+r = runHook(proc("CALL public.invoker_audit_helper(p_actor_id);", "p_actor_id uuid"));
+ok(isDeny(r), "an unbound SECURITY DEFINER procedure CALL is a possible forged write");
+
+r = runHook(proc("PERFORM public.invoker_audit_helper(p_actor_id);", "p_actor_id uuid"));
+ok(isDeny(r), "an unbound SECURITY DEFINER procedure PERFORM is a possible forged write");
 
 r = runHook(
   proc(MUTATION).replace("test_proc", "wrapped_actor_proc") +

@@ -14,7 +14,19 @@ definitions now share the same actor-binding analysis; later `ALTER FUNCTION`,
 schema/signature identity. Renames involving the canonical `cron` schema are
 refused before its command table can become invisible. Eight regressions cover
 both exploit paths plus unrelated-schema, bound-procedure, and invoker-demotion
-controls. The full focused hook suite now passes 370 assertions.
+controls. A subsequent exact-head review found that a single canonical
+`ACTOR_MISMATCH` guard could incorrectly clear a second actor parameter, and
+that a definer procedure could forward a forged actor through `CALL` or
+`PERFORM`. Each actor-shaped parameter now needs its own proven identity refusal
+before any direct write, dynamic SQL, `CALL`, or `PERFORM`; the two live
+actor-forgery predicates now inspect authenticated-executable procedures as
+well as functions. Review also required the historical scan to stay compatible
+with private helpers that explicitly revoke both PUBLIC and authenticated
+EXECUTE, and with nullable actor arguments that first prove non-null before a
+`<>` mismatch check; ambiguous grants and null-unsafe comparisons still fail
+closed. A nested cleanup handler no longer obscures an already-run outer actor
+refusal, while an outer handler still fails closed. Eight regressions pin those
+cases. The full focused hook suite now passes 378 assertions.
 
 ## 2026-08-12 — Actor-binding routine modes use exact schema identity
 

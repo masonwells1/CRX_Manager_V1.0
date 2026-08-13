@@ -1,5 +1,5 @@
 -- predicate (i): actor-forgery into the financial audit log   (blind-spot closer for predicate (c))
--- Authenticated-executable SECDEF functions that reference a forgeable actor-shaped parameter
+-- Authenticated-executable SECDEF routines that reference a forgeable actor-shaped parameter
 -- (p_%by / p_actor% / p_user%) INSIDE a financial_audit_log INSERT, WITHOUT raising the canonical
 -- ACTOR_MISMATCH token. financial_audit_log is append-only / immutable (a CLAUDE.md hard red line), so
 -- stamping its actor (actor_user_id / actor_role) from a caller-supplied id lets an authenticated
@@ -36,7 +36,7 @@ WITH cand AS (
   CROSS JOIN LATERAL unnest(coalesce(p.proargnames, '{}'::text[])) AS a(argname)
   WHERE p.pronamespace = 'public'::regnamespace
     AND p.prosecdef
-    AND p.prokind = 'f'
+    AND p.prokind IN ('f', 'p')
     AND p.prorettype <> 'pg_catalog.trigger'::regtype
     AND has_function_privilege('authenticated', p.oid, 'EXECUTE')
     AND a.argname ~* '^p_\w*by$|^p_actor|^p_user'
