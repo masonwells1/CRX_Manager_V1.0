@@ -135,6 +135,16 @@ describe('quote_versions write boundary — migration', () => {
     expect(migration).not.toMatch(/^RESET\s+(statement|lock)_timeout/m);
   });
 
+  it('locks quote_versions against concurrent writes before scanning and sealing it', () => {
+    // The forgery precondition is only useful if an authenticated INSERT cannot
+    // commit after its scan but before the direct-write boundary is removed.
+    // The migration wrapper keeps this lock through the later DROP/REVOKE.
+    const lock = migration.indexOf('LOCK TABLE public.quote_versions IN EXCLUSIVE MODE;');
+    expect(lock).toBeGreaterThanOrEqual(0);
+    expect(lock).toBeLessThan(migration.indexOf('FROM public.quote_versions qv'));
+    expect(lock).toBeLessThan(migration.indexOf('DROP POLICY IF EXISTS qversions_insert'));
+  });
+
   it('refuses to seal a forged snapshot inside the new boundary', () => {
     // The hole stays open until this file applies. A row inserted in the gap
     // would remain permanently restorable into cost_at_quote_cents, so the

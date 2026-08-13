@@ -298,6 +298,11 @@
 SET LOCAL statement_timeout = '60s';
 SET LOCAL lock_timeout = '10s';
 
+-- Block concurrent row writes while the precondition scans existing snapshots
+-- and until the policy/grant boundary below has been sealed. EXCLUSIVE conflicts
+-- with the ROW EXCLUSIVE lock taken by INSERT, UPDATE and DELETE.
+LOCK TABLE public.quote_versions IN EXCLUSIVE MODE;
+
 DO $precond$
 DECLARE
   v_count int;
@@ -930,8 +935,10 @@ DROP POLICY IF EXISTS qversions_insert ON public.quote_versions;
 -- than "it is harmless". MAINTAIN carries VACUUM, ANALYZE, CLUSTER, REINDEX,
 -- REFRESH MATERIALIZED VIEW and LOCK TABLE. None of those change a row VALUE, so
 -- MAINTAIN is outside the forged-snapshot integrity path this file closes, and
--- the POSTCOND block below correspondingly does not test for it. But it is not
--- nothing: LOCK TABLE ... ACCESS EXCLUSIVE, CLUSTER, VACUUM FULL and REINDEX can
+-- the POSTCOND block below correspondingly does not test for it. The EXCLUSIVE
+-- lock above is a separate migration-time integrity guard, not an API-role
+-- privilege retained by this scope decision. But MAINTAIN is not nothing: LOCK
+-- TABLE ... ACCESS EXCLUSIVE, CLUSTER, VACUUM FULL and REINDEX can
 -- all make the table unavailable while they run, so what is being accepted here
 -- is an AVAILABILITY residual, not a null one. Three things make that
 -- acceptable rather than merely convenient:
