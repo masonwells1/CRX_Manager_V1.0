@@ -764,6 +764,68 @@ const CASES = [
       `UPDATE pg_temp.ids_to_fix_r27 SET id = gen_random_uuid();\n`,
   },
   {
+    // ROUND 28 (Codex High). The indirect reader skips a mutating function that
+    // appears under a statement head of create/alter/drop/grant/..., which is
+    // right for a definition and wrong for `CREATE TRIGGER ... EXECUTE
+    // FUNCTION`: that statement binds the function to a relation, and the next
+    // write to that relation runs it. A plain INSERT was skipped outright
+    // (`setp == 0` — it adds rows rather than rewriting them) and the scratch
+    // table is `made_table`, so nothing reported at all. This is Codex's own
+    // reproducer, verbatim in shape.
+    name: 'a trigger attached to a scratch table and then fired is refused',
+    expect: 'violation',
+    mustReport: 'tmp_fix',
+    sql:
+      `CREATE FUNCTION public.tmp_fix() RETURNS trigger\n` +
+      `LANGUAGE plpgsql SECURITY DEFINER\n` +
+      `SET search_path = public, pg_temp AS $$\nBEGIN\n` +
+      `  UPDATE public.order_items SET profit = (profit);\n  RETURN NEW;\nEND $$;\n` +
+      `CREATE TEMP TABLE scratch_r28 (id integer);\n` +
+      `CREATE TRIGGER run_fix AFTER INSERT ON scratch_r28\n` +
+      `  FOR EACH ROW EXECUTE FUNCTION public.tmp_fix();\n` +
+      `INSERT INTO scratch_r28 (id) VALUES (1);\n`,
+  },
+  {
+    // The false-positive boundary Codex stated with the finding: merely
+    // creating a trigger is not a write. Without this the rule becomes "any
+    // migration that adds a trigger is a violation", and 107 of the 882
+    // migrations in this repository attach one.
+    name: 'attaching a trigger without ever firing it stays silent',
+    expect: 'silent',
+    sql:
+      `CREATE FUNCTION public.tmp_fix_quiet() RETURNS trigger\n` +
+      `LANGUAGE plpgsql AS $$\nBEGIN\n` +
+      `  UPDATE public.order_items SET profit = (profit);\n  RETURN NEW;\nEND $$;\n` +
+      `CREATE TEMP TABLE scratch_quiet_r28 (id integer);\n` +
+      `CREATE TRIGGER run_quiet AFTER INSERT ON scratch_quiet_r28\n` +
+      `  FOR EACH ROW EXECUTE FUNCTION public.tmp_fix_quiet();\n`,
+  },
+  {
+    // The scratch table is incidental. A trigger attached to a real table and
+    // fired by this file's own DML on that table is the same bypass.
+    name: 'a trigger fired by DML on a real table is refused',
+    expect: 'violation',
+    mustReport: 'carry_r28',
+    sql:
+      `CREATE FUNCTION public.carry_r28() RETURNS trigger LANGUAGE plpgsql AS $$\nBEGIN\n` +
+      `  UPDATE public.order_items SET profit = (profit);\n  RETURN NEW;\nEND $$;\n` +
+      `CREATE TRIGGER t_carry_r28 AFTER UPDATE ON public.customers\n` +
+      `  FOR EACH ROW EXECUTE FUNCTION public.carry_r28();\n` +
+      `UPDATE public.customers SET notes = 'x';\n`,
+  },
+  {
+    // …and the shape almost every migration here uses: a trigger whose body
+    // touches nothing protected is not indexed as mutating, so firing it costs
+    // nothing. This is what keeps the measured friction at one file.
+    name: 'firing an updated_at trigger is not a protected write',
+    expect: 'silent',
+    sql:
+      `CREATE FUNCTION public.touch_r28() RETURNS trigger LANGUAGE plpgsql AS $$\nBEGIN\n` +
+      `  NEW.updated_at = now();\n  RETURN NEW;\nEND $$;\n` +
+      `CREATE TRIGGER t_touch_r28 BEFORE UPDATE ON public.crm_contacts\n` +
+      `  FOR EACH ROW EXECUTE FUNCTION public.touch_r28();\n`,
+  },
+  {
     // ROUND 22 (Codex High), the dollar-quoted decoy. Every element of a
     // canonical approved-set repair is present in the file — the locked
     // capture, the whole-row hash, the mismatch test, the row-count assertion —

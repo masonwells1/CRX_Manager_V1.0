@@ -1176,6 +1176,22 @@ $MIG_BASENAME
         for (k = p - 1; k >= 1; k--) { if (tok[k] == ";") return tok[k + 1] }
         return tok[1]
       }
+      # Does a write to `t` fire a mutating trigger this migration attached?
+      # (Codex High, round 28.) Reported on the `indirect` channel, which is
+      # already a refusal for the same reason: a body that writes a protected
+      # table has run, and no digest bound the rows it touched.
+      function fires_trigger(t, p,   n, arr, k) {
+        if (t == "") return
+        gsub(/"/, "", t)
+        sub(/^[a-z0-9_]+\./, "", t)
+        if (trigfn[t] == "") return
+        n = split(trigfn[t], arr, " ")
+        for (k = 1; k <= n; k++) {
+          if (seenfn[arr[k]]) continue
+          seenfn[arr[k]] = 1
+          printf "%d\t%s\t%s\t%s\t%s\t%s\n", tokln[p], arr[k], "indirect", "-", "-", raw[tokln[p]]
+        }
+      }
       # ---- A WRITE TARGET THIS FILE CANNOT ACCOUNT FOR (Codex High, round 21) --
       # Until now the scan only ever spoke up when the target was a PROTECTED
       # table, so a name it did not recognize was silently nothing. That is the
@@ -1308,6 +1324,41 @@ $MIG_BASENAME
           if (nm == "") continue
           if (tok[k] == "table") made_table[nm] = 1; else made_view[nm] = 1
         }
+        # ---- A TRIGGER IS A STANDING INVOCATION (Codex High, round 28) -------
+        # The indirect-rewrite reader below excludes the statement head `create`,
+        # and rightly: `CREATE TRIGGER ... EXECUTE FUNCTION f()` binds a function,
+        # it does not run one. But the very next statement can run it. Attach a
+        # mutating function to a scratch table, insert one row, and its UPDATE of
+        # a protected table applies with no channel reporting anything — the
+        # scratch table is a table this migration made for itself, and a plain
+        # INSERT is not even examined below because it adds rows rather than
+        # rewriting them. Neither exemption is wrong on its own; together they
+        # spell an unbound money rewrite.
+        #
+        # So attachments are indexed here, and the DML that fires one is read on
+        # its own terms further down. Only functions the mutating index already
+        # flags are indexed — attaching an ordinary trigger stays free, which is
+        # what keeps every `updated_at` migration in this repository quiet.
+        for (i = 1; i <= ntok; i++) {
+          if (tok[i] != "trigger" || stmt_head(i) != "create") continue
+          trel = ""; tfn = ""
+          for (k = i + 1; k <= ntok && tok[k] != ";"; k++) {
+            if (tok[k] == "on") { trel = tok[k + 1]; break }
+          }
+          for (k = i + 1; k <= ntok && tok[k] != ";"; k++) {
+            if (tok[k] == "execute" &&
+                (tok[k + 1] == "function" || tok[k + 1] == "procedure")) {
+              tfn = tok[k + 2]; break
+            }
+          }
+          if (trel == "" || tfn == "") continue
+          gsub(/"/, "", trel); sub(/^[a-z0-9_]+\./, "", trel)
+          gsub(/"/, "", tfn);  sub(/^[a-z0-9_]+\./, "", tfn)
+          if (mutfns == "" || tfn !~ ("^(" mutfns ")$")) continue
+          if (index(" " trigfn[trel] " ", " " tfn " ") == 0) {
+            trigfn[trel] = (trigfn[trel] == "" ? tfn : trigfn[trel] " " tfn)
+          }
+        }
         for (i = 1; i <= ntok; i++) {
           # Dynamic SQL: refused outright, no table needed. `EXECUTE FUNCTION`
           # / `EXECUTE PROCEDURE` (trigger bodies) and `... EXECUTE ON ...`
@@ -1344,6 +1395,7 @@ $MIG_BASENAME
             while (j <= ntok && tok[j] != ";") {
               if (tok[j] == "only") { j++; continue }
               tt = tok[j]
+              fires_trigger(tt, i)
               gsub(/"/, "", tt)
               sub(/^public\./, "", tt)
               if (tt ~ ("^(" tables ")$")) {
@@ -1356,6 +1408,9 @@ $MIG_BASENAME
             }
             continue
           }
+          # `COPY t FROM ...` loads rows and fires their triggers. It is not a
+          # bindable rewrite of existing rows, so it is read for nothing else.
+          if (tok[i] == "copy" && stmt_head(i) == "copy") fires_trigger(tok[i + 1], i)
           target = ""; kind = ""; setp = 0
           # `UPDATE` is also a lock strength (`FOR UPDATE`, `FOR NO KEY UPDATE`),
           # a privilege (`GRANT SELECT, UPDATE ON ...`), and a trigger event
@@ -1384,6 +1439,10 @@ $MIG_BASENAME
             for (k = j; k <= ntok && tok[k] != ";"; k++) {
               if (tok[k] == "do" && tok[k + 1] == "update") { setp = k + 2; break }
             }
+            # A plain INSERT is out of scope for binding — but it FIRES TRIGGERS
+            # (round 28), so the relation is checked before the statement is
+            # dropped. This is the exact statement the reproducer used.
+            fires_trigger(tok[j], i)
             if (setp == 0) continue
             target = tok[j]; kind = "upsert"
           } else if (tok[i] == "merge" && tok[i + 1] == "into") {
@@ -1392,6 +1451,7 @@ $MIG_BASENAME
             target = tok[j]; kind = "merge"; setp = j + 1
           }
           if (target == "") continue
+          fires_trigger(target, i)
           gsub(/"/, "", target)
           sub(/^public\./, "", target)
           if (target ~ ("^(" tables ")$")) {

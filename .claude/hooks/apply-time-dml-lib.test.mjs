@@ -258,4 +258,76 @@ eq(T(null), [], "a null body does not throw");
   eq([...own.unknownCalls], [], "round-24: calling a routine this file defines is not unknown");
 }
 
+// ------------------------------------------- ROUND 28: a trigger is a caller
+// The round-24 rule above — "CREATE TRIGGER ... EXECUTE FUNCTION f() is not an
+// invocation" — is true of the CREATE statement and false of the migration.
+// Attaching a mutating function to a scratch table costs nothing; the very next
+// INSERT into that table runs the body against real rows. Both facts have to
+// hold at once, so the reproducer and the attach-only case are tested together.
+{
+  const FIX = "CREATE FUNCTION public.tmp_fix() RETURNS trigger LANGUAGE plpgsql " +
+    "SECURITY DEFINER SET search_path = public, pg_temp AS $$ BEGIN " +
+    "UPDATE public.order_items SET profit = (profit); RETURN NEW; END $$;";
+  const ATTACH = "CREATE TEMP TABLE scratch(id integer);\n" +
+    "CREATE TRIGGER run_fix AFTER INSERT ON scratch FOR EACH ROW " +
+    "EXECUTE FUNCTION public.tmp_fix();";
+
+  // The exact SQL the round-28 review submitted. Before the fix the analyzer
+  // reported scratch.id alone, with unresolved false and no unknown calls.
+  const repro = applyTimeWriteTargets(`${FIX}\n${ATTACH}\nINSERT INTO scratch(id) VALUES (1);`);
+  ok(repro.targets.has("order_items.profit"),
+    "round-28: firing an attached trigger charges the function's writes");
+  ok(repro.targets.has("scratch.id"), "round-28: the INSERT itself is still reported");
+  eq([...repro.firedTriggers], ["scratch.tmp_fix"],
+    "round-28: the fired attachment is named, so the refusal can explain itself");
+
+  // The false-positive boundary the review stated in the same breath. Creating
+  // a trigger is not a write; if this ever turns red, every migration that adds
+  // an updated_at trigger starts demanding an override.
+  const attachOnly = applyTimeWriteTargets(`${FIX}\n${ATTACH}`);
+  eq(T(`${FIX}\n${ATTACH}`), [], "round-28: attaching a trigger and never firing it writes nothing");
+  eq([...attachOnly.firedTriggers], [], "round-28: an unfired attachment is not a firing");
+
+  // Ordinary shape, and the one that decides whether this rule is usable: a
+  // trigger on a real table fires only when this file also writes that table.
+  const BUMP = "CREATE FUNCTION public.touch_row() RETURNS trigger LANGUAGE plpgsql AS $$ " +
+    "BEGIN NEW.updated_at = now(); RETURN NEW; END $$;\n" +
+    "CREATE TRIGGER t_touch BEFORE UPDATE ON public.customers FOR EACH ROW " +
+    "EXECUTE FUNCTION public.touch_row();";
+  eq(T(`${BUMP}\nUPDATE public.customers SET note = 'x';`), ["customers.note"],
+    "round-28: a trigger body that writes nothing adds nothing");
+
+  // Every DML form that reaches rows has to fire, not just INSERT.
+  const fired = (dml) => applyTimeWriteTargets(`${FIX}\nCREATE TABLE scratch(id integer);\n` +
+    "CREATE TRIGGER run_fix AFTER INSERT OR UPDATE OR DELETE ON scratch FOR EACH ROW " +
+    `EXECUTE FUNCTION public.tmp_fix();\n${dml}`).targets.has("order_items.profit");
+  ok(fired("UPDATE scratch SET id = 2;"), "round-28: UPDATE fires the attachment");
+  ok(fired("DELETE FROM scratch;"), "round-28: DELETE fires the attachment");
+  ok(fired("INSERT INTO scratch(id) SELECT 1;"), "round-28: INSERT ... SELECT fires it");
+
+  // Chained: A is attached to scratch, B to the table A writes. Firing A fires
+  // B. The fixpoint loop has to re-check attachments after every fold-in.
+  const chain = applyTimeWriteTargets([
+    "CREATE FUNCTION public.step_a() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN " +
+      "UPDATE public.customers SET note = 'a'; RETURN NEW; END $$;",
+    "CREATE FUNCTION public.step_b() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN " +
+      "UPDATE public.order_items SET profit = (profit); RETURN NEW; END $$;",
+    "CREATE TEMP TABLE scratch(id integer);",
+    "CREATE TRIGGER a1 AFTER INSERT ON scratch FOR EACH ROW EXECUTE FUNCTION public.step_a();",
+    "CREATE TRIGGER b1 AFTER UPDATE ON public.customers FOR EACH ROW EXECUTE FUNCTION public.step_b();",
+    "INSERT INTO scratch(id) VALUES (1);",
+  ].join("\n"));
+  ok(chain.targets.has("order_items.profit"),
+    "round-28: a trigger fired by another trigger's write is charged too");
+
+  // A trigger function that lives in the database rather than this file cannot
+  // be read, so it is reported instead of assumed harmless.
+  const resident = applyTimeWriteTargets(
+    "CREATE TEMP TABLE scratch(id integer);\n" +
+    "CREATE TRIGGER run_fix AFTER INSERT ON scratch FOR EACH ROW " +
+    "EXECUTE FUNCTION public.existing_repair();\nINSERT INTO scratch(id) VALUES (1);");
+  ok(resident.unknownCalls.includes("existing_repair"),
+    "round-28: an unreadable trigger function fails closed");
+}
+
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

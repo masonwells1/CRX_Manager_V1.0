@@ -535,6 +535,61 @@ function targetsFromCode(code, literals) {
 // ordinary shape in this repository — for the body it was replacing.
 const NOT_A_CALL = /\b(function|procedure)\s+(?:if\s+(?:not\s+)?exists\s+)?(?:[a-z0-9_]+\.)?$/;
 
+// ROUND 28. A TRIGGER IS A STANDING INVOCATION.
+//
+// Round 24 made a body count once the migration calls it, and `CREATE TRIGGER
+// ... EXECUTE FUNCTION f()` is deliberately NOT such a call — attaching a
+// trigger runs nothing, and charging every trigger creation for its function's
+// body would demand an override for most schema work in this repository. That
+// exclusion is correct and stays. What it missed is the statement AFTER it:
+//
+//   CREATE FUNCTION tmp_fix() RETURNS trigger AS $$
+//     UPDATE public.order_items SET profit = (profit); $$;
+//   CREATE TEMP TABLE scratch(id integer);
+//   CREATE TRIGGER run_fix AFTER INSERT ON scratch
+//     FOR EACH ROW EXECUTE FUNCTION tmp_fix();
+//   INSERT INTO scratch(id) VALUES (1);
+//
+// Every statement is individually harmless and the analyzer reported exactly
+// `scratch.id`, unresolved false, no unknown calls — while applying it rewrote
+// a money column and re-fired the authoritative profit trigger. The attachment
+// is the missing edge: firing DML on the trigger's relation runs the function
+// as surely as `SELECT f()` does.
+//
+// So attachments are recorded here and the caller fires one once it sees an
+// apply-time write to that relation. Ordering is not modelled — DML written
+// ABOVE the CREATE TRIGGER fires nothing in reality but is charged anyway,
+// which is the over-reporting direction this module always takes.
+const TRIGGER_STMT = /\bcreate\s+(?:or\s+replace\s+)?(?:constraint\s+)?trigger\s+/g;
+
+/**
+ * `{ table, fn }` for every trigger this SQL attaches at apply time.
+ *
+ * `table` is the relation the trigger fires on and `fn` the bare name of its
+ * function; both are schema-stripped to match the rest of this module.
+ */
+export function triggerAttachments(code) {
+  const s = (code || "").toLowerCase();
+  const out = [];
+  TRIGGER_STMT.lastIndex = 0;
+  let m;
+  while ((m = TRIGGER_STMT.exec(s)) !== null) {
+    const semi = s.indexOf(";", m.index);
+    const body = s.slice(m.index, semi === -1 ? s.length : semi);
+    // `... ON relation ...`. The first ON at paren depth zero: a `WHEN (...)`
+    // condition can spell the word too, and `UPDATE OF on_hand` reads as one
+    // identifier, so neither is mistaken for the relation clause.
+    const on = scanTo(body, 0, ["on"]);
+    if (on.hit !== "on") continue;
+    const rel = readRelation(body, on.end);
+    if (!rel || NON_RELATION_KEYWORDS.has(rel.table)) continue;
+    const fn = /\bexecute\s+(?:function|procedure)\s+(?:[a-z0-9_]+\s*\.\s*)?([a-z0-9_]+)/.exec(body);
+    if (!fn) continue;
+    out.push({ table: rel.table, fn: fn[1] });
+  }
+  return out;
+}
+
 function invokedRoutines(codeLower, defined) {
   const found = new Set();
   for (const name of defined) {
@@ -702,10 +757,29 @@ export function applyTimeWriteTargets(sql) {
     byName.get(r.name).push(r);
   }
 
+  // ROUND 28. Triggers this migration attaches, and the ones a write has
+  // already fired. A trigger whose relation is written runs its function, so
+  // the function joins the frontier exactly as an explicit call would; if its
+  // body is not in this file it joins the unknown calls instead, because
+  // nothing here can say what a database-resident body writes.
+  const attachments = triggerAttachments(code);
+  const fired = new Set();
+  const unknownTriggerFns = new Set();
+  const fireAttached = (into) => {
+    for (const att of attachments) {
+      const key = `${att.table}.${att.fn}`;
+      if (fired.has(key) || !top.tables.has(att.table)) continue;
+      fired.add(key);
+      if (byName.has(att.fn)) { if (!seen.has(att.fn)) into.add(att.fn); }
+      else unknownTriggerFns.add(att.fn);
+    }
+  };
+
   // Fold in every invoked body, then anything those bodies invoke, until the
   // set stops growing. `seen` also stops a recursive routine from looping.
   const seen = new Set();
   let frontier = invokedRoutines(code.toLowerCase(), byName.keys());
+  fireAttached(frontier);
   while (frontier.size) {
     const next = new Set();
     for (const name of frontier) {
@@ -722,6 +796,9 @@ export function applyTimeWriteTargets(sql) {
         }
       }
     }
+    // A body just folded in may write the relation of another attachment, and
+    // that trigger fires too. Re-checked every round; `fired` ends the chain.
+    fireAttached(next);
     frontier = next;
   }
 
@@ -730,9 +807,18 @@ export function applyTimeWriteTargets(sql) {
   // may itself call something that only exists in the database.
   const bodies = [...seen].flatMap((n) => (byName.get(n) || []).map((r) => r.code));
   const scan = [code, ...bodies].join("\n;\n").toLowerCase();
-  const unknownCalls = [...unknownCallsIn(scan, new Set(byName.keys()))];
+  const unknownCalls = [...new Set([
+    ...unknownCallsIn(scan, new Set(byName.keys())),
+    ...unknownTriggerFns,
+  ])];
 
-  return { ...top, unknownCalls, definedRoutines: [...byName.keys()], invokedRoutines: [...seen] };
+  return {
+    ...top,
+    unknownCalls,
+    definedRoutines: [...byName.keys()],
+    invokedRoutines: [...seen],
+    firedTriggers: [...fired],
+  };
 }
 
 /**

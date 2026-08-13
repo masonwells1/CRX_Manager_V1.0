@@ -1062,6 +1062,67 @@ function armAutopilot(stateDir, hoursFromNow) {
       rmSync(path.join(tmp, "supabase", "migrations", `${REAL_STEM}.sql`), { force: true });
     }
 
+    // ROUND 28 (Codex High). Round 24 established that `CREATE TRIGGER ...
+    // EXECUTE FUNCTION f()` is not an invocation, and that is correct about the
+    // CREATE statement — attaching a trigger runs nothing. It is false about the
+    // migration, because the NEXT statement can fire it. Attach a mutating
+    // function to a scratch table nobody cares about, insert one row, and the
+    // body runs against live money rows while the analyzer reports only
+    // `scratch.id`. Codex's probe confirmed it: unresolved false, no unknown
+    // calls, no invocation of the function, straight through.
+    //
+    // End-to-end here, through the real hook, using the review's own scratch
+    // table — the module-level cases live in apply-time-dml-lib.test.mjs.
+    {
+      const REAL_STEM = "20260810025159_backfill_stale_line_profit";
+      writeOneShotRegistry(tmp, {
+        [STEM]: REASON,
+        [REAL_STEM]: "fixture mirror of the live population-bound line-profit repair",
+      });
+      writeFileSync(
+        path.join(tmp, "supabase", "migrations", `${REAL_STEM}.sql`),
+        "-- population-bound repair\nUPDATE public.order_items SET total_price = total_price WHERE id = 7;\n",
+      );
+
+      const FIX = "CREATE FUNCTION public.tmp_fix() RETURNS trigger LANGUAGE plpgsql\n" +
+        "SECURITY DEFINER SET search_path = public, pg_temp AS $$\nBEGIN\n" +
+        "  UPDATE public.order_items SET profit = (profit);\n  RETURN NEW;\nEND $$;";
+      const ATTACH = "CREATE TEMP TABLE scratch(id integer);\n" +
+        "CREATE TRIGGER run_fix AFTER INSERT ON scratch\n" +
+        "  FOR EACH ROW EXECUTE FUNCTION public.tmp_fix();";
+
+      r = apply("20990601000180_r28_repro", `${FIX}\n${ATTACH}\nINSERT INTO scratch(id) VALUES (1);`);
+      ok(isDeny(r) && isOneShotDeny(r),
+        "round-28: a trigger fired through a scratch table replays the registered repair → denied");
+
+      // The false-positive boundary Codex named in the same finding. If this
+      // turns red, every migration that adds an updated_at trigger starts
+      // demanding an override, which is how a guard gets switched off.
+      r = apply("20990601000181_r28_attach_only", `${FIX}\n${ATTACH}`);
+      ok(!isOneShotDeny(r), "round-28: attaching a trigger without firing it is not a write");
+
+      // A trigger on a real table, fired by this file's own DML on that table.
+      r = apply("20990601000182_r28_real_table",
+        "CREATE FUNCTION public.carry() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN\n" +
+        "  UPDATE public.order_items SET profit = (profit); RETURN NEW; END $$;\n" +
+        "CREATE TRIGGER t_carry AFTER UPDATE ON public.customers FOR EACH ROW\n" +
+        "  EXECUTE FUNCTION public.carry();\nUPDATE public.customers SET note = 'x';");
+      ok(isDeny(r) && isOneShotDeny(r),
+        "round-28: the scratch table is incidental — any fired attachment counts");
+
+      // …and an ordinary trigger whose body writes nothing protected stays
+      // silent, so the common shape costs nothing.
+      r = apply("20990601000183_r28_benign",
+        "CREATE FUNCTION public.touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN\n" +
+        "  NEW.updated_at = now(); RETURN NEW; END $$;\n" +
+        "CREATE TRIGGER t_touch BEFORE UPDATE ON public.customers FOR EACH ROW\n" +
+        "  EXECUTE FUNCTION public.touch();\nUPDATE public.customers SET note = 'x';");
+      ok(!isOneShotDeny(r), "round-28: an updated_at trigger on an unrelated table is silent");
+
+      writeOneShotRegistry(tmp, { [STEM]: REASON });
+      rmSync(path.join(tmp, "supabase", "migrations", `${REAL_STEM}.sql`), { force: true });
+    }
+
     // 4. ROUND 12 (Codex High) reversed this case. Round 8 let a one-shot
     //    through whenever the ledger already contained it, reasoning that such a
     //    database IS the population the repair was approved against. True at the

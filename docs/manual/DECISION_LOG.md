@@ -9,6 +9,45 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-13 — A trigger attachment is a standing invocation, and both guards must fire it
+
+**Source:** round 28 of adversarial review on PR #364 (one High finding). Like rounds 26 and 27, it
+needed no new spelling of SQL — it used a rule the guards had deliberately adopted.
+
+**Background.** Round 24 settled that `CREATE TRIGGER ... EXECUTE FUNCTION f()` is not an
+invocation, so that attaching an `updated_at` trigger does not charge a migration with the
+function's writes. That is correct about the CREATE statement and incomplete about the migration:
+an attachment persists, and the next statement can fire it. The review's reproducer defines a
+trigger function that writes `public.order_items`, attaches it to a scratch table, and inserts one
+row. The apply-time analyzer reported `scratch.id` alone — no unresolved target, no unknown call.
+The approved-set scanner reported nothing at all: a mutating function under a `CREATE` statement
+head reads as a definition, and a plain `INSERT` was skipped entirely because it adds rows rather
+than rewriting them, against a table the file had just created.
+
+**Decision.** Both guards model a trigger attachment as a **standing invocation of the attached
+function on the attached relation**. The round-24 rule stands unchanged — creating a trigger is
+still not a write — but any DML this file aims at that relation now charges the function's writes.
+The apply-time analyzer re-checks attachments after every fold-in round, so a body folded in this
+round can fire a trigger on a relation it writes. A trigger function that lives only in the
+database is reported as an unknown call and fails closed, consistent with round 25.
+
+**Accepted imprecision.** Statement ordering is not modelled: DML written *above* the
+`CREATE TRIGGER` fires nothing in reality but is charged anyway. Modelling order would make the
+guard's answer depend on line position, which an author controls; over-reporting toward the
+override prompt is the direction both modules already take everywhere else.
+
+Friction was measured across all 882 migrations before shipping. 107 attach a trigger, 14 attach
+one the same file also fires, and against the real one-shot registry exactly **one** flips from
+silent to needing an override — `20260716124223_crm_contacts_identities`. One override prompt
+across the repository's entire history, the same order as round 27's two.
+
+**Operative rule.** "This statement runs nothing" is a claim about a statement, never about the
+migration. A later round that wants to narrow this back — to fire only for real tables, only for
+`AFTER` triggers, or only when the attachment precedes the DML — must first show how the narrower
+rule stays correct as the file's own statements are reordered.
+
+---
+
 ## 2026-08-13 — The migration guards compare tables, not column names
 
 **Source:** round 27 of adversarial review on PR #364 (two High findings). Neither finding needed a

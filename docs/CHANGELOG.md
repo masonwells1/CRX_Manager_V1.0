@@ -2,6 +2,59 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-13 — A trigger attachment is a standing invocation
+
+Round 24 established that `CREATE TRIGGER ... EXECUTE FUNCTION f()` is not an
+invocation. That is true of the CREATE statement — attaching a trigger runs
+nothing — and false of the migration, because the next statement can fire it:
+
+    CREATE FUNCTION public.tmp_fix() RETURNS trigger ... AS $$
+    BEGIN UPDATE public.order_items SET profit = (profit); RETURN NEW; END $$;
+    CREATE TEMP TABLE scratch(id integer);
+    CREATE TRIGGER run_fix AFTER INSERT ON scratch
+      FOR EACH ROW EXECUTE FUNCTION public.tmp_fix();
+    INSERT INTO scratch(id) VALUES (1);
+
+The round-28 review's read-only probe reported `scratch.id` alone: no unresolved
+target, no unknown call, no invocation of `tmp_fix`. Applying it rewrites live
+money rows and re-fires the authoritative profit triggers. Both guards missed it
+independently, for different reasons.
+
+The apply-time analyzer excludes the trigger-binding position from its
+"not a call" rule, which is round 24 doing exactly what it was written to do.
+That exclusion is correct and stays; what was missing is that an attachment
+survives its statement. Every `CREATE TRIGGER` now records `{table, function}`,
+and the analyzer folds a function's writes in as soon as the same file writes the
+relation it is attached to — re-checked after every round, since a body just
+folded in may write the relation of another attachment. A trigger function this
+file does not define is reported as an unknown call rather than assumed harmless.
+
+The migration scanner missed it twice over: a mutating function under a
+`CREATE ...` statement head is skipped as a definition, and a plain `INSERT` was
+skipped outright — it adds rows rather than rewriting them — with the scratch
+table recorded as locally created. It now indexes trigger attachments in the same
+pass that indexes created tables, and fires them on every relation any DML names:
+INSERT, UPDATE, DELETE, MERGE, TRUNCATE, COPY. Statement ordering is not
+modelled, so DML written *above* the `CREATE TRIGGER` is charged even though it
+fires nothing in reality — the over-reporting direction both modules always take.
+
+The false-positive boundary the review stated in the same finding is what makes
+this affordable, and it is tested on both sides: merely creating a trigger is not
+a write. Friction measured over all 882 migrations before shipping — 107 files
+attach a trigger, 14 attach one the same file also fires, and against the real
+one-shot registry exactly **one** flips from silent to needing an override,
+`20260716124223_crm_contacts_identities`. One prompt across the repository's
+entire history, the same order as round 27's two.
+
+Proof: 78 apply-time analyzer assertions (+11, including the review's reproducer
+verbatim, chained triggers where one body's write fires the next, and an
+unreadable resident trigger function failing closed), 204 migration-guard
+assertions (+4), and 134 approved-set validator cases (+4). Both fixes were
+mutation-tested — reverting each to its pre-round-28 code turns its own new cases
+red and reproduces the review's silence exactly — and the reproducer was also run
+through the production hook outside any test harness, where it returns
+`DECISION: deny`.
+
 ## 2026-08-13 — Two guards that read the wrong unit
 
 The round-27 review broke both migration guards without inventing a single new
