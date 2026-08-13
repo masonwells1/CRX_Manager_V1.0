@@ -41,11 +41,12 @@
 -- the POST does not interfere with getting paid early.
 --
 -- HOW THIS FILE MUST BE APPLIED.
--- Through `apply_migration` or psql, NEVER through `execute_sql`. The Supabase
--- MCP `execute_sql` path runs only the LAST statement of a multi-statement
--- script — here that is the bare `COMMIT;` — so it would report a clean, empty
--- success while installing nothing at all. That failure mode is silent and would
--- be indistinguishable from a successful apply.
+-- Through `apply_migration` or `psql --single-transaction`, NEVER through
+-- `execute_sql`. The Supabase
+-- MCP `execute_sql` path is not the migration runner: it does not provide the
+-- same whole-file transaction plus ledger stamp. Supabase apply_migration owns
+-- that outer transaction. Do not add BEGIN/COMMIT here because an inner COMMIT
+-- could split the schema change from its migration-ledger record.
 --
 -- THE HOLE, exactly as it exists on production today.
 -- `_create_quick_delivery_intent_impl_20260802` — the current implementation
@@ -170,7 +171,7 @@
 -- itself. That is deliberate — there is no staging copy of this database, and a
 -- probe that had already been rehearsed elsewhere would be proving something
 -- about the rehearsal. It fails closed: any unexpected outcome raises, and the
--- enclosing BEGIN/COMMIT reverts the whole file including the gate.
+-- apply_migration-owned transaction reverts the whole file including the gate.
 --
 -- THIS FILE IS NOT RERUNNABLE after a successful apply, by design. PRECOND C
 -- refuses if the gate marker is already present in the live function body, so a
@@ -239,11 +240,10 @@
 -- properly means reordering the locks in `_complete_delivery_authorized_impl`,
 -- which is a separate change with its own deadlock analysis.
 --
--- ATOMICITY. The whole migration runs inside one explicit BEGIN/COMMIT — the
--- same shape 30 already-applied migrations in this repo use. Without it, a
--- non-transactional applier could leave the gate installed on production while
--- the proof below reported failure. Any RAISE anywhere in this file now aborts
--- the transaction and the function reverts to exactly what it was.
+-- ATOMICITY. The approved apply_migration runner owns one transaction covering
+-- this whole file and its migration-ledger stamp. A top-level BEGIN/COMMIT here
+-- would be unsafe because an inner COMMIT could split those outcomes. Any RAISE
+-- in this file aborts the runner-owned transaction and restores the old function.
 --
 -- PROOF. The postcondition block below does not merely re-read the catalog. It
 -- picks a real delivery-linked draft invoice, flips its delivery to 'scheduled',
@@ -295,9 +295,7 @@
 --     back to 'false' BEFORE each post attempt, so the gate is always exercised
 --     without it.
 
-BEGIN;
-
--- Transaction-local: reverted at COMMIT, so nothing leaks into a pooled session.
+-- Transaction-local: reverted when the runner commits, so nothing leaks into a pooled session.
 -- lock_timeout bounds how long this transaction WAITS for a lock, so a probe that
 -- collides with an office session fails fast instead of hanging the apply. It does
 -- NOT bound how long the probe HOLDS the locks it already took — those are held
@@ -1539,5 +1537,3 @@ BEGIN
   END IF;
 END;
 $postcond$;
-
-COMMIT;

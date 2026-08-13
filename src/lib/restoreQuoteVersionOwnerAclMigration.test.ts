@@ -20,8 +20,11 @@ describe('restore quote owner implementation ACL migration', () => {
   });
 
   it('revokes every application path while preserving postgres execution', () => {
+    expect(sql).not.toMatch(/^BEGIN;\s*$/im);
+    expect(sql).not.toMatch(/^COMMIT;\s*$/im);
+    expect(sql).not.toMatch(/^ROLLBACK;\s*$/im);
     expect(sql).toMatch(
-      /BEGIN;[\s\S]*REVOKE ALL ON FUNCTION public\._restore_quote_version_owner_impl[\s\S]*\$postflight\$;[\s\S]*COMMIT;/,
+      /SET LOCAL lock_timeout[\s\S]*REVOKE ALL ON FUNCTION public\._restore_quote_version_owner_impl[\s\S]*\$postflight\$;/,
     );
     expect(sql).toContain("SET LOCAL lock_timeout = '5s'");
     expect(sql).toContain("SET LOCAL statement_timeout = '30s'");

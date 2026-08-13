@@ -67,6 +67,14 @@ done
 # here on is in force.
 APPROVED_SET_CUTOFF=20260810025160
 
+# Supabase apply_migration owns the transaction that keeps SQL effects and the
+# schema_migrations ledger row atomic. A top-level BEGIN/COMMIT in the payload
+# can commit the runner's transaction early and leave live schema changed while
+# the ledger write fails. Enforce this for every migration after the currently
+# captured live high-water; older applied history is immutable.
+TOP_LEVEL_TRANSACTION_CONTROL_CUTOFF=20260813011752
+TOP_LEVEL_TRANSACTION_CONTROL_SCANNER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/find-top-level-transaction-control.mjs"
+
 # Which tables carry rows worth binding an approval to? DEFAULT-DENY: every
 # table in .claude/schema-registry.json, minus a short, reason-annotated
 # exemption list.
@@ -153,7 +161,7 @@ approved_rollback_probe_hash() {
       printf '%s\n' 'ea3026e9b38e0b317fb2850f76312f7a0b722299bc15ed4ed4c0aae8262785de'
       ;;
     20260813060000_require_completed_delivery_before_invoice_post.sql)
-      printf '%s\n' '80bf4d99f4603f0b5daf64c481bc3bbc1579874219d69cc5847af2b10903e56a'
+      printf '%s\n' 'e9ad644578a86fc11dd45249f6c46eae92ce2810b231785980ad16bc3c731e0d'
       ;;
     *) return 1 ;;
   esac
@@ -314,6 +322,27 @@ for file in $ALL_SQL; do
     continue
   fi
 
+  MIG_BASENAME=$(basename "$file")
+  MIG_STAMP="${MIG_BASENAME%%_*}"
+
+  if [[ "$MIG_STAMP" =~ ^[0-9]{14}$ ]] && [ "$MIG_STAMP" -ge "$TOP_LEVEL_TRANSACTION_CONTROL_CUTOFF" ]; then
+    TOP_LEVEL_TX_STATUS=0
+    TOP_LEVEL_TX_OUTPUT=$(node "$TOP_LEVEL_TRANSACTION_CONTROL_SCANNER" "$file" 2>&1) || TOP_LEVEL_TX_STATUS=$?
+    if [ "$TOP_LEVEL_TX_STATUS" -ne 0 ]; then
+      echo "VIOLATION: $file"
+      if [ "$TOP_LEVEL_TX_STATUS" -eq 1 ]; then
+        echo "  Uses top-level transaction control owned by the migration runner:"
+        printf '%s\n' "$TOP_LEVEL_TX_OUTPUT" | awk -F'\t' '{ printf "    line %s: %s\n", $1, $2 }'
+        echo "  Remove transaction-control statements and rely on apply_migration's transaction."
+      else
+        echo "  Could not prove top-level transaction-control safety: $TOP_LEVEL_TX_OUTPUT"
+        echo "  The check fails closed; fix the SQL/source scanner before continuing."
+      fi
+      echo ""
+      VIOLATIONS=$((VIOLATIONS + 1))
+    fi
+  fi
+
   # pg_get_functiondef exemption — scoped by name to specific already-applied
   # migrations that reference the catalog fn ONLY inside a read-only post-apply
   # verification DO block (a LIKE assertion that a patch landed), never to
@@ -438,8 +467,6 @@ for file in $ALL_SQL; do
   # APPROVED-SET BINDING for one-shot business-row rewrites
   # See APPROVED_SET_CUTOFF above for why this is date-scoped.
   # ================================================================
-  MIG_BASENAME=$(basename "$file")
-  MIG_STAMP="${MIG_BASENAME%%_*}"
   if [[ "$MIG_STAMP" =~ ^[0-9]{14}$ ]] && [ "$MIG_STAMP" -ge "$APPROVED_SET_CUTOFF" ]; then
     EXACT_LIVE_APPLIED=0
     EXPECTED_LIVE_SHA=$(printf '%s\n' "$APPROVED_SET_LIVE_HASHES" \

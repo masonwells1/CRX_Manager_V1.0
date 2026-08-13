@@ -2,6 +2,10 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-13 — Keep migration SQL and ledger stamps in one runner-owned transaction
+
+Exact-SHA review caught top-level `BEGIN`/`COMMIT` in the pending `20260813090000` restore-owner ACL migration. Supabase `apply_migration` already owns the transaction, so an inner `COMMIT` could separate a security change from its ledger record. Removed that transaction control from `090000` and from the also-pending `20260813060000` delivery-post gate. Added a fail-closed validator for every migration newer than the captured live high-water; it lexes top-level SQL statements while ignoring comments, strings, identifiers, and dollar-quoted procedural bodies. Mutation cases prove top-level `BEGIN`/`COMMIT` and `START TRANSACTION`/`ROLLBACK` are rejected while a normal `DO ... BEGIN ... END` block stays accepted. No applied migration or live database state changed.
+
 ## 2026-08-13 — Rejected unsafe quote-draw repair; narrowed restore ACL instead
 
 Exact review rejected and removed `20260813053545_allocate_multi_price_quote_draws.sql` before it could ship. Its floored unit price could make quantity × unit price reconstruct one cent less than the authoritative order-line total, and its cumulative allocation counted reversible job draws, allowing a cancelled draw to allocate the same cent again. The live same-product/multi-price partial-draw edge therefore remains safely fail-closed and explicitly open; a correct fix needs cent-priced cohorts or an immutable allocation/revenue ledger.

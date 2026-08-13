@@ -11,10 +11,9 @@
 -- granted EXECUTE directly to service_role, however, which let that role skip
 -- both the public wrapper's operation check and the below-cost wrapper. Keep the
 -- implementation private to postgres so every application path must enter
--- through the governed wrapper chain. The explicit transaction makes the ACL
--- change and its postcondition atomic: any failure restores the original grant.
-
-BEGIN;
+-- through the governed wrapper chain. Supabase apply_migration owns the outer
+-- transaction, so the ACL change, postcondition, and ledger stamp remain atomic.
+-- Do not add BEGIN/COMMIT here: an inner COMMIT can split those three outcomes.
 
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '30s';
@@ -178,5 +177,3 @@ BEGIN
   END IF;
 END;
 $postflight$;
-
-COMMIT;

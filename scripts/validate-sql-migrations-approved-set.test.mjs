@@ -79,6 +79,24 @@ END $$;`;
 const CASES = [
   // ── must VIOLATE ────────────────────────────────────────────────────────
   {
+    name: 'top-level BEGIN and COMMIT cannot split the runner transaction from its ledger stamp',
+    expect: 'violation',
+    sql: `BEGIN;\nSELECT 1;\nCOMMIT;\n`,
+  },
+  {
+    name: 'top-level START TRANSACTION and ROLLBACK are also runner-owned',
+    expect: 'violation',
+    sql: `START TRANSACTION;\nSELECT 1;\nROLLBACK;\n`,
+  },
+  {
+    name: 'procedural BEGIN and transaction words inside non-code regions remain allowed',
+    expect: 'silent',
+    sql:
+      `-- BEGIN; COMMIT;\n` +
+      `DO $probe$\nBEGIN\n  PERFORM 'COMMIT;';\nEND;\n$probe$;\n` +
+      `SELECT 'ROLLBACK;';\n`,
+  },
+  {
     name: 'multiline UPDATE with the table on the next line',
     expect: 'violation',
     sql: `DO $$\nBEGIN\n  UPDATE\n    public.orders\n  SET total_profit = 0;\nEND $$;\n`,
@@ -607,7 +625,7 @@ function classify(output, fileName) {
     const block = lines.slice(i, i + 8).join('\n');
     if (
       lines[i].startsWith('VIOLATION:') &&
-      /Rewrites existing business rows|APPROVED_SET_DIGEST/.test(block)
+      /Rewrites existing business rows|APPROVED_SET_DIGEST|top-level transaction control/.test(block)
     ) {
       return 'violation';
     }
