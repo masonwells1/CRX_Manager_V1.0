@@ -12,8 +12,10 @@ path or patch, verifies the current input Git blob, verifies three checked-in so
 SHA-256, builds one pinned output blob, refuses dirty/detached/protected branches, and requires
 Mason's dated approval token before writing. The producer itself does not activate the repair; it
 must first pass an exact-head Sol review and the normal protected pull-request pipeline. The follow-up
-change will run the producer on a feature branch, add the red-to-green regression tests, and remove
-the temporary producer after use.
+change will run the producer on a feature branch and remove the temporary producer after use; the
+generated-module regression harness is already checked in and exercises 74 classifier cases. PR
+review also moved the tracked-and-untracked dirty-worktree check ahead of every temporary or target
+write, so verification mode follows the same fail-closed cleanliness contract as write mode.
 
 Seventeen exact-head adversarial passes have progressively hardened the candidate before activation. The
 latest pass closed a Unicode identifier boundary that could conceal destructive SQL and removed the

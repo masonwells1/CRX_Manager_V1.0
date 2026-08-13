@@ -2,7 +2,7 @@
 
 ## WHERE
 
-- Checkout: `C:\Users\mason\.codex\worktrees\weekly-audit-remediation\CRX_Manager`
+- Checkout: repository root in the isolated owning worktree (local workstation path intentionally omitted)
 - Branch: `codex/harness-maintenance-producer-20260812`
 - Base verified before build: `origin/main` at `2837263d2a22eca71142bf77e449acbe2512e232`;
   current `origin/main` `a44fc2f52a95d815e2873536a6ff4204d84851c2` is contained in the branch.
@@ -17,35 +17,39 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
 
 ## PROVEN
 
-- The current source blob is pinned to `c8bec70830c643e474831985f5e6c3bd16630386`.
+- The producer constants pin the complete artifact mapping: input blob `c8bec70830c643e474831985f5e6c3bd16630386`; output blob `3ed5d18111a21f4949b392ff162fa347b1b1fdce`; constants SHA-256 `99deb8f5560797e1d461e400759efb4d145544e15347569c7755fa32b8b62839`; helpers SHA-256 `6e50bf618da817403e36e74e09b350536f713f93b2c9ebf269fe1475a592e19c`; classifier SHA-256 `e4d217fffe784f6d38a25cae6856c2e37c9704a042972a06a9e273a7610a295f`.
 - `node scripts/apply-live-testdata-maintenance-20260812.mjs --verify` produced pinned output blob
   `3ed5d18111a21f4949b392ff162fa347b1b1fdce`, matched all three snippet SHA-256 values, and passed a
   Node module syntax check without changing the repository target.
-- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 74 assertions against the
-  generated module, including all classifier defect classes found by the first seventeen Sol reviews.
+- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 74 classifier assertions
+  against the generated module plus three producer-status assertions, including all classifier defect
+  classes found by the first seventeen Sol reviews.
 - The write mode refused the dirty build worktree even with Mason's dated token.
 - Current recovery proof passed ESLint, TypeScript typecheck, production build, all 4,466 executed
   Vitest assertions (123 skipped), all agent-workflow tests, agent health, dependency integrity,
   focused producer verification, the candidate harness, and `git diff --check`.
-- `check-doc-drift.mjs` reports only the pre-existing `origin/main` freshness mismatch: the two live
-  manual docs are stamped 2026-08-12 while two deliberately parked and unapplied migration filenames
-  are future-stamped 20260813. The hook treats this check as non-blocking; the migrations remain parked
-  and the docs were not given a false future live-verification date.
+- Historical snapshot as of August 12, 2026 (America/Chicago): `check-doc-drift.mjs` reported only
+  the pre-existing `origin/main` mismatch between two live manual docs stamped 2026-08-12 and two
+  deliberately parked, unapplied migration filenames stamped 20260813 (the next calendar day relative
+  to that snapshot). The hook treats this check as non-blocking; the migrations remain parked and the
+  docs were not given a false later live-verification date.
 
 ## WRITTEN, NOT PROVEN
 
 - The checked-in producer can write only the assembled protected target on a clean non-protected
-  branch after exact hash checks and the dated approval token. Its real write mode has intentionally
-  not run; it must not run until this producer itself is reviewed and merged.
+  branch after exact hash checks and the dated approval token. Detached HEAD and detached worktree
+  states are rejected and are not approved branch states. Its real write mode has intentionally not
+  run; it must not run until this producer itself is reviewed and merged.
 
 ## NOT STARTED
 
 - A clean exact-head `gpt-5.6-sol` high verdict for this branch.
 - Push, pull request, CodeRabbit/check review, merge, and post-merge verification.
-- Follow-up branch that runs the producer, adds red-to-green classifier regressions, removes the
-  temporary producer, and completes its own exact-head review/pipeline.
-- Separate reconciliation of the two newer live-applied migration sources/schema registry and the
-  six stale Wave A migration timestamps.
+- Follow-up branch that runs the producer, preserves the existing red-to-green classifier regressions,
+  removes the temporary producer, and completes its own exact-head review/pipeline.
+- Separate reconciliation of the two 20260813-stamped, parked and unapplied migration sources with
+  the schema registry, plus the six stale Wave A migration timestamps. This description is the
+  August 12, 2026 historical snapshot and is not evidence that either parked migration was applied.
 
 ## APPROVAL STATE
 
@@ -136,7 +140,8 @@ any later live migration apply still requires the repository's current explicit 
 
 ## FIRST ACTION
 
-Refresh `origin/main`, confirm this branch contains it and is clean, then run the exact-SHA Sol-high
-review wrapper against the current branch head.
+Refresh `origin/main`, confirm this branch contains it and is clean, and capture the current HEAD as
+`review_sha`. Run the repository's Sol-high proof writer, require its reported `head_sha` to equal
+`review_sha` before push or merge, and repeat the full exact-head cycle after any head change.
 
 Verify current state from Git, disk, and connected services before trusting this handoff; it may be stale when read.

@@ -6,7 +6,26 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { buildMaintainedSource } from "./apply-live-testdata-maintenance-20260812.mjs";
+import {
+  buildMaintainedSource,
+  worktreeEntriesFromStatus,
+} from "./apply-live-testdata-maintenance-20260812.mjs";
+
+assert.deepEqual(
+  worktreeEntriesFromStatus("## codex/maintenance...origin/codex/maintenance\n"),
+  [],
+  "clean branch status has no worktree entries",
+);
+assert.deepEqual(
+  worktreeEntriesFromStatus("## codex/maintenance\n M tracked.mjs\n?? untracked.txt\n"),
+  [" M tracked.mjs", "?? untracked.txt"],
+  "tracked and untracked changes are both dirty",
+);
+assert.deepEqual(
+  worktreeEntriesFromStatus(" M tracked.mjs\r\n"),
+  [" M tracked.mjs"],
+  "status without a branch header remains dirty",
+);
 
 const { output, blob } = buildMaintainedSource();
 assert.equal(blob, "3ed5d18111a21f4949b392ff162fa347b1b1fdce", "pinned generated blob");
@@ -104,7 +123,9 @@ try {
     assert.equal(result.block, false, `must allow: ${sql}; got ${JSON.stringify(result)}`);
   }
 
-  process.stdout.write(`live-testdata maintenance candidate: ${blocked.length + allowed.length} assertions passed\n`);
+  process.stdout.write(
+    `live-testdata maintenance candidate: ${blocked.length + allowed.length} classifier assertions + 3 producer status assertions passed\n`,
+  );
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }

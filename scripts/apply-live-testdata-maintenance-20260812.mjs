@@ -103,7 +103,19 @@ export function buildMaintainedSource() {
   return { output, blob: gitBlob(output), snippets };
 }
 
+export function worktreeEntriesFromStatus(statusText) {
+  const lines = String(statusText).split(/\r?\n/).filter(Boolean);
+  if (lines[0]?.startsWith("## ")) lines.shift();
+  return lines;
+}
+
 function main() {
+  const status = git(["status", "--short", "--branch"]);
+  const worktreeEntries = worktreeEntriesFromStatus(status);
+  if (worktreeEntries.length > 0) {
+    throw new Error("refusing a dirty worktree; commit or restore unrelated changes first");
+  }
+
   const verifyOnly = process.argv.includes("--verify");
   if (!verifyOnly && !process.argv.includes(APPROVAL)) {
     throw new Error(`this one-use producer requires the exact approval token ${APPROVAL}`);
@@ -145,8 +157,6 @@ function main() {
     return;
   }
 
-  const status = git(["status", "--porcelain", "--untracked-files=no"]);
-  if (status) throw new Error("refusing a dirty worktree; commit or restore unrelated changes first");
   writeFileSync(TARGET_PATH, output, "utf8");
   const writtenBlob = git(["hash-object", TARGET]);
   if (writtenBlob !== EXPECTED_OUTPUT_BLOB) {
