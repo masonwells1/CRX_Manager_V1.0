@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { buildMaintainedSource } from "./apply-live-testdata-maintenance-20260812.mjs";
 
 const { output, blob } = buildMaintainedSource();
-assert.equal(blob, "46c55f5f9bedd98004b0102efc5188a136350975", "pinned generated blob");
+assert.equal(blob, "63847a7b32c6ab57f042dfdec8be8fc3ce600eae", "pinned generated blob");
 
 const scratch = mkdtempSync(path.join(tmpdir(), "crx-live-guard-candidate-test-"));
 try {
@@ -81,6 +81,7 @@ try {
     "CREATE TEMP TABLE scratch_columns (id int, x int); UPDATE pg_temp.scratch_columns SET x = 1 WHERE id = 1;",
     "SELECT pg_catalog.U&\"\\006c\\006f\\005f\\0063\\0072\\0065\\0061\\0074\\0065\"(0)",
     "SELECT public.U&\"\\0063\\0061\\006e\\0063\\0065\\006c\\005f\\006f\\0072\\0064\\0065\\0072\"('00000000-0000-0000-0000-000000000000')",
+    "BEGIN; CREATE VIEW pg_temp.guard_probe AS SELECT customer_id, created_by FROM public.invoices; CREATE TEMP TABLE IF NOT EXISTS guard_probe AS SELECT 1; INSERT INTO pg_temp.guard_probe SELECT c.id, p.id FROM public.customers c CROSS JOIN public.profiles p LIMIT 1; ROLLBACK;",
   ];
   for (const sql of blocked) {
     assert.equal(classifySql(sql).block, true, `must block: ${sql}`);

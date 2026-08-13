@@ -19,10 +19,10 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
 
 - The current source blob is pinned to `c8bec70830c643e474831985f5e6c3bd16630386`.
 - `node scripts/apply-live-testdata-maintenance-20260812.mjs --verify` produced pinned output blob
-  `46c55f5f9bedd98004b0102efc5188a136350975`, matched all three snippet SHA-256 values, and passed a
+  `63847a7b32c6ab57f042dfdec8be8fc3ce600eae`, matched all three snippet SHA-256 values, and passed a
   Node module syntax check without changing the repository target.
-- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 69 assertions against the
-  generated module, including all classifier defect classes found by the first fifteen Sol reviews.
+- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 70 assertions against the
+  generated module, including all classifier defect classes found by the first sixteen Sol reviews.
 - The write mode refused the dirty build worktree even with Mason's dated token.
 - Current recovery proof passed ESLint, TypeScript typecheck, production build, all 4,466 executed
   Vitest assertions (123 skipped), all agent-workflow tests, agent health, dependency integrity,
@@ -123,6 +123,10 @@ any later live migration apply still requires the repository's current explicit 
   classification. Unicode-escaped identifiers now fail closed categorically on this maintenance
   surface, with encoded `lo_create` and `cancel_order` calls pinned. A fresh exact-head review remains
   required.
+- The sixteenth exact-head Sol review found that `CREATE TEMP TABLE IF NOT EXISTS` can be a no-op when
+  a same-named temporary view already exists, yet the classifier still granted that name a later DML
+  exemption. Only unconditional direct CTAS creation now earns the exemption, and the exact updatable
+  view collision is pinned. A fresh exact-head review remains required.
 - GitHub checks and CodeRabbit must be complete and acceptable on the exact PR head.
 
 ## FIRST ACTION

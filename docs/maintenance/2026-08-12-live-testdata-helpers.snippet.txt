@@ -158,7 +158,7 @@ function tempBaseTableName(statement) {
   // Only a direct CTAS scratch table earns a same-batch DML exemption. Column
   // declarations, LIKE/OF clones, copied defaults, generated expressions, and
   // domains can hide calls that mutate persistent state when a row is inserted.
-  const match = /^\s*create\s+(?:temp|temporary)\s+table(?:\s+if\s+not\s+exists)?\s+(?:(?:"?(?:pg_temp|pg_temp_\d+)"?)\s*\.\s*)?"?([a-z_][a-z0-9_$]*)"?\s+as\s+(?:select|with|values)\b/i.exec(statement);
+  const match = /^\s*create\s+(?:temp|temporary)\s+table\s+(?:(?:"?(?:pg_temp|pg_temp_\d+)"?)\s*\.\s*)?"?([a-z_][a-z0-9_$]*)"?\s+as\s+(?:select|with|values)\b/i.exec(statement);
   return match?.[1]?.toLowerCase() || null;
 }
 

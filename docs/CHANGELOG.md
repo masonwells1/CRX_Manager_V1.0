@@ -15,7 +15,7 @@ must first pass an exact-head Sol review and the normal protected pull-request p
 change will run the producer on a feature branch, add the red-to-green regression tests, and remove
 the temporary producer after use.
 
-Fifteen exact-head adversarial passes have progressively hardened the candidate before activation. The
+Sixteen exact-head adversarial passes have progressively hardened the candidate before activation. The
 latest pass closed a Unicode identifier boundary that could conceal destructive SQL and removed the
 unsafe assumption that any `pg_temp`-qualified DML is harmless: PostgreSQL temporary views can be
 updatable proxies for persistent tables. The candidate now permits temporary DML only for a base temp
@@ -26,9 +26,10 @@ commands. Temporary DML now earns an exemption only after a direct CTAS scratch-
 preventing cloned production defaults from advancing persistent financial sequences. The function
 scanner also distinguishes a table declaration from a function call without hiding column expressions.
 Unicode-escaped SQL identifiers now fail closed because the database decodes them after the guard's
-raw-text classification. The 69-assertion generated-module harness pins the exact Unicode identifier,
-temp-view, standalone-target, table-to-view replacement, server-program, server-file, cloned-default,
-encoded-function, and unrecognized-command cases.
+raw-text classification. An `IF NOT EXISTS` CTAS no longer earns a temp-write exemption because it can
+be a no-op behind a same-named updatable view. The 70-assertion generated-module harness pins the exact
+Unicode identifier, temp-view, standalone-target, table-to-view replacement, server-program,
+server-file, cloned-default, encoded-function, view-collision, and unrecognized-command cases.
 
 ## 2026-08-12 — Wave A re-stamped to 20260813: a concurrent apply moved the high-water under us
 
