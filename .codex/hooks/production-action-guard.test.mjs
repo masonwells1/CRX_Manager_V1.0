@@ -107,6 +107,8 @@ try {
     `env FLAG=1 node scripts/${producerName} --verify`,
     `cmd /c node scripts\\${producerName} --verify`,
     `node "C:\\repo\\scripts\\${producerName}" --verify`,
+    "node --no-warnings scripts/$(printf apply-live-testdata-maintenance-20260812.mjs) --approved-by-$(printf mason)=2026-08-12",
+    "node --require fs scripts/$(printf apply-live-testdata-maintenance-20260812.mjs) --approved-by-$(printf mason)=2026-08-12",
   ]) {
     assert.equal(maintenanceProducerCommandMentioned(command), true, `producer spelling recognized: ${command}`);
   }
@@ -128,7 +130,7 @@ try {
   );
   assert.match(
     focusedProducerOutput,
-    /84 classifier assertions \+ 35 producer assertions passed/,
+    /87 classifier assertions \+ 49 producer assertions passed/,
     "the standard guard suite executes the focused producer regression harness",
   );
   assert.equal(evaluateProductionAction({ toolName: "mcp__node_repl__node_repl", toolInput: { code: "1 + 1" } }).blocked, true);

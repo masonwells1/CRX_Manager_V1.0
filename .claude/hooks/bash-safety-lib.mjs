@@ -18,13 +18,22 @@ const MAINTENANCE_PRODUCER_ALLOWED_COMMANDS = new Set([
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12",
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --protect-producer",
+  "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --retire-producer",
 ]);
 
 export function maintenanceProducerCommandMentioned(command) {
-  const compact = String(command || "")
+  const value = String(command || "");
+  if (/\bnode(?:\.exe)?\b/i.test(value) && /[*?\[\]{}$`]|[<>]\(/.test(value)) return true;
+  const nodeScript = /\bnode(?:\.exe)?\s+(?:"([^"]*)"|'([^']*)'|([^\s;&|]+))/i.exec(value);
+  const scriptPath = nodeScript?.[1] || nodeScript?.[2] || nodeScript?.[3] || "";
+  if (/[*?\[\]]|\$\(|\$\{/.test(scriptPath)) return true;
+  const compact = value
     .toLowerCase()
     .replace(/[\s\\/"'`^]/g, "");
-  return compact.includes(MAINTENANCE_PRODUCER_NAME);
+  return compact.includes(MAINTENANCE_PRODUCER_NAME)
+    || compact.includes("apply-live-testdata-")
+    || compact.includes("20260812.mjs")
+    || compact.includes("--approved-by-mason=");
 }
 
 export function checkMaintenanceProducerInvocation(command) {
@@ -38,6 +47,7 @@ export function checkMaintenanceProducerInvocation(command) {
 // original bash-safety.mjs inline table (2026-07 extraction), plus one addition
 // marked below.
 export const DANGEROUS_CMD_CHECKS = [
+  [/\bNODE_OPTIONS\s*=|\bnode(?:\.exe)?\b[^\r\n;&|]*(?:--require(?:=|\s)|(?:^|\s)-r(?:\s|\S)|--import(?:=|\s)|--(?:experimental-)?loader(?:=|\s))/i, "Blocked Node pre-execution loading. NODE_OPTIONS, require/import, and loader hooks can run code before a reviewed script's own safety checks."],
   [/\bgit\b[^\r\n;&|]*\bpush\b[^\r\n;&|]*(?:--force(?:-with-lease)?(?:=\S+)?\b|--force-if-includes\b|(?:^|\s)-[A-Za-z]*f[A-Za-z]*\b|(?:^|\s)\+\S+)/, "Blocked force push. Force pushing any branch requires Mason's explicit approval."],
   // Tolerate intervening git options (`git -C <path> reset --hard`, `git -c x=y clean -fd`)
   // — the adjacent-words-only spellings were bypassable (Codex P1, PR #352).

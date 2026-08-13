@@ -20,14 +20,17 @@ const SNIPPETS = {
 };
 
 const EXPECTED_INPUT_BLOB = "c8bec70830c643e474831985f5e6c3bd16630386";
-const EXPECTED_OUTPUT_BLOB = "fdc67a2ef72698b1e74a8dee53c2a41da4c55fbd";
+const EXPECTED_OUTPUT_BLOB = "7bca8dce4fe2f58afabdbd09d1b31ecef61ce520";
 const EXPECTED_SNIPPET_SHA256 = {
   constants: "53c658d7eb8aab2a60b4314f533f61b7472f8d686f4b81d483d57b20950022a9",
-  helpers: "b70fefdf0e969bc0e953362b1706753e127f1a7a8a8c8fda7181e94e2a161efd",
-  classify: "4babd221a9374e5df0b5d46db7bd267493c32d9a1a3a5dbb0a1a07fc66f6692a",
+  helpers: "8fa108c52b4423b7d269d94d19b91726fe880b6d2ea403c5c9665c686b532398",
+  classify: "41dea42c28a47e47892dbf1da05144a4dac0dfa30045eba99789090905411d00",
 };
 const APPROVAL = "--approved-by-mason=2026-08-12";
 const PROTECT_PRODUCER = "--protect-producer";
+const RETIRE_PRODUCER = "--retire-producer";
+const PRODUCER = "scripts/apply-live-testdata-maintenance-20260812.mjs";
+const PRODUCER_PATH = path.join(REPO_DIR, PRODUCER);
 const PROTECTED_SOURCES = {
   codexGuard: [".codex", "hooks", "production-action-" + "guard.mjs"].join("/"),
   pushLib: [".claude", "hooks", "codex-push-" + "lib.mjs"].join("/"),
@@ -37,22 +40,31 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "b89cfa2c3f980e6965f2f7a50ab2d836c8109ac5",
+  codexGuard: "e24d0fa880ea65327fb9ebd346952b17e628d458",
   pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
 };
 
 export function maintenanceProducerCommandMentioned(command) {
-  const compact = String(command || "")
+  const value = String(command || "");
+  if (/\bnode(?:\.exe)?\b/i.test(value) && /[*?\[\]{}$`]|[<>]\(/.test(value)) return true;
+  const nodeScript = /\bnode(?:\.exe)?\s+(?:"([^"]*)"|'([^']*)'|([^\s;&|]+))/i.exec(value);
+  const scriptPath = nodeScript?.[1] || nodeScript?.[2] || nodeScript?.[3] || "";
+  if (/[*?\[\]]|\$\(|\$\{/.test(scriptPath)) return true;
+  const compact = value
     .toLowerCase()
     .replace(/[\s\\/"'`^]/g, "");
-  return compact.includes("apply-live-testdata-maintenance-20260812.mjs");
+  return compact.includes("apply-live-testdata-maintenance-20260812.mjs")
+    || compact.includes("apply-live-testdata-")
+    || compact.includes("20260812.mjs")
+    || compact.includes("--approved-by-mason=");
 }
 
 export function maintenanceProducerInvocationAllowed(command) {
   const value = String(command || "").trim();
   return value === "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify"
     || value === "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12"
-    || value === "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --protect-producer";
+    || value === "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --protect-producer"
+    || value === "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --retire-producer";
 }
 
 export function exactHeadProofValid(data, headSha, baseSha, nowMs = Date.now()) {
@@ -179,11 +191,18 @@ export function buildProducerProtectionSources() {
   const constantsReplacement = constantsAnchor;
   const constantsWithMatcher = constantsReplacement;
   codexGuard = replaceExactly(codexGuard, constantsAnchor, constantsWithMatcher, "maintenance producer command constants");
-  const matcherAnchor = `export ${maintenanceProducerCommandMentioned.toString()}`;
+  const matcherAnchor = `export function maintenanceProducerCommandMentioned(command) {
+  const compact = String(command || "")
+    .toLowerCase()
+    .replace(/[\\s\\\\/"'\`^]/g, "");
+  return compact.includes("apply-live-testdata-maintenance-20260812.mjs");
+}`;
+  const hardenedMatcher = `export ${normalizeLineEndings(maintenanceProducerCommandMentioned.toString())}`;
+  const allowedMatcher = normalizeLineEndings(maintenanceProducerInvocationAllowed.toString());
   codexGuard = replaceExactly(
     codexGuard,
     matcherAnchor,
-    `${matcherAnchor}\n\nexport ${maintenanceProducerInvocationAllowed.toString()}`,
+    `${hardenedMatcher}\n\nexport ${allowedMatcher}`,
     "strict maintenance producer invocation matcher",
   );
 
@@ -223,10 +242,13 @@ function main() {
     throw new Error("refusing a dirty worktree; commit or restore unrelated changes first");
   }
 
-  const verifyOnly = process.argv.includes("--verify");
-  const protectProducer = process.argv.includes(PROTECT_PRODUCER);
-  if (!verifyOnly && !process.argv.includes(APPROVAL)) {
-    throw new Error(`this one-use producer requires the exact approval token ${APPROVAL}`);
+  const args = process.argv.slice(2);
+  const verifyOnly = args.length === 1 && args[0] === "--verify";
+  const applyMaintenance = args.length === 1 && args[0] === APPROVAL;
+  const protectProducer = args.length === 2 && args[0] === APPROVAL && args[1] === PROTECT_PRODUCER;
+  const retireProducer = args.length === 2 && args[0] === APPROVAL && args[1] === RETIRE_PRODUCER;
+  if (!verifyOnly && !applyMaintenance && !protectProducer && !retireProducer) {
+    throw new Error("unsupported producer invocation; use one exact reviewed command");
   }
 
   const branch = git(["rev-parse", "--abbrev-ref", "HEAD"]);
@@ -234,11 +256,10 @@ function main() {
     throw new Error(`refusing protected or detached branch: ${branch}`);
   }
   if (!verifyOnly) {
-    const producerPath = "scripts/apply-live-testdata-maintenance-20260812.mjs";
     const headSha = git(["rev-parse", "HEAD"]);
     const baseSha = git(["rev-parse", "origin/main"]);
-    const headBlob = git(["rev-parse", `HEAD:${producerPath}`]);
-    const worktreeBlob = git(["hash-object", `--path=${producerPath}`, producerPath]);
+    const headBlob = git(["rev-parse", `HEAD:${PRODUCER}`]);
+    const worktreeBlob = git(["hash-object", `--path=${PRODUCER}`, PRODUCER]);
     if (headBlob !== worktreeBlob) {
       throw new Error("the maintenance producer must match its exact committed HEAD blob");
     }
@@ -254,6 +275,11 @@ function main() {
     if (!exactHeadProofValid(proof, headSha, baseSha)) {
       throw new Error("the maintenance producer requires a fresh exact-head Sol-high proof matching the current HEAD and origin/main");
     }
+  }
+  if (retireProducer) {
+    rmSync(PRODUCER_PATH);
+    process.stdout.write(`Retired reviewed one-use maintenance producer (${PRODUCER}).\n`);
+    return;
   }
   const currentBlob = gitBlob(readNormalized(TARGET));
   if (currentBlob !== EXPECTED_INPUT_BLOB) {

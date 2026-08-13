@@ -17,22 +17,22 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
 
 ## PROVEN
 
-- The producer constants pin the complete artifact mapping: input blob `c8bec70830c643e474831985f5e6c3bd16630386`; output blob `fdc67a2ef72698b1e74a8dee53c2a41da4c55fbd`; constants SHA-256 `53c658d7eb8aab2a60b4314f533f61b7472f8d686f4b81d483d57b20950022a9`; helpers SHA-256 `b70fefdf0e969bc0e953362b1706753e127f1a7a8a8c8fda7181e94e2a161efd`; classifier SHA-256 `4babd221a9374e5df0b5d46db7bd267493c32d9a1a3a5dbb0a1a07fc66f6692a`.
+- The producer constants pin the complete artifact mapping: input blob `c8bec70830c643e474831985f5e6c3bd16630386`; output blob `7bca8dce4fe2f58afabdbd09d1b31ecef61ce520`; constants SHA-256 `53c658d7eb8aab2a60b4314f533f61b7472f8d686f4b81d483d57b20950022a9`; helpers SHA-256 `8fa108c52b4423b7d269d94d19b91726fe880b6d2ea403c5c9665c686b532398`; classifier SHA-256 `41dea42c28a47e47892dbf1da05144a4dac0dfa30045eba99789090905411d00`.
 - `node scripts/apply-live-testdata-maintenance-20260812.mjs --verify` produced pinned output blob
-  `fdc67a2ef72698b1e74a8dee53c2a41da4c55fbd`, matched all three snippet SHA-256 values, and passed a
+  `7bca8dce4fe2f58afabdbd09d1b31ecef61ce520`, matched all three snippet SHA-256 values, and passed a
   Node module syntax check without changing the repository target.
-- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 84 classifier assertions
-  against the generated module plus 35 counted producer assertions, including cross-platform line-ending
+- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 87 classifier assertions
+  against the generated module plus 49 counted producer assertions, including cross-platform line-ending
   normalization and all classifier defect classes found through the latest automated and Sol reviews.
 - The focused producer harness also passes after the exact pinned protections are installed, and the standard
   production-guard suite executes it while separately proving that an invocation without exact-head proof is denied.
 - Before those generated protections are installed, the already-wired Bash/PowerShell and MCP process guards
-  independently allow only the three exact repository-relative producer commands. Chaining, wrappers, alternate
+  independently allow only the four exact repository-relative producer commands. Chaining, wrappers, alternate
   spellings, unknown arguments, npm indirection, and the original pre-bootstrap rewrite reproduction are denied.
 - The write mode refused the dirty build worktree even with Mason's dated token.
-- Current recovery proof passed ESLint, TypeScript typecheck, production build, all 4,466 executed
-  Vitest assertions (123 skipped), all agent-workflow tests, agent health, dependency integrity,
-  focused producer verification, the candidate harness, and `git diff --check`.
+- Current recovery proof passed ESLint, TypeScript typecheck, production build, all agent-workflow tests,
+  agent health, the focused producer harness (87 classifier and 49 producer assertions), the 132-case
+  shell-safety suite, the owning production-action-guard suite, and `git diff --check`.
 - Historical snapshot as of August 12, 2026 (America/Chicago): `check-doc-drift.mjs` reported only
   the pre-existing `origin/main` mismatch between two live manual docs stamped 2026-08-12 and two
   deliberately parked, unapplied migration filenames stamped 20260813 (the next calendar day relative
@@ -50,6 +50,9 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
   review before it runs. Its only outputs are the two pinned guard blobs; once installed, later edits
   to this producer are directly blocked, every producer change requires exact-head review, and any
   producer execution requires a fresh proof matching the current committed HEAD and base.
+- The fourth exact command, `--retire-producer`, removes only this producer file after the same clean-worktree,
+  exact-blob, dated-token, and fresh exact-head proof gates pass. This keeps the later activation lane capable
+  of deleting the one-use tool without reopening a generic protected-file write path.
 
 ## NOT STARTED
 

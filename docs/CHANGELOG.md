@@ -13,7 +13,7 @@ SHA-256, builds one pinned output blob, refuses dirty/detached/protected branche
 Mason's dated approval token before writing. The producer itself does not activate the repair; it
 must first pass an exact-head Sol review and the normal protected pull-request pipeline. The follow-up
 change will run the producer on a feature branch and remove the temporary producer after use; the
-generated-module regression harness is already checked in and exercises 84 classifier cases. PR
+generated-module regression harness is already checked in and exercises 87 classifier cases. PR
 review also moved the tracked-and-untracked dirty-worktree check ahead of every temporary or target
 write, so verification mode follows the same fail-closed cleanliness contract as write mode. Input
 blob verification normalizes Windows CRLF bytes before hashing, matching the producer's normalized
@@ -28,9 +28,13 @@ committed producer also requires a fresh Sol-high proof bound to the current HEA
 
 Twenty-two exact-head adversarial passes have progressively hardened the candidate before activation. The
 latest pass found that ordinary shell quoting could bypass the producer invocation matcher. The generated
-guard now recognizes quoted, absolute, alternate-separator, wrapper-prefixed, and escaped spellings, while
+guard now recognizes quoted, absolute, alternate-separator, wrapper-prefixed, and escaped spellings, and
+fails closed whenever a Node command uses dynamic shell syntax anywhere in its complete command text, while
 the producer itself independently requires its exact committed blob plus a fresh HEAD-and-base-bound
-Sol-high proof before either write mode can run. Thirty-five counted producer assertions pin those boundaries. The
+Sol-high proof before any write mode can run. Forty-nine counted producer assertions pin those boundaries,
+including option-prefixed, value-taking-option, redirection, opaque substitution, and escaped-newline forms. The
+generated guard also normalizes `Function#toString()` line endings before hashing, so Windows worktrees and
+the isolated exact-review snapshot reproduce the same protected output blob.
 next pass found PostgreSQL's optional `ONLY` keyword could hide persistent targets from CTE-wrapped
 `UPDATE`, `DELETE`, and `MERGE`. Target enumeration now accepts `ONLY`, and any `WITH` statement that still
 contains an unaccounted DML verb fails closed. Three exact regressions pin those forms.
@@ -40,7 +44,7 @@ focused harness remains repeatable after protection without accepting a mixed or
 production-guard suite executes that focused harness and proves an invocation without exact-head proof is denied;
 the risky-path suite also pins the producer's exact-review classification. Rollback attempts every protected-file
 restore and reports any incomplete restoration without hiding the original failure.
-The current outer shell-safety hook now independently permits only the three exact repository-relative
+The current outer shell-safety hook now independently permits only the four exact repository-relative
 producer commands and denies chaining, wrappers, alternate spellings, unknown arguments, and npm/MCP
 indirection. This closes the pre-bootstrap check-to-execution gap before the generated production-action
 guard hardening is installed; live hook regressions pin the original chained rewrite reproduction.
@@ -57,7 +61,7 @@ Unicode-escaped SQL identifiers now fail closed because the database decodes the
 raw-text classification. An `IF NOT EXISTS` CTAS no longer earns a temp-write exemption because it can
 be a no-op behind a same-named updatable view. `EXPLAIN` now fails closed because its `ANALYZE` form
 executes the wrapped command. The eighteenth pass closed PostgreSQL's optional-`INTO` `MERGE` grammar,
-including the exact `WITH ... MERGE customers ... WHEN MATCHED THEN DELETE` payload. The 78-assertion generated-module harness pins the exact
+including the exact `WITH ... MERGE customers ... WHEN MATCHED THEN DELETE` payload. The 87-assertion generated-module harness pins the exact
 Unicode identifier, temp-view, standalone-target, table-to-view replacement, server-program,
 server-file, cloned-default, encoded-function, view-collision, and unrecognized-command cases.
 

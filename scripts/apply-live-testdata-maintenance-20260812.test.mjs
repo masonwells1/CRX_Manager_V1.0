@@ -68,12 +68,12 @@ assert.match(
   "Codex guard output binds producer execution to committed reviewed HEAD",
 );
 assert.equal(
-  producerProtection.outputs.codexGuard.includes(`export ${maintenanceProducerCommandMentioned.toString()}`),
+  producerProtection.outputs.codexGuard.includes(`export ${normalizeLineEndings(maintenanceProducerCommandMentioned.toString())}`),
   true,
   "generated guard embeds the invocation matcher exercised below",
 );
 assert.equal(
-  producerProtection.outputs.codexGuard.includes(`export ${maintenanceProducerInvocationAllowed.toString()}`),
+  producerProtection.outputs.codexGuard.includes(`export ${normalizeLineEndings(maintenanceProducerInvocationAllowed.toString())}`),
   true,
   "generated guard embeds the strict invocation allowlist exercised below",
 );
@@ -92,6 +92,19 @@ const producerInvocations = [
   "cmd /c node scripts\\apply-live-testdata-maintenance-20260812.mjs --verify",
   'node "C:\\repo\\scripts\\apply-live-testdata-maintenance-20260812.mjs" --verify',
   'node scripts/apply-live-testdata-maintenance-20260812".mjs" --verify',
+  "node scripts/apply-live-testdata-maintenance-20260812.?js --approved-by-mason=2026-08-12",
+  "node scripts/apply-live-testdata-ma[i]ntenance-20260812.mjs --approved-by-mason=2026-08-12",
+  "node scripts/appl?-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12",
+  "node scripts/apply-l[i]ve-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12",
+  "node scripts/appl?-live-testdata-maintenance-2026081?.mjs --approved-by-mason=2026-08-12",
+  "node scripts/appl?-live-testdata-maintenance-2026081?.mjs --approved-by-mason=2026-08-$(printf 12)",
+  "node scripts/appl?-live-testdata-maintenance-2026081?.mjs --approved-by-$(printf mason)=2026-08-12",
+  "node scripts/$(printf apply-live-testdata-maintenance-20260812.mjs) --approved-by-mason=2026-08-12",
+  "node --no-warnings scripts/$(printf apply-live-testdata-maintenance-20260812.mjs) --approved-by-$(printf mason)=2026-08-12",
+  "node --require fs scripts/$(printf apply-live-testdata-maintenance-20260812.mjs) --approved-by-$(printf mason)=2026-08-12",
+  "node </dev/null --no-warnings scripts/$(printf YXBwbHktbGl2ZS10ZXN0ZGF0YS1tYWludGVuYW5jZS0yMDI2MDgxMi5tanM= | base64 -d) --approved-by-$(printf bWFzb24= | base64 -d)=2026-08-12",
+  "node --no-warnings \\\nscripts/$(printf YXBwbHktbGl2ZS10ZXN0ZGF0YS1tYWludGVuYW5jZS0yMDI2MDgxMi5tanM= | base64 -d) --approved-by-$(printf bWFzb24= | base64 -d)=2026-08-12",
+  "node --require ./preload.cjs scripts/apply-l{i..i}ve-testdata-maintenance-20260{8..8}12.mjs --approved-by-ma{s..s}on=2026-08-12",
 ];
 for (const command of producerInvocations) {
   assert.equal(maintenanceProducerCommandMentioned(command), true, `must recognize producer invocation: ${command}`);
@@ -105,6 +118,7 @@ for (const command of [
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12",
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --protect-producer",
+  "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --retire-producer",
 ]) {
   assert.equal(maintenanceProducerInvocationAllowed(command), true, `exact producer invocation accepted: ${command}`);
 }
@@ -143,7 +157,7 @@ for (const [name, source] of Object.entries(producerProtection.outputs)) {
 }
 
 const { output, blob } = buildMaintainedSource();
-assert.equal(blob, "fdc67a2ef72698b1e74a8dee53c2a41da4c55fbd", "pinned generated blob");
+assert.equal(blob, "7bca8dce4fe2f58afabdbd09d1b31ecef61ce520", "pinned generated blob");
 
 try {
   const candidatePath = path.join(scratch, "candidate.mjs");
@@ -226,6 +240,8 @@ try {
     "EXPLAIN (ANALYZE TRUE) EXECUTE prepared_mutator('00000000-0000-0000-0000-000000000000');",
     "BEGIN; CREATE TABLE public.guard_probe (id int DEFAULT public.cancel_order()); ROLLBACK;",
     "BEGIN; CREATE INDEX guard_probe_idx ON public.customers (public.cancel_order(id)); ROLLBACK;",
+    "SELECT $é$' $é$; DROP TABLE public.customers",
+    "BEGIN; SET LOCAL standard_conforming_strings = off; SELECT 'a\\''; DROP TABLE public.customers; SELECT 'x\\''; ROLLBACK;",
   ];
   for (const sql of blocked) {
     assert.equal(classifySql(sql).block, true, `must block: ${sql}`);
@@ -241,6 +257,7 @@ try {
     "BEGIN; CREATE TABLE public.guard_probe (id int); ROLLBACK;",
     "BEGIN; CREATE INDEX guard_probe_idx ON public.customers (id); ROLLBACK;",
     "BEGIN; SET LOCAL statement_timeout = '1s'; SELECT 1; ROLLBACK;",
+    "CREATE TEMP TABLE scratch_copy AS TABLE public.invoices",
   ];
   for (const sql of allowed) {
     const result = classifySql(sql);
