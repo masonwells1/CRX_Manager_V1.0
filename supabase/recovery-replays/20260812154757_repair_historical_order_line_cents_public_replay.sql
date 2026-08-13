@@ -24,12 +24,14 @@
 -- counts, sibling rows, headers, and financial impact before any write occurs.
 --
 -- APPROVED_SET_DIGEST: 0f8ccef3bf6d3291c654d5abb24a151e16ad759851f5eddfc65d1585d7f5b7db
+-- APPLIED_LEDGER_VERSION: 20260812154757
 -- APPLIED_PAYLOAD_SHA256: 7498b0befab4cd6355560cf9dc29c270a3e0098d2327d24d7eb7ab13d0d927ca
--- PUBLICATION NOTE: unlike the other five migrations recovered alongside it,
+-- PUBLIC RECOVERY REPLAY — NOT A MIGRATION LEDGER SOURCE:
+-- Unlike the other five migrations recovered alongside it,
 -- this file is NOT byte-identical to the payload that was applied. The applied
 -- 35-row preimage map remains in the access-controlled applying-session record
 -- because it contains live order-line identifiers, prices and profit. This
--- public replay source derives that same candidate set from every dirty line,
+-- recovery replay derives that same candidate set from every dirty line,
 -- then uses the applied payload's fixed digest/count/impact checks to prove the
 -- exact preimage before writing. It therefore remains disaster-recovery capable
 -- without publishing customer-linked financial data.

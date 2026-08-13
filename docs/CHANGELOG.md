@@ -2,6 +2,12 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-13 — Separate private applied identity and quarantine unverifiable quote history
+
+Exact-SHA review of PR #389 found two release blockers. First, the public tree placed a derived/sanitized historical-cent repair under live ledger version `20260812154757` even though its bytes did not match the private payload Supabase actually stored. The applied payload is 18,770 normalized bytes with SHA-256 `7498b0befab4cd6355560cf9dc29c270a3e0098d2327d24d7eb7ab13d0d927ca`; it embeds customer-linked financial preimage data and remains private. Removed the different SQL from `supabase/migrations/` and moved the safe disaster-recovery logic to the explicitly non-ledger path `supabase/recovery-replays/20260812154757_repair_historical_order_line_cents_public_replay.sql`, with its own pinned fingerprint and runbook. The captured-ledger prover now fails closed unless the private applied identity and the public recovery replay both match their independent fingerprints.
+
+Second, the pending RPC-only `quote_versions` write boundary could prevent future forged snapshots but could not prove the provenance of the three versions already present live. Added unapplied candidate `20260813170000_quarantine_legacy_quote_version_restore.sql`. It requires the RPC-only boundary first, locks and records every pre-boundary version in a private forced-RLS quarantine table, prevents the quarantine from being edited, and makes the governed restore wrapper reject quarantined ids before any snapshot write. A registered rollback smoke proves the legacy denial and a post-boundary create/restore positive control. Focused static suites passed 55 tests, and the network-isolated captured-ledger reconstruction replayed all 970 live rows plus all 10 pending candidates, passed every registered rollback smoke, and left zero residue. **Neither the new write-boundary candidate nor the quarantine has been applied live.**
+
 ## 2026-08-13 — Close quote draw-down ownership and deletion bypass
 
 Exact-SHA review of PR #389 found that the callable `draw_down_quote` path accepted any active sales rep and broadly readable quote id. The private implementation locked the quote but did not require `quotes.created_by = auth.uid()` for a sales rep and did not reject `deleted_at`, so a rep could target another rep's sent/revised booking or a soft-deleted booking before the normal order, inventory, commission, and audit work began. Added forward-only local candidate `20260813161614_restrict_draw_down_quote_owner.sql`: it pins the exact live private body and governed public wrapper, replaces only the private implementation, rejects deleted quotes as not found, rejects a non-admin non-owner with the established `NOT_QUOTE_OWNER` token, keeps both checks after the row lock and before idempotency replay, and preserves the public signature and ACL boundary. Added a container-only two-sales-rep rollback chain with owning-rep/admin positive controls and zero order/draw-ledger residue. **Not applied live.**
@@ -209,24 +215,28 @@ six files wide.
 **Why the files are trustworthy.** Rebuilding a migration from live `pg_proc.prosrc` loses the
 header, the preconditions and the review history, and produces a file nobody actually reviewed. Five
 files are therefore the exact `apply_migration` payloads recovered verbatim from the applying
-sessions' transcripts. The sixth is the explicitly documented public replay form below. Fidelity was
-then proven rather than asserted: function
+sessions' transcripts. The sixth applied payload is private; its exact ledger identity is documented
+by normalized byte count and SHA-256, while a separately named public recovery replay lives outside
+`supabase/migrations/`. Fidelity was then proven rather than asserted: function
 bodies extracted from the recovered text were md5-compared against live `pg_proc.prosrc` and matched
 exactly, at identical length, for `_guard_below_cost_approval_immutable`,
 `_resnapshot_order_item_cost_on_product_change`, `_snapshot_quote_item_cost` and
 `_guard_quote_item_cost_snapshot`. `bash scripts/validate-sql-migrations.sh --changed-only` reports
 0 violations across the six.
 
-**One deliberate exception to byte fidelity, and it is the only one.** `20260812115238` is published
-without its explicit approved preimage: the applied payload embedded a 35-row map of live order-line
+**Private applied payload and separate public recovery replay.** `20260812115238` is not published
+under its live ledger identity: the applied payload embedded a 35-row map of live order-line
 identifiers with their prices and profit, and this repository is public. The exact applied payload is
-retained in the access-controlled applying-session record and is bound here by SHA-256
+retained in the access-controlled applying-session record and is bound here by its 18,770 normalized
+bytes and SHA-256
 `7498b0befab4cd6355560cf9dc29c270a3e0098d2327d24d7eb7ab13d0d927ca`. The public replay source derives every
 currently fractional line under the same `ACCESS EXCLUSIVE` lock, then requires the original fixed
 SHA-256 full-snapshot digest, row/order/sibling counts, and financial-impact checks to match before
 writing. An older backup with the approved preimage can therefore replay safely, a different dirty
 set fails closed, and an already-clean database installs or retains the validated constraint without
-publishing customer-linked financial data. The file defines no functions, so the md5 fidelity proof
+publishing customer-linked financial data. It is stored under `supabase/recovery-replays/` with a
+`*_public_replay.sql` name and independent fingerprint, so normal migration tooling cannot mistake it
+for the private applied payload. The replay defines no functions, so the md5 fidelity proof
 above is unaffected.
 
 **What the six do**, in apply order (full detail in `docs/reference/migration-history.md`, rows

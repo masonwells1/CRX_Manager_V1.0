@@ -25,8 +25,9 @@ supabase/migrations/20260723193312_product_families_return_policy_foundation.sql
 supabase/migrations/20260729222311_bind_save_field_actor.sql text eol=lf
 scripts/smoke/fixtures/phase3-live-unapply-credit-memo.sql text eol=lf
 
-# The six migrations applied live on 2026-08-12 whose files were recovered from
-# the applying sessions' transcripts and landed afterwards. Same rule, same
+# Five exact migrations applied live on 2026-08-12 whose files were recovered
+# from the applying sessions' transcripts and landed afterwards, plus the
+# separately named public recovery replay for the sixth private payload. Same rule, same
 # reason, and here it is load-bearing in a way that is easy to miss: these bytes
 # were verified LF against live pg_proc.prosrc after the fact, and the recovered
 # text md5-matches the live function bodies exactly. A Windows checkout under
@@ -38,7 +39,7 @@ supabase/migrations/20260812011000_restore_quote_version_whole_cent_money.sql te
 supabase/migrations/20260812145628_snapshot_cost_reporting.sql text eol=lf
 supabase/migrations/20260812151606_quote_items_cost_at_quote_snapshot.sql text eol=lf
 supabase/migrations/20260812154028_enforce_below_cost_admin_approval.sql text eol=lf
-supabase/migrations/20260812154757_repair_historical_order_line_cents.sql text eol=lf
+supabase/recovery-replays/20260812154757_repair_historical_order_line_cents_public_replay.sql text eol=lf
 
 # Wave A. Not yet applied, but the same rule applies for the same reason, and
 # here it binds BEFORE the first apply rather than after: each of these pins an
@@ -66,6 +67,8 @@ supabase/migrations/20260813090000_restrict_restore_quote_owner_impl.sql text eo
 # applier, so a CRLF checkout would mint a proof that no longer matches the file
 # under review.
 supabase/migrations/20260813080000_lock_quote_versions_writes_to_rpc.sql text eol=lf
+supabase/migrations/20260813161614_restrict_draw_down_quote_owner.sql text eol=lf
+supabase/migrations/20260813170000_quarantine_legacy_quote_version_restore.sql text eol=lf
 
 # Generated clean-rebuild baselines are hash-verified release artifacts.
 supabase/baselines/*.sql  text eol=lf

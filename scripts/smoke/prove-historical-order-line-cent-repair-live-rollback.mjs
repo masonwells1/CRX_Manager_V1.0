@@ -18,8 +18,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const MIGRATION = path.join(
   ROOT,
   'supabase',
-  'migrations',
-  '20260812154757_repair_historical_order_line_cents.sql',
+  'recovery-replays',
+  '20260812154757_repair_historical_order_line_cents_public_replay.sql',
 );
 const LINKED_WORKDIR = process.env.CRX_SUPABASE_WORKDIR ?? 'C:\\CRX_Manager';
 const PASS_TOKEN = 'SMOKE_PASS_ROLLBACK historical_order_line_cent_repair';

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const migration = readFileSync(
-  'supabase/migrations/20260812154757_repair_historical_order_line_cents.sql',
+  'supabase/recovery-replays/20260812154757_repair_historical_order_line_cents_public_replay.sql',
   'utf8',
 );
 const prover = readFileSync(

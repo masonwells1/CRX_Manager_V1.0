@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const MIGRATION_PATH =
-  'supabase/migrations/20260812154757_repair_historical_order_line_cents.sql';
+  'supabase/recovery-replays/20260812154757_repair_historical_order_line_cents_public_replay.sql';
 const DIGEST = '0f8ccef3bf6d3291c654d5abb24a151e16ad759851f5eddfc65d1585d7f5b7db';
 
 const migration = readFileSync(MIGRATION_PATH, 'utf8').replace(/\r\n/g, '\n');
@@ -62,7 +62,15 @@ function assertReplaySafe(source: string): void {
   }
 }
 
-describe('historical order-line cent repair public replay source', () => {
+describe('historical order-line cent repair public recovery replay', () => {
+  it('cannot masquerade as the private applied migration source', () => {
+    expect(() => readFileSync(
+      'supabase/migrations/20260812154757_repair_historical_order_line_cents.sql',
+      'utf8',
+    )).toThrow();
+    expect(migration).toContain('PUBLIC RECOVERY REPLAY — NOT A MIGRATION LEDGER SOURCE');
+  });
+
   it('derives the private candidate set and gates the write on the original full snapshot', () => {
     expect(() => assertReplaySafe(migration)).not.toThrow();
   });

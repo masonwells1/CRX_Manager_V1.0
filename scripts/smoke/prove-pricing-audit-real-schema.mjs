@@ -20,31 +20,39 @@ const NAME = `crx-pricing-audit-${process.pid}-${Date.now().toString(36)}`;
 const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
 const BASELINE = path.join(ROOT, 'supabase', 'baselines');
 const migrationsDir = path.join(ROOT, 'supabase', 'migrations');
+const recoveryReplayDir = path.join(ROOT, 'supabase', 'recovery-replays');
 const ledgerSnapshotFile = path.join(ROOT, 'scripts', 'smoke', 'pricing-audit-live-ledger.json');
 const schemaRegistryFile = path.join(ROOT, '.claude', 'schema-registry.json');
 const exactLiveSourceRequiredSince = '20260809130108';
 // The live cent repair contains a private 35-row production preimage that must
-// not be published in this public repository. Its replacement is not a loose
-// exemption: both the applied private payload and the reviewed public replay
-// source are exact byte/hash-bound here, and the latter is executed below.
+// not be published in this public repository. No different SQL is allowed to
+// occupy that applied ledger identity in supabase/migrations. The reviewed
+// recovery replay lives outside the migration directory, is independently
+// byte/hash-bound, and is executed below only to reconstruct the resulting
+// schema and repaired-data invariants in the disposable database.
 const sensitiveAppliedReplaySubstitutions = new Map([
   ['20260812154757', {
     appliedBytes: 18770,
     appliedSha256: '7498b0befab4cd6355560cf9dc29c270a3e0098d2327d24d7eb7ab13d0d927ca',
-    publicBytes: 13823,
-    publicSha256: '7e101fd6aba776732676df3989be5429e5e4bd09d939d11f62e738d390444a49',
+    replayFilename: '20260812154757_repair_historical_order_line_cents_public_replay.sql',
+    publicBytes: 13903,
+    publicSha256: 'd480fab48c6502c7617f4543f61ef05b39299f698aff9562a51f1f78de46c3ec',
   }],
 ]);
 const appliedPricingMigrations = [
   '20260812145628_snapshot_cost_reporting.sql',
   '20260812151606_quote_items_cost_at_quote_snapshot.sql',
   '20260812154028_enforce_below_cost_admin_approval.sql',
-  '20260812154757_repair_historical_order_line_cents.sql',
 ].map((name) => path.join(migrationsDir, name));
+appliedPricingMigrations.push(path.join(
+  recoveryReplayDir,
+  sensitiveAppliedReplaySubstitutions.get('20260812154757').replayFilename,
+));
 const smokeFiles = [
   'smoke-below-cost-admin-wall.sql',
   'smoke-below-cost-quote-lifecycle.sql',
   'smoke-draw-down-quote-owner-boundary.sql',
+  'smoke-quote-version-restore-quarantine.sql',
   'smoke-remaining-money-inventory-hardening.sql',
 ].map((name) => path.join(ROOT, 'scripts', 'smoke', name));
 const oneShotDataReplayExclusions = new Map([
@@ -68,6 +76,10 @@ const pendingCandidateMigrationExclusions = new Map([
   [
     '20260813161614_restrict_draw_down_quote_owner.sql',
     'draw-down follow-up: require quote ownership and reject soft-deleted bookings',
+  ],
+  [
+    '20260813170000_quarantine_legacy_quote_version_restore.sql',
+    'restore follow-up: quarantine every version created before the RPC-only write boundary',
   ],
 ]);
 const pendingCandidateMigrations = [...pendingCandidateMigrationExclusions.keys()]
@@ -198,10 +210,18 @@ function selectedMigrations() {
     assert.ok(appliedNames.has(entry.name), `schema registry is missing live migration ${entry.name}`);
     assert.match(entry.statement_sha256, /^[0-9a-f]{64}$/, `${entry.version} has an invalid live SQL hash`);
     assert.ok(entry.statement_bytes > 0, `${entry.version} has an invalid live SQL byte length`);
-    const file = resolveLiveSource(entry, migrationNames);
-    const fingerprint = sourceFingerprint(file);
     const replaySubstitution = sensitiveAppliedReplaySubstitutions.get(entry.version);
+    let file;
     if (replaySubstitution) {
+      const ledgerIdentityCandidates = migrationNames.filter((name) =>
+        name.startsWith(`${entry.version}_`) || name === `${entry.name}.sql`);
+      assert.deepEqual(
+        ledgerIdentityCandidates,
+        [],
+        `${entry.version} is a private applied payload; no different public SQL may occupy its ledger identity`,
+      );
+      file = path.join(recoveryReplayDir, replaySubstitution.replayFilename);
+      const fingerprint = sourceFingerprint(file);
       assert.equal(entry.statement_bytes, replaySubstitution.appliedBytes,
         `${entry.version} captured applied byte length drifted`);
       assert.equal(entry.statement_sha256, replaySubstitution.appliedSha256,
@@ -210,7 +230,10 @@ function selectedMigrations() {
         `${path.basename(file)} public replay byte length drifted`);
       assert.equal(fingerprint.sha256, replaySubstitution.publicSha256,
         `${path.basename(file)} public replay hash drifted`);
-    } else if (entry.version >= exactLiveSourceRequiredSince) {
+    } else {
+      file = resolveLiveSource(entry, migrationNames);
+      const fingerprint = sourceFingerprint(file);
+      if (entry.version < exactLiveSourceRequiredSince) return { ...entry, file };
       assert.equal(
         fingerprint.bytes,
         entry.statement_bytes,
@@ -256,7 +279,9 @@ function selectedMigrations() {
     .sort();
   const expectedSelected = [
     ...ordered
-      .filter((entry) => !oneShotDataReplayExclusions.has(entry.version))
+      .filter((entry) =>
+        !oneShotDataReplayExclusions.has(entry.version)
+        && !sensitiveAppliedReplaySubstitutions.has(entry.version))
       .map((entry) => path.basename(entry.file)),
     ...pendingCandidateMigrationExclusions.keys(),
   ].sort();
@@ -395,6 +420,9 @@ try {
     // LOCK TABLE guards execute exactly as they do in the managed runner. Feed
     // canonical LF bytes directly so Windows checkout line endings cannot
     // change pg_proc.prosrc hashes inside the disposable database.
+    // For the one private applied payload, entry.file is the separately named
+    // public recovery replay. It reconstructs the same post-state here but is
+    // never represented as the immutable applied migration source.
     psql(`BEGIN;\n${normalizedSql(entry.file)}\nCOMMIT;`);
     recordLedgerEntry(entry);
     replayedLiveMigrations += 1;
@@ -473,6 +501,16 @@ try {
        '00000000-0000-4000-9000-000000000011', '[CHAIN]-QUOTE',
        '00000000-0000-4000-9000-000000000010',
        '00000000-0000-4000-8000-000000000001', 'draft', NULL
+     );
+     INSERT INTO public.quote_versions (
+       id, quote_id, version_number, sent_by, sent_at, sent_method,
+       snapshot_data, notes
+     ) VALUES (
+       '00000000-0000-4000-9000-000000000017',
+       '00000000-0000-4000-9000-000000000011', 1,
+       '00000000-0000-4000-8000-000000000001', now(), 'proof',
+       '{"quote":{"total_price":0,"total_profit":0},"sections":[]}'::jsonb,
+       '[CHAIN] pre-RPC-owned version'
      );
      INSERT INTO public.orders (
        id, order_number, customer_id, status, pricing_status, order_date
@@ -581,11 +619,12 @@ try {
     `live_replayed=${replayedLiveMigrations} pricing_applied=${appliedPricingMigrations.length} ` +
     `pending_candidates_applied=${pendingCandidateMigrations.length} ` +
     `one_shot_data_exclusions=${oneShotDataReplayExclusions.size} ` +
-    `sensitive_replay_substitutions=${sensitiveAppliedReplaySubstitutions.size} ` +
+    `private_payload_recovery_replays=${sensitiveAppliedReplaySubstitutions.size} ` +
     'wave_a_below_cost_wrapper=PASS approved_set_empty=PASS cent_repair_empty=PASS approved_set_nonempty_drift=APPROVED_SET_DRIFTED ' +
     'smoke_below_cost_admin=SMOKE_PASS_ROLLBACK ' +
     'smoke_quote_lifecycle=SMOKE_PASS_ROLLBACK ' +
     'smoke_draw_down_owner=SMOKE_PASS_ROLLBACK ' +
+    'smoke_quote_version_quarantine=SMOKE_PASS_ROLLBACK ' +
     'smoke_profitability_inventory=SMOKE_PASS_ROLLBACK residue=0',
   );
 } catch (error) {
