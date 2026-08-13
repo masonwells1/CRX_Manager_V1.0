@@ -1189,7 +1189,7 @@ $MIG_BASENAME
       # rows are not business rows. Anything else is refused for being
       # unaccounted-for, because a name nobody can resolve is exactly what an
       # unbound rewrite of protected rows looks like from here.
-      function unresolved_write(t, kind, p,   sch) {
+      function unresolved_write(t, kind, p,   sch, bare) {
         if (t == "") return
         # A NAME IN ANOTHER SCHEMA IS NOT AUTOMATICALLY OUT OF SCOPE
         # (Codex High, round 22). Through round 21 ANY dotted name returned here
@@ -1213,6 +1213,29 @@ $MIG_BASENAME
         # and auth — so this costs the existing repository nothing.
         if (t ~ /\./) {
           sch = t; sub(/\..*$/, "", sch)
+          bare = t; sub(/^[^.]*\./, "", bare)
+          # THE VIEW CHECK RUNS BEFORE THE SCHEMA EXEMPTION (Codex High, round
+          # 27). Round 22 kept a fixed list of infrastructure schemas whose names
+          # are out of scope, and returned on it FIRST. `pg_temp` is on that list,
+          # and a temporary view is not scratch — it is a writable alias for
+          # permanent rows:
+          #
+          #   CREATE TEMP VIEW oi_shim AS SELECT * FROM public.order_items;
+          #   UPDATE pg_temp.oi_shim SET profit = 0;
+          #
+          # The view is single-table, so PostgreSQL makes it automatically
+          # updatable and real order_items rows change. The creation WAS recorded
+          # (made_view drops the schema prefix), but the write never reached that
+          # check: `pg_temp.` matched the exemption one line earlier and returned.
+          # The apply-time guard sees only `oi_shim` too, so nothing else catches
+          # it. Resolve the view identity first, on the bare name, and let the
+          # exemption apply only to what is left.
+          if ((knownviews != "" && bare ~ ("^(" knownviews ")$")) || made_view[bare]) {
+            if (seen_unres[t]) return
+            seen_unres[t] = 1
+            printf "%d\t%s\t%s\t%s\t%s\t%s\n", tokln[p], t, "viewwrite", kind, "-", raw[tokln[p]]
+            return
+          }
           if (sch ~ /^(auth|storage|cron|net|extensions|graphql|graphql_public|realtime|supabase_functions|supabase_migrations|vault|pgsodium|pgbouncer|information_schema|pg_catalog|pg_temp|pg_toast)$/) return
           if (seen_unres[t]) return
           seen_unres[t] = 1

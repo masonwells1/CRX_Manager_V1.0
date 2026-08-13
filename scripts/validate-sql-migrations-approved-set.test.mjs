@@ -730,6 +730,40 @@ const CASES = [
       `UPDATE auth.users SET raw_app_meta_data = '{}'::jsonb;\n`,
   },
   {
+    // ROUND 27 (Codex High). The allowlist above was the bypass one more time.
+    // `pg_temp` is on it because a temp table is scratch — but a temp VIEW is
+    // not scratch, it is a writable alias for permanent rows. A single-table
+    // view is automatically updatable, so the two statements below rewrite real
+    // order_items rows; the creation WAS indexed, but the write never reached
+    // the view check because `pg_temp.` matched the schema exemption first and
+    // returned. The apply-time guard sees only `oi_shim`, so nothing else caught
+    // it either. The view check now runs BEFORE the schema exemption.
+    name: 'writing through a pg_temp view is refused',
+    expect: 'violation',
+    mustReport: 'pg_temp.oi_shim',
+    sql:
+      `CREATE TEMP VIEW oi_shim AS\n` +
+      `SELECT * FROM public.order_items;\n` +
+      `UPDATE pg_temp.oi_shim SET profit = 0;\n`,
+  },
+  {
+    // Same hole, reached through a view another migration defined — the reorder
+    // has to consult the repo-wide index, not just what this file created.
+    name: 'writing a repo-known view through the pg_temp qualifier is refused',
+    expect: 'violation',
+    mustReport: 'pg_temp.legacy_orders_v',
+    sql: `UPDATE pg_temp.legacy_orders_v SET total_profit = 0;\n`,
+  },
+  {
+    // And the reorder must not cost the exemption its point: a genuine temp
+    // TABLE holds no business rows and is still out of scope, qualifier and all.
+    name: 'writing a pg_temp scratch table is still out of scope',
+    expect: 'silent',
+    sql:
+      `CREATE TEMP TABLE ids_to_fix_r27 (id uuid);\n` +
+      `UPDATE pg_temp.ids_to_fix_r27 SET id = gen_random_uuid();\n`,
+  },
+  {
     // ROUND 22 (Codex High), the dollar-quoted decoy. Every element of a
     // canonical approved-set repair is present in the file — the locked
     // capture, the whole-row hash, the mismatch test, the row-count assertion —

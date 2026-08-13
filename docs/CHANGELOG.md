@@ -2,6 +2,60 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-13 — Two guards that read the wrong unit
+
+The round-27 review broke both migration guards without inventing a single new
+spelling of SQL. Both breaks came from the same mistake: each guard compared a
+*name*, and the database does not enforce anything at the level of that name.
+
+**A trigger carries the repair to a column the guard was not watching.** The
+replay guard compares `(table, column)` pairs. The registered repair writes
+`order_items.total_price` — but the canonical profit trigger on that table is
+scoped `BEFORE INSERT OR UPDATE OF total_price, profit, cost_per_unit,
+total_units_needed`. So `SET profit = profit` under a fresh name re-fires the
+identical money correction while sharing no column with the registration. The
+review proved it with a read-only probe: `overlaps: []`, `unresolved: false`,
+straight through. The same holds for the other two watched columns.
+
+The comparison is now table-level. The column is still recorded and still named
+in the refusal message; it just cannot narrow the match. The alternative — a
+longer column list — would have to name every trigger-watched column of every
+registered table and stay correct as triggers change, and a silently stale list
+there is a replayed money repair. Writing any part of a row whose derived money a
+trigger owns is a replay candidate; the operator clears it with the existing
+one-shot override.
+
+Friction measured over all 882 migrations before shipping: at column level, zero
+non-registered migrations overlapped the registered repair. At table level,
+**two** do — `20260211240000_normalize_net_margin` and
+`20260513050000_order_items_cost_at_time_snapshot`, both long applied. Two
+override prompts across the repository's entire history is the whole cost.
+
+**A temporary view is not scratch.** The migration scanner exempts a fixed list
+of Supabase/PostgreSQL infrastructure schemas, `pg_temp` among them, on the
+reasoning that a temp table holds no business rows. That is true of tables and
+false of views:
+
+    CREATE TEMP VIEW oi_shim AS SELECT * FROM public.order_items;
+    UPDATE pg_temp.oi_shim SET profit = 0;
+
+A single-table view is automatically updatable, so real rows change. The view
+creation *was* indexed — but the write never reached the view check, because the
+`pg_temp.` qualifier matched the schema exemption two lines earlier and returned.
+The apply-time guard sees only `oi_shim`, so nothing else caught it either. The
+view check now runs before the schema exemption and keeps the schema-qualified
+name in its finding, so the exemption applies only to what is genuinely scratch.
+
+Cost: zero. No migration in the repository writes through a `pg_temp`-qualified
+relation, and none creates a temporary view.
+
+Proof: 200 assertions through the migration guard (+6, including the real
+registered migration replayed through each of the three trigger-watched columns)
+and 130 approved-set validator cases (+3, including the exact `pg_temp` shape the
+review submitted). Both fixes were mutation-tested: reverting each to its
+pre-round-27 code turns its own new cases red, and reverting the replay fix
+reproduces the review's `overlaps: []` result exactly.
+
 ## 2026-08-12 — Two gates that could be opened from the inside
 
 The round-26 review found the round-25 inversion had a blind spot, and found a

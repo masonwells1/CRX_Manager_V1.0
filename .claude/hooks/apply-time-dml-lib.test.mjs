@@ -11,7 +11,7 @@
 // are the ones that must never be relaxed to quiet a false positive.
 
 import assert from "node:assert";
-import { applyTimeWriteTargets, applyTimeCode, overlappingTargets } from "./apply-time-dml-lib.mjs";
+import { applyTimeWriteTargets, applyTimeCode, overlappingTables } from "./apply-time-dml-lib.mjs";
 
 let pass = 0;
 function ok(c, m) { assert.ok(c, m); pass += 1; }
@@ -156,16 +156,27 @@ eq(T("/* outer /* inner */ UPDATE order_items SET total_price = 1; */ SELECT 1;"
   "nested block comments close at the right place");
 
 // -------------------------------------------------------- overlap semantics
-ok(overlappingTargets(new Set(["order_items.total_price"]), new Set(["order_items.total_price"])).length === 1,
+// Round 27 moved this from column-level to table-level. The reason is a trigger:
+// the registered repair writes order_items.total_price, and the canonical profit
+// trigger fires BEFORE UPDATE OF total_price, profit, cost_per_unit,
+// total_units_needed — so `SET profit = profit` re-runs the identical money
+// correction while sharing no column with the registration. A column list cannot
+// express that closure without tracking every trigger on every registered table
+// and staying correct as triggers change; a silently stale list there is a
+// replayed money repair. The table is the honest unit.
+ok(overlappingTables(new Set(["order_items.total_price"]), new Set(["order_items.total_price"])).length === 1,
   "an exact pair overlaps");
-ok(overlappingTargets(new Set(["order_items.net_margin"]), new Set(["order_items.total_price"])).length === 0,
-  "a different column of the same table does not overlap");
-ok(overlappingTargets(new Set(["order_items.*"]), new Set(["order_items.total_price"])).length === 1,
+ok(overlappingTables(new Set(["order_items.profit"]), new Set(["order_items.total_price"])).length === 1,
+  "a sibling column of the same table overlaps — a trigger can recompute the registered money from it");
+ok(overlappingTables(new Set(["order_items.*"]), new Set(["order_items.total_price"])).length === 1,
   "a whole-row write covers the protected column");
-ok(overlappingTargets(new Set(["order_items.total_price"]), new Set(["order_items.*"])).length === 1,
+ok(overlappingTables(new Set(["order_items.total_price"]), new Set(["order_items.*"])).length === 1,
   "a whole-row registration is covered by any column write");
-ok(overlappingTargets(new Set(["orders.total_price"]), new Set(["order_items.total_price"])).length === 0,
+ok(overlappingTables(new Set(["orders.total_price"]), new Set(["order_items.total_price"])).length === 0,
   "the same column name on a different table does not overlap");
+eq(overlappingTables(new Set(["order_items.profit", "orders.status"]), new Set(["order_items.total_price"])),
+  ["order_items.profit"],
+  "only the submitted targets on a registered table are returned, and they keep their column for the message");
 
 // -------------------------------------------------------------- robustness
 eq(T(""), [], "empty input yields nothing");

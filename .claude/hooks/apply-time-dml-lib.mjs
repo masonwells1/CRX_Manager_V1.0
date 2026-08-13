@@ -736,19 +736,29 @@ export function applyTimeWriteTargets(sql) {
 }
 
 /**
- * Does `submitted` write anything `registered` wrote? `table.*` on either side
- * covers every column of that table.
+ * Does `submitted` write any TABLE `registered` wrote? Deliberately table-level:
+ * the column is recorded and reported, but never narrows the match.
+ *
+ * This compared columns until round 27, which is unsound wherever a trigger
+ * recomputes one column from its siblings — and that is the exact shape of the
+ * repair this guard exists to contain. `backfill_stale_line_profit` writes
+ * `order_items.total_price`, but the canonical profit trigger is scoped
+ * `BEFORE INSERT OR UPDATE OF total_price, profit, cost_per_unit,
+ * total_units_needed`, so `SET profit = profit` re-runs the identical money
+ * correction while sharing no column with the registered target. Codex proved it
+ * with a read-only probe: overlaps `[]`, unresolved `false`, straight through.
+ *
+ * A column list cannot express that closure — it would have to track every
+ * trigger on every registered table and stay correct as triggers change, and a
+ * silently stale list here is a replayed money repair. The table is the honest
+ * unit: writing any part of a row whose derived money a trigger owns is a
+ * replay candidate, and the operator clears it with the one-shot override.
+ *
+ * @param {Iterable<string>} submitted `table.column` targets of the candidate
+ * @param {Iterable<string>} registered `table.column` targets of the one-shot
+ * @returns {string[]} the submitted targets whose table a registered write named
  */
-export function overlappingTargets(submitted, registered) {
-  const hits = [];
-  const regList = [...registered];
-  for (const t of submitted) {
-    const [sTable, sCol] = t.split(".");
-    for (const r of regList) {
-      const [rTable, rCol] = r.split(".");
-      if (sTable !== rTable) continue;
-      if (sCol === "*" || rCol === "*" || sCol === rCol) { hits.push(t); break; }
-    }
-  }
-  return hits;
+export function overlappingTables(submitted, registered) {
+  const regTables = new Set([...registered].map((t) => t.split(".")[0]));
+  return [...submitted].filter((t) => regTables.has(t.split(".")[0]));
 }

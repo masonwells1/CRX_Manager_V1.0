@@ -9,6 +9,55 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-13 — The migration guards compare tables, not column names
+
+**Source:** round 27 of adversarial review on PR #364 (two High findings). Neither finding needed a
+new spelling of SQL; both used the database's own behavior against a guard that compared a name.
+
+**Background — the replay guard.** The one-shot replay guard compared the `(table, column)` pairs a
+migration writes when it applies. The registered repair `20260810025159_backfill_stale_line_profit`
+writes `order_items.total_price`, and the canonical profit trigger on that table is scoped
+`BEFORE INSERT OR UPDATE OF total_price, profit, cost_per_unit, total_units_needed`. So
+`SET profit = profit` under a fresh name re-fires the identical money correction while sharing no
+column with the registration. The review proved it with a read-only probe: `overlaps: []`,
+`unresolved: false`.
+
+**Decision.** The overlap comparison is **table-level**. Writing any part of a row whose derived
+money a trigger owns is a replay candidate; the operator clears it with the existing digest-bound
+one-shot override. The column is still recorded and still named in the refusal message — it simply
+cannot narrow the match.
+
+The rejected alternative was a longer column list (registering the repair as its trigger's watch
+set). That list would have to name every trigger-watched column of every registered table and stay
+correct as triggers change, with no mechanism to notice when it goes stale — and a silently stale
+list here is a replayed money repair against live rows. The table is the unit the trigger actually
+operates on, so it is the honest unit to compare.
+
+Friction was measured across all 882 migrations before shipping. At column level, **zero**
+non-registered migrations overlapped. At table level, **two** do —
+`20260211240000_normalize_net_margin` and `20260513050000_order_items_cost_at_time_snapshot`, both
+long applied. Two override prompts across the repository's entire history is the whole cost.
+
+**Background — the migration scanner.** The approved-set scanner exempts a fixed list of
+Supabase/PostgreSQL infrastructure schemas, `pg_temp` among them, because a temporary table holds no
+business rows. A temporary *view* is a different object: `CREATE TEMP VIEW oi_shim AS SELECT * FROM
+public.order_items;` followed by `UPDATE pg_temp.oi_shim SET profit = 0;` rewrites real rows, because
+a single-table view is automatically updatable. The creation was indexed, but the write returned on
+the schema exemption two lines before the view check ever ran, and the apply-time guard sees only
+`oi_shim`.
+
+**Decision.** View resolution runs **before** the infrastructure-schema exemption, on the bare
+relation name, and the finding keeps the schema-qualified identity. The exemption then applies only
+to what is genuinely scratch. Cost across the corpus: zero — no migration writes through a
+`pg_temp`-qualified relation, and none creates a temporary view.
+
+**Operative rule.** Both guards resolve *what a write actually touches* before applying any
+name-based exemption, and neither treats a name the candidate controls as evidence. A later round
+that wants to narrow either comparison back to a column, or to restore an exemption ahead of view
+resolution, must first show how the narrower rule stays correct as triggers and views change.
+
+---
+
 ## 2026-08-12 — A change may not write the list that exempts it
 
 **Source:** round 26 of adversarial review on PR #364 (two High findings).

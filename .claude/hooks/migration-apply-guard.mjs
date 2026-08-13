@@ -25,7 +25,7 @@ import { flagActive } from "./autopilot-lib.mjs";
 import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
 import { sessionProofDirs } from "./codex-push-lib.mjs";
 import { checkMigrationOrdering } from "./migration-ordering-lib.mjs";
-import { applyTimeWriteTargets, overlappingTargets } from "./apply-time-dml-lib.mjs";
+import { applyTimeWriteTargets, overlappingTables } from "./apply-time-dml-lib.mjs";
 
 const REQUIRED_CODEX_MODEL = "gpt-5.6-sol";
 const REQUIRED_CODEX_EFFORT = "high";
@@ -572,11 +572,17 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
             }
             if (registered.targets.size === 0) continue;
 
-            const hits = overlappingTargets(submitted.targets, registered.targets);
+            // Table-level on purpose (Codex High, round 27). A trigger that
+            // recomputes money from sibling columns re-runs the registered
+            // repair for a write that shares no column with it — `SET profit =
+            // profit` re-fires the same correction `SET total_price =
+            // total_price` did. The column is still reported; it just cannot
+            // narrow the match.
+            const hits = overlappingTables(submitted.targets, registered.targets);
             if (hits.length) {
               matched =
-                `the columns it writes when it applies — ${[...new Set(hits)].sort().join(", ")} — ` +
-                `which is what ${stem}.sql already wrote`;
+                `what it writes when it applies — ${[...new Set(hits)].sort().join(", ")} — ` +
+                `in a table ${stem}.sql already wrote`;
               break;
             }
 

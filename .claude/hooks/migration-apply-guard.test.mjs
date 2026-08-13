@@ -795,8 +795,14 @@ function armAutopilot(stateDir, hoursFromNow) {
     );
     ok(!isOneShotDeny(r), "round-23: a trigger definition naming the column is not a write");
 
+    // REVERSED IN ROUND 27, DELIBERATELY. This read `ok(!isOneShotDeny(r), ...)`
+    // — "a different column of the same table is not the registered repair" —
+    // and round 27 proved that sentence false wherever a trigger recomputes one
+    // money column from its siblings, which is the exact shape this guard exists
+    // to contain. See the round-27 block below for the live proof.
     r = apply("20990601000043_other_column", "UPDATE public.orders SET status = 'x' WHERE id = 2;");
-    ok(!isOneShotDeny(r), "round-23: a different column of the same table is not the registered repair");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-27: any write to a table the registered repair wrote is a replay candidate — a trigger can carry it");
 
     r = apply("20990601000044_other_table", "UPDATE public.invoices SET total_profit = 1 WHERE id = 2;");
     ok(!isOneShotDeny(r), "round-23: the same column name on a different table is not the registered repair");
@@ -994,6 +1000,67 @@ function armAutopilot(stateDir, hoursFromNow) {
     // inversion is worthless if it refuses the one migration it exists to guard.
     r = apply(STEM, ONE_SHOT_SQL);
     ok(isOneShotDeny(r), "round-26: the registered one-shot is still recognised as itself");
+
+    // ROUND 27 (Codex High). Every round up to here compared `(table, column)`
+    // pairs, and Codex broke that with the database rather than with the parser:
+    // the real registered repair, `20260810025159_backfill_stale_line_profit`,
+    // writes `order_items.total_price`, and the canonical profit trigger is
+    // scoped `BEFORE INSERT OR UPDATE OF total_price, profit, cost_per_unit,
+    // total_units_needed`. So `SET profit = profit` re-fires the identical money
+    // correction that `SET total_price = total_price` did, while sharing no
+    // column with the registration. Its read-only probe returned `overlaps: []`,
+    // `unresolved: false` — straight through.
+    //
+    // The fix is table-level comparison, not a longer column list: a column list
+    // would have to name every trigger-watched column of every registered table
+    // and stay correct as triggers change, and a silently stale list there is a
+    // replayed money repair.
+    //
+    // These use the REAL registered file shape, with each trigger-watched column
+    // substituted for the registered one.
+    {
+      const REAL_STEM = "20260810025159_backfill_stale_line_profit";
+      const REAL_WRITE = "UPDATE public.order_items SET total_price = total_price WHERE id = 7;";
+      writeOneShotRegistry(tmp, {
+        [STEM]: REASON,
+        [REAL_STEM]: "fixture mirror of the live population-bound line-profit repair",
+      });
+      writeFileSync(
+        path.join(tmp, "supabase", "migrations", `${REAL_STEM}.sql`),
+        `-- population-bound repair\n${REAL_WRITE}\n`,
+      );
+      let idx = 0;
+      for (const col of ["profit", "cost_per_unit", "total_units_needed"]) {
+        r = apply(
+          `20990601${String(160 + idx++).padStart(6, "0")}_r27`,
+          `UPDATE public.order_items SET ${col} = ${col} WHERE id = 7;`,
+        );
+        ok(isDeny(r) && isOneShotDeny(r),
+          `round-27: a self-assignment of trigger-watched ${col} re-runs the registered repair → denied`);
+      }
+      // …and the same write reached the long way round, since the trigger does
+      // not care how the row was touched.
+      r = apply("20990601000170_r27_delete",
+        "DELETE FROM public.order_items WHERE id = 7;");
+      ok(isDeny(r) && isOneShotDeny(r), "round-27: a whole-row write to the registered table is a replay candidate");
+
+      // The widening stops at the table. A different table is still a different
+      // repair — without this the rule would be "any DML anywhere needs an
+      // override", which is how a guard gets switched off.
+      r = apply("20990601000171_r27_other_table",
+        "UPDATE public.invoices SET total_price = total_price WHERE id = 7;");
+      ok(!isOneShotDeny(r), "round-27: a different table is still not the registered repair");
+
+      // And defining a routine that writes the registered TABLE is still not
+      // running it — the round-23/24 apply-time distinction is untouched.
+      r = apply("20990601000172_r27_define",
+        "CREATE OR REPLACE FUNCTION public.recalc_line(p_id bigint) RETURNS void LANGUAGE plpgsql AS $$\n" +
+        "BEGIN UPDATE public.order_items SET profit = 0 WHERE id = p_id; END;\n$$;");
+      ok(!isOneShotDeny(r), "round-27: widening to the table did not widen past apply-time writes");
+
+      writeOneShotRegistry(tmp, { [STEM]: REASON });
+      rmSync(path.join(tmp, "supabase", "migrations", `${REAL_STEM}.sql`), { force: true });
+    }
 
     // 4. ROUND 12 (Codex High) reversed this case. Round 8 let a one-shot
     //    through whenever the ledger already contained it, reasoning that such a
