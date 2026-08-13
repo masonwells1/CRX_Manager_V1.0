@@ -20,11 +20,13 @@ import { Sentry } from '../lib/sentry';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { isDefinitiveRpcRejection } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { ProductOptionDetails, normalizeReturnPolicy, productOptionLabel, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
 import { ReturnDetailItems } from '../components/returns/ReturnDetailItems';
 import { mapReturnPolicyRpcError, RETURN_POLICY_NO_RETURN_CODE } from '../lib/returnPolicyError';
 import type { Return, ReturnItem, Customer, Order, ReturnStatus, ReturnReason, ReturnItemCondition } from '../types';
+import type { Json } from '../types/supabase';
 
 type ReturnRow = Return & {
   customer_name: string;
@@ -64,6 +66,14 @@ interface EditItem {
   max_quantity: number;
 }
 
+interface CreateReturnForm {
+  customer_id: string;
+  order_id: string;
+  reason: ReturnReason;
+  reason_notes: string;
+  notes: string;
+}
+
 interface ReturnableOrderItem {
   id: string;
   product_id: string;
@@ -78,14 +88,54 @@ interface ReturnableOrderItem {
 
 type DetailReturnItem = ReturnItem & { product?: ProductOptionPresentationModel | null };
 
+function buildCreateReturnIntent(
+  form: CreateReturnForm,
+  items: EditItem[],
+) {
+  const returnPayload = {
+    customer_id: form.customer_id,
+    order_id: form.order_id || null,
+    reason: form.reason,
+    reason_notes: form.reason_notes || null,
+    notes: form.notes || null,
+  };
+  const itemsPayload = items.map((item, idx) => ({
+    order_item_id: item.order_item_id,
+    product_id: item.product_id,
+    product_name: item.product_name,
+    quantity: item.quantity,
+    unit: item.unit,
+    unit_price_cents: item.unit_price_cents,
+    condition: item.condition,
+    restock: item.restock,
+    sort_order: idx,
+    notes: item.notes || null,
+  }));
+
+  return {
+    returnPayload,
+    itemsPayload,
+    // JSON.stringify is deterministic for these fixed-key objects and preserves
+    // item order, so the browser key rotates exactly when the RPC payload does.
+    intentScope: JSON.stringify([returnPayload, itemsPayload]),
+  };
+}
+
+function committedCreateResultFromIntentMismatch(error: unknown): Json | null {
+  if (!error || typeof error !== 'object') return null;
+  const rpcError = error as { message?: unknown; details?: unknown };
+  if (typeof rpcError.message !== 'string' || !rpcError.message.includes('IDEMPOTENCY_INTENT_MISMATCH')) return null;
+  try {
+    const detail = typeof rpcError.details === 'string' ? JSON.parse(rpcError.details) : rpcError.details;
+    if (!detail || typeof detail !== 'object') return null;
+    return ((detail as { result?: Json }).result ?? null);
+  } catch {
+    return null;
+  }
+}
+
 export default function Returns() {
   const { profile, role } = useAuth();
-  const approveIdem = useIdempotencyKey('approve_return', profile?.id || '');
-  const receiveIdem = useIdempotencyKey('receive_return', profile?.id || '');
-  const creditIdem = useIdempotencyKey('issue_return_credit', profile?.id || '');
-  const cancelIdem = useIdempotencyKey('cancel_return', profile?.id || '');
-  const rejectIdem = useIdempotencyKey('reject_return', profile?.id || '');
-  const createIdem = useIdempotencyKey('create_return', profile?.id || '');
   const { toast } = useToast();
   const [returns, setReturns] = useState<ReturnRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -103,6 +153,11 @@ export default function Returns() {
     notes: '',
   });
   const [newItems, setNewItems] = useState<EditItem[]>([]);
+  const [unresolvedCreateIntent, setUnresolvedCreateIntent] = useState<{
+    form: CreateReturnForm;
+    items: EditItem[];
+    intent: ReturnType<typeof buildCreateReturnIntent>;
+  } | null>(null);
   const [customerOrders, setCustomerOrders] = useState<Order[]>([]);
   const [orderItems, setOrderItems] = useState<ReturnableOrderItem[]>([]);
   const customerOrdersRequestRef = useRef(0);
@@ -123,6 +178,16 @@ export default function Returns() {
   const [confirmAction, setConfirmAction] = useState<{ type: 'approve' | 'reject'; title: string; message: string } | null>(null);
   const [cancelModalOpen, setCancelModalOpen] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const createIntent = buildCreateReturnIntent(newForm, newItems);
+  const createPayloadLocked = creating || Boolean(unresolvedCreateIntent);
+  const returnIntentScope = activeReturn?.id || '';
+  const approveIdem = useIdempotencyKey('approve_return', profile?.id || '', returnIntentScope);
+  const receiveIdem = useIdempotencyKey('receive_return', profile?.id || '', returnIntentScope);
+  const creditIdem = useIdempotencyKey('issue_return_credit', profile?.id || '', returnIntentScope);
+  const cancelIdem = useIdempotencyKey('cancel_return', profile?.id || '', returnIntentScope);
+  const rejectIdem = useIdempotencyKey('reject_return', profile?.id || '', returnIntentScope);
+  const effectiveCreateIntentScope = unresolvedCreateIntent?.intent.intentScope ?? createIntent.intentScope;
+  const createIdem = useIdempotencyKey('create_return', profile?.id || '', effectiveCreateIntentScope);
 
   const fetchReturns = useCallback(async () => {
     setLoading(true);
@@ -179,9 +244,9 @@ export default function Returns() {
     setCustomers((custRes.data || []) as unknown as Customer[]);
   };
 
-  const loadOrderItems = async (orderId: string) => {
+  const loadOrderItems = async (orderId: string, preserveDraftItems = false) => {
     const requestId = ++orderItemsRequestRef.current;
-    setNewItems([]);
+    if (!preserveDraftItems) setNewItems([]);
     if (!orderId) { setOrderItems([]); return; }
     const [itemsResult, priorReturnsResult] = await Promise.all([
       supabase
@@ -248,11 +313,28 @@ export default function Returns() {
     customerOrdersRequestRef.current += 1;
     orderItemsRequestRef.current += 1;
     loadCreateData();
+    if (unresolvedCreateIntent) {
+      setNewForm({ ...unresolvedCreateIntent.form });
+      setNewItems(unresolvedCreateIntent.items.map((item) => ({ ...item })));
+      setCustomerOrders([]);
+      setOrderItems([]);
+      void loadCustomerOrders(unresolvedCreateIntent.form.customer_id);
+      void loadOrderItems(unresolvedCreateIntent.form.order_id, true);
+      setShowCreate(true);
+      return;
+    }
     setNewForm({ customer_id: '', order_id: '', reason: 'defective', reason_notes: '', notes: '' });
     setNewItems([]);
     setCustomerOrders([]);
     setOrderItems([]);
     setShowCreate(true);
+  };
+
+  const closeCreate = () => {
+    if (creating) return;
+    customerOrdersRequestRef.current += 1;
+    orderItemsRequestRef.current += 1;
+    setShowCreate(false);
   };
 
   const addItem = () => {
@@ -298,37 +380,40 @@ export default function Returns() {
       toast('error', 'Each delivered order item can only be returned once per return');
       return;
     }
+    const requestIntent = unresolvedCreateIntent?.intent || createIntent;
+    if (!unresolvedCreateIntent) {
+      setUnresolvedCreateIntent({
+        form: { ...newForm },
+        items: newItems.map((item) => ({ ...item })),
+        intent: requestIntent,
+      });
+    }
 
     await runCriticalAction({
       action: async () => {
         // Atomic + idempotent creation via create_return RPC (returns_rpc_gating,
         // PARKED-004): replaces the prior next_return_number + two direct inserts.
         const createKey = createIdem.getKey();
-        const { data, error } = await supabase.rpc('create_return', {
-          p_return: {
-            customer_id: newForm.customer_id,
-            order_id: newForm.order_id || null,
-            reason: newForm.reason,
-            reason_notes: newForm.reason_notes || null,
-            notes: newForm.notes || null,
-          },
-          p_items: newItems.map((item, idx) => ({
-            order_item_id: item.order_item_id,
-            product_id: item.product_id,
-            product_name: item.product_name,
-            quantity: item.quantity,
-            unit: item.unit,
-            unit_price_cents: item.unit_price_cents,
-            condition: item.condition,
-            restock: item.restock,
-            sort_order: idx,
-            notes: item.notes || null,
-          })),
+        let { data, error } = await supabase.rpc('create_return', {
+          p_return: requestIntent.returnPayload,
+          p_items: requestIntent.itemsPayload,
           p_idempotency_key: createKey,
         });
-        if (error) throw mapReturnPolicyRpcError(error);
+        if (error) {
+          const committedResult = committedCreateResultFromIntentMismatch(error);
+          if (committedResult === null) {
+            if (isDefinitiveRpcRejection(error)) {
+              createIdem.resetKey();
+              setUnresolvedCreateIntent(null);
+            }
+            throw mapReturnPolicyRpcError(error);
+          }
+          data = committedResult;
+          error = null;
+        }
         assertRpcResult<{ return_id: string; return_number: string; item_count: number }>(data, 'create_return');
         createIdem.resetKey();
+        setUnresolvedCreateIntent(null);
       },
       toast,
       setLoading: setCreating,
@@ -447,7 +532,8 @@ export default function Returns() {
     }
     await runCriticalAction({
       action: async () => {
-        const cancelKey = cancelIdem.getKey();
+        const cancelScope = JSON.stringify([activeReturn.id, reason.trim()]);
+        const cancelKey = cancelIdem.getKeyFor(cancelScope);
         const { data, error } = await supabase.rpc('cancel_return', {
           p_return_id: activeReturn.id,
           p_reason: reason,
@@ -455,7 +541,7 @@ export default function Returns() {
           p_idempotency_key: cancelKey,
         });
         if (error) throw mapReturnPolicyRpcError(error);
-        cancelIdem.resetKey();
+        cancelIdem.resetKeyFor(cancelScope);
         const result = assertRpcResult<{ was_received: boolean; reversed_count: number; skipped_count: number }>(data, 'cancel_return');
         if (result.was_received && result.reversed_count > 0) {
           toast('info', `Inventory restock reversed for ${result.reversed_count} item(s).`);
@@ -745,20 +831,19 @@ export default function Returns() {
       {/* Create Return Modal */}
       <Modal
         open={showCreate}
-        onClose={() => {
-          customerOrdersRequestRef.current += 1;
-          orderItemsRequestRef.current += 1;
-          setShowCreate(false);
-        }}
+        onClose={closeCreate}
         title="New Return / RMA"
         size="large"
+        closeDisabled={creating}
       >
         <div className="space-y-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Customer *</label>
               <select
+                aria-label="Customer"
                 value={newForm.customer_id}
+                disabled={createPayloadLocked}
                 onChange={(e) => {
                   setNewForm({ ...newForm, customer_id: e.target.value, order_id: '' });
                   orderItemsRequestRef.current += 1;
@@ -777,7 +862,9 @@ export default function Returns() {
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Original Order *</label>
               <select
+                aria-label="Original Order"
                 value={newForm.order_id}
+                disabled={createPayloadLocked}
                 onChange={(e) => {
                   setNewForm({ ...newForm, order_id: e.target.value });
                   loadOrderItems(e.target.value);
@@ -796,7 +883,9 @@ export default function Returns() {
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Reason *</label>
               <select
+                aria-label="Reason"
                 value={newForm.reason}
+                disabled={createPayloadLocked}
                 onChange={(e) => setNewForm({ ...newForm, reason: e.target.value as ReturnReason })}
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
@@ -809,6 +898,7 @@ export default function Returns() {
               <Input
                 label="Reason Details"
                 value={newForm.reason_notes}
+                disabled={createPayloadLocked}
                 onChange={(e) => setNewForm({ ...newForm, reason_notes: e.target.value })}
                 placeholder="Additional details..."
               />
@@ -819,7 +909,7 @@ export default function Returns() {
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="text-sm font-medium text-gray-700">Return Items</label>
-              <Button size="sm" variant="secondary" onClick={addItem} disabled={!newForm.order_id}>
+              <Button size="sm" variant="secondary" onClick={addItem} disabled={!newForm.order_id || createPayloadLocked}>
                 <Plus className="w-3 h-3" /> Add Item
               </Button>
             </div>
@@ -834,7 +924,9 @@ export default function Returns() {
                 return (
                   <div key={idx} className="flex min-w-0 flex-col gap-2 rounded-lg bg-gray-50 p-2 sm:flex-row sm:flex-wrap sm:items-center">
                   <select
+                    aria-label={`Return product ${idx + 1}`}
                     value={item.order_item_id}
+                    disabled={createPayloadLocked}
                     onChange={(e) => {
                       const p = orderItems.find((orderItem) => orderItem.id === e.target.value);
                       const updated = [...newItems];
@@ -870,17 +962,21 @@ export default function Returns() {
                     </div>
                   )}
                   <input
+                    aria-label={`Return quantity ${idx + 1}`}
                     type="number"
                     step="0.01"
                     min="0"
                     max={item.max_quantity || undefined}
                     value={item.quantity || ''}
+                    disabled={createPayloadLocked}
                     onChange={(e) => updateItem(idx, 'quantity', parseFloat(e.target.value) || 0)}
                     placeholder="Qty"
                     className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green sm:w-20"
                   />
                   <select
+                    aria-label={`Return condition ${idx + 1}`}
                     value={item.condition}
+                    disabled={createPayloadLocked}
                     onChange={(e) => updateItem(idx, 'condition', e.target.value)}
                     className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green sm:w-28"
                   >
@@ -891,14 +987,16 @@ export default function Returns() {
                   </select>
                   <label className="flex w-full items-center gap-1 text-xs text-gray-600 sm:w-auto whitespace-nowrap">
                     <input
+                      aria-label={`Restock return item ${idx + 1}`}
                       type="checkbox"
                       checked={item.restock}
+                      disabled={createPayloadLocked}
                       onChange={(e) => updateItem(idx, 'restock', e.target.checked)}
                       className="rounded border-gray-300"
                     />
                     Restock
                   </label>
-                  <button onClick={() => removeItem(idx)} className="self-end text-red-400 hover:text-red-600 p-1 sm:self-auto">
+                  <button aria-label={`Remove return item ${idx + 1}`} onClick={() => removeItem(idx)} disabled={createPayloadLocked} className="self-end text-red-400 hover:text-red-600 p-1 disabled:opacity-50 sm:self-auto">
                     <XCircle className="w-4 h-4" />
                   </button>
                   </div>
@@ -913,12 +1011,19 @@ export default function Returns() {
           <Input
             label="Notes (Optional)"
             value={newForm.notes}
+            disabled={createPayloadLocked}
             onChange={(e) => setNewForm({ ...newForm, notes: e.target.value })}
             placeholder="Additional notes for this return..."
           />
 
+          {unresolvedCreateIntent && (
+            <p className="text-xs text-amber-700">
+              The previous response was not confirmed. Retry this exact return so the server can replay or reconcile the committed receipt safely.
+            </p>
+          )}
+
           <div className="flex justify-end gap-2 pt-2 border-t">
-            <Button variant="secondary" onClick={() => setShowCreate(false)}>Cancel</Button>
+            <Button variant="secondary" onClick={closeCreate} disabled={creating}>Cancel</Button>
             <Button onClick={handleCreate} loading={creating}>Create Return</Button>
           </div>
         </div>
