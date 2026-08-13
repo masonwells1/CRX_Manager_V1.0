@@ -1870,16 +1870,89 @@ function callArgumentList(body: string, open: number): string | null {
 }
 
 /**
+ * First top-level argument of an already-unwrapped argument list — commas inside
+ * nested parens or string literals do not split.
+ */
+function firstArgument(args: string): string {
+  let depth = 0;
+  let inLiteral = false;
+  for (let i = 0; i < args.length; i++) {
+    const ch = args[i];
+    if (inLiteral) {
+      if (ch === "'") inLiteral = false;
+      continue;
+    }
+    if (ch === "'") inLiteral = true;
+    else if (ch === '(') depth++;
+    else if (ch === ')') depth--;
+    else if (ch === ',' && depth === 0) return args.slice(0, i);
+  }
+  return args;
+}
+
+/**
+ * True when `rhs` is the idempotency key ITSELF, not merely an expression that
+ * mentions it.
+ *
+ * The distinction is the whole point. `v_key := p_idempotency_key` and
+ * `v_key := coalesce(p_idempotency_key, gen_random_uuid()::text)` both leave
+ * v_key carrying the caller's key, so forwarding v_key to a delegate genuinely
+ * forwards the key. `v_msg := 'idempotency=' || p_idempotency_key` does not —
+ * it builds a log line. Crediting that as an alias let a wrapper forward a
+ * DIFFERENT value to its private impl, hit the impl's own idempotency block,
+ * and have the whole chain scored as covered while every call in it claimed a
+ * fresh key. That is the exact failure `usesIdempotencyThroughDelegates` was
+ * written to catch, so it must not be reachable by naming a variable badly.
+ *
+ * Only identity-preserving wrappers are unwrapped, and only through their FIRST
+ * argument, which is where coalesce/nullif carry the value.
+ */
+function rhsIsKeyAlias(rhs: string): boolean {
+  let s = rhs.trim().replace(/;+\s*$/, '').trim();
+  // Bounded: each pass must strip something or the loop exits on its own.
+  for (let guard = 0; guard < 8; guard++) {
+    const cast = s.replace(/::\s*[A-Za-z_][A-Za-z0-9_]*(\s*\(\s*\d+\s*\))?\s*$/, '').trim();
+    if (cast !== s) {
+      s = cast;
+      continue;
+    }
+    if (s.startsWith('(')) {
+      const inner = callArgumentList(s, 1);
+      // Peel only a paren pair that wraps the WHOLE expression: for
+      // `(a) || p_idempotency_key` the matching close is not the last
+      // character, and peeling it would silently discard the `|| ...` tail.
+      if (inner !== null && inner.length + 2 === s.length) {
+        s = inner.trim();
+        continue;
+      }
+    }
+    const wrapper = s.match(/^(coalesce|nullif|btrim|trim|ltrim|rtrim)\s*\(/i);
+    if (wrapper) {
+      const args = callArgumentList(s, wrapper[0].length);
+      if (args === null) break;
+      // A wrapper must span the entire expression; `coalesce(a,b) || 'x'` must
+      // not be accepted by peeling the call and ignoring the tail.
+      if (s.slice(wrapper[0].length + args.length + 1).trim() !== '') break;
+      s = firstArgument(args).trim();
+      continue;
+    }
+    break;
+  }
+  return /^p_idempotency_key$/i.test(s);
+}
+
+/**
  * Names that carry the caller's idempotency key inside `body`: the parameter
- * itself, plus any local assigned from it (`v_key := p_idempotency_key;` and
- * `v_key := coalesce(p_idempotency_key, ...)`).
+ * itself, plus any local ASSIGNED FROM it — `v_key := p_idempotency_key;` or
+ * `v_key := coalesce(p_idempotency_key, ...)`. See `rhsIsKeyAlias` for why
+ * "mentions the key" is not good enough.
  */
 function idempotencyKeyNames(body: string): string[] {
   const names = ['p_idempotency_key'];
   const re = /\b([A-Za-z_][A-Za-z0-9_]*)\s*:=\s*([^;]*)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(body)) !== null) {
-    if (/\bp_idempotency_key\b/i.test(m[2]) && !names.includes(m[1].toLowerCase())) {
+    if (rhsIsKeyAlias(m[2]) && !names.includes(m[1].toLowerCase())) {
       names.push(m[1].toLowerCase());
     }
   }
@@ -1955,6 +2028,37 @@ describe('Idempotency delegate credit (mutation guard for the guard itself)', ()
 
   it('REFUSES a wrapper that omits the key argument entirely', () => {
     expect(usesIdempotencyThroughDelegates(wrap('p_payload'))).toBe(false);
+  });
+
+  it('REFUSES a local that only MENTIONS the key in a larger expression', () => {
+    // A log line is not an idempotency key. Crediting `v_msg` here would let the
+    // wrapper forward a value that is not the caller's key, reach save_job's own
+    // idempotency block, and score the whole chain as covered — the same hole
+    // the NULL case above closes, reopened by naming a variable badly.
+    expect(
+      usesIdempotencyThroughDelegates(
+        wrap('p_payload, v_msg', "v_msg := 'idempotency=' || p_idempotency_key;"),
+      ),
+    ).toBe(false);
+  });
+
+  it('distinguishes a genuine alias from an expression that merely contains the key', () => {
+    // Identity-preserving: the local still carries the caller's key.
+    expect(rhsIsKeyAlias('p_idempotency_key')).toBe(true);
+    expect(rhsIsKeyAlias(' p_idempotency_key ')).toBe(true);
+    expect(rhsIsKeyAlias('(p_idempotency_key)')).toBe(true);
+    expect(rhsIsKeyAlias('p_idempotency_key::text')).toBe(true);
+    expect(rhsIsKeyAlias("coalesce(p_idempotency_key, gen_random_uuid()::text)")).toBe(true);
+    expect(rhsIsKeyAlias("nullif(btrim(p_idempotency_key), '')")).toBe(true);
+
+    // Not the key: a derived string, a different value, or a wrapper with a tail.
+    expect(rhsIsKeyAlias("'key=' || p_idempotency_key")).toBe(false);
+    expect(rhsIsKeyAlias("p_idempotency_key || ':retry'")).toBe(false);
+    expect(rhsIsKeyAlias("md5(p_idempotency_key)")).toBe(false);
+    expect(rhsIsKeyAlias("coalesce(p_idempotency_key, '') || '-2'")).toBe(false);
+    expect(rhsIsKeyAlias("coalesce(p_other, p_idempotency_key)")).toBe(false);
+    expect(rhsIsKeyAlias("(p_other) || p_idempotency_key")).toBe(false);
+    expect(rhsIsKeyAlias('gen_random_uuid()::text')).toBe(false);
   });
 });
 
@@ -2479,13 +2583,25 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   _guard_delivery_completion_authorized:
     'trigger-only completion-provenance guard; public complete_delivery owns the idempotent, row-bound governed mutation and direct EXECUTE is revoked',
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',
+  // Pruned on 2026-08-12 when 20260812130145 applied live (ledger version
+  // 20260812212323) and the registry high-water moved past it:
+  //   snapshot_invoice_line_shares_on_post — a trigger-returning function never
+  //     reaches the generated client types, so it left the discovered inventory
+  //     the moment its migration stopped being newer than the high-water. It is
+  //     not exempt from anything now; it is simply no longer discovered, and a
+  //     dead entry would silently pre-suppress any future RPC reusing the name.
   _recompute_po_on_order_for_products:
     'internal convergent PO-cache recomputation helper; trigger parents own the transaction and direct browser EXECUTE is revoked',
   // Trigger-only helpers whose migrations are now at or below the live registry
   // high-water are absent from generated client types and this inventory. Keeping
   // dead exemptions would silently pre-suppress any future RPC reusing a name.
-  _enforce_below_cost_line:
-    'trigger-only below-cost guard installed by 20260812115237 (RETURNS trigger, so PostgreSQL refuses any direct call; EXECUTE revoked from PUBLIC, anon and authenticated). It rejects a below-cost line unless the caller is an active admin with a fresh reason, and its one INSERT is the immutable approval-audit row for the money write in the same transaction — replaying the write replays the whole transaction, so the audit row cannot be orphaned or duplicated independently of it.',
+  // Pruned on 2026-08-13 when the registry high-water moved to 20260813011751:
+  //   _enforce_below_cost_line — installed by 20260812115237 (applied live as
+  //     ledger version 20260812154028). It RETURNS trigger, so it can never
+  //     appear in the generated client types, and once its timestamp fell below
+  //     the high-water it stopped being discovered at all. Nothing about the
+  //     guard changed; it is simply no longer something this inventory can see,
+  //     and the staleness test above is what forced the entry out.
   _sync_job_holds: 'internal convergent hold-sync helper; direct client EXECUTE is revoked',
   _sync_planned_holds: 'internal convergent hold-sync helper called within parent transactions',
   _sync_quote_job_reservations: 'internal convergent reservation-sync helper called by parent RPCs',

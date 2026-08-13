@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-08-12",
+    "generated_at": "2026-08-13",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260812003315",
+    "migrations_high_water": "20260813011751",
     "applied_migration_names": [
       "20260207_gap_analysis_fixes.sql",
       "20260209050000_inventory_overhaul",
@@ -344,6 +344,14 @@
       "20260811130000_bind_commission_payout_idempotency_to_intent",
       "20260811200000_blend_ticket_order_whole_cent_totals",
       "20260811230423_log_customer_sales_rep_assignment",
+      "20260812010000_blend_ticket_order_header_runtime_assert",
+      "20260812011000_restore_quote_version_whole_cent_money",
+      "20260812115235_snapshot_cost_reporting",
+      "20260812115236_quote_items_cost_at_quote_snapshot",
+      "20260812115237_enforce_below_cost_admin_approval",
+      "20260812115238_repair_historical_order_line_cents",
+      "20260812130145_bind_return_receipts_to_intent_and_restore_overdue",
+      "20260813070000_pin_return_idempotency_helper_contract",
       "a1_dispatched_list_recent_completed",
       "a1b_dispatched_to_me_completed_tail",
       "accounting_and_integrity_fixes",
@@ -1406,6 +1414,34 @@
       ],
       "constraints": [
         "ar_reminder_tracking_reminder_level_check"
+      ]
+    },
+    "below_cost_approvals.entity_type": {
+      "values": [
+        "order",
+        "invoice",
+        "quote"
+      ],
+      "constraints": [
+        "below_cost_approvals_entity_type_check"
+      ]
+    },
+    "below_cost_approvals.operation": {
+      "values": [
+        "create_direct_order",
+        "create_rush_order",
+        "bulk_import_order",
+        "update_order_items",
+        "price_order",
+        "save_invoice",
+        "save_quote",
+        "convert_quote_to_order",
+        "draw_down_quote",
+        "restore_quote_version",
+        "duplicate_quote"
+      ],
+      "constraints": [
+        "below_cost_approvals_operation_check"
       ]
     },
     "blend_recipes.recipe_type": {
@@ -2720,6 +2756,36 @@
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
+      "table": "below_cost_approvals",
+      "constraint": "below_cost_approvals_locked_unit_cost_cents_check",
+      "def": "CHECK ((locked_unit_cost_cents > 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "below_cost_approvals",
+      "constraint": "below_cost_approvals_quantity_check",
+      "def": "CHECK ((quantity >= (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "below_cost_approvals",
+      "constraint": "below_cost_approvals_reason_check",
+      "def": "CHECK ((length(btrim(reason)) > 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "below_cost_approvals",
+      "constraint": "below_cost_approvals_total_shortfall_cents_check",
+      "def": "CHECK ((total_shortfall_cents >= 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "below_cost_approvals",
+      "constraint": "below_cost_approvals_unit_price_cents_check",
+      "def": "CHECK ((unit_price_cents >= 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "blend_recipe_items",
       "constraint": "blend_recipe_items_price_nonneg",
       "def": "CHECK ((price_per_unit_cents >= 0))",
@@ -3261,8 +3327,20 @@
     },
     {
       "table": "order_items",
+      "constraint": "order_items_price_per_unit_cent_scale_chk",
+      "def": "CHECK (((price_per_unit IS NULL) OR ((price_per_unit = round(price_per_unit, 2)) AND (price_per_unit > '-Infinity'::numeric) AND (price_per_unit < 'Infinity'::numeric))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "order_items",
       "constraint": "order_items_profit_whole_cents_chk",
       "def": "CHECK (((profit IS NULL) OR ((profit = round(profit, 2)) AND (profit > '-Infinity'::numeric) AND (profit < 'Infinity'::numeric))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "order_items",
+      "constraint": "order_items_total_price_whole_cents_chk",
+      "def": "CHECK (((total_price = round(total_price, 2)) AND (total_price > '-Infinity'::numeric) AND (total_price < 'Infinity'::numeric)))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
@@ -3602,6 +3680,12 @@
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
+      "table": "products",
+      "constraint": "products_current_cost_cent_scale_chk",
+      "def": "CHECK (((current_cost IS NULL) OR ((current_cost = round(current_cost, 2)) AND (current_cost > '-Infinity'::numeric) AND (current_cost < 'Infinity'::numeric))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "purchase_order_import_intents",
       "constraint": "purchase_order_import_intents_content_fingerprint_format",
       "def": "CHECK (((content_fingerprint IS NULL) OR (content_fingerprint ~ '^[0-9a-f]{64}$'::text)))",
@@ -3647,6 +3731,12 @@
       "table": "purchase_orders",
       "constraint": "purchase_orders_total_cost_whole_cents",
       "def": "CHECK (((total_cost >= (0)::numeric) AND (total_cost = ((total_cost_cents)::numeric / 100.0))))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "quote_items",
+      "constraint": "quote_items_price_per_unit_cent_scale_chk",
+      "def": "CHECK (((price_per_unit IS NULL) OR ((price_per_unit = round(price_per_unit, 2)) AND (price_per_unit > '-Infinity'::numeric) AND (price_per_unit < 'Infinity'::numeric))))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
@@ -3992,6 +4082,25 @@
       "with_default": [
         "id",
         "taken_at"
+      ]
+    },
+    "below_cost_approvals": {
+      "no_default": [
+        "operation",
+        "entity_type",
+        "entity_id",
+        "line_id",
+        "actor_user_id",
+        "reason",
+        "unit_price_cents",
+        "locked_unit_cost_cents",
+        "quantity",
+        "total_shortfall_cents"
+      ],
+      "with_default": [
+        "id",
+        "created_at",
+        "updated_at"
       ]
     },
     "blend_recipe_items": {
@@ -5994,6 +6103,22 @@
       "row_count",
       "data"
     ],
+    "below_cost_approvals": [
+      "id",
+      "operation",
+      "entity_type",
+      "entity_id",
+      "line_id",
+      "product_id",
+      "actor_user_id",
+      "reason",
+      "unit_price_cents",
+      "locked_unit_cost_cents",
+      "quantity",
+      "total_shortfall_cents",
+      "created_at",
+      "updated_at"
+    ],
     "blend_recipe_items": [
       "id",
       "recipe_id",
@@ -7659,7 +7784,8 @@
       "net_margin",
       "calc_mode",
       "price_unit",
-      "price_override"
+      "price_override",
+      "cost_at_quote_cents"
     ],
     "quote_pdf_templates": [
       "id",

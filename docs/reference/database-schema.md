@@ -112,7 +112,7 @@
 - `cycle_count_items` - Individual count lines (cycle_count_id, product_id, expected_qty, counted_qty, variance, variance_pct, resolved)
 
 ## Returns
-- `returns` - Return/RMA headers (return_number, order_id, customer_id, status: requested/approved/received/credited/rejected, return_type, reason_category)
+- `returns` - Return/RMA headers (return_number, order_id, customer_id, status: requested/approved/received/credited/rejected/cancelled, reason, reason_notes, total_credit_cents, credit_invoice_id, cancelled_at, cancelled_by, cancellation_reason, credited_by)
 - `return_items` - Return line items (return_id, order_item_id, product_id, quantity, unit_price, restocked, sort_order)
 
 ## Compliance
