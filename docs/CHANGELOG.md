@@ -30,8 +30,11 @@ Twenty-one exact-head adversarial passes have progressively hardened the candida
 latest pass found that ordinary shell quoting could bypass the producer invocation matcher. The generated
 guard now recognizes quoted, absolute, alternate-separator, wrapper-prefixed, and escaped spellings, while
 the producer itself independently requires its exact committed blob plus a fresh HEAD-and-base-bound
-Sol-high proof before either write mode can run. Twenty-four producer assertions pin those boundaries. Earlier
-passes closed a Unicode identifier boundary that could conceal destructive SQL and removed the
+Sol-high proof before either write mode can run. Twenty-four producer assertions pin those boundaries. After
+the corrected producer received a clean exact-head review, its pinned bootstrap installed those outer
+protections. The owning production-guard and risky-path suites now exercise the installed matcher and producer
+classification directly, so later edits cannot silently remove either boundary.
+Earlier passes closed a Unicode identifier boundary that could conceal destructive SQL and removed the
 unsafe assumption that any `pg_temp`-qualified DML is harmless: PostgreSQL temporary views can be
 updatable proxies for persistent tables. The candidate now permits temporary DML only for a base temp
 table created earlier in the same batch, clears that exemption after any intervening schema operation,
