@@ -708,6 +708,20 @@ const BLOCK_LEAD = /^(begin|declare|end(\s+(if|loop))?|then|else|loop|do|excepti
 // CASE ... THEN, or a policy's USING, still contributes nothing.
 const CONTROL_INTRO = /\b(?:then|else|loop|\bin)\s+/g;
 
+// ROUND 32. A control fragment evaluates more than the statement introduced by
+// THEN/ELSE/LOOP. Its condition is executable too, as are assignment and
+// declaration initializers:
+//
+//   IF public.existing_repair() THEN NULL; END IF;
+//   v_result := public.existing_repair();
+//   v_result boolean := public.existing_repair();
+//
+// A database-resident routine in any of those expressions runs while the
+// migration applies. Definitions still return above without reaching this
+// branch, so stored CHECK/policy/view/default expressions remain quiet.
+const PLPGSQL_EVALUATED_EXPRESSION =
+  /^(?:if|elsif|while|case|for|foreach|assert|raise|return(?:\s+(?:next|query))?|exit\s+when|continue\s+when)\b|^[a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)?(?:\[[^\]]+\])?\s*(?::=|=(?!=))|^[a-z_][a-z0-9_]*\s+(?:constant\s+)?[a-z_][a-z0-9_.]*(?:(?:%type|%rowtype)|\s*\([^)]*\)|\s*\[\])*(?:\s+not\s+null)?\s*(?::=|default\b)/;
+
 function runForEffectRegion(stmt) {
   // PERFORM and CALL exist only as statement verbs, so wherever they appear in
   // a fragment, what follows them runs. Scan from there.
@@ -742,6 +756,7 @@ function runForEffectRegion(stmt) {
     const tail = rest.slice(intro.index + intro[0].length);
     if (RUNS_FOR_EFFECT.test(tail)) return tail;
   }
+  if (PLPGSQL_EVALUATED_EXPRESSION.test(rest)) return rest;
   return "";
 }
 

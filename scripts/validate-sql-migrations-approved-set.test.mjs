@@ -2234,6 +2234,14 @@ function runTriggerFanoutFailsClosed() {
     const json = (o) => `${JSON.stringify(o, null, 2)}\n`;
     const orders = fanoutBlock('orders', 'total_profit');
 
+    if (!live.fanout?.fields?.some((r) =>
+      r.target === 'field_crop_history' && r.via === 'snapshot_field_crop_history')) {
+      failures.push('  round-32 live fan-out is missing fields -> field_crop_history via snapshot_field_crop_history');
+    }
+
+    expect('an UPSERT conflict arm in a fields trigger binds field_crop_history',
+      json(live), fanoutBlock('fields', 'crop_type'), 'field_crop_history');
+
     const unscanned = structuredClone(live);
     unscanned.tables_scanned = unscanned.tables_scanned.filter((t) => t !== 'orders');
     delete unscanned.fanout.order_items;
@@ -2259,6 +2267,63 @@ function runTriggerFanoutFailsClosed() {
       json(gutted), fanoutBlock('order_items', 'total_price'), null);
   } finally {
     removeFixtureTree(root);
+  }
+  return failures;
+}
+
+/**
+ * A trigger definition can change the live graph without changing its table
+ * count. The changed-only path must therefore reject a trigger migration whose
+ * graph is byte-for-byte equivalent in its trust-bearing sections.
+ *
+ * @returns {string[]} failure descriptions, empty when the guard behaved
+ */
+function runTriggerDefinitionRequiresFanoutRefresh() {
+  const dir = mkdtempSync(join(tmpdir(), 'crx-trigger-staleness-'));
+  const failures = [];
+  try {
+    mkdirSync(join(dir, 'supabase', 'migrations'), { recursive: true });
+    mkdirSync(join(dir, 'scripts'), { recursive: true });
+    writeFileSync(join(dir, 'supabase', 'migrations', '20200101000000_base.sql'), '-- base\n', 'utf8');
+    copyFileSync(join(HERE, 'trigger-fanout.json'), join(dir, 'scripts', 'trigger-fanout.json'));
+
+    const git = (args) => spawnSync('git', args, {
+      cwd: dir, encoding: 'utf8', env: envWithoutGit(),
+    });
+    if (git(['init', '-q']).status !== 0 ||
+        git(['config', 'user.email', 'test@example.com']).status !== 0 ||
+        git(['config', 'user.name', 'test']).status !== 0 ||
+        git(['add', '.']).status !== 0 ||
+        git(['commit', '-qm', 'base']).status !== 0) {
+      return ['  round-32 trigger staleness test could not create a git fixture'];
+    }
+    const base = git(['rev-parse', 'HEAD']).stdout.trim();
+    writeFileSync(
+      join(dir, 'supabase', 'migrations', '20200102000000_trigger.sql'),
+      `CREATE FUNCTION public.t32() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;\n` +
+        `CREATE TRIGGER t32 BEFORE UPDATE ON public.orders FOR EACH ROW EXECUTE FUNCTION public.t32();\n`,
+      'utf8',
+    );
+    const stale = runBash([SCRIPT, '--changed-only', `--base=${base}`, '--max-violations=999'], {
+      cwd: dir, encoding: 'utf8', env: envWithoutGit(),
+    });
+    const staleOut = `${stale.stdout || ''}\n${stale.stderr || ''}`;
+    if (!staleOut.includes('Trigger definitions changed, but the trigger fan-out graph did not')) {
+      failures.push('  round-32 trigger definition with stale fan-out was not rejected');
+    }
+
+    const refreshed = JSON.parse(readFileSync(join(dir, 'scripts', 'trigger-fanout.json'), 'utf8'));
+    refreshed.opaque_on_tables = [...new Set([...(refreshed.opaque_on_tables || []), 'orders'])].sort();
+    writeFileSync(join(dir, 'scripts', 'trigger-fanout.json'), `${JSON.stringify(refreshed, null, 2)}\n`, 'utf8');
+    const guarded = runBash([SCRIPT, '--changed-only', `--base=${base}`, '--max-violations=999'], {
+      cwd: dir, encoding: 'utf8', env: envWithoutGit(),
+    });
+    const guardedOut = `${guarded.stdout || ''}\n${guarded.stderr || ''}`;
+    if (guardedOut.includes('Trigger definitions changed, but the trigger fan-out graph did not')) {
+      failures.push('  round-32 semantic fan-out refresh was still classified as stale');
+    }
+  } finally {
+    removeFixtureTree(dir);
   }
   return failures;
 }
@@ -2337,6 +2402,7 @@ function run() {
   failures.push(...runEditedGrandfather());
   failures.push(...runChangedOnlyIgnoresManifests());
   failures.push(...runTriggerFanoutFailsClosed());
+  failures.push(...runTriggerDefinitionRequiresFanoutRefresh());
 
   if (failures.length > 0) {
     console.error(`❌ approved-set guard: ${failures.length} case(s) behaved wrong\n`);

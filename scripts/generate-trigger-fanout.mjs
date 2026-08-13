@@ -22,9 +22,10 @@
 // gate can fold each cascade target into the set of tables the repair must
 // bind.
 //
-// SCOPE: UPDATE / DELETE / MERGE only. An INSERT creates rows that did not
-// exist when the digest was taken, so no before-state digest could have covered
-// them; only rewrites of pre-existing rows can be silently unbound.
+// SCOPE: UPDATE / DELETE / MERGE plus INSERT ... ON CONFLICT DO UPDATE. A plain
+// INSERT creates rows that did not exist when the digest was taken, so no
+// before-state digest could have covered them; an UPSERT conflict arm rewrites
+// a pre-existing row and therefore belongs in the graph.
 //
 // HOW TO REGENERATE
 // -----------------
@@ -50,9 +51,15 @@
 //   ), edges AS (
 //     SELECT trg.on_table, tbl.tablename AS target, trg.fn AS via
 //     FROM trg JOIN tbl ON tbl.tablename <> trg.on_table
-//       AND trg.src ~ ('(^|[^a-z0-9_])(update|delete[[:space:]]+from|merge'
-//                      || '[[:space:]]+into)[[:space:]]+(only[[:space:]]+)?'
-//                      || '(public\.)?' || tbl.tablename || '([^a-z0-9_]|$)')
+//       AND (
+//         trg.src ~ ('(^|[^a-z0-9_])(update|delete[[:space:]]+from|merge'
+//                    || '[[:space:]]+into)[[:space:]]+(only[[:space:]]+)?'
+//                    || '(public\.)?' || tbl.tablename || '([^a-z0-9_]|$)')
+//         OR trg.src ~ ('(^|[^a-z0-9_])insert[[:space:]]+into[[:space:]]+'
+//                    || '(public\.)?' || tbl.tablename
+//                    || '[^;]*on[[:space:]]+conflict[^;]*do[[:space:]]+update'
+//                    || '[[:space:]]+set[[:space:]]+')
+//       )
 //   )
 //   SELECT jsonb_pretty(jsonb_build_object(
 //     'tables_scanned',   (SELECT jsonb_agg(tablename ORDER BY tablename) FROM tbl),
@@ -173,7 +180,7 @@ const manifest = {
       'gate in scripts/validate-sql-migrations.sh folds each target into the set of tables a ' +
       'bulk repair must capture, hash and count.',
     scope:
-      'UPDATE/DELETE/MERGE only — an INSERT creates rows no before-state digest could cover.',
+      'UPDATE/DELETE/MERGE plus INSERT ... ON CONFLICT DO UPDATE. Plain INSERT is excluded.',
     regenerate: 'node scripts/generate-trigger-fanout.mjs --from-introspection <payload.json>',
   },
   tables_scanned: tablesScanned,

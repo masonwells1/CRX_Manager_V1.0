@@ -569,4 +569,33 @@ eq(T(null), [], "a null body does not throw");
   eq([...comment.targets].length, 0, "round-31: a COMMENT's text writes nothing");
 }
 
+// -------- ROUND 32: PL/pgSQL conditions and assignments are executable too
+{
+  const refuses = (sql) => {
+    const r = applyTimeWriteTargets(sql);
+    return r.unresolved || r.unknownCalls.length > 0;
+  };
+
+  for (const [label, sql] of [
+    ["IF condition", "DO $$ BEGIN IF public.wrapper() THEN NULL; END IF; END $$;"],
+    ["ELSIF condition", "DO $$ BEGIN IF false THEN NULL; ELSIF public.wrapper() THEN NULL; END IF; END $$;"],
+    ["WHILE condition", "DO $$ BEGIN WHILE public.wrapper() LOOP EXIT; END LOOP; END $$;"],
+    ["assignment RHS", "DO $$ DECLARE v boolean; BEGIN v := public.wrapper(); END $$;"],
+    ["declaration initializer", "DO $$ DECLARE v boolean := public.wrapper(); BEGIN NULL; END $$;"],
+    ["array declaration initializer", "DO $$ DECLARE v uuid[] := public.wrapper(); BEGIN NULL; END $$;"],
+    ["rowtype declaration initializer", "DO $$ DECLARE v public.orders%ROWTYPE := public.wrapper(); BEGIN NULL; END $$;"],
+    ["RETURN expression", "CREATE FUNCTION public.f32() RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN RETURN public.wrapper(); END $$; SELECT public.f32();"],
+  ]) {
+    ok(refuses(sql), `round-32: a resident routine in ${label} fails closed`);
+  }
+
+  for (const [label, sql] of [
+    ["stored CHECK condition", "CREATE TABLE public.t32 (v int CHECK (public.wrapper()));"],
+    ["stored policy condition", "CREATE POLICY p32 ON public.scratch USING (public.wrapper());"],
+    ["stored view expression", "CREATE VIEW public.v32 AS SELECT public.wrapper();"],
+  ]) {
+    ok(!refuses(sql), `round-32: ${label} remains deferred`);
+  }
+}
+
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

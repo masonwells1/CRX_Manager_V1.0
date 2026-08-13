@@ -2,6 +2,16 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-13 — PR #364 adversarial guard review, round 32
+
+The exact-head Sol review found three more fail-open shapes in the migration
+authorization guards. Apply-time routine discovery now covers PL/pgSQL
+conditions, assignments, and declaration initializers; the live trigger fan-out
+query now treats `INSERT ... ON CONFLICT DO UPDATE` as a rewrite and records the
+verified `fields` to `field_crop_history` edge; and a changed trigger definition
+cannot pass the changed-only audit with an unchanged graph. Focused mutations
+cover each refusal path. No migration or live data was changed.
+
 ## 2026-08-13 — SQL-validator mutation tests run the real Bash on Windows
 
 PR #364's approved-set mutation suite now resolves Git Bash beside the active

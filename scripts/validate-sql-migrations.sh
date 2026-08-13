@@ -843,6 +843,49 @@ if [ "$CHANGED_ONLY" = true ]; then
     done
     ALL_SQL=$(printf '%s\n' $EXISTING)
     SCAN_MODE="changed-only vs $BASE_REF (merge-base)"
+
+    # ROUND 32. The checked-in fan-out is a catalog snapshot. A new trigger or
+    # replacement trigger-function body can change its cross-table rewrites
+    # without changing the number of tables in the manifest, so the old
+    # `tables_scanned >= 100` completeness test stayed green on stale data.
+    # Require the same change to update the graph itself (fanout, opaque tables,
+    # or scanned tables). Metadata-only edits do not count. A trigger with no
+    # statically provable cross-table rewrite can add its source table to
+    # opaque_on_tables until a post-apply live regeneration proves it clear.
+    TRIGGER_DEFINITION_CHANGED=false
+    for f in $CHANGED; do
+      if [ -f "$f" ] && grep -Eiq \
+        'create[[:space:]]+(or[[:space:]]+replace[[:space:]]+)?(constraint[[:space:]]+)?trigger|returns[[:space:]]+(event_)?trigger' \
+        "$f"; then
+        TRIGGER_DEFINITION_CHANGED=true
+        break
+      fi
+    done
+    if [ "$TRIGGER_DEFINITION_CHANGED" = true ]; then
+      FANOUT_GRAPH_CHANGED=$(node -e "
+const cp = require('child_process');
+const fs = require('fs');
+const path = 'scripts/trigger-fanout.json';
+const pick = (m) => ({
+  tables_scanned: m.tables_scanned || [],
+  opaque_on_tables: m.opaque_on_tables || [],
+  fanout: m.fanout || {},
+});
+try {
+  const before = JSON.parse(cp.execFileSync('git', ['show', process.argv[1] + ':' + path], { encoding: 'utf8' }));
+  const after = JSON.parse(fs.readFileSync(path, 'utf8'));
+  process.stdout.write(JSON.stringify(pick(before)) === JSON.stringify(pick(after)) ? 'no' : 'yes');
+} catch { process.stdout.write('no'); }
+" "$MB" 2>/dev/null || echo no)
+      if [ "$FANOUT_GRAPH_CHANGED" != "yes" ]; then
+        echo "VIOLATION: scripts/trigger-fanout.json"
+        echo "  Trigger definitions changed, but the trigger fan-out graph did not."
+        echo "  Regenerate it from live catalog evidence, or fail closed by adding the affected source table to opaque_on_tables."
+        echo ""
+        VIOLATIONS=$((VIOLATIONS + 1))
+      fi
+    fi
+
     # Zero baseline applies ONLY on the real changed-only path: the scanned set is just
     # what this change touched, so any violation is a regression and the --max-violations
     # ratchet (which exists for the full historical scan, ~61 legacy violations) would

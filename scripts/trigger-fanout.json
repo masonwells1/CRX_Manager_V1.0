@@ -1,10 +1,10 @@
 {
   "_meta": {
-    "generated_at": "2026-08-13T00:00:00Z",
+    "generated_at": "2026-08-13T17:11:48Z",
     "generator": "scripts/generate-trigger-fanout.mjs",
     "source_project": "rhyzpcqhnizqbxphqdkr",
     "purpose": "Live triggers that rewrite a different table than the one written. The approved-set gate in scripts/validate-sql-migrations.sh folds each target into the set of tables a bulk repair must capture, hash and count.",
-    "scope": "UPDATE/DELETE/MERGE only — an INSERT creates rows no before-state digest could cover.",
+    "scope": "UPDATE/DELETE/MERGE plus INSERT ... ON CONFLICT DO UPDATE. Plain INSERT is excluded.",
     "regenerate": "node scripts/generate-trigger-fanout.mjs --from-introspection <payload.json>"
   },
   "tables_scanned": [
@@ -184,6 +184,12 @@
       {
         "target": "customer_contacts",
         "via": "sync_customer_to_primary_contact"
+      }
+    ],
+    "fields": [
+      {
+        "target": "field_crop_history",
+        "via": "snapshot_field_crop_history"
       }
     ],
     "invoices": [
