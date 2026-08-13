@@ -40,6 +40,10 @@ focused harness remains repeatable after protection without accepting a mixed or
 production-guard suite executes that focused harness and proves an invocation without exact-head proof is denied;
 the risky-path suite also pins the producer's exact-review classification. Rollback attempts every protected-file
 restore and reports any incomplete restoration without hiding the original failure.
+The current outer shell-safety hook now independently permits only the three exact repository-relative
+producer commands and denies chaining, wrappers, alternate spellings, unknown arguments, and npm/MCP
+indirection. This closes the pre-bootstrap check-to-execution gap before the generated production-action
+guard hardening is installed; live hook regressions pin the original chained rewrite reproduction.
 Earlier passes closed a Unicode identifier boundary that could conceal destructive SQL and removed the
 unsafe assumption that any `pg_temp`-qualified DML is harmless: PostgreSQL temporary views can be
 updatable proxies for persistent tables. The candidate now permits temporary DML only for a base temp

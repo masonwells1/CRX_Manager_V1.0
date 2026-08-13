@@ -26,6 +26,9 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
   normalization and all classifier defect classes found through the latest automated and Sol reviews.
 - The focused producer harness also passes after the exact pinned protections are installed, and the standard
   production-guard suite executes it while separately proving that an invocation without exact-head proof is denied.
+- Before those generated protections are installed, the already-wired Bash/PowerShell and MCP process guards
+  independently allow only the three exact repository-relative producer commands. Chaining, wrappers, alternate
+  spellings, unknown arguments, npm indirection, and the original pre-bootstrap rewrite reproduction are denied.
 - The write mode refused the dirty build worktree even with Mason's dated token.
 - Current recovery proof passed ESLint, TypeScript typecheck, production build, all 4,466 executed
   Vitest assertions (123 skipped), all agent-workflow tests, agent health, dependency integrity,
