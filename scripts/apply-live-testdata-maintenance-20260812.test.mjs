@@ -12,6 +12,7 @@ import {
   buildProducerProtectionSources,
   exactHeadProofValid,
   maintenanceProducerCommandMentioned,
+  maintenanceProducerInvocationAllowed,
   normalizeLineEndings,
   worktreeEntriesFromStatus,
 } from "./apply-live-testdata-maintenance-20260812.mjs";
@@ -71,6 +72,16 @@ assert.equal(
   true,
   "generated guard embeds the invocation matcher exercised below",
 );
+assert.equal(
+  producerProtection.outputs.codexGuard.includes(`export ${maintenanceProducerInvocationAllowed.toString()}`),
+  true,
+  "generated guard embeds the strict invocation allowlist exercised below",
+);
+assert.match(
+  producerProtection.outputs.codexGuard,
+  /if \(!maintenanceProducerInvocationAllowed\(command\)\)/,
+  "generated execution gate enforces the strict invocation allowlist",
+);
 const producerInvocations = [
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
   'node "scripts/apply-live-testdata-maintenance-20260812.mjs" --protect-producer',
@@ -90,6 +101,25 @@ assert.equal(
   false,
   "unrelated maintenance command is not classified as this producer",
 );
+for (const command of [
+  "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
+  "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12",
+  "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --protect-producer",
+]) {
+  assert.equal(maintenanceProducerInvocationAllowed(command), true, `exact producer invocation accepted: ${command}`);
+}
+for (const command of [
+  "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify; Write-Output chained",
+  "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify --unknown",
+  "node scripts/apply-live-testdata-maintenance-20260812.mjs --protect-producer --approved-by-mason=2026-08-12",
+  "node \"scripts/apply-live-testdata-maintenance-20260812.mjs\" --verify",
+  "node scripts\\apply-live-testdata-maintenance-20260812.mjs --verify",
+  "cmd /c node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
+  "env FLAG=1 node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
+  "[IO.File]::WriteAllText('scripts/apply-live-testdata-maintenance-20260812.mjs','owned'); node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
+]) {
+  assert.equal(maintenanceProducerInvocationAllowed(command), false, `non-literal producer invocation rejected: ${command}`);
+}
 const proofNow = Date.parse("2026-08-13T05:30:00.000Z");
 const exactProof = {
   codex_ran: true,

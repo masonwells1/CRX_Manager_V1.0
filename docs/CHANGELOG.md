@@ -30,7 +30,7 @@ Twenty-two exact-head adversarial passes have progressively hardened the candida
 latest pass found that ordinary shell quoting could bypass the producer invocation matcher. The generated
 guard now recognizes quoted, absolute, alternate-separator, wrapper-prefixed, and escaped spellings, while
 the producer itself independently requires its exact committed blob plus a fresh HEAD-and-base-bound
-Sol-high proof before either write mode can run. Twenty-two counted producer assertions pin those boundaries. The
+Sol-high proof before either write mode can run. Thirty-five counted producer assertions pin those boundaries. The
 next pass found PostgreSQL's optional `ONLY` keyword could hide persistent targets from CTE-wrapped
 `UPDATE`, `DELETE`, and `MERGE`. Target enumeration now accepts `ONLY`, and any `WITH` statement that still
 contains an unaccounted DML verb fails closed. Three exact regressions pin those forms.

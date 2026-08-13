@@ -22,7 +22,7 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
   `fdc67a2ef72698b1e74a8dee53c2a41da4c55fbd`, matched all three snippet SHA-256 values, and passed a
   Node module syntax check without changing the repository target.
 - `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 84 classifier assertions
-  against the generated module plus 22 counted producer assertions, including cross-platform line-ending
+  against the generated module plus 35 counted producer assertions, including cross-platform line-ending
   normalization and all classifier defect classes found through the latest automated and Sol reviews.
 - The focused producer harness also passes after the exact pinned protections are installed, and the standard
   production-guard suite executes it while separately proving that an invocation without exact-head proof is denied.
