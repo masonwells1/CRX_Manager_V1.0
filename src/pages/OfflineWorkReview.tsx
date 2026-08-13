@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, ExternalLink, RefreshCw, ShieldCheck } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import Button from '../components/ui/Button';
@@ -46,8 +46,10 @@ export default function OfflineWorkReview() {
   const [idempotencyKey, setIdempotencyKey] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const loadRequestSequence = useRef(0);
 
   const loadQueue = useCallback(async () => {
+    const requestSequence = ++loadRequestSequence.current;
     setLoading(true);
     setLoadError(null);
     try {
@@ -61,24 +63,35 @@ export default function OfflineWorkReview() {
         data,
         'get_offline_action_review_queue',
       );
+      if (requestSequence !== loadRequestSequence.current) return;
       if (!Array.isArray(result.items) || typeof result.total !== 'number') {
         throw new Error('get_offline_action_review_queue returned an invalid result');
       }
       setItems(result.items);
       setTotal(result.total);
     } catch (error) {
+      if (requestSequence !== loadRequestSequence.current) return;
       const message = error && typeof error === 'object' && 'code' in error && error.code === 'PGRST202'
         ? 'The offline receipt migrations are not active yet. This page will become available after the reviewed database rollout.'
         : 'Could not load the offline work review queue.';
+      setItems([]);
+      setTotal(0);
+      setSelected(null);
+      setConfirmOpen(false);
+      setNote('');
+      setIdempotencyKey(null);
       setLoadError(message);
       Sentry.captureException(error, { tags: { page: 'OfflineWorkReview', action: 'load' } });
     } finally {
-      setLoading(false);
+      if (requestSequence === loadRequestSequence.current) setLoading(false);
     }
   }, [includeResolved]);
 
   useEffect(() => {
     void loadQueue();
+    return () => {
+      loadRequestSequence.current += 1;
+    };
   }, [loadQueue]);
 
   const unresolvedCount = useMemo(
