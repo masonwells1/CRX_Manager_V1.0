@@ -163,7 +163,7 @@ on 2026-08-12 whose files were on no branch and in no worktree, so `main` did no
 
 **Those six land in this same change** — see the entry above. The two are not merely adjacent, they
 are interdependent, and that is why they ship together rather than as two pull requests.
-`20260813010000` pins the body of `create_direct_order` by md5 so that a concurrent session cannot
+`20260813010000` pins the body of `_create_direct_order_below_cost_impl_20260810` by md5 so that a concurrent session cannot
 silently clobber it. The below-cost wrapper migration `20260812115237` renamed that function on
 2026-08-12, which is exactly the situation the pin exists to catch — and it caught it. The repaired
 `20260813010000` therefore pins `_create_direct_order_below_cost_impl_20260810`, a name that only

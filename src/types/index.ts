@@ -721,8 +721,8 @@ export interface QuoteItem {
   // Immutable as-of-quote cost snapshot (20260812115236), mirroring
   // order_items.cost_at_time_cents. Trigger-stamped on insert and never
   // written by the browser. NULL only on a legacy row whose product carried
-  // a NULL current_cost at backfill time. Optional because no current query
-  // selects it — the column is server-managed and the browser never writes it.
+  // a NULL current_cost at backfill time. Optional because partial projections
+  // may omit it; the column is server-managed and the browser never writes it.
   cost_at_quote_cents?: number | null;
   suggested_rate: string | null;
   actual_rate: number | null;
