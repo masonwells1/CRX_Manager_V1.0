@@ -183,8 +183,10 @@ UNION ALL
 -- has_function_privilege() raises undefined_function on a dropped or renamed
 -- routine, and run-sweeps.mjs would then report this whole predicate as ERROR —
 -- which does fail the sweep (it is not fail-open), but it replaces a named,
--- actionable violation_key with an opaque Postgres error and hides the ten other
--- branches in the same run. Resolve first, then decide, so a drop reports as
+-- actionable violation_key with an opaque Postgres error and hides every other
+-- branch in the same run. (Stated without a number on purpose: an earlier
+-- revision said "the ten other branches" and the count was stale within two
+-- rounds of edits.) Resolve first, then decide, so a drop reports as
 -- drift instead of as a crash. Note SQL has no short-circuit guarantee, so this
 -- has to be a CASE, not an `AND` in front of the call.
 --
@@ -224,6 +226,17 @@ UNION ALL
 -- next month is browser-callable the moment it exists, while the signature-
 -- pinned branch below still reports clean on the old one. That is the B9 shape
 -- this repo has already been bitten by once.
+--
+-- BEFORE DELETING THIS OR ANY OTHER EXACTLY-ONE-OVERLOAD BRANCH IN THIS FILE AS
+-- REDUNDANT — the global `overloads.sql` predicate in this same sweep does flag
+-- any public function name carrying more than one signature, so at a glance they
+-- look like duplicates. They are not, in two ways. First, these test `<> 1`, so
+-- they also fire when the count is ZERO;
+-- overloads.sql tests `> 1` and stays silent on a routine that has been dropped
+-- or renamed out from under this boundary, which is the drift that actually
+-- breaks it. Second, a hit here arrives with a violation_key naming this
+-- boundary and a reason explaining what it costs, instead of a bare function
+-- name a reader then has to trace back. Cheap duplication, deliberately kept.
 SELECT 'create_quote_version:overload-count' AS violation_key,
        'public.create_quote_version must have exactly one overload — a new signature is born EXECUTE-able by the API roles and is not covered by the signature-pinned branches here' AS reason
  WHERE (
@@ -301,11 +314,25 @@ UNION ALL
 -- restore_quote_version's gating entirely — the write half of this boundary is
 -- guarded above, and this is the read-back half.
 --
--- Checked before adding: the global anon-exec-secdef predicate does not cover
--- this. That predicate tests the `anon` role only, and this routine appears in
--- no allowlist entry. `authenticated` — the role an ordinary logged-in browser
--- session actually carries — was unwatched on this signature by every predicate
--- in the sweep.
+-- Checked before adding, and stated precisely because an earlier revision
+-- claimed more than it had checked. Two other predicates come near this routine
+-- and neither one catches it:
+--
+--   anon-exec-secdef — tests the `anon` role only. `authenticated`, the role an
+--     ordinary logged-in browser session actually carries, is outside it
+--     entirely, and this routine appears in no allowlist entry.
+--
+--   ungated-secdef-mutators — looks for SECURITY DEFINER routines that mutate
+--     without an authorization reference, and excludes any body matching
+--     `auth\.uid` (alongside require_admin / is_admin / is_sales_rep). This
+--     routine's body references auth.uid, so it is excluded there by
+--     construction. That exclusion is right for what that predicate is for —
+--     it hunts for MISSING authorization logic — but "the body mentions
+--     auth.uid" says nothing about who holds EXECUTE, which is what this branch
+--     tests.
+--
+-- So: not unwatched by every predicate in the sweep, but unwatched on the
+-- privilege question by both of the ones that look at it.
 SELECT '_restore_quote_version_owner_impl:external-execute' AS violation_key,
        'anon/authenticated must not hold EXECUTE on the owner-side restore implementation — calling it directly stamps a stored snapshot back onto a quote as its cost basis, bypassing restore_quote_version entirely' AS reason
  WHERE CASE
@@ -371,6 +398,23 @@ SELECT 'quote_versions:rewrite-path-writable' AS violation_key,
 -- No relkind filter, deliberately: a RULE on an ordinary table reaches this
 -- table exactly as a view does. Column-granular for the same reason the
 -- base-table branch above is.
+--
+-- TRIGGER and TRUNCATE are omitted on purpose, matching 20260813080000's copy of
+-- this branch — change them together or the two will disagree. TRUNCATE is not
+-- rewritten by rules and cannot be aimed at a view, so it has no route here.
+-- TRIGGER is the false-positive trap: this project's default privileges grant it
+-- to authenticated on every new relation in schema public, so testing it would
+-- fire on relations that cannot write anything, and it is not a write path on
+-- its own.
+--
+-- EXPECT THIS BRANCH TO FIRE THE DAY SOMEBODY ADDS A REPORTING VIEW over
+-- quote_versions, even a strictly read-only one, and do not read that as a false
+-- alarm. Under this project's default privileges a newly created relation in
+-- schema public is born with the full authenticated=arwdDxtm grant, so a view
+-- intended for reading arrives holding INSERT and UPDATE, and an auto-updatable
+-- one is then genuinely writable — permission-checked as the view's owner, which
+-- is exactly the hole this branch watches. The fix is to revoke the write
+-- privileges on the new view, not to carve it out of this predicate.
  WHERE EXISTS (
    WITH RECURSIVE rewrite_reachable AS (
      SELECT 'public.quote_versions'::regclass AS relid

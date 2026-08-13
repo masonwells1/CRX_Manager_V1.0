@@ -278,10 +278,21 @@ BEGIN
   END;
   RESET ROLE;
 
-  -- Nothing above may have changed the table.
+  -- Nothing above may have DESTROYED rows. Asymmetric on purpose: this smoke
+  -- runs against the live database while real sessions are working, so a
+  -- legitimate create_quote_version call landing in another session between the
+  -- two counts raises v_after and is NOT evidence of a boundary failure. Every
+  -- write attempted above is a DELETE, an UPDATE, a TRUNCATE or an INSERT that
+  -- must have been refused; the only outcomes that prove a leak are a count that
+  -- FELL (a delete or truncate got through) or the forged INSERT succeeding —
+  -- and that INSERT is already caught by its own SMOKE_FAIL inside the block
+  -- above, which fires the moment the statement does not raise. So a strict
+  -- <> here adds nothing the checks above miss, while making the smoke flake
+  -- whenever the office is busy. Step 5 below applies the same reasoning in the
+  -- other direction and uses >= against a per-quote baseline.
   SELECT count(*) INTO v_after FROM public.quote_versions;
-  IF v_after <> v_before THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: quote_versions row count moved from % to % during the denial checks', v_before, v_after;
+  IF v_after < v_before THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: quote_versions row count FELL from % to % during the denial checks — a delete or truncate got through the boundary', v_before, v_after;
   END IF;
 
   -- ── 5. the LEGITIMATE path must still work ────────────────────────────────

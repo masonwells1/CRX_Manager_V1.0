@@ -216,12 +216,20 @@
 -- Nothing IN this file enforces that, and it cannot: a migration cannot open its
 -- own transaction on this path. So state the consequence rather than assume the
 -- shape holds. On a hypothetical statement-at-a-time applier, a failing
--- POSTCOND would leave the DROP POLICY and the REVOKEs in place while the
--- migration itself is recorded as failed. That direction is safe — the boundary
--- ends up tighter, never looser — but the repository would then disagree with
--- the database about whether this applied. If that ever happens, check the live
--- ACL before re-running: a second apply of an already-revoked table is a no-op,
--- but the PRECONDs would abort on their own now-satisfied assertions.
+-- POSTCOND would leave the DROP POLICY and the REVOKEs in place while no ledger
+-- row is written at all — the applier records a migration only after it
+-- succeeds, so a failure leaves no "failed" row behind, just an absence. That
+-- direction is safe — the boundary ends up tighter, never looser — but the
+-- repository would then disagree with the database about whether this applied.
+--
+-- If that ever happens, re-running is the intended recovery and the PRECONDs are
+-- built for it: the policy check treats an already-absent qversions_insert as an
+-- explicit replay branch and proceeds as a no-op re-assertion, and the remaining
+-- assertions pin things this migration does not change (RLS on, the read policy
+-- present, one overload each, the definer owner still holding INSERT and
+-- rolbypassrls), all of which still hold afterwards. Read the live ACL first
+-- anyway, to confirm the partial state is the one described here rather than a
+-- third party's change.
 --
 -- OUT OF SCOPE, REPORTED SEPARATELY: this blanket-grant shape is not unique to
 -- this table. Most public tables still grant TRUNCATE to `authenticated`, and
@@ -378,6 +386,42 @@ BEGIN
   END IF;
   IF to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)') IS NULL THEN
     RAISE EXCEPTION 'PRECOND: restore_quote_version does not have signature (uuid,uuid,uuid,text,bigint,text); the statements below would not match.';
+  END IF;
+
+  -- The restore side's two implementations must not be callable by a browser
+  -- role. This file is a WRITE boundary for quote_versions, and restore is the
+  -- routine that reads a stored snapshot back out and stamps its cost basis onto
+  -- the quote — so sealing the table while leaving that path open would close the
+  -- front door and leave the back one ajar.
+  --
+  -- The reason it has to be checked HERE and not only in the standing sweep: the
+  -- public restore_quote_version above is a thin wrapper that runs the below-cost
+  -- approval check and then delegates. The gate therefore lives in the wrapper,
+  -- and anything able to reach an implementation directly performs the restore
+  -- with that check skipped. On this project a newly created function is born
+  -- callable by the API roles, so this is the default state, not an exotic one.
+  --
+  -- Overload counts first: the EXECUTE assertions below name one signature each,
+  -- so a second overload of either name would sit outside them entirely.
+  SELECT count(*) INTO v_count
+    FROM pg_proc p
+   WHERE p.pronamespace = 'public'::regnamespace
+     AND p.proname IN ('_restore_quote_version_owner_impl',
+                       '_restore_quote_version_below_cost_impl_20260810');
+  IF v_count <> 2 THEN
+    RAISE EXCEPTION 'PRECOND: expected exactly 2 restore-side implementations (one _restore_quote_version_owner_impl and one _restore_quote_version_below_cost_impl_20260810), found %. An overload would be unwatched by the EXECUTE assertions below; re-review before applying.', v_count;
+  END IF;
+
+  IF to_regprocedure('public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)') IS NULL
+     OR to_regprocedure('public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)') IS NULL THEN
+    RAISE EXCEPTION 'PRECOND: a restore-side implementation is missing at its pinned signature. Re-review before applying — the EXECUTE assertions below cannot be evaluated.';
+  END IF;
+
+  IF has_function_privilege('authenticated', 'public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'PRECOND: a browser role can execute a restore-side implementation directly, skipping the below-cost approval check that lives in the public wrapper. Sealing the quote_versions write boundary while that path is open would give a false sense of closure. Revoke it and re-review before applying.';
   END IF;
 
   -- The privileged writer must exist and must be the owner-side definer, or
@@ -589,7 +633,37 @@ BEGIN
             AND (cost_text ~ '_' OR cost_text ~* '^\s*[-+]?0[xob]')) AS cost_exotic,
            CASE WHEN product_id_text ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
                 THEN product_id_text::uuid
-           END AS product_uuid
+           END AS product_uuid,
+           -- The SAME stricter-scan-than-restore-path mismatch the cost branch
+           -- above exists to close, one field over — and the round that fixed
+           -- the cost branch did not carry the reasoning across to this one.
+           --
+           -- The restore path casts this field with a bare
+           -- (v_item->>'product_id')::uuid (20260812115236:1128), and uuid_in
+           -- accepts far more than the canonical dashed form: brace-wrapped,
+           -- hyphen-free and irregularly-hyphenated all parse, and all compare
+           -- EQUAL to the canonical value. Verified read-only on live 17.6
+           -- before writing this:
+           --   'a0eebc999c0b4ef8bb6d6bb9bd380a11'::uuid
+           --     = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'::uuid  -> true
+           --   '{a0eebc99-...}'::uuid and 'a0ee-bc99-9c0b-...'::uuid likewise,
+           -- while the canonical pattern above returns false for every one.
+           --
+           -- So a forged line naming a REAL product in a non-canonical form
+           -- would leave product_uuid NULL, fall into 'unrestorable' — the one
+           -- ADVISORY bucket, whose NOTICE the Supabase apply channel does not
+           -- surface — and be sealed in permanently, while restore would have
+           -- resolved it, satisfied the quote_items FK, and stamped its cost
+           -- basis into canonical profit and commission money.
+           --
+           -- Blocking in its own right, for the cost_exotic reason: QuoteBuilder
+           -- serialises this field with JSON.stringify from a uuid the database
+           -- emitted, and that is always canonical — so a non-canonical form
+           -- here is hand-crafted JSON regardless of what it resolves to.
+           (product_id_text IS NOT NULL
+            AND product_id_text !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+            AND replace(replace(replace(btrim(product_id_text), '{', ''), '}', ''), '-', '')
+                  ~* '^[0-9a-f]{32}$') AS product_id_exotic
       FROM lines
      WHERE cost_text IS NOT NULL
   ),
@@ -600,7 +674,7 @@ BEGIN
     SELECT p.cost_num,
            pr.current_cost,
            CASE
-             WHEN p.cost_exotic                                   THEN 'exotic'
+             WHEN p.cost_exotic OR p.product_id_exotic            THEN 'exotic'
              WHEN p.product_uuid IS NULL OR pr.id IS NULL         THEN 'unrestorable'
              WHEN p.cost_num IS NULL                              THEN 'unparseable'
              -- NaN and +Infinity must be routed here EXPLICITLY. In PostgreSQL
@@ -648,11 +722,21 @@ BEGIN
   -- on the argument that an aged catalog produces such lines routinely. That
   -- argument holds for exactly one of its members:
   --
-  --   unrestorable (ADVISORY) — the product_id is malformed or names a row that
-  --     no longer exists. quote_items.product_id is NOT NULL REFERENCES
-  --     products(id), so restoring such a line dies on the foreign key. The line
-  --     is not a forgery vector because it cannot be restored at all, and a
-  --     deleted product really is an ordinary state of an old catalog.
+  --   unrestorable (ADVISORY) — the product_id cannot be read as a uuid AT ALL,
+  --     or it resolves but names a row that no longer exists. quote_items
+  --     .product_id is NOT NULL REFERENCES products(id), so restoring such a
+  --     line dies on the foreign key. The line is not a forgery vector because
+  --     it cannot be restored at all, and a deleted product really is an
+  --     ordinary state of an old catalog.
+  --
+  --     READ THE product_id_exotic NOTE ABOVE BEFORE WIDENING THIS BUCKET. What
+  --     makes the advisory treatment safe is that this bucket now holds only
+  --     genuinely uncastable ids. An earlier revision classified on the
+  --     canonical dashed pattern alone, which is STRICTER than the uuid_in the
+  --     restore path actually uses — so a real product id written without
+  --     hyphens landed here, was reported by a NOTICE the apply channel does
+  --     not surface, and would then have been restored perfectly happily. That
+  --     case is now routed to the blocking 'exotic' bucket instead.
   --
   --   unparseable (BLOCKING) — the product resolves and the line is fully
   --     restorable, but this scan cannot read the stored cost string, so it is
@@ -668,9 +752,10 @@ BEGIN
   --     wrong. The live BEFORE trigger on quote_items
   --     (20260812115237_enforce_below_cost_admin_approval.sql) does read the
   --     catalog row FOR SHARE and raises COST_BASIS_REQUIRED on exactly this
-  --     condition, and its early return is scoped to save_quote's own transient
-  --     INSERT, which is not the restore path. So these lines are already
-  --     un-restorable in practice.
+  --     condition. It carries TWO early returns, not one — one on the INSERT
+  --     path for save_quote's own transient write, and a second on the UPDATE
+  --     path — and neither covers restore, which reaches the table by a
+  --     different route. So these lines are already un-restorable in practice.
   --
   --     The block stays anyway, for a different and narrower reason than the one
   --     originally given: this file's contract is that nothing unverified gets
@@ -679,7 +764,10 @@ BEGIN
   --     to resolve, not as a restore-safety emergency — and note it costs
   --     nothing today, since the live measurement below found this bucket empty.
   --
-  --   exotic (BLOCKING) — see the cost_exotic note above.
+  --   exotic (BLOCKING) — a cost literal, or a product_id, in a form the app
+  --     cannot emit but the restore path would still accept. See the cost_exotic
+  --     and product_id_exotic notes above; the reasoning is the same one field
+  --     apart, and both amount to hand-crafted JSON.
   --
   -- Measured read-only against live before this split was written: 5 snapshot
   -- lines exist in total and every one of these buckets is empty, so blocking
@@ -690,15 +778,15 @@ BEGIN
   -- one class that cannot be restored; the classes that carry risk raise
   -- instead, and an EXCEPTION does come back through the apply channel.
   IF v_unrestorable > 0 THEN
-    RAISE NOTICE 'PRECOND (advisory, not blocking): % existing quote_versions snapshot line(s) name a product that no longer exists or a malformed product_id. quote_items.product_id is NOT NULL REFERENCES products(id), so restore would fail on the foreign key rather than stamp a cost basis — these lines are not a forgery vector. Sealing the boundary anyway.', v_unrestorable;
+    RAISE NOTICE 'PRECOND (advisory, not blocking): % existing quote_versions snapshot line(s) carry a product_id that cannot be read as a uuid at all, or one that reads fine but names a product row that no longer exists. quote_items.product_id is NOT NULL REFERENCES products(id), so restore would fail on the foreign key rather than stamp a cost basis — these lines are not a forgery vector. A product_id in an unusual but still castable form does NOT land here; it is treated as hand-crafted and blocks below. Sealing the boundary anyway.', v_unrestorable;
   END IF;
 
   IF v_exotic > 0 THEN
-    RAISE EXCEPTION 'PRECOND: % existing quote_versions snapshot line(s) carry a cost written as a non-decimal or underscore-grouped numeric literal (0x.., 0o.., 0b.., or 1_0). PostgreSQL 16+ accepts these, so restore would stamp them, but JSON.stringify cannot emit them — their presence means the snapshot was hand-crafted rather than written by the app. Investigate those rows before applying.', v_exotic;
+    RAISE EXCEPTION 'PRECOND: % existing quote_versions snapshot line(s) carry a cost or a product_id in a form the app cannot emit but the restore path would still accept. Cost side: a non-decimal or underscore-grouped numeric literal (0x.., 0o.., 0b.., or 1_0), which PostgreSQL 16+ accepts and restore would stamp. Product side: an id that is not in canonical dashed form yet still casts to a uuid (brace-wrapped, hyphen-free or irregularly hyphenated all parse and compare equal), which restore would resolve and stamp a cost basis from. JSON.stringify emits neither form, so their presence means the snapshot was hand-crafted rather than written by the app. Investigate those rows before applying.', v_exotic;
   END IF;
 
   IF v_unchecked > 0 THEN
-    RAISE EXCEPTION 'PRECOND: % existing quote_versions snapshot line(s) are restorable but unverifiable — either the cost string is not a finite decimal number this scan can read, or the product resolves but carries no usable catalog cost to compare against. Restore does not consult the catalog, so it would stamp these into quote_items.cost_at_quote_cents unchallenged. Review them by hand before applying; sealing the boundary would freeze an unchecked cost basis in place.', v_unchecked;
+    RAISE EXCEPTION 'PRECOND: % existing quote_versions snapshot line(s) are unverifiable — either the cost string is not a finite decimal number this scan can read, or the product resolves but carries no usable catalog cost to compare against. Neither case can be cleared by this scan, and the two fail differently: an unreadable cost string is fully restorable and would be stamped into quote_items.cost_at_quote_cents with nobody having checked it, while a missing catalog cost is already refused in practice by the live below-cost trigger on quote_items. Both block for the same contract reason — nothing unverified gets sealed inside the new boundary, and a catalog cost can be repaired later while a version row''s stored basis cannot. Review them by hand before applying.', v_unchecked;
   END IF;
 
   IF v_count > 0 THEN
@@ -718,6 +806,19 @@ DROP POLICY IF EXISTS qversions_insert ON public.quote_versions;
 -- a member of. A grant issued by some other role is left in place and the
 -- statement succeeds silently. The POSTCOND block below is what turns that
 -- silent no-op into a failed apply.
+--
+-- SIX privileges, not seven: MAINTAIN is deliberately left alone, so read the
+-- live ACL after this applies expecting to still see it. PostgreSQL 17 added
+-- MAINTAIN, and it survives the list below — authenticated goes from arwdDxtm to
+-- rm, and anon (which holds only m on this table today) is unchanged.
+--
+-- That is a deliberate scope call, not an oversight. MAINTAIN carries VACUUM,
+-- ANALYZE, CLUSTER, REINDEX, REFRESH MATERIALIZED VIEW and LOCK TABLE — it moves
+-- no rows, so it is not part of the forged-snapshot path this file closes, and
+-- the POSTCOND block below correspondingly does not test for it. Revoking it
+-- would be a separate project-wide ACL decision affecting every table, of the
+-- same kind as the blanket TRUNCATE grants noted in the header, and folding it
+-- into a targeted security fix is how unrelated breakage gets shipped.
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES
   ON TABLE public.quote_versions
   FROM PUBLIC, anon, authenticated;
@@ -902,7 +1003,24 @@ BEGIN
   -- Privileges are tested at COLUMN granularity for the same reason the base
   -- table is (see the has_any_column_privilege block above): a grant on
   -- snapshot_data alone leaves has_table_privilege false and would have passed.
-  -- DELETE and TRUNCATE have no column form and stay table-level.
+  -- DELETE has no column form and stays table-level.
+  --
+  -- TWO privileges the base-table block above DOES test are deliberately absent
+  -- from this one, and the omissions are not oversights:
+  --
+  --   TRUNCATE — rules do not rewrite it and a view cannot be truncated, so it
+  --     has no route from a rewriting relation to a quote_versions row. Direct
+  --     TRUNCATE on the table itself is covered above.
+  --
+  --   TRIGGER — this is the false-positive trap. Per the pg_default_acl note
+  --     below, this project's default privileges grant TRIGGER to authenticated
+  --     on EVERY newly created relation in schema public, so testing it here
+  --     would abort on the first ordinary reporting view somebody adds, whether
+  --     or not it can write anything. It is also not a write path on its own:
+  --     getting a row into quote_versions through a rewriting relation still
+  --     requires one of the privileges tested above. The predicate copy of this
+  --     branch carries the same exclusion for the same reason — change them
+  --     together or they will disagree.
   --
   -- No such object exists today (no CREATE VIEW and no CREATE RULE over
   -- quote_versions anywhere in supabase/migrations/), so this is a gap in the
@@ -977,8 +1095,16 @@ BEGIN
   -- back as. Read live read-only while writing this — pg_default_acl carries two
   -- entries for tables in schema public:
   --
-  --   grantor supabase_admin: anon=arwdDxtm, authenticated=arwdDxtm, service_role
-  --   grantor postgres:       anon=rm,       authenticated=arwdDxtm, service_role
+  --   grantor supabase_admin:
+  --     postgres=arwdDxtm, anon=arwdDxtm, authenticated=arwdDxtm,
+  --     service_role=arwdDxtm
+  --   grantor postgres:
+  --     postgres=arwdDxtm, anon=rm, authenticated=arwdDxtm,
+  --     service_role=arwdDxtm, metabase_ro=r
+  --
+  -- Transcribed in full on purpose. An earlier revision listed only the two
+  -- browser roles, which reads as though the entries contain nothing else and
+  -- invites a later reader to "complete" them from memory.
   --
   -- So a DROP + CREATE of quote_versions returns a table that authenticated can
   -- write in full (and anon too, if supabase_admin creates it), with every
