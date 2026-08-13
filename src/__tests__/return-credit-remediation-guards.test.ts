@@ -141,6 +141,7 @@ function assertInvariantGuards(predicateText: string) {
     "pg_get_userbyid(p.proowner) = 'postgres'",
     "NOT has_function_privilege('service_role', p.oid, 'EXECUTE')",
   ]) expect(predicateText).toContain(anchor);
+  expect(predicateText.match(/AND pg_get_userbyid\(p\.proowner\) = 'postgres'/g)).toHaveLength(3);
 }
 
 function assertLifecycleInvariantComposition(predicateText: string) {
@@ -356,6 +357,19 @@ describe('return/credit remediation durable guards', () => {
       expect(schemaDoc).toMatch(new RegExp(`\\b${column}\\b`));
     }
     expect(schemaDoc).not.toContain('return_type, reason_category');
+  });
+
+  it('mutation-kills protected reversal and snapshot owner pins', () => {
+    const ownerAnchor = "AND pg_get_userbyid(p.proowner) = 'postgres'";
+    const parts = predicate.split(ownerAnchor);
+    expect(parts).toHaveLength(4);
+    for (let occurrence = 1; occurrence <= 3; occurrence += 1) {
+      const mutated = parts.map((part, index) => index === 0
+        ? part
+        : `${index === occurrence ? '__REMOVED_OWNER_GUARD__' : ownerAnchor}${part}`
+      ).join('');
+      expect(() => assertInvariantGuards(mutated)).toThrow();
+    }
   });
 
   it('mutation-kills every apply-time shared-helper contract pin', () => {

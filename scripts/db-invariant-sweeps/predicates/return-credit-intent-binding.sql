@@ -85,6 +85,7 @@ SELECT 'return-credit-reversal:due-date-status' AS violation_key,
    SELECT 1
      FROM pg_proc p
     WHERE p.oid = to_regprocedure('public._reverse_credit_memo_application(uuid,uuid,text,text)')
+      AND pg_get_userbyid(p.proowner) = 'postgres'
       AND encode(sha256(convert_to(replace(p.prosrc, E'\r\n', E'\n'), 'UTF8')), 'hex') = (
         SELECT body_sha256 FROM protected_expected
          WHERE signature = '_reverse_credit_memo_application(uuid,uuid,text,text)'
@@ -104,6 +105,7 @@ SELECT 'return-credit-reversal:snapshot-suppression' AS violation_key,
    SELECT 1
      FROM pg_proc p
     WHERE p.oid = to_regprocedure('public.snapshot_invoice_line_shares_on_post()')
+      AND pg_get_userbyid(p.proowner) = 'postgres'
       AND encode(sha256(convert_to(replace(p.prosrc, E'\r\n', E'\n'), 'UTF8')), 'hex') = (
         SELECT body_sha256 FROM protected_expected
          WHERE signature = 'snapshot_invoice_line_shares_on_post()'
