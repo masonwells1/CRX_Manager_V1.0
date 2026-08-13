@@ -136,7 +136,7 @@ describe('Returns loading and retry behavior', () => {
       createCalls += 1;
       if (createCalls === 1) serverState.setReturnableQuantity(4);
       return Promise.resolve(createCalls === 1
-        ? { data: null, error: new Error('network response lost after commit') }
+        ? { data: null, error: { code: 'ECONNRESET', message: 'network response lost after commit' } }
         : { data: { return_id: 'return-1', return_number: 'RMA-1', item_count: 1 }, error: null });
     });
 

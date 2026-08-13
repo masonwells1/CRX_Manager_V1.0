@@ -43,15 +43,38 @@ export function legacyIntentChanged(
   return previous?.key === current.key && previous.intent !== current.intent;
 }
 
+// Class 08 (connection_exception, e.g. 08007 transaction_resolution_unknown)
+// is deliberately excluded: the server may have committed before the link
+// dropped, so a connection-class code can never be a definitive refusal.
+const POSTGRES_SQLSTATE = /^(?:0[1-7]|0[9A-Z]|20|21|22|23|24|25|26|27|28|2B|2D|2F|34|38|39|3B|3D|3F|40|42|44|53|54|55|57|58|F0|HV|P0|XX)[0-9A-Z]{3}$/;
+// Individually ambiguous codes inside otherwise-definitive classes: the
+// statement/connection outcome is unknown, or the connection was torn down
+// mid-statement.
+const UNCERTAIN_SQLSTATE = new Set(['40003', '57P01', '57P02', '57P03']);
+// PGRST0xx are connection/pool-level failures (server unreachable, pool
+// exhausted, schema cache reload) that can occur after a statement already
+// committed; only PGRST1xx+ (request/query/auth-shape refusals) are definitive.
+const POSTGREST_ERROR_CODE = /^PGRST(?:[1-9]\d{2})$/;
+
 /**
- * PostgREST supplies a nonblank database/error code only after the server has
- * returned a definitive refusal. Fetch/transport failures have no code, so
- * their commit outcome remains uncertain and the retry key must be retained.
+ * Returns true only for a positively identified PostgreSQL/PostgREST refusal.
+ * Runtime/transport libraries frequently attach nonblank codes (ECONNRESET,
+ * ETIMEDOUT, and similar) even when the server committed before the response
+ * was lost. Those outcomes stay uncertain, so their original key is retained.
+ * A corrupt/missing receipt is uncertain for the same reason: an earlier
+ * mutation may have committed even though its replay receipt is unusable.
  */
 export function isDefinitiveRpcRejection(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
-  const code = (error as { code?: unknown }).code;
-  return typeof code === 'string' && code.trim().length > 0;
+  const candidate = error as { code?: unknown; message?: unknown };
+  if (
+    candidate.message === 'IDEMPOTENCY_RESULT_INVALID'
+    || candidate.message === 'IDEMPOTENCY_RECEIPT_MISSING'
+  ) return false;
+  if (typeof candidate.code !== 'string') return false;
+  const code = candidate.code.trim().toUpperCase();
+  if (UNCERTAIN_SQLSTATE.has(code)) return false;
+  return POSTGRES_SQLSTATE.test(code) || POSTGREST_ERROR_CODE.test(code);
 }
 
 /**

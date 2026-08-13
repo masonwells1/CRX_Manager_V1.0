@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 const root = process.cwd();
 const migration = readFileSync(path.join(root, 'supabase/migrations/20260812130145_bind_return_receipts_to_intent_and_restore_overdue.sql'), 'utf8');
+const helperGuardMigration = readFileSync(path.join(root, 'supabase/migrations/20260813070000_pin_return_idempotency_helper_contract.sql'), 'utf8');
 const predicate = readFileSync(path.join(root, 'scripts/db-invariant-sweeps/predicates/return-credit-intent-binding.sql'), 'utf8');
 const lifecyclePredicate = readFileSync(path.join(root, 'scripts/db-invariant-sweeps/predicates/returns-lifecycle-rpc-owned.sql'), 'utf8');
 const returnsSource = readFileSync(path.join(root, 'src/pages/Returns.tsx'), 'utf8').replace(/\r\n/g, '\n');
@@ -104,6 +105,7 @@ function assertExecutableProofGuards(smokeText: string, proverText: string) {
   expect(proverText).toContain('const preApplyViolations = psqlValue');
   expect(proverText).toContain("if (preApplyViolations !== '0')");
   expect(proverText).toContain('RETURN_CREDIT_POSTAPPLY_LIVE_PASS');
+  expect(proverText).toContain("apply('helper-guard.sql')");
 }
 
 function assertInvariantGuards(predicateText: string) {
@@ -111,7 +113,10 @@ function assertInvariantGuards(predicateText: string) {
     "OR NOT has_function_privilege('authenticated', a.oid, 'EXECUTE')",
     "OR a.function_owner IS DISTINCT FROM 'postgres'",
     "OR has_function_privilege('service_role', a.oid, 'EXECUTE')",
-    "has_function_privilege('authenticated', 'public.check_idempotency_intent(text,text,uuid,text)', 'EXECUTE')",
+    "'check_idempotency_intent(text,text,uuid,text)', '71b8a6a0b53f2234a0808b1270eaa06b3c8bf0e7d2523fc429c88e5c479407c8'",
+    "p.proname = 'check_idempotency_intent') <> 1",
+    "pg_get_userbyid(p.proowner) = 'postgres'",
+    "NOT has_function_privilege('service_role', p.oid, 'EXECUTE')",
   ]) expect(predicateText).toContain(anchor);
 }
 
@@ -296,6 +301,7 @@ describe('return/credit remediation durable guards', () => {
       'const preApplyViolations = psqlValue',
       "if (preApplyViolations !== '0')",
       'RETURN_CREDIT_POSTAPPLY_LIVE_PASS',
+      "apply('helper-guard.sql')",
     ]) {
       const mutated = realSchemaProver.split(anchor).join('__REMOVED_GUARD__');
       expect(() => assertExecutableProofGuards(smoke, mutated)).toThrow();
@@ -308,7 +314,10 @@ describe('return/credit remediation durable guards', () => {
       "OR NOT has_function_privilege('authenticated', a.oid, 'EXECUTE')",
       "OR a.function_owner IS DISTINCT FROM 'postgres'",
       "OR has_function_privilege('service_role', a.oid, 'EXECUTE')",
-      "has_function_privilege('authenticated', 'public.check_idempotency_intent(text,text,uuid,text)', 'EXECUTE')",
+      "'check_idempotency_intent(text,text,uuid,text)', '71b8a6a0b53f2234a0808b1270eaa06b3c8bf0e7d2523fc429c88e5c479407c8'",
+      "p.proname = 'check_idempotency_intent') <> 1",
+      "pg_get_userbyid(p.proowner) = 'postgres'",
+      "NOT has_function_privilege('service_role', p.oid, 'EXECUTE')",
     ]) {
       const mutated = predicate.split(anchor).join('__REMOVED_GUARD__');
       expect(() => assertInvariantGuards(mutated)).toThrow();
@@ -321,6 +330,23 @@ describe('return/credit remediation durable guards', () => {
       expect(schemaDoc).toMatch(new RegExp(`\\b${column}\\b`));
     }
     expect(schemaDoc).not.toContain('return_type, reason_category');
+  });
+
+  it('mutation-kills every apply-time shared-helper contract pin', () => {
+    for (const anchor of [
+      "p.proname = 'check_idempotency_intent') <> 1",
+      "'71b8a6a0b53f2234a0808b1270eaa06b3c8bf0e7d2523fc429c88e5c479407c8'",
+      "pg_get_userbyid(p.proowner) = 'postgres'",
+      'AND p.prosecdef',
+      "p.proconfig = ARRAY['search_path=public, pg_temp']::text[]",
+      "NOT has_function_privilege('anon', p.oid, 'EXECUTE')",
+      "NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')",
+      "NOT has_function_privilege('service_role', p.oid, 'EXECUTE')",
+    ]) {
+      expect(helperGuardMigration).toContain(anchor);
+      expect(sha256(helperGuardMigration.replace(anchor, '__REMOVED_GUARD__')))
+        .not.toBe(sha256(helperGuardMigration));
+    }
   });
 
   it('keeps the canonical chain in billing, inventory, idempotency, and security slices', () => {

@@ -16,7 +16,8 @@ WITH expected(signature, body_sha256) AS (
 ), protected_expected(signature, body_sha256) AS (
   VALUES
     ('_reverse_credit_memo_application(uuid,uuid,text,text)', '744c48493d549f9bc2297270bfdc0977935a4f29ed44fe2e336c8a6fce6ecbf8'),
-    ('snapshot_invoice_line_shares_on_post()', 'f12078a7b476444df206f0e9baa21fff26ee5cda9ef6a96dabf772909984f42a')
+    ('snapshot_invoice_line_shares_on_post()', 'f12078a7b476444df206f0e9baa21fff26ee5cda9ef6a96dabf772909984f42a'),
+    ('check_idempotency_intent(text,text,uuid,text)', '71b8a6a0b53f2234a0808b1270eaa06b3c8bf0e7d2523fc429c88e5c479407c8')
 ), public_actual AS (
   SELECT p.oid,
          p.oid::regprocedure::text AS signature,
@@ -116,9 +117,23 @@ SELECT 'return-credit-reversal:snapshot-suppression' AS violation_key,
 
 UNION ALL
 
-SELECT 'check_idempotency_intent:browser-execute' AS violation_key,
-       'receipt-binding helper is missing or executable by a PostgREST role' AS reason
- WHERE to_regprocedure('public.check_idempotency_intent(text,text,uuid,text)') IS NULL
-    OR has_function_privilege('anon', 'public.check_idempotency_intent(text,text,uuid,text)', 'EXECUTE')
-    OR has_function_privilege('authenticated', 'public.check_idempotency_intent(text,text,uuid,text)', 'EXECUTE')
-    OR has_function_privilege('service_role', 'public.check_idempotency_intent(text,text,uuid,text)', 'EXECUTE');
+SELECT 'check_idempotency_intent:contract' AS violation_key,
+       'receipt-binding helper body, overload count, owner, security mode, search path, or grants drifted' AS reason
+ WHERE (SELECT count(*) FROM pg_proc p
+         WHERE p.pronamespace = 'public'::regnamespace
+           AND p.proname = 'check_idempotency_intent') <> 1
+    OR NOT EXISTS (
+      SELECT 1
+        FROM pg_proc p
+       WHERE p.oid = to_regprocedure('public.check_idempotency_intent(text,text,uuid,text)')
+         AND encode(sha256(convert_to(replace(p.prosrc, E'\r\n', E'\n'), 'UTF8')), 'hex') = (
+           SELECT body_sha256 FROM protected_expected
+            WHERE signature = 'check_idempotency_intent(text,text,uuid,text)'
+         )
+         AND pg_get_userbyid(p.proowner) = 'postgres'
+         AND p.prosecdef
+         AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+         AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')
+         AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')
+         AND NOT has_function_privilege('service_role', p.oid, 'EXECUTE')
+    );

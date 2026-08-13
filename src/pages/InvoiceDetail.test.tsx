@@ -167,7 +167,7 @@ describe('InvoiceDetail', () => {
       applyCalls += 1;
       if (applyCalls === 1) creditState.setCreditBalanceCents(-2000);
       return Promise.resolve(applyCalls === 1
-        ? { data: null, error: { message: 'network response lost after commit' } }
+        ? { data: null, error: { code: 'ETIMEDOUT', message: 'network response lost after commit' } }
         : { data: { application_id: 'application-1' }, error: null });
     });
 
