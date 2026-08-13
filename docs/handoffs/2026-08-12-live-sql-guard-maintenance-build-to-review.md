@@ -19,10 +19,10 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
 
 - The current source blob is pinned to `c8bec70830c643e474831985f5e6c3bd16630386`.
 - `node scripts/apply-live-testdata-maintenance-20260812.mjs --verify` produced pinned output blob
-  `63847a7b32c6ab57f042dfdec8be8fc3ce600eae`, matched all three snippet SHA-256 values, and passed a
+  `3ed5d18111a21f4949b392ff162fa347b1b1fdce`, matched all three snippet SHA-256 values, and passed a
   Node module syntax check without changing the repository target.
-- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 70 assertions against the
-  generated module, including all classifier defect classes found by the first sixteen Sol reviews.
+- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 74 assertions against the
+  generated module, including all classifier defect classes found by the first seventeen Sol reviews.
 - The write mode refused the dirty build worktree even with Mason's dated token.
 - Current recovery proof passed ESLint, TypeScript typecheck, production build, all 4,466 executed
   Vitest assertions (123 skipped), all agent-workflow tests, agent health, dependency integrity,
@@ -127,6 +127,11 @@ any later live migration apply still requires the repository's current explicit 
   a same-named temporary view already exists, yet the classifier still granted that name a later DML
   exemption. Only unconditional direct CTAS creation now earns the exemption, and the exact updatable
   view collision is pinned. A fresh exact-head review remains required.
+- The seventeenth exact-head Sol review found that `EXPLAIN ANALYZE` executes its wrapped command even
+  though the classifier treated every `EXPLAIN` statement as read-only. This maintenance surface now
+  rejects all `EXPLAIN` statements rather than approximating PostgreSQL's option grammar. Table CTAS,
+  materialized-view CTAS, option-bearing, and prepared-command forms are pinned. A fresh exact-head
+  review remains required.
 - GitHub checks and CodeRabbit must be complete and acceptable on the exact PR head.
 
 ## FIRST ACTION

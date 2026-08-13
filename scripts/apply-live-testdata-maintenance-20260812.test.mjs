@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { buildMaintainedSource } from "./apply-live-testdata-maintenance-20260812.mjs";
 
 const { output, blob } = buildMaintainedSource();
-assert.equal(blob, "63847a7b32c6ab57f042dfdec8be8fc3ce600eae", "pinned generated blob");
+assert.equal(blob, "3ed5d18111a21f4949b392ff162fa347b1b1fdce", "pinned generated blob");
 
 const scratch = mkdtempSync(path.join(tmpdir(), "crx-live-guard-candidate-test-"));
 try {
@@ -82,6 +82,10 @@ try {
     "SELECT pg_catalog.U&\"\\006c\\006f\\005f\\0063\\0072\\0065\\0061\\0074\\0065\"(0)",
     "SELECT public.U&\"\\0063\\0061\\006e\\0063\\0065\\006c\\005f\\006f\\0072\\0064\\0065\\0072\"('00000000-0000-0000-0000-000000000000')",
     "BEGIN; CREATE VIEW pg_temp.guard_probe AS SELECT customer_id, created_by FROM public.invoices; CREATE TEMP TABLE IF NOT EXISTS guard_probe AS SELECT 1; INSERT INTO pg_temp.guard_probe SELECT c.id, p.id FROM public.customers c CROSS JOIN public.profiles p LIMIT 1; ROLLBACK;",
+    "EXPLAIN ANALYZE CREATE TABLE public.guard_bypass AS SELECT * FROM public.customers;",
+    "EXPLAIN ANALYZE CREATE MATERIALIZED VIEW public.guard_bypass AS SELECT * FROM public.customers;",
+    "EXPLAIN (ANALYZE TRUE, BUFFERS TRUE) CREATE TABLE public.guard_bypass AS SELECT * FROM public.customers;",
+    "EXPLAIN (ANALYZE TRUE) EXECUTE prepared_mutator('00000000-0000-0000-0000-000000000000');",
   ];
   for (const sql of blocked) {
     assert.equal(classifySql(sql).block, true, `must block: ${sql}`);
