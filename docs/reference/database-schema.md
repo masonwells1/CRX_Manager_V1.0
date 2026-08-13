@@ -1,6 +1,6 @@
-# Database Schema Reference (156 tables + 2 views)
+# Database Schema Reference (157 tables + 2 views)
 
-> Count as of 2026-08-09, verified live against Supabase project `rhyzpcqhnizqbxphqdkr` (`SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'` / `'VIEW'`). The per-table sections below are a curated tour, not an exhaustive enumeration of all 156 tables; **`.claude/schema-registry.json`** is the machine-readable source of truth for current columns, constraints, and enum values — prefer it over this prose doc when a fact is load-bearing.
+> Count as of 2026-08-12, verified live against Supabase project `rhyzpcqhnizqbxphqdkr` (`SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'` / `'VIEW'`). The per-table sections below are a curated tour, not an exhaustive enumeration of all 157 tables; **`.claude/schema-registry.json`** is the machine-readable source of truth for current columns, constraints, and enum values — prefer it over this prose doc when a fact is load-bearing.
 
 ## Core Business
 - `profiles` - Users (id refs auth.users, email, full_name, role, phone, is_active, applicator_license_number, faa_certificate_number)
@@ -20,13 +20,14 @@
 ## Quotes & Orders
 - `quotes` - Quote headers (quote_number, customer_id, status, tier, totals, is_planned, expires_at; **LOCAL ONLY pending apply:** `row_version bigint`). After application, the trigger increments the stored version on every quote update; clients use the value returned by `save_quote`, never calculate an increment. The compatible frontend ships before this migration; cached pre-migration bundles must refresh after apply.
 - `quote_sections` - Sections within a quote (section_name, sort_order, field_id)
-- `quote_items` - Line items (product_id, section_id, pricing, rates, acres, totals)
+- `quote_items` - Line items (product_id, section_id, pricing, rates, acres, totals, immutable `cost_at_quote_cents` quote-time cost snapshot; applied migration `20260812151606`, submitted as `20260812115236`)
 - `quote_versions` - Frozen snapshots of sent quotes (version_number, snapshot_data jsonb)
 - `quote_product_draws` - Per-(quote, product) booking draw-down ledger (quantity_drawn, UNIQUE(quote_id, product_id)). Survives quote edits (save_quote recreates quote_items); written only by `draw_down_quote`/`convert_quote_to_order` SECDEF RPCs. Added `20260610145253`
 - `quote_pdf_templates` - Saved column presets for quote PDF generation (template_name, columns jsonb)
 - `quote_templates` - Reusable quote structures (template_name, description, created_by)
 - `orders` - Confirmed orders (order_number, status, totals, order_date, customer_po_number, is_planned, season, program_notes). Note: `total_paid`/`balance_due` columns were DROPPED — AR is tracked via `invoices.balance_cents`.
 - `order_items` - Order line items (quantity_delivered, quantity_remaining, notes, **cost_at_time_cents** bigint — snapshot of `products.current_cost` at insert time, populated by `trg_snapshot_order_item_cost` BEFORE INSERT trigger; migration 20260513050000, audit #32)
+- `below_cost_approvals` - **LIVE (`20260812154028`, submitted as `20260812115237`)** immutable audit for active-admin below-cost overrides (operation, entity/line/product identity, actor, reason, locked current unit cost, sale unit price, quantity and total shortfall cents). Admin-readable only; no authenticated INSERT/UPDATE/DELETE policy; PostgreSQL trigger is the sole writer in the same transaction as the sale.
 - `payments` - Legacy payment records (DEPRECATED — use allocation_sets + invoice_line_allocations instead)
 - `commissions` - Per-order OR per-job per-recipient (split_percentage, commission_amount numeric dollars, status CHECK: pending/paid/cancelled, paid_date). **U8 (migration `20260707060000`, APPLIED LIVE 2026-07-06):** `order_id` is now nullable; new nullable `job_id`/`invoice_id` FKs give application-channel (job) commissions the same lineage orders always had — `chk_commission_source` CHECK requires at least one of order_id/job_id. `invoice_id` is generation-precise: it's the exact field_application invoice that minted a job commission, so reversal/payout-liveness checks key on it (not job-level liveness, which can't tell an old generation from a fresh one across a void→re-invoice cycle). Partial indexes on both new columns.
 
@@ -231,6 +232,7 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | prepay_credits | Admin / Sales Rep | Admin / Sales Rep | Admin | - |
 | prepay_applications | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
 | financial_audit_log | Admin | All authenticated | - | - |
+| below_cost_approvals | Admin | - | - | - |
 | blend_recipes | All authenticated | Admin / Sales Rep | Admin / Sales Rep | Admin |
 | blend_recipe_items | All authenticated | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
 | blend_ticket_to_order_items | All authenticated | Admin / Sales Rep | - | Admin |

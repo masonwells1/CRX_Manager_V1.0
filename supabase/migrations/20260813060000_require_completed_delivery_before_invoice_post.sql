@@ -280,7 +280,7 @@
 -- show a small gap in a generated number. That is cosmetic and expected.
 --
 -- The probe uses three transaction-local settings and clears all three:
---   * `request.jwt.claims` stands in for a signed-in admin session.
+--   * `request.jwt.claim.sub` stands in for a signed-in admin session.
 --   * `app.admin_override` is set ONLY around the delivery-status UPDATEs that
 --     move a row away from completed or into in_progress. It does NOT bypass the
 --     new completion-provenance guard. The authorized RPC itself sets and clears
@@ -1311,8 +1311,9 @@ BEGIN
   SELECT md5(to_jsonb(d)::text) INTO v_row_del_before
     FROM public.deliveries d WHERE d.id = v_delivery_id;
 
+  -- APPROVED_SET_DIGEST: ROLLBACK-PROBE (deliveries, invoices) - the real completion/post allow-and-deny mutations are enclosed by PROBE_OK_ROLLBACK; exact whole-row hashes are checked afterward
   BEGIN
-    EXECUTE format('SET LOCAL request.jwt.claims = %L', json_build_object('sub', v_admin_id)::text);
+    EXECUTE format('SET LOCAL request.jwt.claim.sub = %L', v_admin_id::text);
 
     -- (a) A delivery that has not happened yet must refuse the post. 'scheduled'
     -- is the exact quick-delivery shape and the whole reason this migration
@@ -1448,13 +1449,13 @@ BEGIN
       RAISE EXCEPTION 'POSTCOND PROBE: the allowed post left the invoice at "%" rather than posted', v_status;
     END IF;
 
-    PERFORM set_config('request.jwt.claims', '', true);
+    PERFORM set_config('request.jwt.claim.sub', '', true);
     PERFORM set_config('app.admin_override', 'false', true);
     PERFORM set_config('crx.delivery_completion_authorized', '', true);
     RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'PROBE_OK_ROLLBACK';
   EXCEPTION
     WHEN OTHERS THEN
-      PERFORM set_config('request.jwt.claims', '', true);
+      PERFORM set_config('request.jwt.claim.sub', '', true);
       PERFORM set_config('app.admin_override', 'false', true);
       PERFORM set_config('crx.delivery_completion_authorized', '', true);
       IF SQLERRM <> 'PROBE_OK_ROLLBACK' THEN RAISE; END IF;

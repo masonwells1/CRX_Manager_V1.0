@@ -718,11 +718,15 @@ export interface QuoteItem {
   price_per_unit: number;
   price_override: number | null;
   current_cost: number;
-  // Immutable as-of-quote cost snapshot (20260812115236), mirroring
-  // order_items.cost_at_time_cents. Trigger-stamped on insert and never
-  // written by the browser. NULL only on a legacy row whose product carried
-  // a NULL current_cost at backfill time. Optional because partial projections
-  // may omit it; the column is server-managed and the browser never writes it.
+  /**
+   * Immutable snapshot of `products.current_cost` (cents, rounded) at the
+   * moment this line was first quoted. Preserved across save_quote's
+   * delete+reinsert; NULL only when the product's current_cost is NULL at
+   * stamp time. Populated by trg_snapshot_quote_item_cost trigger.
+   * See applied migration 20260812151606 (submitted as 20260812115236;
+   * mirrors order_items.cost_at_time_cents). Optional because partial
+   * projections may omit it; the browser never writes this server field.
+   */
   cost_at_quote_cents?: number | null;
   suggested_rate: string | null;
   actual_rate: number | null;

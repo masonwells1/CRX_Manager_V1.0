@@ -11,6 +11,7 @@
 // to .env, explicitly called for by the audit) and the npm-script-indirection helpers.
 
 import { readFileSync, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 
 // Ordered [pattern, reason] checks. First match wins. Verbatim from the
@@ -100,6 +101,80 @@ export function checkDestructiveSql(cmd) {
   if (/\b(?:DROP\s+TABLE|DROP\s+SCHEMA|TRUNCATE)\b/i.test(text) && /(psql|supabase\s+sql|--?c\s)/i.test(text)) {
     return "Blocked destructive SQL via psql/supabase. Add a migration instead.";
   }
+  return null;
+}
+
+// Population-bound one-shot DATA migrations are not safe to replay against a
+// restored or drifted database. The Supabase MCP apply path has its own
+// ledger-aware refusal in migration-apply-guard.mjs; this closes the sibling
+// shell path (`psql -f`, `Get-Content ... | psql`, `supabase sql`, etc.).
+//
+// Match three forms so renaming the file is not an escape hatch:
+//   1. the registered migration stem appears in the database command;
+//   2. any referenced .sql file is byte-identical to the registered source;
+//   3. the full registered SQL body is pasted directly into the command.
+//
+// This is deliberately fail-closed for database-execution commands when the
+// tracked registry cannot be read. A broken registry must not silently disable
+// the guard exactly when an operator is about to execute SQL.
+export function checkOneShotReplayCommand(cmd, cwd) {
+  const text = String(cmd || "");
+  if (!text || !/\b(?:psql|supabase\s+(?:sql|db\s+execute))\b/i.test(text)) return null;
+
+  const base = cwd || process.cwd();
+  const registryPath = path.join(base, "supabase", "baselines", "one-shot-migrations.json");
+  let stems;
+  try {
+    const parsed = JSON.parse(readFileSync(registryPath, "utf8"));
+    if (!parsed?.one_shot || typeof parsed.one_shot !== "object") {
+      throw new Error("no `one_shot` map");
+    }
+    stems = Object.keys(parsed.one_shot);
+  } catch (err) {
+    return `Blocked database SQL execution because the one-shot migration registry at ${registryPath} is unreadable (${err?.message || err}). Restore the tracked registry before running psql/Supabase SQL.`;
+  }
+
+  const normalizeSql = (value) => String(value || "")
+    .toLowerCase()
+    .replace(/--[^\n]*/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const normalizedCommand = normalizeSql(text);
+
+  // Extract path-like .sql tokens from common Bash and PowerShell spellings.
+  // Quoted paths with spaces are handled; bare paths stop at shell separators.
+  const referencedSql = new Set();
+  const pathRe = /(?:["']([^"']+\.sql)["']|([^\s'";&|<>]+\.sql))/gi;
+  let match;
+  while ((match = pathRe.exec(text)) !== null) {
+    const candidate = (match[1] || match[2] || "").trim();
+    if (candidate) referencedSql.add(path.isAbsolute(candidate) ? candidate : path.resolve(base, candidate));
+  }
+
+  for (const stem of stems) {
+    const sourcePath = path.join(base, "supabase", "migrations", `${stem}.sql`);
+    let source;
+    try {
+      source = readFileSync(sourcePath, "utf8");
+    } catch (err) {
+      return `Blocked database SQL execution because registered one-shot migration ${stem} cannot be read at ${sourcePath} (${err?.message || err}). Restore the immutable applied migration before running psql/Supabase SQL.`;
+    }
+
+    const reason = `Blocked direct replay of registered one-shot DATA migration ${stem}. Its approval was bound to one historical production population; use the ledger-aware migration-review/apply path, and obtain Mason's explicit approval for any deliberate replay.`;
+    if (text.toLowerCase().includes(stem.toLowerCase())) return reason;
+
+    const sourceHash = createHash("sha256").update(source).digest("hex");
+    for (const candidate of referencedSql) {
+      try {
+        const candidateHash = createHash("sha256").update(readFileSync(candidate)).digest("hex");
+        if (candidateHash === sourceHash) return reason;
+      } catch { /* an unreadable unrelated path is not evidence of a replay */ }
+    }
+
+    const normalizedSource = normalizeSql(source);
+    if (normalizedSource && normalizedCommand.includes(normalizedSource)) return reason;
+  }
+
   return null;
 }
 
@@ -205,6 +280,9 @@ export function readPackageScripts(cwd) {
 // (only if clean) every `npm run X` target's resolved script body, recursively.
 // Returns the first matching reason, or null.
 export function checkCommandDeep(cmd, cwd) {
+  const oneShot = checkOneShotReplayCommand(cmd, cwd);
+  if (oneShot) return oneShot;
+
   const direct = checkDangerousCommand(cmd);
   if (direct) return direct;
 
@@ -226,7 +304,9 @@ export function checkCommandDeep(cmd, cwd) {
       // existing migration is as dangerous as one that force-pushes (Codex P1
       // 2026-07-13: only checkDangerousCommand ran here, so npm indirection
       // still bypassed the migration-immutability guard).
-      const reason = checkDangerousCommand(resolved) || checkMigrationModify(resolved, cwd);
+      const reason = checkOneShotReplayCommand(resolved, cwd)
+        || checkDangerousCommand(resolved)
+        || checkMigrationModify(resolved, cwd);
       if (reason) return `${reason} (found inside \`npm run ${name}\`'s script body)`;
     }
   }

@@ -10,6 +10,7 @@ import { CRX_GREEN, CHARCOAL, GRAY, type JsPDFWithAutoTable } from './pdfTheme';
 import type { autoTable as autoTableFn } from 'jspdf-autotable';
 import { COMPANY_FOOTER_THANKS } from './companyInfo';
 import { formatUSD as fmtMoney } from './money';
+import { stripInternalNotes } from './internalNotes';
 
 
 
@@ -149,15 +150,19 @@ function renderOrderSummaryPage(
   doc.text(fmtMoney(data.total_price), pageW - margin, y, { align: 'right' });
   y += 20;
 
-  // Notes
-  if (data.notes) {
+  // Notes. This document is customer-facing, and it is reached from both the
+  // order detail page and the Orders page batch action. Redacting here rather
+  // than at each call site means a new caller cannot forget and leak an
+  // internal below-cost approval reason; see src/lib/internalNotes.ts.
+  const visibleNotes = stripInternalNotes(data.notes);
+  if (visibleNotes) {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(9);
     doc.setTextColor(...CHARCOAL);
     doc.text('NOTES', margin, y);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(...GRAY);
-    const lines = doc.splitTextToSize(data.notes, pageW - margin * 2);
+    const lines = doc.splitTextToSize(visibleNotes, pageW - margin * 2);
     doc.text(lines, margin, y + 14);
     y += lines.length * 12 + 24;
   }

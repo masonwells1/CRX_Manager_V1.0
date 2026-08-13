@@ -1,4 +1,9 @@
 -- Rolled-back business proof for the final 2026-07-14 money/inventory hardening.
+-- Product fixtures bypass the unrelated governed-pricing write trigger inside
+-- this transaction; the terminal pass exception restores it with all fixtures.
+BEGIN;
+ALTER TABLE public.products DISABLE TRIGGER USER;
+
 DO $smoke$
 DECLARE
   v_admin uuid;
@@ -11,6 +16,9 @@ DECLARE
   v_before_dashboard jsonb;
   v_after_dashboard jsonb;
   v_dashboard_key text;
+  v_group_by text;
+  v_group_key text;
+  v_profit record;
   v_qty numeric;
   v_received numeric;
   v_count bigint;
@@ -27,6 +35,7 @@ BEGIN
 
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
   SELECT financial_dashboard_summary()
     INTO v_before_dashboard;
@@ -52,6 +61,43 @@ BEGIN
   );
   -- Use the real lifecycle path: confirmed -> fulfilled, then the audited void RPC.
   UPDATE orders SET status = 'fulfilled' WHERE id = v_order;
+
+  -- Positive control for the new canonical profitability RPC. Every grouping
+  -- must settle the same line revenue/cost basis before the void exclusion is
+  -- tested below; a query that simply returns no rows must not pass this smoke.
+  FOREACH v_group_by IN ARRAY ARRAY['customer', 'product', 'month'] LOOP
+    v_group_key := CASE v_group_by
+      WHEN 'customer' THEN '[SMOKE] Voided Sales ' || v_suffix
+      WHEN 'product' THEN '[SMOKE] Voided Product ' || v_suffix
+      ELSE to_char(CURRENT_DATE, 'YYYY-MM')
+    END;
+    SELECT * INTO v_profit
+    FROM get_profitability_report(v_group_by, CURRENT_DATE, CURRENT_DATE)
+    WHERE group_key = v_group_key;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: profitability % grouping omitted active control row %',
+        v_group_by, v_group_key;
+    END IF;
+    IF ROW(
+         v_profit.total_revenue,
+         v_profit.total_cost,
+         v_profit.total_profit,
+         v_profit.margin_pct,
+         v_profit.order_count,
+         v_profit.units_sold
+       ) IS DISTINCT FROM ROW(
+         1000::numeric,
+         400::numeric,
+         600::numeric,
+         60.0::numeric,
+         1::bigint,
+         10::numeric
+       ) THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: profitability % grouping returned wrong money/count/units: %',
+        v_group_by, row_to_json(v_profit);
+    END IF;
+  END LOOP;
+
   PERFORM void_order(
     v_order,
     v_admin,
@@ -82,6 +128,21 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: voided order appeared in gross sales';
   END IF;
 
+  FOREACH v_group_by IN ARRAY ARRAY['customer', 'product', 'month'] LOOP
+    v_group_key := CASE v_group_by
+      WHEN 'customer' THEN '[SMOKE] Voided Sales ' || v_suffix
+      WHEN 'product' THEN '[SMOKE] Voided Product ' || v_suffix
+      ELSE to_char(CURRENT_DATE, 'YYYY-MM')
+    END;
+    SELECT count(*) INTO v_count
+    FROM get_profitability_report(v_group_by, CURRENT_DATE, CURRENT_DATE)
+    WHERE group_key = v_group_key;
+    IF v_count <> 0 THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: voided order appeared in profitability % grouping',
+        v_group_by;
+    END IF;
+  END LOOP;
+
   SELECT financial_dashboard_summary()
     INTO v_after_dashboard;
   FOREACH v_dashboard_key IN ARRAY ARRAY[
@@ -103,33 +164,21 @@ BEGIN
     END IF;
   END LOOP;
 
-  -- A sales rep cannot turn on the over-receive escape hatch.
-  PERFORM set_config('request.jwt.claims',
-    json_build_object('sub', v_sales, 'role', 'authenticated')::text, true);
-  BEGIN
-    PERFORM receive_po_items('[]'::jsonb, v_sales, 'smk-po-sales-' || v_suffix, true);
-    RAISE EXCEPTION 'SMOKE_FAIL: sales_rep enabled over-receive';
-  EXCEPTION WHEN OTHERS THEN
-    v_err := SQLERRM;
-    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
-    IF v_err NOT LIKE 'Only an active admin can authorize PO over-receiving%' THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: wrong sales over-receive error: %', v_err;
-    END IF;
-  END;
-
   -- A token for a now-inactive profile is rejected by both inventory and reports.
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
   UPDATE profiles SET is_active = false WHERE id = v_sales;
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_sales, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_sales::text, true);
   BEGIN
     PERFORM receive_po_items('[]'::jsonb, v_sales, 'smk-po-inactive-' || v_suffix, false);
     RAISE EXCEPTION 'SMOKE_FAIL: inactive sales_rep received inventory';
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
     IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
-    IF v_err NOT LIKE 'Only an active admin or sales_rep can receive PO items%' THEN
+    IF v_err NOT LIKE 'Only admin or sales_rep can receive PO items%' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: wrong inactive receive error: %', v_err;
     END IF;
   END;
@@ -145,11 +194,13 @@ BEGIN
   END;
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
   UPDATE profiles SET is_active = true WHERE id = v_sales;
 
   -- Positive control: an active admin can deliberately receive 11 against 10.
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
   INSERT INTO inventory (
     product_id, location, quantity_available, quantity_on_order, quantity_prebooked, unit_size
   ) VALUES (v_product, 'Main Warehouse', 0, 10, 0, 'gal');
@@ -161,10 +212,35 @@ BEGIN
   ) VALUES (v_po, v_product, 10, 0, 40, 'gal')
   RETURNING id INTO v_po_item;
 
+  -- A sales rep cannot authorize a real over-receipt even with a reason.
+  PERFORM set_config('request.jwt.claims',
+    json_build_object('sub', v_sales, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_sales::text, true);
+  BEGIN
+    PERFORM receive_po_items(
+      jsonb_build_array(jsonb_build_object(
+        'po_item_id', v_po_item,
+        'quantity', 11,
+        'over_receive_reason', 'SMOKE sales must not authorize'
+      )),
+      v_sales,
+      'smk-po-sales-over-' || v_suffix,
+      true
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: sales_rep authorized over-receive';
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+    IF v_err LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF v_err NOT LIKE 'OVER_RECEIVE_ADMIN_REQUIRED%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: wrong sales over-receive error: %', v_err;
+    END IF;
+  END;
+
   -- NULL must behave like false, not bypass both boolean guards through SQL's
   -- three-valued logic. A sales rep still cannot over-receive.
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_sales, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_sales::text, true);
   BEGIN
     PERFORM receive_po_items(
       jsonb_build_array(jsonb_build_object(
@@ -185,13 +261,15 @@ BEGIN
   END;
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
   PERFORM receive_po_items(
     jsonb_build_array(jsonb_build_object(
       'po_item_id', v_po_item,
       'quantity', 11,
       'condition', 'good',
-      'notes', 'SMOKE admin-authorized vendor over-shipment'
+      'notes', 'SMOKE admin-authorized vendor over-shipment',
+      'over_receive_reason', 'SMOKE vendor shipped one extra unit'
     )),
     v_admin,
     'smk-po-admin-' || v_suffix,
@@ -223,6 +301,13 @@ BEGIN
        'EXECUTE'
      ) THEN
     RAISE EXCEPTION 'SMOKE_FAIL: anonymous gross-sales execution remains';
+  END IF;
+  IF has_function_privilege(
+       'anon',
+       'public.get_profitability_report(text,date,date)',
+       'EXECUTE'
+     ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: anonymous profitability execution remains';
   END IF;
 
   UPDATE profiles SET is_active = false WHERE id = v_admin;

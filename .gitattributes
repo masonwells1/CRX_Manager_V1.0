@@ -35,10 +35,10 @@ scripts/smoke/fixtures/phase3-live-unapply-credit-memo.sql text eol=lf
 # very drift these files exist to close.
 supabase/migrations/20260812010000_blend_ticket_order_header_runtime_assert.sql text eol=lf
 supabase/migrations/20260812011000_restore_quote_version_whole_cent_money.sql text eol=lf
-supabase/migrations/20260812115235_snapshot_cost_reporting.sql text eol=lf
-supabase/migrations/20260812115236_quote_items_cost_at_quote_snapshot.sql text eol=lf
-supabase/migrations/20260812115237_enforce_below_cost_admin_approval.sql text eol=lf
-supabase/migrations/20260812115238_repair_historical_order_line_cents.sql text eol=lf
+supabase/migrations/20260812145628_snapshot_cost_reporting.sql text eol=lf
+supabase/migrations/20260812151606_quote_items_cost_at_quote_snapshot.sql text eol=lf
+supabase/migrations/20260812154028_enforce_below_cost_admin_approval.sql text eol=lf
+supabase/migrations/20260812154757_repair_historical_order_line_cents.sql text eol=lf
 
 # Wave A. Not yet applied, but the same rule applies for the same reason, and
 # here it binds BEFORE the first apply rather than after: each of these pins an
@@ -56,6 +56,10 @@ supabase/migrations/20260813030000_reject_non_finite_money_and_quantities.sql te
 supabase/migrations/20260813040000_clamp_negative_commission_remainder.sql text eol=lf
 supabase/migrations/20260813050000_guard_job_commission_split_immutable.sql text eol=lf
 supabase/migrations/20260813060000_require_completed_delivery_before_invoice_post.sql text eol=lf
+
+# Pricing follow-up proved in the same captured-schema chain. Keep its function
+# body bytes stable across Windows and CI even though it carries no live md5 pin.
+supabase/migrations/20260813053545_allocate_multi_price_quote_draws.sql text eol=lf
 
 # Generated clean-rebuild baselines are hash-verified release artifacts.
 supabase/baselines/*.sql  text eol=lf

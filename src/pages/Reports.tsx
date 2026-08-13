@@ -25,6 +25,7 @@ import type {
   ChemicalHistoryRow, CommissionBalanceRow, InventoryCostRow,
   YearEndSummaryData,
 } from '../types';
+import type { Database } from '../types/supabase';
 
 // ─── Category / Tab types ──────────────────────────────────────
 type Category = 'profitability' | 'logbook' | 'financial' | 'operational' | 'year_end';
@@ -78,6 +79,9 @@ interface RevenueSummary {
   profit: number;
   orders: number;
 }
+
+type ProfitabilityReportRow =
+  Database['public']['Functions']['get_profitability_report']['Returns'][number];
 
 // ─── Date preset logic ─────────────────────────────────────────
 // Crop season = October 1 to September 30
@@ -182,56 +186,37 @@ export default function Reports() {
 
   // ─── PROFITABILITY sub-fetchers ────────────────────────────
   const fetchCustomerProfitability = useCallback(async () => {
-    let query = supabase
-      .from('orders')
-      .select('total_price, total_profit, total_margin_pct, customer:customers(farm_name)')
-      .is('deleted_at', null)
-      .in('status', ['confirmed', 'partially_fulfilled', 'fulfilled']);
-    if (startDate) query = query.gte('order_date', startDate);
-    if (endDate) query = query.lte('order_date', endDate);
-    const { data, error } = await query;
-    if (error) { toast('error', 'Failed to load customer profitability.'); return; }
-
-    const grouped: Record<string, CustomerProfit> = {};
-    ((data || []) as Array<{ total_price: number; total_profit: number; total_margin_pct: number; customer: { farm_name: string } | { farm_name: string }[] | null }>).forEach((o) => {
-      const customerJoin = Array.isArray(o.customer) ? o.customer[0] : o.customer;
-      const name = customerJoin?.farm_name || 'Unknown';
-      if (!grouped[name]) grouped[name] = { farm_name: name, total_revenue: 0, total_profit: 0, margin_pct: 0, order_count: 0 };
-      grouped[name].total_revenue += o.total_price || 0;
-      grouped[name].total_profit += o.total_profit || 0;
-      grouped[name].order_count += 1;
+    const { data, error } = await supabase.rpc('get_profitability_report', {
+      p_group_by: 'customer',
+      p_start_date: startDate || undefined,
+      p_end_date: endDate || undefined,
     });
-    const result = Object.values(grouped).map((g) => ({
-      ...g,
-      margin_pct: g.total_revenue > 0 ? (g.total_profit / g.total_revenue) * 100 : 0,
-    }));
-    result.sort((a, b) => b.total_revenue - a.total_revenue);
-    setCustomerData(result);
+    if (error) { toast('error', 'Failed to load customer profitability.'); return; }
+    const rows = assertRpcResult<ProfitabilityReportRow[]>(data, 'get_profitability_report');
+    setCustomerData(rows.map((row) => ({
+      farm_name: row.group_key,
+      total_revenue: row.total_revenue,
+      total_profit: row.total_profit,
+      margin_pct: row.margin_pct,
+      order_count: row.order_count,
+    })));
   }, [startDate, endDate, toast]);
 
   const fetchProductProfitability = useCallback(async () => {
-    let query = supabase
-      .from('order_items')
-      .select('product_name, total_price, profit, total_units_needed, order:orders!inner(order_date)');
-    if (startDate) query = query.gte('order.order_date', startDate);
-    if (endDate) query = query.lte('order.order_date', endDate);
-    const { data, error } = await query;
-    if (error) { toast('error', 'Failed to load product profitability.'); return; }
-
-    const grouped: Record<string, ProductProfit> = {};
-    ((data || []) as Array<{ product_name: string; total_price: number; profit: number; total_units_needed: number }>).forEach((i) => {
-      const name = i.product_name;
-      if (!grouped[name]) grouped[name] = { product_name: name, total_revenue: 0, total_profit: 0, units_sold: 0, margin_pct: 0 };
-      grouped[name].total_revenue += i.total_price || 0;
-      grouped[name].total_profit += i.profit || 0;
-      grouped[name].units_sold += i.total_units_needed || 0;
+    const { data, error } = await supabase.rpc('get_profitability_report', {
+      p_group_by: 'product',
+      p_start_date: startDate || undefined,
+      p_end_date: endDate || undefined,
     });
-    const result = Object.values(grouped).map((g) => ({
-      ...g,
-      margin_pct: g.total_revenue > 0 ? (g.total_profit / g.total_revenue) * 100 : 0,
-    }));
-    result.sort((a, b) => b.total_revenue - a.total_revenue);
-    setProductData(result);
+    if (error) { toast('error', 'Failed to load product profitability.'); return; }
+    const rows = assertRpcResult<ProfitabilityReportRow[]>(data, 'get_profitability_report');
+    setProductData(rows.map((row) => ({
+      product_name: row.group_key,
+      total_revenue: row.total_revenue,
+      total_profit: row.total_profit,
+      units_sold: row.units_sold,
+      margin_pct: row.margin_pct,
+    })));
   }, [startDate, endDate, toast]);
 
   // Returns whether the commission list on screen is now current. The quick-pay
@@ -261,24 +246,19 @@ export default function Reports() {
   }, [isAdmin, profile, startDate, endDate, toast]);
 
   const fetchRevenue = useCallback(async () => {
-    let query = supabase.from('orders').select('order_date, total_price, total_profit')
-      .is('deleted_at', null)
-      .in('status', ['confirmed', 'partially_fulfilled', 'fulfilled'])
-      .order('order_date');
-    if (startDate) query = query.gte('order_date', startDate);
-    if (endDate) query = query.lte('order_date', endDate);
-    const { data, error } = await query;
-    if (error) { toast('error', 'Failed to load revenue data.'); return; }
-
-    const grouped: Record<string, RevenueSummary> = {};
-    ((data || []) as Array<{ order_date: string; total_price: number; total_profit: number }>).forEach((o) => {
-      const month = o.order_date.substring(0, 7);
-      if (!grouped[month]) grouped[month] = { month, revenue: 0, profit: 0, orders: 0 };
-      grouped[month].revenue += o.total_price || 0;
-      grouped[month].profit += o.total_profit || 0;
-      grouped[month].orders += 1;
+    const { data, error } = await supabase.rpc('get_profitability_report', {
+      p_group_by: 'month',
+      p_start_date: startDate || undefined,
+      p_end_date: endDate || undefined,
     });
-    setRevenueData(Object.values(grouped).sort((a, b) => b.month.localeCompare(a.month)));
+    if (error) { toast('error', 'Failed to load revenue data.'); return; }
+    const rows = assertRpcResult<ProfitabilityReportRow[]>(data, 'get_profitability_report');
+    setRevenueData(rows.map((row) => ({
+      month: row.group_key,
+      revenue: row.total_revenue,
+      profit: row.total_profit,
+      orders: row.order_count,
+    })).sort((a, b) => b.month.localeCompare(a.month)));
   }, [startDate, endDate, toast]);
 
   // ─── PROFITABILITY parent fetcher ────────────────────────────

@@ -9,6 +9,7 @@
 import { CRX_GREEN, CHARCOAL, GRAY, LIGHT_BG, type JsPDFWithAutoTable } from './pdfTheme';
 import { COMPANY_TAGLINE_HEADER_NO_PHONE } from './companyInfo';
 import { formatUSD as fmt } from './money';
+import { stripInternalNotes } from './internalNotes';
 
 
 type AutoTableColumnStyle = {
@@ -68,7 +69,8 @@ interface PdfQuoteData {
 const PDF_COLUMN_DEFS: Record<string, { label: string; getValue: (item: PdfQuoteItem) => string; align?: 'right' }> = {
   product: { label: 'Product', getValue: (item) => item.product_name },
   category: { label: 'Category', getValue: (item) => item.category || '' },
-  notes: { label: 'Notes', getValue: (item) => item.notes || '' },
+  // Customer-facing: an internal below-cost approval reason must never print here.
+  notes: { label: 'Notes', getValue: (item) => stripInternalNotes(item.notes) || '' },
   sug_rate: { label: 'Sug. Rate', getValue: (item) => item.suggested_rate || '-' },
   actual_rate: { label: 'Rate', getValue: (item) => `${item.actual_rate} ${item.rate_unit}` },
   rate_unit: { label: 'Unit', getValue: (item) => item.rate_unit || '' },

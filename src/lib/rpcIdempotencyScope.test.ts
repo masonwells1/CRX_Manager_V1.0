@@ -224,6 +224,32 @@ const ALIAS_SCOPED: Record<string, string> = {
  * name, so treating the referenced operation as an alias would be misleading.
  */
 const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
+  // 20260812154028 renamed draw_down_quote to this private implementation and
+  // installed the governed five-argument public wrapper. The forward cent
+  // allocation migration replaces only this implementation. Both layers are
+  // one logical draw and must share the public 'draw_down_quote' replay
+  // namespace; application-role EXECUTE on the private function is revoked.
+  _draw_down_quote_below_cost_impl_20260810: ['draw_down_quote'],
+  // 20260812154028 renamed the public create_direct_order body to this
+  // private implementation and put the below-cost approval wrapper at the
+  // original public name. Wave A replaces only the private body. Both layers
+  // are one logical mutation and therefore must share the public
+  // 'create_direct_order' cache namespace; direct EXECUTE on the implementation
+  // remains revoked from every application role.
+  _create_direct_order_below_cost_impl_20260810: ['create_direct_order'],
+  // 20260730235031 RENAMED restore_quote_version to this owner impl and wrapped
+  // it behind a new 5-arg restore_quote_version. The impl is the same logical
+  // operation as its wrapper, not a second RPC, so it deliberately shares the
+  // 'restore_quote_version' cache namespace. Direct EXECUTE is revoked; the
+  // wrapper is the only caller. Not an ALIAS_SCOPED entry because that map
+  // requires the alias NOT to be an existing function name, and here it is one
+  // — which is exactly the point.
+  _restore_quote_version_owner_impl: ['restore_quote_version'],
+  // Same wrapper/impl split as above: 20260730235031 renamed the 3-arg
+  // convert_quote_to_order to this owner impl behind a 4-arg wrapper, so the
+  // impl deliberately shares its wrapper's cache namespace. Direct EXECUTE is
+  // revoked; the wrapper is the only caller.
+  _convert_quote_to_order_owner_impl: ['convert_quote_to_order'],
   _guard_idempotency_key_insert: ['allocate_payment'],
   // Direct EXECUTE is revoked. Private middle layer of the full-cancel chain
   // (cancel_order -> _cancel_order_idem_impl_20260721 ->
@@ -240,34 +266,16 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // the public save_purchase_order RPC and intentionally shares its one cache
   // namespace rather than creating an unreachable internal-operation cache.
   _save_purchase_order_ascii_identity_impl: ['save_purchase_order'],
-  // Direct EXECUTE is revoked. This IS the original public restore_quote_version
-  // body: it was renamed to a private owner impl and the public name became a
-  // delegating wrapper, so the function that performs the operation-scoped
-  // lookup no longer carries the public name. It deliberately keeps reading and
-  // writing the `restore_quote_version` cache — giving the owner impl its own
-  // namespace would strand every idempotency key already written under the
-  // public operation, so a client retry would re-execute the restore instead of
-  // replaying it. It entered this test's scope on 2026-08-12 when the recovered
-  // 20260812011000 and 20260812115236 became the first disk migrations to define
-  // the function under its private name.
-  _restore_quote_version_owner_impl: ['restore_quote_version'],
-  // Direct EXECUTE is revoked (service_role only). This IS the original
-  // public convert_quote_to_order body: migration 20260730235031 renamed it
-  // with `ALTER FUNCTION ... RENAME TO _convert_quote_to_order_owner_impl`
-  // (line 986) and created a new public wrapper that delegates to it, so both
-  // layers read and write the one 'convert_quote_to_order' cache on purpose —
-  // a replay through the wrapper must find the result the impl saved. Giving
-  // the impl its own namespace would strand that cache. The shape is
-  // pre-existing and unchanged; it entered this test's scope only because
-  // migration 20260810150000 is the first to CREATE the function under its
-  // post-rename name (the rename itself defined no function body on disk).
-  _convert_quote_to_order_owner_impl: ['convert_quote_to_order'],
   // Owner-only implementation used by the public standalone/group posting
   // wrappers; all layers intentionally share the public post_invoice cache.
   _post_invoice_impl_20260714: ['post_invoice'],
   // Deleting a PO must invalidate its saved retry result so the same source
   // document can create a fresh PO if an admin intentionally removes it.
   _invalidate_deleted_purchase_order_retry_state: ['save_purchase_order'],
+  // Direct EXECUTE is service_role-only. Implementation half of the public
+  // issue_return_credit wrapper (re-emitted in mig 20260808170000 for COGS
+  // reversal); wrapper pre-checks and impl saves under the one shared cache.
+  _issue_return_credit_impl: ['issue_return_credit'],
   // Direct EXECUTE is revoked. Implementation half of the public save_invoice
   // RPC (re-emitted in mig 20260721223817 to persist payment_terms); all
   // wrapper layers intentionally share the public save_invoice cache.
@@ -278,23 +286,6 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // both intentionally share the wrapper's single 'save_field_app_split_invoice' cache
   // namespace, exactly like the save_purchase_order pair above.
   _save_field_app_split_invoice_impl: ['save_field_app_split_invoice'],
-  // Direct EXECUTE is revoked (migration 20260813010000 emits the REVOKE; live
-  // ACL was already owner-only). Implementation half of the public
-  // create_direct_order RPC: a sibling session split that function into a
-  // SECURITY DEFINER wrapper, which declares below-cost operation context via
-  // _begin_below_cost_money_write, and this impl, which does the work. Both
-  // layers intentionally share the one public 'create_direct_order' cache, for
-  // the same reason as the convert_quote_to_order pair above — a retry through
-  // the wrapper must find the result the impl saved.
-  //
-  // Renaming the operation to this function's own name would be the DANGEROUS
-  // change here, not the safe one: every idempotency key already recorded under
-  // 'create_direct_order' would be stranded, so the first client retry after the
-  // change would re-execute instead of returning its cached result, and create a
-  // duplicate order. The shape is pre-existing; it entered this test's scope
-  // only because 20260813010000 is the first on-disk migration to CREATE the
-  // function under its post-split name.
-  _create_direct_order_below_cost_impl_20260810: ['create_direct_order'],
 };
 
 /**
@@ -434,81 +425,6 @@ function latestDiskDefinitions(): Map<string, DiskFnDef> {
   return latest;
 }
 
-/**
- * `ALTER FUNCTION x(...) RENAME TO y` → y's body is x's latest CREATE *before*
- * that file. 20260812115237 renames each public money RPC to a private
- * `_..._below_cost_impl_20260810` and re-creates the public name as a wrapper,
- * so the impl has no CREATE of its own and is invisible to a CREATE-only scan.
- */
-function renameSources(): Map<string, { fromName: string; fileIdx: number }> {
-  const map = new Map<string, { fromName: string; fileIdx: number }>();
-  const re =
-    /ALTER\s+FUNCTION\s+(?:public\.)?([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*RENAME\s+TO\s+(?:public\.)?([A-Za-z_][A-Za-z0-9_]*)/gi;
-  const files = readdirSync(MIGRATIONS_DIR)
-    .filter((f) => f.endsWith('.sql'))
-    .sort();
-  for (let i = 0; i < files.length; i++) {
-    const content = readFileSync(join(MIGRATIONS_DIR, files[i]), 'utf8');
-    let m: RegExpExecArray | null;
-    re.lastIndex = 0;
-    while ((m = re.exec(content)) !== null) {
-      map.set(m[2].toLowerCase(), { fromName: m[1], fileIdx: i });
-    }
-  }
-  return map;
-}
-
-/** Latest CREATE body of `fn` among files[0..maxIdx], following renames. */
-function resolveBody(fn: string, maxIdx?: number, seen = new Set<string>()): string | null {
-  const files = readdirSync(MIGRATIONS_DIR)
-    .filter((f) => f.endsWith('.sql'))
-    .sort();
-  const upTo = maxIdx === undefined ? files.length - 1 : maxIdx;
-  const sigRe = new RegExp(
-    `CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+(?:public\\.)?${fn}\\s*\\(`,
-    'i',
-  );
-  for (let i = upTo; i >= 0; i--) {
-    const content = readFileSync(join(MIGRATIONS_DIR, files[i]), 'utf8');
-    const sigIdx = content.search(sigRe);
-    if (sigIdx === -1) continue;
-    const after = content.slice(sigIdx);
-    const bodyMatch = after.match(/AS\s+\$([A-Za-z_]*)\$([\s\S]*?)\$\1\$/);
-    return bodyMatch ? bodyMatch[2] : after;
-  }
-  const key = fn.toLowerCase();
-  const edge = renameSources().get(key);
-  if (edge && !seen.has(key)) {
-    seen.add(key);
-    // Strictly BEFORE the renaming file: that same file re-creates the old
-    // public name as the wrapper, and resolving to it would loop.
-    return resolveBody(edge.fromName, edge.fileIdx - 1, seen);
-  }
-  return null;
-}
-
-/**
- * Bodies reachable from `entry` by direct `public.<fn>(` calls, entry first.
- * Depth-bounded and cycle-guarded.
- */
-function delegationChain(entry: string, depth = 4): string[] {
-  const bodies: string[] = [];
-  const seen = new Set<string>();
-  const walk = (fn: string, left: number) => {
-    const key = fn.toLowerCase();
-    if (left < 0 || seen.has(key)) return;
-    seen.add(key);
-    const body = resolveBody(fn);
-    if (body === null) return;
-    bodies.push(body);
-    const callRe = /\bpublic\.([A-Za-z_][A-Za-z0-9_]*)\s*\(/gi;
-    let m: RegExpExecArray | null;
-    while ((m = callRe.exec(body)) !== null) walk(m[1], left - 1);
-  };
-  walk(entry, depth);
-  return bodies;
-}
-
 /** All idempotency operation literals appearing in a function body. */
 function operationLiterals(body: string): string[] {
   const out: string[] = [];
@@ -558,23 +474,44 @@ describe('Idempotency operation literals in latest disk migrations', () => {
 
   it('regression guard: restore_quote_version lookup stays scoped to its own operation', () => {
     // Codex 2026-06-08 LOW — the lookup originally filtered on the key only.
-    //
-    // The public function no longer performs the lookup itself. 20260812115237
-    // (live 2026-08-12) renamed it to a private below-cost impl and re-created
-    // the public name as a thin delegating wrapper, and the lookup now sits
-    // further down the same chain. Asserting on the wrapper body alone would
-    // fail; asserting on the owner impl alone would pass even if the wrapper
-    // stopped reaching it. So walk the chain from the public entry point and
-    // require BOTH that the scoped lookup is reachable and that no reachable
-    // body touching idempotency_keys is scoped to a different operation.
-    const chain = delegationChain('restore_quote_version');
-    expect(chain.length).toBeGreaterThan(1);
-    expect(chain.some((b) => /operation\s*=\s*'restore_quote_version'/i.test(b))).toBe(true);
-    const foreign = chain
-      .filter((b) => /idempotency_keys/i.test(b))
-      .flatMap((b) => operationLiterals(b))
-      .filter((lit) => lit !== 'restore_quote_version');
-    expect(foreign).toEqual([]);
+    // Applied ledger version 20260812154028 wraps the function for below-cost
+    // approval and renames the idempotent body emitted by 20260812151606. Pin both halves so the
+    // disk scanner does not mistake the intentionally thin public wrapper for
+    // loss of operation scoping.
+    const wrapper = defs.get('restore_quote_version');
+    expect(wrapper).toBeDefined();
+    expect(wrapper!.body).toContain('_restore_quote_version_below_cost_impl_20260810');
+
+    const snapshotMigration = readFileSync(
+      join(MIGRATIONS_DIR, '20260812151606_quote_items_cost_at_quote_snapshot.sql'),
+      'utf8'
+    );
+    const enforcementMigration = readFileSync(
+      join(MIGRATIONS_DIR, '20260812154028_enforce_below_cost_admin_approval.sql'),
+      'utf8'
+    );
+    expect(snapshotMigration).toMatch(
+      /CREATE OR REPLACE FUNCTION public\._restore_quote_version_owner_impl[\s\S]*?operation\s*=\s*'restore_quote_version'/i
+    );
+    const restoreBody = snapshotMigration.match(
+      /CREATE OR REPLACE FUNCTION public\._restore_quote_version_owner_impl[\s\S]*?AS \$function\$([\s\S]*?)\$function\$;/i
+    )?.[1];
+    expect(restoreBody).toBeDefined();
+    const firstDestructiveWrite = restoreBody!.indexOf('DELETE FROM quote_sections');
+    expect(firstDestructiveWrite).toBeGreaterThan(0);
+    for (const guardedField of [
+      'QUOTE_SNAPSHOT_MONEY_NOT_FINITE: field quotes.total_price',
+      'QUOTE_SNAPSHOT_MONEY_NOT_FINITE: field quotes.total_profit',
+      'QUOTE_SNAPSHOT_MONEY_NOT_FINITE: field quote_items.profit',
+      'QUOTE_SNAPSHOT_MONEY_NOT_FINITE: field quote_items.total_price',
+    ]) {
+      const guardIndex = restoreBody!.indexOf(guardedField);
+      expect(guardIndex).toBeGreaterThan(0);
+      expect(guardIndex).toBeLessThan(firstDestructiveWrite);
+    }
+    expect(enforcementMigration).toMatch(
+      /ALTER FUNCTION public\.restore_quote_version[\s\S]*?RENAME TO _restore_quote_version_below_cost_impl_20260810/i
+    );
   });
 
   it('disk scan found a meaningful number of function definitions (sanity)', () => {

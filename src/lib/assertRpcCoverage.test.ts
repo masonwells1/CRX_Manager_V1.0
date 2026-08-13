@@ -18,8 +18,11 @@ function findSourceFiles(dir: string): string[] {
 
 // Any `= await supabase.rpc('rpc_name')` — caller has captured the response,
 // either via destructure (`const { data, error } =`, `const { data: alias } =`)
-// or plain assignment (`const result = await supabase.rpc(...)`). Either
-// pattern needs assertRpcResult(...) to enforce the contract.
+// or plain assignment (`const result = await supabase.rpc(...)`). The governed
+// `callBelowCostAwareRpc('rpc_name', ...)` adapter is also one logical capture:
+// it may retry only when PostgREST proves the new optional signature is absent,
+// and the caller still validates the returned data with assertRpcResult(...).
+// Either pattern needs assertRpcResult(...) to enforce the contract.
 //
 // Fire-and-forget calls (`await supabase.rpc(...)` with no `=`) do NOT need
 // wrapping and are excluded by the leading `=`. The `\s*\.\s*rpc` allows the
@@ -29,6 +32,12 @@ function findSourceFiles(dir: string): string[] {
 // in the generated TypeScript types (new tables before type regen). Both aliases
 // must satisfy the same assertRpcResult contract.
 const RPC_CAPTURE_PATTERN = /=\s*await\s+supabase(?:Untyped)?\s*\.\s*rpc\s*\(\s*['"]([^'"]+)['"]/g;
+
+// A below-cost retry may invoke the same logical RPC twice in one file: first
+// without a reason, then once more after the admin supplies one. Only one call
+// returns successful data and only one assertion is required, so count each
+// literal RPC name once per file rather than counting retry attempts.
+const BELOW_COST_CAPTURE_PATTERN = /=\s*await\s+callBelowCostAwareRpc\s*\(\s*['"]([^'"]+)['"]/g;
 
 // `assertRpcResult(...)` invocations. The optional `<...>` group handles
 // generic-type uses like `assertRpcResult<{ id: string }>(data, 'rpc_name')`,
@@ -97,7 +106,10 @@ describe('assertRpcResult coverage', () => {
         const content = readFileSync(file, 'utf-8');
 
         const rpcMatches = Array.from(content.matchAll(RPC_CAPTURE_PATTERN));
-        const rpcNames = rpcMatches.map((m) => m[1]);
+        const belowCostNames = new Set(
+          Array.from(content.matchAll(BELOW_COST_CAPTURE_PATTERN), (m) => m[1])
+        );
+        const rpcNames = [...rpcMatches.map((m) => m[1]), ...belowCostNames];
 
         const assertMatches = Array.from(content.matchAll(ASSERT_PATTERN));
         let assertCount = assertMatches.length;

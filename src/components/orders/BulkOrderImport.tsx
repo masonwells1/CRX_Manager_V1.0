@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Upload, CheckCircle, AlertCircle, FileText, Sparkles } from 'lucide-react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
@@ -11,6 +11,8 @@ import { Sentry } from '../../lib/sentry';
 import { logActivity } from '../../lib/activityLogger';
 import { useAuth } from '../../contexts/AuthContext';
 import { resolveExactProductIdentity } from '../../lib/productIdentityResolver';
+import BelowCostConfirmModal, { type BelowCostLine } from '../ui/BelowCostConfirmModal';
+import { appendBelowCostApproval } from '../../lib/internalNotes';
 
 interface BulkOrderImportProps {
   open: boolean;
@@ -93,6 +95,21 @@ export default function BulkOrderImport({
     failed: number;
     failures: OrderImportFailure[];
   } | null>(null);
+  const [belowCostPrompt, setBelowCostPrompt] = useState<{
+    lines: BelowCostLine[];
+    resolve: (reason: string | null) => void;
+  } | null>(null);
+  const isFieldStaff = profile?.role === 'driver' || profile?.role === 'applicator';
+  // The below-cost reason belongs to the PARSED BATCH, not to one click of
+  // Import. Each parsed order carries a stable idempotency key, and
+  // bulk_import_order fingerprints p_notes -- which carries the approval marker
+  // -- so if a below-cost order commits and its response is lost, a retry that
+  // re-prompts and gets even slightly different wording comes back
+  // IDEMPOTENCY_INTENT_MISMATCH and this component reports the already-created
+  // order as failed. Held with the terms it approved (order, product, price,
+  // cost, quantity) and cleared whenever a new file is parsed, so a changed
+  // batch always re-prompts. (Codex round 36; same shape as the quote fix.)
+  const belowCostReasonRef = useRef<{ terms: string; reason: string } | null>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -114,6 +131,7 @@ export default function BulkOrderImport({
       setFile(selectedFile);
       setValidation(null);
       setUploadResults(null);
+      belowCostReasonRef.current = null;
     }
   };
 
@@ -395,6 +413,71 @@ export default function BulkOrderImport({
     }
     const productCatalog = productResult.data || [];
 
+    // Below-cost guardrail (non-field-staff only): the bulk path must not be a
+    // way around the reason the single-order path requires. Cost is the
+    // authoritative Product current_cost — the same value the RPC snapshots —
+    // so rows whose Product does not resolve uniquely or has no usable cost are
+    // skipped here and rejected/priced by the per-order logic below.
+    let belowCostReason: string | null = null;
+    // Only the orders that actually contain a below-cost line get the approval
+    // note. A batch-global note would stamp "Below-cost approved" onto ordinary
+    // orders in the same upload — a false audit trail, and one that survives
+    // even if the order that triggered the prompt fails validation downstream.
+    const belowCostOrderNumbers = new Set<string>();
+    // Whether a below-cost order actually made it in. The batch reason existing
+    // is not the same thing: if every below-cost order fails validation while an
+    // ordinary one succeeds, logging "below-cost approved" would record an
+    // approval for a sale that was never created.
+    let belowCostSucceeded = false;
+    if (!isFieldStaff) {
+      const belowCostLines: BelowCostLine[] = [];
+      const approvedTermParts: string[] = [];
+      for (const order of validation.valid) {
+        for (const item of order.items) {
+          const resolution = resolveExactProductIdentity(item.product_name, productCatalog);
+          if (resolution.status !== 'unique') continue;
+          const cost = resolution.product.current_cost;
+          if (cost == null || !Number.isFinite(cost) || cost <= 0) continue;
+          if (item.price_per_unit < cost) {
+            belowCostOrderNumbers.add(order.order_number);
+            belowCostLines.push({
+              productName: `${order.order_number} — ${item.product_name}`,
+              price: item.price_per_unit,
+              cost,
+            });
+            // Quantity included: it sets the size of the loss being approved.
+            approvedTermParts.push(
+              `${order.order_number}|${resolution.product.id}|${item.price_per_unit}|${cost}|${item.quantity}`
+            );
+          }
+        }
+      }
+
+      if (belowCostLines.length > 0) {
+        if (profile?.role !== 'admin') {
+          toast('error', 'Only an active admin can approve sales below cost. Ask an admin to review this import.');
+          setUploading(false);
+          return;
+        }
+        const approvedTerms = JSON.stringify(approvedTermParts.sort());
+        if (belowCostReasonRef.current?.terms === approvedTerms) {
+          // Retry of the same batch: reuse the exact text so p_notes -- which
+          // bulk_import_order fingerprints -- is byte-identical to the attempt
+          // that may already have committed.
+          belowCostReason = belowCostReasonRef.current.reason;
+        } else {
+          belowCostReason = await new Promise<string | null>((resolve) =>
+            setBelowCostPrompt({ lines: belowCostLines, resolve })
+          );
+          if (belowCostReason === null) {
+            setUploading(false);
+            return;
+          }
+          belowCostReasonRef.current = { terms: approvedTerms, reason: belowCostReason };
+        }
+      }
+    }
+
     for (const order of validation.valid) {
       try {
         const { data: customer, error: custError } = await supabase
@@ -506,7 +589,11 @@ export default function BulkOrderImport({
           p_total_margin_pct: totalMarginPct,
           p_order_date: order.order_date,
           p_items: itemsPayload,
-          p_notes: order.notes,
+          // The approval reason rides along with the same import that creates
+          // the below-cost lines, so it is durable even if activity logging fails.
+          p_notes: belowCostReason && belowCostOrderNumbers.has(order.order_number)
+            ? appendBelowCostApproval(order.notes, belowCostReason)
+            : order.notes,
           p_idempotency_key: order.idempotency_key,
         });
 
@@ -517,6 +604,7 @@ export default function BulkOrderImport({
         }
 
         successCount++;
+        if (belowCostOrderNumbers.has(order.order_number)) belowCostSucceeded = true;
       } catch (error) {
         Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'Error importing order' } });
         failedCount++;
@@ -532,7 +620,13 @@ export default function BulkOrderImport({
 
     if (successCount > 0) {
       if (profile) {
-        await logActivity({ event: 'orders_bulk_imported', description: `Bulk imported ${successCount} order(s)`, performedBy: profile.id });
+        await logActivity({
+          event: 'orders_bulk_imported',
+          description: belowCostReason && belowCostSucceeded
+            ? `Bulk imported ${successCount} order(s) — below-cost approved: ${belowCostReason}`
+            : `Bulk imported ${successCount} order(s)`,
+          performedBy: profile.id,
+        });
       }
       toast('success', `Imported ${successCount} order${successCount !== 1 ? 's' : ''}`);
       if (failedCount === 0) {
@@ -547,11 +641,23 @@ export default function BulkOrderImport({
     setFile(null);
     setValidation(null);
     setUploadResults(null);
+    // BelowCostConfirmModal renders as a sibling of this Modal, so its
+    // visibility follows belowCostPrompt rather than `open`. Without this it
+    // would outlive the import dialog, and the promise handleUpload is awaiting
+    // would never settle — leaving the upload parked with uploading stuck true.
+    belowCostPrompt?.resolve(null);
+    setBelowCostPrompt(null);
+    belowCostReasonRef.current = null;
     onClose();
   };
 
   return (
-    <Modal open={open} onClose={handleClose} title="Import Orders" size="large">
+    <>
+    {/* While the below-cost prompt is up, this dialog must ignore Escape. Both
+        modals register document-level Escape handlers, so a single press would
+        otherwise cancel the approval AND tear down the whole import, discarding
+        the parsed file and validation results. (Codex round 24.) */}
+    <Modal open={open} onClose={belowCostPrompt ? () => {} : handleClose} title="Import Orders" size="large">
       <div className="space-y-4">
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
           <div className="flex items-start gap-3">
@@ -701,5 +807,19 @@ export default function BulkOrderImport({
         )}
       </div>
     </Modal>
+
+    <BelowCostConfirmModal
+      open={belowCostPrompt !== null}
+      lines={belowCostPrompt?.lines ?? []}
+      onClose={() => {
+        belowCostPrompt?.resolve(null);
+        setBelowCostPrompt(null);
+      }}
+      onConfirm={(reason) => {
+        belowCostPrompt?.resolve(reason);
+        setBelowCostPrompt(null);
+      }}
+    />
+    </>
   );
 }

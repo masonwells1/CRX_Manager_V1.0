@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const MIGRATION_PATH =
-  'supabase/migrations/20260812115238_repair_historical_order_line_cents.sql';
+  'supabase/migrations/20260812154757_repair_historical_order_line_cents.sql';
 const DIGEST = '0f8ccef3bf6d3291c654d5abb24a151e16ad759851f5eddfc65d1585d7f5b7db';
 
 const migration = readFileSync(MIGRATION_PATH, 'utf8').replace(/\r\n/g, '\n');

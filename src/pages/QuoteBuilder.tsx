@@ -31,6 +31,7 @@ import Input from '../components/ui/Input';
 import SearchableSelect from '../components/ui/SearchableSelect';
 import Modal from '../components/ui/Modal';
 import ConfirmModal from '../components/ui/ConfirmModal';
+import BelowCostConfirmModal, { type BelowCostLine } from '../components/ui/BelowCostConfirmModal';
 import RecordVersionConflictDialog from '../components/ui/RecordVersionConflictDialog';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { useToast } from '../components/ui/Toast';
@@ -48,7 +49,13 @@ import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { formatUSD, formatCents } from '../lib/money';
-import { catalogPricePerAcre, validateCommissionSplits } from '../lib/quoteCalc';
+import {
+  catalogPricePerAcre,
+  computeQuoteTotals,
+  settleMoneyDifference,
+  settleMoneyRatio,
+  validateCommissionSplits,
+} from '../lib/quoteCalc';
 import { buildCommissionSplitPatch, nextLoadedSplitSnapshot } from '../lib/commissionSplitConcurrency';
 import {
   buildRowVersionPatch,
@@ -73,6 +80,8 @@ import { useStaleQuoteCheck } from '../hooks/useGuardrails';
 import GuardrailBanner from '../components/ui/GuardrailBanner';
 import { ProductOptionDetails } from '../components/products/ProductOptionPresentation';
 import { ProductSearchResultRow } from '../components/products/ProductSearchResultRow';
+import { appendBelowCostApproval, stripInternalNotes } from '../lib/internalNotes';
+import { belowCostLinesFromRpcError, callBelowCostAwareRpc } from '../lib/belowCostRpc';
 import type {
   Quote,
   QuoteSection,
@@ -159,6 +168,49 @@ interface DrawRow {
   unit: string | null;
 }
 
+interface QuoteTotals {
+  totalPrice: number;
+  totalCost: number;
+  totalProfit: number;
+  totalMarginPct: number;
+}
+
+interface AuthoritativeTotalsSnapshot {
+  calculationKey: string;
+  totals: QuoteTotals;
+}
+
+function quoteCalculationKey(sections: LocalSection[]): string {
+  return JSON.stringify(sections.map((section) => ({
+    key: section._key,
+    items: section.items.map((item) => ({
+      key: item._key,
+      productId: item.product_id,
+      mode: item.calc_mode,
+      pricePerUnit: item.price_per_unit,
+      priceOverride: item.price_override,
+      currentCost: item.current_cost,
+      actualRate: item.actual_rate,
+      rateUnit: item.rate_unit,
+      acres: item.acres,
+      totalUnits: item.total_units_needed,
+      totalPrice: item.total_price,
+      profit: item.profit,
+    })),
+  })));
+}
+
+function parseServerQuoteTotals(value: unknown): QuoteTotals | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const totalPrice = Number(record.total_price);
+  const totalCost = Number(record.total_cost);
+  const totalProfit = Number(record.total_profit);
+  const totalMarginPct = Number(record.total_margin_pct);
+  if (![totalPrice, totalCost, totalProfit, totalMarginPct].every(Number.isFinite)) return null;
+  return { totalPrice, totalCost, totalProfit, totalMarginPct };
+}
+
 let keyCounter = 0;
 function nextKey() {
   return `_k${++keyCounter}`;
@@ -224,6 +276,21 @@ export default function QuoteBuilder() {
     getKey: getSaveQuoteIdempotencyKey,
     resetKey: resetSaveQuoteIdempotencyKey,
   } = useIdempotencyKey('save_quote', profile?.id || '');
+  // The below-cost reason belongs to the SAVE ATTEMPT, not to one click of the
+  // button. save_quote's request fingerprint includes the annotated item notes,
+  // so if a committed save's response is lost and the retry re-prompts, any
+  // difference in the retyped text makes the replay a fingerprint conflict --
+  // and for a brand-new quote the page still has no quoteId, so the stale-save
+  // reload cannot recover the quote that actually committed. Held for the life
+  // of the idempotency key and cleared exactly where that key rotates.
+  //
+  // It also carries the TERMS it approved (product, price, cost per below-cost
+  // line). A pre-commit rejection stores no idempotency result but leaves the
+  // key in place, so retention alone would let an operator change a price or
+  // add another below-cost line and have the earlier approval silently cover
+  // the new sale. Reuse requires the terms to match exactly.
+  // (Codex rounds 30 and 32.)
+  const belowCostReasonRef = useRef<{ terms: string; reason: string } | null>(null);
   const convertQuoteIdem = useIdempotencyKey('convert_quote_to_order', profile?.id || '');
   // A committed conversion can be replayed from the idempotency cache with
   // status:'created'. Keep that marker so a lost response can still trigger
@@ -358,6 +425,7 @@ export default function QuoteBuilder() {
   const [wasPlanned, setWasPlanned] = useState(false);
 
   const [sections, setSections] = useState<LocalSection[]>([makeEmptySection(1)]);
+  const [authoritativeTotals, setAuthoritativeTotals] = useState<AuthoritativeTotalsSnapshot | null>(null);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
@@ -460,6 +528,13 @@ export default function QuoteBuilder() {
   // trigger allows: draft/sent/revised → cancelled; sent/revised → declined;
   // accepted/declined/expired/cancelled → sent (admin revert RPC only).
   const isAdmin = profile?.role === 'admin';
+  // Below-cost guardrail: pending confirmation for a save with lines priced
+  // strictly under their stored quote-time cost — holds the flagged lines plus
+  // the promise resolver that resumes (reason) or cancels (null) saveQuote.
+  const [belowCostPrompt, setBelowCostPrompt] = useState<{
+    lines: BelowCostLine[];
+    resolve: (reason: string | null) => void;
+  } | null>(null);
   const canCancel = isEditing && ['draft', 'sent', 'revised'].includes(currentStatus);
   const canDecline = isEditing && ['sent', 'revised'].includes(currentStatus);
   // "Close — fulfilled by application" is only for a PLANNED open booking (the
@@ -945,6 +1020,10 @@ export default function QuoteBuilder() {
         // The rejected key may represent a committed save whose response was
         // lost. Rotate it only after a complete authoritative reload succeeds.
         resetSaveQuoteIdempotencyKey();
+        // New attempt, and the reload just replaced local state with the
+        // server's -- a reason held for the old key no longer describes what
+        // would be sent, so the next below-cost save must prompt again.
+        belowCostReasonRef.current = null;
         if (resetCreateVersionAfterReloadRef.current) {
           resetCreateVersionAttempt();
           resetCreateVersionAfterReloadRef.current = false;
@@ -1081,12 +1160,27 @@ export default function QuoteBuilder() {
       const pricePerUnit = item.price_override != null ? item.price_override : tierPrice;
       // Fall back to unit_size if inventory_unit is not set on the product
       const inventoryUnitFactorOz = getConversionFactor(product.inventory_unit || product.unit_size);
+      // Preserve the line's stored quote-time cost; only fall back to the live
+      // catalog cost when the line has none yet. Product add/change sets
+      // current_cost from the catalog, so a new or swapped product still
+      // refreshes — but recalcs no longer drift a saved line's cost.
+      // ?? not ||: a zero snapshot is a real cost, not a missing one. Treating it
+      // as absent would swap in today's catalog cost, so the page would show a
+      // different profit than save_quote stores and could raise a false
+      // below-cost approval prompt.
+      const currentCost = item.current_cost ?? product.current_cost ?? 0;
 
       if (item.calc_mode === 'units_direct') {
         // User entered total_units_needed directly — skip rate×acres computation
         const totalInventoryUnits = item.total_units_needed || 0;
-        const totalPrice = pricePerUnit * totalInventoryUnits;
-        const profit = (pricePerUnit - (product.current_cost || 0)) * totalInventoryUnits;
+        // Settled revenue minus settled extended cost -- the SAME boundary
+        // save_quote and the report RPCs use, so the quote on screen matches
+        // the quote that gets stored and converted. (Codex round 41.)
+        const totalPrice = settleMoneyRatio([pricePerUnit, totalInventoryUnits]);
+        const profit = settleMoneyDifference(
+          [pricePerUnit, totalInventoryUnits],
+          [currentCost, totalInventoryUnits],
+        );
         const netMargin = totalPrice > 0 ? profit / totalPrice : 0;
 
         // Back-calculate oz/acre and $/acre if acres provided
@@ -1096,18 +1190,18 @@ export default function QuoteBuilder() {
         if (acres > 0 && inventoryUnitFactorOz > 0) {
           const totalOz = totalInventoryUnits * inventoryUnitFactorOz;
           ozPerAcre = Math.round((totalOz / acres) * 100) / 100;
-          pricePerAcre = Math.round((totalPrice / acres) * 100) / 100;
+          pricePerAcre = settleMoneyRatio([totalPrice], [acres]);
         }
 
         return {
           ...item,
           price_per_unit: pricePerUnit,
-          current_cost: product.current_cost || 0,
+          current_cost: currentCost,
           oz_per_acre: ozPerAcre,
           price_per_acre: pricePerAcre,
           total_units_needed: Math.round(totalInventoryUnits * 100) / 100,
-          total_price: Math.round(totalPrice * 100) / 100,
-          profit: Math.round(profit * 100) / 100,
+          total_price: totalPrice,
+          profit: profit,
           net_margin: Math.round(netMargin * 100 * 100) / 100,
         };
       }
@@ -1125,21 +1219,35 @@ export default function QuoteBuilder() {
         : 0;
 
       const pricePerAcre = inventoryUnitFactorOz > 0
-        ? pricePerUnit * (rateInOz / inventoryUnitFactorOz)
+        ? settleMoneyRatio(
+            [pricePerUnit, actualRate, rateUnitFactorOz],
+            [inventoryUnitFactorOz],
+          )
         : 0;
-      const totalPrice = pricePerUnit * totalInventoryUnits;
-      const profit = (pricePerUnit - (product.current_cost || 0)) * totalInventoryUnits;
+      // Use the original decimal operands so the binary-float division used for
+      // display quantity cannot move an exact half-cent money boundary.
+      const moneyDenominators = [inventoryUnitFactorOz];
+      const totalPrice = settleMoneyRatio(
+        [pricePerUnit, acres, actualRate, rateUnitFactorOz],
+        moneyDenominators,
+      );
+      const profit = settleMoneyDifference(
+        [pricePerUnit, acres, actualRate, rateUnitFactorOz],
+        [currentCost, acres, actualRate, rateUnitFactorOz],
+        moneyDenominators,
+        moneyDenominators,
+      );
       const netMargin = totalPrice > 0 ? profit / totalPrice : 0;
 
       return {
         ...item,
         price_per_unit: pricePerUnit,
-        current_cost: product.current_cost || 0,
+        current_cost: currentCost,
         oz_per_acre: Math.round(ozPerAcre * 100) / 100,
         price_per_acre: Math.round(pricePerAcre * 100) / 100,
         total_units_needed: Math.round(totalInventoryUnits * 100) / 100,
-        total_price: Math.round(totalPrice * 100) / 100,
-        profit: Math.round(profit * 100) / 100,
+        total_price: totalPrice,
+        profit: profit,
         net_margin: Math.round(netMargin * 100 * 100) / 100,
       };
     },
@@ -1207,8 +1315,21 @@ export default function QuoteBuilder() {
           ...sec,
           items: sec.items.map((item) => {
             if (item._key !== itemKey) return item;
+            // Re-opening the picker on an existing line and choosing the SAME
+            // product is not a swap. Falling through would clear the line's id
+            // and overwrite its preserved quote-time cost with today's catalog
+            // cost, so save_quote would insert it as a new line and the trigger
+            // would re-stamp the snapshot — losing the historical cost with no
+            // visible signal. Only a genuine product change may do that.
+            if (item.product_id === product.id) return item;
             const updated: LocalItem = {
               ...item,
+              // Swapping the product makes this a different quoted line. save_quote
+              // only reuses an echoed id when the prior row's product_id still
+              // matches, so keeping the old id here would leave the page holding a
+              // dead id and re-stamp cost_at_quote_cents on every later save. Drop
+              // it so the line is saved as new.
+              id: undefined,
               product_id: product.id,
               product,
               notes: preferredQuoteNotes(product),
@@ -1320,25 +1441,13 @@ export default function QuoteBuilder() {
     });
   };
 
-  const totals = useMemo(() => {
-    let totalPrice = 0;
-    let totalCost = 0;
-    let totalProfit = 0;
-    sections.forEach((sec) => {
-      sec.items.forEach((item) => {
-        totalPrice += item.total_price;
-        totalCost += item.current_cost * (item.total_units_needed || 0);
-        totalProfit += item.profit;
-      });
-    });
-    const totalMarginPct = totalPrice > 0 ? (totalProfit / totalPrice) * 100 : 0;
-    return {
-      totalPrice: Math.round(totalPrice * 100) / 100,
-      totalCost: Math.round(totalCost * 100) / 100,
-      totalProfit: Math.round(totalProfit * 100) / 100,
-      totalMarginPct: Math.round(totalMarginPct * 100) / 100,
-    };
+  const calculationKey = useMemo(() => quoteCalculationKey(sections), [sections]);
+  const localTotals = useMemo(() => {
+    return computeQuoteTotals(sections.flatMap((section) => section.items));
   }, [sections]);
+  const totals = authoritativeTotals?.calculationKey === calculationKey
+    ? authoritativeTotals.totals
+    : localTotals;
 
   const saveQuote = async (newStatus?: QuoteStatus): Promise<string | null> => {
     if (!customerId) {
@@ -1412,6 +1521,64 @@ export default function QuoteBuilder() {
       return null;
     }
 
+    // Below-cost guardrail (non-field-staff only): a line whose effective price
+    // (recalcItem already folded any override into price_per_unit) is strictly
+    // under the live catalog cost needs an explicit reason before the quote can
+    // be saved. The database locks this same live basis, so a catalog increase
+    // cannot surprise an admin with a server-only reason-required error.
+    const isFieldStaff = profile.role === 'driver' || profile.role === 'applicator';
+    let belowCostReason: string | null = null;
+    if (!isFieldStaff) {
+      const belowCostItems = sections
+        .flatMap((sec) => sec.items)
+        .map((item) => ({
+          item,
+          cost: products.find((p) => p.id === item.product_id)?.current_cost ?? item.current_cost,
+        }))
+        .filter(({ item, cost }) => item.product_id && cost > 0 && item.price_per_unit < cost);
+      const belowCostLines: BelowCostLine[] = belowCostItems.map(({ item, cost }) => ({
+        productName:
+          item.product?.product_name
+          || products.find((p) => p.id === item.product_id)?.product_name
+          || 'Unknown product',
+        price: item.price_per_unit,
+        cost,
+      }));
+      if (belowCostLines.length > 0) {
+        if (!isAdmin) {
+          toast('error', 'Only an active admin can approve a quote below cost. Ask an admin to review it.');
+          return null;
+        }
+        // What was actually approved: which product, at which price, against
+        // which cost, IN WHAT QUANTITY. A retry may reuse the reason only while
+        // all four are unchanged. A rejection that stored no idempotency result
+        // (say BOOKING_OVERDRAWN) leaves the key in place, so without this an
+        // operator could cut a price, raise the quantity, or add another
+        // below-cost line and have the previous approval silently cover the new
+        // terms. Quantity belongs here because it sets the SIZE of the loss --
+        // approving 10 units under cost is not approval for 500.
+        // (Codex rounds 32 and 34.)
+        const approvedTerms = JSON.stringify(
+          belowCostItems
+            .map(({ item, cost }) =>
+              `${item.product_id}|${item.price_per_unit}|${cost}|${item.total_units_needed}`)
+            .sort()
+        );
+        if (belowCostReasonRef.current?.terms === approvedTerms) {
+          // Retry of the same sale: reuse the exact text so the payload -- and
+          // therefore save_quote's request fingerprint -- is byte-identical to
+          // the attempt that may already have committed.
+          belowCostReason = belowCostReasonRef.current.reason;
+        } else {
+          belowCostReason = await new Promise<string | null>((resolve) =>
+            setBelowCostPrompt({ lines: belowCostLines, resolve })
+          );
+          if (belowCostReason === null) return null;
+          belowCostReasonRef.current = { terms: approvedTerms, reason: belowCostReason };
+        }
+      }
+    }
+
     const quotePayload = {
       quote_number: quoteNumber,
       customer_id: customerId,
@@ -1440,6 +1607,26 @@ export default function QuoteBuilder() {
       ...(newStatus === 'sent' ? { sent_at: new Date().toISOString() } : {}),
     };
 
+    // Compute the approval-annotated notes ONCE, keyed by line, so the payload
+    // and the local state cannot disagree. saveQuote never refetches, so if the
+    // marker only went into the payload copy, the next save from this same page
+    // would send the original notes and save_quote's delete+reinsert would drop
+    // the approval reason the first save recorded.
+    const annotatedNotes = new Map<string, string | null>();
+    if (belowCostReason) {
+      for (const sec of sections) {
+        for (const item of sec.items) {
+          if (!item.product_id) continue;
+          const cost = products.find((p) => p.id === item.product_id)?.current_cost
+            ?? item.current_cost
+            ?? 0;
+          if (cost > 0 && item.price_per_unit < cost) {
+            annotatedNotes.set(item._key, appendBelowCostApproval(item.notes, belowCostReason));
+          }
+        }
+      }
+    }
+
     // Build sections JSON for the atomic RPC
     const sectionsPayload = sections.map((sec) => ({
       section_name: sec.section_name,
@@ -1451,9 +1638,22 @@ export default function QuoteBuilder() {
       items: sec.items
         .filter((item) => item.product_id)
         .map((item) => ({
+          // Existing lines echo their database id so save_quote's strictly
+          // id-keyed preservation can carry cost_at_quote_cents across the
+          // delete+reinsert; genuinely new lines have no id and send none.
+          ...(item.id ? { id: item.id } : {}),
+          // Opaque local key. save_quote echoes it back with the id it wrote,
+          // so a new line learns its database id without a refetch. Without it
+          // a new line stays id-less forever and a second save of two new lines
+          // of the same product trips QUOTE_ITEM_AMBIGUOUS_COST.
+          client_key: item._key,
           product_id: item.product_id,
           sort_order: item.sort_order,
-          notes: item.notes || null,
+          // The approval reason is recorded on the affected line rather than the
+          // quote header/footer notes, which always print. A PDF template can
+          // still opt the line-notes column in, so quotePdf strips the marker
+          // before rendering; see src/lib/internalNotes.ts.
+          notes: annotatedNotes.get(item._key) ?? (item.notes || null),
           price_per_unit: item.price_per_unit,
           price_override: item.price_override ?? null,
           current_cost: item.current_cost,
@@ -1475,6 +1675,7 @@ export default function QuoteBuilder() {
 
     try {
       const idemKey = getSaveQuoteIdempotencyKey();
+      const savedCalculationKey = calculationKey;
       const { data, error } = await supabase.rpc('save_quote', {
         p_quote_id: ((quoteId && isEditing) ? quoteId : null) as string,
         p_quote_payload: quotePayload as Json,
@@ -1496,7 +1697,52 @@ export default function QuoteBuilder() {
       }
 
       resetSaveQuoteIdempotencyKey();
-      const result = assertRpcResult<{ quote_id: string; commission_split?: CommissionSplit | null; row_version?: unknown }>(data, 'save_quote');
+      // Saved: the reason is recorded on the line and mirrored into local state
+      // below, so the next save resends it from the notes themselves. Holding
+      // it past this point would silently approve a LATER below-cost edit
+      // without asking.
+      belowCostReasonRef.current = null;
+      // The approval reason is now in the database. Mirror it into local state
+      // so a later save from this same page (which never refetches) resends it
+      // instead of reverting the stored notes to the pre-approval text.
+      if (annotatedNotes.size > 0) {
+        setSections((prev) =>
+          prev.map((sec) => ({
+            ...sec,
+            items: sec.items.map((item) =>
+              annotatedNotes.has(item._key)
+                ? { ...item, notes: annotatedNotes.get(item._key) ?? item.notes }
+                : item
+            ),
+          }))
+        );
+      }
+      const result = assertRpcResult<{
+        quote_id: string;
+        commission_split?: CommissionSplit | null;
+        row_version?: unknown;
+        item_ids?: Record<string, string> | null;
+        server_totals?: unknown;
+      }>(data, 'save_quote');
+      const serverTotals = parseServerQuoteTotals(result.server_totals);
+      setAuthoritativeTotals(serverTotals
+        ? { calculationKey: savedCalculationKey, totals: serverTotals }
+        : null);
+      // Install the ids save_quote just wrote. This page never refetches, so
+      // without this a line added in this session stays id-less and every later
+      // save re-sends it as new -- which, for two new lines of one product,
+      // becomes an unresolvable cost ambiguity the server has to refuse.
+      if (result.item_ids && Object.keys(result.item_ids).length > 0) {
+        const assignedIds = result.item_ids;
+        setSections((prev) =>
+          prev.map((sec) => ({
+            ...sec,
+            items: sec.items.map((item) =>
+              assignedIds[item._key] ? { ...item, id: assignedIds[item._key] } : item
+            ),
+          }))
+        );
+      }
       const savedQuoteId = result.quote_id || quoteId;
       if (!savedQuoteId) {
         toast('error', 'Quote save completed without an ID. Refresh before making further changes.');
@@ -2219,13 +2465,29 @@ export default function QuoteBuilder() {
       return;
     }
     const restoreAttempt = getRestoreVersionAttempt(versionId);
-    const { data, error } = await restoreQuoteVersionWithRowVersion({
+    let restoreResponse = await restoreQuoteVersionWithRowVersion({
       p_quote_id: quoteId,
       p_version_id: versionId,
       p_performed_by: profile.id,
       p_idempotency_key: restoreAttempt.key,
       p_expected_row_version: restoreAttempt.expectedRowVersion,
     });
+    const approvalLines = belowCostLinesFromRpcError(restoreResponse.error);
+    if (approvalLines && isAdmin) {
+      const reason = await new Promise<string | null>((resolve) =>
+        setBelowCostPrompt({ lines: approvalLines, resolve })
+      );
+      if (reason === null) return;
+      restoreResponse = await restoreQuoteVersionWithRowVersion({
+        p_quote_id: quoteId,
+        p_version_id: versionId,
+        p_performed_by: profile.id,
+        p_idempotency_key: restoreAttempt.key,
+        p_expected_row_version: restoreAttempt.expectedRowVersion,
+        p_below_cost_reason: reason,
+      });
+    }
+    const { data, error } = restoreResponse;
     if (error) {
       // Drawn-version guard (Codex r2 MED): the server blocks restoring a
       // snapshot that would drop a drawn product or fall below its drawn
@@ -2385,12 +2647,25 @@ export default function QuoteBuilder() {
     }
     setDrawing(true);
     try {
-      const { data, error } = await supabase.rpc('draw_down_quote', {
+      const drawArgs = {
         p_quote_id: id,
         p_draws: draws.map((d) => ({ product_id: d.product_id, quantity: d.quantity })),
         p_performed_by: profile!.id,
         p_idempotency_key: drawDownIdem.getKey(),
-      });
+      };
+      let drawResponse = await callBelowCostAwareRpc('draw_down_quote', drawArgs);
+      const approvalLines = belowCostLinesFromRpcError(drawResponse.error);
+      if (approvalLines && isAdmin) {
+        const reason = await new Promise<string | null>((resolve) =>
+          setBelowCostPrompt({ lines: approvalLines, resolve })
+        );
+        if (reason === null) {
+          setDrawing(false);
+          return;
+        }
+        drawResponse = await callBelowCostAwareRpc('draw_down_quote', drawArgs, reason);
+      }
+      const { data, error } = drawResponse;
       if (error) throw error;
       drawDownIdem.resetKey();
       const result = assertRpcResult<{ status: string; order_id?: string; order_number?: string; warnings?: string[]; fully_drawn?: boolean }>(data, 'draw_down_quote');
@@ -2530,12 +2805,28 @@ export default function QuoteBuilder() {
       // Atomic RPC: order creation + items + inventory prebooking + commissions
       const idemKey = convertQuoteIdem.getKey();
       const expectedRowVersion = quoteRowVersionRef.current;
-      const { data, error } = await convertQuoteToOrderWithRowVersion({
+      const convertArgs = {
         p_quote_id: savedId,
         p_performed_by: profile!.id,
         p_idempotency_key: idemKey,
         p_expected_row_version: expectedRowVersion,
-      });
+      };
+      let convertResponse = await convertQuoteToOrderWithRowVersion(convertArgs);
+      const approvalLines = belowCostLinesFromRpcError(convertResponse.error);
+      if (approvalLines && isAdmin) {
+        const reason = await new Promise<string | null>((resolve) =>
+          setBelowCostPrompt({ lines: approvalLines, resolve })
+        );
+        if (reason === null) {
+          setConverting(false);
+          return;
+        }
+        convertResponse = await convertQuoteToOrderWithRowVersion({
+          ...convertArgs,
+          p_below_cost_reason: reason,
+        });
+      }
+      const { data, error } = convertResponse;
 
       if (error) throw error;
 
@@ -3908,14 +4199,21 @@ export default function QuoteBuilder() {
                             </td>
                             <td className="px-3 py-2">
                               <div className="flex items-center gap-1">
+                                {/* Customer View is shown to the customer, so it gets the same
+                                    redaction the PDF gets: the below-cost approval marker and its
+                                    free-form reason (which can name a competitor's price or a
+                                    complaint) must not appear here. Read-only while redacted --
+                                    editing a stripped value would write the redaction back over
+                                    the real note. (Codex round 27.) */}
                                 <textarea
-                                  value={item.notes || ''}
+                                  value={customerView ? stripInternalNotes(item.notes) || '' : item.notes || ''}
+                                  readOnly={customerView}
                                   onChange={(e) => updateItem(sec._key, item._key, { notes: e.target.value || null })}
                                   rows={1}
                                   placeholder="Product notes..."
                                   className="w-full text-xs border border-gray-200 rounded px-2 py-1 focus:ring-1 focus:ring-crx-green/20 resize-none"
                                 />
-                                {prod && preferredQuoteNotes(prod)
+                                {!customerView && prod && preferredQuoteNotes(prod)
                                   && item.notes !== preferredQuoteNotes(prod) && (
                                   <button
                                     onClick={() => updateItem(sec._key, item._key, { notes: preferredQuoteNotes(prod) })}
@@ -4361,6 +4659,19 @@ export default function QuoteBuilder() {
         entityLabel="quote"
         onKeepEditing={() => setStaleSaveOpen(false)}
         onReload={reloadAfterStaleSave}
+      />
+
+      <BelowCostConfirmModal
+        open={belowCostPrompt !== null}
+        lines={belowCostPrompt?.lines ?? []}
+        onClose={() => {
+          belowCostPrompt?.resolve(null);
+          setBelowCostPrompt(null);
+        }}
+        onConfirm={(reason) => {
+          belowCostPrompt?.resolve(reason);
+          setBelowCostPrompt(null);
+        }}
       />
 
       <ConfirmModal

@@ -9,11 +9,13 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import BulkActionBar from '../components/ui/BulkActionBar';
 import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
+import BelowCostConfirmModal, { type BelowCostLine } from '../components/ui/BelowCostConfirmModal';
 import BulkQuoteImport from '../components/quotes/BulkQuoteImport';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { convertQuoteToOrderWithRowVersion } from '../lib/quoteLifecycleRpc';
+import { belowCostLinesFromRpcError, callBelowCostAwareRpc } from '../lib/belowCostRpc';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
@@ -52,6 +54,10 @@ export default function Quotes() {
   const convertQuoteIdem = useIdempotencyKey('convert_quote_to_order', profile?.id || '');
   const [convertTarget, setConvertTarget] = useState<QuoteRow | null>(null);
   const [converting, setConverting] = useState(false);
+  const [belowCostPrompt, setBelowCostPrompt] = useState<{
+    lines: BelowCostLine[];
+    resolve: (reason: string | null) => void;
+  } | null>(null);
   // F3 guardrail parity with QuoteBuilder: warn (not block) before the one-click
   // convert if the quote is stale (>30d) or the customer already ordered recently.
   const [convertStaleMsg, setConvertStaleMsg] = useState<string | null>(null);
@@ -109,11 +115,21 @@ export default function Quotes() {
     e.stopPropagation();
     try {
       const key = duplicateQuoteIdem.getKey();
-      const { data: result, error } = await supabase.rpc('duplicate_quote', {
+      const duplicateArgs = {
         p_source_quote_id: quoteId,
         p_performed_by: profile!.id,
         p_idempotency_key: key,
-      });
+      };
+      let duplicateResponse = await callBelowCostAwareRpc('duplicate_quote', duplicateArgs);
+      const approvalLines = belowCostLinesFromRpcError(duplicateResponse.error);
+      if (approvalLines && profile?.role === 'admin') {
+        const reason = await new Promise<string | null>((resolve) =>
+          setBelowCostPrompt({ lines: approvalLines, resolve })
+        );
+        if (reason === null) return;
+        duplicateResponse = await callBelowCostAwareRpc('duplicate_quote', duplicateArgs, reason);
+      }
+      const { data: result, error } = duplicateResponse;
       if (error) {
         toast('error', `Failed to duplicate quote: ${error.message}`);
         return;
@@ -182,12 +198,28 @@ export default function Quotes() {
     setConverting(true);
     try {
       const idemKey = convertQuoteIdem.getKey();
-      const { data, error } = await convertQuoteToOrderWithRowVersion({
+      const convertArgs = {
         p_quote_id: convertTarget.id,
         p_performed_by: profile.id,
         p_idempotency_key: idemKey,
         p_expected_row_version: convertTarget.row_version ?? null,
-      });
+      };
+      let convertResponse = await convertQuoteToOrderWithRowVersion(convertArgs);
+      const approvalLines = belowCostLinesFromRpcError(convertResponse.error);
+      if (approvalLines && profile.role === 'admin') {
+        const reason = await new Promise<string | null>((resolve) =>
+          setBelowCostPrompt({ lines: approvalLines, resolve })
+        );
+        if (reason === null) {
+          setConverting(false);
+          return;
+        }
+        convertResponse = await convertQuoteToOrderWithRowVersion({
+          ...convertArgs,
+          p_below_cost_reason: reason,
+        });
+      }
+      const { data, error } = convertResponse;
       if (error) throw error;
       convertQuoteIdem.resetKey();
       const result = data;
@@ -693,9 +725,22 @@ export default function Quotes() {
         loading={deleting}
       />
 
+      <BelowCostConfirmModal
+        open={belowCostPrompt !== null}
+        lines={belowCostPrompt?.lines ?? []}
+        onClose={() => {
+          belowCostPrompt?.resolve(null);
+          setBelowCostPrompt(null);
+        }}
+        onConfirm={(reason) => {
+          belowCostPrompt?.resolve(reason);
+          setBelowCostPrompt(null);
+        }}
+      />
+
       <ConfirmModal
         open={!!convertTarget}
-        onClose={closeConvert}
+        onClose={belowCostPrompt ? () => {} : closeConvert}
         onConfirm={handleConvertConfirm}
         title="Convert to Order?"
         message={

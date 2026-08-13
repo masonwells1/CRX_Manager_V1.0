@@ -270,6 +270,18 @@ Two more consequences worth knowing before you carve a column out:
   from `authenticated` does not reach it. That is what keeps the money engine working — and equally,
   it means a SECDEF function is a live bypass of the carve-out unless it gates internally.
 
+## Product margin columns: "gross margin" means markup
+
+`products.tierN_margin` holds **margin-on-price** ((price − cost) / price — CRX calls it "net
+margin"), and `products.tierN_gross_margin` holds **markup-on-cost** (price / cost − 1 — CRX calls
+it "gross margin"). That is the opposite of standard finance vocabulary, so audits comparing to
+textbook definitions will re-flag it as a data inversion; it is not one. The comments in
+`20260206191700_add_gross_margin_display.sql` describe a formula that lived for ~26 minutes before
+`20260206192224_fix_margin_terminology.sql` deliberately corrected it; the canonical engine today is
+`_calculate_product_pricing()` in `20260718190000_supplier_pricing_phase1a_cutover.sql` (margin-driven:
+`price = cost / (1 − margin)`). Every UI consumer labels both values correctly on-screen
+(`ProductDetail.tsx` defines both terms). Do not "fix" the data and do not trust the 191700 comments.
+
 ---
 
 ## Source

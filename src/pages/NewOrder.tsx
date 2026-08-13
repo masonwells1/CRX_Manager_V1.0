@@ -23,6 +23,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useFormDraft } from '../hooks/useFormDraft';
 import { useCreditLimitCheck } from '../hooks/useGuardrails';
 import GuardrailBanner from '../components/ui/GuardrailBanner';
+import BelowCostConfirmModal, { type BelowCostLine } from '../components/ui/BelowCostConfirmModal';
 import { notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { sendOrderConfirmedEmail } from '../lib/orderConfirmedEmail';
 import { checkRUPCompliance } from '../lib/rupCompliance';
@@ -34,6 +35,7 @@ import { fetchOpenBookings, type OpenBooking } from '../lib/openBookings';
 import { validateInventoryPositionShape } from '../lib/inventoryPositionValidator';
 import { inventoryPositionByProduct } from '../lib/inventoryPositionLookup';
 import { ProductOptionDetails } from '../components/products/ProductOptionPresentation';
+import { appendBelowCostApproval } from '../lib/internalNotes';
 import type { Product, Customer, InventoryPositionRow } from '../types';
 
 interface LocalItem {
@@ -110,6 +112,13 @@ export default function NewOrder() {
   }, [isFieldStaff]);
   // B1 (deep-dive H1): RUP point-of-sale warning — same pattern as QuoteBuilder
   const [rupWarnings, setRupWarnings] = useState<string[]>([]);
+  // Below-cost guardrail: pending confirmation for a save whose effective line
+  // price is under unit cost. Holds the flagged lines plus the promise resolver
+  // that resumes (reason) or cancels (null) the in-flight handleSave.
+  const [belowCostPrompt, setBelowCostPrompt] = useState<{
+    lines: BelowCostLine[];
+    resolve: (reason: string | null) => void;
+  } | null>(null);
 
   // Codex P2 fix (PR #59, 2026-05-16): reset createOrderIdem when form intent
   // changes. Page stays mounted after a failed/lost-response submit; without
@@ -459,12 +468,41 @@ export default function NewOrder() {
       if (!creditOk && !creditWarning?.dismissed) return;
     }
 
-    await submitOrder();
+    // Below-cost guardrail: a priced line whose effective price (override or
+    // tier — recalcItem already folded the override into price_per_unit) is
+    // strictly under the product's unit cost needs an explicit reason before
+    // the order can be created. Skipped for field staff and rush/price-later
+    // orders — those submit unpriced, so there is no price to check.
+    let belowCostReason: string | null = null;
+    if (!isFieldStaff && !priceLater) {
+      const belowCostLines: BelowCostLine[] = validItems
+        .filter((item) => item.unit_cost > 0 && item.price_per_unit < item.unit_cost)
+        .map((item) => ({ productName: item.product_name, price: item.price_per_unit, cost: item.unit_cost }));
+      if (belowCostLines.length > 0) {
+        if (profile.role !== 'admin') {
+          toast('error', 'Only an active admin can approve a sale below cost. Ask an admin to review this order.');
+          return;
+        }
+        belowCostReason = await new Promise<string | null>((resolve) =>
+          setBelowCostPrompt({ lines: belowCostLines, resolve })
+        );
+        if (belowCostReason === null) return;
+      }
+    }
+
+    await submitOrder(belowCostReason);
   };
 
-  const submitOrder = async () => {
+  const submitOrder = async (belowCostReason: string | null = null) => {
     if (!profile) return;
     const validItems = items.filter((item) => item.product_id && item.quantity > 0);
+    // Record the below-cost approval on the order's notes so the reason
+    // travels with the entity. (Rush orders never carry a reason — the
+    // below-cost gate is skipped for the unpriced path.) The order summary PDF
+    // strips this marker before printing; see src/lib/internalNotes.ts.
+    const notesWithApproval = belowCostReason
+      ? appendBelowCostApproval(notes, belowCostReason)
+      : notes;
     setSaving(true);
 
     await runCriticalAction({
@@ -517,7 +555,7 @@ export default function NewOrder() {
           p_customer_id: customerId,
           p_order_date: orderDate,
           p_order_name: orderName || undefined,
-          p_notes: notes || undefined,
+          p_notes: notesWithApproval || undefined,
           p_items: rpcItems,
           p_performed_by: profile.id,
           p_idempotency_key: idemKey,
@@ -632,6 +670,19 @@ export default function NewOrder() {
       </div>
 
       <GuardrailBanner warning={creditWarning} onDismiss={dismissCreditWarning} />
+
+      <BelowCostConfirmModal
+        open={belowCostPrompt !== null}
+        lines={belowCostPrompt?.lines ?? []}
+        onClose={() => {
+          belowCostPrompt?.resolve(null);
+          setBelowCostPrompt(null);
+        }}
+        onConfirm={(reason) => {
+          belowCostPrompt?.resolve(reason);
+          setBelowCostPrompt(null);
+        }}
+      />
 
       {rupWarnings.length > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">

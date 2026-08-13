@@ -77,7 +77,9 @@ function makeCalcItem(overrides: Partial<CalcItem> = {}): CalcItem {
     rate_unit: 'OZ',
     acres: 100,
     price_per_unit: 0,
-    current_cost: 0,
+    // null = no quote-time snapshot, so the live catalog cost applies.
+    // A stored 0 is a real cost and is no longer overridden.
+    current_cost: null,
     oz_per_acre: null,
     price_per_acre: null,
     total_units_needed: null,

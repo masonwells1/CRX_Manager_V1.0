@@ -1,4 +1,5 @@
 import { assertRpcResult, supabaseUntyped } from './db';
+import { callBelowCostAwareRpc } from './belowCostRpc';
 
 type RpcErrorShape = {
   code?: unknown;
@@ -78,28 +79,22 @@ export async function convertQuoteToOrderWithRowVersion(args: {
   p_performed_by: string;
   p_idempotency_key: string;
   p_expected_row_version: number | null;
+  p_below_cost_reason?: string | null;
 }) {
-  const { p_expected_row_version: _expectedRowVersion, ...legacyArgs } = args;
-  const { data, error } = await supabaseUntyped.rpc('convert_quote_to_order', args);
+  const { p_below_cost_reason = null, ...rowVersionArgs } = args;
+  const { data, error } = await callBelowCostAwareRpc(
+    'convert_quote_to_order', rowVersionArgs, p_below_cost_reason,
+  );
   if (!error) {
     return {
       data: assertRpcResult<ConvertQuoteToOrderResult>(data, 'convert_quote_to_order'),
       error: null,
     };
   }
-  if (!isMissingLifecycleSignature(error, 'convert_quote_to_order')) {
-    return { data: null, error };
-  }
-
-  const { data: legacyData, error: legacyError } = await supabaseUntyped.rpc(
-    'convert_quote_to_order',
-    legacyArgs,
-  );
-  if (legacyError) return { data: null, error: legacyError };
-  return {
-    data: assertRpcResult<ConvertQuoteToOrderResult>(legacyData, 'convert_quote_to_order'),
-    error: null,
-  };
+  // Conversion is money/security sensitive. A missing governed signature must
+  // fail closed instead of retrying an overload without row-version and
+  // below-cost approval arguments.
+  return { data: null, error };
 }
 
 export async function restoreQuoteVersionWithRowVersion(args: {
@@ -108,26 +103,19 @@ export async function restoreQuoteVersionWithRowVersion(args: {
   p_performed_by: string;
   p_idempotency_key: string;
   p_expected_row_version: number | null;
+  p_below_cost_reason?: string | null;
 }) {
-  const { p_expected_row_version: _expectedRowVersion, ...legacyArgs } = args;
-  const { data, error } = await supabaseUntyped.rpc('restore_quote_version', args);
+  const { p_below_cost_reason = null, ...rowVersionArgs } = args;
+  const { data, error } = await callBelowCostAwareRpc(
+    'restore_quote_version', rowVersionArgs, p_below_cost_reason,
+  );
   if (!error) {
     return {
       data: assertRpcResult<RestoreQuoteVersionResult>(data, 'restore_quote_version'),
       error: null,
     };
   }
-  if (!isMissingLifecycleSignature(error, 'restore_quote_version')) {
-    return { data: null, error };
-  }
-
-  const { data: legacyData, error: legacyError } = await supabaseUntyped.rpc(
-    'restore_quote_version',
-    legacyArgs,
-  );
-  if (legacyError) return { data: null, error: legacyError };
-  return {
-    data: assertRpcResult<RestoreQuoteVersionResult>(legacyData, 'restore_quote_version'),
-    error: null,
-  };
+  // Restore can recreate money-bearing lines. Preserve the governed error and
+  // never retry a legacy overload that omits the concurrency and approval wall.
+  return { data: null, error };
 }

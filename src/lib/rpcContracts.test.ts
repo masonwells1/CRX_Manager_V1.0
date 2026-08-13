@@ -24,25 +24,24 @@ interface ConvertQuoteToOrderParams {
   p_performed_by: string; // uuid
 }
 
-// The item shape below is the one the deployed `create_direct_order` actually
-// reads (verified 2026-08-11 against live `pg_proc.prosrc`: the function reads
-// exactly `product_id`, `product_name`, `quantity`, `price_per_unit`,
-// `unit_cost`, `unit_size`) and the one the sole production caller sends
-// (`src/pages/NewOrder.tsx`). It previously declared a wholly different set —
-// `current_cost`, `actual_rate`, `total_units_needed`, `total_price`,
-// `total_cost`, `profit`, `net_margin` — none of which the function reads, so
-// the contract test was guarding a payload nobody sends. Wave A fix #1 makes
-// product cost authoritative over the caller-supplied `unit_cost`, which is
-// precisely the field the stale shape omitted.
 interface CreateDirectOrderParams {
   p_customer_id: string;  // uuid
   p_items: Array<{
     product_id: string;
-    product_name: string;
-    quantity: number;
     price_per_unit: number;
-    unit_cost: number;
+    current_cost: number;
+    actual_rate: number | null;
+    rate_unit: string | null;
+    oz_per_acre: number | null;
+    price_per_acre: number | null;
+    acres: number | null;
+    total_units_needed: number;
     unit_size: number | null;
+    total_price: number;
+    total_cost: number;
+    profit: number;
+    net_margin: number;
+    notes: string | null;
   }>;
   p_commission_split: { splits: Array<{ recipient: string; recipient_user_id?: string | null; percentage: number }> } | null;
   p_performed_by: string;
@@ -247,11 +246,20 @@ describe('RPC contract: create_direct_order', () => {
       p_items: [
         {
           product_id: 'prod-uuid',
-          product_name: 'Roundup PowerMAX',
-          quantity: 25,
           price_per_unit: 20,
-          unit_cost: 10,
+          current_cost: 10,
+          actual_rate: 32,
+          rate_unit: 'fl oz',
+          oz_per_acre: 32,
+          price_per_acre: 5,
+          acres: 100,
+          total_units_needed: 25,
           unit_size: null,
+          total_price: 500,
+          total_cost: 250,
+          profit: 250,
+          net_margin: 50,
+          notes: null,
         },
       ],
       p_commission_split: {
@@ -260,11 +268,7 @@ describe('RPC contract: create_direct_order', () => {
       p_performed_by: 'user-uuid',
     });
     expect(params.p_items).toHaveLength(1);
-    // `quantity` is the field the function reads to size the line; the stale
-    // shape omitted it, so a payload matching the old declaration would have
-    // been read as quantity 0 and skipped entirely.
-    expect(params.p_items[0].quantity).toBe(25);
-    expect(params.p_items[0].unit_cost).toBe(10);
+    expect(params.p_items[0].total_price).toBe(500);
   });
 
   it('accepts null commission_split', () => {
@@ -857,6 +861,8 @@ interface IssueReturnCreditResult {
   credit_invoice_id: string;
   credit_invoice_number: string;
   credit_amount_cents: number;
+  /** Positive magnitude of COGS removed from the books (mig 20260808170000). */
+  cogs_reversed_cents: number;
   customer_id: string;
   credited_at: string;          // ISO timestamp
 }
@@ -996,6 +1002,7 @@ describe('RPC contract: issue_return_credit', () => {
       credit_invoice_id: 'inv-uuid',
       credit_invoice_number: 'CM-2026-0001',
       credit_amount_cents: 25000,
+      cogs_reversed_cents: 18000,
       customer_id: 'cust-uuid',
       credited_at: '2026-05-07T01:00:00Z',
     };
@@ -1390,6 +1397,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   // declare p_idempotency_key, and use the canonical replay machinery, so they are
   // classified here rather than in the migration-only bucket.
   '_cancel_order_idem_impl_20260721',
+  '_create_direct_order_below_cost_impl_20260810',
   '_save_field_app_split_invoice_impl',
   '_save_purchase_order_ascii_identity_impl',
   'adjust_inventory',
@@ -1407,9 +1415,6 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   // types regenerated 2026-07-21): each declares p_idempotency_key and replays via
   // check_idempotency/save_idempotency.
   'approve_supplier_price_import',
-  // Customer 360 ownership assignment: payload-bound replay is serialized by
-  // check_idempotency before the target rep/customer rows are mutated.
-  'assign_customers_sales_rep',
   'batch_apply_all_prepayments',
   'batch_apply_prepayments',
   'batch_cancel_deliveries',
@@ -1639,6 +1644,11 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // directly non-executable implementation that owns the canonical replay
   // lookup/save. A dedicated test below pins that indirection and both grants.
   complete_delivery: 'delegated',
+  // The below-cost approval wrapper establishes the transaction-local guard
+  // context and delegates to an owner-only preserved implementation. That
+  // implementation retains the canonical convert_quote_to_order replay
+  // lookup/save; duplicating it in the wrapper would consume the key twice.
+  convert_quote_to_order: 'delegated',
   // The private-provenance wrapper owns a bound replay claim, adds stable
   // order-item serialization and an owner-only creation claim, then invokes
   // the canonical private implementation without a second legacy key.
@@ -1646,6 +1656,10 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // The private-provenance wrapper owns the actor + normalized-ID replay claim,
   // adds an owner-only mutation claim, then invokes the private implementation.
   delete_invoices: 'delegated',
+  // Same governed-wrapper shape as quote conversion: the public function
+  // carries the approval reason, while the renamed owner-only implementation
+  // retains duplicate_quote's canonical replay contract.
+  duplicate_quote: 'delegated',
   // The terminal-provenance wrapper binds actor + order before issuing exact
   // governed cancellation claims and invoking the private implementation.
   cancel_order: 'delegated',
@@ -2250,7 +2264,7 @@ function registryMigrationHighWater(): string {
 // Keep this set aligned with rows explicitly marked PENDING APPLY in
 // docs/reference/migration-history.md.
 //
-// No migration indexed by the current history is waiting on a live apply.
+// The pricing/cent-repair release slice is live; no pending migration remains.
 const EXPECTED_PENDING_MIGRATION_TIMESTAMPS = new Set<string>();
 
 /**
@@ -2321,31 +2335,8 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // MUTATING_RPCS_WITH_IDEMPOTENCY. This bucket remains for the normal pre-apply
   // window: an RPC introduced by a PR migration that is not yet live belongs
   // here until the next truthful live type regeneration.
-
-  // Wave A fix #4 (20260813050000, parked). It accepts p_idempotency_key and
-  // routes it through check_idempotency/save_idempotency, but it cannot appear
-  // in the generated types until the migration applies, so the inventory sees a
-  // mutator with no declared key. This is exactly the pre-apply window this
-  // bucket exists for; the staleness test above deletes it for us by failing the
-  // moment the RPC shows up in the generated types.
   'correct_job_commission_split',
 
-  // Wave A fix #1 (20260813010000, parked). Owner-only implementation half of
-  // the public create_direct_order RPC, after a sibling session split that
-  // function into a below-cost-approval wrapper plus this impl. It declares
-  // p_idempotency_key and routes it through check_idempotency/save_idempotency
-  // under the public 'create_direct_order' operation, so replay safety is real
-  // and shared with the wrapper.
-  //
-  // Two ways this entry differs from the one above, recorded so nobody has to
-  // re-derive them. (1) It is not merely pre-apply: the impl is deliberately
-  // owner-only and never PostgREST-exposed, so it can never appear in the
-  // generated types and the staleness test above will never retire it for us.
-  // (2) Once this migration is applied and the registry high-water passes
-  // 20260813010000, the impl also drops out of the discovered inventory
-  // entirely, at which point this entry is inert. Delete it then; it is not
-  // load-bearing after apply.
-  '_create_direct_order_below_cost_impl_20260810',
 ]);
 
 /**
@@ -2364,6 +2355,12 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
  * anything, they are simply no longer discovered.
  */
 const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
+  _guard_delivery_completion_authorized:
+    'pending trigger-only authorization guard; PostgreSQL invokes it from delivery status updates and direct application-role EXECUTE is revoked',
+  _guard_job_commission_split_immutable:
+    'pending trigger-only immutability guard; PostgreSQL invokes it from job split updates and direct application-role EXECUTE is revoked',
+  check_idempotency_intent:
+    'internal receipt-check helper: it deletes only expired idempotency rows, serializes by key, and is executable only by postgres; the three authenticated payout wrappers own request idempotency',
   _close_undelivered_order_remainder_20260718:
     'preserved internal cancel-remainder impl (Phase 1a closeout); the required-key public cancel_order wrapper owns idempotency and every application-role EXECUTE is revoked',
   _post_deleted_delivery_recovery_invoice_20260719:
@@ -2372,34 +2369,16 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
     'idempotency infrastructure helper (sections 2-6 closeout): binds a completed lifecycle result to its key; direct client EXECUTE is revoked',
   _claim_bound_lifecycle_idempotency:
     'idempotency infrastructure helper (sections 2-6 closeout): claims a bound lifecycle key for replay; direct client EXECUTE is revoked',
-  // Pruned on the 2026-08-11 merge of origin/main, per the standing rule below that a
-  // dead exemption silently pre-suppresses any future RPC reusing the name:
-  //   _guard_job_commission_split_immutable was pruned when its original timestamp
-  //     fell behind the registry high-water. Wave A remediation re-stamped it to
-  //     20260813050000, so it is pending/discovered again and is classified below.
-  //   _crx_payout_assert_impl_20260809 / _crx_payout_assert_replay_20260809 — 20260811130000
-  //     landed on main and applied live; it drops both helpers before finishing.
   _insert_commissions_for_job: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _insert_commissions_for_order: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
-  _guard_job_commission_split_immutable:
-    'trigger-only immutable-split guard; the idempotent correct_job_commission_split RPC owns the governed mutation and direct EXECUTE is revoked',
-  _guard_delivery_completion_authorized:
-    'trigger-only completion-provenance guard; public complete_delivery owns the idempotent, row-bound governed mutation and direct EXECUTE is revoked',
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',
   _recompute_po_on_order_for_products:
     'internal convergent PO-cache recomputation helper; trigger parents own the transaction and direct browser EXECUTE is revoked',
-  // Trigger-only helpers whose migrations are now at or below the live registry
-  // high-water are absent from generated client types and this inventory. Keeping
-  // dead exemptions would silently pre-suppress any future RPC reusing a name.
-  _enforce_below_cost_line:
-    'trigger-only below-cost guard installed by 20260812115237 (RETURNS trigger, so PostgreSQL refuses any direct call; EXECUTE revoked from PUBLIC, anon and authenticated). It rejects a below-cost line unless the caller is an active admin with a fresh reason, and its one INSERT is the immutable approval-audit row for the money write in the same transaction — replaying the write replays the whole transaction, so the audit row cannot be orphaned or duplicated independently of it.',
   _sync_job_holds: 'internal convergent hold-sync helper; direct client EXECUTE is revoked',
   _sync_planned_holds: 'internal convergent hold-sync helper called within parent transactions',
   _sync_quote_job_reservations: 'internal convergent reservation-sync helper called by parent RPCs',
   auto_expire_quotes: 'service-role maintenance sets only currently-expirable quote statuses',
   check_idempotency: 'idempotency infrastructure helper; mutation only purges an expired key',
-  check_idempotency_intent:
-    'idempotency infrastructure helper (Section 07 gauntlet finding 2); mutation only purges an expired key, and it raises rather than replays when the actor or request fingerprint differs; direct client EXECUTE is revoked',
   check_rate_limit: 'rate-limit counter intentionally records every invocation, including retries',
   check_remainder_reminders: 'maintenance reminder sweep uses persisted sent markers to deduplicate',
   check_unpriced_orders: 'cron reminder sweep uses persisted reminder and escalation sent markers',
@@ -2547,7 +2526,7 @@ describe('Idempotency coverage drift (generated-types driven, fail-closed)', () 
       .filter((rpc) => {
         if (rpc in IDEMPOTENCY_BODY_EXEMPT) return false;
         const body = functions.get(rpc)?.body || latestFunctionBody(rpc) || '';
-        return !bodyUsesIdempotency(body);
+        return !usesIdempotencyThroughDelegates(body);
       })
       .sort();
 

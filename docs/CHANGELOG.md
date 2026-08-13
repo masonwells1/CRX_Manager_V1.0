@@ -2,6 +2,29 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-13 — Multi-price partial quote draws made cent-safe (local candidate)
+
+Exact-commit review of the pricing recovery found a live edge case before the
+release branch was pushed: when one product is booked on two quote lines at
+prices one cent apart, `draw_down_quote` can calculate a half-cent weighted
+unit price. The whole-cent database guard correctly rejects that value, but the
+result is that a valid partial draw fails and the transaction rolls back.
+
+`20260813053545_allocate_multi_price_quote_draws.sql` is a forward-only fix. It
+replaces only the private draw implementation, preserves the governed public
+RPC and its idempotency key, allocates each partial order line as the delta
+between cumulative rounded booking value before and after the draw, and floors
+the stored display unit price to cents so below-cost enforcement remains
+fail-closed. A rollback smoke now draws two one-unit orders from same-product
+quote lines priced at `$10.00` and `$10.01`, proving both order lines are
+cent-exact and their combined authoritative total is exactly `$20.01`.
+
+The captured-schema proof replayed all 968 captured live ledger rows, applied
+the four pricing migrations and all seven pending candidates in order, passed
+the three rollback smoke suites, and left zero residue. **This follow-up is not
+applied live yet**, so this entry records prepared and proven source rather than
+a production behavior change.
+
 ## 2026-08-12 — Six migrations were running in production with no file in the repository
 
 Recovered and landed. **Nothing is applied by this change and no live behaviour changes** — all six
@@ -77,24 +100,19 @@ the first time any reviewer could — and between them raised six findings. Each
 current source and read-only live schema rather than accepted on the reviewer's word. **Four describe
 production as it already stands; none is caused by landing the files.** Three held up, one did not:
 
-- **Confirmed — the below-cost approval path has no front end.** The database now requires an active
-  admin *and* a written reason for any line priced under cost, carried by `p_below_cost_reason`. No
-  caller in `src/` passes it, and `src/lib/internalNotes.ts`, referenced by the migration's own
-  notes, does not exist. The approval audit table has never recorded a row. Below-cost saves
-  therefore fail with a generic error and no path forward. Sales at or above cost are unaffected —
-  the guard returns early before any of this is reached.
-- **Confirmed — a quote carrying the same product on two lines cannot be re-saved.** `save_quote`
-  identifies existing lines by id, but the QuoteBuilder payload
-  (`src/pages/QuoteBuilder.tsx`) omits `id` and `client_key` entirely, so every line arrives
-  unidentified and two lines of one product are unresolvable. The resulting
-  `QUOTE_ITEM_AMBIGUOUS_COST` tells the user to reload the quote, which cannot help, because the
-  reload strips the ids again. New quotes are unaffected; the guard only engages where prior lines of
-  that product already exist. No quote in the live database is currently shaped this way, so this is
-  latent rather than active.
-- **Confirmed — `get_profitability_report` is not wired to anything.** `20260812115235` added it so
-  the profitability tabs would stop re-implementing cost basis in the browser, but no caller exists
-  and `src/pages/Reports.tsx` still groups stored header and line profit client-side. The corrected
-  basis is in the database and is not reaching the screen.
+- **Resolved in this combined release — the below-cost approval path now has a front end.** Invoice,
+  order, bulk-order, quote-convert, quote-restore, quote-draw-down, and rush-order callers carry the
+  database challenge through `p_below_cost_reason`, show the shared reason modal, and retry with the
+  same idempotency key. Cancelling makes no second request and the database remains the enforcement
+  boundary.
+- **Resolved in this combined release — same-product quote lines retain identity.** QuoteBuilder now
+  keeps each loaded line's id/client key through the save payload, so the database can preserve the
+  correct immutable cost snapshot instead of rejecting two existing lines for one product as
+  ambiguous.
+- **Resolved in this combined release — Reports uses `get_profitability_report`.** Customer,
+  product, and monthly revenue views now read the authenticated canonical RPC and map its typed
+  response directly to the existing tables/CSV exports. A rendered page test switches through all
+  three views and proves their RPC arguments and displayed results.
 - **Not confirmed — blend-ticket lines without a product.** The claim was that a NULL `product_id`
   would leave the cost NULL, and that `price >= NULL` (which is NULL, not true) would fall through
   into the fail-closed branch. The control flow is exactly that. The case is nonetheless unreachable:
@@ -103,10 +121,10 @@ production as it already stands; none is caused by landing the files.** Three he
   optional, and the reason is itself a finding: typing it as required broke the cast at
   `src/pages/QuoteBuilder.tsx:834`, which proved the quote loader's explicit column list never
   fetches the snapshot at all.
-- **Deferred with cause — `.claude/schema-registry.json`.** It is stale by far more than this one
-  column (high-water `20260812003315` against a live `20260812154757`), so the correct fix is a full
-  `--from-introspection` rebuild. Doing that here would resync the entire schema and bury a six-file
-  recovery record inside an unrelated diff. Tracked in `docs/manual/KNOWN_ISSUES.md`.
+- **Partially closed — `.claude/schema-registry.json`.** The pricing merge restores the generated
+  types and registry through assigned pricing high-water `20260812154757`. Two later return-credit
+  migrations advanced live to `20260813011751`; their companion release owns the final live
+  introspection refresh, so this PR does not mislabel the pricing-era snapshot as current.
 
 Both reviewers also noted that the already-applied files assert privileges against literal role names
 without first checking `pg_roles`, and that the non-finite money guard in `20260812011000` covers only
@@ -174,6 +192,1038 @@ exists in this repository once the recovered `20260812115237` is on disk. Landin
 produces a tree that reads as self-inconsistent, and an adversarial review of the merged result
 correctly refuses it.
 
+
+## 2026-08-12 — Pricing audit application integration and release proof
+
+## 2026-08-12 — Replaced rollback-probe heuristic trust with fail-closed filename plus…
+
+Replaced rollback-probe heuristic trust with fail-closed filename plus LF-normalized SHA-256 binding for the three exact reviewed Wave A probe migrations; unregistered, renamed, or modified probes now fail before structural checks, with 63 mutation cases and captured-live replay green.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `5224ad3f Require reachable rollback probe proof`
+  - `eb4e34c2 Reject quoted rollback probe proof tokens`
+  - `f4172d5e Harden rollback probe scope validation`
+  - `81240c6f Close pricing release proof and exact money gaps`
+  - `aa062d24 feat: complete pricing audit rollout`
+  - `2fd01956 Merge remote-tracking branch 'origin/main' into codex/finish-pricing-audit-20260810`
+  - `f4d3d4b5 Harden pricing audit retry and proof guards`
+  - `45c8acf5 Close final pricing and migration-review gaps`
+  - `9b722997 security(perms): drop tracked recursive Read grant above the checkout`
+  - `585eb281 Fail closed on quote lifecycle signature skew`
+  - `4b78bddf Close remaining pricing review gaps`
+  - `04a739a4 Reject fractional-cent pricing before approval`
+  - `5d6220da chore(db): restore applied stale-profit migration source`
+  - `f7ee2cd8 Keep approved below-cost sales lifecycle-safe`
+  - `f52e8c85 Rebase pricing migrations onto live money guards`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260812010000_blend_ticket_order_header_runtime_assert.sql`
+  - `supabase/migrations/20260812011000_restore_quote_version_whole_cent_money.sql`
+  - `supabase/migrations/20260812145628_snapshot_cost_reporting.sql`
+  - `supabase/migrations/20260812151606_quote_items_cost_at_quote_snapshot.sql`
+  - `supabase/migrations/20260812154028_enforce_below_cost_admin_approval.sql`
+  - `supabase/migrations/20260812154757_repair_historical_order_line_cents.sql`
+  - `supabase/migrations/20260813010000_wave_a_order_cost_authority_and_finiteness.sql`
+  - `supabase/migrations/20260813020000_round_order_header_money.sql`
+  - `supabase/migrations/20260813040000_clamp_negative_commission_remainder.sql`
+  - `supabase/migrations/20260813050000_guard_job_commission_split_immutable.sql`
+  - `supabase/migrations/20260813060000_require_completed_delivery_before_invoice_post.sql`
+
+## 2026-08-12 — Closed the exact-commit reviewers' rollback-probe reachability finding:…
+
+Closed the exact-commit reviewers' rollback-probe reachability finding: sentinels must be outside conditional/CASE/loop control flow and residue proof must be a reachable canonical before/after or EXISTS assertion; 58 mutation cases and the full captured-live replay pass.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `eb4e34c2 Reject quoted rollback probe proof tokens`
+  - `f4172d5e Harden rollback probe scope validation`
+  - `81240c6f Close pricing release proof and exact money gaps`
+  - `aa062d24 feat: complete pricing audit rollout`
+  - `2fd01956 Merge remote-tracking branch 'origin/main' into codex/finish-pricing-audit-20260810`
+  - `f4d3d4b5 Harden pricing audit retry and proof guards`
+  - `45c8acf5 Close final pricing and migration-review gaps`
+  - `9b722997 security(perms): drop tracked recursive Read grant above the checkout`
+  - `585eb281 Fail closed on quote lifecycle signature skew`
+  - `4b78bddf Close remaining pricing review gaps`
+  - `04a739a4 Reject fractional-cent pricing before approval`
+  - `5d6220da chore(db): restore applied stale-profit migration source`
+  - `f7ee2cd8 Keep approved below-cost sales lifecycle-safe`
+  - `f52e8c85 Rebase pricing migrations onto live money guards`
+  - `594d5e94 Merge live whole-cent migration source`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260812010000_blend_ticket_order_header_runtime_assert.sql`
+  - `supabase/migrations/20260812011000_restore_quote_version_whole_cent_money.sql`
+  - `supabase/migrations/20260812145628_snapshot_cost_reporting.sql`
+  - `supabase/migrations/20260812151606_quote_items_cost_at_quote_snapshot.sql`
+  - `supabase/migrations/20260812154028_enforce_below_cost_admin_approval.sql`
+  - `supabase/migrations/20260812154757_repair_historical_order_line_cents.sql`
+  - `supabase/migrations/20260813010000_wave_a_order_cost_authority_and_finiteness.sql`
+  - `supabase/migrations/20260813020000_round_order_header_money.sql`
+  - `supabase/migrations/20260813040000_clamp_negative_commission_remainder.sql`
+  - `supabase/migrations/20260813050000_guard_job_commission_split_immutable.sql`
+  - `supabase/migrations/20260813060000_require_completed_delivery_before_invoice_post.sql`
+
+## 2026-08-12 — Hardened the rollback-probe migration waiver against quoted proof-token…
+
+Hardened the rollback-probe migration waiver against quoted proof-token spoofing, quoted markers, escaped rewrite scope, and non-sentinel error swallowing; added regression mutations and reran the 968-ledger plus six-Wave-A captured-schema proof.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `f4172d5e Harden rollback probe scope validation`
+  - `81240c6f Close pricing release proof and exact money gaps`
+  - `aa062d24 feat: complete pricing audit rollout`
+  - `2fd01956 Merge remote-tracking branch 'origin/main' into codex/finish-pricing-audit-20260810`
+  - `f4d3d4b5 Harden pricing audit retry and proof guards`
+  - `45c8acf5 Close final pricing and migration-review gaps`
+  - `9b722997 security(perms): drop tracked recursive Read grant above the checkout`
+  - `585eb281 Fail closed on quote lifecycle signature skew`
+  - `4b78bddf Close remaining pricing review gaps`
+  - `04a739a4 Reject fractional-cent pricing before approval`
+  - `5d6220da chore(db): restore applied stale-profit migration source`
+  - `f7ee2cd8 Keep approved below-cost sales lifecycle-safe`
+  - `f52e8c85 Rebase pricing migrations onto live money guards`
+  - `594d5e94 Merge live whole-cent migration source`
+  - `72380487 Checkpoint pricing enforcement before live-source merge`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260812010000_blend_ticket_order_header_runtime_assert.sql`
+  - `supabase/migrations/20260812011000_restore_quote_version_whole_cent_money.sql`
+  - `supabase/migrations/20260812145628_snapshot_cost_reporting.sql`
+  - `supabase/migrations/20260812151606_quote_items_cost_at_quote_snapshot.sql`
+  - `supabase/migrations/20260812154028_enforce_below_cost_admin_approval.sql`
+  - `supabase/migrations/20260812154757_repair_historical_order_line_cents.sql`
+  - `supabase/migrations/20260813010000_wave_a_order_cost_authority_and_finiteness.sql`
+  - `supabase/migrations/20260813020000_round_order_header_money.sql`
+  - `supabase/migrations/20260813040000_clamp_negative_commission_remainder.sql`
+  - `supabase/migrations/20260813050000_guard_job_commission_split_immutable.sql`
+  - `supabase/migrations/20260813060000_require_completed_delivery_before_invoice_post.sql`
+
+## 2026-08-12 — Hardened the migration rollback-probe exemption to bind every…
+
+Hardened the migration rollback-probe exemption to bind every business-row rewrite to the same sentinel exception subtransaction, with an escaped-write mutation regression; 51 adversarial cases and the full captured-ledger migration proof pass.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `81240c6f Close pricing release proof and exact money gaps`
+  - `aa062d24 feat: complete pricing audit rollout`
+  - `2fd01956 Merge remote-tracking branch 'origin/main' into codex/finish-pricing-audit-20260810`
+  - `f4d3d4b5 Harden pricing audit retry and proof guards`
+  - `45c8acf5 Close final pricing and migration-review gaps`
+  - `9b722997 security(perms): drop tracked recursive Read grant above the checkout`
+  - `585eb281 Fail closed on quote lifecycle signature skew`
+  - `4b78bddf Close remaining pricing review gaps`
+  - `04a739a4 Reject fractional-cent pricing before approval`
+  - `5d6220da chore(db): restore applied stale-profit migration source`
+  - `f7ee2cd8 Keep approved below-cost sales lifecycle-safe`
+  - `f52e8c85 Rebase pricing migrations onto live money guards`
+  - `594d5e94 Merge live whole-cent migration source`
+  - `72380487 Checkpoint pricing enforcement before live-source merge`
+  - `ca0fa4de Merge origin/main into the whole-cent branch`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260812010000_blend_ticket_order_header_runtime_assert.sql`
+  - `supabase/migrations/20260812011000_restore_quote_version_whole_cent_money.sql`
+  - `supabase/migrations/20260812145628_snapshot_cost_reporting.sql`
+  - `supabase/migrations/20260812151606_quote_items_cost_at_quote_snapshot.sql`
+  - `supabase/migrations/20260812154028_enforce_below_cost_admin_approval.sql`
+  - `supabase/migrations/20260812154757_repair_historical_order_line_cents.sql`
+  - `supabase/migrations/20260813010000_wave_a_order_cost_authority_and_finiteness.sql`
+  - `supabase/migrations/20260813020000_round_order_header_money.sql`
+  - `supabase/migrations/20260813040000_clamp_negative_commission_remainder.sql`
+  - `supabase/migrations/20260813050000_guard_job_commission_split_immutable.sql`
+  - `supabase/migrations/20260813060000_require_completed_delivery_before_invoice_post.sql`
+
+## 2026-08-12 — Completed pricing-audit release repairs: preserved below-cost wrapper…
+
+Completed pricing-audit release repairs: preserved below-cost wrapper compatibility through pending Wave A migrations, added fail-closed rollback-probe validation, switched QuoteBuilder to exact decimal money and authoritative server totals, and proved the captured-live migration chain plus full app suite.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `aa062d24 feat: complete pricing audit rollout`
+  - `2fd01956 Merge remote-tracking branch 'origin/main' into codex/finish-pricing-audit-20260810`
+  - `f4d3d4b5 Harden pricing audit retry and proof guards`
+  - `45c8acf5 Close final pricing and migration-review gaps`
+  - `9b722997 security(perms): drop tracked recursive Read grant above the checkout`
+  - `585eb281 Fail closed on quote lifecycle signature skew`
+  - `4b78bddf Close remaining pricing review gaps`
+  - `04a739a4 Reject fractional-cent pricing before approval`
+  - `5d6220da chore(db): restore applied stale-profit migration source`
+  - `f7ee2cd8 Keep approved below-cost sales lifecycle-safe`
+  - `f52e8c85 Rebase pricing migrations onto live money guards`
+  - `594d5e94 Merge live whole-cent migration source`
+  - `72380487 Checkpoint pricing enforcement before live-source merge`
+  - `ca0fa4de Merge origin/main into the whole-cent branch`
+  - `fdfd782d Close below-cost review blockers`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260812010000_blend_ticket_order_header_runtime_assert.sql`
+  - `supabase/migrations/20260812011000_restore_quote_version_whole_cent_money.sql`
+  - `supabase/migrations/20260812145628_snapshot_cost_reporting.sql`
+  - `supabase/migrations/20260812151606_quote_items_cost_at_quote_snapshot.sql`
+  - `supabase/migrations/20260812154028_enforce_below_cost_admin_approval.sql`
+  - `supabase/migrations/20260812154757_repair_historical_order_line_cents.sql`
+
+## 2026-08-12 — Pricing audit and exact historical-cent repair applied live
+
+Recovered the power-interrupted pricing finish from checkpoint commit `f4d3d4b5`, reconciled the
+captured production ledger, and completed the approved four-migration rollout. Supabase assigned
+live versions `20260812145628`, `20260812151606`, `20260812154028`, and `20260812154757` to submitted
+migrations `20260812115235` through `20260812115238`. The disk files were B7-renamed to those assigned
+versions after their normalized byte lengths and SHA-256 values matched the stored live statements.
+
+Every apply used a fresh exact-byte dual-review proof and an immediate live-ledger precondition. The
+first below-cost enforcement attempt failed because `extensions.moddatetime()` was not installed and
+rolled back completely; the migration was changed to the existing `public.update_updated_at()`
+project convention, revalidated, re-reviewed, and applied successfully. No partial approval table,
+trigger, function, or grant change survived the failed attempt.
+
+Before the durable historical repair, a rollback-only production run repaired exactly 35 lines across
+16 orders, installed and validated the whole-cent constraint inside the transaction, deliberately
+aborted, and restored SHA-256 preimage
+`0f8ccef3bf6d3291c654d5abb24a151e16ad759851f5eddfc65d1585d7f5b7db`. The durable apply then passed
+the same map/digest/postimage guards. Live postflight shows zero dirty order-line prices, a validated
+`order_items_total_price_whole_cents_chk`, zero header-rollup mismatches, RLS on
+`below_cost_approvals`, all three line enforcement triggers, and no direct app-role DML on the three
+protected line tables. The schema registry and generated Supabase TypeScript types were refreshed
+from the 968-row live ledger. Post-apply sweeps, rollback smokes, preflight, and reviewed PR delivery
+remain before the repository portion of this release is closed.
+
+The documentation freshness guard now ignores deliberately future-dated parked migrations until
+their calendar day, preventing it from demanding an impossible future `Last verified` date while
+still making those migrations count automatically when their date arrives. The pricing disposable
+replay likewise names the six unrelated Wave A candidates explicitly, proves they remain unapplied
+and ordered above the captured high-water, and still fails closed on any unlisted migration. The
+idempotency inventory now also classifies those candidates' two trigger-only guards and their
+idempotent admin correction RPC, preserving the fail-closed contract test during the pre-apply window.
+
+Final release review extended the captured-live disposable proof through all six still-unapplied Wave A
+migrations instead of checking them one at a time. That ordered proof exposed and fixed a stale
+`create_direct_order` replacement that would have removed the live below-cost wrapper, a stale
+blend-ticket predecessor pin, client-role EXECUTE grants on private commission minting helpers, two
+empty/probe authentication defects, and incomplete rollback-only approved-set classification. The SQL
+guard now has an explicit fail-closed `ROLLBACK-PROBE` exemption whose marker, sentinel, exact catch,
+table scope, and residue assertion are mutation-tested; all 50 adversarial cases pass. The final
+968-row reconstruction applies all six future migrations in order, exercises commission-split and
+delivery-before-invoice allow/deny paths, reruns all three pricing rollback smokes, and leaves zero
+residue. These six files remain intentionally unapplied and are not included in the live schema
+registry high-water.
+
+The same review found the Quote Builder preview used binary floating-point rounding and ignored the
+authoritative `server_totals` returned by `save_quote`. Quote calculations now settle decimal operands
+through exact integer-ratio math (`$1.01 x 18.50 = $18.69`), and the saved response becomes the displayed
+source of truth until the user changes an input. A rendered regression proves the server-returned
+price, cost, profit, and margin replace the local preview after save.
+
+## 2026-08-10 — Pricing audit follow-through: cost snapshots and report unification…
+
+**Local takeover update (not live yet).** The fresh exact-SHA review correctly refused the old
+handoff's plan to defer server-side below-cost enforcement. The branch now includes
+`20260812154028_enforce_below_cost_admin_approval.sql` (submitted as `20260812115237`): one shared PostgreSQL wall for all eleven
+sell-side write RPCs, active-admin-only overrides, locked current Product cost, an immutable
+same-transaction approval audit, and authoritative product-swap / price-order cost math. The UI
+now denies sales-rep approval and carries the fresh order-edit / price-order reason inside the
+existing JSON payload, so public RPC signatures remain rollout-compatible. Exact catalog,
+supplier-adoption and margin figures were also removed from the public audit document. This work
+is local and has not been pushed, merged, or applied live yet.
+
+After production advanced with the already-live whole-cent and canonical-commission migrations,
+the pricing files were re-issued as `20260812115235`–`20260812115237` and rebased onto those exact
+function bodies. A fresh read-only production schema dump restored into a new disposable database;
+all three later migrations applied cleanly, both rollback-only below-cost smokes reached
+`SMOKE_PASS_ROLLBACK`, and the postcheck found zero smoke customers, products, or approval rows.
+The lifecycle smoke mutation-tests a pre-rounding historical snapshot and asserts conversion
+commission basis equals the canonical Order header.
+
+**Exact-SHA review follow-up 3 (still local).** Review of `f52e8c85` found that the shared line
+trigger also ran on delivery/cancellation bookkeeping and on delivery-generated invoice lines,
+which could strand a correctly approved below-cost Order later in its lifecycle. UPDATE triggers
+now name only pricing-relevant columns; context-free changes are limited to unchanged pricing with
+no quantity increase; and a delivery-generated invoice line is accepted only when Product, unit
+price, cost snapshot, and quantity exactly descend from its governed Order line. The rollback smoke
+now completes a real partial delivery, verifies the derived invoice, proves bookkeeping and a real
+Order cancellation remain usable, and mutation-tests that an unapproved invoice quantity increase
+still fails closed. Both pricing smokes passed again on a fresh current-live schema with zero
+residue. The reviewer also identified the applied stale-profit source missing from this branch;
+that exact already-live migration is being restored before the replacement review.
+
+**Exact-SHA review follow-up 4 (still local).** Review of `5d6220da` demonstrated a
+fractional-cent authorization bypass: a unit price such as `9.999` and cost `10.00` both rounded
+to 1,000 cents for the guard even though a large quantity could still create a material loss.
+Live read-only measurement found zero fractional-cent values in Product current cost, Order unit
+price, or Quote unit price. Migration `20260812115237` now adds validated finite whole-cent CHECKs
+to all three columns, rejects fractional/non-finite unit prices before comparison, and fails closed
+if the locked Product cost is not cent-representable. The rollback smoke mutation-tests a
+fractional price denial before the valid whole-cent approval path. A fresh current-live-schema
+replay applied all three migrations, both pricing smokes passed, all three constraints were
+validated with both scale and finite-value clauses, and zero smoke residue remained. A replacement
+exact-SHA review is still required before publication.
+
+**Exact-SHA review follow-up 5 (still local).** Review of `04a739a4` found three remaining
+fail-closed gaps. Every order-report revenue input now settles the stored line total with
+`ROUND(oi.total_price, 2)` before aggregation so legacy sub-cent rows cannot make panels disagree.
+The browser no longer retries an older lifecycle RPC signature after `PGRST202`; the database
+migration must land before the frontend bundle, and a missing governed signature now stops the
+write. Finally, `save_quote` defers its private transient line INSERT and enforces only the final
+Product-recomputed UPDATE, so one below-cost line writes exactly one approval audit. The Quote
+lifecycle rollback smoke now requires exactly one audit for save, duplicate, restore, convert, and
+draw-down. A fresh current-production-schema replay applied all three migrations transactionally;
+both pricing rollback smokes passed, all three cent-scale constraints were validated, and no smoke
+fixture or approval residue remained. A replacement exact-SHA review is still required.
+
+**Exact-SHA review follow-up 6 (still local).** Review of `4b78bddf` found two older
+row-version rollout bridges that could still undo the new fail-closed RPC adapter: Quote conversion
+and version restore retried signatures without the expected row version or below-cost reason after
+`PGRST202`. Both money-bearing wrappers now preserve the governed error after exactly one call;
+wrapper-level tests pin the full reason and row-version payload and prove no legacy retry occurs.
+The unrelated, non-money `create_quote_version` compatibility fallback remains intentionally
+unchanged. A replacement exact-SHA review is required before publication.
+
+**Exact-SHA review follow-up 7 (still local).** Review of `585eb281` found three final hard
+gaps. First, a caller-controlled positive cost on a null-product invoice line could skip the
+admin wall; the real `save_invoice` path now denies a sales rep, requires an admin reason, and
+writes one immutable audit against the line's stored total revenue and cost. The Invoice editor now
+prompts on the same application-fee total-revenue/total-cost boundary instead of skipping fees, so
+an admin has a usable approval path while a sales rep is stopped early. The migration creates
+the audit table fail-closed and validates its complete column, RLS, policy, trigger, and ACL shape.
+Second, Quote preview money now converts canonical decimal operands to bigint cents and rounds with
+integer arithmetic, including the `1.005 -> 1.01` boundary; the decision log explicitly records the
+already-approved exact-`numeric` compatibility exception for legacy PostgreSQL dollar columns.
+Third, the already-live stale-profit migration remains byte-identical, is registered as a one-shot
+data migration and withheld from normal rebuild replay, while a mutation-tested repository guard
+requires sorted-ID plus material-before-value digests for every future business-row rewrite. A
+replacement exact-SHA review is required before publication.
+
+**Exact-SHA review follow-up 8 (still local).** Review of `45c8acf5` found that an admin whose
+browser held an older Product cost could miss the early below-cost prompt and receive only the
+server's locked-cost denial. Order editing, rush-order pricing, and Invoice saving now parse that
+server challenge, show the locked live price/cost comparison, and retry at most once with the same
+idempotency key after an explicit reason; cancellation and unrelated errors never retry. The same
+review found that the historical one-shot migration was protected on the normal apply path but
+could still be replayed through direct `psql` or Supabase CLI SQL. The shared shell/MCP process
+guard now blocks the registered stem, a renamed byte-identical copy, or a pasted full body, and
+fails closed when the one-shot registry or registered source is unreadable. The compatibility
+money rule is being established independently through prerequisite PR #374 so this pricing branch
+does not approve its own exception. Production remains unchanged, and a replacement exact-SHA
+review is still required before publication.
+
+**Local preflight follow-up 9 (still local).** The approved-set SQL audit was mistaking
+`UPDATE`/`DELETE` statements stored inside RPC definitions for one-shot migration writes whenever
+`LANGUAGE` appeared before the function body's `AS $tag$` delimiter. The scanner now tracks the
+actual dollar-quote boundary, keeps executable `DO` backfills visible, and resumes safely after an
+inline function definition. Its Windows mutation harness now invokes Git Bash instead of the WSL
+launcher and classifies only approved-set findings. All 42 adversarial cases pass, and the parked
+Quote cost-snapshot migration now locks the table and binds its sole install-time backfill to the
+20-row live approved population: sorted Quote-line ids plus the existing `current_cost` source and
+new-column null before-value. Any identity or source-cost drift aborts before the write. The
+exact extracted guard/backfill passed in a network-disabled disposable Supabase PostgreSQL 17
+container, and a one-cent source-cost mutation failed with `APPROVED_SET_DRIFTED`. The
+only second accepted population is the exact empty/no-op set for a schema-only rebuild where no
+row can be rewritten. The changed-migration audit reports zero violations; production is unchanged.
+
+**Preflight smoke follow-up 10 (still local).** The registered money/inventory rollback chain now
+exercises the new `get_profitability_report` RPC across customer, product, and month groupings. It
+requires the active control order to return the same exact revenue, snapshot cost, profit, margin,
+order count, and units in every grouping; then proves a real void removes it from all three and
+that `anon` has no execute path. Its auth fixtures now set both Supabase JWT identity forms, and its
+PO checks match the current governed contract: a real sales-rep over-receipt is denied, NULL cannot
+bypass the quantity ceiling, and an admin supplies the required reason. A reusable network-isolated
+PostgreSQL 17 prover restored the supported baseline, replayed 44 migrations through all three
+parked pricing migrations, proved the empty approved-set apply and non-empty drift rejection, ran
+all three pricing chains to `SMOKE_PASS_ROLLBACK`, and found zero fixture residue. This closes the
+migration-drift reviewer's missing-smoke blocker; production is unchanged.
+
+**Exact-SHA review follow-up (still local).** The review of `b5f949fa` correctly found that the
+first server-wall draft still left direct PostgREST line writes available, ran after the canonical
+rounding trigger and could overwrite its whole-cent result, and could parse an older approval
+marker on repeat saves. The migration now revokes direct INSERT/UPDATE/DELETE on `order_items`,
+`invoice_items`, and `quote_items` from every app role; its late trigger settles line revenue and
+profit to whole cents after replacing cost; and `appendBelowCostApproval` removes prior markers
+before writing the fresh reason. A production-schema disposable replay applied all three pricing
+migrations cleanly, and the expanded rollback smoke proved fractional-quantity cent settlement,
+all 27 table-privilege denials, the governed role paths, zero residue, and trigger restoration.
+The replacement exact-SHA review is still required before push.
+
+**Exact-SHA review follow-up 2 (still local).** Review of `fdfd782d` found that four
+authenticated Quote lifecycle RPCs could still write line items without declaring guard context,
+and that a missing historical Quote cost could become a real zero-cost Order basis. The server
+wall now fails closed on every context-free below-cost line write and wraps conversion, partial
+draw-down, version restore, and duplication with a trailing rollout-compatible approval reason.
+Unknown/non-positive cost is rejected rather than coerced to zero. Quote screens use live catalog
+cost for the early prompt and retry these RPCs only after an admin approves the server-locked
+price/cost detail. A fresh production-schema clone applied all three migrations cleanly; rollback
+smokes exercised all four lifecycle RPCs plus a synthetic legacy unknown-cost conversion and left
+zero residue. A new exact-SHA review remains required before push.
+
+Pricing audit follow-through. The two settled migrations — snapshot-cost report unification and the
+quote-time cost snapshot — went through roughly 41 Codex rounds to green on PR #350, which is now
+mergeable. The return-credit COGS reversal was split to its own parked PR #361 at Mason's direction:
+six rounds on that one function each found a different way to reverse more cost than the reports had
+counted, so it wants a live test rather than another review round. Nothing was applied to the live
+database — a web session cannot mint the Codex proof the apply and merge guards require, which is
+now recorded in `KNOWN_ISSUES.md` along with four other deferred items. `docs/handoffs/2026-08-09-
+pricing-audit-local-finish.md` carries the ordered steps for finishing from a machine with the CLI.
+
+**Read before applying:** `20260812115236` is broader than at first review — it also re-emits
+`duplicate_quote` and drops the three rep-facing write policies on `quote_items` (approved
+2026-08-09). And merging #350 does **not** change the Profitability tabs: `get_profitability_report`
+has no caller until the deferred `Reports.tsx` switch lands after the migration applies.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `7aa390128 Add the handoff for finishing the pricing work from a local session`
+  - `c688318b4 Record the per-unit cost limitation behind the remaining rounding items`
+  - `7f4903be4 Merge remote-tracking branch 'origin/claude/pricing-audit-strategy-jym8rr' into claude/pricing-audit-strategy-jym8rr`
+  - `c5e8d9ba6 Split out the returns migration and settle quote profit on one boundary`
+  - `dc806c654 Merge branch 'main' into claude/pricing-audit-strategy-jym8rr`
+  - `f3654d8d7 Make the return COGS cap exact and spend it across all credits`
+  - `01335255f Cap the return COGS reversal to the quantity actually invoiced`
+  - `28306aa54 Record that the profitability tabs are not fixed until their caller is wired`
+  - `7ab9c2429 Gate the COGS reversal on what both profit reports count`
+  - `d1a966dd8 Judge order edits and return COGS against the same basis the reports use`
+  - `72ab09080 Record that remote sessions also cannot merge a risky PR`
+  - `83cb8a448 Gate the return COGS reversal and retain the bulk approval reason`
+  - `50232b393 Match the returned product when reversing return COGS`
+  - `5b875690d Record that remote sessions cannot apply live migrations`
+  - `6f21070a5 Include quantity in the retained below-cost approval terms`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260812145628_snapshot_cost_reporting.sql`
+  - `supabase/migrations/20260812151606_quote_items_cost_at_quote_snapshot.sql`
+  - `supabase/migrations/20260812154028_enforce_below_cost_admin_approval.sql`
+
+## 2026-08-09 — Returns migration split out; quote profit settled on the report boundary
+
+**Split (Mason, 2026-08-09).** `20260808170000_return_credit_cogs_reversal.sql` is removed from this
+branch and now lives on `claude/return-credit-cogs-reversal`, off current `main`, with its own
+changelog entry and its `rpcIdempotencyScope` alias registration. Mason approved landing the two
+migrations that have been stable — the report unification and the quote cost snapshot — and holding
+the returns reversal until it can be tested against real partial-invoice and repeat-return data. It
+took six Codex rounds in one day, every one of them a way to reverse more cost than the reports
+counted; that is the migration that wants live evidence, not another review round.
+
+**Round 41 (Codex) — quote profit on screen matched neither the database nor the reports.** The page
+and `quoteCalc` rounded `(price − cost) × qty` as one expression while `save_quote` (round 33) had
+moved to settled revenue minus settled extended cost. On fractional quantities landing on half-cents
+the displayed quote disagreed with the stored one, and since the page ignores `server_totals` the
+difference survived the save and rode into conversion. Both calculators now use the same boundary,
+via a shared `round2` and one documented rule.
+
+**Deferred, recorded in `KNOWN_ISSUES.md`:** `draw_down_quote` settles the *per-unit* weighted
+average before extending it, so a full draw of one product across mixed-cost lines can book a cent
+more than the quote carried. Same root as the order-header rounding item already logged: cost is
+stored per-unit as integer cents while quantities are fractional, so no per-unit integer can carry
+an exact extended total. Fixing either site alone moves the inconsistency instead of removing it.
+
+## 2026-08-09 — Review rounds 6-8: cost integrity across product swaps and stale clients
+
+Closed the remaining Codex and CodeRabbit findings on the pricing branch.
+
+- **Stale-client quote saves (Codex P1).** A browser tab running the pre-snapshot bundle
+  sends existing quote lines with no id, so every line would be deleted and reinserted with
+  no preserved cost and the trigger would stamp today's catalog cost over the historical
+  quote cost — a note-only save was enough to do it. `save_quote` now raises
+  `QUOTE_STALE_CLIENT` when an existing quote that already had lines receives a payload
+  echoing none of their ids. Known trade-off: this also trips when a user replaces every
+  line in one save, which is rare and recoverable by saving twice.
+- **Order-line product swaps.** The new re-snapshot trigger would have erased a valid
+  snapshot when the incoming product has a NULL `current_cost`; it now COALESCEs to the
+  prior value, and the product-change test moved into a `WHEN` clause so the body no longer
+  runs on every `order_items` UPDATE. The `$verify$` block asserts the trigger is attached.
+- **Quote-line product re-selection.** Re-picking the *same* product on an existing line
+  cleared its id and overwrote its preserved cost, so `save_quote` inserted it as new and
+  the trigger re-stamped it. Only a genuine product change does that now.
+- **Approval reason durability.** The below-cost reason is written back into local state
+  after a successful save, since `QuoteBuilder` never refetches and the next save would
+  otherwise revert the stored notes.
+- **Zero-cost snapshots.** `quoteCalc` used `||`, so a stored cost of 0 was treated as
+  missing and replaced by the live catalog cost. `CalcItem.current_cost` is now
+  `number | null` with null alone meaning "no snapshot"; two fixtures that used 0 to mean
+  absent were corrected and a regression test covers both cases.
+- **Report agreement.** `financial_dashboard_summary`'s top-customers panel moved to
+  item-level revenue so it agrees with the headline and trend beside it.
+  `get_profitability_report` adopted the same order-inclusion rule as every other report
+  here, and now both groups *and* filters on `COALESCE(o.order_date, o.created_at::date)` —
+  filtering on the raw column while grouping on the fallback made orders with no
+  `order_date` appear unfiltered and vanish once a date range was picked.
+- **Other.** `BulkOrderImport` resolves a pending below-cost prompt when the import dialog
+  closes so the awaited save cannot hang; the notes stripper dropped a backtracking regex
+  for a character class (CodeQL alert 17); redaction moved inside the order-summary
+  renderer so the Orders-page batch export is covered too; and the audit doc's unverifiable
+  "35 stragglers" claim was corrected to the verified counts of 2 and 3.
+
+**Round 41 (Codex) — the quote header now sums the settled per-line cost:**
+
+Line profit moved to settled revenue minus settled extended cost, but the header still summed raw
+`current_cost * total_units_needed`. On a fractional line that put a sub-cent fraction into
+`quotes.total_cost`, broke the header identity (revenue − cost = profit) and carried the fraction
+into versions and conversion. Both `save_quote` and `duplicate_quote` now sum
+`ROUND(current_cost * total_units_needed, 2)`.
+
+Also recorded rather than fixed: the drawn-booking cent difference (`draw_down_quote` averaging
+mixed-cost lines and settling the average) shares one root with the two-row split PR #361 needed —
+cost is stored as an integer **per unit** and multiplied back by quantity, so an extended cost that
+is not a multiple of the quantity cannot be represented. Removing it means storing extended cost
+per line, a schema change across orders, invoices and every rollup. Bounded at one cent per line
+and only on fractional or mixed-cost lines; written up in `KNOWN_ISSUES.md`.
+
+**Round 40 (Codex) — the cap is now exact, and spent across all credits:**
+
+Round 39's cap scaled the per-unit cost, and both of this round's findings were consequences of
+that choice — which is the signal that the mechanism, not the arithmetic, was wrong.
+
+- **Rounding could not represent the cap (P2).** `cost_cents` is an integer the rollups multiply by
+  the row's full quantity, so a scaled unit cost cannot express a capped total: 1 posted unit at
+  100c spread over 6 returned units gives `ROUND(100/6) = 17`, and `17 × 6 = 102c` reversed.
+  Each return item now becomes up to **two** rows — a cost-bearing row for the allowed quantity and
+  a zero-cost row for the remainder — with revenue split exactly between them. Exact by
+  construction, no scaling.
+- **Prior credits did not consume the cap (P1).** Every credit compared against the original posted
+  quantity, so two 2-unit returns against a line with 2 posted units each reversed 2 — 4 units of
+  COGS against 2 the reports counted. The allocation now subtracts what earlier credit memos
+  already reversed (cost-bearing rows only), and the order_items rows are locked before that read
+  so concurrent credits cannot both spend the same budget.
+
+Rounds 35-40 were all one defect wearing different clothes: eligibility, cost, quantity and now
+history each decided separately. They are now a single allocation over one resolved source line.
+
+**Round 39 (Codex) — the reversal is now capped to what was actually invoiced:**
+
+- **Quantity cap (P1).** An order line delivered in batches can have only part of it on a posted
+  invoice, and `create_return` caps returns against *delivered* quantity, not invoiced quantity.
+  Returning 10 delivered units when 2 were posted reversed 10 units of COGS against 2 units the
+  reports had counted — inflating profit. The per-unit cost is now scaled by
+  `LEAST(returned, posted invoiced) / returned`, so the reversal lands on the capped total while
+  the credit-memo row keeps the full negative returned quantity (the customer is credited for
+  everything returned).
+- **Fallback order.** A legacy invoice line with `cost_cents = NULL` fell straight through to the
+  mutable `cost_per_unit` dollars; it now tries the order line's own `cost_at_time_cents` snapshot
+  first, which is the basis the sibling reporting migration treats as canonical.
+- **Structure.** Eligibility, per-unit cost and the quantity cap now come from one `LEFT JOIN
+  LATERAL` resolution of the source sale line, so those three can no longer be decided from
+  different rows — the shape that produced rounds 35 through 38 one predicate at a time.
+- **Deferred:** `update_order_items` trusting the browser's `cost_per_unit` on a product swap while
+  the trigger stamps the current catalog cost. Same class as the deferred server-side below-cost
+  enforcement (an RPC trusting a caller-supplied cost); recorded in `KNOWN_ISSUES.md` to be fixed
+  with it rather than editing a third money RPC here.
+
+**Round 38 (Codex) — the reversal gate now takes the intersection, not the union:**
+
+Round 37 gated the COGS reversal on `status IN ('posted','overdue')`, chosen from the report
+predicates — but the two invoice-basis reports disagree with *each other*: `get_bottom_line_pnl`
+counts `'posted'` alone while `get_monthly_summary` counts both. For a credited overdue sale that
+meant the bottom line excluded the original COGS and included the credit memo's negative COGS,
+**inflating profit**. The gate is now `'posted'` alone — the intersection — so the reversal can
+never outrun what a report counted. Accepted residual: a credited overdue sale gets no reversal, so
+`get_monthly_summary` understates profit. Of the two possible errors, the conservative one is the
+right default. The underlying report disagreement is pre-existing and is recorded in
+`KNOWN_ISSUES.md` with the fix (include `'overdue'` in `get_bottom_line_pnl`, then widen this gate).
+
+**Round 37 (Codex) — both fixes were the same class as earlier rounds, missed by not sweeping:**
+
+- **Order edits compared against the mutable legacy cost.** Round 26 fixed exactly this on the
+  rush-pricing path and I fixed only that instance. `handleSaveEdits` still read `cost_per_unit`,
+  so on an older order whose snapshot and legacy cost differ — an order converted before this
+  branch fixed quote-cost propagation is the common case — a price *between* the two slipped past
+  the prompt while the reports booked the higher snapshot as cost. Both call sites now go through
+  one `belowCostBasis()` helper, so there is no third place for this to diverge. New lines added
+  during an edit have no snapshot yet and keep their caller-supplied cost.
+- **COGS reversal now requires a report-visible sale invoice.** Round 36 gated the reversal on an
+  eligible invoice existing, but "eligible" still meant merely not voided — which admits `draft`
+  and unposted invoices the invoice-basis rollups never counted. Goods delivered and returned
+  before the auto-created draft invoice is posted is the ordinary shape of that, and it inflated
+  profit. Both the gate and the cost lookup now require `status IN ('posted','overdue')`, matching
+  what the reports include.
+
+**Round 36 (Codex) — three findings, two fixed and one deliberately deferred:**
+
+- **No COGS reversal without an included sale invoice.** If the original sale invoice was never
+  created, or was deleted, voided or cancelled, the invoice-basis rollups never counted its COGS —
+  so reversing cost from the order line subtracted cost that was never added and *inflated* profit.
+  The order-line fallback is now reachable only when an eligible original sale line exists;
+  otherwise the credit memo records zero cost.
+- **The bulk-import approval reason now survives a retry.** Same shape as the quote fix in round 30:
+  each parsed order carries a stable idempotency key and `bulk_import_order` fingerprints `p_notes`,
+  which carries the approval marker — so a lost response plus retyped wording returned
+  `IDEMPOTENCY_INTENT_MISMATCH` and the component reported an already-created order as failed. The
+  reason is retained with the terms it approved (order, product, price, cost, quantity) and cleared
+  when a new file is parsed or the dialog closes.
+- **Deferred: order headers still recompute profit unrounded.** `after_order_items_change` uses
+  `cost_per_unit * qty` unrounded while reports and quotes use the settled boundary. Real, but it
+  predates this PR and the trigger fires on every `order_items` write — re-emitting it moves numbers
+  on every order and needs its own migration, review and live before/after. Recorded in
+  `KNOWN_ISSUES.md` rather than ridden along here.
+
+**Round 35 (Codex) — return COGS could reverse the wrong product's cost:**
+
+The credit-memo cost lookup matched only `order_item_id` and took the earliest invoice line.
+`update_order_items` can swap an order line's product after it was invoiced (allowed while no
+delivery item exists), leaving a historical invoice line with the same `order_item_id` but the old
+product and cost — so returning the replacement product would have reversed the previous product's
+cost, corrupting the credit memo's `total_cost_cents` and invoice-basis profit. The lookup now also
+matches `product_id`; no match falls through to the order line's own cost, as before.
+
+**Round 34 (Codex) — quantity belongs in the approved terms:**
+
+Round 32's fingerprint covered product, price and cost but not quantity, so after a pre-commit
+rejection an operator could raise the quantity of the same below-cost line and the earlier approval
+would still be reused — approving 10 units under cost is not approval for 500. The terms now key on
+product id (not display name), price, cost and quantity.
+
+**Round 33 (Codex) + the approved policy change — closing out the branch:**
+
+- **One profit boundary (Codex P2).** `save_quote` rounded `(price - cost) * qty` as a single
+  expression while the reports compute settled revenue minus settled extended cost. On fractional
+  quantities whose extensions land on a half-cent the two disagree by a cent, and that cent rides
+  into the converted order and the commission. Profit and margin are now
+  `ROUND(price*qty) - ROUND(cost*qty)` in both `save_quote` and `duplicate_quote`.
+- **Direct writes to quote lines are gone (Mason approved 2026-08-09).** The UPDATE guard made
+  `cost_at_quote_cents` immutable, but `qitems_insert`/`qitems_update`/`qitems_delete` let a rep
+  delete a historical line and reinsert the same product; nothing was updated, so the guard never
+  fired and the trigger stamped today's cost. Those three policies are dropped — quote lines are
+  writable only through the SECURITY DEFINER RPCs. Verified first that the table does **not** force
+  row security and is owned by `postgres`, and that all five quote RPCs are `postgres`-owned, so
+  they bypass RLS and keep working; and that all three frontend touches of `quote_items` are reads.
+  SELECT is untouched. Postflight asserts no write policy remains, that RLS is still enabled and
+  unforced, and that the read policy survives.
+
+**Round 32 (Codex) — the retained approval had to be bound to what it approved:**
+
+Round 30's retained reason was held for the life of the idempotency key, but a pre-commit
+rejection (`BOOKING_OVERDRAWN` and friends) stores no idempotency result while leaving the key in
+place. An operator could then cut a price or add another below-cost line and retry, and the
+earlier approval would silently cover the new terms — under the same key, with no prompt. The ref
+now carries the terms it approved (product, price, cost per affected line) and reuse requires an
+exact match; anything else re-prompts. Round 30 fixed a retry hazard and opened this one, which is
+the risk of holding approval state at all: it has to be bound to the thing approved, not to a
+clock or a key.
+
+**Round 31 (Codex) — notes typed after an approval were being hidden:**
+
+The approval marker stays in the raw notes field after a below-cost save, so anything an operator
+types on a *later* edit lands below it — and `stripInternalNotes` truncated from the marker
+onward, so that text vanished from the customer's copy while still looking present in the editor.
+Stripping is now line-scoped. That is only safe because `appendBelowCostApproval` collapses the
+reason to a single line at the one point it is written, so a free-form reason can never continue
+onto the next line and print as a customer note. Fixing it at the writer rather than teaching the
+stripper to guess where a reason ends is what makes the two halves consistent.
+
+**Round 30 (Codex) — the approval reason had to survive a retry:**
+
+`save_quote`'s request fingerprint includes the annotated item notes. If a below-cost save
+committed but its response was lost, the retry re-prompted for the reason, and any difference in
+the retyped text turned the replay into a fingerprint conflict — with no `quoteId` yet on a brand
+new quote, the stale-save reload could not recover the quote that had actually committed. The
+reason is now held for the life of the idempotency key and reused verbatim on a retry, so the
+payload is byte-identical to the attempt that may already have landed. It is cleared on a
+successful save (the reason lives on the line from then on) and on a stale-save reload (local
+state was just replaced, so the old reason no longer describes what would be sent) — holding it
+past either point would silently approve a later below-cost edit without asking.
+
+The round's other finding — `BulkOrderImport` comparing against a catalog cost that may have
+moved since the fetch — is the server-side enforcement gap already recorded for a follow-up PR,
+not a new issue.
+
+**Round 29 (Codex) — unpriced rush lines became a phantom loss (P1):**
+
+`create_rush_order` writes its lines with price *and* `cost_per_unit` at 0 on an order whose
+ordinary status is already `confirmed`, and the insert trigger stamps a real
+`cost_at_time_cents`. Under the old `cost_per_unit` basis such a line contributed nothing to
+either side and was invisible. Moving the reports onto the snapshot made it contribute zero
+revenue and its full cost — a loss on the dashboard headline and every profitability report
+for work nobody has quoted yet. This one was created by this branch: the reporting change is
+what turned a harmless zero into a real number.
+
+All twelve profit-bearing aggregations across the five rewritten RPCs now also filter
+`COALESCE(oi.pricing_pending, false) = false`. It is a *line* filter, not an order filter, so a
+partly priced rush order still reports the lines that are done. `committed_orders` is the one
+deliberate exception — it values stock a confirmed order has already claimed, and an unpriced
+rush line commits real product at a real cost. The postflight block now fails closed if any of
+the five reads the snapshot without the pricing filter, since the two must ship together.
+
+**Round 28 (Codex) — two cost-basis holes around the quote snapshot:**
+
+- **Duplicated quotes carried two costs at once (P1).** `duplicate_quote` copied the source
+  quote's `current_cost`, profit and header totals while the new trigger stamped
+  `cost_at_quote_cents` from today's catalog cost. Once a product's cost moved, the copy could
+  be frozen, sent and converted without ever passing through `save_quote` — header and
+  commissions on the old cost, reports on the new one. The function is re-emitted to derive
+  cost, profit, margin and the header totals from today's cost, the same basis the trigger and
+  every report use. Prices are still copied unchanged. Resolving the other way — preserving the
+  source snapshot — would have frozen a stale cost that no ordinary later save would correct,
+  since `save_quote` deliberately carries a snapshot across its delete+reinsert.
+- **New quote lines never learned their ids.** `save_quote` deletes and reinserts every line and
+  returned no id mapping, and `QuoteBuilder` never refetches — so a line added in this session
+  stayed id-less forever. Two new lines of the same product were then unresolvable on the *next*
+  save and hit `QUOTE_ITEM_AMBIGUOUS_COST`, costing the user their pending edits. Each payload
+  line now carries an opaque `client_key`; `save_quote` returns `client_key → id` for every line
+  it writes (inside the idempotency-stored result, so a replay returns the same map) and the page
+  installs them. `client_key` never influences which snapshot a row receives.
+
+This is the third lock-out this guard has produced. The pattern each time: the ambiguity check is
+correct about the *data* and wrong about the *client*, because the client had no way to supply
+what the check demands. Returning the ids removes the cause rather than widening the guard again.
+
+**Round 27 (Codex) — Customer View showed the approval reason:**
+
+The quote PDF redacts the below-cost approval marker, but `QuoteBuilder`'s Customer View —
+the screen turned toward the customer — rendered `item.notes` raw, so the free-form reason
+(which may name a competitor's price or a complaint) was visible in the notes box. Customer
+View now shows the stripped note, read-only so the redaction cannot be saved back over the
+real text, and the "Reset to default" button is hidden there for the same reason. Both
+customer-facing surfaces — the PDFs and this view — now redact; the marker never appears on
+any other screen, which are all staff-only.
+
+**Round 26 (Codex) — the rush below-cost prompt could never fire:**
+
+The Set Pricing guardrail added in round 20 read `cost_per_unit`, but `create_rush_order`
+inserts every rush line with that column at 0 and the snapshot trigger writes
+`cost_at_time_cents` instead — which is exactly what `price_order` divides by 100 when it
+finalizes. So the `cost > 0` filter excluded every ordinary rush line and the prompt never
+appeared on the one path it was written for. It now reads the snapshot, keeping
+`cost_per_unit` only as a fallback for lines predating the trigger.
+
+Two other round-26 findings — validating below-cost inside `create_direct_order` and
+writing the edit approval inside the `update_order_items` transaction — are the
+already-recorded server-side enforcement gap, not new. Both remain deferred to a follow-up
+PR, tracked in `docs/manual/DECISION_LOG.md` (2026-08-09). Every below-cost check on this
+branch is client-side and advisory; a direct RPC caller bypasses all of them.
+
+**Round 25 (Codex) — one revenue basis for `bottom_products`:**
+
+`get_profitability_report`'s product ranking recomputed revenue as `total_units_needed * price_per_unit`
+while its headline, customer and monthly sections all sum the stored, already-cent-settled
+`oi.total_price`. With fractional quantities producing sub-cent extended prices, the ranking, its
+margin and the headline disagreed. All five sites in that aggregation (total revenue, three margin
+expressions, and the `HAVING` clause) now use `oi.total_price` — one revenue basis, as with cost.
+
+**Round 24 (Codex) — two bulk-import details:**
+
+- **Escape closed both dialogs.** The below-cost prompt renders as a sibling of the still-open import
+  `Modal`, and both register document-level Escape handlers, so one press cancelled the approval *and*
+  tore down the whole import — discarding the parsed file and validation results. The import dialog
+  now ignores Escape while the prompt is up.
+- **The batch activity line could claim an approval that never happened.** It branched on the batch
+  reason existing, not on whether a below-cost order actually imported; if every below-cost order
+  failed validation while an ordinary one succeeded, the feed still recorded "below-cost approved".
+  Now tracks whether an affected order really succeeded.
+
+**Round 23 (Codex) — one cost basis for partial draws:**
+
+The round-21 partial-draw fix rounded the weighted cost only at the `cost_at_time_cents` stamp, while
+the order header, line profit and commissions kept using the unrounded average — so drawing two units
+backed equally by $1.00 and $1.01 recorded $2.01 in the header and reported $2.02. `v_wavg_cost` is
+now settled to whole cents once, immediately after it is computed, so every derived figure and the
+stamp share one value. Fixing it at the source rather than at each consumer is the point: this is the
+same "rounded here, unrounded there" split that took three rounds to clear out of the reports.
+
+**Round 22 (Codex) — an overclaim in my own comment:**
+
+The round-21 rush-pricing gate wrote its approval reason via `logActivity` and I commented that this
+was "the durable record". It is not: `logActivity` swallows its own errors by design and runs *after*
+the pricing commits, so a failure leaves the order priced below cost — invoices swept, commissions
+moved — with no reason recorded and a success toast shown. The comment now says plainly that this is
+best-effort and not an audit guarantee, and the activity row carries its `entityType`/`entityId`/
+`customerId` instead of leaving them null.
+
+The real fix is to take the reason into `price_order` and write the audit row in the same
+transaction, which belongs to the settled server-side enforcement work — now recorded there as an
+explicit requirement rather than left implicit. Same class of error as the invented `save_order` RPC
+earlier in this branch: a confident claim in prose that the code did not support.
+
+**Round 21 (Codex) — partial draws and the rush-pricing screen:**
+
+- **P1: `draw_down_quote` had the same conversion gap.** A partially drawn booking creates
+  `order_items` exactly as a full conversion does, taking `cost_per_unit` from the quote-time cost but
+  leaving `cost_at_time_cents` NULL for the trigger to stamp at today's catalog cost — so the snapshot
+  reports and the order/commission figures disagreed on a partial draw the same way they did on a full
+  one. Now stamps from `v_wavg_cost` (already the quote-time basis), coalesced to zero.
+- **P2: the rush-order Set Pricing screen never prompted.** `handlePriceOrder` sent prices straight to
+  `price_order`, which accepts any non-negative price — so the one path that *exists* to price an
+  unpriced order could finalize it below cost, sweep draft invoices and drive commissions with no
+  reason collected. It now runs the same confirmation as every other money write. `price_order` takes
+  no notes parameter, so the reason is recorded via the activity log; making it a stored field needs
+  the migration tracked with the settled server-side below-cost work.
+
+**Round 20 (Codex) — the ambiguity guard blocked an ordinary edit:**
+
+The round-19 payload-side check refused whenever two id-less rows shared a product, *before* checking
+whether any prior line of that product existed. So adding two new lines of a product the quote never
+carried — an ordinary edit — was rejected, and no reload could clear it because new lines have no ids
+to supply. Both ambiguity tests are now gated on at least one unconsumed prior candidate existing:
+with zero candidates there is no history to allocate and every unresolved row is simply new.
+
+This is the second time a guard added to this mechanism has blocked legitimate work (round 11 was the
+first), and the third time the fix for one edge created another. The guards are now: refuse only when
+real history is at stake **and** the payload cannot say who owns it.
+
+**Round 19 (Codex) — a NULL basis could still be refilled, and payload-side ambiguity:**
+
+- **Fourth appearance of the NULL-passthrough shape**, this time in the ordinary save path. A prior
+  line created while its product had no cost carries a JSON-null snapshot; passing that through left
+  `v_preserved_cost` NULL, so once the product finally got a price an ordinary save silently replaced
+  the unknown historical basis with the current one. Now normalized to an explicit zero, matching the
+  restore and conversion paths.
+- **Ambiguity is now judged on both sides.** Round 14 refused when several *prior* lines of a product
+  carried different costs, but not when several *payload* rows compete for the same product's history
+  — a pre-snapshot tab that also swaps A→B on a quote already holding B sends two id-less B rows, and
+  iteration order decided which kept the historical cost. The reservation pass now counts id-less
+  rows per product and refuses when more than one competes.
+
+Recorded plainly: this mechanism has now taken **six** corrections in one session. Each fix has been
+sound in isolation and each has exposed a new edge. That pattern is itself the finding — the design
+needs live exercise more than further static iteration.
+
+**Round 18 (CodeRabbit) — the rounding sweep missed a reversed operand order:**
+
+`financial_dashboard_summary.bottom_products` writes the cost as `quantity * cost` where every other
+site writes `cost * quantity`, so the round-17 grep — which matched one operand order — reported zero
+unrounded sites while two remained. The claim "all 21, zero remain" in the previous entry was wrong;
+it was 21 of 23. Both are now rounded, and a re-audit keyed on `cost_at_time_cents / 100.0` alone
+(operand-order independent) finds nothing left.
+
+One site is **deliberately not rounded** and now says so in the SQL: `committed_orders` values the
+stock still owed on open orders. That is a valuation, not a cost that reconciles against revenue and
+profit, so per-line rounding would add error for a consistency that does not apply to it.
+
+**Round 17 (Codex) — revenue, COGS and profit now reconcile at one cents boundary:**
+
+The detail and summary reports rounded the displayed COGS but derived profit from the *unrounded*
+cost, so a line could report $0.01 revenue, $0.01 cost and $0.01 profit at once. Profit and margin
+are now derived from the same `ROUND(cost * quantity, 2)` the cost column shows. Swept the whole
+migration rather than the two sites reported: the dashboard headline and its monthly trend had the
+same shape. **All 21 cost expressions in the file now round at one boundary; zero unrounded remain.**
+
+**Round 16 (CodeRabbit) — the same NULL hole, one step later:**
+
+The round-15 conversion fix passed `qi.cost_at_quote_cents` straight through, so a quote line created
+while its product had no cost carried a NULL snapshot into the order, and the order-side trigger
+stamped whatever the catalog said at conversion time — a cost that did not exist when the quote was
+written. `COALESCE(..., 0)`, matching how the restore branch was corrected earlier in this branch.
+Third appearance of this exact NULL-passthrough shape here: a nullable snapshot column needs a
+deliberate decision at every write site, not only the one being edited.
+
+**Round 15 (Codex) — a converted quote lost its quote-time cost:**
+
+`convert_quote_to_order` copies `quote_items.current_cost` into `order_items.cost_per_unit` but left
+`cost_at_time_cents` NULL, so the order-side trigger stamped **today's** catalog cost. A quote
+converted after a cost change then reported one profit through the snapshot reports in this branch
+and a different one through the order header, line profit and commissions — all of which follow the
+quote cost. The owner impl now carries `qi.cost_at_quote_cents` into the order snapshot; the INSERT
+trigger honors it because it only fills when the caller left the column NULL. Postflight asserts it.
+
+`get_gross_sales_report` also still summed unrounded extended costs while its siblings round each
+line first, so two 0.5-unit lines at a one-cent cost reported one cent here and two cents there. All
+seven cost aggregations and six profit aggregations in that RPC now round per line.
+
+**Round 14 (CodeRabbit) — refuse an unresolvable cost match instead of guessing:**
+
+Even with the reservation pass, a quote holding two lines of the *same product at different costs*
+left the fallback with nothing to distinguish them: which id-less row inherited which cost came down
+to key order. When those lines carry different quantities that silently changes COGS, margin and
+commission. `save_quote` now raises `QUOTE_ITEM_AMBIGUOUS_COST` rather than guess.
+
+Scoped deliberately to *differing* costs — several prior lines of the same product at the same cost
+are interchangeable and any pick gives an identical answer, so blocking there would be a lock-out
+for no gain. That distinction matters given round 11 was exactly such a lock-out.
+
+**Round 13 (Codex) — payload order could decide which line keeps its cost:**
+
+The round-12 fallback resolved each line in a single pass, so the outcome depended on the order the
+payload happened to arrive in. Changing a line from product A to product B on a quote that already
+contains B clears the changed line's id; if that row was processed first it claimed the **existing**
+B row's uuid and historical snapshot, and the real B row — whose echoed id was now already consumed —
+fell through to a fresh stamp at today's catalog cost. With different quantities on the two lines
+that silently changes the quote's cost, profit, the order converted from it, and commissions.
+
+`save_quote` now runs a **reservation pass** over the whole payload first, claiming every valid
+echoed id before any id-less row is allowed to take a product fallback. The result no longer depends
+on payload order. The postflight block asserts the reservation pass is present.
+
+**Round 12 (Codex) — the stale-client guard was wrong twice; replaced with a real one:**
+
+Codex rejected the round-11 fix: `client_sends_item_ids` was set by the caller, so a rep could
+send it while omitting every line id, and unchanged lines would be re-stamped at today's catalog
+cost — lowering the recorded basis and inflating profit and commission whenever a product got
+cheaper. Reverting to the round-7 echo count was not an option either, since that locked users out
+of a legitimate replace-every-line save.
+
+Both designs were attempts to *detect a stale caller*. The actual requirement is narrower: an
+unresolved line must not lose its cost. `save_quote` now falls back to the first unconsumed prior
+line of the **same quote and same product**, consuming each prior row at most once. That covers the
+old browser bundle and the product-swap case alike, and it is not forgeable — the map is built only
+inside the owner-checked existing-quote branch and scoped to this quote, so the only cost a caller
+can inherit is one this quote already recorded for that product. Omitting an id can no longer lower
+a cost basis; at worst it preserves the honest historical value. `QUOTE_STALE_CLIENT` and the client
+marker are both gone, and the postflight block now asserts their **absence** so neither is retried.
+
+Accepted trade-off: if a save adds a genuinely new line for a product already on the quote, one of
+those lines inherits the prior snapshot instead of a fresh stamp. Same product, same quote, so the
+value is honest — and the alternatives were a lock-out and a forgery vector.
+
+**Round 11 (Codex) — a lock-out I shipped, plus two consistency fixes:**
+
+- **`QUOTE_STALE_CLIENT` refused a legitimate edit.** The round-7 stale-client guard inferred a
+  current bundle by counting echoed line ids. But `assignProduct` deliberately clears the id of a
+  line whose product changed, so a user who changes the product on *every* line — trivially, on a
+  one-line quote — echoed nothing and was refused. Reloading could not clear it either: repeating
+  the same legitimate edit reproduces the same payload, so the operator was locked out with no way
+  forward. My earlier note calling this "rare and recoverable by saving twice" was wrong. Replaced
+  the heuristic with an explicit `client_sends_item_ids` capability marker that `QuoteBuilder` sets
+  on the payload; `BulkQuoteImport` is unaffected (it always passes `p_quote_id: null`, so the
+  guard cannot fire).
+- **Rounding boundary.** `get_profitability_report` summed unrounded line costs and rounded only
+  the group total, while its sibling reports round each line first — so a fractional quantity with
+  a sub-cent extended cost made the "unified" reports disagree. Now rounds per line, matching.
+
+**Deferred with reasons (Codex round 11):** the below-cost checks on `save_quote`/`save_invoice`
+comparing browser-held cost rather than server cost is the same settled server-side-enforcement work
+already recorded above. Separately, `update_order_items` still derives `cost_per_unit`, line profit
+and commissions from the caller-supplied cost while the new trigger stamps `cost_at_time_cents` from
+the server, so a product swap can leave the reports and the order records on different costs; that
+needs `update_order_items` itself to lock one server cost for every derived field, which is a change
+to that RPC's contract rather than to this migration.
+
+**Rounds 9-10 (Codex + CodeRabbit):**
+
+- **Moving a quote line to another quote (Codex P1).** The snapshot guard blocked editing the cost
+  and swapping the product, but not re-parenting the row. A rep owning both an old quote with a
+  cheap snapshot and a newer quote holding the same product could move the old line across via the
+  RLS update policy; `save_quote` would then see a known id with a matching product and faithfully
+  preserve the stale cost. `quote_id` is now immutable, and `section_id` may only move between
+  sections of the same quote.
+- **COGS gated on the wrong flag.** The previous round gated the reversal on `restock` (eligibility).
+  Codex pointed out `receive_return` sets `restocked` only after inventory is actually incremented,
+  and leaves it false when no inventory row exists — so an eligible-but-skipped line still got its
+  cost reversed. Now gated on `restocked`, which also closes the edge the previous round documented
+  as open. Safe to read the outcome flag because `credit_return` refuses to run unless the return is
+  already in status `received`.
+- **NULL cost in a restored version.** A `quote_versions` item with a missing or JSON-null
+  `current_cost` restored as NULL, the trigger fell through to today's catalog cost, and the restore
+  repriced after all. Now coalesced to an explicit zero, which later saves preserve.
+- **Doc corrections.** The no-backfill boundary is now the moment the returns migration is applied
+  rather than an ambiguous calendar date; the below-cost decision is explicitly marked NOT
+  IMPLEMENTED so it is not misread as current behavior; and a `save_order` RPC cited in both this
+  changelog and the decision log **does not exist** — the real money-write surface is
+  `create_direct_order`, `create_rush_order`, `bulk_import_order`, `update_order_items`,
+  `price_order`, `save_invoice` and `save_quote`.
+
+**Round 8 (Codex), two more:**
+
+- **COGS on non-restockable returns.** The returns credit reversed the full cost of every
+  returned line, including ones marked `restock = false` — damaged, expired, or otherwise
+  unsellable goods. The customer gets their money back but the product never comes back to
+  us, so handing the cost back overstates gross profit on exactly the returns that hurt
+  most. Cost is now reversed only for restock-eligible lines. Residual edge, deliberately
+  not covered: a line marked `restock = true` that `receive_return` skips because no
+  inventory row exists still reverses its cost.
+- **Restoring an old quote version repriced it.** `restore_quote_version` reinserts
+  `quote_items` with the version's historical `current_cost` but no snapshot column, so the
+  new trigger stamped today's catalog cost. Nothing looked wrong immediately, but the next
+  ordinary save preserved that stamp and recomputed the line from it — silently repricing a
+  restored version at today's cost. The RPC now supplies the version's own cost through the
+  same trusted transaction-local passthrough `save_quote` uses.
+
+All three migrations remain **PARKED and never executed against a database**.
+
+## 2026-08-09 — Codex review round 5: keep below-cost approval reasons off customer documents
+
+Codex found that the below-cost approval reason, stored in `orders.notes` so it travels
+durably with the entity, is printed verbatim on the customer-facing order summary PDF
+(`OrderDetail.handlePrintSummary` → `orderSummaryPdf`). A reason like a price match,
+clearance decision, or goodwill exception could reach the grower.
+
+Confirmed, and found one more instance Codex did not flag: `QuoteBuilder` records the
+reason on the affected quote *line*'s notes, and while the line-notes column is not in
+the default quote PDF template, a saved template can opt it in — same leak, different
+document. (Invoice item notes do not print on the invoice PDF; only header/footer notes
+do, which the invoice path already avoids.)
+
+Rather than patch each PDF, added `src/lib/internalNotes.ts` as the single place that
+knows the marker: `appendBelowCostApproval` composes it and `stripInternalNotes` removes
+it, so a writer and the redactor cannot drift apart. All four writers (NewOrder,
+OrderDetail's bulk import, InvoiceDetail, QuoteBuilder) now use the helper, and the two
+customer-facing render points strip it. Internal documents — notably the order pick list —
+deliberately still print notes raw.
+
+No schema change; the reason stays durable on the entity and is only hidden at the
+customer-document boundary.
+
+## 2026-08-08 — Codex review round 4: product-swap snapshot integrity, per-order below-cost note
+
+Closed three of four round-4 Codex findings on the pricing branch.
+
+- **P1 — quote line product swap.** The snapshot immutability guard rejected edits to
+  `cost_at_quote_cents` but allowed an owning rep to change `product_id` through the
+  `qitems_update` RLS policy, permanently attaching a cheap snapshot to an expensive
+  product. The guard now also rejects `product_id` changes (`QUOTE_ITEM_PRODUCT_IMMUTABLE`).
+  `save_quote` never UPDATEs `product_id` — a swap is delete+reinsert — so no governed
+  path is affected.
+- **P2 — order line product swap.** `update_order_items` swaps `product_id` and
+  `cost_per_unit` in place but left `cost_at_time_cents` from the old product; once the
+  reports make that column canonical, a valid swap would report the old product's cost.
+  Added `trg_resnapshot_order_item_cost`, a BEFORE UPDATE trigger that re-stamps the
+  snapshot on a product change unless the caller deliberately supplied a new one — placed
+  on the table so every write path is covered, not just that one RPC.
+- **P2 — batch-global approval note.** `BulkOrderImport` appended "Below-cost approved"
+  to every order in an upload. Now only orders that actually contain a below-cost line
+  get the note.
+
+**Deferred (owner decision):** Codex's remaining P2 asks that below-cost approval be a
+server-side invariant rather than a UI gate, which would also close the
+catalog-cost-changes-mid-import race. `bulk_import_order` is where Codex raised it, but it
+is only one part: `create_direct_order`, `create_rush_order`, `update_order_items`, `price_order`,
+`save_invoice` and `save_quote` write money on the same terms and have the same gap, so it must be
+decided once and applied across the whole money-write surface. (An earlier draft named a
+`save_order` RPC; no such function exists.) That changes what those RPCs will accept from every
+caller — it needs Mason's call, and is tracked with the other open pricing decisions.
+**Settled 2026-08-09:** yes, enforce server-side, with an admin exception. The *policy* is
+settled; the *implementation* is deferred to a follow-up and is **NOT IMPLEMENTED** — nothing in
+this PR enforces below-cost server-side. See `docs/manual/DECISION_LOG.md`.
+
+## 2026-08-08 — Codex review round 3: stable quote item ids, dashboard on snapshot cost, below-cost gate on bulk import
+
+Addressed the third Codex review round on the pricing Phase B/C branch. `save_quote`
+now reuses the caller-echoed `quote_items.id` when it matches a prior line of the same
+quote and product, so `QuoteBuilder` (which never refetches after a draft save) keeps
+working ids and no longer re-stamps `cost_at_quote_cents` from today's catalog on every
+later save; each prior id is consumed at most once and a repeat raises
+`QUOTE_ITEM_ID_DUPLICATE` before the insert. `financial_dashboard_summary`'s headline
+and monthly-trend figures now aggregate from `order_items` using the canonical snapshot
+cost expression, so they agree with the section-level margins in the same RPC.
+`BulkOrderImport` now runs the same below-cost confirmation as `NewOrder` and persists
+the typed reason into `bulk_import_order`'s `p_notes`. `recalcItem` uses `??` rather
+than `||` so a legitimate zero cost snapshot is preserved.
+
+Both migrations remain **PARKED, not applied** — the apply guard could not mint proof in
+this container (no trusted Codex CLI binary), so Mason applies them from his own machine.
+RLS re-review returned zero findings across all ten checks on the id-reuse change.
+
+- **Migrations touched**:
+  - `supabase/migrations/20260812145628_snapshot_cost_reporting.sql`
+  - `supabase/migrations/20260812151606_quote_items_cost_at_quote_snapshot.sql`
+
+## 2026-08-08 — Pricing audit + Phase B/C: full pricing audit doc; gotchas entry for…
+
+Pricing audit + Phase B/C: full pricing audit doc; gotchas entry for margin/markup semantics; three PARKED reviewed migrations (returns-COGS reversal, snapshot-cost report unification + get_profitability_report, quote-time cost snapshot with anti-forgery); BelowCostConfirmModal below-cost sale gate; QuoteBuilder line-id preservation. Migrations await Mason-machine Codex-proof apply.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `8d7e71c42 Pricing Phase B/C: returns-COGS reversal, snapshot-cost reporting, quote cost snapshot, below-cost confirmation`
+  - `c75d3e323 Address Codex review: workbook freshness scope + SalesReports data-flow`
+  - `c742e75fd Resolve margin/markup 'swap' finding as naming-only; document semantics in gotchas`
+  - `6576747ac Mark partial-delivery cost defect as already fixed per Codex review`
+  - `3b9040da8 Log pricing audit session in changelog`
+  - `54b4aa949 Add full product pricing audit and strategy (2026-08-08)`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260808170000_return_credit_cogs_reversal.sql`
+  - `supabase/migrations/20260812145628_snapshot_cost_reporting.sql`
+  - `supabase/migrations/20260812151606_quote_items_cost_at_quote_snapshot.sql`
+
+## 2026-08-08 — Read-only product pricing audit: added…
+
+Read-only product pricing audit: added docs/audits/2026-08-08-product-pricing-full-audit-and-strategy.md (cost capture, margins, vendor price history, 600-SKU update strategy); pushed branch claude/pricing-audit-strategy-jym8rr, draft PR #350. No code/schema/data changes.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `54b4aa94 Add full product pricing audit and strategy (2026-08-08)`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+## 2026-08-10 — Declined the bigint-cents conversion and applied three whole-cent migrations live
+
+Evaluated CodeRabbit's bigint-cents request on the canonical profit path and declined the conversion, drafting three migrations that fix the underlying cent-scale defects instead. PostgreSQL numeric is exact decimal, not floating point, so the AGENTS.md money rule was never violated; converting orders.total_profit, orders.total_cost, order_items.profit and order_items.net_margin to bigint cents would reach src/types/index.ts, reporting, invoicing and commissions for no correctness gain. The real defects, confirmed from live function source, are that commission rows mint their basis from a stale pre-trigger profit value rather than the canonical order header, and that several creation paths store sub-cent money. Three migrations were written and then, on Mason's explicit in-chat approval, APPLIED LIVE to production on 2026-08-10 in order: 20260810150000 rebases the commission basis on the rounded order header and rounds create_direct_order money (ledger version 20260810152935); 20260810150500 rounds save_quote total_cost and quote_items money (20260810154721); 20260810151000 adds whole-cent CHECK constraints to seven already-clean money columns, five more deferred behind a legacy backfill (20260810155629). All three ran end to end against a throwaway postgres:17-alpine first and every post-condition was mutation-tested to fail closed; each apply then passed the full proof gate, with both reviewer charters run as real gpt-5.6-sol high-effort Codex reviews returning CLEAN against the exact on-disk file hash. Post-apply live reads confirm every function body changed as written with SECURITY DEFINER, search_path and grants unchanged, and exactly the intended seven CHECK constraints present and validated with the five deferred columns still unconstrained. No live row was modified. The schema registry was rebuilt from live introspection afterwards. Nothing has been pushed, merged, or deployed. Deferred: the _update_order_items_impl total_price clobber is blocked on live-vs-disk function drift, and the quote-versus-order profit formula divergence is an owner decision.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `8dfbf176 docs: correct the live commission-basis mismatch count (10 -> 12)`
+  - `908da7a3 fix(money): whole-cent canonical profit + commission basis from order header`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
 ## 2026-08-12 — Wave A re-stamped to 20260813: a concurrent apply moved the high-water under us
 
 Rename-only change. The six Wave A migrations move from `20260812010000`–`20260812060000` to
@@ -609,6 +1659,439 @@ Evaluated CodeRabbit's bigint-cents request on the canonical profit path and dec
   - `supabase/migrations/20260810150000_commission_basis_from_canonical_order_header.sql`
   - `supabase/migrations/20260810150500_save_quote_whole_cent_total_cost.sql`
   - `supabase/migrations/20260810151000_whole_cent_money_check_constraints.sql`
+## 2026-08-11 — Commission-payout intent binding merged and applied live (PR #378)
+
+Closeout for the entry dated 2026-08-10 below, which is superseded on its two open points: the review
+rounds continued past the twelve recorded there and the final one returned a **clean** verdict — proof
+minted at head `4d45bcf0` against base `261d10bd`, `gpt-5.6-sol` at high effort, 2026-08-11 13:48 UTC —
+Mason gave explicit approval for both irreversible steps, PR #378 was merged to `main`, and migration
+`20260811130000_bind_commission_payout_idempotency_to_intent.sql` was applied to production through the
+governed `apply_migration` gate on 2026-08-11. It is recorded in the live ledger under ledger version
+`20260811183437` carrying the migration's own name — the apply tool stamps its own clock as the version,
+so the file's `20260811130000` timestamp is the name, not the ledger version.
+
+Verified against production after the apply, not inferred from the migration text:
+
+- **Catalog postconditions.** Each of the seven function names has exactly one overload; none of the four
+  internal helper functions survived the migration; all three public payout wrappers contain a call to
+  `check_idempotency_intent(`; `anon` cannot execute any of the three public entry points while
+  `authenticated` can; and none of `anon`, `authenticated` or `service_role` can execute any of the four
+  internal functions.
+- **Existing payout smoke chain.** `scripts/smoke/smoke-commission_payment_for_update_fix.sql` run against
+  production returned `SMOKE_PASS_ROLLBACK`, and this run took the new wrapper branch of its
+  implementation-identity scenario. Inside the rolled-back transaction it created a real payment batch with
+  matching items and an audit row, was refused on the duplicate as already sitting in a live payment, and
+  replayed a keyed create back to the same payment id with exactly one item.
+- **Intent binding itself, proven live.** The checked-in intent-binding proof is a container harness and
+  cannot run against production, so a nine-assertion chain was written and run live, ending in the same
+  mandatory `SMOKE_PASS_ROLLBACK` so every effect was discarded. It observed: the receipt now carries the
+  acting admin's id and a 64-character fingerprint; an identical intent replays to the same payment id and
+  is insensitive to surrounding whitespace; changing the commission selection on a retained key raises
+  `IDEMPOTENCY_INTENT_MISMATCH`; changing the reference does the same; a NULL key raises
+  `IDEMPOTENCY_KEY_REQUIRED` and pays nothing; a legacy receipt with both binding columns still NULL fails
+  closed rather than replaying; a post replay aimed at a *different* payment raises
+  `IDEMPOTENCY_INTENT_MISMATCH` with that other payment left unposted; and a second active admin reusing
+  the first admin's key raises `IDEMPOTENCY_ACTOR_MISMATCH`.
+
+No live rows were altered: every scenario above ran inside a transaction that ends in a deliberate
+exception, which is how these chains prove both the behaviour and the rollback.
+
+## 2026-08-11 — Preserve the applied line-profit backfill without replaying it by default
+
+Added the exact source for live migration `20260810025159_backfill_stale_line_profit.sql`,
+closing the repository-to-ledger gap for the already-applied 37-line profit repair. Because
+that migration rewrote a production-specific business-row population, the post-baseline
+rebuild selector now reads a small one-shot registry and withholds the repair from default
+replay while reporting the omission on stderr. An explicit `--include-one-shot` escape hatch
+remains available only after the target population has been independently proven to match
+the population originally approved. After a restore proves it already contains the corrected
+values, `--one-shot-repair-plan` emits the reviewed ledger-repair commands needed to prevent a
+later unfiltered push from rediscovering the skipped rewrite. Focused tests prove the default
+quarantine, visible warning, registry/file correspondence, deliberate override, and durable
+ledger closeout path.
+
+## 2026-08-10 — Record the exact-whole-cent compatibility policy
+
+Recorded Mason's financial storage decision independently of the pricing implementation: new money
+storage uses bigint cents. Established PostgreSQL numeric-dollar storage may remain temporarily to
+avoid a risky unit rewrite, but it is approved only after exact numeric arithmetic, clean finite
+whole-cent values, and an active finite whole-cent CHECK are verified. Dirty or unconstrained
+columns remain tracked findings and may not be suppressed as accepted exceptions. Authoritative
+TypeScript money calculations and input-parsing paths that are added or changed must parse decimal
+operands into integer cents and may not introduce binary floating-point conversion, parsing,
+arithmetic, or rounding; display-only formatting from already-integer cents remains allowed. Updated
+required reviewer, workflow, architecture, operations, and audit-template guidance that still stated the superseded
+blanket bigint-only rule. The pre-existing `parseCents.ts` excess-precision truncation is recorded
+as open debt below rather than silently changing input behavior in this policy-only PR. The separate
+pricing implementation owns the money paths it changes; this PR changes no schema, data, or
+production behavior. Latest-head review also aligned the compliance/PDF reviewers, migration and RPC
+scaffolds, money hook message, inventory checklist, and required gotchas reference so none can
+override the fail-closed legacy-column approval gate. A final exact-head Sol review rejected the
+earlier "once clean" wording because it could hide dirty or unconstrained columns; the policy,
+review prompts, audit allowlists, and migration/RPC guidance now keep those columns visible until
+all three approval conditions are proven. A final current-head review also made the
+compliance reviewer reject raw use of the legacy cent parsers on inputs with more than two
+fractional digits unless an explicit exact rounding rule has been approved; the deterministic
+money-safety hook now gives the same qualified remediation instead of recommending the truncating
+helper by itself. The final exact-head review applied that same precision gate to the field-map UX
+loop prompt, which had still described the legacy parser as exact without qualifying its truncation.
+
+## 2026-08-10 — Graphify-first agent navigation policy
+
+Made Graphify the explicit first-pass navigator for architecture, multi-file, workflow/migration,
+difficult-debugging, structural-audit, and PR-impact work. `AGENTS.md` now defines the shared routing,
+authority, and evidence boundaries; `CLAUDE.md` explicitly routes Claude through that policy. The shared
+Graphify skill carries the tool procedure: check graph freshness, query the smallest useful subgraph,
+use the generated report/visual index, minimize source reads, and preserve useful or corrected outcomes
+with `save-result`/`reflect`. Focused source and live read-only evidence remain mandatory for safe edits
+and material proof; Graphify is navigation, not authority. When Graphify is unavailable or its wrapper
+reports a supported skip, agents continue with focused source inspection and disclose the limitation.
+
+## 2026-08-10 — Spell out the whole-cent CHECK predicate and record which columns actually pass the gate
+
+Documentation-only follow-on to the exact-whole-cent compatibility policy above:
+no code, no schema, no migration, and no change to the `AGENTS.md` rule itself.
+
+That policy says a legacy `numeric` dollar column is an approved exception only
+once "an active finite whole-cent CHECK is present," but it never said what that
+CHECK is. Written from the description alone, the obvious constraint —
+`CHECK (col = ROUND(col, 2))` — **does not work**, and fails in the direction
+that looks safe. PostgreSQL `numeric` deliberately does not use IEEE-754 `NaN`
+semantics: so values stay sortable and indexable, it treats `NaN` as equal to
+`NaN` and greater than every finite value, which makes `'NaN' = ROUND('NaN', 2)`
+true. A rounding-only check therefore admits `NaN` while appearing to satisfy the
+gate. `docs/manual/DECISION_LOG.md` now carries the full predicate, both halves
+marked load-bearing, and the `<table>_<column>_whole_cents_chk` naming rule;
+`docs/workflows/SAFE_DEVELOPMENT_RULES.md` repeats it where the money rules live.
+
+Also recorded: never add one of these as `NOT VALID` over a column that still
+holds dirty rows. `NOT VALID` skips only the initial scan, and a CHECK is
+re-evaluated against the whole new row on every later UPDATE whatever column
+changed — so each legacy dirty row becomes permanently un-editable, invisibly,
+until someone tries to edit an old record.
+
+Finally, the per-column gate status, verified read-only against the live
+database on 2026-08-11: of the 12 order/quote/commission columns the 2026-08-10
+evaluation measured, **7 carry the constraint and 5 do not**, with the reason and
+status for each. Four of the five hold legacy fractional-cent rows and need a
+data repair that is a separate, unapproved decision; `orders.total_price` is
+clean but blocked because `_update_order_items_impl` overwrites it with the raw
+un-rounded line sum. The entry also names the legacy dollar columns outside that
+audit (`payments.amount`, the `commissions` amounts, `purchase_orders.total_cost`,
+the `products` price tiers and others) as unconstrained tracked debt, so the
+grandfathering is not misread as covering them.
+
+## 2026-08-10 — Agent toolchain refresh; removed the dead Codex Sentry connector
+
+Verified the Codex side of the harness end-to-end from a Claude Code desktop session and brought the local agent toolchain current. All three Codex model tiers were confirmed live by running each one (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`); `codex-review`, `codex-gauntlet` and `codex-build.mjs` pin model and reasoning effort explicitly and correctly. Codex CLI (0.147.0) and Claude Code (2.1.226) were already at the newest published versions; six other global CLIs were updated (npm 11→12, vercel 55→58, google-workspace-mcp 2→4, filesystem MCP server, sentry, @sentry/cli), after which a live `codex exec` run confirmed the major npm jump broke nothing.
+
+- **Removed `[mcp_servers.sentry]` from `.codex/config.toml`.** Its OAuth grant had been revoked server-side (`invalid_grant: Grant not found`), so every Codex run logged two refresh errors before doing any work. Sentry is not configured for Codex and nothing depends on it — the only `sentry` string in the Codex workflows is `src/lib/sentry`, an application source path, not this connector. Removed so a future OAuth error in a Codex run means something instead of being noise operators learn to scroll past. Verified after removal: `codex mcp list` shows Supabase only, and a live run returned the correct most-recent migration with zero *Sentry* OAuth errors. The retained Supabase entry still fails its own OAuth refresh on every run with the same `invalid_grant` — a separate, pre-existing defect this change neither fixed nor introduced, recorded in the new KNOWN_ISSUES entry below.
+- **`[mcp_servers.supabase]` deliberately kept**, including `read_only=true`. It is asserted by both `check-agent-workflows.mjs` and `check-agent-guidance.mjs`. An attempt to remove it as a second dead entry was reverted when that guard failed — see the new KNOWN_ISSUES entry, which records what that guard does and does not actually prove.
+- **`agent-pair-review.md` names no model or effort.** It reaches `gpt-5.6-sol` at high effort only by routing through `codex-review`; nothing enforces it. Filed as follow-up, not fixed here.
+
+## 2026-08-10 — Own-worktree containment compares paths case-insensitively on Windows
+
+Closed a narrower instance of the push block the 2026-08-09 own-worktree
+exemption was written to remove. That exemption keys its registry by a path
+string: `registeredWorktreeDirectories()` stored the repo-relative path using
+the casing `git worktree list --porcelain` printed, and `worktreeEntryKind()`
+built its lookup key from the casing the ignored-directory listing reported.
+Every other containment comparison in the checker routes through
+`containmentPathKey()`, which lowercases on win32 precisely so a containment
+decision cannot hinge on the casing Git happened to print — that Set
+round-trip was the one place that did not.
+
+On Windows the two casings can disagree, and when they did the membership
+lookup missed and a legitimate linked worktree of this same repository was
+classified as an embedded repository, failing the pre-push containment gate.
+It failed closed, so it over-blocked a push and never risked leaking a private
+artifact — a regression risk, not a security hole. Both the stored key and the
+lookup key now go through `containmentPathKey()`, preserving the existing
+`path.relative` and forward-slash conversion.
+
+New fixtures drive the disagreement from both sides against a real registered
+worktree: the registry casing skewed away from disk, and the ignored-listing
+casing skewed away from the registry. Each asserts the harness actually
+rewrote a path, so neither can pass vacuously. The first also asserts the
+correct fail-closed result on case-sensitive filesystems, where the two
+casings genuinely name two different directories; the second is Windows-only,
+because elsewhere the skewed path names a directory that does not exist.
+Reverting either half of the fix turned the suite red before restore.
+
+Codex's review of that fix raised two findings on PR #366, both real and both
+addressed in the same PR. First, folding case decides which registry key a
+candidate matches, and matching a key was the *only* thing granting the
+exemption. A Windows directory with per-directory case sensitivity enabled can
+hold `session` and `SESSION` at once — two different directories that fold to
+one key — so a foreign repository parked at the colliding name would have
+inherited a linked worktree's exemption and had its contents skipped instead of
+failing closed. `worktreeEntryKind()` now re-verifies the `.git` pointer file on
+the candidate directory itself before exempting it, which is the same two-signal
+rule the registry side already applied and does not depend on case semantics at
+all. A new fixture enables per-directory case sensitivity, builds both
+directories for real, and asserts the foreign one is still rejected; it skips
+where the filesystem cannot hold two case-distinct names. Removing the
+re-verification turned it red before restore.
+
+Second, every CI runner in this repository is `ubuntu-latest`, where
+`containmentPathKey()` is the identity function — so the Windows-only branches
+never executed and both production edits could have been reverted with CI still
+green. A `Phase 3C Containment (Windows)` job now runs this suite on
+`windows-latest`. The suite imports only Node builtins and sibling scripts, so
+that leg needs Git and Node but no `npm ci`.
+
+Standing that job up surfaced a pre-existing incompatibility between this suite
+and the hosted Windows runner, which points `TEMP` at an 8.3 short path
+(`C:\Users\RUNNER~1\...`). The suite builds its fixture repositories under
+`os.tmpdir()`, and Node's `realpathSync` keeps the short form while Git expands
+it, so a fixture root passed its own canonical check and then never equalled
+`git rev-parse --show-toplevel` — every canonical-root assertion failed. That
+was reproduced locally against a deliberately short-named directory before
+being fixed; the job now runs with `TMP`/`TEMP` set to `runner.temp`, a plain
+long path. The guard itself is unchanged: the fix corrects the test
+environment, not the check. The suite also pins the number of CI checkout steps
+so each new one gets a least-privilege review, and this job's checkout drops the
+GitHub token like the other four.
+
+Running on Windows for the first time then exposed a second dormant case. One
+assertion checks that a forbidden `private-artifacts` name fails closed before
+any reparse point is dereferenced, and it built that link as a junction aimed at
+a file. A junction is a directory-only reparse point, so aimed at a file it is a
+broken link Git cannot open (`could not open directory ... Not a directory`),
+the entry never reaches the name rule, and the assertion fails. It had gone
+unnoticed because it sat behind a Windows *file* symlink whose creation needs a
+privilege an ordinary account lacks — the resulting `EPERM` skipped the block on
+every Windows machine except an elevated CI runner. The junction case now stands
+in its own block and aims at a directory, so it executes on an ordinary Windows
+account too; it was confirmed red against the old shape and green against the new
+one on a non-elevated machine. The guard is again unchanged, and was verified
+directly: a junction pointing at a real directory of packets — the shape that
+could actually carry private data — was already rejected.
+
+Review of that fix then found a real hole in the exemption itself, and this one
+could hide private data rather than merely block a push. A linked worktree of
+this repository is recognised by a `.git` pointer file naming a directory inside
+this repository's worktree bookkeeping. That pointer was trusted on its face, so
+a *copy* of a genuine worktree's pointer file was equally convincing. Windows
+compares names case-insensitively by default, but a directory can opt in to
+per-directory case sensitivity, and one that has can hold `session` and
+`SESSION` as two different directories that the containment check folds to a
+single key. A foreign directory parked at the colliding name could copy the
+pointer next door and inherit the exemption — its private contents skipped. That was reproduced end to end before anything
+changed: a private packet passed the gate. The exemption now reads the backlink
+Git keeps in that bookkeeping directory and requires it to name the very
+directory being exempted. The comparison is made on filesystem identity rather
+than path text, because Node's `realpathSync` returns whatever casing it was
+handed on Windows while case-sensitive directories make two spellings genuinely
+two places; and it compares the backlink's parent *directory*, so hard-linking
+the pointer file — which would preserve the file's identity — fails too, NTFS
+having no way to hard-link a directory. Both attacks and both legitimate cases
+are now fixtures in the suite, each confirmed red against the previous shape.
+
+Raised by CodeRabbit on PR #359 and deferred there only because a new commit
+would have discarded that PR's banked Vercel status while the daily build
+quota was exhausted.
+
+## 2026-08-10 — Pending commission snapshots reconciled live (PR #372)
+
+Closed the last open item from the canonical-profit workstream. The 2026-08-09 line-profit backfill
+re-derived line profit from the order header but left a small set of *pending* commission snapshots
+holding the pre-backfill figures, so a commission that had not yet been paid could be computed from a
+stale basis. `reconcile_pending_commission_snapshots` repairs exactly that set and nothing else.
+
+**The write set was pinned before it could move.** The migration is forward-only and binds itself to a
+SHA-256 fingerprint of the approved target rows, recomputed from live data immediately before the apply
+and matched exactly — so the migration could not widen its own scope between review and execution. It
+locks orders before commissions, deletes nothing, and excludes paid, cancelled, deleted, batched, job,
+and application commissions. It fails closed on target-set, lifecycle, money-value, or postcondition
+drift. Target size: 11 snapshot rows across 10 orders. Per-row and aggregate money figures are
+deliberately withheld here — this repository is public.
+
+**Applied live 2026-08-10** after Mason's explicit approval in the active session, with both
+`gpt-5.6-sol` high-effort reviewer charters re-minted against this exact body and returning CLEAN.
+Supabase assigned ledger version `20260810235207`; the disk file was B7-renamed to match, body
+byte-identical. Live readback shows zero remaining eligible mismatches, and the registered
+`pending_commission_snapshot_reconcile` chain returned the exact terminal marker `SMOKE_PASS_ROLLBACK`.
+
+One deviation from the handoff's "preserve these files exactly": the smoke's `SMOKE_FAIL` message
+contained the literal text `snapshot(s)`, which the repository's live-data guard parses as a function
+call, blocking the whole chain from running through the sanctioned channel. The wording is now
+`snapshot rows`. Assertion logic and the terminal marker are untouched.
+
+**Generated-artifact closeout.** `.claude/schema-registry.json` was regenerated from live introspection,
+not stamped: `_meta.migrations_high_water` moves `20260810025159` → `20260810235207` and the applied-name
+list goes 947 → 951 distinct names. Every schema-shape section is byte-identical
+(`generated_columns`, `status_enums`, `check_constraints`, `not_null_columns`, `columns`, `sequences`,
+`tables_without_updated_at`) — as it must be, since this migration contains no DDL. The one section that
+moved is `skipped_constraints`, 187 → 194, and none of the seven additions come from this migration:
+they are the whole-cent money CHECKs from `20260810151000_whole_cent_money_check_constraints`, live since
+earlier the same day. The registry was stale against three migrations, not one. Those constraint
+definitions are recorded here because the registry describes *live* truth; their migration sources sit on
+a separate in-flight branch and are untouched by this change.
+
+## 2026-08-10 — Review fixes on the harness guards (PR #369)
+
+Six findings from the Codex and CodeRabbit reviews of PR #369, all in the pre-commit harness. Five are
+code fixes, each mutation-proved (break the fix, watch the new assertion go red):
+
+1. **A registry row the diff never mentions no longer reads as "nothing pending."** Every check in
+   `parkedDraftPathsFrom` ran inside the loop over changed paths, so a branch that registers pending SQL
+   in `migration-history.md` but never touches that SQL in the diff got a confident zero over a registry
+   the code had not read. The registry is now reconciled against the diff outside the loop; an
+   unaccounted row answers UNKNOWN, which sends the caller to a full scan.
+2. **An unreadable migration history over an empty diff is UNKNOWN too** — same loop, same blind spot.
+3. **Migration enumeration is index-scoped, not a directory listing.** The guard describes the commit
+   being created, so it must not see untracked or unstaged `.sql` files. Proved by planting an untracked
+   migration and confirming only a directory listing finds it.
+4. **The backup-staleness check no longer guesses at the main checkout.** It derived the checkout from
+   `dirname(<git-common-dir>)`, which under `--separate-git-dir` or in a bare repo lands on an unrelated
+   folder that could hold some other project's `backups/LATEST-OK.json`. It now asks Git, and rejects
+   layouts it cannot resolve rather than reporting a different database's backup as this one's.
+5. **Canonical blobs come from the index only** — no HEAD fallback (which would validate history the
+   commit deletes) and no working-tree fallback (which would certify bytes the commit omits).
+6. **Doc fix:** `docs/audits/2026-08-08-foundation-ultra-review.md` still read as if its five follow-up
+   migrations were unapplied and its §2 fixes were future work. All of it is live since 2026-08-09, and a
+   reader following the old text could have replayed or restamped shipped work. The stale passages are
+   now labelled SUPERSEDED with the live status verified by direct introspection. The one genuinely open
+   item — the historical fractional-cent repair, whose statement is commented out on purpose — is called
+   out as Mason's decision and was **not** run.
+
+Hook suites: `worktree-awareness-lib` 185 assertions, `session-staleness` 23 assertions, both green.
+
+## 2026-08-10 — Harness guards now validate the commit being created (PR #357)
+
+Resolved the review findings on the abandoned harness-permissions branch. The headline defect: the
+migration cross-reference guard hashed the **staged** SQL blob but parsed the **unstaged**
+`migration-history.md`, so a commit whose staged history carried an all-zero sha256 pin passed all 176
+assertions while the correct pin sat unstaged on disk — the guard blessed a commit it had never
+actually inspected. Both artifacts now come from one index-first reader. Mutation-proved in a
+throwaway setup: staged-wrong/disk-right is RED, staged-right/disk-wrong is GREEN, history restored
+byte-identical.
+
+Two further guard fixes, each proved against the pre-fix code rather than asserted:
+
+- **Backup-freshness false alarm.** `session-staleness.mjs` always preferred the canonical checkout's
+  `backups/LATEST-OK.json`, but `/backup-db` stamps that marker in whichever checkout it ran from. A
+  backup taken inside a worktree was therefore invisible, and every later session warned that the only
+  copy of production data was missing or stale — training the reader to ignore the one warning that
+  matters. Now newest-wins, which keeps the original protection (a stale worktree marker still loses
+  to a newer canonical one) without the false alarm. Before/after in a throwaway repo: canonical-old
+  plus worktree-fresh warned "2414 days old" before and is silent after; both-old still warns;
+  neither-present still warns. This deliberately **reverses a previously-asserted rule** — the FIX 3
+  case in `session-staleness.test.mjs` asserted "shared canonical marker wins over a conflicting
+  worktree-local marker". That assertion is replaced, not deleted: the suite now pins both halves of
+  newest-wins (a fresher worktree marker is not masked, and a stale worktree marker cannot fake a
+  stale backup when the canonical one is fresh). Mutation-proved — restoring canonical-always-wins
+  turns the suite RED.
+- **Dangling candidate registry.** `parkedDraftPathsFrom()` skipped a vanished path before consulting
+  history, so a LOCAL CANDIDATE pin naming SQL that is not on disk produced a confident zero with no
+  `unknownReason`. It now reports UNKNOWN for exactly that case; a retired `SUPERSEDED-` draft, which
+  is not in the registry, stays silent as before. The pre-commit cross-reference guard already caught
+  this at commit time, so nothing dangling could reach `main` — the gap was that `/fleet` and
+  SessionStart under-reported until someone tried to commit.
+
+One reported finding is **not actioned because it does not reproduce**: exercised against this head, a
+headerless branch candidate registered only by a matching sha256 pin *is* surfaced, and a mismatched
+pin sets `unknownReason`.
+
+Also retired two stale documentation claims. `docs/audits/2026-08-08-foundation-ultra-review.md` and
+`docs/reference/rpc-functions.md` still said the foundation-ultra-review migrations were unapplied
+candidates and instructed agents to restamp them. They are **applied live** — re-issued forward as
+`20260809170500`–`20260809170900`, ledger versions `20260809203222`, `20260809204044`, `20260809204435`,
+`20260809204855`, `20260809205423`, with per-migration proof in `migration-history.md` rows 857–861.
+The one deliberate exception is unchanged: the historical money repair inside `20260809170800` stays
+commented out, so the 49 pre-existing fractional-cent rows are untouched and restating them remains
+Mason's decision.
+
+## 2026-08-10 — Bound commission-payout idempotency to the actor and the intent (applied live 2026-08-11)
+
+The three commission payout RPCs — `create_commission_payment`, `post_commission_payment` and `void_commission_payment` — stored their retry receipts keyed on the operation and the key text alone. Nothing in the stored receipt recorded *who* was asking or *which* payment they had asked about — the key text the browser generated happened to contain a user id, but the server never read it, stored it or checked it against the caller — so a retry aimed at a different payment could be answered out of an earlier payment's cached success: the UI reports "posted", and the row the admin was actually looking at was never touched. Migration `20260811130000_bind_commission_payout_idempotency_to_intent.sql` binds every receipt to the acting user id and to a SHA-256 fingerprint of the request arguments, and fails closed — raising rather than replaying — whenever a reused key arrives carrying a different actor or a different fingerprint. Each RPC is split into a private implementation function with the binding check living in a thin public wrapper, so the check cannot be skipped by calling the inner function directly. The accounting body is moved, not retyped, so the money arithmetic cannot drift; the wrapper does normalize the free-text metadata it forwards — payment method, reference, notes and void reason are trimmed, and blank becomes NULL — so that the fingerprint and the row the payment stores can never disagree about what was asked for. This migration was **applied to production on 2026-08-11** with Mason's explicit approval, after the final review round returned clean; the closeout entry at the top of this file records what was observed live. The paragraphs below describe the change as it stood on 2026-08-10 and are left as written, except where they stated a review or approval status that has since been superseded.
+
+The client side had a matching defect that the server fix alone would not have cured. `useIdempotencyKey` retained exactly one key at a time, so an admin who started a payout on one payment, moved to a second, then came *back* to the first was issued a third, brand-new key for a request the server had already committed — the retry the key exists to make safe. It now retains one key per target in a Map, and clearing a key on success retires only that target's key rather than every unresolved retry the admin still has open. The commission payments page scopes its create-payment key to the sorted set of commissions being paid *and* to the payment method, date, reference and note, which replaced a reset-on-dialog-open that was destroying the only key capable of replaying an uncertain create. Reopening the dialog on the same commissions with the same payment details now replays the same request; changing the selection, or correcting any of those details, is a genuinely different request and mints a fresh key. The scope is what the key is derived from, so this recovery holds only while the page stays mounted — navigating away and back still loses the key, which is the codebase-wide remount gap recorded below as out of scope. Because a replay can return a payment that has since been voided, the success path now reads the payment's status back and warns — rather than congratulating — when the replayed payment is no longer live, and the ordinary failure toast now tells the admin a payment may exist and to check the list before creating another.
+
+Two accounting defects in the Reports commission run were fixed alongside. A recipient counter incremented *after* the RPC returned could not distinguish "committed but the response was lost" from "nothing happened", so an uncertain call silently vanished from the totals; an `attempted` counter now increments before the call. And the batch summary now confirms every batch it created is still live before claiming success, instead of reporting a payout that a concurrent void had already reversed.
+
+Twelve rounds of adversarial Codex review have run against this branch, and **no round has yet returned a clean verdict** — each one surfaced further findings, mostly ones the previous round's fix had exposed rather than introduced. Round 9 returned thirteen (4 HIGH, 3 MEDIUM, 6 LOW); nine were closed and four declined, and round 10 accepted all four declines. Round 10 returned six (3 HIGH, 1 MEDIUM, 2 LOW). Round 11 returned six more (1 HIGH, 1 MEDIUM, 2 LOW, 2 NIT), and its HIGH was a hole in the guard round 10 had just added. Round 12 returned five (1 HIGH, 1 MEDIUM, 3 LOW); three are fixed, one is declined with evidence, and the HIGH is the undecidable residual described under round 12 — it is now pinned by a proof case instead of claimed closed. "Closed" throughout means closed against the review that found it, not proven clean by a review that found nothing. The findings are getting narrower — rounds 7 and 8 were largely about the *guards*, whether a hostile future author could slip a body past the scanner, rather than about the payout behaviour itself — but rounds 9 and 10 were not only that: round 9's first finding was a live defect in the migration's own replay path that needed no hostile actor at all, and round 10's three HIGHs were all cases where the guard added to close a previous round's finding was itself fail-*open*. The standing "apply live without asking" migration authority was therefore **revoked for this change** — the merge and the live apply were both held for Mason's explicit OK, which he gave on 2026-08-11 after a later round finally returned clean. **Superseded:** review continued past round 12 and the final round returned a clean verdict; the closeout entry at the top of this file records the merge, the live apply and what was observed against production afterwards.
+
+- **Migration replay safety.** Each of the three rename blocks now inspects the live function definition before renaming. If the private implementation is missing but the wrapper survived, replaying the migration would have renamed the wrapper onto the implementation's name, leaving a function whose body calls itself — infinite recursion that every name, overload and grant postcondition would still have passed. The blocks raise instead.
+- **Test-quality repairs.** A source-scanning guard sliced its assertions from the first `toast('warning'` in the function; adding a warning to the success path silently re-pointed two pre-existing assertions away from the branch they were meant to guard. The slices are now anchored to the catch block. A second helper matched only the first function definition in a migration file and skipped the rest without failing — it now finds every definition by regex and asserts on all of them. A third guard, in the money/inventory gauntlet suite, was pinned to the old one-slot hook internals; it now asserts the per-target Map lookup, which is the property it was always meant to protect.
+- **Behaviour change: the idempotency key is now required.** All three payout RPCs previously accepted a call that omitted `p_idempotency_key`, and such a call ran the payout with no receipt and therefore no intent binding at all — an authenticated admin calling the RPC directly (PostgREST lets a defaulted argument be omitted) reached the money path unbound, which is the exact hole this change exists to close. The wrappers now raise `IDEMPOTENCY_KEY_REQUIRED` on a missing or whitespace-only key. Every *application* caller already sends one — the four call sites are `src/pages/CommissionPayments.tsx` (create, post, void) and `src/pages/Reports.tsx` (create) — so no screen changes; a direct API caller that omitted it would now be refused. Review caught one checked-in script that did omit it, `scripts/smoke/smoke-commission_payment_for_update_fix.sql`, which passed NULL twice and would have started failing the moment the migration landed; it is fixed in the same change, with a distinct key per scenario so that what rejects a call is the guard the scenario is about rather than a replay of the previous scenario's receipt.
+- **Post-side parity with the create side.** The post path now re-reads the payment's status after a success and warns instead of congratulating when the replayed payment has since been voided, and it no longer records an activity-feed entry for a posting that no longer stands. Its ordinary failure message says the payment may still have been posted and that pressing Post again is safe, rather than a flat "failed" that invites the admin to treat a committed posting as never having happened.
+- **Round-6 fixes.** The migration-scanning guard in the payout test suite was matching function definitions with regular expressions, so a `--` comment between the DDL keywords, an unqualified `CREATE FUNCTION`, a commented-out definition or one sitting inside a string literal could each hide or fake a definition; it was rewritten around a real SQL lexer that treats comments as whitespace, nests block comments, distinguishes `$1` from a dollar-quote tag, and anchors each body on its own `AS` so a routine-level `SET search_path = ''` is not mistaken for the function body. The rename blocks now match their identity markers against the body with comments stripped, so a function that merely *names* `check_idempotency()` in a comment cannot pose as the payout implementation. The required-key check gained a locale-independent second predicate, because `[[:space:]]` follows the database collation and a key of one non-breaking space would otherwise have been accepted as a real key on some clusters. On the client, the idempotency key is now derived with a mirror of Postgres `btrim(text)` rather than JavaScript `String.trim()` — trim strips tabs, newlines and Unicode spaces that btrim keeps, so the two normalizations disagreed and a retry the admin had not changed could come back refused as an intent mismatch — and the void key now moves with the void reason, which the server fingerprints, instead of with the payment row alone. A new source scan asserts that every payout call site in `src/` passes a non-null `p_idempotency_key`, which is the durable form of the type-level gap: the generated `src/types/supabase.ts` still reports the argument as optional and would lose any hand edit on the next regeneration.
+- **Round-7 fixes.** Three defects were in the guards themselves. `pg_proc.prosrc` keeps string literals as well as comments, so a body whose only mention of the contract markers sat inside a `RAISE NOTICE` still satisfied the rename's identity check; literals are now stripped too. Postgres block comments *nest* while the non-greedy strip stops at the first `*/`, which is the one direction in which stripping can *fabricate* a marker instead of removing one, so any body whose stripped form still carries a stray `/*` or `*/` is now refused outright. And the locale-independent blank-key predicate was not actually locale-independent: a bracket *range* like `[!-~]` is resolved through the active collating sequence exactly as `[[:space:]]` is, so it now carries an explicit `COLLATE "C"`. On the client, a binding refusal in the Reports quick-pay loop used to clear the *whole* map of retained keys, which undid the partial-batch protection — recipient A lands, recipient B is refused, and clearing throws away A's key too, so the retry sends A a new key, the server refuses A because its commissions are already in a live payment, and the loop dies before it ever reaches B; only the key actually refused is dropped now. The ordinary (non-binding) void failure reported a flat "Failed to void payment" over a list it had never refreshed, even though the RPC may have committed and lost its reply; it now refreshes first and says the void may still have gone through. The SQL lexer behind the migration-scanning guard gained three fixes of its own: a single-quoted `AS '…'` function body is now decoded and re-lexed rather than read as opaque text (a commented-out guard inside one satisfied a `.toContain()` while the live function was unguarded), quoted identifiers no longer yield SQL keywords to the scanner, and an unqualified `CREATE FUNCTION` following a *statement-level* `SET search_path` is refused rather than guessed at — distinguished from the routine-level clause that appears in hundreds of this repository's migrations by walking back to the statement boundary.
+- **Round-8 fixes.** The identity check that decides whether a live body may be renamed was reducing that body to code with a chain of `regexp_replace` strips, and a regex chain is unsound in the direction that matters: a dollar-quoted literal is invisible to a `'…'` pattern, a `--` inside a literal eats that literal's closing quote, an E-string's backslash-escaped quote breaks quote pairing, and — because Postgres block comments *nest* while a non-greedy `/\*.*?\*/` stops at the first close — a strip could *fabricate* a marker rather than remove one. It is now a character-loop lexer, `_crx_payout_code_only_20260809`, that knows each construct's real terminator and raises on anything it cannot terminate, so whatever it cannot read confidently is refused rather than passed; the helper is revoked from every browser-reachable role, dropped at the end of the migration, and a post-condition refuses if it survived. Three test-quality defects were fixed alongside. The migration suite's own reader used plain `indexOf` where the guards suite already had a real lexer, so the two could disagree about where a wrapper body began — both now share one module, `src/lib/sqlSourceLexer.ts`, and assertions about executable SQL run against a code-only view that blanks the literals a body prints, so `RAISE NOTICE 'FOR UPDATE OF c'` can no longer satisfy an assertion about a lock the function does not take. The scan that requires every `.rpc()` name to be a plain string literal was only looking at the first character after the parenthesis, so a name assembled from a literal plus an expression passed it while being invisible to the payout call-site scan; it now reads the whole literal — and doing so exposed a real blind spot, a cast-bearing call the payout scan could not see either, which is closed in the same shape. Finally, on the commission payments page, the three busy flags that disable the buttons moved into `finally` blocks (a throw from inside a recovery path had been able to leave a button disabled until a page reload), and a recovery path that refreshed the list loudly now refreshes quietly, so the generic "Failed to load" toast no longer stacks on top of the specific message that already explains what happened.
+- **Round-9 fixes.** The first was a real defect in the migration rather than in a guard. Each rename block skips the rename when the private implementation function already exists — the re-runnability path — and it also skipped the identity check along with it, so a re-run after a partially-applied migration, or any unrelated function that happened to occupy that name, would have been adopted as the payout implementation with nothing checked. The wrapper would then bind a receipt, call whatever was there, and report a successful payout for work the real implementation never did. Every block now holds the pre-existing body to exactly the same test, and the container proof exercises both directions: a wrong body under the implementation name is refused, and a genuine second application of the migration still succeeds. The identity check was also matching its two contract markers as bare substrings, so `fakecheck_idempotency(` and `archived_commission_payment_items` would each have satisfied it; the markers are now matched on identifier boundaries. A body carrying `standard_conforming_strings = off`, at the function level or the session level, is now refused outright rather than read under a quoting rule the lexer does not implement. Both lexers — the migration's own and the TypeScript one behind the source scans — read a dollar-quote tag the way Postgres actually defines it rather than as ASCII letters only, and they now agree on what counts as an identifier character, which they did not: where they disagreed, the scanner refused a body the database accepts. Both were widened in the fail-closed direction, since over-blanking loses a marker and refuses, while under-blanking reads a literal's contents as code and can count a hidden marker as a real guard. Two client defects were fixed as well: the commission payments list refresh could itself reject out of the recovery handler that awaited it — a network drop mid-recovery was enough — which skipped the specific "your payout may have gone through, reload and check" message and left the spinner up; and on Reports, the Mark Paid busy flag was cleared after the catch rather than in a `finally`, so a throw from the same refresh left the button disabled with no way back but a page reload. Four further findings were declined and the reasons recorded in review: one asks the dollar-quote reader to implement Postgres's opener rule for identifier boundaries, which would move it in the *unsafe* direction, and three are test-scanner durability items that presuppose a hostile future author rather than a runtime defect.
+- **Round-10 fixes.** Three of them were holes in the identity check itself, all in the fail-*open* direction. The lexer read a dollar-quote tag out of a fixed 256-character window; Postgres puts no length limit on a tag, so a legal tag longer than the window was not recognised at all, the `$` was emitted as ordinary code, and everything inside that literal — markers included — was read as executable SQL. The tag is now matched against the remainder of the source with no window. The two contract markers were anchored on a *blacklist* of boundary characters, `[^A-Za-z0-9_$]`, and a blacklist cannot be written correctly for this: Postgres allows letters with diacriticals and non-Latin letters in unquoted identifiers, so the `é` in `fakeécheck_idempotency()` counted as a boundary and a body calling an entirely different function satisfied the marker again. The boundary is now a whitelist of the ASCII characters that may legally abut a call or a table reference, so any character the list does not name fails closed. And `pg_proc.prosrc` is language-dependent — for a SQL-standard `BEGIN ATOMIC` body it is not the source at all, and for an internal or C function it is a symbol name — so the checker now demands the one language whose source the lexer is written to parse and refuses anything else instead of parsing a symbol name as PL/pgSQL. The fourth is the limit of what marker matching can prove: a body can carry both markers inside `IF false` and never execute either, so presence is not reachability. Rather than chase an undecidable property, the *state machine* is constrained. A new `_crx_payout_assert_replay_20260809` runs before the body check on every replay path and permits only the two states this migration can legitimately re-enter — a completed prior apply, where the public function is this migration's wrapper, or an apply interrupted between the rename and the wrapper, where the public function is absent. An implementation that exists while the public function is still unwrapped is refused as a state this migration did not produce. As round 11 found, the round-10 form of that check proved "this is the wrapper" by searching the public function's *raw* source for the implementation's name, which a comment could satisfy; that is corrected below. The residual gap is documented rather than papered over: beyond that check it is bounded by `CREATE` privilege on schema `public`, and an actor holding that could replace the wrapper itself, so no check here is the real boundary. Two documentation defects were fixed alongside — `scripts/smoke/smoke-specs.json` described the *opposite* of the migration's NULL-key behaviour, and the counts below were stale.
+- **Round-11 fixes.** The state check round 10 had just added was itself fail-open, in the same shape as the holes it was written to close. It proved "a prior apply completed" by searching the public function's *raw* source for the implementation's name — and raw source includes comments, so any function carrying `-- _create_commission_payment_intent_impl_20260809` in a comment declared the wrapper installed. Paired with a planted implementation whose contract markers sit in executable-but-unreachable code, which the body check cannot distinguish, the migration would have adopted a body that never pays anyone and wrapped it in a real receipt. The public function's source now goes through the same lexer as everything else before it is believed, so comments and literals are blanked; the wrapper's *executable* text must contain a call to the implementation, not merely name it in a comment; and it must likewise contain a call to `check_idempotency_intent()`, which this migration introduces and no implementation contains, so a bare passthrough cannot pose as the wrapper either. What that proves is lexical — that the calls are in the code rather than in a comment or a string — not that either one ever runs; see round 12. The same language guard applied to implementations now applies here, and the implementation's name is regex-escaped before it reaches the pattern. Two smaller repairs: the boundary whitelist was missing the backtick, which is a legal Postgres operator character — its absence could only ever have refused a genuine body, never admitted a hostile one, but a migration that refuses in production and applies in a container is its own kind of defect — and that whitelist now has one shared definition, `_crx_payout_bnd_20260809()`, read by both checkers, because a boundary set written twice is a boundary set that drifts. The tests that were supposed to cover this were the MEDIUM finding of the same round: the structural suite had affirmatively pinned the comment-reading behaviour it should have refused, and the proof suite exercised neither half of the rule. Three proof cases were added — the exact round-11 attack, a passthrough that calls the implementation without the wrapper's own marker, and a non-PL/pgSQL stub whose text satisfies both code predicates — and the structural assertions were rewritten against the new form. One knock-on: the codebase-wide mutating-RPC inventory reads a function's body with regular expressions, so the new check's own `check_idempotency_intent` *regex string* was read as a call to that mutating function and the read-only helper was flagged as an unclassified mutator. It is recorded in the inventory's exemption list beside its sibling, with the reason stated — the function is `STABLE`, returns void, writes nothing, has EXECUTE revoked from every application role, and is dropped before the migration finishes.
+- **Mutation-proven.** Per the standing rule that an untested guard is decoration, 92 deliberate mutants were introduced one at a time across two harnesses — 28 against the real-Postgres container proof and 64 against the source-scanning and page-behavioural suites, including the ones that break only on the A→B→A return trip, the one that lets the payout run with no key, the seven that put the identity lexer back to reading literals, dollar quotes, nested comments and quoted identifiers as code or tolerating an unterminated construct, the one that leaves the helper behind after the migration, the one that reverts the client key to `String.trim()`, the two that stop the shared lexer blanking body literals, the one that names a payout RPC by concatenation, the ones that move a busy flag back outside its `finally`, the four that undo the round-9 guards — the replay path adopting a body unchecked, the markers matched as substrings again, `standard_conforming_strings = off` tolerated, and either lexer's dollar-quote tag narrowed back to ASCII — the five that undo the round-10 guards — the dollar-tag scan re-bounded to a fixed window, the identifier boundary put back to an ASCII blacklist, `prosrc` read without checking the function's language, the replay-state check removed or reordered to run *after* the body check rather than before it, and the new helper left behind at the end of the migration — and the ones that undo the round-11 guards: the replay check reading raw source again, the wrapper's own marker requirement dropped, the language check on the public function removed, the implementation name reaching the regex engine unescaped, the backtick dropped from the boundary whitelist, and the shared boundary helper left behind or its post-condition removed. Every mutant turned its suite red. Five of them only went red after the guards they targeted were given assertions that could actually observe them, which is the point of running the harness rather than trusting the guard: the most recent survivor was a `toContain()` satisfied by *either* of the two paths that raise the same load-failure toast, so suppression could be dropped from one of them and the assertion still passed. The container proof itself proves the identity guard by behaviour rather than by text: it exercises the lexer directly against four code shapes that must survive, twelve never-executed constructs whose contents must not, and five unterminated constructs that must be refused, then plants twelve impostor bodies — markers hidden in a string literal, in nested-comment residue, in a dollar-quoted diagnostic, in a dollar-quoted diagnostic whose tag is 260 characters long, in a literal whose closing quote a `--` strip would eat, in an E-string with an escaped quote, in a literal holding a `*/`, as quoted identifiers, as the tails of longer ASCII identifiers, and as parts of longer non-ASCII identifiers, plus one that carries the real markers but turns `standard_conforming_strings` off and one that is not PL/pgSQL at all — and asserts the rename refuses all twelve while the genuine body still goes through. Six further bodies exercise the replay path specifically: one planted under the private implementation's name while the public function is still unwrapped, which has to be refused on the state before the markers are ever looked at; one swapped in underneath a genuinely completed apply, which the marker check has to catch on its own; one whose only mention of the implementation is a comment inside an otherwise-unwrapped public function, paired with a planted implementation whose markers sit in real executable text so the body check cannot save it; one that calls the implementation but is a bare passthrough rather than the wrapper; and one non-PL/pgSQL stub whose text satisfies both code predicates. The migration is then applied twice over to prove that same path still accepts the implementation it installed itself. The verification sweep run against this working tree: `tsc --noEmit` clean, `eslint` clean on all changed files, the full suite at 324 files / 4,408 tests passing (123 skipped) with no failures and no flake on the run, all 92 mutants killed, and `prove-commission-payout-intent-binding.mjs` returning PASS against a disposable Postgres 17 container.
+- **Round-12 fixes, and the limit this change stops at.** Round 12 returned five findings and re-opened round 11's HIGH: the replay check proves that a call to the implementation and a call to `check_idempotency_intent()` *occur* in the public function's executable text, which a body that parks both inside `IF false` satisfies while running neither. That is not closeable by a better text check — reachability is undecidable from source, and any predicate stated here is one the author of a planted body can read and satisfy. It is now pinned rather than argued about: a sixth proof case builds exactly that pair, asserts the migration adopts the planted body, and fails the moment a later change makes it refuse, so the claim in this file cannot drift away from what the code does. The barrier that actually stops the scenario is `CREATE` privilege on schema `public` — an actor who can install both of those functions can replace the wrapper the instant the migration finishes, with or without this check — and the check's real job is to stop the migration adopting a half-applied or hand-edited state by accident, which text matching does adequately. Two mechanical fixes landed alongside: the shared TypeScript lexer recognised double-quoted identifiers only *outside* a function body, so a quoted alias such as `AS "FOR UPDATE OF c"` survived the code-only view and could have satisfied a lock assertion after the real lock was deleted (it is blanked in that view now, which is the fail-closed direction), and the two public documents were rewritten where they said the wrapper must "actually call" the implementation. One round-12 finding was declined with evidence: the boundary whitelist was reported as missing `.`, which would have made the migration refuse a schema-qualified production body forever — the character is present, between `}` and the escaped quote.
+- **Deliberately not fixed here.** Idempotency keys are still lost on component remount codebase-wide; that classification was raised and accepted in review as out of scope for this change.
+- **Commits this session** (git log origin/main..HEAD):
+  - `e3dddf70 Bind commission payout idempotency to actor and intent`
+  - `c6b6be7a Record Section 7 commissions gauntlet refresh`
+  - `4fa7ec27 Close the DO-NOT-SHIP findings on payout intent binding`
+  - `17bc9815 Close the six findings from the payout intent-binding re-review`
+  - `af22dc16 Close round-3 review findings on payout intent binding`
+  - `054e2de4 Close round-4 review findings on payout intent binding`
+  - `c5fb7bf8 Close round-5 review findings on payout intent binding`
+  - `dbcdb4f6 Index migration 20260811130000 in migration-history`
+  - `d4b21b86 Close round-6 payout intent-binding findings`
+  - `ca8802fd Close round-7 payout intent-binding findings`
+  - `8c818619 Close round-8 payout intent-binding findings`
+  - `c22ff94d Close round-9 findings on the payout intent binding`
+  - `5c11b013 Close round-10 fail-open holes in the payout identity check`
+  - plus this commit, closing the round-11 findings and recording the work here.
+
+## 2026-08-09 — Team Board delegated completion shipped (database live, frontend merged via PR #351)
+
+Assigning a to-do to a teammate on the Team Board was effectively broken: the checkbox
+wrote straight to the table, and the creator-or-admin row policy silently rejected the
+assignee, so their click did nothing. Delegation is now governed by an RPC and the
+notification path is hardened.
+
+**Live database changes (owner-approved; applied and verified live on 2026-08-09/2026-08-10).** Both migrations below were already live before this entry was written. The PR carrying this entry (#372) recorded and re-verified that closeout only — it applied neither of these two migrations and mutated no live data through them.
+
+- `20260809130108_team_note_completion_rpc_and_assignment_notify` — adds
+  `complete_team_note(note_id, completed, idempotency_key)` as a SECURITY DEFINER function
+  with a pinned `search_path`, taking the actor from `auth.uid()` so it cannot be forged.
+  Authorization (creator, current assignee, or active admin) runs *before* the idempotency
+  replay, and the function reports the row's actual state so a no-op cannot rewrite
+  `completed_by`. Also adds the assignment trigger that files one `task_assigned`
+  notification, staying silent on self-assignment and unchanged assignees. Revoked from
+  PUBLIC and anon; granted to authenticated and the default `service_role` grant, while
+  runtime authorization still requires an active `auth.uid()` actor.
+- `20260810010308_active_team_note_assignment_actor` (authored as `20260809154649`) —
+  closes the gap review found afterwards: a deactivated profile whose token had not yet
+  expired could satisfy the legacy creator-only insert policy and make the owner-run
+  trigger notify an active teammate. Now the insert policy requires an active profile and
+  the trigger independently rejects an inactive effective actor. `tnotes_update` is
+  deliberately unchanged.
+
+Both migrations cleared the `rls-security-reviewer` and `migration-drift-reviewer` charters
+with CLEAN machine verdicts on the exact file content before apply, and both disk files were
+renamed content-identically to their server-assigned ledger versions.
+
+**Proven against live, by rollback-only probes rather than tests alone.** An active
+non-admin assignee completed a note they did not create, with `completed_by` stamped from
+`auth.uid()` and exactly one notification filed; an unrelated employee was refused with
+`NOT_AUTHORIZED_TO_COMPLETE`; a real deactivated profile was refused at the row-policy layer;
+and with that layer deliberately bypassed, the trigger's own guard raised `PROFILE_INACTIVE`.
+The normal assignment and completion path was re-checked afterwards and was unaffected.
+
+**Frontend (merged via PR #351; production rollout follows its Vercel deployment).** Team Board calls the
+RPC instead of writing the table, guards against double-submit, and maps the actionable runtime
+errors to specific messages. The checkbox is disabled with an explanatory tooltip for viewers who
+are not the creator, assignee, or an admin. Notification deep-links now route team notes to
+the board, and the deep-link fetch no longer waits on a populated list before resolving.
+
+**Post-apply closeout.** The full registered chain
+`scripts/smoke/smoke-complete-team-note-chain.sql` ran against live and reached exact
+`SMOKE_PASS_ROLLBACK`, proving the business path and fixture rollback. The schema registry
+was genuinely regenerated from live introspection through high-water `20260810025159`, and
+the generated TypeScript types match live. *(The registry has since been regenerated again,
+through high-water `20260810235207` — see the 2026-08-10 reconciliation entry at the top of
+this file. `20260810025159` is the high-water this Team Board closeout observed, not the
+current one.)*
 
 ## 2026-08-10 — Graphify-first agent navigation policy
 

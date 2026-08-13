@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "generated_at": "2026-08-08T14:40:13.939Z",
+    "generated_at": "2026-08-08T16:16:20.483Z",
     "generator": "node scripts/generate-caller-graph.mjs",
     "purpose": "C5 control — caller graph consumed by .claude/hooks/grant-change-guard.mjs to force per-function caller analysis on GRANT/REVOKE migrations (B10) and branch-accurate Edge guards (B8).",
     "scanned_dirs": [

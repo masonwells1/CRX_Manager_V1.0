@@ -126,6 +126,14 @@ function writeAppliedSnapshot(stateDir, { applied = ["20260808150400_round_money
     applied,
   }));
 }
+// supabase/baselines/one-shot-migrations.json is tracked in git and ships
+// beside the hook, so the hook fails CLOSED when it is missing — every fixture
+// must therefore seed one, exactly as a real checkout has one.
+function writeOneShotRegistry(projectDir, oneShot = {}) {
+  const dir = path.join(projectDir, "supabase", "baselines");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, "one-shot-migrations.json"), JSON.stringify({ one_shot: oneShot }));
+}
 function armAutopilot(stateDir, hoursFromNow) {
   writeFileSync(path.join(stateDir, "AUTOPILOT.on"), JSON.stringify({
     expires: new Date(Date.now() + hoursFromNow * 3600_000).toISOString(),
@@ -136,6 +144,7 @@ function armAutopilot(stateDir, hoursFromNow) {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "mig-apply-guard-"));
   const stateDir = path.join(tmp, ".claude", "session-state");
   mkdirSync(stateDir, { recursive: true });
+  writeOneShotRegistry(tmp);
   try {
     const call = (query) => ({ tool_name: "mcp__supabase__apply_migration", tool_input: { project_id: "x", name: MIG, query } });
 
@@ -384,6 +393,7 @@ function armAutopilot(stateDir, hoursFromNow) {
     // before the proof-scoping behaviour under test is ever reached.
     mkdirSync(path.join(primary, ".claude", "session-state"), { recursive: true });
     writeAppliedSnapshot(path.join(primary, ".claude", "session-state"));
+    writeOneShotRegistry(primary);
     // Proof exists ONLY in the linked worktree; the primary has none.
     writeProof(linkedState, BENIGN_SQL);
     // CLAUDE_PROJECT_DIR stays pinned to `primary` in every call below — that is
@@ -503,6 +513,100 @@ function armAutopilot(stateDir, hoursFromNow) {
       /no 14-digit timestamp/.test(r.stdout),
       "the deny explains that an untimestamped, caller-supplied name cannot skip the ordering comparison",
     );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ── ONE-SHOT REPLAY GUARD (2026-08-10, Codex High round 8) ─────────────────
+// A one-shot DATA migration authorizes itself against the live population that
+// existed when it was written. Registering it in
+// supabase/baselines/one-shot-migrations.json taught the replay PLANNER to
+// withhold it — but the SQL file is still on disk, and an ordinary apply
+// against a restored or drifted database still saw it. The containment was
+// advisory; it is now enforced at the apply.
+{
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "mig-apply-guard-oneshot-"));
+  const stateDir = path.join(tmp, ".claude", "session-state");
+  mkdirSync(stateDir, { recursive: true });
+  const STEM = "20990601000000_backfill_fixture";
+  const ONE_SHOT_SQL = "UPDATE public.orders SET total_profit = 1 WHERE id = 2;";
+  const REASON = "fixture: population-bound money repair";
+  const isOneShotDeny = (r) => r.stdout.includes("ONE-SHOT REPLAY GUARD");
+  try {
+    writeAppliedSnapshot(stateDir, { applied: ["20990101000000_already_applied"] });
+    writeOneShotRegistry(tmp, { [STEM]: REASON });
+    // A full, valid, hash-matching review proof, so nothing else can be what
+    // stops the apply.
+    const proofFor = (name, query) => writeFileSync(
+      path.join(stateDir, `migration-review-${name}.json`),
+      JSON.stringify({
+        migration: name,
+        timestamp: new Date().toISOString(),
+        reviewers: ["rls-security-reviewer", "migration-drift-reviewer"],
+        findings: "clean",
+        queryHash: sha(query),
+      }),
+    );
+    const apply = (name, query) => {
+      proofFor(name, query);
+      return runHook({
+        tool_name: "mcp__supabase__apply_migration",
+        tool_input: { project_id: "x", name, query },
+      }, tmp);
+    };
+
+    // 1. Registered, and the ledger does not have it → refused.
+    let r = apply(STEM, ONE_SHOT_SQL);
+    ok(isDeny(r), "registered one-shot missing from the ledger → apply denied");
+    ok(isOneShotDeny(r), "the deny is the one-shot replay guard, not an incidental gate");
+    ok(r.stdout.includes(REASON), "the deny quotes why the migration is registered");
+
+    // 2. An unregistered migration is untouched by this guard.
+    r = apply("20990601000001_ordinary_schema_change", BENIGN_SQL);
+    ok(!isOneShotDeny(r), "an unregistered migration is not caught by the one-shot guard");
+
+    // 3. The MCP `name` is caller-controlled, so renaming it must not be an
+    //    escape hatch — the SQL body is checked against the registered file.
+    mkdirSync(path.join(tmp, "supabase", "migrations"), { recursive: true });
+    writeFileSync(path.join(tmp, "supabase", "migrations", `${STEM}.sql`), `-- header\n${ONE_SHOT_SQL}\n`);
+    r = apply("20990601000002_totally_innocent_name", ONE_SHOT_SQL);
+    ok(isDeny(r), "the same one-shot body under a different name → apply denied");
+    ok(isOneShotDeny(r), "the body match, not the name, is what catches the renamed replay");
+
+    // 4. A ledger that ALREADY contains it is by definition the population the
+    //    migration was approved against — this guard has nothing to say there.
+    writeAppliedSnapshot(stateDir, { applied: ["20990101000000_already_applied", STEM] });
+    r = apply(STEM, ONE_SHOT_SQL);
+    ok(!isOneShotDeny(r), "a ledger that already contains the one-shot is not a replay onto a foreign population");
+    writeAppliedSnapshot(stateDir, { applied: ["20990101000000_already_applied"] });
+
+    // 5. The override is bound to the exact SQL, not to a name. A flag keyed on
+    //    the migration alone would authorize any body someone put under it.
+    const ovPath = path.join(stateDir, "one-shot-replay-override.json");
+    writeFileSync(ovPath, JSON.stringify({ migration: STEM, queryHash: sha("some other sql") }));
+    r = apply(STEM, ONE_SHOT_SQL);
+    ok(isOneShotDeny(r), "an override whose queryHash does not match the transmitted SQL does not authorize it");
+
+    writeFileSync(ovPath, JSON.stringify({ migration: STEM, queryHash: sha(ONE_SHOT_SQL) }));
+    r = apply(STEM, ONE_SHOT_SQL);
+    ok(!isOneShotDeny(r), "a digest-bound override matching the exact SQL releases the one-shot refusal");
+
+    // The same override must not release a DIFFERENT body.
+    r = apply(STEM, `${ONE_SHOT_SQL} -- edited`);
+    ok(isOneShotDeny(r), "the override authorizes that exact text and nothing else");
+    rmSync(ovPath, { force: true });
+
+    // 6. Fail closed. The registry is tracked in git; unreadable or absent means
+    //    the checkout is broken or the file was removed — the two states in
+    //    which a silent pass is most dangerous.
+    writeFileSync(path.join(tmp, "supabase", "baselines", "one-shot-migrations.json"), "{not json");
+    r = apply("20990601000003_anything", BENIGN_SQL);
+    ok(isDeny(r) && isOneShotDeny(r), "unparseable one-shot registry → apply denied (fail closed)");
+
+    rmSync(path.join(tmp, "supabase", "baselines", "one-shot-migrations.json"), { force: true });
+    r = apply("20990601000004_anything", BENIGN_SQL);
+    ok(isDeny(r) && isOneShotDeny(r), "missing one-shot registry → apply denied (fail closed)");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

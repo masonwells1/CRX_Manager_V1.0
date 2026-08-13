@@ -7,6 +7,18 @@
     "area_tags": "Every spec carries an \"area\" array (business-area tags: billing, inventory, lifecycle, pricing, security, idempotency, regression). run-smoke.mjs --area <area> selects by tag; scripts/run-area.mjs bundles these with the matching vitest slice and DB invariant sweeps."
   },
   "specs": {
+    "below_cost_admin_wall": {
+      "chain": "smoke-below-cost-admin-wall.sql",
+      "description": "Server-side below-cost wall: real direct-order, order-edit, rush-order, price-order, null-product invoice-save, delivery-completion with derived invoicing, and order-cancellation calls prove sales-rep denial, required admin reason, locked current Product cost, classified non-product total-cost enforcement, caller-cost rejection, same-value profit math, immutable same-transaction audit, exact order-to-invoice lineage, lifecycle-safe fulfillment and invoice bookkeeping, fail-closed exposure increases, and terminal rollback. Catalog assertions prove bulk import and quote save route through the same trigger context without public overloads.",
+      "covers": ["create_direct_order", "create_rush_order", "bulk_import_order", "update_order_items", "price_order", "save_invoice", "save_quote", "complete_delivery", "cancel_order", "below_cost_approvals"],
+      "area": ["billing", "pricing", "security", "idempotency", "regression"]
+    },
+    "below_cost_quote_lifecycle": {
+      "chain": "smoke-below-cost-quote-lifecycle.sql",
+      "description": "Quote lifecycle below-cost wall: real save, duplicate, restore-version, whole-conversion, and partial-draw RPCs first reject a blank reason where applicable after live Product cost rises above the locked Quote price, then accept an active-admin reason and write exactly one atomic approval audit per governed line. The save path proves its transient INSERT is deferred and only the final Product-recomputed UPDATE is enforced and audited. A synthetic legacy Quote with an unknown historical cost is refused before it can become a zero-cost Order; a mutated pre-rounding version snapshot restores as whole-cent money; conversion commission basis is asserted equal to the canonical Order header. Terminal rollback and zero residue.",
+      "covers": ["save_quote", "duplicate_quote", "restore_quote_version", "convert_quote_to_order", "draw_down_quote", "below_cost_approvals"],
+      "area": ["billing", "inventory", "lifecycle", "pricing", "security", "idempotency", "regression"]
+    },
     "create_order_from_blend_ticket": {
       "chain": "smoke-blend-ticket-fractional-cents.sql",
       "container_only": true,
@@ -253,11 +265,12 @@
     },
     "remaining_money_inventory_hardening": {
       "chain": "smoke-remaining-money-inventory-hardening.sql",
-      "description": "Final money/inventory audit chain: voided orders disappear from detail, summary, gross-sales, and finance-dashboard revenue; inactive sales/admin profiles are rejected; only an active admin can use the PO over-receive flag, NULL cannot bypass the quantity ceiling, and a real admin 11-against-10 receipt succeeds; anonymous gross-sales execution and authenticated direct payment-table writes are absent. Self-contained fixtures and terminal rollback.",
+      "description": "Final money/inventory audit chain: the canonical profitability RPC returns the same exact customer/product/month money basis for an active order; voided orders disappear from profitability, detail, summary, gross-sales, and finance-dashboard revenue; inactive sales/admin profiles are rejected; only an active admin can use the PO over-receive flag, NULL cannot bypass the quantity ceiling, and a real admin 11-against-10 receipt succeeds; anonymous gross-sales/profitability execution and authenticated direct payment-table writes are absent. Self-contained fixtures and terminal rollback.",
       "covers": [
         "get_sales_detail_report",
         "get_sales_summary_report",
         "get_gross_sales_report",
+        "get_profitability_report",
         "financial_dashboard_summary",
         "receive_po_items",
         "payments"

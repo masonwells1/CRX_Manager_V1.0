@@ -11,6 +11,289 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ## 2026-08-10 — Exact whole cents is the invariant; legacy numeric-dollar storage has a fail-closed approval gate
 
+**Source:** `docs/audits/2026-08-10-order-profit-bigint-cents-evaluation.md`, the owner-approved
+live apply recorded in migration-history row 867, and the exact-SHA review of the pricing finish
+branch on 2026-08-10.
+
+**Decision.** New money storage remains bigint cents. Existing PostgreSQL `numeric`-dollar storage
+may remain only where authoritative arithmetic is exact decimal, every existing value is finite and
+whole-cent, and an active validated finite whole-cent CHECK makes future violations fail closed.
+Dirty or unconstrained legacy columns remain tracked findings and are never widened, rewritten, or
+treated as an exception without Mason's explicit approval. This contract landed independently in
+PR #374 before the pricing implementation relied on it.
+
+**Operative rule.** The invariant is exact whole cents, not a blind type conversion. New database
+money columns use bigint cents. A legacy numeric-dollar column may remain only while it satisfies the
+approval gate above; merely being old does not exempt it. Browser preview math must convert decimal operands
+to integer cents before multiplying, dividing, rounding, or aggregating; binary `Math.round` money
+is not permitted. The server remains authoritative for persisted Quote values.
+
+---
+
+## 2026-08-10 — Data migrations bind approval to a digest, not to row counts
+
+**Source:** Codex exact-SHA review of PR #364, 2026-08-10 (`CODEX_PROOF_VERDICT: BLOCKERS`, finding 1).
+
+**Background.** `20260810022500_backfill_stale_line_profit.sql` gates its write on three
+cardinalities — 37 rows, 17 orders, 11 fractional-price rows — and only then captures the ids it
+writes. Codex' objection is that cardinalities are not identity: a different population that happens
+to have the same three counts would satisfy the guard, and the migration would rewrite rows nobody
+approved.
+
+**Decision.** The objection is accepted as a **forward-looking rule** and is *not* retrofitted to
+that migration, which was already applied live (ledger version `20260810025159`). Editing an applied
+migration is forbidden by `AGENTS.md`, and Codex' own remediation text says the same: if it has
+already applied, do not edit it, reconcile forward. The concrete risk cannot now materialise on that
+file either — it early-returns on zero stale rows, and the count guard raises `APPROVED_SET_DRIFTED`
+rather than writing, so a re-run fails closed instead of touching an unapproved population.
+
+**Operative rule.** Any future migration that rewrites existing business rows must bind its approval
+to a **digest of the sorted approved record ids plus the material before-values** (for money, the
+stored cents), asserted before the write. Row counts, order counts and similar cardinalities may
+accompany that digest but may never be the only thing standing between an approval and a write.
+
+**Enforcement (hard, not prose).** `scripts/validate-sql-migrations.sh` now fails any migration
+stamped `20260810025160` or later that contains a top-level `UPDATE`/`DELETE` against a business-row
+table unless the file either (a) carries `-- APPROVED_SET_DIGEST: <64 hex>` *and* asserts that same
+hex in executable SQL before the write, or (b) explicitly waives it with
+`-- APPROVED_SET_DIGEST: NOT-REQUIRED - <reason>` for the case where there is no before-value to
+protect (backfilling a column the same migration just added). Rewrites inside a function body are
+runtime logic and are not checked. The gate is scoped by **timestamp, not an allowlist**, so it needs
+no maintenance; the cutoff sits one second past the already-applied
+`20260810025159_backfill_stale_line_profit.sql`, which `AGENTS.md` forbids editing, so that migration
+stays history and **every** migration written from here on is in force. This is the deterministic
+replay/baseline guard Codex asked for in place of editing applied SQL.
+
+**Hardened after review (same day).** The first cut of that guard did not enforce what it claimed,
+and a round-3 Codex review (`CRX-GUARD-001`) was right to say so. Three bypasses, all now closed:
+
+1. **Detection was line-anchored.** SQL is free-form, so `UPDATE`, the optional `ONLY`, and the table
+   name can each sit on a different line, and the table can be quoted (`"public"."orders"`). Any of
+   those walked straight past the check. Detection is now **token-based** over the flattened
+   non-function-body text, with quoted identifiers and string literals stripped first — so prose
+   inside a `RAISE NOTICE` cannot fabricate a match either.
+2. **The digest was decorative.** It passed by appearing anywhere in executable SQL. Four things are
+   now required together, and the failure message names which one is missing: the digest must be
+   **compared** (a comparison operator on that line — mentioning or `SELECT … INTO` is not a check);
+   the value it is compared against must be **computed** (a hash call over the approved set before
+   the write, so it is not one literal compared to another); the comparison must sit **before the
+   first write**; and a `RAISE EXCEPTION` must sit **inside that comparison's own `IF` block**, so a
+   drifted set aborts. A `RAISE` that merely happens to be nearby, in an unrelated or unreachable
+   branch, no longer counts.
+3. **The opt-out was a silent blanket pass.** It must now **name every business table it waives**,
+   and it emits a `WARNING` — a waived money rewrite belongs in the CI log where a reviewer sees it,
+   not passing quietly.
+
+The protected-table list was also too narrow: it covered the ordering and invoicing tables but not
+`inventory`, `vendor_bills`, `vendor_payments`, `cost_history`, `prepay_credits`, and the rest of the
+financial state. It now covers all of them.
+
+**Hardened again after a second review (same day).** A round-5 Codex review found four more bypasses
+in the hardened version. All closed:
+
+4. **The comparison accepted `=`.** `IF actual = '<approved>' THEN RAISE EXCEPTION` reads exactly
+   like a guard and is its precise inversion: it aborts when the data is *right* and writes when it
+   has *drifted*. Only a mismatch test now counts — `<>`, `!=`, or `IS DISTINCT FROM` (preferred, it
+   is NULL-safe). Equality is rejected outright with a message naming why.
+5. **"A hash appears somewhere above" was not a binding.** A migration could hash an unrelated table,
+   hand-set the compared variable to the literal, and pass. The guard now reads the **identifier on
+   the left of the mismatch** and requires *that* variable to be the one a hash was assigned into,
+   matched statement-by-statement so a multi-line `SELECT … INTO` still works.
+6. **Two blind spots in the function-body state machine.** A block comment naming `CREATE FUNCTION`
+   pinned the scanner in function-body mode and swallowed every rewrite after it; and a one-line
+   `CREATE FUNCTION … AS $$ … $$ LANGUAGE plpgsql;` opened that mode and never closed it. Block
+   comments are now stripped statefully before anything else, and the close is checked on the same
+   line as the open.
+7. **The cutoff left a hole.** Rounding up to the next midnight meant every later `20260810…`
+   migration was unguarded. It is now one second past the last applied stamp.
+8. **The waiver was a self-authored bypass.** Naming the tables was not enough — an author could
+   waive their own guard on any rewrite. The waiver is now restricted to its one honest use: every
+   table it names must get an `ADD COLUMN` in the same migration, i.e. there is genuinely no
+   pre-existing population to protect. Anything else is a `VIOLATION`.
+
+**Hardened a third time after a round-6 review (same day).** Codex `CRX-GUARD-001` found the guard
+still only understood one shape of rewrite and never checked what the digest was actually a hash
+*of*. Four more closed:
+
+9. **Only `UPDATE`/`DELETE` counted as a rewrite.** `INSERT … ON CONFLICT DO UPDATE SET` and
+    `MERGE INTO … WHEN MATCHED THEN UPDATE` rewrite existing rows just as thoroughly and walked
+    straight past the guard. Both are now detected. A *plain* `INSERT` still is not — it adds rows,
+    it does not overwrite an approved population — so ordinary seed migrations stay silent.
+10. **The digest could be a hash of anything.** The guard checked that a hash was assigned into the
+    compared variable, not what the hash covered. `encode(digest('approved', 'sha256'), 'hex')` — a
+    real hash of a constant — passed. The hashing statement must now read one of the tables the
+    migration rewrites, cover the row `id`s, and cover at least one of the columns the rewrite
+    actually assigns. The failure message says which of the three is missing.
+11. **The waiver was still table-level.** "This table gets an `ADD COLUMN`" let a migration add one
+    harmless column and, in the same file, rewrite a pre-existing money column on that same table.
+    The waiver is now **column-level**: every column the rewrite assigns must be a column this
+    migration adds. A waiver on a `DELETE` — which backfills nothing — is a `VIOLATION` outright.
+12. **A one-shot data migration must never be replayed.** (Codex `CRX-DATA-001`.) The applied
+    backfill is not editable, so containment is forward-only:
+    `supabase/baselines/one-shot-migrations.json` registers it, and
+    `scripts/list-post-baseline-migrations.mjs` — whose stdout *is* the disaster-recovery replay plan
+    — withholds registered one-shot data migrations from that plan and says so loudly on stderr.
+    A restore brings the corrected values back with the data; re-running the edit would point it at a
+    different population. `--include-one-shot` exists as a deliberate, reviewed override. Schema and
+    function migrations never belong in the registry — they are idempotent by contract and must keep
+    rebuilding.
+
+**Hardened a fourth time after a round-8 review (same day).** Codex returned `BLOCKERS` again with
+three High findings. All closed:
+
+13. **The digest checks were statement-wide, not span-scoped.** Round 6 required the hashing
+    statement to cover the ids and a written column — but it looked for those tokens anywhere in the
+    statement, and a `SELECT` can mention plenty of things outside the hash call. So
+    `SELECT encode(digest('approved','sha256'),'hex') INTO actual FROM orders WHERE id = ANY(...)
+    AND total_profit IS NOT NULL` — a hash of a **constant** — passed by naming `id` and
+    `total_profit` in its `WHERE` clause. The guard now extracts the **argument span of the hash
+    call** by balancing parentheses, and requires the ids and the written column to appear *inside
+    that span*. It also requires the span to contain a `string_agg()`: a digest that is not an
+    ordered aggregate over the affected rows is not a digest *of* them. The table check stays
+    statement-level by design — in the mandated shape the `FROM` legitimately sits outside the hash
+    call.
+14. **The protected-table list was an allowlist, and allowlists rot.** The hand-maintained set had
+    grown to 52 tables and still missed `application_services`, `customer_application_rates`,
+    `allocation_sets`, `field_app_billing_lines`, `invoice_line_share_snapshots`, and the
+    supplier-pricing tables — so `UPDATE public.application_services SET cost_per_acre_cents = 0`
+    was simply not a rewrite as far as the guard was concerned. Protection is now **default-deny**:
+    every table in `.claude/schema-registry.json` is protected, minus a short, commented exemption
+    list of append-only logs, queues, and transient notice tables (17 entries, each with its reason
+    on the line). New tables are protected the moment the registry is refreshed, with no edit here.
+    The derivation **fails closed** — an unreadable registry, or one yielding fewer than 100 tables,
+    aborts the script rather than silently protecting a partial list. The registry path resolves
+    from the script's own location, not the working directory, because the mutation harness runs the
+    script against temp directories.
+15. **One-shot containment was advisory.** Item 12 taught the disaster-recovery *replay planner* to
+    withhold registered one-shot data migrations. That is one path to an apply; the SQL file is
+    still on disk, and an ordinary `apply_migration` against a restored or drifted database still
+    saw it. `.claude/hooks/migration-apply-guard.mjs` now **refuses** any apply that matches a
+    registered one-shot whenever the target database's applied-migration ledger does not already
+    contain it, and quotes the registry's reason in the refusal. A ledger that *does* contain it is
+    by definition the population the migration was approved against, so the guard stays silent
+    there. The MCP `name` is caller-controlled, so a name match is only a convenience — the
+    normalized SQL body is checked against the registered file on disk, and renaming the migration
+    does not get past it. The escape hatch is **digest-bound**: the override must carry the SHA-256
+    of the exact SQL being applied, so it authorizes that text and nothing else; a name-keyed flag
+    would have been a wave-through for any body. A missing or unparseable registry denies the apply.
+
+**The guard has committed tests.** `scripts/validate-sql-migrations-approved-set.test.mjs` writes 41
+synthetic migrations — real bypass attempts, waivers, and shapes that must stay silent — runs the
+actual script over them, and asserts what it printed for each. It runs in
+`npm run test:correction-guards`, as does `scripts/list-post-baseline-migrations.test.mjs`, which
+covers the one-shot replay containment (both were added to that slice, so neither is a guard the
+regression gate cannot see). The apply-time refusal added in item 15 is covered by
+`.claude/hooks/migration-apply-guard.test.mjs` (98 assertions), which seeds a real one-shot registry
+per fixture and drives the hook end to end. Each round was verified by breaking the guard on purpose
+and watching each mutant turn exactly its own case(s) red, then restoring and watching everything go
+green: round 5 by accepting `=`, dropping the block-comment stripper, un-closing the same-line
+function body, dropping the `ADD COLUMN` requirement, dropping the variable binding, and narrowing
+the table list; round 7 by removing upsert detection, removing `MERGE` detection, removing the
+digest's table-coverage check, removing its written-column check, removing the column-level waiver
+check, bypassing the one-shot quarantine, and emptying the registry; round 8 by widening the hash
+span back to the whole statement, dropping the `string_agg` requirement, putting
+`application_services` back in the exemption list, making the one-shot registry read fail open,
+checking only the caller-supplied name instead of the SQL body, un-binding the override from the
+query digest, and firing the guard even when the ledger already had the migration. Per the standing
+rule that an untested guard is decoration, that red-then-green run is the evidence, not a reading of
+the diff.
+
+**Also settled here.** The permission entry `Read(//c/CRX_Manager/**)` was removed from the tracked
+`.claude/settings.local.json` (Codex finding 2). It had been added by an auto-approved prompt during
+the backfill work. Because it is recursive, standing, and *tracked*, it silently granted every future
+session in this repository read access to `C:\CRX_Manager\.env` — a real file holding live keys —
+without an approval prompt. Rule: never commit a recursive `Read()` grant rooted above the checkout;
+scope permission grants to tracked source paths.
+
+---
+
+## 2026-08-09 — Pricing: commission clawback, no historical backfill, per-product margin targets, below-cost as a hard rule
+
+Four settled answers to the open questions from the 2026-08-08 product pricing audit
+(`docs/audits/2026-08-08-product-pricing-full-audit-and-strategy.md`). All four are Mason's
+words in chat, 2026-08-09.
+
+**1. Commission is clawed back on returns.** Today the returns lifecycle
+(`20260507110000_returns_lifecycle_rebuild.sql`) does not reference commissions at all, so a rep
+keeps full commission on product the customer sends back. **Decision: yes, pull it back**, and if
+the commission was already paid out, **reverse it against the rep's next check** rather than
+letting paid amounts stand. Operative rule: a return must generate a proportional negative
+commission adjustment; unpaid commission is reduced directly, already-paid commission becomes a
+debit carried into the next commission period.
+
+**2. No historical backfill.** The returns-COGS reversal corrects cost handling going forward, and
+the earlier question was whether to correct returns already in the database. **Decision: leave
+history as-is.** Reason: the app is not in production use for this functionality until next year,
+so the existing rows are test and transitional data, not real financial history worth correcting.
+Operative rule: the boundary is **the moment `20260808170000_return_credit_cogs_reversal.sql` is
+applied to the live database**, not a calendar date — credit memos issued before that apply are out
+of scope for backfill regardless of when they were created, and everything issued after it follows
+the new behavior automatically. Do not write a backfill migration for the pre-apply rows. If real
+customer returns are entered before the cutover, revisit this.
+
+**3. Margin targets are per-product, not global.** **Decision: targets vary product by product** —
+there is no single company-wide margin number to price against. Operative rule: the pricing workbook
+cycle needs a per-product target, so the design must carry a target margin on the product record (or
+an equivalent per-SKU store) rather than a single configured constant. A global default may exist as
+a fallback for products with no target set, but the per-product value is authoritative. Note for
+whoever builds it: without a target populated somewhere, the workbook cannot flag anything, so
+seeding strategy for the catalog is part of that work.
+
+**4. Below-cost selling becomes a hard rule, with an admin exception.** The 2026-08-08 work shipped
+below-cost approval as a UI confirmation, which a direct RPC caller bypasses and which a catalog-cost
+increase mid-transaction can defeat (Codex round 4, PR #350). **The policy is settled: make it a
+wall — enforce it server-side — but admins can still sell under cost.**
+
+**Status: APPLIED LIVE 2026-08-12 as ledger version `20260812154028` (submitted as `20260812115237`).**
+`20260812154028_enforce_below_cost_admin_approval.sql` adds the shared PostgreSQL wall, immutable
+same-transaction approval audit, active-admin exception, and authoritative cost handling for
+`update_order_items` / `price_order`. The browser still provides the early explanation and reason
+prompt, but sales reps can no longer approve. Direct app-role INSERT/UPDATE/DELETE on the three
+sell-side line tables is revoked so PostgREST cannot walk around the RPC wall; owner-run SECURITY
+DEFINER workflows retain their governed write paths. The late cost guard also re-settles extended
+revenue and profit to whole cents so it cannot undo the canonical rounding trigger. Live postflight
+confirmed RLS, all three enforcement triggers, and no direct app-role DML on the protected line tables.
+
+The operative rule is: the money-write RPCs must reject a below-cost line unless an
+approval reason is supplied, with the check performed against the locked product cost inside the
+same transaction, and the admin role retains the ability to proceed. It must land across the whole
+  money-write surface at once rather than being patched into one RPC. The RPCs that actually exist and
+  need direct approval context are `create_direct_order`, `create_rush_order`, `bulk_import_order`,
+  `update_order_items`, `price_order`, `save_invoice`, `save_quote`, `convert_quote_to_order`,
+  `draw_down_quote`, `restore_quote_version`, and `duplicate_quote`. Any other line-writing workflow
+  may proceed without context only when the locked current cost is not above the sale price; an
+  unrecognized below-cost path fails closed. (An earlier draft of this entry listed a
+`save_order` RPC — no such function exists; that was an error.)
+
+**Design settled during PR #350 review (Codex, 2026-08-09) — do not re-litigate:**
+
+- **Keep the client-side checks.** They are a UI convenience, not the enforcement boundary: they
+  give immediate feedback before a network round-trip, name the affected products, collect the
+  reason in context, and avoid pointless RPC failures in the common case where the browser's cost
+  is still current. They stay useful after server enforcement lands. Do not delete them, and do
+  not describe them anywhere as the financial control.
+- **Why they are insufficient on their own.** The browser compares against the cost it loaded; the
+  server stamps the live catalog cost. A cost increase between page load and RPC execution saves a
+  below-cost line with no reason, and a direct RPC caller skips the check entirely. That gap is the
+  whole reason for this decision.
+- **Shape of the server check.** On finding a below-cost line the caller did not approve, reject
+  with a *structured* error (not a bare exception) carrying the offending lines, so the client can
+  refresh costs, show what changed, collect a reason where the caller is eligible, and retry. A
+  plain failure would strand the operator with no way forward.
+- **The reason must be written in the same transaction as the money.** Today the approval reason
+  reaches the database in three different ways, and only two are durable: `bulk_import_order`,
+  `save_invoice` and `save_quote` carry it in a field written with the sale, but the rush-order
+  `price_order` path has no reason parameter, so `OrderDetail.handlePriceOrder` falls back to
+  `logActivity` *after* the pricing commits. `logActivity` swallows its own errors by design, so a
+  failure there leaves an order priced below cost — invoices swept, commissions moved — with no
+  reason recorded and a success toast shown (Codex, PR #350 round 22). When the server-side work
+  lands, `price_order` must carry the reason and write its audit row inside the same transaction.
+  The local implementation carries the reason in the price-item JSON so the public RPC signature
+  stays deployment-compatible, and the shared trigger writes `below_cost_approvals` atomically.
+
+---
+## 2026-08-10 — Exact whole cents is the invariant; legacy numeric-dollar storage has a fail-closed approval gate
+
 **Source:** Mason's explicit 2026-08-10 project instruction, following the bigint-cents evaluation
 recorded in the 2026-08-09 changelog entry for canonical profit.
 
@@ -163,6 +446,7 @@ guarantee above is scoped to `total_profit` only.
 and are parked alongside the two migrations named in the audit (restore the `batch_apply_prepayments`
 actor guard, add a migration-ordering preflight guard). Decisions 1 and 4 are "no change" — an agent
 proposing either change must cite a new reason, not re-derive the original one.
+---
 
 ## 2026-08-07 — Governed Autonomous Software Factory REMOVED
 

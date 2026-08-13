@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   from: vi.fn(),
   rpc: vi.fn(),
   toast: vi.fn(),
+  profileRole: 'admin',
 }));
 
 // Fully chainable Supabase query-builder mock
@@ -45,7 +46,7 @@ vi.mock('../ui/Toast', () => ({
 }));
 
 vi.mock('../../contexts/AuthContext', () => ({
-  useAuth: () => ({ profile: { id: 'user-1', full_name: 'Test User' } }),
+  useAuth: () => ({ profile: { id: 'user-1', full_name: 'Test User', role: mocks.profileRole } }),
 }));
 
 vi.mock('../../lib/activityLogger', () => ({
@@ -58,10 +59,18 @@ vi.mock('../../lib/sentry', () => ({
 
 import BulkOrderImport from './BulkOrderImport';
 
+/** Type a reason into the below-cost guardrail modal and approve it. */
+async function approveBelowCost(reason: string) {
+  const textarea = await screen.findByLabelText(/reason \(required\)/i);
+  fireEvent.change(textarea, { target: { value: reason } });
+  fireEvent.click(screen.getByRole('button', { name: /approve below-cost sale/i }));
+}
+
 describe('BulkOrderImport', () => {
   const defaultProps = { open: true, onClose: vi.fn(), onSuccess: vi.fn() };
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.profileRole = 'admin';
     mocks.from.mockImplementation((table: string) => {
       if (table === 'products') {
         return chainable({
@@ -219,6 +228,9 @@ describe('BulkOrderImport', () => {
     await screen.findByText(/O-CENTS/);
     fireEvent.click(screen.getByRole('button', { name: /import 1 order/i }));
 
+    // 0.105 is below the 7.00 Product cost, so the below-cost guardrail fires first.
+    await approveBelowCost('cents test — priced below cost on purpose');
+
     await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith('bulk_import_order', expect.anything()));
     const args = mocks.rpc.mock.calls.find(([name]) => name === 'bulk_import_order')?.[1] as {
       p_total_price: number;
@@ -310,6 +322,124 @@ describe('BulkOrderImport', () => {
     fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
 
     expect(await screen.findByText(/only confirmed orders can be imported/i)).toBeInTheDocument();
+    expect(mocks.rpc).not.toHaveBeenCalledWith('bulk_import_order', expect.anything());
+  });
+
+  it('blocks a below-cost import until a reason is approved and persists it in the notes', async () => {
+    const { container } = render(<BulkOrderImport {...defaultProps} />);
+    const csv = [
+      'order_number,customer_name,product_name,quantity,price_per_unit,notes',
+      'O-BELOW,North Farm,SKU-B,2,3,Imported batch',
+    ].join('\n');
+    const file = new File([csv], 'below-cost.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: () => Promise.resolve(csv) });
+    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
+      target: { files: [file] },
+    });
+    await screen.findByText(/below-cost\.csv/i);
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+    await screen.findByText(/O-BELOW/);
+    fireEvent.click(screen.getByRole('button', { name: /import 1 order/i }));
+
+    // The guardrail must fire BEFORE the import RPC.
+    expect(await screen.findByText(/selling below cost/i)).toBeInTheDocument();
+    expect(mocks.rpc).not.toHaveBeenCalledWith('bulk_import_order', expect.anything());
+
+    await approveBelowCost('price match approved by Mason');
+
+    await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith('bulk_import_order', expect.anything()));
+    const args = mocks.rpc.mock.calls.find(([name]) => name === 'bulk_import_order')?.[1] as {
+      p_notes: string;
+    };
+    expect(args.p_notes).toContain('Imported batch');
+    expect(args.p_notes).toContain('Below-cost approved: price match approved by Mason');
+  });
+
+  it('attaches the approval reason only to the orders that are actually below cost', async () => {
+    const { container } = render(<BulkOrderImport {...defaultProps} />);
+    // SKU-B costs 7.00 in the fixture: O-BELOW is under it, O-OK is well over.
+    const csv = [
+      'order_number,customer_name,product_name,quantity,price_per_unit,notes',
+      'O-BELOW,North Farm,SKU-B,2,3,Below batch',
+      'O-OK,North Farm,SKU-B,2,20,Normal batch',
+    ].join('\n');
+    const file = new File([csv], 'mixed-cost.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: () => Promise.resolve(csv) });
+    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
+      target: { files: [file] },
+    });
+    await screen.findByText(/mixed-cost\.csv/i);
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+    await screen.findByText(/O-BELOW/);
+    fireEvent.click(screen.getByRole('button', { name: /import 2 orders/i }));
+
+    expect(await screen.findByText(/selling below cost/i)).toBeInTheDocument();
+    await approveBelowCost('clearance');
+
+    await waitFor(() =>
+      expect(mocks.rpc.mock.calls.filter(([name]) => name === 'bulk_import_order')).toHaveLength(2)
+    );
+    const calls = mocks.rpc.mock.calls
+      .filter(([name]) => name === 'bulk_import_order')
+      .map(([, args]) => args as { p_order_number: string; p_notes: string });
+
+    const below = calls.find((c) => c.p_order_number === 'O-BELOW');
+    const ok = calls.find((c) => c.p_order_number === 'O-OK');
+    expect(below?.p_notes).toContain('Below-cost approved: clearance');
+    // The ordinary order must NOT be stamped with an approval it never needed.
+    expect(ok?.p_notes).toBe('Normal batch');
+    expect(ok?.p_notes).not.toContain('Below-cost approved');
+  });
+
+  it('cancels a below-cost import without calling bulk_import_order', async () => {
+    const { container } = render(<BulkOrderImport {...defaultProps} />);
+    const csv = [
+      'order_number,customer_name,product_name,quantity,price_per_unit',
+      'O-BELOW-CANCEL,North Farm,SKU-B,2,3',
+    ].join('\n');
+    const file = new File([csv], 'below-cancel.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: () => Promise.resolve(csv) });
+    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
+      target: { files: [file] },
+    });
+    await screen.findByText(/below-cancel\.csv/i);
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+    await screen.findByText(/O-BELOW-CANCEL/);
+    fireEvent.click(screen.getByRole('button', { name: /import 1 order/i }));
+
+    await screen.findByText(/selling below cost/i);
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /import 1 order/i })).toBeEnabled()
+    );
+    expect(mocks.rpc).not.toHaveBeenCalledWith('bulk_import_order', expect.anything());
+  });
+
+  it('denies a sales rep instead of showing the below-cost approval prompt', async () => {
+    mocks.profileRole = 'sales_rep';
+    const { container } = render(<BulkOrderImport {...defaultProps} />);
+    const csv = [
+      'order_number,customer_name,product_name,quantity,price_per_unit',
+      'O-BELOW-REP,North Farm,SKU-B,2,3',
+    ].join('\n');
+    const file = new File([csv], 'below-rep.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: () => Promise.resolve(csv) });
+    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
+      target: { files: [file] },
+    });
+    await screen.findByText(/below-rep\.csv/i);
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+    await screen.findByText(/O-BELOW-REP/);
+    fireEvent.click(screen.getByRole('button', { name: /import 1 order/i }));
+
+    await waitFor(() =>
+      expect(mocks.toast).toHaveBeenCalledWith(
+        'error',
+        expect.stringMatching(/only an active admin can approve sales below cost/i),
+      )
+    );
+    expect(screen.queryByLabelText(/reason \(required\)/i)).not.toBeInTheDocument();
     expect(mocks.rpc).not.toHaveBeenCalledWith('bulk_import_order', expect.anything());
   });
 

@@ -4,11 +4,10 @@
  *
  * NOT AUTHORITATIVE FOR PERSISTENCE. The server recalculates and persists all
  * quote line math in save_quote() (migration 20260528042000) — that is the
- * single source of truth for stored prices. These functions exist only for
- * unit-test coverage of the pricing rules and as a reference for live-preview
- * display math. They are NOT imported by QuoteBuilder's save payload, and new
- * code must NOT route persisted values through them — read the server-returned
- * values after save instead. (Foundation audit P2-E, 2026-05-28.)
+ * single source of truth for stored prices. These functions provide exact-cent
+ * live-preview math for QuoteBuilder, but the save payload is still only a
+ * request: callers must install the authoritative totals returned by save_quote
+ * after a successful save. (Foundation audit P2-E, 2026-05-28.)
  */
 import type { Product, UnitConversion } from '../types';
 
@@ -21,7 +20,13 @@ export interface CalcItem {
   rate_unit: string | null;
   acres: number | null;
   price_per_unit: number;
-  current_cost: number;
+  /**
+   * Quote-time cost snapshot. `null` means the line has no snapshot yet (new
+   * line, or one whose product just changed) and the live catalog cost should
+   * be used. A stored `0` is a real cost, not a missing one, so this is read
+   * with `??` rather than `||`.
+   */
+  current_cost: number | null;
   oz_per_acre: number | null;
   price_per_acre: number | null;
   total_units_needed: number | null;
@@ -56,6 +61,93 @@ export function getConversionFactor(
   return conv ? conv.factor_oz : 1;
 }
 
+type DecimalParts = { coefficient: bigint; scale: number };
+
+/**
+ * Convert a finite JS number's canonical decimal spelling into an exact
+ * coefficient/scale pair. Money rounding below then uses bigint arithmetic,
+ * not binary floating-point Math.round (which turns 1.005 into 1.00).
+ */
+function decimalParts(value: number): DecimalParts {
+  if (!Number.isFinite(value)) throw new RangeError('Money operand must be finite');
+  const match = value.toString().match(/^(-?)(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/i);
+  if (!match) throw new RangeError('Money operand must be decimal');
+  const [, sign, whole, fraction = '', exponentText = '0'] = match;
+  const exponent = Number(exponentText);
+  let coefficient = BigInt(`${whole}${fraction}`);
+  if (sign === '-') coefficient = -coefficient;
+  let scale = fraction.length - exponent;
+  if (scale < 0) {
+    coefficient *= 10n ** BigInt(-scale);
+    scale = 0;
+  }
+  return { coefficient, scale };
+}
+
+function roundedDecimalRatio(
+  numerators: number[],
+  denominators: number[] = [],
+  targetScale = 2,
+): number {
+  let numerator = 1n;
+  let numeratorScale = 0;
+  for (const value of numerators) {
+    const parts = decimalParts(value);
+    numerator *= parts.coefficient;
+    numeratorScale += parts.scale;
+  }
+
+  let denominator = 1n;
+  let denominatorScale = 0;
+  for (const value of denominators) {
+    const parts = decimalParts(value);
+    denominator *= parts.coefficient;
+    denominatorScale += parts.scale;
+  }
+  if (denominator === 0n) throw new RangeError('Money divisor must be non-zero');
+
+  numerator *= 10n ** BigInt(denominatorScale + targetScale);
+  denominator *= 10n ** BigInt(numeratorScale);
+  const negative = (numerator < 0n) !== (denominator < 0n);
+  const absoluteNumerator = numerator < 0n ? -numerator : numerator;
+  const absoluteDenominator = denominator < 0n ? -denominator : denominator;
+  let rounded = absoluteNumerator / absoluteDenominator;
+  if ((absoluteNumerator % absoluteDenominator) * 2n >= absoluteDenominator) rounded += 1n;
+  if (negative) rounded = -rounded;
+
+  const asNumber = Number(rounded);
+  if (!Number.isSafeInteger(asNumber)) throw new RangeError('Money result exceeds safe cents');
+  return asNumber;
+}
+
+const centsToDollars = (cents: number): number => cents / 100;
+const ratioDollars = (numerators: number[], denominators: number[]): number =>
+  centsToDollars(roundedDecimalRatio(numerators, denominators));
+
+/**
+ * Settle a product or ratio to whole-cent dollars using PostgreSQL-compatible
+ * decimal half-up rounding. Callers pass the original decimal operands so a
+ * binary-float intermediate cannot move an exact half-cent boundary.
+ */
+export function settleMoneyRatio(
+  numerators: number[],
+  denominators: number[] = [],
+): number {
+  return centsToDollars(roundedDecimalRatio(numerators, denominators));
+}
+
+/** Difference between two independently settled money expressions. */
+export function settleMoneyDifference(
+  minuendNumerators: number[],
+  subtrahendNumerators: number[],
+  minuendDenominators: number[] = [],
+  subtrahendDenominators: number[] = [],
+): number {
+  const minuendCents = roundedDecimalRatio(minuendNumerators, minuendDenominators);
+  const subtrahendCents = roundedDecimalRatio(subtrahendNumerators, subtrahendDenominators);
+  return centsToDollars(minuendCents - subtrahendCents);
+}
+
 /** Core pricing recalculation — pure function (no React deps) */
 export function recalcItem(
   item: CalcItem,
@@ -70,12 +162,23 @@ export function recalcItem(
     product.inventory_unit || product.unit_size,
     conversions
   );
+  // Preserve the line's stored quote-time cost; only fall back to the live
+  // catalog cost when the line has none yet (new or just-changed product).
+  // Mirrors QuoteBuilder.recalcItem and the save_quote snapshot semantics.
+  const currentCost = item.current_cost ?? product.current_cost ?? 0;
 
   if (mode === 'units_direct') {
     // User entered total_units_needed directly — skip rate×acres computation
     const totalInventoryUnits = item.total_units_needed || 0;
-    const totalPrice = pricePerUnit * totalInventoryUnits;
-    const profit = (pricePerUnit - (product.current_cost || 0)) * totalInventoryUnits;
+    // Settled revenue minus settled extended cost -- the SAME boundary
+    // save_quote and the report RPCs use. Rounding (price - cost) * qty as one
+    // expression disagrees with them by a cent on fractional quantities whose
+    // extensions land on a half-cent, so the quote on screen would differ from
+    // the quote that was stored and converted. (Codex round 41.)
+    const totalPriceCents = roundedDecimalRatio([pricePerUnit, totalInventoryUnits]);
+    const totalCostCents = roundedDecimalRatio([currentCost, totalInventoryUnits]);
+    const totalPrice = centsToDollars(totalPriceCents);
+    const profit = centsToDollars(totalPriceCents - totalCostCents);
     const netMargin = totalPrice > 0 ? profit / totalPrice : 0;
 
     // Back-calculate rate if acres is also set (informational)
@@ -85,18 +188,18 @@ export function recalcItem(
     if (acres > 0 && inventoryUnitFactorOz > 0) {
       const totalOz = totalInventoryUnits * inventoryUnitFactorOz;
       ozPerAcre = Math.round((totalOz / acres) * 100) / 100;
-      pricePerAcre = Math.round((totalPrice / acres) * 100) / 100;
+      pricePerAcre = ratioDollars([totalPrice], [acres]);
     }
 
     return {
       ...item,
       price_per_unit: pricePerUnit,
-      current_cost: product.current_cost || 0,
+      current_cost: currentCost,
       oz_per_acre: ozPerAcre,
       price_per_acre: pricePerAcre,
       total_units_needed: Math.round(totalInventoryUnits * 100) / 100,
-      total_price: Math.round(totalPrice * 100) / 100,
-      profit: Math.round(profit * 100) / 100,
+      total_price: totalPrice,
+      profit: profit,
       net_margin: Math.round(netMargin * 100 * 100) / 100,
     };
   }
@@ -114,21 +217,35 @@ export function recalcItem(
 
   const pricePerAcre =
     inventoryUnitFactorOz > 0
-      ? pricePerUnit * (rateInOz / inventoryUnitFactorOz)
+      ? ratioDollars(
+          [pricePerUnit, actualRate, rateUnitFactorOz],
+          [inventoryUnitFactorOz],
+        )
       : 0;
-  const totalPrice = pricePerUnit * totalInventoryUnits;
-  const profit = (pricePerUnit - (product.current_cost || 0)) * totalInventoryUnits;
+  // Use the original decimal operands for money. `totalInventoryUnits` is a
+  // display quantity computed with JS division; feeding that binary-float
+  // intermediate back into money could move an exact half-cent boundary.
+  const totalPriceCents = roundedDecimalRatio(
+    [pricePerUnit, acres, actualRate, rateUnitFactorOz],
+    [inventoryUnitFactorOz],
+  );
+  const totalCostCents = roundedDecimalRatio(
+    [currentCost, acres, actualRate, rateUnitFactorOz],
+    [inventoryUnitFactorOz],
+  );
+  const totalPrice = centsToDollars(totalPriceCents);
+  const profit = centsToDollars(totalPriceCents - totalCostCents);
   const netMargin = totalPrice > 0 ? profit / totalPrice : 0;
 
   return {
     ...item,
     price_per_unit: pricePerUnit,
-    current_cost: product.current_cost || 0,
+    current_cost: currentCost,
     oz_per_acre: Math.round(ozPerAcre * 100) / 100,
-    price_per_acre: Math.round(pricePerAcre * 100) / 100,
+    price_per_acre: pricePerAcre,
     total_units_needed: Math.round(totalInventoryUnits * 100) / 100,
-    total_price: Math.round(totalPrice * 100) / 100,
-    profit: Math.round(profit * 100) / 100,
+    total_price: totalPrice,
+    profit: profit,
     net_margin: Math.round(netMargin * 100 * 100) / 100, // stored as percentage
   };
 }
@@ -162,9 +279,11 @@ export function catalogPricePerAcre(
     conversions
   );
   if (!(inventoryUnitFactorOz > 0)) return null;
-  const rateInOz = rate * getConversionFactor(product.rate_unit, conversions);
-  const perAcre = getTierPrice(product, tierNum) * (rateInOz / inventoryUnitFactorOz);
-  return Math.round(perAcre * 100) / 100;
+  const rateFactor = getConversionFactor(product.rate_unit, conversions);
+  return ratioDollars(
+    [getTierPrice(product, tierNum), rate, rateFactor],
+    [inventoryUnitFactorOz],
+  );
 }
 
 /** Compute quote-level totals from items */
@@ -174,18 +293,24 @@ export function computeQuoteTotals(items: CalcItem[]): {
   totalProfit: number;
   totalMarginPct: number;
 } {
-  let totalPrice = 0;
-  let totalCost = 0;
+  let totalPriceCents = 0;
+  let totalCostCents = 0;
   for (const item of items) {
-    totalPrice += (item.total_price || 0);
-    totalCost += (item.current_cost || 0) * (item.total_units_needed || 0);
+    totalPriceCents += roundedDecimalRatio([item.total_price || 0]);
+    totalCostCents += roundedDecimalRatio([
+      item.current_cost || 0,
+      item.total_units_needed || 0,
+    ]);
   }
-  const totalProfit = totalPrice - totalCost;
+  const totalProfitCents = totalPriceCents - totalCostCents;
+  const totalPrice = centsToDollars(totalPriceCents);
+  const totalCost = centsToDollars(totalCostCents);
+  const totalProfit = centsToDollars(totalProfitCents);
   const totalMarginPct = totalPrice > 0 ? (totalProfit / totalPrice) * 100 : 0;
   return {
-    totalPrice: Math.round(totalPrice * 100) / 100,
-    totalCost: Math.round(totalCost * 100) / 100,
-    totalProfit: Math.round(totalProfit * 100) / 100,
+    totalPrice,
+    totalCost,
+    totalProfit,
     totalMarginPct: Math.round(totalMarginPct * 100) / 100,
   };
 }

@@ -11,6 +11,7 @@ import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
 import ConfirmModal from '../components/ui/ConfirmModal';
+import BelowCostConfirmModal, { type BelowCostLine } from '../components/ui/BelowCostConfirmModal';
 import Input from '../components/ui/Input';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -35,6 +36,7 @@ import type { OrderSummaryData } from '../lib/orderSummaryPdf';
 import type { PickListData } from '../lib/orderPickListPdf';
 import { validateInventoryPositionShape } from '../lib/inventoryPositionValidator';
 import { inventoryPositionByProduct } from '../lib/inventoryPositionLookup';
+import { retryBelowCostReasonRequired } from '../lib/belowCostRpc';
 import { ProductOptionDetails } from '../components/products/ProductOptionPresentation';
 import type { Order, OrderItem, OrderShare, OrderItemFieldAllocation, Customer, Invoice, Delivery, Product, LinkedEntityType, InventoryPositionRow } from '../types';
 
@@ -52,6 +54,23 @@ interface NewOrderItem {
 
 let _editKeyCounter = 0;
 function nextEditKey() { return `_new_${++_editKeyCounter}`; }
+
+/**
+ * The cost a below-cost check must judge a line against: the immutable
+ * as-of-sale snapshot the reports treat as COGS, in dollars.
+ *
+ * `cost_per_unit` is the mutable legacy column and is only a fallback for rows
+ * written before the snapshot trigger existed. On an older order the two can
+ * differ — an order converted before this branch fixed quote-cost propagation
+ * is the common case — and a price BETWEEN them would slip past a guard reading
+ * the lower legacy value while the reports still book the higher snapshot as
+ * cost. One helper for every below-cost check on this page, because this exact
+ * bug has now been found twice on two different code paths.
+ * (Codex rounds 26 and 37.)
+ */
+function belowCostBasis(line: { cost_at_time_cents?: number | null; cost_per_unit?: number | null }): number {
+  return line.cost_at_time_cents != null ? line.cost_at_time_cents / 100 : (line.cost_per_unit ?? 0);
+}
 
 export default function OrderDetail() {
   const { id } = useParams<{ id: string }>();
@@ -101,6 +120,14 @@ export default function OrderDetail() {
   const [newAllocFieldId, setNewAllocFieldId] = useState('');
   const [newAllocAcres, setNewAllocAcres] = useState('');
   const [savingAlloc, setSavingAlloc] = useState(false);
+
+  // Below-cost guardrail: pending confirmation for an edit-save whose line
+  // price is under cost — holds the flagged lines plus the promise resolver
+  // that resumes (reason) or cancels (null) the in-flight handleSaveEdits.
+  const [belowCostPrompt, setBelowCostPrompt] = useState<{
+    lines: BelowCostLine[];
+    resolve: (reason: string | null) => void;
+  } | null>(null);
 
   // Edit mode state
   const [editing, setEditing] = useState(false);
@@ -353,6 +380,8 @@ export default function OrderDetail() {
           extended_price: it.total_price,
         })),
         total_price: order.total_price,
+        // Raw notes: orderSummaryPdf redacts internal annotations itself, so
+        // the batch path from the Orders page is covered by the same rule.
         notes: order.notes,
       };
       await downloadOrderSummaryPdf(data);
@@ -471,6 +500,39 @@ export default function OrderDetail() {
 
   const handleSaveEdits = async () => {
     if (!profile) return;
+
+    // Below-cost guardrail (non-field-staff only): any kept or newly added line
+    // priced strictly under its cost needs an explicit reason before saving.
+    const isFieldStaff = role === 'driver' || role === 'applicator';
+    let belowCostReason: string | null = null;
+    if (!isFieldStaff) {
+      const candidateItems = [
+        // Existing lines judge against their snapshot; a line added in this
+        // edit has none yet, so its caller-supplied cost is all there is.
+        ...editItems.map((item) => ({
+          name: item.product_name,
+          price: item.price_per_unit,
+          cost: belowCostBasis(item),
+        })),
+        ...newItems
+          .filter((item) => item.product_id && item.total_units_needed > 0)
+          .map((item) => ({ name: item.product_name, price: item.price_per_unit, cost: item.cost_per_unit })),
+      ];
+      const belowCostLines: BelowCostLine[] = candidateItems
+        .filter((item) => item.cost > 0 && item.price < item.cost)
+        .map((item) => ({ productName: item.name, price: item.price, cost: item.cost }));
+      if (belowCostLines.length > 0) {
+        if (profile.role !== 'admin') {
+          toast('error', 'Only an active admin can approve an order below cost. Ask an admin to review it.');
+          return;
+        }
+        belowCostReason = await new Promise<string | null>((resolve) =>
+          setBelowCostPrompt({ lines: belowCostLines, resolve })
+        );
+        if (belowCostReason === null) return;
+      }
+    }
+
     await runCriticalAction({
       action: async () => {
         // Build payload: existing items (with id) + new items (without id)
@@ -497,14 +559,27 @@ export default function OrderDetail() {
           }));
 
         const itemsPayload = [...existingPayload, ...newPayload];
-
         const idemKey = updateOrderIdem.getKey();
-        const { data, error } = await supabase.rpc('update_order_items', {
-          p_order_id: id!,
-          p_items: itemsPayload,
-          p_performed_by: profile.id,
-          p_idempotency_key: idemKey,
-        });
+        const updateAttempt = await retryBelowCostReasonRequired(
+          belowCostReason,
+          async (reason) => {
+            const response = await supabase.rpc('update_order_items', {
+              p_order_id: id!,
+              p_items: reason
+                ? itemsPayload.map((item) => ({ ...item, below_cost_reason: reason }))
+                : itemsPayload,
+              p_performed_by: profile.id,
+              p_idempotency_key: idemKey,
+            });
+            return response;
+          },
+          (lines) => new Promise<string | null>((resolve) =>
+            setBelowCostPrompt({ lines, resolve })
+          ),
+        );
+        if (updateAttempt.cancelled) return;
+        belowCostReason = updateAttempt.reason;
+        const { data, error } = updateAttempt.response;
 
         if (error) {
           // Server-side backstop for the hidden Edit button: a draw-created
@@ -1049,15 +1124,62 @@ export default function OrderDetail() {
       .map((i) => ({ order_item_id: i.id, price: parseFloat(priceInputs[i.id]) || 0 }));
     if (priced.length === 0) { toast('warning', 'Enter a price for at least one line.'); return; }
     if (priced.some((x) => x.price < 0)) { toast('error', 'Prices cannot be negative.'); return; }
+
+    // Below-cost guardrail on the rush-order Set Pricing path. Finalizing here
+    // writes the sale price, sweeps draft invoices and drives commissions, so it
+    // is a money write like any other and needs the same approval. Cost comes
+    // from cost_at_time_cents, the trigger-written snapshot -- that is what
+    // price_order itself divides by 100 and writes into cost_per_unit when it
+    // finalizes. create_rush_order inserts these lines with cost_per_unit = 0,
+    // so reading that column here meant every ordinary rush line failed the
+    // cost > 0 test and the prompt could never fire on the one path it exists
+    // for. cost_per_unit is kept only as a fallback for older lines inserted
+    // before the snapshot trigger. (Codex rounds 20 and 26.)
+    const isFieldStaffPricing = role === 'driver' || role === 'applicator';
+    let pricingBelowCostReason: string | null = null;
+    if (!isFieldStaffPricing) {
+      const belowCostLines: BelowCostLine[] = priced
+        .map((p) => {
+          const line = items.find((i) => i.id === p.order_item_id);
+          if (!line) return null;
+          return { productName: line.product_name, price: p.price, cost: belowCostBasis(line) };
+        })
+        .filter((l): l is BelowCostLine => l !== null && l.cost > 0 && l.price < l.cost);
+      if (belowCostLines.length > 0) {
+        if (profile.role !== 'admin') {
+          toast('error', 'Only an active admin can approve pricing below cost. Ask an admin to review this order.');
+          return;
+        }
+        pricingBelowCostReason = await new Promise<string | null>((resolve) =>
+          setBelowCostPrompt({ lines: belowCostLines, resolve })
+        );
+        if (pricingBelowCostReason === null) return;
+      }
+    }
+
     setPricingOrder(true);
     try {
       const idemKey = priceOrderIdem.getKey();
-      const { data, error } = await supabase.rpc('price_order', {
-        p_order_id: order.id,
-        p_items: priced,
-        p_performed_by: profile.id,
-        p_idempotency_key: idemKey,
-      });
+      const pricingAttempt = await retryBelowCostReasonRequired(
+        pricingBelowCostReason,
+        async (reason) => {
+          const response = await supabase.rpc('price_order', {
+            p_order_id: order.id,
+            p_items: reason
+              ? priced.map((item) => ({ ...item, below_cost_reason: reason }))
+              : priced,
+            p_performed_by: profile.id,
+            p_idempotency_key: idemKey,
+          });
+          return response;
+        },
+        (lines) => new Promise<string | null>((resolve) =>
+          setBelowCostPrompt({ lines, resolve })
+        ),
+      );
+      if (pricingAttempt.cancelled) return;
+      pricingBelowCostReason = pricingAttempt.reason;
+      const { data, error } = pricingAttempt.response;
       if (error) throw error;
       const result = assertRpcResult<{ success: boolean; pricing_status: string; remaining_pending: number; invoices_swept: number }>(data, 'price_order');
       priceOrderIdem.resetKey();
@@ -2113,6 +2235,19 @@ export default function OrderDetail() {
           )}
         </div>
       </Modal>
+
+      <BelowCostConfirmModal
+        open={belowCostPrompt !== null}
+        lines={belowCostPrompt?.lines ?? []}
+        onClose={() => {
+          belowCostPrompt?.resolve(null);
+          setBelowCostPrompt(null);
+        }}
+        onConfirm={(reason) => {
+          belowCostPrompt?.resolve(reason);
+          setBelowCostPrompt(null);
+        }}
+      />
 
       <ConfirmModal
         open={statusConfirmOpen}
