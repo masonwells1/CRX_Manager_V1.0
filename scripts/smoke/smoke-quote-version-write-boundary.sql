@@ -60,10 +60,20 @@
 -- claim this file makes is about the PRIVILEGE, so the privilege is checked
 -- directly as well as behaviourally.
 --
--- HOW TO RUN: execute this whole file as a SINGLE statement (Supabase MCP
--- execute_sql, or psql -1 / run-smoke.mjs) as postgres/service_role. The DO
--- block ALWAYS ends with RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK', so nothing it
+-- HOW TO RUN: execute this whole file as a SINGLE statement, via
+-- `node scripts/smoke/run-smoke.mjs` or `psql -1`, as postgres/service_role. The
+-- DO block ALWAYS ends with RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK', so nothing it
 -- writes persists. ANY other error text = a real failure.
+--
+-- NOT via Supabase MCP execute_sql, though an earlier revision of this line said
+-- so. The repo's live-testdata guard classifies SQL by scanning its TEXT, and
+-- this file contains a literal `TRUNCATE public.quote_versions;` — deliberately,
+-- inside a BEGIN/EXCEPTION block that asserts the 42501 denial. The guard has no
+-- way to see that the statement is expected to be refused, so it classifies the
+-- whole file as destructive and blocks the call. That is the guard behaving
+-- correctly on the information it has; the fix is to use a channel that runs the
+-- file as a script rather than to weaken the guard or to split the assertion out
+-- of the file that explains it.
 --
 -- Auth: SECURITY DEFINER RPCs derive the actor from auth.uid(), which reads
 -- request.jwt.claims — injected via set_config(..., is_local => true) using a

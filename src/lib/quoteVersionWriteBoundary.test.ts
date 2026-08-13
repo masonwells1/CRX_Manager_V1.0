@@ -199,6 +199,31 @@ describe('quote_versions write boundary — migration', () => {
     expect(exoticBlock![0]).toContain('product_id');
   });
 
+  it('keeps the uuid canonical test case-SENSITIVE and the 32-hex test case-insensitive', () => {
+    // These two choices are opposite ON PURPOSE and a "consistency" fix in either
+    // direction reopens a hole, so both are pinned here.
+    //
+    // The stated invariant is that uuid_out renders lowercase, dashed, canonical.
+    // An earlier revision tested the canonical pattern with `~*`, so an uppercase
+    // 'A0EEBC99-...' was read as canonical, resolved to a real product, and
+    // treated as legitimately written — contradicting the invariant three
+    // paragraphs above it in the same file.
+    //
+    // But tightening the 32-hex-digit test too would be WORSE than the original
+    // bug: an uppercase id would then fail both tests, leaving product_uuid NULL
+    // with product_id_exotic false, which lands it in the ADVISORY 'unrestorable'
+    // bucket — whose NOTICE the Supabase apply channel does not surface — instead
+    // of the BLOCKING 'exotic' one. Case-insensitive there is what CATCHES it.
+    const canonical = String.raw`\^\[0-9a-f\]\{8\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{12\}\$`;
+    // Case-sensitive operators only on the canonical pattern: `~` and `!~`, never
+    // `~*` or `!~*`. Asserted as "no case-insensitive operator precedes it".
+    expect(migration).not.toMatch(new RegExp(`~\\*\\s*'${canonical}'`));
+    expect(migration).toMatch(new RegExp(`(?<!\\*)\\s~\\s*'${canonical}'`));
+    expect(migration).toMatch(new RegExp(`!~\\s*'${canonical}'`));
+    // And the normalized 32-hex test stays case-insensitive.
+    expect(migration).toMatch(/~\*\s*'\^\[0-9a-f\]\{32\}\$'/);
+  });
+
   it('blocks on every unevaluable class except the one the FK already protects', () => {
     // This replaces a single v_unknown bucket that was advisory for ALL of it.
     // The reasoning that produced that bucket was sound but too coarse: it
@@ -391,10 +416,17 @@ describe('quote_versions write boundary — migration', () => {
   });
 
   it('pins every signature it revokes, and refuses a surprise overload', () => {
+    // All FIVE revoked signatures, not the three this covered originally. The
+    // two restore-side ones were added to the migration in a later round and the
+    // list was not extended with them, so a typo in either REVOKE's signature —
+    // the exact failure this test exists to catch — would have shipped green
+    // under a title that claims "every signature".
     for (const signature of [
       'public.create_quote_version(uuid,uuid,text,text,bigint)',
       'public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)',
       'public._create_quote_version_owner_impl(uuid,uuid,text,text)',
+      'public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)',
+      'public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)',
     ]) {
       expect(migration).toContain(signature);
     }
@@ -406,6 +438,18 @@ describe('quote_versions write boundary — migration', () => {
     ]) {
       expect(migration).toMatch(new RegExp(`expected exactly 1[^\\n]*${name}`));
     }
+    // The restore-side pair is counted TOGETHER, so it is pinned by a combined
+    // count of 2 rather than two counts of 1. Asserted in its own shape here
+    // instead of being forced into the loop above: a single count of 2 admits
+    // "two of one name and none of the other", which is why the migration also
+    // requires both pinned signatures to resolve. Both halves are pinned.
+    expect(migration).toMatch(/expected exactly 2 restore-side implementations/);
+    expect(migration).toMatch(
+      /to_regprocedure\('public\._restore_quote_version_owner_impl\(uuid,uuid,uuid,text\)'\) IS NULL/,
+    );
+    expect(migration).toMatch(
+      /to_regprocedure\('public\._restore_quote_version_below_cost_impl_20260810\(uuid,uuid,uuid,text,bigint\)'\) IS NULL/,
+    );
   });
 
   it('carries the caller-analysis markers the grant-change guard requires', () => {
@@ -459,12 +503,15 @@ describe('quote_versions write boundary — migration', () => {
     expect(block.match(/has_function_privilege\('anon'/g) ?? []).toHaveLength(2);
   });
 
-  it('corrects the restore-side grants rather than only refusing over them', () => {
-    // No-ops on the database as read today, and deliberately so: the create-side
-    // implementation got a defensive revoke while the restore side got only an
-    // assertion that aborts the apply. A file that refuses to apply over a
-    // condition it can perfectly well correct just makes the next person hand-fix
-    // it under time pressure.
+  it('pins the defensive restore-side revokes, and reads both of them back', () => {
+    // These do NOT "correct" a live browser grant, and an earlier version of this
+    // test asserted that they did. The precondition ~500 lines earlier raises
+    // unconditionally if either browser role holds EXECUTE on either routine, and
+    // it runs before the first write — so if there were anything to correct the
+    // apply would already have aborted and these statements would never be
+    // reached. They are unreachable-as-a-fix by construction. What they buy is
+    // that the revoked state is written down as an executable statement, so it
+    // survives the precondition being narrowed or this file being copied.
     expect(migration).toMatch(
       /REVOKE EXECUTE ON FUNCTION public\._restore_quote_version_owner_impl\(uuid, uuid, uuid, text\)\s+FROM PUBLIC, anon, authenticated;/,
     );
@@ -480,18 +527,50 @@ describe('quote_versions write boundary — migration', () => {
     for (const stmt of restoreRevokes) {
       expect(stmt).not.toContain('service_role');
     }
+
+    // Both revokes must be READ BACK in the postcondition. REVOKE silently
+    // no-ops when the grant was issued by a role the executing role is not a
+    // member of, so "the statement ran" proves nothing on its own — which is
+    // exactly why the create-side revoke has always had a read-back. The
+    // restore-side pair did not, leaving the one failure mode these statements
+    // can actually have unobserved. Asserted inside the postcond block only, so
+    // that moving the check back into the precondition cannot satisfy this.
+    const postcond = migration.match(/DO \$postcond\$[\s\S]*?\$postcond\$;/)?.[0] ?? '';
+    expect(postcond).not.toBe('');
+    for (const signature of [
+      "'public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)', 'EXECUTE'",
+      "'public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)', 'EXECUTE'",
+    ]) {
+      // Both browser roles, for each implementation.
+      expect(postcond).toContain(`'authenticated', ${signature}`);
+      expect(postcond).toContain(`'anon', ${signature}`);
+    }
   });
 
-  it('pins both public entry points as SECURITY DEFINER', () => {
+  it('pins both public entry points as search_path-pinned SECURITY DEFINER', () => {
     // The hinge the whole fix swings on. After the REVOKEs, `authenticated` holds
     // no direct write privilege on quote_versions, so the only remaining path is
-    // these two wrappers running as their privileged owner. A SECURITY INVOKER
-    // rebuild — the default, and therefore what an incomplete CREATE OR REPLACE
-    // silently produces — would execute with the caller's revoked privileges and
-    // break create/restore for every user.
+    // these two wrappers running as their privileged owner. Two ways that breaks:
+    //   * SECURITY INVOKER rebuild — the default, and therefore what an incomplete
+    //     CREATE OR REPLACE silently produces — runs with the caller's revoked
+    //     privileges and breaks create/restore for every user. Loud.
+    //   * DEFINER rebuild that drops SET search_path — the same incomplete
+    //     replace, one clause further along. Quiet, and worse: the wrapper keeps
+    //     running as an RLS-bypassing owner while resolving its unqualified
+    //     references through whatever schema the caller put first.
+    // Both reviewers flagged, independently, that this assertion originally
+    // covered only the first. The owner-side check twenty lines down in the
+    // migration has always asserted both; there is no reason the two routines
+    // that BECOME the only write path get held to the weaker half.
     const secdef = migration.match(/AND p\.proname IN \('create_quote_version', 'restore_quote_version'\)[\s\S]*?END IF;/);
     expect(secdef).not.toBeNull();
     expect(secdef![0]).toContain('NOT p.prosecdef');
+    // The search_path half. Matched on the space-stripped comparison the
+    // migration actually uses, so a rewrite that drops the `replace()` and
+    // compares the raw proconfig value — which carries a space after the comma
+    // on live and would therefore never match — fails here rather than silently
+    // asserting nothing.
+    expect(secdef![0]).toContain("replace(config.value, ' ', '') = 'search_path=public,pg_temp'");
     expect(secdef![0]).toContain('PRECOND:');
   });
 });
@@ -542,7 +621,7 @@ describe('quote_versions write boundary — standing predicate', () => {
       // watched was reopened one signature over.
       '_restore_quote_version_below_cost_impl_20260810:overload-count',
       // These six mirror assertions the migration makes exactly once, at apply
-      // time. Without them the predicate describes only the table and its three
+      // time. Without them the predicate describes only the table and its five
       // named routines, and a NEW writer or a NEW rewrite path could reopen the
       // boundary afterwards without disturbing anything the other branches
       // watch. Pinned here so the standing guard cannot quietly shrink back to

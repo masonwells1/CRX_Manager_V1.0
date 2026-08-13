@@ -78,7 +78,7 @@
 --   * therefore the legitimate server-side write runs as a role that bypasses
 --     RLS and holds its own grants. Dropping the policy and revoking the
 --     browser grants cannot reach it.
---   * exactly ONE overload exists of each of the three functions named below,
+--   * exactly ONE overload exists of each of the five functions named below,
 --     so every REVOKE/GRANT here hits the whole surface of that name;
 --   * the RESTORE side was read live too, because the precondition below now
 --     asserts its shape and an assertion whose premise was never observed is
@@ -470,29 +470,46 @@ BEGIN
     RAISE EXCEPTION 'PRECOND: a browser role can execute a restore-side implementation directly, skipping the below-cost approval check that lives in the public wrapper. Sealing the quote_versions write boundary while that path is open would give a false sense of closure. Revoke it and re-review before applying.';
   END IF;
 
-  -- Both PUBLIC entry points must still be SECURITY DEFINER. This is the hinge
-  -- the whole fix swings on and nothing else in this file or in the standing
-  -- sweep states it. After the REVOKEs below, `authenticated` holds no direct
-  -- write privilege on quote_versions at all, so the only remaining way a
-  -- version gets created or restored is these two wrappers running as their
-  -- privileged owner. If either one were rebuilt as SECURITY INVOKER — the
-  -- default, and therefore what an incomplete CREATE OR REPLACE silently
-  -- produces — it would execute with the caller's own privileges, find them
-  -- revoked, and the feature would stop working for every user. Checked live
-  -- before writing this: both are prosecdef = true today.
+  -- Both PUBLIC entry points must still be SECURITY DEFINER *and* still carry a
+  -- pinned search_path. This is the hinge the whole fix swings on and nothing
+  -- else in this file or in the standing sweep states it. After the REVOKEs
+  -- below, `authenticated` holds no direct write privilege on quote_versions at
+  -- all, so the only remaining way a version gets created or restored is these
+  -- two wrappers running as their privileged owner.
   --
-  -- Deliberately an apply-time assertion and not a sweep branch: losing DEFINER
-  -- breaks the feature loudly for everyone rather than opening a quiet hole, so
-  -- it does not need standing surveillance — it needs to be true at the moment
-  -- this file removes the fallback path.
+  -- Two ways that hinge can break, and this asserts both:
+  --   * rebuilt as SECURITY INVOKER — the default, and therefore what an
+  --     incomplete CREATE OR REPLACE silently produces — it would execute with
+  --     the caller's own privileges, find them revoked, and version create and
+  --     restore would stop working for every user. Loud.
+  --   * rebuilt as DEFINER but WITHOUT `SET search_path` — the same incomplete
+  --     replace, one clause further along. That one is quiet and worse: the
+  --     wrapper keeps running as an RLS-bypassing owner while resolving its own
+  --     unqualified references through whatever schema the caller put first.
+  --     Asserting DEFINER alone would wave that through. An earlier revision of
+  --     this block did exactly that; the owner-side check twenty lines down has
+  --     always asserted both, and there is no reason the two routines that
+  --     become the ONLY write path should be held to the weaker half.
+  -- Checked live before writing this: both are prosecdef = true and both carry
+  -- proconfig `search_path=public, pg_temp` today, so this precondition passes
+  -- against the database as it stands.
+  --
+  -- Deliberately an apply-time assertion and not a sweep branch: it needs to be
+  -- true at the moment this file removes the fallback path.
   IF EXISTS (
     SELECT 1
       FROM pg_proc p
      WHERE p.pronamespace = 'public'::regnamespace
        AND p.proname IN ('create_quote_version', 'restore_quote_version')
-       AND NOT p.prosecdef
+       AND (
+         NOT p.prosecdef
+         OR NOT EXISTS (
+           SELECT 1 FROM unnest(coalesce(p.proconfig, '{}'::text[])) AS config(value)
+            WHERE replace(config.value, ' ', '') = 'search_path=public,pg_temp'
+         )
+       )
   ) THEN
-    RAISE EXCEPTION 'PRECOND: create_quote_version and/or restore_quote_version is not SECURITY DEFINER. This file revokes the browser roles direct write access to quote_versions, so a SECURITY INVOKER wrapper would run with the caller''s revoked privileges and version create/restore would fail for every user. Restore DEFINER and re-review before applying.';
+    RAISE EXCEPTION 'PRECOND: create_quote_version and/or restore_quote_version is not a search_path-pinned SECURITY DEFINER. This file revokes the browser roles direct write access to quote_versions, so these two wrappers become the only write path: a SECURITY INVOKER rebuild would run with the caller''s revoked privileges and break create/restore for every user, and a DEFINER rebuild without SET search_path would resolve its unqualified references through the caller''s search_path while running as an RLS-bypassing owner. Restore both and re-review before applying.';
   END IF;
 
   -- The privileged writer must exist and must be the owner-side definer, or
@@ -709,7 +726,7 @@ BEGIN
            -- presence therefore means the row was written around that function.
            (cost_text !~ '^\s*[-+]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][-+]?[0-9]{1,4})?\s*$'
             AND (cost_text ~ '_' OR cost_text ~* '^\s*[-+]?0[xob]')) AS cost_exotic,
-           CASE WHEN product_id_text ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+           CASE WHEN product_id_text ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
                 THEN product_id_text::uuid
            END AS product_uuid,
            -- The SAME stricter-scan-than-restore-path mismatch the cost branch
@@ -742,8 +759,23 @@ BEGIN
            -- or hyphen-free spelling cannot come out of that function no matter
            -- what a client sent in, so its presence here means the row was
            -- written around the legitimate writer, whatever it resolves to.
+           --
+           -- The two case-sensitivity choices below are deliberate and OPPOSITE.
+           -- An earlier revision had the canonical pattern case-INsensitive, so
+           -- an uppercase 'A0EEBC99-...' was read as canonical, resolved, and
+           -- treated as legitimately written — even though the invariant stated
+           -- three paragraphs up is lowercase-only, and uuid_out can no more
+           -- emit uppercase than it can emit braces.
+           --   * canonical test: `~` / `!~`, case-SENSITIVE. Uppercase is not
+           --     canonical, so it must fail this and stay a candidate.
+           --   * 32-hex-digit test: `~*`, case-INsensitive, and it must stay
+           --     that way. It is what CATCHES the uppercase spelling and routes
+           --     it to the blocking 'exotic' bucket. Tightening this one too
+           --     would make an uppercase id fail both tests, leaving it in the
+           --     ADVISORY 'unrestorable' bucket whose NOTICE the Supabase apply
+           --     channel does not surface — strictly worse than before.
            (product_id_text IS NOT NULL
-            AND product_id_text !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+            AND product_id_text !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
             AND replace(replace(replace(btrim(product_id_text), '{', ''), '}', ''), '-', '')
                   ~* '^[0-9a-f]{32}$') AS product_id_exotic
       FROM lines
@@ -939,14 +971,25 @@ GRANT EXECUTE ON FUNCTION public.restore_quote_version(uuid, uuid, uuid, text, b
 REVOKE EXECUTE ON FUNCTION public._create_quote_version_owner_impl(uuid, uuid, text, text)
   FROM PUBLIC, anon, authenticated;
 
--- The two RESTORE-side implementations get the same defensive revoke, so that
--- this file's write half and read-back half are symmetric. Both are no-ops on
--- the database as read today — neither browser role holds EXECUTE on either —
--- and that is exactly the point: the create side got a defensive revoke while
--- the restore side got only an assertion that aborts the apply. A file that
--- refuses to apply over a condition it is perfectly able to correct just makes
--- the next person hand-fix it under time pressure, and the create-side revoke
--- above proves the correction is considered safe here.
+-- The two RESTORE-side implementations get the same defensive revoke the create
+-- side has, so the file governs all three implementation routines in the same
+-- shape rather than two-thirds of them.
+--
+-- Be precise about what these do and do not buy, because an earlier revision of
+-- this comment was not. They do NOT "correct" a live browser grant: the PRECOND
+-- roughly five hundred lines above raises unconditionally if either browser role
+-- holds EXECUTE on either routine, and it runs before the first write. If there
+-- were something here to correct, the apply would already have aborted and these
+-- statements would never be reached. They are unreachable-as-a-fix by
+-- construction, and that is the intended design — this file's stated posture is
+-- that an unexpected browser grant on a cost-basis writer is a thing a human
+-- looks at, not a thing a migration quietly launders.
+--
+-- What they buy is that the revoked state is written down as an executable
+-- statement and not only as an assertion, so if the PRECOND is ever narrowed or
+-- this file is ever used as the pattern for the next one, the restore side
+-- carries its own guarantee instead of inheriting one from a check that may not
+-- travel with it.
 --
 -- Note both statements name PUBLIC, anon and authenticated ONLY. service_role
 -- is left alone deliberately: it holds EXECUTE on the owner-side routine (not
@@ -1048,6 +1091,28 @@ BEGIN
      OR has_function_privilege(
        'anon', 'public._create_quote_version_owner_impl(uuid,uuid,text,text)', 'EXECUTE') THEN
     RAISE EXCEPTION 'POSTCOND: the owner-side version writer is directly callable by an external API role';
+  END IF;
+
+  -- Read back the two RESTORE-side revokes as well. The create-side revoke above
+  -- has always been read back and the restore-side pair was not, which left the
+  -- one failure mode those statements can actually have unobserved: REVOKE
+  -- silently no-ops when the grant was issued by a role the executing role is
+  -- not a member of, so a statement that "ran" proves nothing on its own. Both
+  -- of these are expected to be no-ops today over an already-clean state; the
+  -- assertion is what makes the difference between that and a silent no-op over
+  -- a dirty one visible.
+  IF has_function_privilege(
+       'authenticated', 'public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)', 'EXECUTE')
+     OR has_function_privilege(
+       'anon', 'public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'POSTCOND: the owner-side restore implementation is directly callable by an external API role, bypassing the below-cost approval check in the public wrapper';
+  END IF;
+
+  IF has_function_privilege(
+       'authenticated', 'public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)', 'EXECUTE')
+     OR has_function_privilege(
+       'anon', 'public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'POSTCOND: the below-cost restore implementation is directly callable by an external API role, which would make the below-cost approval gate optional';
   END IF;
 
   IF NOT EXISTS (
@@ -1247,11 +1312,11 @@ BEGIN
   -- On top of PostgreSQL's own default EXECUTE to PUBLIC, that means every new
   -- function in schema public is born directly callable by both browser roles.
   -- This is precisely why the preconditions above pin an exact overload COUNT on
-  -- each of the three routines and not merely their signatures: a fourth
-  -- overload of create_quote_version or restore_quote_version added later is
-  -- browser-callable the moment it is created, and every signature-scoped check
-  -- in this file keeps passing on the old one. The standing predicate carries
-  -- both counts for the same reason.
+  -- each of the five routines and not merely their signatures: a SECOND overload
+  -- of any of them, added later, is browser-callable the moment it is created,
+  -- and every signature-scoped check in this file keeps passing on the old one.
+  -- The counts are pinned at exactly 1, so the second one trips them, not the
+  -- fourth. The standing predicate carries the same counts for the same reason.
   --
   -- Neither side is asserted, because both are project-wide defaults that govern
   -- every table and every function in public, not properties of quote_versions —
