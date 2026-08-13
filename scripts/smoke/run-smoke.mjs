@@ -247,7 +247,7 @@ function printForClaude(key, spec) {
   console.log(bar);
   console.log('EXECUTE the SQL below as ONE statement via Supabase MCP execute_sql');
   console.log('(project rhyzpcqhnizqbxphqdkr). Interpret the result:');
-  console.log(`  * error message contains '${PASS_TOKEN}'  -> PASS (rollback fired)`);
+  console.log(`  * PostgreSQL error message starts '${PASS_TOKEN}' -> PASS (rollback fired)`);
   console.log("  * error starts 'ERROR: SMOKE_PREREQ:'       -> SKIP: the change this");
   console.log('      chain proves is not deployed on this database. NOT a pass — it');
   console.log('      proved nothing. Apply the migration, then run it again.');
@@ -269,7 +269,7 @@ function main() {
       '                                        [--allow-prereq-skips]\n\n' +
       'Modes: SUPABASE_DB_URL set -> executes via psql and reports PASS/FAIL;\n' +
       '       otherwise prints each chain with banners for Claude/MCP execution.\n\n' +
-      `PASS contract: chain error text contains '${PASS_TOKEN}'.\n\n` +
+      `PASS contract: PostgreSQL error text starts '${PASS_TOKEN}'.\n\n` +
       'Prerequisite skips exit NONZERO by default: post-apply, a skip means the\n' +
       'boundary the chain proves has been re-opened. Pass --allow-prereq-skips\n' +
       'only when the database is deliberately behind.'
@@ -406,6 +406,10 @@ function main() {
 
 // Importers use the parser regression tests below without starting a smoke
 // run. The command-line entry point remains exactly this file.
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+const invokedPath = process.argv[1] && path.resolve(process.argv[1]);
+const modulePath = fileURLToPath(import.meta.url);
+if (invokedPath && (process.platform !== 'win32'
+  ? invokedPath === modulePath
+  : invokedPath.toLowerCase() === modulePath.toLowerCase())) {
   main();
 }

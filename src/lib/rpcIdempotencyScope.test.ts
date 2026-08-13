@@ -580,9 +580,11 @@ describe('Idempotency operation literals in latest disk migrations', () => {
     // before the legacy snapshot can reach the restore writer.
     const trustBoundary = chain.find((b) => /QUOTE_VERSION_LEGACY_UNTRUSTED/.test(b));
     expect(trustBoundary).toBeDefined();
-    expect(trustBoundary!.indexOf('check_idempotency')).toBeLessThan(
-      trustBoundary!.indexOf('QUOTE_VERSION_LEGACY_UNTRUSTED'),
-    );
+    const idempotencyIndex = trustBoundary!.indexOf('check_idempotency');
+    const untrustedIndex = trustBoundary!.indexOf('QUOTE_VERSION_LEGACY_UNTRUSTED');
+    expect(idempotencyIndex).toBeGreaterThanOrEqual(0);
+    expect(untrustedIndex).toBeGreaterThanOrEqual(0);
+    expect(idempotencyIndex).toBeLessThan(untrustedIndex);
     const foreign = chain
       .filter((b) => /idempotency_keys/i.test(b))
       .flatMap((b) => operationLiterals(b))

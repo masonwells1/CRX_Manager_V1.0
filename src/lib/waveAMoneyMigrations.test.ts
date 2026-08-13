@@ -187,6 +187,19 @@ describe('Wave A money migration remediation', () => {
     expect(finitenessSql).toContain('POSTCOND: constraint %.% is missing or not validated');
   });
 
+  it('locks the exact live product cost used by the finite-value behavioural probe', () => {
+    const probe = finitenessSql.slice(
+      finitenessSql.indexOf('SELECT qi.quote_id, qi.section_id, qi.product_id, p.current_cost'),
+      finitenessSql.indexOf("RAISE NOTICE 'POSTCOND: no quote_items row", finitenessSql.indexOf('SELECT qi.quote_id, qi.section_id, qi.product_id, p.current_cost')),
+    );
+
+    expect(probe).toContain('LIMIT 1\n  FOR SHARE OF p;');
+    // These are every live quote_items column that is both NOT NULL and has no
+    // default. The probe cannot reach its NaN CHECK if an unrelated required
+    // column rejects first.
+    expect(finitenessSql).toContain('(quote_id, section_id, product_id, price_per_unit, acres)');
+  });
+
   it('requires a row-bound completion RPC handoff before a delivery can become completed', () => {
     const guardStart = deliveryBillingSql.indexOf(
       'CREATE FUNCTION public._guard_delivery_completion_authorized()',

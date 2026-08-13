@@ -116,7 +116,7 @@ vi.mock('../lib/db', () => ({
   checkMutationResult: vi.fn(),
   assertRpcResult: vi.fn((d) => d),
   hasRpcCode: (error: { message?: string }, code: string) => error.message?.includes(code) ?? false,
-  RpcErrorCodes: { QUOTE_STALE_WRITE: 'QUOTE_STALE_WRITE', CUSTOMER_STALE_WRITE: 'CUSTOMER_STALE_WRITE', COMMISSION_SPLIT_CONFLICT: 'COMMISSION_SPLIT_CONFLICT', IDEMPOTENCY_PAYLOAD_CONFLICT: 'IDEMPOTENCY_PAYLOAD_CONFLICT' },
+  RpcErrorCodes: { QUOTE_STALE_WRITE: 'QUOTE_STALE_WRITE', QUOTE_VERSION_LEGACY_UNTRUSTED: 'QUOTE_VERSION_LEGACY_UNTRUSTED', CUSTOMER_STALE_WRITE: 'CUSTOMER_STALE_WRITE', COMMISSION_SPLIT_CONFLICT: 'COMMISSION_SPLIT_CONFLICT', IDEMPOTENCY_PAYLOAD_CONFLICT: 'IDEMPOTENCY_PAYLOAD_CONFLICT' },
   sanitizeError: vi.fn((e: unknown) => (e as Error)?.message || 'Error'),
 }));
 

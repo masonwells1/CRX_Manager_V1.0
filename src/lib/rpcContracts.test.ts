@@ -2023,9 +2023,8 @@ function usesIdempotencyThroughDelegates(body: string, depth = 0, seen = new Set
     if (args === null) continue;
     const forwardsKey = keyNames.some((name) => new RegExp(`\\b${name}\\b`, 'i').test(args));
     if (!forwardsKey) continue;
-    seen.add(callee);
     const calleeBody = resolveFunctionBody(callee);
-    if (calleeBody && usesIdempotencyThroughDelegates(calleeBody, depth + 1, seen)) return true;
+    if (calleeBody && usesIdempotencyThroughDelegates(calleeBody, depth + 1, new Set([...seen, callee]))) return true;
   }
   return false;
 }

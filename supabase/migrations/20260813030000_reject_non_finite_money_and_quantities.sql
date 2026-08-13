@@ -408,7 +408,8 @@ BEGIN
     AND p.current_cost::text NOT IN ('NaN', 'Infinity', '-Infinity')
     AND p.current_cost > 0
     AND p.current_cost = round(p.current_cost, 2)
-  LIMIT 1;
+  LIMIT 1
+  FOR SHARE OF p;
 
   IF v_quote_id IS NULL THEN
     RAISE NOTICE 'POSTCOND: no quote_items row with a costed product available to source FK values from — behavioural probe SKIPPED (semantic and structural proofs still ran)';

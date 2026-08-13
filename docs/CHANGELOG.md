@@ -6,6 +6,7 @@ All significant development milestones, in reverse chronological order.
 
 - Security: quote-version restores now require a server-issued trust marker. Existing snapshots remain visible but are intentionally not restored into money-bearing quote lines, because their pre-boundary provenance cannot be proven. The migration aborts on any pre-existing marker state and pins the complete public-to-private restore route; smoke parsing now accepts only the real PostgreSQL terminal error message.
 - Security follow-up: the trust migration now refuses to run until the earlier RPC-only write boundary is demonstrably present; the standing sweep permits the new marker update only under an exact SECURITY DEFINER contract, and smoke parsing recognizes Windows absolute `psql` paths.
+- Review follow-up: the candidate finite-value probe locks the exact product cost it uses, legacy restore refusals now have a clear operator message, and the quote-version standing sweep is held for post-apply execution rather than flagging the known pre-apply state.
 - Safety tooling: repaired the one-use live-SQL maintenance producer so its strict command matcher is generated deterministically across Windows line endings; its protected-output hash and 119 focused regression assertions now validate again.
 
 ## 2026-08-13 — Round-5 hardening of the quote_versions write-boundary migration…
@@ -40,6 +41,7 @@ Round-5 hardening of the quote_versions write-boundary migration (20260813080000
   - `supabase/migrations/20260813030000_reject_non_finite_money_and_quantities.sql`
   - `supabase/migrations/20260813040000_clamp_negative_commission_remainder.sql`
   - `supabase/migrations/20260813080000_lock_quote_versions_writes_to_rpc.sql`
+  - `supabase/migrations/20260813090000_quote_version_restore_trust_boundary.sql`
 
 ## 2026-08-13 — Third reviewer round on the not-yet-applied quote_versions write…
 
@@ -73,6 +75,7 @@ Third reviewer round on the not-yet-applied quote_versions write boundary. Both 
   - `supabase/migrations/20260813030000_reject_non_finite_money_and_quantities.sql`
   - `supabase/migrations/20260813040000_clamp_negative_commission_remainder.sql`
   - `supabase/migrations/20260813080000_lock_quote_versions_writes_to_rpc.sql`
+  - `supabase/migrations/20260813090000_quote_version_restore_trust_boundary.sql`
 
 ## 2026-08-13 — Second-round reviewer fixes on the quote_versions write boundary:…
 
@@ -303,9 +306,10 @@ edited, so these belong in a future migration.
 The 2026-08-12 apply attempt refused four of the six Wave A migrations. Nothing was written to the
 live database, and nothing is applied by this change either — these are file fixes only.
 
-All four failures were one defect wearing four costumes: **an assertion broader than its own
-remedy**. A migration that asserts a state it never enforces is a migration that aborts itself on
-first apply. Each file is now scoped to what it actually does.
+The four were `20260813010000`, `20260813020000`, `20260813030000`, and
+`20260813040000`; all failed for one defect wearing four costumes: **an assertion broader than its
+own remedy**. A migration that asserts a state it never enforces is a migration that aborts itself
+on first apply. Each file is now scoped to what it actually does.
 
 `20260813010000` — the rewrite is retargeted off `public.create_direct_order` and onto
 `_create_direct_order_below_cost_impl_20260810`. Rewriting the wrapper would have silently deleted
