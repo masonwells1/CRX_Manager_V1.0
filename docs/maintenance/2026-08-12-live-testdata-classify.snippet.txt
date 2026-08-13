@@ -215,6 +215,13 @@ export function classifySql(query) {
     // Every DML operation already passed through the persistent-target loop.
     // Reaching here means every target in this statement was explicit pg_temp.
     if (dmlTargets(visibleStatements[index]).length > 0) continue;
+    if (/^with\b[\s\S]*\b(?:insert\s+into|update|delete\s+from|merge(?:\s+into)?)\b/i.test(statement)) {
+      return {
+        block: true,
+        kind: "raw-mutation",
+        reason: "This WITH statement contains a DML verb whose target could not be classified safely. Use the app/RPC fixture path or a reviewed maintenance workflow.",
+      };
+    }
     if (/^(?:select|with|show|values)\b/i.test(statement)) continue;
     if (/^(?:begin|rollback)(?:\s+(?:work|transaction))?$/i.test(statement)) continue;
     if (/^create\s+(?:temp|temporary)\s+table\b/i.test(statement)) continue;

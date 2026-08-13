@@ -20,11 +20,11 @@ const SNIPPETS = {
 };
 
 const EXPECTED_INPUT_BLOB = "c8bec70830c643e474831985f5e6c3bd16630386";
-const EXPECTED_OUTPUT_BLOB = "bda5a0b744ac28dbd2059b38cd2bdf0e5890e31f";
+const EXPECTED_OUTPUT_BLOB = "07bd0d80d62f5c45e5ef16d39ae5efb1d270b478";
 const EXPECTED_SNIPPET_SHA256 = {
-  constants: "a8ab856dd6cd28089f60c00584a4bfc0b288a839246c80020d32681f790838a0",
+  constants: "53c658d7eb8aab2a60b4314f533f61b7472f8d686f4b81d483d57b20950022a9",
   helpers: "6e50bf618da817403e36e74e09b350536f713f93b2c9ebf269fe1475a592e19c",
-  classify: "524e38a342f48e113821377434032b79fd76ace4db3fb1f268d637a3ec4cc8c4",
+  classify: "4babd221a9374e5df0b5d46db7bd267493c32d9a1a3a5dbb0a1a07fc66f6692a",
 };
 const APPROVAL = "--approved-by-mason=2026-08-12";
 const PROTECT_PRODUCER = "--protect-producer";

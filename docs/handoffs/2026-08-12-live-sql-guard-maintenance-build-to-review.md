@@ -17,14 +17,14 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
 
 ## PROVEN
 
-- The producer constants pin the complete artifact mapping: input blob `c8bec70830c643e474831985f5e6c3bd16630386`; output blob `bda5a0b744ac28dbd2059b38cd2bdf0e5890e31f`; constants SHA-256 `a8ab856dd6cd28089f60c00584a4bfc0b288a839246c80020d32681f790838a0`; helpers SHA-256 `6e50bf618da817403e36e74e09b350536f713f93b2c9ebf269fe1475a592e19c`; classifier SHA-256 `524e38a342f48e113821377434032b79fd76ace4db3fb1f268d637a3ec4cc8c4`.
+- The producer constants pin the complete artifact mapping: input blob `c8bec70830c643e474831985f5e6c3bd16630386`; output blob `07bd0d80d62f5c45e5ef16d39ae5efb1d270b478`; constants SHA-256 `53c658d7eb8aab2a60b4314f533f61b7472f8d686f4b81d483d57b20950022a9`; helpers SHA-256 `6e50bf618da817403e36e74e09b350536f713f93b2c9ebf269fe1475a592e19c`; classifier SHA-256 `4babd221a9374e5df0b5d46db7bd267493c32d9a1a3a5dbb0a1a07fc66f6692a`.
 - `node scripts/apply-live-testdata-maintenance-20260812.mjs --verify` produced pinned output blob
-  `bda5a0b744ac28dbd2059b38cd2bdf0e5890e31f`, matched all three snippet SHA-256 values, and passed a
+  `07bd0d80d62f5c45e5ef16d39ae5efb1d270b478`, matched all three snippet SHA-256 values, and passed a
   Node module syntax check without changing the repository target.
-- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 75 classifier assertions
+- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 78 classifier assertions
   against the generated module plus 24 producer assertions, including cross-platform line-ending
   normalization and all classifier defect
-  classes found by the first twenty-one Sol reviews.
+  classes found by the first twenty-two Sol reviews.
 - The write mode refused the dirty build worktree even with Mason's dated token.
 - Current recovery proof passed ESLint, TypeScript typecheck, production build, all 4,466 executed
   Vitest assertions (123 skipped), all agent-workflow tests, agent health, dependency integrity,

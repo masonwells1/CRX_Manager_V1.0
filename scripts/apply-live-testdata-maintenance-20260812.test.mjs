@@ -100,7 +100,7 @@ for (const [name, source] of Object.entries(producerProtection.outputs)) {
 }
 
 const { output, blob } = buildMaintainedSource();
-assert.equal(blob, "bda5a0b744ac28dbd2059b38cd2bdf0e5890e31f", "pinned generated blob");
+assert.equal(blob, "07bd0d80d62f5c45e5ef16d39ae5efb1d270b478", "pinned generated blob");
 
 try {
   const candidatePath = path.join(scratch, "candidate.mjs");
@@ -117,6 +117,9 @@ try {
     "INSERT INTO some_log_table (x) VALUES (1)",
     "MERGE INTO invoices i USING source_rows s ON i.id=s.id WHEN MATCHED THEN UPDATE SET total_cents=1",
     "WITH source AS (SELECT '00000000-0000-0000-0000-000000000000'::uuid AS id) MERGE public.customers AS c USING source AS s ON c.id = s.id WHEN MATCHED THEN DELETE",
+    "WITH changed AS (UPDATE ONLY public.customers SET phone = 'owned' WHERE id = 1 RETURNING id) SELECT count(*) FROM changed;",
+    "WITH changed AS (DELETE FROM ONLY public.customers WHERE id = 1 RETURNING id) SELECT count(*) FROM changed;",
+    "WITH incoming AS (SELECT 1 AS id) MERGE ONLY public.customers c USING incoming i ON c.id = i.id WHEN MATCHED THEN DELETE;",
     "SELECT * INTO public.guard_bypass FROM public.profiles",
     "COMMENT ON TABLE public.profiles IS 'raw change'",
     "SELECT preview_product_cost_basis_changes('00000000-0000-0000-0000-000000000000')",

@@ -13,7 +13,7 @@ SHA-256, builds one pinned output blob, refuses dirty/detached/protected branche
 Mason's dated approval token before writing. The producer itself does not activate the repair; it
 must first pass an exact-head Sol review and the normal protected pull-request pipeline. The follow-up
 change will run the producer on a feature branch and remove the temporary producer after use; the
-generated-module regression harness is already checked in and exercises 75 classifier cases. PR
+generated-module regression harness is already checked in and exercises 78 classifier cases. PR
 review also moved the tracked-and-untracked dirty-worktree check ahead of every temporary or target
 write, so verification mode follows the same fail-closed cleanliness contract as write mode. Input
 blob verification normalizes Windows CRLF bytes before hashing, matching the producer's normalized
@@ -26,14 +26,14 @@ the reviewed outer protections. After that one-time bootstrap, any later produce
 the direct-write guard and is always classified as risky for exact-head review; executing the clean
 committed producer also requires a fresh Sol-high proof bound to the current HEAD and base.
 
-Twenty-one exact-head adversarial passes have progressively hardened the candidate before activation. The
+Twenty-two exact-head adversarial passes have progressively hardened the candidate before activation. The
 latest pass found that ordinary shell quoting could bypass the producer invocation matcher. The generated
 guard now recognizes quoted, absolute, alternate-separator, wrapper-prefixed, and escaped spellings, while
 the producer itself independently requires its exact committed blob plus a fresh HEAD-and-base-bound
-Sol-high proof before either write mode can run. Twenty-four producer assertions pin those boundaries. After
-the corrected producer received a clean exact-head review, its pinned bootstrap installed those outer
-protections. The owning production-guard and risky-path suites now exercise the installed matcher and producer
-classification directly, so later edits cannot silently remove either boundary.
+Sol-high proof before either write mode can run. Twenty-four producer assertions pin those boundaries. The
+next pass found PostgreSQL's optional `ONLY` keyword could hide persistent targets from CTE-wrapped
+`UPDATE`, `DELETE`, and `MERGE`. Target enumeration now accepts `ONLY`, and any `WITH` statement that still
+contains an unaccounted DML verb fails closed. Three exact regressions pin those forms.
 Earlier passes closed a Unicode identifier boundary that could conceal destructive SQL and removed the
 unsafe assumption that any `pg_temp`-qualified DML is harmless: PostgreSQL temporary views can be
 updatable proxies for persistent tables. The candidate now permits temporary DML only for a base temp
@@ -47,7 +47,7 @@ Unicode-escaped SQL identifiers now fail closed because the database decodes the
 raw-text classification. An `IF NOT EXISTS` CTAS no longer earns a temp-write exemption because it can
 be a no-op behind a same-named updatable view. `EXPLAIN` now fails closed because its `ANALYZE` form
 executes the wrapped command. The eighteenth pass closed PostgreSQL's optional-`INTO` `MERGE` grammar,
-including the exact `WITH ... MERGE customers ... WHEN MATCHED THEN DELETE` payload. The 75-assertion generated-module harness pins the exact
+including the exact `WITH ... MERGE customers ... WHEN MATCHED THEN DELETE` payload. The 78-assertion generated-module harness pins the exact
 Unicode identifier, temp-view, standalone-target, table-to-view replacement, server-program,
 server-file, cloned-default, encoded-function, view-collision, and unrecognized-command cases.
 
