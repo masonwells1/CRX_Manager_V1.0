@@ -42,6 +42,25 @@ scripts/.staging-migrations/20260813040000_clamp_negative_commission_remainder.s
 scripts/.staging-migrations/20260813050000_guard_job_commission_split_immutable.sql text eol=lf
 scripts/.staging-migrations/20260813060000_require_completed_delivery_before_invoice_post.sql text eol=lf
 
+# Draw-down ownership fix. Same rule, same reason: this migration pins the md5
+# of the body it installs and re-checks it in its own POSTCOND block. Verified
+# empirically 2026-08-14 — replaying a fresh read-only live schema dump into a
+# disposable container and applying the CRLF working-tree bytes aborted with
+# `DRAW_DOWN_OWNER_GUARD_POSTCONDITION_FAILED: private implementation drifted`,
+# because prosrc inherited CRLF and can never match the LF-computed pin.
+supabase/migrations/20260813161614_restrict_draw_down_quote_owner.sql text eol=lf
+
+# The governed live-guard maintenance producer anchors its patches on
+# `someFunction.toString()` — the function's own source bytes — and matches them
+# against guard sources it reads through `normalizeLineEndings`. On a Windows
+# checkout `core.autocrlf=true` gave the producer CRLF, so `.toString()` returned
+# CRLF while the haystack was LF and the anchor could never be found: every local
+# commit died in the pre-commit hook with "strict maintenance producer invocation
+# matcher must occur exactly once". The index was already LF, so this pin changes
+# no committed bytes — it only stops the checkout from rewriting them.
+scripts/apply-live-testdata-maintenance-20260812.mjs text eol=lf
+scripts/apply-live-testdata-maintenance-20260812.test.mjs text eol=lf
+
 # Generated clean-rebuild baselines are hash-verified release artifacts.
 supabase/baselines/*.sql  text eol=lf
 supabase/baselines/*.json text eol=lf

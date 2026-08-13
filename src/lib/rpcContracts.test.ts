@@ -2254,6 +2254,15 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // supabase/migrations:
   // - correct_job_commission_split (20260813050000)
   // - _create_direct_order_below_cost_impl_20260810 (20260813010000)
+
+  // Private draw-down implementation behind the public five-argument
+  // draw_down_quote wrapper. Direct EXECUTE is revoked, so it is absent from
+  // generated client types; it declares p_idempotency_key text and uses the
+  // canonical check/save machinery under the shared 'draw_down_quote'
+  // operation. It enters this inventory with 20260813161614, the pending
+  // owner/soft-delete authorization fix, and moves to
+  // MUTATING_RPCS_WITH_IDEMPOTENCY at the next truthful live type regeneration.
+  '_draw_down_quote_below_cost_impl_20260810',
 ]);
 
 /**
