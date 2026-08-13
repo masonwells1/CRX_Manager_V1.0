@@ -53,6 +53,11 @@ export default function BelowCostApprovalModal({ open, detail, onCancel, onConfi
                   Price {formatCents(price)} · Cost {formatCents(cost)} · Shortfall {formatCents(shortfall)} per unit
                 </p>
               )}
+              <p className="mt-2">
+                The database reported this line first. Approving applies your reason to{' '}
+                <span className="font-medium">every below-cost line in this save</span>, not only the one shown —
+                review the other line prices before approving if you are unsure.
+              </p>
             </div>
           </div>
         </div>
