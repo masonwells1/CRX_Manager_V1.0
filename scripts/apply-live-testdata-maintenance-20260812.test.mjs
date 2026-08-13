@@ -10,6 +10,8 @@ import { pathToFileURL } from "node:url";
 import {
   buildMaintainedSource,
   buildProducerProtectionSources,
+  exactHeadProofValid,
+  maintenanceProducerCommandMentioned,
   normalizeLineEndings,
   worktreeEntriesFromStatus,
 } from "./apply-live-testdata-maintenance-20260812.mjs";
@@ -52,6 +54,44 @@ assert.match(
   /gateMaintenanceProducerExecution/,
   "Codex guard output binds producer execution to committed reviewed HEAD",
 );
+assert.equal(
+  producerProtection.outputs.codexGuard.includes(`export ${maintenanceProducerCommandMentioned.toString()}`),
+  true,
+  "generated guard embeds the invocation matcher exercised below",
+);
+const producerInvocations = [
+  "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
+  'node "scripts/apply-live-testdata-maintenance-20260812.mjs" --protect-producer',
+  "node 'scripts/apply-live-testdata-maintenance-20260812.mjs' --protect-producer",
+  "node scripts\\apply-live-testdata-maintenance-20260812.mjs --verify",
+  "node scripts\\\\apply-live-testdata-maintenance-20260812.mjs --verify",
+  "env FLAG=1 node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
+  "cmd /c node scripts\\apply-live-testdata-maintenance-20260812.mjs --verify",
+  'node "C:\\repo\\scripts\\apply-live-testdata-maintenance-20260812.mjs" --verify',
+  'node scripts/apply-live-testdata-maintenance-20260812".mjs" --verify',
+];
+for (const command of producerInvocations) {
+  assert.equal(maintenanceProducerCommandMentioned(command), true, `must recognize producer invocation: ${command}`);
+}
+assert.equal(
+  maintenanceProducerCommandMentioned("node scripts/apply-some-other-maintenance.mjs --verify"),
+  false,
+  "unrelated maintenance command is not classified as this producer",
+);
+const proofNow = Date.parse("2026-08-13T05:30:00.000Z");
+const exactProof = {
+  codex_ran: true,
+  verdict: "clean",
+  model: "gpt-5.6-sol",
+  reasoning_effort: "high",
+  head_sha: "head",
+  base_sha: "base",
+  timestamp: "2026-08-13T05:29:00.000Z",
+};
+assert.equal(exactHeadProofValid(exactProof, "head", "base", proofNow), true, "fresh exact proof is accepted");
+assert.equal(exactHeadProofValid(exactProof, "other", "base", proofNow), false, "wrong HEAD proof is rejected");
+assert.equal(exactHeadProofValid(exactProof, "head", "other", proofNow), false, "wrong base proof is rejected");
+assert.equal(exactHeadProofValid({ ...exactProof, timestamp: "2026-08-13T04:00:00.000Z" }, "head", "base", proofNow), false, "stale proof is rejected");
 process.stdout.write(`producer protection candidate blobs: ${JSON.stringify(producerProtection.blobs)}\n`);
 for (const [name, source] of Object.entries(producerProtection.outputs)) {
   const sourcePath = path.join(scratch, `${name}.mjs`);
@@ -156,7 +196,7 @@ try {
   }
 
   process.stdout.write(
-    `live-testdata maintenance candidate: ${blocked.length + allowed.length} classifier assertions + 9 producer assertions passed\n`,
+    `live-testdata maintenance candidate: ${blocked.length + allowed.length} classifier assertions + 24 producer assertions passed\n`,
   );
 } finally {
   rmSync(scratch, { recursive: true, force: true });

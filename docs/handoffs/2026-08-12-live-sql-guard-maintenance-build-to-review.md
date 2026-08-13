@@ -22,9 +22,9 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
   `bda5a0b744ac28dbd2059b38cd2bdf0e5890e31f`, matched all three snippet SHA-256 values, and passed a
   Node module syntax check without changing the repository target.
 - `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 75 classifier assertions
-  against the generated module plus nine producer assertions, including cross-platform line-ending
+  against the generated module plus 24 producer assertions, including cross-platform line-ending
   normalization and all classifier defect
-  classes found by the first twenty Sol reviews.
+  classes found by the first twenty-one Sol reviews.
 - The write mode refused the dirty build worktree even with Mason's dated token.
 - Current recovery proof passed ESLint, TypeScript typecheck, production build, all 4,466 executed
   Vitest assertions (123 skipped), all agent-workflow tests, agent health, dependency integrity,

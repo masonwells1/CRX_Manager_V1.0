@@ -26,7 +26,11 @@ the reviewed outer protections. After that one-time bootstrap, any later produce
 the direct-write guard and is always classified as risky for exact-head review; executing the clean
 committed producer also requires a fresh Sol-high proof bound to the current HEAD and base.
 
-Twenty exact-head adversarial passes have progressively hardened the candidate before activation. Earlier
+Twenty-one exact-head adversarial passes have progressively hardened the candidate before activation. The
+latest pass found that ordinary shell quoting could bypass the producer invocation matcher. The generated
+guard now recognizes quoted, absolute, alternate-separator, wrapper-prefixed, and escaped spellings, while
+the producer itself independently requires its exact committed blob plus a fresh HEAD-and-base-bound
+Sol-high proof before either write mode can run. Twenty-four producer assertions pin those boundaries. Earlier
 passes closed a Unicode identifier boundary that could conceal destructive SQL and removed the
 unsafe assumption that any `pg_temp`-qualified DML is harmless: PostgreSQL temporary views can be
 updatable proxies for persistent tables. The candidate now permits temporary DML only for a base temp

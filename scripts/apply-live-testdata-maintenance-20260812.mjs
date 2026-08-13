@@ -37,9 +37,25 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   pushLib: "40c8857d4b6c37b6a89525efb1caf49e9c4215d1",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "7ca5983e0a34e5940194688a538f4487c9003045",
+  codexGuard: "28c9b3d6e3ff38b619eb244fb9f96ca14dd09cb6",
   pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
 };
+
+export function maintenanceProducerCommandMentioned(command) {
+  const compact = String(command || "")
+    .toLowerCase()
+    .replace(/[\s\\/"'`^]/g, "");
+  return compact.includes("apply-live-testdata-maintenance-20260812.mjs");
+}
+
+export function exactHeadProofValid(data, headSha, baseSha, nowMs = Date.now()) {
+  if (!data || data.codex_ran !== true || data.verdict !== "clean") return false;
+  if (data.model !== "gpt-5.6-sol" || data.reasoning_effort !== "high") return false;
+  if (data.head_sha !== headSha || data.base_sha !== baseSha) return false;
+  const timestamp = Date.parse(data.timestamp || "");
+  const age = nowMs - timestamp;
+  return Number.isFinite(timestamp) && age >= 0 && age <= 30 * 60 * 1000;
+}
 
 const OLD_CONSTANTS = [
   "const DDL_STMT_RE = /(?:^|;)\\s*(?:create(?!\\s+(?:temp|temporary)\\b)(?:\\s+or\\s+replace)?|alter|drop)\\s+\\S+/im;",
@@ -147,11 +163,16 @@ export function buildProducerProtectionSources() {
 
   const constantsAnchor = "const PROTECTED_HARNESS_FRAGMENT_RE = new RegExp(`(?<![\\\\w.-])${PROTECTED_HARNESS_SOURCE}(?![\\\\w.-])`, \"i\");";
   const constantsReplacement = `${constantsAnchor}\nconst MAINTENANCE_PRODUCER = "scripts/apply-live-testdata-maintenance-20260812.mjs";\nconst MAINTENANCE_PRODUCER_COMMAND_RE = /(?:^|[;&|]\\s*)(?:\"[^\"]*[\\\\/]node(?:\\.exe)?\"|'[^']*[\\\\/]node(?:\\.exe)?'|(?:\\S*[\\\\/])?node(?:\\.exe)?)\\s+(?:(?:--[a-z-]+(?:=[^\\s]+)?|-{1,2}[a-z-]+)\\s+)*(?:\"[^\"]*[\\\\/]|'[^']*[\\\\/]|\\S*[\\\\/])?scripts[\\\\/]apply-live-testdata-maintenance-20260812\\.mjs(?:[\"']|\\s|$)/i;`;
-  codexGuard = replaceExactly(codexGuard, constantsAnchor, constantsReplacement, "maintenance producer command constants");
+  const constantsWithMatcher = `${constantsReplacement}\nexport ${maintenanceProducerCommandMentioned.toString()}`;
+  codexGuard = replaceExactly(codexGuard, constantsAnchor, constantsWithMatcher, "maintenance producer command constants");
 
   const proofFunctionAnchor = "function shellWords(value) {";
   const maintenanceGate = `function gateMaintenanceProducerExecution({ command, repoDir, nowMs, runGit }) {\n  if (!MAINTENANCE_PRODUCER_COMMAND_RE.test(command)) return { blocked: false };\n\n  let headSha;\n  let baseSha;\n  let headBlob;\n  let worktreeBlob;\n  let status;\n  try {\n    headSha = runGit([\"rev-parse\", \"HEAD\"], repoDir);\n    baseSha = runGit([\"rev-parse\", \"origin/main\"], repoDir);\n    status = runGit([\"status\", \"--porcelain\", \"--untracked-files=all\", \"--\", MAINTENANCE_PRODUCER], repoDir);\n    headBlob = runGit([\"rev-parse\", \`HEAD:\${MAINTENANCE_PRODUCER}\`], repoDir);\n    worktreeBlob = runGit([\"hash-object\", \`--path=\${MAINTENANCE_PRODUCER}\`, MAINTENANCE_PRODUCER], repoDir);\n  } catch (error) {\n    return denied(\`CODEX PRODUCTION GATE: cannot bind the maintenance producer to the current committed HEAD: \${error?.message || error}\`);\n  }\n  if (status || headBlob !== worktreeBlob) {\n    return denied(\"CODEX PRODUCTION GATE: the maintenance producer differs from its exact committed HEAD blob. Commit it, obtain a fresh exact-head review, and retry.\");\n  }\n\n  const proofPath = path.join(repoDir, \".claude\", \"session-state\", \`codex-review-\${headSha}.json\`);\n  let proof;\n  try {\n    proof = JSON.parse(readFileSync(proofPath, \"utf8\"));\n  } catch (error) {\n    return proofRequirement(headSha, \"execution of the protected maintenance producer\", \`Missing or unreadable exact-head proof: \${proofPath}\`, baseSha);\n  }\n  if (!proofValid(proof, headSha, nowMs, baseSha)) {\n    return proofRequirement(headSha, \"execution of the protected maintenance producer\", \"The exact-head Sol-high proof is stale or does not match the current HEAD/base.\", baseSha);\n  }\n  return { blocked: false };\n}\n\n`;
-  codexGuard = replaceExactly(codexGuard, proofFunctionAnchor, maintenanceGate + proofFunctionAnchor, "maintenance producer execution gate");
+  const hardenedMaintenanceGate = maintenanceGate.replace(
+    "MAINTENANCE_PRODUCER_COMMAND_RE.test",
+    "maintenanceProducerCommandMentioned",
+  );
+  codexGuard = replaceExactly(codexGuard, proofFunctionAnchor, hardenedMaintenanceGate + proofFunctionAnchor, "maintenance producer execution gate");
 
   const commandAnchor = "  if (/[\\r\\n]/.test(command) && PROTECTED_HARNESS_FRAGMENT_RE.test(command)) {";
   const commandReplacement = `  const maintenanceProducerGate = gateMaintenanceProducerExecution({ command, repoDir: actionRepoDir, nowMs, runGit });\n  if (maintenanceProducerGate.blocked) return maintenanceProducerGate;\n\n${commandAnchor}`;
@@ -188,6 +209,28 @@ function main() {
   const branch = git(["rev-parse", "--abbrev-ref", "HEAD"]);
   if (branch === "HEAD" || /^(?:main|master|production)$/i.test(branch)) {
     throw new Error(`refusing protected or detached branch: ${branch}`);
+  }
+  if (!verifyOnly) {
+    const producerPath = "scripts/apply-live-testdata-maintenance-20260812.mjs";
+    const headSha = git(["rev-parse", "HEAD"]);
+    const baseSha = git(["rev-parse", "origin/main"]);
+    const headBlob = git(["rev-parse", `HEAD:${producerPath}`]);
+    const worktreeBlob = git(["hash-object", `--path=${producerPath}`, producerPath]);
+    if (headBlob !== worktreeBlob) {
+      throw new Error("the maintenance producer must match its exact committed HEAD blob");
+    }
+    const stateDir = [".claude", "session-state"].join(path.sep);
+    const proofName = "codex-" + "review-" + headSha + ".json";
+    const proofPath = path.join(REPO_DIR, stateDir, proofName);
+    let proof;
+    try {
+      proof = JSON.parse(readFileSync(proofPath, "utf8"));
+    } catch {
+      throw new Error(`missing or unreadable exact-head proof: ${proofPath}`);
+    }
+    if (!exactHeadProofValid(proof, headSha, baseSha)) {
+      throw new Error("the maintenance producer requires a fresh exact-head Sol-high proof matching the current HEAD and origin/main");
+    }
   }
   const currentBlob = gitBlob(readNormalized(TARGET));
   if (currentBlob !== EXPECTED_INPUT_BLOB) {
