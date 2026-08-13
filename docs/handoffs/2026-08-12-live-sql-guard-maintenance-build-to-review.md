@@ -19,10 +19,10 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
 
 - The current source blob is pinned to `c8bec70830c643e474831985f5e6c3bd16630386`.
 - `node scripts/apply-live-testdata-maintenance-20260812.mjs --verify` produced pinned output blob
-  `69177ebe14b04458e5a84247b279d63618edc0f2`, matched all three snippet SHA-256 values, and passed a
+  `46c55f5f9bedd98004b0102efc5188a136350975`, matched all three snippet SHA-256 values, and passed a
   Node module syntax check without changing the repository target.
-- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 67 assertions against the
-  generated module, including all classifier defect classes found by the first fourteen Sol reviews.
+- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 69 assertions against the
+  generated module, including all classifier defect classes found by the first fifteen Sol reviews.
 - The write mode refused the dirty build worktree even with Mason's dated token.
 - Current recovery proof passed ESLint, TypeScript typecheck, production build, all 4,466 executed
   Vitest assertions (123 skipped), all agent-workflow tests, agent health, dependency integrity,
@@ -118,6 +118,11 @@ any later live migration apply still requires the repository's current explicit 
   without hiding expressions inside its column body, so a table name plus `(` is no longer mistaken for
   an RPC. The exact cloned-default batch and declared-table follow-up are pinned. A fresh exact-head
   review remains required.
+- The fifteenth exact-head Sol review found that PostgreSQL `U&"..."` identifiers are decoded only by
+  the database parser, allowing an encoded built-in or application mutator to evade raw-text function
+  classification. Unicode-escaped identifiers now fail closed categorically on this maintenance
+  surface, with encoded `lo_create` and `cancel_order` calls pinned. A fresh exact-head review remains
+  required.
 - GitHub checks and CodeRabbit must be complete and acceptable on the exact PR head.
 
 ## FIRST ACTION

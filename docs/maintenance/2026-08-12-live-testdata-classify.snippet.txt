@@ -11,6 +11,17 @@ export function classifySql(query) {
   const visibleKeywordStatements = visibleStatements.map((statement) => keywordView(statement));
   const visibleKeywordText = visibleKeywordStatements.join(";\n");
 
+  // PostgreSQL decodes U&"..." identifiers after parsing. Classifying their
+  // raw escape text would let an encoded mutating function name evade the
+  // default-deny function scanner, so this maintenance surface fails closed.
+  if (/\bU&\s*"/i.test(visibleKeywordText)) {
+    return {
+      block: true,
+      kind: "raw-mutation",
+      reason: "Unicode-escaped SQL identifiers are not accepted through raw execute_sql because their decoded function or object name cannot be classified safely. Use ordinary identifiers or a reviewed maintenance path.",
+    };
+  }
+
   // The append-only audit log never receives a raw write, including E2E data.
   if (AUDIT_LOG_WRITE_RE.test(visibleKeywordText)) {
     return {
