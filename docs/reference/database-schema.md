@@ -197,8 +197,8 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | quotes | Admin / Sales Rep | Admin / Sales Rep (own) | Admin / Sales Rep (own) | Admin |
 | quote_sections | All authenticated | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) |
 | quote_product_draws | Admin / Sales Rep | - (SECDEF RPCs only) | - (SECDEF RPCs only) | - (SECDEF RPCs only) |
-| quote_items | All authenticated | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) |
-| quote_versions | All authenticated | - (create_quote_version RPC only, since 20260813080000) | - | - |
+| quote_items | Admin / Sales Rep | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) |
+| quote_versions | Admin / Sales Rep | Admin / Sales Rep (own quote); **LOCAL ONLY pending apply** (`20260813080000`, CRX-SEC-1): becomes `create_quote_version` RPC only | - | - |
 | orders | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | order_items | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | inventory | Admin / Sales Rep / Driver | Admin | Admin | Admin |

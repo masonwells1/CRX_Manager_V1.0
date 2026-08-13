@@ -17,8 +17,13 @@
 --     rendering and this predicate must not pass by having broken reads;
 --   * the owner-side writer _create_quote_version_owner_impl stays a
 --     search_path-pinned SECURITY DEFINER owned by an RLS-bypassing role and
---     stays uncallable by anon/authenticated — it is what holds the
---     crx.quote_cost_snapshot_passthrough that makes snapshot_data trusted;
+--     stays uncallable by anon/authenticated — it is the ONLY routine in the
+--     database that INSERTs quote_versions, so it is the sole author of the
+--     snapshot_data that the restore path later trusts as a cost basis.
+--     (It does NOT hold crx.quote_cost_snapshot_passthrough — an earlier draft
+--     said so and was wrong. That flag is armed by save_quote and by
+--     _restore_quote_version_owner_impl, both in 20260812115236. Chasing the
+--     passthrough from here would lead a reader to the wrong function.);
 --   * the two public entry points stay authenticated-only.
 --
 -- SCOPE: this is a BROWSER-role boundary. service_role keeps full write access,
@@ -99,12 +104,20 @@ SELECT 'quote_versions:rls-disabled' AS violation_key,
 
 UNION ALL
 
--- 20260813080000 asserts FORCE ROW LEVEL SECURITY is OFF and depends on it: the
--- INSERT policy is gone, so if a later migration turns FORCE on, the owner-side
--- writer stops being exempt from policies and version creation dies in
--- production. Without this branch the sweep would report the invariant healthy.
+-- 20260813080000 asserted FORCE ROW LEVEL SECURITY was OFF when it applied, and
+-- this branch holds that state steady. Be precise about WHY, because the obvious
+-- reading is wrong and an earlier draft of this comment stated it: turning FORCE
+-- on does NOT break the owner-side writer. FORCE removes only the table owner's
+-- implicit exemption; the definer owner here carries the rolbypassrls ROLE
+-- ATTRIBUTE, which bypasses policies with or without FORCE. Version creation
+-- would keep working.
+-- The branch earns its place as a drift tripwire instead: FORCE appearing here
+-- means somebody deliberately reshaped this table's security model after the
+-- boundary was reasoned about, and every other branch in this predicate was
+-- written against the un-forced table. Investigate the reshape; do not go
+-- looking for a production outage that is not happening.
 SELECT 'quote_versions:force-rls-enabled' AS violation_key,
-       'FORCE ROW LEVEL SECURITY must stay off on public.quote_versions — with no INSERT policy left, forcing it would break the owner-side writer' AS reason
+       'FORCE ROW LEVEL SECURITY was turned on for public.quote_versions after 20260813080000 sealed the write boundary. This is NOT breaking version creation (the definer owner bypasses policies via rolbypassrls regardless) — it means this table''s security model was deliberately reshaped, and the rest of this predicate was written against the un-forced table. Find out who changed it and re-review the boundary.' AS reason
  WHERE EXISTS (
    SELECT 1
      FROM pg_class c
@@ -156,27 +169,56 @@ SELECT '_create_quote_version_owner_impl:lost-insert-grant' AS violation_key,
 
 UNION ALL
 
+-- Every EXECUTE branch below resolves its routine with to_regprocedure FIRST.
+-- has_function_privilege() raises undefined_function on a dropped or renamed
+-- routine, and run-sweeps.mjs would then report this whole predicate as ERROR —
+-- which does fail the sweep (it is not fail-open), but it replaces a named,
+-- actionable violation_key with an opaque Postgres error and hides the ten other
+-- branches in the same run. Resolve first, then decide, so a drop reports as
+-- drift instead of as a crash. Note SQL has no short-circuit guarantee, so this
+-- has to be a CASE, not an `AND` in front of the call.
+--
+-- Role existence is deliberately NOT guarded the same way: `anon` and
+-- `authenticated` disappearing from a Supabase project is not a drift this
+-- predicate could usefully survive, and the sweep already fails loudly if it
+-- happens.
 SELECT '_create_quote_version_owner_impl:external-execute' AS violation_key,
-       'anon/authenticated must not hold EXECUTE on the owner-side version writer — it carries the snapshot passthrough' AS reason
- WHERE has_function_privilege(
-         'authenticated', 'public._create_quote_version_owner_impl(uuid,uuid,text,text)', 'EXECUTE')
-    OR has_function_privilege(
-         'anon', 'public._create_quote_version_owner_impl(uuid,uuid,text,text)', 'EXECUTE')
+       'anon/authenticated must not hold EXECUTE on the owner-side version writer — it is the sole author of the snapshot_data the restore path trusts as a cost basis' AS reason
+ WHERE CASE
+         WHEN to_regprocedure('public._create_quote_version_owner_impl(uuid,uuid,text,text)') IS NULL
+           -- Absence is already reported by the exactly-one-writer branch above;
+           -- reporting it twice would just add noise to the same finding.
+           THEN false
+         ELSE has_function_privilege(
+                'authenticated', 'public._create_quote_version_owner_impl(uuid,uuid,text,text)', 'EXECUTE')
+           OR has_function_privilege(
+                'anon', 'public._create_quote_version_owner_impl(uuid,uuid,text,text)', 'EXECUTE')
+       END
 
 UNION ALL
 
 SELECT 'create_quote_version(uuid, uuid, text, text, bigint)' AS violation_key,
-       'create_quote_version must stay authenticated-callable and never anon-callable' AS reason
- WHERE NOT has_function_privilege(
-         'authenticated', 'public.create_quote_version(uuid,uuid,text,text,bigint)', 'EXECUTE')
-    OR has_function_privilege(
-         'anon', 'public.create_quote_version(uuid,uuid,text,text,bigint)', 'EXECUTE')
+       'create_quote_version must exist and stay authenticated-callable and never anon-callable — it is the only remaining way to create a version' AS reason
+ WHERE CASE
+         WHEN to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)') IS NULL
+           -- A dropped entry point IS the violation: with direct writes revoked,
+           -- losing this signature means version creation is simply gone.
+           THEN true
+         ELSE NOT has_function_privilege(
+                'authenticated', 'public.create_quote_version(uuid,uuid,text,text,bigint)', 'EXECUTE')
+           OR has_function_privilege(
+                'anon', 'public.create_quote_version(uuid,uuid,text,text,bigint)', 'EXECUTE')
+       END
 
 UNION ALL
 
 SELECT 'restore_quote_version(uuid, uuid, uuid, text, bigint, text)' AS violation_key,
-       'restore_quote_version must stay authenticated-callable and never anon-callable' AS reason
- WHERE NOT has_function_privilege(
-         'authenticated', 'public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)', 'EXECUTE')
-    OR has_function_privilege(
-         'anon', 'public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)', 'EXECUTE');
+       'restore_quote_version must exist and stay authenticated-callable and never anon-callable' AS reason
+ WHERE CASE
+         WHEN to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)') IS NULL
+           THEN true
+         ELSE NOT has_function_privilege(
+                'authenticated', 'public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)', 'EXECUTE')
+           OR has_function_privilege(
+                'anon', 'public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)', 'EXECUTE')
+       END;

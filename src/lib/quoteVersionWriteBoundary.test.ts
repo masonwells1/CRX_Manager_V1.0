@@ -35,10 +35,19 @@ const predicate = read(
 );
 const smoke = read('scripts', 'smoke', 'smoke-quote-version-write-boundary.sql');
 
-/** Statements with comment lines stripped and whitespace collapsed. */
+/**
+ * Statements with comment lines stripped and whitespace collapsed.
+ *
+ * The leading `[ \t]*` matters: both DO blocks in the migration are full of
+ * INDENTED `--` comments, and a column-0-only strip leaves every one of them in
+ * the text handed to the `;` split. None contains a semicolon today, so the
+ * exact-match assertions below pass — but the first indented comment that ever
+ * mentions one would cut a statement in half and fail this suite for a reason
+ * that has nothing to do with the write boundary.
+ */
 const statements = (sql: string) =>
   sql
-    .replace(/^--.*$/gm, '')
+    .replace(/^[ \t]*--.*$/gm, '')
     .split(';')
     .map((statement) => statement.replace(/\s+/g, ' ').trim())
     .filter(Boolean);
@@ -136,7 +145,15 @@ describe('quote_versions write boundary — migration', () => {
     // the wrong reason. prosqlbody is the marker; filtering on prokind = 'f'
     // would let a BEGIN ATOMIC *procedure* through both guard and scan.
     expect(migration).toContain('p.prosqlbody IS NOT NULL');
-    expect(migration).not.toMatch(/prokind\s*=\s*'f'\s*\n?\s*AND\s+coalesce\(btrim\(p\.prosrc\)/);
+    // Asserted as the absence of a prokind PREDICATE rather than against one
+    // specific historical draft. The previous form was pinned to an exact
+    // multi-line shape, so a normally-written regression (`AND p.prokind = 'f'`
+    // appended to the scan's WHERE clause) could never have matched it — the
+    // guard documented the risk without covering it. A bare /prokind/ would not
+    // work either: the migration's own comments explain why the filter is absent,
+    // and banning the word would ban the explanation.
+    expect(migration).not.toMatch(/p\.prokind/);
+    expect(migration).not.toMatch(/prokind\s*(=|<>|!=|IN\b)/i);
     expect(migration).toMatch(/routine\(s\) have a BEGIN ATOMIC body/);
   });
 
@@ -217,10 +234,17 @@ describe('quote_versions write boundary — standing predicate', () => {
   });
 
   it('watches the two conditions the migration itself treats as load-bearing', () => {
-    // The migration aborts on either: FORCE RLS would break the owner-side
-    // writer once the INSERT policy is gone, and rolbypassrls bypasses
-    // POLICIES, not GRANTS. A standing check that ignores both would report the
-    // invariant healthy while version creation was dead in production.
+    // The migration aborts on either.
+    // FORCE RLS is a DRIFT TRIPWIRE, not an outage predictor: rolbypassrls is a
+    // role attribute that bypasses policies with or without FORCE, so turning
+    // FORCE on would NOT break the owner-side writer. What it would mean is that
+    // this table's security model was deliberately reshaped after the boundary
+    // was reasoned about. (An earlier version of this comment claimed the
+    // outage; it was wrong, and the same wrong claim was corrected in the
+    // migration and the predicate.)
+    // The owner INSERT grant is the genuine load-bearing one: rolbypassrls
+    // bypasses POLICIES, not GRANTS, so losing that grant really does kill
+    // version creation while every other branch still reads healthy.
     expect(predicate).toContain('relforcerowsecurity');
     expect(predicate).toMatch(/has_table_privilege\(\s*r\.rolname,\s*'public\.quote_versions',\s*'INSERT'\s*\)/);
   });
@@ -253,7 +277,9 @@ describe('quote_versions write boundary — standing predicate', () => {
 
   it('is a read-only SELECT, as the sweep runner requires', () => {
     // run-sweeps.mjs refuses a predicate that is not a plain read.
-    const body = predicate.replace(/^--.*$/gm, '').trim();
+    // Same indented-comment allowance as `statements()` above, so the two
+    // parsers in this file cannot disagree about what counts as a comment.
+    const body = predicate.replace(/^[ \t]*--.*$/gm, '').trim();
     expect(body.startsWith('SELECT')).toBe(true);
     expect(body.endsWith(';')).toBe(true);
     for (const line of body.split('\n')) {
@@ -314,6 +340,18 @@ describe('quote_versions write boundary — behavioural smoke', () => {
     // production is the one most likely to be soft-deleted, and step 5 would
     // then report "the fix broke version creation" when nothing is broken.
     expect(smoke).toMatch(/FROM public\.quotes\s+WHERE deleted_at IS NULL/);
+
+    // The status filter is the sharper trap and MUST be asserted here, not just
+    // described in the smoke's comments. create_quote_version ends in an
+    // unconditional UPDATE quotes SET status = 'sent', and the lifecycle trigger
+    // admits 'sent' only from these four. On 2026-08-13 the oldest live quote
+    // was 'cancelled', so an unfiltered pick chose exactly the row that
+    // false-fails and blamed the security fix for a lifecycle rule. Without this
+    // assertion, deleting the filter leaves the suite green.
+    expect(smoke).toMatch(
+      /status IN \('draft', 'revised', 'accepted', 'sent'\)/,
+    );
+    expect(smoke).toMatch(/SMOKE_SETUP: no live quote in draft\/revised\/accepted\/sent/);
   });
 
   it('is registered in smoke-specs.json, or run-smoke.mjs never runs it', () => {
@@ -336,6 +374,27 @@ describe('quote_versions write boundary — behavioural smoke', () => {
     expect(smoke).toContain('SELECT public.create_quote_version(');
     expect(smoke).toMatch(/SMOKE_FAIL: create_quote_version RPC no longer works/);
     expect(smoke).toMatch(/SMOKE_FAIL: authenticated SELECT on quote_versions was refused/);
+  });
+
+  it('proves the legitimate path by OUTCOME, not by "it did not raise"', () => {
+    // Two distinct vacuity traps, both of which the smoke passed at one point.
+    //
+    // 1. The read-back must be COUNTED. Under RLS a policy that stops matching
+    //    returns zero rows rather than raising, so a bare PERFORM inside an
+    //    exception handler passes just as happily against a table the browser
+    //    can no longer read.
+    expect(smoke).toMatch(/SELECT count\(\*\) INTO v_visible/);
+    expect(smoke).toMatch(/v_visible < v_ver_before \+ 1/);
+    expect(smoke).toMatch(/SELECT count\(\*\) INTO v_ver_before/);
+
+    // 2. The RPC returning without raising is not proof it wrote anything:
+    //    _create_quote_version_owner_impl short-circuits with status "duplicate"
+    //    on an idempotency-key hit, writing nothing and raising nothing.
+    expect(smoke).toMatch(/v_result ->> 'status', ''\) <> 'created'/);
+
+    // And the freshness re-read that stops a concurrent bump to row_version from
+    // surfacing as "the fix broke version creation".
+    expect(smoke).toMatch(/SELECT row_version INTO v_row_version\s+FROM public\.quotes\s+WHERE id = v_quote_id;/);
   });
 
   it('never lets a SMOKE_FAIL be swallowed by its own handler', () => {

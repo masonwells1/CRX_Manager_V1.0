@@ -180,6 +180,14 @@ function printList(specs) {
 function interpretResult(outputText) {
   if (outputText.includes(PASS_TOKEN)) return { pass: true };
   const lines = outputText.split(/\r?\n/).filter((l) => l.trim());
+  // SMOKE_PREREQ means "the change this chain proves is not deployed on THIS
+  // database" — a chain gated behind an unapplied migration, not a regression.
+  // Without this branch, --all reports a red FAIL on every environment that is
+  // simply behind, and a red run that is expected to be red trains everyone to
+  // ignore red runs. It is deliberately NOT extended to SMOKE_SETUP: a missing
+  // fixture is a real gap in the proof and must stay loud.
+  const prereqLine = lines.find((l) => /SMOKE_PREREQ/.test(l));
+  if (prereqLine) return { pass: false, prereq: true, message: prereqLine.trim() };
   const errLine =
     lines.find((l) => /SMOKE_FAIL|SMOKE_SETUP/.test(l)) ||
     lines.find((l) => /ERROR:|FATAL:/.test(l)) ||
@@ -214,6 +222,9 @@ function printForClaude(key, spec) {
   console.log('EXECUTE the SQL below as ONE statement via Supabase MCP execute_sql');
   console.log('(project rhyzpcqhnizqbxphqdkr). Interpret the result:');
   console.log(`  * error message contains '${PASS_TOKEN}'  -> PASS (rollback fired)`);
+  console.log("  * error message contains 'SMOKE_PREREQ'     -> SKIP: the change this");
+  console.log('      chain proves is not deployed on this database. NOT a pass — it');
+  console.log('      proved nothing. Apply the migration, then run it again.');
   console.log('  * ANY other error (or no error at all)      -> FAIL: report the message');
   console.log(`${bar}\n`);
   console.log(sql);
@@ -309,18 +320,30 @@ function main() {
   }
 
   let failures = 0;
+  let prereqSkips = 0;
   for (const [key, spec] of selected) {
     process.stdout.write(`[smoke] ${key} (${spec.chain}) ... `);
     const result = runViaPsql(key, spec, dbUrl);
     if (result.pass) {
       console.log('PASS (rolled back)');
+    } else if (result.prereq) {
+      prereqSkips++;
+      console.log('SKIPPED (prerequisite not deployed here)');
+      console.log(`        ${result.message}`);
     } else {
       failures++;
       console.log('FAIL');
       console.log(`        ${result.message}`);
     }
   }
-  console.log(`\n${selected.size - failures}/${selected.size} chain(s) passed.`);
+  const ran = selected.size - prereqSkips;
+  console.log(`\n${ran - failures}/${ran} chain(s) passed` +
+    (prereqSkips > 0 ? `, ${prereqSkips} skipped on prerequisites.` : '.'));
+  if (prereqSkips > 0) {
+    // A skip is not a pass. Say so, or a green summary line reads as coverage
+    // the run did not actually provide.
+    console.log('A skipped chain proved NOTHING - apply its migration, then re-run it.');
+  }
   if (failures > 0) {
     console.log('A failing chain means the fix is NOT fixed - do not declare it done.');
     process.exitCode = 1;

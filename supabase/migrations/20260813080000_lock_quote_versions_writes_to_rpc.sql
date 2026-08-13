@@ -85,12 +85,19 @@
 --     call sites in src/ are `.select('*')` reads in QuoteBuilder.tsx, and
 --     src/lib/quoteLifecycleRpc.ts creates versions through the RPC.
 --
--- CALLER ANALYSIS FOR THE EXECUTE RE-STATEMENTS BELOW (B10 rule). Each REVOKE
--- below is REVOKE-from-PUBLIC/anon immediately followed by a GRANT to
--- authenticated + service_role, which is a no-op re-assertion of the ACL read
--- from live on 2026-08-13 (postgres=X, authenticated=X, service_role=X on both
--- public entry points; anon absent from both). The browser calls these through
--- PostgREST as the `authenticated` role, which keeps EXECUTE.
+-- CALLER ANALYSIS FOR THE EXECUTE RE-STATEMENTS BELOW (B10 rule). Read the
+-- three statements individually rather than as one pattern; an earlier draft of
+-- this paragraph claimed every REVOKE is followed by a GRANT and that is not
+-- true of the third. For the two PUBLIC entry points -- create_quote_version and
+-- restore_quote_version -- the REVOKE from PUBLIC/anon IS immediately followed by
+-- a GRANT to authenticated + service_role, which is a no-op re-assertion of the
+-- ACL read from live on 2026-08-13 (postgres=X, authenticated=X, service_role=X
+-- on both; anon absent from both). The browser calls these through PostgREST as
+-- the `authenticated` role, which keeps EXECUTE. The third statement, on
+-- _create_quote_version_owner_impl, revokes from PUBLIC, anon AND authenticated
+-- with NO following GRANT -- deliberately, because that is the owner-side writer
+-- and nothing outside the definer chain may call it. Auditing the ACL delta from
+-- the blanket sentence alone would have missed that asymmetry.
 --
 -- caller-analysis: create_quote_version :: two callers, both in
 --   src/lib/quoteLifecycleRpc.ts:54 (5-arg current signature) and :65 (the
@@ -117,8 +124,17 @@
 -- caller-analysis: _create_quote_version_owner_impl :: no callers in src/ and
 --   none possible — live ACL is postgres=X, service_role=X with no
 --   authenticated grant. The REVOKE is a defensive re-assertion so a future
---   default-grant sweep cannot expose the owner-side writer that holds the
---   snapshot passthrough.
+--   default-grant sweep cannot expose the owner-side writer, and it carries no
+--   matching GRANT by design.
+--   Do NOT describe this function as the holder of the cost-snapshot
+--   passthrough; an earlier draft did, and it is wrong in a way that would
+--   misdirect the next person hardening this area. `crx.quote_cost_snapshot_
+--   passthrough` is armed by exactly two routines, both in
+--   20260812115236: save_quote (line 573) and _restore_quote_version_owner_impl
+--   (line 1096). This create-side impl never sets it. What makes THIS function
+--   worth sealing is narrower and sufficient: it is the only routine in the
+--   database that INSERTs into quote_versions, so it is the sole author of the
+--   snapshot_data that the restore path later trusts as a cost basis.
 --
 -- TRUNCATE is revoked as well, deliberately. RLS policies do not apply to
 -- TRUNCATE at all, so the grant alone let an authenticated caller empty the
@@ -190,7 +206,7 @@ BEGIN
   -- exactly-one-writer scan — was made against the un-forced table. Abort and
   -- re-review rather than apply a reviewed-elsewhere conclusion.
   IF v_forced THEN
-    RAISE EXCEPTION 'PRECOND: public.quote_versions now has FORCE ROW LEVEL SECURITY. Dropping qversions_insert would break the owner-side RPC write; re-review before applying.';
+    RAISE EXCEPTION 'PRECOND: public.quote_versions now has FORCE ROW LEVEL SECURITY, which it did not when this migration was written and reviewed. This does NOT mean the owner-side RPC write is about to break — the definer owner bypasses policies via rolbypassrls whether or not FORCE is set. It means somebody deliberately reshaped this table''s security model, so the pinned policy shapes and the exactly-one-writer scan below were judged against a table that no longer exists. Re-review before applying.';
   END IF;
 
   -- The read path must survive untouched.
@@ -371,7 +387,11 @@ BEGIN
       JOIN pg_roles r ON r.oid = p.proowner
      WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
        AND NOT (p.prosecdef AND r.rolbypassrls)
-       AND p.proname <> '_create_quote_version_owner_impl'
+       -- Schema-qualified on purpose. The scan itself is all-schema (see the
+       -- nspname filter above), so a bare `proname <> ...` carve-out would also
+       -- excuse a routine of that name living in staging, crx, or a schema
+       -- restored from a backup — the one hole a same-named impostor needs.
+       AND NOT (n.nspname = 'public' AND p.proname = '_create_quote_version_owner_impl')
        AND p.prosrc ~* '(insert\s+into|update|delete\s+from|merge\s+into)\s+(only\s+)?("?public"?\s*\.\s*)?"?quote_versions\M'
   ) THEN
     RAISE EXCEPTION 'PRECOND: another routine writes public.quote_versions without bypassing RLS and would break under this change. Re-review before applying.';
@@ -390,7 +410,9 @@ BEGIN
      WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
        AND p.prosecdef
        AND r.rolbypassrls
-       AND p.proname <> '_create_quote_version_owner_impl'
+       -- Schema-qualified for the same reason as the scan above: this carve-out
+       -- must excuse exactly one function, not every function wearing its name.
+       AND NOT (n.nspname = 'public' AND p.proname = '_create_quote_version_owner_impl')
        AND p.prosrc ~* '(insert\s+into|update|delete\s+from|merge\s+into)\s+(only\s+)?("?public"?\s*\.\s*)?"?quote_versions\M'
   ) THEN
     RAISE EXCEPTION 'PRECOND: a second RLS-bypassing routine writes public.quote_versions. This migration assumes exactly one authoritative writer; re-review before applying.';

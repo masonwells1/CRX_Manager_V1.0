@@ -1,4 +1,4 @@
-# Migration History (883 migration-history entries)
+# Migration History (884 migration-history entries)
 
 > LIVE RECONCILIATION — `20260730235031_quote_customer_row_version_guard.sql` was submitted as `20260730201230_quote_customer_row_version_guard` after PR #290 deployed the compatible browser bundle. It adds trigger-maintained `row_version bigint NOT NULL DEFAULT 1` to `quotes` and `customers`, re-emits `save_quote`/`save_customer` with fail-closed expected-version checks and fresh-version results, and preserves the commission-split-specific guard ahead of the generic guard. Live postflight, four rollback-only chains, zero-residue checks, all 21 invariant predicates, and the B7 rename passed. The AP-only close-race/table-boundary follow-up applied afterward as ledger `20260731001654`; the live schema registry is refreshed through that high-water and records both migrations and both row-version columns.
 

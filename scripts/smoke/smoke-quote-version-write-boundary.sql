@@ -46,6 +46,14 @@
 -- commit — but the lock and the churn are real. The prereq gate below therefore
 -- refuses to run at all until the grants are actually gone.
 --
+-- Note the lock is taken in the DENIED case too, and that is not a contradiction
+-- of "refused before touching a row": TRUNCATE acquires ACCESS EXCLUSIVE BEFORE
+-- the privilege check runs. So even a refused TRUNCATE can briefly block every
+-- reader of this table without modifying a single row. The lock is released when
+-- the exception subtransaction aborts, so the stall is short — but on a live
+-- money table during business hours, "short" is still a stall, and it is a
+-- second, independent reason this file must not run before the boundary exists.
+--
 -- That gate doubles as the grant-level assertion: SQLSTATE 42501 is raised by
 -- an RLS WITH CHECK violation too, so the behavioural denials alone cannot tell
 -- "the privilege is revoked" from "a policy happened to reject this row". The
@@ -87,6 +95,7 @@ DECLARE
   v_priv        text;
   v_role        text;
   v_visible     bigint;
+  v_ver_before  bigint;
 BEGIN
   -- ── 0. PREREQ: refuse to run until the boundary actually exists ───────────
   -- Steps 1-4 below are real write statements. Post-fix they are refused before
@@ -139,11 +148,13 @@ BEGIN
   -- an unfiltered ORDER BY created_at picked exactly the one quote that
   -- false-fails. Keep this list in lockstep with the trigger's inbound edges to
   -- 'sent'; it is a property of the quote lifecycle, not of this boundary.
+  -- The id tiebreaker only makes the pick deterministic when two quotes share a
+  -- created_at; without it the fixture can silently differ between runs.
   SELECT id, row_version INTO v_quote_id, v_row_version
     FROM public.quotes
    WHERE deleted_at IS NULL
      AND status IN ('draft', 'revised', 'accepted', 'sent')
-   ORDER BY created_at
+   ORDER BY created_at, id
    LIMIT 1;
   IF v_quote_id IS NULL THEN
     RAISE EXCEPTION 'SMOKE_SETUP: no live quote in draft/revised/accepted/sent to attach a version to. This is a fixture gap, NOT a failure of the write boundary: create_quote_version moves a quote to ''sent'', and no other status has a legal edge to it.';
@@ -272,6 +283,24 @@ BEGIN
 
   -- ── 5. the LEGITIMATE path must still work ────────────────────────────────
   -- A boundary that also broke version creation would pass every check above.
+
+  -- Baseline the per-quote version count BEFORE the call. Counting after and
+  -- asserting "> 0" would pass on a quote that already had version history,
+  -- proving nothing about this call.
+  SELECT count(*) INTO v_ver_before
+    FROM public.quote_versions
+   WHERE quote_id = v_quote_id;
+
+  -- Re-read row_version immediately before the call rather than reusing the one
+  -- captured during setup. Steps 1-4 run real (refused) write attempts and take
+  -- measurable time; a concurrent write to this quote in that window bumps
+  -- row_version, and create_quote_version would then raise QUOTE_STALE_WRITE —
+  -- which the handler below would report as "the fix broke version creation".
+  -- Same false-fail class the fixture filter above exists to prevent.
+  SELECT row_version INTO v_row_version
+    FROM public.quotes
+   WHERE id = v_quote_id;
+
   SET LOCAL ROLE authenticated;
   IF current_user <> 'authenticated' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: SET LOCAL ROLE authenticated did not take effect (current_user=%)', current_user;
@@ -285,13 +314,22 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: create_quote_version RPC no longer works for an authenticated admin — the fix broke version creation: % (%)', SQLERRM, SQLSTATE;
   END;
 
+  -- "Did not raise" is not "did the work". _create_quote_version_owner_impl
+  -- short-circuits with {"status":"duplicate"} when a row already exists for
+  -- this idempotency key + operation, writing nothing and raising nothing — so
+  -- without this assertion the smoke could report the legitimate path healthy
+  -- while no row was ever created.
+  IF coalesce(v_result ->> 'status', '') <> 'created' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: create_quote_version returned status=% instead of ''created'' — the RPC did not raise, but it also did not create a version', coalesce(v_result ->> 'status', '(null)');
+  END IF;
+
   -- Version history must still render for the browser role.
   -- Counted, not merely executed: under RLS a policy that no longer matches
   -- returns ZERO ROWS rather than raising, so a bare PERFORM wrapped in an
   -- exception handler would pass just as happily against a table the browser
-  -- can no longer read — the precise failure this check exists to catch. Step 5
-  -- has already created a version for v_quote_id in this transaction, so a
-  -- healthy read path cannot return zero here.
+  -- can no longer read — the precise failure this check exists to catch. The
+  -- status='created' assertion above is what makes the floor below legitimate:
+  -- a row for v_quote_id demonstrably exists in this transaction now.
   BEGIN
     SELECT count(*) INTO v_visible
       FROM public.quote_versions
@@ -300,8 +338,12 @@ BEGIN
     WHEN OTHERS THEN
       RAISE EXCEPTION 'SMOKE_FAIL: authenticated SELECT on quote_versions was refused — version history would stop rendering: % (%)', SQLERRM, SQLSTATE;
   END;
-  IF v_visible IS NULL OR v_visible = 0 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: authenticated sees zero versions for a quote that was just versioned — qversions_select no longer matches and version history would render empty';
+  -- >= rather than = : the baseline was taken as the outer role and a concurrent
+  -- session committing another version for this quote in between would make
+  -- strict equality flap. The failure this guards against is the read path
+  -- silently returning nothing, and >= catches that exactly.
+  IF v_visible IS NULL OR v_visible < v_ver_before + 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: authenticated sees % versions for a quote that had % before this transaction created one — qversions_select no longer matches and version history would render empty', coalesce(v_visible, -1), v_ver_before;
   END IF;
   RESET ROLE;
 
