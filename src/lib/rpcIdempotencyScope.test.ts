@@ -251,6 +251,11 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // migration 20260810150000 is the first to CREATE the function under its
   // post-rename name (the rename itself defined no function body on disk).
   _convert_quote_to_order_owner_impl: ['convert_quote_to_order'],
+  // Direct EXECUTE is revoked. This is the idempotent implementation behind
+  // the public restore_quote_version wrapper; both intentionally use the one
+  // public restore_quote_version cache namespace so a replay through the
+  // wrapper reaches the result that the implementation saved.
+  _restore_quote_version_owner_impl: ['restore_quote_version'],
   // Owner-only implementation used by the public standalone/group posting
   // wrappers; all layers intentionally share the public post_invoice cache.
   _post_invoice_impl_20260714: ['post_invoice'],
@@ -455,7 +460,9 @@ describe('Idempotency operation literals in latest disk migrations', () => {
 
   it('regression guard: restore_quote_version lookup stays scoped to its own operation', () => {
     // Codex 2026-06-08 LOW — the lookup originally filtered on the key only.
-    const def = defs.get('restore_quote_version');
+    // The public wrapper now delegates, so pin the lookup in the private
+    // implementation that owns the idempotency SQL rather than the wrapper.
+    const def = defs.get('_restore_quote_version_owner_impl');
     expect(def).toBeDefined();
     expect(def!.body).toMatch(/operation\s*=\s*'restore_quote_version'/i);
   });
