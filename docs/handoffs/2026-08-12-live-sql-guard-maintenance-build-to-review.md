@@ -17,14 +17,13 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
 
 ## PROVEN
 
-- The producer constants pin the complete artifact mapping: input blob `c8bec70830c643e474831985f5e6c3bd16630386`; output blob `07bd0d80d62f5c45e5ef16d39ae5efb1d270b478`; constants SHA-256 `53c658d7eb8aab2a60b4314f533f61b7472f8d686f4b81d483d57b20950022a9`; helpers SHA-256 `6e50bf618da817403e36e74e09b350536f713f93b2c9ebf269fe1475a592e19c`; classifier SHA-256 `4babd221a9374e5df0b5d46db7bd267493c32d9a1a3a5dbb0a1a07fc66f6692a`.
+- The producer constants pin the complete artifact mapping: input blob `c8bec70830c643e474831985f5e6c3bd16630386`; output blob `fdc67a2ef72698b1e74a8dee53c2a41da4c55fbd`; constants SHA-256 `53c658d7eb8aab2a60b4314f533f61b7472f8d686f4b81d483d57b20950022a9`; helpers SHA-256 `b70fefdf0e969bc0e953362b1706753e127f1a7a8a8c8fda7181e94e2a161efd`; classifier SHA-256 `4babd221a9374e5df0b5d46db7bd267493c32d9a1a3a5dbb0a1a07fc66f6692a`.
 - `node scripts/apply-live-testdata-maintenance-20260812.mjs --verify` produced pinned output blob
-  `07bd0d80d62f5c45e5ef16d39ae5efb1d270b478`, matched all three snippet SHA-256 values, and passed a
+  `fdc67a2ef72698b1e74a8dee53c2a41da4c55fbd`, matched all three snippet SHA-256 values, and passed a
   Node module syntax check without changing the repository target.
-- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 78 classifier assertions
+- `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 84 classifier assertions
   against the generated module plus 22 counted producer assertions, including cross-platform line-ending
-  normalization and all classifier defect
-  classes found by the first twenty-two Sol reviews.
+  normalization and all classifier defect classes found through the latest automated and Sol reviews.
 - The focused producer harness also passes after the exact pinned protections are installed, and the standard
   production-guard suite executes it while separately proving that an invocation without exact-head proof is denied.
 - The write mode refused the dirty build worktree even with Mason's dated token.

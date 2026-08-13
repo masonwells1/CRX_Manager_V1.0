@@ -163,13 +163,27 @@ function tempBaseTableName(statement) {
 }
 
 function functionCallView(statement) {
-  // A CREATE TABLE object name followed by a column-definition parenthesis is
-  // not a function call. Remove only that declaration token; expressions in
-  // the column body and CTAS query remain visible to the default-deny scanner.
-  return statement.replace(
-    /^\s*create\s+(?:temp|temporary)\s+table(?:\s+if\s+not\s+exists)?\s+(?:(?:"?(?:pg_temp|pg_temp_\d+)"?)\s*\.\s*)?"?[a-z_][a-z0-9_$]*"?(?=\s*\()/i,
-    "",
+  // Type modifiers in explicit casts are grammar, not function calls. Remove
+  // only the precision/scale suffix; an explicitly schema-qualified public
+  // function with the same name stays visible to the default-deny scanner.
+  const withoutTypeModifiers = statement.replace(
+    /((?:::|\bas\s+)\s*(?:(?:"?pg_catalog"?)\s*\.\s*)?"?(?:numeric|decimal)"?)\s*\(\s*\d+\s*(?:,\s*\d+\s*)?\)/gi,
+    "$1",
   );
+
+  // CREATE TABLE object names and CREATE INDEX target names can be followed by
+  // column/expression parentheses but are not calls. Strip only those DDL
+  // declaration tokens; defaults, generated expressions, and index expression
+  // bodies remain visible and are still scanned for mutating functions.
+  return withoutTypeModifiers
+    .replace(
+      /^\s*create\s+(?:(?:temp|temporary)\s+)?table(?:\s+if\s+not\s+exists)?\s+(?:(?:"?[a-z_][a-z0-9_$]*"?)\s*\.\s*)?"?[a-z_][a-z0-9_$]*"?(?=\s*\()/i,
+      "",
+    )
+    .replace(
+      /^\s*create\s+(?:unique\s+)?index(?:\s+concurrently)?(?:\s+if\s+not\s+exists)?\s+(?:(?:"?[a-z_][a-z0-9_$]*"?)\s*\.\s*)?"?[a-z_][a-z0-9_$]*"?\s+on(?:\s+only)?\s+(?:(?:"?[a-z_][a-z0-9_$]*"?)\s*\.\s*)?"?[a-z_][a-z0-9_$]*"?(?:\s+using\s+"?[a-z_][a-z0-9_$]*"?)?(?=\s*\()/i,
+      "",
+    );
 }
 
 function isRollbackSafeSmokeStatement(statement) {

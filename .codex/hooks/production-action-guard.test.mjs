@@ -128,7 +128,7 @@ try {
   );
   assert.match(
     focusedProducerOutput,
-    /78 classifier assertions \+ 22 producer assertions passed/,
+    /84 classifier assertions \+ 22 producer assertions passed/,
     "the standard guard suite executes the focused producer regression harness",
   );
   assert.equal(evaluateProductionAction({ toolName: "mcp__node_repl__node_repl", toolInput: { code: "1 + 1" } }).blocked, true);

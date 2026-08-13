@@ -113,7 +113,7 @@ for (const [name, source] of Object.entries(producerProtection.outputs)) {
 }
 
 const { output, blob } = buildMaintainedSource();
-assert.equal(blob, "07bd0d80d62f5c45e5ef16d39ae5efb1d270b478", "pinned generated blob");
+assert.equal(blob, "fdc67a2ef72698b1e74a8dee53c2a41da4c55fbd", "pinned generated blob");
 
 try {
   const candidatePath = path.join(scratch, "candidate.mjs");
@@ -144,6 +144,7 @@ try {
     "UPDATE customers SET phone='owned' WHERE id=1 AND '[E2E]'='[E2E]'",
     "DELETE FROM customers WHERE id=1 AND '[E2E]'='[E2E]'",
     "VALUES (public.cancel_order('00000000-0000-0000-0000-000000000000'))",
+    "VALUES (public.numeric(10,2))",
     "WITH source AS (SELECT 1 AS x) SELECT x INTO public.guard_bypass FROM source",
     "INSERT INTO customers (name) VALUES ('[E2E] Farm Alpha')",
     "UPDATE customers SET phone = '555' WHERE name LIKE '[E2E]%'",
@@ -193,6 +194,8 @@ try {
     "EXPLAIN ANALYZE CREATE MATERIALIZED VIEW public.guard_bypass AS SELECT * FROM public.customers;",
     "EXPLAIN (ANALYZE TRUE, BUFFERS TRUE) CREATE TABLE public.guard_bypass AS SELECT * FROM public.customers;",
     "EXPLAIN (ANALYZE TRUE) EXECUTE prepared_mutator('00000000-0000-0000-0000-000000000000');",
+    "BEGIN; CREATE TABLE public.guard_probe (id int DEFAULT public.cancel_order()); ROLLBACK;",
+    "BEGIN; CREATE INDEX guard_probe_idx ON public.customers (public.cancel_order(id)); ROLLBACK;",
   ];
   for (const sql of blocked) {
     assert.equal(classifySql(sql).block, true, `must block: ${sql}`);
@@ -200,10 +203,13 @@ try {
 
   const allowed = [
     "SELECT * FROM customers WHERE id = 1",
+    "VALUES (1::numeric(10,2))",
     "CREATE TEMP TABLE some_log_table AS SELECT 1 AS id, 0 AS x; UPDATE pg_temp.some_log_table SET x = 1 WHERE id = 1",
     "CREATE TEMP TABLE scratch AS SELECT 1",
     "CREATE TEMP TABLE scratch_columns (id int, x int)",
     "BEGIN; ALTER TABLE invoices ADD COLUMN x text; ROLLBACK;",
+    "BEGIN; CREATE TABLE public.guard_probe (id int); ROLLBACK;",
+    "BEGIN; CREATE INDEX guard_probe_idx ON public.customers (id); ROLLBACK;",
     "BEGIN; SET LOCAL statement_timeout = '1s'; SELECT 1; ROLLBACK;",
   ];
   for (const sql of allowed) {

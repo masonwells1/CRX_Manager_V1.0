@@ -13,7 +13,7 @@ SHA-256, builds one pinned output blob, refuses dirty/detached/protected branche
 Mason's dated approval token before writing. The producer itself does not activate the repair; it
 must first pass an exact-head Sol review and the normal protected pull-request pipeline. The follow-up
 change will run the producer on a feature branch and remove the temporary producer after use; the
-generated-module regression harness is already checked in and exercises 78 classifier cases. PR
+generated-module regression harness is already checked in and exercises 84 classifier cases. PR
 review also moved the tracked-and-untracked dirty-worktree check ahead of every temporary or target
 write, so verification mode follows the same fail-closed cleanliness contract as write mode. Input
 blob verification normalizes Windows CRLF bytes before hashing, matching the producer's normalized
