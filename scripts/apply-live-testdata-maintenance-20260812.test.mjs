@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 
 import {
   buildMaintainedSource,
+  normalizeLineEndings,
   worktreeEntriesFromStatus,
 } from "./apply-live-testdata-maintenance-20260812.mjs";
 
@@ -25,6 +26,11 @@ assert.deepEqual(
   worktreeEntriesFromStatus(" M tracked.mjs\r\n"),
   [" M tracked.mjs"],
   "status without a branch header remains dirty",
+);
+assert.equal(
+  normalizeLineEndings("first\r\nsecond\r\n"),
+  "first\nsecond\n",
+  "working-tree CRLF bytes normalize before Git-blob hashing",
 );
 
 const { output, blob } = buildMaintainedSource();
@@ -125,7 +131,7 @@ try {
   }
 
   process.stdout.write(
-    `live-testdata maintenance candidate: ${blocked.length + allowed.length} classifier assertions + 3 producer status assertions passed\n`,
+    `live-testdata maintenance candidate: ${blocked.length + allowed.length} classifier assertions + 4 producer assertions passed\n`,
   );
 } finally {
   rmSync(scratch, { recursive: true, force: true });

@@ -15,7 +15,9 @@ must first pass an exact-head Sol review and the normal protected pull-request p
 change will run the producer on a feature branch and remove the temporary producer after use; the
 generated-module regression harness is already checked in and exercises 75 classifier cases. PR
 review also moved the tracked-and-untracked dirty-worktree check ahead of every temporary or target
-write, so verification mode follows the same fail-closed cleanliness contract as write mode.
+write, so verification mode follows the same fail-closed cleanliness contract as write mode. Input
+blob verification normalizes Windows CRLF bytes before hashing, matching the producer's normalized
+assembly path and the reviewed Git blob on every checkout.
 
 Eighteen exact-head adversarial passes have progressively hardened the candidate before activation. Earlier
 passes closed a Unicode identifier boundary that could conceal destructive SQL and removed the

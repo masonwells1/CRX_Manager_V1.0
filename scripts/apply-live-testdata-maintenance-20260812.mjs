@@ -63,7 +63,11 @@ function gitBlob(value) {
 }
 
 function readNormalized(relativePath) {
-  return readFileSync(path.join(REPO_DIR, relativePath), "utf8").replace(/\r\n/g, "\n");
+  return normalizeLineEndings(readFileSync(path.join(REPO_DIR, relativePath), "utf8"));
+}
+
+export function normalizeLineEndings(value) {
+  return String(value).replace(/\r\n/g, "\n");
 }
 
 function replaceExactly(source, oldValue, newValue, label) {
@@ -125,7 +129,7 @@ function main() {
   if (branch === "HEAD" || /^(?:main|master|production)$/i.test(branch)) {
     throw new Error(`refusing protected or detached branch: ${branch}`);
   }
-  const currentBlob = git(["hash-object", TARGET]);
+  const currentBlob = gitBlob(readNormalized(TARGET));
   if (currentBlob !== EXPECTED_INPUT_BLOB) {
     throw new Error(`refusing changed target: expected ${EXPECTED_INPUT_BLOB}, got ${currentBlob}`);
   }

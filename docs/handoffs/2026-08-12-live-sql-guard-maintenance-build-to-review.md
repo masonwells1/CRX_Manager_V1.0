@@ -22,7 +22,8 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
   `bda5a0b744ac28dbd2059b38cd2bdf0e5890e31f`, matched all three snippet SHA-256 values, and passed a
   Node module syntax check without changing the repository target.
 - `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 75 classifier assertions
-  against the generated module plus three producer-status assertions, including all classifier defect
+  against the generated module plus four producer assertions, including cross-platform line-ending
+  normalization and all classifier defect
   classes found by the first eighteen Sol reviews.
 - The write mode refused the dirty build worktree even with Mason's dated token.
 - Current recovery proof passed ESLint, TypeScript typecheck, production build, all 4,466 executed
@@ -47,6 +48,11 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
 - Push, pull request, CodeRabbit/check review, merge, and post-merge verification.
 - Follow-up branch that runs the producer, preserves the existing red-to-green classifier regressions,
   removes the temporary producer, and completes its own exact-head review/pipeline.
+- Before activation, replace or deliberately reroute the existing `DO`-based rollback smoke chains:
+  the fail-closed classifier correctly rejects raw `DO` because transaction rollback cannot undo
+  sequence side effects, while the current smoke workflow sends those chains through the classified
+  MCP `execute_sql` path. Activation is blocked until a reviewed safe execution route preserves the
+  required `SMOKE_PASS_ROLLBACK` real-path proof without reopening raw `DO`.
 - Separate reconciliation of the two 20260813-stamped, parked and unapplied migration sources with
   the schema registry, plus the six stale Wave A migration timestamps. This description is the
   August 12, 2026 historical snapshot and is not evidence that either parked migration was applied.
