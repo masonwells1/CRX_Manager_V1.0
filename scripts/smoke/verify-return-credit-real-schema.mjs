@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,6 +56,10 @@ function refreshLiveSchema() {
   const commonDir = spawnSync('git', ['rev-parse', '--git-common-dir'], { cwd: ROOT, encoding: 'utf8' });
   if (commonDir.status !== 0) throw new Error(`cannot locate linked checkout: ${commonDir.stderr}`);
   const linkedRoot = path.dirname(path.resolve(ROOT, commonDir.stdout.trim()));
+  // `supabase db dump --file` appends when the target already exists. Replace
+  // the disposable snapshot so an interrupted/repeated proof cannot replay a
+  // duplicated schema and report a false database failure.
+  rmSync(LIVE_SCHEMA, { force: true });
   const dump = spawnSync(
     'supabase',
     ['db', 'dump', '--linked', '--workdir', linkedRoot, '--schema', 'public,auth', '--file', LIVE_SCHEMA, '--keep-comments'],
@@ -83,10 +87,14 @@ try {
     .replace(/OWNER TO "[^"]+";/g, 'OWNER TO postgres;')
     .replace(/FOR ROLE "[^"]+"/g, 'FOR ROLE "postgres"');
   psql(liveSchema);
-  const migrations = [CANDIDATE];
-  copy(CANDIDATE, 'candidate.sql');
-  apply('candidate.sql');
   const predicate = readFileSync(PREDICATE, 'utf8').trim().replace(/;$/, '');
+  const preApplyViolations = psqlValue(`SELECT count(*) FROM (${predicate}) AS violations;`);
+  const migrations = [];
+  if (preApplyViolations !== '0') {
+    copy(CANDIDATE, 'candidate.sql');
+    apply('candidate.sql');
+    migrations.push(CANDIDATE);
+  }
   assert.equal(psqlValue(`SELECT count(*) FROM (${predicate}) AS violations;`), '0', 'return-credit invariant reported candidate-state drift');
   const lifecyclePredicate = readFileSync(LIFECYCLE_PREDICATE, 'utf8').trim().replace(/;$/, '');
   const lifecycleViolations = psqlValue(`SELECT violation_key || ': ' || reason FROM (${lifecyclePredicate}) AS violations ORDER BY violation_key;`);
@@ -145,7 +153,8 @@ try {
   assert.equal(psqlValue("SELECT count(*) FROM public.returns WHERE return_number LIKE 'SMK-%';"), '0', 'return fixture residue remained');
   assert.equal(psqlValue("SELECT count(*) FROM public.invoices WHERE invoice_number LIKE 'SMK-RCC-%';"), '0', 'invoice fixture residue remained');
   assert.equal(psqlValue("SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key LIKE 'smk-rcc-%';"), '0', 'receipt residue remained');
-  console.log(`RETURN_CREDIT_REAL_SCHEMA_PASS source=fresh-live-read-only-schema candidate_migrations=${migrations.length} invariant_violations=0 smoke=SMOKE_PASS_ROLLBACK residue=0`);
+  const passMarker = migrations.length === 0 ? 'RETURN_CREDIT_POSTAPPLY_LIVE_PASS' : 'RETURN_CREDIT_REAL_SCHEMA_PASS';
+  console.log(`${passMarker} source=fresh-live-read-only-schema candidate_migrations=${migrations.length} invariant_violations=0 smoke=SMOKE_PASS_ROLLBACK residue=0`);
 } catch (error) {
   console.error(`RETURN_CREDIT_REAL_SCHEMA_FAIL ${error.stack ?? error.message}`);
   process.exitCode = 1;

@@ -100,6 +100,10 @@ function assertExecutableProofGuards(smokeText: string, proverText: string) {
   expect(proverText).toContain("invoice_number LIKE 'SMK-RCC-%'");
   expect(proverText).toContain("receipt residue remained");
   expect(proverText).toContain("--schema', 'public,auth'");
+  expect(proverText).toContain('rmSync(LIVE_SCHEMA, { force: true })');
+  expect(proverText).toContain('const preApplyViolations = psqlValue');
+  expect(proverText).toContain("if (preApplyViolations !== '0')");
+  expect(proverText).toContain('RETURN_CREDIT_POSTAPPLY_LIVE_PASS');
 }
 
 function assertInvariantGuards(predicateText: string) {
@@ -126,7 +130,8 @@ function assertReturnsDocGuards(checkText: string, rpcText: string) {
     'documentedStatuses.length === returnsStatuses.length',
     'documentedStatuses.every((status, index) => status === returnsStatuses[index])',
   ]) expect(checkText).toContain(anchor);
-  expect(rpcText).toContain('**WRITTEN, NOT APPLIED LIVE:**');
+  expect(rpcText).toContain('**APPLIED LIVE 2026-08-12:**');
+  expect(rpcText).toContain('ledger version `20260812212323`');
   expect(rpcText).toContain('20260812130145_bind_return_receipts_to_intent_and_restore_overdue.sql');
 }
 
@@ -287,6 +292,10 @@ describe('return/credit remediation durable guards', () => {
       "invoice_number LIKE 'SMK-RCC-%'",
       'receipt residue remained',
       "--schema', 'public,auth'",
+      'rmSync(LIVE_SCHEMA, { force: true })',
+      'const preApplyViolations = psqlValue',
+      "if (preApplyViolations !== '0')",
+      'RETURN_CREDIT_POSTAPPLY_LIVE_PASS',
     ]) {
       const mutated = realSchemaProver.split(anchor).join('__REMOVED_GUARD__');
       expect(() => assertExecutableProofGuards(smoke, mutated)).toThrow();
@@ -321,6 +330,7 @@ describe('return/credit remediation durable guards', () => {
   });
 
   it('fails closed when the Returns status registry or exact retry rollout state drifts', () => {
+    assertReturnsDocGuards(docDriftCheck, rpcDoc);
     for (const anchor of [
       'Array.isArray(returnsStatuses) && returnsStatuses.length > 0',
       'documentedStatuses.length === returnsStatuses.length',
@@ -329,7 +339,8 @@ describe('return/credit remediation durable guards', () => {
       expect(() => assertReturnsDocGuards(docDriftCheck.replace(anchor, '__REMOVED_GUARD__'), rpcDoc)).toThrow();
     }
     for (const anchor of [
-      '**WRITTEN, NOT APPLIED LIVE:**',
+      '**APPLIED LIVE 2026-08-12:**',
+      'ledger version `20260812212323`',
       '20260812130145_bind_return_receipts_to_intent_and_restore_overdue.sql',
     ]) {
       expect(() => assertReturnsDocGuards(docDriftCheck, rpcDoc.replace(anchor, '__REMOVED_GUARD__'))).toThrow();
