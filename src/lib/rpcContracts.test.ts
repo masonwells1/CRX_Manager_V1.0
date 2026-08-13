@@ -2248,30 +2248,12 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // window: an RPC introduced by a PR migration that is not yet live belongs
   // here until the next truthful live type regeneration.
 
-  // Wave A fix #4 (20260813050000, parked). It accepts p_idempotency_key and
-  // routes it through check_idempotency/save_idempotency, but it cannot appear
-  // in the generated types until the migration applies, so the inventory sees a
-  // mutator with no declared key. This is exactly the pre-apply window this
-  // bucket exists for; the staleness test above deletes it for us by failing the
-  // moment the RPC shows up in the generated types.
-  'correct_job_commission_split',
-
-  // Wave A fix #1 (20260813010000, parked). Owner-only implementation half of
-  // the public create_direct_order RPC, after a sibling session split that
-  // function into a below-cost-approval wrapper plus this impl. It declares
-  // p_idempotency_key and routes it through check_idempotency/save_idempotency
-  // under the public 'create_direct_order' operation, so replay safety is real
-  // and shared with the wrapper.
-  //
-  // Two ways this entry differs from the one above, recorded so nobody has to
-  // re-derive them. (1) It is not merely pre-apply: the impl is deliberately
-  // owner-only and never PostgREST-exposed, so it can never appear in the
-  // generated types and the staleness test above will never retire it for us.
-  // (2) Once this migration is applied and the registry high-water passes
-  // 20260813010000, the impl also drops out of the discovered inventory
-  // entirely, at which point this entry is inert. Delete it then; it is not
-  // load-bearing after apply.
-  '_create_direct_order_below_cost_impl_20260810',
+  // Wave A drafts are parked under scripts/.staging-migrations and therefore
+  // intentionally absent from the active migration inventory. Restore their
+  // classifications only when the drafts are promoted back to
+  // supabase/migrations:
+  // - correct_job_commission_split (20260813050000)
+  // - _create_direct_order_below_cost_impl_20260810 (20260813010000)
 ]);
 
 /**
@@ -2300,17 +2282,15 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
     'idempotency infrastructure helper (sections 2-6 closeout): claims a bound lifecycle key for replay; direct client EXECUTE is revoked',
   // Pruned on the 2026-08-11 merge of origin/main, per the standing rule below that a
   // dead exemption silently pre-suppresses any future RPC reusing the name:
-  //   _guard_job_commission_split_immutable was pruned when its original timestamp
-  //     fell behind the registry high-water. Wave A remediation re-stamped it to
-  //     20260813050000, so it is pending/discovered again and is classified below.
+  //   _guard_job_commission_split_immutable remains parked with Wave A under
+  //     scripts/.staging-migrations. Restore its narrow trigger exemption only
+  //     when 20260813050000 is promoted back to supabase/migrations.
   //   _crx_payout_assert_impl_20260809 / _crx_payout_assert_replay_20260809 — 20260811130000
   //     landed on main and applied live; it drops both helpers before finishing.
   _insert_commissions_for_job: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _insert_commissions_for_order: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
-  _guard_job_commission_split_immutable:
-    'trigger-only immutable-split guard; the idempotent correct_job_commission_split RPC owns the governed mutation and direct EXECUTE is revoked',
-  _guard_delivery_completion_authorized:
-    'trigger-only completion-provenance guard; public complete_delivery owns the idempotent, row-bound governed mutation and direct EXECUTE is revoked',
+  // _guard_delivery_completion_authorized is also parked with Wave A in
+  // 20260813060000. Restore its trigger exemption when that draft is promoted.
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',
   // Pruned on 2026-08-12 when 20260812130145 applied live (ledger version
   // 20260812212323) and the registry high-water moved past it:
