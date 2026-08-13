@@ -5,6 +5,7 @@ All significant development milestones, in reverse chronological order.
 ## Unreleased
 
 - Security: quote-version restores now require a server-issued trust marker. Existing snapshots remain visible but are intentionally not restored into money-bearing quote lines, because their pre-boundary provenance cannot be proven. The migration aborts on any pre-existing marker state and pins the complete public-to-private restore route; smoke parsing now accepts only the real PostgreSQL terminal error message.
+- Security follow-up: the trust migration now refuses to run until the earlier RPC-only write boundary is demonstrably present; the standing sweep permits the new marker update only under an exact SECURITY DEFINER contract, and smoke parsing recognizes Windows absolute `psql` paths.
 - Safety tooling: repaired the one-use live-SQL maintenance producer so its strict command matcher is generated deterministically across Windows line endings; its protected-output hash and 119 focused regression assertions now validate again.
 
 ## 2026-08-13 — Round-5 hardening of the quote_versions write-boundary migration…

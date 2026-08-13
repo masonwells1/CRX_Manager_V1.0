@@ -197,7 +197,7 @@ export function interpretResult(outputText) {
   // smoke-commission-payout-intent-binding-live.sql — 'SMOKE_PASS_ROLLBACK
   // (9/9 incl. cross-actor)' and the 8/8 form — still match, because the suffix
   // follows the token rather than preceding it.
-  const postgresErrorMessage = (line) => line.match(/^(?:psql:[^:]+:\d+: )?ERROR:\s+(.+)$/)?.[1] || null;
+  const postgresErrorMessage = (line) => line.match(/^(?:psql:.*:\d+: )?ERROR:\s+(.+)$/)?.[1] || null;
   if (lines.map(postgresErrorMessage).some((message) => message?.startsWith(PASS_TOKEN))) return { pass: true };
   // SMOKE_PREREQ means "the change this chain proves is not deployed on THIS
   // database" — a chain gated behind an unapplied migration, not a regression.

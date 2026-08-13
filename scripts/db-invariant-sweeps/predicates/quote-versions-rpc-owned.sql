@@ -502,7 +502,7 @@ SELECT 'quote_versions:non-bypassing-writer' AS violation_key,
 UNION ALL
 
 SELECT 'quote_versions:second-authoritative-writer' AS violation_key,
-       'a second RLS-bypassing routine writes public.quote_versions — snapshot_data is an authoritative cost basis and this boundary is reasoned around exactly one author of it' AS reason
+       'an unpinned RLS-bypassing routine writes public.quote_versions — snapshot_data is an authoritative cost basis; the only allowed second writer is the exact create_quote_version trust-marker update guarded immediately above' AS reason
  WHERE EXISTS (
    SELECT 1
      FROM pg_proc p
@@ -512,7 +512,59 @@ SELECT 'quote_versions:second-authoritative-writer' AS violation_key,
       AND p.prosecdef
       AND r.rolbypassrls
       AND NOT (n.nspname = 'public' AND p.proname = '_create_quote_version_owner_impl')
+      -- 20260813090000 adds a deliberately narrow second writer: after the
+      -- owner-only implementation has constructed a fresh snapshot, the public
+      -- create wrapper can set only that row's null trust marker. Do not exempt
+      -- by name: any signature, definer, owner, search_path, browser-grant, or
+      -- body drift makes it an authoritative writer again and reports here.
+      AND NOT (
+        p.oid = 'public.create_quote_version(uuid,uuid,text,text,bigint)'::regprocedure
+        AND EXISTS (
+          SELECT 1 FROM unnest(coalesce(p.proconfig, '{}'::text[])) AS config(value)
+          WHERE replace(config.value, ' ', '') = 'search_path=public,pg_temp'
+        )
+        AND NOT has_function_privilege('anon', 'public.create_quote_version(uuid,uuid,text,text,bigint)', 'EXECUTE')
+        AND has_function_privilege('authenticated', 'public.create_quote_version(uuid,uuid,text,text,bigint)', 'EXECUTE')
+        AND p.prosrc LIKE '%_create_quote_version_owner_impl%'
+        AND regexp_count(
+          p.prosrc,
+          'update\s+public\.quote_versions\s+set\s+restore_trusted_at\s*=\s*clock_timestamp\(\)\s+where\s+id\s*=\s*v_version_id\s+and\s+quote_id\s*=\s*p_quote_id\s+and\s+restore_trusted_at\s+is\s+null',
+          'i'
+        ) = 1
+        AND p.prosrc !~* '(insert\s+into|delete\s+from|merge\s+into)\s+(only\s+)?("?public"?\s*\.\s*)?"?quote_versions\M'
+      )
       AND p.prosrc ~* '(insert\s+into|update|delete\s+from|merge\s+into)\s+(only\s+)?("?public"?\s*\.\s*)?"?quote_versions\M'
+ )
+
+UNION ALL
+
+-- The exception above is intentionally checked as its own named contract too.
+-- It may UPDATE only the freshly returned owner-written row, only from NULL to
+-- clock_timestamp(), and only through the existing authenticated public
+-- wrapper. If this exact shape drifts, the writer scan must stop exempting it
+-- before a broadened marker update can bless arbitrary legacy snapshots.
+SELECT 'create_quote_version:trusted-marker-writer-contract' AS violation_key,
+       'create_quote_version may be the sole additional RLS-bypassing quote_versions writer only as the pinned SECURITY DEFINER, authenticated-only, search_path-pinned marker update after _create_quote_version_owner_impl' AS reason
+ WHERE NOT EXISTS (
+   SELECT 1
+     FROM pg_proc p
+     JOIN pg_roles r ON r.oid = p.proowner
+    WHERE p.oid = 'public.create_quote_version(uuid,uuid,text,text,bigint)'::regprocedure
+      AND p.prosecdef
+      AND r.rolbypassrls
+      AND EXISTS (
+        SELECT 1 FROM unnest(coalesce(p.proconfig, '{}'::text[])) AS config(value)
+        WHERE replace(config.value, ' ', '') = 'search_path=public,pg_temp'
+      )
+      AND NOT has_function_privilege('anon', 'public.create_quote_version(uuid,uuid,text,text,bigint)', 'EXECUTE')
+      AND has_function_privilege('authenticated', 'public.create_quote_version(uuid,uuid,text,text,bigint)', 'EXECUTE')
+      AND p.prosrc LIKE '%_create_quote_version_owner_impl%'
+      AND regexp_count(
+        p.prosrc,
+        'update\s+public\.quote_versions\s+set\s+restore_trusted_at\s*=\s*clock_timestamp\(\)\s+where\s+id\s*=\s*v_version_id\s+and\s+quote_id\s*=\s*p_quote_id\s+and\s+restore_trusted_at\s+is\s+null',
+        'i'
+      ) = 1
+      AND p.prosrc !~* '(insert\s+into|delete\s+from|merge\s+into)\s+(only\s+)?("?public"?\s*\.\s*)?"?quote_versions\M'
  )
 
 UNION ALL

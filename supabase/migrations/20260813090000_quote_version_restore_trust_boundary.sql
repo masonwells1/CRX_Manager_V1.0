@@ -14,6 +14,34 @@ SET LOCAL lock_timeout = '10s';
 
 DO $precond$
 BEGIN
+  -- This marker is meaningful only after 20260813080000 has made version
+  -- writes RPC-owned. Timestamp ordering is not an apply-order guarantee: if
+  -- this file were applied first, a browser could insert a row and supply its
+  -- own non-null marker. Fail closed on the complete live boundary instead.
+  IF EXISTS (
+    SELECT 1 FROM pg_policy p
+    WHERE p.polrelid = 'public.quote_versions'::regclass
+      AND p.polcmd IN ('a', 'w', 'd', '*')
+  ) OR has_table_privilege('authenticated', 'public.quote_versions', 'INSERT')
+     OR has_table_privilege('authenticated', 'public.quote_versions', 'UPDATE')
+     OR has_table_privilege('authenticated', 'public.quote_versions', 'DELETE')
+     OR has_table_privilege('authenticated', 'public.quote_versions', 'TRUNCATE')
+     OR has_table_privilege('authenticated', 'public.quote_versions', 'TRIGGER')
+     OR has_table_privilege('authenticated', 'public.quote_versions', 'REFERENCES')
+     OR has_table_privilege('anon', 'public.quote_versions', 'INSERT')
+     OR has_table_privilege('anon', 'public.quote_versions', 'UPDATE')
+     OR has_table_privilege('anon', 'public.quote_versions', 'DELETE')
+     OR has_table_privilege('anon', 'public.quote_versions', 'TRUNCATE')
+     OR has_table_privilege('anon', 'public.quote_versions', 'TRIGGER')
+     OR has_table_privilege('anon', 'public.quote_versions', 'REFERENCES')
+     OR has_any_column_privilege('authenticated', 'public.quote_versions', 'INSERT')
+     OR has_any_column_privilege('authenticated', 'public.quote_versions', 'UPDATE')
+     OR has_any_column_privilege('authenticated', 'public.quote_versions', 'REFERENCES')
+     OR has_any_column_privilege('anon', 'public.quote_versions', 'INSERT')
+     OR has_any_column_privilege('anon', 'public.quote_versions', 'UPDATE')
+     OR has_any_column_privilege('anon', 'public.quote_versions', 'REFERENCES') THEN
+    RAISE EXCEPTION 'PRECOND: 20260813080000 quote_versions RPC-only write boundary is not fully present; refuse to create a forgeable trust marker';
+  END IF;
   IF EXISTS (
     SELECT 1 FROM pg_attribute a
     WHERE a.attrelid = 'public.quote_versions'::regclass
@@ -298,6 +326,30 @@ BEGIN
     SELECT 1 FROM public.quote_versions WHERE restore_trusted_at IS NOT NULL
   ) THEN
     RAISE EXCEPTION 'POSTCOND: trust marker must have no default/generated value and must leave every pre-boundary version untrusted';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_policy p
+    WHERE p.polrelid = 'public.quote_versions'::regclass
+      AND p.polcmd IN ('a', 'w', 'd', '*')
+  ) OR has_table_privilege('authenticated', 'public.quote_versions', 'INSERT')
+     OR has_table_privilege('authenticated', 'public.quote_versions', 'UPDATE')
+     OR has_table_privilege('authenticated', 'public.quote_versions', 'DELETE')
+     OR has_table_privilege('authenticated', 'public.quote_versions', 'TRUNCATE')
+     OR has_table_privilege('authenticated', 'public.quote_versions', 'TRIGGER')
+     OR has_table_privilege('authenticated', 'public.quote_versions', 'REFERENCES')
+     OR has_table_privilege('anon', 'public.quote_versions', 'INSERT')
+     OR has_table_privilege('anon', 'public.quote_versions', 'UPDATE')
+     OR has_table_privilege('anon', 'public.quote_versions', 'DELETE')
+     OR has_table_privilege('anon', 'public.quote_versions', 'TRUNCATE')
+     OR has_table_privilege('anon', 'public.quote_versions', 'TRIGGER')
+     OR has_table_privilege('anon', 'public.quote_versions', 'REFERENCES')
+     OR has_any_column_privilege('authenticated', 'public.quote_versions', 'INSERT')
+     OR has_any_column_privilege('authenticated', 'public.quote_versions', 'UPDATE')
+     OR has_any_column_privilege('authenticated', 'public.quote_versions', 'REFERENCES')
+     OR has_any_column_privilege('anon', 'public.quote_versions', 'INSERT')
+     OR has_any_column_privilege('anon', 'public.quote_versions', 'UPDATE')
+     OR has_any_column_privilege('anon', 'public.quote_versions', 'REFERENCES') THEN
+    RAISE EXCEPTION 'POSTCOND: quote_versions RPC-only write boundary regressed while creating the trust marker';
   END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_proc

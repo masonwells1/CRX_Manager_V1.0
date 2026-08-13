@@ -27,6 +27,11 @@ const migration = read(
   'migrations',
   '20260813080000_lock_quote_versions_writes_to_rpc.sql',
 );
+const restoreTrustMigration = read(
+  'supabase',
+  'migrations',
+  '20260813090000_quote_version_restore_trust_boundary.sql',
+);
 const predicate = read(
   'scripts',
   'db-invariant-sweeps',
@@ -575,6 +580,23 @@ describe('quote_versions write boundary — migration', () => {
   });
 });
 
+describe('quote_versions restore trust boundary — prerequisite', () => {
+  it('fails closed unless the earlier RPC-only write boundary is fully live', () => {
+    const precond = restoreTrustMigration.match(/DO \$precond\$[\s\S]*?\$precond\$;/)?.[0] ?? '';
+    expect(precond).not.toBe('');
+    expect(precond).toContain("p.polcmd IN ('a', 'w', 'd', '*')");
+    for (const role of ['authenticated', 'anon']) {
+      for (const privilege of ['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'TRIGGER', 'REFERENCES']) {
+        expect(precond).toContain(`has_table_privilege('${role}', 'public.quote_versions', '${privilege}')`);
+      }
+      for (const privilege of ['INSERT', 'UPDATE', 'REFERENCES']) {
+        expect(precond).toContain(`has_any_column_privilege('${role}', 'public.quote_versions', '${privilege}')`);
+      }
+    }
+    expect(precond).toContain('refuse to create a forgeable trust marker');
+  });
+});
+
 describe('quote_versions write boundary — standing predicate', () => {
   it('covers every branch of the boundary', () => {
     for (const key of [
@@ -630,6 +652,7 @@ describe('quote_versions write boundary — standing predicate', () => {
       'quote_versions:writer-scan-blinded',
       'quote_versions:non-bypassing-writer',
       'quote_versions:second-authoritative-writer',
+      'create_quote_version:trusted-marker-writer-contract',
       'quote_versions:inheritance-path',
       'quote_versions:service-role-write-lost',
     ]) {
@@ -651,6 +674,16 @@ describe('quote_versions write boundary — standing predicate', () => {
     // version creation while every other branch still reads healthy.
     expect(predicate).toContain('relforcerowsecurity');
     expect(predicate).toMatch(/has_table_privilege\(\s*r\.rolname,\s*'public\.quote_versions',\s*'INSERT'\s*\)/);
+  });
+
+  it('allows the post-boundary marker update only through its exact guarded writer contract', () => {
+    expect(predicateCode).toContain("'public.create_quote_version(uuid,uuid,text,text,bigint)'::regprocedure");
+    expect(predicateCode).toContain("'create_quote_version:trusted-marker-writer-contract' AS violation_key");
+    expect(predicateCode).toContain("'search_path=public,pg_temp'");
+    expect(predicateCode).toContain("'authenticated', 'public.create_quote_version(uuid,uuid,text,text,bigint)', 'EXECUTE'");
+    expect(predicateCode).toContain("'anon', 'public.create_quote_version(uuid,uuid,text,text,bigint)', 'EXECUTE'");
+    expect(predicateCode).toContain('restore_trusted_at');
+    expect(predicateCode).toContain('regexp_count(');
   });
 
   it('stays in lockstep with every privilege the migration revokes', () => {
