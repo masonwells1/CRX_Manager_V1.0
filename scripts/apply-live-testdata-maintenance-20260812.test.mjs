@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -8,6 +9,7 @@ import { pathToFileURL } from "node:url";
 
 import {
   buildMaintainedSource,
+  buildProducerProtectionSources,
   normalizeLineEndings,
   worktreeEntriesFromStatus,
 } from "./apply-live-testdata-maintenance-20260812.mjs";
@@ -33,10 +35,33 @@ assert.equal(
   "working-tree CRLF bytes normalize before Git-blob hashing",
 );
 
+const scratch = mkdtempSync(path.join(tmpdir(), "crx-live-guard-candidate-test-"));
+const producerProtection = buildProducerProtectionSources();
+assert.match(
+  producerProtection.outputs.codexGuard,
+  /apply-live-testdata-maintenance-20260812/,
+  "Codex guard output protects the one-use producer",
+);
+assert.match(
+  producerProtection.outputs.pushLib,
+  /scripts\\\/apply-live-testdata-maintenance-20260812/,
+  "push gate output classifies the one-use producer as risky",
+);
+assert.match(
+  producerProtection.outputs.codexGuard,
+  /gateMaintenanceProducerExecution/,
+  "Codex guard output binds producer execution to committed reviewed HEAD",
+);
+process.stdout.write(`producer protection candidate blobs: ${JSON.stringify(producerProtection.blobs)}\n`);
+for (const [name, source] of Object.entries(producerProtection.outputs)) {
+  const sourcePath = path.join(scratch, `${name}.mjs`);
+  writeFileSync(sourcePath, source, "utf8");
+  execFileSync(process.execPath, ["--check", sourcePath], { stdio: ["ignore", "pipe", "pipe"] });
+}
+
 const { output, blob } = buildMaintainedSource();
 assert.equal(blob, "bda5a0b744ac28dbd2059b38cd2bdf0e5890e31f", "pinned generated blob");
 
-const scratch = mkdtempSync(path.join(tmpdir(), "crx-live-guard-candidate-test-"));
 try {
   const candidatePath = path.join(scratch, "candidate.mjs");
   writeFileSync(candidatePath, output, "utf8");
@@ -131,7 +156,7 @@ try {
   }
 
   process.stdout.write(
-    `live-testdata maintenance candidate: ${blocked.length + allowed.length} classifier assertions + 4 producer assertions passed\n`,
+    `live-testdata maintenance candidate: ${blocked.length + allowed.length} classifier assertions + 9 producer assertions passed\n`,
   );
 } finally {
   rmSync(scratch, { recursive: true, force: true });

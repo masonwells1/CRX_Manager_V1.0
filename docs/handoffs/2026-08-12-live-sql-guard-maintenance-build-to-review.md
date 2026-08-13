@@ -22,9 +22,9 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
   `bda5a0b744ac28dbd2059b38cd2bdf0e5890e31f`, matched all three snippet SHA-256 values, and passed a
   Node module syntax check without changing the repository target.
 - `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 75 classifier assertions
-  against the generated module plus four producer assertions, including cross-platform line-ending
+  against the generated module plus nine producer assertions, including cross-platform line-ending
   normalization and all classifier defect
-  classes found by the first eighteen Sol reviews.
+  classes found by the first twenty Sol reviews.
 - The write mode refused the dirty build worktree even with Mason's dated token.
 - Current recovery proof passed ESLint, TypeScript typecheck, production build, all 4,466 executed
   Vitest assertions (123 skipped), all agent-workflow tests, agent health, dependency integrity,
@@ -41,6 +41,11 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
   branch after exact hash checks and the dated approval token. Detached HEAD and detached worktree
   states are rejected and are not approved branch states. Its real write mode has intentionally not
   run; it must not run until this producer itself is reviewed and merged.
+- The producer also contains a one-time, exact-blob `--protect-producer` bootstrap for the outer Codex
+  direct-edit guard and shared risky-path classifier. That mode must receive its own clean exact-head
+  review before it runs. Its only outputs are the two pinned guard blobs; once installed, later edits
+  to this producer are directly blocked, every producer change requires exact-head review, and any
+  producer execution requires a fresh proof matching the current committed HEAD and base.
 
 ## NOT STARTED
 
@@ -146,6 +151,11 @@ any later live migration apply still requires the repository's current explicit 
   so a `WITH` statement could hide a persistent `WHEN MATCHED THEN DELETE` from the target scanner.
   The matcher now recognizes both grammar forms, the persistent-merge classifier handles both captured
   verbs, and the exact customer-delete payload is pinned. A fresh exact-head review remains required.
+- The nineteenth exact-head Sol review was clean after the optional-`INTO` correction. The twentieth
+  review then found the governance bootstrap gap: the producer could reach a protected target while
+  remaining outside outer direct-edit and risky-path enforcement. The exact-blob protection mode now
+  installs both outer controls and requires current committed-head proof before future execution. A
+  fresh exact-head review of that bootstrap producer remains required before it runs.
 - GitHub checks and CodeRabbit must be complete and acceptable on the exact PR head.
 
 ## FIRST ACTION

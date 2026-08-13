@@ -19,7 +19,14 @@ write, so verification mode follows the same fail-closed cleanliness contract as
 blob verification normalizes Windows CRLF bytes before hashing, matching the producer's normalized
 assembly path and the reviewed Git blob on every checkout.
 
-Eighteen exact-head adversarial passes have progressively hardened the candidate before activation. Earlier
+The final governance review found a bootstrap flaw: the one-use producer could write the protected
+classifier but was not itself covered by the outer direct-edit or exact-review guards. Its new
+hash-pinned `--protect-producer` mode first verifies the exact committed inputs, then installs only
+the reviewed outer protections. After that one-time bootstrap, any later producer edit is blocked by
+the direct-write guard and is always classified as risky for exact-head review; executing the clean
+committed producer also requires a fresh Sol-high proof bound to the current HEAD and base.
+
+Twenty exact-head adversarial passes have progressively hardened the candidate before activation. Earlier
 passes closed a Unicode identifier boundary that could conceal destructive SQL and removed the
 unsafe assumption that any `pg_temp`-qualified DML is harmless: PostgreSQL temporary views can be
 updatable proxies for persistent tables. The candidate now permits temporary DML only for a base temp

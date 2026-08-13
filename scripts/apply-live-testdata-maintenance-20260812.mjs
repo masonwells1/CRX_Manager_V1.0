@@ -27,6 +27,19 @@ const EXPECTED_SNIPPET_SHA256 = {
   classify: "524e38a342f48e113821377434032b79fd76ace4db3fb1f268d637a3ec4cc8c4",
 };
 const APPROVAL = "--approved-by-mason=2026-08-12";
+const PROTECT_PRODUCER = "--protect-producer";
+const PROTECTED_SOURCES = {
+  codexGuard: [".codex", "hooks", "production-action-" + "guard.mjs"].join("/"),
+  pushLib: [".claude", "hooks", "codex-push-" + "lib.mjs"].join("/"),
+};
+const EXPECTED_PROTECTED_INPUT_BLOBS = {
+  codexGuard: "ffde9b188f7ec69c7d74ed1df6c631d7a595270b",
+  pushLib: "40c8857d4b6c37b6a89525efb1caf49e9c4215d1",
+};
+const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
+  codexGuard: "7ca5983e0a34e5940194688a538f4487c9003045",
+  pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
+};
 
 const OLD_CONSTANTS = [
   "const DDL_STMT_RE = /(?:^|;)\\s*(?:create(?!\\s+(?:temp|temporary)\\b)(?:\\s+or\\s+replace)?|alter|drop)\\s+\\S+/im;",
@@ -113,6 +126,52 @@ export function worktreeEntriesFromStatus(statusText) {
   return lines;
 }
 
+export function buildProducerProtectionSources() {
+  const sources = Object.fromEntries(Object.entries(PROTECTED_SOURCES).map(([key, relativePath]) => {
+    const value = readNormalized(relativePath);
+    const blob = gitBlob(value);
+    if (blob !== EXPECTED_PROTECTED_INPUT_BLOBS[key]) {
+      throw new Error(`refusing stale protected input ${relativePath}: expected ${EXPECTED_PROTECTED_INPUT_BLOBS[key]}, got ${blob}`);
+    }
+    return [key, value];
+  }));
+
+  const oldProtectedHarness = "(?:run-claude-review|write-codex-push-proof|write-apply-proofs|overnight-codex-gate)";
+  const newProtectedHarness = "(?:run-claude-review|write-codex-push-proof|write-apply-proofs|overnight-codex-gate|apply-live-testdata-maintenance-20260812)";
+  let codexGuard = replaceExactly(
+    sources.codexGuard,
+    oldProtectedHarness,
+    newProtectedHarness,
+    "Codex direct-edit protected producer list",
+  );
+
+  const constantsAnchor = "const PROTECTED_HARNESS_FRAGMENT_RE = new RegExp(`(?<![\\\\w.-])${PROTECTED_HARNESS_SOURCE}(?![\\\\w.-])`, \"i\");";
+  const constantsReplacement = `${constantsAnchor}\nconst MAINTENANCE_PRODUCER = "scripts/apply-live-testdata-maintenance-20260812.mjs";\nconst MAINTENANCE_PRODUCER_COMMAND_RE = /(?:^|[;&|]\\s*)(?:\"[^\"]*[\\\\/]node(?:\\.exe)?\"|'[^']*[\\\\/]node(?:\\.exe)?'|(?:\\S*[\\\\/])?node(?:\\.exe)?)\\s+(?:(?:--[a-z-]+(?:=[^\\s]+)?|-{1,2}[a-z-]+)\\s+)*(?:\"[^\"]*[\\\\/]|'[^']*[\\\\/]|\\S*[\\\\/])?scripts[\\\\/]apply-live-testdata-maintenance-20260812\\.mjs(?:[\"']|\\s|$)/i;`;
+  codexGuard = replaceExactly(codexGuard, constantsAnchor, constantsReplacement, "maintenance producer command constants");
+
+  const proofFunctionAnchor = "function shellWords(value) {";
+  const maintenanceGate = `function gateMaintenanceProducerExecution({ command, repoDir, nowMs, runGit }) {\n  if (!MAINTENANCE_PRODUCER_COMMAND_RE.test(command)) return { blocked: false };\n\n  let headSha;\n  let baseSha;\n  let headBlob;\n  let worktreeBlob;\n  let status;\n  try {\n    headSha = runGit([\"rev-parse\", \"HEAD\"], repoDir);\n    baseSha = runGit([\"rev-parse\", \"origin/main\"], repoDir);\n    status = runGit([\"status\", \"--porcelain\", \"--untracked-files=all\", \"--\", MAINTENANCE_PRODUCER], repoDir);\n    headBlob = runGit([\"rev-parse\", \`HEAD:\${MAINTENANCE_PRODUCER}\`], repoDir);\n    worktreeBlob = runGit([\"hash-object\", \`--path=\${MAINTENANCE_PRODUCER}\`, MAINTENANCE_PRODUCER], repoDir);\n  } catch (error) {\n    return denied(\`CODEX PRODUCTION GATE: cannot bind the maintenance producer to the current committed HEAD: \${error?.message || error}\`);\n  }\n  if (status || headBlob !== worktreeBlob) {\n    return denied(\"CODEX PRODUCTION GATE: the maintenance producer differs from its exact committed HEAD blob. Commit it, obtain a fresh exact-head review, and retry.\");\n  }\n\n  const proofPath = path.join(repoDir, \".claude\", \"session-state\", \`codex-review-\${headSha}.json\`);\n  let proof;\n  try {\n    proof = JSON.parse(readFileSync(proofPath, \"utf8\"));\n  } catch (error) {\n    return proofRequirement(headSha, \"execution of the protected maintenance producer\", \`Missing or unreadable exact-head proof: \${proofPath}\`, baseSha);\n  }\n  if (!proofValid(proof, headSha, nowMs, baseSha)) {\n    return proofRequirement(headSha, \"execution of the protected maintenance producer\", \"The exact-head Sol-high proof is stale or does not match the current HEAD/base.\", baseSha);\n  }\n  return { blocked: false };\n}\n\n`;
+  codexGuard = replaceExactly(codexGuard, proofFunctionAnchor, maintenanceGate + proofFunctionAnchor, "maintenance producer execution gate");
+
+  const commandAnchor = "  if (/[\\r\\n]/.test(command) && PROTECTED_HARNESS_FRAGMENT_RE.test(command)) {";
+  const commandReplacement = `  const maintenanceProducerGate = gateMaintenanceProducerExecution({ command, repoDir: actionRepoDir, nowMs, runGit });\n  if (maintenanceProducerGate.blocked) return maintenanceProducerGate;\n\n${commandAnchor}`;
+  codexGuard = replaceExactly(codexGuard, commandAnchor, commandReplacement, "maintenance producer command gate call");
+
+  const riskyAnchor = "  /(^|\\/)scripts\\/overnight-codex-gate\\.mjs$/i,";
+  const riskyReplacement = `${riskyAnchor}\n  /(^|\\/)scripts\\/apply-live-testdata-maintenance-20260812\\.mjs$/i,`;
+  const pushLib = replaceExactly(sources.pushLib, riskyAnchor, riskyReplacement, "risky producer path");
+
+  const outputs = { codexGuard, pushLib };
+  const blobs = Object.fromEntries(Object.entries(outputs).map(([key, value]) => [key, gitBlob(value)]));
+  for (const [key, blob] of Object.entries(blobs)) {
+    const expected = EXPECTED_PROTECTED_OUTPUT_BLOBS[key];
+    if (expected !== "TO_BE_FILLED" && blob !== expected) {
+      throw new Error(`generated protected output failed its reviewed blob check for ${PROTECTED_SOURCES[key]}: ${blob}`);
+    }
+  }
+  return { outputs, blobs };
+}
+
 function main() {
   const status = git(["status", "--short", "--branch"]);
   const worktreeEntries = worktreeEntriesFromStatus(status);
@@ -121,6 +180,7 @@ function main() {
   }
 
   const verifyOnly = process.argv.includes("--verify");
+  const protectProducer = process.argv.includes(PROTECT_PRODUCER);
   if (!verifyOnly && !process.argv.includes(APPROVAL)) {
     throw new Error(`this one-use producer requires the exact approval token ${APPROVAL}`);
   }
@@ -158,6 +218,27 @@ function main() {
       syntax_check: "pass",
       snippet_sha256: Object.fromEntries(Object.entries(snippets).map(([key, value]) => [key, sha256(value)])),
     }, null, 2) + "\n");
+    return;
+  }
+
+  if (protectProducer) {
+    const { outputs, blobs } = buildProducerProtectionSources();
+    const originals = Object.fromEntries(Object.entries(PROTECTED_SOURCES).map(([key, relativePath]) => [key, readNormalized(relativePath)]));
+    try {
+      for (const [key, relativePath] of Object.entries(PROTECTED_SOURCES)) {
+        writeFileSync(path.join(REPO_DIR, relativePath), outputs[key], "utf8");
+      }
+      for (const [key, relativePath] of Object.entries(PROTECTED_SOURCES)) {
+        const writtenBlob = gitBlob(readNormalized(relativePath));
+        if (writtenBlob !== blobs[key]) throw new Error(`post-write blob mismatch for ${relativePath}`);
+      }
+    } catch (error) {
+      for (const [key, relativePath] of Object.entries(PROTECTED_SOURCES)) {
+        writeFileSync(path.join(REPO_DIR, relativePath), originals[key], "utf8");
+      }
+      throw error;
+    }
+    process.stdout.write(`Protected reviewed maintenance producer (${JSON.stringify(blobs)}).\n`);
     return;
   }
 
