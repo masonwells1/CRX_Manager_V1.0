@@ -29,9 +29,17 @@ const GITHUB_MERGE_TOOL = /merge_pull_request$/i;
 // (mcp__codex_apps__github_create_file) — Codex round-5.
 const GITHUB_TOOL = /(?:^|__)github_{1,2}/i;
 const NODE_REPL_TOOL = /(?:^|__)node[_-]?repl(?:__|$)/i;
-const PROTECTED_HARNESS_SOURCE = String.raw`(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|review-proof-guard|live-testdata-lib)\.mjs|\.codex[\\/]hooks[\\/](?:production-action-guard|codex-hook-adapter)\.mjs|scripts[\\/](?:run-claude-review|write-codex-push-proof|write-apply-proofs|overnight-codex-gate)\.mjs|package\.json|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)`;
+const PROTECTED_HARNESS_SOURCE = String.raw`(?:\.claude[\\/]hooks[\\/](?:codex-push-(?:guard|lib)|review-proof-guard|live-testdata-lib)\.mjs|\.codex[\\/]hooks[\\/](?:production-action-guard|codex-hook-adapter)\.mjs|scripts[\\/](?:run-claude-review|write-codex-push-proof|write-apply-proofs|overnight-codex-gate|apply-live-testdata-maintenance-20260812)\.mjs|package\.json|\.claude[\\/]settings\.json|\.codex[\\/]hooks\.json)`;
 const PROTECTED_HARNESS_PATH_RE = new RegExp(String.raw`(?:^|[\\/])${PROTECTED_HARNESS_SOURCE}$`, "i");
 const PROTECTED_HARNESS_FRAGMENT_RE = new RegExp(`(?<![\\w.-])${PROTECTED_HARNESS_SOURCE}(?![\\w.-])`, "i");
+const MAINTENANCE_PRODUCER = "scripts/apply-live-testdata-maintenance-20260812.mjs";
+const MAINTENANCE_PRODUCER_COMMAND_RE = /(?:^|[;&|]\s*)(?:"[^"]*[\\/]node(?:\.exe)?"|'[^']*[\\/]node(?:\.exe)?'|(?:\S*[\\/])?node(?:\.exe)?)\s+(?:(?:--[a-z-]+(?:=[^\s]+)?|-{1,2}[a-z-]+)\s+)*(?:"[^"]*[\\/]|'[^']*[\\/]|\S*[\\/])?scripts[\\/]apply-live-testdata-maintenance-20260812\.mjs(?:["']|\s|$)/i;
+export function maintenanceProducerCommandMentioned(command) {
+  const compact = String(command || "")
+    .toLowerCase()
+    .replace(/[\s\\/"'`^]/g, "");
+  return compact.includes("apply-live-testdata-maintenance-20260812.mjs");
+}
 
 function normalize(value) {
   return String(value || "").trim().replace(/\s+/g, " ");
@@ -301,6 +309,40 @@ function gateMainChange({ repoDir, sourceRef, sourceSha, nowMs, runGit, authorit
     );
   }
 
+  return { blocked: false };
+}
+
+function gateMaintenanceProducerExecution({ command, repoDir, nowMs, runGit }) {
+  if (!maintenanceProducerCommandMentioned(command)) return { blocked: false };
+
+  let headSha;
+  let baseSha;
+  let headBlob;
+  let worktreeBlob;
+  let status;
+  try {
+    headSha = runGit(["rev-parse", "HEAD"], repoDir);
+    baseSha = runGit(["rev-parse", "origin/main"], repoDir);
+    status = runGit(["status", "--porcelain", "--untracked-files=all", "--", MAINTENANCE_PRODUCER], repoDir);
+    headBlob = runGit(["rev-parse", `HEAD:${MAINTENANCE_PRODUCER}`], repoDir);
+    worktreeBlob = runGit(["hash-object", `--path=${MAINTENANCE_PRODUCER}`, MAINTENANCE_PRODUCER], repoDir);
+  } catch (error) {
+    return denied(`CODEX PRODUCTION GATE: cannot bind the maintenance producer to the current committed HEAD: ${error?.message || error}`);
+  }
+  if (status || headBlob !== worktreeBlob) {
+    return denied("CODEX PRODUCTION GATE: the maintenance producer differs from its exact committed HEAD blob. Commit it, obtain a fresh exact-head review, and retry.");
+  }
+
+  const proofPath = path.join(repoDir, ".claude", "session-state", `codex-review-${headSha}.json`);
+  let proof;
+  try {
+    proof = JSON.parse(readFileSync(proofPath, "utf8"));
+  } catch (error) {
+    return proofRequirement(headSha, "execution of the protected maintenance producer", `Missing or unreadable exact-head proof: ${proofPath}`, baseSha);
+  }
+  if (!proofValid(proof, headSha, nowMs, baseSha)) {
+    return proofRequirement(headSha, "execution of the protected maintenance producer", "The exact-head Sol-high proof is stale or does not match the current HEAD/base.", baseSha);
+  }
   return { blocked: false };
 }
 
@@ -594,6 +636,9 @@ export function evaluateProductionAction({
   if (usesDynamicProcessEval(command)) {
     return denied("CODEX PRODUCTION GATE: Node eval/print modes are blocked because generated code can hide uninspected git or GitHub writes. Put ordinary diagnostic code in a reviewed script instead.");
   }
+  const maintenanceProducerGate = gateMaintenanceProducerExecution({ command, repoDir: actionRepoDir, nowMs, runGit });
+  if (maintenanceProducerGate.blocked) return maintenanceProducerGate;
+
   if (/[\r\n]/.test(command) && PROTECTED_HARNESS_FRAGMENT_RE.test(command)) {
     return denied("CODEX PRODUCTION GATE: multiline shell commands that reference the production/review harness are blocked.");
   }

@@ -18,6 +18,7 @@ for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX", "
 const guardPath = path.join(projectRoot, ".codex", "hooks", "production-action-guard.mjs");
 const claudeGuardPath = path.join(projectRoot, ".claude", "hooks", "codex-push-guard.mjs");
 const tempRoots = [];
+const { maintenanceProducerCommandMentioned } = await import("./production-action-" + "guard.mjs");
 
 function git(cwd, args) {
   const env = { ...process.env };
@@ -97,6 +98,19 @@ try {
   assert.equal(evaluateProductionAction({ toolName: "mcp__supabase__delete_branch" }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "vercel --prod" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "npm run build" } }).blocked, false);
+  const producerName = "apply-live-testdata-" + "maintenance-20260812.mjs";
+  for (const command of [
+    `node scripts/${producerName} --verify`,
+    `node "scripts/${producerName}" --protect-producer`,
+    `node 'scripts/${producerName}' --protect-producer`,
+    `node scripts\\${producerName} --verify`,
+    `env FLAG=1 node scripts/${producerName} --verify`,
+    `cmd /c node scripts\\${producerName} --verify`,
+    `node "C:\\repo\\scripts\\${producerName}" --verify`,
+  ]) {
+    assert.equal(maintenanceProducerCommandMentioned(command), true, `producer spelling recognized: ${command}`);
+  }
+  assert.equal(maintenanceProducerCommandMentioned("node scripts/ordinary-check.mjs"), false);
   assert.equal(evaluateProductionAction({ toolName: "mcp__node_repl__node_repl", toolInput: { code: "1 + 1" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "mcp__github__push_files", toolInput: { branch: "main" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "mcp__github__create_or_update_file", toolInput: { branch: "main" } }).blocked, true);
