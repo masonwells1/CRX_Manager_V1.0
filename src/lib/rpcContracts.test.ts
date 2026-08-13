@@ -1493,6 +1493,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'resolve_offline_action',
   'restore_cancelled_delivery',
   'restore_cancelled_order',
+  'restore_quote_version',
   'retire_inventory_item',
   'reverse_blend_ticket_approval',
   'reverse_completed_cycle_count',
@@ -1666,6 +1667,13 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // Its rollback smoke proves exact replay and changed-request rejection.
   generate_finance_charges: 'delegated',
   post_invoice: 'delegated',
+  // The public restore wrapper performs the caller, owner, and row-version
+  // checks before it delegates to the browser-inaccessible below-cost
+  // implementation. That implementation retains the one canonical
+  // operation-scoped replay cache; duplicating a cache lookup in the wrapper
+  // would split pre-existing client keys. The dedicated chain test pins both
+  // reachability and the public operation literal.
+  restore_quote_version: 'delegated',
   // The public wrapper authorizes active customer scope before delegating to
   // the directly non-executable implementation that owns canonical replay.
   save_invoice: 'delegated',
@@ -2610,6 +2618,8 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
     'trigger-only immutable-split guard; the idempotent correct_job_commission_split RPC owns the governed mutation and direct EXECUTE is revoked',
   _guard_delivery_completion_authorized:
     'trigger-only completion-provenance guard; public complete_delivery owns the idempotent, row-bound governed mutation and direct EXECUTE is revoked',
+  _restore_quote_version_below_cost_impl_20260810:
+    'private below-cost restore implementation; direct application-role EXECUTE is revoked and the public restore_quote_version wrapper performs actor and owner checks before this helper uses the one canonical operation-scoped replay cache',
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',
   // Pruned on 2026-08-12 when 20260812130145 applied live (ledger version
   // 20260812212323) and the registry high-water moved past it:

@@ -182,7 +182,7 @@ function printList(specs) {
 }
 
 /** PASS iff the chain's terminal error IS the pass token; otherwise FAIL + message. */
-function interpretResult(outputText) {
+export function interpretResult(outputText) {
   const lines = outputText.split(/\r?\n/).filter((l) => l.trim());
   // Anchored on the psql-rendered error, not on a bare substring — the same bug
   // class fixed for SMOKE_PREREQ below, but in the dangerous direction. A bare
@@ -197,7 +197,8 @@ function interpretResult(outputText) {
   // smoke-commission-payout-intent-binding-live.sql — 'SMOKE_PASS_ROLLBACK
   // (9/9 incl. cross-actor)' and the 8/8 form — still match, because the suffix
   // follows the token rather than preceding it.
-  if (lines.some((l) => new RegExp(`ERROR:\\s+${PASS_TOKEN}`).test(l))) return { pass: true };
+  const postgresErrorMessage = (line) => line.match(/^(?:psql:[^:]+:\d+: )?ERROR:\s+(.+)$/)?.[1] || null;
+  if (lines.map(postgresErrorMessage).some((message) => message?.startsWith(PASS_TOKEN))) return { pass: true };
   // SMOKE_PREREQ means "the change this chain proves is not deployed on THIS
   // database" — a chain gated behind an unapplied migration, not a regression.
   // Without this branch, --all reports a red FAIL on every environment that is
@@ -211,7 +212,7 @@ function interpretResult(outputText) {
   // downgrades a real failure to a skip. psql renders the raise as
   // `psql:file.sql:NN: ERROR:  SMOKE_PREREQ: ...`, so require the token to be
   // the immediate start of the error message.
-  const prereqLine = lines.find((l) => /ERROR:\s+SMOKE_PREREQ:/.test(l));
+  const prereqLine = lines.find((l) => postgresErrorMessage(l)?.startsWith('SMOKE_PREREQ:'));
   if (prereqLine) return { pass: false, prereq: true, message: prereqLine.trim() };
   const errLine =
     lines.find((l) => /SMOKE_FAIL|SMOKE_SETUP/.test(l)) ||
@@ -403,4 +404,8 @@ function main() {
   }
 }
 
-main();
+// Importers use the parser regression tests below without starting a smoke
+// run. The command-line entry point remains exactly this file.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
+}

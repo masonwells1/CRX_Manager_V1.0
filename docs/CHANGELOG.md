@@ -2,6 +2,10 @@
 
 All significant development milestones, in reverse chronological order.
 
+## Unreleased
+
+- Security: quote-version restores now require a server-issued trust marker. Existing snapshots remain visible but are intentionally not restored into money-bearing quote lines, because their pre-boundary provenance cannot be proven. The migration aborts on any pre-existing marker state and pins the complete public-to-private restore route; smoke parsing now accepts only the real PostgreSQL terminal error message.
+
 ## 2026-08-13 — Round-5 hardening of the quote_versions write-boundary migration…
 
 Round-5 hardening of the quote_versions write-boundary migration (20260813080000, still unapplied): the SECURITY DEFINER precondition now also requires a pinned search_path; the canonical-UUID recognition test is case-sensitive while the neighbouring 32-hex test deliberately stays case-insensitive; two POSTCOND read-backs added over the restore-side implementations; routine-count and framing corrections in the header, sweep predicate and migration-history row. Boundary suite 41 -> 42 tests, all four new guards mutation-tested to red. Full gate green: typecheck, lint, check:docs, SQL audit (0 violations), 4547 tests, build. No live database state was changed.

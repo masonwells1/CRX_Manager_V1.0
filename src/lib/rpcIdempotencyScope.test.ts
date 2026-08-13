@@ -251,6 +251,11 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // 20260812011000 and 20260812115236 became the first disk migrations to define
   // the function under its private name.
   _restore_quote_version_owner_impl: ['restore_quote_version'],
+  // Direct EXECUTE is revoked. The below-cost wrapper delegates to this same
+  // private restore implementation, which owns the operation-scoped replay
+  // lookup. It intentionally shares the public restore_quote_version cache so
+  // retries cannot strand pre-existing client keys in a second namespace.
+  _restore_quote_version_below_cost_impl_20260810: ['restore_quote_version'],
   // Direct EXECUTE is revoked (service_role only). This IS the original
   // public convert_quote_to_order body: migration 20260730235031 renamed it
   // with `ALTER FUNCTION ... RENAME TO _convert_quote_to_order_owner_impl`
@@ -570,6 +575,14 @@ describe('Idempotency operation literals in latest disk migrations', () => {
     const chain = delegationChain('restore_quote_version');
     expect(chain.length).toBeGreaterThan(1);
     expect(chain.some((b) => /operation\s*=\s*'restore_quote_version'/i.test(b))).toBe(true);
+    // 20260813090000 adds a trust boundary inside the same canonical restore
+    // implementation. Keep that failure closed after a validated replay but
+    // before the legacy snapshot can reach the restore writer.
+    const trustBoundary = chain.find((b) => /QUOTE_VERSION_LEGACY_UNTRUSTED/.test(b));
+    expect(trustBoundary).toBeDefined();
+    expect(trustBoundary!.indexOf('check_idempotency')).toBeLessThan(
+      trustBoundary!.indexOf('QUOTE_VERSION_LEGACY_UNTRUSTED'),
+    );
     const foreign = chain
       .filter((b) => /idempotency_keys/i.test(b))
       .flatMap((b) => operationLiterals(b))
