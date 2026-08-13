@@ -2,6 +2,16 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-13 — SQL-validator mutation tests run the real Bash on Windows
+
+PR #364's approved-set mutation suite now resolves Git Bash beside the active
+Windows `git.exe` instead of invoking the WSL launcher that PowerShell exposes
+as `bash`. A missing shell now throws instead of producing empty output that the
+test can misclassify. Fixture cleanup also gets bounded retries and tolerates a
+remaining Windows `EPERM`/`EBUSY`: some Windows runners retain an MSYS Bash
+fixture handle until Node exits, while every case remains isolated in its own
+`mkdtemp` tree. Neither change alters validator acceptance.
+
 ## 2026-08-13 — A string literal handed to EXECUTE is SQL, and a type change is a rewrite
 
 Round 29 of adversarial review on PR #364, two High findings, one per guard.

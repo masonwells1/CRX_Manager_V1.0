@@ -11,7 +11,15 @@
  * Each fixture is a synthetic migration written into a scratch directory, run
  * through the real script, and classified by what the script printed for it.
  */
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync, copyFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +29,26 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, 'validate-sql-migrations.sh');
 const HEX = 'a'.repeat(64);
 const OTHER_HEX = 'b'.repeat(64);
+
+function resolveBashExecutable() {
+  if (process.platform !== 'win32') return 'bash';
+
+  const whereGit = spawnSync('where.exe', ['git.exe'], { encoding: 'utf8' });
+  for (const gitPath of (whereGit.stdout || '').split(/\r?\n/).filter(Boolean)) {
+    const candidate = join(dirname(dirname(gitPath.trim())), 'bin', 'bash.exe');
+    if (existsSync(candidate)) return candidate;
+  }
+
+  throw new Error('Git Bash was not found beside any git.exe on PATH');
+}
+
+const BASH = resolveBashExecutable();
+
+function runBash(args, options) {
+  const result = spawnSync(BASH, args, options);
+  if (result.error) throw result.error;
+  return result;
+}
 
 /**
  * process.env with every GIT_* variable stripped.
@@ -43,6 +71,31 @@ function envWithoutGit() {
   return Object.fromEntries(
     Object.entries(process.env).filter(([k]) => !k.toUpperCase().startsWith('GIT_')),
   );
+}
+
+/**
+ * Remove a fixture tree after Bash exits.
+ *
+ * On Windows, MSYS Bash can retain a directory handle for a fraction of a
+ * second after spawnSync returns. Node's recursive remover retries EPERM only
+ * when maxRetries is non-zero; without that bound the mutation suite aborts
+ * during cleanup before it can report the validator assertions.
+ *
+ * @param {string} dir fixture root
+ */
+function removeFixtureTree(dir) {
+  try {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  } catch (error) {
+    const code = error && typeof error === 'object' && 'code' in error ? error.code : null;
+    if (process.platform === 'win32' && (code === 'EPERM' || code === 'EBUSY')) {
+      // Some Windows runners retain fixture handles until this Node process
+      // exits. Every fixture uses mkdtemp, so leaving that one isolated tree
+      // for the OS temp cleaner cannot affect another case.
+      return;
+    }
+    throw error;
+  }
 }
 
 /**
@@ -1985,13 +2038,13 @@ function runEditedGrandfather() {
     `${GRANDFATHERED_BODY}\n-- a later edit, however small\n`,
     'utf8',
   );
-  const res = spawnSync('bash', [SCRIPT, '--max-violations=999'], {
+  const res = runBash([SCRIPT, '--max-violations=999'], {
     cwd: dir,
     encoding: 'utf8',
     env: envWithoutGit(),
   });
   const out = `${res.stdout || ''}\n${res.stderr || ''}`;
-  rmSync(dir, { recursive: true, force: true });
+  removeFixtureTree(dir);
 
   const got = classify(out, GRANDFATHERED);
   if (got === 'violation') return [];
@@ -2053,7 +2106,7 @@ function runChangedOnlyIgnoresManifests() {
     writeFileSync(join(migrations, GRANDFATHERED), GRANDFATHERED_BODY, 'utf8');
 
     const runScan = (extra) => {
-      const res = spawnSync('bash', [SCRIPT, ...extra], { cwd: dir, encoding: 'utf8', env: envWithoutGit() });
+      const res = runBash([SCRIPT, ...extra], { cwd: dir, encoding: 'utf8', env: envWithoutGit() });
       return `${res.stdout || ''}\n${res.stderr || ''}`;
     };
 
@@ -2096,7 +2149,7 @@ function runChangedOnlyIgnoresManifests() {
       failures.push('  round-26: the full-scan fallback lost the grandfather manifest');
     }
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    removeFixtureTree(dir);
   }
   return failures;
 }
@@ -2153,12 +2206,12 @@ function runTriggerFanoutFailsClosed() {
         writeFileSync(join(dir, 'supabase', 'migrations', name), sql, 'utf8');
         writeOneShotRegistry(dir, [name.replace(/\.sql$/, '')]);
         writeFileSync(manifestPath, manifest, 'utf8');
-        const res = spawnSync('bash', [mirroredScript, '--max-violations=999'], {
+        const res = runBash([mirroredScript, '--max-violations=999'], {
           cwd: dir, encoding: 'utf8', env: envWithoutGit(),
         });
         return { out: `${res.stdout || ''}\n${res.stderr || ''}`, name };
       } finally {
-        rmSync(dir, { recursive: true, force: true });
+        removeFixtureTree(dir);
       }
     };
 
@@ -2205,7 +2258,7 @@ function runTriggerFanoutFailsClosed() {
     expect('MUTANT: with the fan-out emptied the order_items attack survives',
       json(gutted), fanoutBlock('order_items', 'total_price'), null);
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    removeFixtureTree(root);
   }
   return failures;
 }
@@ -2240,7 +2293,7 @@ function run() {
   writeFileSync(join(migrations, GRANDFATHERED), GRANDFATHERED_BODY, 'utf8');
   writeFileSync(join(migrations, BACKDATED), GRANDFATHERED_BODY, 'utf8');
 
-  const res = spawnSync('bash', [SCRIPT, '--max-violations=999'], {
+  const res = runBash([SCRIPT, '--max-violations=999'], {
     cwd: dir,
     encoding: 'utf8',
     env: envWithoutGit(),
@@ -2280,7 +2333,7 @@ function run() {
     );
   }
 
-  rmSync(dir, { recursive: true, force: true });
+  removeFixtureTree(dir);
   failures.push(...runEditedGrandfather());
   failures.push(...runChangedOnlyIgnoresManifests());
   failures.push(...runTriggerFanoutFailsClosed());
