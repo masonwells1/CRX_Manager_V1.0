@@ -2117,6 +2117,10 @@ function routineExplicitlyNonAuthenticated(structuralSql, fromIndex, routineName
   );
   let grant;
   while ((grant = grantRe.exec(later)) !== null) {
+    // PostgreSQL decodes U&"..." role identifiers before grant resolution.
+    // Do not attempt a partial decoder here: an opaque grantee might be the
+    // authenticated role, so it must keep the routine under actor review.
+    if (/U&\s*"/i.test(grant[1])) return false;
     if (/\b(?:public|authenticated)\b/i.test(grant[1])) return false;
   }
   return true;

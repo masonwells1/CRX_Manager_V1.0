@@ -26,7 +26,9 @@ EXECUTE, and with nullable actor arguments that first prove non-null before a
 `<>` mismatch check; ambiguous grants and null-unsafe comparisons still fail
 closed. A nested cleanup handler no longer obscures an already-run outer actor
 refusal, while an outer handler still fails closed. Eight regressions pin those
-cases. The full focused hook suite now passes 378 assertions.
+cases. Unicode-escaped later EXECUTE grantees are now treated as opaque rather
+than trusted-private, so an encoded authenticated grant cannot bypass review.
+The full focused hook suite now passes 380 assertions.
 
 ## 2026-08-12 — Actor-binding routine modes use exact schema identity
 
