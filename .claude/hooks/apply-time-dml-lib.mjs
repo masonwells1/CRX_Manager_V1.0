@@ -498,12 +498,17 @@ function targetsFromCode(code, literals) {
   const EXEC_OPERAND_READABLE = /^''\s*$/;
   const EXEC_STMT = /\bexecute\s+/g;
   let xm;
+  // ROUND 29. Whether this code runs dynamic SQL at all. A readable operand no
+  // longer ends the analysis — see `applyTimeWriteTargets`, which reads the
+  // literals as SQL — so the fact has to leave this function.
+  let dynamicExec = false;
   while ((xm = EXEC_STMT.exec(s)) !== null) {
     // `CREATE TRIGGER ... EXECUTE FUNCTION f()` and `GRANT/REVOKE EXECUTE ON
     // FUNCTION f` spell EXECUTE without running any dynamic SQL.
     const rest = s.slice(xm.index + xm[0].length);
     if (/^(function|procedure)\b/.test(rest)) continue;
     if (inGrantOrRevoke(s, xm.index)) continue;
+    dynamicExec = true;
     // `EXECUTE <expr> [INTO target] [USING args]` — only the expression matters.
     const stop = scanTo(s, xm.index + xm[0].length, ["into", "using"]);
     if (!EXEC_OPERAND_READABLE.test(s.slice(xm.index + xm[0].length, stop.at).trim())) {
@@ -519,7 +524,7 @@ function targetsFromCode(code, literals) {
     if (FORMAT_PLACEHOLDER.test(rest.trim())) unresolved = true;
   }
 
-  return { targets, tables, dynamicWrites, unresolved: unresolved || unparsedUpsert };
+  return { targets, tables, dynamicWrites, unresolved: unresolved || unparsedUpsert, dynamicExec };
 }
 
 // Which of `defined` does this code actually invoke? A name followed by `(` is
@@ -627,6 +632,20 @@ function runForEffectRegion(stmt) {
   let prev;
   do { prev = rest; rest = rest.replace(BLOCK_LEAD, ""); } while (rest !== prev);
   return RUNS_FOR_EFFECT.test(rest) ? rest : "";
+}
+
+// ROUND 29. The verbs that begin a statement PostgreSQL will run. Used to tell
+// a string literal that is SQL from one that is a comment, an error message or
+// a column default. Deliberately wider than the write verbs: a literal handed to
+// EXECUTE may call a routine, rewrite a column's type, or define a trigger, and
+// none of those spells UPDATE.
+const STATEMENT_HEAD = /^(select|with|call|perform|do|update|insert|delete|merge|truncate|copy|alter|create|drop|grant|revoke|comment|refresh|set|reset|execute|lock|analyze|vacuum|reindex|cluster|values|explain)\b/;
+
+function readsAsStatement(text) {
+  let rest = String(text).trim().toLowerCase();
+  let prev;
+  do { prev = rest; rest = rest.replace(BLOCK_LEAD, ""); } while (rest !== prev);
+  return STATEMENT_HEAD.test(rest);
 }
 
 // Names that are followed by `(` without being a call to a routine whose body we
@@ -752,10 +771,13 @@ export function applyTimeWriteTargets(sql) {
   // more than this module can do honestly. It unions them instead — every body
   // that could be the one being called is counted, which can only over-report.
   const byName = new Map();
-  for (const r of routines) {
-    if (!byName.has(r.name)) byName.set(r.name, []);
-    byName.get(r.name).push(r);
-  }
+  const defineRoutines = (list) => {
+    for (const r of list) {
+      if (!byName.has(r.name)) byName.set(r.name, []);
+      byName.get(r.name).push(r);
+    }
+  };
+  defineRoutines(routines);
 
   // ROUND 28. Triggers this migration attaches, and the ones a write has
   // already fired. A trigger whose relation is written runs its function, so
@@ -763,6 +785,47 @@ export function applyTimeWriteTargets(sql) {
   // body is not in this file it joins the unknown calls instead, because
   // nothing here can say what a database-resident body writes.
   const attachments = triggerAttachments(code);
+
+  // ROUND 29. A string literal handed to EXECUTE is SQL, and the only thing this
+  // module did with one was scan it for a bare DML verb. So
+  //
+  //     EXECUTE 'SELECT public.tmp_fix()'
+  //
+  // reported no targets, no unknown calls and unresolved=false — a call is not a
+  // DML verb — while PostgreSQL ran a function that rewrites money rows. The same
+  // silence covered `EXECUTE 'ALTER TABLE public.orders ALTER COLUMN total TYPE
+  // numeric USING ...'`, which rewrites every row of the table.
+  //
+  // Mapping an EXECUTE back to its own operand is not reliable here: a deferred
+  // routine body emits `''` into `code` without pushing a literal, and a nested
+  // `$$` body contributes literals whose positions are relative to its own code.
+  // So position is not used. Instead, once a body is known to run dynamic SQL at
+  // all, EVERY apply-time literal in it that reads as a statement is parsed as
+  // SQL and folded in — its writes, its routine definitions, its trigger
+  // attachments and the calls it makes. A body with no runnable EXECUTE is
+  // untouched, which is what keeps this affordable: a literal there is a comment
+  // or a default, not a statement.
+  const execCodes = [];
+  const analysed = new Set();
+  const foldLiterals = (result, lits) => {
+    if (!result.dynamicExec) return;
+    for (const lit of lits) {
+      if (analysed.has(lit) || analysed.size >= 500) continue;
+      analysed.add(lit);
+      if (!readsAsStatement(lit)) continue;
+      const parsed = applyTimeCode(lit);
+      const inner = targetsFromCode(parsed.code, parsed.literals);
+      for (const t of inner.targets) top.targets.add(t);
+      for (const t of inner.tables) top.tables.add(t);
+      top.dynamicWrites.push(...inner.dynamicWrites);
+      if (inner.unresolved) top.unresolved = true;
+      defineRoutines(parsed.routines);
+      attachments.push(...triggerAttachments(parsed.code));
+      execCodes.push(parsed.code);
+      foldLiterals(inner, parsed.literals);
+    }
+  };
+  foldLiterals(top, literals);
   const fired = new Set();
   const unknownTriggerFns = new Set();
   const fireAttached = (into) => {
@@ -775,10 +838,24 @@ export function applyTimeWriteTargets(sql) {
     }
   };
 
+  // Literal SQL runs whatever it names, so the routines it calls join the
+  // frontier exactly as a call written in plain text does. Drained rather than
+  // scanned once, because a body folded in later can itself EXECUTE a literal.
+  let execScanned = 0;
+  const drainExec = (into) => {
+    while (execScanned < execCodes.length) {
+      const c = execCodes[execScanned++];
+      for (const n of invokedRoutines(c.toLowerCase(), byName.keys())) {
+        if (!seen.has(n)) into.add(n);
+      }
+    }
+  };
+
   // Fold in every invoked body, then anything those bodies invoke, until the
   // set stops growing. `seen` also stops a recursive routine from looping.
   const seen = new Set();
   let frontier = invokedRoutines(code.toLowerCase(), byName.keys());
+  drainExec(frontier);
   fireAttached(frontier);
   while (frontier.size) {
     const next = new Set();
@@ -791,11 +868,13 @@ export function applyTimeWriteTargets(sql) {
         for (const t of inner.tables) top.tables.add(t);
         top.dynamicWrites.push(...inner.dynamicWrites);
         if (inner.unresolved) top.unresolved = true;
+        foldLiterals(inner, r.literals);
         for (const n of invokedRoutines(r.code.toLowerCase(), byName.keys())) {
           if (!seen.has(n)) next.add(n);
         }
       }
     }
+    drainExec(next);
     // A body just folded in may write the relation of another attachment, and
     // that trigger fires too. Re-checked every round; `fired` ends the chain.
     fireAttached(next);
@@ -803,17 +882,23 @@ export function applyTimeWriteTargets(sql) {
   }
 
   // Routines run for effect whose bodies are not in this file. Scanned across
-  // the top-level code and every body folded in above, because a defined helper
-  // may itself call something that only exists in the database.
+  // the top-level code, every literal executed as SQL, and every body folded in
+  // above, because a defined helper may itself call something that only exists
+  // in the database.
   const bodies = [...seen].flatMap((n) => (byName.get(n) || []).map((r) => r.code));
-  const scan = [code, ...bodies].join("\n;\n").toLowerCase();
+  const scan = [code, ...execCodes, ...bodies].join("\n;\n").toLowerCase();
   const unknownCalls = [...new Set([
     ...unknownCallsIn(scan, new Set(byName.keys())),
     ...unknownTriggerFns,
   ])];
 
+  // `dynamicExec` is internal bookkeeping for the literal fold above and is not
+  // part of this function's contract, so the fields are named rather than spread.
   return {
-    ...top,
+    targets: top.targets,
+    tables: top.tables,
+    dynamicWrites: top.dynamicWrites,
+    unresolved: top.unresolved,
     unknownCalls,
     definedRoutines: [...byName.keys()],
     invokedRoutines: [...seen],

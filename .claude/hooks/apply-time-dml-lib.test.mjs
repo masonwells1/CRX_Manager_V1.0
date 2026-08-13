@@ -330,4 +330,88 @@ eq(T(null), [], "a null body does not throw");
     "round-28: an unreadable trigger function fails closed");
 }
 
+// -------------------------------------- ROUND 29: literal SQL is still SQL
+// A readable EXECUTE operand used to end the analysis: the literal was scanned
+// for a bare DML verb and nothing else. A call is not a DML verb, so
+// `EXECUTE 'SELECT tmp_fix()'` reported no targets, no unknown calls and
+// unresolved=false while PostgreSQL rewrote money rows. So did a type change,
+// which rewrites every row of the table without naming a DML verb either.
+{
+  const FIX = "CREATE FUNCTION public.tmp_fix() RETURNS void LANGUAGE plpgsql " +
+    "SECURITY DEFINER SET search_path = public, pg_temp AS $$ BEGIN " +
+    "UPDATE public.order_items SET profit = (profit); END $$;";
+  const exec = (stmt) => `DO $do$ BEGIN EXECUTE ${stmt}; END $do$;`;
+
+  // The reproducer the round-29 review submitted.
+  const repro = applyTimeWriteTargets(`${FIX}\n${exec("'SELECT public.tmp_fix()'")}`);
+  ok(repro.targets.has("order_items.profit"),
+    "round-29: a routine called from literal SQL is charged with its writes");
+  ok(repro.invokedRoutines.includes("tmp_fix"),
+    "round-29: the call is named, so the refusal can explain itself");
+
+  // The same call to a body that lives in the database, which cannot be read.
+  const resident = applyTimeWriteTargets(exec("'SELECT public.existing_repair()'"));
+  ok(resident.unknownCalls.includes("existing_repair"),
+    "round-29: a database-resident routine called from literal SQL fails closed");
+
+  // A type change rewrites every row; the USING expression is evaluated per row
+  // and what it returns is what gets stored.
+  const retype = applyTimeWriteTargets(exec(
+    "'ALTER TABLE public.orders ALTER COLUMN total_profit TYPE numeric(12,2) " +
+    "USING round(total_profit, 2)'"));
+  ok(retype.targets.has("orders.*"),
+    "round-29: a column retype inside literal SQL is a whole-table rewrite");
+
+  // Direct DML in a literal was reported as a dynamic write with no target;
+  // now it resolves to the column, which is what a one-shot compares against.
+  eq(T(exec("'UPDATE public.order_items SET profit = 0'")), ["order_items.profit"],
+    "round-29: literal DML resolves to its column, not just to a dynamic write");
+
+  // Literal SQL can define a routine and attach it, and the round-28 rule has to
+  // reach through the literal to see the firing.
+  const defines = applyTimeWriteTargets([
+    exec("$q$ CREATE FUNCTION public.t_fix() RETURNS trigger LANGUAGE plpgsql AS $b$ " +
+      "BEGIN UPDATE public.order_items SET profit = (profit); RETURN NEW; END $b$ $q$"),
+    "CREATE TEMP TABLE scratch(id integer);",
+    "CREATE TRIGGER run_fix AFTER INSERT ON scratch FOR EACH ROW " +
+      "EXECUTE FUNCTION public.t_fix();",
+    "INSERT INTO scratch(id) VALUES (1);",
+  ].join("\n"));
+  ok(defines.targets.has("order_items.profit"),
+    "round-29: a routine defined inside literal SQL is still readable when fired");
+
+  // THE BOUNDARY THAT MAKES THIS AFFORDABLE. A migration that runs no dynamic
+  // SQL is untouched, however its literals read — a comment, a RAISE message and
+  // a column default are text, not statements. If either of these turns red,
+  // every migration in the repository starts demanding an override.
+  eq(T("COMMENT ON TABLE public.orders IS 'update public.order_items set profit = 0';"), [],
+    "round-29: a literal in a file that executes nothing is not a statement");
+  eq(T("ALTER TABLE public.orders ADD COLUMN note text DEFAULT 'select public.tmp_fix()';"), [],
+    "round-29: a column default is not executed at apply time");
+  eq(T(`DO $do$ BEGIN EXECUTE 'SELECT 1'; RAISE NOTICE 'finished with order_items'; END $do$;`), [],
+    "round-29: prose alongside dynamic SQL is still prose");
+
+  // THE OVER-REPORT, STATED RATHER THAN HIDDEN. Once a file runs dynamic SQL,
+  // every literal in it is judged by how it reads, because which literal reached
+  // the EXECUTE cannot be recovered — a deferred body emits an empty literal
+  // placeholder and a nested body renumbers its own. So a RAISE message that
+  // happens to begin with a DML verb and a table name is charged as a write.
+  // It over-reports, which is the direction every module here takes, and it
+  // costs an override prompt only in a file that already does dynamic SQL.
+  // Measured over all 882 migrations in this tree: 3 change classification, all
+  // 3 were already unresolved (so already refused against every registered
+  // one-shot), and none is registered — the real cost is zero prompts.
+  eq(T(`DO $do$ BEGIN EXECUTE 'SELECT 1'; RAISE NOTICE 'update public.order_items'; END $do$;`),
+    ["order_items.*"],
+    "round-29: a literal that reads as a statement is charged, even as prose");
+
+  // An operand that cannot be read still refuses, exactly as before — reading
+  // literals is an addition to that rule, never a replacement for it.
+  ok(applyTimeWriteTargets("DO $do$ BEGIN EXECUTE v_sql; END $do$;").unresolved,
+    "round-29: an unreadable EXECUTE operand still fails closed");
+  ok(applyTimeWriteTargets(
+    "DO $do$ BEGIN EXECUTE format('UPDATE %I SET profit = 0', v_t); END $do$;").unresolved,
+    "round-29: format() is still not readable");
+}
+
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

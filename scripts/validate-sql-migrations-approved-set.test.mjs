@@ -1694,6 +1694,79 @@ const CASES = [
       `  GET DIAGNOSTICS n = ROW_COUNT;\n  IF n <> array_length(v_ids, 1) THEN\n` +
       `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\nEND $$;\n`,
   },
+
+  // ── round 29: a column type change is a whole-table rewrite ──────────────
+  // Every channel above reads a DML verb, and `ALTER TABLE ... ALTER COLUMN c
+  // TYPE t USING <expr>` spells none of them while rewriting every row of the
+  // table: the USING expression is evaluated per row and its result is what
+  // gets stored. No binding is possible, because all rows changed — so it is
+  // reported exactly as TRUNCATE is, and needs the same digest (Codex High,
+  // round 29). The apply-time analyzer already read this shape as `table.*`;
+  // this closes the same gap on the scanner side.
+  {
+    name: 'a type change with USING on a protected table is a whole-table rewrite',
+    expect: 'violation',
+    mustReport: 'retype',
+    sql:
+      `ALTER TABLE public.order_items\n` +
+      `  ALTER COLUMN profit TYPE numeric(12,2) USING round(profit, 2);\n`,
+  },
+  {
+    // The other spelling of the same statement. PostgreSQL accepts `SET DATA
+    // TYPE` as a synonym, and a rule that reads only one of them is a rule an
+    // author defeats by typing three extra words.
+    name: 'the SET DATA TYPE spelling of the same rewrite is caught too',
+    expect: 'violation',
+    mustReport: 'retype',
+    sql:
+      `ALTER TABLE ONLY public.order_items\n` +
+      `  ALTER COLUMN profit SET DATA TYPE numeric(12,2);\n`,
+  },
+  {
+    // The boundaries that keep this affordable. These are what ALTER COLUMN is
+    // actually used for in this repository — measured over all 882 migrations,
+    // every one of the 11 files that says `ALTER COLUMN` does one of these and
+    // none changes a type, so the rule costs the existing tree nothing.
+    name: 'a NOT NULL constraint change is not a row rewrite',
+    expect: 'silent',
+    sql: `ALTER TABLE public.order_items ALTER COLUMN profit SET NOT NULL;\n`,
+  },
+  {
+    name: 'a column default change is not a row rewrite',
+    expect: 'silent',
+    sql: `ALTER TABLE public.order_items ALTER COLUMN profit SET DEFAULT 0;\n`,
+  },
+  {
+    // The false positive the first cut of this rule actually had. A column
+    // literally named `type` puts the word TYPE one token before where the
+    // keyword would be, and reading backwards from TYPE mistook the word
+    // `column` for the column's name and fired on a plain default change.
+    // The reader walks the action list FORWARDS from each ALTER instead, which
+    // is the only direction that can tell a name from a keyword.
+    name: 'a column named type is not a type change',
+    expect: 'silent',
+    sql:
+      `ALTER TABLE public.order_items ALTER COLUMN type SET DEFAULT 'blend';\n` +
+      `ALTER TABLE public.order_items ALTER CONSTRAINT fk_order DEFERRABLE;\n` +
+      `ALTER TABLE public.order_items ADD COLUMN probe_note_r29 text;\n`,
+  },
+  {
+    // …and the same column really being retyped still fires, so the case above
+    // proves the reader distinguishes them rather than merely going quiet.
+    name: 'retyping a column named type is still a whole-table rewrite',
+    expect: 'violation',
+    mustReport: 'retype',
+    sql: `ALTER TABLE public.order_items ALTER COLUMN type TYPE text;\n`,
+  },
+  {
+    // Scratch rows are not business rows. A table this migration created has no
+    // approved set to bind, exactly as with every other write channel here.
+    name: 'retyping a column of a table this migration created stays silent',
+    expect: 'silent',
+    sql:
+      `CREATE TEMP TABLE scratch_r29 (id integer, amt numeric);\n` +
+      `ALTER TABLE scratch_r29 ALTER COLUMN amt TYPE numeric(12,2) USING round(amt, 2);\n`,
+  },
 ];
 
 // A stamp no real migration uses, so these fixtures are never mistaken for

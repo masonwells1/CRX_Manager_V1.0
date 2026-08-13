@@ -1119,6 +1119,36 @@ function armAutopilot(stateDir, hoursFromNow) {
         "  EXECUTE FUNCTION public.touch();\nUPDATE public.customers SET note = 'x';");
       ok(!isOneShotDeny(r), "round-28: an updated_at trigger on an unrelated table is silent");
 
+      // ROUND 29 (Codex High). A string handed to EXECUTE is SQL, and the
+      // analyzer only ever scanned one for a bare DML verb. A call is not a DML
+      // verb, so this reached the database with unresolved false, no targets and
+      // no unknown calls — the same silence round 28 described, reached through
+      // a different door. A column type change is the second door: it rewrites
+      // every row of the table and names no DML verb either.
+      r = apply("20990601000190_r29_literal_call",
+        `${FIX.replace("RETURNS trigger", "RETURNS void").replace("  RETURN NEW;\n", "")}\n` +
+        "DO $do$ BEGIN EXECUTE 'SELECT public.tmp_fix()'; END $do$;");
+      ok(isDeny(r) && isOneShotDeny(r),
+        "round-29: a routine called from literal SQL replays the registered repair → denied");
+
+      r = apply("20990601000191_r29_literal_retype",
+        "DO $do$ BEGIN EXECUTE 'ALTER TABLE public.order_items ALTER COLUMN profit " +
+        "TYPE numeric(12,2) USING round(profit, 2)'; END $do$;");
+      ok(isDeny(r) && isOneShotDeny(r),
+        "round-29: a column retype inside literal SQL rewrites the registered table → denied");
+
+      // The boundary that keeps this usable: reading literals is gated on the
+      // file running dynamic SQL at all. This one quotes a call to the mutating
+      // function above and still executes nothing, so it stays silent — without
+      // that gate every comment and column default in the repository would be
+      // parsed as a statement. (A literal naming a DML verb AND the registered
+      // table is refused whether or not this file executes it; that is the
+      // older dynamic-write rule, tested above, and it is untouched here.)
+      r = apply("20990601000192_r29_prose",
+        "COMMENT ON TABLE public.order_items IS 'select public.tmp_fix()';\n" +
+        "ALTER TABLE public.customers ADD COLUMN note text DEFAULT 'select public.tmp_fix()';");
+      ok(!isOneShotDeny(r), "round-29: a file that executes nothing has no literal SQL to read");
+
       writeOneShotRegistry(tmp, { [STEM]: REASON });
       rmSync(path.join(tmp, "supabase", "migrations", `${REAL_STEM}.sql`), { force: true });
     }

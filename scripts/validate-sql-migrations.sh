@@ -1408,6 +1408,59 @@ $MIG_BASENAME
             }
             continue
           }
+          # ---- A TYPE CHANGE IS A WHOLE-TABLE REWRITE (Codex High, round 29) ---
+          # Every channel below reads a DML verb, and
+          #
+          #   ALTER TABLE public.order_items
+          #     ALTER COLUMN profit TYPE numeric(12,2) USING round(profit, 2);
+          #
+          # spells none of them while rewriting every row of the table — the USING
+          # expression is evaluated per row and the result is what gets stored.
+          # There is no way to bind which rows changed, because all of them did,
+          # so it is reported as a rewrite of the whole table exactly as TRUNCATE
+          # is, and needs the same approved-set digest. The apply-time analyzer
+          # already reads this shape as `table.*`; this closes the same gap on the
+          # scanner side. Measured over all 882 migrations in this tree, NONE
+          # changes a column type — the 11 files that say `ALTER COLUMN` all
+          # SET/DROP NOT NULL or SET/DROP DEFAULT — so this costs the existing
+          # repository nothing at all.
+          if (tok[i] == "alter" && tok[i + 1] == "table" && stmt_head(i) == "alter") {
+            j = i + 2
+            if (tok[j] == "if" && tok[j + 1] == "exists") j += 2
+            if (tok[j] == "only") j++
+            at = tok[j]
+            retype = 0
+            for (k = j + 1; k <= ntok && tok[k] != ";"; k++) {
+              # Read the action list FORWARDS from each ALTER, not backwards from
+              # TYPE. `ALTER [COLUMN] <name> [SET DATA] TYPE t` is the only shape
+              # that rewrites rows, and only a forward walk can tell it from
+              # `ALTER COLUMN type SET DEFAULT ...` — a column actually named
+              # `type`, which reading backwards mistakes for the TYPE keyword.
+              # Every other action (ALTER CONSTRAINT, SET/DROP NOT NULL,
+              # SET/DROP DEFAULT) lands on something that is not TYPE and is
+              # skipped.
+              if (tok[k] != "alter") continue
+              p = k + 1
+              if (tok[p] == "column") p++
+              p++                                    # the column name itself
+              if (tok[p] == "type") { retype = 1; break }
+              if (tok[p] == "set" && tok[p + 1] == "data" && tok[p + 2] == "type") {
+                retype = 1
+                break
+              }
+            }
+            if (retype) {
+              fires_trigger(at, i)
+              gsub(/"/, "", at)
+              sub(/^public\./, "", at)
+              if (at ~ ("^(" tables ")$")) {
+                printf "%d\t%s\t%s\t%s\t%s\t%s\n", tokln[i], at, "retype", "-", "-", raw[tokln[i]]
+              } else {
+                unresolved_write(at, "retype", i)
+              }
+              continue
+            }
+          }
           # `COPY t FROM ...` loads rows and fires their triggers. It is not a
           # bindable rewrite of existing rows, so it is read for nothing else.
           if (tok[i] == "copy" && stmt_head(i) == "copy") fires_trigger(tok[i + 1], i)

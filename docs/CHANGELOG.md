@@ -2,6 +2,64 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-13 — A string literal handed to EXECUTE is SQL, and a type change is a rewrite
+
+Round 29 of adversarial review on PR #364, two High findings, one per guard.
+
+**The apply-time analyzer read literal SQL for DML verbs and nothing else.** A
+routine call is not a DML verb, so:
+
+    DO $do$ BEGIN EXECUTE 'SELECT public.tmp_fix()'; END $do$;
+
+reported no write targets, no unknown calls, and `unresolved: false` — while
+PostgreSQL ran a function that rewrites money rows. `EXECUTE 'ALTER TABLE
+public.orders ALTER COLUMN total TYPE numeric USING ...'` was equally invisible,
+and that one rewrites every row of the table. The operand was a single literal,
+which the reader treated as "readable", so the fail-closed inversion from round
+25 never fired either.
+
+Mapping an `EXECUTE` back to its own operand is not reliable in this module: a
+deferred routine body emits an empty literal placeholder without pushing a
+literal, and a nested dollar-quoted body contributes literals numbered against
+its own code. Position is therefore not used. Instead, once a body is known to
+run dynamic SQL at all, **every** apply-time literal in it that reads as a
+statement is parsed as SQL and folded in — its writes, the routines it defines,
+the triggers it attaches, and the routines it calls, transitively. A body with
+no runnable `EXECUTE` is untouched, which is what keeps this affordable: a
+literal there is a comment or a column default, not a statement.
+
+The accepted over-report, stated rather than hidden and pinned by its own test:
+a `RAISE` message that happens to begin with a statement verb and a table name
+is charged as a write. Measured over all 882 migrations, 3 files change
+classification; all 3 were already `unresolved`, so they were already refused
+against every registered one-shot, and none of them is a registered one-shot.
+The real cost is zero new override prompts.
+
+**The approved-set scanner missed whole-table type rewrites.** Every channel in
+that scanner reads a DML verb, and
+
+    ALTER TABLE public.order_items
+      ALTER COLUMN profit TYPE numeric(12,2) USING round(profit, 2);
+
+spells none of them while rewriting every row: the `USING` expression is
+evaluated per row and its result is what gets stored. No binding to an approved
+set is possible, because all rows changed — so it is reported as a `retype`
+rewrite and needs the same digest `TRUNCATE` does. The apply-time analyzer
+already read this shape; this closes the same gap on the scanner side.
+
+Writing that rule by reading backwards from the word `TYPE` introduced a false
+positive caught in its own test: a column literally named `type` puts that word
+one token before where the keyword would sit, so `ALTER COLUMN type SET DEFAULT
+'blend'` fired. The reader walks the action list **forwards** from each `ALTER`
+instead, which is the only direction that can tell a name from a keyword.
+`ALTER COLUMN type TYPE text` still fires, so the boundary proves a distinction
+rather than a silence.
+
+Friction measured over all 882 migrations: **zero**. Thirteen `ALTER COLUMN`
+usages exist across eleven files and every one is a `SET`/`DROP NOT NULL` or a
+`SET`/`DROP DEFAULT`. No migration in this repository has ever changed a column
+type.
+
 ## 2026-08-13 — A trigger attachment is a standing invocation
 
 Round 24 established that `CREATE TRIGGER ... EXECUTE FUNCTION f()` is not an

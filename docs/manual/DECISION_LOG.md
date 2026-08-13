@@ -9,6 +9,48 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-13 — Literal SQL is read as SQL, and a column type change is a whole-table rewrite
+
+**Source:** round 29 of adversarial review on PR #364 (two High findings, one per guard).
+
+**Background.** The apply-time analyzer scanned string literals for bare DML verbs. A routine call
+is not a DML verb, so `EXECUTE 'SELECT public.tmp_fix()'` reported no targets, no unknown calls and
+`unresolved: false` while running a function that rewrites money rows; `EXECUTE 'ALTER TABLE ...
+ALTER COLUMN ... TYPE ... USING ...'` was invisible for the same reason. Separately, the
+approved-set scanner recognised only DML verbs, so a type change with a `USING` expression — which
+evaluates per row and stores the result, rewriting the entire table — passed with no digest.
+
+**Decision — literals.** Once a body is known to run dynamic SQL at all, **every** apply-time
+literal in it that reads as a statement is parsed as SQL and folded in: its writes, the routines it
+defines, the triggers it attaches, and the routines it calls, transitively. Mapping an `EXECUTE`
+back to its own operand is deliberately not attempted — a deferred routine body emits an empty
+literal placeholder without pushing a literal, and a nested dollar-quoted body numbers its literals
+against its own code, so position is unreliable and a rule built on it would fail silently. The
+gate that keeps this affordable is the presence of a runnable `EXECUTE`: in a file that executes
+nothing, a literal is a comment or a column default, and is left alone.
+
+**Decision — type changes.** `ALTER TABLE ... ALTER COLUMN c TYPE t` (either spelling, with or
+without `USING`) on a protected table is reported as a whole-table rewrite and needs the same
+approved-set digest `TRUNCATE` does. There is no narrower binding available, because every row
+changed.
+
+**Accepted imprecision.** A `RAISE` message inside a dynamic-SQL file that happens to begin with a
+statement verb and a table name is charged as a write. Over-reporting toward the override prompt is
+the direction both modules take everywhere else. Measured over all 882 migrations: 3 files change
+classification, all 3 were already `unresolved` (hence already refused against every registered
+one-shot), and none is registered — zero new override prompts. On the scanner side the measured
+cost is exactly zero: all thirteen `ALTER COLUMN` usages in the repository are `SET`/`DROP NOT
+NULL` or `SET`/`DROP DEFAULT`, and no migration has ever changed a column type.
+
+**Operative rule.** A guard that reads SQL as text must read it as SQL wherever SQL can arrive. The
+first cut of the type-change rule read backwards from the word `TYPE` and fired on a column
+literally named `type`; the reader walks the action list forwards from each `ALTER` instead, and
+both directions are pinned by tests — `ALTER COLUMN type SET DEFAULT` stays silent and `ALTER
+COLUMN type TYPE text` still fires. A later round that wants to narrow either rule must show how
+the narrower version survives an author renaming a column or moving a statement.
+
+---
+
 ## 2026-08-13 — A trigger attachment is a standing invocation, and both guards must fire it
 
 **Source:** round 28 of adversarial review on PR #364 (one High finding). Like rounds 26 and 27, it
