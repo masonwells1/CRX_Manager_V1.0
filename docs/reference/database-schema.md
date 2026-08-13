@@ -4,7 +4,7 @@
 
 ## Core Business
 - `profiles` - Users (id refs auth.users, email, full_name, role, phone, is_active, applicator_license_number, faa_certificate_number)
-- `customers` - Farms (farm_name, assigned_sales_rep, assigned_tier 1-4, credit_limit, finance_charge_rate, prepay_balance; **LOCAL ONLY pending apply:** `row_version bigint`). After the forward-only row-version migration is applied, existing-customer whole-record saves fail closed when the loaded version is stale. The compatible frontend ships before this migration; cached pre-migration bundles must refresh after apply.
+- `customers` - Farms (farm_name, assigned_sales_rep, assigned_tier 1-4, credit_limit, finance_charge_rate, prepay_balance, `row_version bigint`). Existing-customer whole-record saves fail closed when the loaded version is stale. Applied live 2026-07-30 as ledger version `20260730235031` (history row 847, submitted as `20260730201230_quote_customer_row_version_guard`); the "LOCAL ONLY pending apply" marker that stood here was stale from that date.
 - `customer_addresses` - Multiple addresses per customer (label, address, delivery_notes, is_default)
 - `products` - Product master (product_name, sku, category, vendor, tier1-4 pricing, EPA reg, RUP status, signal_word, rei_hours [WPS restricted-entry interval], phi_days [pre-harvest interval], product_form, notes [grower description], internal_notes [internal only])
 - `cost_history` - Cost change audit log (product_id, old/new costs, margins and prices, source/reason, change-set identity, old/new pricing versions, change_note). Supplier Pricing Phase 1a is live through its strict enforcement cutover: app roles cannot insert history directly, and the governed pricing trigger is the single writer.
@@ -18,7 +18,7 @@
 - `customer_application_rates` - Per-customer rate overrides for application services (~5% of customers). UNIQUE(customer_id, application_service_id, season)
 
 ## Quotes & Orders
-- `quotes` - Quote headers (quote_number, customer_id, status, tier, totals, is_planned, expires_at; **LOCAL ONLY pending apply:** `row_version bigint`). After application, the trigger increments the stored version on every quote update; clients use the value returned by `save_quote`, never calculate an increment. The compatible frontend ships before this migration; cached pre-migration bundles must refresh after apply.
+- `quotes` - Quote headers (quote_number, customer_id, status, tier, totals, is_planned, expires_at, `row_version bigint`). The trigger increments the stored version on every quote update; clients use the value returned by `save_quote`, never calculate an increment. Applied live 2026-07-30 alongside the `customers` half above — same migration, same ledger version `20260730235031`.
 - `quote_sections` - Sections within a quote (section_name, sort_order, field_id)
 - `quote_items` - Line items (product_id, section_id, pricing, rates, acres, totals, immutable `cost_at_quote_cents` quote-time cost snapshot; applied migration `20260812151606`, submitted as `20260812115236`)
 - `quote_versions` - Frozen snapshots of sent quotes (version_number, snapshot_data jsonb)

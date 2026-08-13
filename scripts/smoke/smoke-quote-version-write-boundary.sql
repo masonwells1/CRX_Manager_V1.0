@@ -109,14 +109,17 @@ BEGIN
       IF has_table_privilege(v_role, 'public.quote_versions', v_priv) THEN
         RAISE EXCEPTION 'SMOKE_PREREQ: % still holds % on public.quote_versions — 20260813080000 has not applied. Refusing to run: steps 1-4 would perform real writes on live data and TRUNCATE would lock the table.', v_role, v_priv;
       END IF;
-      -- REVOKE ... ON TABLE removes table-level ACLs only, and
-      -- has_table_privilege reports only table-level. A column-level grant on
-      -- snapshot_data would reopen the exact money path while every table-level
-      -- check above still passed. (has_any_column_privilege supports only
+      -- has_table_privilege reports only the TABLE-level ACL, so a column-level
+      -- grant on snapshot_data would reopen the exact money path while every
+      -- table-level check above still passed. A column grant here means one was
+      -- made AFTER the migration: PostgreSQL's REVOKE reference states that
+      -- revoking a privilege on a table automatically revokes the corresponding
+      -- column privileges on each of its columns, so the migration cleared any
+      -- that existed. (has_any_column_privilege supports only
       -- INSERT/SELECT/UPDATE/REFERENCES; the others are table-only privileges.)
       IF v_priv IN ('INSERT', 'UPDATE', 'REFERENCES')
          AND has_any_column_privilege(v_role, 'public.quote_versions', v_priv) THEN
-        RAISE EXCEPTION 'SMOKE_PREREQ: % holds a COLUMN-level % on public.quote_versions. The table-level revoke does not remove that; the forged-snapshot path is still open.', v_role, v_priv;
+        RAISE EXCEPTION 'SMOKE_PREREQ: % holds a COLUMN-level % on public.quote_versions that table-level checks cannot see. It was granted after 20260813080000 applied; the forged-snapshot path is open again.', v_role, v_priv;
       END IF;
     END LOOP;
   END LOOP;
@@ -275,10 +278,21 @@ BEGIN
   END;
   RESET ROLE;
 
-  -- Nothing above may have changed the table.
+  -- Nothing above may have DESTROYED rows. Asymmetric on purpose: this smoke
+  -- runs against the live database while real sessions are working, so a
+  -- legitimate create_quote_version call landing in another session between the
+  -- two counts raises v_after and is NOT evidence of a boundary failure. Every
+  -- write attempted above is a DELETE, an UPDATE, a TRUNCATE or an INSERT that
+  -- must have been refused; the only outcomes that prove a leak are a count that
+  -- FELL (a delete or truncate got through) or the forged INSERT succeeding —
+  -- and that INSERT is already caught by its own SMOKE_FAIL inside the block
+  -- above, which fires the moment the statement does not raise. So a strict
+  -- <> here adds nothing the checks above miss, while making the smoke flake
+  -- whenever the office is busy. Step 5 below applies the same reasoning in the
+  -- other direction and uses >= against a per-quote baseline.
   SELECT count(*) INTO v_after FROM public.quote_versions;
-  IF v_after <> v_before THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: quote_versions row count moved from % to % during the denial checks', v_before, v_after;
+  IF v_after < v_before THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: quote_versions row count FELL from % to % during the denial checks — a delete or truncate got through the boundary', v_before, v_after;
   END IF;
 
   -- ── 5. the LEGITIMATE path must still work ────────────────────────────────

@@ -181,10 +181,23 @@ function printList(specs) {
   );
 }
 
-/** PASS iff the error text contains the pass token; otherwise FAIL + message. */
+/** PASS iff the chain's terminal error IS the pass token; otherwise FAIL + message. */
 function interpretResult(outputText) {
-  if (outputText.includes(PASS_TOKEN)) return { pass: true };
   const lines = outputText.split(/\r?\n/).filter((l) => l.trim());
+  // Anchored on the psql-rendered error, not on a bare substring — the same bug
+  // class fixed for SMOKE_PREREQ below, but in the dangerous direction. A bare
+  // outputText.includes(PASS_TOKEN) reports PASS on ANY output carrying the
+  // token: a SMOKE_FAIL message quoting it, a NOTICE, or a psql-echoed source
+  // line. That turns a real failure green, which is strictly worse than turning
+  // a pass red. Checked across every chain in scripts/smoke: no chain trips the
+  // old form today (all other occurrences are comments or the terminal raise
+  // itself), so this closes the hole without changing any current verdict.
+  // psql renders the raise as `psql:file.sql:NN: ERROR:  SMOKE_PASS_ROLLBACK`.
+  // The token must start the error message; the suffixed variants raised by
+  // smoke-commission-payout-intent-binding-live.sql — 'SMOKE_PASS_ROLLBACK
+  // (9/9 incl. cross-actor)' and the 8/8 form — still match, because the suffix
+  // follows the token rather than preceding it.
+  if (lines.some((l) => new RegExp(`ERROR:\\s+${PASS_TOKEN}`).test(l))) return { pass: true };
   // SMOKE_PREREQ means "the change this chain proves is not deployed on THIS
   // database" — a chain gated behind an unapplied migration, not a regression.
   // Without this branch, --all reports a red FAIL on every environment that is

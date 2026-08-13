@@ -52,6 +52,23 @@ const statements = (sql: string) =>
     .map((statement) => statement.replace(/\s+/g, ' ').trim())
     .filter(Boolean);
 
+/**
+ * The migration with `--` comment lines removed, for assertions that a given
+ * SQL shape is ABSENT. Matching absence against the raw text is a trap this
+ * file has already hit once: the migration explains in prose why a filter was
+ * removed, so banning the shape outright also bans its own explanation.
+ */
+const migrationCode = migration.replace(/^[ \t]*--.*$/gm, '');
+
+/**
+ * Same treatment for the standing predicate. The migration is a ONE-SHOT check
+ * that runs once and is gone; the predicate is what re-checks this boundary on
+ * every sweep from then on. Any shape worth pinning in the migration is worth
+ * pinning here too, or the durable half of the guard can drift while the
+ * throwaway half stays green.
+ */
+const predicateCode = predicate.replace(/^[ \t]*--.*$/gm, '');
+
 const tableRevokes = statements(migration).filter(
   (statement) => /^REVOKE/i.test(statement) && /ON TABLE public\.quote_versions/i.test(statement),
 );
@@ -93,10 +110,13 @@ describe('quote_versions write boundary — migration', () => {
     ).toHaveLength(2);
   });
 
-  it('closes the column-level hole the table-level revoke leaves open', () => {
-    // REVOKE ... ON TABLE strips table-level ACLs only, and has_table_privilege
-    // reports only table-level. A column grant on snapshot_data alone reopens
-    // the whole money path with every other postcondition still passing.
+  it('checks column-level privileges, which table-level checks cannot see', () => {
+    // has_table_privilege reports only the TABLE-level ACL, so a column grant on
+    // snapshot_data alone reopens the whole money path with every other
+    // postcondition still passing. Not a leftover-catcher: PostgreSQL's REVOKE
+    // reference states that revoking a privilege on a table automatically
+    // revokes the corresponding column privileges on each of its columns, so the
+    // migration's own revoke already cleared any that existed at apply time.
     expect(migration).toContain(
       "has_any_column_privilege('authenticated', 'public.quote_versions', 'INSERT')",
     );
@@ -133,25 +153,94 @@ describe('quote_versions write boundary — migration', () => {
 
   it('counts snapshot lines it cannot evaluate instead of skipping them', () => {
     // An inner join to products silently DROPS a line pointing at a deleted or
-    // zero-cost product — exactly where a forged line would hide. Restore never
-    // consults the product row, so such a line is still fully restorable.
+    // zero-cost product — exactly where a forged line would hide. The LEFT JOIN
+    // keeps it and lets the CASE classify it explicitly.
+    //
+    // An earlier revision justified this by saying restore never consults the
+    // product row. It does, twice over: quote_items.product_id is NOT NULL
+    // REFERENCES products(id), and the live below-cost trigger reads the catalog
+    // row. The join shape is right regardless — what changes is that a line whose
+    // product is gone is advisory because it CANNOT be restored, not because
+    // nobody would look.
     expect(migration).toContain('LEFT JOIN public.products pr');
-    expect(migration).toMatch(/PRECOND \(advisory, not blocking\): % existing quote_versions snapshot line\(s\) cannot be evaluated/);
+    expect(migration).toMatch(
+      /PRECOND \(advisory, not blocking\): % existing quote_versions snapshot line\(s\) carry a product_id that cannot be read as a uuid at all, or one that reads fine but names a product row that no longer exists/,
+    );
   });
 
-  it('reports unevaluable lines but still seals the boundary', () => {
-    // Deliberate reversal, and the direction matters. v_unknown counts lines
-    // this scan cannot JUDGE — a deleted product, a discontinued one now at
-    // zero catalog cost, a cost string that is not a finite number. None of
-    // those is evidence of forgery and every one is an ordinary state of an
-    // aged catalog. Aborting on them let a routine data condition block a
-    // SECURITY fix, which leaves the forged-snapshot write path OPEN — strictly
-    // worse than sealing over a line nobody can classify, since such a line is
-    // no less frozen without this migration. So: NOTICE, never EXCEPTION.
-    const unknownBlock = migration.match(/IF v_unknown > 0 THEN[\s\S]*?END IF;/);
-    expect(unknownBlock).not.toBeNull();
-    expect(unknownBlock![0]).toContain('RAISE NOTICE');
-    expect(unknownBlock![0]).not.toContain('RAISE EXCEPTION');
+  it('classifies a product_id the way the restore path casts it, not more strictly', () => {
+    // The forgery scan and the restore path must agree on what resolves. Restore
+    // casts with a bare (v_item->>'product_id')::uuid, and uuid_in accepts far
+    // more than the canonical dashed form — brace-wrapped, hyphen-free and
+    // irregularly hyphenated all parse and compare EQUAL to the canonical value.
+    //
+    // Classifying on the canonical pattern alone therefore sent a REAL product id
+    // written without hyphens into the advisory 'unrestorable' bucket, whose
+    // NOTICE the Supabase apply channel does not surface — while restore would
+    // have resolved it happily and stamped its cost basis into canonical profit
+    // and commission money. QuoteBuilder serialises this field from a uuid the
+    // database emitted, which is always canonical, so a non-canonical form is
+    // hand-crafted JSON whatever it resolves to. It blocks.
+    expect(migration).toContain('AS product_id_exotic');
+    expect(migration).toContain('p.cost_exotic OR p.product_id_exotic');
+    // Normalize-then-test: strip braces and hyphens before checking for 32 hex
+    // digits. A scan that only tested the canonical pattern would miss the exact
+    // forms uuid_in accepts.
+    expect(migration).toMatch(
+      /replace\(replace\(replace\(btrim\(product_id_text\), '\{', ''\), '\}', ''\), '-', ''\)/,
+    );
+    // The blocking message has to name the product side too, or a hit reads as a
+    // cost-literal problem and gets investigated in the wrong place.
+    const exoticBlock = migration.match(/IF v_exotic > 0 THEN[\s\S]*?END IF;/);
+    expect(exoticBlock).not.toBeNull();
+    expect(exoticBlock![0]).toContain('product_id');
+  });
+
+  it('blocks on every unevaluable class except the one the FK already protects', () => {
+    // This replaces a single v_unknown bucket that was advisory for ALL of it.
+    // The reasoning that produced that bucket was sound but too coarse: it
+    // argued that a line nobody can classify is no less frozen without this
+    // migration, so aborting on one would let routine catalog decay block a
+    // SECURITY fix. True for exactly ONE of the classes it lumped together.
+    //
+    //   unrestorable — product row gone, or a product_id that cannot be read as
+    //     a uuid AT ALL. Advisory, and provably so: quote_items.product_id is
+    //     NOT NULL REFERENCES products(id), so a restore of such a line dies on
+    //     the foreign key before it can stamp any cost basis. Not a forgery
+    //     vector. A product_id that is non-canonical but still castable does NOT
+    //     land here — see the classification test above.
+    //   exotic — a cost written as 0x../0o../0b../1_0, or a product_id in a
+    //     non-canonical-but-castable form. PostgreSQL parses both and restore
+    //     would accept both; JSON.stringify emits neither. Their presence is
+    //     itself evidence the snapshot was hand-crafted. Must block.
+    //   unchecked — the cost string is unreadable, or the product carries no
+    //     catalog cost to compare against. Neither can be cleared by the scan,
+    //     and sealing here would freeze an unverified cost basis inside the new
+    //     boundary. Blocks. (An earlier revision justified this by saying restore
+    //     does not consult the catalog — it does; the live below-cost trigger
+    //     reads the product row and already refuses on the no-catalog-cost case.
+    //     The block stays for the narrower contract reason.)
+    //
+    // Measured read-only against live before this split was written: all three
+    // buckets are empty, so blocking costs nothing at apply time and buys a
+    // real assertion the day it stops being empty.
+    const advisory = migration.match(/IF v_unrestorable > 0 THEN[\s\S]*?END IF;/);
+    expect(advisory).not.toBeNull();
+    expect(advisory![0]).toContain('RAISE NOTICE');
+    expect(advisory![0]).not.toContain('RAISE EXCEPTION');
+
+    for (const blocking of ['v_exotic', 'v_unchecked']) {
+      const block = migration.match(new RegExp(`IF ${blocking} > 0 THEN[\\s\\S]*?END IF;`));
+      expect(block, `${blocking} must have a reporting branch`).not.toBeNull();
+      expect(block![0]).toContain('RAISE EXCEPTION');
+      expect(block![0]).not.toContain('RAISE NOTICE');
+    }
+
+    // Disjointness is what makes those counts trustworthy. A chain of
+    // independent boolean FILTERs would let one line land in two buckets and be
+    // both advisory and blocking at once; a single CASE cannot.
+    expect(migration).toContain('END AS bucket');
+    expect(migration).toMatch(/count\(\*\) FILTER \(WHERE bucket = 'unrestorable'\)/);
   });
 
   it('still aborts on the forgery signature itself', () => {
@@ -159,9 +248,23 @@ describe('quote_versions write boundary — migration', () => {
     // v_count is the below-half-cost signature — the thing this file exists to
     // refuse sealing in. Downgrading this one to a notice would turn the
     // exploitation check into decoration.
-    const forgedBlock = migration.match(/IF v_count > 0 THEN[\s\S]*?END IF;/);
-    expect(forgedBlock).not.toBeNull();
-    expect(forgedBlock![0]).toContain('RAISE EXCEPTION');
+    // `v_count` is REUSED as a scratch counter by three separate blocks in the
+    // precondition, so a bare .match() returns the FIRST one — the unrelated
+    // mutation-policy check — and passes on its RAISE EXCEPTION while never
+    // reading the forgery block at all. That is exactly how this assertion was
+    // written originally, and it meant the one guard protecting the money check
+    // would have stayed green through a downgrade to RAISE NOTICE. Collect every
+    // block and select by the message text, which is unique to this one.
+    const countBlocks = migration.match(/IF v_count > 0 THEN[\s\S]*?END IF;/g) ?? [];
+    expect(
+      countBlocks.length,
+      'v_count is reused; if this drops to 1 the selection below is no longer load-bearing',
+    ).toBeGreaterThan(1);
+
+    const forgedBlock = countBlocks.find((block) => block.includes('forged-snapshot path'));
+    expect(forgedBlock, 'the below-half-cost forgery block must still exist').toBeDefined();
+    expect(forgedBlock!).toContain('RAISE EXCEPTION');
+    expect(forgedBlock!).not.toContain('RAISE NOTICE');
   });
 
   // NOTE on the service_role token in the next test: it is SQL assertion text
@@ -188,8 +291,52 @@ describe('quote_versions write boundary — migration', () => {
     // forged-snapshot path fully open with every other assertion passing. No
     // such object exists today; this closes the gap in the proof, not a hole.
     expect(migration).toContain('pg_rewrite');
-    expect(migration).toMatch(/v\.relkind IN \('v', 'm'\)/);
     expect(migration).toContain('is writable by an external API role');
+
+    // The scan must NOT narrow to relkind IN ('v','m'). A rewrite RULE can be
+    // attached to an ordinary table ('r') or a partitioned one ('p'), and such a
+    // write is permission-checked as the owner of the rule-carrying table —
+    // the same hole a view opens, in an object the view filter walks straight
+    // past. An earlier draft carried that filter; this pins its removal.
+    expect(migrationCode).not.toMatch(/relkind\s*(=|IN\b)/);
+    expect(predicateCode).not.toMatch(/relkind\s*(=|IN\b)/);
+
+    // Table-level has_table_privilege is not enough either: a grant of INSERT on
+    // a SINGLE COLUMN of the rewriting relation is enough to drive the rewrite,
+    // and the table-level test returns false for it.
+    expect(migration).toMatch(/has_any_column_privilege\('authenticated', rr\.relid, 'INSERT'\)/);
+    expect(migration).toMatch(/has_any_column_privilege\('anon', rr\.relid, 'INSERT'\)/);
+
+    // And the walk must be RECURSIVE, not one hop. A view B over view A over
+    // quote_versions carries its pg_depend edge to A, not to the table, so a
+    // single hop never reaches B — while B can still be auto-updatable and a
+    // write through it is permission-checked as B's owner. That is this check's
+    // own hole one level further out, and an earlier draft had it. UNION rather
+    // than UNION ALL is what makes the walk terminate on a rule cycle, so pin
+    // that too: UNION ALL here would hang the apply instead of failing it.
+    //
+    // Both are pinned against the STANDING PREDICATE as well, not the migration
+    // alone. The migration runs once; the predicate is what re-checks this
+    // boundary on every sweep afterwards, so a one-hop regression there would
+    // outlive the one it cannot happen in.
+    for (const [label, sql] of [
+      ['migration', migrationCode],
+      ['predicate', predicateCode],
+    ] as const) {
+      expect(sql, `${label} must walk rewrite dependencies recursively`).toMatch(
+        /WITH RECURSIVE rewrite_reachable AS/,
+      );
+      // Slice the CTE body out and test THAT, rather than a fixed-width window
+      // after the opening paren: the predicate joins its branches with UNION ALL,
+      // so a window wide enough to cover the CTE would also swallow the next
+      // branch separator and fail for the wrong reason.
+      const cte = sql.match(/WITH RECURSIVE rewrite_reachable AS \(([\s\S]*?)\n\s*\)\n/);
+      expect(cte, `${label} must contain a readable recursive CTE body`).not.toBeNull();
+      expect(
+        cte![1],
+        `${label} must use UNION, not UNION ALL, so the walk terminates on a rule cycle`,
+      ).not.toMatch(/UNION ALL/);
+    }
   });
 
   it('fails closed rather than open when it cannot see a routine body', () => {
@@ -281,6 +428,41 @@ describe('quote_versions write boundary — standing predicate', () => {
       '_create_quote_version_owner_impl:lost-insert-grant',
       'create_quote_version(uuid, uuid, text, text, bigint)',
       'restore_quote_version(uuid, uuid, uuid, text, bigint, text)',
+      // The overload counts are not redundant with the signature-pinned branches
+      // above them. A NEW overload of either entry point is born EXECUTE-able by
+      // the API roles, and the pinned branches keep reporting clean on the old
+      // signature while it happens. The migration checks this once, as a
+      // PRECOND, because its REVOKEs each name one signature.
+      'create_quote_version:overload-count',
+      'restore_quote_version:overload-count',
+      // The restore path's owner-side implementation. Nothing pinned its EXECUTE
+      // anywhere: the global anon-exec-secdef predicate tests only `anon`, so
+      // `authenticated` — the role a logged-in browser session carries — was
+      // unwatched on this signature by every predicate in the sweep.
+      '_restore_quote_version_owner_impl:external-execute',
+      // ...and its own overload count, for the same reason the two entry points
+      // have one: the branch above names ONE signature, so a second overload of
+      // this name is unwatched by it, and on this project a new function is born
+      // EXECUTE-able by the API roles.
+      '_restore_quote_version_owner_impl:overload-count',
+      // One layer further in than the entry point: 20260812115237 renamed the old
+      // restore_quote_version to this and rebuilt the public name as a wrapper
+      // that runs the below-cost approval check FIRST. The gate lives in the
+      // wrapper, so anything able to call this directly restores a stored cost
+      // basis with that check skipped.
+      '_restore_quote_version_below_cost_impl_20260810:external-execute',
+      // These six mirror assertions the migration makes exactly once, at apply
+      // time. Without them the predicate describes only the table and its three
+      // named routines, and a NEW writer or a NEW rewrite path could reopen the
+      // boundary afterwards without disturbing anything the other branches
+      // watch. Pinned here so the standing guard cannot quietly shrink back to
+      // the one-shot set.
+      'quote_versions:rewrite-path-writable',
+      'quote_versions:writer-scan-blinded',
+      'quote_versions:non-bypassing-writer',
+      'quote_versions:second-authoritative-writer',
+      'quote_versions:inheritance-path',
+      'quote_versions:service-role-write-lost',
     ]) {
       expect(predicate).toContain(`'${key}' AS violation_key`);
     }
