@@ -109,14 +109,17 @@ BEGIN
       IF has_table_privilege(v_role, 'public.quote_versions', v_priv) THEN
         RAISE EXCEPTION 'SMOKE_PREREQ: % still holds % on public.quote_versions — 20260813080000 has not applied. Refusing to run: steps 1-4 would perform real writes on live data and TRUNCATE would lock the table.', v_role, v_priv;
       END IF;
-      -- REVOKE ... ON TABLE removes table-level ACLs only, and
-      -- has_table_privilege reports only table-level. A column-level grant on
-      -- snapshot_data would reopen the exact money path while every table-level
-      -- check above still passed. (has_any_column_privilege supports only
+      -- has_table_privilege reports only the TABLE-level ACL, so a column-level
+      -- grant on snapshot_data would reopen the exact money path while every
+      -- table-level check above still passed. A column grant here means one was
+      -- made AFTER the migration: PostgreSQL's REVOKE reference states that
+      -- revoking a privilege on a table automatically revokes the corresponding
+      -- column privileges on each of its columns, so the migration cleared any
+      -- that existed. (has_any_column_privilege supports only
       -- INSERT/SELECT/UPDATE/REFERENCES; the others are table-only privileges.)
       IF v_priv IN ('INSERT', 'UPDATE', 'REFERENCES')
          AND has_any_column_privilege(v_role, 'public.quote_versions', v_priv) THEN
-        RAISE EXCEPTION 'SMOKE_PREREQ: % holds a COLUMN-level % on public.quote_versions. The table-level revoke does not remove that; the forged-snapshot path is still open.', v_role, v_priv;
+        RAISE EXCEPTION 'SMOKE_PREREQ: % holds a COLUMN-level % on public.quote_versions that table-level checks cannot see. It was granted after 20260813080000 applied; the forged-snapshot path is open again.', v_role, v_priv;
       END IF;
     END LOOP;
   END LOOP;

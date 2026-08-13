@@ -101,10 +101,13 @@ describe('quote_versions write boundary — migration', () => {
     ).toHaveLength(2);
   });
 
-  it('closes the column-level hole the table-level revoke leaves open', () => {
-    // REVOKE ... ON TABLE strips table-level ACLs only, and has_table_privilege
-    // reports only table-level. A column grant on snapshot_data alone reopens
-    // the whole money path with every other postcondition still passing.
+  it('checks column-level privileges, which table-level checks cannot see', () => {
+    // has_table_privilege reports only the TABLE-level ACL, so a column grant on
+    // snapshot_data alone reopens the whole money path with every other
+    // postcondition still passing. Not a leftover-catcher: PostgreSQL's REVOKE
+    // reference states that revoking a privilege on a table automatically
+    // revokes the corresponding column privileges on each of its columns, so the
+    // migration's own revoke already cleared any that existed at apply time.
     expect(migration).toContain(
       "has_any_column_privilege('authenticated', 'public.quote_versions', 'INSERT')",
     );
@@ -194,9 +197,23 @@ describe('quote_versions write boundary — migration', () => {
     // v_count is the below-half-cost signature — the thing this file exists to
     // refuse sealing in. Downgrading this one to a notice would turn the
     // exploitation check into decoration.
-    const forgedBlock = migration.match(/IF v_count > 0 THEN[\s\S]*?END IF;/);
-    expect(forgedBlock).not.toBeNull();
-    expect(forgedBlock![0]).toContain('RAISE EXCEPTION');
+    // `v_count` is REUSED as a scratch counter by three separate blocks in the
+    // precondition, so a bare .match() returns the FIRST one — the unrelated
+    // mutation-policy check — and passes on its RAISE EXCEPTION while never
+    // reading the forgery block at all. That is exactly how this assertion was
+    // written originally, and it meant the one guard protecting the money check
+    // would have stayed green through a downgrade to RAISE NOTICE. Collect every
+    // block and select by the message text, which is unique to this one.
+    const countBlocks = migration.match(/IF v_count > 0 THEN[\s\S]*?END IF;/g) ?? [];
+    expect(
+      countBlocks.length,
+      'v_count is reused; if this drops to 1 the selection below is no longer load-bearing',
+    ).toBeGreaterThan(1);
+
+    const forgedBlock = countBlocks.find((block) => block.includes('forged-snapshot path'));
+    expect(forgedBlock, 'the below-half-cost forgery block must still exist').toBeDefined();
+    expect(forgedBlock!).toContain('RAISE EXCEPTION');
+    expect(forgedBlock!).not.toContain('RAISE NOTICE');
   });
 
   // NOTE on the service_role token in the next test: it is SQL assertion text
@@ -328,7 +345,19 @@ describe('quote_versions write boundary — standing predicate', () => {
       '_create_quote_version_owner_impl:lost-insert-grant',
       'create_quote_version(uuid, uuid, text, text, bigint)',
       'restore_quote_version(uuid, uuid, uuid, text, bigint, text)',
-      // These four mirror assertions the migration makes exactly once, at apply
+      // The overload counts are not redundant with the signature-pinned branches
+      // above them. A NEW overload of either entry point is born EXECUTE-able by
+      // the API roles, and the pinned branches keep reporting clean on the old
+      // signature while it happens. The migration checks this once, as a
+      // PRECOND, because its REVOKEs each name one signature.
+      'create_quote_version:overload-count',
+      'restore_quote_version:overload-count',
+      // The restore path's owner-side implementation. Nothing pinned its EXECUTE
+      // anywhere: the global anon-exec-secdef predicate tests only `anon`, so
+      // `authenticated` — the role a logged-in browser session carries — was
+      // unwatched on this signature by every predicate in the sweep.
+      '_restore_quote_version_owner_impl:external-execute',
+      // These six mirror assertions the migration makes exactly once, at apply
       // time. Without them the predicate describes only the table and its three
       // named routines, and a NEW writer or a NEW rewrite path could reopen the
       // boundary afterwards without disturbing anything the other branches
@@ -338,6 +367,8 @@ describe('quote_versions write boundary — standing predicate', () => {
       'quote_versions:writer-scan-blinded',
       'quote_versions:non-bypassing-writer',
       'quote_versions:second-authoritative-writer',
+      'quote_versions:inheritance-path',
+      'quote_versions:service-role-write-lost',
     ]) {
       expect(predicate).toContain(`'${key}' AS violation_key`);
     }

@@ -64,13 +64,16 @@ SELECT 'quote_versions:browser-mutation-privilege' AS violation_key,
 
 UNION ALL
 
--- REVOKE ... ON TABLE removes table-level ACLs only, and has_table_privilege
--- reports only table-level. A column grant on snapshot_data alone reopens the
--- whole money path while every check above still passes. has_any_column_privilege
--- supports INSERT/UPDATE/REFERENCES (and SELECT); DELETE/TRUNCATE/TRIGGER are
--- table-only privileges and are already covered above.
+-- has_table_privilege reports only the TABLE-level ACL, so a column grant on
+-- snapshot_data alone reopens the whole money path while every check above
+-- still passes. Note the reason this branch exists is a LATER grant, not a
+-- leftover: PostgreSQL's REVOKE reference states that revoking a privilege on
+-- a table automatically revokes the corresponding column privileges on each of
+-- its columns, so 20260813080000 cleared any that existed at apply time.
+-- has_any_column_privilege supports INSERT/UPDATE/REFERENCES (and SELECT);
+-- DELETE/TRUNCATE/TRIGGER are table-only privileges, already covered above.
 SELECT 'quote_versions:column-mutation-privilege' AS violation_key,
-       'anon/authenticated must not hold a COLUMN-level INSERT, UPDATE or REFERENCES on public.quote_versions — a column grant survives REVOKE ... ON TABLE' AS reason
+       'anon/authenticated must not hold a COLUMN-level INSERT, UPDATE or REFERENCES on public.quote_versions — table-level checks do not see a column grant' AS reason
  WHERE has_any_column_privilege('authenticated', 'public.quote_versions', 'INSERT')
     OR has_any_column_privilege('authenticated', 'public.quote_versions', 'UPDATE')
     OR has_any_column_privilege('authenticated', 'public.quote_versions', 'REFERENCES')
@@ -211,6 +214,27 @@ SELECT '_create_quote_version_owner_impl:external-execute' AS violation_key,
 
 UNION ALL
 
+-- The two entry points get the same exactly-one-overload pin the owner-side
+-- writer got above, and for a sharper reason. 20260813080000 asserts this at
+-- apply time (PRECOND, both names) because its REVOKEs each name ONE signature.
+-- After the apply nothing re-checked it, and a NEW overload of either name is
+-- not a hypothetical drift: a freshly created function is born with EXECUTE to
+-- PUBLIC, and this project's pg_default_acl grants the API roles on top of
+-- that. So `create_quote_version(uuid, uuid, text, text, bigint, text)` added
+-- next month is browser-callable the moment it exists, while the signature-
+-- pinned branch below still reports clean on the old one. That is the B9 shape
+-- this repo has already been bitten by once.
+SELECT 'create_quote_version:overload-count' AS violation_key,
+       'public.create_quote_version must have exactly one overload — a new signature is born EXECUTE-able by the API roles and is not covered by the signature-pinned branches here' AS reason
+ WHERE (
+   SELECT count(*)
+     FROM pg_proc p
+    WHERE p.pronamespace = 'public'::regnamespace
+      AND p.proname = 'create_quote_version'
+ ) <> 1
+
+UNION ALL
+
 SELECT 'create_quote_version(uuid, uuid, text, text, bigint)' AS violation_key,
        'create_quote_version must exist and stay authenticated-callable and never anon-callable — it is the only remaining way to create a version' AS reason
  WHERE CASE
@@ -223,6 +247,17 @@ SELECT 'create_quote_version(uuid, uuid, text, text, bigint)' AS violation_key,
            OR has_function_privilege(
                 'anon', 'public.create_quote_version(uuid,uuid,text,text,bigint)', 'EXECUTE')
        END
+
+UNION ALL
+
+SELECT 'restore_quote_version:overload-count' AS violation_key,
+       'public.restore_quote_version must have exactly one overload — same reasoning as the create_quote_version count above' AS reason
+ WHERE (
+   SELECT count(*)
+     FROM pg_proc p
+    WHERE p.pronamespace = 'public'::regnamespace
+      AND p.proname = 'restore_quote_version'
+ ) <> 1
 
 UNION ALL
 
@@ -239,7 +274,33 @@ SELECT 'restore_quote_version(uuid, uuid, uuid, text, bigint, text)' AS violatio
 
 UNION ALL
 
--- The four branches below mirror assertions that 20260813080000 makes exactly
+-- The restore path has an owner-side implementation too, and nothing anywhere
+-- pinned its EXECUTE. It is the routine that READS a snapshot back onto the
+-- quote as a cost basis, so a browser role calling it directly skips
+-- restore_quote_version's gating entirely — the write half of this boundary is
+-- guarded above, and this is the read-back half.
+--
+-- Checked before adding: the global anon-exec-secdef predicate does not cover
+-- this. That predicate tests the `anon` role only, and this routine appears in
+-- no allowlist entry. `authenticated` — the role an ordinary logged-in browser
+-- session actually carries — was unwatched on this signature by every predicate
+-- in the sweep.
+SELECT '_restore_quote_version_owner_impl:external-execute' AS violation_key,
+       'anon/authenticated must not hold EXECUTE on the owner-side restore implementation — calling it directly stamps a stored snapshot back onto a quote as its cost basis, bypassing restore_quote_version entirely' AS reason
+ WHERE CASE
+         WHEN to_regprocedure('public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)') IS NULL
+           -- Unresolvable means unverifiable; unverifiable reports as drift.
+           -- Same trade as the create-side branch above.
+           THEN true
+         ELSE has_function_privilege(
+                'authenticated', 'public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)', 'EXECUTE')
+           OR has_function_privilege(
+                'anon', 'public._restore_quote_version_owner_impl(uuid,uuid,uuid,text)', 'EXECUTE')
+       END
+
+UNION ALL
+
+-- The six branches below mirror assertions that 20260813080000 makes exactly
 -- ONCE, at apply time. Everything above this line describes the table and its
 -- three named routines; nothing above notices a NEW writer or a NEW rewrite path
 -- appearing afterwards, which is precisely how this boundary would be reopened
@@ -319,4 +380,40 @@ SELECT 'quote_versions:second-authoritative-writer' AS violation_key,
       AND r.rolbypassrls
       AND NOT (n.nspname = 'public' AND p.proname = '_create_quote_version_owner_impl')
       AND p.prosrc ~* '(insert\s+into|update|delete\s+from|merge\s+into)\s+(only\s+)?("?public"?\s*\.\s*)?"?quote_versions\M'
- );
+ )
+
+UNION ALL
+
+-- Inheritance, BOTH directions — the migration asserts both, once.
+--
+-- As a CHILD: quote_versions inheriting from another table means a write aimed
+-- at the parent lands here, permission-checked against the parent.
+--
+-- As a PARENT: a child of quote_versions is a brand-new table in schema public,
+-- and under this project's pg_default_acl every new table there is BORN
+-- writable by authenticated. A direct INSERT into that child produces a row
+-- that reads back through quote_versions — the forged cost basis this whole
+-- boundary exists to prevent — with every other branch in this file still
+-- returning zero rows. Live has neither today; this keeps that measured.
+SELECT 'quote_versions:inheritance-path' AS violation_key,
+       'public.quote_versions is now part of an inheritance or partition hierarchy — a parent lets writes reach it under the parent''s permissions, and a child in schema public is born browser-writable and reads back through this table' AS reason
+ WHERE EXISTS (
+   SELECT 1
+     FROM pg_inherits i
+    WHERE i.inhrelid = 'public.quote_versions'::regclass
+       OR i.inhparent = 'public.quote_versions'::regclass
+ )
+
+UNION ALL
+
+-- The migration's SCOPE claim is that this is a BROWSER-role boundary and the
+-- service key keeps full write access. Asserted once at apply time; standing
+-- here because the way it breaks is silent. A later blanket REVOKE that catches
+-- service_role — or a role that ends up holding its privilege through PUBLIC —
+-- surfaces weeks afterwards as a bare permission-denied inside an edge function
+-- or a backfill, with no migration anywhere in the blame path.
+SELECT 'quote_versions:service-role-write-lost' AS violation_key,
+       'service_role no longer holds INSERT, UPDATE and DELETE on public.quote_versions — this boundary is scoped to the browser roles and must never cost the service key its writes; edge functions and backfills that write version rows are now broken' AS reason
+ WHERE NOT has_table_privilege('service_role', 'public.quote_versions', 'INSERT')
+    OR NOT has_table_privilege('service_role', 'public.quote_versions', 'UPDATE')
+    OR NOT has_table_privilege('service_role', 'public.quote_versions', 'DELETE');

@@ -146,7 +146,39 @@
 -- KNOWN LIMIT OF THE WRITER SCAN. It reads routine source text, so it cannot
 -- see a write assembled at runtime with EXECUTE format(...) or one performed by
 -- a COPY outside a routine. It is a defence-in-depth check on top of the live
--- ACL read above, not the primary evidence.
+-- ACL read above, not the primary evidence. Three further blind spots, stated
+-- rather than left for the next reader to discover:
+--   * a write that reaches the table through a VIEW names the view, not
+--     quote_versions, so the source regex never matches it. The rewrite-path
+--     postcondition below is what covers that shape; the two scans do not.
+--   * a comment or a line break between the DML keyword and the table name
+--     (`INSERT INTO /* ... */ quote_versions`) defeats the regex. Nothing live
+--     is written that way, and tightening the pattern to survive arbitrary
+--     comment placement costs more false positives than it buys.
+--   * a routine with a BEGIN ATOMIC body has BLANK prosrc rather than NULL, so
+--     it scans clean. The standing predicate carries an explicit branch that
+--     reports when any such routine exists, which converts that silent miss
+--     into a visible one. Measured read-only 2026-08-13: zero such routines in
+--     any non-system schema on this project. Expect that to change on a future
+--     platform upgrade — when the branch starts firing on a Supabase-owned
+--     schema, re-scope it there rather than deleting it.
+--
+-- KNOWN LIMIT OF THE FORGERY SCAN. The precondition inspects ONE field,
+-- `current_cost`, because that is the field the restore path stamps into
+-- quote_items.cost_at_quote_cents and therefore the one that moves canonical
+-- profit and commission money. A snapshot is a whole quote, and restore also
+-- writes price_per_unit, profit, total_price and the quote-level totals back
+-- more or less verbatim. So this scan is a targeted detector for a forged COST
+-- BASIS, not a full audit of snapshot integrity. Do not read a clean precond as
+-- "every stored snapshot is trustworthy".
+--
+-- AND READ A 'no_basis' ABORT CAREFULLY. That bucket means the product's
+-- catalog cost is missing, non-positive or non-finite TODAY, which makes the
+-- below-half comparison unevaluable — it is not itself evidence of forgery. An
+-- ordinary discontinued product with its cost zeroed out lands there. The abort
+-- is deliberate (unevaluable means unverified, and this file's whole purpose is
+-- to avoid sealing a bad basis in place), but the first move on seeing one is to
+-- read the flagged rows, not to assume an attack.
 --
 -- TRANSACTION SHAPE. This file relies on the applier wrapping the whole thing in
 -- one transaction, so a failing postcondition rolls the REVOKEs back. The
@@ -183,9 +215,25 @@ DECLARE
   v_forced boolean;
   v_enabled boolean;
   v_check text;
+  v_polcmd "char";
+  v_missing_roles text;
   v_policy_exists boolean;
   v_owner name;
 BEGIN
+  -- Fail early and legibly on a replay target that lacks Supabase's API roles.
+  -- Every REVOKE/GRANT below names anon, authenticated or service_role, and a
+  -- plain-Postgres restore would abort on the first of them with a bare
+  -- `role "anon" does not exist` — 400 lines after the last thing this file
+  -- printed, and with no hint that the cause is the target rather than the
+  -- table. The postconditions cannot carry this check: they all run AFTER those
+  -- statements, so they are unreachable on such a target.
+  SELECT string_agg(r.expected, ', ' ORDER BY r.expected) INTO v_missing_roles
+    FROM unnest(ARRAY['anon', 'authenticated', 'service_role']) AS r(expected)
+   WHERE NOT EXISTS (SELECT 1 FROM pg_roles pr WHERE pr.rolname = r.expected);
+  IF v_missing_roles IS NOT NULL THEN
+    RAISE EXCEPTION 'PRECOND: this database is missing the API role(s): %. This migration is a grant boundary for Supabase''s API roles and cannot be replayed onto a target that does not have them.', v_missing_roles;
+  END IF;
+
   SELECT c.relrowsecurity, c.relforcerowsecurity
     INTO v_enabled, v_forced
     FROM pg_class c
@@ -235,13 +283,20 @@ BEGIN
        AND p.polname = 'qversions_insert'
   ) INTO v_policy_exists;
 
-  SELECT pg_get_expr(p.polwithcheck, p.polrelid) INTO v_check
+  SELECT pg_get_expr(p.polwithcheck, p.polrelid), p.polcmd INTO v_check, v_polcmd
     FROM pg_policy p
    WHERE p.polrelid = 'public.quote_versions'::regclass
      AND p.polname = 'qversions_insert';
 
   IF NOT v_policy_exists THEN
     RAISE NOTICE 'PRECOND: qversions_insert is already absent — replay may proceed as a no-op re-assertion';
+  ELSIF v_polcmd <> 'a' THEN
+    -- Matching on polname alone is not enough. A policy widened from FOR INSERT
+    -- to FOR ALL while keeping both q.created_by and is_sales_rep() in its WITH
+    -- CHECK would satisfy the baseline branch below and be dropped unreviewed,
+    -- taking its USING side with it. The NULL-WITH-CHECK guard above catches
+    -- only the USING-only shape, not one carrying both clauses.
+    RAISE EXCEPTION 'PRECOND: qversions_insert is no longer a FOR INSERT policy (polcmd = %). It has been widened since this migration was written; re-review before applying.', v_polcmd;
   ELSIF v_check IS NULL THEN
     RAISE EXCEPTION 'PRECOND: qversions_insert exists but has no WITH CHECK expression. It has been reshaped since this migration was written; re-review before applying.';
   ELSIF position('q.created_by' in v_check) > 0 AND position('is_sales_rep()' in v_check) > 0 THEN
@@ -510,7 +565,19 @@ BEGIN
              WHEN p.cost_exotic                                   THEN 'exotic'
              WHEN p.product_uuid IS NULL OR pr.id IS NULL         THEN 'unrestorable'
              WHEN p.cost_num IS NULL                              THEN 'unparseable'
-             WHEN pr.current_cost IS NULL OR pr.current_cost <= 0 THEN 'no_basis'
+             -- NaN and +Infinity must be routed here EXPLICITLY. In PostgreSQL
+             -- numeric, NaN sorts ABOVE every finite value, so `NaN <= 0` is
+             -- false and a non-finite catalog cost would fall through to
+             -- 'evaluable' — where `cost_num < NaN / 2` is TRUE for every line
+             -- naming that product, aborting the apply with a confident and
+             -- wrong forged-snapshot diagnosis. This is reachable: the live
+             -- constraint is CHECK (current_cost >= 0), which NaN satisfies,
+             -- and no finiteness CHECK on products.current_cost exists anywhere.
+             -- (-Infinity needs no clause; it is caught by `<= 0`.)
+             WHEN pr.current_cost IS NULL
+               OR pr.current_cost = 'NaN'::numeric
+               OR pr.current_cost = 'Infinity'::numeric
+               OR pr.current_cost <= 0                            THEN 'no_basis'
              ELSE 'evaluable'
            END AS bucket
       FROM parsed p
@@ -602,7 +669,10 @@ GRANT EXECUTE ON FUNCTION public.restore_quote_version(uuid, uuid, uuid, text, b
   TO authenticated, service_role;
 
 -- The owner-side implementation must never be callable from the browser: it is
--- what actually holds the passthrough that makes snapshot_data authoritative.
+-- the only routine in the database that INSERTs into quote_versions, so it is
+-- the sole author of the snapshot_data the restore path later trusts as a cost
+-- basis. It does NOT hold the cost-snapshot passthrough — see the header, which
+-- names the two routines in 20260812115236 that actually arm it.
 REVOKE EXECUTE ON FUNCTION public._create_quote_version_owner_impl(uuid, uuid, text, text)
   FROM PUBLIC, anon, authenticated;
 
@@ -633,9 +703,20 @@ BEGIN
     RAISE EXCEPTION 'POSTCOND: public.quote_versions remains directly mutable by an external API role';
   END IF;
 
-  -- REVOKE ... ON TABLE strips table-level ACLs only, and has_table_privilege
-  -- reports only table-level. A column-level grant on snapshot_data alone would
-  -- reopen the entire money path with every check above still passing.
+  -- has_table_privilege reports only the TABLE-level ACL, so a column-level
+  -- grant on snapshot_data alone would reopen the entire money path with every
+  -- check above still passing. That is why this block exists.
+  --
+  -- What it is NOT: a catch for column grants the revoke above missed. An
+  -- earlier draft of this comment said REVOKE ... ON TABLE strips table-level
+  -- ACLs only. That is wrong, and worth correcting rather than deleting so the
+  -- next person does not re-derive it — PostgreSQL's REVOKE reference states
+  -- that revoking a privilege on a table automatically revokes the
+  -- corresponding column privileges on every column of that table. So the
+  -- statement above is STRONGER than advertised: it silently clears such a
+  -- grant instead of leaving one for this block to find. This check is
+  -- therefore a guard against a grant made concurrently or afterwards, and
+  -- against a future narrowing of the revoke list — not against a leftover.
   -- has_any_column_privilege supports INSERT/SELECT/UPDATE/REFERENCES;
   -- DELETE, TRUNCATE and TRIGGER are table-only privileges, already covered.
   IF has_any_column_privilege('authenticated', 'public.quote_versions', 'INSERT')
@@ -789,6 +870,18 @@ BEGIN
     RAISE EXCEPTION 'POSTCOND: public.quote_versions is now an inheritance/partition child. A write aimed at the parent bypasses every privilege check in this migration.';
   END IF;
 
+  -- The PARENT direction matters just as much, and for a reason specific to this
+  -- project. A child of quote_versions would be a brand-new table in schema
+  -- public, and per the pg_default_acl note below it would be BORN writable by
+  -- authenticated. A direct INSERT into that child lands a row that reads back
+  -- through the parent, with every check in this migration and every branch of
+  -- the standing sweep still green. Live has no children today.
+  IF EXISTS (
+    SELECT 1 FROM pg_inherits WHERE inhparent = 'public.quote_versions'::regclass
+  ) THEN
+    RAISE EXCEPTION 'POSTCOND: public.quote_versions now has an inheritance/partition child. A new child table in schema public is born browser-writable under this project default privileges, and rows inserted into it read back through the parent.';
+  END IF;
+
   -- KNOWN LIMIT, deliberately NOT asserted here. Everything above constrains the
   -- table as it exists; none of it constrains what a re-created table would come
   -- back as. Read live read-only while writing this — pg_default_acl carries two
@@ -803,14 +896,35 @@ BEGIN
   -- table writes from anon under the postgres grantor only; authenticated was
   -- never covered, and the supabase_admin entry was never touched.
   --
-  -- This is NOT asserted because it is a project-wide default that governs every
-  -- table in public, not a property of quote_versions — raising on it here would
-  -- abort a scoped security migration over a pre-existing global condition it
-  -- neither caused nor can safely fix. Narrowing those defaults changes the
-  -- privileges every future table is born with and belongs in its own reviewed
-  -- migration. Containment today is the standing rule that a new table ships RLS
-  -- and policies in the same migration; that is defence in depth, not a
-  -- substitute. Recorded here so the gap is visible rather than assumed away.
+  -- The FUNCTION side is the same shape and matters just as much here, so state
+  -- it too rather than leaving a reader to assume tables are the whole story.
+  -- Same live read, objtype 'f' in schema public:
+  --
+  --   grantor supabase_admin: anon=X, authenticated=X, service_role=X
+  --   grantor postgres:       anon=X, authenticated=X, service_role=X
+  --
+  -- On top of PostgreSQL's own default EXECUTE to PUBLIC, that means every new
+  -- function in schema public is born directly callable by both browser roles.
+  -- This is precisely why the preconditions above pin an exact overload COUNT on
+  -- each of the three routines and not merely their signatures: a fourth
+  -- overload of create_quote_version or restore_quote_version added later is
+  -- browser-callable the moment it is created, and every signature-scoped check
+  -- in this file keeps passing on the old one. The standing predicate carries
+  -- both counts for the same reason.
+  --
+  -- Neither side is asserted, because both are project-wide defaults that govern
+  -- every table and every function in public, not properties of quote_versions —
+  -- raising on them here would abort a scoped security migration over a
+  -- pre-existing global condition it neither caused nor can safely fix.
+  -- Narrowing those defaults changes what every future object is born with and
+  -- belongs in its own reviewed migration.
+  --
+  -- Be honest about containment: today it rests on the standing rule that a new
+  -- table ships RLS and policies in the same migration, and on the invariant
+  -- sweep catching a new anon-executable SECURITY DEFINER. Both are review-time
+  -- and sweep-time controls, so the real containment window is "until the next
+  -- sweep runs", not "always". That is defence in depth, not a substitute.
+  -- Recorded here so the gap stays visible rather than assumed away.
 END;
 $postcond$;
 
