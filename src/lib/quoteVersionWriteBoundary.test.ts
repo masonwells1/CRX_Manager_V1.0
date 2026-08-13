@@ -763,7 +763,7 @@ describe('quote_versions write boundary — behavioural smoke', () => {
     // not discover scripts/smoke/*.sql from disk the way run-sweeps.mjs
     // discovers predicates. An unregistered chain is dead code.
     const specs = JSON.parse(read('scripts', 'smoke', 'smoke-specs.json')) as {
-      specs: Record<string, { chain?: string; covers?: string[]; area?: string[] }>;
+      specs: Record<string, { chain?: string; covers?: string[]; area?: string[]; psql_only?: boolean }>;
     };
     const entry = Object.values(specs.specs).find(
       (spec) => spec.chain === 'smoke-quote-version-write-boundary.sql',
@@ -771,6 +771,7 @@ describe('quote_versions write boundary — behavioural smoke', () => {
     expect(entry).toBeDefined();
     expect(entry?.covers).toContain('create_quote_version');
     expect(entry?.area).toContain('security');
+    expect(entry?.psql_only).toBe(true);
   });
 
   it('also proves the legitimate path still works', () => {

@@ -91,6 +91,9 @@ function loadSpecs() {
     if ('container_only' in spec && typeof spec.container_only !== 'boolean') {
       fail(`spec "${key}" has a non-boolean "container_only" (expected true/false)`);
     }
+    if ('psql_only' in spec && typeof spec.psql_only !== 'boolean') {
+      fail(`spec "${key}" has a non-boolean "psql_only" (expected true/false)`);
+    }
     if (spec.container_only && !spec.container_prover) {
       fail(`spec "${key}" is container_only but names no "container_prover" to run instead`);
     }
@@ -114,6 +117,22 @@ function dropContainerOnly(selected) {
   const skipped = [];
   for (const [key, spec] of [...selected]) {
     if (spec.container_only) {
+      selected.delete(key);
+      skipped.push([key, spec]);
+    }
+  }
+  return skipped;
+}
+
+/**
+ * psql-only chains are safe to run through the local psql path, but their SQL
+ * is intentionally not emitted for MCP execution. The MCP live-data guard
+ * correctly refuses the quote_versions TRUNCATE probe in this chain.
+ */
+function dropPsqlOnly(selected) {
+  const skipped = [];
+  for (const [key, spec] of [...selected]) {
+    if (spec.psql_only) {
       selected.delete(key);
       skipped.push([key, spec]);
     }
@@ -172,6 +191,9 @@ function printList(specs) {
     console.log(`    area:   ${spec.area.join(', ')}`);
     if (spec.container_only) {
       console.log(`    NOTE:   CONTAINER ONLY — not run by --all/--area; use node scripts/smoke/${spec.container_prover}`);
+    }
+    if (spec.psql_only) {
+      console.log('    NOTE:   PSQL ONLY — requires SUPABASE_DB_URL; never emitted for MCP execution.');
     }
     console.log(`    ${spec.description}\n`);
   }
@@ -325,21 +347,34 @@ function main() {
 
   // This runner never runs a container-only chain. Announce every skip:
   // a silently shrunk run reads as "everything passed" when it did not.
-  const skipped = dropContainerOnly(selected);
-  for (const [key, spec] of skipped) {
+  const containerSkipped = dropContainerOnly(selected);
+  for (const [key, spec] of containerSkipped) {
     console.log(
       `[smoke] ${key} SKIPPED — container-only; run: node scripts/smoke/${spec.container_prover}`
     );
   }
+
+  const dbUrl = process.env.SUPABASE_DB_URL;
+  // In Claude-first mode, keep chains with destructive probes out of the SQL
+  // printed for MCP. Unlike a normal print-only chain, this is not a pass.
+  const psqlSkipped = dbUrl ? [] : dropPsqlOnly(selected);
+  for (const [key] of psqlSkipped) {
+    console.log(
+      `[smoke] ${key} SKIPPED — psql-only; set SUPABASE_DB_URL to execute via psql (not emitted for MCP).`
+    );
+  }
   if (selected.size === 0) {
+    const rerun = [
+      ...containerSkipped.map(([key, spec]) => `  ${key}: node scripts/smoke/${spec.container_prover}`),
+      ...psqlSkipped.map(([key]) => `  ${key}: set SUPABASE_DB_URL, then re-run this command`),
+    ];
     fail(
-      'nothing ran: every selected smoke chain was skipped because it is container-only.\n' +
-      'Run the skipped chain(s) in their disposable containers instead:\n' +
-      skipped.map(([key, spec]) => `  ${key}: node scripts/smoke/${spec.container_prover}`).join('\n')
+      'nothing ran: every selected smoke chain was skipped because it is container-only or psql-only.\n' +
+      'Run the skipped chain(s) using their required execution path:\n' +
+      rerun.join('\n')
     );
   }
 
-  const dbUrl = process.env.SUPABASE_DB_URL;
   if (!dbUrl) {
     // Claude-first mode: emit the chains for MCP execution.
     for (const [key, spec] of selected) printForClaude(key, spec);
@@ -347,6 +382,10 @@ function main() {
       `Printed ${selected.size} chain(s). Execute each as ONE statement and apply\n` +
       `the PASS contract above. (Set SUPABASE_DB_URL to run via psql instead.)`
     );
+    if (psqlSkipped.length > 0) {
+      console.error('A psql-only chain was skipped and proved NOTHING; this run is not green.');
+      process.exitCode = 2;
+    }
     return;
   }
 
