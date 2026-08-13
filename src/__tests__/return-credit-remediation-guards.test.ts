@@ -112,6 +112,10 @@ function assertExecutableProofGuards(smokeText: string, proverText: string) {
   expect(proverText).toContain('const FORWARD_COMPATIBILITY_REPLAY = [');
   expect(proverText).toContain("'20260813060000_require_completed_delivery_before_invoice_post.sql'");
   expect(proverText).toContain('for (const migration of FORWARD_COMPATIBILITY_REPLAY)');
+  expect(proverText).toContain('function forwardReplayState(migration)');
+  expect(proverText).toContain("assert.notEqual(forwardState, 'drifted'");
+  expect(proverText).toContain('if (pendingForwardMigrations.length > 0)');
+  expect(proverText).toContain('for (const migration of pendingForwardMigrations)');
   expect(proverText).toContain("'smk-forward-replay-pricing-apply'");
   expect(proverText).toContain('applyStandalone(name)');
   expect(proverText).toContain("apply('helper-guard.sql')");
@@ -134,6 +138,7 @@ function assertCompletedDeliveryForwardReplayContract(sql: string) {
 function assertInvariantGuards(predicateText: string) {
   for (const anchor of [
     "OR NOT has_function_privilege('authenticated', a.oid, 'EXECUTE')",
+    "OR NOT has_function_privilege('service_role', a.oid, 'EXECUTE')",
     "OR a.function_owner IS DISTINCT FROM 'postgres'",
     "OR has_function_privilege('service_role', a.oid, 'EXECUTE')",
     "'check_idempotency_intent(text,text,uuid,text)', '71b8a6a0b53f2234a0808b1270eaa06b3c8bf0e7d2523fc429c88e5c479407c8'",
@@ -328,6 +333,10 @@ describe('return/credit remediation durable guards', () => {
       'const preApplyViolations = psqlValue',
       "if (preApplyViolations !== '0')",
       'RETURN_CREDIT_POSTAPPLY_LIVE_PASS',
+      'function forwardReplayState(migration)',
+      "assert.notEqual(forwardState, 'drifted'",
+      'if (pendingForwardMigrations.length > 0)',
+      'for (const migration of pendingForwardMigrations)',
       "apply('helper-guard.sql')",
     ]) {
       const mutated = realSchemaProver.split(anchor).join('__REMOVED_GUARD__');
@@ -339,6 +348,7 @@ describe('return/credit remediation durable guards', () => {
     assertInvariantGuards(predicate);
     for (const anchor of [
       "OR NOT has_function_privilege('authenticated', a.oid, 'EXECUTE')",
+      "OR NOT has_function_privilege('service_role', a.oid, 'EXECUTE')",
       "OR a.function_owner IS DISTINCT FROM 'postgres'",
       "OR has_function_privilege('service_role', a.oid, 'EXECUTE')",
       "'check_idempotency_intent(text,text,uuid,text)', '71b8a6a0b53f2234a0808b1270eaa06b3c8bf0e7d2523fc429c88e5c479407c8'",

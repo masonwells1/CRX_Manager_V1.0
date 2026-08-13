@@ -56,6 +56,7 @@ SELECT 'return-credit-wrapper:' || e.signature AS violation_key,
     OR NOT a.prosecdef
     OR a.proconfig IS DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
     OR NOT has_function_privilege('authenticated', a.oid, 'EXECUTE')
+    OR NOT has_function_privilege('service_role', a.oid, 'EXECUTE')
     OR has_function_privilege('anon', a.oid, 'EXECUTE')
 
 UNION ALL

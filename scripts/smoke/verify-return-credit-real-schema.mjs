@@ -74,6 +74,36 @@ function refreshLiveSchema() {
     throw new Error(`fresh read-only live schema dump failed: ${sanitizeCliOutput(dump.stderr || dump.stdout)}`);
   }
 }
+function forwardReplayState(migration) {
+  const name = path.basename(migration);
+  if (name !== '20260813060000_require_completed_delivery_before_invoice_post.sql') {
+    throw new Error(`no installed-state detector for forward replay migration: ${name}`);
+  }
+  return psqlValue(`
+    SELECT CASE
+      WHEN bool_or(position('WAVE-A-DELIVERY-BEFORE-BILLING-2026-08-11' in p.prosrc) > 0)
+       AND count(*) = 1
+       AND bool_and(
+         p.pronargs = 2
+         AND p.proargtypes[0] = 'uuid'::regtype
+         AND p.proargtypes[1] = 'text'::regtype
+         AND p.prosecdef
+         AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+         AND NOT EXISTS (
+           SELECT 1 FROM pg_roles r
+            WHERE r.rolname IN ('anon', 'authenticated', 'service_role', 'metabase_ro')
+              AND has_function_privilege(r.oid, p.oid, 'EXECUTE')
+         )
+       ) THEN 'installed'
+      WHEN bool_or(position('WAVE-A-DELIVERY-BEFORE-BILLING-2026-08-11' in p.prosrc) > 0)
+        THEN 'drifted'
+      ELSE 'pending'
+    END
+      FROM pg_proc p
+     WHERE p.pronamespace = 'public'::regnamespace
+       AND p.proname = '_post_invoice_impl_20260714';
+  `);
+}
 try {
   assert.ok(readFileSync(CANDIDATE, 'utf8').length > 0, 'candidate migration is missing');
   assert.ok(readFileSync(HELPER_GUARD, 'utf8').length > 0, 'helper guard migration is missing');
@@ -105,12 +135,19 @@ try {
     apply('candidate.sql');
     migrations.push(CANDIDATE);
   }
+  const pendingForwardMigrations = [];
+  for (const migration of FORWARD_COMPATIBILITY_REPLAY) {
+    const forwardState = forwardReplayState(migration);
+    assert.notEqual(forwardState, 'drifted', `installed forward migration contract drifted: ${path.basename(migration)}`);
+    assert.ok(['installed', 'pending'].includes(forwardState), `unknown forward migration state ${forwardState}: ${path.basename(migration)}`);
+    if (forwardState === 'pending') pendingForwardMigrations.push(migration);
+  }
   // 060000 carries an apply-time behavioural probe that requires one active
   // admin and one postable delivery-linked draft. The live-schema dump is
   // intentionally schema-only, so create an isolated synthetic row chain.
   // The disposable container is destroyed in finally; no production row is read
   // or written and none of these fixed UUIDs can leave residue.
-  psql(`
+  if (pendingForwardMigrations.length > 0) psql(`
     INSERT INTO auth.users (id, email, created_at, updated_at, raw_user_meta_data)
     VALUES (
       '00000000-0000-4000-8000-000000000091',
@@ -227,7 +264,7 @@ try {
   // reversal helper. The five earlier Wave A files are unrelated parked drafts
   // with independent stale preconditions; treating them as apply-ready here
   // would silently widen this remediation. This file remains unapplied live.
-  for (const migration of FORWARD_COMPATIBILITY_REPLAY) {
+  for (const migration of pendingForwardMigrations) {
     const name = path.basename(migration);
     copy(migration, name);
     applyStandalone(name);
