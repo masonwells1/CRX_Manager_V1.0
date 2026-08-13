@@ -30,6 +30,13 @@ cases. Unicode-escaped later EXECUTE grantees are now treated as opaque rather
 than trusted-private, so an encoded authenticated grant cannot bypass review.
 The full focused hook suite now passes 380 assertions.
 
+The final application-integrity review also found that Offline Work Review could
+leave a permanent-resolution confirmation open while its authoritative queue was
+being refreshed. Every refresh now invalidates the selected receipt and its
+idempotency key before the new snapshot arrives; the UI and handler refuse a
+resolution while loading or after a load error. A deferred-refresh regression
+proves that no stale resolution RPC can be sent.
+
 ## 2026-08-12 — Actor-binding routine modes use exact schema identity
 
 Fresh adversarial review found that a later `ALTER FUNCTION ... SECURITY
