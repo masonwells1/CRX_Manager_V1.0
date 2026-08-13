@@ -635,6 +635,22 @@
         "inventory"
       ]
     },
+    "draw_down_quote_owner_boundary": {
+      "chain": "smoke-draw-down-quote-owner-boundary.sql",
+      "container_only": true,
+      "container_prover": "prove-pricing-audit-real-schema.mjs",
+      "description": "CONTAINER ONLY pending-apply rollback chain for the draw-down authorization follow-up: two active sales reps prove a rep cannot draw another rep's sent quote; an owning rep cannot draw a soft-deleted revised quote; owning-rep and active-admin controls both pass the boundary and reach EMPTY_DRAW; no order or draw-ledger row survives. The captured-live-ledger prover replays the exact live schema, applies every pending candidate in order, executes this chain, and requires SMOKE_PASS_ROLLBACK.",
+      "covers": [
+        "draw_down_quote"
+      ],
+      "area": [
+        "inventory",
+        "lifecycle",
+        "security",
+        "idempotency",
+        "regression"
+      ]
+    },
     "draw_down_quote": {
       "chain": "smoke-auth-probe-template.sql",
       "description": "Standard 4-probe auth set, worked example against draw_down_quote: no-auth -> AUTH_REQUIRED; anon-key -> AUTH_REQUIRED with zero rows written; wrong-role (driver/applicator) -> INSUFFICIENT_ROLE; forged p_performed_by -> ACTOR_MISMATCH; plus a positive admin control draw proving the probes failed for the right reason. File header documents the placeholders for adapting it to any new RPC.",

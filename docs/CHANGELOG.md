@@ -2,6 +2,10 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-13 — Close quote draw-down ownership and deletion bypass
+
+Exact-SHA review of PR #389 found that the callable `draw_down_quote` path accepted any active sales rep and broadly readable quote id. The private implementation locked the quote but did not require `quotes.created_by = auth.uid()` for a sales rep and did not reject `deleted_at`, so a rep could target another rep's sent/revised booking or a soft-deleted booking before the normal order, inventory, commission, and audit work began. Added forward-only local candidate `20260813161614_restrict_draw_down_quote_owner.sql`: it pins the exact live private body and governed public wrapper, replaces only the private implementation, rejects deleted quotes as not found, rejects a non-admin non-owner with the established `NOT_QUOTE_OWNER` token, keeps both checks after the row lock and before idempotency replay, and preserves the public signature and ACL boundary. Added a container-only two-sales-rep rollback chain with owning-rep/admin positive controls and zero order/draw-ledger residue. **Not applied live.**
+
 ## 2026-08-13 — Keep migration SQL and ledger stamps in one runner-owned transaction
 
 Exact-SHA review caught top-level `BEGIN`/`COMMIT` in the pending `20260813090000` restore-owner ACL migration. Supabase `apply_migration` already owns the transaction, so an inner `COMMIT` could separate a security change from its ledger record. Removed that transaction control from `090000` and from the also-pending `20260813060000` delivery-post gate. Added a fail-closed validator for every migration newer than the captured live high-water; it lexes top-level SQL statements while ignoring comments, strings, identifiers, and dollar-quoted procedural bodies. Mutation cases prove top-level `BEGIN`/`COMMIT` and `START TRANSACTION`/`ROLLBACK` are rejected while a normal `DO ... BEGIN ... END` block stays accepted. No applied migration or live database state changed.

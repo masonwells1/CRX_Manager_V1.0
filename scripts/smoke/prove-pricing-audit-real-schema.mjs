@@ -44,6 +44,7 @@ const appliedPricingMigrations = [
 const smokeFiles = [
   'smoke-below-cost-admin-wall.sql',
   'smoke-below-cost-quote-lifecycle.sql',
+  'smoke-draw-down-quote-owner-boundary.sql',
   'smoke-remaining-money-inventory-hardening.sql',
 ].map((name) => path.join(ROOT, 'scripts', 'smoke', name));
 const oneShotDataReplayExclusions = new Map([
@@ -63,6 +64,10 @@ const pendingCandidateMigrationExclusions = new Map([
   [
     '20260813090000_restrict_restore_quote_owner_impl.sql',
     'restore follow-up: keep the owner implementation behind governed wrappers',
+  ],
+  [
+    '20260813161614_restrict_draw_down_quote_owner.sql',
+    'draw-down follow-up: require quote ownership and reject soft-deleted bookings',
   ],
 ]);
 const pendingCandidateMigrations = [...pendingCandidateMigrationExclusions.keys()]
@@ -580,6 +585,7 @@ try {
     'wave_a_below_cost_wrapper=PASS approved_set_empty=PASS cent_repair_empty=PASS approved_set_nonempty_drift=APPROVED_SET_DRIFTED ' +
     'smoke_below_cost_admin=SMOKE_PASS_ROLLBACK ' +
     'smoke_quote_lifecycle=SMOKE_PASS_ROLLBACK ' +
+    'smoke_draw_down_owner=SMOKE_PASS_ROLLBACK ' +
     'smoke_profitability_inventory=SMOKE_PASS_ROLLBACK residue=0',
   );
 } catch (error) {
