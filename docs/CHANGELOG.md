@@ -2,52 +2,59 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-13 — Multi-price partial quote draws made cent-safe (local candidate)
+## 2026-08-13 — Rejected unsafe quote-draw repair; narrowed restore ACL instead
 
-Exact-commit review of the pricing recovery found a live edge case before the
-release branch was pushed: when one product is booked on two quote lines at
-prices one cent apart, `draw_down_quote` can calculate a half-cent weighted
-unit price. The whole-cent database guard correctly rejects that value, but the
-result is that a valid partial draw fails and the transaction rolls back.
+Exact review rejected and removed `20260813053545_allocate_multi_price_quote_draws.sql` before it could ship. Its floored unit price could make quantity × unit price reconstruct one cent less than the authoritative order-line total, and its cumulative allocation counted reversible job draws, allowing a cancelled draw to allocate the same cent again. The live same-product/multi-price partial-draw edge therefore remains safely fail-closed and explicitly open; a correct fix needs cent-priced cohorts or an immutable allocation/revenue ledger.
 
-`20260813053545_allocate_multi_price_quote_draws.sql` is a forward-only fix. It
-replaces only the private draw implementation, preserves the governed public
-RPC and its idempotency key, allocates each partial order line as the delta
-between cumulative rounded booking value before and after the draw, and floors
-the stored display unit price to cents so below-cost enforcement remains
-fail-closed. A rollback smoke now draws two one-unit orders from same-product
-quote lines priced at `$10.00` and `$10.01`, proving both order lines are
-cent-exact and their combined authoritative total is exactly `$20.01`.
+The same review narrowed an idempotency concern. The public restore path already rejects cross-operation key reuse through `check_idempotency`, and the enabled key-insert trigger independently rolls back a conflicting receipt. The real bypass was direct `service_role` EXECUTE on `_restore_quote_version_owner_impl`. The replacement local candidate, `20260813090000_restrict_restore_quote_owner_impl.sql`, fingerprints the exact live wrapper/idempotency chain and changes only that ACL so direct execution is `postgres`-only. It is **not applied live**. Its timestamp is later than the captured live ledger and the sibling quote-version boundary candidate so a future ordered apply does not require another restamp.
 
-After merged PR #388 advanced the ledger, the snapshot was refreshed from the
-fresh 970-row migration list and pinned both applied return sources by normalized
-bytes and SHA-256. The first Wave A candidate was rename-only restamped from
-`20260813010000` to `20260813015000`, preserving its order before `20260813020000`.
-The captured-schema proof replayed all 970 captured live ledger rows, applied
-the four pricing migrations and all seven pending candidates in order, passed
-the three rollback smoke suites, and left zero residue. **This follow-up is not
-applied live yet**, so this entry records prepared and proven source rather than
-a production behavior change.
+## 2026-08-13 — A sales rep could write their own cost basis into commission money (CRX-SEC-1)
 
-PR #388 also hardened the pending completed-delivery invoice-post migration to
-recognize the exact due-date-aware credit-reversal wrapper that is now live. Its
-rollback-probe waiver remains fail-closed: the validator's filename plus
-LF-normalized SHA-256 binding was refreshed to those merged bytes, while the
-mutation suite continues to reject renamed or modified copies.
+Found by the exact-SHA adversarial review of PR #389 — the first review any human or reviewer had
+given the SQL that went live on 2026-08-12, because until that PR the files existed nowhere but
+inside the database. **NOT YET APPLIED.** This change adds the fix and its proofs to the repository;
+nothing in the live database moves until the migration is applied and approved separately.
 
-The first exact-commit review then found three release blockers, all closed
-before push. The one-shot migration shell guard now recognizes the repository's
-real `supabase db query` and `supabase db execute` SQL paths (including renamed
-or pasted one-shot bodies and fail-closed registry errors). The multi-price draw
-migration now fingerprints the complete live predecessor and public-wrapper
-catalog topology before `CREATE OR REPLACE`, then fingerprints the complete
-installed body afterward, so a concurrent money, inventory, authorization or
-ACL change cannot be overwritten. Finally, the historical cent-repair rollback
-prover now supports the published privacy-preserving migration that derives its
-approved rows under lock instead of requiring the private applied-payload map.
-Focused proof passed 91 hook assertions and 7 migration/prover tests; the full
-captured 970-row schema replay also passed with all rollback smokes and zero
-residue.
+**The hole.** `quote_versions` stores a snapshot of a quote each time a version is created. Its
+insert rule checked only *who owns the quote* — never what was in the snapshot — and the table still
+carried a raw write grant for every signed-in user. So a sales rep could write a version row of their
+own construction onto their own quote, straight past the app.
+
+That became a money problem the day before. Since `20260812115236`, restoring a version copies the
+cost figures out of that snapshot onto the quote's lines, converting the quote to an order freezes
+those costs into the order permanently, and profit, margin reporting and commission all derive from
+there. Understating a cost raises apparent profit, and the below-cost approval guard cannot catch it:
+that guard compares the *sale price* against the *live* product cost, so lowering the recorded cost
+only makes the line look more profitable and the guard never fires.
+
+**No evidence anyone did it.** Verified read-only at discovery and again on 2026-08-13: every cost
+line in every existing snapshot parses as a number against a real product, and none sits below half
+that product's current cost. That is a check against today's cost, not proof no forged row was ever
+written.
+
+**The fix** (`20260813080000`) takes the same shape as the returns boundary from `20260715203911`:
+drop the ownership-only insert rule, and revoke the direct write privileges — insert, update, delete,
+truncate, trigger and references — from PUBLIC, `anon` and `authenticated`. Writes go through the
+existing RPC, which builds the snapshot server-side. Truncate is revoked deliberately and separately:
+insert rules do not apply to truncate at all, so the grant alone let any signed-in caller empty the
+table. Reading is untouched, and the migration fails if reading breaks — a boundary that also broke
+version history would be a regression, not a fix.
+
+It refuses to apply to a database it does not recognise: preconditions check the writer is still the
+one RLS-bypassing function it expects, that no second writer exists, that each function has exactly
+one version at exactly the expected signature, and that no snapshot already carries a suspicious cost
+basis. Where a check cannot see something — a function body stored in a form its source scan cannot
+read — it aborts rather than assume the answer.
+
+**Three companion artifacts**, the standard pattern here: a standing drift check that fails if the
+boundary is ever reopened *or* if it is "closed" by breaking the legitimate writer; a rolled-back
+behavioural proof that runs as a real signed-in admin and refuses to run at all until the migration
+has applied, because its steps are genuine write attempts; and a shape test over all three.
+
+**Also in this change**, from the same review: the idempotency guard credited a wrapper for calling a
+compliant delegate without checking it actually forwarded the key, so a wrapper handing its delegate
+nothing was marked compliant while every retry re-ran the money write. The guard now reads the real
+argument list. Mutation-tested in both directions; no existing RPC regressed.
 
 ## 2026-08-12 — Six migrations were running in production with no file in the repository
 
@@ -87,7 +94,7 @@ publishing customer-linked financial data. The file defines no functions, so the
 above is unaffected.
 
 **What the six do**, in apply order (full detail in `docs/reference/migration-history.md`, rows
-878-883):
+880-885):
 
 - `20260812010000` — blend-ticket order creation now proves its own order header at run time, not
   just at apply time. A dropped or repointed totals trigger would previously have left a zero header

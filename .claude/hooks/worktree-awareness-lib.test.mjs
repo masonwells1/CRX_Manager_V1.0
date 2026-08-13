@@ -575,7 +575,11 @@ const currentCrossReference = validateParkedMigrationCrossReferences(
   readCanonicalBlob,
   sha256Text,
 );
-eq(currentCrossReference.state, "known", "repository correction guard proves every current parked header is either this exact candidate or an exact applied/retired history row");
+eq(
+  currentCrossReference.state,
+  "known",
+  `repository correction guard proves every current parked header is either this exact candidate or an exact applied/retired history row (reason: ${currentCrossReference.reason || "none"})`,
+);
 // Independent count, deliberately not the lib's parser: how many distinct
 // migration files does the history file itself mark LOCAL CANDIDATE right now?
 // Hard-coding a number goes stale the moment a candidate is applied live (all

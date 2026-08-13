@@ -58,11 +58,12 @@ const pendingCandidateMigrationExclusions = new Map([
   ['20260813030000_reject_non_finite_money_and_quantities.sql', 'Wave A money candidate'],
   ['20260813040000_clamp_negative_commission_remainder.sql', 'Wave A money candidate'],
   ['20260813050000_guard_job_commission_split_immutable.sql', 'Wave A money candidate'],
-  [
-    '20260813053545_allocate_multi_price_quote_draws.sql',
-    'pricing follow-up: cent-exact same-product multi-price partial draws',
-  ],
   ['20260813060000_require_completed_delivery_before_invoice_post.sql', 'Wave A money candidate'],
+  ['20260813080000_lock_quote_versions_writes_to_rpc.sql', 'CRX-SEC-1 quote-version write boundary'],
+  [
+    '20260813090000_restrict_restore_quote_owner_impl.sql',
+    'restore follow-up: keep the owner implementation behind governed wrappers',
+  ],
 ]);
 const pendingCandidateMigrations = [...pendingCandidateMigrationExclusions.keys()]
   .map((name) => path.join(migrationsDir, name));

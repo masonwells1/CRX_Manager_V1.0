@@ -122,11 +122,16 @@ function dropContainerOnly(selected) {
 }
 
 function parseArgs(argv) {
-  const args = { list: false, all: false, specs: [], areas: [] };
+  const args = { list: false, all: false, specs: [], areas: [], allowPrereqSkips: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--list' || a === '-l') args.list = true;
     else if (a === '--all' || a === '-a') args.all = true;
+    // Exploratory opt-out. A prerequisite skip exits NONZERO by default (see the
+    // exit-code block at the bottom of main); this flag is for running --all
+    // against a database that is deliberately behind, and it must be typed on
+    // purpose. Do not put it in CI.
+    else if (a === '--allow-prereq-skips') args.allowPrereqSkips = true;
     else if (a === '--spec' || a === '-s') {
       const v = argv[++i];
       if (!v) fail('--spec requires an RPC name');
@@ -180,6 +185,21 @@ function printList(specs) {
 function interpretResult(outputText) {
   if (outputText.includes(PASS_TOKEN)) return { pass: true };
   const lines = outputText.split(/\r?\n/).filter((l) => l.trim());
+  // SMOKE_PREREQ means "the change this chain proves is not deployed on THIS
+  // database" — a chain gated behind an unapplied migration, not a regression.
+  // Without this branch, --all reports a red FAIL on every environment that is
+  // simply behind, and a red run that is expected to be red trains everyone to
+  // ignore red runs. It is deliberately NOT extended to SMOKE_SETUP: a missing
+  // fixture is a real gap in the proof and must stay loud.
+  // Anchored on the RAISE, not on the token. A bare /SMOKE_PREREQ/ substring
+  // match is pre-empted by any line that merely mentions it — a chain quoting
+  // the token in a hint, or a SMOKE_FAIL message explaining what a prereq skip
+  // would have meant — and because this branch is tested before SMOKE_FAIL, that
+  // downgrades a real failure to a skip. psql renders the raise as
+  // `psql:file.sql:NN: ERROR:  SMOKE_PREREQ: ...`, so require the token to be
+  // the immediate start of the error message.
+  const prereqLine = lines.find((l) => /ERROR:\s+SMOKE_PREREQ:/.test(l));
+  if (prereqLine) return { pass: false, prereq: true, message: prereqLine.trim() };
   const errLine =
     lines.find((l) => /SMOKE_FAIL|SMOKE_SETUP/.test(l)) ||
     lines.find((l) => /ERROR:|FATAL:/.test(l)) ||
@@ -214,6 +234,11 @@ function printForClaude(key, spec) {
   console.log('EXECUTE the SQL below as ONE statement via Supabase MCP execute_sql');
   console.log('(project rhyzpcqhnizqbxphqdkr). Interpret the result:');
   console.log(`  * error message contains '${PASS_TOKEN}'  -> PASS (rollback fired)`);
+  console.log("  * error starts 'ERROR: SMOKE_PREREQ:'       -> SKIP: the change this");
+  console.log('      chain proves is not deployed on this database. NOT a pass — it');
+  console.log('      proved nothing. Apply the migration, then run it again.');
+  console.log('      AFTER that migration is applied, this same signal is a FAILURE:');
+  console.log('      it means the boundary was re-opened. Treat it as red, not skipped.');
   console.log('  * ANY other error (or no error at all)      -> FAIL: report the message');
   console.log(`${bar}\n`);
   console.log(sql);
@@ -226,10 +251,14 @@ function main() {
 
   if (args.help || (!args.list && !args.all && args.specs.length === 0 && args.areas.length === 0)) {
     console.log(
-      'Usage: node scripts/smoke/run-smoke.mjs --list | --spec <rpc> [...] | --area <area> [...] | --all\n\n' +
+      'Usage: node scripts/smoke/run-smoke.mjs --list | --spec <rpc> [...] | --area <area> [...] | --all\n' +
+      '                                        [--allow-prereq-skips]\n\n' +
       'Modes: SUPABASE_DB_URL set -> executes via psql and reports PASS/FAIL;\n' +
       '       otherwise prints each chain with banners for Claude/MCP execution.\n\n' +
-      `PASS contract: chain error text contains '${PASS_TOKEN}'.`
+      `PASS contract: chain error text contains '${PASS_TOKEN}'.\n\n` +
+      'Prerequisite skips exit NONZERO by default: post-apply, a skip means the\n' +
+      'boundary the chain proves has been re-opened. Pass --allow-prereq-skips\n' +
+      'only when the database is deliberately behind.'
     );
     process.exit(args.help ? 0 : 2);
   }
@@ -309,20 +338,54 @@ function main() {
   }
 
   let failures = 0;
+  let prereqSkips = 0;
   for (const [key, spec] of selected) {
     process.stdout.write(`[smoke] ${key} (${spec.chain}) ... `);
     const result = runViaPsql(key, spec, dbUrl);
     if (result.pass) {
       console.log('PASS (rolled back)');
+    } else if (result.prereq) {
+      prereqSkips++;
+      console.log('SKIPPED (prerequisite not deployed here)');
+      console.log(`        ${result.message}`);
     } else {
       failures++;
       console.log('FAIL');
       console.log(`        ${result.message}`);
     }
   }
-  console.log(`\n${selected.size - failures}/${selected.size} chain(s) passed.`);
+  const ran = selected.size - prereqSkips;
+  console.log(`\n${ran - failures}/${ran} chain(s) passed` +
+    (prereqSkips > 0 ? `, ${prereqSkips} skipped on prerequisites.` : '.'));
+  if (prereqSkips > 0) {
+    // A skip is not a pass. Say so, or a green summary line reads as coverage
+    // the run did not actually provide.
+    console.log('A skipped chain proved NOTHING - apply its migration, then re-run it.');
+  }
   if (failures > 0) {
     console.log('A failing chain means the fix is NOT fixed - do not declare it done.');
+    process.exitCode = 1;
+  }
+  // A prerequisite skip is a NONZERO exit unless it was asked for explicitly.
+  //
+  // This is the security-relevant half of the skip contract, and it is the exact
+  // inverse of what the branch above used to do. Several of these chains prove a
+  // privilege boundary by asserting the boundary is CLOSED, and their step 0
+  // raises SMOKE_PREREQ when it is still OPEN. Pre-apply that reads as "not
+  // deployed yet" and is fine. Post-apply the SAME signal means the boundary was
+  // re-opened - by a later migration, or by a hand-run GRANT - and exiting 0
+  // there turns the one runner that would have noticed into a green tick.
+  // run-area.mjs trusts this exit status, so the failure has to live here.
+  //
+  // Default nonzero, explicit --allow-prereq-skips to opt out. Getting this
+  // wrong in the safe direction costs one flag on a deliberately-behind
+  // database; getting it wrong in the other direction costs a silent hole.
+  if (prereqSkips > 0 && !args.allowPrereqSkips) {
+    console.log(
+      'Exiting nonzero on prerequisite skips. If this database is deliberately\n' +
+      'behind, re-run with --allow-prereq-skips. If it is NOT behind, a skip here\n' +
+      'means the boundary the chain proves has been re-opened - investigate it.'
+    );
     process.exitCode = 1;
   }
 }

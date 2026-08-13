@@ -1857,27 +1857,224 @@ function resolveFunctionBody(rpc: string, maxIdx?: number, seen = new Set<string
 }
 
 /**
+ * The argument list of a call whose opening paren sits at `open - 1`, matched
+ * with balanced parens so a nested call or a cast does not truncate it.
+ * Single-quoted literals are skipped so a `')'` inside a message cannot close
+ * the list early. Returns null if the call is never closed.
+ */
+function callArgumentList(body: string, open: number): string | null {
+  let depth = 1;
+  let inLiteral = false;
+  for (let i = open; i < body.length; i++) {
+    const ch = body[i];
+    if (inLiteral) {
+      if (ch === "'") inLiteral = false;
+      continue;
+    }
+    if (ch === "'") {
+      inLiteral = true;
+    } else if (ch === '(') {
+      depth++;
+    } else if (ch === ')') {
+      depth--;
+      if (depth === 0) return body.slice(open, i);
+    }
+  }
+  return null;
+}
+
+/**
+ * First top-level argument of an already-unwrapped argument list — commas inside
+ * nested parens or string literals do not split.
+ */
+function firstArgument(args: string): string {
+  let depth = 0;
+  let inLiteral = false;
+  for (let i = 0; i < args.length; i++) {
+    const ch = args[i];
+    if (inLiteral) {
+      if (ch === "'") inLiteral = false;
+      continue;
+    }
+    if (ch === "'") inLiteral = true;
+    else if (ch === '(') depth++;
+    else if (ch === ')') depth--;
+    else if (ch === ',' && depth === 0) return args.slice(0, i);
+  }
+  return args;
+}
+
+/**
+ * True when `rhs` is the idempotency key ITSELF, not merely an expression that
+ * mentions it.
+ *
+ * The distinction is the whole point. `v_key := p_idempotency_key` and
+ * `v_key := coalesce(p_idempotency_key, gen_random_uuid()::text)` both leave
+ * v_key carrying the caller's key, so forwarding v_key to a delegate genuinely
+ * forwards the key. `v_msg := 'idempotency=' || p_idempotency_key` does not —
+ * it builds a log line. Crediting that as an alias let a wrapper forward a
+ * DIFFERENT value to its private impl, hit the impl's own idempotency block,
+ * and have the whole chain scored as covered while every call in it claimed a
+ * fresh key. That is the exact failure `usesIdempotencyThroughDelegates` was
+ * written to catch, so it must not be reachable by naming a variable badly.
+ *
+ * Only identity-preserving wrappers are unwrapped, and only through their FIRST
+ * argument, which is where coalesce/nullif carry the value.
+ */
+function rhsIsKeyAlias(rhs: string): boolean {
+  let s = rhs.trim().replace(/;+\s*$/, '').trim();
+  // Bounded: each pass must strip something or the loop exits on its own.
+  for (let guard = 0; guard < 8; guard++) {
+    const cast = s.replace(/::\s*[A-Za-z_][A-Za-z0-9_]*(\s*\(\s*\d+\s*\))?\s*$/, '').trim();
+    if (cast !== s) {
+      s = cast;
+      continue;
+    }
+    if (s.startsWith('(')) {
+      const inner = callArgumentList(s, 1);
+      // Peel only a paren pair that wraps the WHOLE expression: for
+      // `(a) || p_idempotency_key` the matching close is not the last
+      // character, and peeling it would silently discard the `|| ...` tail.
+      if (inner !== null && inner.length + 2 === s.length) {
+        s = inner.trim();
+        continue;
+      }
+    }
+    const wrapper = s.match(/^(coalesce|nullif|btrim|trim|ltrim|rtrim)\s*\(/i);
+    if (wrapper) {
+      const args = callArgumentList(s, wrapper[0].length);
+      if (args === null) break;
+      // A wrapper must span the entire expression; `coalesce(a,b) || 'x'` must
+      // not be accepted by peeling the call and ignoring the tail.
+      if (s.slice(wrapper[0].length + args.length + 1).trim() !== '') break;
+      s = firstArgument(args).trim();
+      continue;
+    }
+    break;
+  }
+  return /^p_idempotency_key$/i.test(s);
+}
+
+/**
+ * Names that carry the caller's idempotency key inside `body`: the parameter
+ * itself, plus any local ASSIGNED FROM it — `v_key := p_idempotency_key;` or
+ * `v_key := coalesce(p_idempotency_key, ...)`. See `rhsIsKeyAlias` for why
+ * "mentions the key" is not good enough.
+ */
+function idempotencyKeyNames(body: string): string[] {
+  const names = ['p_idempotency_key'];
+  const re = /\b([A-Za-z_][A-Za-z0-9_]*)\s*:=\s*([^;]*)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body)) !== null) {
+    if (rhsIsKeyAlias(m[2]) && !names.includes(m[1].toLowerCase())) {
+      names.push(m[1].toLowerCase());
+    }
+  }
+  return names;
+}
+
+/**
  * True when this body — or any function it delegates to — handles idempotency.
  *
  * A thin wrapper that passes p_idempotency_key straight through to a private
  * impl is still covered; the guard's real target is an RPC that DECLARES the
  * parameter and then drops it on the floor, which is unchanged by delegation.
  * Depth-bounded and cycle-guarded.
+ *
+ * A delegate is only credited when the CALL SITE actually forwards the key.
+ * Without that check the guard credits `public._impl(p_order_id, NULL)` — the
+ * wrapper declares p_idempotency_key, drops it on the floor, and the delegate's
+ * own idempotency block makes the whole chain look covered while every call
+ * claims a fresh key. That is exactly the failure this suite exists to catch,
+ * so it must not be reachable through one level of indirection.
  */
 function usesIdempotencyThroughDelegates(body: string, depth = 0, seen = new Set<string>()): boolean {
   if (bodyUsesIdempotency(body)) return true;
   if (depth >= 3) return false;
+  const keyNames = idempotencyKeyNames(body);
   const callRe = /\bpublic\.([A-Za-z_][A-Za-z0-9_]*)\s*\(/gi;
   let m: RegExpExecArray | null;
   while ((m = callRe.exec(body)) !== null) {
     const callee = m[1].toLowerCase();
     if (seen.has(callee)) continue;
+    const args = callArgumentList(body, m.index + m[0].length);
+    if (args === null) continue;
+    const forwardsKey = keyNames.some((name) => new RegExp(`\\b${name}\\b`, 'i').test(args));
+    if (!forwardsKey) continue;
     seen.add(callee);
     const calleeBody = resolveFunctionBody(callee);
     if (calleeBody && usesIdempotencyThroughDelegates(calleeBody, depth + 1, seen)) return true;
   }
   return false;
 }
+
+describe('Idempotency delegate credit (mutation guard for the guard itself)', () => {
+  // save_job is the anchor: a separate test below proves its own body handles
+  // idempotency, so any wrapper that genuinely forwards the key to it is
+  // covered and any wrapper that does not must NOT be.
+  const wrap = (args: string, prelude = '') =>
+    `DECLARE v_res jsonb; BEGIN ${prelude} v_res := public.save_job(${args}); RETURN v_res; END;`;
+
+  it('credits a wrapper that forwards the key', () => {
+    expect(usesIdempotencyThroughDelegates(wrap('p_payload, p_idempotency_key'))).toBe(true);
+  });
+
+  it('credits a wrapper that forwards a local assigned from the key', () => {
+    expect(
+      usesIdempotencyThroughDelegates(
+        wrap('p_payload, v_key', 'v_key := coalesce(p_idempotency_key, NULL);'),
+      ),
+    ).toBe(true);
+  });
+
+  it('is not fooled by a nested call in an earlier argument', () => {
+    expect(
+      usesIdempotencyThroughDelegates(wrap("coalesce(p_payload, '{}'::jsonb), p_idempotency_key")),
+    ).toBe(true);
+  });
+
+  it('REFUSES a wrapper that declares the key and passes NULL instead', () => {
+    // The whole point. Before 2026-08-13 this returned true: the delegate's own
+    // idempotency block was credited without ever checking the call site, so a
+    // wrapper could drop the key on the floor and still pass this suite.
+    expect(usesIdempotencyThroughDelegates(wrap('p_payload, NULL'))).toBe(false);
+  });
+
+  it('REFUSES a wrapper that omits the key argument entirely', () => {
+    expect(usesIdempotencyThroughDelegates(wrap('p_payload'))).toBe(false);
+  });
+
+  it('REFUSES a local that only MENTIONS the key in a larger expression', () => {
+    // A log line is not an idempotency key. Crediting `v_msg` here would let the
+    // wrapper forward a value that is not the caller's key, reach save_job's own
+    // idempotency block, and score the whole chain as covered — the same hole
+    // the NULL case above closes, reopened by naming a variable badly.
+    expect(
+      usesIdempotencyThroughDelegates(
+        wrap('p_payload, v_msg', "v_msg := 'idempotency=' || p_idempotency_key;"),
+      ),
+    ).toBe(false);
+  });
+
+  it('distinguishes a genuine alias from an expression that merely contains the key', () => {
+    // Identity-preserving: the local still carries the caller's key.
+    expect(rhsIsKeyAlias('p_idempotency_key')).toBe(true);
+    expect(rhsIsKeyAlias(' p_idempotency_key ')).toBe(true);
+    expect(rhsIsKeyAlias('(p_idempotency_key)')).toBe(true);
+    expect(rhsIsKeyAlias('p_idempotency_key::text')).toBe(true);
+    expect(rhsIsKeyAlias("coalesce(p_idempotency_key, gen_random_uuid()::text)")).toBe(true);
+    expect(rhsIsKeyAlias("nullif(btrim(p_idempotency_key), '')")).toBe(true);
+
+    // Not the key: a derived string, a different value, or a wrapper with a tail.
+    expect(rhsIsKeyAlias("'key=' || p_idempotency_key")).toBe(false);
+    expect(rhsIsKeyAlias("p_idempotency_key || ':retry'")).toBe(false);
+    expect(rhsIsKeyAlias("md5(p_idempotency_key)")).toBe(false);
+    expect(rhsIsKeyAlias("coalesce(p_idempotency_key, '') || '-2'")).toBe(false);
+    expect(rhsIsKeyAlias("coalesce(p_other, p_idempotency_key)")).toBe(false);
+    expect(rhsIsKeyAlias("(p_other) || p_idempotency_key")).toBe(false);
+    expect(rhsIsKeyAlias('gen_random_uuid()::text')).toBe(false);
+  });
+});
 
 describe('Idempotency BODY verification (reads migration SQL)', () => {
   it('every covered RPC body actually reads/writes idempotency_keys (not just declares the param)', () => {
@@ -2381,6 +2578,16 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
   //     dead entry would silently pre-suppress any future RPC reusing the name.
   _recompute_po_on_order_for_products:
     'internal convergent PO-cache recomputation helper; trigger parents own the transaction and direct browser EXECUTE is revoked',
+  // Trigger-only helpers whose migrations are now at or below the live registry
+  // high-water are absent from generated client types and this inventory. Keeping
+  // dead exemptions would silently pre-suppress any future RPC reusing a name.
+  // Pruned on 2026-08-13 when the registry high-water moved to 20260813011751:
+  //   _enforce_below_cost_line — installed by 20260812115237 (applied live as
+  //     ledger version 20260812154028). It RETURNS trigger, so it can never
+  //     appear in the generated client types, and once its timestamp fell below
+  //     the high-water it stopped being discovered at all. Nothing about the
+  //     guard changed; it is simply no longer something this inventory can see,
+  //     and the staleness test above is what forced the entry out.
   _sync_job_holds: 'internal convergent hold-sync helper; direct client EXECUTE is revoked',
   _sync_planned_holds: 'internal convergent hold-sync helper called within parent transactions',
   _sync_quote_job_reservations: 'internal convergent reservation-sync helper called by parent RPCs',
