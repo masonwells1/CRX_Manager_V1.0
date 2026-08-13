@@ -67,6 +67,49 @@ install bytes those pins were never computed against.
 **Prevention is not addressed here.** Nothing in this change stops the next session from applying a
 migration without landing its file. That gap is recorded in `docs/manual/KNOWN_ISSUES.md`.
 
+### What review found once the files were finally readable
+
+This is the point of landing them. Two automated reviewers read the six files on the pull request —
+the first time any reviewer could — and between them raised six findings. Each was checked against
+current source and read-only live schema rather than accepted on the reviewer's word. **Four describe
+production as it already stands; none is caused by landing the files.** Three held up, one did not:
+
+- **Confirmed — the below-cost approval path has no front end.** The database now requires an active
+  admin *and* a written reason for any line priced under cost, carried by `p_below_cost_reason`. No
+  caller in `src/` passes it, and `src/lib/internalNotes.ts`, referenced by the migration's own
+  notes, does not exist. The approval audit table has never recorded a row. Below-cost saves
+  therefore fail with a generic error and no path forward. Sales at or above cost are unaffected —
+  the guard returns early before any of this is reached.
+- **Confirmed — a quote carrying the same product on two lines cannot be re-saved.** `save_quote`
+  identifies existing lines by id, but the QuoteBuilder payload
+  (`src/pages/QuoteBuilder.tsx`) omits `id` and `client_key` entirely, so every line arrives
+  unidentified and two lines of one product are unresolvable. The resulting
+  `QUOTE_ITEM_AMBIGUOUS_COST` tells the user to reload the quote, which cannot help, because the
+  reload strips the ids again. New quotes are unaffected; the guard only engages where prior lines of
+  that product already exist. No quote in the live database is currently shaped this way, so this is
+  latent rather than active.
+- **Confirmed — `get_profitability_report` is not wired to anything.** `20260812115235` added it so
+  the profitability tabs would stop re-implementing cost basis in the browser, but no caller exists
+  and `src/pages/Reports.tsx` still groups stored header and line profit client-side. The corrected
+  basis is in the database and is not reaching the screen.
+- **Not confirmed — blend-ticket lines without a product.** The claim was that a NULL `product_id`
+  would leave the cost NULL, and that `price >= NULL` (which is NULL, not true) would fall through
+  into the fail-closed branch. The control flow is exactly that. The case is nonetheless unreachable:
+  `order_items.product_id` is `NOT NULL` live, verified by introspection. Dismissed.
+- **Fixed here — `quote_items.cost_at_quote_cents` was missing from `src/types/index.ts`.** Declared
+  optional, and the reason is itself a finding: typing it as required broke the cast at
+  `src/pages/QuoteBuilder.tsx:834`, which proved the quote loader's explicit column list never
+  fetches the snapshot at all.
+- **Deferred with cause — `.claude/schema-registry.json`.** It is stale by far more than this one
+  column (high-water `20260812003315` against a live `20260812154757`), so the correct fix is a full
+  `--from-introspection` rebuild. Doing that here would resync the entire schema and bury a six-file
+  recovery record inside an unrelated diff. Tracked in `docs/manual/KNOWN_ISSUES.md`.
+
+Both reviewers also noted that the already-applied files assert privileges against literal role names
+without first checking `pg_roles`, and that the non-finite money guard in `20260812011000` covers only
+the constrained fields. Both are correct and both are **forward-only**: an applied migration is never
+edited, so these belong in a future migration.
+
 ## 2026-08-12 — Wave A re-stamped to 20260813: a concurrent apply moved the high-water under us
 
 Rename-only change. The six Wave A migrations move from `20260812010000`–`20260812060000` to
