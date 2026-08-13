@@ -559,6 +559,18 @@
         "lifecycle"
       ]
     },
+    "create_quote_version": {
+      "chain": "smoke-quote-version-write-boundary.sql",
+      "description": "CRX-SEC-1 write boundary (migration 20260813080000): quote_versions.snapshot_data is an authoritative cost source since 20260812115236 - restore stamps quote_items.cost_at_quote_cents from snapshot_data.sections[].items[].current_cost, convert_quote_to_order copies it into the immutable order cost snapshot, and profit and commissions derive from there - so a direct table write is a commission-money write, and the below-cost trigger cannot catch it because understating the cost basis only raises apparent margin. Step 0 refuses to run until the boundary exists: it asserts anon and authenticated hold no table-level INSERT/UPDATE/DELETE/TRUNCATE/TRIGGER/REFERENCES and no column-level INSERT/UPDATE/REFERENCES, which is both a safety gate (steps 1-4 are real write statements, and pre-fix the TRUNCATE would take an ACCESS EXCLUSIVE lock on a live money table) and the direct grant-level assertion, since an RLS WITH CHECK violation also raises 42501. Under a real admin JWT - the case the dropped is_admin() policy WOULD have allowed - a direct forged-cost INSERT, an UPDATE, a DELETE and a TRUNCATE must each raise insufficient_privilege, the row count must not move, and then the legitimate path must still work: create_quote_version succeeds and authenticated SELECT still renders version history, so the boundary cannot be satisfied by breaking version creation. Ends in SMOKE_PASS_ROLLBACK; the RPC-created version row rolls back. EXPECT SMOKE_PREREQ, not a pass, on any database where 20260813080000 has not applied.",
+      "covers": [
+        "create_quote_version"
+      ],
+      "area": [
+        "security",
+        "regression",
+        "lifecycle"
+      ]
+    },
     "get_customer_statement": {
       "chain": "smoke-customer_statement_blind_spots.sql",
       "description": "Statement blind-spot fix (CHIP task_25d25699, migrations 20260611131549 + 20260716160000): legacy, NULL-order, and allocation-set payments each appear exactly once; paid/overdue invoices keep their charge lines; soft-deleted payments excluded; credit memo single-count; unapplied overpayment prepay NOT pre-counted (DEDUP RULE); the exact same allocate_payment key is replayed after the committed result and must return the cached result without a second allocation set or statement change (regression proof for the atomic idempotency-claim guard); running balance never negative; unknown-actor auth probe rejected by the in-body gate.",
