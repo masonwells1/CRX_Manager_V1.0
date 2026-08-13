@@ -25,6 +25,21 @@ supabase/migrations/20260723193312_product_families_return_policy_foundation.sql
 supabase/migrations/20260729222311_bind_save_field_actor.sql text eol=lf
 scripts/smoke/fixtures/phase3-live-unapply-credit-memo.sql text eol=lf
 
+# The six migrations applied live on 2026-08-12 whose files were recovered from
+# the applying sessions' transcripts and landed afterwards. Same rule, same
+# reason, and here it is load-bearing in a way that is easy to miss: these bytes
+# were verified LF against live pg_proc.prosrc after the fact, and the recovered
+# text md5-matches the live function bodies exactly. A Windows checkout under
+# core.autocrlf=true would rewrite them to CRLF, and a from-scratch rebuild would
+# then install bodies that no longer hash to what production actually runs — the
+# very drift these files exist to close.
+supabase/migrations/20260812010000_blend_ticket_order_header_runtime_assert.sql text eol=lf
+supabase/migrations/20260812011000_restore_quote_version_whole_cent_money.sql text eol=lf
+supabase/migrations/20260812115235_snapshot_cost_reporting.sql text eol=lf
+supabase/migrations/20260812115236_quote_items_cost_at_quote_snapshot.sql text eol=lf
+supabase/migrations/20260812115237_enforce_below_cost_admin_approval.sql text eol=lf
+supabase/migrations/20260812115238_repair_historical_order_line_cents.sql text eol=lf
+
 # Wave A. Not yet applied, but the same rule applies for the same reason, and
 # here it binds BEFORE the first apply rather than after: each of these pins an
 # md5 of a function body this file itself installs, so the bytes Git hands the
