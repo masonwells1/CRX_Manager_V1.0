@@ -110,6 +110,65 @@ without first checking `pg_roles`, and that the non-finite money guard in `20260
 the constrained fields. Both are correct and both are **forward-only**: an applied migration is never
 edited, so these belong in a future migration.
 
+## 2026-08-12 — Restore a governed maintenance path for the live SQL safety boundary
+
+The weekly adversarial review confirmed two active fail-open paths in the live SQL classifier, but
+the repository's direct-write guard also made its documented "reviewed maintenance workflow"
+impossible: the former governed producer was removed and no replacement existed. This change adds a
+single-purpose, one-use producer for the exact reviewed classifier repair. It accepts no arbitrary
+path or patch, verifies the current input Git blob, verifies three checked-in source snippets by
+SHA-256, builds one pinned output blob, refuses dirty/detached/protected branches, and requires
+Mason's dated approval token before writing. The producer itself does not activate the repair; it
+must first pass an exact-head Sol review and the normal protected pull-request pipeline. The follow-up
+change will run the producer on a feature branch and remove the temporary producer after use; the
+generated-module regression harness is already checked in and exercises 84 classifier cases. PR
+review also moved the tracked-and-untracked dirty-worktree check ahead of every temporary or target
+write, so verification mode follows the same fail-closed cleanliness contract as write mode. Input
+blob verification normalizes Windows CRLF bytes before hashing, matching the producer's normalized
+assembly path and the reviewed Git blob on every checkout.
+
+The final governance review found a bootstrap flaw: the one-use producer could write the protected
+classifier but was not itself covered by the outer direct-edit or exact-review guards. Its new
+hash-pinned `--protect-producer` mode first verifies the exact committed inputs, then installs only
+the reviewed outer protections. After that one-time bootstrap, any later producer edit is blocked by
+the direct-write guard and is always classified as risky for exact-head review; executing the clean
+committed producer also requires a fresh Sol-high proof bound to the current HEAD and base.
+
+Twenty-two exact-head adversarial passes have progressively hardened the candidate before activation. The
+latest pass found that ordinary shell quoting could bypass the producer invocation matcher. The generated
+guard now recognizes quoted, absolute, alternate-separator, wrapper-prefixed, and escaped spellings, while
+the producer itself independently requires its exact committed blob plus a fresh HEAD-and-base-bound
+Sol-high proof before either write mode can run. Thirty-five counted producer assertions pin those boundaries. The
+next pass found PostgreSQL's optional `ONLY` keyword could hide persistent targets from CTE-wrapped
+`UPDATE`, `DELETE`, and `MERGE`. Target enumeration now accepts `ONLY`, and any `WITH` statement that still
+contains an unaccounted DML verb fails closed. Three exact regressions pin those forms.
+After the corrected producer received a clean exact-head review, its pinned bootstrap installed the outer
+protections. The producer now recognizes the complete reviewed pre-install or post-install blob pair, so the
+focused harness remains repeatable after protection without accepting a mixed or stale state. The owning
+production-guard suite executes that focused harness and proves an invocation without exact-head proof is denied;
+the risky-path suite also pins the producer's exact-review classification. Rollback attempts every protected-file
+restore and reports any incomplete restoration without hiding the original failure.
+The current outer shell-safety hook now independently permits only the three exact repository-relative
+producer commands and denies chaining, wrappers, alternate spellings, unknown arguments, and npm/MCP
+indirection. This closes the pre-bootstrap check-to-execution gap before the generated production-action
+guard hardening is installed; live hook regressions pin the original chained rewrite reproduction.
+Earlier passes closed a Unicode identifier boundary that could conceal destructive SQL and removed the
+unsafe assumption that any `pg_temp`-qualified DML is harmless: PostgreSQL temporary views can be
+updatable proxies for persistent tables. The candidate now permits temporary DML only for a base temp
+table created earlier in the same batch, clears that exemption after any intervening schema operation,
+and rejects server-side `COPY` categorically because rollback cannot undo process or filesystem effects.
+The former blanket rollback exemption is now an object-specific allowlist of transaction-safe smoke
+commands. Temporary DML now earns an exemption only after a direct CTAS scratch-table declaration,
+preventing cloned production defaults from advancing persistent financial sequences. The function
+scanner also distinguishes a table declaration from a function call without hiding column expressions.
+Unicode-escaped SQL identifiers now fail closed because the database decodes them after the guard's
+raw-text classification. An `IF NOT EXISTS` CTAS no longer earns a temp-write exemption because it can
+be a no-op behind a same-named updatable view. `EXPLAIN` now fails closed because its `ANALYZE` form
+executes the wrapped command. The eighteenth pass closed PostgreSQL's optional-`INTO` `MERGE` grammar,
+including the exact `WITH ... MERGE customers ... WHEN MATCHED THEN DELETE` payload. The 78-assertion generated-module harness pins the exact
+Unicode identifier, temp-view, standalone-target, table-to-view replacement, server-program,
+server-file, cloned-default, encoded-function, view-collision, and unrecognized-command cases.
+
 ## 2026-08-12 — Wave A re-stamped to 20260813: a concurrent apply moved the high-water under us
 
 Rename-only change. The six Wave A migrations move from `20260812010000`–`20260812060000` to
@@ -263,6 +322,87 @@ aborted the migration on every apply. It now seeds the rows it needs inside its 
 rolled-back subtransaction, so it exercises the reconciliation for real on any database state rather
 than skipping, and proves it left nothing behind by whole-row fingerprint, row count, and explicit
 absence of the synthetic ids.
+
+## 2026-08-12 — Live SQL maintenance producer: first Sol findings closed
+
+The first exact-head Sol pass found two candidate defects before push: a `DO` block could execute
+transaction control before its abort marker, and safe target-bound fixtures were re-blocked by the
+final default-deny loop. The producer now rejects `COMMIT` or `ROLLBACK` inside the special `DO`
+smoke form, recognizes already-vetted DML in its final pass, and executes 21 assertions directly
+against the pinned generated module, including both Sol reproductions.
+
+The second exact-head Sol pass found four more bypasses before push: conditional or caught abort
+markers, literal-vs-literal E2E predicates, custom mutators invoked through `VALUES`, and CTE-wrapped
+`SELECT INTO`. Rollback proof now requires the marker to be the final executable statement in the
+outer `DO` block and rejects transaction control or earlier exits; E2E writes require a real column
+predicate without `OR` or joined-table broadening; custom calls are scanned per `SELECT`, `VALUES`,
+or `WITH` statement; and persistent `SELECT INTO` is detected behind CTEs. The generated candidate
+suite now covers 28 allow/deny cases including every Sol reproduction from both passes.
+
+The third exact-head pass proved that trying to preserve a regex-based persistent `[E2E]` exemption
+was itself unsafe: negation could invert a seemingly positive predicate, a marker in a non-identity
+insert column could bless a real entity, and a safe first CTE write could hide a later mass delete.
+The raw SQL connector now has the simpler enforceable boundary: production reads, explicit
+`pg_temp` scratch writes, and structurally proven rollback smoke only. Persistent E2E fixtures must
+use the governed app/RPC path. Every DML operation in a statement is enumerated, so a safe first CTE
+cannot hide a second mutation. The generated suite now covers 31 cases including all third-pass
+reproductions and the deliberate denial of persistent E2E raw writes.
+
+The fourth exact-head pass found that valid PostgreSQL `E'…'` escape strings could desynchronize the
+new scanner and hide any following mutation. All single-quote scans now recognize backslash escapes
+only for an actual `E`-prefixed literal, and the generated suite exercises the exact escape-string
+prefix before `DROP`, `TRUNCATE`, `GRANT`, `INSERT`, `UPDATE`, and `DELETE`. It now covers 37 direct
+candidate cases.
+
+The fifth exact-head pass found nested mutating RPCs could still execute inside otherwise allowed
+`EXPLAIN ANALYZE`, `CREATE TEMP … AS`, and `pg_temp` DML. The custom-function scanner is no longer
+activated by a statement-prefix allowlist; it inspects every executable statement before any safe
+exception is considered. All three exact payloads are regressions, bringing the generated candidate
+suite to 40 cases.
+
+The sixth exact-head pass found that a structurally valid aborting `DO` block still was not rollback
+proof: PostgreSQL sequence operations such as `nextval` and `setval` survive both a raised exception
+and an outer transaction rollback. Raw `DO` blocks now fail closed categorically and must use the
+reviewed migration smoke harness instead. The obsolete abort-marker parser was removed, and four
+sequence reproductions bring the pinned generated-module suite to 43 cases.
+
+The seventh exact-head pass found a platform-independent line-ending bypass: both comment scanners
+stopped `--` comments only at `\n`, while PostgreSQL also ends them at a lone `\r`. An attacker could
+therefore hide a following mutation, destructive DDL, grant, or mutating RPC from the candidate.
+Both scanners now stop at the earliest `\r` or `\n`; five exact payloads bring the pinned suite to
+48 cases.
+
+The eighth exact-head pass found a split-brain lexer: the new escape-aware statement scanner still
+delegated dollar-body removal to the legacy scanner, whose ordinary-string handling was not
+escape-aware. An `E'…'` string could therefore manufacture a fake `$tag$…$tag$` span around a CTE
+`DELETE`. The classifier no longer uses that legacy scanner path; statement splitting, dollar-body
+blanking, comments, and DML discovery all use the same escape-aware rules. The exact payload is pinned,
+bringing the generated-module suite to 49 cases. Current main was merged at the same time so this
+branch preserves PR #387's already-reviewed `20260813…` Wave A names rather than reversing them.
+
+The ninth exact-head pass found two ways to forge rollback proof with transaction boundaries. `END`
+is PostgreSQL's alias for `COMMIT`, and an intermediate `ROLLBACK` can terminate the protected
+transaction before later SQL; in both cases a decoy `BEGIN; ROLLBACK` at the end still satisfied the
+old first/last shape. Rollback smoke now requires exactly one outer transaction and rejects every
+intermediate `BEGIN`, `START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK`, `ABORT`, or
+`PREPARE TRANSACTION`. Both exact RLS-disabling payloads are pinned, bringing the suite to 51 cases.
+
+The tenth exact-head pass found two lexer mismatches with PostgreSQL. The trivia skipper still ended
+line comments only at `\n` even though the statement and keyword scanners already honored a lone
+`\r`, and the dollar-tag recognizer treated `$tag$` embedded in an unquoted identifier as the start
+of a dollar-quoted body. Either mismatch could hide destructive SQL from later classifier passes.
+All lexer paths now share the carriage-return comment boundary, and a dollar tag is recognized only
+at a valid token boundary with PostgreSQL's empty-or-identifier tag grammar. Four exact destructive
+payloads are pinned, bringing the generated-module suite to 55 cases; the producer's helper SHA-256
+and generated Git blob were re-bound to the corrected source.
+
+The eleventh exact-head pass found that a rollback-wrapped temporary function with a trusted `get_`
+name could hide `setval()` or `nextval()` inside its dollar-quoted body, execute the function, and be
+classified as allowed. Rolling back removes the temporary function but does not undo PostgreSQL
+sequence changes, so the smoke boundary was still fail-open. Raw function and procedure definitions
+now fail closed categorically, matching the existing raw-`DO` rule and requiring the reviewed
+migration smoke harness instead. The exact `pg_temp.get_pwn()` sequence payload is pinned, bringing
+the generated-module suite to 56 cases; the classifier SHA-256 and generated Git blob were re-bound.
 
 ## 2026-08-11 — A smoke selection that runs nothing no longer reports success
 
