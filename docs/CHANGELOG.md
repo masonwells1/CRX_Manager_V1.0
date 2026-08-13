@@ -7,6 +7,38 @@ All significant development milestones, in reverse chronological order.
 Exact review rejected and removed `20260813053545_allocate_multi_price_quote_draws.sql` before it could ship. Its floored unit price could make quantity × unit price reconstruct one cent less than the authoritative order-line total, and its cumulative allocation counted reversible job draws, allowing a cancelled draw to allocate the same cent again. The live same-product/multi-price partial-draw edge therefore remains safely fail-closed and explicitly open; a correct fix needs cent-priced cohorts or an immutable allocation/revenue ledger.
 
 The same review narrowed an idempotency concern. The public restore path already rejects cross-operation key reuse through `check_idempotency`, and the enabled key-insert trigger independently rolls back a conflicting receipt. The real bypass was direct `service_role` EXECUTE on `_restore_quote_version_owner_impl`. The replacement local candidate, `20260813090000_restrict_restore_quote_owner_impl.sql`, fingerprints the exact live wrapper/idempotency chain and changes only that ACL so direct execution is `postgres`-only. It is **not applied live**. Its timestamp is later than the captured live ledger and the sibling quote-version boundary candidate so a future ordered apply does not require another restamp.
+## 2026-08-13 — Third reviewer round on the not-yet-applied quote_versions write…
+
+Third reviewer round on the not-yet-applied quote_versions write boundary. Both independent reviewers found the same gap: the standing sweep pinned an exactly-one-overload count on four routines in the restore chain but not the fifth, so a later overload of the deepest one would be born callable by the browser roles, sit below the approval gate, and leave the sweep green. Added that branch (twenty-three now), pinned it in the guard test, and updated the reference count. Added defensive revokes for both restore-side implementations so the migration corrects the condition it was previously only willing to abort over, and an apply-time assertion that both public entry points are still SECURITY DEFINER. Corrected a rationale that credited browser serialisation for a value the database builds server-side, an over-strong claim about which id spellings the restore cast accepts, two stale privilege counts, a transcription that dropped a role, and a claim that every assertion has a standing mirror. Four new guards mutation-tested: each removal produces its own red. Nothing was applied and no live data was touched.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `3dc0c008 fix(security): match the uuid cast the restore path uses, not a stricter one`
+  - `69a1377e fix(security): close the second reviewer round on the quote-version boundary`
+  - `6f859fd1 fix(security): close the reviewer findings on the quote-version write boundary`
+  - `18c4e406 fix(security): act on both reviewer reports for CRX-SEC-1; correct six doc claims`
+  - `68a7a030 fix(security): close the review findings on the quote-version write boundary`
+  - `39c1aa0c Merge origin/main into claude/recover-applied-migrations-20260812`
+  - `3a3f6a6f fix(quote-versions): resolve the automated reviewer findings on CRX-SEC-1`
+  - `93f97b43 fix(security): make quote_versions writes RPC-owned (CRX-SEC-1)`
+  - `9872d848 docs: reconcile recovered migration state`
+  - `c0873d75 merge: land the Wave A repairs alongside the six recovered migrations`
+  - `cfa777d0 docs(changelog): record what review found once the six files were readable`
+  - `c7062a3f fix(types): declare quote_items.cost_at_quote_cents in the shared type layer`
+  - `8976341d fix(migrations): land the six migrations that were live with no file in the repo`
+  - `3bfd6271 fix(migrations): 010000 is single-shot; its structural replay arm was unsafe`
+  - `0923d9f5 docs(known-issues): the repo/production gap is six migrations, not one`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260812010000_blend_ticket_order_header_runtime_assert.sql`
+  - `supabase/migrations/20260812011000_restore_quote_version_whole_cent_money.sql`
+  - `supabase/migrations/20260812115235_snapshot_cost_reporting.sql`
+  - `supabase/migrations/20260812115236_quote_items_cost_at_quote_snapshot.sql`
+  - `supabase/migrations/20260812115237_enforce_below_cost_admin_approval.sql`
+  - `supabase/migrations/20260812115238_repair_historical_order_line_cents.sql`
+  - `supabase/migrations/20260813010000_wave_a_order_cost_authority_and_finiteness.sql`
+  - `supabase/migrations/20260813020000_round_order_header_money.sql`
+  - `supabase/migrations/20260813030000_reject_non_finite_money_and_quantities.sql`
+  - `supabase/migrations/20260813040000_clamp_negative_commission_remainder.sql`
+  - `supabase/migrations/20260813080000_lock_quote_versions_writes_to_rpc.sql`
 
 ## 2026-08-13 — Second-round reviewer fixes on the quote_versions write boundary:…
 

@@ -60,8 +60,10 @@
 -- THE FIX, AND WHY IT CANNOT BREAK THE APP
 -- Versions become RPC-owned, the same shape 20260715203911 used for returns:
 --   * drop the ownership-only INSERT policy;
---   * revoke the direct INSERT/UPDATE/DELETE/TRUNCATE table grants from the
---     browser roles;
+--   * revoke the direct INSERT/UPDATE/DELETE/TRUNCATE/TRIGGER/REFERENCES table
+--     grants from the browser roles — six privileges, the full write-capable
+--     set minus MAINTAIN, which is deliberately kept and explained at the
+--     REVOKE itself;
 --   * leave qversions_select and the authenticated SELECT grant untouched, so
 --     version history keeps rendering;
 --   * re-state the intended callable boundary on create_quote_version and
@@ -78,14 +80,31 @@
 --     browser grants cannot reach it.
 --   * exactly ONE overload exists of each of the three functions named below,
 --     so every REVOKE/GRANT here hits the whole surface of that name;
+--   * the RESTORE side was read live too, because the precondition below now
+--     asserts its shape and an assertion whose premise was never observed is
+--     just a guess written in SQL. Read read-only from pg_proc, five rows, one
+--     per name, no overload of any of them, every one SECURITY DEFINER with
+--     proconfig `search_path=public, pg_temp`:
+--       _create_quote_version_owner_impl(4 args)            postgres, service_role
+--       _restore_quote_version_owner_impl(4 args)           postgres, service_role
+--       _restore_quote_version_below_cost_impl_20260810(5)  postgres ONLY
+--       create_quote_version(5 args)         postgres, authenticated, service_role
+--       restore_quote_version(6 args)        postgres, authenticated, service_role
+--     So neither browser role can execute either restore-side implementation
+--     today, and the precondition below is pinning an observed state rather
+--     than establishing a new one. Note the below-cost implementation is the
+--     one routine here that service_role cannot reach either; that asymmetry is
+--     intentional (see 20260812115237) and is called out again in the caller
+--     analysis below.
 --   * no routine in ANY non-system schema has a BEGIN ATOMIC body, so the source
 --     scan in the precondition is not blind. (The precondition really does scan
 --     every non-system schema, not just `public`, and applies no prokind filter,
 --     so procedures are covered too. An earlier revision of this line said
 --     `public`, which understated the check it was describing.)
---   * no routine in any non-system schema writes this table either;
+--   * no OTHER routine in any non-system schema writes this table either — the
+--     one legitimate writer named above is of course excluded from that claim;
 --   * the browser never writes this table: the only two `.from('quote_versions')`
---     call sites in src/ are `.select('*')` reads in QuoteBuilder.tsx, and
+--     call sites in src/ are `.select('*')` reads in src/pages/QuoteBuilder.tsx, and
 --     src/lib/quoteLifecycleRpc.ts creates versions through the RPC.
 --   * `anon` and `authenticated` are members of NO other role. Read live
 --     read-only from pg_auth_members before writing this line: the result is
@@ -98,9 +117,9 @@
 --     changes.
 --
 -- CALLER ANALYSIS FOR THE EXECUTE RE-STATEMENTS BELOW (B10 rule). Read the
--- three statements individually rather than as one pattern; an earlier draft of
+-- five statements individually rather than as one pattern; an earlier draft of
 -- this paragraph claimed every REVOKE is followed by a GRANT and that is not
--- true of the third. For the two PUBLIC entry points -- create_quote_version and
+-- true of the last three. For the two PUBLIC entry points -- create_quote_version and
 -- restore_quote_version -- the REVOKE from PUBLIC/anon IS immediately followed by
 -- a GRANT to authenticated + service_role, which is a no-op re-assertion of the
 -- ACL read from live on 2026-08-13 (postgres=X, authenticated=X, service_role=X
@@ -109,7 +128,9 @@
 -- _create_quote_version_owner_impl, revokes from PUBLIC, anon AND authenticated
 -- with NO following GRANT -- deliberately, because that is the owner-side writer
 -- and nothing outside the definer chain may call it. Auditing the ACL delta from
--- the blanket sentence alone would have missed that asymmetry.
+-- the blanket sentence alone would have missed that asymmetry. The fourth and
+-- fifth statements are the restore-side mirror of the third and follow the same
+-- revoke-without-grant shape for the same reason.
 --
 -- caller-analysis: create_quote_version :: two callers, both in
 --   src/lib/quoteLifecycleRpc.ts:54 (5-arg current signature) and :65 (the
@@ -147,6 +168,25 @@
 --   worth sealing is narrower and sufficient: it is the only routine in the
 --   database that INSERTs into quote_versions, so it is the sole author of the
 --   snapshot_data that the restore path later trusts as a cost basis.
+-- caller-analysis: _restore_quote_version_owner_impl :: no callers in src/ and
+--   none possible from a browser — live ACL is postgres=X, service_role=X with
+--   no authenticated grant. Its only legitimate caller is the public
+--   restore_quote_version wrapper, inside the definer chain. Same defensive
+--   revoke-without-grant as the create-side impl above; service_role is left
+--   untouched because it holds EXECUTE today and this file's scope is the
+--   browser roles. This is the routine that arms
+--   crx.quote_cost_snapshot_passthrough (20260812115236 line 1096), which is
+--   precisely why a direct browser path to it would be a cost-basis hole.
+-- caller-analysis: _restore_quote_version_below_cost_impl_20260810 :: no callers
+--   in src/ and none possible — live ACL is postgres=X ONLY, the single routine
+--   in this chain that service_role cannot reach either. 20260812115237 renamed
+--   the pre-existing restore_quote_version to this name and rebuilt the public
+--   entry point as a thin wrapper that runs _begin_below_cost_money_write FIRST
+--   and then delegates here, so the below-cost approval gate lives in the
+--   wrapper and NOT in this routine. Anything that could call this directly
+--   would perform a restore with that approval check skipped entirely. Same
+--   defensive revoke-without-grant; no GRANT is added to anyone, including
+--   service_role, because it holds none today.
 --
 -- TRUNCATE is revoked as well, deliberately. RLS policies do not apply to
 -- TRUNCATE at all, so the grant alone let an authenticated caller empty the
@@ -191,9 +231,15 @@
 -- BASIS, not a full audit of snapshot integrity. Do not read a clean precond as
 -- "every stored snapshot is trustworthy".
 --
--- AND IT RUNS EXACTLY ONCE. Every other assertion this file makes has a mirror
--- in the standing sweep predicate that ships with it, so drift is re-detected.
--- The forgery scan deliberately does not: it is a pre-apply data gate whose job
+-- AND IT RUNS EXACTLY ONCE. Every STRUCTURAL assertion this file makes — the
+-- policy shape, the table privileges, the function EXECUTE grants and the
+-- overload counts — has a mirror in the standing sweep predicate that ships with
+-- it, so drift in any of those is re-detected. Two assertions in this file are
+-- deliberately apply-time only and have no standing counterpart: this forgery
+-- scan, and the SECURITY DEFINER check on the two public entry points. Each
+-- carries its own note saying why. Do not read the sentence above as "every line
+-- in this file is watched forever".
+-- The forgery scan is the first of the two: it is a pre-apply data gate whose job
 -- is to refuse to seal a forged basis inside the new boundary, not a standing
 -- watch. After the apply the only remaining writers are service_role and
 -- postgres — no browser role can reach the table at all — so the population it
@@ -424,6 +470,31 @@ BEGIN
     RAISE EXCEPTION 'PRECOND: a browser role can execute a restore-side implementation directly, skipping the below-cost approval check that lives in the public wrapper. Sealing the quote_versions write boundary while that path is open would give a false sense of closure. Revoke it and re-review before applying.';
   END IF;
 
+  -- Both PUBLIC entry points must still be SECURITY DEFINER. This is the hinge
+  -- the whole fix swings on and nothing else in this file or in the standing
+  -- sweep states it. After the REVOKEs below, `authenticated` holds no direct
+  -- write privilege on quote_versions at all, so the only remaining way a
+  -- version gets created or restored is these two wrappers running as their
+  -- privileged owner. If either one were rebuilt as SECURITY INVOKER — the
+  -- default, and therefore what an incomplete CREATE OR REPLACE silently
+  -- produces — it would execute with the caller's own privileges, find them
+  -- revoked, and the feature would stop working for every user. Checked live
+  -- before writing this: both are prosecdef = true today.
+  --
+  -- Deliberately an apply-time assertion and not a sweep branch: losing DEFINER
+  -- breaks the feature loudly for everyone rather than opening a quiet hole, so
+  -- it does not need standing surveillance — it needs to be true at the moment
+  -- this file removes the fallback path.
+  IF EXISTS (
+    SELECT 1
+      FROM pg_proc p
+     WHERE p.pronamespace = 'public'::regnamespace
+       AND p.proname IN ('create_quote_version', 'restore_quote_version')
+       AND NOT p.prosecdef
+  ) THEN
+    RAISE EXCEPTION 'PRECOND: create_quote_version and/or restore_quote_version is not SECURITY DEFINER. This file revokes the browser roles direct write access to quote_versions, so a SECURITY INVOKER wrapper would run with the caller''s revoked privileges and version create/restore would fail for every user. Restore DEFINER and re-review before applying.';
+  END IF;
+
   -- The privileged writer must exist and must be the owner-side definer, or
   -- revoking the browser grants would leave NO way to create a version.
   SELECT count(*) INTO v_count
@@ -626,9 +697,16 @@ BEGIN
            -- rejected by the decimal pattern above, so without this branch a
            -- forged one-cent basis written as '0.0_1' would land in the
            -- unreadable bucket rather than the forged one. Treated as blocking
-           -- in its own right: QuoteBuilder serialises this field with
-           -- JSON.stringify, which cannot emit either form, so its presence is
-           -- hand-crafted JSON regardless of what the value works out to.
+           -- in its own right, and the reason is stronger than a claim about
+           -- the browser. snapshot_data is not serialised by the client at all:
+           -- _create_quote_version_owner_impl builds it SERVER-side with
+           -- jsonb_build_object, taking 'current_cost' straight from the typed
+           -- quote_items.current_cost column (20260611211058:1194-1250). So this
+           -- field is whatever PostgreSQL's own numeric output renders, which is
+           -- plain decimal — 0x64 goes in as the numeric 100 and comes back out
+           -- as "100". There is no path through the legitimate writer that can
+           -- put '0x64' or '1_0' in this field, whatever the client sent. Its
+           -- presence therefore means the row was written around that function.
            (cost_text !~ '^\s*[-+]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][-+]?[0-9]{1,4})?\s*$'
             AND (cost_text ~ '_' OR cost_text ~* '^\s*[-+]?0[xob]')) AS cost_exotic,
            CASE WHEN product_id_text ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
@@ -656,10 +734,14 @@ BEGIN
            -- resolved it, satisfied the quote_items FK, and stamped its cost
            -- basis into canonical profit and commission money.
            --
-           -- Blocking in its own right, for the cost_exotic reason: QuoteBuilder
-           -- serialises this field with JSON.stringify from a uuid the database
-           -- emitted, and that is always canonical — so a non-canonical form
-           -- here is hand-crafted JSON regardless of what it resolves to.
+           -- Blocking in its own right, for the cost_exotic reason and by the
+           -- same server-side argument: _create_quote_version_owner_impl builds
+           -- snapshot_data with jsonb_build_object from the typed
+           -- quote_items.product_id UUID column, and PostgreSQL renders a uuid
+           -- in exactly one form — lowercase, dashed, canonical. A brace-wrapped
+           -- or hyphen-free spelling cannot come out of that function no matter
+           -- what a client sent in, so its presence here means the row was
+           -- written around the legitimate writer, whatever it resolves to.
            (product_id_text IS NOT NULL
             AND product_id_text !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
             AND replace(replace(replace(btrim(product_id_text), '{', ''), '}', ''), '-', '')
@@ -782,7 +864,7 @@ BEGIN
   END IF;
 
   IF v_exotic > 0 THEN
-    RAISE EXCEPTION 'PRECOND: % existing quote_versions snapshot line(s) carry a cost or a product_id in a form the app cannot emit but the restore path would still accept. Cost side: a non-decimal or underscore-grouped numeric literal (0x.., 0o.., 0b.., or 1_0), which PostgreSQL 16+ accepts and restore would stamp. Product side: an id that is not in canonical dashed form yet still casts to a uuid (brace-wrapped, hyphen-free or irregularly hyphenated all parse and compare equal), which restore would resolve and stamp a cost basis from. JSON.stringify emits neither form, so their presence means the snapshot was hand-crafted rather than written by the app. Investigate those rows before applying.', v_exotic;
+    RAISE EXCEPTION 'PRECOND: % existing quote_versions snapshot line(s) carry a cost or a product_id in a form the legitimate writer cannot produce. Cost side: a non-decimal or underscore-grouped numeric literal (0x.., 0o.., 0b.., or 1_0), which PostgreSQL 16+ accepts and restore would stamp. Product side: an id that is not in canonical dashed form but is 32 hex digits once braces and hyphens are stripped — deliberately a SUPERSET of what uuid_in accepts, so some flagged spellings (a doubled or trailing hyphen, an unmatched brace) would in fact fail the restore cast rather than resolve; the scan does not narrow to the accepted subset because the point is that NO such spelling can come from the writer. snapshot_data is built server-side by _create_quote_version_owner_impl with jsonb_build_object from the typed quote_items.current_cost and quote_items.product_id columns, so PostgreSQL renders plain decimal and canonical lowercase-dashed uuid respectively; anything else means the row was written around that function. Investigate those rows before applying.', v_exotic;
   END IF;
 
   IF v_unchecked > 0 THEN
@@ -812,13 +894,27 @@ DROP POLICY IF EXISTS qversions_insert ON public.quote_versions;
 -- MAINTAIN, and it survives the list below — authenticated goes from arwdDxtm to
 -- rm, and anon (which holds only m on this table today) is unchanged.
 --
--- That is a deliberate scope call, not an oversight. MAINTAIN carries VACUUM,
--- ANALYZE, CLUSTER, REINDEX, REFRESH MATERIALIZED VIEW and LOCK TABLE — it moves
--- no rows, so it is not part of the forged-snapshot path this file closes, and
--- the POSTCOND block below correspondingly does not test for it. Revoking it
--- would be a separate project-wide ACL decision affecting every table, of the
--- same kind as the blanket TRUNCATE grants noted in the header, and folding it
--- into a targeted security fix is how unrelated breakage gets shipped.
+-- That is a deliberate scope call, not an oversight, and the reason is narrower
+-- than "it is harmless". MAINTAIN carries VACUUM, ANALYZE, CLUSTER, REINDEX,
+-- REFRESH MATERIALIZED VIEW and LOCK TABLE. None of those change a row VALUE, so
+-- MAINTAIN is outside the forged-snapshot integrity path this file closes, and
+-- the POSTCOND block below correspondingly does not test for it. But it is not
+-- nothing: LOCK TABLE ... ACCESS EXCLUSIVE, CLUSTER, VACUUM FULL and REINDEX can
+-- all make the table unavailable while they run, so what is being accepted here
+-- is an AVAILABILITY residual, not a null one. Three things make that
+-- acceptable rather than merely convenient:
+--   * there is no reachable caller. Browser traffic arrives through PostgREST,
+--     which issues no LOCK/CLUSTER/VACUUM/REINDEX statements, and the one RPC
+--     that could run arbitrary SQL, execute_sql_readonly(text), had its EXECUTE
+--     revoked from authenticated, anon and PUBLIC by 20260614153000 lines 31-34;
+--   * the residual is denial-of-service at worst, self-inflicted, and visible —
+--     unlike the integrity failures this file exists to prevent, which are
+--     silent and permanent once a forged snapshot is restorable;
+--   * revoking it would be a project-wide ACL decision affecting every table, of
+--     the same kind as the blanket TRUNCATE grants noted in the header. Folding
+--     that into a targeted security fix is how unrelated breakage gets shipped.
+-- If the project ever does sweep MAINTAIN off the API roles, this table needs no
+-- special handling — it just stops being an exception.
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES
   ON TABLE public.quote_versions
   FROM PUBLIC, anon, authenticated;
@@ -841,6 +937,30 @@ GRANT EXECUTE ON FUNCTION public.restore_quote_version(uuid, uuid, uuid, text, b
 -- basis. It does NOT hold the cost-snapshot passthrough — see the header, which
 -- names the two routines in 20260812115236 that actually arm it.
 REVOKE EXECUTE ON FUNCTION public._create_quote_version_owner_impl(uuid, uuid, text, text)
+  FROM PUBLIC, anon, authenticated;
+
+-- The two RESTORE-side implementations get the same defensive revoke, so that
+-- this file's write half and read-back half are symmetric. Both are no-ops on
+-- the database as read today — neither browser role holds EXECUTE on either —
+-- and that is exactly the point: the create side got a defensive revoke while
+-- the restore side got only an assertion that aborts the apply. A file that
+-- refuses to apply over a condition it is perfectly able to correct just makes
+-- the next person hand-fix it under time pressure, and the create-side revoke
+-- above proves the correction is considered safe here.
+--
+-- Note both statements name PUBLIC, anon and authenticated ONLY. service_role
+-- is left alone deliberately: it holds EXECUTE on the owner-side routine (not
+-- on the below-cost one) and this file's declared scope is the browser roles.
+--
+-- These revokes are belt, not braces. The PRECOND above already hard-fails if
+-- either routine is browser-executable, so nothing downstream depends on these
+-- succeeding — which matters, because REVOKE silently no-ops on a grant issued
+-- by a role the executing role is not a member of, the same grantor trap
+-- documented at the table REVOKE above.
+REVOKE EXECUTE ON FUNCTION public._restore_quote_version_owner_impl(uuid, uuid, uuid, text)
+  FROM PUBLIC, anon, authenticated;
+
+REVOKE EXECUTE ON FUNCTION public._restore_quote_version_below_cost_impl_20260810(uuid, uuid, uuid, text, bigint)
   FROM PUBLIC, anon, authenticated;
 
 DO $postcond$
@@ -1116,8 +1236,13 @@ BEGIN
   -- it too rather than leaving a reader to assume tables are the whole story.
   -- Same live read, objtype 'f' in schema public:
   --
-  --   grantor supabase_admin: anon=X, authenticated=X, service_role=X
-  --   grantor postgres:       anon=X, authenticated=X, service_role=X
+  --   grantor supabase_admin: postgres=X, anon=X, authenticated=X, service_role=X
+  --   grantor postgres:       postgres=X, anon=X, authenticated=X, service_role=X
+  --
+  -- postgres=X is listed because it is there. An earlier revision of these two
+  -- lines dropped it while the TABLE transcription above kept its equivalent —
+  -- exactly the "complete them from memory" failure the note above warns about,
+  -- committed three paragraphs later.
   --
   -- On top of PostgreSQL's own default EXECUTE to PUBLIC, that means every new
   -- function in schema public is born directly callable by both browser roles.
