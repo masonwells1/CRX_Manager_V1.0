@@ -401,7 +401,7 @@ UNION ALL
 
 -- The six branches below mirror assertions that 20260813080000 makes exactly
 -- ONCE, at apply time. Everything above this line describes the table and its
--- three named routines; nothing above notices a NEW writer or a NEW rewrite path
+-- five named routines; nothing above notices a NEW writer or a NEW rewrite path
 -- appearing afterwards, which is precisely how this boundary would be reopened
 -- without touching anything the earlier branches watch. A one-shot POSTCOND is
 -- not a guard, it is a receipt; these make the same claims standing.
