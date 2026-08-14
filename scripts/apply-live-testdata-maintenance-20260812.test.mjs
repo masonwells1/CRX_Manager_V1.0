@@ -157,6 +157,7 @@ const producerInvocations = [
   '"pwsh" /EncodedCommand ZW5jb2RlZA==',
   'pwsh "$env:OPT" "$env:PAYLOAD"',
   'pwsh @args',
+  '& $EXE $OPTION $MODULE $SCRIPT $APPROVAL',
   "pwsh -Command \"Start-Process pwsh -ArgumentList @('-" + "Encoded" + "Command','ZW5jb2RlZA==') -Wait\"",
   "pwsh -Command \"Start-Process pwsh -ArgumentList '-" + "Encoded" + "Command ZW5jb2RlZA==' -Wait\"",
   "bash -c 'if true; then pwsh --" + "Encoded" + "Command ZW5jb2RlZA==; fi'",
@@ -214,6 +215,7 @@ assert.equal(
 );
 const wrappedDynamicProducer = 'F=$(decode); P=$(decode); S=$(decode); T=$(decode); command node --no-warnings "$F" "$P" "$S" "$T"';
 const wrappedDynamicProducers = [
+  '& $EXE $OPTION $MODULE $SCRIPT $APPROVAL',
   "pwsh -Command \"Start-Process pwsh -ArgumentList @('-" + "Encoded" + "Command','ZW5jb2RlZA==') -Wait\"",
   "pwsh -Command \"Start-Process pwsh -ArgumentList '-" + "Encoded" + "Command ZW5jb2RlZA==' -Wait\"",
   "bash -c 'if true; then pwsh --" + "Encoded" + "Command ZW5jb2RlZA==; fi'",

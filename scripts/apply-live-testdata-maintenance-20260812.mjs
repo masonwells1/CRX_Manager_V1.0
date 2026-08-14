@@ -40,7 +40,7 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "da3a8b831f4842e1a551296282c2f39e82163a2b",
+  codexGuard: "5a44f593a68b11948deaa8534b9ff8773d4693e5",
   pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
 };
 
@@ -156,6 +156,16 @@ export function maintenanceProducerCommandMentioned(command) {
   };
   const dynamicArgument = (argument) => /^(?:[$`@*?\[<{(]|![^!\r\n]+!|%[^%\r\n]+%)/.test(argument)
     || /^(?:--?|\/).*(?:[$`@*?\[<{(]|![^!\r\n]+!|%[^%\r\n]+%)/.test(argument);
+  const opaqueExecutablePosition = (token, index, list) => {
+    if (token.control || !dynamicArgument(token.value)) return false;
+    const prior = list[index - 1];
+    if (prior?.control && prior.value === "&") return true;
+    if (prior?.control && /[({]/.test(prior.value)) return false;
+    let segmentStart = index;
+    while (segmentStart > 0 && !list[segmentStart - 1].control) segmentStart -= 1;
+    return list.slice(segmentStart, index).every((entry) => /^[A-Za-z_]\w*=/.test(entry.value));
+  };
+  if (dynamicSyntax && tokens.some(opaqueExecutablePosition)) return true;
   const powerShellValueOption = (argument) => /^(?:--?|\/)(?:configuration(?:name|file)|config|cus(?:t(?:o(?:m(?:p(?:i(?:p(?:e(?:n(?:a(?:m(?:e)?)?)?)?)?)?)?)?)?)?)?|settings(?:f(?:i(?:l(?:e)?)?)?)?|executionpolicy|ex|ep|inputformat|inp|input|if|outputformat|o|of|out|windowstyle|w|workingdirectory|wd)(?::|=)?/i.test(argument);
   const commandStringContainsEncodedPowerShell = (text) => {
     const cmdTokens = tokenize(text);
