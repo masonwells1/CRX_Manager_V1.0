@@ -23,7 +23,7 @@ const MAINTENANCE_PRODUCER_ALLOWED_COMMANDS = new Set([
 
 export function maintenanceProducerCommandMentioned(command) {
   const value = String(command || "");
-  const hasDynamicSyntax = (text) => /[*?\[\]{}$`@]|[<>]\(|\([^()\r\n]*\+[^()\r\n]*\)|![^!\r\n]+!|%[^%\r\n]+%/.test(text);
+  const hasDynamicSyntax = (text) => /[*?\[\]{}$`@]|[<>]\(|\([^()\r\n]*\+[^()\r\n]*\)|\s-join(?:\s|$)|![^!\r\n]+!|%[^%\r\n]+%/i.test(text);
   const dynamicSyntax = hasDynamicSyntax(value);
   const tokenize = (text) => {
       const tokens = [];
@@ -133,6 +133,10 @@ export function maintenanceProducerCommandMentioned(command) {
   };
   const dynamicArgument = (argument) => /^(?:[$`@*?\[<{(]|![^!\r\n]+!|%[^%\r\n]+%)/.test(argument)
     || /^(?:--?|\/).*(?:[$`@*?\[<{(]|![^!\r\n]+!|%[^%\r\n]+%)/.test(argument);
+  if (tokens.some((token, index, list) => token.control
+    && token.value === "&"
+    && list[index + 1]?.control
+    && /[({]/.test(list[index + 1].value))) return true;
   const opaqueExecutablePosition = (token, index, list) => {
     if (token.control || !dynamicArgument(token.value)) return false;
     const prior = list[index - 1];

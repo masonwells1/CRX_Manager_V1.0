@@ -40,13 +40,13 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "5a44f593a68b11948deaa8534b9ff8773d4693e5",
+  codexGuard: "b9baeeed1254e6dd4b6f162b47374376b109b0a5",
   pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
 };
 
 export function maintenanceProducerCommandMentioned(command) {
   const value = String(command || "");
-  const hasDynamicSyntax = (text) => /[*?\[\]{}$`@]|[<>]\(|\([^()\r\n]*\+[^()\r\n]*\)|![^!\r\n]+!|%[^%\r\n]+%/.test(text);
+  const hasDynamicSyntax = (text) => /[*?\[\]{}$`@]|[<>]\(|\([^()\r\n]*\+[^()\r\n]*\)|\s-join(?:\s|$)|![^!\r\n]+!|%[^%\r\n]+%/i.test(text);
   const dynamicSyntax = hasDynamicSyntax(value);
   const tokenize = (text) => {
       const tokens = [];
@@ -156,6 +156,10 @@ export function maintenanceProducerCommandMentioned(command) {
   };
   const dynamicArgument = (argument) => /^(?:[$`@*?\[<{(]|![^!\r\n]+!|%[^%\r\n]+%)/.test(argument)
     || /^(?:--?|\/).*(?:[$`@*?\[<{(]|![^!\r\n]+!|%[^%\r\n]+%)/.test(argument);
+  if (tokens.some((token, index, list) => token.control
+    && token.value === "&"
+    && list[index + 1]?.control
+    && /[({]/.test(list[index + 1].value))) return true;
   const opaqueExecutablePosition = (token, index, list) => {
     if (token.control || !dynamicArgument(token.value)) return false;
     const prior = list[index - 1];
