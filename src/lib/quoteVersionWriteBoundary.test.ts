@@ -710,6 +710,23 @@ describe('quote_versions write boundary — standing predicate', () => {
     expect(predicateCode).toContain("regexp_count(p.prosrc, '_restore_quote_version_owner_impl\\s*\\(', 'i') = 1");
     expect(predicateCode).toContain("strpos(lower(p.prosrc), 'raise exception ''quote_version_legacy_untrusted''')");
     expect(predicateCode).toContain("strpos(lower(p.prosrc), 'v_result := public._restore_quote_version_owner_impl')");
+
+    const body = restoreTrustMigration.match(
+      /CREATE OR REPLACE FUNCTION public\._restore_quote_version_below_cost_impl_20260810\([\s\S]*?AS \$function\$([\s\S]*?)\$function\$;/,
+    )?.[1];
+    expect(body).toBeDefined();
+    const trustCheck = "IF v_restore_trusted_at IS NULL THEN\n    RAISE EXCEPTION 'QUOTE_VERSION_LEGACY_UNTRUSTED';\n  END IF;";
+    const ownerCall = 'v_result := public._restore_quote_version_owner_impl(';
+    const hasSafeOrder = (source: string) =>
+      source.indexOf(trustCheck) >= 0 &&
+      source.indexOf(ownerCall) >= 0 &&
+      source.indexOf(trustCheck) < source.indexOf(ownerCall);
+    expect(hasSafeOrder(body!)).toBe(true);
+
+    // Mutation proof: moving the exact rejection below the owner call must fail
+    // the same ordering contract the standing SQL predicate enforces live.
+    const movedAfterOwner = body!.replace(trustCheck, '').replace(ownerCall, `${ownerCall}\n${trustCheck}`);
+    expect(hasSafeOrder(movedAfterOwner)).toBe(false);
   });
 
   it('keeps the new legacy-restore refusal intelligible in the quote UI', () => {
@@ -793,12 +810,7 @@ describe('quote_versions restore trust boundary — rollback smoke', () => {
 
   it('requires the exact legacy refusal before any quote state changes', () => {
     expect(restoreTrustSmoke).toContain("IF SQLERRM <> 'QUOTE_VERSION_LEGACY_UNTRUSTED' THEN");
-    expect(restoreTrustSmoke).toContain('CREATE FUNCTION public._smoke_quote_restore_attempt_sentinel()');
-    expect(restoreTrustSmoke).toMatch(/BEFORE UPDATE OR DELETE ON public\.quotes/);
-    expect(restoreTrustSmoke).toMatch(/BEFORE INSERT OR UPDATE OR DELETE ON public\.quote_sections/);
-    expect(restoreTrustSmoke).toMatch(/BEFORE INSERT OR UPDATE OR DELETE ON public\.quote_items/);
-    expect(restoreTrustSmoke).toContain("v_attempted_mutation := pg_advisory_unlock(");
-    expect(restoreTrustSmoke).toContain('legacy rejection occurred only after an attempted quote, section, or item mutation');
+    expect(restoreTrustSmoke).not.toMatch(/CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|TRIGGER)/i);
     expect(restoreTrustSmoke).toMatch(/to_jsonb\(q\), q\.row_version[\s\S]*FOR UPDATE/);
     expect(restoreTrustSmoke).toMatch(/v_quote_after IS DISTINCT FROM v_quote_before/);
     expect(restoreTrustSmoke).toMatch(/v_sections_after IS DISTINCT FROM v_sections_before/);
