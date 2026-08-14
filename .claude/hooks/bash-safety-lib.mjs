@@ -132,7 +132,7 @@ export function checkDestructiveSql(cmd) {
 //
 // Match three forms so renaming the file is not an escape hatch:
 //   1. the registered migration stem appears in the database command;
-//   2. any referenced .sql file is byte-identical to the registered source;
+//   2. any referenced SQL input file is byte-identical to the registered source;
 //   3. the full registered SQL body is pasted directly into the command.
 //
 // This is deliberately fail-closed for database-execution commands when the
@@ -162,18 +162,41 @@ export function checkOneShotReplayCommand(cmd, cwd) {
     .trim();
   const normalizedCommand = normalizeSql(text);
 
-  // Extract path-like .sql tokens from common Bash and PowerShell spellings.
+  // Extract explicit psql/Supabase --file inputs regardless of extension, then
+  // also collect path-like .sql tokens used by pipeline forms such as
+  // `Get-Content copy.sql | psql`. A byte-identical one-shot migration must not
+  // become replayable merely by copying it to an extensionless filename.
   // Quoted paths with spaces are handled; bare paths stop at shell separators.
   const referencedSql = new Set();
-  const pathRe = /(?:["']([^"']+\.sql)["']|([^\s'";&|<>]+\.sql))/gi;
+  const referencedCandidates = new Set();
+  const fileOptionRe = /(?:^|[\s;&|])(?:-f(?:\s+|=)?|--file(?:\s+|=))(?:["']([^"']+)["']|([^\s'";&|<>]+))/gi;
   let match;
+  while ((match = fileOptionRe.exec(text)) !== null) {
+    referencedCandidates.add((match[1] || match[2] || "").trim());
+  }
+
+  const pipedInputRe = /(?:^|[;&|]\s*)(?:get-content|gc|type|cat)(?:\s+(?:-literalpath|-path))?\s+(?:["']([^"']+)["']|([^\s'";&|<>]+))\s*\|/gi;
+  while ((match = pipedInputRe.exec(text)) !== null) {
+    referencedCandidates.add((match[1] || match[2] || "").trim());
+  }
+
+  const redirectedInputRe = /\bpsql\b[^;&|]*<\s*(?:["']([^"']+)["']|([^\s'";&|<>]+))/gi;
+  while ((match = redirectedInputRe.exec(text)) !== null) {
+    referencedCandidates.add((match[1] || match[2] || "").trim());
+  }
+
+  const pathRe = /(?:["']([^"']+\.sql)["']|([^\s'";&|<>]+\.sql))/gi;
   while ((match = pathRe.exec(text)) !== null) {
-    const candidate = (match[1] || match[2] || "")
+    referencedCandidates.add((match[1] || match[2] || "")
       .trim()
       // CLI option assignment is not part of the path. Without stripping it,
       // `--file=copy.sql` resolves to a fictitious file named `--file=...` and
       // a byte-identical one-shot replay bypasses the hash check.
-      .replace(/^--?[a-z][\w-]*=/i, "");
+      .replace(/^--?[a-z][\w-]*=/i, ""));
+  }
+
+  for (const rawCandidate of referencedCandidates) {
+    const candidate = rawCandidate.trim();
     if (!candidate) continue;
 
     // A command such as `cd /tmp && psql -f renamed-copy.sql` resolves the SQL
@@ -185,7 +208,7 @@ export function checkOneShotReplayCommand(cmd, cwd) {
     // go through the byte-identity check below.
     if (!path.isAbsolute(candidate)
         && /(?:^|[;&|]\s*)(?:cd|pushd|set-location|sl|push-location)\b/i.test(text)) {
-      return "Blocked database SQL execution with a relative .sql path after a shell directory change. Use an absolute SQL path so the one-shot replay guard can hash the exact file.";
+      return "Blocked database SQL execution with a relative SQL input path after a shell directory change. Use an absolute path so the one-shot replay guard can hash the exact file.";
     }
 
     referencedSql.add(path.isAbsolute(candidate) ? candidate : path.resolve(base, candidate));

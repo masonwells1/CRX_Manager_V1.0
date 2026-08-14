@@ -2,6 +2,38 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-14 — Hardened the one-shot migration replay guard so extensionless SQL input…
+
+Hardened the one-shot migration replay guard so extensionless SQL input files cannot evade byte-identity checks through psql or Supabase file options, Bash/PowerShell pipelines, or stdin redirection; added mutation coverage.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `415afb08 fix: close quote conversion review blockers`
+  - `ca359ca3 Merge remote-tracking branch 'origin/main' into codex/pr389-coderabbit-fixes`
+  - `d197264e fix(security): require fresh below-cost approval context`
+  - `e33f451e Merge remote-tracking branch 'origin/main' into codex/pr389-coderabbit-fixes`
+  - `08e3c737 Merge remote-tracking branch 'origin/main' into codex/pr389-coderabbit-fixes`
+  - `d03a60fc fix(review): close PR 397 findings`
+  - `74831413 fix(migrations): make quote quarantine cutover atomic`
+  - `2565c90e fix(migrations): separate private replay and quarantine history`
+  - `f61f947e Merge remote-tracking branch 'origin/main' into codex/pr389-coderabbit-fixes`
+  - `802a121c fix: restrict quote draw-down ownership`
+  - `7f2a325c Merge remote-tracking branch 'origin/main' into codex/pr389-coderabbit-fixes`
+  - `2471e5bd Merge remote-tracking branch 'origin/claude/recover-applied-migrations-20260812' into codex/pr389-coderabbit-fixes`
+  - `e31e7184 fix(migrations): keep apply and ledger writes atomic`
+  - `da748bc3 docs(changelog): log the 2026-08-13 round-5 write-boundary hardening session`
+  - `75be6bc6 fix(security): pin search_path on the SECDEF precond, and read back the restore-side revokes`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260812010000_blend_ticket_order_header_runtime_assert.sql`
+  - `supabase/migrations/20260812011000_restore_quote_version_whole_cent_money.sql`
+  - `supabase/migrations/20260812145628_snapshot_cost_reporting.sql`
+  - `supabase/migrations/20260812151606_quote_items_cost_at_quote_snapshot.sql`
+  - `supabase/migrations/20260812154028_enforce_below_cost_admin_approval.sql`
+  - `supabase/migrations/20260813080000_lock_quote_versions_writes_to_rpc.sql`
+  - `supabase/migrations/20260813090000_restrict_restore_quote_owner_impl.sql`
+  - `supabase/migrations/20260813161614_restrict_draw_down_quote_owner.sql`
+  - `supabase/migrations/20260814041419_fresh_below_cost_reason.sql`
+  - `supabase/migrations/20260814063000_quote_sections_rpc_owned.sql`
+
 ## 2026-08-14 — Closed final PR #397 quote conversion safety blockers
 
 Removed Quote Builder's race-prone direct accepted-to-sent compensation after a cancelled below-cost conversion prompt. A cancelled prompt now leaves the already-committed quote accepted, makes no second mutation, and tells staff that no order was created; conversion can be retried from that truthful state without overwriting a concurrent change. Added pending `20260814063000_quote_sections_rpc_owned.sql` to remove application-role write privileges and obsolete write policies from `quote_sections` while retaining RLS-backed SELECT and governed RPC writers. The existing pending draw-down candidate now rounds weighted unit price, as well as weighted cost, before dependent order money and insertion. Added a rollback smoke and static contract coverage; the 970-row captured-ledger reconstruction applied all five pending candidates in order, passed every registered deny/positive-control chain, and left zero residue. Focused UI/migration/contract tests (187), typecheck, lint, production build, documentation checks, and the changed-only SQL audit passed. No migration was applied and no live data changed.

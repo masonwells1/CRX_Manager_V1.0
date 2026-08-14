@@ -181,8 +181,12 @@ ok(!checkDangerousCommand("cat .env.example"), "reading .env.example is not a wr
     const sql = "DO $x$ BEGIN UPDATE public.order_items SET profit = 1; END $x$;\n";
     const source = path.join(migDir, `${stem}.sql`);
     const renamed = path.join(tmp, "renamed-copy.sql");
+    const extensionless = path.join(tmp, "renamed-copy");
+    const safeExtensionless = path.join(tmp, "read-only-query");
     writeFileSync(source, sql);
     writeFileSync(renamed, sql);
+    writeFileSync(extensionless, sql);
+    writeFileSync(safeExtensionless, "select 1;\n");
     writeFileSync(
       path.join(baselineDir, "one-shot-migrations.json"),
       JSON.stringify({ one_shot: { [stem]: "historical population-bound repair" } }),
@@ -194,6 +198,14 @@ ok(!checkDangerousCommand("cat .env.example"), "reading .env.example is not a wr
     ok(checkOneShotReplayCommand(`supabase sql --file supabase/migrations/${stem}.sql`, tmp), "Supabase CLI one-shot replay is blocked");
     ok(checkOneShotReplayCommand("supabase sql --file=renamed-copy.sql", tmp), "Supabase --file= byte-identical replay is blocked");
     ok(checkOneShotReplayCommand("psql --file=renamed-copy.sql", tmp), "psql --file= byte-identical replay is blocked");
+    ok(checkOneShotReplayCommand("psql -f renamed-copy", tmp), "psql extensionless byte-identical replay is blocked");
+    ok(checkOneShotReplayCommand("psql -frenamed-copy", tmp), "psql attached -f extensionless replay is blocked");
+    ok(checkOneShotReplayCommand("psql --file=renamed-copy", tmp), "psql --file= extensionless replay is blocked");
+    ok(checkOneShotReplayCommand("supabase sql --file renamed-copy", tmp), "Supabase extensionless replay is blocked");
+    ok(checkOneShotReplayCommand("Get-Content renamed-copy | psql", tmp), "PowerShell extensionless pipeline replay is blocked");
+    ok(checkOneShotReplayCommand("cat renamed-copy | psql", tmp), "Bash extensionless pipeline replay is blocked");
+    ok(checkOneShotReplayCommand("psql < renamed-copy", tmp), "extensionless psql input redirection replay is blocked");
+    eq(checkOneShotReplayCommand("psql -f read-only-query", tmp), null, "unrelated extensionless SQL file stays allowed");
     ok(
       checkOneShotReplayCommand("cd /tmp && psql -f renamed-copy.sql", tmp),
       "relative psql replay after Bash cd is blocked instead of resolving from the hook cwd",
