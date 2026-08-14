@@ -623,6 +623,46 @@ eq(T(null), [], "a null body does not throw");
     'round-34: a quoted keyword trigger name cannot hide its fired protected write');
 }
 
+// ----------------------- ROUND 35: ALTER expressions can execute over rows
+{
+  const addedDefault = applyTimeWriteTargets(
+    'CREATE TEMP TABLE scratch(v int); INSERT INTO scratch(v) VALUES (1); ' +
+    'ALTER TABLE scratch ADD COLUMN probe int DEFAULT public.repair_orders();',
+  );
+  ok(addedDefault.unknownCalls.includes('repair_orders'),
+    'round-35: ADD COLUMN DEFAULT names a resident routine evaluated for existing rows');
+
+  const addedCheck = applyTimeWriteTargets(
+    'CREATE TEMP TABLE scratch(v int); INSERT INTO scratch(v) VALUES (1); ' +
+    'ALTER TABLE scratch ADD CONSTRAINT c CHECK (public.repair_orders());',
+  );
+  ok(addedCheck.unknownCalls.includes('repair_orders'),
+    'round-35: an immediately validated CHECK names its resident routine');
+
+  const generated = applyTimeWriteTargets(
+    'CREATE TEMP TABLE scratch(v int); INSERT INTO scratch(v) VALUES (1); ' +
+    'ALTER TABLE scratch ADD COLUMN probe int GENERATED ALWAYS AS (public.repair_orders()) STORED;',
+  );
+  ok(generated.unknownCalls.includes('repair_orders'),
+    'round-35: a stored generated column names its resident routine');
+
+  ok(applyTimeWriteTargets(
+    'ALTER TABLE public.orders VALIDATE CONSTRAINT orders_stored_check;',
+  ).unresolved, 'round-35: validating an unreadable stored CHECK fails closed');
+
+  const deferred = applyTimeWriteTargets(
+    'ALTER TABLE public.orders ADD CONSTRAINT c CHECK (public.repair_orders()) NOT VALID;',
+  );
+  ok(!deferred.unknownCalls.includes('repair_orders') && !deferred.unresolved,
+    'round-35: a NOT VALID CHECK remains deferred');
+
+  const setDefault = applyTimeWriteTargets(
+    'ALTER TABLE public.orders ALTER COLUMN total_profit SET DEFAULT public.repair_orders();',
+  );
+  ok(!setDefault.unknownCalls.includes('repair_orders') && !setDefault.unresolved,
+    'round-35: SET DEFAULT changes future rows but does not evaluate existing rows');
+}
+
 // -------- ROUND 32: PL/pgSQL conditions and assignments are executable too
 {
   const refuses = (sql) => {

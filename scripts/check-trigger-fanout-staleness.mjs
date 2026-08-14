@@ -84,6 +84,15 @@ export function changedTriggerInputs(sqlFiles) {
 function manifestWeakeningSources(before, after) {
   const weakened = new Set();
   const afterScanned = new Set(after.tables_scanned || []);
+  if (!(before.tables_scanned || []).length) {
+    // No base artifact means there is no trusted graph to compare. The first
+    // manifest is useful only as review evidence; operationally every declared
+    // source must remain opaque so an omitted edge cannot become a permanent
+    // false negative. The schema-registry equality check in the shell validator
+    // prevents a candidate from shrinking this declared source universe.
+    const opaque = new Set(after.opaque_on_tables || []);
+    for (const table of afterScanned) if (!opaque.has(table)) weakened.add(table);
+  }
   for (const table of before.tables_scanned || []) {
     if (!afterScanned.has(table)) weakened.add(`__removed_scanned_table_${table}`);
   }

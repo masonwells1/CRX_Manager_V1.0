@@ -251,6 +251,14 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
     [...usedRoutineNames].sort().map((name) => [name, allRoutineHashes[name]]),
   );
 
+  // This PR introduces the first checked-in live fan-out artifact, so there is
+  // no independently trusted base graph against which omissions can be judged.
+  // Preserve the captured edges for review, but fail closed operationally by
+  // marking every scanned source opaque. A later change may narrow this only
+  // after adding an independently bound live-capture attestation; the staleness
+  // checker rejects simply deleting these opacity markers.
+  const bootstrapOpaque = [...tablesScanned].sort();
+
   return {
     _meta: {
       format_version: TRIGGER_FANOUT_FORMAT,
@@ -260,10 +268,11 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
       source_project: projectId,
       scope:
         'Transitive trigger and FK referential-action writes; unresolved calls or dynamic targets are opaque.',
+      bootstrap_policy: 'all-scanned-sources-opaque-until-independent-attestation',
       regenerate: 'node scripts/generate-trigger-fanout.mjs',
     },
     tables_scanned: tablesScanned,
-    opaque_on_tables: [...opaque].sort(),
+    opaque_on_tables: bootstrapOpaque,
     reachable_routines: Object.fromEntries(
       Object.entries(reachableRoutines).sort(([a], [b]) => a.localeCompare(b)),
     ),

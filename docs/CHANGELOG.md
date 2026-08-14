@@ -51,7 +51,7 @@ check even with a decoy comment present.
 
 ## 2026-08-14 — PR #364 evidence provenance and fail-closed follow-up
 
-Fifteen adversarial findings in the migration authorization guards are repaired. The applied
+Seventeen adversarial findings in the migration authorization guards are repaired. The applied
 migration snapshot and trigger fan-out manifest now query the verified linked CRX Supabase
 project themselves instead of trusting pasted JSON with a caller-supplied project label. The shared
 capture helper accepts only two named built-in queries; caller-supplied SQL is impossible. The
@@ -65,14 +65,19 @@ unreadable standing invocation. Quoted keyword names retain their identifier ide
 view, or trigger named `"on"` cannot disappear into SQL grammar. Candidate fan-out evidence may add
 detail but may not remove a captured edge, dependency, opacity marker, source, or routine hash; an
 FK-only change also invalidates the affected parent source. Migration filenames containing
-whitespace are rejected before shell list expansion can skip their SQL. Material-column coverage now includes compound money names such as
-`total_margin_pct`, `price_per_unit`, and `net_margin`. Finally, a registered one-shot repair
+whitespace are rejected before shell list expansion can skip their SQL. Material-column coverage
+now includes compound money names such as `total_margin_pct`, `price_per_unit`, and `net_margin`.
+Finally, a registered one-shot repair
 with a missing or unreadable canonical source file blocks every apply instead of silently
 disabling the body-identity check; readable but empty/corrupted canonical SQL is refused too.
 The ledger producer preserves the authoritative ledger version even when its submitted name
 carries another timestamp, and worktree invocations write to the primary linked checkout read by
-the hook. The refreshed linked-production manifest covers 157 tables, 389 transitive cascade
-edges, and 18 opaque sources. The live catalog was read only; no migration or business row was changed.
+the hook. Apply-time `ALTER TABLE` expressions that evaluate existing rows now expose resident
+routine calls, and unreadable `VALIDATE CONSTRAINT` expressions fail closed. The first fan-out
+artifact has no independent base trust root, so its captured 389 edges remain review evidence
+while all 157 schema-registry tables are operationally opaque; a later change may narrow that only
+with independent live-capture attestation. The live catalog was read only; no migration or business
+row was changed.
 
 ## 2026-08-13 — PR #364 Windows compatibility with the governed maintenance producer
 

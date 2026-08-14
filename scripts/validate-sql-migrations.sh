@@ -229,17 +229,28 @@ TRIGGER_FANOUT_MANIFEST="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/trigger-f
 TRIGGER_FANOUT_RAW=$(node -e "
 const fs = require('fs');
 const m = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+const registry = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const ok = (n) => typeof n === 'string' && /^[a-z0-9_]+\$/.test(n);
 if (!m._meta || m._meta.format_version !== 3 ||
     m._meta.generator !== 'scripts/generate-trigger-fanout.mjs' ||
     m._meta.capture_method !== 'supabase-cli-db-query-linked' ||
     m._meta.source_project !== 'rhyzpcqhnizqbxphqdkr' ||
+    m._meta.bootstrap_policy !== 'all-scanned-sources-opaque-until-independent-attestation' ||
     typeof m._meta.captured_at !== 'string' || !Number.isFinite(Date.parse(m._meta.captured_at))) {
   throw new Error('trigger fan-out manifest has no verified linked-production provenance');
 }
 const scanned = (m.tables_scanned || []).filter(ok);
 if (scanned.length < 100) {
   throw new Error('trigger fan-out manifest scanned only ' + scanned.length + ' tables');
+}
+const registryTables = Object.keys(registry.columns || {}).filter(ok).sort();
+const scannedSorted = [...new Set(scanned)].sort();
+if (JSON.stringify(scannedSorted) !== JSON.stringify(registryTables)) {
+  throw new Error('trigger fan-out source universe does not equal the schema registry');
+}
+const opaque = (m.opaque_on_tables || []).filter(ok);
+if (opaque.some((name) => !scanned.includes(name))) {
+  throw new Error('trigger fan-out opacity names a source outside the scanned universe');
 }
 if (!m.reachable_routines || typeof m.reachable_routines !== 'object' ||
     Array.isArray(m.reachable_routines) || !m.routine_hashes ||
@@ -259,7 +270,7 @@ for (const [src, names] of Object.entries(m.reachable_routines)) {
 }
 const out = [];
 for (const n of scanned) out.push('s:' + n);
-for (const n of (m.opaque_on_tables || []).filter(ok)) out.push('o:' + n);
+for (const n of opaque) out.push('o:' + n);
 for (const [src, rows] of Object.entries(m.fanout || {})) {
   if (!ok(src)) continue;
   for (const r of rows || []) {
@@ -267,7 +278,7 @@ for (const [src, rows] of Object.entries(m.fanout || {})) {
   }
 }
 process.stdout.write(out.join('\n'));
-" "$TRIGGER_FANOUT_MANIFEST" 2>/dev/null || true)
+" "$TRIGGER_FANOUT_MANIFEST" "$APPROVED_SET_REGISTRY" 2>/dev/null || true)
 
 TRIGGER_FANOUT_SCANNED=$(printf '%s\n' "$TRIGGER_FANOUT_RAW" | sed -n 's/^s://p')
 TRIGGER_FANOUT_OPAQUE=$(printf '%s\n' "$TRIGGER_FANOUT_RAW" | sed -n 's/^o://p')
@@ -1631,7 +1642,7 @@ $MIG_BASENAME
           if (mutfns != "" && callee ~ ("^(" mutfns ")$") && !seenfn[callee]) {
             h = stmt_head(i)
             if (h != "grant" && h != "revoke" && h != "comment" && h != "drop" &&
-                h != "alter" && h != "create" &&
+                h != "create" &&
                 tok[i - 1] != "function" && tok[i - 1] != "procedure") {
               seenfn[callee] = 1
               printf "%d\t%s\t%s\t%s\t%s\t%s\n", tokln[i], callee, "indirect", "-", "-", raw[tokln[i]]

@@ -24,6 +24,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { staleTriggerSources } from './check-trigger-fanout-staleness.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, 'validate-sql-migrations.sh');
@@ -793,6 +794,23 @@ const CASES = [
     sql:
       `UPDATE storage.objects SET updated_at = now();\n` +
       `UPDATE auth.users SET raw_app_meta_data = '{}'::jsonb;\n`,
+  },
+  {
+    // ROUND 35 (Sol High). Adding a volatile default evaluates it for existing
+    // rows. Excluding every call under ALTER let a scratch-table rewrite invoke
+    // a mutator of protected money while the scanner reported nothing.
+    name: 'round-35: ADD COLUMN DEFAULT cannot invoke a protected-row mutator',
+    expect: 'violation',
+    mustReport: 'alter_default_repair_r35',
+    sql:
+      `CREATE FUNCTION public.alter_default_repair_r35() RETURNS integer\n` +
+      `LANGUAGE plpgsql AS $$ BEGIN\n` +
+      `  UPDATE public.orders SET total_profit = total_profit;\n` +
+      `  RETURN 1;\nEND $$;\n` +
+      `CREATE TEMP TABLE scratch_r35 (id integer);\n` +
+      `INSERT INTO scratch_r35(id) VALUES (1);\n` +
+      `ALTER TABLE scratch_r35 ADD COLUMN probe integer ` +
+      `DEFAULT public.alter_default_repair_r35();\n`,
   },
   {
     // ROUND 27 (Codex High). The allowlist above was the bypass one more time.
@@ -2325,8 +2343,29 @@ function runTriggerDefinitionRequiresFanoutRefresh() {
     writeFileSync(join(dir, 'supabase', 'migrations', '20200101000000_base.sql'), '-- base\n', 'utf8');
     const manifestPath = join(dir, 'scripts', 'trigger-fanout.json');
     const baseManifest = JSON.parse(readFileSync(join(HERE, 'trigger-fanout.json'), 'utf8'));
-    baseManifest.opaque_on_tables = (baseManifest.opaque_on_tables || [])
-      .filter((table) => table !== 'orders');
+    const noChanges = {
+      changedRoutines: new Set(), changedTriggerRoutines: new Set(), triggerTables: new Set(),
+      foreignKeyParents: new Set(), unparsedTriggerDefinition: false,
+      unparsedRoutineDefinition: false, unparsedForeignKeyDefinition: false,
+    };
+    const guttedInitial = structuredClone(baseManifest);
+    guttedInitial.fanout = {};
+    guttedInitial.opaque_on_tables = [];
+    guttedInitial.reachable_routines = {};
+    guttedInitial.routine_hashes = {};
+    const initialStale = staleTriggerSources({}, guttedInitial, noChanges);
+    if (!initialStale.length || !initialStale.includes(guttedInitial.tables_scanned[0])) {
+      failures.push('  round-35 an incomplete first fan-out trust root was not rejected');
+    }
+    const opaqueInitial = structuredClone(guttedInitial);
+    opaqueInitial.opaque_on_tables = [...opaqueInitial.tables_scanned];
+    if (staleTriggerSources({}, opaqueInitial, noChanges).length) {
+      failures.push('  round-35 an all-opaque first fan-out trust root did not fail closed cleanly');
+    }
+    // This fixture has a committed base manifest, so it is testing ordinary
+    // post-bootstrap weakening/refresh behavior rather than the all-opaque
+    // first-trust-root rule exercised immediately above.
+    baseManifest.opaque_on_tables = [];
     baseManifest.reachable_routines.orders = [
       ...new Set([...(baseManifest.reachable_routines.orders || []), 'ordinary_helper']),
     ].sort();

@@ -510,6 +510,13 @@ function targetsFromCode(code, literals) {
     }
   }
 
+  // VALIDATE CONSTRAINT evaluates a stored CHECK against existing rows. The
+  // expression is not present in this migration, so a resident routine inside
+  // it cannot be enumerated. Refuse rather than treating the validation as a
+  // schema-only no-op. ADD CHECK is inspected by unknownCallsIn; NOT VALID is
+  // deliberately deferred and therefore does not run here.
+  if (/\balter\s+table\b[^;]*\bvalidate\s+constraint\b/.test(s)) unresolved = true;
+
   const dynamicWrites = [];
 
   // ROUND 25. Scanning string literals one at a time cannot see a statement that
@@ -708,6 +715,12 @@ const INDEX_PREFIX =
 // rewrite; this teaches the analyzer to read the call inside it. Scoped to ALTER
 // TABLE so that `ALTER POLICY ... USING (...)`, which is deferred, stays out.
 const RETYPE_USING = /\busing\s/;
+const ADD_COLUMN_DEFAULT =
+  /\badd\s+(?:column\s+)?(?:if\s+not\s+exists\s+)?[a-z_][a-z0-9_$]*\b[\s\S]*?\bdefault\s+/;
+const ADD_COLUMN_GENERATED =
+  /\badd\s+(?:column\s+)?(?:if\s+not\s+exists\s+)?[a-z_][a-z0-9_$]*\b[\s\S]*?\bgenerated\s+always\s+as\s*\(/;
+const ADD_CHECK_CONSTRAINT =
+  /\badd\s+(?:constraint\s+[a-z_][a-z0-9_$]*\s+)?check\s*\(/;
 
 // Splitting a routine body on `;` leaves the first statement fused to the block
 // keywords in front of it — `BEGIN PERFORM repair()` arrives as one fragment
@@ -772,8 +785,17 @@ function runForEffectRegion(stmt) {
   if (/^alter\s+table\b/.test(rest)) {
     const using = RETYPE_USING.exec(rest);
     if (using) return rest.slice(using.index);
+    const addedDefault = ADD_COLUMN_DEFAULT.exec(rest);
+    if (addedDefault) return rest.slice(addedDefault.index + addedDefault[0].lastIndexOf("default"));
+    const generated = ADD_COLUMN_GENERATED.exec(rest);
+    if (generated) return rest.slice(generated.index + generated[0].lastIndexOf("generated"));
+    const check = ADD_CHECK_CONSTRAINT.exec(rest);
+    if (check && !/\bnot\s+valid\b/.test(rest)) {
+      return rest.slice(check.index + check[0].lastIndexOf("check"));
+    }
     return "";
   }
+
   // A statement introduced by a control structure rather than beginning the
   // fragment. Reached only when the fragment is not a definition.
   CONTROL_INTRO.lastIndex = 0;
@@ -799,7 +821,6 @@ export function ruleAttachments(code) {
     if (to.hit !== "to") continue;
     const rel = readRelation(body, to.end);
     if (!rel || (NON_RELATION_KEYWORDS.has(rel.table) && !rel.quoted)) continue;
-    if (rel.quoted && NON_RELATION_KEYWORDS.has(rel.table)) unresolved = true;
     out.push(rel.table);
   }
   return [...new Set(out)];
@@ -833,7 +854,7 @@ function readsAsStatement(text) {
 const NOT_A_ROUTINE_CALL = new Set([
   // Syntax that takes a parenthesized operand.
   "in", "exists", "and", "or", "not", "any", "all", "some", "from", "as", "on",
-  "select", "where", "using", "join", "filter", "cast", "position", "when",
+  "select", "where", "using", "join", "filter", "cast", "position", "when", "check",
   "case", "values", "row", "over", "within", "order", "group", "having",
   "returning", "set", "distinct", "between", "like", "overlaps", "at", "by",
   // `ON CONFLICT (v) DO UPDATE` — reachable only since round 30 taught this scan

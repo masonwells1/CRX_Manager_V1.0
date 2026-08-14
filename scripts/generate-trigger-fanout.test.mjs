@@ -79,7 +79,8 @@ check('direct and helper-mediated writes create cascade edges', () => {
 });
 check('dynamic targets and unresolved effectful calls are opaque', () => {
   const manifest = buildTriggerFanoutManifest(payload);
-  assert.deepEqual(manifest.opaque_on_tables, ['dynamic_source', 'unknown_source', 'unsupported_source']);
+  assert.deepEqual(manifest.opaque_on_tables, tables,
+    'the first trust root refuses every scanned source until independent attestation exists');
 });
 check('trigger-to-trigger writes close transitively', () => {
   const manifest = buildTriggerFanoutManifest(payload);
@@ -122,6 +123,8 @@ check('manifest records linked capture provenance', () => {
   assert.equal(manifest._meta.format_version, TRIGGER_FANOUT_FORMAT);
   assert.equal(manifest._meta.source_project, CRX_SUPABASE_PROJECT_ID);
   assert.equal(manifest._meta.capture_method, 'supabase-cli-db-query-linked');
+  assert.equal(manifest._meta.bootstrap_policy,
+    'all-scanned-sources-opaque-until-independent-attestation');
   assert.equal(manifest._meta.captured_at, CAPTURED_AT);
 });
 check('capture invokes one fixed linked query and writes its result', () => {
