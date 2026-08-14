@@ -411,15 +411,31 @@ describe('QuoteBuilder', () => {
     vi.unstubAllGlobals();
   });
 
-  it('installs the authoritative server totals returned by save_quote', async () => {
+  it('installs the authoritative server totals and canonical lines returned by save_quote', async () => {
     const { quote, product, section, item } = makeQuoteFixture('draft', 7);
+    const canonicalProduct = {
+      ...product,
+      tier1_price: 12,
+      current_cost: 7,
+    };
+    const canonicalItem = {
+      ...item,
+      product: canonicalProduct,
+      price_per_unit: 12,
+      current_cost: 7,
+      total_units_needed: 2,
+      total_price: 24,
+      profit: 10,
+      net_margin: 41.67,
+    };
+    let quoteItemReads = 0;
     mockFrom.mockImplementation((table: string) => buildChain({
       data: table === 'quotes'
         ? quote
         : table === 'quote_sections'
           ? [section]
           : table === 'quote_items'
-            ? [item]
+            ? [++quoteItemReads === 1 ? item : canonicalItem]
             : table === 'customers'
               ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }]
               : table === 'products'
@@ -433,10 +449,10 @@ describe('QuoteBuilder', () => {
             quote_id: quote.id,
             row_version: 8,
             server_totals: {
-              total_price: 19.99,
-              total_cost: 11.11,
-              total_profit: 8.88,
-              total_margin_pct: 44.42,
+              total_price: 24,
+              total_cost: 14,
+              total_profit: 10,
+              total_margin_pct: 41.67,
             },
           },
           error: null,
@@ -446,19 +462,70 @@ describe('QuoteBuilder', () => {
     renderQuoteBuilder(quote.id);
     fireEvent.click(await screen.findByText('Save Draft'));
 
-    await waitFor(() => expect(screen.getByText('$19.99')).toBeInTheDocument());
-    expect(screen.getByText('$11.11')).toBeInTheDocument();
-    expect(screen.getByText('$8.88')).toBeInTheDocument();
-    expect(screen.getByText('44.4%')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText('$24.00').length).toBeGreaterThan(0));
+    expect(screen.getAllByText('$14.00').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('$10.00').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('41.7%').length).toBeGreaterThan(0);
 
     fireEvent.change(screen.getByRole('spinbutton', { name: 'Units needed' }), {
       target: { value: '3' },
     });
-    await waitFor(() => expect(screen.getAllByText('$30.00').length).toBeGreaterThan(0));
-    expect(screen.getAllByText('$18.00').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('$12.00').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('40.0%').length).toBeGreaterThan(0);
-    expect(screen.queryByText('$19.99')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText('$36.00').length).toBeGreaterThan(0));
+    expect(screen.getAllByText('$21.00').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('$15.00').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('41.7%').length).toBeGreaterThan(0);
+    expect(screen.queryByText('$24.00')).not.toBeInTheDocument();
+  });
+
+  it('fails closed and retains the save key when canonical saved lines cannot be refreshed', async () => {
+    const { quote, product, section, item } = makeQuoteFixture('draft', 7);
+    let quoteItemReads = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'quote_items') {
+        quoteItemReads += 1;
+        return buildChain(quoteItemReads === 1
+          ? { data: [item], error: null }
+          : { data: null, error: { message: 'canonical line read failed' } });
+      }
+      return buildChain({
+        data: table === 'quotes'
+          ? quote
+          : table === 'quote_sections'
+            ? [section]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : [],
+        error: null,
+      });
+    });
+    mockRpc.mockImplementation((name: string) => Promise.resolve(name === 'save_quote'
+      ? {
+          data: {
+            quote_id: quote.id,
+            row_version: 8,
+            server_totals: {
+              total_price: 20,
+              total_cost: 12,
+              total_profit: 8,
+              total_margin_pct: 40,
+            },
+          },
+          error: null,
+        }
+      : { data: null, error: null }));
+
+    renderQuoteBuilder(quote.id);
+    fireEvent.click(await screen.findByText('Save Draft'));
+
+    expect(await screen.findByText('Reload Quote')).toBeInTheDocument();
+    expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'The quote was saved, but its canonical line values could not be refreshed. Reload the quote before continuing.',
+    );
+    expect(mockResetIdempotencyKey).not.toHaveBeenCalled();
+    expect(mockToast).not.toHaveBeenCalledWith('success', 'Quote saved as draft');
   });
 
   it('preserves a stale edit until Reload Quote replaces it and sends the refreshed version on the next save', async () => {

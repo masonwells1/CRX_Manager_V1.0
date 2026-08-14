@@ -827,6 +827,70 @@ export default function QuoteBuilder() {
     return true;
   }, [clearQuoteRowVersionWithRefreshWarning]);
 
+  const fetchQuoteStructure = useCallback(async (
+    targetQuoteId: string,
+    errorMessage: string,
+  ): Promise<LocalSection[] | null> => {
+    const [sectionsRes, itemsRes] = await Promise.all([
+      supabase.from('quote_sections').select('*').eq('quote_id', targetQuoteId).order('sort_order'),
+      supabase
+        .from('quote_items')
+        .select('*, product:products(*, product_family:product_families(name))')
+        .eq('quote_id', targetQuoteId)
+        .order('sort_order'),
+    ]);
+
+    if (sectionsRes.error || itemsRes.error) {
+      if (sectionsRes.error) {
+        Sentry.captureException(sectionsRes.error, { tags: { source: 'read', action: 'load_quote_sections_snapshot' } });
+      }
+      if (itemsRes.error) {
+        Sentry.captureException(itemsRes.error, { tags: { source: 'read', action: 'load_quote_items_snapshot' } });
+      }
+      toast('error', errorMessage);
+      return null;
+    }
+
+    const dbSections = (sectionsRes.data as QuoteSection[]) || [];
+    const dbItems = (itemsRes.data as QuoteItem[]) || [];
+    return dbSections.map((section) => ({
+      _key: nextKey(),
+      id: section.id,
+      section_name: section.section_name,
+      sort_order: section.sort_order,
+      section_notes: section.section_notes,
+      section_header_notes: section.section_header_notes,
+      needed_by_date: section.needed_by_date || null,
+      field_id: section.field_id || null,
+      items: dbItems
+        .filter((item) => item.section_id === section.id)
+        .map((item) => ({
+          _key: nextKey(),
+          id: item.id,
+          product_id: item.product_id,
+          sort_order: item.sort_order,
+          notes: item.notes,
+          price_per_unit: item.price_per_unit,
+          price_override: item.price_override ?? null,
+          current_cost: item.current_cost,
+          suggested_rate: item.suggested_rate,
+          actual_rate: item.actual_rate,
+          rate_unit: item.rate_unit,
+          oz_per_acre: item.oz_per_acre,
+          price_per_acre: item.price_per_acre,
+          acres: item.acres,
+          total_units_needed: item.total_units_needed,
+          unit_size: item.unit_size,
+          profit: item.profit,
+          total_price: item.total_price,
+          net_margin: item.net_margin,
+          product: item.product,
+          calc_mode: (item.calc_mode as CalcMode) || 'rate_acres',
+          price_unit: item.price_unit || null,
+        })),
+    }));
+  }, [toast]);
+
   const fetchQuote = useCallback(async (quoteId: string, requireStableRowVersion = false): Promise<boolean> => {
     const quoteRes = await supabase
       .from('quotes')
@@ -849,22 +913,14 @@ export default function QuoteBuilder() {
     }
 
     const initialRowVersion = readRowVersion((quoteRes.data as Quote & { row_version?: unknown }).row_version);
-    const [sectionsRes, itemsRes] = await Promise.all([
-      supabase.from('quote_sections').select('*').eq('quote_id', quoteId).order('sort_order'),
-      supabase
-        .from('quote_items')
-        .select('*, product:products(*, product_family:product_families(name))')
-        .eq('quote_id', quoteId)
-        .order('sort_order'),
-    ]);
-
     // Build and validate the complete editable snapshot before changing any
     // form state. A failed Reload must never replace an operator's local work
     // with an empty quote, sections, or items list.
-    if (sectionsRes.error || itemsRes.error) {
-      if (sectionsRes.error) Sentry.captureException(sectionsRes.error, { tags: { source: 'read', action: 'load_quote_sections_snapshot' } });
-      if (itemsRes.error) Sentry.captureException(itemsRes.error, { tags: { source: 'read', action: 'load_quote_items_snapshot' } });
-      toast('error', 'Could not load the complete quote. Your current edits were kept; try Reload again or refresh the page.');
+    const localSections = await fetchQuoteStructure(
+      quoteId,
+      'Could not load the complete quote. Your current edits were kept; try Reload again or refresh the page.',
+    );
+    if (localSections === null) {
       setLoading(false);
       return false;
     }
@@ -885,48 +941,6 @@ export default function QuoteBuilder() {
     }
 
     const q = quoteRes.data as Quote;
-    const dbSections = (sectionsRes.data as QuoteSection[]) || [];
-    const dbItems = (itemsRes.data as QuoteItem[]) || [];
-
-    const localSections: LocalSection[] = dbSections.map((s) => ({
-      _key: nextKey(),
-      id: s.id,
-      section_name: s.section_name,
-      sort_order: s.sort_order,
-      section_notes: s.section_notes,
-      section_header_notes: s.section_header_notes,
-      needed_by_date: s.needed_by_date || null,
-      field_id: s.field_id || null,
-      items: dbItems
-        .filter((item) => item.section_id === s.id)
-        .map((item) => {
-          return {
-            _key: nextKey(),
-            id: item.id,
-            product_id: item.product_id,
-            sort_order: item.sort_order,
-            notes: item.notes,
-            price_per_unit: item.price_per_unit,
-            price_override: item.price_override ?? null,
-            current_cost: item.current_cost,
-            suggested_rate: item.suggested_rate,
-            actual_rate: item.actual_rate,
-            rate_unit: item.rate_unit,
-            oz_per_acre: item.oz_per_acre,
-            price_per_acre: item.price_per_acre,
-            acres: item.acres,
-            total_units_needed: item.total_units_needed,
-            unit_size: item.unit_size,
-            profit: item.profit,
-            total_price: item.total_price,
-            net_margin: item.net_margin,
-            product: item.product,
-            calc_mode: (item.calc_mode as CalcMode) || 'rate_acres',
-            price_unit: item.price_unit || null,
-          };
-        }),
-    }));
-
     // The complete snapshot is now known-good. Install its related form state
     // together so React never observes an error-path partial reload.
     quoteRowVersionRef.current = finalRowVersion;
@@ -984,7 +998,7 @@ export default function QuoteBuilder() {
     // Allow a tick for state to settle before tracking changes
     setTimeout(() => { initialLoadDone.current = true; }, 0);
     return true;
-  }, [toast, navigate]);
+  }, [fetchQuoteStructure, toast, navigate]);
 
   const reloadAfterStaleSave = useCallback(async () => {
     if (!quoteId) return false;
@@ -1589,33 +1603,12 @@ export default function QuoteBuilder() {
         return null;
       }
 
-      resetSaveQuoteIdempotencyKey();
       const result = assertRpcResult<{
         quote_id: string;
         commission_split?: CommissionSplit | null;
         row_version?: unknown;
-        item_ids?: Record<string, string> | null;
         server_totals?: unknown;
       }>(data, 'save_quote');
-      const serverTotals = parseServerQuoteTotals(result.server_totals);
-      setAuthoritativeTotals(serverTotals
-        ? { calculationKey: savedCalculationKey, totals: serverTotals }
-        : null);
-      // Install the ids save_quote just wrote. This page never refetches, so
-      // without this a line added in this session stays id-less and every later
-      // save re-sends it as new -- which, for two new lines of one product,
-      // becomes an unresolvable cost ambiguity the server has to refuse.
-      if (result.item_ids && Object.keys(result.item_ids).length > 0) {
-        const assignedIds = result.item_ids;
-        setSections((prev) =>
-          prev.map((sec) => ({
-            ...sec,
-            items: sec.items.map((item) =>
-              assignedIds[item._key] ? { ...item, id: assignedIds[item._key] } : item
-            ),
-          }))
-        );
-      }
       const savedQuoteId = result.quote_id || quoteId;
       if (!savedQuoteId) {
         toast('error', 'Quote save completed without an ID. Refresh before making further changes.');
@@ -1626,6 +1619,43 @@ export default function QuoteBuilder() {
       if (!installAuthoritativeQuoteRowVersion(result.row_version, 'saved')) {
         return null;
       }
+
+      // save_quote recalculates every line from locked database pricing and
+      // replaces the section/item rows in the same transaction. Install that
+      // complete canonical structure before any follow-up action can continue;
+      // header totals alone would leave stale line operands in this still-open
+      // editor and the next local recalculation could show the wrong margin.
+      const savedStructure = await fetchQuoteStructure(
+        savedQuoteId,
+        'The quote was saved, but its canonical line values could not be refreshed. Reload the quote before continuing.',
+      );
+      if (savedStructure === null) {
+        quoteVersionRecoveryRequiredRef.current = true;
+        setStaleSaveOpen(true);
+        return null;
+      }
+
+      suppressDirtyUntilReloadSettlesRef.current = true;
+      setSections(savedStructure.length > 0 ? savedStructure : [makeEmptySection(1)]);
+      setIsDirty(false);
+      let dirtySuppressionReleased = false;
+      const releaseDirtySuppression = () => {
+        if (dirtySuppressionReleased) return;
+        dirtySuppressionReleased = true;
+        suppressDirtyUntilReloadSettlesRef.current = false;
+        setIsDirty(false);
+      };
+      const dirtySuppressionFallback = window.setTimeout(releaseDirtySuppression, 250);
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        window.clearTimeout(dirtySuppressionFallback);
+        releaseDirtySuppression();
+      }));
+
+      const serverTotals = parseServerQuoteTotals(result.server_totals);
+      setAuthoritativeTotals(serverTotals
+        ? { calculationKey: savedCalculationKey, totals: serverTotals }
+        : null);
+      resetSaveQuoteIdempotencyKey();
       // Advance the baseline snapshot ONLY when THIS tab saved its own split edit;
       // an untouched save keeps the old baseline (still shown in the editor) so a
       // later edit fail-closed-conflicts if another tab changed the split.

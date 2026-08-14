@@ -6,6 +6,8 @@ All significant development milestones, in reverse chronological order.
 
 Closed the final exact-head PR #397 blocker in Quote Builder. The browser now saves current quote edits without first changing the quote to `accepted`; the existing governed `convert_quote_to_order()` transaction owns the accepted transition, quote-hold release, order creation, and inventory prebooking together. Cancelling the below-cost approval prompt therefore leaves the quote state and inventory reservation unchanged, with no compensating browser write. Rendered regression coverage pins both the same-status save and cancellation behavior, while a source contract test pins the complete private conversion transaction and its governed wrapper chain. No migration was added or applied and no live data changed.
 
+The final PR review also found that a successful `save_quote()` installed its authoritative header totals but left the still-open editor's line operands from before the database recalculation. Quote Builder now refetches and installs the saved section/item rows (including their refreshed product pricing relation) before any follow-up action can continue; a failed canonical read opens the existing Reload Quote recovery instead of allowing a stale calculation or conversion. The rendered regression changes server price/cost behind the page, saves, edits quantity, and proves the next calculation uses the refreshed values. This follow-up also required no migration and changed no live data.
+
 ## 2026-08-14 — Codex Supabase access is write-enabled by owner decision
 
 **Source:** Mason's explicit in-chat approval, 2026-08-14 ("Readable write scope for codex let
