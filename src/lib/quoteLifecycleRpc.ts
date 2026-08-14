@@ -78,8 +78,13 @@ export async function convertQuoteToOrderWithRowVersion(args: {
   p_performed_by: string;
   p_idempotency_key: string;
   p_expected_row_version: number | null;
+  p_below_cost_reason?: string;
 }) {
-  const { p_expected_row_version: _expectedRowVersion, ...legacyArgs } = args;
+  const {
+    p_expected_row_version: _expectedRowVersion,
+    p_below_cost_reason: belowCostReason,
+    ...legacyArgs
+  } = args;
   const { data, error } = await supabaseUntyped.rpc('convert_quote_to_order', args);
   if (!error) {
     return {
@@ -90,6 +95,7 @@ export async function convertQuoteToOrderWithRowVersion(args: {
   if (!isMissingLifecycleSignature(error, 'convert_quote_to_order')) {
     return { data: null, error };
   }
+  if (belowCostReason) return { data: null, error };
 
   const { data: legacyData, error: legacyError } = await supabaseUntyped.rpc(
     'convert_quote_to_order',
@@ -108,8 +114,13 @@ export async function restoreQuoteVersionWithRowVersion(args: {
   p_performed_by: string;
   p_idempotency_key: string;
   p_expected_row_version: number | null;
+  p_below_cost_reason?: string;
 }) {
-  const { p_expected_row_version: _expectedRowVersion, ...legacyArgs } = args;
+  const {
+    p_expected_row_version: _expectedRowVersion,
+    p_below_cost_reason: belowCostReason,
+    ...legacyArgs
+  } = args;
   const { data, error } = await supabaseUntyped.rpc('restore_quote_version', args);
   if (!error) {
     return {
@@ -120,6 +131,7 @@ export async function restoreQuoteVersionWithRowVersion(args: {
   if (!isMissingLifecycleSignature(error, 'restore_quote_version')) {
     return { data: null, error };
   }
+  if (belowCostReason) return { data: null, error };
 
   const { data: legacyData, error: legacyError } = await supabaseUntyped.rpc(
     'restore_quote_version',
