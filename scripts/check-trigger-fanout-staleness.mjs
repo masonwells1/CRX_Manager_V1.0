@@ -11,8 +11,10 @@ export function changedTriggerInputs(sqlFiles) {
   const changedRoutines = new Set();
   const changedTriggerRoutines = new Set();
   const triggerTables = new Set();
+  const foreignKeyParents = new Set();
   let unparsedTriggerDefinition = false;
   let unparsedRoutineDefinition = false;
+  let unparsedForeignKeyDefinition = false;
   const ident = '(?:"(?:[^"]|"")*"|[a-z_][a-z0-9_$]*)';
   const publicPrefix = '(?:(?:public|"public")\\s*\\.\\s*)?';
   const canonical = (raw) => {
@@ -53,14 +55,69 @@ export function changedTriggerInputs(sqlFiles) {
     if (/\bcreate\s+(?:constraint\s+)?trigger\b/i.test(sql) && !parsedTrigger) {
       unparsedTriggerDefinition = true;
     }
+    const referencePattern = new RegExp(`\\breferences\\s+${publicPrefix}(${ident})`, 'gi');
+    let parsedReference = false;
+    for (const match of sql.matchAll(referencePattern)) {
+      parsedReference = true;
+      const parent = canonical(match[1]);
+      if (parent) foreignKeyParents.add(parent); else unparsedForeignKeyDefinition = true;
+    }
+    // A declared FK always has a REFERENCES clause. If that clause could not be
+    // mapped to a public relation, the graph impact is unknown and must fail
+    // closed. DROP CONSTRAINT removes a possible cascade and is covered by the
+    // before/after graph-weakening comparison below.
+    if (/\bforeign\s+key\b/i.test(sql) && !parsedReference) {
+      unparsedForeignKeyDefinition = true;
+    }
   }
   return {
     changedRoutines,
     changedTriggerRoutines,
     triggerTables,
+    foreignKeyParents,
     unparsedTriggerDefinition,
     unparsedRoutineDefinition,
+    unparsedForeignKeyDefinition,
   };
+}
+
+function manifestWeakeningSources(before, after) {
+  const weakened = new Set();
+  const afterScanned = new Set(after.tables_scanned || []);
+  for (const table of before.tables_scanned || []) {
+    if (!afterScanned.has(table)) weakened.add(`__removed_scanned_table_${table}`);
+  }
+
+  const edgeKey = (edge) => `${edge?.target || ''}\u0000${edge?.via || ''}`;
+  for (const [source, edges] of Object.entries(before.fanout || {})) {
+    const afterEdges = new Set((after.fanout?.[source] || []).map(edgeKey));
+    if ((edges || []).some((edge) => !afterEdges.has(edgeKey(edge)))) weakened.add(source);
+  }
+
+  const afterOpaque = new Set(after.opaque_on_tables || []);
+  for (const source of before.opaque_on_tables || []) {
+    if (!afterOpaque.has(source)) weakened.add(source);
+  }
+
+  for (const [source, routines] of Object.entries(before.reachable_routines || {})) {
+    const afterRoutines = new Set(after.reachable_routines?.[source] || []);
+    if ((routines || []).some((name) => !afterRoutines.has(name))) weakened.add(source);
+  }
+
+  const owners = new Map();
+  for (const [source, routines] of Object.entries(before.reachable_routines || {})) {
+    for (const name of routines || []) {
+      if (!owners.has(name)) owners.set(name, new Set());
+      owners.get(name).add(source);
+    }
+  }
+  for (const [name, hash] of Object.entries(before.routine_hashes || {})) {
+    if (after.routine_hashes?.[name] === hash) continue;
+    const routineOwners = owners.get(name);
+    if (routineOwners?.size) for (const source of routineOwners) weakened.add(source);
+    else weakened.add(`__changed_unowned_routine_${name}`);
+  }
+  return weakened;
 }
 
 export function staleTriggerSources(before, after, changed) {
@@ -73,6 +130,7 @@ export function staleTriggerSources(before, after, changed) {
     for (const name of names || []) if (changed.changedRoutines.has(name)) add(source, name);
   }
   for (const table of changed.triggerTables) add(table, '__trigger_attachment__');
+  for (const table of changed.foreignKeyParents || []) add(table, '__foreign_key_change__');
   for (const name of changed.changedTriggerRoutines) {
     const owners = Object.entries(before.reachable_routines || {})
       .filter(([, names]) => (names || []).includes(name));
@@ -80,6 +138,8 @@ export function staleTriggerSources(before, after, changed) {
   }
   if (changed.unparsedTriggerDefinition) add('__unparsed_trigger_definition__', 'unknown');
   if (changed.unparsedRoutineDefinition) add('__unparsed_routine_definition__', 'unknown');
+  if (changed.unparsedForeignKeyDefinition) add('__unparsed_foreign_key_definition__', 'unknown');
+  for (const source of manifestWeakeningSources(before, after)) add(source, '__manifest_weakened__');
 
   const opaque = new Set(after.opaque_on_tables || []);
   const stale = [];
@@ -99,11 +159,24 @@ function main() {
   const [base, manifestPath, ...sqlFiles] = process.argv.slice(2);
   if (!base || !manifestPath) throw new Error('usage: check-trigger-fanout-staleness <base> <manifest> [sql...]');
   const changed = changedTriggerInputs(sqlFiles);
-  if (!changed.changedRoutines.size && !changed.triggerTables.size &&
-      !changed.unparsedTriggerDefinition && !changed.unparsedRoutineDefinition) return;
-  const before = JSON.parse(execFileSync(
-    'git', ['show', `${base}:${manifestPath.replaceAll('\\', '/')}`], { encoding: 'utf8' },
-  ));
+  const gitPath = manifestPath.replaceAll('\\', '/');
+  let before;
+  try {
+    before = JSON.parse(execFileSync(
+      'git', ['show', `${base}:${gitPath}`],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    ));
+  } catch (error) {
+    // A manifest introduced by this branch has no base artifact to weaken. That
+    // is distinct from an unreadable base: prove the commit exists and the path
+    // is genuinely absent before accepting an empty comparison baseline.
+    const listed = execFileSync(
+      'git', ['ls-tree', '--name-only', base, '--', gitPath],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+    ).trim();
+    if (listed) throw error;
+    before = {};
+  }
   const after = JSON.parse(readFileSync(path.resolve(manifestPath), 'utf8'));
   process.stdout.write(staleTriggerSources(before, after, changed).join(' '));
 }

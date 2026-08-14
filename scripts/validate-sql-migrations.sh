@@ -400,6 +400,23 @@ TABLES_WITHOUT_UPDATED_AT=(
 
 MIGRATION_DIR="supabase/migrations"
 
+# The scanners below deliberately operate on shell word lists for speed across
+# the historical corpus. A filename containing whitespace would therefore be
+# split into several nonexistent paths and could make a changed migration scan
+# as zero SQL. Migration names are operational identifiers, not prose: reject
+# the unsafe spelling before any list is expanded so no mode can skip it.
+UNSAFE_MIGRATION_NAME=false
+while IFS= read -r -d '' candidate; do
+  base_name=${candidate##*/}
+  if [[ "$base_name" =~ [[:space:]] ]]; then
+    echo "VIOLATION: $candidate"
+    echo "  Unsafe migration filename: whitespace is not allowed because it can split validator input."
+    echo ""
+    UNSAFE_MIGRATION_NAME=true
+  fi
+done < <(find "$MIGRATION_DIR" -name '*.sql' -type f -print0 2>/dev/null)
+if [ "$UNSAFE_MIGRATION_NAME" = true ]; then exit 1; fi
+
 if [ ! -d "$MIGRATION_DIR" ]; then
   echo "ERROR: $MIGRATION_DIR directory not found. Run from repo root."
   exit 1

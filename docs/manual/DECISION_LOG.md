@@ -11,7 +11,7 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ## 2026-08-14 — Guard evidence must establish its own production provenance
 
-**Source:** final adversarial follow-up on PR #364 (eleven findings).
+**Source:** final adversarial follow-up on PR #364 (fifteen findings).
 
 **Decision.** An evidence producer may not label caller-supplied JSON as production evidence.
 The applied-migration snapshot and trigger fan-out manifest now run fixed read-only queries
@@ -24,17 +24,23 @@ and unreadable SQL-standard bodies make the source table opaque. Source tables a
 hashes of every transitively reachable routine, so a helper change requires evidence for the
 specific affected sources rather than any unrelated graph edit. A hash changed by the same branch
 is self-asserted, not linked-live proof; without external exact-artifact attestation, each affected
-source must remain opaque. Quoted routine identifiers are canonicalized as atomic names, and a
-PostgreSQL rule that is fired by the migration is treated as unresolved rather than assumed harmless.
+source must remain opaque. Candidate evidence may not weaken the base graph by removing an edge,
+scanned source, opacity marker, dependency, or routine hash, and a migration that defines an FK
+invalidates the referenced parent source even when it changes no trigger SQL. Quoted identifiers
+remain distinguishable from SQL keywords until their syntactic role is resolved, and a PostgreSQL
+rule that is fired by the migration is treated as unresolved rather than assumed harmless.
 
 The material-money classifier treats compound names such as `total_margin_pct`,
 `price_per_unit` and `net_margin` as material. A registered one-shot repair is also invalid if
 its canonical source file is missing or unreadable in every verified checkout: a filename match
 does not excuse the missing source because the exact source body is the replay identity.
+Migration filenames containing whitespace are refused before any shell word-list expansion, so
+the validator cannot split a changed path and accidentally scan zero SQL.
 
 **Operative rule.** Production evidence establishes where it came from by performing the read
 through a verified link. A caller assertion or branch-authored hash is never provenance, helper
-indirection, quoted identifiers, rules, and foreign-key actions never make a write disappear, and
+indirection, quoted identifiers, rules, foreign-key actions, and evidence weakening never make a
+write disappear, unsafe migration paths are rejected before scanning, and
 missing replay identity blocks rather than silently disabling a one-shot guard.
 
 ---

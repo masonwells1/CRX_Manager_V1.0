@@ -596,6 +596,33 @@ eq(T(null), [], "a null body does not throw");
   ok(!attachOnly.unresolved, "round-33: defining but not firing a rule remains deferred");
 }
 
+// ---------------------------- ROUND 34: quoted keywords remain identifiers
+{
+  const direct = applyTimeWriteTargets('UPDATE public."on" SET amount = 0;');
+  ok(direct.targets.has('on.amount'),
+    'round-34: a quoted keyword relation is retained as a write target');
+  ok(direct.unresolved,
+    'round-34: an ambiguous quoted keyword relation fails closed');
+
+  const view = applyTimeWriteTargets(
+    'CREATE VIEW public."on" AS SELECT * FROM public.order_items; ' +
+    'UPDATE public."on" SET total_price = 0;',
+  );
+  ok(view.unresolved,
+    'round-34: an automatically updatable view with a quoted keyword name fails closed');
+
+  const fired = applyTimeWriteTargets(
+    'CREATE TEMP TABLE scratch_probe(id integer); ' +
+    'CREATE FUNCTION public.money_repair() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.order_items SET total_price = 0; RETURN NEW; END $$; ' +
+    'CREATE TRIGGER "on" AFTER INSERT ON scratch_probe FOR EACH ROW ' +
+    'EXECUTE FUNCTION public.money_repair(); ' +
+    'INSERT INTO scratch_probe(id) VALUES (1);',
+  );
+  ok(fired.targets.has('order_items.total_price'),
+    'round-34: a quoted keyword trigger name cannot hide its fired protected write');
+}
+
 // -------- ROUND 32: PL/pgSQL conditions and assignments are executable too
 {
   const refuses = (sql) => {

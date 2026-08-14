@@ -53,9 +53,21 @@ const IDENT_CHAR = /[A-Za-z0-9_$\u0080-\uFFFF]/;
 // definition and call. Canonicalize non-identifier characters instead. The
 // mapping may collide with an ordinary name, but that only unions extra bodies
 // and therefore fails toward an override prompt.
+const QUOTED_IDENT_PREFIX = "_crxq_";
+
 function canonicalQuotedIdentifier(value) {
   const canonical = String(value || "").replace(/[^A-Za-z0-9_$\u0080-\uFFFF]/g, "_");
-  return canonical || "_quoted_";
+  // Keep the token visibly quoted until its syntactic role is known. Without
+  // this tag a legal name such as public."on" is flattened to the keyword ON:
+  // relation readers then discard the write, and trigger readers can mistake a
+  // quoted trigger name for the attachment clause.
+  return `${QUOTED_IDENT_PREFIX}${canonical || "_quoted_"}`;
+}
+
+function identifierIdentity(value) {
+  const text = String(value || "");
+  if (!text.startsWith(QUOTED_IDENT_PREFIX)) return { value: text, quoted: false };
+  return { value: text.slice(QUOTED_IDENT_PREFIX.length) || "_quoted_", quoted: true };
 }
 
 // A format placeholder standing where a relation name belongs — `EXECUTE
@@ -246,13 +258,13 @@ function readRelation(s, pos) {
   const first = readIdent(s, i);
   if (!first) return null;
   i = first.end;
-  let name = first.value;
+  let identity = identifierIdentity(first.value);
   const after = skipSpace(s, i);
   if (s[after] === ".") {
     const second = readIdent(s, skipSpace(s, after + 1));
-    if (second) { name = second.value; i = second.end; }
+    if (second) { identity = identifierIdentity(second.value); i = second.end; }
   }
-  return { table: name, end: i };
+  return { table: identity.value, quoted: identity.quoted, end: i };
 }
 
 // Walk forward from `pos` at paren depth 0 until one of `stops` appears as a
@@ -304,12 +316,12 @@ function assignmentColumns(region) {
       const inner = close === -1 ? piece.slice(1) : piece.slice(1, close);
       for (const part of splitTopLevel(inner)) {
         const id = readIdent(part.trim(), 0);
-        if (id) cols.push(id.value);
+        if (id) cols.push(identifierIdentity(id.value).value);
       }
       continue;
     }
     const id = readIdent(piece, 0);
-    if (id) cols.push(id.value);
+    if (id) cols.push(identifierIdentity(id.value).value);
   }
   return cols;
 }
@@ -396,7 +408,8 @@ function targetsFromCode(code, literals) {
       const stop = scanTo(s, from, ["restart", "continue", "cascade", "restrict"]);
       for (const part of splitTopLevel(s.slice(from, stop.at))) {
         const rel = readRelation(part, 0);
-        if (!rel || NON_RELATION_KEYWORDS.has(rel.table)) continue;
+        if (!rel || (NON_RELATION_KEYWORDS.has(rel.table) && !rel.quoted)) continue;
+        if (rel.quoted && NON_RELATION_KEYWORDS.has(rel.table)) unresolved = true;
         tables.add(rel.table);
         targets.add(`${rel.table}.*`);
       }
@@ -436,7 +449,8 @@ function targetsFromCode(code, literals) {
     // UPDATE USING (...)`, and `SELECT ... FOR UPDATE` all put a keyword where
     // a relation would go. Reading that keyword as a table name invented
     // targets like `on.*` and `of.*` — noise that hides the real ones.
-    if (NON_RELATION_KEYWORDS.has(rel.table)) continue;
+    if (NON_RELATION_KEYWORDS.has(rel.table) && !rel.quoted) continue;
+    if (rel.quoted && NON_RELATION_KEYWORDS.has(rel.table)) unresolved = true;
     tables.add(rel.table);
     if (verb === "insert into") lastInsertTable = rel.table;
 
@@ -465,7 +479,7 @@ function targetsFromCode(code, literals) {
         const cols = splitTopLevel(s.slice(i + 1, j))
           .map((p) => readIdent(p.trim(), 0))
           .filter(Boolean)
-          .map((id) => id.value);
+          .map((id) => identifierIdentity(id.value).value);
         if (cols.length === 0) targets.add(`${rel.table}.*`);
         else for (const c of cols) targets.add(`${rel.table}.${c}`);
       } else {
@@ -487,7 +501,7 @@ function targetsFromCode(code, literals) {
   let am;
   while ((am = ALTER_TABLE.exec(s)) !== null) {
     const rel = readRelation(s, am.index + am[0].length - 1);
-    if (!rel || NON_RELATION_KEYWORDS.has(rel.table)) continue;
+    if (!rel || (NON_RELATION_KEYWORDS.has(rel.table) && !rel.quoted)) continue;
     const stmtEnd = s.indexOf(";", am.index);
     const body = s.slice(rel.end, stmtEnd === -1 ? s.length : stmtEnd);
     if (/\balter\s+(?:column\s+)?[a-z0-9_"]+\s+(?:set\s+data\s+)?type\b/.test(body)) {
@@ -624,7 +638,7 @@ export function triggerAttachments(code) {
     const on = scanTo(body, 0, ["on"]);
     if (on.hit !== "on") continue;
     const rel = readRelation(body, on.end);
-    if (!rel || NON_RELATION_KEYWORDS.has(rel.table)) continue;
+    if (!rel || (NON_RELATION_KEYWORDS.has(rel.table) && !rel.quoted)) continue;
     const fn = /\bexecute\s+(?:function|procedure)\s+(?:[a-z0-9_]+\s*\.\s*)?([a-z0-9_]+)/.exec(body);
     if (!fn) continue;
     out.push({ table: rel.table, fn: fn[1] });
@@ -784,7 +798,8 @@ export function ruleAttachments(code) {
     const to = scanTo(body, 0, ["to"]);
     if (to.hit !== "to") continue;
     const rel = readRelation(body, to.end);
-    if (!rel || NON_RELATION_KEYWORDS.has(rel.table)) continue;
+    if (!rel || (NON_RELATION_KEYWORDS.has(rel.table) && !rel.quoted)) continue;
+    if (rel.quoted && NON_RELATION_KEYWORDS.has(rel.table)) unresolved = true;
     out.push(rel.table);
   }
   return [...new Set(out)];

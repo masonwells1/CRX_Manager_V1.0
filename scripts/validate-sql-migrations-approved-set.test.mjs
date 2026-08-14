@@ -2383,6 +2383,75 @@ function runTriggerDefinitionRequiresFanoutRefresh() {
     if (guardedOut.includes('Trigger fan-out evidence is stale for affected source(s)')) {
       failures.push('  round-33 exact affected-source opacity was still classified as stale');
     }
+
+    // An FK cascade is a graph input even when no trigger or routine changes.
+    // The parent relation is the source whose DELETE/UPDATE can fan out.
+    writeFileSync(
+      join(dir, 'supabase', 'migrations', '20200102000000_trigger.sql'),
+      'ALTER TABLE public.child_row ADD CONSTRAINT child_parent_fk ' +
+        'FOREIGN KEY (parent_id) REFERENCES public."quoted_parent"(id) ON DELETE CASCADE;\n',
+      'utf8',
+    );
+    const fkStale = runBash([SCRIPT, '--changed-only', `--base=${base}`], {
+      cwd: dir, encoding: 'utf8', env: envWithoutGit(),
+    });
+    const fkOut = `${fkStale.stdout || ''}\n${fkStale.stderr || ''}`;
+    if (!fkOut.includes('Trigger fan-out evidence is stale for affected source(s): quoted_parent')) {
+      failures.push('  round-34 FK-only fan-out change did not refuse the affected parent source');
+    }
+
+    const fkGuarded = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    fkGuarded.opaque_on_tables = [
+      ...new Set([...(fkGuarded.opaque_on_tables || []), 'quoted_parent']),
+    ].sort();
+    writeFileSync(manifestPath, `${JSON.stringify(fkGuarded, null, 2)}\n`, 'utf8');
+    const fkSafe = runBash([SCRIPT, '--changed-only', `--base=${base}`], {
+      cwd: dir, encoding: 'utf8', env: envWithoutGit(),
+    });
+    if (`${fkSafe.stdout || ''}\n${fkSafe.stderr || ''}`.includes(
+      'Trigger fan-out evidence is stale for affected source(s): quoted_parent')) {
+      failures.push('  round-34 FK parent opacity was still classified as stale');
+    }
+
+    // Candidate-authored evidence may add detail, but it may not silently erase
+    // an edge captured in the base manifest. This must run even with no SQL graph
+    // input in the changed migration.
+    const weakened = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    const removable = Object.entries(baseManifest.fanout || {}).find(
+      ([source, edges]) => (edges || []).length > 0 && !(weakened.opaque_on_tables || []).includes(source),
+    );
+    if (!removable) {
+      failures.push('  round-34 fixture had no non-opaque fan-out edge to remove');
+    } else {
+      const [source] = removable;
+      weakened.fanout[source] = (weakened.fanout[source] || []).slice(1);
+      writeFileSync(manifestPath, `${JSON.stringify(weakened, null, 2)}\n`, 'utf8');
+      writeFileSync(
+        join(dir, 'supabase', 'migrations', '20200102000000_trigger.sql'),
+        '-- no trigger, routine, or FK input\n',
+        'utf8',
+      );
+      const edgeStale = runBash([SCRIPT, '--changed-only', `--base=${base}`], {
+        cwd: dir, encoding: 'utf8', env: envWithoutGit(),
+      });
+      const edgeOut = `${edgeStale.stdout || ''}\n${edgeStale.stderr || ''}`;
+      if (!edgeOut.includes(`Trigger fan-out evidence is stale for affected source(s): ${source}`)) {
+        failures.push(`  round-34 removing base fan-out edge for ${source} was not rejected`);
+      }
+    }
+
+    // Reject unsafe filenames before the historical word-list loops can split
+    // them into nonexistent paths and accidentally scan zero SQL.
+    const unsafePath = join(dir, 'supabase', 'migrations', '20200103000000_bad name.sql');
+    writeFileSync(unsafePath, 'UPDATE public.orders SET total_profit = 0;\n', 'utf8');
+    const unsafe = runBash([SCRIPT, '--changed-only', `--base=${base}`], {
+      cwd: dir, encoding: 'utf8', env: envWithoutGit(),
+    });
+    const unsafeOut = `${unsafe.stdout || ''}\n${unsafe.stderr || ''}`;
+    if (unsafe.status === 0 || !unsafeOut.includes('Unsafe migration filename: whitespace is not allowed')) {
+      failures.push('  round-34 whitespace migration filename was not rejected before scanning');
+    }
+    rmSync(unsafePath, { force: true });
   } finally {
     removeFixtureTree(dir);
   }
