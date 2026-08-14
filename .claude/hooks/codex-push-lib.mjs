@@ -203,7 +203,12 @@ export function reviewProofPathMentioned(value) {
   // separators, commas, redirects, parentheses, and future punctuation all
   // delimit the protected basename, while embedded lookalikes such as
   // `my-claude-review-push.json.bak` do not match.
-  return /(?<![\w.-])(?:claude-review-push\.json|codex-review-[^\s/"']+\.json)(?![\w.-])/i.test(text);
+  // The recovery attestation and its ledger-evidence input are wrapper-owned
+  // for the same reason as the review proofs: a directly written file could
+  // fabricate the ledger digests that weaken the push-proof review. Legitimate
+  // writes go through scripts/write-recovery-attestation.mjs, whose tool
+  // command never names either file.
+  return /(?<![\w.-])(?:claude-review-push\.json|codex-review-[^\s/"']+\.json|recovery-attestation\.json|recovery-ledger-evidence\.json)(?![\w.-])/i.test(text);
 }
 
 export function reviewStateDirectoryMentioned(value) {

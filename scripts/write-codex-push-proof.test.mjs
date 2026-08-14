@@ -42,6 +42,7 @@ import {
   RECOVERY_LEDGER_EVIDENCE_PROJECT_ID,
   RECOVERY_LEDGER_EVIDENCE_SCHEMA_VERSION,
   validateRecoveryAttestation,
+  writeRecoveryLedgerEvidenceFile,
 } from "./write-recovery-attestation.mjs";
 // Cross-check against the REAL guard validator so the minted proof shape can
 // never silently drift from what codex-push-guard actually accepts.
@@ -435,6 +436,37 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
 
   const goodRows = recoveryPaths.map((repoPath, index) => ledgerRowFor(repoPath, ledgerVersions[index]));
   const fetchedAt = "2026-08-14T11:55:00.000Z";
+
+  assert.deepEqual(
+    parseRecoveryArgs(["--write-evidence"]),
+    { help: false, writeEvidence: true, specs: [] },
+    "--write-evidence parses as the sanctioned evidence-write mode",
+  );
+  assert.throws(
+    () => writeRecoveryLedgerEvidenceFile({ root: fixture.root, text: '{"kind":"wrong"}' }),
+    /missing or unexpected fields/,
+    "the sanctioned evidence channel re-validates and refuses a malformed payload",
+  );
+  assert.equal(
+    existsSync(recoveryLedgerEvidencePath(fixture.root)),
+    false,
+    "a refused evidence payload leaves no file behind",
+  );
+  const channelBytes = `${JSON.stringify({
+    schema_version: RECOVERY_LEDGER_EVIDENCE_SCHEMA_VERSION,
+    kind: RECOVERY_LEDGER_EVIDENCE_KIND,
+    project_id: RECOVERY_LEDGER_EVIDENCE_PROJECT_ID,
+    fetched_at: fetchedAt,
+    rows: goodRows,
+  }, null, 2)}\n`;
+  const channelResult = writeRecoveryLedgerEvidenceFile({ root: fixture.root, text: channelBytes });
+  assert.equal(channelResult.path, recoveryLedgerEvidencePath(fixture.root));
+  assert.equal(channelResult.rowCount, goodRows.length, "the sanctioned channel reports every accepted row");
+  assert.equal(
+    channelResult.sha256,
+    createHash("sha256").update(Buffer.from(channelBytes, "utf8")).digest("hex"),
+    "the sanctioned channel writes the piped bytes verbatim and reports their digest",
+  );
 
   writeLedgerEvidence(fixture.root, goodRows, "2026-08-14T10:00:00.000Z");
   assert.throws(

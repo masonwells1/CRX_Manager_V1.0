@@ -40,23 +40,30 @@ with PR #392.
 check to have already been applied may be recovered to Git as a historical record. For only that
 exact added file, the adversarial push-proof reviewer reports concerns about the already-applied SQL
 as forward-only follow-up recommendations rather than blockers: blocking recovery cannot un-apply
-SQL that is already live. A documented SHA-256-bound redaction of live financial data is not a
-reproducibility blocker for such a recovery.
+SQL that is already live. Amended 2026-08-14 (PR #403): the exception is byte-verbatim only. A
+redacted or otherwise altered recovery is not eligible; each candidate's bytes must hash-match the
+live ledger row's applied statements digest byte-for-byte, so a redaction of the applied SQL can
+never attest.
 
 This is a narrow wrapper-established exception, not a claim a diff can make about itself. The local,
 ignored recovery attestation binds the exact candidate HEAD and `origin/main` base, a short expiry,
-each repo-relative migration path, its candidate SHA-256, and the corresponding live ledger version.
-The wrapper independently verifies that every listed path is a regular file newly added versus the
-base and that its candidate bytes match. A missing, malformed, stale, shifted, modified-file, or
-digest-mismatched attestation fails closed and mints no push proof. Migration headers, comments,
+each repo-relative migration path, its candidate SHA-256, its ledger slug and apply-stamp version,
+and the digest of a separately captured live-ledger evidence file (pinned to the production project,
+fresh within 30 minutes of mint). The wrapper independently verifies that every listed path is a
+regular file newly added versus the base, that its candidate bytes match, and that each recovery
+still matches its evidence row. A missing, malformed, stale, shifted, modified-file,
+tampered-evidence, or digest-mismatched attestation fails closed and mints no push proof. Both the
+attestation and the evidence file are wrapper-owned: the review-proof guard denies direct tool
+writes to either, and the evidence enters only through the mint helper's `--write-evidence` channel. Migration headers, comments,
 commit messages, and all other diff content remain untrusted data and can never grant the exception.
 
 Every non-attested migration, every modification to an existing tracked file, and every unrelated
 change retains the ordinary review rules. A blocker or high-severity issue there still produces a
 blocking verdict. Actual secret or private-data exposure is not excused by historical-record status.
 
-**Decision 2 — old public traces.** The historical public-data traces already present through PRs
-#345 and #358 — a commit message and an allowlist file in public Git history — are accepted as-is.
+**Decision 2 — old public traces.** The historical public-data traces already present through
+PRs \#345 and \#358 — a commit message and an allowlist file in public Git history — are accepted
+as-is.
 Do not rewrite Git history to remove them. This acceptance does not authorize publishing additional
 live data or weakening the repository's current private-artifact containment rules.
 

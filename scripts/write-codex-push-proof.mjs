@@ -657,6 +657,11 @@ export function buildCodexReviewPrompt({ base = GUARDED_BASE, trustedRecoveries 
   const reportLine = promptLines.indexOf(
     "Report your findings as usual. Then end your reply with EXACTLY ONE final line, and NOTHING",
   );
+  // indexOf(-1) would silently splice the recovery section AFTER the verdict
+  // instructions if the anchor sentence is ever reworded; fail closed instead.
+  if (reportLine < 0) {
+    throw new Error("Fixed review prompt anchor line not found; cannot place the trusted-recovery section.");
+  }
   promptLines.splice(reportLine, 0, ...recoverySection);
   return promptLines.join("\n");
 }

@@ -135,7 +135,11 @@ first captures live-ledger evidence through a read-only query — one row per ap
 its slug `name`, apply-stamp `version`, and
 `encode(sha256(convert_to(array_to_string(statements, E'\n'), 'UTF8')), 'hex')` — written as
 `.claude/session-state/recovery-ledger-evidence.json` (kind `live-ledger-evidence`, pinned to the
-production project id, fresh within the same 30-minute window). Then run:
+production project id, fresh within the same 30-minute window). Both that evidence file and
+`recovery-attestation.json` are wrapper-owned: the review-proof guard denies any tool command that
+names either file, so the captured evidence is piped through the helper's sanctioned channel
+(`node scripts/write-recovery-attestation.mjs --write-evidence` with the JSON on stdin), which
+re-validates the payload and keeps nothing on refusal. Then run:
 
 ```text
 node scripts/write-recovery-attestation.mjs --migration supabase/migrations/<timestamp>_<name>.sql=<live-ledger-version> [--migration ...]

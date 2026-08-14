@@ -44,12 +44,15 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // scripts/write-recovery-attestation.mjs as gate-critical (Codex P1 —
   // the attestation validator can downgrade migration blockers in the
   // proof prompt, so editing it alone must stay a risky/protected change).
+  // Re-pinned again 2026-08-14 (PR #403, CodeRabbit): the shared proof-path
+  // matcher now also protects the recovery attestation and its ledger
+  // evidence from direct tool writes.
   codexGuard: "b98ca16105a2a6e100940b390ff5a974acc0fdfb",
-  pushLib: "601f4bf11e0fa7523466dbe576f939fd3eeb9f26",
+  pushLib: "eca115f419a0ed1026f3d6cdeccd7f73c8be68d7",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "49f96ef78864324b56605cc9e3c0f9bd922fa4c5",
-  pushLib: "601f4bf11e0fa7523466dbe576f939fd3eeb9f26",
+  pushLib: "eca115f419a0ed1026f3d6cdeccd7f73c8be68d7",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

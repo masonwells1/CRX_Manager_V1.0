@@ -2,6 +2,19 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-14 — Recovery evidence and attestation are now guard-protected (CodeRabbit, PR #403)
+
+CodeRabbit's review of the recovery-exception PR found the two files the exception trusts — the
+recovery attestation and its live-ledger evidence — were not covered by the review-proof guard, so
+an agent could have written fabricated ledger digests directly and self-triggered the weakened
+review path. The guard's protected-basename matcher now denies any tool command naming either
+file (both Claude and Codex sides share the matcher); the mint helper gains a sanctioned
+`--write-evidence` stdin channel that re-validates the captured evidence and keeps nothing on
+refusal. Also from the same review: the fixed review prompt now fails closed if its splice anchor
+sentence is ever reworded (instead of silently misplacing the trusted-recovery section), and the
+decision log was corrected to the byte-verbatim-only contract — the earlier redaction allowance
+is gone everywhere.
+
 ## 2026-08-14 — Recovery attestation now content-bound to the live ledger (Codex P1 #2, PR #403)
 
 Codex's second P1 on the recovery-exception PR: the attestation accepted any well-formed 14-digit

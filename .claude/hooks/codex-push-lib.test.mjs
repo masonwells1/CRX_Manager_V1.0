@@ -260,6 +260,11 @@ assert.equal(reviewProofPathMentioned("cat claude-review-push.json|more"), true)
 assert.equal(reviewProofPathMentioned("rm codex-review-x.json)"), true);
 assert.equal(reviewProofPathMentioned("Remove-Item a.json,claude-review-push.json"), true);
 assert.equal(reviewProofPathMentioned("copy forged.json claude-review-push.json>nul"), true);
+assert.equal(reviewProofPathMentioned(".claude/session-state/recovery-attestation.json"), true);
+assert.equal(reviewProofPathMentioned("C:\\repo\\.claude\\session-state\\recovery-ledger-evidence.json"), true);
+assert.equal(reviewProofPathMentioned("printf {} > recovery-ledger-evidence.json"), true);
+assert.equal(reviewProofPathMentioned("rm recovery-attestation.json;ls"), true);
+assert.equal(reviewProofPathMentioned("my-recovery-attestation.json.bak"), false);
 assert.equal(reviewProofPathMentioned("my-claude-review-push.json.bak"), false);
 assert.equal(reviewProofPathMentioned(".claude/session-state/claude-review-latest.txt"), false);
 assert.equal(reviewStateDirectoryMentioned("cd .claude/session-state"), true);
