@@ -2,6 +2,28 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-14 — Codex Supabase access is write-enabled by owner decision
+
+**Source:** Mason's explicit in-chat approval, 2026-08-14 ("Readable write scope for codex let
+it write"), after the risk was explained in plain English: the migration apply-guard proof
+system gates only the Claude-side apply path, so Codex writes to production are not covered by
+those repo hooks.
+
+**Decision.** The tracked `.codex/config.toml` Supabase MCP entry declares `read_only=false`,
+and the two guard assertions (`check-agent-workflows.mjs`, `check-agent-guidance.mjs`) pin the
+new declared state instead of the old read-only claim. The 2026-08-10 KNOWN_ISSUES finding
+about the dead OAuth grant vs the live `codex_apps/supabase` App is closed as a false-assurance
+problem (the repo no longer claims Codex is read-only); the App's actual scope is controlled in
+the Codex app's own connector settings, which only Mason can change.
+
+**Operative rule.** Codex may hold write-capable Supabase access. The workflow default remains
+"Codex builds migration files; a gated operator applies them" — AGENTS.md hard rules (no editing
+applied migrations, RLS on new tables, idempotency, destructive-migration refusals, per-apply
+approval outside armed hands-free runs) bind every agent regardless of connection scope. Do not
+reintroduce a `read_only=true` assertion without a fresh owner decision.
+
+---
+
 ## 2026-08-14 — Made below-cost order approval depend on locked database cost
 
 Fixed stale browser-cost below-cost approval in New Order and Bulk Order Import by requiring the database locked-cost challenge before retrying with an admin reason; added same-key, cancellation, role-denial, mixed-order, and source-regression coverage. Follow-up exact-head review also closed one-shot replay bypasses involving wrapped statements, extensionless shell input, PowerShell `Get-Content` options, and SQL block comments; deliberate overrides now hash the exact submitted SQL. Bulk Order Import also retains the exact approved request only across an ambiguous lost response, then replays the same idempotency key and reason so a committed order can recover its receipt without a second approval.

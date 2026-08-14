@@ -9,6 +9,28 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-14 — Codex Supabase access is write-enabled by owner decision
+
+**Source:** Mason's explicit in-chat approval, 2026-08-14 ("Readable write scope for codex let
+it write"), after the risk was explained in plain English: the migration apply-guard proof
+system gates only the Claude-side apply path, so Codex writes to production are not covered by
+those repo hooks.
+
+**Decision.** The tracked `.codex/config.toml` Supabase MCP entry declares `read_only=false`,
+and the two guard assertions (`check-agent-workflows.mjs`, `check-agent-guidance.mjs`) pin the
+new declared state instead of the old read-only claim. The 2026-08-10 KNOWN_ISSUES finding
+about the dead OAuth grant vs the live `codex_apps/supabase` App is closed as a false-assurance
+problem (the repo no longer claims Codex is read-only); the App's actual scope is controlled in
+the Codex app's own connector settings, which only Mason can change.
+
+**Operative rule.** Codex may hold write-capable Supabase access. The workflow default remains
+"Codex builds migration files; a gated operator applies them" — AGENTS.md hard rules (no editing
+applied migrations, RLS on new tables, idempotency, destructive-migration refusals, per-apply
+approval outside armed hands-free runs) bind every agent regardless of connection scope. Do not
+reintroduce a `read_only=true` assertion without a fresh owner decision.
+
+---
+
 ## 2026-08-10 — Whole-cent compatibility predicate and non-finite guard
 
 **Source:** `docs/audits/2026-08-10-order-profit-bigint-cents-evaluation.md`, the owner-approved

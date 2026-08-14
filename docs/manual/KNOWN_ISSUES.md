@@ -197,11 +197,16 @@ semantics.
 
 ---
 
-## OPEN — the Codex `read_only=true` guard may not describe the connection Codex actually uses
+## CLOSED 2026-08-14 — Codex Supabase read-only guard withdrawn: write access is now the deliberate policy
 
-**Found 2026-08-10.** No production write was performed during the investigation.
-Production write capability remains unverified. This affects how much assurance
-the read-only guard is entitled to claim.
+**Found 2026-08-10; closed by owner decision 2026-08-14.** Mason explicitly approved
+write-enabled Supabase access for Codex (see `docs/manual/DECISION_LOG.md`, 2026-08-14).
+`.codex/config.toml` now declares `read_only=false`, and both guard assertions were
+updated to pin the new declared state. The original finding below is preserved because
+its core observation — the tracked entry's OAuth grant is dead and real traffic flows
+through the separate `codex_apps/supabase` App — is still true and still matters:
+enabling write for the App is a toggle in the Codex app's own connector settings that
+only Mason can perform, and no guard in this repository verifies that channel's scope.
 
 `check-agent-workflows.mjs:92` and `check-agent-guidance.mjs:121` both assert
 that `.codex/config.toml` contains `read_only=true`, and that assertion is the
@@ -237,13 +242,14 @@ attempting a write against the production database, which is not an acceptable
 test. A capability probe (asking Codex to list its Supabase tool names without
 calling them) was attempted twice and produced no usable output.
 
-**Owed to Mason (owner decision):** confirm in the Codex app's own connector
-settings whether the Supabase App is scoped read-only. If it is not, Codex has
-had unverified write capability against production for as long as the App has
-been serving traffic, and the guard has been reporting green throughout.
-
-**Do not** "fix" this by deleting the `read_only=true` line or by relaxing either
-check — both guards correctly refused the change that prompted this entry.
+**Closure (2026-08-14).** Mason decided Codex should have write access, which
+dissolves the false-assurance problem: the repository no longer claims Codex is
+read-only. Remaining owner action: if the `codex_apps/supabase` App is scoped
+read-only in the Codex app's connector settings, Mason flips it there — no file
+in this repository controls that channel. Operative safety note: the migration
+apply-guard proof system gates Claude's applies only; Codex writes to production
+are gated by Codex-side discipline (AGENTS.md hard rules and the standing
+"Codex builds files, gated operator applies" workflow), not by a repo hook.
 
 ---
 
