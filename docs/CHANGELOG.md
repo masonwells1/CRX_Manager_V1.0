@@ -2,6 +2,53 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-14 — Codex Supabase guard: exact read-only allowlist (Sol HIGH finding)
+
+Sol's adversarial review of the write-scope PR found that the Codex production-action guard
+blocked only three Supabase tool suffixes (apply_migration, deploy_edge_function, delete_branch),
+so branch-lifecycle mutations like merge_branch and reset_branch would have passed once the
+connector went write-enabled. The guard now governs every `supabase__`-prefixed tool with an
+exact read-only allowlist that fails closed on unrecognized tools; `execute_sql` remains the one
+pass-through to the existing read-only SQL content gate. A defense-in-depth suffix blocklist
+(mirroring the Claude-side autopilot deny set) covers connectors whose MCP prefix is a UUID rather
+than the literal server name. Regression tests assert every lifecycle mutation is blocked under
+both prefixes, an unknown future tool is blocked, and each read-only tool still passes. The
+protected-producer blob pins were re-pinned to the hardened guard.
+
+CodeRabbit follow-up on the same PR: the app connector's UUID MCP prefix now hits the same
+fail-closed allowlist (unknown tools under that prefix previously fell through to the suffix
+blocklist only), with regression tests for unknown, read-only, and `execute_sql` tools under both
+prefixes. The two agent-guidance checkers also parse `.codex/config.toml` line-by-line and match
+`read_only` at query-parameter boundaries, so commented headings, `backup_url` keys, later-table
+urls, and `read_only=false0`-style decoys can no longer satisfy the write-access assertion
+(mutation-tested against seven decoy configs).
+
+Codex-review P1 follow-up on the same PR: the built-in `codex_apps/supabase` channel — the one
+actually serving Codex's Supabase traffic per `docs/manual/KNOWN_ISSUES.md` — normalizes tool
+names with a single underscore (`mcp__codex_apps__supabase_<leaf>`), which the allowlist regex
+did not match, so an unknown write tool on that channel would have bypassed the fail-closed gate
+(only the suffix blocklist applied). The regex now accepts both naming forms (`_{1,2}`, the same
+dual-form handling the guard already uses for GitHub tools), with regression tests for unknown,
+mutating, read-only, and `execute_sql` tools under the `codex_apps` name, and the producer blob
+pins re-pinned.
+
+Second Codex-review P1 on the same PR: PostgreSQL's `SELECT ... INTO new_table` creates and
+populates a table while beginning with `SELECT`, so it passed the read-only SQL gate's
+leading-keyword and deny-keyword checks. The deny list now includes bare `INTO` — in a statement
+that begins with `SELECT`, that word is only ever the table-creating form (string literals are
+blanked before the check, and `INTO` is a reserved word, so read-only queries cannot contain it).
+Regression tests cover plain and `TEMP` `SELECT INTO` denial plus an `'into'`-in-a-string query
+that stays readable.
+
+## 2026-08-14 — Write-access assertion scoped to the Supabase connector url
+
+CodeRabbit follow-up on the Codex write-scope PR: the two agent-guidance checkers asserted the
+connector's write-enabled state with a whole-file substring match on `read_only=false`, which a
+stale comment anywhere in `.codex/config.toml` could satisfy while the active connector stayed
+read-only. Both checkers now extract the `[mcp_servers.supabase]` `url` value and require it to
+contain `read_only=false` and not `read_only=true`. Mutation-tested: a reverted flag fails the
+check even with a decoy comment present.
+
 ## 2026-08-12 — Six migrations were running in production with no file in the repository
 
 Recovered and landed. **Nothing is applied by this change and no live behaviour changes** — all six
@@ -461,6 +508,16 @@ sequence changes, so the smoke boundary was still fail-open. Raw function and pr
 now fail closed categorically, matching the existing raw-`DO` rule and requiring the reviewed
 migration smoke harness instead. The exact `pg_temp.get_pwn()` sequence payload is pinned, bringing
 the generated-module suite to 56 cases; the classifier SHA-256 and generated Git blob were re-bound.
+
+## 2026-08-12 — Return retries are actor/payload-bound and credit reversal restores overdue immediately (applied live)
+
+Section 08 of the refreshed Returns/Credit Memos gauntlet found six return RPCs whose receipts were keyed only by operation and key text, an Apply Credit dialog that discarded the only safe retry key when reopened, a shared reversal helper that reopened every fully credited invoice as `posted`, and a stale Returns schema row. Migration `20260812130145_bind_return_receipts_to_intent_and_restore_overdue.sql` moves the verified current return and reversal bodies behind postgres-only implementations and adds thin public guards: every return key is required and bound to the authenticated actor plus the exact return id or exact create JSON payload; cancel also binds its exact reason. Exact retries replay once, while a changed actor, return, reason, header, or ordered line payload raises and performs no second mutation. The existing source-derived credit math, locks, immutable ledger, generated balances, period gates, RLS, grants, search paths, and statement history remain in the renamed bodies.
+
+The Returns page now records and locks an unresolved create header, ordered line payload, and key before sending; after an uncertain response, close/reopen restores that exact request even if fresh server data changed. A pre-migration unbound receipt is reconciled from the fail-closed mismatch detail instead of issuing another create or trapping the form. Lifecycle keys likewise remain scoped per return. Apply Credit records the unresolved memo, target invoice, parsed integer-cent amount, and key before sending; after an uncertain response it restores and locks that exact intent across close/reopen even when a fresh server read shows a changed or exhausted memo balance. These keys and locks retire only after a confirmed replay result. Escape, backdrop, X, and Cancel are also blocked while Apply Credit is pending. The shared reversal boundary derives an open invoice status from its due date (`overdue` when past due, otherwise `posted`) and scopes the established transition override to that status-only re-derivation so a corrected-forward due date can safely restore `overdue` to `posted` without widening the global transition matrix.
+
+The final exact-head review caught that nonblank runtime codes such as `ECONNRESET` and `ETIMEDOUT` were being mistaken for definitive database refusals. Coded transport failures and unusable-receipt errors now retain the unresolved key; only recognized PostgreSQL SQLSTATE or PostgREST codes can unlock the intent, and focused React tests prove a coded lost response reuses the exact key. A forward-only assertion migration plus the durable invariant now also pin the shared intent helper's exact body, overload count, owner, security mode, search path, and browser/service grants without editing the already-applied migration. The assertion-only migration applied live on 2026-08-12 as ledger version `20260813011751`, name `20260813070000_pin_return_idempotency_helper_contract`; post-apply catalog verification matched the exact reviewed helper contract, and a real live-introspection registry refresh recorded the new high-water/name. A later exact-head review then found that the parked completed-delivery posting migration's paid-only reversal precondition would reject this new wrapper during forward replay. That parked precondition now accepts only the exact legacy body or the exact reviewed wrapper/private topology, and the Section 08 disposable prover applies that later migration with synthetic rows before rerunning the invariant and rollback smoke. The smoke now completes its delivery through the canonical RPC, so the forward proof does not depend on a direct status-write escape hatch.
+
+The Apply Credit and reversal cases were added after the first exact-SHA adversarial review blocked the earlier implementation; the Create Return lock/reconciliation followed a second blocking review. A later proof-renewal review found that the existing Returns lifecycle invariant still expected attribution writes directly in the public bodies and that migration preflight did not pin overload count, owner, security mode, search path, and ACLs. The invariant now verifies the strict wrapper and private attribution-writing implementation together, and the migration fails closed on each catalog attribute both before rename and after installation. The fresh migration-security proof then caught that the recreated reversal helper had lost its explicit internal-idempotency exemption marker and still accepted its audit actor without validating it; the helper now derives `auth.uid()`, rejects missing or mismatched attribution, and has mutation coverage for both protections. PR review then found four more fail-closed details: definitive database refusals must release Create/Apply retry locks while uncertain transport failures retain them; Cancel keys must include the normalized reason available only at submit time; reversal-only invoice status changes must not create a second split-billing post snapshot; and the rollback prover must neither disable product triggers nor expose CLI credentials on failure. Focused behavior tests, exact-body/static mutation guards, the governed pricing fixture, and snapshot-count assertions now cover those paths. The real-schema prover runs both the new and pre-existing Returns invariants before the rollback smoke. The Returns reference row now matches the live-regenerated registry, and the docs check derives its required status set and high-risk columns from that registry. **Applied live 2026-08-12** with Mason's explicit approval, through the governed proof gate: renewed migration-security and drift reviews were clean, the apply ran through `apply_migration`, and the ledger recorded version `20260812212323` carrying name `20260812130145_bind_return_receipts_to_intent_and_restore_overdue` (the apply tool stamps its own clock, so this row matches on name, not on the file timestamp; the disk filename is deliberately left unrenamed so the ledger name and the file stay in sync). Post-apply verification against live: the ledger grew by exactly one row (968 → 969), all eight function bodies match the migration file byte-for-byte, the seven renamed private implementations kept their pre-migration body hashes — proving rename-not-retype rather than a silent rewrite — and owner, security mode, fixed search path, overload count, and grants all match what was reviewed. A disposable-PostgreSQL replay of a fresh read-only dump of the live schema returned `RETURN_CREDIT_POSTAPPLY_LIVE_PASS invariant_violations=0 smoke=SMOKE_PASS_ROLLBACK residue=0`, and the schema registry was rebuilt from live introspection to high-water `20260812212323`.
 
 ## 2026-08-11 — A smoke selection that runs nothing no longer reports success
 
