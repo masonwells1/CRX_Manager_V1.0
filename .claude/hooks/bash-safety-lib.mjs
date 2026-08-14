@@ -147,6 +147,16 @@ export function maintenanceProducerCommandMentioned(command) {
     return list.slice(segmentStart, index).every((entry) => /^[A-Za-z_]\w*=/.test(entry.value));
   };
   if (dynamicSyntax && tokens.some(opaqueExecutablePosition)) return true;
+  const opaqueJavaScriptLoaderInvocation = (token, index, list) => {
+    if (!invocationPosition(list, index)) return false;
+    let segmentEnd = index + 1;
+    while (segmentEnd < list.length && !list[segmentEnd].control) segmentEnd += 1;
+    const argumentsInSegment = list.slice(index + 1, segmentEnd).map((entry) => normalizeShellOption(entry.value));
+    const loaderOption = /^(?:-r|--require|--import|--preload|--(?:experimental-)?loader)(?:=|$)/i;
+    return argumentsInSegment.some((argument) => loaderOption.test(argument))
+      && argumentsInSegment.some((argument) => dynamicArgument(argument));
+  };
+  if (dynamicSyntax && tokens.some(opaqueJavaScriptLoaderInvocation)) return true;
   const opaqueInlineInterpreterInvocation = (token, index, list) => {
     if (!invocationPosition(list, index)) return false;
     const python = ["python", "python2", "python3", "py"].some((name) => executableNamed(token, name, true));
@@ -154,22 +164,38 @@ export function maintenanceProducerCommandMentioned(command) {
     const shortEval = ["perl", "ruby"].some((name) => executableNamed(token, name, true));
     const php = executableNamed(token, "php", true);
     const deno = executableNamed(token, "deno", true);
-    if (!(python || nodeLike || shortEval || php || deno)) return false;
+    const shell = ["bash", "sh", "dash", "zsh", "ksh"].some((name) => executableNamed(token, name, true));
+    if (!(python || nodeLike || shortEval || php || deno || shell)) return false;
+    let segmentStart = index;
+    while (segmentStart > 0 && !list[segmentStart - 1].control) segmentStart -= 1;
+    if (list[segmentStart - 1]?.value === "|") return true;
+    let segmentEnd = index + 1;
+    while (segmentEnd < list.length && !list[segmentEnd].control) segmentEnd += 1;
+    if (shell && list[segmentEnd]?.value === "<") return true;
     for (let cursor = index + 1; cursor < list.length && !list[cursor].control; cursor += 1) {
       const argument = normalizeShellToken(list[cursor].value);
+      if (/^(?:--help|--version|-h|-V)$/.test(argument)) return false;
+      if ((nodeLike || deno) && dynamicArgument(argument)) return true;
       if (python && argument === "-c") return true;
       if (nodeLike && /^(?:-e|--eval|-p|--print)(?:=|$)/i.test(argument)) return true;
       if (shortEval && /^-[eE](?:$|.)/.test(argument)) return true;
       if (php && /^-r(?:$|.)/i.test(argument)) return true;
       if (deno && /^eval$/i.test(argument)) return true;
-      if (argument === "--") return false;
+      if (deno && /^(?:run|serve|task)$/i.test(argument)) continue;
+      if (nodeLike && executableNamed(token, "bun", true) && /^run$/i.test(argument)) continue;
+      if (shell && /^-[A-Za-z]*[cs][A-Za-z]*$/.test(argument)) return true;
+      if (argument === "-") return true;
+      if (argument === "--") {
+        const operand = list[cursor + 1];
+        return !operand || operand.control || operand.value === "-";
+      }
       if (python && /^(?:-W|-X)$/.test(argument)) {
         cursor += 1;
         continue;
       }
       if (!argument.startsWith("-")) return false;
     }
-    return false;
+    return true;
   };
   if (tokens.some(opaqueInlineInterpreterInvocation)) return true;
   const powerShellValueOption = (argument) => /^(?:--?|\/)(?:configuration(?:name|file)|config|cus(?:t(?:o(?:m(?:p(?:i(?:p(?:e(?:n(?:a(?:m(?:e)?)?)?)?)?)?)?)?)?)?)?|settings(?:f(?:i(?:l(?:e)?)?)?)?|executionpolicy|ex|ep|inputformat|inp|input|if|outputformat|o|of|out|windowstyle|w|workingdirectory|wd)(?::|=)?/i.test(argument);

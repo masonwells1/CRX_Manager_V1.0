@@ -74,8 +74,8 @@ write, so verification mode follows the same fail-closed cleanliness contract as
 blob verification normalizes Windows CRLF bytes before hashing, matching the producer's normalized
 assembly path and the reviewed Git blob on every checkout.
 
-The final PR review also closed an opaque inline-interpreter bootstrap path before merge, while
-preserving quoted search text as data. The shared preload rule now treats `NODE_OPTIONS=` as dangerous
+The final PR review also closed opaque inline-interpreter, alternate-runtime preload, and decoded-stdin bootstrap paths before
+merge, while preserving quoted search text as data. The shared preload rule now treats `NODE_OPTIONS=` as dangerous
 only in an executable assignment position, and producer retirement verifies the worktree removal and
 states plainly that the deletion still must be committed.
 
