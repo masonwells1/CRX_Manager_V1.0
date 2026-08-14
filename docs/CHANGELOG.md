@@ -5,7 +5,7 @@ All significant development milestones, in reverse chronological order.
 ## Unreleased
 
 - Security: quote-version restores now require a server-issued trust marker. Existing snapshots remain visible but cannot be restored into money-bearing quote lines because their pre-boundary provenance cannot be proven. This is repository-only work: neither quote-version security migration has been applied live.
-- Security proof: the standing quote-version invariant now fails closed if any direct DML, dynamic statement, or non-allowlisted function call in any expression position appears before the legacy trust rejection. Mutation tests exercise the actual predicate comparator, pre-guard DML rule, allowlist clauses, SELECT-list helper calls, and conditional helper calls; the rollback runtime smoke contains no table-level trigger DDL that could block production quote writes.
+- Security proof: the standing quote-version invariant now fingerprints the complete whitespace-normalized prefix before the legacy trust rejection, so any added, removed, renamed, or reordered statement fails closed without attempting to parse PostgreSQL identifier syntax. Mutation tests exercise the actual comparator and fingerprint against direct DML, SELECT-list helpers, conditional helpers, quoted identifiers, and dollar identifiers; the rollback runtime smoke contains no table-level trigger DDL that could block production quote writes.
 
 ## 2026-08-12 — Six migrations were running in production with no file in the repository
 

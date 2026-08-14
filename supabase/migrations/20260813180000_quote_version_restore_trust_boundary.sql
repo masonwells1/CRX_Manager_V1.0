@@ -367,59 +367,32 @@ BEGIN
               0
             )
           ) !~* '(insert\s+into|update\s+(only\s+)?[a-z_\"]|delete\s+from|merge\s+into|truncate\s+(table\s+)?[a-z_\"]|execute\s+|perform\s+|call\s+)'
-      AND NOT EXISTS (
-        SELECT 1
-        FROM regexp_matches(
-          substring(
-            prosrc FROM 1 FOR greatest(
-              strpos(lower(prosrc), 'raise exception ''quote_version_legacy_untrusted''') - 1,
-              0
-            )
-          ),
-          '\m([a-z_][a-z0-9_.]*)\s*\(',
-          'gi'
-        ) AS prefix_call(call_match)
-        WHERE lower((call_match)[1]) NOT IN (
-          'auth.uid',
-          'public.check_idempotency',
-          'jsonb_typeof',
-          'coalesce',
-          'jsonb_build_object',
-          'in',
-          'or',
-          'return'
-        )
-      )
-      AND regexp_count(
-            substring(
-              prosrc FROM 1 FOR greatest(
-                strpos(lower(prosrc), 'raise exception ''quote_version_legacy_untrusted''') - 1,
-                0
-              )
-            ),
-            ':=\s*[a-z_][a-z0-9_.]*\s*\(',
-            'i'
-          ) = 2
-      AND regexp_count(
-            substring(
-              prosrc FROM 1 FOR greatest(
-                strpos(lower(prosrc), 'raise exception ''quote_version_legacy_untrusted''') - 1,
-                0
-              )
-            ),
-            'v_actor\s*:=\s*auth\.uid\s*\(',
-            'i'
-          ) = 1
-      AND regexp_count(
-            substring(
-              prosrc FROM 1 FOR greatest(
-                strpos(lower(prosrc), 'raise exception ''quote_version_legacy_untrusted''') - 1,
-                0
-              )
-            ),
-            'v_existing\s*:=\s*public\.check_idempotency\s*\(',
-            'i'
-          ) = 1
+      AND length(
+            btrim(regexp_replace(
+              substring(
+                prosrc FROM 1 FOR greatest(
+                  strpos(lower(prosrc), 'raise exception ''quote_version_legacy_untrusted''') - 1,
+                  0
+                )
+              ),
+              '\s+',
+              ' ',
+              'g'
+            ))
+          ) = 2730
+      AND md5(
+            btrim(regexp_replace(
+              substring(
+                prosrc FROM 1 FOR greatest(
+                  strpos(lower(prosrc), 'raise exception ''quote_version_legacy_untrusted''') - 1,
+                  0
+                )
+              ),
+              '\s+',
+              ' ',
+              'g'
+            ))
+          ) = '62440ea5c855d1366808c5a2098177d7'
   ) THEN RAISE EXCEPTION 'POSTCOND: restore path no longer rejects untrusted legacy snapshots'; END IF;
   IF has_function_privilege('authenticated', 'public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)', 'EXECUTE')
      OR has_function_privilege('anon', 'public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)', 'EXECUTE') THEN

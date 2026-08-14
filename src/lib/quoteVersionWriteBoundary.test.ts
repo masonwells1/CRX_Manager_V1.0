@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -712,62 +713,35 @@ describe('quote_versions write boundary — standing predicate', () => {
       "strpos(lower(p.prosrc), 'raise exception ''quote_version_legacy_untrusted''')\n          < strpos(lower(p.prosrc), 'v_result := public._restore_quote_version_owner_impl')";
     const predicateDmlGuard =
       "!~* '(insert\\s+into|update\\s+(only\\s+)?[a-z_\\\"]|delete\\s+from|merge\\s+into|truncate\\s+(table\\s+)?[a-z_\\\"]|execute\\s+|perform\\s+|call\\s+)'";
-    const predicateCallGuard = "FROM regexp_matches(";
-    const predicateAllowedCallFragments = [
-      "'auth.uid',",
-      "'public.check_idempotency',",
-      "'jsonb_typeof',",
-      "'coalesce',",
-      "'jsonb_build_object',",
-      "'in',",
-      "'or',",
-      "'return'",
-    ];
+    const predicatePrefixLength = ') = 2730';
+    const predicatePrefixDigest = "= '62440ea5c855d1366808c5a2098177d7'";
     const predicateProtectsPrefix = (source: string) =>
       source.includes(predicateComparator) &&
       source.includes(predicateDmlGuard) &&
-      source.includes(predicateCallGuard) &&
-      predicateAllowedCallFragments.every((fragment) => source.includes(fragment));
+      source.includes(predicatePrefixLength) &&
+      source.includes(predicatePrefixDigest);
     expect(predicateProtectsPrefix(predicateCode)).toBe(true);
-    expect(predicateCode).toContain("':=\\s*[a-z_][a-z0-9_.]*\\s*\\('");
-    expect(predicateCode).toContain("'v_actor\\s*:=\\s*auth\\.uid\\s*\\('");
-    expect(predicateCode).toContain("'v_existing\\s*:=\\s*public\\.check_idempotency\\s*\\('");
-    expect(restoreTrustMigration).toContain(predicateCallGuard);
-    for (const fragment of predicateAllowedCallFragments) {
-      expect(restoreTrustMigration).toContain(fragment);
-      expect(predicateProtectsPrefix(predicateCode.replace(fragment, ''))).toBe(false);
-    }
+    expect(restoreTrustMigration).toContain(predicatePrefixLength);
+    expect(restoreTrustMigration).toContain(predicatePrefixDigest);
+    expect(predicateProtectsPrefix(predicateCode.replace(predicatePrefixLength, ') = 2729'))).toBe(false);
+    expect(predicateProtectsPrefix(predicateCode.replace(predicatePrefixDigest, "= '00000000000000000000000000000000'"))).toBe(false);
 
     const body = restoreTrustMigration.match(
       /CREATE OR REPLACE FUNCTION public\._restore_quote_version_below_cost_impl_20260810\([\s\S]*?AS \$function\$([\s\S]*?)\$function\$;/,
     )?.[1];
     expect(body).toBeDefined();
     const trustCheck = "IF v_restore_trusted_at IS NULL THEN\n    RAISE EXCEPTION 'QUOTE_VERSION_LEGACY_UNTRUSTED';\n  END IF;";
+    const trustRaise = "RAISE EXCEPTION 'QUOTE_VERSION_LEGACY_UNTRUSTED'";
     const ownerCall = 'v_result := public._restore_quote_version_owner_impl(';
     const hasSafeOrder = (source: string) =>
       source.indexOf(trustCheck) >= 0 &&
       source.indexOf(ownerCall) >= 0 &&
       source.indexOf(trustCheck) < source.indexOf(ownerCall);
     const hasReadOnlyPrefix = (source: string) => {
-      const prefix = source.slice(0, source.indexOf(trustCheck));
-      const assignmentCalls = prefix.match(/:=\s*[a-z_][a-z0-9_.]*\s*\(/gi) ?? [];
-      const allowedCalls = new Set([
-        'auth.uid',
-        'public.check_idempotency',
-        'jsonb_typeof',
-        'coalesce',
-        'jsonb_build_object',
-        'in',
-        'or',
-        'return',
-      ]);
-      const expressionCalls = [...prefix.matchAll(/\b([a-z_][a-z0-9_.]*)\s*\(/gi)]
-        .map((match) => match[1].toLowerCase());
-      return !/(insert\s+into|update\s+(only\s+)?[a-z_"]|delete\s+from|merge\s+into|truncate\s+(table\s+)?[a-z_"]|execute\s+|perform\s+|call\s+)/i.test(prefix) &&
-        expressionCalls.every((call) => allowedCalls.has(call)) &&
-        assignmentCalls.length === 2 &&
-        /v_actor\s*:=\s*auth\.uid\s*\(/i.test(prefix) &&
-        /v_existing\s*:=\s*public\.check_idempotency\s*\(/i.test(prefix);
+      const prefix = source.slice(0, source.indexOf(trustRaise));
+      const normalizedPrefix = prefix.replace(/\s+/g, ' ').trim();
+      return normalizedPrefix.length === 2730 &&
+        createHash('md5').update(normalizedPrefix, 'utf8').digest('hex') === '62440ea5c855d1366808c5a2098177d7';
     };
     expect(hasSafeOrder(body!)).toBe(true);
     expect(hasReadOnlyPrefix(body!)).toBe(true);
@@ -797,6 +771,18 @@ describe('quote_versions write boundary — standing predicate', () => {
       `IF public.some_mutator() THEN NULL; END IF;\n  ${trustCheck}`,
     );
     expect(hasReadOnlyPrefix(conditionalHelperMutant)).toBe(false);
+
+    const quotedHelperMutant = body!.replace(
+      trustCheck,
+      `PERFORM "public"."some_mutator"();\n  ${trustCheck}`,
+    );
+    expect(hasReadOnlyPrefix(quotedHelperMutant)).toBe(false);
+
+    const dollarIdentifierMutant = body!.replace(
+      trustCheck,
+      `PERFORM public.some_mutator$coalesce();\n  ${trustCheck}`,
+    );
+    expect(hasReadOnlyPrefix(dollarIdentifierMutant)).toBe(false);
   });
 
   it('keeps the new legacy-restore refusal intelligible in the quote UI', () => {

@@ -622,71 +622,43 @@ SELECT '_restore_quote_version_below_cost_impl_20260810:trust-check-contract' AS
       AND strpos(lower(p.prosrc), 'raise exception ''quote_version_legacy_untrusted''')
           < strpos(lower(p.prosrc), 'v_result := public._restore_quote_version_owner_impl')
       -- The owner call is not the only possible write shape. Keep the entire
-      -- prefix before the rejection read-only: no direct DML/dynamic statement,
-      -- no call in any expression position except the explicitly allowlisted
-      -- read-only builtins/helpers, and exactly the two known assignment calls
-      -- (auth.uid and the read-only idempotency lookup). This makes a future
-      -- inline UPDATE or newly introduced helper mutator fail the standing gate
-      -- even if the owner call remains below the trust check.
+      -- prefix before the rejection read-only. The normalized length + digest
+      -- deliberately fingerprints the entire reviewed prefix instead of trying
+      -- to tokenize every legal PL/pgSQL identifier spelling. Any statement,
+      -- helper call, quoted identifier, dollar identifier, or reordered guard
+      -- changes the fingerprint and fails the standing gate closed.
       AND substring(
             p.prosrc FROM 1 FOR greatest(
               strpos(lower(p.prosrc), 'raise exception ''quote_version_legacy_untrusted''') - 1,
               0
             )
           ) !~* '(insert\s+into|update\s+(only\s+)?[a-z_\"]|delete\s+from|merge\s+into|truncate\s+(table\s+)?[a-z_\"]|execute\s+|perform\s+|call\s+)'
-      AND NOT EXISTS (
-        SELECT 1
-        FROM regexp_matches(
-          substring(
-            p.prosrc FROM 1 FOR greatest(
-              strpos(lower(p.prosrc), 'raise exception ''quote_version_legacy_untrusted''') - 1,
-              0
-            )
-          ),
-          '\m([a-z_][a-z0-9_.]*)\s*\(',
-          'gi'
-        ) AS prefix_call(call_match)
-        WHERE lower((call_match)[1]) NOT IN (
-          'auth.uid',
-          'public.check_idempotency',
-          'jsonb_typeof',
-          'coalesce',
-          'jsonb_build_object',
-          'in',
-          'or',
-          'return'
-        )
-      )
-      AND regexp_count(
-            substring(
-              p.prosrc FROM 1 FOR greatest(
-                strpos(lower(p.prosrc), 'raise exception ''quote_version_legacy_untrusted''') - 1,
-                0
-              )
-            ),
-            ':=\s*[a-z_][a-z0-9_.]*\s*\(',
-            'i'
-          ) = 2
-      AND regexp_count(
-            substring(
-              p.prosrc FROM 1 FOR greatest(
-                strpos(lower(p.prosrc), 'raise exception ''quote_version_legacy_untrusted''') - 1,
-                0
-              )
-            ),
-            'v_actor\s*:=\s*auth\.uid\s*\(',
-            'i'
-          ) = 1
-      AND regexp_count(
-            substring(
-              p.prosrc FROM 1 FOR greatest(
-                strpos(lower(p.prosrc), 'raise exception ''quote_version_legacy_untrusted''') - 1,
-                0
-              )
-            ),
-            'v_existing\s*:=\s*public\.check_idempotency\s*\(',
-            'i'
-          ) = 1
+      AND length(
+            btrim(regexp_replace(
+              substring(
+                p.prosrc FROM 1 FOR greatest(
+                  strpos(lower(p.prosrc), 'raise exception ''quote_version_legacy_untrusted''') - 1,
+                  0
+                )
+              ),
+              '\s+',
+              ' ',
+              'g'
+            ))
+          ) = 2730
+      AND md5(
+            btrim(regexp_replace(
+              substring(
+                p.prosrc FROM 1 FOR greatest(
+                  strpos(lower(p.prosrc), 'raise exception ''quote_version_legacy_untrusted''') - 1,
+                  0
+                )
+              ),
+              '\s+',
+              ' ',
+              'g'
+            ))
+          ) = '62440ea5c855d1366808c5a2098177d7'
  )
 
 UNION ALL
