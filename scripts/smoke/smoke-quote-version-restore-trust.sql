@@ -11,6 +11,39 @@
 -- transaction-local writes and must never be split into individually committed
 -- statements or run through the live-data MCP guard.
 
+-- Session-level advisory locks are deliberately used as an attempt sentinel.
+-- A caught PL/pgSQL exception rolls table changes back to its subtransaction,
+-- which makes after-state equality alone unable to prove that no write was
+-- attempted. Session advisory locks survive that rollback, so these temporary
+-- triggers leave observable evidence if the owner restore path reaches any
+-- quote/header/section/item mutation before the trust rejection. The terminal
+-- transaction rollback removes this function and all three triggers.
+CREATE FUNCTION public._smoke_quote_restore_attempt_sentinel()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $sentinel$
+DECLARE
+  v_target_quote uuid;
+  v_row_quote uuid;
+BEGIN
+  v_target_quote := nullif(current_setting('crx.smoke_quote_restore_target', true), '')::uuid;
+  IF TG_TABLE_NAME = 'quotes' THEN
+    v_row_quote := coalesce(NEW.id, OLD.id);
+  ELSE
+    v_row_quote := coalesce(NEW.quote_id, OLD.quote_id);
+  END IF;
+  IF v_target_quote IS NOT NULL AND v_row_quote = v_target_quote THEN
+    PERFORM pg_advisory_lock(
+      hashtext('crx-quote-restore-attempt'),
+      hashtext(current_setting('crx.smoke_quote_restore_marker', true))
+    );
+  END IF;
+  IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+  RETURN NEW;
+END;
+$sentinel$;
+
 DO $smoke$
 DECLARE
   v_admin uuid;
@@ -26,6 +59,8 @@ DECLARE
   v_sections_after jsonb;
   v_items_before jsonb;
   v_items_after jsonb;
+  v_attempted_mutation boolean;
+  v_attempt_marker integer;
   v_suffix text := substr(md5(random()::text), 1, 8);
 BEGIN
   IF to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)') IS NULL
@@ -53,10 +88,22 @@ BEGIN
     FROM public.quotes
    WHERE deleted_at IS NULL
      AND status IN ('draft', 'revised', 'accepted', 'sent')
+     AND NOT EXISTS (
+       SELECT 1
+         FROM public.quote_items qi
+        WHERE qi.quote_id = quotes.id
+          AND (qi.current_cost IS NULL OR qi.current_cost <= 0)
+     )
+     AND NOT EXISTS (
+       SELECT 1
+         FROM public.quote_product_draws qpd
+        WHERE qpd.quote_id = quotes.id
+          AND qpd.quantity_drawn > 0
+     )
    ORDER BY created_at, id
    LIMIT 1;
   IF v_quote_id IS NULL THEN
-    RAISE EXCEPTION 'SMOKE_SETUP: no live quote in draft/revised/accepted/sent is available';
+    RAISE EXCEPTION 'SMOKE_SETUP: no restorable live quote with positive item costs, no drawn ledger, and status draft/revised/accepted/sent is available';
   END IF;
 
   PERFORM set_config(
@@ -145,6 +192,19 @@ BEGIN
     FROM public.quote_items i
    WHERE i.quote_id = v_quote_id;
 
+  v_attempt_marker := hashtext(v_suffix);
+  PERFORM set_config('crx.smoke_quote_restore_target', v_quote_id::text, false);
+  PERFORM set_config('crx.smoke_quote_restore_marker', v_suffix, false);
+  EXECUTE 'CREATE TRIGGER zz_smoke_quote_restore_attempt_quote
+             BEFORE UPDATE OR DELETE ON public.quotes
+             FOR EACH ROW EXECUTE FUNCTION public._smoke_quote_restore_attempt_sentinel()';
+  EXECUTE 'CREATE TRIGGER zz_smoke_quote_restore_attempt_section
+             BEFORE INSERT OR UPDATE OR DELETE ON public.quote_sections
+             FOR EACH ROW EXECUTE FUNCTION public._smoke_quote_restore_attempt_sentinel()';
+  EXECUTE 'CREATE TRIGGER zz_smoke_quote_restore_attempt_item
+             BEFORE INSERT OR UPDATE OR DELETE ON public.quote_items
+             FOR EACH ROW EXECUTE FUNCTION public._smoke_quote_restore_attempt_sentinel()';
+
   SET LOCAL ROLE authenticated;
   BEGIN
     PERFORM public.restore_quote_version(
@@ -164,6 +224,17 @@ BEGIN
       END IF;
   END;
   RESET ROLE;
+
+  v_attempted_mutation := pg_advisory_unlock(
+    hashtext('crx-quote-restore-attempt'),
+    v_attempt_marker
+  );
+  EXECUTE 'DROP TRIGGER zz_smoke_quote_restore_attempt_quote ON public.quotes';
+  EXECUTE 'DROP TRIGGER zz_smoke_quote_restore_attempt_section ON public.quote_sections';
+  EXECUTE 'DROP TRIGGER zz_smoke_quote_restore_attempt_item ON public.quote_items';
+  IF v_attempted_mutation THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: legacy rejection occurred only after an attempted quote, section, or item mutation';
+  END IF;
 
   SELECT to_jsonb(q) INTO v_quote_after
     FROM public.quotes q

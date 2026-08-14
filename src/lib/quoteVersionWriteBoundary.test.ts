@@ -793,10 +793,22 @@ describe('quote_versions restore trust boundary — rollback smoke', () => {
 
   it('requires the exact legacy refusal before any quote state changes', () => {
     expect(restoreTrustSmoke).toContain("IF SQLERRM <> 'QUOTE_VERSION_LEGACY_UNTRUSTED' THEN");
+    expect(restoreTrustSmoke).toContain('CREATE FUNCTION public._smoke_quote_restore_attempt_sentinel()');
+    expect(restoreTrustSmoke).toMatch(/BEFORE UPDATE OR DELETE ON public\.quotes/);
+    expect(restoreTrustSmoke).toMatch(/BEFORE INSERT OR UPDATE OR DELETE ON public\.quote_sections/);
+    expect(restoreTrustSmoke).toMatch(/BEFORE INSERT OR UPDATE OR DELETE ON public\.quote_items/);
+    expect(restoreTrustSmoke).toContain("v_attempted_mutation := pg_advisory_unlock(");
+    expect(restoreTrustSmoke).toContain('legacy rejection occurred only after an attempted quote, section, or item mutation');
     expect(restoreTrustSmoke).toMatch(/to_jsonb\(q\), q\.row_version[\s\S]*FOR UPDATE/);
     expect(restoreTrustSmoke).toMatch(/v_quote_after IS DISTINCT FROM v_quote_before/);
     expect(restoreTrustSmoke).toMatch(/v_sections_after IS DISTINCT FROM v_sections_before/);
     expect(restoreTrustSmoke).toMatch(/v_items_after IS DISTINCT FROM v_items_before/);
+  });
+
+  it('chooses a quote that satisfies cost and drawn-ledger restore preconditions', () => {
+    expect(restoreTrustSmoke).toMatch(/qi\.current_cost IS NULL OR qi\.current_cost <= 0/);
+    expect(restoreTrustSmoke).toMatch(/qpd\.quantity_drawn > 0/);
+    expect(restoreTrustSmoke).toContain('no restorable live quote with positive item costs, no drawn ledger');
   });
 
   it('also restores the marked version and proves the N+1 token', () => {
