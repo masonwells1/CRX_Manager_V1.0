@@ -708,8 +708,16 @@ describe('quote_versions write boundary — standing predicate', () => {
     expect(predicateCode).toContain("'_restore_quote_version_below_cost_impl_20260810:trust-check-contract' AS violation_key");
     expect(predicateCode).toContain("'QUOTE_VERSION_LEGACY_UNTRUSTED'");
     expect(predicateCode).toContain("regexp_count(p.prosrc, '_restore_quote_version_owner_impl\\s*\\(', 'i') = 1");
-    expect(predicateCode).toContain("strpos(lower(p.prosrc), 'raise exception ''quote_version_legacy_untrusted''')");
-    expect(predicateCode).toContain("strpos(lower(p.prosrc), 'v_result := public._restore_quote_version_owner_impl')");
+    const predicateComparator =
+      "strpos(lower(p.prosrc), 'raise exception ''quote_version_legacy_untrusted''')\n          < strpos(lower(p.prosrc), 'v_result := public._restore_quote_version_owner_impl')";
+    const predicateDmlGuard =
+      "!~* '(insert\\s+into|update\\s+(only\\s+)?[a-z_\\\"]|delete\\s+from|merge\\s+into|truncate\\s+(table\\s+)?[a-z_\\\"]|execute\\s+|perform\\s+|call\\s+)'";
+    const predicateProtectsPrefix = (source: string) =>
+      source.includes(predicateComparator) && source.includes(predicateDmlGuard);
+    expect(predicateProtectsPrefix(predicateCode)).toBe(true);
+    expect(predicateCode).toContain("':=\\s*[a-z_][a-z0-9_.]*\\s*\\('");
+    expect(restoreTrustMigration).toContain("'v_actor\\s*:=\\s*auth\\.uid\\s*\\('");
+    expect(restoreTrustMigration).toContain("'v_existing\\s*:=\\s*public\\.check_idempotency\\s*\\('");
 
     const body = restoreTrustMigration.match(
       /CREATE OR REPLACE FUNCTION public\._restore_quote_version_below_cost_impl_20260810\([\s\S]*?AS \$function\$([\s\S]*?)\$function\$;/,
@@ -721,12 +729,31 @@ describe('quote_versions write boundary — standing predicate', () => {
       source.indexOf(trustCheck) >= 0 &&
       source.indexOf(ownerCall) >= 0 &&
       source.indexOf(trustCheck) < source.indexOf(ownerCall);
+    const hasReadOnlyPrefix = (source: string) => {
+      const prefix = source.slice(0, source.indexOf(trustCheck));
+      const assignmentCalls = prefix.match(/:=\s*[a-z_][a-z0-9_.]*\s*\(/gi) ?? [];
+      return !/(insert\s+into|update\s+(only\s+)?[a-z_"]|delete\s+from|merge\s+into|truncate\s+(table\s+)?[a-z_"]|execute\s+|perform\s+|call\s+)/i.test(prefix) &&
+        !/\bselect\s+[a-z_][a-z0-9_.]*\s*\(/i.test(prefix) &&
+        assignmentCalls.length === 2 &&
+        /v_actor\s*:=\s*auth\.uid\s*\(/i.test(prefix) &&
+        /v_existing\s*:=\s*public\.check_idempotency\s*\(/i.test(prefix);
+    };
     expect(hasSafeOrder(body!)).toBe(true);
+    expect(hasReadOnlyPrefix(body!)).toBe(true);
 
     // Mutation proof: moving the exact rejection below the owner call must fail
     // the same ordering contract the standing SQL predicate enforces live.
     const movedAfterOwner = body!.replace(trustCheck, '').replace(ownerCall, `${ownerCall}\n${trustCheck}`);
     expect(hasSafeOrder(movedAfterOwner)).toBe(false);
+
+    const predicateComparatorMutant = predicateCode.replace(predicateComparator, predicateComparator.replace('<', '<>'));
+    expect(predicateProtectsPrefix(predicateComparatorMutant)).toBe(false);
+
+    const predicateDmlGuardMutant = predicateCode.replace(predicateDmlGuard, "!~* '(delete\\s+from)' ");
+    expect(predicateProtectsPrefix(predicateDmlGuardMutant)).toBe(false);
+
+    const inlineUpdateMutant = body!.replace(trustCheck, `UPDATE public.quotes SET status = status;\n  ${trustCheck}`);
+    expect(hasReadOnlyPrefix(inlineUpdateMutant)).toBe(false);
   });
 
   it('keeps the new legacy-restore refusal intelligible in the quote UI', () => {

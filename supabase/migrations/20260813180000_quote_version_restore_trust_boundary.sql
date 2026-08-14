@@ -361,6 +361,48 @@ BEGIN
     WHERE oid = 'public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)'::regprocedure
       AND prosrc LIKE '%QUOTE_VERSION_LEGACY_UNTRUSTED%'
       AND prosrc LIKE '%restore_trusted_at%'
+      AND substring(
+            prosrc FROM 1 FOR greatest(
+              strpos(lower(prosrc), 'raise exception ''quote_version_legacy_untrusted''') - 1,
+              0
+            )
+          ) !~* '(insert\s+into|update\s+(only\s+)?[a-z_\"]|delete\s+from|merge\s+into|truncate\s+(table\s+)?[a-z_\"]|execute\s+|perform\s+|call\s+)'
+      AND substring(
+            prosrc FROM 1 FOR greatest(
+              strpos(lower(prosrc), 'raise exception ''quote_version_legacy_untrusted''') - 1,
+              0
+            )
+          ) !~* '\mselect\s+[a-z_][a-z0-9_.]*\s*\('
+      AND regexp_count(
+            substring(
+              prosrc FROM 1 FOR greatest(
+                strpos(lower(prosrc), 'raise exception ''quote_version_legacy_untrusted''') - 1,
+                0
+              )
+            ),
+            ':=\s*[a-z_][a-z0-9_.]*\s*\(',
+            'i'
+          ) = 2
+      AND regexp_count(
+            substring(
+              prosrc FROM 1 FOR greatest(
+                strpos(lower(prosrc), 'raise exception ''quote_version_legacy_untrusted''') - 1,
+                0
+              )
+            ),
+            'v_actor\s*:=\s*auth\.uid\s*\(',
+            'i'
+          ) = 1
+      AND regexp_count(
+            substring(
+              prosrc FROM 1 FOR greatest(
+                strpos(lower(prosrc), 'raise exception ''quote_version_legacy_untrusted''') - 1,
+                0
+              )
+            ),
+            'v_existing\s*:=\s*public\.check_idempotency\s*\(',
+            'i'
+          ) = 1
   ) THEN RAISE EXCEPTION 'POSTCOND: restore path no longer rejects untrusted legacy snapshots'; END IF;
   IF has_function_privilege('authenticated', 'public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)', 'EXECUTE')
      OR has_function_privilege('anon', 'public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)', 'EXECUTE') THEN
