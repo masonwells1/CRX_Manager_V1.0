@@ -1420,4 +1420,4 @@ These 10 historical migrations apply by timestamp order like all others; they si
 | Entry | Version | Status |
 |---:|---|---|
 | 886 | 20260813080000 | **LOCAL CANDIDATE — NOT APPLIED.** `20260813080000_lock_quote_versions_writes_to_rpc.sql` removes direct browser writes to `quote_versions`, preserves governed create/restore RPCs, and fails closed on unexpected writers or grants. |
-| 887 | 20260813090000 | **LOCAL CANDIDATE — NOT APPLIED.** `20260813090000_quote_version_restore_trust_boundary.sql` adds a server-issued restore trust marker, marks only newly RPC-created versions, and rejects restoration of unmarked legacy snapshots before quote or money rows are rebuilt. Existing history remains readable; no existing business row is backfilled, deleted, or modified. |
+| 887 | 20260813180000 | **LOCAL CANDIDATE — NOT APPLIED.** `20260813180000_quote_version_restore_trust_boundary.sql` adds a server-issued restore trust marker, marks only newly RPC-created versions, and rejects restoration of unmarked legacy snapshots before quote or money rows are rebuilt. Existing history remains readable; no existing business row is backfilled, deleted, or modified. |
