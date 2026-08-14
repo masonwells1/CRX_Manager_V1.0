@@ -1066,12 +1066,17 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
   clearRecoveryAttestation({ root: modifiedFixture.root });
   const launcherModuleUrl = new URL("./write-recovery-attestation.mjs", import.meta.url).href;
   const launcherPath = path.join(modifiedFixture.root, "forged-launcher.mjs");
+  // The launcher source is a fixed static string; the module URL, fixture
+  // root, ledger name, and forged rows all arrive via argv, never by
+  // interpolating data into generated code.
   writeFileSync(launcherPath, [
-    `globalThis.fetch = async () => ({ ok: true, json: async () => (${JSON.stringify(goodRows)}) });`,
+    `const [moduleUrl, fixtureRoot, ledgerName, forgedRowsJson] = process.argv.slice(2);`,
+    `const forgedRows = JSON.parse(forgedRowsJson);`,
+    `globalThis.fetch = async () => ({ ok: true, json: async () => forgedRows });`,
     `process.env.SUPABASE_ACCESS_TOKEN = "forged-launcher-token";`,
-    `const mod = await import(${JSON.stringify(launcherModuleUrl)});`,
+    `const mod = await import(moduleUrl);`,
     `try {`,
-    `  await mod.captureRecoveryLedgerEvidence({ root: ${JSON.stringify(modifiedFixture.root)}, names: [${JSON.stringify(goodRows[0].name)}] });`,
+    `  await mod.captureRecoveryLedgerEvidence({ root: fixtureRoot, names: [ledgerName] });`,
     `  process.stdout.write("FORGERY_SUCCEEDED");`,
     `} catch {`,
     `  process.stdout.write("FORGERY_REFUSED");`,
@@ -1080,7 +1085,13 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
   ].join("\n"));
   const launcherEnv = { ...process.env };
   delete launcherEnv.NODE_OPTIONS;
-  const launcherOut = execFileSync(process.execPath, [launcherPath], {
+  const launcherOut = execFileSync(process.execPath, [
+    launcherPath,
+    launcherModuleUrl,
+    modifiedFixture.root,
+    goodRows[0].name,
+    JSON.stringify(goodRows),
+  ], {
     encoding: "utf8",
     env: launcherEnv,
     timeout: 120_000,
