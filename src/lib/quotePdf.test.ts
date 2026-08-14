@@ -162,6 +162,27 @@ describe('generateQuotePdf', () => {
     const doc = await generateQuotePdf(data);
     expect(doc).toBe(mockDoc);
   });
+
+  it('never renders internal approval markers from quote or section notes', async () => {
+    await generateQuotePdf(makeQuoteData({
+      header_notes: 'Header visible\nBelow-cost approved: header secret',
+      footer_notes: 'Footer visible\nBelow-cost approved: footer secret',
+      sections: [{
+        section_name: 'Corn Pre-Emerge',
+        section_header_notes: 'Header instruction\nBelow-cost approved: section header secret',
+        section_notes: 'Section visible\nBelow-cost approved: section secret',
+        items: [],
+      }],
+    }));
+
+    const renderedText = mockDoc.text.mock.calls.flat().join(' ');
+    expect(renderedText).toContain('Header visible');
+    expect(renderedText).toContain('Footer visible');
+    expect(renderedText).toContain('Header instruction');
+    expect(renderedText).toContain('Section visible');
+    expect(renderedText).not.toContain('Below-cost approved:');
+    expect(renderedText).not.toContain('secret');
+  });
 });
 
 describe('downloadQuotePdf', () => {

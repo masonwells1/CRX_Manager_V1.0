@@ -445,6 +445,15 @@ describe('QuoteBuilder', () => {
     expect(screen.getByText('$11.11')).toBeInTheDocument();
     expect(screen.getByText('$8.88')).toBeInTheDocument();
     expect(screen.getByText('44.4%')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Units needed' }), {
+      target: { value: '3' },
+    });
+    await waitFor(() => expect(screen.getAllByText('$30.00').length).toBeGreaterThan(0));
+    expect(screen.getAllByText('$18.00').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('$12.00').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('40.0%').length).toBeGreaterThan(0);
+    expect(screen.queryByText('$19.99')).not.toBeInTheDocument();
   });
 
   it('preserves a stale edit until Reload Quote replaces it and sends the refreshed version on the next save', async () => {

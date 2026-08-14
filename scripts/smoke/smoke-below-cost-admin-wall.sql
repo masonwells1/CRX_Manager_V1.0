@@ -91,6 +91,7 @@ BEGIN
     );
     RAISE EXCEPTION 'SMOKE_FAIL: sales rep below-cost order committed';
   EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
     IF SQLERRM NOT LIKE 'BELOW_COST_ADMIN_REQUIRED:%' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: expected admin-required denial, got %', SQLERRM;
     END IF;
@@ -148,6 +149,7 @@ BEGIN
     );
     RAISE EXCEPTION 'SMOKE_FAIL: sales rep null-product below-cost invoice committed';
   EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
     IF SQLERRM NOT LIKE 'BELOW_COST_ADMIN_REQUIRED:%' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: expected null-product admin denial, got %', SQLERRM;
     END IF;
@@ -182,6 +184,7 @@ BEGIN
     );
     RAISE EXCEPTION 'SMOKE_FAIL: reasonless null-product below-cost invoice committed';
   EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
     IF SQLERRM NOT LIKE 'BELOW_COST_REASON_REQUIRED:%' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: expected null-product reason denial, got %', SQLERRM;
     END IF;
@@ -239,6 +242,7 @@ BEGIN
     );
     RAISE EXCEPTION 'SMOKE_FAIL: reasonless admin below-cost order committed';
   EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
     IF SQLERRM NOT LIKE 'BELOW_COST_REASON_REQUIRED:%' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: expected reason-required denial, got %', SQLERRM;
     END IF;
@@ -284,6 +288,7 @@ BEGIN
     WHERE entity_id = v_order_id;
     RAISE EXCEPTION 'SMOKE_FAIL: approval audit was mutable';
   EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
     IF SQLERRM NOT LIKE 'BELOW_COST_APPROVAL_IMMUTABLE%' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: expected immutable audit denial, got %', SQLERRM;
     END IF;
@@ -310,6 +315,7 @@ BEGIN
     );
     RAISE EXCEPTION 'SMOKE_FAIL: fractional-cent unit price committed';
   EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
     IF SQLERRM <> 'INVALID_UNIT_PRICE_CENTS' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: expected fractional-cent denial, got %', SQLERRM;
     END IF;
@@ -437,6 +443,7 @@ BEGIN
     WHERE id = v_invoice_item_id;
     RAISE EXCEPTION 'SMOKE_FAIL: context-free invoice exposure increase committed';
   EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
     IF SQLERRM NOT LIKE 'BELOW_COST_CONTEXT_REQUIRED:%' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: expected invoice context denial, got %', SQLERRM;
     END IF;

@@ -15,6 +15,9 @@
 -- grants, and generated TypeScript contract. Both new checks execute after the
 -- existing quote row lock and before any idempotency result can be returned or
 -- any business row can be written.
+-- Historical quotes whose created_by is NULL remain admin-only: the ownership
+-- comparison uses IS DISTINCT FROM, so no sales representative can inherit an
+-- ownerless booking by accident. No live sent/revised row is backfilled here.
 --
 -- Supabase apply_migration owns the outer transaction. Do not add BEGIN/COMMIT:
 -- the body replacement, ACL assertions, and ledger stamp must remain atomic.

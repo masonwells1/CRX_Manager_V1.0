@@ -98,6 +98,18 @@ describe('Reports profitability database authority', () => {
       p_end_date: undefined,
     });
 
+    const startDate = screen.getByText('Start Date').parentElement?.querySelector('input');
+    const endDate = screen.getByText('End Date').parentElement?.querySelector('input');
+    expect(startDate).not.toBeNull();
+    expect(endDate).not.toBeNull();
+    fireEvent.change(startDate!, { target: { value: '2026-08-01' } });
+    fireEvent.change(endDate!, { target: { value: '2026-08-31' } });
+    await waitFor(() => expect(mockRpc).toHaveBeenCalledWith('get_profitability_report', {
+      p_group_by: 'customer',
+      p_start_date: '2026-08-01',
+      p_end_date: '2026-08-31',
+    }));
+
     fireEvent.click(screen.getByRole('button', { name: 'By Product' }));
     await screen.findByText('Product A');
     await waitFor(() => expect(mockRpc).toHaveBeenCalledWith(

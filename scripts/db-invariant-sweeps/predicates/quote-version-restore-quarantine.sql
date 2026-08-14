@@ -68,7 +68,8 @@ SELECT 'quote-version-quarantine:immutability-guard-drifted' AS violation_key,
           SELECT 1
           FROM pg_proc p
           WHERE p.oid = 'public._guard_quote_version_restore_quarantine_immutable()'::regprocedure
-            AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
+            AND replace(COALESCE(array_to_string(p.proconfig, ','), ''), ' ', '')
+                = 'search_path=public,pg_temp'
             AND position('QUOTE_VERSION_RESTORE_QUARANTINE_IMMUTABLE' in p.prosrc) > 0
         )
  END
@@ -84,7 +85,8 @@ SELECT 'quote-version-quarantine:restore-wrapper-drifted' AS violation_key,
           FROM pg_proc p
           WHERE p.oid = 'public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)'::regprocedure
             AND p.prosecdef
-            AND p.proconfig IS NOT DISTINCT FROM ARRAY['search_path=public, pg_temp']::text[]
+            AND replace(COALESCE(array_to_string(p.proconfig, ','), ''), ' ', '')
+                = 'search_path=public,pg_temp'
             AND position('quote_version_restore_quarantine' in p.prosrc) > 0
             AND position('QUOTE_VERSION_RESTORE_QUARANTINED' in p.prosrc) > 0
             AND position('quote_version_restore_quarantine' in p.prosrc)

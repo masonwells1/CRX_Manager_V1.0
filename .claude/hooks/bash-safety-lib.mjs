@@ -168,8 +168,20 @@ export function checkOneShotReplayCommand(cmd, cwd) {
   const pathRe = /(?:["']([^"']+\.sql)["']|([^\s'";&|<>]+\.sql))/gi;
   let match;
   while ((match = pathRe.exec(text)) !== null) {
-    const candidate = (match[1] || match[2] || "").trim();
+    const candidate = (match[1] || match[2] || "")
+      .trim()
+      // CLI option assignment is not part of the path. Without stripping it,
+      // `--file=copy.sql` resolves to a fictitious file named `--file=...` and
+      // a byte-identical one-shot replay bypasses the hash check.
+      .replace(/^--?[a-z][\w-]*=/i, "");
     if (candidate) referencedSql.add(path.isAbsolute(candidate) ? candidate : path.resolve(base, candidate));
+  }
+
+  const referencedSqlHashes = new Set();
+  for (const candidate of referencedSql) {
+    try {
+      referencedSqlHashes.add(createHash("sha256").update(readFileSync(candidate)).digest("hex"));
+    } catch { /* an unreadable unrelated path is not evidence of a replay */ }
   }
 
   for (const stem of stems) {
@@ -185,12 +197,7 @@ export function checkOneShotReplayCommand(cmd, cwd) {
     if (text.toLowerCase().includes(stem.toLowerCase())) return reason;
 
     const sourceHash = createHash("sha256").update(source).digest("hex");
-    for (const candidate of referencedSql) {
-      try {
-        const candidateHash = createHash("sha256").update(readFileSync(candidate)).digest("hex");
-        if (candidateHash === sourceHash) return reason;
-      } catch { /* an unreadable unrelated path is not evidence of a replay */ }
-    }
+    if (referencedSqlHashes.has(sourceHash)) return reason;
 
     const normalizedSource = normalizeSql(source);
     if (normalizedSource && normalizedCommand.includes(normalizedSource)) return reason;

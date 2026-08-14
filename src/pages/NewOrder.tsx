@@ -483,10 +483,14 @@ export default function NewOrder() {
           toast('error', 'Only an active admin can approve a sale below cost. Ask an admin to review this order.');
           return;
         }
+        setSaving(true);
         belowCostReason = await new Promise<string | null>((resolve) =>
           setBelowCostPrompt({ lines: belowCostLines, resolve })
         );
-        if (belowCostReason === null) return;
+        if (belowCostReason === null) {
+          setSaving(false);
+          return;
+        }
       }
     }
 

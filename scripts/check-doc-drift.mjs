@@ -125,7 +125,12 @@ for (const doc of manualDocs) {
 // Future-dated migration files are intentionally excluded until their calendar day:
 // parked migrations may reserve a future ordering slot, and a document cannot truthfully
 // claim a future verification date merely because such a file exists on disk.
-const todayMigDate = new Date().toISOString().slice(0, 10).replaceAll("-", "");
+const localNow = new Date();
+const todayMigDate = [
+  localNow.getFullYear(),
+  String(localNow.getMonth() + 1).padStart(2, "0"),
+  String(localNow.getDate()).padStart(2, "0"),
+].join("");
 const newestMigDate = migrations
   .map((name) => name.match(/^(\d{8})/)?.[1])
   .filter((date) => date && date <= todayMigDate)

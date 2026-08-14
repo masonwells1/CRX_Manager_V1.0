@@ -19,6 +19,18 @@ DECLARE
   v_group_by text;
   v_group_key text;
   v_profit record;
+  v_before_month_revenue numeric := 0;
+  v_before_month_cost numeric := 0;
+  v_before_month_profit numeric := 0;
+  v_before_month_margin numeric := 0;
+  v_before_month_orders bigint := 0;
+  v_before_month_units numeric := 0;
+  v_after_month_revenue numeric := 0;
+  v_after_month_cost numeric := 0;
+  v_after_month_profit numeric := 0;
+  v_after_month_margin numeric := 0;
+  v_after_month_orders bigint := 0;
+  v_after_month_units numeric := 0;
   v_qty numeric;
   v_received numeric;
   v_count bigint;
@@ -39,6 +51,26 @@ BEGIN
 
   SELECT financial_dashboard_summary()
     INTO v_before_dashboard;
+
+  -- The month bucket is shared with real current-date orders. Capture its
+  -- exact baseline so this smoke proves only the fixture's delta and never
+  -- assumes an otherwise empty production month.
+  SELECT
+    COALESCE(MAX(total_revenue), 0),
+    COALESCE(MAX(total_cost), 0),
+    COALESCE(MAX(total_profit), 0),
+    COALESCE(MAX(margin_pct), 0),
+    COALESCE(MAX(order_count), 0),
+    COALESCE(MAX(units_sold), 0)
+  INTO
+    v_before_month_revenue,
+    v_before_month_cost,
+    v_before_month_profit,
+    v_before_month_margin,
+    v_before_month_orders,
+    v_before_month_units
+  FROM get_profitability_report('month', CURRENT_DATE, CURRENT_DATE)
+  WHERE group_key = to_char(CURRENT_DATE, 'YYYY-MM');
 
   INSERT INTO customers (farm_name)
   VALUES ('[SMOKE] Voided Sales ' || v_suffix) RETURNING id INTO v_customer;
@@ -65,11 +97,10 @@ BEGIN
   -- Positive control for the new canonical profitability RPC. Every grouping
   -- must settle the same line revenue/cost basis before the void exclusion is
   -- tested below; a query that simply returns no rows must not pass this smoke.
-  FOREACH v_group_by IN ARRAY ARRAY['customer', 'product', 'month'] LOOP
+  FOREACH v_group_by IN ARRAY ARRAY['customer', 'product'] LOOP
     v_group_key := CASE v_group_by
       WHEN 'customer' THEN '[SMOKE] Voided Sales ' || v_suffix
       WHEN 'product' THEN '[SMOKE] Voided Product ' || v_suffix
-      ELSE to_char(CURRENT_DATE, 'YYYY-MM')
     END;
     SELECT * INTO v_profit
     FROM get_profitability_report(v_group_by, CURRENT_DATE, CURRENT_DATE)
@@ -97,6 +128,31 @@ BEGIN
         v_group_by, row_to_json(v_profit);
     END IF;
   END LOOP;
+
+  SELECT * INTO v_profit
+  FROM get_profitability_report('month', CURRENT_DATE, CURRENT_DATE)
+  WHERE group_key = to_char(CURRENT_DATE, 'YYYY-MM');
+  IF NOT FOUND OR ROW(
+       v_profit.total_revenue,
+       v_profit.total_cost,
+       v_profit.total_profit,
+       v_profit.margin_pct,
+       v_profit.order_count,
+       v_profit.units_sold
+     ) IS DISTINCT FROM ROW(
+       v_before_month_revenue + 1000,
+       v_before_month_cost + 400,
+       v_before_month_profit + 600,
+       ROUND(
+         ((v_before_month_profit + 600) / NULLIF(v_before_month_revenue + 1000, 0)) * 100,
+         1
+       ),
+       v_before_month_orders + 1,
+       v_before_month_units + 10
+     ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: profitability month grouping returned wrong fixture delta: %',
+      row_to_json(v_profit);
+  END IF;
 
   PERFORM void_order(
     v_order,
@@ -128,11 +184,10 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: voided order appeared in gross sales';
   END IF;
 
-  FOREACH v_group_by IN ARRAY ARRAY['customer', 'product', 'month'] LOOP
+  FOREACH v_group_by IN ARRAY ARRAY['customer', 'product'] LOOP
     v_group_key := CASE v_group_by
       WHEN 'customer' THEN '[SMOKE] Voided Sales ' || v_suffix
       WHEN 'product' THEN '[SMOKE] Voided Product ' || v_suffix
-      ELSE to_char(CURRENT_DATE, 'YYYY-MM')
     END;
     SELECT count(*) INTO v_count
     FROM get_profitability_report(v_group_by, CURRENT_DATE, CURRENT_DATE)
@@ -142,6 +197,40 @@ BEGIN
         v_group_by;
     END IF;
   END LOOP;
+
+  SELECT
+    COALESCE(MAX(total_revenue), 0),
+    COALESCE(MAX(total_cost), 0),
+    COALESCE(MAX(total_profit), 0),
+    COALESCE(MAX(margin_pct), 0),
+    COALESCE(MAX(order_count), 0),
+    COALESCE(MAX(units_sold), 0)
+  INTO
+    v_after_month_revenue,
+    v_after_month_cost,
+    v_after_month_profit,
+    v_after_month_margin,
+    v_after_month_orders,
+    v_after_month_units
+  FROM get_profitability_report('month', CURRENT_DATE, CURRENT_DATE)
+  WHERE group_key = to_char(CURRENT_DATE, 'YYYY-MM');
+  IF ROW(
+       v_after_month_revenue,
+       v_after_month_cost,
+       v_after_month_profit,
+       v_after_month_margin,
+       v_after_month_orders,
+       v_after_month_units
+     ) IS DISTINCT FROM ROW(
+       v_before_month_revenue,
+       v_before_month_cost,
+       v_before_month_profit,
+       v_before_month_margin,
+       v_before_month_orders,
+       v_before_month_units
+     ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: voided order changed profitability month baseline';
+  END IF;
 
   SELECT financial_dashboard_summary()
     INTO v_after_dashboard;

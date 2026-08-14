@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
@@ -574,6 +574,9 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(isDeny(r), "the same one-shot body under a different name → apply denied");
     ok(isOneShotDeny(r), "the body match, not the name, is what catches the renamed replay");
 
+    r = apply("20990601000003_partial_body", "UPDATE public.orders SET total_profit = 1;");
+    ok(!isOneShotDeny(r), "a normalized substring is not misclassified as the registered one-shot body");
+
     // 4. A ledger that ALREADY contains it is by definition the population the
     //    migration was approved against — this guard has nothing to say there.
     writeAppliedSnapshot(stateDir, { applied: ["20990101000000_already_applied", STEM] });
@@ -591,8 +594,13 @@ function armAutopilot(stateDir, hoursFromNow) {
     writeFileSync(ovPath, JSON.stringify({ migration: STEM, queryHash: sha(ONE_SHOT_SQL) }));
     r = apply(STEM, ONE_SHOT_SQL);
     ok(!isOneShotDeny(r), "a digest-bound override matching the exact SQL releases the one-shot refusal");
+    ok(!existsSync(ovPath), "a successful guard authorization consumes the one-shot override");
 
-    // The same override must not release a DIFFERENT body.
+    r = apply(STEM, ONE_SHOT_SQL);
+    ok(isOneShotDeny(r), "the consumed override cannot authorize a second apply attempt");
+
+    // A fresh override must not release a DIFFERENT body.
+    writeFileSync(ovPath, JSON.stringify({ migration: STEM, queryHash: sha(ONE_SHOT_SQL) }));
     r = apply(STEM, `${ONE_SHOT_SQL} -- edited`);
     ok(isOneShotDeny(r), "the override authorizes that exact text and nothing else");
     rmSync(ovPath, { force: true });

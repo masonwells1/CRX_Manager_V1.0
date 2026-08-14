@@ -164,10 +164,11 @@ export async function generateQuotePdf(data: PdfQuoteData, columns?: string[]) {
   y += 18;
 
   // ─── Header notes ─────────────────────────────────────────
-  if (data.header_notes) {
+  const customerHeaderNotes = stripInternalNotes(data.header_notes);
+  if (customerHeaderNotes) {
     doc.setFontSize(9);
     doc.setTextColor(...GRAY);
-    const lines = doc.splitTextToSize(data.header_notes, pageW - margin * 2);
+    const lines = doc.splitTextToSize(customerHeaderNotes, pageW - margin * 2);
     doc.text(lines, margin, y);
     y += lines.length * 12 + 8;
   }
@@ -184,11 +185,12 @@ export async function generateQuotePdf(data: PdfQuoteData, columns?: string[]) {
     y += 26;
 
     // Section header notes (above items table)
-    if (section.section_header_notes) {
+    const customerSectionHeaderNotes = stripInternalNotes(section.section_header_notes);
+    if (customerSectionHeaderNotes) {
       doc.setFontSize(9);
       doc.setFont('helvetica', 'italic');
       doc.setTextColor(...GRAY);
-      const headerNoteLines = doc.splitTextToSize(section.section_header_notes, pageW - margin * 2 - 8);
+      const headerNoteLines = doc.splitTextToSize(customerSectionHeaderNotes, pageW - margin * 2 - 8);
       doc.text(headerNoteLines, margin + 4, y + 4);
       y += headerNoteLines.length * 4 + 8;
     }
@@ -230,11 +232,12 @@ export async function generateQuotePdf(data: PdfQuoteData, columns?: string[]) {
 
     y = (doc as JsPDFWithAutoTable).lastAutoTable.finalY + 6;
 
-    if (section.section_notes) {
+    const customerSectionNotes = stripInternalNotes(section.section_notes);
+    if (customerSectionNotes) {
       doc.setFontSize(8);
       doc.setTextColor(...GRAY);
       doc.setFont('helvetica', 'italic');
-      doc.text(section.section_notes, margin + 4, y + 4);
+      doc.text(customerSectionNotes, margin + 4, y + 4);
       y += 14;
     }
 
@@ -269,11 +272,12 @@ export async function generateQuotePdf(data: PdfQuoteData, columns?: string[]) {
   y += 50;
 
   // ─── Footer notes ─────────────────────────────────────────
-  if (data.footer_notes) {
+  const customerFooterNotes = stripInternalNotes(data.footer_notes);
+  if (customerFooterNotes) {
     doc.setFontSize(9);
     doc.setTextColor(...GRAY);
     doc.setFont('helvetica', 'normal');
-    const lines = doc.splitTextToSize(data.footer_notes, pageW - margin * 2);
+    const lines = doc.splitTextToSize(customerFooterNotes, pageW - margin * 2);
     doc.text(lines, margin, y);
     y += lines.length * 12 + 10;
   }

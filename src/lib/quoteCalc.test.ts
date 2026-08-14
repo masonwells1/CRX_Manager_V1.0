@@ -8,7 +8,9 @@ import {
   validateCommissionSplits,
   convertToGlLb,
   settleMoneyDifference,
+  settleMoneyCents,
   settleMoneyRatio,
+  settleQuantityHundredths,
   type CalcItem,
   type CalcMode,
 } from './quoteCalc';
@@ -167,6 +169,7 @@ describe('getConversionFactor', () => {
 describe('recalcItem', () => {
   it('settles the Quote Builder 1.01 x 18.50 regression to PostgreSQL whole cents', () => {
     expect(settleMoneyRatio([1.01, 18.5])).toBe(18.69);
+    expect(settleMoneyCents([1.005])).toBe(101);
     expect(settleMoneyDifference([1.01, 18.5], [0.5, 18.5])).toBe(9.44);
   });
 
@@ -450,6 +453,26 @@ describe('recalcItem', () => {
     expect(result.total_price).toBe(1.01);
   });
 
+  it('settles quantity before extending line money, matching save_quote', () => {
+    const product = makeProduct({
+      tier1_price: 100,
+      current_cost: 50,
+      inventory_unit: 'Gallon',
+    });
+    const item = makeItem({
+      actual_rate: 1,
+      rate_unit: 'fl oz',
+      acres: 3,
+    });
+
+    const result = recalcItem(item, product, 1, conversions);
+
+    expect(settleQuantityHundredths([3, 1], [128])).toBe(0.02);
+    expect(result.total_units_needed).toBe(0.02);
+    expect(result.total_price).toBe(2);
+    expect(result.profit).toBe(1);
+  });
+
   it('units_direct: back-calculates oz/acre and $/acre when acres provided', () => {
     const product = makeProduct({ tier1_price: 20, current_cost: 10, inventory_unit: 'Gallon' });
     const item = makeItem({
@@ -531,8 +554,8 @@ describe('recalcItem', () => {
 describe('computeQuoteTotals', () => {
   it('computes totals across multiple items', () => {
     const items: CalcItem[] = [
-      makeItem({ total_price: 500, current_cost: 10, total_units_needed: 25 }),
-      makeItem({ total_price: 300, current_cost: 5, total_units_needed: 20 }),
+      makeItem({ total_price: 500, profit: 250, current_cost: 10, total_units_needed: 25 }),
+      makeItem({ total_price: 300, profit: 200, current_cost: 5, total_units_needed: 20 }),
     ];
 
     const totals = computeQuoteTotals(items);
@@ -566,24 +589,42 @@ describe('computeQuoteTotals', () => {
 
   it('handles items with undefined total_price without producing NaN', () => {
     const items: CalcItem[] = [
-      makeItem({ total_price: undefined as unknown as number, current_cost: 10, total_units_needed: 5 }),
-      makeItem({ total_price: 200, current_cost: 8, total_units_needed: 10 }),
+      makeItem({ total_price: undefined as unknown as number, profit: 0, current_cost: 10, total_units_needed: 5 }),
+      makeItem({ total_price: 200, profit: 120, current_cost: 8, total_units_needed: 10 }),
     ];
     const totals = computeQuoteTotals(items);
     expect(Number.isFinite(totals.totalPrice)).toBe(true);
     expect(totals.totalPrice).toBe(200);
     expect(Number.isFinite(totals.totalCost)).toBe(true);
-    expect(totals.totalCost).toBe(130); // (10*5) + (8*10)
+    expect(totals.totalCost).toBe(80);
   });
 
   it('handles items with undefined current_cost without producing NaN', () => {
     const items: CalcItem[] = [
-      makeItem({ total_price: 100, current_cost: undefined as unknown as number, total_units_needed: 5 }),
+      makeItem({ total_price: 100, profit: 100, current_cost: undefined as unknown as number, total_units_needed: 5 }),
     ];
     const totals = computeQuoteTotals(items);
     expect(Number.isFinite(totals.totalCost)).toBe(true);
     expect(totals.totalCost).toBe(0);
     expect(totals.totalPrice).toBe(100);
+  });
+
+  it('uses each settled line profit so header cost cannot drift from line math', () => {
+    const settledLine = recalcItem(
+      makeItem({ actual_rate: 1, rate_unit: 'fl oz', acres: 3 }),
+      makeProduct({ tier1_price: 100, current_cost: 50, inventory_unit: 'Gallon' }),
+      1,
+      conversions,
+    );
+
+    const totals = computeQuoteTotals([settledLine]);
+
+    expect(totals).toEqual({
+      totalPrice: 2,
+      totalCost: 1,
+      totalProfit: 1,
+      totalMarginPct: 50,
+    });
   });
 });
 

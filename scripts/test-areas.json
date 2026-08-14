@@ -114,6 +114,8 @@
       "vitest": [
         "src/lib/rlsContracts.test.ts",
         "src/lib/quoteVersionWriteBoundary.test.ts",
+        "src/lib/quoteVersionRestoreQuarantineMigration.test.ts",
+        "src/lib/drawDownQuoteOwnershipMigration.test.ts",
         "src/lib/pagePermissions.test.ts",
         "src/lib/sqlRoleGateNullFailOpen.test.ts",
         "src/lib/e2eSafetyGuards.test.ts",
@@ -130,6 +132,7 @@
         "auth-bound-role-ungated",
         "office-only-pricing-secdef-gates",
         "quote-versions-rpc-owned",
+        "quote-version-restore-quarantine",
         "save-field-actor-binding",
         "secdef-searchpath",
         "section9-po-ap-controls",

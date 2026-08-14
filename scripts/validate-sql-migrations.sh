@@ -599,6 +599,26 @@ for file in $ALL_SQL; do
             j = i + 2
             if (tok[j] == "only") j++
             target = tok[j]; kind = "delete"
+          } else if (tok[i] == "truncate" &&
+                     (i == 1 || tok[i - 1] == ";" || tok[i - 1] == "begin" ||
+                      tok[i - 1] == "then" || tok[i - 1] == "else")) {
+            j = i + 1
+            if (tok[j] == "table") j++
+            # TRUNCATE accepts a comma-separated relation list and an optional
+            # ONLY before any relation. Every listed business table is a full
+            # existing-row rewrite and must enter the approved-set guard.
+            for (k = j; k <= ntok && tok[k] != ";"; k++) {
+              if (tok[k] == "," || tok[k] == "only") continue
+              if (tok[k] == "restart" || tok[k] == "continue" ||
+                  tok[k] == "identity" || tok[k] == "cascade" ||
+                  tok[k] == "restrict") break
+              truncate_target = tok[k]
+              sub(/^public\./, "", truncate_target)
+              if (truncate_target ~ ("^(" tables ")$")) {
+                printf "%d\t%s\ttruncate\t\t%s\n", tokln[i], truncate_target, raw[tokln[i]]
+              }
+            }
+            continue
           } else if (tok[i] == "insert" && tok[i + 1] == "into") {
             # An INSERT is only a rewrite of EXISTING rows when it carries
             # ON CONFLICT ... DO UPDATE. A plain INSERT adds rows and is out of

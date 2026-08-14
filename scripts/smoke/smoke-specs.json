@@ -15,7 +15,9 @@
     },
     "below_cost_quote_lifecycle": {
       "chain": "smoke-below-cost-quote-lifecycle.sql",
-      "description": "Quote lifecycle below-cost wall: real save, duplicate, restore-version, whole-conversion, and partial-draw RPCs first reject a blank reason where applicable after live Product cost rises above the locked Quote price, then accept an active-admin reason and write exactly one atomic approval audit per governed line. The save path proves its transient INSERT is deferred and only the final Product-recomputed UPDATE is enforced and audited. A synthetic legacy Quote with an unknown historical cost is refused before it can become a zero-cost Order; a mutated pre-rounding version snapshot restores as whole-cent money; conversion commission basis is asserted equal to the canonical Order header. Terminal rollback and zero residue.",
+      "container_only": true,
+      "container_prover": "prove-pricing-audit-real-schema.mjs",
+      "description": "CONTAINER ONLY — Quote lifecycle below-cost wall: real save, duplicate, restore-version, whole-conversion, and partial-draw RPCs first reject a blank reason where applicable after live Product cost rises above the locked Quote price, then accept an active-admin reason and write exactly one atomic approval audit per governed line. The save path proves its transient INSERT is deferred and only the final Product-recomputed UPDATE is enforced and audited. A synthetic legacy Quote with an unknown historical cost is refused before it can become a zero-cost Order; a mutated pre-rounding version snapshot restores as whole-cent money; conversion commission basis is asserted equal to the canonical Order header. Terminal rollback and zero residue.",
       "covers": ["save_quote", "duplicate_quote", "restore_quote_version", "convert_quote_to_order", "draw_down_quote", "below_cost_approvals"],
       "area": ["billing", "inventory", "lifecycle", "pricing", "security", "idempotency", "regression"]
     },

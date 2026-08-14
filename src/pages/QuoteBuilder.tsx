@@ -54,6 +54,7 @@ import {
   computeQuoteTotals,
   settleMoneyDifference,
   settleMoneyRatio,
+  settleQuantityHundredths,
   validateCommissionSplits,
 } from '../lib/quoteCalc';
 import { buildCommissionSplitPatch, nextLoadedSplitSnapshot } from '../lib/commissionSplitConcurrency';
@@ -1168,11 +1169,13 @@ export default function QuoteBuilder() {
       // as absent would swap in today's catalog cost, so the page would show a
       // different profit than save_quote stores and could raise a false
       // below-cost approval prompt.
-      const currentCost = item.current_cost ?? product.current_cost ?? 0;
+      const currentCost = item.current_cost ?? 0;
 
       if (item.calc_mode === 'units_direct') {
         // User entered total_units_needed directly — skip rate×acres computation
-        const totalInventoryUnits = item.total_units_needed || 0;
+        const totalInventoryUnits = settleQuantityHundredths([
+          item.total_units_needed || 0,
+        ]);
         // Settled revenue minus settled extended cost -- the SAME boundary
         // save_quote and the report RPCs use, so the quote on screen matches
         // the quote that gets stored and converted. (Codex round 41.)
@@ -1215,7 +1218,10 @@ export default function QuoteBuilder() {
       const ozPerAcre = rateInOz;
 
       const totalInventoryUnits = inventoryUnitFactorOz > 0
-        ? (acres * rateInOz) / inventoryUnitFactorOz
+        ? settleQuantityHundredths(
+            [acres, actualRate, rateUnitFactorOz],
+            [inventoryUnitFactorOz],
+          )
         : 0;
 
       const pricePerAcre = inventoryUnitFactorOz > 0
@@ -1224,18 +1230,12 @@ export default function QuoteBuilder() {
             [inventoryUnitFactorOz],
           )
         : 0;
-      // Use the original decimal operands so the binary-float division used for
-      // display quantity cannot move an exact half-cent money boundary.
-      const moneyDenominators = [inventoryUnitFactorOz];
-      const totalPrice = settleMoneyRatio(
-        [pricePerUnit, acres, actualRate, rateUnitFactorOz],
-        moneyDenominators,
-      );
+      // save_quote first settles quantity to hundredths, then extends money
+      // from that stored quantity. Match that authoritative order exactly.
+      const totalPrice = settleMoneyRatio([pricePerUnit, totalInventoryUnits]);
       const profit = settleMoneyDifference(
-        [pricePerUnit, acres, actualRate, rateUnitFactorOz],
-        [currentCost, acres, actualRate, rateUnitFactorOz],
-        moneyDenominators,
-        moneyDenominators,
+        [pricePerUnit, totalInventoryUnits],
+        [currentCost, totalInventoryUnits],
       );
       const netMargin = totalPrice > 0 ? profit / totalPrice : 0;
 
@@ -1527,15 +1527,15 @@ export default function QuoteBuilder() {
     // be saved. The database locks this same live basis, so a catalog increase
     // cannot surprise an admin with a server-only reason-required error.
     const isFieldStaff = profile.role === 'driver' || profile.role === 'applicator';
+    const belowCostItems = sections
+      .flatMap((sec) => sec.items)
+      .map((item) => ({
+        item,
+        cost: products.find((p) => p.id === item.product_id)?.current_cost ?? item.current_cost,
+      }))
+      .filter(({ item, cost }) => item.product_id && cost > 0 && item.price_per_unit < cost);
     let belowCostReason: string | null = null;
     if (!isFieldStaff) {
-      const belowCostItems = sections
-        .flatMap((sec) => sec.items)
-        .map((item) => ({
-          item,
-          cost: products.find((p) => p.id === item.product_id)?.current_cost ?? item.current_cost,
-        }))
-        .filter(({ item, cost }) => item.product_id && cost > 0 && item.price_per_unit < cost);
       const belowCostLines: BelowCostLine[] = belowCostItems.map(({ item, cost }) => ({
         productName:
           item.product?.product_name
@@ -1614,16 +1614,8 @@ export default function QuoteBuilder() {
     // the approval reason the first save recorded.
     const annotatedNotes = new Map<string, string | null>();
     if (belowCostReason) {
-      for (const sec of sections) {
-        for (const item of sec.items) {
-          if (!item.product_id) continue;
-          const cost = products.find((p) => p.id === item.product_id)?.current_cost
-            ?? item.current_cost
-            ?? 0;
-          if (cost > 0 && item.price_per_unit < cost) {
-            annotatedNotes.set(item._key, appendBelowCostApproval(item.notes, belowCostReason));
-          }
-        }
+      for (const { item } of belowCostItems) {
+        annotatedNotes.set(item._key, appendBelowCostApproval(item.notes, belowCostReason));
       }
     }
 
@@ -2473,7 +2465,11 @@ export default function QuoteBuilder() {
       p_expected_row_version: restoreAttempt.expectedRowVersion,
     });
     const approvalLines = belowCostLinesFromRpcError(restoreResponse.error);
-    if (approvalLines && isAdmin) {
+    if (approvalLines) {
+      if (!isAdmin) {
+        toast('error', 'This saved version is below cost and requires an active admin to restore it. Ask an admin to review it.');
+        return;
+      }
       const reason = await new Promise<string | null>((resolve) =>
         setBelowCostPrompt({ lines: approvalLines, resolve })
       );
@@ -2497,6 +2493,8 @@ export default function QuoteBuilder() {
           || (typeof error.message === 'string' ? error.message : null)
           || 'This version books less than what has already been drawn down to orders.';
         toast('error', errMsg);
+      } else if (hasRpcCode(error, RpcErrorCodes.QUOTE_VERSION_RESTORE_QUARANTINED)) {
+        toast('error', 'This historical saved version cannot be restored because it predates the trusted version boundary. Create a new version from the current quote instead.');
       } else if (hasRpcCode(error, RpcErrorCodes.QUOTE_STALE_WRITE)
         || hasRpcCode(error, RpcErrorCodes.IDEMPOTENCY_PAYLOAD_CONFLICT)) {
         resetRestoreVersionAfterReloadRef.current = true;
@@ -2801,6 +2799,35 @@ export default function QuoteBuilder() {
       return;
     }
 
+    const restoreOpenQuoteStatus = async (
+      action: string,
+      failureMessage: string,
+    ): Promise<void> => {
+      const revertTo = status === 'accepted' || status === 'draft'
+        ? 'sent'
+        : (status || 'sent');
+      try {
+        const previousRowVersion = quoteRowVersionRef.current;
+        const revertResult = await supabase
+          .from('quotes')
+          .update({ status: revertTo })
+          .eq('id', savedId)
+          .select('*');
+        checkMutationResult(revertResult, 'Revert quote status');
+        setStatus(revertTo);
+        applyDirectQuoteMutationRowVersion(
+          previousRowVersion,
+          (revertResult.data as Array<{ row_version?: unknown }>)[0]?.row_version,
+          'reverted',
+        );
+      } catch (revertErr) {
+        Sentry.captureException(revertErr, {
+          tags: { source: 'mutation', action },
+        });
+        toast('error', `${failureMessage} — its status may need a manual fix`);
+      }
+    };
+
     try {
       // Atomic RPC: order creation + items + inventory prebooking + commissions
       const idemKey = convertQuoteIdem.getKey();
@@ -2818,6 +2845,15 @@ export default function QuoteBuilder() {
           setBelowCostPrompt({ lines: approvalLines, resolve })
         );
         if (reason === null) {
+          // saveQuote('accepted') already committed, while the refused first
+          // conversion attempt created no Order. Restore the editable state so
+          // cancelling approval cannot strand this Quote as read-only.
+          if (status !== 'accepted') {
+            await restoreOpenQuoteStatus(
+              'revert_quote_status_after_cancelled_below_cost',
+              'The below-cost approval was cancelled, but the quote could not be returned to its open status',
+            );
+          }
           setConverting(false);
           return;
         }
@@ -2973,23 +3009,10 @@ export default function QuoteBuilder() {
       // A successful status check proved the quote was not accepted. A draft can
       // only reach this path through Book as Order, whose mark-presented step
       // already committed it as sent; keep it sent so normal Convert remains.
-      const revertTo = status === 'accepted' || status === 'draft' ? 'sent' : (status || 'sent');
-      try {
-        const previousRowVersion = quoteRowVersionRef.current;
-        const revertResult = await supabase.from('quotes').update({ status: revertTo }).eq('id', savedId).select('*');
-        checkMutationResult(revertResult, 'Revert quote status');
-        setStatus(revertTo);
-        applyDirectQuoteMutationRowVersion(
-          previousRowVersion,
-          (revertResult.data as Array<{ row_version?: unknown }>)[0]?.row_version,
-          'reverted',
-        );
-      } catch (revertErr) {
-        // The quote is now stuck 'accepted' with no order — surface it instead
-        // of failing silently so someone fixes the status by hand.
-        Sentry.captureException(revertErr, { tags: { source: 'mutation', action: 'revert_quote_status_after_failed_convert' } });
-        toast('error', `Order creation failed AND the quote could not be reverted to "${revertTo}" — its status may need a manual fix`);
-      }
+      await restoreOpenQuoteStatus(
+        'revert_quote_status_after_failed_convert',
+        'Order creation failed AND the quote could not be returned to its open status',
+      );
     }
     setConverting(false);
   };

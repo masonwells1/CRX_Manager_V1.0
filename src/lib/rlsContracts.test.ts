@@ -41,6 +41,8 @@
  * Sprint 3b: Go-live hardening
  */
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -476,6 +478,24 @@ describe('RLS Contracts: Access Matrix Completeness', () => {
     const tables = RLS_ACCESS_MATRIX.map(c => c.table);
     const unique = new Set(tables);
     expect(unique.size).toBe(tables.length);
+  });
+
+  it('keeps the live quote_versions matrix aligned with the captured pending boundary', () => {
+    const pendingMigrationName = '20260813080000_lock_quote_versions_writes_to_rpc';
+    const migration = readFileSync(
+      join(process.cwd(), 'supabase', 'migrations', `${pendingMigrationName}.sql`),
+      'utf8'
+    );
+    const ledger = JSON.parse(
+      readFileSync(join(process.cwd(), 'scripts', 'smoke', 'pricing-audit-live-ledger.json'), 'utf8')
+    ) as { entries: Array<{ name: string }> };
+    const contract = RLS_ACCESS_MATRIX.find(entry => entry.table === 'quote_versions');
+
+    expect(ledger.entries.some(entry => entry.name === pendingMigrationName)).toBe(false);
+    expect(migration).toMatch(/REVOKE INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES\s+ON TABLE public\.quote_versions/i);
+    expect(contract?.access.admin.INSERT).toBe('all');
+    expect(contract?.access.sales_rep.INSERT).toBe('own');
+    expect(contract?.notes).toContain('NOT yet applied live');
   });
 
   it('covers all 28 critical tables', () => {

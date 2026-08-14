@@ -725,19 +725,6 @@ export default function Quotes() {
         loading={deleting}
       />
 
-      <BelowCostConfirmModal
-        open={belowCostPrompt !== null}
-        lines={belowCostPrompt?.lines ?? []}
-        onClose={() => {
-          belowCostPrompt?.resolve(null);
-          setBelowCostPrompt(null);
-        }}
-        onConfirm={(reason) => {
-          belowCostPrompt?.resolve(reason);
-          setBelowCostPrompt(null);
-        }}
-      />
-
       <ConfirmModal
         open={!!convertTarget}
         onClose={belowCostPrompt ? () => {} : closeConvert}
@@ -756,6 +743,19 @@ export default function Quotes() {
         variant={convertStaleMsg || convertDupMsg ? 'warning' : 'info'}
         icon={convertStaleMsg || convertDupMsg ? AlertTriangle : PackageCheck}
         loading={converting || convertChecking}
+      />
+
+      <BelowCostConfirmModal
+        open={belowCostPrompt !== null}
+        lines={belowCostPrompt?.lines ?? []}
+        onClose={() => {
+          belowCostPrompt?.resolve(null);
+          setBelowCostPrompt(null);
+        }}
+        onConfirm={(reason) => {
+          belowCostPrompt?.resolve(reason);
+          setBelowCostPrompt(null);
+        }}
       />
     </div>
   );

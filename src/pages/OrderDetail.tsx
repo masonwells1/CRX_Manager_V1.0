@@ -37,6 +37,7 @@ import type { PickListData } from '../lib/orderPickListPdf';
 import { validateInventoryPositionShape } from '../lib/inventoryPositionValidator';
 import { inventoryPositionByProduct } from '../lib/inventoryPositionLookup';
 import { retryBelowCostReasonRequired } from '../lib/belowCostRpc';
+import { settleMoneyCents } from '../lib/quoteCalc';
 import { ProductOptionDetails } from '../components/products/ProductOptionPresentation';
 import type { Order, OrderItem, OrderShare, OrderItemFieldAllocation, Customer, Invoice, Delivery, Product, LinkedEntityType, InventoryPositionRow } from '../types';
 
@@ -57,7 +58,7 @@ function nextEditKey() { return `_new_${++_editKeyCounter}`; }
 
 /**
  * The cost a below-cost check must judge a line against: the immutable
- * as-of-sale snapshot the reports treat as COGS, in dollars.
+ * as-of-sale snapshot the reports treat as COGS, normalized to integer cents.
  *
  * `cost_per_unit` is the mutable legacy column and is only a fallback for rows
  * written before the snapshot trigger existed. On an older order the two can
@@ -68,8 +69,10 @@ function nextEditKey() { return `_new_${++_editKeyCounter}`; }
  * bug has now been found twice on two different code paths.
  * (Codex rounds 26 and 37.)
  */
-function belowCostBasis(line: { cost_at_time_cents?: number | null; cost_per_unit?: number | null }): number {
-  return line.cost_at_time_cents != null ? line.cost_at_time_cents / 100 : (line.cost_per_unit ?? 0);
+function belowCostBasisCents(line: { cost_at_time_cents?: number | null; cost_per_unit?: number | null }): number {
+  return line.cost_at_time_cents != null
+    ? line.cost_at_time_cents
+    : settleMoneyCents([line.cost_per_unit ?? 0]);
 }
 
 export default function OrderDetail() {
@@ -500,6 +503,7 @@ export default function OrderDetail() {
 
   const handleSaveEdits = async () => {
     if (!profile) return;
+    setSaving(true);
 
     // Below-cost guardrail (non-field-staff only): any kept or newly added line
     // priced strictly under its cost needs an explicit reason before saving.
@@ -512,24 +516,32 @@ export default function OrderDetail() {
         ...editItems.map((item) => ({
           name: item.product_name,
           price: item.price_per_unit,
-          cost: belowCostBasis(item),
+          costCents: belowCostBasisCents(item),
         })),
         ...newItems
           .filter((item) => item.product_id && item.total_units_needed > 0)
-          .map((item) => ({ name: item.product_name, price: item.price_per_unit, cost: item.cost_per_unit })),
+          .map((item) => ({
+            name: item.product_name,
+            price: item.price_per_unit,
+            costCents: settleMoneyCents([item.cost_per_unit]),
+          })),
       ];
       const belowCostLines: BelowCostLine[] = candidateItems
-        .filter((item) => item.cost > 0 && item.price < item.cost)
-        .map((item) => ({ productName: item.name, price: item.price, cost: item.cost }));
+        .filter((item) => item.costCents > 0 && settleMoneyCents([item.price]) < item.costCents)
+        .map((item) => ({ productName: item.name, price: item.price, cost: item.costCents / 100 }));
       if (belowCostLines.length > 0) {
         if (profile.role !== 'admin') {
           toast('error', 'Only an active admin can approve an order below cost. Ask an admin to review it.');
+          setSaving(false);
           return;
         }
         belowCostReason = await new Promise<string | null>((resolve) =>
           setBelowCostPrompt({ lines: belowCostLines, resolve })
         );
-        if (belowCostReason === null) return;
+        if (belowCostReason === null) {
+          setSaving(false);
+          return;
+        }
       }
     }
 
@@ -1124,6 +1136,7 @@ export default function OrderDetail() {
       .map((i) => ({ order_item_id: i.id, price: parseFloat(priceInputs[i.id]) || 0 }));
     if (priced.length === 0) { toast('warning', 'Enter a price for at least one line.'); return; }
     if (priced.some((x) => x.price < 0)) { toast('error', 'Prices cannot be negative.'); return; }
+    setPricingOrder(true);
 
     // Below-cost guardrail on the rush-order Set Pricing path. Finalizing here
     // writes the sale price, sweeps draft invoices and drives commissions, so it
@@ -1142,22 +1155,36 @@ export default function OrderDetail() {
         .map((p) => {
           const line = items.find((i) => i.id === p.order_item_id);
           if (!line) return null;
-          return { productName: line.product_name, price: p.price, cost: belowCostBasis(line) };
+          const costCents = belowCostBasisCents(line);
+          return {
+            productName: line.product_name,
+            price: p.price,
+            cost: costCents / 100,
+            costCents,
+          };
         })
-        .filter((l): l is BelowCostLine => l !== null && l.cost > 0 && l.price < l.cost);
+        .filter((line): line is BelowCostLine & { costCents: number } =>
+          line !== null
+          && line.costCents > 0
+          && settleMoneyCents([line.price]) < line.costCents
+        )
+        .map(({ productName, price, cost }) => ({ productName, price, cost }));
       if (belowCostLines.length > 0) {
         if (profile.role !== 'admin') {
           toast('error', 'Only an active admin can approve pricing below cost. Ask an admin to review this order.');
+          setPricingOrder(false);
           return;
         }
         pricingBelowCostReason = await new Promise<string | null>((resolve) =>
           setBelowCostPrompt({ lines: belowCostLines, resolve })
         );
-        if (pricingBelowCostReason === null) return;
+        if (pricingBelowCostReason === null) {
+          setPricingOrder(false);
+          return;
+        }
       }
     }
 
-    setPricingOrder(true);
     try {
       const idemKey = priceOrderIdem.getKey();
       const pricingAttempt = await retryBelowCostReasonRequired(

@@ -1428,7 +1428,11 @@ export default function CustomerDetail() {
                         };
                         let duplicateResponse = await callBelowCostAwareRpc('duplicate_quote', duplicateArgs);
                         const approvalLines = belowCostLinesFromRpcError(duplicateResponse.error);
-                        if (approvalLines && profile?.role === 'admin') {
+                        if (approvalLines) {
+                          if (profile?.role !== 'admin') {
+                            toast('error', 'This quote is below cost and requires an active admin to duplicate it. Ask an admin to review it.');
+                            return;
+                          }
                           const reason = await new Promise<string | null>((resolve) =>
                             setBelowCostPrompt({ lines: approvalLines, resolve })
                           );

@@ -17,7 +17,7 @@
 // Setup matcher: this hook is registered against matcher "*" and filters
 // in-script for tool names containing "apply_migration".
 
-import { readFileSync, existsSync, readdirSync, statSync, mkdirSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, statSync, mkdirSync, unlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -308,7 +308,7 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
           const filePath = path.join(projectDir, "supabase", "migrations", `${stem}.sql`);
           if (existsSync(filePath)) {
             const normFile = norm(readFileSync(filePath, "utf8"));
-            if (normFile && (normQuery.includes(normFile) || normFile.includes(normQuery))) {
+            if (normFile && normQuery === normFile) {
               matched = `the SQL body (it matches ${stem}.sql on disk)`;
             }
           }
@@ -331,7 +331,20 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
             (ov?.queryHash || "").toString().trim().toLowerCase() === currentHash;
         }
       } catch { overrideOk = false; }
-      if (overrideOk) continue;
+      if (overrideOk) {
+        // A replay override is a one-attempt capability, not a durable bypass.
+        // Consume it before allowing the external call; a failed apply must be
+        // reviewed and explicitly re-authorized rather than silently retried.
+        try {
+          unlinkSync(ovPath);
+        } catch (err) {
+          out("block",
+            `ONE-SHOT REPLAY GUARD: the exact override matched, but it could not be consumed ` +
+            `(${err?.message || err}). Refusing the apply because a reusable override would ` +
+            `remain active.`);
+        }
+        continue;
+      }
 
       out("block",
         `ONE-SHOT REPLAY GUARD: this apply matches ${matched}, which is registered as a one-shot ` +

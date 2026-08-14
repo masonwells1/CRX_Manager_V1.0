@@ -9,7 +9,7 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
-## 2026-08-10 — Exact whole cents is the invariant; legacy numeric-dollar storage has a fail-closed approval gate
+## 2026-08-10 — Whole-cent compatibility predicate and non-finite guard
 
 **Source:** `docs/audits/2026-08-10-order-profit-bigint-cents-evaluation.md`, the owner-approved
 live apply recorded in migration-history row 867, and the exact-SHA review of the pricing finish

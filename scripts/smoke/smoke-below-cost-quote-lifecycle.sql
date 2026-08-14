@@ -1,4 +1,4 @@
--- Rollback-only proof that every app-reachable Quote lifecycle line writer is
+-- CONTAINER-ONLY rollback proof that every app-reachable Quote lifecycle line writer is
 -- routed through the PostgreSQL below-cost wall. PASS is the terminal
 -- SMOKE_PASS_ROLLBACK exception; the transaction retains no fixtures.
 BEGIN;
@@ -19,6 +19,8 @@ DECLARE
   v_section_unknown uuid;
   v_version uuid;
   v_order_id uuid;
+  v_duplicate_quote_id uuid;
+  v_draw_order_id uuid;
   v_row_version bigint;
   v_result jsonb;
   v_sections jsonb;
@@ -225,6 +227,7 @@ BEGIN
     );
     RAISE EXCEPTION 'SMOKE_FAIL: unknown-cost conversion committed';
   EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
     IF SQLERRM NOT LIKE 'COST_BASIS_REQUIRED:%' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: unknown-cost conversion denial was %', SQLERRM;
     END IF;
@@ -236,14 +239,16 @@ BEGIN
     );
     RAISE EXCEPTION 'SMOKE_FAIL: reasonless duplicate committed';
   EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
     IF SQLERRM NOT LIKE 'BELOW_COST_REASON_REQUIRED:%' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: duplicate denial was %', SQLERRM;
     END IF;
   END;
-  PERFORM public.duplicate_quote(
+  v_result := public.duplicate_quote(
     v_quote_convert, v_admin, 'smoke-q-duplicate-ok-' || v_sfx,
     'duplicate lifecycle approval'
   );
+  v_duplicate_quote_id := (v_result->>'quote_id')::uuid;
 
   SELECT row_version INTO v_row_version
   FROM public.quotes WHERE id = v_quote_restore;
@@ -254,6 +259,7 @@ BEGIN
     );
     RAISE EXCEPTION 'SMOKE_FAIL: reasonless restore committed';
   EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
     IF SQLERRM NOT LIKE 'BELOW_COST_REASON_REQUIRED:%' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: restore denial was %', SQLERRM;
     END IF;
@@ -286,6 +292,7 @@ BEGIN
     );
     RAISE EXCEPTION 'SMOKE_FAIL: reasonless conversion committed';
   EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
     IF SQLERRM NOT LIKE 'BELOW_COST_REASON_REQUIRED:%' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: conversion denial was %', SQLERRM;
     END IF;
@@ -314,16 +321,18 @@ BEGIN
     );
     RAISE EXCEPTION 'SMOKE_FAIL: reasonless draw-down committed';
   EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
     IF SQLERRM NOT LIKE 'BELOW_COST_REASON_REQUIRED:%' THEN
       RAISE EXCEPTION 'SMOKE_FAIL: draw-down denial was %', SQLERRM;
     END IF;
   END;
-  PERFORM public.draw_down_quote(
+  v_result := public.draw_down_quote(
     v_quote_draw,
     jsonb_build_array(jsonb_build_object('product_id', v_product, 'quantity', 2)),
     v_admin, 'smoke-q-draw-ok-' || v_sfx,
     'draw lifecycle approval'
   );
+  v_draw_order_id := (v_result->>'order_id')::uuid;
 
   FOREACH v_operation IN ARRAY ARRAY[
     'duplicate_quote', 'restore_quote_version',
@@ -333,7 +342,13 @@ BEGIN
     SELECT count(*) INTO v_audit_count
     FROM public.below_cost_approvals
     WHERE operation = v_operation
-      AND actor_user_id = v_admin;
+      AND actor_user_id = v_admin
+      AND entity_id = CASE v_operation
+        WHEN 'duplicate_quote' THEN v_duplicate_quote_id
+        WHEN 'restore_quote_version' THEN v_quote_restore
+        WHEN 'convert_quote_to_order' THEN v_order_id
+        WHEN 'draw_down_quote' THEN v_draw_order_id
+      END;
     IF v_audit_count <> 1 THEN
       RAISE EXCEPTION
         'SMOKE_FAIL: % wrote % approval audits instead of exactly one',

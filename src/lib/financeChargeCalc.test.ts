@@ -289,7 +289,7 @@ describe('Quote totals (computeQuoteTotals)', () => {
 
   it('computes single item total correctly', () => {
     const items: CalcItem[] = [
-      makeCalcItem({ total_price: 500, current_cost: 10, total_units_needed: 20 }),
+      makeCalcItem({ total_price: 500, profit: 300, current_cost: 10, total_units_needed: 20 }),
     ];
     const result = computeQuoteTotals(items);
     expect(result.totalPrice).toBe(500);
@@ -299,8 +299,8 @@ describe('Quote totals (computeQuoteTotals)', () => {
 
   it('sums multiple items correctly', () => {
     const items: CalcItem[] = [
-      makeCalcItem({ total_price: 1000, current_cost: 5, total_units_needed: 100 }),
-      makeCalcItem({ total_price: 2000, current_cost: 8, total_units_needed: 150 }),
+      makeCalcItem({ total_price: 1000, profit: 500, current_cost: 5, total_units_needed: 100 }),
+      makeCalcItem({ total_price: 2000, profit: 800, current_cost: 8, total_units_needed: 150 }),
     ];
     const result = computeQuoteTotals(items);
     expect(result.totalPrice).toBe(3000);
@@ -310,7 +310,7 @@ describe('Quote totals (computeQuoteTotals)', () => {
 
   it('handles mixed positive and zero price items', () => {
     const items: CalcItem[] = [
-      makeCalcItem({ total_price: 750, current_cost: 5, total_units_needed: 50 }),
+      makeCalcItem({ total_price: 750, profit: 500, current_cost: 5, total_units_needed: 50 }),
       makeCalcItem({ total_price: 0, current_cost: 0, total_units_needed: 0 }),
     ];
     const result = computeQuoteTotals(items);
@@ -321,7 +321,7 @@ describe('Quote totals (computeQuoteTotals)', () => {
 
   it('computes correct margin percentage', () => {
     const items: CalcItem[] = [
-      makeCalcItem({ total_price: 1000, current_cost: 10, total_units_needed: 50 }),
+      makeCalcItem({ total_price: 1000, profit: 500, current_cost: 10, total_units_needed: 50 }),
     ];
     const result = computeQuoteTotals(items);
     // cost = 500, profit = 500, margin = 50%

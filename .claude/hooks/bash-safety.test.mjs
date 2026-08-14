@@ -192,6 +192,8 @@ ok(!checkDangerousCommand("cat .env.example"), "reading .env.example is not a wr
     ok(checkOneShotReplayCommand("Get-Content renamed-copy.sql | psql", tmp), "renamed byte-identical one-shot file is blocked");
     ok(checkOneShotReplayCommand(`psql -c \"${sql}\"`, tmp), "pasted full one-shot body is blocked");
     ok(checkOneShotReplayCommand(`supabase sql --file supabase/migrations/${stem}.sql`, tmp), "Supabase CLI one-shot replay is blocked");
+    ok(checkOneShotReplayCommand("supabase sql --file=renamed-copy.sql", tmp), "Supabase --file= byte-identical replay is blocked");
+    ok(checkOneShotReplayCommand("psql --file=renamed-copy.sql", tmp), "psql --file= byte-identical replay is blocked");
     ok(
       checkOneShotReplayCommand(`supabase db query --linked --file supabase/migrations/${stem}.sql`, tmp),
       "Supabase db query one-shot replay is blocked",

@@ -136,6 +136,25 @@ export function settleMoneyRatio(
   return centsToDollars(roundedDecimalRatio(numerators, denominators));
 }
 
+/** Settle decimal money operands directly to an integer-cent comparison key. */
+export function settleMoneyCents(
+  numerators: number[],
+  denominators: number[] = [],
+): number {
+  return roundedDecimalRatio(numerators, denominators);
+}
+
+/**
+ * Settle an inventory quantity to the same two-decimal boundary used by
+ * save_quote before that quantity participates in line-level money math.
+ */
+export function settleQuantityHundredths(
+  numerators: number[],
+  denominators: number[] = [],
+): number {
+  return roundedDecimalRatio(numerators, denominators) / 100;
+}
+
 /** Difference between two independently settled money expressions. */
 export function settleMoneyDifference(
   minuendNumerators: number[],
@@ -169,7 +188,8 @@ export function recalcItem(
 
   if (mode === 'units_direct') {
     // User entered total_units_needed directly — skip rate×acres computation
-    const totalInventoryUnits = item.total_units_needed || 0;
+    const enteredInventoryUnits = item.total_units_needed || 0;
+    const totalInventoryUnits = settleQuantityHundredths([enteredInventoryUnits]);
     // Settled revenue minus settled extended cost -- the SAME boundary
     // save_quote and the report RPCs use. Rounding (price - cost) * qty as one
     // expression disagrees with them by a cent on fractional quantities whose
@@ -212,8 +232,12 @@ export function recalcItem(
   const rateInOz = actualRate * rateUnitFactorOz;
   const ozPerAcre = rateInOz;
 
-  const totalInventoryUnits =
-    inventoryUnitFactorOz > 0 ? (acres * rateInOz) / inventoryUnitFactorOz : 0;
+  const totalInventoryUnits = inventoryUnitFactorOz > 0
+    ? settleQuantityHundredths(
+        [acres, actualRate, rateUnitFactorOz],
+        [inventoryUnitFactorOz],
+      )
+    : 0;
 
   const pricePerAcre =
     inventoryUnitFactorOz > 0
@@ -222,17 +246,11 @@ export function recalcItem(
           [inventoryUnitFactorOz],
         )
       : 0;
-  // Use the original decimal operands for money. `totalInventoryUnits` is a
-  // display quantity computed with JS division; feeding that binary-float
-  // intermediate back into money could move an exact half-cent boundary.
-  const totalPriceCents = roundedDecimalRatio(
-    [pricePerUnit, acres, actualRate, rateUnitFactorOz],
-    [inventoryUnitFactorOz],
-  );
-  const totalCostCents = roundedDecimalRatio(
-    [currentCost, acres, actualRate, rateUnitFactorOz],
-    [inventoryUnitFactorOz],
-  );
+  // save_quote first settles quantity to hundredths, then extends revenue and
+  // cost from that stored quantity. Reuse that boundary so the preview cannot
+  // disagree with the authoritative persisted line on tiny applications.
+  const totalPriceCents = roundedDecimalRatio([pricePerUnit, totalInventoryUnits]);
+  const totalCostCents = roundedDecimalRatio([currentCost, totalInventoryUnits]);
   const totalPrice = centsToDollars(totalPriceCents);
   const profit = centsToDollars(totalPriceCents - totalCostCents);
   const netMargin = totalPrice > 0 ? profit / totalPrice : 0;
@@ -295,14 +313,14 @@ export function computeQuoteTotals(items: CalcItem[]): {
 } {
   let totalPriceCents = 0;
   let totalCostCents = 0;
+  let totalProfitCents = 0;
   for (const item of items) {
-    totalPriceCents += roundedDecimalRatio([item.total_price || 0]);
-    totalCostCents += roundedDecimalRatio([
-      item.current_cost || 0,
-      item.total_units_needed || 0,
-    ]);
+    const linePriceCents = roundedDecimalRatio([item.total_price || 0]);
+    const lineProfitCents = roundedDecimalRatio([item.profit || 0]);
+    totalPriceCents += linePriceCents;
+    totalProfitCents += lineProfitCents;
+    totalCostCents += linePriceCents - lineProfitCents;
   }
-  const totalProfitCents = totalPriceCents - totalCostCents;
   const totalPrice = centsToDollars(totalPriceCents);
   const totalCost = centsToDollars(totalCostCents);
   const totalProfit = centsToDollars(totalProfitCents);

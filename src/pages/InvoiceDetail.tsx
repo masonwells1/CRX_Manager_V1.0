@@ -756,10 +756,14 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
           toast('error', 'Only an active admin can approve an invoice below cost. Ask an admin to review it.');
           return;
         }
+        setSaving(true);
         belowCostReason = await new Promise<string | null>((resolve) =>
           setBelowCostPrompt({ lines: belowCostLines, resolve })
         );
-        if (belowCostReason === null) return;
+        if (belowCostReason === null) {
+          setSaving(false);
+          return;
+        }
       }
     }
 
@@ -2274,7 +2278,6 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         loading={printing}
       />
 
-      {/* Post Invoice Confirm */}
       <BelowCostConfirmModal
         open={belowCostPrompt !== null}
         lines={belowCostPrompt?.lines ?? []}
@@ -2288,6 +2291,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         }}
       />
 
+      {/* Post Invoice Confirm */}
       <ConfirmModal
         open={showPostConfirm}
         onClose={() => setShowPostConfirm(false)}

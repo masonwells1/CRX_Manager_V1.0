@@ -62,34 +62,40 @@ export function findTopLevelTransactionControl(source) {
     if (ch === "'") {
       append("''");
       i += 1;
+      let closed = false;
       while (i < source.length) {
         if (source[i] === '\n') line += 1;
         if (source[i] === "'" && source[i + 1] === "'") {
           i += 2;
         } else if (source[i] === "'") {
           i += 1;
+          closed = true;
           break;
         } else {
           i += 1;
         }
       }
+      if (!closed) throw new Error(`unterminated single-quoted string at line ${line}`);
       continue;
     }
 
     if (ch === '"') {
       append('""');
       i += 1;
+      let closed = false;
       while (i < source.length) {
         if (source[i] === '\n') line += 1;
         if (source[i] === '"' && source[i + 1] === '"') {
           i += 2;
         } else if (source[i] === '"') {
           i += 1;
+          closed = true;
           break;
         } else {
           i += 1;
         }
       }
+      if (!closed) throw new Error(`unterminated double-quoted identifier at line ${line}`);
       continue;
     }
 

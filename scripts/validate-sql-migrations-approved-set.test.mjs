@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { findTopLevelTransactionControl } from './find-top-level-transaction-control.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
@@ -24,6 +25,24 @@ const GIT_BASH = 'C:\\Program Files\\Git\\bin\\bash.exe';
 const BASH = process.platform === 'win32' && existsSync(GIT_BASH) ? GIT_BASH : 'bash';
 const HEX = 'a'.repeat(64);
 const OTHER_HEX = 'b'.repeat(64);
+
+// The migration validator imports this scanner. Keep its lexer fail-closed so
+// an unfinished quote cannot hide a top-level COMMIT/ROLLBACK token.
+if (findTopLevelTransactionControl("SELECT 'BEGIN'; COMMIT;").length !== 1) {
+  throw new Error('top-level transaction scanner missed COMMIT after a quoted token');
+}
+for (const [source, expected] of [
+  ["SELECT 'unterminated", /unterminated single-quoted string/],
+  ['SELECT "unterminated', /unterminated double-quoted identifier/],
+  ['DO $body$ BEGIN;', /unterminated dollar-quoted body/],
+]) {
+  try {
+    findTopLevelTransactionControl(source);
+    throw new Error(`top-level transaction scanner accepted malformed SQL: ${source}`);
+  } catch (error) {
+    if (!expected.test(String(error))) throw error;
+  }
+}
 
 /**
  * A digest block that is genuinely fail-closed: computed, compared, aborts.
@@ -77,6 +96,11 @@ BEGIN
 END $$;`;
 
 const CASES = [
+  {
+    name: 'TRUNCATE existing business rows without approved-set binding',
+    sql: 'TRUNCATE TABLE ONLY public.orders, public.order_items RESTART IDENTITY CASCADE;\n',
+    expect: 'violation',
+  },
   // ── must VIOLATE ────────────────────────────────────────────────────────
   {
     name: 'top-level BEGIN and COMMIT cannot split the runner transaction from its ledger stamp',
@@ -551,6 +575,11 @@ END $$;`,
   },
 
   // ── must PASS silently ──────────────────────────────────────────────────
+  {
+    name: 'TRUNCATE named as a privilege in REVOKE is not a row rewrite',
+    expect: 'silent',
+    sql: 'REVOKE INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER ON public.orders FROM authenticated;\n',
+  },
   {
     name: 'correct fail-closed digest: computed, compared, aborts, before the write',
     expect: 'silent',

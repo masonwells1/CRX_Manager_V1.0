@@ -25,6 +25,12 @@ const LINKED_WORKDIR = process.env.CRX_SUPABASE_WORKDIR ?? 'C:\\CRX_Manager';
 const PASS_TOKEN = 'SMOKE_PASS_ROLLBACK historical_order_line_cent_repair';
 const EXPECTED_DIGEST = '0f8ccef3bf6d3291c654d5abb24a151e16ad759851f5eddfc65d1585d7f5b7db';
 
+if (process.env.CRX_RUN_LINKED_ROLLBACK_PROOF !== '1') {
+  throw new Error(
+    'Refusing linked-database rollback proof without CRX_RUN_LINKED_ROLLBACK_PROOF=1',
+  );
+}
+
 function runSupabase(args, { allowFailure = false } = {}) {
   const result = spawnSync('supabase', args, {
     cwd: ROOT,

@@ -1818,13 +1818,21 @@ function bodyUsesIdempotency(body: string): boolean {
 const RENAME_SOURCES: Map<string, { fromName: string; fileIdx: number }> = (() => {
   const map = new Map<string, { fromName: string; fileIdx: number }>();
   const re =
-    /ALTER\s+FUNCTION\s+(?:public\.)?([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*RENAME\s+TO\s+(?:public\.)?([A-Za-z_][A-Za-z0-9_]*)/gi;
+    /ALTER\s+FUNCTION\s+(?:public\.)?([A-Za-z_][A-Za-z0-9_]*)\s*\(/gi;
   const files = getMigrationFiles();
   for (let i = 0; i < files.length; i++) {
     let m: RegExpExecArray | null;
     re.lastIndex = 0;
     while ((m = re.exec(files[i].content)) !== null) {
-      map.set(m[2].toLowerCase(), { fromName: m[1], fileIdx: i });
+      const args = callArgumentList(files[i].content, re.lastIndex);
+      if (args === null) continue;
+      const afterArgs = files[i].content.slice(re.lastIndex + args.length + 1);
+      const rename = afterArgs.match(
+        /^\s*RENAME\s+TO\s+(?:public\.)?([A-Za-z_][A-Za-z0-9_]*)/i,
+      );
+      if (rename) {
+        map.set(rename[1].toLowerCase(), { fromName: m[1], fileIdx: i });
+      }
     }
   }
   return map;
@@ -2109,7 +2117,7 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
     const offenders: string[] = [];
     for (const rpc of MUTATING_RPCS_WITH_IDEMPOTENCY) {
       if (rpc in IDEMPOTENCY_BODY_EXEMPT) continue;
-      const body = latestFunctionBody(rpc);
+      const body = resolveFunctionBody(rpc);
       if (body === null) continue; // defined in a consolidated file; existence covered elsewhere
       if (!usesIdempotencyThroughDelegates(body)) offenders.push(rpc);
     }

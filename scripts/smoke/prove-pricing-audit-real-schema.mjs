@@ -35,8 +35,8 @@ const sensitiveAppliedReplaySubstitutions = new Map([
     appliedBytes: 18770,
     appliedSha256: '7498b0befab4cd6355560cf9dc29c270a3e0098d2327d24d7eb7ab13d0d927ca',
     replayFilename: '20260812154757_repair_historical_order_line_cents_public_replay.sql',
-    publicBytes: 13903,
-    publicSha256: 'd480fab48c6502c7617f4543f61ef05b39299f698aff9562a51f1f78de46c3ec',
+    publicBytes: 14725,
+    publicSha256: 'bc859b8a99454935709e48394a8de93c72fb4b00604da4586b4898fbfde95d7b',
   }],
 ]);
 const appliedPricingMigrations = [
@@ -48,6 +48,10 @@ appliedPricingMigrations.push(path.join(
   recoveryReplayDir,
   sensitiveAppliedReplaySubstitutions.get('20260812154757').replayFilename,
 ));
+const quoteSnapshotPricingMigration = appliedPricingMigrations.find(
+  file => path.basename(file) === '20260812151606_quote_items_cost_at_quote_snapshot.sql',
+);
+assert.ok(quoteSnapshotPricingMigration, 'missing quote snapshot pricing migration');
 const smokeFiles = [
   'smoke-below-cost-admin-wall.sql',
   'smoke-below-cost-quote-lifecycle.sql',
@@ -337,7 +341,7 @@ function proveNonEmptyApprovedSetDrift() {
        :'proof_quote_id', :'proof_section_id', :'proof_product_id', 0, 1,
        1, 1, 1, 0, 0, NULL
      );
-     ${normalizedSql(appliedPricingMigrations[1])}
+     ${normalizedSql(quoteSnapshotPricingMigration)}
      ROLLBACK;`,
     { allowFailure: true },
   );

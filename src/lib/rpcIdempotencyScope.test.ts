@@ -494,8 +494,8 @@ describe('Idempotency operation literals in latest disk migrations', () => {
       /CREATE OR REPLACE FUNCTION public\._restore_quote_version_owner_impl[\s\S]*?operation\s*=\s*'restore_quote_version'/i
     );
     const restoreBody = snapshotMigration.match(
-      /CREATE OR REPLACE FUNCTION public\._restore_quote_version_owner_impl[\s\S]*?AS \$function\$([\s\S]*?)\$function\$;/i
-    )?.[1];
+      /CREATE OR REPLACE FUNCTION public\._restore_quote_version_owner_impl[\s\S]*?AS\s+(\$[A-Za-z0-9_]*\$)([\s\S]*?)\1\s*;/i
+    )?.[2];
     expect(restoreBody).toBeDefined();
     const firstDestructiveWrite = restoreBody!.indexOf('DELETE FROM quote_sections');
     expect(firstDestructiveWrite).toBeGreaterThan(0);

@@ -352,13 +352,34 @@ BEGIN
 END
 $approved_repair$;
 
-ALTER TABLE public.order_items
-  ADD CONSTRAINT order_items_total_price_whole_cents_chk
-  CHECK (
-    total_price = ROUND(total_price, 2)
-    AND total_price > '-Infinity'::numeric
-    AND total_price < 'Infinity'::numeric
-  );
+DO $constraint$
+DECLARE
+  v_found_def text;
+  v_expected_def constant text :=
+    'CHECK (total_price = ROUND(total_price, 2) AND total_price > ''-Infinity''::numeric AND total_price < ''Infinity''::numeric)';
+BEGIN
+  SELECT pg_get_constraintdef(c.oid)
+    INTO v_found_def
+    FROM pg_constraint AS c
+   WHERE c.conrelid = 'public.order_items'::regclass
+     AND c.conname = 'order_items_total_price_whole_cents_chk';
+
+  IF v_found_def IS NULL THEN
+    ALTER TABLE public.order_items
+      ADD CONSTRAINT order_items_total_price_whole_cents_chk
+      CHECK (
+        total_price = ROUND(total_price, 2)
+        AND total_price > '-Infinity'::numeric
+        AND total_price < 'Infinity'::numeric
+      );
+  ELSIF regexp_replace(lower(v_found_def), '[[:space:]()]', '', 'g')
+        IS DISTINCT FROM regexp_replace(lower(v_expected_def), '[[:space:]()]', '', 'g') THEN
+    RAISE EXCEPTION
+      'PRECOND: existing order_items_total_price_whole_cents_chk differs from the reviewed definition. Found: %',
+      v_found_def;
+  END IF;
+END
+$constraint$;
 
 DO $postcondition$
 BEGIN

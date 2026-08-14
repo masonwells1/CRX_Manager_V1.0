@@ -2,6 +2,42 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-13 — Addressed PR 397 review findings across exact-cent quote math,…
+
+Addressed PR 397 review findings across exact-cent quote math, below-cost lifecycle UX, RPC and migration guards, rollback smokes, quarantine sweeps, and recovery replay proof; full tests, build, lint, SQL audit, 68-case mutation suite, captured-ledger disposable replay, and rendered UI checks passed.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `74831413 fix(migrations): make quote quarantine cutover atomic`
+  - `2565c90e fix(migrations): separate private replay and quarantine history`
+  - `f61f947e Merge remote-tracking branch 'origin/main' into codex/pr389-coderabbit-fixes`
+  - `802a121c fix: restrict quote draw-down ownership`
+  - `7f2a325c Merge remote-tracking branch 'origin/main' into codex/pr389-coderabbit-fixes`
+  - `2471e5bd Merge remote-tracking branch 'origin/claude/recover-applied-migrations-20260812' into codex/pr389-coderabbit-fixes`
+  - `e31e7184 fix(migrations): keep apply and ledger writes atomic`
+  - `da748bc3 docs(changelog): log the 2026-08-13 round-5 write-boundary hardening session`
+  - `75be6bc6 fix(security): pin search_path on the SECDEF precond, and read back the restore-side revokes`
+  - `ec4f911f Merge remote-tracking branch 'origin/claude/recover-applied-migrations-20260812' into codex/pr389-coderabbit-fixes`
+  - `1474907f Merge remote-tracking branch 'origin/claude/recover-applied-migrations-20260812' into codex/pr389-coderabbit-fixes`
+  - `83a19a1a fix(security): pin the last unwatched overload in the restore chain`
+  - `3dc0c008 fix(security): match the uuid cast the restore path uses, not a stricter one`
+  - `a7dbc305 merge: reconcile PR 389 security review fixes`
+  - `69a1377e fix(security): close the second reviewer round on the quote-version boundary`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260812010000_blend_ticket_order_header_runtime_assert.sql`
+  - `supabase/migrations/20260812011000_restore_quote_version_whole_cent_money.sql`
+  - `supabase/migrations/20260812145628_snapshot_cost_reporting.sql`
+  - `supabase/migrations/20260812151606_quote_items_cost_at_quote_snapshot.sql`
+  - `supabase/migrations/20260812154028_enforce_below_cost_admin_approval.sql`
+  - `supabase/migrations/20260813015000_wave_a_order_cost_authority_and_finiteness.sql`
+  - `supabase/migrations/20260813020000_round_order_header_money.sql`
+  - `supabase/migrations/20260813030000_reject_non_finite_money_and_quantities.sql`
+  - `supabase/migrations/20260813040000_clamp_negative_commission_remainder.sql`
+  - `supabase/migrations/20260813050000_guard_job_commission_split_immutable.sql`
+  - `supabase/migrations/20260813060000_require_completed_delivery_before_invoice_post.sql`
+  - `supabase/migrations/20260813080000_lock_quote_versions_writes_to_rpc.sql`
+  - `supabase/migrations/20260813090000_restrict_restore_quote_owner_impl.sql`
+  - `supabase/migrations/20260813161614_restrict_draw_down_quote_owner.sql`
+
 ## 2026-08-13 — Separate private applied identity and atomically quarantine unverifiable quote history
 
 Exact-SHA review of PR #389 found two release blockers. First, the public tree placed a derived/sanitized historical-cent repair under live ledger version `20260812154757` even though its bytes did not match the private payload Supabase actually stored. The applied payload is 18,770 normalized bytes with SHA-256 `7498b0befab4cd6355560cf9dc29c270a3e0098d2327d24d7eb7ab13d0d927ca`; it embeds customer-linked financial preimage data and remains private. Removed the different SQL from `supabase/migrations/` and moved the safe disaster-recovery logic to the explicitly non-ledger path `supabase/recovery-replays/20260812154757_repair_historical_order_line_cents_public_replay.sql`, with its own pinned fingerprint and runbook. The captured-ledger prover now fails closed unless the private applied identity and the public recovery replay both match their independent fingerprints.
