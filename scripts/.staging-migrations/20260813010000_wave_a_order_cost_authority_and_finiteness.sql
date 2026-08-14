@@ -92,30 +92,117 @@
 -- unconditional CREATE OR REPLACE would silently clobber a change made by a
 -- concurrent session against the same function (the known pending-migration
 -- overlap trap). md5 read from live pg_proc immediately before writing this file.
+-- RETARGETED 2026-08-13 — the pinned body MOVED, it did not change.
+--
+-- When this file was written, public.create_direct_order held the entire 7692-char
+-- body whose md5 is pinned below. A concurrent session has since split that
+-- function in two: create_direct_order is now a 441-char SECURITY DEFINER wrapper
+-- that declares below-cost operation context via _begin_below_cost_money_write and
+-- then delegates to _create_direct_order_below_cost_impl_20260810 — and that impl
+-- carries the pinned md5 byte-for-byte, because the split moved the body verbatim.
+--
+-- So the body this migration rewrites now lives in the impl. Running this file's
+-- CREATE OR REPLACE against the WRAPPER would overwrite the delegation with the
+-- old inline body and delete the below-cost approval gate the split installed —
+-- a money-safety regression far worse than the bug being fixed. The rewrite is
+-- therefore applied to the impl, and the wrapper is deliberately left untouched.
 DO $precond$
 DECLARE
   v_count integer;
   v_md5 text;
+  v_impl_src text;
+  v_wrapper_src text;
 BEGIN
+  SELECT count(*) INTO v_count
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public'
+    AND p.proname = '_create_direct_order_below_cost_impl_20260810';
+
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'PRECOND: expected exactly 1 _create_direct_order_below_cost_impl_20260810, found %', v_count;
+  END IF;
+
+  SELECT md5(p.prosrc), p.prosrc INTO v_md5, v_impl_src
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public'
+    AND p.proname = '_create_direct_order_below_cost_impl_20260810';
+
+  -- ONLY the pinned baseline may proceed. An earlier draft of this file also
+  -- accepted any body containing this migration's two marker variables, so that
+  -- a re-run could pass as a no-op re-assertion. That was unsafe, and the reason
+  -- is worth recording so it is not re-added: a later security or money fix to
+  -- this same function would naturally keep both markers, so the structural test
+  -- would accept the NEWER body and this file would then overwrite it with its
+  -- own older text — silently, and in a SECURITY DEFINER money writer.
+  --
+  -- The obvious repair is to pin the exact post-apply md5 instead. That hash can
+  -- only be obtained by applying, and the catalog stores prosrc verbatim (line
+  -- endings included), so writing a locally computed literal here would assert a
+  -- value nobody has observed — the exact habit that produced the four refusals
+  -- this wave exists to fix.
+  --
+  -- Carrying the pre-apply hash forward to a postcondition equality check was
+  -- also considered and rejected: it only works if the whole migration runs in
+  -- one transaction, and that could not be verified from here without applying.
+  --
+  -- So this migration is deliberately single-shot. It applies against the state
+  -- it was written for, and refuses anything else. A refusal writes nothing and
+  -- names what to check. Losing re-runnability costs one human diff; getting the
+  -- replay test wrong costs a silently reverted money fix.
+  --
+  -- Read from live 2026-08-13, the pre-apply baseline ALREADY contains
+  -- v_canonical_profit (it arrived with the earlier DELTA-A commission-basis
+  -- change) and does NOT contain v_norm_items, which this migration introduces.
+  -- That is what distinguishes "not yet applied" from "already applied" below.
+  IF v_md5 <> 'c761f4c46dc12ea07efd74af5b2ada54' THEN
+    IF v_impl_src LIKE '%v_norm_items%' AND v_impl_src LIKE '%v_canonical_profit%' THEN
+      RAISE EXCEPTION 'PRECOND: _create_direct_order_below_cost_impl_20260810 already carries this migration''s markers [md5 %], so this looks like a re-run. It is refused on purpose: this file cannot tell its own output apart from its output plus a later fix, and re-applying would discard that fix. If a re-apply is genuinely needed, diff the live body against this file by hand first.', v_md5;
+    END IF;
+    RAISE EXCEPTION 'PRECOND: _create_direct_order_below_cost_impl_20260810 is not the body this migration was written against [expected md5 c761f4c46dc12ea07efd74af5b2ada54, got %]. It changed after this migration was retargeted — re-diff before applying.', v_md5;
+  END IF;
+
+  RAISE NOTICE 'PRECOND: impl matches the pinned pre-apply baseline — first application may proceed';
+
+  -- The wrapper must still exist AND still route here. If a later session
+  -- re-inlined the body or pointed create_direct_order at something else, then
+  -- patching the impl would fix a function no customer path actually reaches,
+  -- and this migration would report success while changing nothing that matters.
   SELECT count(*) INTO v_count
   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
   WHERE n.nspname = 'public' AND p.proname = 'create_direct_order';
 
   IF v_count <> 1 THEN
-    RAISE EXCEPTION 'PRECOND: expected exactly 1 create_direct_order, found %', v_count;
+    RAISE EXCEPTION 'PRECOND: expected exactly 1 create_direct_order wrapper, found %', v_count;
   END IF;
 
-  SELECT md5(p.prosrc) INTO v_md5
+  SELECT p.prosrc INTO v_wrapper_src
   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
   WHERE n.nspname = 'public' AND p.proname = 'create_direct_order';
 
-  IF v_md5 <> 'c761f4c46dc12ea07efd74af5b2ada54' THEN
-    RAISE EXCEPTION 'PRECOND: create_direct_order body is not the expected baseline (got md5 %). It changed after this migration was written — re-diff before applying.', v_md5;
+  IF v_wrapper_src NOT LIKE '%_create_direct_order_below_cost_impl_20260810%' THEN
+    RAISE EXCEPTION 'PRECOND: create_direct_order no longer delegates to _create_direct_order_below_cost_impl_20260810, so rewriting the impl would not change what callers reach — re-diff before applying.';
+  END IF;
+
+  -- Routing alone is not the property worth protecting. The whole reason this
+  -- migration was retargeted onto the impl is that overwriting the wrapper
+  -- would have deleted the below-cost approval gate -- so assert the gate
+  -- itself, not merely the name it delegates to. A wrapper that still MENTIONED
+  -- the impl while having dropped this call would sail past the check above and
+  -- leave the gate silently gone.
+  --
+  -- Read from the live wrapper body while writing this migration: it calls
+  -- _begin_below_cost_money_write, which rejects an unknown operation name,
+  -- requires a signed-in caller, binds the actor to that caller, requires an
+  -- active admin or sales_rep profile, and records the below-cost reason. It is
+  -- a real gate, not a blanket authorization, and this migration must not be
+  -- applied to a seam where it has gone missing.
+  IF v_wrapper_src NOT LIKE '%_begin_below_cost_money_write%' THEN
+    RAISE EXCEPTION 'PRECOND: create_direct_order no longer declares below-cost operation context -- _begin_below_cost_money_write is absent from the wrapper body. The approval gate this retarget exists to preserve is already gone; stop and re-diff before applying.';
   END IF;
 END;
 $precond$;
 
-CREATE OR REPLACE FUNCTION public.create_direct_order(
+CREATE OR REPLACE FUNCTION public._create_direct_order_below_cost_impl_20260810(
   p_customer_id uuid,
   p_order_date date,
   p_order_name text DEFAULT NULL::text,
@@ -366,18 +453,49 @@ BEGIN
 END;
 $function$;
 
-COMMENT ON FUNCTION public.create_direct_order(uuid, date, text, text, jsonb, uuid, text, text) IS
-  'Creates a confirmed order directly. Cost is authoritative from products.current_cost — a caller-supplied unit_cost is validated but never used (Wave A, ordering-cycle review 2026-08-09). Non-finite quantity/price/cost values are rejected at the boundary.';
+COMMENT ON FUNCTION public._create_direct_order_below_cost_impl_20260810(uuid, date, text, text, jsonb, uuid, text, text) IS
+  'Creates a confirmed order directly. Cost is authoritative from products.current_cost — a caller-supplied unit_cost is validated but never used (Wave A, ordering-cycle review 2026-08-09). Non-finite quantity/price/cost values are rejected at the boundary. Reached only through the public.create_direct_order wrapper, which declares below-cost operation context before delegating here.';
+
+-- Enforce the impl's owner-only reachability instead of only asserting it.
+-- Live currently shows its ACL as {postgres=X/postgres}, and CREATE OR REPLACE
+-- preserves ACLs, so on today's database every REVOKE below is a no-op. That is
+-- precisely why it belongs here: the postcondition raises if any of these roles
+-- holds EXECUTE, and an assertion broader than its remedy is a self-aborting
+-- migration. Emitting the REVOKE makes the postcondition a check on work this
+-- file actually did, rather than a bet on a grant state it never enforced.
+--
+-- REVOKE is not conditional on the grant existing, and revoking a privilege that
+-- was never granted is a documented no-op, so no pg_roles guard is needed for
+-- the roles themselves. Supabase always provisions anon/authenticated/
+-- service_role; on a bare-Postgres replay these statements would fail on the
+-- missing role, which is the correct loud failure for a target that is not this
+-- database.
+REVOKE ALL ON FUNCTION public._create_direct_order_below_cost_impl_20260810(uuid, date, text, text, jsonb, uuid, text, text)
+  FROM PUBLIC, anon, authenticated, service_role;
 
 -- Postcondition: the replacement must not have silently dropped SECURITY DEFINER
 -- or the pinned search_path. An ALTER FUNCTION elsewhere can change an attribute
 -- without touching the body, so assert on the catalogue rather than the source.
+--
+-- RETARGETED 2026-08-13. The structural checks follow the body onto the impl,
+-- because that is what this migration now writes. The EXECUTE-grant checks stay
+-- on the WRAPPER: create_direct_order is the only name PostgREST exposes, so it
+-- is the only name an anon grant could actually be reached through. This
+-- migration does not touch the wrapper, so those three are "nothing else moved
+-- underneath us" checks rather than claims about our own write — and they are
+-- worth keeping for exactly that reason, since a concurrent session already
+-- reshaped this seam once.
+--
+-- The impl then gets its own, stricter grant check. It must be reachable from
+-- nothing but its owner: any grant there would be a second door into the order
+-- writer that skips the wrapper's below-cost approval context entirely.
 DO $postcond$
 DECLARE
   v_count integer;
   v_secdef boolean;
   v_config text[];
   v_src text;
+  v_wrapper_src text;
 BEGIN
   -- Overload uniqueness FIRST. A bare SELECT ... INTO over several rows takes an
   -- arbitrary row without erroring, so every check below would silently inspect
@@ -385,10 +503,11 @@ BEGIN
   -- signature was written to avoid, so it is worth asserting rather than assuming.
   SELECT count(*) INTO v_count
   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-  WHERE n.nspname = 'public' AND p.proname = 'create_direct_order';
+  WHERE n.nspname = 'public'
+    AND p.proname = '_create_direct_order_below_cost_impl_20260810';
 
   IF v_count <> 1 THEN
-    RAISE EXCEPTION 'POSTCOND: expected exactly 1 create_direct_order, found % — a second overload was created', v_count;
+    RAISE EXCEPTION 'POSTCOND: expected exactly 1 _create_direct_order_below_cost_impl_20260810, found % — a second overload was created', v_count;
   END IF;
 
   SELECT p.prosecdef, p.proconfig, p.prosrc
@@ -396,13 +515,13 @@ BEGIN
   FROM pg_proc p
   JOIN pg_namespace n ON n.oid = p.pronamespace
   WHERE n.nspname = 'public'
-    AND p.proname = 'create_direct_order';
+    AND p.proname = '_create_direct_order_below_cost_impl_20260810';
 
   IF NOT COALESCE(v_secdef, false) THEN
-    RAISE EXCEPTION 'POSTCOND: create_direct_order lost SECURITY DEFINER';
+    RAISE EXCEPTION 'POSTCOND: _create_direct_order_below_cost_impl_20260810 lost SECURITY DEFINER';
   END IF;
   IF v_config IS NULL OR NOT ('search_path=public, pg_temp' = ANY (v_config)) THEN
-    RAISE EXCEPTION 'POSTCOND: create_direct_order lost its pinned search_path (got %)', v_config;
+    RAISE EXCEPTION 'POSTCOND: _create_direct_order_below_cost_impl_20260810 lost its pinned search_path (got %)', v_config;
   END IF;
 
   -- The security fix itself actually landed. A clobbered or partial apply would
@@ -415,15 +534,42 @@ BEGIN
     RAISE EXCEPTION 'POSTCOND: DELTA-A (canonical commission basis) was lost by this replacement';
   END IF;
 
-  -- CREATE OR REPLACE preserves ACLs, so this should be a no-op — but this is a
+  -- The wrapper must still exist and still route here. Patching an impl that
+  -- nothing reaches would let this migration report success while changing
+  -- nothing a customer path actually runs.
+  SELECT count(*) INTO v_count
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public' AND p.proname = 'create_direct_order';
+
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'POSTCOND: expected exactly 1 create_direct_order wrapper, found %', v_count;
+  END IF;
+
+  SELECT p.prosrc INTO v_wrapper_src
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public' AND p.proname = 'create_direct_order';
+
+  IF v_wrapper_src NOT LIKE '%_create_direct_order_below_cost_impl_20260810%' THEN
+    RAISE EXCEPTION 'POSTCOND: create_direct_order no longer delegates to the impl this migration rewrote';
+  END IF;
+
+  -- Same reasoning as the matching precondition: delegation by name is not the
+  -- property that matters. Re-assert that the wrapper still declares below-cost
+  -- operation context, so that a concurrent session which reshaped the wrapper
+  -- while this migration was running cannot leave the gate removed behind us.
+  IF v_wrapper_src NOT LIKE '%_begin_below_cost_money_write%' THEN
+    RAISE EXCEPTION 'POSTCOND: create_direct_order no longer declares below-cost operation context -- _begin_below_cost_money_write is absent from the wrapper body';
+  END IF;
+
+  -- CREATE OR REPLACE preserves ACLs, so these should be no-ops — but this is a
   -- SECURITY DEFINER mutator and the B9 incident was exactly an unnoticed anon
   -- grant. Assert it rather than trust it.
   -- Each NAMED-role check is guarded on pg_roles, the same intent the sibling
   -- 20260813060000 already carries. has_function_privilege() RAISES for a role
   -- that does not exist rather than returning false, so an unguarded call turns a
   -- replay target that lacks Supabase's roles into a "role does not exist" abort
-  -- instead of a real grant verdict. The PUBLIC check below is deliberately left
-  -- UNGUARDED: PUBLIC is a pseudo-role and never appears in pg_roles, so an
+  -- instead of a real grant verdict. The PUBLIC checks below are deliberately
+  -- left UNGUARDED: PUBLIC is a pseudo-role and never appears in pg_roles, so an
   -- EXISTS guard there would silently skip it forever.
   --
   -- The guard is a CASE, not `EXISTS (...) AND has_function_privilege(...)`.
@@ -447,6 +593,47 @@ BEGIN
        ELSE has_function_privilege('authenticated', 'public.create_direct_order(uuid, date, text, text, jsonb, uuid, text, text)', 'EXECUTE')
      END THEN
     RAISE EXCEPTION 'POSTCOND: authenticated lost EXECUTE on create_direct_order';
+  END IF;
+
+  -- The impl is internal and must be reachable from its owner alone. The REVOKE
+  -- above enforces that; these four checks confirm the enforcement landed. Each
+  -- one now has a remedy in this same file, which is the difference between a
+  -- postcondition and a self-abort.
+  IF CASE
+       WHEN NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN false
+       ELSE has_function_privilege('anon', 'public._create_direct_order_below_cost_impl_20260810(uuid, date, text, text, jsonb, uuid, text, text)', 'EXECUTE')
+     END THEN
+    RAISE EXCEPTION 'POSTCOND: anon must not hold EXECUTE on _create_direct_order_below_cost_impl_20260810';
+  END IF;
+  IF CASE
+       WHEN NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN false
+       ELSE has_function_privilege('authenticated', 'public._create_direct_order_below_cost_impl_20260810(uuid, date, text, text, jsonb, uuid, text, text)', 'EXECUTE')
+     END THEN
+    RAISE EXCEPTION 'POSTCOND: authenticated must not hold EXECUTE on _create_direct_order_below_cost_impl_20260810 — it would bypass the below-cost wrapper';
+  END IF;
+  IF CASE
+       WHEN NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN false
+       ELSE has_function_privilege('service_role', 'public._create_direct_order_below_cost_impl_20260810(uuid, date, text, text, jsonb, uuid, text, text)', 'EXECUTE')
+     END THEN
+    RAISE EXCEPTION 'POSTCOND: service_role must not hold EXECUTE on _create_direct_order_below_cost_impl_20260810 — it would bypass the below-cost wrapper';
+  END IF;
+  IF has_function_privilege('public', 'public._create_direct_order_below_cost_impl_20260810(uuid, date, text, text, jsonb, uuid, text, text)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'POSTCOND: PUBLIC must not hold EXECUTE on _create_direct_order_below_cost_impl_20260810';
+  END IF;
+  -- The four named-role checks above cannot see an explicit grant to any OTHER
+  -- role, and such a grant would reach the impl and bypass the wrapper just the
+  -- same. Sweep the whole ACL: no grantee other than the owner may hold
+  -- EXECUTE. A NULL ACL expands to its default (owner + PUBLIC), so this also
+  -- fails closed if the REVOKEs above ever stop leaving an explicit ACL behind.
+  IF EXISTS (
+    SELECT 1
+    FROM pg_proc p
+    CROSS JOIN LATERAL aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) AS acl(grantor, grantee, privilege_type, is_grantable)
+    WHERE p.oid = 'public._create_direct_order_below_cost_impl_20260810(uuid, date, text, text, jsonb, uuid, text, text)'::regprocedure
+      AND acl.privilege_type = 'EXECUTE'
+      AND acl.grantee <> p.proowner
+  ) THEN
+    RAISE EXCEPTION 'POSTCOND: a non-owner role holds EXECUTE on _create_direct_order_below_cost_impl_20260810 — it would bypass the below-cost wrapper';
   END IF;
 END;
 $postcond$;
