@@ -3,9 +3,13 @@
 // adversarial push-proof review: recovering a migration file that an operator
 // has independently confirmed already exists in the live Supabase ledger.
 //
-// This helper NEVER queries Supabase. The operator supplies the ledger version
-// after a separate live read-only check. The helper only binds that assertion to
-// the exact candidate commit, base commit, migration paths, and candidate bytes.
+// This helper NEVER queries Supabase. The operator first captures live ledger
+// evidence (row name, apply-stamp version, and a SHA-256 digest of the row's
+// applied statements) through a separate read-only query and writes it to the
+// local ignored evidence file. Minting then refuses unless each candidate
+// file's bytes hash-match that live row byte-for-byte, and the attestation
+// binds the assertion to the exact candidate commit, base commit, migration
+// paths, candidate bytes, and the evidence file's own digest.
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -20,16 +24,25 @@ import {
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-export const RECOVERY_ATTESTATION_SCHEMA_VERSION = 1;
+export const RECOVERY_ATTESTATION_SCHEMA_VERSION = 2;
 export const RECOVERY_ATTESTATION_KIND = "live-ledger-migration-recovery";
 export const RECOVERY_ATTESTATION_TTL_MS = 30 * 60 * 1000;
 export const RECOVERY_ATTESTATION_MAX_FILES = 64;
 export const RECOVERY_ATTESTATION_FILENAME = "recovery-attestation.json";
+export const RECOVERY_LEDGER_EVIDENCE_SCHEMA_VERSION = 1;
+export const RECOVERY_LEDGER_EVIDENCE_KIND = "live-ledger-evidence";
+export const RECOVERY_LEDGER_EVIDENCE_FILENAME = "recovery-ledger-evidence.json";
+// Pinned to the one production project this exception can ever describe. The
+// project id is already public in AGENTS.md; pinning it here refuses evidence
+// captured from any other database.
+export const RECOVERY_LEDGER_EVIDENCE_PROJECT_ID = "rhyzpcqhnizqbxphqdkr";
+export const RECOVERY_LEDGER_EVIDENCE_MAX_ROWS = 512;
 
 const GUARDED_BASE = "origin/main";
 const SHA_RE = /^[a-f0-9]{40}$/;
 const SHA256_RE = /^[a-f0-9]{64}$/;
 const LEDGER_VERSION_RE = /^[0-9]{14}$/;
+const LEDGER_NAME_RE = /^[0-9]{14}_[a-z0-9_]+$/;
 const MIGRATION_PATH_RE = /^supabase\/migrations\/[0-9]{14}_[a-z0-9_]+\.sql$/;
 const TOP_LEVEL_KEYS = [
   "base_sha",
@@ -37,10 +50,13 @@ const TOP_LEVEL_KEYS = [
   "head_sha",
   "issued_at",
   "kind",
+  "ledger_evidence_sha256",
   "recoveries",
   "schema_version",
 ];
-const RECOVERY_KEYS = ["ledger_version", "path", "sha256"];
+const RECOVERY_KEYS = ["ledger_name", "ledger_version", "path", "sha256"];
+const EVIDENCE_TOP_KEYS = ["fetched_at", "kind", "project_id", "rows", "schema_version"];
+const EVIDENCE_ROW_KEYS = ["name", "statements_sha256", "version"];
 
 function fixedGitExecutable(platform = process.platform) {
   const candidates = platform === "win32"
@@ -106,10 +122,15 @@ export function recoveryAttestationPath(root) {
   return path.join(root, ".claude", "session-state", RECOVERY_ATTESTATION_FILENAME);
 }
 
+export function recoveryLedgerEvidencePath(root) {
+  return path.join(root, ".claude", "session-state", RECOVERY_LEDGER_EVIDENCE_FILENAME);
+}
+
 export function buildRecoveryAttestation({
   headSha,
   baseSha,
   recoveries,
+  ledgerEvidenceSha256,
   issuedAt = new Date().toISOString(),
 } = {}) {
   const issuedMs = canonicalIso(issuedAt, "issued_at");
@@ -118,10 +139,88 @@ export function buildRecoveryAttestation({
     kind: RECOVERY_ATTESTATION_KIND,
     head_sha: headSha,
     base_sha: baseSha,
+    ledger_evidence_sha256: ledgerEvidenceSha256,
     issued_at: issuedAt,
     expires_at: new Date(issuedMs + RECOVERY_ATTESTATION_TTL_MS).toISOString(),
     recoveries,
   };
+}
+
+// Reads and shape-validates the operator-captured live ledger evidence file.
+// Returns the file's own digest (so the attestation can pin the exact evidence
+// bytes) plus a by-name row index for the content checks.
+export function readRecoveryLedgerEvidence(evidencePath) {
+  const label = "Live ledger evidence";
+  const stat = lstatSync(evidencePath);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`${label} must be a regular file, not a link.`);
+  if (stat.size > 256 * 1024) throw new Error(`${label} is unexpectedly large.`);
+  const bytes = readFileSync(evidencePath);
+  const text = bytes.toString("utf8");
+  if (text.charCodeAt(0) === 0xFEFF) throw new Error(`${label} must be UTF-8 without a BOM.`);
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`${label} is not valid JSON.`);
+  }
+  assertExactKeys(data, EVIDENCE_TOP_KEYS, label);
+  if (data.schema_version !== RECOVERY_LEDGER_EVIDENCE_SCHEMA_VERSION
+      || data.kind !== RECOVERY_LEDGER_EVIDENCE_KIND) {
+    throw new Error(`${label} has an unsupported schema or kind.`);
+  }
+  if (data.project_id !== RECOVERY_LEDGER_EVIDENCE_PROJECT_ID) {
+    throw new Error(`${label} was not captured from the pinned production project.`);
+  }
+  const fetchedMs = canonicalIso(data.fetched_at, `${label} fetched_at`);
+  if (!Array.isArray(data.rows)
+      || data.rows.length === 0
+      || data.rows.length > RECOVERY_LEDGER_EVIDENCE_MAX_ROWS) {
+    throw new Error(`${label} must contain a bounded, non-empty rows array.`);
+  }
+  const rowsByName = new Map();
+  const seenVersions = new Set();
+  for (const [index, row] of data.rows.entries()) {
+    assertExactKeys(row, EVIDENCE_ROW_KEYS, `${label} row ${index + 1}`);
+    if (!LEDGER_VERSION_RE.test(String(row.version || ""))) {
+      throw new Error(`${label} row ${index + 1} version must be exactly 14 digits.`);
+    }
+    if (!LEDGER_NAME_RE.test(String(row.name || ""))) {
+      throw new Error(`${label} row ${index + 1} name must be a timestamped migration slug.`);
+    }
+    if (!SHA256_RE.test(String(row.statements_sha256 || ""))) {
+      throw new Error(`${label} row ${index + 1} statements digest is malformed.`);
+    }
+    if (rowsByName.has(row.name)) throw new Error(`${label} repeats ledger name ${row.name}.`);
+    if (seenVersions.has(row.version)) throw new Error(`${label} repeats ledger version ${row.version}.`);
+    rowsByName.set(row.name, row);
+    seenVersions.add(row.version);
+  }
+  return { sha256: sha256Bytes(bytes), fetchedMs, rowsByName };
+}
+
+// Matches one candidate recovery against the live ledger evidence: the row is
+// found by the file's own slug, must carry the operator-supplied apply-stamp
+// version, and the candidate bytes must hash-match the row's applied statements
+// byte-for-byte. A redacted or otherwise altered recovery can never attest.
+function bindRecoveryToLedgerEvidence({ recovery, ledgerVersion, evidence }) {
+  const ledgerName = path.posix.basename(recovery.path, ".sql");
+  const row = evidence.rowsByName.get(ledgerName);
+  if (!row) {
+    throw new Error(`Live ledger evidence has no row named ${ledgerName}; cannot attest ${recovery.path}.`);
+  }
+  if (row.version !== String(ledgerVersion)) {
+    throw new Error(
+      `Live ledger evidence binds ${ledgerName} to version ${row.version}, ` +
+      `not the supplied ${ledgerVersion}.`,
+    );
+  }
+  if (row.statements_sha256 !== recovery.sha256) {
+    throw new Error(
+      `Candidate bytes for ${recovery.path} do not match the live ledger row's ` +
+      `applied statements digest; only a byte-verbatim recovery can attest.`,
+    );
+  }
+  return { ...recovery, ledger_name: ledgerName };
 }
 
 function commitTreeEntry({ root, commitSha, repoPath }) {
@@ -183,10 +282,24 @@ export function mintRecoveryAttestation({
     throw new Error(`Supply between 1 and ${RECOVERY_ATTESTATION_MAX_FILES} recovery files.`);
   }
 
+  const evidencePath = recoveryLedgerEvidencePath(repoRoot);
+  if (!existsSync(evidencePath)) {
+    throw new Error(
+      `Live ledger evidence is required first: write ${RECOVERY_LEDGER_EVIDENCE_FILENAME} under ` +
+      `.claude/session-state/ from a read-only live ledger query, then re-run.`,
+    );
+  }
+  const evidence = readRecoveryLedgerEvidence(evidencePath);
+  const issuedMs = canonicalIso(issuedAt, "issued_at");
+  if (issuedMs < evidence.fetchedMs || issuedMs - evidence.fetchedMs > RECOVERY_ATTESTATION_TTL_MS) {
+    throw new Error("Live ledger evidence is stale or from the future; re-run the read-only ledger query.");
+  }
+
   const seenPaths = new Set();
   const seenLedgerVersions = new Set();
   const recoveries = specs.map(({ repoPath, ledgerVersion }) => {
-    const recovery = candidateRecoveryFromGit({ root: repoRoot, baseSha, headSha, repoPath, ledgerVersion });
+    const candidate = candidateRecoveryFromGit({ root: repoRoot, baseSha, headSha, repoPath, ledgerVersion });
+    const recovery = bindRecoveryToLedgerEvidence({ recovery: candidate, ledgerVersion, evidence });
     if (seenPaths.has(recovery.path)) throw new Error(`Duplicate recovery path: ${recovery.path}`);
     if (seenLedgerVersions.has(recovery.ledger_version)) {
       throw new Error(`Duplicate live ledger version: ${recovery.ledger_version}`);
@@ -196,7 +309,13 @@ export function mintRecoveryAttestation({
     return recovery;
   });
 
-  const attestation = buildRecoveryAttestation({ headSha, baseSha, recoveries, issuedAt });
+  const attestation = buildRecoveryAttestation({
+    headSha,
+    baseSha,
+    recoveries,
+    ledgerEvidenceSha256: evidence.sha256,
+    issuedAt,
+  });
   mkdirSync(path.dirname(outputPath), { recursive: true });
   writeFileSync(outputPath, `${JSON.stringify(attestation, null, 2)}\n`, "utf8");
   return { path: outputPath, attestation };
@@ -256,6 +375,20 @@ export function validateRecoveryAttestation({
       || data.recoveries.length > RECOVERY_ATTESTATION_MAX_FILES) {
     throw new Error(`${label} must name a bounded, non-empty recovery list.`);
   }
+  if (!SHA256_RE.test(String(data.ledger_evidence_sha256 || ""))) {
+    throw new Error(`${label} ledger evidence digest is malformed.`);
+  }
+
+  // The wrapper cannot query the live database, so it independently re-reads
+  // the SAME evidence file the mint bound and refuses if a single byte moved.
+  const evidencePath = recoveryLedgerEvidencePath(root);
+  if (!existsSync(evidencePath)) {
+    throw new Error(`${label} is present but its live ledger evidence file is missing.`);
+  }
+  const evidence = readRecoveryLedgerEvidence(evidencePath);
+  if (evidence.sha256 !== data.ledger_evidence_sha256) {
+    throw new Error(`${label} ledger evidence digest does not match the evidence file on disk.`);
+  }
 
   const baseManifest = readPacketManifest(reviewRoot, "BASE_TREE_MANIFEST.json");
   const candidateManifest = readPacketManifest(reviewRoot, "CANDIDATE_TREE_MANIFEST.json");
@@ -272,6 +405,9 @@ export function validateRecoveryAttestation({
     }
     if (!SHA256_RE.test(String(recovery.sha256 || ""))) {
       throw new Error(`${label} SHA-256 is malformed for ${repoPath}.`);
+    }
+    if (recovery.ledger_name !== path.posix.basename(repoPath, ".sql")) {
+      throw new Error(`${label} ledger name does not match the recovery file's own slug: ${repoPath}`);
     }
     if (seenPaths.has(repoPath)) throw new Error(`${label} repeats recovery path ${repoPath}.`);
     if (seenLedgerVersions.has(recovery.ledger_version)) {
@@ -299,8 +435,22 @@ export function validateRecoveryAttestation({
         || candidateEntry.snapshotSha256 !== recovery.sha256) {
       throw new Error(`${label} SHA-256 does not match the candidate snapshot: ${repoPath}`);
     }
+
+    const row = evidence.rowsByName.get(recovery.ledger_name);
+    if (!row) {
+      throw new Error(`${label} names ${recovery.ledger_name} but the ledger evidence has no such row.`);
+    }
+    if (row.version !== recovery.ledger_version) {
+      throw new Error(`${label} ledger version does not match the evidence row for ${recovery.ledger_name}.`);
+    }
+    if (row.statements_sha256 !== recovery.sha256) {
+      throw new Error(
+        `${label} candidate bytes do not match the live ledger row's applied statements digest: ${repoPath}`,
+      );
+    }
     return {
       path: repoPath,
+      ledger_name: recovery.ledger_name,
       ledger_version: recovery.ledger_version,
       sha256: recovery.sha256,
     };
@@ -332,10 +482,14 @@ function usage() {
   return [
     "Usage: node scripts/write-recovery-attestation.mjs --migration <repo-path>=<live-ledger-version> [--migration ...]",
     "",
-    "Run only after an operator has verified each version in the live Supabase migration ledger",
-    "through a read-only query. This helper never queries the database. It requires a clean",
-    "committed candidate, verifies every path is new versus origin/main, computes each candidate",
-    "SHA-256, and writes an ignored attestation bound to HEAD and origin/main for 30 minutes.",
+    "Run only after an operator has captured live ledger evidence through a read-only query and",
+    `written it to .claude/session-state/${RECOVERY_LEDGER_EVIDENCE_FILENAME} (kind`,
+    `"${RECOVERY_LEDGER_EVIDENCE_KIND}"; rows of {version, name, statements_sha256} where the digest is`,
+    "encode(sha256(convert_to(array_to_string(statements, E'\\n'), 'UTF8')), 'hex')).",
+    "This helper never queries the database. It requires a clean committed candidate, verifies",
+    "every path is new versus origin/main, requires each candidate's bytes to hash-match its live",
+    "ledger row byte-for-byte, and writes an ignored attestation bound to HEAD, origin/main, and",
+    "the evidence digest for 30 minutes.",
   ].join("\n");
 }
 

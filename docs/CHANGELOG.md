@@ -2,6 +2,21 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-14 — Recovery attestation now content-bound to the live ledger (Codex P1 #2, PR #403)
+
+Codex's second P1 on the recovery-exception PR: the attestation accepted any well-formed 14-digit
+ledger version on the operator's word, so a wrong version — or a recovered file whose bytes differ
+from what the live ledger actually applied — would still earn the historical-record exception. This
+was a real risk: a live spot-check found one of the six planned recovery files did not match its
+applied ledger row. Minting now requires an operator-captured, read-only live-ledger evidence file
+(row name, apply-stamp version, and a SHA-256 of the row's applied statements) and refuses unless
+the candidate file's bytes hash-match its ledger row byte-for-byte, matched by the file's own slug.
+The attestation pins the evidence file's digest, and the push-proof wrapper independently re-reads
+the evidence and re-checks every name/version/content binding before changing one word of the
+review prompt; a redacted or otherwise altered recovery can never attest. Fail-closed tests cover
+missing/stale/tampered evidence, wrong version, wrong slug, and content mismatch at both mint and
+validate stages.
+
 ## 2026-08-14 — Recovery-attestation validator registered as gate-critical (Codex P1, PR #403)
 
 Codex's review of the recovery-attestation PR found that the new

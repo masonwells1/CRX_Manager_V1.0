@@ -37,6 +37,10 @@ import {
   mintRecoveryAttestation,
   parseRecoveryArgs,
   recoveryAttestationPath,
+  recoveryLedgerEvidencePath,
+  RECOVERY_LEDGER_EVIDENCE_KIND,
+  RECOVERY_LEDGER_EVIDENCE_PROJECT_ID,
+  RECOVERY_LEDGER_EVIDENCE_SCHEMA_VERSION,
   validateRecoveryAttestation,
 } from "./write-recovery-attestation.mjs";
 // Cross-check against the REAL guard validator so the minted proof shape can
@@ -103,6 +107,36 @@ function writeLocalAttestation(root, attestation) {
   const attestationPath = recoveryAttestationPath(root);
   mkdirSync(path.dirname(attestationPath), { recursive: true });
   writeFileSync(attestationPath, `${JSON.stringify(attestation, null, 2)}\n`, "utf8");
+}
+
+// Mirrors the operator's read-only live ledger capture: one row per applied
+// migration with its slug name, apply-stamp version, and a SHA-256 of the
+// row's applied statements. Returns the evidence file's own digest.
+function writeLedgerEvidence(root, rows, fetchedAt) {
+  const evidencePath = recoveryLedgerEvidencePath(root);
+  mkdirSync(path.dirname(evidencePath), { recursive: true });
+  const bytes = `${JSON.stringify({
+    schema_version: RECOVERY_LEDGER_EVIDENCE_SCHEMA_VERSION,
+    kind: RECOVERY_LEDGER_EVIDENCE_KIND,
+    project_id: RECOVERY_LEDGER_EVIDENCE_PROJECT_ID,
+    fetched_at: fetchedAt,
+    rows,
+  }, null, 2)}\n`;
+  writeFileSync(evidencePath, bytes, "utf8");
+  return createHash("sha256").update(Buffer.from(bytes, "utf8")).digest("hex");
+}
+
+// The fixture writes each candidate as "-- candidate historical record for <basename>\n",
+// so a truthful ledger row carries the SHA-256 of exactly those bytes.
+function ledgerRowFor(recoveryPath, version) {
+  const name = path.posix.basename(recoveryPath, ".sql");
+  return {
+    version,
+    name,
+    statements_sha256: createHash("sha256")
+      .update(`-- candidate historical record for ${name}.sql\n`)
+      .digest("hex"),
+  };
 }
 
 function removeRecoveryFixture(fixture) {
@@ -389,6 +423,50 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
     "no local attestation leaves the wrapper on its unchanged ordinary-review path",
   );
 
+  const mintSpecs = recoveryPaths.map((repoPath, index) => ({
+    repoPath,
+    ledgerVersion: ledgerVersions[index],
+  }));
+  assert.throws(
+    () => mintRecoveryAttestation({ root: fixture.root, issuedAt, specs: mintSpecs }),
+    /Live ledger evidence is required/,
+    "minting refuses outright without operator-captured live ledger evidence",
+  );
+
+  const goodRows = recoveryPaths.map((repoPath, index) => ledgerRowFor(repoPath, ledgerVersions[index]));
+  const fetchedAt = "2026-08-14T11:55:00.000Z";
+
+  writeLedgerEvidence(fixture.root, goodRows, "2026-08-14T10:00:00.000Z");
+  assert.throws(
+    () => mintRecoveryAttestation({ root: fixture.root, issuedAt, specs: mintSpecs }),
+    /stale or from the future/,
+    "evidence older than the attestation TTL must be re-captured, never reused",
+  );
+
+  writeLedgerEvidence(
+    fixture.root,
+    [{ ...goodRows[0], statements_sha256: "c".repeat(64) }, goodRows[1]],
+    fetchedAt,
+  );
+  assert.throws(
+    () => mintRecoveryAttestation({ root: fixture.root, issuedAt, specs: mintSpecs }),
+    /byte-verbatim recovery/,
+    "a candidate whose bytes differ from the live row's applied statements can never attest",
+  );
+
+  writeLedgerEvidence(
+    fixture.root,
+    [{ ...goodRows[0], version: "20260812999999" }, goodRows[1]],
+    fetchedAt,
+  );
+  assert.throws(
+    () => mintRecoveryAttestation({ root: fixture.root, issuedAt, specs: mintSpecs }),
+    /binds .* to version/,
+    "the operator-supplied version must match the evidence row's apply-stamp version",
+  );
+
+  const evidenceSha = writeLedgerEvidence(fixture.root, goodRows, fetchedAt);
+
   const minted = mintRecoveryAttestation({
     root: fixture.root,
     issuedAt,
@@ -402,6 +480,16 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
     minted.attestation.recoveries.map((recovery) => recovery.path),
     recoveryPaths,
     "minting helper binds exactly the operator-supplied migration paths",
+  );
+  assert.equal(
+    minted.attestation.ledger_evidence_sha256,
+    evidenceSha,
+    "minted attestation pins the exact evidence file bytes it was checked against",
+  );
+  assert.deepEqual(
+    minted.attestation.recoveries.map((recovery) => recovery.ledger_name),
+    recoveryPaths.map((repoPath) => path.posix.basename(repoPath, ".sql")),
+    "each minted recovery records the live ledger row it matched by name",
   );
   const trustedRecoveries = validateRecoveryAttestation({
     root: fixture.root,
@@ -426,7 +514,16 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
   for (const recoveryPath of recoveryPaths) assert.ok(trustedPrompt.includes(recoveryPath));
   assert.match(trustedPrompt, /HISTORICAL RECORD/);
   assert.match(trustedPrompt, /forward-only follow-up recommendations/);
-  assert.match(trustedPrompt, /documented SHA-256-bound redaction of live financial data/);
+  assert.match(
+    trustedPrompt,
+    /byte-verbatim identical to the applied SQL/,
+    "prompt states the wrapper's content binding to the live ledger row",
+  );
+  assert.match(
+    trustedPrompt,
+    /redacted or otherwise altered recovery can never attest/,
+    "prompt forecloses any redacted/altered variant riding the exception",
+  );
   assert.match(
     trustedPrompt,
     /Every non-attested file, every modification to an existing tracked file, and every other change/,
@@ -445,6 +542,7 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
 
   const validRecoveries = recoveryPaths.map((repoPath, index) => ({
     path: repoPath,
+    ledger_name: path.posix.basename(repoPath, ".sql"),
     ledger_version: ledgerVersions[index],
     sha256: candidateSnapshotSha(fixture, repoPath),
   }));
@@ -452,6 +550,7 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
     headSha: fixture.headSha,
     baseSha: fixture.baseSha,
     recoveries: validRecoveries,
+    ledgerEvidenceSha256: evidenceSha,
     issuedAt,
   });
 
@@ -459,6 +558,7 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
     headSha: fixture.headSha,
     baseSha: fixture.baseSha,
     recoveries: validRecoveries,
+    ledgerEvidenceSha256: evidenceSha,
     issuedAt: "2026-08-14T11:00:00.000Z",
   }));
   assert.throws(
@@ -490,6 +590,7 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
     ...validShape,
     recoveries: [{
       path: "supabase/migrations/20260812140000_missing_recovery.sql",
+      ledger_name: "20260812140000_missing_recovery",
       ledger_version: "20260812140001",
       sha256: "a".repeat(64),
     }],
@@ -522,6 +623,77 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
     "attestation cannot widen to different candidate bytes",
   );
 
+  writeLocalAttestation(fixture.root, {
+    ...validShape,
+    recoveries: [
+      { ...validRecoveries[0], ledger_name: "20260812130000_recovered_beta" },
+      validRecoveries[1],
+    ],
+  });
+  assert.throws(
+    () => validateRecoveryAttestation({
+      root: fixture.root,
+      reviewRoot: fixture.packet.root,
+      headSha: fixture.headSha,
+      baseSha: fixture.baseSha,
+      nowMs,
+    }),
+    /does not match the recovery file's own slug/,
+    "a recovery cannot claim a different ledger row than its own filename",
+  );
+
+  writeLocalAttestation(fixture.root, validShape);
+  writeLedgerEvidence(fixture.root, goodRows, "2026-08-14T11:56:00.000Z");
+  assert.throws(
+    () => validateRecoveryAttestation({
+      root: fixture.root,
+      reviewRoot: fixture.packet.root,
+      headSha: fixture.headSha,
+      baseSha: fixture.baseSha,
+      nowMs,
+    }),
+    /does not match the evidence file on disk/,
+    "any post-mint edit to the evidence file voids the attestation",
+  );
+
+  const tamperedEvidenceSha = writeLedgerEvidence(
+    fixture.root,
+    [{ ...goodRows[0], statements_sha256: "d".repeat(64) }, goodRows[1]],
+    fetchedAt,
+  );
+  writeLocalAttestation(fixture.root, buildRecoveryAttestation({
+    headSha: fixture.headSha,
+    baseSha: fixture.baseSha,
+    recoveries: validRecoveries,
+    ledgerEvidenceSha256: tamperedEvidenceSha,
+    issuedAt,
+  }));
+  assert.throws(
+    () => validateRecoveryAttestation({
+      root: fixture.root,
+      reviewRoot: fixture.packet.root,
+      headSha: fixture.headSha,
+      baseSha: fixture.baseSha,
+      nowMs,
+    }),
+    /applied statements digest/,
+    "the wrapper independently re-checks candidate bytes against the ledger row digest",
+  );
+
+  writeLocalAttestation(fixture.root, validShape);
+  rmSync(recoveryLedgerEvidencePath(fixture.root), { force: true });
+  assert.throws(
+    () => validateRecoveryAttestation({
+      root: fixture.root,
+      reviewRoot: fixture.packet.root,
+      headSha: fixture.headSha,
+      baseSha: fixture.baseSha,
+      nowMs,
+    }),
+    /evidence file is missing/,
+    "an attestation without its bound evidence file is refused",
+  );
+
   removeRecoveryFixture(fixture);
 
   const modifiedFixture = createRecoveryFixture({
@@ -529,14 +701,21 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
     baseContainsRecovery: true,
     includeUnrelatedRisk: false,
   });
+  const modifiedEvidenceSha = writeLedgerEvidence(
+    modifiedFixture.root,
+    [ledgerRowFor(recoveryPaths[0], ledgerVersions[0])],
+    issuedAt,
+  );
   const modifiedShape = buildRecoveryAttestation({
     headSha: modifiedFixture.headSha,
     baseSha: modifiedFixture.baseSha,
     recoveries: [{
       path: recoveryPaths[0],
+      ledger_name: path.posix.basename(recoveryPaths[0], ".sql"),
       ledger_version: ledgerVersions[0],
       sha256: candidateSnapshotSha(modifiedFixture, recoveryPaths[0]),
     }],
+    ledgerEvidenceSha256: modifiedEvidenceSha,
     issuedAt,
   });
   writeLocalAttestation(modifiedFixture.root, modifiedShape);

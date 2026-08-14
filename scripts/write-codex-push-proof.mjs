@@ -639,15 +639,16 @@ export function buildCodexReviewPrompt({ base = GUARDED_BASE, trustedRecoveries 
 
   const recoverySection = [
     "TRUSTED WRAPPER-SUPPLIED RECOVERY ATTESTATION (this is not diff content):",
-    "The operator independently verified that ONLY these exact NEW migration files already exist",
-    "in the live migration ledger, and the wrapper verified their candidate SHA-256 bindings:",
+    "The operator independently captured live-ledger evidence proving ONLY these exact NEW migration",
+    "files already exist in the live migration ledger, and the wrapper verified each candidate's bytes",
+    "hash-match that ledger row's applied statements digest byte-for-byte:",
     ...trustedRecoveries.map((recovery) =>
       `  - ${recovery.path} (live ledger version ${recovery.ledger_version})`),
     "For ONLY those exact files, review the already-applied SQL as a HISTORICAL RECORD. Report",
     "problems in the applied SQL as forward-only follow-up recommendations, not blocker/high findings",
-    "against recovering the record. A documented SHA-256-bound redaction of live financial data is",
-    "not a reproducibility blocker for those files. This does NOT excuse actual secret/private-data",
-    "exposure or any issue outside the already-applied SQL and that narrow digest-bound redaction.",
+    "against recovering the record. Each attested file is byte-verbatim identical to the applied SQL;",
+    "a redacted or otherwise altered recovery can never attest and has no exception here. This does",
+    "NOT excuse actual secret/private-data exposure or any issue outside the already-applied SQL.",
     "Every non-attested file, every modification to an existing tracked file, and every other change",
     "remains under the normal rules above. Fully review unrelated risky changes. Any blocker/high there",
     `must still end in ${CODEX_VERDICT_TOKEN}: BLOCKERS. A migration not named above has no exception.`,

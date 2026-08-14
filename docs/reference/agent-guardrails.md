@@ -130,29 +130,35 @@ Built from a workflow that mined the last 50 sessions (524 Mason-typed messages 
 ### Historical migration-recovery exception
 
 Mason approved one narrow push-proof prompt exception on 2026-08-14. It does not weaken proof
-shape, freshness, clean-worktree, model, effort, exact-verdict, base, or HEAD checks. After an
-operator has confirmed the migration versions through a live read-only ledger query, run:
+shape, freshness, clean-worktree, model, effort, exact-verdict, base, or HEAD checks. The operator
+first captures live-ledger evidence through a read-only query — one row per applied migration with
+its slug `name`, apply-stamp `version`, and
+`encode(sha256(convert_to(array_to_string(statements, E'\n'), 'UTF8')), 'hex')` — written as
+`.claude/session-state/recovery-ledger-evidence.json` (kind `live-ledger-evidence`, pinned to the
+production project id, fresh within the same 30-minute window). Then run:
 
 ```text
 node scripts/write-recovery-attestation.mjs --migration supabase/migrations/<timestamp>_<name>.sql=<live-ledger-version> [--migration ...]
 ```
 
 The helper never queries the database. It requires a clean committed candidate, verifies each path
-is a regular migration file newly added versus `origin/main`, computes the candidate SHA-256, and
-writes ignored local state under `.claude/session-state/`. The attestation is bound to the exact HEAD
-and base, expires after the same 30-minute window as a push proof, and records each file's live ledger
-version. The review wrapper independently rechecks the JSON shape, time window, HEAD/base,
-added-file status, candidate snapshot path, Git mode, and all byte digests before injecting a trusted
-paragraph naming exactly those files.
+is a regular migration file newly added versus `origin/main`, matches each file to its ledger row
+by the file's own slug, requires the supplied version to equal that row's apply-stamp version, and
+refuses unless the candidate's bytes hash-match the row's applied statements byte-for-byte — a
+redacted or otherwise altered recovery can never attest. The attestation is bound to the exact HEAD
+and base, pins the evidence file's own SHA-256, expires after the same 30-minute window as a push
+proof, and records each file's ledger name and version. The review wrapper independently rechecks
+the JSON shape, time window, HEAD/base, added-file status, candidate snapshot path, Git mode, all
+byte digests, and re-reads the evidence file to re-verify every name/version/content binding before
+injecting a trusted paragraph naming exactly those files.
 
 For the attested files only, Sol treats the already-applied SQL as a historical record: applied-SQL
-concerns become forward-only follow-up recommendations, and a documented digest-bound redaction of
-live financial data is not a reproducibility blocker. Actual secret/private-data exposure remains a
-normal finding. Every non-attested file, every modification to an existing tracked file, and every
+concerns become forward-only follow-up recommendations. Actual secret/private-data exposure remains
+a normal finding. Every non-attested file, every modification to an existing tracked file, and every
 unrelated risky change remains fully reviewed; a blocker or high-severity issue there still yields
 `CODEX_PROOF_VERDICT: BLOCKERS`. With no attestation file, the fixed prompt is byte-for-byte the
-pre-exception prompt. Any malformed, expired, shifted, missing-file, modified-file, or digest
-mismatch fails closed before the reviewer runs and clears any proof for that HEAD.
+pre-exception prompt. Any malformed, expired, shifted, missing-file, modified-file, tampered-evidence,
+or digest mismatch fails closed before the reviewer runs and clears any proof for that HEAD.
 
 ### Conditionally-wired guards
 
