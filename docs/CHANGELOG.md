@@ -54,6 +54,13 @@ matches both to the created routine's exact identity; a wrong-overload revoke
 remains under actor-binding review. The focused hook suite now passes 384
 assertions.
 
+The next exact-head review found that a direct internal-only execute ACL could
+still become browser-reachable through a newly granted role membership. The
+guard now refuses that ambiguity anywhere in the same migration, before or
+after the routine definition, rather than attempting to infer PostgreSQL's
+recursive role graph. Two regressions cover both statement orderings; the
+focused hook suite now passes 386 assertions.
+
 ## 2026-08-12 — Actor-binding routine modes use exact schema identity
 
 Fresh adversarial review found that a later `ALTER FUNCTION ... SECURITY

@@ -2091,6 +2091,19 @@ function routineAltersMatch(left, right) {
  * schema-wide, quoted, or role-membership-sensitive grants remain fail-closed. */
 function routineExplicitlyNonAuthenticated(structuralSql, fromIndex, routine) {
   if (!routine || !/^[a-z_][\w$]*\.[a-z_][\w$]*$/.test(routine.name) || routine.signature === null) return false;
+  // Role membership may make a direct internal-only EXECUTE grant reachable by
+  // browser roles. Do not try to model PostgreSQL's recursive membership graph:
+  // a local membership grant to a browser role is enough ambiguity to retain
+  // actor review, regardless of whether it appears before or after the routine.
+  const membershipGrantRe = /\bGRANT\s+([^;]+?)\s+TO\s+([^;]+);/gi;
+  let membershipGrant;
+  while ((membershipGrant = membershipGrantRe.exec(structuralSql)) !== null) {
+    if (/\bON\b/i.test(membershipGrant[1])) continue;
+    const grantees = membershipGrant[2];
+    if (/U&\s*"|"/.test(grantees) || /\b(?:public|anon|authenticated)\b/i.test(grantees)) {
+      return false;
+    }
+  }
   const [schema] = routine.name.split(".");
   const tail = structuralSql.slice(fromIndex);
   const aclHeadRe = new RegExp(

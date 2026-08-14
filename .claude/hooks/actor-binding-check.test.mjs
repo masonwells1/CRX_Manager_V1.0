@@ -2439,6 +2439,14 @@ r = runHook(`${INTERNAL_ONLY_FN}
 GRANT EXECUTE ON FUNCTION public.test_fn(uuid) TO U&"\\0061uthenticated";`);
 ok(isDeny(r), "a Unicode-escaped authenticated function grant cannot bypass actor binding review");
 
+r = runHook(`GRANT office_queue_executor TO authenticated;
+${INTERNAL_ONLY_FN}`);
+ok(isDeny(r), "a browser-role membership grant before an internal ACL keeps actor binding review enabled");
+
+r = runHook(`${INTERNAL_ONLY_FN}
+GRANT office_queue_executor TO authenticated;`);
+ok(isDeny(r), "a browser-role membership grant after an internal ACL keeps actor binding review enabled");
+
 r = runHook(fn(MUTATION).replace(
   "public.test_fn",
   "public.bad_acl_overload"
