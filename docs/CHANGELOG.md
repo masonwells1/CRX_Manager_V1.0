@@ -23,6 +23,15 @@ prefixes. The two agent-guidance checkers also parse `.codex/config.toml` line-b
 urls, and `read_only=false0`-style decoys can no longer satisfy the write-access assertion
 (mutation-tested against seven decoy configs).
 
+Codex-review P1 follow-up on the same PR: the built-in `codex_apps/supabase` channel — the one
+actually serving Codex's Supabase traffic per `docs/manual/KNOWN_ISSUES.md` — normalizes tool
+names with a single underscore (`mcp__codex_apps__supabase_<leaf>`), which the allowlist regex
+did not match, so an unknown write tool on that channel would have bypassed the fail-closed gate
+(only the suffix blocklist applied). The regex now accepts both naming forms (`_{1,2}`, the same
+dual-form handling the guard already uses for GitHub tools), with regression tests for unknown,
+mutating, read-only, and `execute_sql` tools under the `codex_apps` name, and the producer blob
+pins re-pinned.
+
 ## 2026-08-14 — Write-access assertion scoped to the Supabase connector url
 
 CodeRabbit follow-up on the Codex write-scope PR: the two agent-guidance checkers asserted the

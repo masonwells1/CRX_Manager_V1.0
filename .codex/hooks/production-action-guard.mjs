@@ -35,7 +35,12 @@ import { stripCommentsQuoteAware } from "../../.claude/hooks/live-testdata-lib.m
 // too. If the connector is ever re-created under a new UUID, its known
 // leaves stay covered by the suffix blocklist and the execute_sql content
 // gate below; add the new UUID here so unknown leaves fail closed again.
-const SUPABASE_TOOL_RE = /(?:^|__)(?:supabase|50e15046-cf2c-49da-b8df-ceef27768f63)__([a-z0-9_]+)$/i;
+// Codex-review follow-up: the built-in codex_apps/supabase channel (the one
+// actually serving Codex traffic per docs/manual/KNOWN_ISSUES.md) normalizes
+// to app-style names with a SINGLE underscore (mcp__codex_apps__supabase_<leaf>),
+// so `_{1,2}` accepts both naming forms — same dual-form handling as
+// GITHUB_TOOL below.
+const SUPABASE_TOOL_RE = /(?:^|__)(?:supabase|50e15046-cf2c-49da-b8df-ceef27768f63)_{1,2}([a-z0-9_]+)$/i;
 const SUPABASE_READ_ONLY_TOOLS = new Set([
   "generate_typescript_types", "get_advisors", "get_cost", "get_edge_function",
   "get_logs", "get_organization", "get_project", "get_project_url",

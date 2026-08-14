@@ -130,6 +130,15 @@ try {
   });
   assert.equal(unknownUuidSupabase.blocked, true, "unrecognized UUID-connector Supabase tool fails closed");
   assert.match(unknownUuidSupabase.reason, /read-only allowlist/i, "UUID unknown-tool denial names the allowlist");
+  // Codex-review follow-up: the built-in codex_apps/supabase channel uses
+  // app-style single-underscore names (mcp__codex_apps__supabase_<leaf>) —
+  // the channel actually serving Codex traffic per KNOWN_ISSUES. An unknown
+  // leaf there must hit the SAME fail-closed allowlist.
+  const unknownAppSupabase = evaluateProductionAction({
+    toolName: "mcp__codex_apps__supabase_future_write_tool",
+  });
+  assert.equal(unknownAppSupabase.blocked, true, "unrecognized codex_apps Supabase tool fails closed");
+  assert.match(unknownAppSupabase.reason, /read-only allowlist/i, "codex_apps unknown-tool denial names the allowlist");
   // The exact read-only allowlist stays usable under both prefixes.
   for (const leaf of [
     "list_tables", "list_migrations", "list_branches", "list_extensions",
@@ -146,7 +155,35 @@ try {
       false,
       `read-only Supabase tool stays allowed under app-connector prefix: ${leaf}`,
     );
+    assert.equal(
+      evaluateProductionAction({ toolName: `mcp__codex_apps__supabase_${leaf}` }).blocked,
+      false,
+      `read-only Supabase tool stays allowed under codex_apps prefix: ${leaf}`,
+    );
   }
+  // Mutating lifecycle leaves stay blocked under the app-style name too.
+  assert.equal(
+    evaluateProductionAction({ toolName: "mcp__codex_apps__supabase_apply_migration" }).blocked,
+    true,
+    "codex_apps apply_migration is denied",
+  );
+  // codex_apps execute_sql routes to the SQL content gate like the other prefixes.
+  assert.equal(
+    evaluateProductionAction({
+      toolName: "mcp__codex_apps__supabase_execute_sql",
+      toolInput: { query: "select count(*) from public.orders" },
+    }).blocked,
+    false,
+    "codex_apps execute_sql with read-only SQL passes the content gate",
+  );
+  assert.equal(
+    evaluateProductionAction({
+      toolName: "mcp__codex_apps__supabase_execute_sql",
+      toolInput: { query: "delete from public.orders" },
+    }).blocked,
+    true,
+    "codex_apps execute_sql with mutating SQL is denied",
+  );
   // execute_sql under the UUID prefix still routes to the SQL content gate:
   // read-only SQL passes, mutating SQL is denied.
   assert.equal(
