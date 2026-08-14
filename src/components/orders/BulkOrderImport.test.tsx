@@ -396,6 +396,53 @@ describe('BulkOrderImport', () => {
     expect(retryArgs.p_idempotency_key).toBe(firstArgs.p_idempotency_key);
   });
 
+  it('replays the exact approved request after an ambiguous lost response', async () => {
+    const onSuccess = vi.fn();
+    mocks.rpc
+      .mockResolvedValueOnce({ data: null, error: belowCostReasonError })
+      .mockResolvedValueOnce({
+        data: null,
+        error: { code: 'ETIMEDOUT', message: 'response timed out after commit' },
+      })
+      .mockResolvedValueOnce({ data: { order_id: 'order-committed' }, error: null });
+
+    const { container } = renderImport({ ...defaultProps, onSuccess });
+    const csv = [
+      'order_number,customer_name,product_name,quantity,price_per_unit,notes',
+      'O-RECEIPT,North Farm,SKU-B,2,3,Imported batch',
+    ].join('\n');
+    const file = new File([csv], 'receipt-replay.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: () => Promise.resolve(csv) });
+    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
+      target: { files: [file] },
+    });
+    await screen.findByText(/receipt-replay\.csv/i);
+    fireEvent.click(screen.getByRole('button', { name: /parse file/i }));
+    await screen.findByText(/O-RECEIPT/);
+    fireEvent.click(screen.getByRole('button', { name: /import 1 order/i }));
+    await approveBelowCost('receipt recovery approval');
+
+    await screen.findByText(/failed: 1/i);
+    expect(mocks.rpc).toHaveBeenCalledTimes(2);
+    const committedArgs = mocks.rpc.mock.calls[1][1] as {
+      p_notes: string;
+      p_idempotency_key: string;
+    };
+    expect(committedArgs.p_notes).toContain('Below-cost approved: receipt recovery approval');
+
+    fireEvent.click(screen.getByRole('button', { name: /retry 1 failed order/i }));
+
+    await waitFor(() => expect(mocks.rpc).toHaveBeenCalledTimes(3));
+    const replayArgs = mocks.rpc.mock.calls[2][1] as {
+      p_notes: string;
+      p_idempotency_key: string;
+    };
+    expect(replayArgs.p_notes).toBe(committedArgs.p_notes);
+    expect(replayArgs.p_idempotency_key).toBe(committedArgs.p_idempotency_key);
+    expect(screen.queryByRole('heading', { name: /approve below-cost price/i })).not.toBeInTheDocument();
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1));
+  });
+
   it('attaches the approval reason only to the orders that are actually below cost', async () => {
     mocks.rpc
       .mockResolvedValueOnce({ data: null, error: belowCostReasonError })

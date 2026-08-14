@@ -28,15 +28,18 @@ describe('below-cost server-challenge clients', () => {
     expect(call).toContain('}, reason)))');
   });
 
-  it('imports each order reasonless before using the database locked-cost challenge', () => {
+  it('imports each new order reasonless and preserves an approved receipt replay', () => {
     const call = rpcWindow(bulkImportSource, 'bulk_import_order');
 
     expect(bulkImportSource).not.toContain('BelowCostConfirmModal');
     expect(bulkImportSource).not.toContain('belowCostPrompt');
     expect(bulkImportSource).not.toContain('belowCostReasonRef');
     expect(call).toContain('runWithBelowCostApproval((reason) =>');
-    expect(bulkImportSource).toContain('if (reason) approvalReasonUsed = reason;');
+    expect(bulkImportSource).toContain('const effectiveReason = reason ?? approvalReasonUsed;');
+    expect(bulkImportSource).toContain('unresolvedApprovalReasonsRef.current.set(order.idempotency_key, effectiveReason);');
+    expect(bulkImportSource).toContain('if (isDefinitiveRpcRejection(rpcError))');
     expect(call).toContain('}, recordApprovalReason(reason)))');
+    expect(bulkImportSource).toContain('Retry ${uploadResults.failed} Failed Order');
     expect(bulkImportSource).toContain('onClose={approvalOpen ? () => {} : handleClose}');
   });
 });

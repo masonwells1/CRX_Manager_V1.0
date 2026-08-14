@@ -195,6 +195,8 @@ ok(!checkDangerousCommand("cat .env.example"), "reading .env.example is not a wr
     ok(checkOneShotReplayCommand(`psql -f supabase/migrations/${stem}.sql`, tmp), "psql original one-shot path is blocked");
     ok(checkOneShotReplayCommand("Get-Content renamed-copy.sql | psql", tmp), "renamed byte-identical one-shot file is blocked");
     ok(checkOneShotReplayCommand(`psql -c \"${sql}\"`, tmp), "pasted full one-shot body is blocked");
+    const commentedSql = sql.replace("UPDATE ", "UPDATE /* replay */ ");
+    ok(checkOneShotReplayCommand(`psql -c \"${commentedSql}\"`, tmp), "an inline block comment cannot hide a pasted one-shot body");
     ok(checkOneShotReplayCommand(`supabase sql --file supabase/migrations/${stem}.sql`, tmp), "Supabase CLI one-shot replay is blocked");
     ok(checkOneShotReplayCommand("supabase sql --file=renamed-copy.sql", tmp), "Supabase --file= byte-identical replay is blocked");
     ok(checkOneShotReplayCommand("psql --file=renamed-copy.sql", tmp), "psql --file= byte-identical replay is blocked");
@@ -203,6 +205,9 @@ ok(!checkDangerousCommand("cat .env.example"), "reading .env.example is not a wr
     ok(checkOneShotReplayCommand("psql --file=renamed-copy", tmp), "psql --file= extensionless replay is blocked");
     ok(checkOneShotReplayCommand("supabase sql --file renamed-copy", tmp), "Supabase extensionless replay is blocked");
     ok(checkOneShotReplayCommand("Get-Content renamed-copy | psql", tmp), "PowerShell extensionless pipeline replay is blocked");
+    ok(checkOneShotReplayCommand("Get-Content -Raw renamed-copy | psql", tmp), "PowerShell -Raw extensionless pipeline replay is blocked");
+    ok(checkOneShotReplayCommand("Get-Content -Encoding UTF8 renamed-copy | psql", tmp), "PowerShell value options cannot hide an extensionless pipeline replay");
+    ok(checkOneShotReplayCommand("Get-Content -Path renamed-copy -Raw | psql", tmp), "PowerShell options after an explicit path cannot hide a replay");
     ok(checkOneShotReplayCommand("cat renamed-copy | psql", tmp), "Bash extensionless pipeline replay is blocked");
     ok(checkOneShotReplayCommand("cmd /c type renamed-copy | psql", tmp), "cmd launcher cannot hide an extensionless pipeline replay");
     ok(checkOneShotReplayCommand("cmd.exe /c type renamed-copy | psql", tmp), "cmd.exe launcher cannot hide an extensionless pipeline replay");

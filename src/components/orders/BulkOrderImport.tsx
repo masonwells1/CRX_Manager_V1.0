@@ -1,10 +1,10 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Upload, CheckCircle, AlertCircle, FileText, Sparkles } from 'lucide-react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
 import { supabase, assertRpcResult } from '../../lib/db';
-import { generateIdempotencyKey } from '../../lib/idempotency';
+import { generateIdempotencyKey, isDefinitiveRpcRejection } from '../../lib/idempotency';
 import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
 import { localToday } from '../../lib/dateUtils';
 import { Sentry } from '../../lib/sentry';
@@ -95,6 +95,7 @@ export default function BulkOrderImport({
     failed: number;
     failures: OrderImportFailure[];
   } | null>(null);
+  const unresolvedApprovalReasonsRef = useRef(new Map<string, string>());
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -116,6 +117,7 @@ export default function BulkOrderImport({
       setFile(selectedFile);
       setValidation(null);
       setUploadResults(null);
+      unresolvedApprovalReasonsRef.current.clear();
     }
   };
 
@@ -381,7 +383,15 @@ export default function BulkOrderImport({
   const handleUpload = async () => {
     if (!validation || validation.valid.length === 0) return;
 
+    const failedOrderNumbers = uploadResults?.failed
+      ? new Set(uploadResults.failures.map((failure) => failure.orderNumber))
+      : null;
+    const ordersToImport = failedOrderNumbers
+      ? validation.valid.filter((order) => failedOrderNumbers.has(order.order_number))
+      : validation.valid;
+
     setUploading(true);
+    setUploadResults(null);
     let successCount = 0;
     let failedCount = 0;
     const failures: OrderImportFailure[] = [];
@@ -398,7 +408,7 @@ export default function BulkOrderImport({
     }
     const productCatalog = productResult.data || [];
 
-    for (const order of validation.valid) {
+    for (const order of ordersToImport) {
       try {
         const { data: customer, error: custError } = await supabase
           .from('customers')
@@ -498,10 +508,14 @@ export default function BulkOrderImport({
         // Always let the database lock Product costs before asking for approval.
         // The callback retains this parsed order's stable idempotency key across
         // the reasonless challenge and its approved retry.
-        let approvalReasonUsed: string | null = null;
+        let approvalReasonUsed = unresolvedApprovalReasonsRef.current.get(order.idempotency_key) ?? null;
         const recordApprovalReason = (reason: string | null) => {
-          if (reason) approvalReasonUsed = reason;
-          return reason;
+          const effectiveReason = reason ?? approvalReasonUsed;
+          if (effectiveReason) {
+            approvalReasonUsed = effectiveReason;
+            unresolvedApprovalReasonsRef.current.set(order.idempotency_key, effectiveReason);
+          }
+          return effectiveReason;
         };
         const { data: rpcResult, error: rpcError } = await runWithBelowCostApproval((reason) =>
           supabase.rpc('bulk_import_order', withBelowCostReason('bulk_import_order', {
@@ -519,8 +533,14 @@ export default function BulkOrderImport({
           }, recordApprovalReason(reason)))
         );
 
-        if (rpcError) throw rpcError;
+        if (rpcError) {
+          if (isDefinitiveRpcRejection(rpcError)) {
+            unresolvedApprovalReasonsRef.current.delete(order.idempotency_key);
+          }
+          throw rpcError;
+        }
         const result = assertRpcResult<{ order_id: string; warnings?: string[] }>(rpcResult, 'bulk_import_order');
+        unresolvedApprovalReasonsRef.current.delete(order.idempotency_key);
         for (const warning of result.warnings ?? []) {
           toast('warning', `Inventory for imported order ${order.order_number}: ${warning}`);
         }
@@ -528,6 +548,9 @@ export default function BulkOrderImport({
         successCount++;
         if (approvalReasonUsed) approvedBelowCostReasons.add(approvalReasonUsed);
       } catch (error) {
+        if (isDefinitiveRpcRejection(error)) {
+          unresolvedApprovalReasonsRef.current.delete(order.idempotency_key);
+        }
         if (!isBelowCostApprovalHandledError(error)) {
           Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'Error importing order' } });
         }
@@ -565,6 +588,7 @@ export default function BulkOrderImport({
     setFile(null);
     setValidation(null);
     setUploadResults(null);
+    unresolvedApprovalReasonsRef.current.clear();
     onClose();
   };
 
@@ -691,31 +715,40 @@ export default function BulkOrderImport({
             )}
 
             {uploadResults && (
-              <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                <p className="text-sm font-medium text-nav-dark mb-2">Import Complete</p>
-                <div className="text-sm text-secondary space-y-1">
-                  <p>Successfully imported: {uploadResults.success}</p>
-                  {uploadResults.failed > 0 && (
-                    <>
-                      <p className="text-red-600">Failed: {uploadResults.failed}</p>
-                      <ul
-                        aria-label="Order import failure details"
-                        className="mt-2 space-y-2 text-red-700"
-                      >
-                        {uploadResults.failures.map((failure) => (
-                          <li key={failure.orderNumber}>
-                            <span className="font-medium">Order {failure.orderNumber}</span>
-                            <ul className="ml-5 list-disc">
-                              {failure.details.map((detail) => (
-                                <li key={detail}>{detail}</li>
-                              ))}
-                            </ul>
-                          </li>
-                        ))}
-                      </ul>
-                    </>
-                  )}
+              <div className="space-y-3">
+                <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                  <p className="text-sm font-medium text-nav-dark mb-2">Import Complete</p>
+                  <div className="text-sm text-secondary space-y-1">
+                    <p>Successfully imported: {uploadResults.success}</p>
+                    {uploadResults.failed > 0 && (
+                      <>
+                        <p className="text-red-600">Failed: {uploadResults.failed}</p>
+                        <ul
+                          aria-label="Order import failure details"
+                          className="mt-2 space-y-2 text-red-700"
+                        >
+                          {uploadResults.failures.map((failure) => (
+                            <li key={failure.orderNumber}>
+                              <span className="font-medium">Order {failure.orderNumber}</span>
+                              <ul className="ml-5 list-disc">
+                                {failure.details.map((detail) => (
+                                  <li key={detail}>{detail}</li>
+                                ))}
+                              </ul>
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
+                  </div>
                 </div>
+                {uploadResults.failed > 0 && (
+                  <Button onClick={handleUpload} disabled={uploading} className="w-full">
+                    {uploading
+                      ? 'Retrying...'
+                      : `Retry ${uploadResults.failed} Failed Order${uploadResults.failed !== 1 ? 's' : ''}`}
+                  </Button>
+                )}
               </div>
             )}
           </div>

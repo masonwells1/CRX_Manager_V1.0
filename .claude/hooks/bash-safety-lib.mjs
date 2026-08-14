@@ -157,6 +157,7 @@ export function checkOneShotReplayCommand(cmd, cwd) {
 
   const normalizeSql = (value) => String(value || "")
     .toLowerCase()
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
     .replace(/--[^\n]*/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -175,9 +176,33 @@ export function checkOneShotReplayCommand(cmd, cwd) {
     referencedCandidates.add((match[1] || match[2] || "").trim());
   }
 
-  const pipedInputRe = /(?:^|[;&|])[^;&|]*?\b(?:get-content|gc|type|cat)(?:\s+(?:-literalpath|-path))?\s+(?:["']([^"']+)["']|([^\s'";&|<>]+))\s*\|/gi;
+  const pipedInputRe = /(?:^|[;&|])([^;&|]*?\b(?:get-content|gc|type|cat)\b[^;&|]*?)\s*\|/gi;
+  const optionValues = new Set([
+    "delimiter", "encoding", "exclude", "filter", "include",
+    "readcount", "stream", "tail", "totalcount",
+  ]);
   while ((match = pipedInputRe.exec(text)) !== null) {
-    referencedCandidates.add((match[1] || match[2] || "").trim());
+    const segment = match[1];
+    const reader = /\b(?:get-content|gc|type|cat)\b/i.exec(segment);
+    if (!reader) continue;
+
+    const argumentsText = segment.slice(reader.index + reader[0].length).trim();
+    const explicitPath = /(?:-literalpath|-path)\s+(?:["']([^"']+)["']|([^\s'";&|<>]+))/i.exec(argumentsText);
+    if (explicitPath) {
+      referencedCandidates.add((explicitPath[1] || explicitPath[2] || "").trim());
+      continue;
+    }
+
+    const tokens = Array.from(argumentsText.matchAll(/["']([^"']*)["']|([^\s]+)/g), (token) => token[1] ?? token[2]);
+    for (let index = 0; index < tokens.length; index += 1) {
+      const token = tokens[index];
+      if (token.startsWith("-")) {
+        if (optionValues.has(token.replace(/^-+/, "").toLowerCase())) index += 1;
+        continue;
+      }
+      referencedCandidates.add(token.trim());
+      break;
+    }
   }
 
   const redirectedInputRe = /\bpsql\b[^;&|]*<\s*(?:["']([^"']+)["']|([^\s'";&|<>]+))/gi;
