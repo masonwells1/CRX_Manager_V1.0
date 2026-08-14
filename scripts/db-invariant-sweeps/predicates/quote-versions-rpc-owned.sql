@@ -518,13 +518,19 @@ SELECT 'quote_versions:second-authoritative-writer' AS violation_key,
       -- by name: any signature, definer, owner, search_path, browser-grant, or
       -- body drift makes it an authoritative writer again and reports here.
       AND NOT (
-        p.oid = 'public.create_quote_version(uuid,uuid,text,text,bigint)'::regprocedure
+        p.oid = to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)')
         AND EXISTS (
           SELECT 1 FROM unnest(coalesce(p.proconfig, '{}'::text[])) AS config(value)
           WHERE replace(config.value, ' ', '') = 'search_path=public,pg_temp'
         )
-        AND NOT has_function_privilege('anon', 'public.create_quote_version(uuid,uuid,text,text,bigint)', 'EXECUTE')
-        AND has_function_privilege('authenticated', 'public.create_quote_version(uuid,uuid,text,text,bigint)', 'EXECUTE')
+        AND CASE
+          WHEN to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)') IS NULL THEN true
+          ELSE NOT has_function_privilege('anon', to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)'), 'EXECUTE')
+        END
+        AND CASE
+          WHEN to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)') IS NULL THEN true
+          ELSE has_function_privilege('authenticated', to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)'), 'EXECUTE')
+        END
         AND p.prosrc LIKE '%_create_quote_version_owner_impl%'
         AND regexp_count(
           p.prosrc,
@@ -549,15 +555,21 @@ SELECT 'create_quote_version:trusted-marker-writer-contract' AS violation_key,
    SELECT 1
      FROM pg_proc p
      JOIN pg_roles r ON r.oid = p.proowner
-    WHERE p.oid = 'public.create_quote_version(uuid,uuid,text,text,bigint)'::regprocedure
+     WHERE p.oid = to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)')
       AND p.prosecdef
       AND r.rolbypassrls
       AND EXISTS (
         SELECT 1 FROM unnest(coalesce(p.proconfig, '{}'::text[])) AS config(value)
         WHERE replace(config.value, ' ', '') = 'search_path=public,pg_temp'
       )
-      AND NOT has_function_privilege('anon', 'public.create_quote_version(uuid,uuid,text,text,bigint)', 'EXECUTE')
-      AND has_function_privilege('authenticated', 'public.create_quote_version(uuid,uuid,text,text,bigint)', 'EXECUTE')
+       AND CASE
+         WHEN to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)') IS NULL THEN true
+         ELSE NOT has_function_privilege('anon', to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)'), 'EXECUTE')
+       END
+       AND CASE
+         WHEN to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)') IS NULL THEN true
+         ELSE has_function_privilege('authenticated', to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)'), 'EXECUTE')
+       END
       AND p.prosrc LIKE '%_create_quote_version_owner_impl%'
       AND regexp_count(
         p.prosrc,

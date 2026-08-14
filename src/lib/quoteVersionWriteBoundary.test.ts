@@ -39,6 +39,9 @@ const predicate = read(
   'quote-versions-rpc-owned.sql',
 );
 const smoke = read('scripts', 'smoke', 'smoke-quote-version-write-boundary.sql');
+const quoteBuilder = read('src', 'pages', 'QuoteBuilder.tsx');
+const db = read('src', 'lib', 'db.ts');
+const testAreas = read('scripts', 'test-areas.json');
 
 /**
  * Statements with comment lines stripped and whitespace collapsed.
@@ -687,13 +690,30 @@ describe('quote_versions write boundary — standing predicate', () => {
   });
 
   it('allows the post-boundary marker update only through its exact guarded writer contract', () => {
-    expect(predicateCode).toContain("'public.create_quote_version(uuid,uuid,text,text,bigint)'::regprocedure");
+    expect(predicateCode).toContain("to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)')");
+    expect(predicateCode).not.toContain("'public.create_quote_version(uuid,uuid,text,text,bigint)'::regprocedure");
+    expect(predicateCode).toContain("WHEN to_regprocedure('public.create_quote_version(uuid,uuid,text,text,bigint)') IS NULL THEN true");
     expect(predicateCode).toContain("'create_quote_version:trusted-marker-writer-contract' AS violation_key");
     expect(predicateCode).toContain("'search_path=public,pg_temp'");
     expect(predicateCode).toContain("'authenticated', 'public.create_quote_version(uuid,uuid,text,text,bigint)', 'EXECUTE'");
     expect(predicateCode).toContain("'anon', 'public.create_quote_version(uuid,uuid,text,text,bigint)', 'EXECUTE'");
     expect(predicateCode).toContain('restore_trusted_at');
     expect(predicateCode).toContain('regexp_count(');
+  });
+
+  it('keeps the new legacy-restore refusal intelligible in the quote UI', () => {
+    expect(db).toContain("QUOTE_VERSION_LEGACY_UNTRUSTED: 'QUOTE_VERSION_LEGACY_UNTRUSTED'");
+    expect(quoteBuilder).toContain('RpcErrorCodes.QUOTE_VERSION_LEGACY_UNTRUSTED');
+    expect(quoteBuilder).toContain('This older saved version cannot be restored');
+  });
+
+  it('holds the post-boundary predicate out of ordinary pre-apply security runs', () => {
+    // The live database deliberately fails this predicate until BOTH quote
+    // migrations are applied. It remains a discoverable predicate and must be
+    // run explicitly during the post-apply gate, not used to make every normal
+    // security area run fail before the boundary exists.
+    const security = JSON.parse(testAreas).areas.security as { sweeps: string[] };
+    expect(security.sweeps).not.toContain('quote-versions-rpc-owned');
   });
 
   it('stays in lockstep with every privilege the migration revokes', () => {

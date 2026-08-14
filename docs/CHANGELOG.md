@@ -2,6 +2,10 @@
 
 All significant development milestones, in reverse chronological order.
 
+## Unreleased
+
+- Security: quote-version restores now require a server-issued trust marker. Existing snapshots remain visible but cannot be restored into money-bearing quote lines because their pre-boundary provenance cannot be proven. This is repository-only work: neither quote-version security migration has been applied live.
+
 ## 2026-08-12 — Six migrations were running in production with no file in the repository
 
 Recovered and landed. **Nothing is applied by this change and no live behaviour changes** — all six

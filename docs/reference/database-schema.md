@@ -197,10 +197,10 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | quotes | Admin / Sales Rep | Admin / Sales Rep (own) | Admin / Sales Rep (own) | Admin |
 | quote_sections | All authenticated | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) |
 | quote_product_draws | Admin / Sales Rep | - (SECDEF RPCs only) | - (SECDEF RPCs only) | - (SECDEF RPCs only) |
-| quote_items | Admin / Sales Rep | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) |
+| quote_items | Admin / Sales Rep | RPC only | RPC only | RPC only |
 | quote_versions | Admin / Sales Rep | Admin / Sales Rep (own quote); **LOCAL ONLY pending apply** (`20260813080000`, CRX-SEC-1): becomes `create_quote_version` RPC only | - | - |
 | orders | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
-| order_items | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
+| order_items | Admin / Sales Rep | RPC only | RPC only | RPC only |
 | inventory | Admin / Sales Rep / Driver | Admin | Admin | Admin |
 | inventory_transactions | Admin / Sales Rep | Admin / Sales Rep | - | - |
 | inventory_holds | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
@@ -224,7 +224,7 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | ingredient_map | All authenticated | Admin | Admin | Admin |
 | unit_conversions | All authenticated | Admin | Admin | - |
 | invoices | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
-| invoice_items | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
+| invoice_items | Admin / Sales Rep | RPC only | RPC only | RPC only |
 | allocation_sets | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
 | order_line_allocations | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
 | invoice_line_allocations | Admin / Sales Rep | Admin / Sales Rep | - | Admin |

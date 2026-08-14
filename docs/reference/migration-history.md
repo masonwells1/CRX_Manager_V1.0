@@ -1,4 +1,4 @@
-# Migration History (885 migration-history entries)
+# Migration History (887 migration-history entries)
 
 > LIVE RECONCILIATION — `20260730235031_quote_customer_row_version_guard.sql` was submitted as `20260730201230_quote_customer_row_version_guard` after PR #290 deployed the compatible browser bundle. It adds trigger-maintained `row_version bigint NOT NULL DEFAULT 1` to `quotes` and `customers`, re-emits `save_quote`/`save_customer` with fail-closed expected-version checks and fresh-version results, and preserves the commission-split-specific guard ahead of the generic guard. Live postflight, four rollback-only chains, zero-residue checks, all 21 invariant predicates, and the B7 rename passed. The AP-only close-race/table-boundary follow-up applied afterward as ledger `20260731001654`; the live schema registry is refreshed through that high-water and records both migrations and both row-version columns.
 
@@ -1414,3 +1414,10 @@ These 10 historical migrations apply by timestamp order like all others; they si
 > **Doc drift note (2026-07-10):** rows 641–644 are the only billing-day-loop-era rows captured; migration-history is otherwise ~15 rows behind (Sprint D `20260710120000`/`130000`, U15–U20, EPA lookup, credit-memo apply `20260711021000`–`060000`, save_job_applied guards). Needs a `/update-docs` backfill.
 
 > PARKED-011 (process-document base64 size cap) is an edge-fn, not a migration — deployed to `process-document` v14 on 2026-06-30. The 5 HIGH migrations (parked_001/003/004/007/009) landed via the beyond-parity go-live.
+
+## 2026-08-13 pending quote-version candidates
+
+| Entry | Version | Status |
+|---:|---|---|
+| 886 | 20260813080000 | **LOCAL CANDIDATE — NOT APPLIED.** `20260813080000_lock_quote_versions_writes_to_rpc.sql` removes direct browser writes to `quote_versions`, preserves governed create/restore RPCs, and fails closed on unexpected writers or grants. |
+| 887 | 20260813090000 | **LOCAL CANDIDATE — NOT APPLIED.** `20260813090000_quote_version_restore_trust_boundary.sql` adds a server-issued restore trust marker, marks only newly RPC-created versions, and rejects restoration of unmarked legacy snapshots before quote or money rows are rebuilt. Existing history remains readable; no existing business row is backfilled, deleted, or modified. |

@@ -11,6 +11,11 @@ assert.deepEqual(
   { pass: true },
   'a Windows absolute psql path must still recognize the terminal pass raise',
 );
+assert.deepEqual(
+  interpretResult('ERROR:  SMOKE_PASS_ROLLBACK (9/9 incl. cross-actor)'),
+  { pass: true },
+  'a documented suffixed terminal pass raise must remain green',
+);
 
 const quotedPass = interpretResult(
   'psql:chain.sql:42: ERROR:  SMOKE_FAIL expected SMOKE_PASS_ROLLBACK but write was rejected',

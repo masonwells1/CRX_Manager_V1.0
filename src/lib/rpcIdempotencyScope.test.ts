@@ -256,6 +256,9 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // public restore_quote_version cache namespace so a replay through the
   // wrapper reaches the result that the implementation saved.
   _restore_quote_version_owner_impl: ['restore_quote_version'],
+  // The below-cost restore implementation owns the scoped replay lookup after
+  // the trust-boundary migration and deliberately shares the public operation.
+  _restore_quote_version_below_cost_impl_20260810: ['restore_quote_version'],
   // Owner-only implementation used by the public standalone/group posting
   // wrappers; all layers intentionally share the public post_invoice cache.
   _post_invoice_impl_20260714: ['post_invoice'],
@@ -460,11 +463,15 @@ describe('Idempotency operation literals in latest disk migrations', () => {
 
   it('regression guard: restore_quote_version lookup stays scoped to its own operation', () => {
     // Codex 2026-06-08 LOW — the lookup originally filtered on the key only.
-    // The public wrapper now delegates, so pin the lookup in the private
-    // implementation that owns the idempotency SQL rather than the wrapper.
-    const def = defs.get('_restore_quote_version_owner_impl');
+    // The trust-boundary migration re-emits the below-cost implementation,
+    // which owns the lookup and must check the cache before rejecting legacy
+    // snapshots so a validated retry remains a no-op.
+    const def = defs.get('_restore_quote_version_below_cost_impl_20260810');
     expect(def).toBeDefined();
     expect(def!.body).toMatch(/operation\s*=\s*'restore_quote_version'/i);
+    expect(def!.body.indexOf('check_idempotency')).toBeLessThan(
+      def!.body.indexOf('QUOTE_VERSION_LEGACY_UNTRUSTED'),
+    );
   });
 
   it('disk scan found a meaningful number of function definitions (sanity)', () => {
