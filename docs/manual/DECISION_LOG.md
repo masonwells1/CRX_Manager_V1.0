@@ -1,11 +1,42 @@
 # Decision Log
 
-Last verified: 2026-08-10
+Last verified: 2026-08-14
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-08-14 — One-time override: `20260812115238`'s order-line map is published in full
+
+**Source:** Mason's explicit in-chat instruction, 2026-08-14, verbatim: "I don't care all the numbers
+in my system arnt real or operational so do it all" — given after the trade-off was explained in
+plain English (publishing puts 35 real order-line identifiers, prices and profit figures into a
+permanently public Git history).
+
+**Decision.** The recovered migration
+`supabase/migrations/20260812115238_repair_historical_order_line_cents.sql` is committed
+byte-for-byte as applied, including the 35-row approved preimage map that was withheld when the file
+first landed. The redaction-era header note and the `APPROVED_SET_WITHHELD` guard — both added only
+because the map had been emptied — are removed with it. The committed bytes are verified against the
+live ledger: `statements[1]` of `supabase_migrations.schema_migrations` version `20260812154757`,
+18,770 bytes, md5 `f31409684f7f01eee19042468f1e6998`, LF endings.
+
+**Operative rule.** This override covers this one map and nothing else. The standing rule — no live
+financial data, customer identifiers, or operational figures in the public repository — is unchanged
+and still binds every other file, commit message, changelog entry and pull request. Do not cite this
+entry as precedent for publishing any other live data; a fresh owner decision is required each time.
+Mason's stated basis was that the data in this system is not real or operational, so the basis does
+not carry to data that is.
+
+**Related, and deliberately not restated here:** the narrow live-ledger recovery exception (the rule
+that lets an already-applied migration be recovered to Git without its already-live SQL blocking the
+push proof) was settled the same day, but its Decision Log entry lives on PR #403 and **is not on
+`main` yet**. Until #403 merges, `main`'s Decision Log does not record that approval. That entry is
+also what makes this change necessary: as amended in #403, the exception is **byte-verbatim only** —
+a redacted recovery cannot attest — so publishing this file in full is what makes it eligible.
 
 ---
 

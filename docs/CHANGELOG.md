@@ -118,15 +118,19 @@ exactly, at identical length, for `_guard_below_cost_approval_immutable`,
 `_guard_quote_item_cost_snapshot`. `bash scripts/validate-sql-migrations.sh --changed-only` reports
 0 violations across the six.
 
-**One deliberate exception to that fidelity, and it is the only one.** `20260812115238` is published
-with its approved preimage removed: the applied payload embedded a 35-row map of live order-line
-identifiers with their prices and profit, and this repository is public. Nothing else in that file
-changed, its SHA-256 `APPROVED_SET_DIGEST` still binds the exact preimage, and no reachable code path
-is affected — an empty database returns early before the map is read, and an already-repaired
-database (which is every database that now exists, including production) raises
-`APPROVED_SET_DRIFTED` before the map is read. The only branch that reads the map now fails closed
-with `APPROVED_SET_WITHHELD` instead of running on a partial map. The file defines no functions, so
-the md5 fidelity proof above is unaffected.
+**All six are published byte-identical, including the one that carries live figures.**
+`20260812115238` embedded a 35-row map of the exact order lines it repaired, with their prices and
+profit. That map was withheld when the file first landed, because this repository is public. On
+2026-08-14 Mason directed that it be published in full, on his stated basis that the figures in this
+system are not real or operational, so the file now matches the applied payload exactly. Fidelity is
+measured, not asserted: this one was recovered from the live ledger rather than a transcript —
+`statements[1]` of ledger version `20260812154757` in `supabase_migrations.schema_migrations`, 18,770
+bytes, md5 `f31409684f7f01eee19042468f1e6998`, LF endings — and the committed file hashes identically.
+The two edits the earlier redaction required are gone with it: the publication note in the header, and
+the `APPROVED_SET_WITHHELD` guard that existed only to fail closed when the map had been emptied. The
+file defines no functions, so the md5 fidelity proof above is unaffected. This decision covers this
+map and nothing else; the standing rule against publishing live financial data is unchanged
+(`docs/manual/DECISION_LOG.md`, 2026-08-14).
 
 **What the six do**, in apply order (full detail in `docs/reference/migration-history.md`, rows
 880-885):
@@ -149,8 +153,8 @@ the md5 fidelity proof above is unaffected.
   confirmation was never an authorization boundary; a direct API caller skipped it.
 - `20260812115238` — the one live-data correction in the group, approved by Mason in chat on
   2026-08-12: rounds the historical order lines that still carried fractions of a cent, recomputes
-  the affected order headers, and installs the whole-cent rule as a validated constraint.
-  Per-line and per-order figures are deliberately withheld from this public repository.
+  the affected order headers, and installs the whole-cent rule as a validated constraint. Published
+  in full, including the 35-row map of the lines it repaired, per Mason's 2026-08-14 decision.
 
 Also in this change: the six files are pinned `text eol=lf` in `.gitattributes` — several carry md5
 pins computed against the live catalog, and a Windows checkout under `core.autocrlf=true` would
