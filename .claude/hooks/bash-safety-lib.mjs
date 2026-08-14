@@ -175,7 +175,7 @@ export function checkOneShotReplayCommand(cmd, cwd) {
     referencedCandidates.add((match[1] || match[2] || "").trim());
   }
 
-  const pipedInputRe = /(?:^|[;&|]\s*)(?:get-content|gc|type|cat)(?:\s+(?:-literalpath|-path))?\s+(?:["']([^"']+)["']|([^\s'";&|<>]+))\s*\|/gi;
+  const pipedInputRe = /(?:^|[;&|])[^;&|]*?\b(?:get-content|gc|type|cat)(?:\s+(?:-literalpath|-path))?\s+(?:["']([^"']+)["']|([^\s'";&|<>]+))\s*\|/gi;
   while ((match = pipedInputRe.exec(text)) !== null) {
     referencedCandidates.add((match[1] || match[2] || "").trim());
   }

@@ -204,6 +204,9 @@ ok(!checkDangerousCommand("cat .env.example"), "reading .env.example is not a wr
     ok(checkOneShotReplayCommand("supabase sql --file renamed-copy", tmp), "Supabase extensionless replay is blocked");
     ok(checkOneShotReplayCommand("Get-Content renamed-copy | psql", tmp), "PowerShell extensionless pipeline replay is blocked");
     ok(checkOneShotReplayCommand("cat renamed-copy | psql", tmp), "Bash extensionless pipeline replay is blocked");
+    ok(checkOneShotReplayCommand("cmd /c type renamed-copy | psql", tmp), "cmd launcher cannot hide an extensionless pipeline replay");
+    ok(checkOneShotReplayCommand("cmd.exe /c type renamed-copy | psql", tmp), "cmd.exe launcher cannot hide an extensionless pipeline replay");
+    ok(checkOneShotReplayCommand("powershell -Command Get-Content renamed-copy | psql", tmp), "PowerShell launcher cannot hide an extensionless pipeline replay");
     ok(checkOneShotReplayCommand("psql < renamed-copy", tmp), "extensionless psql input redirection replay is blocked");
     eq(checkOneShotReplayCommand("psql -f read-only-query", tmp), null, "unrelated extensionless SQL file stays allowed");
     ok(

@@ -279,15 +279,35 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
         `file from git (it is tracked) and retry.`);
     }
 
-    // Normalize for comparison: lowercase, strip `--` line comments, collapse
+    // Normalize for comparison: lowercase, strip SQL comments, collapse
     // whitespace. Enough to catch a reformatted copy-paste of the same body;
     // NOT enough to catch a materially rewritten one — but a materially
     // rewritten body is a new migration that needs its own review anyway.
     const norm = (s) => s
       .toLowerCase()
+      .replace(/\/\*[\s\S]*?\*\//g, " ")
       .replace(/--[^\n]*/g, " ")
       .replace(/\s+/g, " ")
       .trim();
+    const containsStatementSequence = (query, source) => {
+      if (!query || !source) return false;
+
+      let fromIndex = 0;
+      while (fromIndex < query.length) {
+        const matchIndex = query.indexOf(source, fromIndex);
+        if (matchIndex === -1) return false;
+
+        const before = query.slice(0, matchIndex).trimEnd();
+        const after = query.slice(matchIndex + source.length).trimStart();
+        const hasLeftBoundary = before.length === 0 || before.endsWith(";");
+        const hasRightBoundary = after.length === 0 || source.endsWith(";") || after.startsWith(";");
+        if (hasLeftBoundary && hasRightBoundary) return true;
+
+        fromIndex = matchIndex + 1;
+      }
+
+      return false;
+    };
     const normQuery = norm(migQuery);
     const ledgerHas = (stem) => {
       const version = (stem.match(/\d{14}/) || [])[0];
@@ -308,7 +328,7 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
           const filePath = path.join(projectDir, "supabase", "migrations", `${stem}.sql`);
           if (existsSync(filePath)) {
             const normFile = norm(readFileSync(filePath, "utf8"));
-            if (normFile && normQuery === normFile) {
+            if (containsStatementSequence(normQuery, normFile)) {
               matched = `the SQL body (it matches ${stem}.sql on disk)`;
             }
           }
@@ -356,9 +376,9 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
         `the corrected values come back with the DATA — not by re-running the edit.\n\n` +
         `If this really is a deliberate, reviewed replay, bind the override to the exact SQL:\n` +
         `  node -e "const c=require('node:crypto'),f=require('node:fs');` +
-        `const q=f.readFileSync('supabase/migrations/${stem}.sql','utf8');` +
+        `const q=f.readFileSync(process.argv[1],'utf8');` +
         `f.writeFileSync('.claude/session-state/one-shot-replay-override.json',` +
-        `JSON.stringify({migration:'${stem}',queryHash:c.createHash('sha256').update(q).digest('hex')}))"\n` +
+        `JSON.stringify({migration:'${stem}',queryHash:c.createHash('sha256').update(q).digest('hex')}))" "PATH_TO_EXACT_SUBMITTED_SQL"\n` +
         `That override authorizes that exact text and nothing else. Get Mason's explicit OK first — ` +
         `this is a live money write.`);
     }

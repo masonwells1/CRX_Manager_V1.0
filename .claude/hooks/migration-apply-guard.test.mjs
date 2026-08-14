@@ -574,6 +574,16 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(isDeny(r), "the same one-shot body under a different name → apply denied");
     ok(isOneShotDeny(r), "the body match, not the name, is what catches the renamed replay");
 
+    const WRAPPED_ONE_SHOT_SQL = `SET statement_timeout = '5s';\n${ONE_SHOT_SQL}\nSELECT 1;`;
+    r = apply("20990601000002_wrapped_innocent_name", WRAPPED_ONE_SHOT_SQL);
+    ok(isDeny(r), "a renamed one-shot surrounded by valid SQL statements → apply denied");
+    ok(isOneShotDeny(r), "statement wrappers cannot hide the registered one-shot body");
+
+    const COMMENT_REFORMATTED_ONE_SHOT_SQL = "UPDATE /* replay */ public.orders SET total_profit = 1 WHERE id = 2;";
+    r = apply("20990601000002_commented_innocent_name", COMMENT_REFORMATTED_ONE_SHOT_SQL);
+    ok(isDeny(r), "a renamed one-shot reformatted with a block comment → apply denied");
+    ok(isOneShotDeny(r), "SQL comments cannot hide the registered one-shot body");
+
     r = apply("20990601000003_partial_body", "UPDATE public.orders SET total_profit = 1;");
     ok(!isOneShotDeny(r), "a normalized substring is not misclassified as the registered one-shot body");
 
@@ -604,6 +614,18 @@ function armAutopilot(stateDir, hoursFromNow) {
     r = apply(STEM, `${ONE_SHOT_SQL} -- edited`);
     ok(isOneShotDeny(r), "the override authorizes that exact text and nothing else");
     rmSync(ovPath, { force: true });
+
+    const REFORMATTED_ONE_SHOT_SQL = "UPDATE public.orders\nSET total_profit = 1\nWHERE id = 2;";
+    r = apply("20990601000002_reformatted_copy", REFORMATTED_ONE_SHOT_SQL);
+    ok(isOneShotDeny(r), "a whitespace-reformatted one-shot body is still denied");
+    ok(
+      r.stdout.includes("PATH_TO_EXACT_SUBMITTED_SQL") && r.stdout.includes("process.argv[1]"),
+      "override guidance hashes the exact submitted SQL file instead of the tracked migration file",
+    );
+    writeFileSync(ovPath, JSON.stringify({ migration: STEM, queryHash: sha(REFORMATTED_ONE_SHOT_SQL) }));
+    r = apply("20990601000002_reformatted_copy", REFORMATTED_ONE_SHOT_SQL);
+    ok(!isOneShotDeny(r), "an exact submitted-body digest authorizes the deliberately reviewed reformatted SQL");
+    ok(!existsSync(ovPath), "the exact submitted-body override is also consumed after one use");
 
     // 6. Fail closed. The registry is tracked in git; unreadable or absent means
     //    the checkout is broken or the file was removed — the two states in

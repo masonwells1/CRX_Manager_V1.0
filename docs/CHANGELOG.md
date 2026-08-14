@@ -4,9 +4,10 @@ All significant development milestones, in reverse chronological order.
 
 ## 2026-08-14 — Made below-cost order approval depend on locked database cost
 
-Fixed stale browser-cost below-cost approval in New Order and Bulk Order Import by requiring the database locked-cost challenge before retrying with an admin reason; added same-key, cancellation, role-denial, mixed-order, and source-regression coverage.
+Fixed stale browser-cost below-cost approval in New Order and Bulk Order Import by requiring the database locked-cost challenge before retrying with an admin reason; added same-key, cancellation, role-denial, mixed-order, and source-regression coverage. Follow-up exact-head review also closed three one-shot replay bypasses: registered SQL is detected when surrounded by other statements, shell launchers cannot hide extensionless byte-identical inputs, and a deliberate override hashes the exact SQL submitted rather than the tracked source file.
 
 - **Commits this session** (git log origin/main..HEAD):
+  - `1ff9fe6a fix: require locked-cost challenge for order approval`
   - `3ffbeab6 fix(security): hash extensionless SQL replay inputs`
   - `415afb08 fix: close quote conversion review blockers`
   - `ca359ca3 Merge remote-tracking branch 'origin/main' into codex/pr389-coderabbit-fixes`
