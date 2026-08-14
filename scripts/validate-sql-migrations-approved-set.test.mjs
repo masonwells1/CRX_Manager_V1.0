@@ -142,7 +142,8 @@ const WHOLE_ROW_HASH_EXPR =
 const ENUMERATED_HASH_EXPR =
   `encode(digest(string_agg(id::text || ':' || coalesce(quote_id::text, '') || ':' || coalesce(customer_id::text, '')` +
   ` || ':' || coalesce(status::text, '') || ':' || coalesce(total_price::text, '') || ':' || coalesce(total_cost::text, '')` +
-  ` || ':' || coalesce(total_profit::text, '') || ':' || coalesce(salesman_id::text, '')` +
+  ` || ':' || coalesce(total_profit::text, '') || ':' || coalesce(total_margin_pct::text, '')` +
+  ` || ':' || coalesce(salesman_id::text, '')` +
   ` || ':' || coalesce(deleted_at::text, '') || ':' || coalesce(pricing_status::text, '')` +
   // Round 21 added lifecycle booleans to the material set, and `orders.is_planned`
   // is one: a planned order flipped to real between the digest and the write is
@@ -160,6 +161,11 @@ const ENUMERATED_HASH_EXPR =
  */
 const ENUMERATED_MINUS_FLAG_EXPR = ENUMERATED_HASH_EXPR.replace(
   ` || ':' || coalesce(is_planned::text, '')`,
+  '',
+);
+/** The pre-round-33 enumeration: authoritative margin state was omitted. */
+const ENUMERATED_MINUS_MARGIN_EXPR = ENUMERATED_HASH_EXPR.replace(
+  ` || ':' || coalesce(total_margin_pct::text, '')`,
   '',
 );
 /** A real hash, correctly assigned — but over a constant. Binds nothing. */
@@ -1782,6 +1788,14 @@ const CASES = [
     sql: `-- APPROVED_SET_DIGEST: ${HEX}\n${goodSetBlock({ bind: 'enumerated' })}\n`,
   },
   {
+    name: 'UPDATE digest enumeration omits compound money column total_margin_pct',
+    expect: 'violation',
+    mustReport: 'total_margin_pct',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\n` +
+      `${goodSetBlock({ bind: 'enumerated' }).replace(ENUMERATED_HASH_EXPR, ENUMERATED_MINUS_MARGIN_EXPR)}\n`,
+  },
+  {
     // The shortcut's own failure mode. A whole-row projection names no table,
     // so on a two-table repair `to_jsonb(o.*)` would silently excuse the
     // columns of the table it does NOT cover. It is accepted for single-table
@@ -1880,18 +1894,18 @@ const CASES = [
     // ROUND 31 (Codex High). Everything above proves the repair rewrote exactly
     // the rows it hashed — for the table the UPDATE names. Triggers were
     // invisible, so this block, which is airtight by every earlier rule, fired
-    // trg_recalc_order_totals underneath and rewrote public.orders: rows never
+    // write_product_pricing_history underneath and rewrote public.cost_history: rows never
     // captured, never hashed, and not counted by the ROW_COUNT assertion.
     name: 'round-31: a trigger cascade out of the repaired table is reported',
     expect: 'violation',
-    mustReport: 'trg_recalc_order_totals',
-    sql: fanoutBlock('order_items', 'total_price'),
+    mustReport: 'write_product_pricing_history',
+    sql: fanoutBlock('products', 'current_cost'),
   },
   {
     name: 'round-31: the cascade report names the table that gets rewritten',
     expect: 'violation',
-    mustReport: 'rewrites orders',
-    sql: fanoutBlock('order_items', 'total_price'),
+    mustReport: 'rewrites cost_history',
+    sql: fanoutBlock('products', 'current_cost'),
   },
   {
     // The control the two cases above are worthless without. Byte-identical
@@ -1900,15 +1914,15 @@ const CASES = [
     // works.
     name: 'round-31: the same shape on a table with no cascade stays silent',
     expect: 'silent',
-    sql: fanoutBlock('orders', 'total_profit'),
+    sql: fanoutBlock('commissions', 'commission_amount'),
   },
   {
     // One trigger, three targets. The message only has to name one of them to
     // be actionable, but the migration must not pass.
     name: 'round-31: a trigger that rewrites three tables is reported',
     expect: 'violation',
-    mustReport: '_receiving_records_before_delete',
-    sql: fanoutBlock('receiving_records', 'quantity'),
+    mustReport: 'write_product_pricing_history',
+    sql: fanoutBlock('products', 'current_cost'),
   },
 ];
 
@@ -2239,8 +2253,10 @@ function runTriggerFanoutFailsClosed() {
       failures.push('  round-32 live fan-out is missing fields -> field_crop_history via snapshot_field_crop_history');
     }
 
+    const visibleFields = structuredClone(live);
+    visibleFields.opaque_on_tables = visibleFields.opaque_on_tables.filter((t) => t !== 'fields');
     expect('an UPSERT conflict arm in a fields trigger binds field_crop_history',
-      json(live), fanoutBlock('fields', 'crop_type'), 'field_crop_history');
+      json(visibleFields), fanoutBlock('fields', 'crop_type'), 'field_crop_history');
 
     const unscanned = structuredClone(live);
     unscanned.tables_scanned = unscanned.tables_scanned.filter((t) => t !== 'orders');
@@ -2263,6 +2279,7 @@ function runTriggerFanoutFailsClosed() {
 
     const gutted = structuredClone(live);
     gutted.fanout = {};
+    gutted.opaque_on_tables = [];
     expect('MUTANT: with the fan-out emptied the order_items attack survives',
       json(gutted), fanoutBlock('order_items', 'total_price'), null);
   } finally {

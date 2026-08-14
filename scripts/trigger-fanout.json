@@ -1,11 +1,12 @@
 {
   "_meta": {
-    "generated_at": "2026-08-13T17:11:48Z",
+    "format_version": 2,
+    "captured_at": "2026-08-14T05:43:22.897136Z",
     "generator": "scripts/generate-trigger-fanout.mjs",
+    "capture_method": "supabase-cli-db-query-linked",
     "source_project": "rhyzpcqhnizqbxphqdkr",
-    "purpose": "Live triggers that rewrite a different table than the one written. The approved-set gate in scripts/validate-sql-migrations.sh folds each target into the set of tables a bulk repair must capture, hash and count.",
-    "scope": "UPDATE/DELETE/MERGE plus INSERT ... ON CONFLICT DO UPDATE. Plain INSERT is excluded.",
-    "regenerate": "node scripts/generate-trigger-fanout.mjs --from-introspection <payload.json>"
+    "scope": "Transitive UPDATE/DELETE/MERGE and UPSERT-conflict writes; unresolved calls or dynamic targets are opaque.",
+    "regenerate": "node scripts/generate-trigger-fanout.mjs"
   },
   "tables_scanned": [
     "accounting_periods",
@@ -166,7 +167,23 @@
     "watchdog_flags",
     "write_offs"
   ],
-  "opaque_on_tables": [],
+  "opaque_on_tables": [
+    "customer_contacts",
+    "customers",
+    "fields",
+    "idempotency_keys",
+    "invoice_items",
+    "invoices",
+    "offline_action_receipts",
+    "order_items",
+    "profiles",
+    "purchase_orders",
+    "quote_items",
+    "receiving_records",
+    "return_items",
+    "returns",
+    "team_notes"
+  ],
   "fanout": {
     "blend_ticket_products": [
       {
@@ -176,6 +193,10 @@
     ],
     "customer_contacts": [
       {
+        "target": "customer_contacts",
+        "via": "sync_customer_to_primary_contact"
+      },
+      {
         "target": "customers",
         "via": "sync_primary_contact_to_customer"
       }
@@ -184,6 +205,16 @@
       {
         "target": "customer_contacts",
         "via": "sync_customer_to_primary_contact"
+      },
+      {
+        "target": "customers",
+        "via": "sync_primary_contact_to_customer"
+      }
+    ],
+    "deliveries": [
+      {
+        "target": "activity_feed",
+        "via": "trg_delivery_status_change"
       }
     ],
     "fields": [
@@ -192,19 +223,37 @@
         "via": "snapshot_field_crop_history"
       }
     ],
+    "inventory": [
+      {
+        "target": "activity_feed",
+        "via": "trg_inventory_significant_change"
+      }
+    ],
+    "invoice_items": [
+      {
+        "target": "below_cost_approvals",
+        "via": "_enforce_below_cost_line"
+      }
+    ],
     "invoices": [
       {
         "target": "blend_tickets",
         "via": "sync_blend_ticket_payment_status"
-      }
-    ],
-    "job_fields": [
+      },
       {
-        "target": "job_dispatch_preservation",
-        "via": "_sync_job_location_dispatch_on_field_insert"
+        "target": "invoice_line_share_snapshots",
+        "via": "snapshot_invoice_line_shares_on_post"
       }
     ],
-    "jobs": [
+    "job_applied_record_fields": [
+      {
+        "target": "inventory_holds",
+        "via": "_trg_release_job_holds_on_lifecycle"
+      },
+      {
+        "target": "job_applied_records",
+        "via": "trg_jarf_recompute"
+      },
       {
         "target": "job_location_dispatches",
         "via": "_close_job_location_dispatch_on_job_terminal"
@@ -212,12 +261,102 @@
       {
         "target": "job_location_dispatches",
         "via": "_sync_job_location_dispatch_on_applicator_change"
+      },
+      {
+        "target": "job_product_draws",
+        "via": "_trg_release_job_holds_on_lifecycle"
+      },
+      {
+        "target": "jobs",
+        "via": "trg_jarf_recompute"
+      },
+      {
+        "target": "jobs",
+        "via": "trg_job_applied_record_recompute"
+      }
+    ],
+    "job_applied_records": [
+      {
+        "target": "inventory_holds",
+        "via": "_trg_release_job_holds_on_lifecycle"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "_close_job_location_dispatch_on_job_terminal"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "_sync_job_location_dispatch_on_applicator_change"
+      },
+      {
+        "target": "job_product_draws",
+        "via": "_trg_release_job_holds_on_lifecycle"
+      },
+      {
+        "target": "jobs",
+        "via": "trg_job_applied_record_recompute"
+      }
+    ],
+    "job_chemicals": [
+      {
+        "target": "inventory_holds",
+        "via": "_trg_sync_job_holds"
+      },
+      {
+        "target": "job_product_draws",
+        "via": "_trg_sync_job_holds"
+      }
+    ],
+    "job_fields": [
+      {
+        "target": "job_dispatch_preservation",
+        "via": "_preserve_job_location_dispatch_on_field_delete"
+      },
+      {
+        "target": "job_dispatch_preservation",
+        "via": "_sync_job_location_dispatch_on_field_insert"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "_sync_job_location_dispatch_on_field_insert"
+      }
+    ],
+    "jobs": [
+      {
+        "target": "inventory_holds",
+        "via": "_trg_release_job_holds_on_lifecycle"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "_close_job_location_dispatch_on_job_terminal"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "_sync_job_location_dispatch_on_applicator_change"
+      },
+      {
+        "target": "job_product_draws",
+        "via": "_trg_release_job_holds_on_lifecycle"
       }
     ],
     "order_items": [
       {
+        "target": "activity_feed",
+        "via": "trg_order_status_change"
+      },
+      {
+        "target": "below_cost_approvals",
+        "via": "_enforce_below_cost_line"
+      },
+      {
         "target": "orders",
         "via": "trg_recalc_order_totals"
+      }
+    ],
+    "orders": [
+      {
+        "target": "activity_feed",
+        "via": "trg_order_status_change"
       }
     ],
     "prepay_applications": [
@@ -227,6 +366,10 @@
       }
     ],
     "products": [
+      {
+        "target": "cost_history",
+        "via": "write_product_pricing_history"
+      },
       {
         "target": "product_cost_basis",
         "via": "guard_product_cost_basis_unit_change"
@@ -242,13 +385,45 @@
         "via": "sync_profile_public_directory"
       }
     ],
+    "purchase_order_items": [
+      {
+        "target": "activity_feed",
+        "via": "trg_inventory_significant_change"
+      },
+      {
+        "target": "inventory",
+        "via": "trg_po_items_recompute_on_order"
+      }
+    ],
     "purchase_orders": [
+      {
+        "target": "activity_feed",
+        "via": "trg_inventory_significant_change"
+      },
+      {
+        "target": "activity_feed",
+        "via": "trg_po_status_change"
+      },
       {
         "target": "idempotency_keys",
         "via": "_invalidate_deleted_purchase_order_retry_state"
+      },
+      {
+        "target": "inventory",
+        "via": "trg_po_status_recompute_on_order"
+      }
+    ],
+    "quote_items": [
+      {
+        "target": "below_cost_approvals",
+        "via": "_enforce_below_cost_line"
       }
     ],
     "quotes": [
+      {
+        "target": "activity_feed",
+        "via": "release_holds_on_quote_status_change"
+      },
       {
         "target": "inventory_holds",
         "via": "release_holds_on_quote_status_change"
@@ -256,7 +431,31 @@
     ],
     "receiving_records": [
       {
+        "target": "activity_feed",
+        "via": "trg_inventory_significant_change"
+      },
+      {
+        "target": "activity_feed",
+        "via": "trg_po_status_change"
+      },
+      {
+        "target": "idempotency_keys",
+        "via": "_invalidate_deleted_purchase_order_retry_state"
+      },
+      {
         "target": "inventory",
+        "via": "_receiving_records_before_delete"
+      },
+      {
+        "target": "inventory",
+        "via": "trg_po_items_recompute_on_order"
+      },
+      {
+        "target": "inventory",
+        "via": "trg_po_status_recompute_on_order"
+      },
+      {
+        "target": "inventory_transactions",
         "via": "_receiving_records_before_delete"
       },
       {
@@ -266,6 +465,26 @@
       {
         "target": "purchase_orders",
         "via": "_receiving_records_before_delete"
+      }
+    ],
+    "team_note_comments": [
+      {
+        "target": "note_activity_log",
+        "via": "log_comment_activity"
+      },
+      {
+        "target": "notifications",
+        "via": "notify_mentioned_users_in_comment"
+      }
+    ],
+    "team_notes": [
+      {
+        "target": "note_activity_log",
+        "via": "log_note_activity"
+      },
+      {
+        "target": "notifications",
+        "via": "notify_team_note_assignment"
       }
     ]
   }

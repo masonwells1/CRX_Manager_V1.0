@@ -2,6 +2,20 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-14 — PR #364 evidence provenance and fail-closed follow-up
+
+Five adversarial findings in the migration authorization guards are repaired. The applied
+migration snapshot and trigger fan-out manifest now query the verified linked CRX Supabase
+project themselves instead of trusting pasted JSON with a caller-supplied project label. The
+trigger capture follows helper routines and trigger-to-trigger cascades transitively, while
+dynamic, unresolved, or unsupported-language behavior is opaque. Material-column coverage now includes compound money names such as
+`total_margin_pct`, `price_per_unit`, and `net_margin`. Finally, a registered one-shot repair
+with a missing or unreadable canonical source file blocks every apply instead of silently
+disabling the body-identity check; readable but empty/corrupted canonical SQL is refused too.
+The ledger producer preserves the authoritative ledger version even when its submitted name
+carries another timestamp, and worktree invocations write to the primary linked checkout read by
+the hook. The live catalog was read only; no migration or business row was changed.
+
 ## 2026-08-13 — PR #364 Windows compatibility with the governed maintenance producer
 
 After merging current `main`, the newly landed one-use maintenance producer

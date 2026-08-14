@@ -161,17 +161,15 @@ function armAutopilot(stateDir, hoursFromNow) {
     let r = runHook(call(BENIGN_SQL), tmp);
     ok(isDeny(r), "no applied-migration snapshot → apply denied");
     ok(r.stdout.includes("MIGRATION ORDERING GUARD"), "missing-snapshot deny names the ordering guard");
-    // The recapture instructions must name the project THIS apply targets.
-    // Reading it from the environment printed a literal placeholder in every
-    // normal hook run, and a stray env value could aim the operator at another
-    // project's ledger. (Codex P2, PR #354.)
+    // The recapture path must be the linked, self-verifying producer. Pasted
+    // MCP output plus a caller-supplied --project assertion is not provenance.
     ok(
-      r.stdout.includes("execute_sql on x"),
-      "recapture instructions name the apply's own project_id",
+      r.stdout.includes("node scripts/refresh-applied-migrations.mjs"),
+      "recapture instructions name the linked producer",
     );
     ok(
-      !r.stdout.includes("<your project ref>"),
-      "recapture instructions never print a placeholder ref",
+      !r.stdout.includes("execute_sql on") && !r.stdout.includes("--project="),
+      "recapture instructions never ask the caller to assert provenance",
     );
 
     writeAppliedSnapshot(stateDir, { ageHours: 48 });
@@ -422,11 +420,12 @@ function armAutopilot(stateDir, hoursFromNow) {
 
     const linkedState = path.join(linked, ".claude", "session-state");
     mkdirSync(linkedState, { recursive: true });
-    writeAppliedSnapshot(linkedState);
     // The ordering snapshot is read from CLAUDE_PROJECT_DIR, which the harness
     // pins to `primary` throughout this fixture even when the session's cwd is
-    // the linked worktree. Seed it there too, or the ordering guard blocks
-    // before the proof-scoping behaviour under test is ever reached.
+    // the linked worktree. The no-argument producer resolves and writes beside
+    // that primary Supabase link, while proof files remain session-worktree
+    // scoped. Seed ordering evidence ONLY there so this test cannot hide a
+    // producer/consumer location mismatch.
     mkdirSync(path.join(primary, ".claude", "session-state"), { recursive: true });
     writeAppliedSnapshot(path.join(primary, ".claude", "session-state"));
     writeOneShotRegistry(primary);
@@ -464,7 +463,6 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(addedNested.status === 0, `nested git worktree add succeeded (status=${addedNested.status}): ${(addedNested.stderr || "").trim()}`);
     const nestedState = path.join(nested, ".claude", "session-state");
     mkdirSync(nestedState, { recursive: true });
-    writeAppliedSnapshot(nestedState);
     writeProof(nestedState, BENIGN_SQL);
     r = runHook(callFrom(nested, BENIGN_SQL), primary);
     ok(!isDeny(r), "a worktree nested inside the primary checkout resolves to itself, not to its parent");
@@ -575,6 +573,9 @@ function armAutopilot(stateDir, hoursFromNow) {
   try {
     writeAppliedSnapshot(stateDir, { applied: ["20990101000000_already_applied"] });
     writeOneShotRegistry(tmp, { [STEM]: REASON });
+    mkdirSync(path.join(tmp, "supabase", "migrations"), { recursive: true });
+    const oneShotPath = path.join(tmp, "supabase", "migrations", `${STEM}.sql`);
+    writeFileSync(oneShotPath, `-- header\n${ONE_SHOT_SQL}\n`);
     // A full, valid, hash-matching review proof, so nothing else can be what
     // stops the apply.
     const proofFor = (name, query) => writeFileSync(
@@ -595,8 +596,32 @@ function armAutopilot(stateDir, hoursFromNow) {
       }, tmp);
     };
 
+    // 0. The registry is only enforceable while its tracked source exists. A
+    // missing source used to mean "no body match", allowing the same repair
+    // under a new name. Invalid evidence now blocks every apply until restored.
+    rmSync(oneShotPath, { force: true });
+    let r = apply("20990601000009_renamed_while_source_missing", ONE_SHOT_SQL);
+    ok(isOneShotDeny(r), "round-33: a registered one-shot with no readable source denies closed");
+    ok(r.stdout.includes("missing from every verified checkout"),
+      "round-33: the missing-source refusal names the evidence defect");
+    writeFileSync(oneShotPath, `-- header\n${ONE_SHOT_SQL}\n`);
+
+    writeFileSync(oneShotPath, '-- comments are not replay identity\n/* empty */\n');
+    r = apply("20990601000010_renamed_while_source_empty", ONE_SHOT_SQL);
+    ok(isOneShotDeny(r), "round-34: a readable but empty registered source denies closed");
+    ok(r.stdout.includes("no executable canonical SQL"),
+      "round-34: the empty-source refusal names the missing replay identity");
+    writeFileSync(oneShotPath, `-- header\n${ONE_SHOT_SQL}\n`);
+
+    writeFileSync(oneShotPath, 'SELECT 1;\n');
+    r = apply("20990601000011_renamed_while_source_corrupt", ONE_SHOT_SQL);
+    ok(isOneShotDeny(r), "round-34: a nonempty read-only registered source denies closed");
+    ok(r.stdout.includes("no analyzable apply-time write identity"),
+      "round-34: the corrupted-source refusal names the missing write identity");
+    writeFileSync(oneShotPath, `-- header\n${ONE_SHOT_SQL}\n`);
+
     // 1. Registered, and the ledger does not have it → refused.
-    let r = apply(STEM, ONE_SHOT_SQL);
+    r = apply(STEM, ONE_SHOT_SQL);
     ok(isDeny(r), "registered one-shot missing from the ledger → apply denied");
     ok(isOneShotDeny(r), "the deny is the one-shot replay guard, not an incidental gate");
     ok(r.stdout.includes(REASON), "the deny quotes why the migration is registered");
@@ -607,8 +632,7 @@ function armAutopilot(stateDir, hoursFromNow) {
 
     // 3. The MCP `name` is caller-controlled, so renaming it must not be an
     //    escape hatch — the SQL body is checked against the registered file.
-    mkdirSync(path.join(tmp, "supabase", "migrations"), { recursive: true });
-    writeFileSync(path.join(tmp, "supabase", "migrations", `${STEM}.sql`), `-- header\n${ONE_SHOT_SQL}\n`);
+    writeFileSync(oneShotPath, `-- header\n${ONE_SHOT_SQL}\n`);
     r = apply("20990601000002_totally_innocent_name", ONE_SHOT_SQL);
     ok(isDeny(r), "the same one-shot body under a different name → apply denied");
     ok(isOneShotDeny(r), "the body match, not the name, is what catches the renamed replay");
@@ -1492,6 +1516,8 @@ function armAutopilot(stateDir, hoursFromNow) {
   try {
     writeAppliedSnapshot(stateDir, { applied: ["20990101000000_already_applied"] });
     writeOneShotRegistry(tmp, { [STEM]: "fixture: population-bound money repair" });
+    mkdirSync(path.join(tmp, "supabase", "migrations"), { recursive: true });
+    writeFileSync(path.join(tmp, "supabase", "migrations", `${STEM}.sql`), SQL);
     writeFileSync(path.join(stateDir, `migration-review-${STEM}.json`), JSON.stringify({
       migration: STEM,
       timestamp: new Date().toISOString(),

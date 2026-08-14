@@ -1,6 +1,12 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-08-12 UTC, post-apply.** Live ledger high-water is `20260812003315` at 962 rows, carrying submitted name `20260811230423_log_customer_sales_rep_assignment`. The Customer 360 assignment RPC is live with atomic customer timestamp/activity logging, one overload, the reviewed security/search-path/grant shape, and no table, column, enum, generated-column, signature, or public-function-name-count change. The schema registry was genuinely refreshed through the same high-water. Ledger versions are UTC and Supabase applies may assign a version different from the submitted filename, so match the recorded name when reconciling an apply. The historical Team Board, money, and commission-payout details below remain separately dated evidence rather than claims that their older high-waters are current.
+**Last verified: 2026-08-14 UTC, read-only ledger and repository recheck.** The verified linked
+production ledger has 970 rows and its final submitted name is
+`20260813070000_pin_return_idempotency_helper_contract` (ledger version `20260813011751`, as
+recorded in migration-history row 879). The six live migration sources listed in the open gap
+below remain absent from `origin/main` and present on recovery branches, so that issue remains
+open. The historical Customer 360, Team Board, money, and commission-payout details below remain
+their separately dated evidence rather than claims that the older high-waters are current.
 
 **Wave A — six parked migration drafts.** This branch carries `20260813010000` through `20260813060000` under `scripts/.staging-migrations/`. They are intentionally absent from `supabase/migrations/`, are not armed for apply, and create no live state. Nothing in this document describes state they created.
 

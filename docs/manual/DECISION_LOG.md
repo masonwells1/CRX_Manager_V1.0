@@ -1,11 +1,35 @@
 # Decision Log
 
-Last verified: 2026-08-10
+Last verified: 2026-08-14
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-08-14 — Guard evidence must establish its own production provenance
+
+**Source:** final adversarial follow-up on PR #364 (five findings).
+
+**Decision.** An evidence producer may not label caller-supplied JSON as production evidence.
+The applied-migration snapshot and trigger fan-out manifest now run fixed read-only queries
+through the linked Supabase CLI, verify the linked project before and after the query, validate
+the CLI envelope, and stamp the database clock returned by that query. Their consumers reject
+missing or mismatched provenance. Trigger fan-out follows public helper routines and
+trigger-to-trigger cascades transitively; dynamic SQL, unresolved calls, unsupported routine
+languages and unreadable SQL-standard bodies make the source table opaque.
+
+The material-money classifier treats compound names such as `total_margin_pct`,
+`price_per_unit` and `net_margin` as material. A registered one-shot repair is also invalid if
+its canonical source file is missing or unreadable in every verified checkout: a filename match
+does not excuse the missing source because the exact source body is the replay identity.
+
+**Operative rule.** Production evidence establishes where it came from by performing the read
+through a verified link. A caller assertion is never provenance, helper indirection never makes
+a trigger write disappear, and missing replay identity blocks rather than silently disabling a
+one-shot guard.
 
 ---
 
@@ -271,8 +295,8 @@ business-row tables and their material before-value columns is derived from
 `.claude/schema-registry.json`, so a new status or money column is protected the moment it exists;
 the derivation fails closed (the validator refuses to run at all on a partial list). Since round 31
 a second manifest, `scripts/trigger-fanout.json`, records which live triggers rewrite a *different*
-table than the one being written — regenerate it with `node scripts/generate-trigger-fanout.mjs
---from-introspection <payload.json>`. Without it an approved repair on `order_items` looked airtight
+table than the one being written — regenerate it with the no-argument linked-production command
+`node scripts/generate-trigger-fanout.mjs`. Without it an approved repair on `order_items` looked airtight
 while `trg_recalc_order_totals` fired underneath and rewrote money on `orders`: rows never captured,
 never hashed, and not counted by the row-count assertion. Cascade targets are now folded into the
 set the repair must bind, and a table the manifest cannot speak for — absent from its scan, or

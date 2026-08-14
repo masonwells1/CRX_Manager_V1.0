@@ -1,6 +1,12 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-08-12 UTC, post-apply Customer 360 release check. The live ledger has 962 rows and ends at `20260812003315`, carrying submitted migration name `20260811230423_log_customer_sales_rep_assignment`. It re-emits the approved Customer 360 assignment RPC to advance `customers.updated_at` and write one customer-scoped activity row in the same atomic transaction. Live catalog proof found one overload, `SECURITY DEFINER`, `search_path=public, pg_temp`, `postgres` ownership, no PUBLIC/anon EXECUTE, and authenticated/service access; the active-admin, target-lock, exact-set, audit-count, and payload-bound replay guards are present in the stored body. The schema registry was genuinely refreshed from all six live introspection queries through this 962-row high-water. No table, column, enum, generated column, function signature, or public-function-name count changed, so generated Supabase types and the 566-name `pg_proc` fixture remain structurally current and only their verification stamp advances. Team Board deployment details below remain current; operational counts below remain the separately dated 2026-07-18 snapshot.
+**Last verified:** 2026-08-14 UTC, read-only ledger and repository recheck. The verified linked
+production ledger has 970 rows and its final submitted name is
+`20260813070000_pin_return_idempotency_helper_contract` (ledger version `20260813011751`, as
+recorded in migration-history row 879). The six Wave A files remain parked under
+`scripts/.staging-migrations/`; no parked migration was treated as applied. The detailed Customer
+360 catalog proof below remains the separately dated 2026-08-12 post-apply evidence, and the
+operational counts remain the separately dated 2026-07-18 snapshot.
 
 **Wave A — six migrations are PARKED DRAFTS (STAGED), NOT APPLIED.** As of PR #393 (2026-08-13) the six Wave A files live at `scripts/.staging-migrations/20260813010000`–`20260813060000` — moved **out** of `supabase/migrations/` so nothing can replay them. Their `20260813` stamps are **no longer forward of live**: a concurrent 2026-08-13 apply carries ledger name stamp `20260813070000`, ahead of the whole parked range, so the Phase 2 governed apply must restamp all six against the then-current high-water before applying (content is what the sha256 pins bind; the stamps are expected to change). They are **not applied**; no statement in this document describes state they created. Each is pinned byte-for-byte by a SQL sha256 in `docs/reference/migration-history.md` rows 872–877. They apply only through the Phase 2 governed apply pipeline with fresh proofs; the older `20260811…` copies on branch `claude/wave-a-money` are superseded.
 

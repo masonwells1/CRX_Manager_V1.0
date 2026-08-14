@@ -67,8 +67,8 @@ try {
   emit(
     `Applied-migration snapshot invalidated (a migration was just applied, so the previous capture is ` +
     `now behind the live ledger). Before the next apply, re-capture it:\n` +
-    `  select version, name from supabase_migrations.schema_migrations order by version;\n` +
-    `  ... | node scripts/refresh-applied-migrations.mjs --project=<the ref you queried>`
+    `  node scripts/refresh-applied-migrations.mjs\n` +
+    `The producer verifies the linked CRX project and queries its ledger directly.`
   );
 } catch {
   process.exit(0);

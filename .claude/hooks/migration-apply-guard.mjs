@@ -134,10 +134,10 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
     CRX_PRODUCTION_REF;
   const howTo =
     `Refresh it first (read-only):\n` +
-    `  1. Via Supabase MCP execute_sql on ${targetRef}:\n` +
-    `       select version, name from supabase_migrations.schema_migrations order by version;\n` +
-    `  2. Pipe that JSON into: node scripts/refresh-applied-migrations.mjs --project=${targetRef}\n` +
-    `The snapshot is gitignored and per-checkout, so a fresh clone or a newer apply elsewhere ` +
+    `  node scripts/refresh-applied-migrations.mjs\n` +
+    `That command verifies the linked checkout is project ${CRX_PRODUCTION_REF}, queries its ` +
+    `migration ledger directly, and refuses mismatched or malformed output. ` +
+    `The snapshot is gitignored in the primary linked checkout, so a fresh clone or a newer apply elsewhere ` +
     `means it must be regenerated. Do NOT hand-write it.`;
 
   let appliedNames = [];
@@ -525,6 +525,46 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
     for (const [stem, reason] of Object.entries(oneShot)) {
       const version = (stem.match(/\d{14}/) || [])[0] || "";
       let matched = "";
+      const sourceFiles = [];
+      for (const root of evidenceRoots) {
+        const filePath = path.join(root, "supabase", "migrations", `${stem}.sql`);
+        if (!existsSync(filePath)) continue;
+        try {
+          const sourceSql = readFileSync(filePath, "utf8");
+          if (!norm(sourceSql)) {
+            out("block",
+              `ONE-SHOT REPLAY GUARD: ${stem} is registered as a population-bound migration, ` +
+              `but its source file at ${filePath} has no executable canonical SQL after comments ` +
+              `are removed. An empty or corrupted source has no replay identity. Refusing the ` +
+              `apply; restore the tracked SQL file and retry.`);
+          }
+          const registered = applyTimeWriteTargets(sourceSql);
+          const resolvedWrite = registered.targets.size > 0;
+          const opaqueWrite = registered.unresolved || registered.dynamicWrites.length > 0 ||
+            registered.unknownCalls?.length > 0;
+          if (!resolvedWrite && !opaqueWrite) {
+            out("block",
+              `ONE-SHOT REPLAY GUARD: ${stem} is registered as a population-bound migration, ` +
+              `but its source file at ${filePath} contains no analyzable apply-time write identity. ` +
+              `A nonempty but corrupted/read-only source cannot identify the registered repair. ` +
+              `Refusing the apply; restore the tracked SQL file and retry.`);
+          }
+          sourceFiles.push({ filePath, sourceSql, registered });
+        } catch (err) {
+          out("block",
+            `ONE-SHOT REPLAY GUARD: ${stem} is registered as a population-bound migration, ` +
+            `but its source file at ${filePath} could not be read (${err?.message || err}). ` +
+            `Without that source, a renamed replay cannot be compared to the registered repair. ` +
+            `Refusing the apply; restore the tracked SQL file and retry.`);
+        }
+      }
+      if (sourceFiles.length === 0) {
+        out("block",
+          `ONE-SHOT REPLAY GUARD: ${stem} is registered as a population-bound migration, but ` +
+          `supabase/migrations/${stem}.sql is missing from every verified checkout. Without that ` +
+          `source, a renamed replay cannot be compared to the registered repair. Refusing the ` +
+          `apply; restore the tracked SQL file and retry.`);
+      }
       // The MCP `name` is caller-controlled, so a name match is a convenience,
       // not the whole test — the body is checked too.
       if (migName && (migName.includes(stem) || (version && migName.includes(version)))) {
@@ -533,11 +573,9 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
         // Same reason the registry is read from every verified checkout: the
         // migration file for a branch-local one-shot exists only in the
         // worktree (Codex High, round 12).
-        for (const root of evidenceRoots) {
+        for (const { filePath, sourceSql, registered } of sourceFiles) {
           try {
-            const filePath = path.join(root, "supabase", "migrations", `${stem}.sql`);
-            if (!existsSync(filePath)) continue;
-            const normFile = norm(readFileSync(filePath, "utf8"));
+            const normFile = norm(sourceSql);
             if (normFile && (normQuery.includes(normFile) || normFile.includes(normQuery))) {
               matched = `the SQL body (it matches ${stem}.sql on disk)`;
               break;
@@ -556,15 +594,16 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
             // Rewording, re-parenthesizing, aliasing, re-casing, or re-commenting
             // the registered repair changes every text comparison and changes
             // nothing here.
-            const registered = applyTimeWriteTargets(readFileSync(filePath, "utf8"));
-
             // A registered one-shot whose own targets cannot be read statically
             // gives this layer nothing to compare against. Rather than pass
             // quietly, treat any apply-time write in the submitted SQL as
             // needing the override. Nothing in the registry does this today, so
             // it costs nothing until someone registers dynamic SQL — at which
             // point a prompt is the correct outcome.
-            if (registered.unresolved && submitted.targets.size) {
+            const submittedHasEffect = submitted.targets.size || submitted.unresolved ||
+              submitted.dynamicWrites.length || submitted.unknownCalls?.length;
+            if ((registered.unresolved || registered.dynamicWrites.length ||
+                 registered.unknownCalls?.length) && submittedHasEffect) {
               matched =
                 `an apply-time write that cannot be cleared against ${stem}.sql, whose own ` +
                 `write target is decided at runtime`;
@@ -623,7 +662,13 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
                 `(${[...regTables].sort().join(", ")})`;
               break;
             }
-          } catch { /* a missing or unreadable file just means no body match */ }
+          } catch (err) {
+            out("block",
+              `ONE-SHOT REPLAY GUARD: ${stem} is registered as a population-bound migration, ` +
+              `but its source file at ${filePath} could not be read or analysed ` +
+              `(${err?.message || err}). Without that source, a renamed replay cannot be compared ` +
+              `to the registered repair. Refusing the apply; restore the tracked SQL file and retry.`);
+          }
         }
       }
       if (!matched) continue;

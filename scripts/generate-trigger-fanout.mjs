@@ -1,197 +1,275 @@
 #!/usr/bin/env node
-// Generate scripts/trigger-fanout.json — the manifest of live triggers that
-// rewrite a DIFFERENT table than the one being written.
+// Generate scripts/trigger-fanout.json from the linked production catalog.
 //
-// WHY THIS FILE EXISTS
-// --------------------
-// The approved-set gate in scripts/validate-sql-migrations.sh proves that a
-// bulk repair rewrote exactly the rows it hashed: capture an id set, hash those
-// rows, compare the hash against the approved digest, write, assert the row
-// count. That proof is airtight for the table named in the UPDATE — and blind
-// to every row a TRIGGER rewrites as a side effect.
-//
-//   UPDATE public.order_items SET total_price = 0 WHERE id = ANY(v_ids);
-//
-// looks fully bound. On the live database `trg_recalc_order_totals` fires and
-// rewrites public.orders. Those order rows were never captured, never hashed,
-// and are not counted by the ROW_COUNT assertion, so an approved repair on a
-// child table silently rewrites money on the parent with no proof at all.
-//
-// The validator is a text scanner; it cannot know the live trigger graph. This
-// manifest is that graph, captured from the live catalog and checked in, so the
-// gate can fold each cascade target into the set of tables the repair must
-// bind.
-//
-// SCOPE: UPDATE / DELETE / MERGE plus INSERT ... ON CONFLICT DO UPDATE. A plain
-// INSERT creates rows that did not exist when the digest was taken, so no
-// before-state digest could have covered them; an UPSERT conflict arm rewrites
-// a pre-existing row and therefore belongs in the graph.
-//
-// HOW TO REGENERATE
-// -----------------
-// Run this query against the live database (read-only), save the single
-// `payload` value to a file, and feed it in:
-//
-//   node scripts/generate-trigger-fanout.mjs --from-introspection payload.json
-//   node scripts/generate-trigger-fanout.mjs --from-introspection -   # stdin
-//
-// The query:
-//
-//   WITH trg AS (
-//     SELECT DISTINCT c.relname AS on_table, p.proname AS fn,
-//            lower(coalesce(p.prosrc, '')) AS src,
-//            (p.prosrc IS NULL OR btrim(p.prosrc) = '') AS opaque
-//     FROM pg_trigger t
-//     JOIN pg_class c ON c.oid = t.tgrelid
-//     JOIN pg_namespace n ON n.oid = c.relnamespace
-//     JOIN pg_proc p ON p.oid = t.tgfoid
-//     WHERE NOT t.tgisinternal AND n.nspname = 'public'
-//   ), tbl AS (
-//     SELECT tablename FROM pg_tables WHERE schemaname = 'public'
-//   ), edges AS (
-//     SELECT trg.on_table, tbl.tablename AS target, trg.fn AS via
-//     FROM trg JOIN tbl ON tbl.tablename <> trg.on_table
-//       AND (
-//         trg.src ~ ('(^|[^a-z0-9_])(update|delete[[:space:]]+from|merge'
-//                    || '[[:space:]]+into)[[:space:]]+(only[[:space:]]+)?'
-//                    || '(public\.)?' || tbl.tablename || '([^a-z0-9_]|$)')
-//         OR trg.src ~ ('(^|[^a-z0-9_])insert[[:space:]]+into[[:space:]]+'
-//                    || '(public\.)?' || tbl.tablename
-//                    || '[^;]*on[[:space:]]+conflict[^;]*do[[:space:]]+update'
-//                    || '[[:space:]]+set[[:space:]]+')
-//       )
-//   )
-//   SELECT jsonb_pretty(jsonb_build_object(
-//     'tables_scanned',   (SELECT jsonb_agg(tablename ORDER BY tablename) FROM tbl),
-//     'opaque_on_tables', (SELECT coalesce(jsonb_agg(DISTINCT on_table), '[]'::jsonb)
-//                            FROM trg WHERE opaque),
-//     'edges',            (SELECT coalesce(jsonb_agg(jsonb_build_object(
-//                            'on_table', on_table, 'target', target, 'via', via)
-//                            ORDER BY on_table, target, via), '[]'::jsonb) FROM edges)
-//   )) AS payload;
-//
-// `opaque_on_tables` is the fail-closed escape hatch. A trigger function
-// compiled with BEGIN ATOMIC stores a parsed body, not source text, so prosrc
-// comes back blank and the text scan above cannot see what it writes. Any table
-// carrying such a trigger is listed there, and the validator refuses to accept
-// an approved-set proof that touches it rather than assuming it is clean. The
-// live database has none today; the field exists so that the day one appears,
-// the gate tightens instead of quietly going blind.
-import { readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+// The approved-set migration guard must include rows rewritten by triggers.
+// This producer verifies the linked Supabase project and captures trigger plus
+// routine bodies itself; it accepts no pasted payload or caller-supplied project
+// label. Helper calls are followed transitively. Dynamic SQL, unresolved calls,
+// unreadable bodies, or writes outside the scanned public tables make the source
+// table opaque so the validator refuses it instead of assuming no fan-out.
+
+import { writeFileSync } from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { applyTimeCode, applyTimeWriteTargets } from '../.claude/hooks/apply-time-dml-lib.mjs';
+import {
+  CRX_SUPABASE_PROJECT_ID,
+  runLinkedRead,
+} from './supabase-linked-read.mjs';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const OUT = join(HERE, 'trigger-fanout.json');
-const SOURCE_PROJECT = 'rhyzpcqhnizqbxphqdkr';
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const OUT = path.join(HERE, 'trigger-fanout.json');
+export const TRIGGER_FANOUT_FORMAT = 2;
 
-const die = (msg) => {
-  process.stderr.write(`generate-trigger-fanout: ${msg}\n`);
-  process.exit(1);
-};
+export const TRIGGER_FANOUT_SQL = `
+WITH tables AS (
+  SELECT tablename
+  FROM pg_tables
+  WHERE schemaname = 'public'
+  ORDER BY tablename
+), routines AS (
+  SELECT
+    p.oid::text AS oid,
+    p.proname AS name,
+    l.lanname AS language,
+    COALESCE(p.prosrc, '') AS source,
+    (p.prosqlbody IS NOT NULL) AS has_sql_body
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  JOIN pg_language l ON l.oid = p.prolang
+  WHERE n.nspname = 'public' AND p.prokind IN ('f', 'p')
+  ORDER BY p.oid
+), triggers AS (
+  SELECT DISTINCT
+    c.relname AS on_table,
+    p.oid::text AS routine_oid,
+    p.proname AS routine_name
+  FROM pg_trigger t
+  JOIN pg_class c ON c.oid = t.tgrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_proc p ON p.oid = t.tgfoid
+  WHERE NOT t.tgisinternal AND n.nspname = 'public'
+  ORDER BY on_table, routine_name, routine_oid
+)
+SELECT jsonb_build_object(
+  'captured_at', to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+  'tables_scanned', COALESCE((SELECT jsonb_agg(tablename) FROM tables), '[]'::jsonb),
+  'routines', COALESCE((SELECT jsonb_agg(to_jsonb(routines)) FROM routines), '[]'::jsonb),
+  'triggers', COALESCE((SELECT jsonb_agg(to_jsonb(triggers)) FROM triggers), '[]'::jsonb)
+) AS trigger_fanout_capture;
+`.trim();
 
-const argv = process.argv.slice(2);
-const flag = argv.indexOf('--from-introspection');
-if (flag === -1 || !argv[flag + 1]) {
-  die('usage: generate-trigger-fanout.mjs --from-introspection <file.json | ->');
+function fail(message) {
+  throw new Error(`generate-trigger-fanout: ${message}`);
 }
-const src = argv[flag + 1];
-const stampArg = argv.indexOf('--generated-at');
-const generatedAt = stampArg === -1 ? null : argv[stampArg + 1];
-if (stampArg !== -1 && !generatedAt) die('--generated-at needs a value');
 
-let raw;
-try {
-  raw = readFileSync(src === '-' ? 0 : src, 'utf8');
-} catch (err) {
-  die(`cannot read ${src}: ${err.message}`);
+function bareName(value, label) {
+  if (typeof value !== 'string' || !/^[a-z0-9_]+$/.test(value)) {
+    fail(`${label} is not a bare lower-case identifier: ${JSON.stringify(value)}`);
+  }
+  return value;
 }
 
-let payload;
-try {
-  payload = JSON.parse(raw);
-} catch (err) {
-  die(`introspection payload is not JSON: ${err.message}`);
+function uniqueNames(value, label) {
+  if (!Array.isArray(value)) fail(`${label} must be an array`);
+  return [...new Set(value.map((name) => bareName(name, label)))].sort();
 }
-// jsonb_pretty returns the object as a string when it arrives through a JSON
-// transport, so one extra unwrap keeps a copy-pasted result usable as-is.
-if (typeof payload === 'string') {
+
+function routineDefinition(routine, index) {
+  let tag = `$crx_fanout_${index}$`;
+  while (routine.source.includes(tag)) tag = `$crx_fanout_${index}_x$`;
+  return `CREATE FUNCTION public.${routine.name}() RETURNS void LANGUAGE plpgsql AS ${tag}\n${routine.source}\n${tag};`;
+}
+
+export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PROJECT_ID) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    fail('linked query returned an invalid trigger_fanout_capture envelope');
+  }
+  const expectedKeys = ['captured_at', 'routines', 'tables_scanned', 'triggers'];
+  if (JSON.stringify(Object.keys(payload).sort()) !== JSON.stringify(expectedKeys)) {
+    fail('linked query returned an unexpected trigger_fanout_capture shape');
+  }
+  if (typeof payload.captured_at !== 'string' ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(payload.captured_at) ||
+      !Number.isFinite(Date.parse(payload.captured_at))) {
+    fail('linked query returned an invalid database capture timestamp');
+  }
+
+  const tablesScanned = uniqueNames(payload.tables_scanned, 'tables_scanned');
+  if (tablesScanned.length < 100) {
+    fail(`tables_scanned holds only ${tablesScanned.length} tables; the capture looks truncated`);
+  }
+  const tableSet = new Set(tablesScanned);
+  if (!Array.isArray(payload.routines) || !Array.isArray(payload.triggers)) {
+    fail('routines and triggers must be arrays');
+  }
+
+  const routines = payload.routines.map((routine) => {
+    if (!routine || typeof routine !== 'object' || Array.isArray(routine)) fail('routine is invalid');
+    const keys = Object.keys(routine).sort();
+    if (JSON.stringify(keys) !== JSON.stringify(['has_sql_body', 'language', 'name', 'oid', 'source'])) {
+      fail('routine has an unexpected shape');
+    }
+    if (typeof routine.oid !== 'string' || !/^\d+$/.test(routine.oid)) fail('routine oid is invalid');
+    if (typeof routine.language !== 'string' || !/^[a-z0-9_]+$/.test(routine.language)) {
+      fail('routine language is invalid');
+    }
+    if (typeof routine.source !== 'string' || typeof routine.has_sql_body !== 'boolean') {
+      fail('routine body metadata is invalid');
+    }
+    return { ...routine, name: bareName(routine.name, 'routine name') };
+  });
+  const routineByOid = new Map(routines.map((routine) => [routine.oid, routine]));
+  const opaqueRoutineNames = new Set(
+    routines
+      .filter((routine) =>
+        routine.has_sql_body || !routine.source.trim() ||
+        !new Set(['plpgsql', 'sql']).has(routine.language))
+      .map((routine) => routine.name),
+  );
+  const nonPublicEffectCallNames = new Set(
+    routines
+      .filter((routine) => {
+        const code = applyTimeCode(`DO $crx_scan$ ${routine.source} $crx_scan$;`).code.toLowerCase();
+        return /\b(?:perform|call)\s+(?!public\.)[a-z_][a-z0-9_$]*\s*\./.test(code);
+      })
+      .map((routine) => routine.name),
+  );
+  const definitions = routines.map(routineDefinition).join('\n');
+
+  const triggers = payload.triggers.map((trigger) => {
+    if (!trigger || typeof trigger !== 'object' || Array.isArray(trigger)) fail('trigger is invalid');
+    const keys = Object.keys(trigger).sort();
+    if (JSON.stringify(keys) !== JSON.stringify(['on_table', 'routine_name', 'routine_oid'])) {
+      fail('trigger has an unexpected shape');
+    }
+    const onTable = bareName(trigger.on_table, 'trigger table');
+    const routineName = bareName(trigger.routine_name, 'trigger routine');
+    if (!tableSet.has(onTable)) fail(`trigger table ${onTable} is not in tables_scanned`);
+    if (typeof trigger.routine_oid !== 'string' || !routineByOid.has(trigger.routine_oid)) {
+      fail(`trigger routine ${routineName} is absent from the captured routine catalog`);
+    }
+    if (routineByOid.get(trigger.routine_oid).name !== routineName) {
+      fail(`trigger routine oid/name mismatch for ${routineName}`);
+    }
+    return { onTable, routineName };
+  });
+
+  const directFanout = {};
+  const directlyOpaque = new Set();
+  for (const trigger of triggers) {
+    const invokeTag = '$crx_fanout_run$';
+    const analysed = applyTimeWriteTargets(
+      `${definitions}\nDO ${invokeTag} BEGIN PERFORM public.${trigger.routineName}(); END ${invokeTag};`,
+    );
+    const unknownTables = [...analysed.tables].filter((table) => !tableSet.has(table));
+    const invokedOpaque = analysed.invokedRoutines.some((name) => opaqueRoutineNames.has(name));
+    const invokedNonPublic = analysed.invokedRoutines.some((name) => nonPublicEffectCallNames.has(name));
+    if (analysed.unresolved || analysed.unknownCalls.length || unknownTables.length ||
+        invokedOpaque || invokedNonPublic) {
+      directlyOpaque.add(trigger.onTable);
+    }
+    for (const target of [...analysed.tables].sort()) {
+      if (target === trigger.onTable || !tableSet.has(target)) continue;
+      (directFanout[trigger.onTable] ??= []).push({ target, via: trigger.routineName });
+    }
+  }
+
+  // A trigger write can fire another captured trigger. Close over the table
+  // graph so A -> B -> C is represented as both A -> B and A -> C. Opacity
+  // propagates the same way: if any reached table has an unreadable/dynamic
+  // trigger, the original source is not safe to approve by a finite edge list.
+  const fanout = {};
+  const opaque = new Set(directlyOpaque);
+  const sourceTables = new Set([
+    ...Object.keys(directFanout),
+    ...directlyOpaque,
+  ]);
+  for (const source of sourceTables) {
+    const edges = [];
+    const queued = [...(directFanout[source] || [])];
+    const expandedTables = new Set();
+    for (let index = 0; index < queued.length; index += 1) {
+      const edge = queued[index];
+      edges.push(edge);
+      if (expandedTables.has(edge.target)) continue;
+      expandedTables.add(edge.target);
+      if (directlyOpaque.has(edge.target)) opaque.add(source);
+      for (const downstream of directFanout[edge.target] || []) queued.push(downstream);
+    }
+    if (edges.length) fanout[source] = edges;
+  }
+
+  const sorted = {};
+  for (const source of Object.keys(fanout).sort()) {
+    const seen = new Set();
+    sorted[source] = fanout[source]
+      .filter((edge) => {
+        const key = `${edge.target}\t${edge.via}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort((a, b) => a.target.localeCompare(b.target) || a.via.localeCompare(b.via));
+  }
+
+  return {
+    _meta: {
+      format_version: TRIGGER_FANOUT_FORMAT,
+      captured_at: payload.captured_at,
+      generator: 'scripts/generate-trigger-fanout.mjs',
+      capture_method: 'supabase-cli-db-query-linked',
+      source_project: projectId,
+      scope:
+        'Transitive UPDATE/DELETE/MERGE and UPSERT-conflict writes; unresolved calls or dynamic targets are opaque.',
+      regenerate: 'node scripts/generate-trigger-fanout.mjs',
+    },
+    tables_scanned: tablesScanned,
+    opaque_on_tables: [...opaque].sort(),
+    fanout: sorted,
+  };
+}
+
+export function captureTriggerFanout({
+  projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd(),
+  linkedRoot,
+  run,
+  outPath = OUT,
+} = {}) {
+  const capture = runLinkedRead({
+    projectRoot: projectDir,
+    linkedRoot,
+    sql: TRIGGER_FANOUT_SQL,
+    ...(run ? { run } : {}),
+  });
+  if (capture.rows.length !== 1) fail('linked query did not return exactly one row');
+  const row = capture.rows[0];
+  if (!row || typeof row !== 'object' || Array.isArray(row) ||
+      JSON.stringify(Object.keys(row)) !== JSON.stringify(['trigger_fanout_capture'])) {
+    fail('linked query returned an unexpected row shape');
+  }
+  const manifest = buildTriggerFanoutManifest(row.trigger_fanout_capture, capture.projectId);
+  writeFileSync(outPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  return { manifest, outPath };
+}
+
+function main() {
+  if (process.argv.slice(2).length) {
+    fail('usage: node scripts/generate-trigger-fanout.mjs (no arguments or stdin)');
+  }
+  const { manifest, outPath } = captureTriggerFanout();
+  const edgeCount = Object.values(manifest.fanout).reduce((count, rows) => count + rows.length, 0);
+  process.stdout.write(
+    `generate-trigger-fanout: wrote ${outPath}\n  ${manifest.tables_scanned.length} tables, ` +
+    `${edgeCount} cascade edges, ${manifest.opaque_on_tables.length} opaque source tables\n`,
+  );
+}
+
+if (process.argv[1] && path.resolve(fileURLToPath(import.meta.url)) === path.resolve(process.argv[1])) {
   try {
-    payload = JSON.parse(payload);
-  } catch (err) {
-    die(`introspection payload is a string that is not JSON: ${err.message}`);
+    main();
+  } catch (error) {
+    process.stderr.write(`${error?.message || error}\n`);
+    process.exitCode = 1;
   }
 }
-
-const names = (v, what) => {
-  if (!Array.isArray(v)) die(`${what} must be an array`);
-  for (const n of v) {
-    if (typeof n !== 'string' || !/^[a-z0-9_]+$/.test(n)) {
-      die(`${what} contains a name that is not a bare identifier: ${JSON.stringify(n)}`);
-    }
-  }
-  return [...new Set(v)].sort();
-};
-
-const tablesScanned = names(payload.tables_scanned, 'tables_scanned');
-// The manifest drives a fail-closed staleness check: the validator refuses
-// every approved-set proof when a protected table is missing from this list.
-// A truncated scan would therefore wedge the gate, so catch it here instead.
-if (tablesScanned.length < 100) {
-  die(`tables_scanned holds only ${tablesScanned.length} tables — the scan looks truncated`);
-}
-const opaqueOnTables = names(payload.opaque_on_tables ?? [], 'opaque_on_tables');
-
-if (!Array.isArray(payload.edges)) die('edges must be an array');
-const fanout = {};
-for (const e of payload.edges) {
-  for (const k of ['on_table', 'target', 'via']) {
-    if (typeof e?.[k] !== 'string' || !/^[a-z0-9_]+$/.test(e[k])) {
-      die(`edge field ${k} is not a bare identifier: ${JSON.stringify(e)}`);
-    }
-  }
-  if (e.on_table === e.target) continue; // self-writes are already bound
-  if (!tablesScanned.includes(e.on_table)) die(`edge source ${e.on_table} is not in tables_scanned`);
-  if (!tablesScanned.includes(e.target)) die(`edge target ${e.target} is not in tables_scanned`);
-  (fanout[e.on_table] ??= []).push({ target: e.target, via: e.via });
-}
-// Deterministic output: regenerating without a schema change must produce a
-// byte-identical file, or every regeneration shows up as noise in review.
-const sorted = {};
-for (const t of Object.keys(fanout).sort()) {
-  const seen = new Set();
-  sorted[t] = fanout[t]
-    .filter((r) => {
-      const k = `${r.target}\t${r.via}`;
-      if (seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    })
-    .sort((a, b) => a.target.localeCompare(b.target) || a.via.localeCompare(b.via));
-}
-
-const manifest = {
-  _meta: {
-    generated_at: generatedAt ?? new Date().toISOString(),
-    generator: 'scripts/generate-trigger-fanout.mjs',
-    source_project: SOURCE_PROJECT,
-    purpose:
-      'Live triggers that rewrite a different table than the one written. The approved-set ' +
-      'gate in scripts/validate-sql-migrations.sh folds each target into the set of tables a ' +
-      'bulk repair must capture, hash and count.',
-    scope:
-      'UPDATE/DELETE/MERGE plus INSERT ... ON CONFLICT DO UPDATE. Plain INSERT is excluded.',
-    regenerate: 'node scripts/generate-trigger-fanout.mjs --from-introspection <payload.json>',
-  },
-  tables_scanned: tablesScanned,
-  opaque_on_tables: opaqueOnTables,
-  fanout: sorted,
-};
-
-writeFileSync(OUT, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-const edgeCount = Object.values(sorted).reduce((n, r) => n + r.length, 0);
-process.stdout.write(
-  `wrote ${OUT}\n  ${tablesScanned.length} tables scanned, ` +
-    `${Object.keys(sorted).length} source tables, ${edgeCount} cascade edges, ` +
-    `${opaqueOnTables.length} unreadable trigger bodies\n`
-);

@@ -230,6 +230,13 @@ TRIGGER_FANOUT_RAW=$(node -e "
 const fs = require('fs');
 const m = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
 const ok = (n) => typeof n === 'string' && /^[a-z0-9_]+\$/.test(n);
+if (!m._meta || m._meta.format_version !== 2 ||
+    m._meta.generator !== 'scripts/generate-trigger-fanout.mjs' ||
+    m._meta.capture_method !== 'supabase-cli-db-query-linked' ||
+    m._meta.source_project !== 'rhyzpcqhnizqbxphqdkr' ||
+    typeof m._meta.captured_at !== 'string' || !Number.isFinite(Date.parse(m._meta.captured_at))) {
+  throw new Error('trigger fan-out manifest has no verified linked-production provenance');
+}
 const scanned = (m.tables_scanned || []).filter(ok);
 if (scanned.length < 100) {
   throw new Error('trigger fan-out manifest scanned only ' + scanned.length + ' tables');
@@ -275,7 +282,11 @@ const fs = require('fs');
 const reg = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
 const cols = reg.columns || {};
 const LIFECYCLE_AT = /^[a-z0-9_]*(deleted|voided|paid|posted|invoiced|delivered|completed|cancelled|canceled|approved|finalized|refunded|closed|applied|archived|shipped|received|fulfilled|reconciled|settled|locked|signed)_at\$/;
-const MONEY = /(^|_)(cents|price|cost|profit|amount|balance|total|subtotal|rate)\$/;
+// Money concepts can occur inside compound names, not only at the end:
+// total_margin_pct, price_per_unit and net_margin are authoritative values too.
+// Match complete underscore-delimited tokens so pricing_status does not turn
+// into a false price hit.
+const MONEY = /(^|_)(cents|price|cost|profit|amount|balance|total|subtotal|rate|margin)(_|\$)/;
 // Quantity matches anywhere in the name, not only at the end: the inventory
 // columns are quantity_on_hand / quantity_available, and a stock level is as
 // material to a deletion as a dollar figure is.
