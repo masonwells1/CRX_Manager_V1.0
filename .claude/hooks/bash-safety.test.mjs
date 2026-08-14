@@ -97,6 +97,10 @@ const focusedProducerHarness = "node scripts/apply-live-testdata-maintenance-202
 ok(!maintenanceProducerCommandMentioned(focusedProducerHarness), "focused producer test harness is not classified as the protected producer");
 eq(checkMaintenanceProducerInvocation(focusedProducerHarness), null, "focused producer test harness stays allowed by the shell guard");
 ok(!checkDangerousCommand(focusedProducerHarness), "focused producer test harness stays runnable");
+const nodeMentionAsData = "Select-String -Pattern 'node' | ForEach-Object { $_ }";
+ok(!maintenanceProducerCommandMentioned(nodeMentionAsData), "Node mentioned as text is not classified as an invocation");
+eq(checkMaintenanceProducerInvocation(nodeMentionAsData), null, "Node text search stays outside the producer gate");
+ok(!checkDangerousCommand(nodeMentionAsData), "ordinary PowerShell Node text search stays allowed");
 ok(!checkDangerousCommand("echo $PATH"), "ordinary environment-variable display stays allowed");
 ok(!checkDangerousCommand("Get-ChildItem *.mjs"), "ordinary non-Node file glob stays allowed");
 ok(checkDangerousCommand("node --require ./preload.cjs scripts/ordinary-check.mjs"), "Node require preload is denied");

@@ -121,6 +121,11 @@ assert.equal(
   false,
   "focused producer test harness is not classified as the protected producer",
 );
+assert.equal(
+  maintenanceProducerCommandMentioned("Select-String -Pattern 'node' | ForEach-Object { $_ }"),
+  false,
+  "Node mentioned as PowerShell data is not classified as an invocation",
+);
 for (const command of [
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12",

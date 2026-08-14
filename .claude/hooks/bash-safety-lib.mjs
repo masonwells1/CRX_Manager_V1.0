@@ -23,7 +23,8 @@ const MAINTENANCE_PRODUCER_ALLOWED_COMMANDS = new Set([
 
 export function maintenanceProducerCommandMentioned(command) {
   const value = String(command || "");
-  if (/\bnode(?:\.exe)?\b/i.test(value) && /[*?\[\]{}$`]|[<>]\(|\([^()\r\n]*\+[^()\r\n]*\)|![^!\r\n]+!|%[^%\r\n]+%/.test(value)) return true;
+  const nodeInvocation = /(?:^|[|;&]\s*|^\s*(?:[A-Za-z_]\w*=\S+\s+)+|\benv(?:\.exe)?(?:\s+[A-Za-z_]\w*=\S+)*\s+|\bcmd(?:\.exe)?(?:\s+\/[A-Za-z:]+)*\s+)(?:"[^"]*[\\/]node(?:\.exe)?"|'[^']*[\\/]node(?:\.exe)?'|(?:\S*[\\/])?node(?:\.exe)?)(?=\s|$)/i.test(value);
+  if (nodeInvocation && /[*?\[\]{}$`]|[<>]\(|\([^()\r\n]*\+[^()\r\n]*\)|![^!\r\n]+!|%[^%\r\n]+%/.test(value)) return true;
   const nodeScript = /\bnode(?:\.exe)?\s+(?:"([^"]*)"|'([^']*)'|([^\s;&|]+))/i.exec(value);
   const scriptPath = nodeScript?.[1] || nodeScript?.[2] || nodeScript?.[3] || "";
   if (/[*?\[\]]|\$\(|\$\{/.test(scriptPath)) return true;

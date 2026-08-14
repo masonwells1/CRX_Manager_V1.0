@@ -22,7 +22,7 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
   `7bca8dce4fe2f58afabdbd09d1b31ecef61ce520`, matched all three snippet SHA-256 values, and passed a
   Node module syntax check without changing the repository target.
 - `node scripts/apply-live-testdata-maintenance-20260812.test.mjs` executed 87 classifier assertions
-  against the generated module plus 52 counted producer assertions, including cross-platform line-ending
+  against the generated module plus 53 counted producer assertions, including cross-platform line-ending
   normalization and all classifier defect classes found through the latest automated and Sol reviews.
 - The focused producer harness also passes after the exact pinned protections are installed, and the standard
   production-guard suite executes it while separately proving that an invocation without exact-head proof is denied.
@@ -31,7 +31,7 @@ passes the protected PR pipeline, and lands before the classifier repair is acti
   spellings, unknown arguments, npm indirection, and the original pre-bootstrap rewrite reproduction are denied.
 - The write mode refused the dirty build worktree even with Mason's dated token.
 - Current recovery proof passed ESLint, TypeScript typecheck, production build, all agent-workflow tests,
-  agent health, the focused producer harness (87 classifier and 52 producer assertions), the 139-case
+  agent health, the focused producer harness (87 classifier and 53 producer assertions), the 142-case
   shell-safety suite, the owning production-action-guard suite, and `git diff --check`.
 - Historical snapshot as of August 12, 2026 (America/Chicago): `check-doc-drift.mjs` reported only
   the pre-existing `origin/main` mismatch between two live manual docs stamped 2026-08-12 and two

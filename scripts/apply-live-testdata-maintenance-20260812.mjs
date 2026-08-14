@@ -40,13 +40,14 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "6ee6bda779d82c03d1d63b8d97c096ecf72404aa",
+  codexGuard: "21fa7631ea92ff1fb23e1da3a310cd6d15a759f3",
   pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
 };
 
 export function maintenanceProducerCommandMentioned(command) {
   const value = String(command || "");
-  if (/\bnode(?:\.exe)?\b/i.test(value) && /[*?\[\]{}$`]|[<>]\(|\([^()\r\n]*\+[^()\r\n]*\)|![^!\r\n]+!|%[^%\r\n]+%/.test(value)) return true;
+  const nodeInvocation = /(?:^|[|;&]\s*|^\s*(?:[A-Za-z_]\w*=\S+\s+)+|\benv(?:\.exe)?(?:\s+[A-Za-z_]\w*=\S+)*\s+|\bcmd(?:\.exe)?(?:\s+\/[A-Za-z:]+)*\s+)(?:"[^"]*[\\/]node(?:\.exe)?"|'[^']*[\\/]node(?:\.exe)?'|(?:\S*[\\/])?node(?:\.exe)?)(?=\s|$)/i.test(value);
+  if (nodeInvocation && /[*?\[\]{}$`]|[<>]\(|\([^()\r\n]*\+[^()\r\n]*\)|![^!\r\n]+!|%[^%\r\n]+%/.test(value)) return true;
   const nodeScript = /\bnode(?:\.exe)?\s+(?:"([^"]*)"|'([^']*)'|([^\s;&|]+))/i.exec(value);
   const scriptPath = nodeScript?.[1] || nodeScript?.[2] || nodeScript?.[3] || "";
   if (/[*?\[\]]|\$\(|\$\{/.test(scriptPath)) return true;
