@@ -24,7 +24,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const RECOVERY_ATTESTATION_SCHEMA_VERSION = 2;
 export const RECOVERY_ATTESTATION_KIND = "live-ledger-migration-recovery";
@@ -560,12 +560,13 @@ export function assertNoModulePreload({ execArgv = process.execArgv, env = proce
   }
 }
 
-// The one trusted transport to the live ledger. Deliberately accepts NO
-// injectable fetch implementation, token, or clock: it always uses this
-// process's own globalThis.fetch and SUPABASE_ACCESS_TOKEN, so a local script
-// cannot hand it a fake transport, and it refuses to run at all in a process
-// launched with module preloads that could have replaced that global fetch.
-async function fetchLedgerRows(names) {
+// In-process query implementation, run ONLY inside the fresh trusted
+// subprocess below (and exercised directly by unit tests of the transport
+// mechanics). It accepts no injectable fetch, token, or clock — it uses the
+// process's own globalThis.fetch and SUPABASE_ACCESS_TOKEN — but a same-
+// process caller could still have patched those globals before importing this
+// module, which is exactly why the trusted paths never call this directly.
+export async function executeLedgerQueryInProcess(names) {
   assertNoModulePreload();
   if (!process.env.SUPABASE_ACCESS_TOKEN) {
     throw new Error("SUPABASE_ACCESS_TOKEN is required to query the live ledger.");
@@ -603,9 +604,69 @@ async function fetchLedgerRows(names) {
   return rows;
 }
 
-// The trusted capture channel: this process performs the fixed read-only
-// production query itself and builds the evidence exclusively from the live
-// response, so it cannot be invoked with caller-fabricated rows.
+// Captured at module load so a same-process caller cannot later repoint them.
+const TRUSTED_ENTRY_PATH = fileURLToPath(import.meta.url);
+const TRUSTED_NODE_PATH = process.execPath;
+export const RECOVERY_LEDGER_SUBPROCESS_FLAG = "--ledger-query-subprocess";
+// Only what a fresh Node process needs to make one HTTPS request. Everything
+// else — NODE_OPTIONS and any other preload/override channel — is dropped.
+const SUBPROCESS_ENV_ALLOWLIST = [
+  "SUPABASE_ACCESS_TOKEN",
+  "SYSTEMROOT",
+  "SystemRoot",
+  "WINDIR",
+  "windir",
+  "TEMP",
+  "TMP",
+  "HOME",
+  "USERPROFILE",
+];
+
+// The one trusted transport to the live ledger (Sol adversarial finding,
+// round 3): the query runs in a FRESH direct-entry Node subprocess with a
+// sanitized environment. An in-process attacker who imports this module
+// normally — no preload flags needed — can replace globalThis.fetch in their
+// own process, but that patched global never reaches the child: the child is
+// this script itself, started clean, using its own pristine fetch. The node
+// binary and script path are module-load constants, and the child re-runs the
+// preload refusal on its own arguments as defense in depth.
+async function fetchLedgerRows(names) {
+  assertNoModulePreload();
+  if (!process.env.SUPABASE_ACCESS_TOKEN) {
+    throw new Error("SUPABASE_ACCESS_TOKEN is required to query the live ledger.");
+  }
+  buildLedgerEvidenceQuery(names); // validate the slugs before handing them to the child
+  const env = {};
+  for (const key of SUBPROCESS_ENV_ALLOWLIST) {
+    if (process.env[key] !== undefined) env[key] = process.env[key];
+  }
+  let stdout;
+  try {
+    stdout = execFileSync(TRUSTED_NODE_PATH, [TRUSTED_ENTRY_PATH, RECOVERY_LEDGER_SUBPROCESS_FLAG, ...names], {
+      env,
+      encoding: "utf8",
+      timeout: RECOVERY_LEDGER_QUERY_TIMEOUT_MS + 15_000,
+      windowsHide: true,
+      maxBuffer: 16 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    const detail = String(error?.stderr || error?.message || "").trim().split("\n").pop() || "unknown error";
+    throw new Error(`Live ledger query subprocess failed: ${detail}`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    throw new Error("Live ledger query subprocess returned unparseable output.");
+  }
+  if (!Array.isArray(parsed)) throw new Error("Live ledger query returned an unexpected response shape.");
+  return parsed;
+}
+
+// The trusted capture channel: the fixed read-only production query runs in
+// the fresh trusted subprocess and the evidence is built exclusively from the
+// live response, so it cannot be invoked with caller-fabricated rows.
 export async function captureRecoveryLedgerEvidence({ root = process.cwd(), names } = {}) {
   const rows = await fetchLedgerRows(names);
   const text = buildLedgerEvidenceText({ names, rows, fetchedAt: new Date().toISOString() });
@@ -722,6 +783,16 @@ function usage() {
 
 export async function run(argv = process.argv.slice(2)) {
   try {
+    if (argv[0] === RECOVERY_LEDGER_SUBPROCESS_FLAG) {
+      // Direct-entry only: this mode exists solely for the trusted fresh
+      // subprocess above and refuses to run from an importing caller.
+      if (!isMainModule()) {
+        throw new Error("The ledger-query subprocess mode only runs as a direct script entry.");
+      }
+      const rows = await executeLedgerQueryInProcess(argv.slice(1));
+      process.stdout.write(JSON.stringify(rows));
+      return 0;
+    }
     const options = parseRecoveryArgs(argv);
     if (options.help) {
       process.stdout.write(`${usage()}\n`);

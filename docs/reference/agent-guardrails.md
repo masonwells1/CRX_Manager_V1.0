@@ -174,7 +174,16 @@ Follow-up hardening on the same transport: every live-ledger query refuses to ru
 process launched with module preloads (`--require`/`--import`/`--loader`, directly or via
 `NODE_OPTIONS`), because a preloaded module could replace the process's own `fetch` before this code
 loads; and the query aborts at a fixed 30-second deadline so a stalled connection fails closed
-instead of blocking the proof workflow. A stale or superseded attestation is discarded only through
+instead of blocking the proof workflow. Sol's next adversarial round showed the preload refusal
+alone was not enough: an ordinary ignored launcher script can `import` the module normally (no
+preload flags anywhere), replace `globalThis.fetch` in-process, and call the exported entry points.
+The live query therefore no longer runs in the caller's process at all — it runs in a fresh,
+direct-entry-only Node child process (node path and script path frozen at module load, environment
+reduced to a small allowlist that excludes `NODE_OPTIONS` by construction) whose pristine globals an
+in-process attacker cannot patch. The child refuses to run unless it is the script's own entrypoint
+and re-runs the preload refusal itself; the parent parses only the child's JSON stdout. A launcher
+regression test performs the exact attack — patching `globalThis.fetch` before importing the module
+— and confirms evidence capture fails closed with no evidence file written. A stale or superseded attestation is discarded only through
 the helper's own `node scripts/write-recovery-attestation.mjs --clear-attestation` (the guards deny
 direct tool deletion of both session-state files), and the helper itself is a pre-commit
 ledger-guard trigger: it cannot change without a CHANGELOG/manual record in the same commit.

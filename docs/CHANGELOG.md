@@ -2,6 +2,22 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-14 — Live-ledger query moved into a fresh trusted subprocess (Sol adversarial review round 5, PR #403)
+
+Sol's fifth adversarial pass found that the preload refusal below closes preload *flags* but not
+in-process substitution: an ordinary ignored launcher script can `import` the attestation module
+normally, replace `globalThis.fetch` before calling the exported entry points, and thereby forge the
+"independent" live re-query without any preload flag appearing anywhere. Fixed by moving the live
+query out of the caller's process entirely: it now runs in a fresh, direct-entry-only Node child
+process whose node path and script path are frozen at module load, whose environment is reduced to a
+small allowlist (excluding `NODE_OPTIONS` by construction), and whose pristine `fetch` an in-process
+attacker cannot patch. The child refuses to run unless it is the script's own entrypoint and re-runs
+the preload refusal itself; the parent accepts only the child's JSON stdout. The 30-second deadline
+and preload refusal carry over unchanged inside the child. Regression tests perform the exact
+attacks: an in-process `fetch` stub is provably never consulted on either the capture or the
+validation-time re-check path, and a real launcher script that patches `globalThis.fetch` before
+importing the module fails evidence capture closed with no evidence file written.
+
 ## 2026-08-14 — Recovery-validation hardening from PR #403 review comments (round 3)
 
 CodeRabbit and the Codex GitHub reviewer raised five follow-ups on the round-2 fix below, all

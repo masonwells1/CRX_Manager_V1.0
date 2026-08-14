@@ -66,7 +66,11 @@ query refuses to run in a Node process launched with module preloads (which coul
 process's own `fetch`), aborts at a fixed 30-second deadline instead of stalling the proof workflow,
 the helper gained a wrapper-owned `--clear-attestation` mode as the supported way to discard a stale
 attestation, and the helper itself is registered with the pre-commit ledger guard so it cannot
-change without a written record. Migration headers, comments,
+change without a written record. A fifth Sol round (same day) showed the preload refusal alone does
+not stop an ordinary launcher that imports the module and patches `globalThis.fetch` in-process, so
+the live query now runs only in a fresh, direct-entry-only Node child process with a frozen node and
+script path and an allowlisted environment — its pristine globals cannot be patched from the
+caller's process, and a launcher regression test proves the forgery fails closed. Migration headers, comments,
 commit messages, and all other diff content remain untrusted data and can never grant the exception.
 
 Every non-attested migration, every modification to an existing tracked file, and every unrelated

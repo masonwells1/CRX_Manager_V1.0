@@ -40,8 +40,11 @@ import {
   buildRecoveryAttestation,
   captureRecoveryLedgerEvidence,
   clearRecoveryAttestation,
+  executeLedgerQueryInProcess,
   mintRecoveryAttestation,
+  RECOVERY_LEDGER_SUBPROCESS_FLAG,
   parseRecoveryArgs,
+  readRecoveryLedgerEvidence,
   run as runRecoveryCli,
   RECOVERY_LEDGER_QUERY_URL,
   recoveryAttestationPath,
@@ -473,10 +476,11 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
     "a live response missing a requested row refuses instead of silently attesting less",
   );
 
-  // The live-query transport deliberately accepts NO injectable fetch
-  // implementation, token, or clock — it always uses this process's own
-  // globalThis.fetch and SUPABASE_ACCESS_TOKEN. Tests therefore stub the
-  // process globals, exactly the surface an external caller cannot hand in.
+  // Transport mechanics are unit-tested against the in-process implementation
+  // that runs INSIDE the fresh trusted subprocess (executeLedgerQueryInProcess);
+  // its fetch/token stubs model the child's own pristine globals. The trusted
+  // capture/verify paths themselves never touch this process's fetch — that
+  // bypass is asserted separately below.
   const realFetch = globalThis.fetch;
   const realToken = process.env.SUPABASE_ACCESS_TOKEN;
   const capturedRequests = [];
@@ -484,9 +488,14 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
   delete process.env.SUPABASE_ACCESS_TOKEN;
   globalThis.fetch = () => { throw new Error("the live query must never run without a token"); };
   await assert.rejects(
+    () => executeLedgerQueryInProcess([goodRows[0].name]),
+    /SUPABASE_ACCESS_TOKEN/,
+    "the query refuses without the management-API token",
+  );
+  await assert.rejects(
     () => captureRecoveryLedgerEvidence({ root: fixture.root, names: [goodRows[0].name] }),
     /SUPABASE_ACCESS_TOKEN/,
-    "capture refuses without the management-API token",
+    "capture refuses without the management-API token before spawning anything",
   );
 
   process.env.SUPABASE_ACCESS_TOKEN = "test-token";
@@ -494,25 +503,12 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
     capturedRequests.push({ url, init });
     return Promise.resolve({ ok: true, json: () => Promise.resolve(goodRows) });
   };
-  const channelResult = await captureRecoveryLedgerEvidence({
-    root: fixture.root,
-    names: goodRows.map((row) => row.name),
-  });
-  assert.equal(channelResult.path, recoveryLedgerEvidencePath(fixture.root));
-  assert.equal(channelResult.rowCount, goodRows.length, "capture reports every live row it accepted");
-  const capturedBytes = readFileSync(recoveryLedgerEvidencePath(fixture.root));
-  assert.equal(
-    channelResult.sha256,
-    createHash("sha256").update(capturedBytes).digest("hex"),
-    "capture reports the digest of exactly the evidence bytes it wrote",
-  );
-  const capturedDoc = JSON.parse(capturedBytes.toString("utf8"));
-  assert.deepEqual(capturedDoc.rows, goodRows, "the written evidence rows are exactly the live response rows");
-  assert.equal(capturedDoc.project_id, RECOVERY_LEDGER_EVIDENCE_PROJECT_ID);
+  const inProcessRows = await executeLedgerQueryInProcess(goodRows.map((row) => row.name));
+  assert.deepEqual(inProcessRows, goodRows, "the query returns exactly the live response rows");
   assert.equal(
     capturedRequests[0].url,
     RECOVERY_LEDGER_QUERY_URL,
-    "capture posts only to the pinned production project's fixed query endpoint",
+    "the query posts only to the pinned production project's fixed query endpoint",
   );
   assert.equal(
     JSON.parse(capturedRequests[0].init.body).query,
@@ -520,35 +516,70 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
     "the request body carries exactly the one fixed ledger query",
   );
 
+  // Evidence building/writing is validated through the same builder capture
+  // uses; a live response with foreign fields is copied field-by-field.
   const forged = { ...goodRows[0], statements_sha256: "d".repeat(64) };
-  globalThis.fetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve([{ ...forged, extra: true }]) });
-  const strippedResult = await captureRecoveryLedgerEvidence({ root: fixture.root, names: [goodRows[0].name] });
+  const strippedText = buildLedgerEvidenceText({
+    names: [goodRows[0].name],
+    rows: [{ ...forged, extra: true }],
+    fetchedAt,
+  });
   assert.deepEqual(
-    Object.keys(JSON.parse(readFileSync(strippedResult.path, "utf8")).rows[0]).sort(),
+    Object.keys(JSON.parse(strippedText).rows[0]).sort(),
     ["name", "statements_sha256", "version"],
     "a live response with foreign fields is copied field-by-field, never trusted wholesale",
   );
 
   globalThis.fetch = () => Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve({}) });
   await assert.rejects(
-    () => captureRecoveryLedgerEvidence({ root: fixture.root, names: [goodRows[0].name] }),
+    () => executeLedgerQueryInProcess([goodRows[0].name]),
     /HTTP 401/,
-    "a failed live query refuses instead of writing evidence",
+    "a failed live query refuses instead of returning rows",
   );
 
-  globalThis.fetch = () => Promise.resolve({
-    ok: true,
-    json: () => Promise.resolve([{ ...goodRows[0], statements_sha256: "not-hex" }]),
+  // A live row with a malformed digest passes through the field-copier but is
+  // refused by the strict evidence validator capture runs before keeping the
+  // file — the same reader every consumer of the evidence file goes through.
+  const malformedText = buildLedgerEvidenceText({
+    names: [goodRows[0].name],
+    rows: [{ ...goodRows[0], statements_sha256: "not-hex" }],
+    fetchedAt,
   });
-  await assert.rejects(
-    () => captureRecoveryLedgerEvidence({ root: fixture.root, names: [goodRows[0].name] }),
+  const malformedEvidencePath = path.join(fixture.root, "malformed-evidence-scratch.json");
+  writeFileSync(malformedEvidencePath, malformedText);
+  assert.throws(
+    () => readRecoveryLedgerEvidence(malformedEvidencePath),
     /statements digest is malformed/,
-    "a live row with a malformed digest is refused by the validating writer",
+    "a live row with a malformed digest is refused by the evidence validator",
   );
+  rmSync(malformedEvidencePath, { force: true });
   assert.equal(
     existsSync(recoveryLedgerEvidencePath(fixture.root)),
     false,
-    "an invalid capture leaves no evidence file behind",
+    "no evidence file exists before a successful operator capture",
+  );
+
+  // ── the Sol round-3 forgery route must fail closed (in-process variant) ────
+  // An attacker who imports this module normally and replaces this process's
+  // globalThis.fetch must not be able to feed capture or the validation-time
+  // re-query: both run the real query in a fresh subprocess whose pristine
+  // fetch the stub never reaches, and the forged token cannot satisfy the
+  // real pinned endpoint.
+  const forgeryAttempts = [];
+  globalThis.fetch = (url, init) => {
+    forgeryAttempts.push({ url, init });
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(goodRows) });
+  };
+  await assert.rejects(
+    () => captureRecoveryLedgerEvidence({ root: fixture.root, names: [goodRows[0].name] }),
+    /Live ledger query subprocess/,
+    "capture with a patched in-process fetch fails in the fresh subprocess instead of accepting forged rows",
+  );
+  assert.equal(forgeryAttempts.length, 0, "the trusted capture path never touches this process's fetch");
+  assert.equal(
+    existsSync(recoveryLedgerEvidencePath(fixture.root)),
+    false,
+    "the failed forgery attempt writes no evidence file",
   );
 
   writeLedgerEvidence(fixture.root, goodRows, "2026-08-14T10:00:00.000Z");
@@ -652,20 +683,19 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
   await verifyRecoveriesAgainstLiveLedger([]);
   await verifyRecoveriesAgainstLiveLedger(undefined);
 
-  const liveQueries = [];
+  // The validation-time re-check also runs in the fresh subprocess: a patched
+  // in-process fetch serving perfect rows must never satisfy it (Sol round 3).
+  const reCheckForgeryAttempts = [];
   globalThis.fetch = (url, init) => {
-    liveQueries.push({ url, init });
+    reCheckForgeryAttempts.push({ url, init });
     return Promise.resolve({ ok: true, json: () => Promise.resolve(goodRows) });
   };
-  await verifyRecoveriesAgainstLiveLedger(trustedRecoveries);
-  assert.equal(liveQueries[0].url, RECOVERY_LEDGER_QUERY_URL, "the re-check queries only the pinned production endpoint");
-
-  globalThis.fetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve([goodRows[1]]) });
   await assert.rejects(
     () => verifyRecoveriesAgainstLiveLedger(trustedRecoveries),
-    /no row named/,
-    "the async re-check fails closed when the live ledger lacks an attested row",
+    /Live ledger query subprocess/,
+    "the re-check with a patched in-process fetch fails in the fresh subprocess instead of trusting forged rows",
   );
+  assert.equal(reCheckForgeryAttempts.length, 0, "the re-check never touches this process's fetch");
 
 
   const trustedPrompt = buildCodexReviewPrompt({ trustedRecoveries });
@@ -745,14 +775,16 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
     recoveryPaths.length,
     "plain-fs forged evidence + attestation DOES pass local-only validation — the exact hole the live re-query closes",
   );
-  globalThis.fetch = () => Promise.resolve({
-    ok: true,
-    json: () => Promise.resolve([{ ...goodRows[0], statements_sha256: "a".repeat(64) }, goodRows[1]]),
-  });
-  await assert.rejects(
-    () => verifyRecoveriesAgainstLiveLedger(forgedTrusted),
+  // The pure comparison proves the forged attestation cannot match what the
+  // real ledger holds (here: a different applied digest for the same row), and
+  // the subprocess transport (asserted above) is what delivers the real rows.
+  assert.throws(
+    () => assertRecoveriesMatchLiveRows(
+      forgedTrusted,
+      [{ ...goodRows[0], statements_sha256: "a".repeat(64) }, goodRows[1]],
+    ),
     /does not match the attested recovery digest/,
-    "forged local evidence + attestation cannot survive the independent live re-query",
+    "forged local evidence + attestation cannot survive comparison against the real ledger rows",
   );
 
   writeLocalAttestation(fixture.root, buildRecoveryAttestation({
@@ -999,7 +1031,7 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
     else init.signal.addEventListener("abort", () => reject(new Error("aborted")));
   });
   await assert.rejects(
-    () => captureRecoveryLedgerEvidence({ root: modifiedFixture.root, names: [goodRows[0].name] }),
+    () => executeLedgerQueryInProcess([goodRows[0].name]),
     /timed out after 30s/,
     "a stalled live-ledger query aborts at the fixed deadline instead of hanging",
   );
@@ -1018,12 +1050,61 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
     }),
   });
   await assert.rejects(
-    () => captureRecoveryLedgerEvidence({ root: modifiedFixture.root, names: [goodRows[0].name] }),
+    () => executeLedgerQueryInProcess([goodRows[0].name]),
     /timed out after 30s/,
     "a response body that stalls after headers still aborts at the fixed deadline",
   );
   globalThis.setTimeout = realSetTimeout;
   globalThis.clearTimeout = realClearTimeout;
+  globalThis.fetch = realFetch;
+
+  // ── launcher forgery: an ignored ordinary launcher script that replaces
+  // globalThis.fetch BEFORE importing this module (no preload flags anywhere)
+  // must still fail evidence capture. The live query runs in a fresh child
+  // process with pristine globals, so the launcher's patched fetch is never
+  // consulted and the forged token cannot satisfy the real endpoint.
+  clearRecoveryAttestation({ root: modifiedFixture.root });
+  const launcherModuleUrl = new URL("./write-recovery-attestation.mjs", import.meta.url).href;
+  const launcherPath = path.join(modifiedFixture.root, "forged-launcher.mjs");
+  writeFileSync(launcherPath, [
+    `globalThis.fetch = async () => ({ ok: true, json: async () => (${JSON.stringify(goodRows)}) });`,
+    `process.env.SUPABASE_ACCESS_TOKEN = "forged-launcher-token";`,
+    `const mod = await import(${JSON.stringify(launcherModuleUrl)});`,
+    `try {`,
+    `  await mod.captureRecoveryLedgerEvidence({ root: ${JSON.stringify(modifiedFixture.root)}, names: [${JSON.stringify(goodRows[0].name)}] });`,
+    `  process.stdout.write("FORGERY_SUCCEEDED");`,
+    `} catch {`,
+    `  process.stdout.write("FORGERY_REFUSED");`,
+    `}`,
+    ``,
+  ].join("\n"));
+  const launcherEnv = { ...process.env };
+  delete launcherEnv.NODE_OPTIONS;
+  const launcherOut = execFileSync(process.execPath, [launcherPath], {
+    encoding: "utf8",
+    env: launcherEnv,
+    timeout: 120_000,
+    windowsHide: true,
+  });
+  assert.equal(
+    launcherOut,
+    "FORGERY_REFUSED",
+    "an in-process fetch-patching launcher cannot forge the live ledger evidence",
+  );
+  assert.equal(
+    existsSync(recoveryLedgerEvidencePath(modifiedFixture.root)),
+    false,
+    "the forged launcher run leaves no evidence file behind",
+  );
+  rmSync(launcherPath, { force: true });
+
+  // ── direct-entry-only subprocess mode: an imported call to the CLI with the
+  // subprocess flag refuses (exit 1) because the module is not the entrypoint.
+  assert.equal(
+    await runRecoveryCli([RECOVERY_LEDGER_SUBPROCESS_FLAG, goodRows[0].name]),
+    1,
+    "the ledger-query subprocess mode refuses when the module is merely imported",
+  );
 
   // ── wrapper-owned clear: the supported way to discard a stale attestation.
   // The guards deny direct tool deletion of both session-state files, so this
