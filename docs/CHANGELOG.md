@@ -47,6 +47,13 @@ rejects later schema-wide or untrusted-role grants; and permits only explicit
 the `anon` default grant and a later schema-wide authenticated grant. The
 focused hook suite now passes 383 assertions.
 
+The renewed exact-head review also found that a same-named ACL on a different
+PostgreSQL overload could be mistaken for the actor-writing routine's private
+ACL. The compatibility check now parses the ACL signature and routine kind and
+matches both to the created routine's exact identity; a wrong-overload revoke
+remains under actor-binding review. The focused hook suite now passes 384
+assertions.
+
 ## 2026-08-12 — Actor-binding routine modes use exact schema identity
 
 Fresh adversarial review found that a later `ALTER FUNCTION ... SECURITY

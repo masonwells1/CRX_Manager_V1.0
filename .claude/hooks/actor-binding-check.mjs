@@ -163,7 +163,7 @@ const SQL_IDENTIFIER_PATTERN =
 const SQL_QUALIFIED_IDENTIFIER_PATTERN =
   `${SQL_IDENTIFIER_PATTERN}(?:\\s*\\.\\s*${SQL_IDENTIFIER_PATTERN})*`;
 const routineHeadRe = new RegExp(
-  `CREATE\\s+(?:OR\\s+REPLACE\\s+)?(?:FUNCTION|PROCEDURE)\\s+` +
+  `CREATE\\s+(?:OR\\s+REPLACE\\s+)?(FUNCTION|PROCEDURE)\\s+` +
     `(${SQL_QUALIFIED_IDENTIFIER_PATTERN})\\s*\\(`,
   "gi"
 );
@@ -2089,23 +2089,40 @@ function routineAltersMatch(left, right) {
  * its final local ACL explicitly excludes every browser-client role and any later
  * grant is limited to Supabase's non-client execution principals. Unknown,
  * schema-wide, quoted, or role-membership-sensitive grants remain fail-closed. */
-function routineExplicitlyNonAuthenticated(structuralSql, fromIndex, routineName) {
-  const normalized = normalizedQualifiedIdentifier(routineName);
-  if (!/^[a-z_][\w$]*\.[a-z_][\w$]*$/.test(normalized)) return false;
-  const [schema, name] = normalized.split(".");
-  const exactName = `${escapedRegexLiteral(schema)}\\s*\\.\\s*${escapedRegexLiteral(name)}`;
-  const routineHead = `(?:FUNCTION|PROCEDURE|ROUTINE)\\s+${exactName}\\s*\\([^;]*?\\)`;
+function routineExplicitlyNonAuthenticated(structuralSql, fromIndex, routine) {
+  if (!routine || !/^[a-z_][\w$]*\.[a-z_][\w$]*$/.test(routine.name) || routine.signature === null) return false;
+  const [schema] = routine.name.split(".");
   const tail = structuralSql.slice(fromIndex);
-  const revokeRe = new RegExp(
-    `\\bREVOKE\\s+ALL\\s+ON\\s+${routineHead}\\s+FROM\\s+([^;]+);`,
+  const aclHeadRe = new RegExp(
+    `\\b(REVOKE\\s+ALL\\s+ON|GRANT\\s+EXECUTE\\s+ON)\\s+` +
+      `(FUNCTION|PROCEDURE|ROUTINE)\\s+(${SQL_QUALIFIED_IDENTIFIER_PATTERN})\\s*\\(`,
     "gi"
   );
+  const aclStatements = [];
+  let aclHead;
+  while ((aclHead = aclHeadRe.exec(tail)) !== null) {
+    const paramsOpen = aclHeadRe.lastIndex - 1;
+    const parsed = readBalancedParens(tail, paramsOpen);
+    if (!parsed) return false;
+    const action = /^GRANT\b/i.test(aclHead[1]) ? "GRANT" : "REVOKE";
+    const rolesHead = new RegExp(`^\\s+${action === "GRANT" ? "TO" : "FROM"}\\s+([^;]+);`).exec(tail.slice(parsed.end));
+    if (!rolesHead) return false;
+    const end = parsed.end + rolesHead[0].length;
+    const kind = aclHead[2].toUpperCase();
+    const name = normalizedQualifiedIdentifier(aclHead[3]);
+    const signature = normalizedRoutineIdentityArgs(parsed.params, false);
+    if ((kind === "ROUTINE" || kind === routine.kind) &&
+        routineNamesMayMatch(name, routine.name) && signature === routine.signature) {
+      aclStatements.push({ action, roles: rolesHead[1], end });
+    }
+    aclHeadRe.lastIndex = end;
+  }
   let revocationEnd = -1;
-  let revoke;
-  while ((revoke = revokeRe.exec(tail)) !== null) {
-    const roles = revoke[1].toLowerCase();
+  for (const statement of aclStatements) {
+    if (statement.action !== "REVOKE") continue;
+    const roles = statement.roles.toLowerCase();
     if (/\bpublic\b/.test(roles) && /\banon\b/.test(roles) && /\bauthenticated\b/.test(roles)) {
-      revocationEnd = revokeRe.lastIndex;
+      revocationEnd = statement.end;
     }
   }
   if (revocationEnd === -1) return false;
@@ -2115,17 +2132,10 @@ function routineExplicitlyNonAuthenticated(structuralSql, fromIndex, routineName
     "i"
   );
   if (schemaGrantRe.test(later)) return false;
-  const grantRe = new RegExp(
-    `\\bGRANT\\s+EXECUTE\\s+ON\\s+${routineHead}\\s+TO\\s+([^;]+);`,
-    "gi"
-  );
-  let grant;
-  while ((grant = grantRe.exec(later)) !== null) {
-    // PostgreSQL decodes U&"..." role identifiers before grant resolution.
-    // Do not attempt a partial decoder here: an opaque grantee might be the
-    // authenticated role, so it must keep the routine under actor review.
-    if (/U&\s*"|"/.test(grant[1])) return false;
-    const roles = grant[1].split(",").map((role) => role.trim().toLowerCase());
+  for (const statement of aclStatements) {
+    if (statement.action !== "GRANT" || statement.end <= revocationEnd) continue;
+    if (/U&\s*"|"/.test(statement.roles)) return false;
+    const roles = statement.roles.split(",").map((role) => role.trim().toLowerCase());
     if (roles.length === 0 || roles.some((role) => !/^(?:postgres|service_role)$/.test(role))) return false;
   }
   return true;
@@ -2333,7 +2343,8 @@ try {
   if (masked !== null) checkDynamicDdl(0, masked.length);
   let head;
   while (masked !== null && (head = routineHeadRe.exec(masked)) !== null) {
-    const routineName = head[1];
+    const routineKind = head[1].toUpperCase();
+    const routineName = head[2];
     const normalizedRoutineName = normalizedQualifiedIdentifier(routineName);
     const paramsOpen = routineHeadRe.lastIndex - 1;
     const parsed = readBalancedParens(masked, paramsOpen);
@@ -2359,6 +2370,7 @@ try {
     const params = content.slice(paramsOpen + 1, parsed.end - 1);
     const maskedParams = parsed.params;
     const createdRoutine = {
+      kind: routineKind,
       name: normalizedRoutineName,
       signature: normalizedRoutineIdentityArgs(maskedParams, true),
     };
@@ -2393,7 +2405,7 @@ try {
       .filter((n) => ACTOR_PARAM_RE.test(n));
     if (actorParams.length === 0) continue;
 
-    if (routineExplicitlyNonAuthenticated(masked, head.index, routineName)) continue;
+    if (routineExplicitlyNonAuthenticated(masked, head.index, createdRoutine)) continue;
 
     const commentBlankedBody = blankComments(body);
     const actorParamReference = actorParams.map(identifierReferencePattern).join("|");
