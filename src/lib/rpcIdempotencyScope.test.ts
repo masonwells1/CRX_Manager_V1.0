@@ -272,6 +272,8 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // both intentionally share the wrapper's single 'save_field_app_split_invoice' cache
   // namespace, exactly like the save_purchase_order pair above.
   _save_field_app_split_invoice_impl: ['save_field_app_split_invoice'],
+  // Restore the Wave A alias exemption when its drafts are promoted from
+  // scripts/.staging-migrations/.
 };
 
 /**

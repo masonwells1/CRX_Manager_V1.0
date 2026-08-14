@@ -4068,3 +4068,19 @@ export interface BackupRun {
   failed: string[];
   succeeded: boolean;
 }
+
+export interface BelowCostApprovalDetail {
+  operation: string | null;
+  entity_type: string | null;
+  entity_id: string | null;
+  line_id: string | null;
+  product_id: string | null;
+  product_name: string | null;
+  unit_price_cents: number | null;
+  locked_unit_cost_cents: number | null;
+}
+
+export interface BelowCostApprovalError {
+  kind: 'context' | 'admin' | 'reason';
+  detail: BelowCostApprovalDetail | null;
+}
