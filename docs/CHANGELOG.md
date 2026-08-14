@@ -2,6 +2,15 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-14 — Write-access assertion scoped to the Supabase connector url
+
+CodeRabbit follow-up on the Codex write-scope PR: the two agent-guidance checkers asserted the
+connector's write-enabled state with a whole-file substring match on `read_only=false`, which a
+stale comment anywhere in `.codex/config.toml` could satisfy while the active connector stayed
+read-only. Both checkers now extract the `[mcp_servers.supabase]` `url` value and require it to
+contain `read_only=false` and not `read_only=true`. Mutation-tested: a reverted flag fails the
+check even with a decoy comment present.
+
 ## 2026-08-12 — Wave A round 5: four migrations self-aborted, all for the same reason
 
 The 2026-08-12 Wave A apply attempt refused four of the six Wave A migrations. That rejected

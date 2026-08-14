@@ -118,7 +118,14 @@ record(codexHooksText.includes(".claude/hooks/sql-safety.mjs"), "Codex invokes s
 record(codexHooksText.includes("production-action-guard.mjs"), "Codex production action guard is registered");
 record(codexHooksText.includes("review-proof-guard.mjs"), "Codex review proof guard is registered");
 record(!gitignore.split(/\r?\n/).some((line) => line.trim() === ".agents/" || line.trim() === ".codex/"), "tracked agent configuration is not blanket-ignored");
-record(read(".codex/config.toml").includes("read_only=false"), "Codex Supabase MCP declares write access (Mason approved 2026-08-14)");
+// Scope to the [mcp_servers.supabase] url line — a substring match on the whole
+// file would accept a stale comment while the active connector stays read-only.
+const codexSupabaseUrl = read(".codex/config.toml")
+  .match(/\[mcp_servers\.supabase\][\s\S]*?url\s*=\s*"([^"]+)"/)?.[1] || "";
+record(
+  codexSupabaseUrl.includes("read_only=false") && !codexSupabaseUrl.includes("read_only=true"),
+  "Codex Supabase MCP url declares write access (Mason approved 2026-08-14)",
+);
 
 const sync = spawnSync(process.execPath, [path.join(ROOT, "scripts", "sync-agent-workflows.mjs"), "--check"], {
   cwd: ROOT,
