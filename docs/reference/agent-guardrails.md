@@ -130,22 +130,27 @@ Built from a workflow that mined the last 50 sessions (524 Mason-typed messages 
 ### Historical migration-recovery exception
 
 Mason approved one narrow push-proof prompt exception on 2026-08-14. It does not weaken proof
-shape, freshness, clean-worktree, model, effort, exact-verdict, base, or HEAD checks. The operator
-first captures live-ledger evidence through a read-only query — one row per applied migration with
-its slug `name`, apply-stamp `version`, and
-`encode(sha256(convert_to(array_to_string(statements, E'\n'), 'UTF8')), 'hex')` — written as
-`.claude/session-state/recovery-ledger-evidence.json` (kind `live-ledger-evidence`, pinned to the
-production project id, fresh within the same 30-minute window). Both that evidence file and
-`recovery-attestation.json` are wrapper-owned: the review-proof guard denies any tool command that
-names either file, so the captured evidence is piped through the helper's sanctioned channel
-(`node scripts/write-recovery-attestation.mjs --write-evidence` with the JSON on stdin), which
-re-validates the payload and keeps nothing on refusal. Then run:
+shape, freshness, clean-worktree, model, effort, exact-verdict, base, or HEAD checks. Live-ledger
+evidence — one row per applied migration with its slug `name`, apply-stamp `version`, and
+`encode(sha256(convert_to(array_to_string(statements, E'\n'), 'UTF8')), 'hex')` — is captured only
+by the mint helper's own trusted mode
+(`node scripts/write-recovery-attestation.mjs --capture-evidence --name <ledger-slug> [--name ...]`,
+requires `SUPABASE_ACCESS_TOKEN`): the helper itself runs the one fixed read-only ledger query
+against the pinned production project over the management API and builds
+`.claude/session-state/recovery-ledger-evidence.json` (kind `live-ledger-evidence`, pinned project
+id, fresh within the same 30-minute window) entirely from the live response. Callers may only
+choose which rows to fetch by strictly-validated slug — there is no channel that accepts
+caller-supplied row contents, so evidence for SQL that was never applied cannot be fabricated. Both
+that evidence file and `recovery-attestation.json` are wrapper-owned: the review-proof guard denies
+any tool command that names either file, and the writer re-validates the document and keeps nothing
+on refusal. Then run:
 
 ```text
 node scripts/write-recovery-attestation.mjs --migration supabase/migrations/<timestamp>_<name>.sql=<live-ledger-version> [--migration ...]
 ```
 
-The helper never queries the database. It requires a clean committed candidate, verifies each path
+Minting itself never queries the database — it trusts only the evidence its own capture mode
+wrote. It requires a clean committed candidate, verifies each path
 is a regular migration file newly added versus `origin/main`, matches each file to its ledger row
 by the file's own slug, requires the supplied version to equal that row's apply-stamp version, and
 refuses unless the candidate's bytes hash-match the row's applied statements byte-for-byte — a

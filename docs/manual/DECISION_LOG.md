@@ -48,13 +48,15 @@ never attest.
 This is a narrow wrapper-established exception, not a claim a diff can make about itself. The local,
 ignored recovery attestation binds the exact candidate HEAD and `origin/main` base, a short expiry,
 each repo-relative migration path, its candidate SHA-256, its ledger slug and apply-stamp version,
-and the digest of a separately captured live-ledger evidence file (pinned to the production project,
-fresh within 30 minutes of mint). The wrapper independently verifies that every listed path is a
+and the digest of a live-ledger evidence file (pinned to the production project, fresh within 30
+minutes of mint). The wrapper independently verifies that every listed path is a
 regular file newly added versus the base, that its candidate bytes match, and that each recovery
 still matches its evidence row. A missing, malformed, stale, shifted, modified-file,
 tampered-evidence, or digest-mismatched attestation fails closed and mints no push proof. Both the
 attestation and the evidence file are wrapper-owned: the review-proof guard denies direct tool
-writes to either, and the evidence enters only through the mint helper's `--write-evidence` channel. Migration headers, comments,
+writes to either, and the evidence is produced only by the mint helper's own `--capture-evidence`
+mode, which runs the fixed read-only ledger query against the pinned production project itself and
+accepts no caller-supplied rows (Sol adversarial finding, fixed same day in PR #403). Migration headers, comments,
 commit messages, and all other diff content remain untrusted data and can never grant the exception.
 
 Every non-attested migration, every modification to an existing tracked file, and every unrelated

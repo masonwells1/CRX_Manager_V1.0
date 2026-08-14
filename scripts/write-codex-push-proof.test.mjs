@@ -33,9 +33,13 @@ import {
 } from "./write-codex-push-proof.mjs";
 import { gitLocalEnvironmentNames } from "../.claude/hooks/git-test-env.mjs";
 import {
+  buildLedgerEvidenceQuery,
+  buildLedgerEvidenceText,
   buildRecoveryAttestation,
+  captureRecoveryLedgerEvidence,
   mintRecoveryAttestation,
   parseRecoveryArgs,
+  RECOVERY_LEDGER_QUERY_URL,
   recoveryAttestationPath,
   recoveryLedgerEvidencePath,
   RECOVERY_LEDGER_EVIDENCE_KIND,
@@ -438,34 +442,98 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
   const fetchedAt = "2026-08-14T11:55:00.000Z";
 
   assert.deepEqual(
-    parseRecoveryArgs(["--write-evidence"]),
-    { help: false, writeEvidence: true, specs: [] },
-    "--write-evidence parses as the sanctioned evidence-write mode",
+    parseRecoveryArgs(["--capture-evidence", "--name", goodRows[0].name]),
+    { help: false, captureEvidence: true, names: [goodRows[0].name], specs: [] },
+    "--capture-evidence parses with its --name row filters",
+  );
+  assert.throws(
+    () => buildLedgerEvidenceQuery(["not-a-slug'; drop table x; --"]),
+    /timestamped migration slug/,
+    "the fixed query builder refuses any name that is not a strict ledger slug",
+  );
+  assert.throws(
+    () => buildLedgerEvidenceQuery([]),
+    /at least one --name/,
+    "capture requires an explicit row filter; the full ledger is never fetched",
+  );
+  const fixedQuery = buildLedgerEvidenceQuery(goodRows.map((row) => row.name));
+  assert.ok(
+    fixedQuery.startsWith("select version, name,")
+      && fixedQuery.includes("from supabase_migrations.schema_migrations")
+      && goodRows.every((row) => fixedQuery.includes(`'${row.name}'`)),
+    "the query is the one fixed read-only ledger select over the requested slugs",
+  );
+  assert.throws(
+    () => buildLedgerEvidenceText({ names: [goodRows[0].name, "20260812999999_missing_row"], rows: goodRows, fetchedAt }),
+    /no row named/,
+    "a live response missing a requested row refuses instead of silently attesting less",
+  );
+
+  const capturedRequests = [];
+  const stubFetch = (url, init) => {
+    capturedRequests.push({ url, init });
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(goodRows) });
+  };
+  await assert.rejects(
+    () => captureRecoveryLedgerEvidence({ root: fixture.root, names: [goodRows[0].name], fetchImpl: stubFetch, token: "" }),
+    /SUPABASE_ACCESS_TOKEN/,
+    "capture refuses without the management-API token",
+  );
+  const channelResult = await captureRecoveryLedgerEvidence({
+    root: fixture.root,
+    names: goodRows.map((row) => row.name),
+    fetchImpl: stubFetch,
+    token: "test-token",
+    now: () => new Date(fetchedAt),
+  });
+  assert.equal(channelResult.path, recoveryLedgerEvidencePath(fixture.root));
+  assert.equal(channelResult.rowCount, goodRows.length, "capture reports every live row it accepted");
+  assert.equal(
+    channelResult.sha256,
+    createHash("sha256")
+      .update(Buffer.from(buildLedgerEvidenceText({ names: goodRows.map((row) => row.name), rows: goodRows, fetchedAt }), "utf8"))
+      .digest("hex"),
+    "capture writes exactly the evidence document built from the live response",
+  );
+  assert.equal(
+    capturedRequests[0].url,
+    RECOVERY_LEDGER_QUERY_URL,
+    "capture posts only to the pinned production project's fixed query endpoint",
+  );
+
+  const forged = { ...goodRows[0], statements_sha256: "d".repeat(64) };
+  await assert.rejects(
+    () => captureRecoveryLedgerEvidence({
+      root: fixture.root,
+      names: [goodRows[0].name],
+      fetchImpl: () => Promise.resolve({ ok: true, json: () => Promise.resolve([{ ...forged, extra: true }]) }),
+      token: "test-token",
+      now: () => new Date(fetchedAt),
+    }).then(() => {
+      // Even a hostile response only reaches disk through the validating
+      // writer; extra fields are stripped by the field-by-field copy above,
+      // so this capture succeeds — assert the file carries no foreign field.
+      const onDisk = JSON.parse(readFileSync(recoveryLedgerEvidencePath(fixture.root), "utf8"));
+      assert.deepEqual(Object.keys(onDisk.rows[0]).sort(), ["name", "statements_sha256", "version"]);
+      throw new Error("expected-clean-capture");
+    }),
+    /expected-clean-capture/,
+    "a live response with foreign fields is copied field-by-field, never trusted wholesale",
+  );
+  await assert.rejects(
+    () => captureRecoveryLedgerEvidence({
+      root: fixture.root,
+      names: [goodRows[0].name],
+      fetchImpl: () => Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve({}) }),
+      token: "test-token",
+    }),
+    /HTTP 401/,
+    "a failed live query refuses instead of writing evidence",
   );
   assert.throws(
     () => writeRecoveryLedgerEvidenceFile({ root: fixture.root, text: '{"kind":"wrong"}' }),
     /missing or unexpected fields/,
-    "the sanctioned evidence channel re-validates and refuses a malformed payload",
-  );
-  assert.equal(
-    existsSync(recoveryLedgerEvidencePath(fixture.root)),
-    false,
-    "a refused evidence payload leaves no file behind",
-  );
-  const channelBytes = `${JSON.stringify({
-    schema_version: RECOVERY_LEDGER_EVIDENCE_SCHEMA_VERSION,
-    kind: RECOVERY_LEDGER_EVIDENCE_KIND,
-    project_id: RECOVERY_LEDGER_EVIDENCE_PROJECT_ID,
-    fetched_at: fetchedAt,
-    rows: goodRows,
-  }, null, 2)}\n`;
-  const channelResult = writeRecoveryLedgerEvidenceFile({ root: fixture.root, text: channelBytes });
-  assert.equal(channelResult.path, recoveryLedgerEvidencePath(fixture.root));
-  assert.equal(channelResult.rowCount, goodRows.length, "the sanctioned channel reports every accepted row");
-  assert.equal(
-    channelResult.sha256,
-    createHash("sha256").update(Buffer.from(channelBytes, "utf8")).digest("hex"),
-    "the sanctioned channel writes the piped bytes verbatim and reports their digest",
+    "the validating writer refuses a malformed evidence document",
   );
 
   writeLedgerEvidence(fixture.root, goodRows, "2026-08-14T10:00:00.000Z");

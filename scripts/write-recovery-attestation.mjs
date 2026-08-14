@@ -3,13 +3,15 @@
 // adversarial push-proof review: recovering a migration file that an operator
 // has independently confirmed already exists in the live Supabase ledger.
 //
-// This helper NEVER queries Supabase. The operator first captures live ledger
-// evidence (row name, apply-stamp version, and a SHA-256 digest of the row's
-// applied statements) through a separate read-only query and writes it to the
-// local ignored evidence file. Minting then refuses unless each candidate
-// file's bytes hash-match that live row byte-for-byte, and the attestation
-// binds the assertion to the exact candidate commit, base commit, migration
-// paths, candidate bytes, and the evidence file's own digest.
+// The ledger evidence (row name, apply-stamp version, and a SHA-256 digest of
+// the row's applied statements) is captured ONLY by this helper's own
+// --capture-evidence mode: a fixed read-only query against the pinned
+// production project, built entirely from the live response. Caller-supplied
+// rows are never accepted through any channel, so an actor cannot fabricate
+// evidence for SQL that was never applied. Minting then refuses unless each
+// candidate file's bytes hash-match that live row byte-for-byte, and the
+// attestation binds the assertion to the exact candidate commit, base commit,
+// migration paths, candidate bytes, and the evidence file's own digest.
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -37,6 +39,11 @@ export const RECOVERY_LEDGER_EVIDENCE_FILENAME = "recovery-ledger-evidence.json"
 // captured from any other database.
 export const RECOVERY_LEDGER_EVIDENCE_PROJECT_ID = "rhyzpcqhnizqbxphqdkr";
 export const RECOVERY_LEDGER_EVIDENCE_MAX_ROWS = 512;
+// Fixed management-API endpoint for the pinned project. The host is a constant
+// and the project ref is pinned above, so a token for any other project (or a
+// redirected host) cannot produce acceptable evidence.
+export const RECOVERY_LEDGER_QUERY_URL =
+  `https://api.supabase.com/v1/projects/${RECOVERY_LEDGER_EVIDENCE_PROJECT_ID}/database/query`;
 
 const GUARDED_BASE = "origin/main";
 const SHA_RE = /^[a-f0-9]{40}$/;
@@ -457,12 +464,11 @@ export function validateRecoveryAttestation({
   });
 }
 
-// Sanctioned write channel for the ledger-evidence file. The review-proof
-// guard denies any tool command that names the evidence or attestation JSON,
-// so the operator pipes the captured evidence through this helper instead; the
-// invoking command never contains either protected basename. The evidence is
-// fully re-validated (shape, kind, pinned project, row grammar) before it is
-// kept; an invalid payload leaves no file behind.
+// Internal validating writer for the ledger-evidence file. Only the trusted
+// capture path below reaches it; the review-proof guard denies any tool
+// command that names the evidence or attestation JSON, so no direct write
+// channel exists. The evidence is fully re-validated (shape, kind, pinned
+// project, row grammar) before it is kept; an invalid payload leaves no file.
 export function writeRecoveryLedgerEvidenceFile({ root, text }) {
   const evidencePath = recoveryLedgerEvidencePath(root);
   mkdirSync(path.dirname(evidencePath), { recursive: true });
@@ -476,12 +482,99 @@ export function writeRecoveryLedgerEvidenceFile({ root, text }) {
   }
 }
 
+// Builds the one fixed read-only ledger query. Callers may only choose WHICH
+// ledger rows to fetch, by slug name; every name is validated against the
+// strict slug grammar before being embedded as a quoted literal, so no other
+// SQL can be expressed through this channel.
+export function buildLedgerEvidenceQuery(names) {
+  if (!Array.isArray(names) || names.length === 0) {
+    throw new Error("--capture-evidence requires at least one --name <ledger-slug>.");
+  }
+  if (names.length > RECOVERY_LEDGER_EVIDENCE_MAX_ROWS) {
+    throw new Error(`--capture-evidence accepts at most ${RECOVERY_LEDGER_EVIDENCE_MAX_ROWS} names.`);
+  }
+  const seen = new Set();
+  for (const name of names) {
+    if (typeof name !== "string" || !LEDGER_NAME_RE.test(name)) {
+      throw new Error(`--name must be a timestamped migration slug such as 20260812123456_example: ${name}`);
+    }
+    if (seen.has(name)) throw new Error(`--name repeats ledger slug ${name}.`);
+    seen.add(name);
+  }
+  return [
+    "select version, name,",
+    "  encode(sha256(convert_to(array_to_string(statements, E'\\n'), 'UTF8')), 'hex') as statements_sha256",
+    "from supabase_migrations.schema_migrations",
+    `where name in (${names.map((name) => `'${name}'`).join(", ")})`,
+    "order by version",
+  ].join("\n");
+}
+
+// Assembles the evidence document from the live API response. Rows are copied
+// field-by-field (never trusted wholesale) and every requested name must be
+// present, so a partial response cannot silently attest fewer files than asked.
+export function buildLedgerEvidenceText({ names, rows, fetchedAt }) {
+  if (!Array.isArray(rows)) throw new Error("Live ledger query returned an unexpected response shape.");
+  const returnedNames = new Set(rows.map((row) => String(row?.name ?? "")));
+  const missing = names.filter((name) => !returnedNames.has(name));
+  if (missing.length > 0) {
+    throw new Error(`The live ledger has no row named: ${missing.join(", ")}.`);
+  }
+  const evidence = {
+    schema_version: RECOVERY_LEDGER_EVIDENCE_SCHEMA_VERSION,
+    kind: RECOVERY_LEDGER_EVIDENCE_KIND,
+    project_id: RECOVERY_LEDGER_EVIDENCE_PROJECT_ID,
+    fetched_at: fetchedAt,
+    rows: rows.map((row) => ({
+      version: String(row?.version ?? ""),
+      name: String(row?.name ?? ""),
+      statements_sha256: String(row?.statements_sha256 ?? ""),
+    })),
+  };
+  return `${JSON.stringify(evidence, null, 2)}\n`;
+}
+
+// The trusted capture channel Sol's review requires: this process performs the
+// fixed read-only production query itself and builds the evidence exclusively
+// from the live response, so it cannot be invoked with caller-fabricated rows.
+export async function captureRecoveryLedgerEvidence({
+  root = process.cwd(),
+  names,
+  fetchImpl = globalThis.fetch,
+  token = process.env.SUPABASE_ACCESS_TOKEN,
+  now = () => new Date(),
+} = {}) {
+  if (!token) {
+    throw new Error("SUPABASE_ACCESS_TOKEN is required to capture live ledger evidence.");
+  }
+  const query = buildLedgerEvidenceQuery(names);
+  const response = await fetchImpl(RECOVERY_LEDGER_QUERY_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ query }),
+  });
+  if (!response.ok) {
+    throw new Error(`Live ledger query failed: HTTP ${response.status}.`);
+  }
+  const parsed = await response.json();
+  const rows = Array.isArray(parsed) ? parsed : parsed?.result ?? parsed?.rows;
+  const text = buildLedgerEvidenceText({ names, rows, fetchedAt: now().toISOString() });
+  return writeRecoveryLedgerEvidenceFile({ root, text });
+}
+
 export function parseRecoveryArgs(argv) {
-  const parsed = { help: false, writeEvidence: false, specs: [] };
+  const parsed = { help: false, captureEvidence: false, names: [], specs: [] };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === "--write-evidence") {
-      parsed.writeEvidence = true;
+    if (arg === "--capture-evidence") {
+      parsed.captureEvidence = true;
+    } else if (arg === "--name") {
+      const value = argv[++index];
+      if (!value) throw new Error("--name requires a ledger slug value.");
+      parsed.names.push(value);
     } else if (arg === "--migration") {
       const value = argv[++index];
       const separator = String(value || "").lastIndexOf("=");
@@ -502,39 +595,45 @@ export function parseRecoveryArgs(argv) {
 function usage() {
   return [
     "Usage: node scripts/write-recovery-attestation.mjs --migration <repo-path>=<live-ledger-version> [--migration ...]",
-    "       node scripts/write-recovery-attestation.mjs --write-evidence  < <captured-evidence-json>",
+    "       node scripts/write-recovery-attestation.mjs --capture-evidence --name <ledger-slug> [--name ...]",
     "",
-    "Run only after an operator has captured live ledger evidence through a read-only query and",
-    "written it via the --write-evidence channel (both JSON files are guard-protected against",
-    `direct tool writes) to .claude/session-state/${RECOVERY_LEDGER_EVIDENCE_FILENAME} (kind`,
-    `"${RECOVERY_LEDGER_EVIDENCE_KIND}"; rows of {version, name, statements_sha256} where the digest is`,
-    "encode(sha256(convert_to(array_to_string(statements, E'\\n'), 'UTF8')), 'hex')).",
-    "This helper never queries the database. It requires a clean committed candidate, verifies",
-    "every path is new versus origin/main, requires each candidate's bytes to hash-match its live",
-    "ledger row byte-for-byte, and writes an ignored attestation bound to HEAD, origin/main, and",
-    "the evidence digest for 30 minutes.",
+    "Capture live ledger evidence first with --capture-evidence: this helper itself runs the one",
+    "fixed read-only ledger query against the pinned production project (management API; requires",
+    "SUPABASE_ACCESS_TOKEN) and builds the evidence entirely from the live response — callers may",
+    "only choose which rows to fetch, never supply row contents. The result is written to",
+    `.claude/session-state/${RECOVERY_LEDGER_EVIDENCE_FILENAME} (kind "${RECOVERY_LEDGER_EVIDENCE_KIND}";`,
+    "rows of {version, name, statements_sha256} where the digest is",
+    "encode(sha256(convert_to(array_to_string(statements, E'\\n'), 'UTF8')), 'hex')); both JSON",
+    "files are guard-protected against direct tool writes.",
+    "Minting requires a clean committed candidate, verifies every path is new versus origin/main,",
+    "requires each candidate's bytes to hash-match its live ledger row byte-for-byte, and writes an",
+    "ignored attestation bound to HEAD, origin/main, and the evidence digest for 30 minutes.",
   ].join("\n");
 }
 
-export function run(argv = process.argv.slice(2)) {
+export async function run(argv = process.argv.slice(2)) {
   const options = parseRecoveryArgs(argv);
   if (options.help) {
     process.stdout.write(`${usage()}\n`);
     return 0;
   }
   try {
-    if (options.writeEvidence) {
+    if (options.captureEvidence) {
       if (options.specs.length) {
-        throw new Error("--write-evidence cannot be combined with --migration; capture evidence first, then mint.");
+        throw new Error("--capture-evidence cannot be combined with --migration; capture evidence first, then mint.");
       }
-      const result = writeRecoveryLedgerEvidenceFile({
+      const result = await captureRecoveryLedgerEvidence({
         root: process.cwd(),
-        text: readFileSync(0, "utf8"),
+        names: options.names,
       });
       process.stdout.write(
-        `Ledger evidence written to ${result.path} (${result.rowCount} row(s), sha256 ${result.sha256}).\n`,
+        `Ledger evidence captured from the live ledger to ${result.path} ` +
+        `(${result.rowCount} row(s), sha256 ${result.sha256}).\n`,
       );
       return 0;
+    }
+    if (options.names.length) {
+      throw new Error("--name is only valid with --capture-evidence.");
     }
     const result = mintRecoveryAttestation({ root: process.cwd(), specs: options.specs });
     process.stdout.write(
@@ -557,4 +656,4 @@ function isMainModule() {
   }
 }
 
-if (isMainModule()) process.exit(run());
+if (isMainModule()) run().then((code) => process.exit(code));
