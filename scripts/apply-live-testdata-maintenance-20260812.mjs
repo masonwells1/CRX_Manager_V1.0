@@ -36,11 +36,18 @@ const PROTECTED_SOURCES = {
   pushLib: [".claude", "hooks", "codex-push-" + "lib.mjs"].join("/"),
 };
 const EXPECTED_PROTECTED_INPUT_BLOBS = {
-  codexGuard: "fc72a09819632e29ab6273f0cb480c6ac560a430",
+  // Re-pinned 2026-08-14: the guard gained the Supabase read-only allowlist
+  // (Sol HIGH finding on the write-scope review), then the app-connector UUID
+  // prefix (CodeRabbit follow-up), then the codex_apps single-underscore
+  // naming form and the SELECT INTO denial in the read-only SQL gate
+  // (Codex-review P1 follow-ups). This PR cohort also wrapped matcherAnchor
+  // in normalizeLineEndings; the anchor text itself is unchanged, so the
+  // transform still applies cleanly.
+  codexGuard: "05499cfe34a3246b2400a22c343562fbd8fd0c33",
   pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "fb8b80003a3ec2e38ed3835388aef8595999c2b3",
+  codexGuard: "eb2e1ad5563d167396ef541f16881fc494cfc5b8",
   pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
 };
 
@@ -492,12 +499,14 @@ export function buildProducerProtectionSources() {
   const constantsReplacement = constantsAnchor;
   const constantsWithMatcher = constantsReplacement;
   codexGuard = replaceExactly(codexGuard, constantsAnchor, constantsWithMatcher, "maintenance producer command constants");
-  const matcherAnchor = `export function maintenanceProducerCommandMentioned(command) {
+  // Normalize the literal input anchor because Git may materialize this file
+  // with CRLF while the protected guard source is normalized to LF.
+  const matcherAnchor = normalizeLineEndings(`export function maintenanceProducerCommandMentioned(command) {
   const compact = String(command || "")
     .toLowerCase()
     .replace(/[\\s\\\\/"'\`^]/g, "");
   return compact.includes("apply-live-testdata-maintenance-20260812.mjs");
-}`;
+}`);
   const hardenedMatcher = `export ${normalizeLineEndings(maintenanceProducerCommandMentioned.toString())}`;
   const allowedMatcher = normalizeLineEndings(maintenanceProducerInvocationAllowed.toString());
   codexGuard = replaceExactly(
