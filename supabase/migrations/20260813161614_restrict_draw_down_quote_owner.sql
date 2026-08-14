@@ -11,8 +11,9 @@
 --
 -- This forward-only migration changes only the private implementation behind
 -- the governed five-argument public wrapper: it adds the ownership/deletion
--- guard and settles both weighted money inputs to whole cents before deriving
--- the order line. It preserves the public signature,
+-- guard, rejects ambiguous same-product price/cost cohorts, and settles the
+-- remaining single-cohort money inputs to whole cents before deriving the
+-- order line. It preserves the public signature,
 -- below-cost approval context, idempotency ordering, inventory/order behavior,
 -- grants, and generated TypeScript contract. Both new checks execute after the
 -- existing quote row lock and before any idempotency result can be returned or
@@ -110,6 +111,10 @@ DECLARE
   v_remaining numeric;
   v_wavg_price numeric;
   v_wavg_cost numeric;
+  -- MONEY_COHORT_GUARD<<< declarations
+  v_price_cohort_count integer;
+  v_cost_cohort_count integer;
+  -- >>>MONEY_COHORT_GUARD declarations
   v_total_acres numeric;
   v_unit_size text;
   v_acres numeric;
@@ -223,16 +228,35 @@ BEGIN
         THEN SUM((qi.cost_at_quote_cents::numeric / 100) * COALESCE(qi.total_units_needed, 0)) / SUM(COALESCE(qi.total_units_needed, 0))
         ELSE 0 END,
       SUM(COALESCE(qi.acres, 0)),
-      MIN(qi.unit_size)
-    INTO v_booked, v_wavg_price, v_wavg_cost, v_total_acres, v_unit_size
+      -- MONEY_COHORT_GUARD<<< aggregate
+      MIN(qi.unit_size),
+      COUNT(DISTINCT qi.price_per_unit)
+        FILTER (WHERE COALESCE(qi.total_units_needed, 0) > 0),
+      COUNT(DISTINCT qi.cost_at_quote_cents)
+        FILTER (WHERE COALESCE(qi.total_units_needed, 0) > 0)
+    INTO v_booked, v_wavg_price, v_wavg_cost, v_total_acres, v_unit_size,
+         v_price_cohort_count, v_cost_cohort_count
+      -- >>>MONEY_COHORT_GUARD aggregate
     FROM quote_items qi
     WHERE qi.quote_id = p_quote_id AND qi.product_id = v_product_id;
 
-    -- SNAPSHOT<<< settle both weighted money inputs to whole cents ONCE, here,
-    -- before anything derives from them. Several quote lines of one product can
-    -- average to fractional cents. The order_items invariant rejects a
-    -- fractional price_per_unit, and leaving either input unsettled would make
-    -- line totals, profit, commissions and reports use different bases.
+    -- MONEY_COHORT_GUARD<<< reject ambiguous allocation
+    -- A partial product-level draw does not say which quote line it consumes.
+    -- Combining distinct price or cost cohorts into one weighted unit amount
+    -- can charge a cent that no booked line carried, or reuse a rounding cent
+    -- after a reversible draw. Preserve the existing fail-closed behavior until
+    -- a cent-priced cohort or immutable allocation ledger is implemented.
+    IF v_price_cohort_count > 1 OR v_cost_cohort_count > 1 THEN
+      RAISE EXCEPTION
+        'AMBIGUOUS_BOOKING_MONEY_COHORTS:%:price_cohorts=%:cost_cohorts=%',
+        v_product_id, v_price_cohort_count, v_cost_cohort_count;
+    END IF;
+    -- >>>MONEY_COHORT_GUARD reject ambiguous allocation
+
+    -- SNAPSHOT<<< settle the now-single-cohort money inputs to whole cents ONCE,
+    -- here, before anything derives from them. The explicit cohort guard above
+    -- prevents rounding from inventing an unbooked cent; this normalization is
+    -- only a final representation boundary for already-unambiguous values.
     v_wavg_price := ROUND(v_wavg_price, 2);
     v_wavg_cost := ROUND(v_wavg_cost, 2);
     -- >>>SNAPSHOT
@@ -458,10 +482,11 @@ BEGIN
 
   IF v_impl IS NULL
      OR v_wrapper IS NULL
-     OR md5(v_impl_source) <> '2ff7a345a555b1cdeee16a890bb65034'
+     OR md5(v_impl_source) <> 'e9fcd62bb5a96db0f7b5105fc3172bc4'
      OR position('v_quote.deleted_at IS NOT NULL' in v_impl_source) = 0
      OR position('v_quote.created_by IS DISTINCT FROM v_actor' in v_impl_source) = 0
      OR position('NOT_QUOTE_OWNER' in v_impl_source) = 0
+     OR position('AMBIGUOUS_BOOKING_MONEY_COHORTS' in v_impl_source) = 0
      OR position('v_quote.deleted_at IS NOT NULL' in v_impl_source)
         > position('check_idempotency' in v_impl_source)
      OR position('v_quote.created_by IS DISTINCT FROM v_actor' in v_impl_source)

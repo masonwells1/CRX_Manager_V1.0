@@ -8,6 +8,8 @@ Closed the final exact-head PR #397 blocker in Quote Builder. The browser now sa
 
 The final PR review also found that a successful `save_quote()` installed its authoritative header totals but left the still-open editor's line operands from before the database recalculation. Quote Builder now refetches and installs the saved section/item rows (including their refreshed product pricing relation) before any follow-up action can continue; a failed canonical read opens the existing Reload Quote recovery instead of allowing a stale calculation or conversion. The rendered regression changes server price/cost behind the page, saves, edits quantity, and proves the next calculation uses the refreshed values. This follow-up also required no migration and changed no live data.
 
+A final money review then caught a real blocker in the still-unapplied `20260813161614` draw-down ownership candidate: rounding a `$10.005` weighted unit price could turn two booked lines totaling `$20.01` into a `$20.02` order. The candidate now rejects more than one distinct same-product price or cost cohort before deriving line, header, profit, or commission money. Its rollback smoke builds the exact `$10.00`/`$10.01` case and requires `AMBIGUOUS_BOOKING_MONEY_COHORTS` with no surviving order or draw-ledger row. This preserves the live fail-closed behavior while retaining the candidate's owner/deleted-quote security fixes; a future cohort-allocation ledger is still required to make that ambiguous partial draw succeed. The migration remains unapplied and no live data changed.
+
 ## 2026-08-14 — Codex Supabase access is write-enabled by owner decision
 
 **Source:** Mason's explicit in-chat approval, 2026-08-14 ("Readable write scope for codex let

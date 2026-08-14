@@ -655,13 +655,14 @@
       "chain": "smoke-draw-down-quote-owner-boundary.sql",
       "container_only": true,
       "container_prover": "prove-pricing-audit-real-schema.mjs",
-      "description": "CONTAINER ONLY pending-apply rollback chain for the draw-down authorization follow-up: two active sales reps prove a rep cannot draw another rep's sent quote; an owning rep cannot draw a soft-deleted revised quote; owning-rep and active-admin controls both pass the boundary and reach EMPTY_DRAW; no order or draw-ledger row survives. The captured-live-ledger prover replays the exact live schema, applies every pending candidate in order, executes this chain, and requires SMOKE_PASS_ROLLBACK.",
+      "description": "CONTAINER ONLY pending-apply rollback chain for the draw-down authorization and money-boundary follow-up: two active sales reps prove a rep cannot draw another rep's sent quote; an owning rep cannot draw a soft-deleted revised quote; owning-rep and active-admin controls both pass the boundary and reach EMPTY_DRAW; a same-product $10.00/$10.01 booking raises AMBIGUOUS_BOOKING_MONEY_COHORTS instead of inventing a rounding cent; no order or draw-ledger row survives. The captured-live-ledger prover replays the exact live schema, applies every pending candidate in order, executes this chain, and requires SMOKE_PASS_ROLLBACK.",
       "covers": [
         "draw_down_quote"
       ],
       "area": [
         "inventory",
         "lifecycle",
+        "pricing",
         "security",
         "idempotency",
         "regression"

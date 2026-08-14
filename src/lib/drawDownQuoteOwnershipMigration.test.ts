@@ -33,7 +33,7 @@ function md5(source: string): string {
 }
 
 describe('draw_down_quote owner and deletion boundary migration', () => {
-  it('pins the exact applied private body and changes only authorization plus cent settlement', () => {
+  it('pins the exact applied private body and changes only authorization plus fail-closed money settlement', () => {
     const baselineBody = storedFunctionSource(
       baselineSql,
       'CREATE OR REPLACE FUNCTION public.draw_down_quote(',
@@ -53,12 +53,28 @@ describe('draw_down_quote owner and deletion boundary migration', () => {
     ].join('\n');
 
     expect(md5(baselineBody)).toBe('87bf7adcdc63d94684676da5ab09bfde');
-    expect(md5(patchedBody)).toBe('2ff7a345a555b1cdeee16a890bb65034');
+    expect(md5(patchedBody)).toBe('e9fcd62bb5a96db0f7b5105fc3172bc4');
     expect(
       patchedBody
         .replace(
           newGuard,
           "  IF NOT FOUND THEN RAISE EXCEPTION 'Quote not found'; END IF;\n\n",
+        )
+        .replace(
+          / {2}-- MONEY_COHORT_GUARD<<< declarations[\s\S]*? {2}-- >>>MONEY_COHORT_GUARD declarations\n/,
+          '',
+        )
+        .replace(
+          / {6}-- MONEY_COHORT_GUARD<<< aggregate[\s\S]*? {6}-- >>>MONEY_COHORT_GUARD aggregate\n/,
+          [
+            '      MIN(qi.unit_size)',
+            '    INTO v_booked, v_wavg_price, v_wavg_cost, v_total_acres, v_unit_size',
+            '',
+          ].join('\n'),
+        )
+        .replace(
+          / {4}-- MONEY_COHORT_GUARD<<< reject ambiguous allocation[\s\S]*? {4}-- >>>MONEY_COHORT_GUARD reject ambiguous allocation\n\n/,
+          '',
         )
         .replace('    v_wavg_price := ROUND(v_wavg_price, 2);\n', '')
         .replace(/^[ \t]*--.*$/gm, '')
@@ -69,17 +85,23 @@ describe('draw_down_quote owner and deletion boundary migration', () => {
     );
   });
 
-  it('settles weighted price and cost before deriving order-line money', () => {
+  it('rejects distinct price or cost cohorts before deriving order-line money', () => {
     const body = storedFunctionSource(
       migrationSql,
       'CREATE OR REPLACE FUNCTION public._draw_down_quote_below_cost_impl_20260810(',
     );
+    const priceCohorts = body.indexOf('COUNT(DISTINCT qi.price_per_unit)');
+    const costCohorts = body.indexOf('COUNT(DISTINCT qi.cost_at_quote_cents)');
+    const cohortGuard = body.indexOf('AMBIGUOUS_BOOKING_MONEY_COHORTS');
     const roundedPrice = body.indexOf('v_wavg_price := ROUND(v_wavg_price, 2);');
     const roundedCost = body.indexOf('v_wavg_cost := ROUND(v_wavg_cost, 2);');
     const lineTotal = body.indexOf('v_line_total := ROUND(v_wavg_price * v_qty, 2);');
     const orderInsert = body.indexOf('INSERT INTO order_items');
 
-    expect(roundedPrice).toBeGreaterThan(-1);
+    expect(priceCohorts).toBeGreaterThan(-1);
+    expect(costCohorts).toBeGreaterThan(priceCohorts);
+    expect(cohortGuard).toBeGreaterThan(costCohorts);
+    expect(roundedPrice).toBeGreaterThan(cohortGuard);
     expect(roundedCost).toBeGreaterThan(roundedPrice);
     expect(lineTotal).toBeGreaterThan(roundedCost);
     expect(orderInsert).toBeGreaterThan(lineTotal);
@@ -116,12 +138,15 @@ describe('draw_down_quote owner and deletion boundary migration', () => {
     expect(migrationSql).toContain("NOT has_function_privilege('postgres', v_impl, 'EXECUTE')");
   });
 
-  it('proves two sales reps, a deleted quote, owner/admin controls, and zero mutation', () => {
+  it('proves owner/admin controls, ambiguous money denial, and zero mutation', () => {
     expect(smokeSql.match(/'sales_rep'/g)).toHaveLength(2);
     expect(smokeSql).toContain("'NOT_QUOTE_OWNER%'");
     expect(smokeSql).toContain("'Quote not found%'");
     expect(smokeSql.match(/'EMPTY_DRAW%'/g)).toHaveLength(2);
     expect(smokeSql).toContain('deleted_at');
+    expect(smokeSql).toContain("'AMBIGUOUS_BOOKING_MONEY_COHORTS:%'");
+    expect(smokeSql).toContain('10.00');
+    expect(smokeSql).toContain('10.01');
     expect(smokeSql).toContain('FROM public.orders');
     expect(smokeSql).toContain('FROM public.quote_product_draws');
     expect(smokeSql).toContain("RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'");
