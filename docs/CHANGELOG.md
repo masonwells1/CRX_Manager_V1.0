@@ -2,6 +2,39 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-14 — CRX-SEC-1: quote versions become RPC-owned (folded into the recovery PR)
+
+`public.quote_versions` was client-writable. Its RLS INSERT policy (`qversions_insert`) checked
+only WHO owned the quote — never what the row contained — and the browser roles still held the
+raw table write grants, so a sales rep could PostgREST-INSERT a version row of their own
+construction onto their own quote, including a forged `sent_by`.
+
+That turned into a money defect once `20260812115236` made `snapshot_data` an authoritative cost
+source: the restore path arms the cost-snapshot passthrough and writes the snapshot's
+`current_cost` straight into the immutable `quote_items.cost_at_quote_cents`, whose only check is
+`<= 0`. `convert_quote_to_order` then copies that into the order line, and canonical profit and
+commission derive from it. The below-cost approval trigger from `20260812115237` does not catch
+this — it compares the SALE PRICE against the LIVE product cost, and understating the historical
+cost basis raises apparent margin, so the trigger never fires. Net effect: a sales rep could
+understate COGS on their own quote and inflate margin reporting and their own commission with no
+admin approval in the path. Live since 2026-08-12; the read-only exploitation check against live
+came back CLEAN, so nothing needs repairing — only closing.
+
+`20260813080000_lock_quote_versions_writes_to_rpc.sql` closes it with the same RPC-owned shape
+`20260715203911` used for returns: drop the ownership-only INSERT policy, revoke the six
+write-capable table grants from the browser roles (MAINTAIN deliberately kept and explained at the
+REVOKE), leave `qversions_select` and the authenticated SELECT grant untouched so version history
+keeps rendering, and re-state the callable boundary on `create_quote_version` and
+`restore_quote_version`. The legitimate writer is a SECURITY DEFINER owned by `postgres` with no
+authenticated EXECUTE, so it bypasses RLS and holds its own grants — dropping the policy cannot
+reach it. Ships with a write-boundary smoke test, RLS contract assertions, and a DB-invariant
+predicate. **STATUS: NOT APPLIED** — the file lands on `main` as source; the live apply is a
+separate approval.
+
+This PR also folds in what was PR #394 (split 3/3 of #389). The recovery split and this fix land
+together because the adversarial review correctly refused to clear migrations that create a
+client-writable authoritative cost path without the fix present in the same diff.
+
 ## 2026-08-14 — Codex Supabase guard: exact read-only allowlist (Sol HIGH finding)
 
 Sol's adversarial review of the write-scope PR found that the Codex production-action guard
