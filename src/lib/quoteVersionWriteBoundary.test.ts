@@ -149,7 +149,18 @@ describe('quote_versions write boundary — migration', () => {
     // The hole stays open until this file applies. A row inserted in the gap
     // would remain permanently restorable into cost_at_quote_cents, so the
     // exploitation check is a hard precondition, not just a header note.
-    expect(migration).toMatch(/cost basis below half the product current cost/);
+    expect(migration).toMatch(
+      /stored cost basis that is not EXACTLY the live products\.current_cost/,
+    );
+
+    // And it must stay EXACT. Review finding CRX-QV-001 (2026-08-14) killed an
+    // earlier revision that only flagged a line below HALF the catalog cost: a
+    // basis forged at 60% of a $100 cost cleared that band, so the lockdown
+    // would have sealed a forged snapshot in place permanently. A percentage
+    // band cannot prove provenance — assert the comparison itself, so a future
+    // edit cannot quietly reintroduce a tolerance.
+    expect(migration).toMatch(/AND cost_num <> current_cost\)/);
+    expect(migration).not.toMatch(/cost_num\s*<\s*current_cost\s*\/\s*2/);
   });
 
   it('reads the forged cost the way the restore path does', () => {

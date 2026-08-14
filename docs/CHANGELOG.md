@@ -20,6 +20,18 @@ understate COGS on their own quote and inflate margin reporting and their own co
 admin approval in the path. Live since 2026-08-12; the read-only exploitation check against live
 came back CLEAN, so nothing needs repairing — only closing.
 
+That clean result is now proven exactly rather than approximately. The first revision of the
+migration's pre-apply check flagged a snapshot line only when its stored cost sat below HALF the
+product's catalog cost, and the independent review of 2026-08-14 (finding CRX-QV-001, High) was
+right to refuse it: a basis forged at 60% of a $100 cost clears a 50% band, and a percentage
+threshold cannot prove provenance at all. The check is now exact equality against
+`products.current_cost`, which the only legitimate writer copies verbatim, so any line that does
+not match to the last digit aborts the apply for a human read. Re-measured read-only against live
+on 2026-08-14: three version rows, five snapshot lines, every stored basis exactly equal to its
+product's catalog cost. The exact test is deliberately fail-closed — a legitimate catalog price
+move between measurement and apply will also abort it, and the answer there is to re-measure and
+read the differing line, not to widen the test.
+
 `20260813080000_lock_quote_versions_writes_to_rpc.sql` closes it with the same RPC-owned shape
 `20260715203911` used for returns: drop the ownership-only INSERT policy, revoke the six
 write-capable table grants from the browser roles (MAINTAIN deliberately kept and explained at the
