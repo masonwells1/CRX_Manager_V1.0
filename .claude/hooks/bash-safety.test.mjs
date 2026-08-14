@@ -89,6 +89,92 @@ for (const command of [
   "node --require ./preload.cjs scripts/apply-l{i..i}ve-testdata-maintenance-20260{8..8}12.mjs --approved-by-ma{s..s}on=2026-08-12",
   "node (\"--req\"+\"uire\") ./preload.cjs (\"scripts/apply-\"+\"live-testdata-maintenance-20260812.mjs\") (\"--approved-by-\"+\"mason=2026-08-12\")",
   'cmd /v:on /c "set a=--requ&set b=ire&set c=scripts/apply-live-testdata-maintenance-20260812.mjs&node !a!!b! ./preload.cjs !c! --approved-by-mason=2026-08-12"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); command node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); command -p node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); exec node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); exec -c node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); env -i node --no-warnings "$F" "$P" "$S" "$T"',
+  'set F=encoded& set P=encoded& set S=encoded& set T=encoded& cmd /v:on /c "node --no-warnings !F! !P! !S! !T!"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); exec -ca reviewed-name node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); env --default-signal node --no-warnings "$F" "$P" "$S" "$T"',
+  'PACKED=$(decode); env -S "$PACKED"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); command -p -- node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); exec -a "reviewed name" node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); env -C "C:\\temp dir" node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); nohup node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); nice node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); timeout 5 node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); setsid node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); stdbuf -o0 node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); (node --no-warnings "$F" "$P" "$S" "$T")',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); "node" --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); nohup "node" --no-warnings "$F" "$P" "$S" "$T"',
+  'PACKED=$(decode); env -S"$PACKED"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); Select-String -Pattern\n"node" --no-warnings "$F" "$P" "$S" "$T"',
+  'set F=encoded& set P=encoded& set S=encoded& set T=encoded& cmd /v:on /c"node --no-warnings !F! !P! !S! !T!"',
+  'PACKED=$(decode); env -a reviewed-name -S"$PACKED"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); Select-String -Pattern ^\n"node" --no-warnings "$F" "$P" "$S" "$T"',
+  'set F=encoded& set P=encoded& set S=encoded& set T=encoded& cmd /v:on /d/s/c"node --no-warnings !F! !P! !S! !T!"',
+  'PACKED=$(decode); env -vS"$PACKED"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); $\'node\' --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); n^ode --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); "n`ode" --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); bash -c \'"node" --no-warnings "$F" "$P" "$S" "$T"\'',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); pwsh -Command \'"node" --no-warnings "$F" "$P" "$S" "$T"\'',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); bash -c \'bash -c "node --no-warnings $F $P $S $T"\'',
+  'F=$(decode); bash -c \'echo safe\'; bash -c \'bash -c "node $F"\'',
+  'F=$(decode); pwsh -Com \'"node" $F\'',
+  'F=$(decode); pwsh -CommandWithArgs \'"node" $F\'',
+  'F=$(decode); pwsh -cwa \'"node" $F\'',
+  'pwsh -EncodedCommand ZW5jb2RlZA==',
+  'ENC=$(decode); pwsh -ec "$ENC"',
+  'F=$(decode); pwsh /Com \'"node" $F\'',
+  'F=$(decode); pwsh /CommandWithArgs \'"node" $F\'',
+  'F=$(decode); pwsh /cwa \'"node" $F\'',
+  'F=$(decode); pwsh /Com:\'"node" $F\'',
+  'pwsh /EncodedCommand ZW5jb2RlZA==',
+  'pwsh /EncodedCommand:ZW5jb2RlZA==',
+  'ENC=$(decode); pwsh /ec "$ENC"',
+  'F=$(decode); "pwsh" /Com \'"node" $F\'',
+  '"pwsh" /EncodedCommand ZW5jb2RlZA==',
+  'pwsh "$env:OPT" "$env:PAYLOAD"',
+  'pwsh @args',
+  "pwsh -Command \"Start-Process pwsh -ArgumentList @('-" + "Encoded" + "Command','ZW5jb2RlZA==') -Wait\"",
+  "pwsh -Command \"Start-Process pwsh -ArgumentList '-" + "Encoded" + "Command ZW5jb2RlZA==' -Wait\"",
+  "bash -c 'if true; then pwsh --" + "Encoded" + "Command ZW5jb2RlZA==; fi'",
+  "pwsh -Command 'if ($true) { pwsh --" + "Encoded" + "Command ZW5jb2RlZA== }'",
+  "cmd /d /c '@pwsh --" + "Encoded" + "Command ZW5jb2RlZA=='",
+  "cmd /d /c 'call pwsh --" + "Encoded" + "Command ZW5jb2RlZA=='",
+  "cmd /d /c 'if 1==1 pwsh --" + "Encoded" + "Command ZW5jb2RlZA=='",
+  'F=$(decode); cmd /d /c \'@node "$F"\'',
+  "command command command command command command command command command pwsh --" + "Encoded" + "Command ZW5jb2RlZA==",
+  "env -vu FOO pwsh --" + "Encoded" + "Command ZW5jb2RlZA==",
+  "timeout -vk 1s 5s pwsh --" + "Encoded" + "Command ZW5jb2RlZA==",
+  "exec -ca review pwsh --" + "Encoded" + "Command ZW5jb2RlZA==",
+  "exec -la review pwsh --" + "Encoded" + "Command ZW5jb2RlZA==",
+  "pwsh -Cus reviewpipe --" + "Encoded" + "Command ZW5jb2RlZA==",
+  'cmd /d /c pwsh /EncodedCommand ZW5jb2RlZA==',
+  'bash -c \'pwsh /EncodedCommand ZW5jb2RlZA==\'',
+  'env -S \'pwsh /EncodedCommand ZW5jb2RlZA==\'',
+  'pwsh -En\\codedCommand ZW5jb2RlZA==',
+  'cmd /c pwsh -En^codedCommand ZW5jb2RlZA==',
+  'pwsh --EncodedCommand ZW5jb2RlZA==',
+  'F=$(decode); pwsh --Command \'"node" $F\'',
+  'F=$(decode); pwsh --CommandWithArgs \'"node" $F\'',
+  'bash -c \'pwsh --EncodedCommand ZW5jb2RlZA==\'',
+  'pwsh \\/EncodedCommand ZW5jb2RlZA==',
+  'MID=w env -S \'p${MID}sh /EncodedCommand ZW5jb2RlZA==\'',
+  'pwsh -CustomPipeName reviewpipe --EncodedCommand ZW5jb2RlZA==',
+  'pwsh -ep Bypass --EncodedCommand ZW5jb2RlZA==',
+  'pwsh -ConfigurationName Microsoft.PowerShell --EncodedCommand ZW5jb2RlZA==',
+  'pwsh -ConfigurationFile config.pssc --EncodedCommand ZW5jb2RlZA==',
+  'pwsh -SettingsFile settings.json --EncodedCommand ZW5jb2RlZA==',
+  'pwsh -inp text --EncodedCommand ZW5jb2RlZA==',
+  'pwsh -out text --EncodedCommand ZW5jb2RlZA==',
+  'pwsh -w hidden --EncodedCommand ZW5jb2RlZA==',
+  'pwsh -wd . --EncodedCommand ZW5jb2RlZA==',
+  'cmd /d /k pwsh --EncodedCommand ZW5jb2RlZA==',
+  'cmd /d/k"pwsh --EncodedCommand ZW5jb2RlZA=="',
 ]) {
   ok(maintenanceProducerCommandMentioned(command), `producer spelling recognized by shell guard: ${command}`);
   ok(checkDangerousCommand(command), `non-literal producer invocation denied by shell guard: ${command}`);
@@ -103,6 +189,52 @@ eq(checkMaintenanceProducerInvocation(nodeMentionAsData), null, "Node text searc
 ok(!checkDangerousCommand(nodeMentionAsData), "ordinary PowerShell Node text search stays allowed");
 ok(!checkDangerousCommand("echo $PATH"), "ordinary environment-variable display stays allowed");
 ok(!checkDangerousCommand("Get-ChildItem *.mjs"), "ordinary non-Node file glob stays allowed");
+const wrappedNodeMentionAsData = 'Write-Output \'command node "$F"\'';
+ok(!maintenanceProducerCommandMentioned(wrappedNodeMentionAsData), "wrapped Node spelling used as quoted data is not classified as an invocation");
+eq(checkMaintenanceProducerInvocation(wrappedNodeMentionAsData), null, "wrapped Node quoted data stays outside the producer gate");
+ok(!checkDangerousCommand(wrappedNodeMentionAsData), "ordinary wrapped Node quoted data stays allowed");
+const envSplitStringAsData = "env MODE=-S powershell -Command 'Write-Output $env:MODE'";
+ok(!maintenanceProducerCommandMentioned(envSplitStringAsData), "env assignment value named -S is not parsed as a split-string option");
+eq(checkMaintenanceProducerInvocation(envSplitStringAsData), null, "env assignment value stays outside the producer gate");
+ok(!checkDangerousCommand(envSplitStringAsData), "ordinary env assignment value stays allowed");
+const envPostCommandSplitStringData = "env -- powershell -Command 'Write-Output -S $env:MODE'";
+ok(!maintenanceProducerCommandMentioned(envPostCommandSplitStringData), "env scanner stops before child-command -S data");
+eq(checkMaintenanceProducerInvocation(envPostCommandSplitStringData), null, "child-command -S data stays outside the producer gate");
+ok(!checkDangerousCommand(envPostCommandSplitStringData), "ordinary child-command -S data stays allowed");
+const powershellOptionData = "pwsh -ExecutionPolicy Bypass 'Write-Output node $value'";
+ok(!maintenanceProducerCommandMentioned(powershellOptionData), "PowerShell non-command options do not reinterpret later quoted data");
+eq(checkMaintenanceProducerInvocation(powershellOptionData), null, "PowerShell option data stays outside the producer gate");
+ok(!checkDangerousCommand(powershellOptionData), "ordinary PowerShell option data stays allowed");
+const encodedPowerShellAsData = "rg -n 'pwsh /EncodedCommand' docs";
+ok(!maintenanceProducerCommandMentioned(encodedPowerShellAsData), "PowerShell encoded-command spelling used as quoted search data is not classified as an invocation");
+eq(checkMaintenanceProducerInvocation(encodedPowerShellAsData), null, "encoded-command quoted data stays outside the producer gate");
+ok(!checkDangerousCommand(encodedPowerShellAsData), "ordinary encoded-command text search stays allowed");
+const encodedPowerShellAsPlainData = "Write-Output pwsh /EncodedCommand";
+ok(!maintenanceProducerCommandMentioned(encodedPowerShellAsPlainData), "PowerShell encoded-command spelling after a non-wrapper command is not classified as an invocation");
+eq(checkMaintenanceProducerInvocation(encodedPowerShellAsPlainData), null, "encoded-command plain data stays outside the producer gate");
+ok(!checkDangerousCommand(encodedPowerShellAsPlainData), "ordinary encoded-command plain output stays allowed");
+const encodedPowerShellAsScriptArgument = "pwsh -File script.ps1 /EncodedCommand";
+ok(!maintenanceProducerCommandMentioned(encodedPowerShellAsScriptArgument), "PowerShell option scanning stops at -File");
+eq(checkMaintenanceProducerInvocation(encodedPowerShellAsScriptArgument), null, "script argument stays outside the producer gate");
+ok(!checkDangerousCommand(encodedPowerShellAsScriptArgument), "ordinary PowerShell script argument stays allowed");
+for (const lookupCommand of ["command -v pwsh /EncodedCommand", "command -V pwsh /EncodedCommand"]) {
+  ok(!maintenanceProducerCommandMentioned(lookupCommand), `PowerShell name lookup is not classified as an invocation: ${lookupCommand}`);
+  eq(checkMaintenanceProducerInvocation(lookupCommand), null, `PowerShell lookup stays outside the producer gate: ${lookupCommand}`);
+  ok(!checkDangerousCommand(lookupCommand), `ordinary PowerShell lookup stays allowed: ${lookupCommand}`);
+}
+const nestedShellAsData = "Write-Output bash -c 'pwsh /EncodedCommand text'";
+ok(!maintenanceProducerCommandMentioned(nestedShellAsData), "nested shell spelling after a non-wrapper command is not classified as an invocation");
+eq(checkMaintenanceProducerInvocation(nestedShellAsData), null, "nested shell data stays outside the producer gate");
+ok(!checkDangerousCommand(nestedShellAsData), "ordinary nested shell text output stays allowed");
+for (const terminalWrapperCommand of ["env --help pwsh /EncodedCommand", "timeout --help pwsh /EncodedCommand"]) {
+  ok(!maintenanceProducerCommandMentioned(terminalWrapperCommand), `terminal wrapper mode is not classified as execution: ${terminalWrapperCommand}`);
+  eq(checkMaintenanceProducerInvocation(terminalWrapperCommand), null, `terminal wrapper mode stays outside the producer gate: ${terminalWrapperCommand}`);
+  ok(!checkDangerousCommand(terminalWrapperCommand), `terminal wrapper mode stays allowed: ${terminalWrapperCommand}`);
+}
+const terminalWrapperAfterOption = "timeout -s TERM --help pwsh /" + "Encoded" + "Command";
+ok(!maintenanceProducerCommandMentioned(terminalWrapperAfterOption), "terminal wrapper mode after an option is not classified as execution");
+eq(checkMaintenanceProducerInvocation(terminalWrapperAfterOption), null, "terminal wrapper mode after an option stays outside the producer gate");
+ok(!checkDangerousCommand(terminalWrapperAfterOption), "terminal wrapper mode after an option stays allowed");
 ok(checkDangerousCommand("node --require ./preload.cjs scripts/ordinary-check.mjs"), "Node require preload is denied");
 ok(checkDangerousCommand("NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "NODE_OPTIONS preload is denied");
 

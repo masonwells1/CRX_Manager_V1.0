@@ -23,8 +23,236 @@ const MAINTENANCE_PRODUCER_ALLOWED_COMMANDS = new Set([
 
 export function maintenanceProducerCommandMentioned(command) {
   const value = String(command || "");
-  const nodeInvocation = /(?:^|[|;&]\s*|^\s*(?:[A-Za-z_]\w*=\S+\s+)+|\benv(?:\.exe)?(?:\s+[A-Za-z_]\w*=\S+)*\s+|\bcmd(?:\.exe)?(?:\s+\/[A-Za-z:]+)*\s+)(?:"[^"]*[\\/]node(?:\.exe)?"|'[^']*[\\/]node(?:\.exe)?'|(?:\S*[\\/])?node(?:\.exe)?)(?=\s|$)/i.test(value);
-  if (nodeInvocation && /[*?\[\]{}$`]|[<>]\(|\([^()\r\n]*\+[^()\r\n]*\)|![^!\r\n]+!|%[^%\r\n]+%/.test(value)) return true;
+  const hasDynamicSyntax = (text) => /[*?\[\]{}$`@]|[<>]\(|\([^()\r\n]*\+[^()\r\n]*\)|![^!\r\n]+!|%[^%\r\n]+%/.test(text);
+  const dynamicSyntax = hasDynamicSyntax(value);
+  const tokenize = (text) => {
+      const tokens = [];
+      let current = "";
+      let quote = "";
+      let sawQuoted = false;
+      let sawUnquoted = false;
+      const push = () => {
+        if (!current) return;
+        tokens.push({ value: current, sawQuoted, sawUnquoted, control: false });
+        current = "";
+        sawQuoted = false;
+        sawUnquoted = false;
+      };
+      for (let index = 0; index < text.length; index += 1) {
+        const char = text[index];
+        if (quote) {
+          if (char === quote) quote = "";
+          else {
+            current += char;
+            sawQuoted = true;
+          }
+          continue;
+        }
+        if (char === "\"" || char === "'") {
+          quote = char;
+          sawQuoted = true;
+        } else if (char === "\r" || char === "\n") {
+          push();
+          tokens.push({ value: "\n", sawQuoted: false, sawUnquoted: true, control: true });
+          if (char === "\r" && text[index + 1] === "\n") index += 1;
+        } else if (/\s/.test(char)) push();
+        else if (/[;&|(){}<>]/.test(char)) {
+          push();
+          tokens.push({ value: char, sawQuoted: false, sawUnquoted: true, control: true });
+        } else {
+          current += char;
+          sawUnquoted = true;
+        }
+      }
+      push();
+      return tokens;
+  };
+  const tokens = tokenize(value);
+  const normalizeShellToken = (tokenValue) => String(tokenValue || "")
+    .replace(/\\([^\\/])/g, "$1")
+    .replace(/\^([^^])/g, "$1")
+    .replace(/`([^`])/g, "$1")
+    .replace(/^@/, "");
+  const normalizeShellOption = (tokenValue) => normalizeShellToken(tokenValue).replace(/\\\//g, "/");
+  const executableNamed = (token, name, allowQuotedBare = false) => {
+    if (!token || token.control) return false;
+    const normalized = normalizeShellToken(token.value);
+      const candidates = [token.value, normalized, normalized.replace(/^\$/, "")];
+      return candidates.some((candidate) => {
+        const basename = candidate.split(/[\\/]/).pop();
+        const exact = new RegExp(`^${name}(?:\\.exe)?$`, "i").test(basename);
+      return exact && (allowQuotedBare || !token.sawQuoted || token.sawUnquoted || /[\\/]/.test(candidate));
+    });
+  };
+  const invocationPosition = (list, index) => {
+    let segmentStart = index;
+    while (segmentStart > 0 && !list[segmentStart - 1].control) segmentStart -= 1;
+    let cursor = segmentStart;
+    while (cursor < index && /^[A-Za-z_]\w*=/.test(list[cursor].value)) cursor += 1;
+    let wrapperDepth = 0;
+    for (; cursor < index && wrapperDepth < 8; wrapperDepth += 1) {
+      const token = list[cursor];
+      const named = (name) => executableNamed(token, name, true);
+      if (named("command")) {
+        cursor += 1;
+        if (cursor < index && /^-[vV]$/.test(list[cursor].value)) return false;
+        while (cursor < index && /^(?:-p|--)$/.test(list[cursor].value)) cursor += 1;
+      } else if (named("exec")) {
+        cursor += 1;
+        while (cursor < index && list[cursor].value.startsWith("-")) {
+          if (/^-[cla]*a[cla]*$/.test(list[cursor].value)) cursor += 1;
+          cursor += 1;
+        }
+      } else if (named("env")) {
+        cursor += 1;
+        while (cursor < index) {
+          const argument = list[cursor].value;
+          if (/^--(?:help|version)$/.test(argument)) return false;
+          if (argument === "--") { cursor += 1; break; }
+          if (/^-[i0v]*[uCa][i0v]*$/.test(argument)) { cursor += 2; continue; }
+          if (/^(?:-u|--unset|-C|--chdir|-a|--argv0)$/.test(argument)) { cursor += 2; continue; }
+          if (/^[A-Za-z_]\w*=/.test(argument) || argument.startsWith("-")) { cursor += 1; continue; }
+          break;
+        }
+      } else if (["nohup", "nice", "timeout", "setsid", "stdbuf"].some((name) => named(name))) {
+        cursor += 1;
+        if (cursor < index && /^--(?:help|version)$/.test(list[cursor].value)) return false;
+        while (cursor < index && list[cursor].value.startsWith("-")) {
+          if (/^--(?:help|version)$/.test(list[cursor].value)) return false;
+          if (/^(?:-n|--adjustment|-k|--kill-after|-s|--signal|-o|-e|-i)$/.test(list[cursor].value)
+            || (named("timeout") && /^-[a-z]*[ks][a-z]*$/i.test(list[cursor].value))) cursor += 1;
+          cursor += 1;
+        }
+        if (named("timeout") && cursor < index) cursor += 1;
+      } else {
+        return false;
+      }
+      while (cursor < index && /^[A-Za-z_]\w*=/.test(list[cursor].value)) cursor += 1;
+    }
+    return cursor === index || (wrapperDepth >= 8 && cursor < index);
+  };
+  const dynamicArgument = (argument) => /^(?:[$`@*?\[<{(]|![^!\r\n]+!|%[^%\r\n]+%)/.test(argument)
+    || /^(?:--?|\/).*(?:[$`@*?\[<{(]|![^!\r\n]+!|%[^%\r\n]+%)/.test(argument);
+  const powerShellValueOption = (argument) => /^(?:--?|\/)(?:configuration(?:name|file)|config|cus(?:t(?:o(?:m(?:p(?:i(?:p(?:e(?:n(?:a(?:m(?:e)?)?)?)?)?)?)?)?)?)?)?|settings(?:f(?:i(?:l(?:e)?)?)?)?|executionpolicy|ex|ep|inputformat|inp|input|if|outputformat|o|of|out|windowstyle|w|workingdirectory|wd)(?::|=)?/i.test(argument);
+  const commandStringContainsEncodedPowerShell = (text) => {
+    const cmdTokens = tokenize(text);
+    return cmdTokens.some((token, index) => {
+      if (!(executableNamed(token, "pwsh", true) || executableNamed(token, "powershell", true))) return false;
+      for (let cursor = index + 1; cursor < cmdTokens.length; cursor += 1) {
+        if (/^(?:--?|\/)e(?:c|n[a-z]*)?(?:$|(?::|=|[\s,]).*)/i.test(normalizeShellOption(cmdTokens[cursor].value))) return true;
+      }
+      return false;
+    });
+  };
+  const powerShellEncodedCommand = tokens.some((token, index, list) => {
+    if (!(executableNamed(token, "pwsh", true) || executableNamed(token, "powershell", true)) || !invocationPosition(list, index)) return false;
+    for (let cursor = index + 1; cursor < list.length && !list[cursor].control; cursor += 1) {
+      const argument = normalizeShellOption(list[cursor].value);
+      if (/^(?:--?|\/)f(?:i(?:l(?:e)?)?)?(?:(?::|=).*)?$/i.test(argument)) return false;
+      if (/^(?:--?|\/)e(?:c|n[a-z]*)?(?:(?::|=).*)?$/i.test(argument)) return true;
+      if (powerShellValueOption(argument) && !/[:=]/.test(argument)) cursor += 1;
+      else if (!argument.startsWith("-") && !argument.startsWith("/")) break;
+    }
+    return false;
+  });
+  if (powerShellEncodedCommand) return true;
+  {
+    const nodeExecutable = (token, index, list) => {
+      if (!executableNamed(token, "node", true)) return false;
+      const pureQuotedBare = token.sawQuoted && !token.sawUnquoted && !/[\\/]/.test(token.value);
+      if (!pureQuotedBare || String(list[index - 1]?.value || "").toLowerCase() !== "-pattern") return true;
+      let segmentStart = index - 1;
+      while (segmentStart >= 0 && !list[segmentStart].control) segmentStart -= 1;
+      const commandToken = list[segmentStart + 1];
+      return !(executableNamed(commandToken, "select-string", true) || executableNamed(commandToken, "sls", true));
+    };
+    const maxNestedShellDepth = 4;
+    function analyzeText(text, depth) {
+      if (depth > maxNestedShellDepth) return true;
+      return analyzeTokens(tokenize(text), depth);
+    }
+    function analyzeTokens(candidateTokens, depth) {
+      if (dynamicSyntax && candidateTokens.some(nodeExecutable)) return true;
+      for (let index = 0; index < candidateTokens.length; index += 1) {
+        if (executableNamed(candidateTokens[index], "env") && invocationPosition(candidateTokens, index)) {
+          for (let cursor = index + 1; cursor < candidateTokens.length && !candidateTokens[cursor].control; cursor += 1) {
+            const argument = normalizeShellToken(candidateTokens[cursor].value);
+            if (argument === "--") break;
+            const shortSplit = /^-[i0v]*S(.*)$/.exec(argument);
+            const longSplit = /^--split-string(?:=(.*))?$/.exec(argument);
+            if (shortSplit || longSplit) {
+              const attached = shortSplit?.[1] || longSplit?.[1] || "";
+              const commandText = attached || candidateTokens[cursor + 1]?.value || "";
+              if (!commandText || hasDynamicSyntax(commandText) || depth >= maxNestedShellDepth || analyzeText(commandText, depth + 1)) return true;
+              break;
+            }
+            if (/^(?:-u|--unset|-C|--chdir|-a|--argv0)$/.test(argument)) {
+              cursor += 1;
+              continue;
+            }
+            if (/^[A-Za-z_]\w*=/.test(argument) || argument.startsWith("-")) continue;
+            break;
+          }
+        }
+        if (executableNamed(candidateTokens[index], "cmd") && invocationPosition(candidateTokens, index)) {
+          let commandString = false;
+          for (let cursor = index + 1; cursor < candidateTokens.length && !candidateTokens[cursor].control; cursor += 1) {
+            const commandSwitch = /^(?:\/[a-z](?::[a-z]+)?)*\/[ck](.*)$/i.exec(candidateTokens[cursor].value);
+            if (commandSwitch?.[1]) {
+              if (commandStringContainsEncodedPowerShell(commandSwitch[1]) || depth >= maxNestedShellDepth || analyzeText(commandSwitch[1], depth + 1)) return true;
+              break;
+            }
+            if (commandSwitch) {
+              commandString = true;
+              continue;
+            }
+            if (commandString) {
+              let commandEnd = cursor;
+              while (commandEnd < candidateTokens.length && !candidateTokens[commandEnd].control) commandEnd += 1;
+              const commandText = candidateTokens.slice(cursor, commandEnd).map((entry) => entry.value).join(" ");
+              if (commandStringContainsEncodedPowerShell(commandText) || depth >= maxNestedShellDepth || analyzeText(commandText, depth + 1)) return true;
+              break;
+            }
+          }
+        }
+        const posixShell = ["bash", "sh", "dash", "zsh", "ksh"].some((name) => executableNamed(candidateTokens[index], name)) && invocationPosition(candidateTokens, index);
+        const powerShell = ["pwsh", "powershell"].some((name) => executableNamed(candidateTokens[index], name, true)) && invocationPosition(candidateTokens, index);
+        if (posixShell || powerShell) {
+          let commandString = false;
+          for (let cursor = index + 1; cursor < candidateTokens.length && !candidateTokens[cursor].control; cursor += 1) {
+            const rawArgument = candidateTokens[cursor].value;
+            const argument = powerShell ? normalizeShellOption(rawArgument) : normalizeShellToken(rawArgument);
+            if (powerShell && !commandString && dynamicArgument(rawArgument)) return true;
+            if (powerShell && !commandString && /^(?:--?|\/)f(?:i(?:l(?:e)?)?)?(?:(?::|=).*)?$/i.test(argument)) break;
+            if (powerShell && !commandString && powerShellValueOption(argument)) {
+              if (!/[:=]/.test(argument)) cursor += 1;
+              continue;
+            }
+            if (powerShell && !commandString && !argument.startsWith("-") && !argument.startsWith("/")) break;
+            if (powerShell && /^(?:--?|\/)e(?:c|n[a-z]*)?(?:(?::|=).*)?$/i.test(argument)) return true;
+            const attachedCommand = powerShell ? /^(?:(?:(?:--?|\/)c|(?:--?|\/)co(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?|(?:--?|\/)cwa|(?:--?|\/)commandw[a-z]*):|--command=)(.+)$/i.exec(argument) : null;
+            if (attachedCommand) {
+              if (commandStringContainsEncodedPowerShell(attachedCommand[1]) || depth >= maxNestedShellDepth || analyzeText(attachedCommand[1], depth + 1)) return true;
+              break;
+            }
+            const commandOption = posixShell
+              ? /^-[a-z]*c[a-z]*$/i.test(argument)
+              : /^(?:(?:--?|\/)c|(?:--?|\/)co(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?|(?:--?|\/)cwa|(?:--?|\/)commandw[a-z]*)$/i.test(argument);
+            if (commandOption) {
+              commandString = true;
+              continue;
+            }
+            if (commandString) {
+              if (commandStringContainsEncodedPowerShell(argument) || depth >= maxNestedShellDepth || analyzeText(argument, depth + 1)) return true;
+              break;
+            }
+          }
+        }
+      }
+      return false;
+    }
+    if (analyzeTokens(tokens, 0)) return true;
+  }
   const nodeScript = /\bnode(?:\.exe)?\s+(?:"([^"]*)"|'([^']*)'|([^\s;&|]+))/i.exec(value);
   const scriptPath = nodeScript?.[1] || nodeScript?.[2] || nodeScript?.[3] || "";
   if (/[*?\[\]]|\$\(|\$\{/.test(scriptPath)) return true;

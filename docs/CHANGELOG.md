@@ -81,13 +81,16 @@ the reviewed outer protections. After that one-time bootstrap, any later produce
 the direct-write guard and is always classified as risky for exact-head review; executing the clean
 committed producer also requires a fresh Sol-high proof bound to the current HEAD and base.
 
-Twenty-two exact-head adversarial passes have progressively hardened the candidate before activation. The
-latest pass found that ordinary shell quoting could bypass the producer invocation matcher. The generated
+Repeated exact-head adversarial passes have progressively hardened the candidate before activation. Recent
+passes found that ordinary shell quoting and dynamically reconstructed preload arguments behind execution
+wrappers could bypass the producer invocation matcher. The generated
 guard now recognizes quoted, absolute, alternate-separator, wrapper-prefixed, and escaped spellings, and
 fails closed whenever a Node command uses dynamic shell syntax anywhere in its complete command text, while
 the producer itself independently requires its exact committed blob plus a fresh HEAD-and-base-bound
-Sol-high proof before any write mode can run. Fifty-three counted producer assertions pin those boundaries,
-including option-prefixed, value-taking-option, redirection, opaque substitution, and escaped-newline forms. The
+Sol-high proof before any write mode can run. Two hundred fifty-four counted producer assertions pin those boundaries,
+including option-prefixed, value-taking-option, redirection, opaque substitution, escaped-newline, and
+standalone Node tokens behind shell builtins, external wrappers, grouping, `env -S`, and quoted `cmd` strings
+while preserving quoted-data and environment-assignment negatives. The
 generated guard also normalizes `Function#toString()` line endings before hashing, so Windows worktrees and
 the isolated exact-review snapshot reproduce the same protected output blob.
 next pass found PostgreSQL's optional `ONLY` keyword could hide persistent targets from CTE-wrapped
