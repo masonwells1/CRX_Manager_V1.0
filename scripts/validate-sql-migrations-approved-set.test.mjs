@@ -1924,6 +1924,25 @@ const CASES = [
     mustReport: 'write_product_pricing_history',
     sql: fanoutBlock('products', 'current_cost'),
   },
+  {
+    name: 'round-33: comment markers inside a quoted routine name cannot hide its rewrite',
+    expect: 'violation',
+    mustReport: '__now',
+    sql:
+      `CREATE FUNCTION public."--now"() RETURNS void LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = 0; END $$;\n` +
+      `SELECT public."--now"();\n`,
+  },
+  {
+    name: 'round-33: firing a PostgreSQL rule is an unbindable indirect rewrite',
+    expect: 'violation',
+    mustReport: 'rule_on_scratch_probe',
+    sql:
+      `CREATE TEMP TABLE scratch_probe(id integer);\n` +
+      `CREATE RULE fire_repair AS ON INSERT TO scratch_probe ` +
+      `DO ALSO SELECT public.existing_repair();\n` +
+      `INSERT INTO scratch_probe(id) VALUES (1);\n`,
+  },
 ];
 
 // A stamp no real migration uses, so these fixtures are never mistaken for
@@ -2327,13 +2346,14 @@ function runTriggerDefinitionRequiresFanoutRefresh() {
     const base = git(['rev-parse', 'HEAD']).stdout.trim();
     writeFileSync(
       join(dir, 'supabase', 'migrations', '20200102000000_trigger.sql'),
-      `CREATE OR REPLACE FUNCTION public.ordinary_helper() RETURNS void LANGUAGE plpgsql AS $$ BEGIN NULL; END $$;\n` +
+      `CREATE OR REPLACE FUNCTION public."ordinary_helper"() RETURNS void LANGUAGE plpgsql AS $$ BEGIN NULL; END $$;\n` +
         `CREATE FUNCTION public.t32() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;\n` +
         `CREATE TRIGGER t32 BEFORE UPDATE ON public.orders FOR EACH ROW EXECUTE FUNCTION public.t32();\n`,
       'utf8',
     );
     const unrelated = JSON.parse(readFileSync(manifestPath, 'utf8'));
     (unrelated.fanout.customers ??= []).push({ target: 'orders', via: 'ordinary_helper' });
+    unrelated.routine_hashes.ordinary_helper = 'b'.repeat(64);
     writeFileSync(manifestPath, `${JSON.stringify(unrelated, null, 2)}\n`, 'utf8');
     const stale = runBash([SCRIPT, '--changed-only', `--base=${base}`, '--max-violations=999'], {
       cwd: dir, encoding: 'utf8', env: envWithoutGit(),

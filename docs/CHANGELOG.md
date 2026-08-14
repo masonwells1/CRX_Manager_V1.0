@@ -4,14 +4,17 @@ All significant development milestones, in reverse chronological order.
 
 ## 2026-08-14 — PR #364 evidence provenance and fail-closed follow-up
 
-Eight adversarial findings in the migration authorization guards are repaired. The applied
+Eleven adversarial findings in the migration authorization guards are repaired. The applied
 migration snapshot and trigger fan-out manifest now query the verified linked CRX Supabase
 project themselves instead of trusting pasted JSON with a caller-supplied project label. The shared
 capture helper accepts only two named built-in queries; caller-supplied SQL is impossible. The
 trigger capture follows helper routines, trigger-to-trigger cascades, and foreign-key referential
 actions transitively, while dynamic, unresolved, or unsupported-language behavior is opaque. Each
 source is bound to its reachable routine-body hashes, so an unrelated manifest edit cannot excuse
-a changed helper. Material-column coverage now includes compound money names such as
+a changed helper; a branch-authored replacement hash is not accepted as live evidence, so every
+affected source stays opaque until externally verified. Quoted routine identifiers are
+canonicalized instead of becoming comment syntax, and firing a PostgreSQL rule fails closed as an
+unreadable standing invocation. Material-column coverage now includes compound money names such as
 `total_margin_pct`, `price_per_unit`, and `net_margin`. Finally, a registered one-shot repair
 with a missing or unreadable canonical source file blocks every apply instead of silently
 disabling the body-identity check; readable but empty/corrupted canonical SQL is refused too.

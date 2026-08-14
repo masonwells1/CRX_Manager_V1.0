@@ -256,8 +256,13 @@ and an unreadable manifest do the same. The manifest carries the verified projec
 capture method and database timestamp, and the consumer rejects missing or mismatched
 provenance. Each source table also records its transitively reachable routines and body hashes;
 a changed helper must refresh that exact source's live evidence or mark it opaque, so an unrelated
-edge cannot hide stale evidence. The shared live-read helper accepts only named built-in queries
-and cannot submit an arbitrary `SELECT` with side effects. **Cost:** a repair
+edge cannot hide stale evidence. A hash changed by the same branch is not accepted as a live
+refresh; absent an external exact-artifact attestation, the affected source must be opaque. Quoted
+routine names are canonicalized as atomic identifiers so comment markers inside a legal name cannot
+erase its body or invocation. A `CREATE RULE` remains deferred until the migration writes its
+relation; when fired, its action is conservatively unresolved rather than silently trusted. The
+shared live-read helper accepts only named built-in queries and cannot submit an arbitrary `SELECT`
+with side effects. **Cost:** a repair
 on a table with a cascading trigger can no longer take the one-table shape at all — it
 must be restructured, or waived with a `NOT-REQUIRED` marker naming both tables.
 

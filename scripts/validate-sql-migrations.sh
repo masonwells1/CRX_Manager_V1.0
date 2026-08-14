@@ -507,6 +507,17 @@ AWK_STRIP_NOISE=$(cat <<'AWK_SN'
             if (c == "'") { instr = 0; estr = 0 }
             i++; continue
           }
+          if (inident) {
+            # A quoted identifier is syntax, but its contents are not comment
+            # delimiters. Canonicalize punctuation so public."--now" remains
+            # one callable identifier instead of truncating the line at `--`.
+            if (c == "\"" && substr(s, i + 1, 1) == "\"") {
+              out = out "_"; i += 2; continue
+            }
+            if (c == "\"") { inident = 0; i++; continue }
+            out = out (c ~ /[a-z0-9_$]/ ? c : "_")
+            i++; continue
+          }
           if (d == "/*") { inblk++; i += 2; out = out " "; continue }
           if (d == "--") break
           if (c == "'") {
@@ -515,6 +526,7 @@ AWK_STRIP_NOISE=$(cat <<'AWK_SN'
             estr = (p == "e" && q !~ /[a-z0-9_]/)
             instr = 1; out = out " "; i++; continue
           }
+          if (c == "\"") { inident = 1; i++; continue }
           out = out c; i++
         }
         return out
@@ -532,7 +544,7 @@ build_mutating_fn_index() {
         '"$AWK_STRIP_NOISE"'
         # Per-file reset: an unterminated body — or an unterminated block comment
         # or string literal — must not leak into the next file.
-        FNR == 1 { infn = 0; curfn = ""; tag = ""; inblk = 0; instr = 0; estr = 0 }
+        FNR == 1 { infn = 0; curfn = ""; tag = ""; inblk = 0; instr = 0; estr = 0; inident = 0 }
         {
           l = strip_noise(tolower($0))
           gsub(/"/, "", l)
@@ -1388,6 +1400,10 @@ $MIG_BASENAME
         if (t == "") return
         gsub(/"/, "", t)
         sub(/^[a-z0-9_]+\./, "", t)
+        if (rulerel[t] && !seenrule[t]) {
+          seenrule[t] = 1
+          printf "%d\t%s\t%s\t%s\t%s\t%s\n", tokln[p], "rule_on_" t, "indirect", "-", "-", raw[tokln[p]]
+        }
         if (trigfn[t] == "") return
         n = split(trigfn[t], arr, " ")
         for (k = 1; k <= n; k++) {
@@ -1562,6 +1578,19 @@ $MIG_BASENAME
           if (index(" " trigfn[trel] " ", " " tfn " ") == 0) {
             trigfn[trel] = (trigfn[trel] == "" ? tfn : trigfn[trel] " " tfn)
           }
+        }
+        # A PostgreSQL rule is another standing invocation. Its action can call
+        # a database-resident mutator whose body this file cannot inspect, so a
+        # later write to the rule relation is refused as an indirect rewrite.
+        for (i = 1; i <= ntok; i++) {
+          if (tok[i] != "rule" || stmt_head(i) != "create") continue
+          rrel = ""
+          for (k = i + 1; k <= ntok && tok[k] != ";"; k++) {
+            if (tok[k] == "to") { rrel = tok[k + 1]; break }
+          }
+          if (rrel == "") continue
+          gsub(/"/, "", rrel); sub(/^[a-z0-9_]+\./, "", rrel)
+          rulerel[rrel] = 1
         }
         for (i = 1; i <= ntok; i++) {
           # Dynamic SQL: refused outright, no table needed. `EXECUTE FUNCTION`

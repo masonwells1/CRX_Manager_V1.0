@@ -47,6 +47,17 @@
 const IDENT_START = /[A-Za-z_\u0080-\uFFFF]/;
 const IDENT_CHAR = /[A-Za-z0-9_$\u0080-\uFFFF]/;
 
+// PostgreSQL quoted identifiers can legally contain comment markers, spaces,
+// punctuation, and doubled quotes. Feeding their raw contents back into the
+// syntax stream turns public."--now" into a line comment and erases both the
+// definition and call. Canonicalize non-identifier characters instead. The
+// mapping may collide with an ordinary name, but that only unions extra bodies
+// and therefore fails toward an override prompt.
+function canonicalQuotedIdentifier(value) {
+  const canonical = String(value || "").replace(/[^A-Za-z0-9_$\u0080-\uFFFF]/g, "_");
+  return canonical || "_quoted_";
+}
+
 // A format placeholder standing where a relation name belongs — `EXECUTE
 // format('UPDATE %I SET ...', v_table)`. The target is chosen at runtime, so no
 // static reading of this file can rule out a protected table.
@@ -194,7 +205,7 @@ export function applyTimeCode(sql, depth = 0) {
         id += sql[i];
         i += 1;
       }
-      code += id;
+      code += canonicalQuotedIdentifier(id);
       continue;
     }
 
@@ -591,6 +602,7 @@ const NOT_A_CALL = /\b(function|procedure)\s+(?:if\s+(?:not\s+)?exists\s+)?(?:[a
 // ABOVE the CREATE TRIGGER fires nothing in reality but is charged anyway,
 // which is the over-reporting direction this module always takes.
 const TRIGGER_STMT = /\bcreate\s+(?:or\s+replace\s+)?(?:constraint\s+)?trigger\s+/g;
+const RULE_STMT = /\bcreate\s+(?:or\s+replace\s+)?rule\s+/g;
 
 /**
  * `{ table, fn }` for every trigger this SQL attaches at apply time.
@@ -758,6 +770,24 @@ function runForEffectRegion(stmt) {
   }
   if (PLPGSQL_EVALUATED_EXPRESSION.test(rest)) return rest;
   return "";
+}
+
+/** Relations that receive a standing PostgreSQL rule in this migration. */
+export function ruleAttachments(code) {
+  const s = (code || "").toLowerCase();
+  const out = [];
+  RULE_STMT.lastIndex = 0;
+  let m;
+  while ((m = RULE_STMT.exec(s)) !== null) {
+    const semi = s.indexOf(";", m.index);
+    const body = s.slice(m.index, semi === -1 ? s.length : semi);
+    const to = scanTo(body, 0, ["to"]);
+    if (to.hit !== "to") continue;
+    const rel = readRelation(body, to.end);
+    if (!rel || NON_RELATION_KEYWORDS.has(rel.table)) continue;
+    out.push(rel.table);
+  }
+  return [...new Set(out)];
 }
 
 // ROUND 29. The verbs that begin a statement PostgreSQL will run. Used to tell
@@ -937,6 +967,7 @@ export function applyTimeWriteTargets(sql) {
   // body is not in this file it joins the unknown calls instead, because
   // nothing here can say what a database-resident body writes.
   const attachments = triggerAttachments(code);
+  const ruleTables = ruleAttachments(code);
 
   // ROUND 29. A string literal handed to EXECUTE is SQL, and the only thing this
   // module did with one was scan it for a bare DML verb. So
@@ -973,14 +1004,24 @@ export function applyTimeWriteTargets(sql) {
       if (inner.unresolved) top.unresolved = true;
       defineRoutines(parsed.routines);
       attachments.push(...triggerAttachments(parsed.code));
+      ruleTables.push(...ruleAttachments(parsed.code));
       execCodes.push(parsed.code);
       foldLiterals(inner, parsed.literals);
     }
   };
   foldLiterals(top, literals);
   const fired = new Set();
+  const firedRules = new Set();
   const unknownTriggerFns = new Set();
   const fireAttached = (into) => {
+    for (const table of ruleTables) {
+      if (firedRules.has(table) || !top.tables.has(table)) continue;
+      // A rule action can call a database-resident mutator or issue arbitrary
+      // DML. Until rule actions are parsed as fully as routine bodies, firing
+      // one is not provably bounded and must refuse rather than disappear.
+      firedRules.add(table);
+      top.unresolved = true;
+    }
     for (const att of attachments) {
       const key = `${att.table}.${att.fn}`;
       if (fired.has(key) || !top.tables.has(att.table)) continue;
@@ -1055,6 +1096,7 @@ export function applyTimeWriteTargets(sql) {
     definedRoutines: [...byName.keys()],
     invokedRoutines: [...seen],
     firedTriggers: [...fired],
+    firedRules: [...firedRules],
   };
 }
 

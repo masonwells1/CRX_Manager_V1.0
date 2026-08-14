@@ -569,6 +569,33 @@ eq(T(null), [], "a null body does not throw");
   eq([...comment.targets].length, 0, "round-31: a COMMENT's text writes nothing");
 }
 
+// ------------------------------------- ROUND 33: rules and quoted routines
+{
+  const quoted = applyTimeWriteTargets(
+    'CREATE FUNCTION public."--now"() RETURNS void LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.order_items SET total_price = total_price; END $$; ' +
+    'SELECT public."--now"();',
+  );
+  ok(quoted.targets.has("order_items.total_price"),
+    "round-33: comment markers inside a quoted routine name cannot erase its body or call");
+
+  const rule = applyTimeWriteTargets(
+    "CREATE TEMP TABLE scratch_probe(id integer); " +
+    "CREATE RULE fire_repair AS ON INSERT TO scratch_probe " +
+    "DO ALSO SELECT public.existing_repair(); " +
+    "INSERT INTO scratch_probe(id) VALUES (1);",
+  );
+  ok(rule.unresolved, "round-33: firing a PostgreSQL rule fails closed");
+  eq([...rule.firedRules], ["scratch_probe"],
+    "round-33: the fired rule relation is named");
+
+  const attachOnly = applyTimeWriteTargets(
+    "CREATE TEMP TABLE scratch_probe(id integer); " +
+    "CREATE RULE fire_repair AS ON INSERT TO scratch_probe DO ALSO SELECT 1;",
+  );
+  ok(!attachOnly.unresolved, "round-33: defining but not firing a rule remains deferred");
+}
+
 // -------- ROUND 32: PL/pgSQL conditions and assignments are executable too
 {
   const refuses = (sql) => {

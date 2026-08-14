@@ -1173,6 +1173,30 @@ function armAutopilot(stateDir, hoursFromNow) {
         "  EXECUTE FUNCTION public.touch();\nUPDATE public.customers SET note = 'x';");
       ok(!isOneShotDeny(r), "round-28: an updated_at trigger on an unrelated table is silent");
 
+      // ROUND 33. A quoted routine name may legally contain `--`; it must stay
+      // one identifier rather than becoming a comment that erases the body and
+      // call. A fired PostgreSQL rule is likewise a standing invocation whose
+      // action is unreadable unless modeled, so it fails closed.
+      r = apply("20990601000184_r33_quoted_routine",
+        'CREATE FUNCTION public."--now"() RETURNS void LANGUAGE plpgsql AS $$ BEGIN\n' +
+        '  UPDATE public.order_items SET profit = profit; END $$;\n' +
+        'SELECT public."--now"();');
+      ok(isDeny(r) && isOneShotDeny(r),
+        "round-33: a quoted routine name cannot hide a registered replay");
+
+      r = apply("20990601000185_r33_rule",
+        "CREATE TEMP TABLE scratch_rule(id integer);\n" +
+        "CREATE RULE fire_repair AS ON INSERT TO scratch_rule " +
+        "DO ALSO SELECT public.existing_repair();\n" +
+        "INSERT INTO scratch_rule(id) VALUES (1);");
+      ok(isDeny(r) && isOneShotDeny(r),
+        "round-33: firing an unreadable rule action fails the replay guard closed");
+
+      r = apply("20990601000186_r33_rule_attach_only",
+        "CREATE TEMP TABLE scratch_rule(id integer);\n" +
+        "CREATE RULE benign AS ON INSERT TO scratch_rule DO ALSO SELECT 1;");
+      ok(!isOneShotDeny(r), "round-33: defining but not firing a rule remains deferred");
+
       // ROUND 29 (Codex High). A string handed to EXECUTE is SQL, and the
       // analyzer only ever scanned one for a bare DML verb. A call is not a DML
       // verb, so this reached the database with unresolved false, no targets and

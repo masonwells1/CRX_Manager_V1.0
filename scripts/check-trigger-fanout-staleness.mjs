@@ -12,25 +12,55 @@ export function changedTriggerInputs(sqlFiles) {
   const changedTriggerRoutines = new Set();
   const triggerTables = new Set();
   let unparsedTriggerDefinition = false;
+  let unparsedRoutineDefinition = false;
+  const ident = '(?:"(?:[^"]|"")*"|[a-z_][a-z0-9_$]*)';
+  const publicPrefix = '(?:(?:public|"public")\\s*\\.\\s*)?';
+  const canonical = (raw) => {
+    const text = String(raw || '').trim();
+    const name = text.startsWith('"') && text.endsWith('"')
+      ? text.slice(1, -1).replaceAll('""', '"')
+      : text.toLowerCase();
+    return /^[a-z0-9_]+$/.test(name) ? name : null;
+  };
   for (const file of sqlFiles) {
     const sql = readFileSync(file, 'utf8');
-    const routinePattern = /\bcreate\s+(?:or\s+replace\s+)?(?:function|procedure)\s+(?:public\.)?([a-z_][a-z0-9_$]*)\s*\(/gi;
-    for (const match of sql.matchAll(routinePattern)) changedRoutines.add(match[1].toLowerCase());
-    const triggerRoutinePattern = /\bcreate\s+(?:or\s+replace\s+)?function\s+(?:public\.)?([a-z_][a-z0-9_$]*)\s*\([\s\S]*?\breturns\s+(?:event_)?trigger\b/gi;
-    for (const match of sql.matchAll(triggerRoutinePattern)) {
-      changedTriggerRoutines.add(match[1].toLowerCase());
+    const routinePattern = new RegExp(
+      `\\bcreate\\s+(?:or\\s+replace\\s+)?(?:function|procedure)\\s+${publicPrefix}(${ident})\\s*\\(`,
+      'gi',
+    );
+    for (const match of sql.matchAll(routinePattern)) {
+      const name = canonical(match[1]);
+      if (name) changedRoutines.add(name); else unparsedRoutineDefinition = true;
     }
-    const triggerPattern = /\bcreate\s+(?:constraint\s+)?trigger\b[\s\S]*?\bon\s+(?:public\.)?([a-z_][a-z0-9_$]*)\b/gi;
+    const triggerRoutinePattern = new RegExp(
+      `\\bcreate\\s+(?:or\\s+replace\\s+)?function\\s+${publicPrefix}(${ident})\\s*\\([\\s\\S]*?\\breturns\\s+(?:event_)?trigger\\b`,
+      'gi',
+    );
+    for (const match of sql.matchAll(triggerRoutinePattern)) {
+      const name = canonical(match[1]);
+      if (name) changedTriggerRoutines.add(name); else unparsedRoutineDefinition = true;
+    }
+    const triggerPattern = new RegExp(
+      `\\bcreate\\s+(?:constraint\\s+)?trigger\\b[\\s\\S]*?\\bon\\s+${publicPrefix}(${ident})`,
+      'gi',
+    );
     let parsedTrigger = false;
     for (const match of sql.matchAll(triggerPattern)) {
       parsedTrigger = true;
-      triggerTables.add(match[1].toLowerCase());
+      const table = canonical(match[1]);
+      if (table) triggerTables.add(table); else unparsedTriggerDefinition = true;
     }
     if (/\bcreate\s+(?:constraint\s+)?trigger\b/i.test(sql) && !parsedTrigger) {
       unparsedTriggerDefinition = true;
     }
   }
-  return { changedRoutines, changedTriggerRoutines, triggerTables, unparsedTriggerDefinition };
+  return {
+    changedRoutines,
+    changedTriggerRoutines,
+    triggerTables,
+    unparsedTriggerDefinition,
+    unparsedRoutineDefinition,
+  };
 }
 
 export function staleTriggerSources(before, after, changed) {
@@ -49,22 +79,18 @@ export function staleTriggerSources(before, after, changed) {
     if (!owners.length && !changed.triggerTables.size) add('__unmapped_trigger_routine__', name);
   }
   if (changed.unparsedTriggerDefinition) add('__unparsed_trigger_definition__', 'unknown');
+  if (changed.unparsedRoutineDefinition) add('__unparsed_routine_definition__', 'unknown');
 
   const opaque = new Set(after.opaque_on_tables || []);
   const stale = [];
   for (const [source, reasons] of affected) {
     if (opaque.has(source)) continue;
     if (source.startsWith('__')) { stale.push(source); continue; }
-    const routineReasons = [...reasons].filter((name) => !name.startsWith('__'));
-    const routineRefreshed = routineReasons.length > 0 && routineReasons.every((name) =>
-      (after.reachable_routines?.[source] || []).includes(name) &&
-      typeof before.routine_hashes?.[name] === 'string' &&
-      typeof after.routine_hashes?.[name] === 'string' &&
-      before.routine_hashes[name] !== after.routine_hashes[name]);
-    const attachmentRefreshed = reasons.has('__trigger_attachment__') &&
-      JSON.stringify(before.reachable_routines?.[source] || []) !==
-        JSON.stringify(after.reachable_routines?.[source] || []);
-    if (!routineRefreshed && !attachmentRefreshed) stale.push(source);
+    // A branch-authored hash or edge change is self-asserted, not proof of a
+    // linked live capture. Without an external exact-artifact attestation the
+    // only honest pre-apply state is explicit opacity for every affected source.
+    void reasons;
+    stale.push(source);
   }
   return stale.sort();
 }
@@ -74,7 +100,7 @@ function main() {
   if (!base || !manifestPath) throw new Error('usage: check-trigger-fanout-staleness <base> <manifest> [sql...]');
   const changed = changedTriggerInputs(sqlFiles);
   if (!changed.changedRoutines.size && !changed.triggerTables.size &&
-      !changed.unparsedTriggerDefinition) return;
+      !changed.unparsedTriggerDefinition && !changed.unparsedRoutineDefinition) return;
   const before = JSON.parse(execFileSync(
     'git', ['show', `${base}:${manifestPath.replaceAll('\\', '/')}`], { encoding: 'utf8' },
   ));
