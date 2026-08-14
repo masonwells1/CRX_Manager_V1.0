@@ -2,6 +2,53 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-14 — Codex Supabase guard: exact read-only allowlist (Sol HIGH finding)
+
+Sol's adversarial review of the write-scope PR found that the Codex production-action guard
+blocked only three Supabase tool suffixes (apply_migration, deploy_edge_function, delete_branch),
+so branch-lifecycle mutations like merge_branch and reset_branch would have passed once the
+connector went write-enabled. The guard now governs every `supabase__`-prefixed tool with an
+exact read-only allowlist that fails closed on unrecognized tools; `execute_sql` remains the one
+pass-through to the existing read-only SQL content gate. A defense-in-depth suffix blocklist
+(mirroring the Claude-side autopilot deny set) covers connectors whose MCP prefix is a UUID rather
+than the literal server name. Regression tests assert every lifecycle mutation is blocked under
+both prefixes, an unknown future tool is blocked, and each read-only tool still passes. The
+protected-producer blob pins were re-pinned to the hardened guard.
+
+CodeRabbit follow-up on the same PR: the app connector's UUID MCP prefix now hits the same
+fail-closed allowlist (unknown tools under that prefix previously fell through to the suffix
+blocklist only), with regression tests for unknown, read-only, and `execute_sql` tools under both
+prefixes. The two agent-guidance checkers also parse `.codex/config.toml` line-by-line and match
+`read_only` at query-parameter boundaries, so commented headings, `backup_url` keys, later-table
+urls, and `read_only=false0`-style decoys can no longer satisfy the write-access assertion
+(mutation-tested against seven decoy configs).
+
+Codex-review P1 follow-up on the same PR: the built-in `codex_apps/supabase` channel — the one
+actually serving Codex's Supabase traffic per `docs/manual/KNOWN_ISSUES.md` — normalizes tool
+names with a single underscore (`mcp__codex_apps__supabase_<leaf>`), which the allowlist regex
+did not match, so an unknown write tool on that channel would have bypassed the fail-closed gate
+(only the suffix blocklist applied). The regex now accepts both naming forms (`_{1,2}`, the same
+dual-form handling the guard already uses for GitHub tools), with regression tests for unknown,
+mutating, read-only, and `execute_sql` tools under the `codex_apps` name, and the producer blob
+pins re-pinned.
+
+Second Codex-review P1 on the same PR: PostgreSQL's `SELECT ... INTO new_table` creates and
+populates a table while beginning with `SELECT`, so it passed the read-only SQL gate's
+leading-keyword and deny-keyword checks. The deny list now includes bare `INTO` — in a statement
+that begins with `SELECT`, that word is only ever the table-creating form (string literals are
+blanked before the check, and `INTO` is a reserved word, so read-only queries cannot contain it).
+Regression tests cover plain and `TEMP` `SELECT INTO` denial plus an `'into'`-in-a-string query
+that stays readable.
+
+## 2026-08-14 — Write-access assertion scoped to the Supabase connector url
+
+CodeRabbit follow-up on the Codex write-scope PR: the two agent-guidance checkers asserted the
+connector's write-enabled state with a whole-file substring match on `read_only=false`, which a
+stale comment anywhere in `.codex/config.toml` could satisfy while the active connector stayed
+read-only. Both checkers now extract the `[mcp_servers.supabase]` `url` value and require it to
+contain `read_only=false` and not `read_only=true`. Mutation-tested: a reverted flag fails the
+check even with a decoy comment present.
+
 ## 2026-08-14 — PR #364 evidence provenance and fail-closed follow-up
 
 Fifteen adversarial findings in the migration authorization guards are repaired. The applied
