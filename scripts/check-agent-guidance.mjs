@@ -118,7 +118,7 @@ record(codexHooksText.includes(".claude/hooks/sql-safety.mjs"), "Codex invokes s
 record(codexHooksText.includes("production-action-guard.mjs"), "Codex production action guard is registered");
 record(codexHooksText.includes("review-proof-guard.mjs"), "Codex review proof guard is registered");
 record(!gitignore.split(/\r?\n/).some((line) => line.trim() === ".agents/" || line.trim() === ".codex/"), "tracked agent configuration is not blanket-ignored");
-record(read(".codex/config.toml").includes("read_only=true"), "Codex Supabase MCP is read-only");
+record(read(".codex/config.toml").includes("read_only=false"), "Codex Supabase MCP declares write access (Mason approved 2026-08-14)");
 
 const sync = spawnSync(process.execPath, [path.join(ROOT, "scripts", "sync-agent-workflows.mjs"), "--check"], {
   cwd: ROOT,

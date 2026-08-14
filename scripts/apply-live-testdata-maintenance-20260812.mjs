@@ -179,11 +179,15 @@ export function buildProducerProtectionSources() {
   const constantsReplacement = constantsAnchor;
   const constantsWithMatcher = constantsReplacement;
   codexGuard = replaceExactly(codexGuard, constantsAnchor, constantsWithMatcher, "maintenance producer command constants");
-  const matcherAnchor = `export ${maintenanceProducerCommandMentioned.toString()}`;
+  // Function.prototype.toString() preserves the line endings of the module file
+  // ON DISK. With core.autocrlf=true a fresh Windows checkout is CRLF, while the
+  // guard source is LF-normalized before anchoring — normalize the anchor too or
+  // it can never match (found 2026-08-14 as a latent red on every fresh checkout).
+  const matcherAnchor = `export ${normalizeLineEndings(maintenanceProducerCommandMentioned.toString())}`;
   codexGuard = replaceExactly(
     codexGuard,
     matcherAnchor,
-    `${matcherAnchor}\n\nexport ${maintenanceProducerInvocationAllowed.toString()}`,
+    `${matcherAnchor}\n\nexport ${normalizeLineEndings(maintenanceProducerInvocationAllowed.toString())}`,
     "strict maintenance producer invocation matcher",
   );
 

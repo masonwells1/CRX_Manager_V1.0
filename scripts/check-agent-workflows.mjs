@@ -89,7 +89,7 @@ requireIncludes(".codex/hooks.json", codexHooksText, ".claude/hooks/sql-safety.m
 requireIncludes(".claude/settings.json", claudeSettingsText, "review-proof-guard.mjs");
 requireIncludes(".codex/hooks.json", codexHooksText, "review-proof-guard.mjs");
 requireIncludes(".codex/hooks.json", codexHooksText, "production-action-guard.mjs");
-requireIncludes(".codex/config.toml", contents.get(".codex/config.toml"), "read_only=true");
+requireIncludes(".codex/config.toml", contents.get(".codex/config.toml"), "read_only=false");
 requireIncludes(".claude/commands/claude-review.md", contents.get(".claude/commands/claude-review.md"), "node scripts/run-claude-review.mjs");
 requireIncludes(".claude/commands/agent-pr-comment.md", contents.get(".claude/commands/agent-pr-comment.md"), "--dry-run");
 requireIncludes(".claude/commands/agent-pr-comment.md", contents.get(".claude/commands/agent-pr-comment.md"), "--confirm");
