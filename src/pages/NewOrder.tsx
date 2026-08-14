@@ -25,7 +25,6 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useFormDraft } from '../hooks/useFormDraft';
 import { useCreditLimitCheck } from '../hooks/useGuardrails';
 import GuardrailBanner from '../components/ui/GuardrailBanner';
-import BelowCostConfirmModal, { type BelowCostLine } from '../components/ui/BelowCostConfirmModal';
 import { notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { sendOrderConfirmedEmail } from '../lib/orderConfirmedEmail';
 import { checkRUPCompliance } from '../lib/rupCompliance';
@@ -114,14 +113,6 @@ export default function NewOrder() {
   }, [isFieldStaff]);
   // B1 (deep-dive H1): RUP point-of-sale warning — same pattern as QuoteBuilder
   const [rupWarnings, setRupWarnings] = useState<string[]>([]);
-  // Below-cost guardrail: pending confirmation for a save whose effective line
-  // price is under unit cost. Holds the flagged lines plus the promise resolver
-  // that resumes (reason) or cancels (null) the in-flight handleSave.
-  const [belowCostPrompt, setBelowCostPrompt] = useState<{
-    lines: BelowCostLine[];
-    resolve: (reason: string | null) => void;
-  } | null>(null);
-
   // Codex P2 fix (PR #59, 2026-05-16): reset createOrderIdem when form intent
   // changes. Page stays mounted after a failed/lost-response submit; without
   // reset, editing customer/items/date and resubmitting would replay the
@@ -470,36 +461,10 @@ export default function NewOrder() {
       if (!creditOk && !creditWarning?.dismissed) return;
     }
 
-    // Below-cost guardrail: a priced line whose effective price (override or
-    // tier — recalcItem already folded the override into price_per_unit) is
-    // strictly under the product's unit cost needs an explicit reason before
-    // the order can be created. Skipped for field staff and rush/price-later
-    // orders — those submit unpriced, so there is no price to check.
-    let belowCostReason: string | null = null;
-    if (!isFieldStaff && !priceLater) {
-      const belowCostLines: BelowCostLine[] = validItems
-        .filter((item) => item.unit_cost > 0 && item.price_per_unit < item.unit_cost)
-        .map((item) => ({ productName: item.product_name, price: item.price_per_unit, cost: item.unit_cost }));
-      if (belowCostLines.length > 0) {
-        if (profile.role !== 'admin') {
-          toast('error', 'Only an active admin can approve a sale below cost. Ask an admin to review this order.');
-          return;
-        }
-        setSaving(true);
-        belowCostReason = await new Promise<string | null>((resolve) =>
-          setBelowCostPrompt({ lines: belowCostLines, resolve })
-        );
-        if (belowCostReason === null) {
-          setSaving(false);
-          return;
-        }
-      }
-    }
-
-    await submitOrder(belowCostReason);
+    await submitOrder();
   };
 
-  const submitOrder = async (belowCostReason: string | null = null) => {
+  const submitOrder = async () => {
     if (!profile) return;
     const validItems = items.filter((item) => item.product_id && item.quantity > 0);
     setSaving(true);
@@ -550,10 +515,9 @@ export default function NewOrder() {
           unit_size: item.unit_size,
         }));
 
-        // The local price comparison may already have collected a fresh
-        // reason before the shared server-challenge runner's first attempt.
-        // Let the transport helper append only that fresh reason; it strips
-        // any marker persisted in the user's existing notes otherwise.
+        // The first attempt is deliberately reasonless. The database locks the
+        // current Product cost and only then challenges an active admin; the
+        // approved retry keeps this same idempotency key.
         const { data, error } = await runWithBelowCostApproval((reason) => supabase.rpc('create_direct_order', withBelowCostReason('create_direct_order', {
           p_customer_id: customerId,
           p_order_date: orderDate,
@@ -563,7 +527,7 @@ export default function NewOrder() {
           p_performed_by: profile.id,
           p_idempotency_key: idemKey,
           p_customer_po_number: customerPoNumber.trim() || undefined,
-        }, reason ?? belowCostReason)));
+        }, reason)));
 
         if (error) throw error;
 
@@ -673,19 +637,6 @@ export default function NewOrder() {
       </div>
 
       <GuardrailBanner warning={creditWarning} onDismiss={dismissCreditWarning} />
-
-      <BelowCostConfirmModal
-        open={belowCostPrompt !== null}
-        lines={belowCostPrompt?.lines ?? []}
-        onClose={() => {
-          belowCostPrompt?.resolve(null);
-          setBelowCostPrompt(null);
-        }}
-        onConfirm={(reason) => {
-          belowCostPrompt?.resolve(reason);
-          setBelowCostPrompt(null);
-        }}
-      />
 
       {rupWarnings.length > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">

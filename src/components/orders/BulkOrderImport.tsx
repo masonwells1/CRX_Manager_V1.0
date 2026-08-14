@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { Upload, CheckCircle, AlertCircle, FileText, Sparkles } from 'lucide-react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
@@ -13,7 +13,6 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useBelowCostApproval } from '../../contexts/BelowCostApprovalContext';
 import { isBelowCostApprovalHandledError, withBelowCostReason } from '../../lib/belowCostApproval';
 import { resolveExactProductIdentity } from '../../lib/productIdentityResolver';
-import BelowCostConfirmModal, { type BelowCostLine } from '../ui/BelowCostConfirmModal';
 
 interface BulkOrderImportProps {
   open: boolean;
@@ -40,9 +39,8 @@ interface ParsedOrder {
   items: ParsedOrderItem[];
   /**
    * Stable idempotency key for this parsed order. Generated once at parse
-   * time so that a retry of `handleUpload` (e.g. after a network timeout)
-   * sends the same key to `bulk_import_order`, letting the DB short-circuit
-   * the duplicate via `check_idempotency`.
+   * time so the database challenge and the approved retry use one operation
+   * identity. A newly parsed import receives a fresh key.
    */
   idempotency_key: string;
 }
@@ -87,7 +85,7 @@ export default function BulkOrderImport({
 }: BulkOrderImportProps) {
   const { toast } = useToast();
   const { profile } = useAuth();
-  const { runWithBelowCostApproval } = useBelowCostApproval();
+  const { runWithBelowCostApproval, approvalOpen } = useBelowCostApproval();
   const [file, setFile] = useState<File | null>(null);
   const [parsing, setParsing] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -97,21 +95,6 @@ export default function BulkOrderImport({
     failed: number;
     failures: OrderImportFailure[];
   } | null>(null);
-  const [belowCostPrompt, setBelowCostPrompt] = useState<{
-    lines: BelowCostLine[];
-    resolve: (reason: string | null) => void;
-  } | null>(null);
-  const isFieldStaff = profile?.role === 'driver' || profile?.role === 'applicator';
-  // The below-cost reason belongs to the PARSED BATCH, not to one click of
-  // Import. Each parsed order carries a stable idempotency key, and
-  // bulk_import_order fingerprints p_notes -- which carries the approval marker
-  // -- so if a below-cost order commits and its response is lost, a retry that
-  // re-prompts and gets even slightly different wording comes back
-  // IDEMPOTENCY_INTENT_MISMATCH and this component reports the already-created
-  // order as failed. Held with the terms it approved (order, product, price,
-  // cost, quantity) and cleared whenever a new file is parsed, so a changed
-  // batch always re-prompts. (Codex round 36; same shape as the quote fix.)
-  const belowCostReasonRef = useRef<{ terms: string; reason: string } | null>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -133,7 +116,6 @@ export default function BulkOrderImport({
       setFile(selectedFile);
       setValidation(null);
       setUploadResults(null);
-      belowCostReasonRef.current = null;
     }
   };
 
@@ -403,6 +385,7 @@ export default function BulkOrderImport({
     let successCount = 0;
     let failedCount = 0;
     const failures: OrderImportFailure[] = [];
+    const approvedBelowCostReasons = new Set<string>();
     const productResult = await supabase
       .from('products')
       .select('id, product_name, sku, is_active, current_cost')
@@ -414,71 +397,6 @@ export default function BulkOrderImport({
       return;
     }
     const productCatalog = productResult.data || [];
-
-    // Below-cost guardrail (non-field-staff only): the bulk path must not be a
-    // way around the reason the single-order path requires. Cost is the
-    // authoritative Product current_cost — the same value the RPC snapshots —
-    // so rows whose Product does not resolve uniquely or has no usable cost are
-    // skipped here and rejected/priced by the per-order logic below.
-    let belowCostReason: string | null = null;
-    // Only the orders that actually contain a below-cost line get the approval
-    // note. A batch-global note would stamp "Below-cost approved" onto ordinary
-    // orders in the same upload — a false audit trail, and one that survives
-    // even if the order that triggered the prompt fails validation downstream.
-    const belowCostOrderNumbers = new Set<string>();
-    // Whether a below-cost order actually made it in. The batch reason existing
-    // is not the same thing: if every below-cost order fails validation while an
-    // ordinary one succeeds, logging "below-cost approved" would record an
-    // approval for a sale that was never created.
-    let belowCostSucceeded = false;
-    if (!isFieldStaff) {
-      const belowCostLines: BelowCostLine[] = [];
-      const approvedTermParts: string[] = [];
-      for (const order of validation.valid) {
-        for (const item of order.items) {
-          const resolution = resolveExactProductIdentity(item.product_name, productCatalog);
-          if (resolution.status !== 'unique') continue;
-          const cost = resolution.product.current_cost;
-          if (cost == null || !Number.isFinite(cost) || cost <= 0) continue;
-          if (item.price_per_unit < cost) {
-            belowCostOrderNumbers.add(order.order_number);
-            belowCostLines.push({
-              productName: `${order.order_number} — ${item.product_name}`,
-              price: item.price_per_unit,
-              cost,
-            });
-            // Quantity included: it sets the size of the loss being approved.
-            approvedTermParts.push(
-              `${order.order_number}|${resolution.product.id}|${item.price_per_unit}|${cost}|${item.quantity}`
-            );
-          }
-        }
-      }
-
-      if (belowCostLines.length > 0) {
-        if (profile?.role !== 'admin') {
-          toast('error', 'Only an active admin can approve sales below cost. Ask an admin to review this import.');
-          setUploading(false);
-          return;
-        }
-        const approvedTerms = JSON.stringify(approvedTermParts.sort());
-        if (belowCostReasonRef.current?.terms === approvedTerms) {
-          // Retry of the same batch: reuse the exact text so p_notes -- which
-          // bulk_import_order fingerprints -- is byte-identical to the attempt
-          // that may already have committed.
-          belowCostReason = belowCostReasonRef.current.reason;
-        } else {
-          belowCostReason = await new Promise<string | null>((resolve) =>
-            setBelowCostPrompt({ lines: belowCostLines, resolve })
-          );
-          if (belowCostReason === null) {
-            setUploading(false);
-            return;
-          }
-          belowCostReasonRef.current = { terms: approvedTerms, reason: belowCostReason };
-        }
-      }
-    }
 
     for (const order of validation.valid) {
       try {
@@ -577,31 +495,29 @@ export default function BulkOrderImport({
           : 0;
 
         // Audit #31: atomic per-order create — order + items rolled together.
-        // The idempotency key is generated once at parse time and stored on
-        // the ParsedOrder, so retrying handleUpload (e.g. after a network
-        // timeout on an earlier order in the batch) sends the SAME key and
-        // bulk_import_order's check_idempotency short-circuits the dupe.
-        // The batch prompt may already have collected a fresh reason before
-        // the shared server-challenge runner starts its first attempt. Pass
-        // that reason through the authoritative transport instead of hiding
-        // it in p_notes before the helper can distinguish fresh from stale.
-        const { data: rpcResult, error: rpcError } = await runWithBelowCostApproval((reason) => supabase.rpc('bulk_import_order', withBelowCostReason('bulk_import_order', {
-          p_order_number: order.order_number,
-          p_customer_id: customer.id,
-          p_status: 'confirmed',
-          p_total_price: totalPriceCents / 100,
-          p_total_cost: totalCostCents / 100,
-          p_total_profit: totalProfitCents / 100,
-          p_total_margin_pct: totalMarginPct,
-          p_order_date: order.order_date,
-          p_items: itemsPayload,
-          p_notes: order.notes,
-          p_idempotency_key: order.idempotency_key,
-        }, reason ?? (
-          belowCostReason && belowCostOrderNumbers.has(order.order_number)
-            ? belowCostReason
-            : null
-        ))));
+        // Always let the database lock Product costs before asking for approval.
+        // The callback retains this parsed order's stable idempotency key across
+        // the reasonless challenge and its approved retry.
+        let approvalReasonUsed: string | null = null;
+        const recordApprovalReason = (reason: string | null) => {
+          if (reason) approvalReasonUsed = reason;
+          return reason;
+        };
+        const { data: rpcResult, error: rpcError } = await runWithBelowCostApproval((reason) =>
+          supabase.rpc('bulk_import_order', withBelowCostReason('bulk_import_order', {
+            p_order_number: order.order_number,
+            p_customer_id: customer.id,
+            p_status: 'confirmed',
+            p_total_price: totalPriceCents / 100,
+            p_total_cost: totalCostCents / 100,
+            p_total_profit: totalProfitCents / 100,
+            p_total_margin_pct: totalMarginPct,
+            p_order_date: order.order_date,
+            p_items: itemsPayload,
+            p_notes: order.notes,
+            p_idempotency_key: order.idempotency_key,
+          }, recordApprovalReason(reason)))
+        );
 
         if (rpcError) throw rpcError;
         const result = assertRpcResult<{ order_id: string; warnings?: string[] }>(rpcResult, 'bulk_import_order');
@@ -610,7 +526,7 @@ export default function BulkOrderImport({
         }
 
         successCount++;
-        if (belowCostOrderNumbers.has(order.order_number)) belowCostSucceeded = true;
+        if (approvalReasonUsed) approvedBelowCostReasons.add(approvalReasonUsed);
       } catch (error) {
         if (!isBelowCostApprovalHandledError(error)) {
           Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'Error importing order' } });
@@ -630,8 +546,8 @@ export default function BulkOrderImport({
       if (profile) {
         await logActivity({
           event: 'orders_bulk_imported',
-          description: belowCostReason && belowCostSucceeded
-            ? `Bulk imported ${successCount} order(s) — below-cost approved: ${belowCostReason}`
+          description: approvedBelowCostReasons.size > 0
+            ? `Bulk imported ${successCount} order(s) — below-cost approved: ${Array.from(approvedBelowCostReasons).join('; ')}`
             : `Bulk imported ${successCount} order(s)`,
           performedBy: profile.id,
         });
@@ -649,23 +565,14 @@ export default function BulkOrderImport({
     setFile(null);
     setValidation(null);
     setUploadResults(null);
-    // BelowCostConfirmModal renders as a sibling of this Modal, so its
-    // visibility follows belowCostPrompt rather than `open`. Without this it
-    // would outlive the import dialog, and the promise handleUpload is awaiting
-    // would never settle — leaving the upload parked with uploading stuck true.
-    belowCostPrompt?.resolve(null);
-    setBelowCostPrompt(null);
-    belowCostReasonRef.current = null;
     onClose();
   };
 
   return (
     <>
-    {/* While the below-cost prompt is up, this dialog must ignore Escape. Both
-        modals register document-level Escape handlers, so a single press would
-        otherwise cancel the approval AND tear down the whole import, discarding
-        the parsed file and validation results. (Codex round 24.) */}
-    <Modal open={open} onClose={belowCostPrompt ? () => {} : handleClose} title="Import Orders" size="large">
+    {/* While the shared server-challenge prompt is up, this dialog must ignore
+        Escape so one keypress cannot cancel approval and discard the import. */}
+    <Modal open={open} onClose={approvalOpen ? () => {} : handleClose} title="Import Orders" size="large">
       <div className="space-y-4">
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
           <div className="flex items-start gap-3">
@@ -816,18 +723,6 @@ export default function BulkOrderImport({
       </div>
     </Modal>
 
-    <BelowCostConfirmModal
-      open={belowCostPrompt !== null}
-      lines={belowCostPrompt?.lines ?? []}
-      onClose={() => {
-        belowCostPrompt?.resolve(null);
-        setBelowCostPrompt(null);
-      }}
-      onConfirm={(reason) => {
-        belowCostPrompt?.resolve(reason);
-        setBelowCostPrompt(null);
-      }}
-    />
     </>
   );
 }

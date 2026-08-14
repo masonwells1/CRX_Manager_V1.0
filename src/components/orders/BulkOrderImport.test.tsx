@@ -58,13 +58,46 @@ vi.mock('../../lib/sentry', () => ({
 }));
 
 import BulkOrderImport from './BulkOrderImport';
+import { BelowCostApprovalProvider } from '../../contexts/BelowCostApprovalContext';
 
-/** Type a reason into the below-cost guardrail modal and approve it. */
-async function approveBelowCost(reason: string) {
-  const textarea = await screen.findByLabelText(/reason \(required\)/i);
-  fireEvent.change(textarea, { target: { value: reason } });
-  fireEvent.click(screen.getByRole('button', { name: /approve below-cost sale/i }));
+function renderImport(props: Parameters<typeof BulkOrderImport>[0]) {
+  return render(
+    <BelowCostApprovalProvider>
+      <BulkOrderImport {...props} />
+    </BelowCostApprovalProvider>,
+  );
 }
+
+/** Type a reason into the database-challenge modal and approve it. */
+async function approveBelowCost(reason: string) {
+  const textarea = await screen.findByLabelText(/approval reason \(required\)/i);
+  fireEvent.change(textarea, { target: { value: reason } });
+  fireEvent.click(screen.getByRole('button', { name: /approve and retry/i }));
+}
+
+const belowCostReasonError = {
+  code: 'P0001',
+  message: `BELOW_COST_REASON_REQUIRED:${JSON.stringify({
+    operation: 'bulk_import_order',
+    product_id: 'product-b',
+    product_name: 'Same Name',
+    unit_price_cents: 300,
+    // Intentionally differs from the browser fixture's $7 Product cost. The
+    // modal must display this later $9 database-locked value.
+    locked_unit_cost_cents: 900,
+  })}`,
+};
+
+const belowCostAdminError = {
+  code: 'P0001',
+  message: `BELOW_COST_ADMIN_REQUIRED:${JSON.stringify({
+    operation: 'bulk_import_order',
+    product_id: 'product-b',
+    product_name: 'Same Name',
+    unit_price_cents: 300,
+    locked_unit_cost_cents: 700,
+  })}`,
+};
 
 describe('BulkOrderImport', () => {
   const defaultProps = { open: true, onClose: vi.fn(), onSuccess: vi.fn() };
@@ -92,22 +125,22 @@ describe('BulkOrderImport', () => {
   });
 
   it('renders when open', () => {
-    render(<BulkOrderImport {...defaultProps} />);
+    renderImport(defaultProps);
     expect(screen.getByText(/import orders/i)).toBeInTheDocument();
   });
 
   it('does not render when closed', () => {
-    render(<BulkOrderImport {...defaultProps} open={false} />);
+    renderImport({ ...defaultProps, open: false });
     expect(screen.queryByText(/import orders/i)).not.toBeInTheDocument();
   });
 
   it('shows file upload area', () => {
-    render(<BulkOrderImport {...defaultProps} />);
+    renderImport(defaultProps);
     expect(screen.getAllByText(/csv/i).length).toBeGreaterThan(0);
   });
 
   it('rejects an ambiguous same-name Product before bulk_import_order', async () => {
-    const { container } = render(<BulkOrderImport {...defaultProps} />);
+    const { container } = renderImport(defaultProps);
     const csv = [
       'order_number,customer_name,product_name,quantity,price_per_unit',
       'O-AMB,North Farm,Same Name,2,20',
@@ -132,7 +165,7 @@ describe('BulkOrderImport', () => {
   });
 
   it('shows the missing Product text and retry guidance without calling bulk_import_order', async () => {
-    const { container } = render(<BulkOrderImport {...defaultProps} />);
+    const { container } = renderImport(defaultProps);
     const csv = [
       'order_number,customer_name,product_name,quantity,price_per_unit',
       'O-MISSING,North Farm,Unknown Product,2,20',
@@ -156,7 +189,7 @@ describe('BulkOrderImport', () => {
   });
 
   it('rejects a cross-field name/SKU collision before bulk_import_order', async () => {
-    const { container } = render(<BulkOrderImport {...defaultProps} />);
+    const { container } = renderImport(defaultProps);
     const csv = [
       'order_number,customer_name,product_name,quantity,price_per_unit',
       'O-CROSS,North Farm,Cross Identity,2,20',
@@ -178,7 +211,7 @@ describe('BulkOrderImport', () => {
   });
 
   it('uses a unique SKU to send the exact sibling UUID', async () => {
-    const { container } = render(<BulkOrderImport {...defaultProps} />);
+    const { container } = renderImport(defaultProps);
     const csv = [
       'order_number,customer_name,product_name,quantity,price_per_unit',
       'O-SKU,North Farm,SKU-B,2,20',
@@ -206,14 +239,16 @@ describe('BulkOrderImport', () => {
   });
 
   it('submits cent-normalized totals and surfaces returned inventory warnings', async () => {
-    mocks.rpc.mockResolvedValue({
-      data: {
-        order_id: 'order-warning',
-        warnings: ['Same Name: need 3, net position is 0'],
-      },
-      error: null,
-    });
-    const { container } = render(<BulkOrderImport {...defaultProps} />);
+    mocks.rpc
+      .mockResolvedValueOnce({ data: null, error: belowCostReasonError })
+      .mockResolvedValueOnce({
+        data: {
+          order_id: 'order-warning',
+          warnings: ['Same Name: need 3, net position is 0'],
+        },
+        error: null,
+      });
+    const { container } = renderImport(defaultProps);
     const csv = [
       'order_number,customer_name,product_name,quantity,price_per_unit',
       'O-CENTS,North Farm,SKU-B,3,0.105',
@@ -232,7 +267,7 @@ describe('BulkOrderImport', () => {
     await approveBelowCost('cents test — priced below cost on purpose');
 
     await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith('bulk_import_order', expect.anything()));
-    const args = mocks.rpc.mock.calls.find(([name]) => name === 'bulk_import_order')?.[1] as {
+    const args = mocks.rpc.mock.calls[1][1] as {
       p_total_price: number;
       p_total_cost: number;
       p_total_profit: number;
@@ -247,7 +282,7 @@ describe('BulkOrderImport', () => {
   });
 
   it('rejects a malformed explicit unit cost before bulk_import_order', async () => {
-    const { container } = render(<BulkOrderImport {...defaultProps} />);
+    const { container } = renderImport(defaultProps);
     const csv = [
       'order_number,customer_name,product_name,quantity,price_per_unit,unit_cost',
       'O-BAD-COST,North Farm,SKU-B,2,20,not-a-number',
@@ -265,7 +300,7 @@ describe('BulkOrderImport', () => {
   });
 
   it('rejects a blank required price instead of coercing it to zero', async () => {
-    const { container } = render(<BulkOrderImport {...defaultProps} />);
+    const { container } = renderImport(defaultProps);
     const csv = [
       'order_number,customer_name,product_name,quantity,price_per_unit',
       'O-BLANK-PRICE,North Farm,SKU-B,2,',
@@ -283,7 +318,7 @@ describe('BulkOrderImport', () => {
   });
 
   it('does not let an explicit zero override the authoritative Product cost', async () => {
-    const { container } = render(<BulkOrderImport {...defaultProps} />);
+    const { container } = renderImport(defaultProps);
     const csv = [
       'order_number,customer_name,product_name,quantity,price_per_unit,unit_cost',
       'O-ZERO-COST,North Farm,SKU-B,2,20,0',
@@ -308,7 +343,7 @@ describe('BulkOrderImport', () => {
   });
 
   it('rejects a terminal imported status before bulk_import_order', async () => {
-    const { container } = render(<BulkOrderImport {...defaultProps} />);
+    const { container } = renderImport(defaultProps);
     const csv = [
       'order_number,customer_name,status,product_name,quantity,price_per_unit',
       'O-FULFILLED,North Farm,fulfilled,SKU-B,2,20',
@@ -326,7 +361,10 @@ describe('BulkOrderImport', () => {
   });
 
   it('blocks a below-cost import until a reason is approved and persists it in the notes', async () => {
-    const { container } = render(<BulkOrderImport {...defaultProps} />);
+    mocks.rpc
+      .mockResolvedValueOnce({ data: null, error: belowCostReasonError })
+      .mockResolvedValueOnce({ data: { order_id: 'order-1' }, error: null });
+    const { container } = renderImport(defaultProps);
     const csv = [
       'order_number,customer_name,product_name,quantity,price_per_unit,notes',
       'O-BELOW,North Farm,SKU-B,2,3,Imported batch',
@@ -341,22 +379,28 @@ describe('BulkOrderImport', () => {
     await screen.findByText(/O-BELOW/);
     fireEvent.click(screen.getByRole('button', { name: /import 1 order/i }));
 
-    // The guardrail must fire BEFORE the import RPC.
-    expect(await screen.findByText(/selling below cost/i)).toBeInTheDocument();
-    expect(mocks.rpc).not.toHaveBeenCalledWith('bulk_import_order', expect.anything());
+    // The first RPC is explicitly reasonless. The modal uses the locked cost
+    // returned by that database attempt rather than the earlier Product read.
+    expect(await screen.findByRole('heading', { name: /approve below-cost price/i })).toBeInTheDocument();
+    expect(screen.getByText(/Price \$3\.00 · Cost \$9\.00 · Shortfall \$6\.00 per unit/)).toBeInTheDocument();
+    const firstArgs = mocks.rpc.mock.calls[0][1] as { p_notes: string; p_idempotency_key: string };
+    expect(firstArgs.p_notes).toBe('Imported batch');
+    expect(firstArgs.p_notes).not.toContain('Below-cost approved');
 
     await approveBelowCost('price match approved by Mason');
 
-    await waitFor(() => expect(mocks.rpc).toHaveBeenCalledWith('bulk_import_order', expect.anything()));
-    const args = mocks.rpc.mock.calls.find(([name]) => name === 'bulk_import_order')?.[1] as {
-      p_notes: string;
-    };
-    expect(args.p_notes).toContain('Imported batch');
-    expect(args.p_notes).toContain('Below-cost approved: price match approved by Mason');
+    await waitFor(() => expect(mocks.rpc).toHaveBeenCalledTimes(2));
+    const retryArgs = mocks.rpc.mock.calls[1][1] as { p_notes: string; p_idempotency_key: string };
+    expect(retryArgs.p_notes).toContain('Imported batch');
+    expect(retryArgs.p_notes).toContain('Below-cost approved: price match approved by Mason');
+    expect(retryArgs.p_idempotency_key).toBe(firstArgs.p_idempotency_key);
   });
 
   it('attaches the approval reason only to the orders that are actually below cost', async () => {
-    const { container } = render(<BulkOrderImport {...defaultProps} />);
+    mocks.rpc
+      .mockResolvedValueOnce({ data: null, error: belowCostReasonError })
+      .mockResolvedValue({ data: { order_id: 'order-1' }, error: null });
+    const { container } = renderImport(defaultProps);
     // SKU-B costs 7.00 in the fixture: O-BELOW is under it, O-OK is well over.
     const csv = [
       'order_number,customer_name,product_name,quantity,price_per_unit,notes',
@@ -373,26 +417,28 @@ describe('BulkOrderImport', () => {
     await screen.findByText(/O-BELOW/);
     fireEvent.click(screen.getByRole('button', { name: /import 2 orders/i }));
 
-    expect(await screen.findByText(/selling below cost/i)).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /approve below-cost price/i })).toBeInTheDocument();
     await approveBelowCost('clearance');
 
     await waitFor(() =>
-      expect(mocks.rpc.mock.calls.filter(([name]) => name === 'bulk_import_order')).toHaveLength(2)
+      expect(mocks.rpc.mock.calls.filter(([name]) => name === 'bulk_import_order')).toHaveLength(3)
     );
     const calls = mocks.rpc.mock.calls
       .filter(([name]) => name === 'bulk_import_order')
       .map(([, args]) => args as { p_order_number: string; p_notes: string });
 
-    const below = calls.find((c) => c.p_order_number === 'O-BELOW');
+    const belowAttempts = calls.filter((c) => c.p_order_number === 'O-BELOW');
     const ok = calls.find((c) => c.p_order_number === 'O-OK');
-    expect(below?.p_notes).toContain('Below-cost approved: clearance');
+    expect(belowAttempts[0]?.p_notes).toBe('Below batch');
+    expect(belowAttempts[1]?.p_notes).toContain('Below-cost approved: clearance');
     // The ordinary order must NOT be stamped with an approval it never needed.
     expect(ok?.p_notes).toBe('Normal batch');
     expect(ok?.p_notes).not.toContain('Below-cost approved');
   });
 
-  it('cancels a below-cost import without calling bulk_import_order', async () => {
-    const { container } = render(<BulkOrderImport {...defaultProps} />);
+  it('cancels a database challenge with Escape without closing the import or retrying', async () => {
+    mocks.rpc.mockResolvedValueOnce({ data: null, error: belowCostReasonError });
+    const { container } = renderImport(defaultProps);
     const csv = [
       'order_number,customer_name,product_name,quantity,price_per_unit',
       'O-BELOW-CANCEL,North Farm,SKU-B,2,3',
@@ -407,18 +453,21 @@ describe('BulkOrderImport', () => {
     await screen.findByText(/O-BELOW-CANCEL/);
     fireEvent.click(screen.getByRole('button', { name: /import 1 order/i }));
 
-    await screen.findByText(/selling below cost/i);
-    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+    await screen.findByRole('heading', { name: /approve below-cost price/i });
+    fireEvent.keyDown(document, { key: 'Escape' });
 
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: /import 1 order/i })).toBeEnabled()
-    );
-    expect(mocks.rpc).not.toHaveBeenCalledWith('bulk_import_order', expect.anything());
+    await screen.findByText(/failed: 1/i);
+    expect(defaultProps.onClose).not.toHaveBeenCalled();
+    expect(screen.getByText(/below-cancel\.csv/i)).toBeInTheDocument();
+    expect(mocks.rpc).toHaveBeenCalledTimes(1);
+    const args = mocks.rpc.mock.calls[0][1] as { p_notes?: string };
+    expect(args.p_notes ?? '').not.toContain('Below-cost approved');
   });
 
   it('denies a sales rep instead of showing the below-cost approval prompt', async () => {
     mocks.profileRole = 'sales_rep';
-    const { container } = render(<BulkOrderImport {...defaultProps} />);
+    mocks.rpc.mockResolvedValueOnce({ data: null, error: belowCostAdminError });
+    const { container } = renderImport(defaultProps);
     const csv = [
       'order_number,customer_name,product_name,quantity,price_per_unit',
       'O-BELOW-REP,North Farm,SKU-B,2,3',
@@ -436,23 +485,21 @@ describe('BulkOrderImport', () => {
     await waitFor(() =>
       expect(mocks.toast).toHaveBeenCalledWith(
         'error',
-        expect.stringMatching(/only an active admin can approve sales below cost/i),
+        expect.stringMatching(/below-cost price requires an admin/i),
       )
     );
-    expect(screen.queryByLabelText(/reason \(required\)/i)).not.toBeInTheDocument();
-    expect(mocks.rpc).not.toHaveBeenCalledWith('bulk_import_order', expect.anything());
+    expect(screen.queryByLabelText(/approval reason \(required\)/i)).not.toBeInTheDocument();
+    expect(mocks.rpc).toHaveBeenCalledTimes(1);
   });
 
   it('keeps mixed-result failure details open while refreshing successful orders', async () => {
     const onSuccess = vi.fn();
     const onPartialSuccess = vi.fn();
-    const { container } = render(
-      <BulkOrderImport
-        {...defaultProps}
-        onSuccess={onSuccess}
-        onPartialSuccess={onPartialSuccess}
-      />,
-    );
+    const { container } = renderImport({
+      ...defaultProps,
+      onSuccess,
+      onPartialSuccess,
+    });
     const csv = [
       'order_number,customer_name,product_name,quantity,price_per_unit',
       'O-GOOD,North Farm,SKU-B,2,20',

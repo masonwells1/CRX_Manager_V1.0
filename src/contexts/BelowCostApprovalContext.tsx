@@ -10,10 +10,12 @@ import {
 
 interface ContextValue {
   runWithBelowCostApproval: BelowCostApprovalRunner;
+  approvalOpen: boolean;
 }
 
 const BelowCostApprovalContext = createContext<ContextValue>({
   runWithBelowCostApproval: async (attempt) => attempt(null),
+  approvalOpen: false,
 });
 
 export function BelowCostApprovalProvider({ children }: { children: ReactNode }) {
@@ -68,7 +70,10 @@ export function BelowCostApprovalProvider({ children }: { children: ReactNode })
     return attempt(reason);
   }, [requestReason, toast]);
 
-  const value = useMemo(() => ({ runWithBelowCostApproval }), [runWithBelowCostApproval]);
+  const value = useMemo(
+    () => ({ runWithBelowCostApproval, approvalOpen: open }),
+    [open, runWithBelowCostApproval],
+  );
   return (
     <BelowCostApprovalContext.Provider value={value}>
       {children}

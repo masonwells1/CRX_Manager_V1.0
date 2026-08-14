@@ -2,6 +2,38 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-14 — Made below-cost order approval depend on locked database cost
+
+Fixed stale browser-cost below-cost approval in New Order and Bulk Order Import by requiring the database locked-cost challenge before retrying with an admin reason; added same-key, cancellation, role-denial, mixed-order, and source-regression coverage.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `3ffbeab6 fix(security): hash extensionless SQL replay inputs`
+  - `415afb08 fix: close quote conversion review blockers`
+  - `ca359ca3 Merge remote-tracking branch 'origin/main' into codex/pr389-coderabbit-fixes`
+  - `d197264e fix(security): require fresh below-cost approval context`
+  - `e33f451e Merge remote-tracking branch 'origin/main' into codex/pr389-coderabbit-fixes`
+  - `08e3c737 Merge remote-tracking branch 'origin/main' into codex/pr389-coderabbit-fixes`
+  - `d03a60fc fix(review): close PR 397 findings`
+  - `74831413 fix(migrations): make quote quarantine cutover atomic`
+  - `2565c90e fix(migrations): separate private replay and quarantine history`
+  - `f61f947e Merge remote-tracking branch 'origin/main' into codex/pr389-coderabbit-fixes`
+  - `802a121c fix: restrict quote draw-down ownership`
+  - `7f2a325c Merge remote-tracking branch 'origin/main' into codex/pr389-coderabbit-fixes`
+  - `2471e5bd Merge remote-tracking branch 'origin/claude/recover-applied-migrations-20260812' into codex/pr389-coderabbit-fixes`
+  - `e31e7184 fix(migrations): keep apply and ledger writes atomic`
+  - `da748bc3 docs(changelog): log the 2026-08-13 round-5 write-boundary hardening session`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260812010000_blend_ticket_order_header_runtime_assert.sql`
+  - `supabase/migrations/20260812011000_restore_quote_version_whole_cent_money.sql`
+  - `supabase/migrations/20260812145628_snapshot_cost_reporting.sql`
+  - `supabase/migrations/20260812151606_quote_items_cost_at_quote_snapshot.sql`
+  - `supabase/migrations/20260812154028_enforce_below_cost_admin_approval.sql`
+  - `supabase/migrations/20260813080000_lock_quote_versions_writes_to_rpc.sql`
+  - `supabase/migrations/20260813090000_restrict_restore_quote_owner_impl.sql`
+  - `supabase/migrations/20260813161614_restrict_draw_down_quote_owner.sql`
+  - `supabase/migrations/20260814041419_fresh_below_cost_reason.sql`
+  - `supabase/migrations/20260814063000_quote_sections_rpc_owned.sql`
+
 ## 2026-08-14 — Hardened the one-shot migration replay guard so extensionless SQL input…
 
 Hardened the one-shot migration replay guard so extensionless SQL input files cannot evade byte-identity checks through psql or Supabase file options, Bash/PowerShell pipelines, or stdin redirection; added mutation coverage.
