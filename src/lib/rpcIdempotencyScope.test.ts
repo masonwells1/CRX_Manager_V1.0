@@ -240,6 +240,19 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // the public save_purchase_order RPC and intentionally shares its one cache
   // namespace rather than creating an unreachable internal-operation cache.
   _save_purchase_order_ascii_identity_impl: ['save_purchase_order'],
+  // Direct EXECUTE is revoked (verified live 2026-08-14: anon, authenticated
+  // and service_role all lack EXECUTE on the private implementation). A live
+  // migration renamed the public draw_down_quote body to this private name and
+  // put a below-cost approval wrapper at the original public name; migration
+  // 20260814194500 replaces only this private body to round the averaged unit
+  // price. Both layers are one logical draw and must share the public
+  // 'draw_down_quote' replay namespace — the live body already uses that
+  // literal, and giving this layer its own namespace would create an
+  // unreachable cache and let a replay slip past the shared one. Branch
+  // claude/restrict-draw-down-owner adds the same key for its own pending
+  // migration (20260813161614); reconcile to a single entry when those
+  // migrations are folded together.
+  _draw_down_quote_below_cost_impl_20260810: ['draw_down_quote'],
   // Direct EXECUTE is revoked (service_role only). This IS the original
   // public convert_quote_to_order body: migration 20260730235031 renamed it
   // with `ALTER FUNCTION ... RENAME TO _convert_quote_to_order_owner_impl`

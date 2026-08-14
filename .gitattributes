@@ -42,6 +42,14 @@ scripts/.staging-migrations/20260813040000_clamp_negative_commission_remainder.s
 scripts/.staging-migrations/20260813050000_guard_job_commission_split_immutable.sql text eol=lf
 scripts/.staging-migrations/20260813060000_require_completed_delivery_before_invoice_post.sql text eol=lf
 
+# Draw-down weighted unit-price rounding. Same rule, same reason as Wave A: this
+# migration pins the md5 of the body it installs and re-checks that md5 in its own
+# POSTCOND block, so the bytes Git hands the applier ARE the bytes hashed. Under
+# `core.autocrlf=true` a Windows checkout smudges the file to CRLF, prosrc inherits
+# CRLF, and the LF-computed pin can never match — the migration would abort at its
+# own postflight on a machine that merely checked the repo out differently.
+supabase/migrations/20260814194500_round_draw_down_weighted_unit_price.sql text eol=lf
+
 # Generated clean-rebuild baselines are hash-verified release artifacts.
 supabase/baselines/*.sql  text eol=lf
 supabase/baselines/*.json text eol=lf

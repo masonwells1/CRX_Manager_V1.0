@@ -2,6 +2,39 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-14 — Partial draw-down could not complete when one product was booked at two prices
+
+A partial draw-down averages every quote line of one product into a single order line. The
+averaged cost was already settled to whole cents at the source; the averaged unit price was not,
+so it reached `order_items.price_per_unit` carrying fractional cents whenever the same product
+appeared on a quote at two different prices. `trg_order_items_round_money` settles the line total
+and derives profit but never touches `price_per_unit`, so the below-cost guard
+`zz_crx_below_cost_order_items` — which fires last on the row — raised `INVALID_UNIT_PRICE_CENTS`
+and rolled the whole draw-down back. A legitimate draw against a legitimately booked quote could
+not be completed at all.
+
+Migration `20260814194500_round_draw_down_weighted_unit_price.sql` adds one rounding statement
+beside the existing cost rounding in the private implementation behind the governed five-argument
+public wrapper, and changes nothing else: signature, authentication and role checks, below-cost
+approval context, idempotency ordering, inventory and order behavior, grants, and the generated
+TypeScript contract are unchanged. The emitted body was extracted from the applied source and
+verified byte-identical to live `prosrc` before the change; the only diff against live is the new
+block. Preflight pins the live body and ACL boundary, postflight pins the installed body and
+asserts the new statement precedes both the order-line insert and the line-total derivation. The
+file is pinned to LF in `.gitattributes` for the Wave A reason — the migration hashes the bytes
+Git hands the applier, so a CRLF checkout would abort at its own postflight.
+
+Verified read-only against live arithmetic: the averaged price trips the guard predicate before
+the change and satisfies it after. Rounding at the source is what keeps the stored unit price,
+line total, line profit and net margin on one basis; the trade-off is that a line total is now
+unit-price × quantity and may differ by a cent from the exact sum of the underlying quote lines,
+the same trade-off already accepted for cost directly above.
+
+Ordering note: branch `claude/restrict-draw-down-owner` carries an unapplied migration
+(`20260813161614_restrict_draw_down_quote_owner.sql`) that replaces this same function body and
+pins the same source hash. Whichever applies second fails closed on its preflight by design; the
+two must be reconciled into a single body before either is applied live.
+
 ## 2026-08-14 — Codex Supabase guard: exact read-only allowlist (Sol HIGH finding)
 
 Sol's adversarial review of the write-scope PR found that the Codex production-action guard
