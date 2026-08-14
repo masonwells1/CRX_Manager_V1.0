@@ -2,6 +2,10 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-14 — Kept quote acceptance and inventory transfer atomic during conversion
+
+Closed the final exact-head PR #397 blocker in Quote Builder. The browser now saves current quote edits without first changing the quote to `accepted`; the existing governed `convert_quote_to_order()` transaction owns the accepted transition, quote-hold release, order creation, and inventory prebooking together. Cancelling the below-cost approval prompt therefore leaves the quote state and inventory reservation unchanged, with no compensating browser write. Rendered regression coverage pins both the same-status save and cancellation behavior, while a source contract test pins the complete private conversion transaction and its governed wrapper chain. No migration was added or applied and no live data changed.
+
 ## 2026-08-14 — Codex Supabase access is write-enabled by owner decision
 
 **Source:** Mason's explicit in-chat approval, 2026-08-14 ("Readable write scope for codex let

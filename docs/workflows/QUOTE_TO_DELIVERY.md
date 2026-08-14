@@ -33,7 +33,7 @@ draft -> sent -> revised -> accepted -> declined -> expired -> cancelled
 - **draft**: Initial state. Can be edited freely.
 - **sent**: Quote was sent to the customer. A `quote_versions` snapshot is created.
 - **revised**: Edits were made after sending. New version snapshot created on next send.
-- **accepted**: Customer accepted. The `is_planned` flag can reserve inventory via holds.
+- **accepted**: Customer accepted. Whole-quote conversion reaches this state inside the governed order-creation transaction.
 - **declined**: Customer said no.
 - **expired**: Past the `expires_at` date.
 
@@ -78,7 +78,7 @@ confirmed -> partially_fulfilled -> fulfilled -> cancelled -> voided
 - **cancelled**: Order was cancelled.
 
 ### Key RPCs
-- `convert_quote_to_order()` — creates order + order_items + commissions from an accepted quote
+- `convert_quote_to_order()` — atomically accepts the quote, releases quote holds, creates the order + items + commissions, and prebooks order inventory
 - `create_direct_order()` — creates an order without a quote
 - `cancel_order()` — cancels order and releases any inventory holds
 - `update_order_items()` — modify order items (admin only)
@@ -92,9 +92,10 @@ confirmed -> partially_fulfilled -> fulfilled -> cancelled -> voided
   findings. Parse decimal input exactly instead of multiplying a binary float.
 - Always use `checkMutationResult()` after writes.
 - Always use `generateIdempotencyKey()` for order creation to prevent double-submissions.
+- The browser must not save a quote as `accepted` before `convert_quote_to_order()`. The RPC owns that transition and all inventory movement so an error or cancelled approval leaves the quote and its reservation unchanged.
 
 ### What can go wrong
-- Creating an order from a quote that wasn't accepted
+- Saving a quote as accepted before atomic conversion, which can release quote holds without creating or prebooking the order
 - Forgetting that order items have `quantity_remaining` which drives delivery fulfillment
 - Modifying an order after deliveries have already been made
 

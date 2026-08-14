@@ -2648,14 +2648,15 @@ export default function QuoteBuilder() {
       }
     }
 
-    // A normally open Quote must first commit its accepted status. An already
-    // accepted Quote is the recovery/idempotent-resume path: it is read-only in
-    // this UI, and rewriting its sections could disturb an Order that another
-    // attempt already created. Let the server RPC either create the missing
-    // Order or return the existing one without another whole-Quote save.
+    // Persist current edits without crossing the accepted boundary in the
+    // browser. The governed conversion RPC owns the accepted transition, quote
+    // hold release, Order creation, and inventory prebooking in one database
+    // transaction, so a refusal or cancelled approval leaves the booking open.
+    // An already accepted Quote is the recovery/idempotent-resume path: avoid a
+    // whole-Quote rewrite and let the server return the existing Order.
     const savedId = status === 'accepted' && quoteId
       ? quoteId
-      : await saveQuote('accepted');
+      : await saveQuote(status);
     if (!savedId) {
       setConverting(false);
       return;
@@ -2733,15 +2734,10 @@ export default function QuoteBuilder() {
       navigate(`/orders/${result.order_id}`);
     } catch (error: unknown) {
       if (isBelowCostApprovalHandledError(error)) {
-        if (status !== 'accepted') {
-          // The accepted save already committed. Do not attempt a compensating
-          // browser write after cancellation: another tab may have changed the
-          // quote or created its Order. Keeping the accepted state is the safe,
-          // truthful outcome; staff can retry conversion from that state.
-          setStatus('accepted');
-          setIsDirty(false);
-          toast('info', 'Below-cost approval was cancelled. The quote remains accepted and no order was created.');
-        }
+        // The conversion RPC is transactional. Cancellation occurs before its
+        // accepted transition commits, so no compensating browser write is
+        // needed and the existing quote/hold state remains authoritative.
+        toast('info', 'Below-cost approval was cancelled. The quote state and inventory reservations were left unchanged; no order was created.');
         setConverting(false);
         return;
       }
@@ -2835,10 +2831,9 @@ export default function QuoteBuilder() {
 
   // U16b: one-step booking for a clean, saved draft. Mark Presented uses the
   // existing create_quote_version path (snapshot + sent), then the existing
-  // conversion handler applies all stale/duplicate/draw-down guards. If the
-  // first step succeeds but below-cost approval is cancelled, the quote remains
-  // accepted so no race-prone compensating browser write can overwrite another
-  // tab; staff can retry conversion from the accepted state.
+  // conversion handler applies all stale/duplicate/draw-down guards. The
+  // conversion RPC atomically accepts the sent Quote, releases quote holds,
+  // creates the Order, and prebooks inventory; cancellation leaves it sent.
   const handleBookAsOrder = async () => {
     setBookingAsOrder(true);
     try {

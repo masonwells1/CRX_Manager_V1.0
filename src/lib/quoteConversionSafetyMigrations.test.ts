@@ -33,9 +33,11 @@ describe('quote conversion safety boundaries', () => {
     expect(boundarySmoke).toContain("RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'");
   });
 
-  it('leaves a newly accepted quote accepted when approval is cancelled', () => {
-    expect(builder).toContain("setStatus('accepted');");
-    expect(builder).toContain('The quote remains accepted and no order was created.');
+  it('keeps acceptance server-owned when approval is cancelled', () => {
+    expect(builder).toContain(': await saveQuote(status);');
+    expect(builder).not.toContain("await saveQuote('accepted')");
+    expect(builder).not.toContain("setStatus('accepted');");
+    expect(builder).toContain('The quote state and inventory reservations were left unchanged; no order was created.');
     expect(builder).not.toContain("supabase.rpc('compensate_quote_conversion_failure'");
     expect(builder).not.toContain(".from('quotes')\n          .update({ status: revertTo })");
   });

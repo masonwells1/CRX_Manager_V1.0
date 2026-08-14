@@ -1193,15 +1193,16 @@ describe('QuoteBuilder', () => {
     }));
   });
 
-  it('stops on an unconfirmed accepted save and safely resumes conversion after reload', async () => {
+  it('stops on an unconfirmed same-status save and safely resumes conversion after reload', async () => {
     const fixture = makeQuoteFixture('draft', 7);
     const { product, section, item } = fixture;
     const quote = { ...fixture.quote, status: 'sent' };
     let reloaded = false;
     let saveCalls = 0;
+    const savedStatuses: unknown[] = [];
     mockFrom.mockImplementation((table: string) => buildChain({
       data: table === 'quotes'
-        ? (reloaded ? { ...quote, status: 'accepted', row_version: 9 } : quote)
+        ? (reloaded ? { ...quote, row_version: 9 } : quote)
         : table === 'quote_sections'
           ? [section]
           : table === 'quote_items'
@@ -1213,9 +1214,10 @@ describe('QuoteBuilder', () => {
                 : [],
       error: null,
     }));
-    mockRpc.mockImplementation((name: string) => {
+    mockRpc.mockImplementation((name: string, args?: unknown) => {
       if (name === 'save_quote') {
         saveCalls += 1;
+        savedStatuses.push((args as { p_quote_payload?: { status?: unknown } } | undefined)?.p_quote_payload?.status);
         return Promise.resolve({
           data: { quote_id: quote.id, row_version: saveCalls === 1 ? 9 : 10 },
           error: null,
@@ -1252,9 +1254,10 @@ describe('QuoteBuilder', () => {
 
     await waitFor(() => expect(mockRpc).toHaveBeenCalledWith(
       'convert_quote_to_order',
-      expect.objectContaining({ p_quote_id: quote.id, p_expected_row_version: 9 }),
+      expect.objectContaining({ p_quote_id: quote.id, p_expected_row_version: 10 }),
     ));
-    expect(saveCalls).toBe(1);
+    expect(saveCalls).toBe(2);
+    expect(savedStatuses).toEqual(['sent', 'sent']);
     expect(mockToast).toHaveBeenCalledWith(
       'info',
       expect.stringContaining('already converted'),
@@ -1265,11 +1268,12 @@ describe('QuoteBuilder', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/orders/order-1');
   });
 
-  it('leaves a newly accepted quote accepted without a compensating write when below-cost approval is cancelled', async () => {
+  it('keeps a sent quote and its inventory reservation unchanged when below-cost approval is cancelled', async () => {
     const fixture = makeQuoteFixture('draft', 7);
     const { product, section, item } = fixture;
     const quote = { ...fixture.quote, status: 'sent' };
     const updatePayloads: unknown[] = [];
+    const savedStatuses: unknown[] = [];
     mockFrom.mockImplementation((table: string) => {
       if (table === 'quotes') {
         return buildUpdateChain(
@@ -1291,8 +1295,9 @@ describe('QuoteBuilder', () => {
         error: null,
       });
     });
-    mockRpc.mockImplementation((name: string) => {
+    mockRpc.mockImplementation((name: string, args?: unknown) => {
       if (name === 'save_quote') {
+        savedStatuses.push((args as { p_quote_payload?: { status?: unknown } } | undefined)?.p_quote_payload?.status);
         return Promise.resolve({
           data: { quote_id: quote.id, row_version: 8 },
           error: null,
@@ -1319,8 +1324,9 @@ describe('QuoteBuilder', () => {
 
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
       'info',
-      expect.stringContaining('remains accepted'),
+      expect.stringContaining('inventory reservations were left unchanged'),
     ));
+    expect(savedStatuses).toEqual(['sent']);
     expect(updatePayloads).toEqual([]);
     expect(mockRpc.mock.calls.filter(([name]) => name === 'convert_quote_to_order')).toHaveLength(1);
     expect(mockRpc.mock.calls.some(([name]) => name === 'revert_quote_status')).toBe(false);

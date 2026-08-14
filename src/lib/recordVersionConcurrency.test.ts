@@ -56,8 +56,10 @@ describe('whole-record row-version client contract', () => {
     const customerDetail = readFileSync(resolve(process.cwd(), 'src/pages/CustomerDetail.tsx'), 'utf8');
     expect(quoteBuilder.match(/applyDirectQuoteMutationRowVersion\(/g)).toHaveLength(1);
     expect(quoteBuilder).toContain('const previousRowVersion = quoteRowVersionRef.current;');
-    expect(quoteBuilder).toContain("setStatus('accepted');");
-    expect(quoteBuilder).toContain('The quote remains accepted and no order was created.');
+    expect(quoteBuilder).toContain(': await saveQuote(status);');
+    expect(quoteBuilder).not.toContain("await saveQuote('accepted')");
+    expect(quoteBuilder).not.toContain("setStatus('accepted');");
+    expect(quoteBuilder).toContain('The quote state and inventory reservations were left unchanged; no order was created.');
     expect(quoteBuilder).not.toContain('revert_quote_status_after_cancelled_below_cost');
     expect(customerDetail).toContain('const previousRowVersion = customerRowVersionRef.current;');
     expect(customerDetail).toContain('resolveDirectMutationRowVersion(previousRowVersion, nextRowVersion)');
