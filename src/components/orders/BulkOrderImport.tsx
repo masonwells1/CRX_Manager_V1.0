@@ -10,6 +10,8 @@ import { localToday } from '../../lib/dateUtils';
 import { Sentry } from '../../lib/sentry';
 import { logActivity } from '../../lib/activityLogger';
 import { useAuth } from '../../contexts/AuthContext';
+import { useBelowCostApproval } from '../../contexts/BelowCostApprovalContext';
+import { isBelowCostApprovalHandledError, withBelowCostReason } from '../../lib/belowCostApproval';
 import { resolveExactProductIdentity } from '../../lib/productIdentityResolver';
 import BelowCostConfirmModal, { type BelowCostLine } from '../ui/BelowCostConfirmModal';
 import { appendBelowCostApproval } from '../../lib/internalNotes';
@@ -86,6 +88,7 @@ export default function BulkOrderImport({
 }: BulkOrderImportProps) {
   const { toast } = useToast();
   const { profile } = useAuth();
+  const { runWithBelowCostApproval } = useBelowCostApproval();
   const [file, setFile] = useState<File | null>(null);
   const [parsing, setParsing] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -579,7 +582,7 @@ export default function BulkOrderImport({
         // the ParsedOrder, so retrying handleUpload (e.g. after a network
         // timeout on an earlier order in the batch) sends the SAME key and
         // bulk_import_order's check_idempotency short-circuits the dupe.
-        const { data: rpcResult, error: rpcError } = await supabase.rpc('bulk_import_order', {
+        const { data: rpcResult, error: rpcError } = await runWithBelowCostApproval((reason) => supabase.rpc('bulk_import_order', withBelowCostReason('bulk_import_order', {
           p_order_number: order.order_number,
           p_customer_id: customer.id,
           p_status: 'confirmed',
@@ -595,7 +598,7 @@ export default function BulkOrderImport({
             ? appendBelowCostApproval(order.notes, belowCostReason)
             : order.notes,
           p_idempotency_key: order.idempotency_key,
-        });
+        }, reason)));
 
         if (rpcError) throw rpcError;
         const result = assertRpcResult<{ order_id: string; warnings?: string[] }>(rpcResult, 'bulk_import_order');
@@ -606,7 +609,9 @@ export default function BulkOrderImport({
         successCount++;
         if (belowCostOrderNumbers.has(order.order_number)) belowCostSucceeded = true;
       } catch (error) {
-        Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'Error importing order' } });
+        if (!isBelowCostApprovalHandledError(error)) {
+          Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'Error importing order' } });
+        }
         failedCount++;
         failures.push({
           orderNumber: order.order_number,

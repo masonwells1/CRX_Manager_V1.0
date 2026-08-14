@@ -31,12 +31,12 @@ import Input from '../components/ui/Input';
 import SearchableSelect from '../components/ui/SearchableSelect';
 import Modal from '../components/ui/Modal';
 import ConfirmModal from '../components/ui/ConfirmModal';
-import BelowCostConfirmModal, { type BelowCostLine } from '../components/ui/BelowCostConfirmModal';
 import RecordVersionConflictDialog from '../components/ui/RecordVersionConflictDialog';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { useToast } from '../components/ui/Toast';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useAuth } from '../contexts/AuthContext';
+import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import {
@@ -57,6 +57,7 @@ import {
   settleQuantityHundredths,
   validateCommissionSplits,
 } from '../lib/quoteCalc';
+import { isBelowCostApprovalHandledError, withBelowCostReason } from '../lib/belowCostApproval';
 import { buildCommissionSplitPatch, nextLoadedSplitSnapshot } from '../lib/commissionSplitConcurrency';
 import {
   buildRowVersionPatch,
@@ -81,8 +82,7 @@ import { useStaleQuoteCheck } from '../hooks/useGuardrails';
 import GuardrailBanner from '../components/ui/GuardrailBanner';
 import { ProductOptionDetails } from '../components/products/ProductOptionPresentation';
 import { ProductSearchResultRow } from '../components/products/ProductSearchResultRow';
-import { appendBelowCostApproval, stripInternalNotes } from '../lib/internalNotes';
-import { belowCostLinesFromRpcError, callBelowCostAwareRpc } from '../lib/belowCostRpc';
+import { stripInternalNotes } from '../lib/internalNotes';
 import type {
   Quote,
   QuoteSection,
@@ -273,25 +273,11 @@ export default function QuoteBuilder() {
   const location = useLocation();
   const { toast } = useToast();
   const { profile } = useAuth();
+  const { runWithBelowCostApproval } = useBelowCostApproval();
   const {
     getKey: getSaveQuoteIdempotencyKey,
     resetKey: resetSaveQuoteIdempotencyKey,
   } = useIdempotencyKey('save_quote', profile?.id || '');
-  // The below-cost reason belongs to the SAVE ATTEMPT, not to one click of the
-  // button. save_quote's request fingerprint includes the annotated item notes,
-  // so if a committed save's response is lost and the retry re-prompts, any
-  // difference in the retyped text makes the replay a fingerprint conflict --
-  // and for a brand-new quote the page still has no quoteId, so the stale-save
-  // reload cannot recover the quote that actually committed. Held for the life
-  // of the idempotency key and cleared exactly where that key rotates.
-  //
-  // It also carries the TERMS it approved (product, price, cost per below-cost
-  // line). A pre-commit rejection stores no idempotency result but leaves the
-  // key in place, so retention alone would let an operator change a price or
-  // add another below-cost line and have the earlier approval silently cover
-  // the new sale. Reuse requires the terms to match exactly.
-  // (Codex rounds 30 and 32.)
-  const belowCostReasonRef = useRef<{ terms: string; reason: string } | null>(null);
   const convertQuoteIdem = useIdempotencyKey('convert_quote_to_order', profile?.id || '');
   // A committed conversion can be replayed from the idempotency cache with
   // status:'created'. Keep that marker so a lost response can still trigger
@@ -529,13 +515,6 @@ export default function QuoteBuilder() {
   // trigger allows: draft/sent/revised → cancelled; sent/revised → declined;
   // accepted/declined/expired/cancelled → sent (admin revert RPC only).
   const isAdmin = profile?.role === 'admin';
-  // Below-cost guardrail: pending confirmation for a save with lines priced
-  // strictly under their stored quote-time cost — holds the flagged lines plus
-  // the promise resolver that resumes (reason) or cancels (null) saveQuote.
-  const [belowCostPrompt, setBelowCostPrompt] = useState<{
-    lines: BelowCostLine[];
-    resolve: (reason: string | null) => void;
-  } | null>(null);
   const canCancel = isEditing && ['draft', 'sent', 'revised'].includes(currentStatus);
   const canDecline = isEditing && ['sent', 'revised'].includes(currentStatus);
   // "Close — fulfilled by application" is only for a PLANNED open booking (the
@@ -1021,10 +1000,6 @@ export default function QuoteBuilder() {
         // The rejected key may represent a committed save whose response was
         // lost. Rotate it only after a complete authoritative reload succeeds.
         resetSaveQuoteIdempotencyKey();
-        // New attempt, and the reload just replaced local state with the
-        // server's -- a reason held for the old key no longer describes what
-        // would be sent, so the next below-cost save must prompt again.
-        belowCostReasonRef.current = null;
         if (resetCreateVersionAfterReloadRef.current) {
           resetCreateVersionAttempt();
           resetCreateVersionAfterReloadRef.current = false;
@@ -1521,64 +1496,6 @@ export default function QuoteBuilder() {
       return null;
     }
 
-    // Below-cost guardrail (non-field-staff only): a line whose effective price
-    // (recalcItem already folded any override into price_per_unit) is strictly
-    // under the live catalog cost needs an explicit reason before the quote can
-    // be saved. The database locks this same live basis, so a catalog increase
-    // cannot surprise an admin with a server-only reason-required error.
-    const isFieldStaff = profile.role === 'driver' || profile.role === 'applicator';
-    const belowCostItems = sections
-      .flatMap((sec) => sec.items)
-      .map((item) => ({
-        item,
-        cost: products.find((p) => p.id === item.product_id)?.current_cost ?? item.current_cost,
-      }))
-      .filter(({ item, cost }) => item.product_id && cost > 0 && item.price_per_unit < cost);
-    let belowCostReason: string | null = null;
-    if (!isFieldStaff) {
-      const belowCostLines: BelowCostLine[] = belowCostItems.map(({ item, cost }) => ({
-        productName:
-          item.product?.product_name
-          || products.find((p) => p.id === item.product_id)?.product_name
-          || 'Unknown product',
-        price: item.price_per_unit,
-        cost,
-      }));
-      if (belowCostLines.length > 0) {
-        if (!isAdmin) {
-          toast('error', 'Only an active admin can approve a quote below cost. Ask an admin to review it.');
-          return null;
-        }
-        // What was actually approved: which product, at which price, against
-        // which cost, IN WHAT QUANTITY. A retry may reuse the reason only while
-        // all four are unchanged. A rejection that stored no idempotency result
-        // (say BOOKING_OVERDRAWN) leaves the key in place, so without this an
-        // operator could cut a price, raise the quantity, or add another
-        // below-cost line and have the previous approval silently cover the new
-        // terms. Quantity belongs here because it sets the SIZE of the loss --
-        // approving 10 units under cost is not approval for 500.
-        // (Codex rounds 32 and 34.)
-        const approvedTerms = JSON.stringify(
-          belowCostItems
-            .map(({ item, cost }) =>
-              `${item.product_id}|${item.price_per_unit}|${cost}|${item.total_units_needed}`)
-            .sort()
-        );
-        if (belowCostReasonRef.current?.terms === approvedTerms) {
-          // Retry of the same sale: reuse the exact text so the payload -- and
-          // therefore save_quote's request fingerprint -- is byte-identical to
-          // the attempt that may already have committed.
-          belowCostReason = belowCostReasonRef.current.reason;
-        } else {
-          belowCostReason = await new Promise<string | null>((resolve) =>
-            setBelowCostPrompt({ lines: belowCostLines, resolve })
-          );
-          if (belowCostReason === null) return null;
-          belowCostReasonRef.current = { terms: approvedTerms, reason: belowCostReason };
-        }
-      }
-    }
-
     const quotePayload = {
       quote_number: quoteNumber,
       customer_id: customerId,
@@ -1607,18 +1524,6 @@ export default function QuoteBuilder() {
       ...(newStatus === 'sent' ? { sent_at: new Date().toISOString() } : {}),
     };
 
-    // Compute the approval-annotated notes ONCE, keyed by line, so the payload
-    // and the local state cannot disagree. saveQuote never refetches, so if the
-    // marker only went into the payload copy, the next save from this same page
-    // would send the original notes and save_quote's delete+reinsert would drop
-    // the approval reason the first save recorded.
-    const annotatedNotes = new Map<string, string | null>();
-    if (belowCostReason) {
-      for (const { item } of belowCostItems) {
-        annotatedNotes.set(item._key, appendBelowCostApproval(item.notes, belowCostReason));
-      }
-    }
-
     // Build sections JSON for the atomic RPC
     const sectionsPayload = sections.map((sec) => ({
       section_name: sec.section_name,
@@ -1641,11 +1546,7 @@ export default function QuoteBuilder() {
           client_key: item._key,
           product_id: item.product_id,
           sort_order: item.sort_order,
-          // The approval reason is recorded on the affected line rather than the
-          // quote header/footer notes, which always print. A PDF template can
-          // still opt the line-notes column in, so quotePdf strips the marker
-          // before rendering; see src/lib/internalNotes.ts.
-          notes: annotatedNotes.get(item._key) ?? (item.notes || null),
+          notes: item.notes || null,
           price_per_unit: item.price_per_unit,
           price_override: item.price_override ?? null,
           current_cost: item.current_cost,
@@ -1668,13 +1569,13 @@ export default function QuoteBuilder() {
     try {
       const idemKey = getSaveQuoteIdempotencyKey();
       const savedCalculationKey = calculationKey;
-      const { data, error } = await supabase.rpc('save_quote', {
+      const { data, error } = await runWithBelowCostApproval((reason) => supabase.rpc('save_quote', withBelowCostReason('save_quote', {
         p_quote_id: ((quoteId && isEditing) ? quoteId : null) as string,
         p_quote_payload: quotePayload as Json,
         p_sections: sectionsPayload,
         p_performed_by: profile.id,
         p_idempotency_key: idemKey,
-      });
+      }, reason)));
 
       if (error) {
         if (hasRpcCode(error, RpcErrorCodes.QUOTE_STALE_WRITE)
@@ -1689,26 +1590,6 @@ export default function QuoteBuilder() {
       }
 
       resetSaveQuoteIdempotencyKey();
-      // Saved: the reason is recorded on the line and mirrored into local state
-      // below, so the next save resends it from the notes themselves. Holding
-      // it past this point would silently approve a LATER below-cost edit
-      // without asking.
-      belowCostReasonRef.current = null;
-      // The approval reason is now in the database. Mirror it into local state
-      // so a later save from this same page (which never refetches) resends it
-      // instead of reverting the stored notes to the pre-approval text.
-      if (annotatedNotes.size > 0) {
-        setSections((prev) =>
-          prev.map((sec) => ({
-            ...sec,
-            items: sec.items.map((item) =>
-              annotatedNotes.has(item._key)
-                ? { ...item, notes: annotatedNotes.get(item._key) ?? item.notes }
-                : item
-            ),
-          }))
-        );
-      }
       const result = assertRpcResult<{
         quote_id: string;
         commission_split?: CommissionSplit | null;
@@ -1760,6 +1641,7 @@ export default function QuoteBuilder() {
       }
       return savedQuoteId;
     } catch (err: unknown) {
+      if (isBelowCostApprovalHandledError(err)) return null;
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'save_quote' } });
       toast('error', err instanceof Error ? err.message : 'Failed to save quote');
       return null;
@@ -2457,31 +2339,20 @@ export default function QuoteBuilder() {
       return;
     }
     const restoreAttempt = getRestoreVersionAttempt(versionId);
-    let restoreResponse = await restoreQuoteVersionWithRowVersion({
-      p_quote_id: quoteId,
-      p_version_id: versionId,
-      p_performed_by: profile.id,
-      p_idempotency_key: restoreAttempt.key,
-      p_expected_row_version: restoreAttempt.expectedRowVersion,
-    });
-    const approvalLines = belowCostLinesFromRpcError(restoreResponse.error);
-    if (approvalLines) {
-      if (!isAdmin) {
-        toast('error', 'This saved version is below cost and requires an active admin to restore it. Ask an admin to review it.');
-        return;
-      }
-      const reason = await new Promise<string | null>((resolve) =>
-        setBelowCostPrompt({ lines: approvalLines, resolve })
-      );
-      if (reason === null) return;
-      restoreResponse = await restoreQuoteVersionWithRowVersion({
-        p_quote_id: quoteId,
-        p_version_id: versionId,
-        p_performed_by: profile.id,
-        p_idempotency_key: restoreAttempt.key,
-        p_expected_row_version: restoreAttempt.expectedRowVersion,
-        p_below_cost_reason: reason,
-      });
+    let restoreResponse;
+    try {
+      restoreResponse = await runWithBelowCostApproval((reason) => restoreQuoteVersionWithRowVersion(
+        withBelowCostReason('restore_quote_version', {
+          p_quote_id: quoteId,
+          p_version_id: versionId,
+          p_performed_by: profile.id,
+          p_idempotency_key: restoreAttempt.key,
+          p_expected_row_version: restoreAttempt.expectedRowVersion,
+        }, reason),
+      ));
+    } catch (error: unknown) {
+      if (isBelowCostApprovalHandledError(error)) return;
+      throw error;
     }
     const { data, error } = restoreResponse;
     if (error) {
@@ -2645,25 +2516,12 @@ export default function QuoteBuilder() {
     }
     setDrawing(true);
     try {
-      const drawArgs = {
+      const { data, error } = await runWithBelowCostApproval((reason) => supabaseUntyped.rpc('draw_down_quote', withBelowCostReason('draw_down_quote', {
         p_quote_id: id,
         p_draws: draws.map((d) => ({ product_id: d.product_id, quantity: d.quantity })),
         p_performed_by: profile!.id,
         p_idempotency_key: drawDownIdem.getKey(),
-      };
-      let drawResponse = await callBelowCostAwareRpc('draw_down_quote', drawArgs);
-      const approvalLines = belowCostLinesFromRpcError(drawResponse.error);
-      if (approvalLines && isAdmin) {
-        const reason = await new Promise<string | null>((resolve) =>
-          setBelowCostPrompt({ lines: approvalLines, resolve })
-        );
-        if (reason === null) {
-          setDrawing(false);
-          return;
-        }
-        drawResponse = await callBelowCostAwareRpc('draw_down_quote', drawArgs, reason);
-      }
-      const { data, error } = drawResponse;
+      }, reason)));
       if (error) throw error;
       drawDownIdem.resetKey();
       const result = assertRpcResult<{ status: string; order_id?: string; order_number?: string; warnings?: string[]; fully_drawn?: boolean }>(data, 'draw_down_quote');
@@ -2680,6 +2538,10 @@ export default function QuoteBuilder() {
       setShowDrawModal(false);
       navigate(`/orders/${result.order_id}`);
     } catch (error: unknown) {
+      if (isBelowCostApprovalHandledError(error)) {
+        setDrawing(false);
+        return;
+      }
       Sentry.captureException(error, { tags: { source: 'critical_action', action: 'draw_down_quote' } });
       const errObj = error as Record<string, unknown> | null;
       const errMsg = (error instanceof Error ? error.message : null)
@@ -2832,37 +2694,14 @@ export default function QuoteBuilder() {
       // Atomic RPC: order creation + items + inventory prebooking + commissions
       const idemKey = convertQuoteIdem.getKey();
       const expectedRowVersion = quoteRowVersionRef.current;
-      const convertArgs = {
-        p_quote_id: savedId,
-        p_performed_by: profile!.id,
-        p_idempotency_key: idemKey,
-        p_expected_row_version: expectedRowVersion,
-      };
-      let convertResponse = await convertQuoteToOrderWithRowVersion(convertArgs);
-      const approvalLines = belowCostLinesFromRpcError(convertResponse.error);
-      if (approvalLines && isAdmin) {
-        const reason = await new Promise<string | null>((resolve) =>
-          setBelowCostPrompt({ lines: approvalLines, resolve })
-        );
-        if (reason === null) {
-          // saveQuote('accepted') already committed, while the refused first
-          // conversion attempt created no Order. Restore the editable state so
-          // cancelling approval cannot strand this Quote as read-only.
-          if (status !== 'accepted') {
-            await restoreOpenQuoteStatus(
-              'revert_quote_status_after_cancelled_below_cost',
-              'The below-cost approval was cancelled, but the quote could not be returned to its open status',
-            );
-          }
-          setConverting(false);
-          return;
-        }
-        convertResponse = await convertQuoteToOrderWithRowVersion({
-          ...convertArgs,
-          p_below_cost_reason: reason,
-        });
-      }
-      const { data, error } = convertResponse;
+      const { data, error } = await runWithBelowCostApproval((reason) => convertQuoteToOrderWithRowVersion(
+        withBelowCostReason('convert_quote_to_order', {
+          p_quote_id: savedId,
+          p_performed_by: profile!.id,
+          p_idempotency_key: idemKey,
+          p_expected_row_version: expectedRowVersion,
+        }, reason),
+      ));
 
       if (error) throw error;
 
@@ -2922,6 +2761,16 @@ export default function QuoteBuilder() {
       setIsDirty(false);
       navigate(`/orders/${result.order_id}`);
     } catch (error: unknown) {
+      if (isBelowCostApprovalHandledError(error)) {
+        if (status !== 'accepted') {
+          await restoreOpenQuoteStatus(
+            'revert_quote_status_after_cancelled_below_cost',
+            'The below-cost approval was cancelled, but the quote could not be returned to its open status',
+          );
+        }
+        setConverting(false);
+        return;
+      }
       Sentry.captureException(error, { tags: { source: 'critical_action', action: 'convert_quote_to_order' } });
 
       if (hasRpcCode(error, RpcErrorCodes.QUOTE_STALE_WRITE)
@@ -4682,19 +4531,6 @@ export default function QuoteBuilder() {
         entityLabel="quote"
         onKeepEditing={() => setStaleSaveOpen(false)}
         onReload={reloadAfterStaleSave}
-      />
-
-      <BelowCostConfirmModal
-        open={belowCostPrompt !== null}
-        lines={belowCostPrompt?.lines ?? []}
-        onClose={() => {
-          belowCostPrompt?.resolve(null);
-          setBelowCostPrompt(null);
-        }}
-        onConfirm={(reason) => {
-          belowCostPrompt?.resolve(reason);
-          setBelowCostPrompt(null);
-        }}
       />
 
       <ConfirmModal

@@ -4,6 +4,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
+import { BelowCostApprovalProvider } from '../contexts/BelowCostApprovalContext';
 
 const { mockFrom, mockRpc, mockToast, mockNavigate, intentKeys, nextIntentKey } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
@@ -113,11 +114,13 @@ import InvoiceDetail from './InvoiceDetail';
 
 function renderInvoiceDetail(id = 'inv-123') {
   return render(
-    <MemoryRouter initialEntries={[`/invoices/${id}`]}>
-      <Routes>
-        <Route path="/invoices/:id" element={<InvoiceDetail />} />
-      </Routes>
-    </MemoryRouter>,
+    <BelowCostApprovalProvider>
+      <MemoryRouter initialEntries={[`/invoices/${id}`]}>
+        <Routes>
+          <Route path="/invoices/:id" element={<InvoiceDetail />} />
+        </Routes>
+      </MemoryRouter>
+    </BelowCostApprovalProvider>,
   );
 }
 
@@ -573,12 +576,12 @@ describe('InvoiceDetail — chemical-sale payment terms', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
-    expect(await screen.findByRole('heading', { name: 'Selling below cost' })).toBeInTheDocument();
-    expect(screen.getByText(/Server Cost Product: price \$9\.00 is below cost \$10\.00/)).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Reason (required)'), {
+    expect(await screen.findByRole('heading', { name: 'Approve below-cost price' })).toBeInTheDocument();
+    expect(screen.getByText(/Price \$9\.00 · Cost \$10\.00 · Shortfall \$1\.00 per unit/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Approval reason (required)'), {
       target: { value: 'Price match approved by manager' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Approve Below-Cost Sale' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Approve and Retry' }));
 
     await waitFor(() => expect(saveAttempts).toBe(2));
     const saveCalls = mockRpc.mock.calls.filter(([name]) => name === 'save_invoice');
@@ -586,7 +589,7 @@ describe('InvoiceDetail — chemical-sale payment terms', () => {
     const firstSaveKey = saveCalls[0][1].p_idempotency_key;
     expect(firstSaveKey).toMatch(/^test-idem-key-\d+$/);
     expect(saveCalls[1][1].p_idempotency_key).toBe(firstSaveKey);
-    expect(saveCalls[0][1].p_items[0].below_cost_reason).toBeNull();
+    expect(saveCalls[0][1].p_items[0]).not.toHaveProperty('below_cost_reason');
     expect(saveCalls[1][1].p_items[0].below_cost_reason).toBe('Price match approved by manager');
     expect(mockToast).toHaveBeenCalledWith('success', 'Invoice saved');
   });

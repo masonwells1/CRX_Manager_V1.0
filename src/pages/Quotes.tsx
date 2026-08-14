@@ -9,19 +9,19 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import BulkActionBar from '../components/ui/BulkActionBar';
 import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
-import BelowCostConfirmModal, { type BelowCostLine } from '../components/ui/BelowCostConfirmModal';
 import BulkQuoteImport from '../components/quotes/BulkQuoteImport';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
+import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { convertQuoteToOrderWithRowVersion } from '../lib/quoteLifecycleRpc';
-import { belowCostLinesFromRpcError, callBelowCostAwareRpc } from '../lib/belowCostRpc';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { formatUSD as fmt } from '../lib/money';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
 import { sanitizeError } from '../lib/errorSanitizer';
+import { isBelowCostApprovalHandledError, withBelowCostReason } from '../lib/belowCostApproval';
 import { Sentry } from '../lib/sentry';
 import { SkeletonTable } from '../components/ui/Skeleton';
 import HelpTip from '../components/ui/HelpTip';
@@ -49,15 +49,12 @@ export default function Quotes() {
   const [importModalOpen, setImportModalOpen] = useState(false);
   const { toast } = useToast();
   const { profile } = useAuth();
+  const { runWithBelowCostApproval } = useBelowCostApproval();
   const duplicateQuoteIdem = useIdempotencyKey('duplicate_quote', profile?.id || '');
   // F3 act-from-list: convert a sent/revised quote to an order in place (confirm popup).
   const convertQuoteIdem = useIdempotencyKey('convert_quote_to_order', profile?.id || '');
   const [convertTarget, setConvertTarget] = useState<QuoteRow | null>(null);
   const [converting, setConverting] = useState(false);
-  const [belowCostPrompt, setBelowCostPrompt] = useState<{
-    lines: BelowCostLine[];
-    resolve: (reason: string | null) => void;
-  } | null>(null);
   // F3 guardrail parity with QuoteBuilder: warn (not block) before the one-click
   // convert if the quote is stale (>30d) or the customer already ordered recently.
   const [convertStaleMsg, setConvertStaleMsg] = useState<string | null>(null);
@@ -115,21 +112,11 @@ export default function Quotes() {
     e.stopPropagation();
     try {
       const key = duplicateQuoteIdem.getKey();
-      const duplicateArgs = {
+      const { data: result, error } = await runWithBelowCostApproval((reason) => supabaseUntyped.rpc('duplicate_quote', withBelowCostReason('duplicate_quote', {
         p_source_quote_id: quoteId,
         p_performed_by: profile!.id,
         p_idempotency_key: key,
-      };
-      let duplicateResponse = await callBelowCostAwareRpc('duplicate_quote', duplicateArgs);
-      const approvalLines = belowCostLinesFromRpcError(duplicateResponse.error);
-      if (approvalLines && profile?.role === 'admin') {
-        const reason = await new Promise<string | null>((resolve) =>
-          setBelowCostPrompt({ lines: approvalLines, resolve })
-        );
-        if (reason === null) return;
-        duplicateResponse = await callBelowCostAwareRpc('duplicate_quote', duplicateArgs, reason);
-      }
-      const { data: result, error } = duplicateResponse;
+      }, reason)));
       if (error) {
         toast('error', `Failed to duplicate quote: ${error.message}`);
         return;
@@ -139,6 +126,7 @@ export default function Quotes() {
       toast('success', `Quote duplicated as ${dupResult.quote_number}`);
       navigate(`/quotes/${dupResult.quote_id}`);
     } catch (err: unknown) {
+      if (isBelowCostApprovalHandledError(err)) return;
       toast('error', `Failed to duplicate quote: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
   };
@@ -198,28 +186,14 @@ export default function Quotes() {
     setConverting(true);
     try {
       const idemKey = convertQuoteIdem.getKey();
-      const convertArgs = {
-        p_quote_id: convertTarget.id,
-        p_performed_by: profile.id,
-        p_idempotency_key: idemKey,
-        p_expected_row_version: convertTarget.row_version ?? null,
-      };
-      let convertResponse = await convertQuoteToOrderWithRowVersion(convertArgs);
-      const approvalLines = belowCostLinesFromRpcError(convertResponse.error);
-      if (approvalLines && profile.role === 'admin') {
-        const reason = await new Promise<string | null>((resolve) =>
-          setBelowCostPrompt({ lines: approvalLines, resolve })
-        );
-        if (reason === null) {
-          setConverting(false);
-          return;
-        }
-        convertResponse = await convertQuoteToOrderWithRowVersion({
-          ...convertArgs,
-          p_below_cost_reason: reason,
-        });
-      }
-      const { data, error } = convertResponse;
+      const { data, error } = await runWithBelowCostApproval((reason) => convertQuoteToOrderWithRowVersion(
+        withBelowCostReason('convert_quote_to_order', {
+          p_quote_id: convertTarget.id,
+          p_performed_by: profile.id,
+          p_idempotency_key: idemKey,
+          p_expected_row_version: convertTarget.row_version ?? null,
+        }, reason),
+      ));
       if (error) throw error;
       convertQuoteIdem.resetKey();
       const result = data;
@@ -263,6 +237,7 @@ export default function Quotes() {
       if (result.order_id) navigate(`/orders/${result.order_id}`);
       else fetchQuotes();
     } catch (err: unknown) {
+      if (isBelowCostApprovalHandledError(err)) return;
       if (hasRpcCode(err, RpcErrorCodes.BOOKING_PARTIALLY_DRAWN)) {
         toast('warning', 'This booking has partial draw-downs — draw the remaining balance from the quote instead of converting.');
       } else if (hasRpcCode(err, RpcErrorCodes.BOOKING_CLOSED)) {
@@ -727,7 +702,7 @@ export default function Quotes() {
 
       <ConfirmModal
         open={!!convertTarget}
-        onClose={belowCostPrompt ? () => {} : closeConvert}
+        onClose={closeConvert}
         onConfirm={handleConvertConfirm}
         title="Convert to Order?"
         message={
@@ -745,18 +720,6 @@ export default function Quotes() {
         loading={converting || convertChecking}
       />
 
-      <BelowCostConfirmModal
-        open={belowCostPrompt !== null}
-        lines={belowCostPrompt?.lines ?? []}
-        onClose={() => {
-          belowCostPrompt?.resolve(null);
-          setBelowCostPrompt(null);
-        }}
-        onConfirm={(reason) => {
-          belowCostPrompt?.resolve(reason);
-          setBelowCostPrompt(null);
-        }}
-      />
     </div>
   );
 }

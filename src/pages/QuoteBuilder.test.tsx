@@ -4,6 +4,7 @@
 import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { BelowCostApprovalProvider } from '../contexts/BelowCostApprovalContext';
 
 // ── Hoisted mocks ──────────────────────────────────────────────────────────
 
@@ -88,6 +89,7 @@ function buildPendingChain(): Record<string, unknown> {
 function buildUpdateChain(
   readResult: { data: unknown; error: unknown },
   updateResult: { data: unknown; error: unknown },
+  onUpdate?: (payload: unknown) => void,
 ): Record<string, unknown> {
   let updated = false;
   const self: Record<string, unknown> = {};
@@ -98,8 +100,9 @@ function buildUpdateChain(
     'order', 'limit', 'offset', 'single', 'maybeSingle', 'csv',
     'rollback', 'returns', 'textSearch', 'overlaps', 'abortSignal'];
   for (const m of methods) self[m] = method;
-  self.update = (..._args: unknown[]) => {
+  self.update = (payload: unknown) => {
     updated = true;
+    onUpdate?.(payload);
     return self;
   };
   self.select = (..._args: unknown[]) => self;
@@ -174,12 +177,14 @@ import QuoteBuilder from './QuoteBuilder';
 function renderQuoteBuilder(id?: string) {
   const path = id ? `/quotes/${id}/edit` : '/quotes/new';
   return render(
-    <MemoryRouter initialEntries={[path]}>
-      <Routes>
-        <Route path="/quotes/new" element={<QuoteBuilder />} />
-        <Route path="/quotes/:id/edit" element={<QuoteBuilder />} />
-      </Routes>
-    </MemoryRouter>,
+    <BelowCostApprovalProvider>
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route path="/quotes/new" element={<QuoteBuilder />} />
+          <Route path="/quotes/:id/edit" element={<QuoteBuilder />} />
+        </Routes>
+      </MemoryRouter>
+    </BelowCostApprovalProvider>,
   );
 }
 
@@ -1258,6 +1263,63 @@ describe('QuoteBuilder', () => {
     expect(mockNotifyLargeOrder).not.toHaveBeenCalled();
     expect(mockSendOrderConfirmedEmail).not.toHaveBeenCalled();
     expect(mockNavigate).toHaveBeenCalledWith('/orders/order-1');
+  });
+
+  it('returns a newly accepted quote to its open status when below-cost conversion approval is cancelled', async () => {
+    const fixture = makeQuoteFixture('draft', 7);
+    const { product, section, item } = fixture;
+    const quote = { ...fixture.quote, status: 'sent' };
+    const updatePayloads: unknown[] = [];
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'quotes') {
+        return buildUpdateChain(
+          { data: quote, error: null },
+          { data: [{ ...quote, status: 'sent', row_version: 9 }], error: null },
+          (payload) => updatePayloads.push(payload),
+        );
+      }
+      return buildChain({
+        data: table === 'quote_sections'
+          ? [section]
+          : table === 'quote_items'
+            ? [item]
+            : table === 'customers'
+              ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }]
+              : table === 'products'
+                ? [product]
+                : [],
+        error: null,
+      });
+    });
+    mockRpc.mockImplementation((name: string) => {
+      if (name === 'save_quote') {
+        return Promise.resolve({
+          data: { quote_id: quote.id, row_version: 8 },
+          error: null,
+        });
+      }
+      if (name === 'convert_quote_to_order') {
+        return Promise.resolve({
+          data: null,
+          error: {
+            message: 'BELOW_COST_REASON_REQUIRED:{"operation":"convert_quote_to_order","product_name":"Product","unit_price_cents":500,"locked_unit_cost_cents":600}',
+          },
+        });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    renderQuoteBuilder(quote.id);
+    fireEvent.click(await screen.findByRole('button', { name: 'Create Order ▾' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Convert whole booking' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create Order' }));
+
+    const approvalDialog = await screen.findByRole('dialog', { name: 'Approve below-cost price' });
+    fireEvent.click(within(approvalDialog).getByRole('button', { name: 'Cancel' }));
+
+    await waitFor(() => expect(updatePayloads).toContainEqual({ status: 'sent' }));
+    expect(mockRpc.mock.calls.filter(([name]) => name === 'convert_quote_to_order')).toHaveLength(1);
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 
   it('stops Book as Order when mark-presented cannot confirm the frozen quote token', async () => {
