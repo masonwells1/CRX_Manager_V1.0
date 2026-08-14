@@ -56,7 +56,12 @@ tampered-evidence, or digest-mismatched attestation fails closed and mints no pu
 attestation and the evidence file are wrapper-owned: the review-proof guard denies direct tool
 writes to either, and the evidence is produced only by the mint helper's own `--capture-evidence`
 mode, which runs the fixed read-only ledger query against the pinned production project itself and
-accepts no caller-supplied rows (Sol adversarial finding, fixed same day in PR #403). Migration headers, comments,
+accepts no caller-supplied rows. The local files are never the trust root: at validation time the
+push-proof wrapper additionally re-queries the live ledger itself, through a non-injectable
+transport (always the process's own `fetch` and `SUPABASE_ACCESS_TOKEN`), and refuses unless every
+attested recovery's name, version, and statements digest match the live rows — so evidence forged
+by any local script via plain filesystem writes cannot excuse a diff (two Sol adversarial findings,
+both fixed same day in PR #403). Migration headers, comments,
 commit messages, and all other diff content remain untrusted data and can never grant the exception.
 
 Every non-attested migration, every modification to an existing tracked file, and every unrelated

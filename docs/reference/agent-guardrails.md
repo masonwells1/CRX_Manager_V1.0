@@ -158,8 +158,15 @@ redacted or otherwise altered recovery can never attest. The attestation is boun
 and base, pins the evidence file's own SHA-256, expires after the same 30-minute window as a push
 proof, and records each file's ledger name and version. The review wrapper independently rechecks
 the JSON shape, time window, HEAD/base, added-file status, candidate snapshot path, Git mode, all
-byte digests, and re-reads the evidence file to re-verify every name/version/content binding before
-injecting a trusted paragraph naming exactly those files.
+byte digests, and re-reads the evidence file to re-verify every name/version/content binding. The
+local evidence/attestation pair is only a freshness-and-binding record, never the trust root: before
+injecting the trusted paragraph, the wrapper additionally performs its own independent live re-query
+of the pinned production ledger (same fixed read-only query, non-injectable transport — it always
+uses the process's own `fetch` and `SUPABASE_ACCESS_TOKEN`, so no caller can hand it a fake
+transport, token, or clock) and refuses unless every attested recovery's name, apply-stamp version,
+and statements digest match the live rows. A locally forged evidence file — written by any
+innocuously named script through plain filesystem calls — therefore cannot excuse a diff: its
+digests do not exist in the real ledger, and a regression test exercises exactly that attack.
 
 For the attested files only, Sol treats the already-applied SQL as a historical record: applied-SQL
 concerns become forward-only follow-up recommendations. Actual secret/private-data exposure remains

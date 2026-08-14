@@ -2,6 +2,21 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-14 — Recovery validation now independently re-queries the live ledger (Sol adversarial review round 2, PR #403)
+
+Sol's second adversarial pass found the remaining HIGH hole in the trusted-capture design below: the
+evidence file still lived on local disk, the capture path exposed injectable fetch/token/clock
+parameters plus an exported writer, and the guard only matches protected basenames in tool
+commands — so any innocuously named local script (or a plain filesystem write, since the
+session-state directory is gitignored) could fabricate evidence and an attestation that local
+validation would accept. Fixed by moving trust off the local file entirely: the push-proof wrapper
+now performs its own independent live-ledger re-query at validation time and refuses unless every
+attested recovery's name, apply-stamp version, and statements digest match the live rows. The
+transport is non-injectable (always the process's own `fetch` and `SUPABASE_ACCESS_TOKEN`; no
+caller-supplied fetch, token, or clock anywhere), the validating writer is module-private, and a
+regression test performs the exact attack — forging both files via plain filesystem writes,
+confirming local-only validation accepts them, and confirming the live re-query refuses them.
+
 ## 2026-08-14 — Recovery evidence capture moved to a trusted live query (Sol adversarial review, PR #403)
 
 Sol's adversarial review of the guard-protection commit found one HIGH blocker: the sanctioned

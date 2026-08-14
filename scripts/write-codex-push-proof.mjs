@@ -46,7 +46,10 @@ import { createHash } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { validateRecoveryAttestation } from "./write-recovery-attestation.mjs";
+import {
+  validateRecoveryAttestation,
+  verifyRecoveriesAgainstLiveLedger,
+} from "./write-recovery-attestation.mjs";
 
 const SCRIPT_DIR = path.resolve(fileURLToPath(new URL(".", import.meta.url)));
 const FALLBACK_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -790,7 +793,7 @@ function usage() {
 }
 
 // ── main ─────────────────────────────────────────────────────────────────────
-export function run(argv = process.argv.slice(2)) {
+export async function run(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   if (options.help) {
     process.stdout.write(`${usage()}\n`);
@@ -852,6 +855,11 @@ export function run(argv = process.argv.slice(2)) {
       headSha: headBefore,
       baseSha: baseBefore,
     });
+    // The local attestation/evidence pair only proves freshness and binding.
+    // Trust comes from this independent live re-query: the wrapper itself asks
+    // the pinned production ledger and refuses unless every attested recovery
+    // matches the live rows, so locally forged evidence cannot excuse a diff.
+    await verifyRecoveriesAgainstLiveLedger(trustedRecoveries);
     prompt = buildCodexReviewPrompt({ base: GUARDED_BASE, trustedRecoveries });
     const args = buildCodexExecArgs({ root: reviewWorkspace.root, prompt });
     result = spawnSync(codexBin, args, {
@@ -942,10 +950,10 @@ function isMainModule() {
 }
 
 if (isMainModule()) {
-  try {
-    process.exit(run());
-  } catch (error) {
-    console.error(error.message);
-    process.exit(2);
-  }
+  run()
+    .then((code) => process.exit(code))
+    .catch((error) => {
+      console.error(error.message);
+      process.exit(2);
+    });
 }

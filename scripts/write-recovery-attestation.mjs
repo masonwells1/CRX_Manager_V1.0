@@ -464,12 +464,14 @@ export function validateRecoveryAttestation({
   });
 }
 
-// Internal validating writer for the ledger-evidence file. Only the trusted
-// capture path below reaches it; the review-proof guard denies any tool
-// command that names the evidence or attestation JSON, so no direct write
-// channel exists. The evidence is fully re-validated (shape, kind, pinned
-// project, row grammar) before it is kept; an invalid payload leaves no file.
-export function writeRecoveryLedgerEvidenceFile({ root, text }) {
+// Internal validating writer for the ledger-evidence file. Module-private:
+// only the trusted capture path below reaches it, and the local evidence file
+// is a freshness/binding record only — final trust comes from the push-proof
+// wrapper's own live re-query (verifyRecoveriesAgainstLiveLedger), so even a
+// fabricated local file cannot survive validation. The evidence is fully
+// re-validated (shape, kind, pinned project, row grammar) before it is kept;
+// an invalid payload leaves no file.
+function writeRecoveryLedgerEvidenceFile({ root, text }) {
   const evidencePath = recoveryLedgerEvidencePath(root);
   mkdirSync(path.dirname(evidencePath), { recursive: true });
   writeFileSync(evidencePath, text);
@@ -534,24 +536,20 @@ export function buildLedgerEvidenceText({ names, rows, fetchedAt }) {
   return `${JSON.stringify(evidence, null, 2)}\n`;
 }
 
-// The trusted capture channel Sol's review requires: this process performs the
-// fixed read-only production query itself and builds the evidence exclusively
-// from the live response, so it cannot be invoked with caller-fabricated rows.
-export async function captureRecoveryLedgerEvidence({
-  root = process.cwd(),
-  names,
-  fetchImpl = globalThis.fetch,
-  token = process.env.SUPABASE_ACCESS_TOKEN,
-  now = () => new Date(),
-} = {}) {
-  if (!token) {
-    throw new Error("SUPABASE_ACCESS_TOKEN is required to capture live ledger evidence.");
+// The one trusted transport to the live ledger. Deliberately accepts NO
+// injectable fetch implementation, token, or clock: it always uses this
+// process's own globalThis.fetch and SUPABASE_ACCESS_TOKEN, so a local script
+// cannot hand it a fake transport. (A hostile process stubbing its OWN fetch
+// gains nothing — the trusted invocation is the push-proof wrapper's process.)
+async function fetchLedgerRows(names) {
+  if (!process.env.SUPABASE_ACCESS_TOKEN) {
+    throw new Error("SUPABASE_ACCESS_TOKEN is required to query the live ledger.");
   }
   const query = buildLedgerEvidenceQuery(names);
-  const response = await fetchImpl(RECOVERY_LEDGER_QUERY_URL, {
+  const response = await globalThis.fetch(RECOVERY_LEDGER_QUERY_URL, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${process.env.SUPABASE_ACCESS_TOKEN}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ query }),
@@ -561,8 +559,56 @@ export async function captureRecoveryLedgerEvidence({
   }
   const parsed = await response.json();
   const rows = Array.isArray(parsed) ? parsed : parsed?.result ?? parsed?.rows;
-  const text = buildLedgerEvidenceText({ names, rows, fetchedAt: now().toISOString() });
+  if (!Array.isArray(rows)) throw new Error("Live ledger query returned an unexpected response shape.");
+  return rows;
+}
+
+// The trusted capture channel: this process performs the fixed read-only
+// production query itself and builds the evidence exclusively from the live
+// response, so it cannot be invoked with caller-fabricated rows.
+export async function captureRecoveryLedgerEvidence({ root = process.cwd(), names } = {}) {
+  const rows = await fetchLedgerRows(names);
+  const text = buildLedgerEvidenceText({ names, rows, fetchedAt: new Date().toISOString() });
   return writeRecoveryLedgerEvidenceFile({ root, text });
+}
+
+// Pure comparison used by the validation-time live re-check: every attested
+// recovery must have a live row whose name, version, and statements digest all
+// match exactly. Fails closed on any missing row or mismatch.
+export function assertRecoveriesMatchLiveRows(recoveries, rows) {
+  if (!Array.isArray(rows)) throw new Error("Live ledger query returned an unexpected response shape.");
+  const rowsByName = new Map(rows.map((row) => [String(row?.name ?? ""), row]));
+  for (const recovery of recoveries) {
+    const row = rowsByName.get(recovery.ledger_name);
+    if (!row) {
+      throw new Error(`The live ledger has no row named: ${recovery.ledger_name}.`);
+    }
+    if (String(row?.version ?? "") !== recovery.ledger_version) {
+      throw new Error(
+        `Live ledger row ${recovery.ledger_name} has version ${String(row?.version ?? "")}, ` +
+        `not the attested ${recovery.ledger_version}.`,
+      );
+    }
+    if (String(row?.statements_sha256 ?? "") !== recovery.sha256) {
+      throw new Error(
+        `Live ledger row ${recovery.ledger_name} does not match the attested recovery digest; ` +
+        `the recovered file is not byte-verbatim with the live ledger.`,
+      );
+    }
+  }
+}
+
+// Validation-time independent live re-check (Sol adversarial finding, round 2):
+// the local evidence file is only a freshness/binding record, never the trust
+// root. Before a recovery attestation can excuse anything, the push-proof
+// wrapper calls this to re-query the pinned live ledger itself — through the
+// non-injectable transport above — and refuses unless every attested recovery
+// matches the live rows. A locally forged evidence file therefore cannot
+// bypass the gate: the forged digests will not exist in the real ledger.
+export async function verifyRecoveriesAgainstLiveLedger(recoveries) {
+  if (!Array.isArray(recoveries) || recoveries.length === 0) return;
+  const rows = await fetchLedgerRows([...new Set(recoveries.map((recovery) => recovery.ledger_name))]);
+  assertRecoveriesMatchLiveRows(recoveries, rows);
 }
 
 export function parseRecoveryArgs(argv) {
