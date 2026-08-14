@@ -296,6 +296,9 @@ assert.deepEqual(
 assert.deepEqual(riskyFiles([".claude/agents/rls-security-reviewer.md"]), [".claude/agents/rls-security-reviewer.md"]);
 assert.deepEqual(riskyFiles(["scripts/write-apply-proofs.mjs"]), ["scripts/write-apply-proofs.mjs"]);
 assert.deepEqual(riskyFiles(["scripts/overnight-codex-gate.mjs"]), ["scripts/overnight-codex-gate.mjs"]);
+// Codex P1 (PR #403): the recovery-attestation validator can downgrade
+// migration blockers in the proof prompt — editing only it stays risky.
+assert.deepEqual(riskyFiles(["scripts/write-recovery-attestation.mjs"]), ["scripts/write-recovery-attestation.mjs"]);
 assert.deepEqual(
   riskyFiles(["package.json"]),
   ["package.json"],

@@ -270,6 +270,11 @@ try {
   assert.equal(evaluateProductionAction({ toolName: "Read", toolInput: { file_path: "package.json" } }).blocked, false);
   assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: "scripts/write-apply-proofs.mjs" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: "scripts/overnight-codex-gate.mjs" } }).blocked, true);
+  // Codex P1 (PR #403): the recovery-attestation validator feeds the proof
+  // prompt, so it is protected exactly like the proof wrapper itself.
+  assert.equal(evaluateProductionAction({ toolName: "Edit", toolInput: { file_path: "scripts/write-recovery-attestation.mjs" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Write", toolInput: { file_path: "repo\\scripts\\write-recovery-attestation.mjs" } }).blocked, true);
+  assert.equal(evaluateProductionAction({ toolName: "Read", toolInput: { file_path: "scripts/write-recovery-attestation.mjs" } }).blocked, false);
   for (const command of [
     "rm .claude/hooks/review-proof-guard.mjs",
     "rm .claude/hooks/codex-push-guard.mjs;ls",

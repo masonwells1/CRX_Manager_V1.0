@@ -2,6 +2,17 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-14 — Recovery-attestation validator registered as gate-critical (Codex P1, PR #403)
+
+Codex's review of the recovery-attestation PR found that the new
+`scripts/write-recovery-attestation.mjs` — whose output can downgrade migration blockers in the
+adversarial-review prompt — was absent from both protected sets: the push gate's risky-path list
+(`RISKY_PATH_RES`) and the Codex production guard's protected-harness list. A later commit
+touching only that file would have merged as a non-risky change without the required independent
+Sol/high review. Both lists now include it, with regression tests in both suites (risky-path
+classification; Edit/Write blocked while Read stays allowed), and the protected-producer blob
+pins were re-pinned to the hardened guards.
+
 ## 2026-08-14 — Codex Supabase guard: exact read-only allowlist (Sol HIGH finding)
 
 Sol's adversarial review of the write-scope PR found that the Codex production-action guard

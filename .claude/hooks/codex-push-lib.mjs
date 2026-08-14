@@ -372,6 +372,10 @@ const RISKY_PATH_RES = [
   /(^|\/)\.(?:gitattributes|gitmodules)$/i,
   /(^|\/)scripts\/run-claude-review\.mjs$/i,
   /(^|\/)scripts\/write-codex-push-proof\.mjs$/i,
+  // The recovery-attestation validator can downgrade migration blockers in the
+  // proof prompt, so a change to it alone must still count as risky (Codex P1,
+  // PR #403).
+  /(^|\/)scripts\/write-recovery-attestation\.mjs$/i,
   /(^|\/)scripts\/overnight-codex-gate\.mjs$/i,
   /(^|\/)scripts\/apply-live-testdata-maintenance-20260812\.mjs$/i,
   /(^|\/)package\.json$/i,
