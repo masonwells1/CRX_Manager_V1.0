@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   buildCodexExecArgs,
@@ -35,6 +36,7 @@ import { gitLocalEnvironmentNames } from "../.claude/hooks/git-test-env.mjs";
 import {
   assertNoModulePreload,
   assertRecoveriesMatchLiveRows,
+  assertTrustedProcessEntry,
   buildLedgerEvidenceQuery,
   buildLedgerEvidenceText,
   buildRecoveryAttestation,
@@ -570,10 +572,15 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
     forgeryAttempts.push({ url, init });
     return Promise.resolve({ ok: true, json: () => Promise.resolve(goodRows) });
   };
+  // Called from this test process — not one of the two wrapper CLIs — the
+  // transport now refuses at the launcher boundary before it spawns anything
+  // (Sol round 6). The fresh-subprocess behaviour that used to surface here is
+  // asserted end-to-end by the launcher forgery runs further below, which
+  // execute the real CLI as the process entry point.
   await assert.rejects(
     () => captureRecoveryLedgerEvidence({ root: fixture.root, names: [goodRows[0].name] }),
-    /Live ledger query subprocess/,
-    "capture with a patched in-process fetch fails in the fresh subprocess instead of accepting forged rows",
+    /imported or launcher-driven call is refused/,
+    "capture refuses outright when the process entry is not an owning wrapper CLI",
   );
   assert.equal(forgeryAttempts.length, 0, "the trusted capture path never touches this process's fetch");
   assert.equal(
@@ -683,8 +690,10 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
   await verifyRecoveriesAgainstLiveLedger([]);
   await verifyRecoveriesAgainstLiveLedger(undefined);
 
-  // The validation-time re-check also runs in the fresh subprocess: a patched
-  // in-process fetch serving perfect rows must never satisfy it (Sol round 3).
+  // The validation-time re-check is subject to the same launcher boundary as
+  // capture: called from anything but the two owning wrapper CLIs it refuses
+  // before querying, so a patched in-process fetch serving perfect rows can
+  // never satisfy it (Sol rounds 3 and 6).
   const reCheckForgeryAttempts = [];
   globalThis.fetch = (url, init) => {
     reCheckForgeryAttempts.push({ url, init });
@@ -692,8 +701,8 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
   };
   await assert.rejects(
     () => verifyRecoveriesAgainstLiveLedger(trustedRecoveries),
-    /Live ledger query subprocess/,
-    "the re-check with a patched in-process fetch fails in the fresh subprocess instead of trusting forged rows",
+    /imported or launcher-driven call is refused/,
+    "the re-check refuses outright when the process entry is not an owning wrapper CLI",
   );
   assert.equal(reCheckForgeryAttempts.length, 0, "the re-check never touches this process's fetch");
 
@@ -1000,6 +1009,37 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
     /module preloads/,
     "a NODE_OPTIONS preload is rejected too",
   );
+  // ── launcher boundary: the transport only runs as one of the two owning
+  // wrapper CLIs, so an imported call can never reach it however the importing
+  // process has been rigged (Sol round 6).
+  const recoveryCliPath = fileURLToPath(new URL("./write-recovery-attestation.mjs", import.meta.url));
+  const proofCliPath = fileURLToPath(new URL("./write-codex-push-proof.mjs", import.meta.url));
+  assert.doesNotThrow(
+    () => assertTrustedProcessEntry({ entry: recoveryCliPath }),
+    "the recovery attestation CLI is a trusted process entry",
+  );
+  assert.doesNotThrow(
+    () => assertTrustedProcessEntry({ entry: proofCliPath }),
+    "the push-proof wrapper CLI is a trusted process entry",
+  );
+  assert.doesNotThrow(
+    () => assertTrustedProcessEntry({ entry: path.relative(process.cwd(), proofCliPath) }),
+    "a relative invocation of a trusted CLI still resolves to the same trusted entry",
+  );
+  for (const untrusted of [
+    fileURLToPath(import.meta.url),
+    path.join(path.dirname(proofCliPath), "write-codex-push-proof.mjs.bak"),
+    path.join(tmpdir(), "forged-launcher.mjs"),
+    "",
+    undefined,
+  ]) {
+    assert.throws(
+      () => assertTrustedProcessEntry({ entry: untrusted }),
+      /imported or launcher-driven call is refused/,
+      `a non-wrapper process entry is refused: ${String(untrusted) || "<none>"}`,
+    );
+  }
+
   const realNodeOptions = process.env.NODE_OPTIONS;
   process.env.NODE_OPTIONS = "--import=/tmp/fake-fetch.mjs";
   globalThis.fetch = () => { throw new Error("the live query must never run in a preloaded process"); };
@@ -1108,6 +1148,62 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
     "the forged launcher run leaves no evidence file behind",
   );
   rmSync(launcherPath, { force: true });
+
+  // ── launcher forgery, round 6 variant: replacing globalThis.fetch is not the
+  // only route. A launcher can replace child_process.execFileSync, call
+  // syncBuiltinESMExports() so this module's imported binding resolves to the
+  // replacement, and then import the module — no preload flag anywhere, and no
+  // child process ever runs. The launcher reports whether that patch mechanism
+  // actually took effect, so this can never pass vacuously: if the ESM binding
+  // were not repointed, the test fails instead of quietly proving nothing.
+  const execLauncherPath = path.join(modifiedFixture.root, "forged-exec-launcher.mjs");
+  // Static source; the module URL, fixture root, ledger name and forged rows
+  // all arrive via argv rather than being interpolated into generated code.
+  writeFileSync(execLauncherPath, [
+    `const [moduleUrl, fixtureRoot, ledgerName, forgedRowsJson] = process.argv.slice(2);`,
+    `const forgedRows = JSON.parse(forgedRowsJson);`,
+    `let fakeCalled = false;`,
+    `const fake = () => { fakeCalled = true; return JSON.stringify(forgedRows); };`,
+    `const cp = await import("node:child_process");`,
+    `const { syncBuiltinESMExports } = await import("node:module");`,
+    `cp.default.execFileSync = fake;`,
+    `syncBuiltinESMExports();`,
+    `const { execFileSync: rebound } = await import("node:child_process");`,
+    `const patchWorks = rebound === fake;`,
+    `process.env.SUPABASE_ACCESS_TOKEN = "forged-launcher-token";`,
+    `const mod = await import(moduleUrl);`,
+    `let outcome = "FORGERY_REFUSED";`,
+    `try {`,
+    `  await mod.captureRecoveryLedgerEvidence({ root: fixtureRoot, names: [ledgerName] });`,
+    `  outcome = "FORGERY_SUCCEEDED";`,
+    `} catch {}`,
+    `process.stdout.write(outcome + "|patch=" + patchWorks + "|fake=" + fakeCalled);`,
+    ``,
+  ].join("\n"));
+  const execLauncherOut = execFileSync(process.execPath, [
+    execLauncherPath,
+    launcherModuleUrl,
+    modifiedFixture.root,
+    goodRows[0].name,
+    JSON.stringify(goodRows),
+  ], {
+    encoding: "utf8",
+    env: launcherEnv,
+    timeout: 120_000,
+    windowsHide: true,
+  });
+  assert.equal(
+    execLauncherOut,
+    "FORGERY_REFUSED|patch=true|fake=false",
+    "a launcher that repoints execFileSync via syncBuiltinESMExports is refused at the entry boundary, " +
+    "and its replacement is never called (patch=true proves the attack mechanism itself works)",
+  );
+  assert.equal(
+    existsSync(recoveryLedgerEvidencePath(modifiedFixture.root)),
+    false,
+    "the execFileSync forgery run leaves no evidence file behind",
+  );
+  rmSync(execLauncherPath, { force: true });
 
   // ── direct-entry-only subprocess mode: an imported call to the CLI with the
   // subprocess flag refuses (exit 1) because the module is not the entrypoint.

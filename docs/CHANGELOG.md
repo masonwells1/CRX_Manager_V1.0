@@ -2,6 +2,25 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-14 — Live-ledger queries refuse to run outside their owning wrapper CLI (Sol adversarial review round 6, PR #403)
+
+Sol's sixth adversarial pass defeated the fresh-subprocess boundary below without using any preload
+flag. A launcher can replace `child_process.execFileSync`, call Node's `syncBuiltinESMExports()` so
+the attestation module's own imported binding resolves to the replacement, then dynamically import
+the module: no child process is ever launched, forged ledger rows are returned directly, and
+`assertNoModulePreload()` sees a completely clean process. Nothing running inside a process can
+defend against that process, so the transport no longer tries. `fetchLedgerRows()` — the single
+choke point for both evidence capture and the validation-time re-check — now calls
+`assertTrustedProcessEntry()` and refuses outright unless the process **entry point** is one of the
+two wrapper CLIs that own this gate (`write-recovery-attestation.mjs` or
+`write-codex-push-proof.mjs`), both derived from the module's own location at load time and
+canonicalized before comparison, so a caller cannot repoint them later. An imported or
+launcher-driven call is therefore unreachable no matter what it has patched. The regression test
+Sol asked for performs the exact attack and asserts both that the forgery is refused and that the
+attacker's replacement is never called, while separately asserting the patch itself took effect so
+the test cannot pass vacuously. Mutation-tested: with the boundary removed the same test reports
+`FORGERY_SUCCEEDED` with the replacement invoked.
+
 ## 2026-08-14 — Live-ledger query moved into a fresh trusted subprocess (Sol adversarial review round 5, PR #403)
 
 Sol's fifth adversarial pass found that the preload refusal below closes preload *flags* but not

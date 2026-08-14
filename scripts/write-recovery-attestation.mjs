@@ -20,6 +20,7 @@ import {
   lstatSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -610,6 +611,58 @@ const TRUSTED_NODE_PATH = process.execPath;
 export const RECOVERY_LEDGER_SUBPROCESS_FLAG = "--ledger-query-subprocess";
 // Only what a fresh Node process needs to make one HTTPS request. Everything
 // else — NODE_OPTIONS and any other preload/override channel — is dropped.
+// The fresh-subprocess boundary is only as trustworthy as the process that
+// launches it, and an attacker needs no preload flag to defeat it (Sol
+// adversarial finding, round 6): an ordinary launcher can replace
+// child_process.execFileSync, call syncBuiltinESMExports() so this module's
+// imported binding resolves to the replacement, and then dynamically import
+// this module. No child ever runs and forged ledger rows come straight back,
+// while assertNoModulePreload() sees a completely clean process.
+//
+// Nothing inside a process can defend against that process, so the transport
+// does not try: it refuses to run at all unless the process ENTRY POINT is one
+// of the two wrapper CLIs that own this gate. A launcher-driven or otherwise
+// imported call is therefore never reachable, whatever it has patched. Both
+// paths are derived from this module's own location at load time, so a caller
+// cannot repoint them later.
+const TRUSTED_PROCESS_ENTRY_PATHS = Object.freeze([
+  TRUSTED_ENTRY_PATH,
+  path.join(path.dirname(TRUSTED_ENTRY_PATH), "write-codex-push-proof.mjs"),
+]);
+
+// Canonicalized for comparison: argv[1] may be relative, and on Windows the
+// same file is reachable under different casing. A path that cannot be
+// canonicalized keeps its resolved form and simply fails to match below.
+function canonicalEntryPath(entry) {
+  if (!entry) return "";
+  let resolved;
+  try {
+    resolved = path.resolve(String(entry));
+  } catch {
+    return "";
+  }
+  try {
+    resolved = realpathSync.native ? realpathSync.native(resolved) : realpathSync(resolved);
+  } catch {
+    // Keep the resolved (non-canonical) form; an unmatched path fails closed.
+  }
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+export function assertTrustedProcessEntry({
+  entry = process.argv[1],
+  trusted = TRUSTED_PROCESS_ENTRY_PATHS,
+} = {}) {
+  const actual = canonicalEntryPath(entry);
+  const allowed = trusted.map((candidate) => canonicalEntryPath(candidate));
+  if (!actual || !allowed.includes(actual)) {
+    throw new Error(
+      "Live ledger queries only run as the recovery-attestation or push-proof wrapper CLI " +
+      `(process entry: ${entry ? String(entry) : "<none>"}); an imported or launcher-driven call is refused.`,
+    );
+  }
+}
+
 const SUBPROCESS_ENV_ALLOWLIST = [
   "SUPABASE_ACCESS_TOKEN",
   "SYSTEMROOT",
@@ -635,6 +688,11 @@ async function fetchLedgerRows(names) {
   if (!process.env.SUPABASE_ACCESS_TOKEN) {
     throw new Error("SUPABASE_ACCESS_TOKEN is required to query the live ledger.");
   }
+  // The launcher boundary: refuse before spawning anything if this process was
+  // not started as one of the two owning wrapper CLIs. Without this, a launcher
+  // that replaced execFileSync would receive forged rows from a child that
+  // never ran.
+  assertTrustedProcessEntry();
   buildLedgerEvidenceQuery(names); // validate the slugs before handing them to the child
   const env = {};
   for (const key of SUBPROCESS_ENV_ALLOWLIST) {

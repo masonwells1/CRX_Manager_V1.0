@@ -183,7 +183,18 @@ reduced to a small allowlist that excludes `NODE_OPTIONS` by construction) whose
 in-process attacker cannot patch. The child refuses to run unless it is the script's own entrypoint
 and re-runs the preload refusal itself; the parent parses only the child's JSON stdout. A launcher
 regression test performs the exact attack — patching `globalThis.fetch` before importing the module
-— and confirms evidence capture fails closed with no evidence file written. A stale or superseded attestation is discarded only through
+— and confirms evidence capture fails closed with no evidence file written. Sol's sixth round then
+defeated that subprocess boundary with no preload flag at all: a launcher can replace
+`child_process.execFileSync`, call Node's `syncBuiltinESMExports()` so this module's own imported
+binding resolves to the replacement, and dynamically import the module — no child is ever launched
+and forged rows come straight back. Nothing inside a process can defend against that process, so
+the transport now refuses at the launcher boundary instead: every live-ledger query first requires
+that the process **entry point** be one of the two wrapper CLIs that own this gate
+(`write-recovery-attestation.mjs` or `write-codex-push-proof.mjs`), both derived from the module's
+own location at load time and canonicalized before comparison. An imported or launcher-driven call
+is refused before anything is spawned, whatever it has patched. The regression test runs that exact
+`syncBuiltinESMExports` attack and asserts both refusal and that the attacker's replacement is never
+called, plus that the patch itself took effect so the test cannot pass vacuously. A stale or superseded attestation is discarded only through
 the helper's own `node scripts/write-recovery-attestation.mjs --clear-attestation` (the guards deny
 direct tool deletion of both session-state files), and the helper itself is a pre-commit
 ledger-guard trigger: it cannot change without a CHANGELOG/manual record in the same commit.
