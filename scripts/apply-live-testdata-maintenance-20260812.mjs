@@ -34,13 +34,15 @@ const PROTECTED_SOURCES = {
 };
 const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // Re-pinned 2026-08-14: the guard gained the Supabase read-only allowlist
-  // (Sol HIGH finding on the write-scope review); none of this producer's
-  // transform anchors changed.
-  codexGuard: "89750dbca9ed9524e2aa19a063474b782494ccc4",
+  // (Sol HIGH finding on the write-scope review), then the app-connector UUID
+  // prefix was added to that allowlist (CodeRabbit follow-up). This PR cohort
+  // also wrapped matcherAnchor in normalizeLineEndings; the anchor text itself
+  // is unchanged, so the transform still applies cleanly.
+  codexGuard: "ba8c5a4fef2fc38e8dd98cf5d1cf2bfc3105ea9a",
   pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "6cbe0ba1ad94088edce28b66b8544910ace9beee",
+  codexGuard: "949226195921b4ef11b3dc7e8b9ff2040d2d9d63",
   pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
 };
 

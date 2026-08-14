@@ -89,11 +89,22 @@ requireIncludes(".codex/hooks.json", codexHooksText, ".claude/hooks/sql-safety.m
 requireIncludes(".claude/settings.json", claudeSettingsText, "review-proof-guard.mjs");
 requireIncludes(".codex/hooks.json", codexHooksText, "review-proof-guard.mjs");
 requireIncludes(".codex/hooks.json", codexHooksText, "production-action-guard.mjs");
-// Scope to the [mcp_servers.supabase] url line — a whole-file substring match
-// would accept a stale comment while the active connector stays read-only.
-const codexSupabaseUrl = (contents.get(".codex/config.toml") || "")
-  .match(/\[mcp_servers\.supabase\][\s\S]*?url\s*=\s*"([^"]+)"/)?.[1] || "";
-if (codexSupabaseUrl.includes("read_only=false") && !codexSupabaseUrl.includes("read_only=true")) {
+// Scope to the [mcp_servers.supabase] url line, parsed line-by-line so a
+// commented heading, a commented url, a backup_url key, or a url in a later
+// TOML table can never satisfy the check; the read_only flag is matched at
+// query-parameter boundaries so read_only=false0 / other_read_only=false fail.
+let codexSupabaseUrl = "";
+{
+  let inSupabase = false;
+  for (const line of (contents.get(".codex/config.toml") || "").split(/\r?\n/)) {
+    const heading = line.match(/^\s*\[([^\]]+)\]\s*$/);
+    if (heading) { inSupabase = heading[1].trim() === "mcp_servers.supabase"; continue; }
+    if (!inSupabase) continue;
+    const url = line.match(/^\s*url\s*=\s*"([^"]+)"\s*(?:#.*)?$/);
+    if (url) { codexSupabaseUrl = url[1]; break; }
+  }
+}
+if (/[?&]read_only=false(?:&|$)/.test(codexSupabaseUrl) && !/[?&]read_only=true(?:&|$)/.test(codexSupabaseUrl)) {
   pass(".codex/config.toml supabase url declares read_only=false");
 } else {
   fail(".codex/config.toml supabase url declares read_only=false");

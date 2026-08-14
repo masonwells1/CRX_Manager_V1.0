@@ -15,6 +15,14 @@ than the literal server name. Regression tests assert every lifecycle mutation i
 both prefixes, an unknown future tool is blocked, and each read-only tool still passes. The
 protected-producer blob pins were re-pinned to the hardened guard.
 
+CodeRabbit follow-up on the same PR: the app connector's UUID MCP prefix now hits the same
+fail-closed allowlist (unknown tools under that prefix previously fell through to the suffix
+blocklist only), with regression tests for unknown, read-only, and `execute_sql` tools under both
+prefixes. The two agent-guidance checkers also parse `.codex/config.toml` line-by-line and match
+`read_only` at query-parameter boundaries, so commented headings, `backup_url` keys, later-table
+urls, and `read_only=false0`-style decoys can no longer satisfy the write-access assertion
+(mutation-tested against seven decoy configs).
+
 ## 2026-08-14 — Write-access assertion scoped to the Supabase connector url
 
 CodeRabbit follow-up on the Codex write-scope PR: the two agent-guidance checkers asserted the

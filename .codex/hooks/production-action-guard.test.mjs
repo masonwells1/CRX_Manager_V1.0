@@ -122,7 +122,15 @@ try {
   const unknownSupabase = evaluateProductionAction({ toolName: "mcp__supabase__future_write_tool" });
   assert.equal(unknownSupabase.blocked, true, "unrecognized Supabase tool fails closed");
   assert.match(unknownSupabase.reason, /read-only allowlist/i, "unknown-tool denial names the allowlist");
-  // The exact read-only allowlist stays usable.
+  // CodeRabbit follow-up: the app connector's UUID prefix must hit the SAME
+  // fail-closed allowlist — before this, an unknown tool under the UUID prefix
+  // bypassed it and only the suffix blocklist applied.
+  const unknownUuidSupabase = evaluateProductionAction({
+    toolName: "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__future_write_tool",
+  });
+  assert.equal(unknownUuidSupabase.blocked, true, "unrecognized UUID-connector Supabase tool fails closed");
+  assert.match(unknownUuidSupabase.reason, /read-only allowlist/i, "UUID unknown-tool denial names the allowlist");
+  // The exact read-only allowlist stays usable under both prefixes.
   for (const leaf of [
     "list_tables", "list_migrations", "list_branches", "list_extensions",
     "list_edge_functions", "get_advisors", "get_project", "get_edge_function",
@@ -133,7 +141,30 @@ try {
       false,
       `read-only Supabase tool stays allowed: ${leaf}`,
     );
+    assert.equal(
+      evaluateProductionAction({ toolName: `mcp__50e15046-cf2c-49da-b8df-ceef27768f63__${leaf}` }).blocked,
+      false,
+      `read-only Supabase tool stays allowed under app-connector prefix: ${leaf}`,
+    );
   }
+  // execute_sql under the UUID prefix still routes to the SQL content gate:
+  // read-only SQL passes, mutating SQL is denied.
+  assert.equal(
+    evaluateProductionAction({
+      toolName: "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__execute_sql",
+      toolInput: { query: "select count(*) from public.orders" },
+    }).blocked,
+    false,
+    "UUID-connector execute_sql with read-only SQL passes the content gate",
+  );
+  assert.equal(
+    evaluateProductionAction({
+      toolName: "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__execute_sql",
+      toolInput: { query: "delete from public.orders" },
+    }).blocked,
+    true,
+    "UUID-connector execute_sql with mutating SQL is denied",
+  );
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "vercel --prod" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "npm run build" } }).blocked, false);
   const producerName = "apply-live-testdata-" + "maintenance-20260812.mjs";
