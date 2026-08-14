@@ -14,6 +14,7 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import Input from '../components/ui/Input';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
+import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
@@ -24,6 +25,7 @@ import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { runCriticalAction } from '../lib/criticalAction';
 import { parseLocalDate } from '../lib/dateUtils';
 import { formatUSD as fmt } from '../lib/money';
+import { isBelowCostApprovalHandledError, withBelowCostReason } from '../lib/belowCostApproval';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import HelpTip from '../components/ui/HelpTip';
 import RelatedNotes from '../components/team/RelatedNotes';
@@ -58,6 +60,7 @@ export default function OrderDetail() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { role, profile } = useAuth();
+  const { runWithBelowCostApproval } = useBelowCostApproval();
   const updateOrderIdem = useIdempotencyKey('update_order_items', profile?.id || '');
   const voidOrderIdem = useIdempotencyKey('void_order', profile?.id || '');
   const cancelOrderIdem = useIdempotencyKey('cancel_order', profile?.id || '');
@@ -499,12 +502,12 @@ export default function OrderDetail() {
         const itemsPayload = [...existingPayload, ...newPayload];
 
         const idemKey = updateOrderIdem.getKey();
-        const { data, error } = await supabase.rpc('update_order_items', {
+        const { data, error } = await runWithBelowCostApproval((reason) => supabase.rpc('update_order_items', withBelowCostReason('update_order_items', {
           p_order_id: id!,
           p_items: itemsPayload,
           p_performed_by: profile.id,
           p_idempotency_key: idemKey,
-        });
+        }, reason)));
 
         if (error) {
           // Server-side backstop for the hidden Edit button: a draw-created
@@ -1052,12 +1055,12 @@ export default function OrderDetail() {
     setPricingOrder(true);
     try {
       const idemKey = priceOrderIdem.getKey();
-      const { data, error } = await supabase.rpc('price_order', {
+      const { data, error } = await runWithBelowCostApproval((reason) => supabase.rpc('price_order', withBelowCostReason('price_order', {
         p_order_id: order.id,
         p_items: priced,
         p_performed_by: profile.id,
         p_idempotency_key: idemKey,
-      });
+      }, reason)));
       if (error) throw error;
       const result = assertRpcResult<{ success: boolean; pricing_status: string; remaining_pending: number; invoices_swept: number }>(data, 'price_order');
       priceOrderIdem.resetKey();
@@ -1066,6 +1069,7 @@ export default function OrderDetail() {
         : `Saved — ${result.remaining_pending} line(s) still need a price`);
       await fetchOrder();
     } catch (err) {
+      if (isBelowCostApprovalHandledError(err)) return;
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'price_order' } });
       if (hasRpcCode(err, RpcErrorCodes.INSUFFICIENT_ROLE)) toast('error', 'Only admin or sales can price orders.');
       else toast('error', err instanceof Error ? err.message : 'Failed to price the order.');
