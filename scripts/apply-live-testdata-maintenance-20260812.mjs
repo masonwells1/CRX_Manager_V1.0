@@ -40,7 +40,7 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "b9baeeed1254e6dd4b6f162b47374376b109b0a5",
+  codexGuard: "714f593d004418dbcc86b8517a393f0d616d2fd3",
   pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
 };
 
@@ -181,6 +181,14 @@ export function maintenanceProducerCommandMentioned(command) {
       return false;
     });
   };
+  const opaqueLauncherContainsEncodedPowerShell = tokens.some((token, index, list) => {
+    const launcher = executableNamed(token, "start-process", true) || executableNamed(token, "xargs", true);
+    if (!launcher || !invocationPosition(list, index)) return false;
+    let commandEnd = index + 1;
+    while (commandEnd < list.length && !list[commandEnd].control) commandEnd += 1;
+    return commandStringContainsEncodedPowerShell(list.slice(index + 1, commandEnd).map((entry) => entry.value).join(" "));
+  });
+  if (opaqueLauncherContainsEncodedPowerShell) return true;
   const powerShellEncodedCommand = tokens.some((token, index, list) => {
     if (!(executableNamed(token, "pwsh", true) || executableNamed(token, "powershell", true)) || !invocationPosition(list, index)) return false;
     for (let cursor = index + 1; cursor < list.length && !list[cursor].control; cursor += 1) {
@@ -280,6 +288,7 @@ export function maintenanceProducerCommandMentioned(command) {
               continue;
             }
             if (commandString) {
+              if (powerShell && argument === "-") return true;
               if (commandStringContainsEncodedPowerShell(argument) || depth >= maxNestedShellDepth || analyzeText(argument, depth + 1)) return true;
               break;
             }

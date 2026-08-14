@@ -87,7 +87,7 @@ wrappers could bypass the producer invocation matcher. The generated
 guard now recognizes quoted, absolute, alternate-separator, wrapper-prefixed, and escaped spellings, and
 fails closed whenever a Node command uses dynamic shell syntax anywhere in its complete command text, while
 the producer itself independently requires its exact committed blob plus a fresh HEAD-and-base-bound
-Sol-high proof before any write mode can run. Two hundred fifty-eight counted producer assertions pin those boundaries,
+Sol-high proof before any write mode can run. Two hundred sixty-four counted producer assertions pin those boundaries,
 including option-prefixed, value-taking-option, redirection, opaque substitution, escaped-newline, and
 standalone Node tokens behind shell builtins, external wrappers, grouping, `env -S`, and quoted `cmd` strings
 while preserving quoted-data and environment-assignment negatives. The

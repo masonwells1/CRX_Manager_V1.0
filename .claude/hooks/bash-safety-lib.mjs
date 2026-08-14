@@ -158,6 +158,14 @@ export function maintenanceProducerCommandMentioned(command) {
       return false;
     });
   };
+  const opaqueLauncherContainsEncodedPowerShell = tokens.some((token, index, list) => {
+    const launcher = executableNamed(token, "start-process", true) || executableNamed(token, "xargs", true);
+    if (!launcher || !invocationPosition(list, index)) return false;
+    let commandEnd = index + 1;
+    while (commandEnd < list.length && !list[commandEnd].control) commandEnd += 1;
+    return commandStringContainsEncodedPowerShell(list.slice(index + 1, commandEnd).map((entry) => entry.value).join(" "));
+  });
+  if (opaqueLauncherContainsEncodedPowerShell) return true;
   const powerShellEncodedCommand = tokens.some((token, index, list) => {
     if (!(executableNamed(token, "pwsh", true) || executableNamed(token, "powershell", true)) || !invocationPosition(list, index)) return false;
     for (let cursor = index + 1; cursor < list.length && !list[cursor].control; cursor += 1) {
@@ -257,6 +265,7 @@ export function maintenanceProducerCommandMentioned(command) {
               continue;
             }
             if (commandString) {
+              if (powerShell && argument === "-") return true;
               if (commandStringContainsEncodedPowerShell(argument) || depth >= maxNestedShellDepth || analyzeText(argument, depth + 1)) return true;
               break;
             }

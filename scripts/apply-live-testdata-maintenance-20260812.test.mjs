@@ -157,6 +157,9 @@ const producerInvocations = [
   '"pwsh" /EncodedCommand ZW5jb2RlZA==',
   'pwsh "$env:OPT" "$env:PAYLOAD"',
   'pwsh @args',
+  "Start-Process pwsh -ArgumentList '-" + "Encoded" + "Command','ZW5jb2RlZA==' -Wait",
+  "Write-Output payload | xargs pwsh --" + "Encoded" + "Command ZW5jb2RlZA==",
+  'Write-Output payload | pwsh -Command -',
   "& ('no','de' -join '') ('--requ','ire' -join '') ./preload.cjs ('scripts/apply-live-testdata-maintenance-20260812','.mjs' -join '') ('--approved-by-','mason=2026-08-12' -join '')",
   '& $EXE $OPTION $MODULE $SCRIPT $APPROVAL',
   "pwsh -Command \"Start-Process pwsh -ArgumentList @('-" + "Encoded" + "Command','ZW5jb2RlZA==') -Wait\"",
@@ -216,6 +219,9 @@ assert.equal(
 );
 const wrappedDynamicProducer = 'F=$(decode); P=$(decode); S=$(decode); T=$(decode); command node --no-warnings "$F" "$P" "$S" "$T"';
 const wrappedDynamicProducers = [
+  "Start-Process pwsh -ArgumentList '-" + "Encoded" + "Command','ZW5jb2RlZA==' -Wait",
+  "Write-Output payload | xargs pwsh --" + "Encoded" + "Command ZW5jb2RlZA==",
+  'Write-Output payload | pwsh -Command -',
   "& ('no','de' -join '') ('--requ','ire' -join '') ./preload.cjs ('scripts/apply-live-testdata-maintenance-20260812','.mjs' -join '') ('--approved-by-','mason=2026-08-12' -join '')",
   '& $EXE $OPTION $MODULE $SCRIPT $APPROVAL',
   "pwsh -Command \"Start-Process pwsh -ArgumentList @('-" + "Encoded" + "Command','ZW5jb2RlZA==') -Wait\"",
