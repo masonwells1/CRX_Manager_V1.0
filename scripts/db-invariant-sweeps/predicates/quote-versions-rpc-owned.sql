@@ -512,7 +512,7 @@ SELECT 'quote_versions:second-authoritative-writer' AS violation_key,
       AND p.prosecdef
       AND r.rolbypassrls
       AND NOT (n.nspname = 'public' AND p.proname = '_create_quote_version_owner_impl')
-      -- 20260813090000 adds a deliberately narrow second writer: after the
+      -- 20260813180000 adds a deliberately narrow second writer: after the
       -- owner-only implementation has constructed a fresh snapshot, the public
       -- create wrapper can set only that row's null trust marker. Do not exempt
       -- by name: any signature, definer, owner, search_path, browser-grant, or

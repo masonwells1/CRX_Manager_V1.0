@@ -575,7 +575,7 @@ describe('Idempotency operation literals in latest disk migrations', () => {
     const chain = delegationChain('restore_quote_version');
     expect(chain.length).toBeGreaterThan(1);
     expect(chain.some((b) => /operation\s*=\s*'restore_quote_version'/i.test(b))).toBe(true);
-    // 20260813090000 adds a trust boundary inside the same canonical restore
+    // 20260813180000 adds a trust boundary inside the same canonical restore
     // implementation. Keep that failure closed after a validated replay but
     // before the legacy snapshot can reach the restore writer.
     const trustBoundary = chain.find((b) => /QUOTE_VERSION_LEGACY_UNTRUSTED/.test(b));

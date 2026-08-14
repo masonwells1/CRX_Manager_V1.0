@@ -30,7 +30,7 @@ const migration = read(
 const restoreTrustMigration = read(
   'supabase',
   'migrations',
-  '20260813090000_quote_version_restore_trust_boundary.sql',
+  '20260813180000_quote_version_restore_trust_boundary.sql',
 );
 const predicate = read(
   'scripts',

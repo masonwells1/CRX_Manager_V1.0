@@ -41,7 +41,7 @@ Round-5 hardening of the quote_versions write-boundary migration (20260813080000
   - `supabase/migrations/20260813030000_reject_non_finite_money_and_quantities.sql`
   - `supabase/migrations/20260813040000_clamp_negative_commission_remainder.sql`
   - `supabase/migrations/20260813080000_lock_quote_versions_writes_to_rpc.sql`
-  - `supabase/migrations/20260813090000_quote_version_restore_trust_boundary.sql`
+  - `supabase/migrations/20260813180000_quote_version_restore_trust_boundary.sql`
 
 ## 2026-08-13 — Third reviewer round on the not-yet-applied quote_versions write…
 
@@ -75,7 +75,7 @@ Third reviewer round on the not-yet-applied quote_versions write boundary. Both 
   - `supabase/migrations/20260813030000_reject_non_finite_money_and_quantities.sql`
   - `supabase/migrations/20260813040000_clamp_negative_commission_remainder.sql`
   - `supabase/migrations/20260813080000_lock_quote_versions_writes_to_rpc.sql`
-  - `supabase/migrations/20260813090000_quote_version_restore_trust_boundary.sql`
+  - `supabase/migrations/20260813180000_quote_version_restore_trust_boundary.sql`
 
 ## 2026-08-13 — Second-round reviewer fixes on the quote_versions write boundary:…
 
