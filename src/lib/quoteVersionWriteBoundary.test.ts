@@ -712,12 +712,31 @@ describe('quote_versions write boundary — standing predicate', () => {
       "strpos(lower(p.prosrc), 'raise exception ''quote_version_legacy_untrusted''')\n          < strpos(lower(p.prosrc), 'v_result := public._restore_quote_version_owner_impl')";
     const predicateDmlGuard =
       "!~* '(insert\\s+into|update\\s+(only\\s+)?[a-z_\\\"]|delete\\s+from|merge\\s+into|truncate\\s+(table\\s+)?[a-z_\\\"]|execute\\s+|perform\\s+|call\\s+)'";
+    const predicateCallGuard = "FROM regexp_matches(";
+    const predicateAllowedCallFragments = [
+      "'auth.uid',",
+      "'public.check_idempotency',",
+      "'jsonb_typeof',",
+      "'coalesce',",
+      "'jsonb_build_object',",
+      "'in',",
+      "'or',",
+      "'return'",
+    ];
     const predicateProtectsPrefix = (source: string) =>
-      source.includes(predicateComparator) && source.includes(predicateDmlGuard);
+      source.includes(predicateComparator) &&
+      source.includes(predicateDmlGuard) &&
+      source.includes(predicateCallGuard) &&
+      predicateAllowedCallFragments.every((fragment) => source.includes(fragment));
     expect(predicateProtectsPrefix(predicateCode)).toBe(true);
     expect(predicateCode).toContain("':=\\s*[a-z_][a-z0-9_.]*\\s*\\('");
-    expect(restoreTrustMigration).toContain("'v_actor\\s*:=\\s*auth\\.uid\\s*\\('");
-    expect(restoreTrustMigration).toContain("'v_existing\\s*:=\\s*public\\.check_idempotency\\s*\\('");
+    expect(predicateCode).toContain("'v_actor\\s*:=\\s*auth\\.uid\\s*\\('");
+    expect(predicateCode).toContain("'v_existing\\s*:=\\s*public\\.check_idempotency\\s*\\('");
+    expect(restoreTrustMigration).toContain(predicateCallGuard);
+    for (const fragment of predicateAllowedCallFragments) {
+      expect(restoreTrustMigration).toContain(fragment);
+      expect(predicateProtectsPrefix(predicateCode.replace(fragment, ''))).toBe(false);
+    }
 
     const body = restoreTrustMigration.match(
       /CREATE OR REPLACE FUNCTION public\._restore_quote_version_below_cost_impl_20260810\([\s\S]*?AS \$function\$([\s\S]*?)\$function\$;/,
@@ -732,8 +751,20 @@ describe('quote_versions write boundary — standing predicate', () => {
     const hasReadOnlyPrefix = (source: string) => {
       const prefix = source.slice(0, source.indexOf(trustCheck));
       const assignmentCalls = prefix.match(/:=\s*[a-z_][a-z0-9_.]*\s*\(/gi) ?? [];
+      const allowedCalls = new Set([
+        'auth.uid',
+        'public.check_idempotency',
+        'jsonb_typeof',
+        'coalesce',
+        'jsonb_build_object',
+        'in',
+        'or',
+        'return',
+      ]);
+      const expressionCalls = [...prefix.matchAll(/\b([a-z_][a-z0-9_.]*)\s*\(/gi)]
+        .map((match) => match[1].toLowerCase());
       return !/(insert\s+into|update\s+(only\s+)?[a-z_"]|delete\s+from|merge\s+into|truncate\s+(table\s+)?[a-z_"]|execute\s+|perform\s+|call\s+)/i.test(prefix) &&
-        !/\bselect\s+[a-z_][a-z0-9_.]*\s*\(/i.test(prefix) &&
+        expressionCalls.every((call) => allowedCalls.has(call)) &&
         assignmentCalls.length === 2 &&
         /v_actor\s*:=\s*auth\.uid\s*\(/i.test(prefix) &&
         /v_existing\s*:=\s*public\.check_idempotency\s*\(/i.test(prefix);
@@ -754,6 +785,18 @@ describe('quote_versions write boundary — standing predicate', () => {
 
     const inlineUpdateMutant = body!.replace(trustCheck, `UPDATE public.quotes SET status = status;\n  ${trustCheck}`);
     expect(hasReadOnlyPrefix(inlineUpdateMutant)).toBe(false);
+
+    const selectListHelperMutant = body!.replace(
+      trustCheck,
+      `SELECT 1, public.some_mutator() INTO v_cache_rows;\n  ${trustCheck}`,
+    );
+    expect(hasReadOnlyPrefix(selectListHelperMutant)).toBe(false);
+
+    const conditionalHelperMutant = body!.replace(
+      trustCheck,
+      `IF public.some_mutator() THEN NULL; END IF;\n  ${trustCheck}`,
+    );
+    expect(hasReadOnlyPrefix(conditionalHelperMutant)).toBe(false);
   });
 
   it('keeps the new legacy-restore refusal intelligible in the quote UI', () => {

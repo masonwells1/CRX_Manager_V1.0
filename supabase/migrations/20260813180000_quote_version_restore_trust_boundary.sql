@@ -367,12 +367,29 @@ BEGIN
               0
             )
           ) !~* '(insert\s+into|update\s+(only\s+)?[a-z_\"]|delete\s+from|merge\s+into|truncate\s+(table\s+)?[a-z_\"]|execute\s+|perform\s+|call\s+)'
-      AND substring(
+      AND NOT EXISTS (
+        SELECT 1
+        FROM regexp_matches(
+          substring(
             prosrc FROM 1 FOR greatest(
               strpos(lower(prosrc), 'raise exception ''quote_version_legacy_untrusted''') - 1,
               0
             )
-          ) !~* '\mselect\s+[a-z_][a-z0-9_.]*\s*\('
+          ),
+          '\m([a-z_][a-z0-9_.]*)\s*\(',
+          'gi'
+        ) AS prefix_call(call_match)
+        WHERE lower((call_match)[1]) NOT IN (
+          'auth.uid',
+          'public.check_idempotency',
+          'jsonb_typeof',
+          'coalesce',
+          'jsonb_build_object',
+          'in',
+          'or',
+          'return'
+        )
+      )
       AND regexp_count(
             substring(
               prosrc FROM 1 FOR greatest(
