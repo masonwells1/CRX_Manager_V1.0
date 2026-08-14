@@ -26,6 +26,74 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-08-14 — `draw_down_quote` never rounds the weighted average PRICE, and the whole-cent guard rejects it
+
+**Severity: HIGH, live in production, currently latent (0 reachable rows).** Found by the
+independent Codex review of PR #392 and re-verified directly against live `pg_proc` and live data
+on 2026-08-14. **This is a defect in already-applied SQL — it is not caused by the recovery PR, and
+it cannot be fixed by editing the recovered files, which must stay byte-identical to what ran.**
+
+Live `_draw_down_quote_below_cost_impl_20260810` aggregates the quote lines of one product into a
+quantity-weighted average price and a quantity-weighted average cost:
+
+```
+118    CASE WHEN SUM(COALESCE(qi.total_units_needed, 0)) > 0
+119      THEN SUM(qi.price_per_unit * COALESCE(qi.total_units_needed, 0)) / SUM(COALESCE(qi.total_units_needed, 0))
+...
+126  INTO v_booked, v_wavg_price, v_wavg_cost, v_total_acres, v_unit_size
+137  v_wavg_cost := ROUND(v_wavg_cost, 2);      -- cost settled to whole cents
+176    v_wavg_price, v_wavg_cost, v_acres,      -- price inserted UNROUNDED
+```
+
+Line 137 settles the weighted **cost** to whole cents, behind a seven-line comment explaining
+precisely why an average of several differently-priced lines lands on fractional cents. There is no
+matching `v_wavg_price := ROUND(v_wavg_price, 2);`. The unrounded price goes straight into
+`order_items.price_per_unit` at line 176.
+
+Live `_enforce_below_cost_line` then rejects exactly that value — twice, at lines 40–41 and 148–149:
+
+```
+       OR NEW.price_per_unit <> round(NEW.price_per_unit, 2) THEN
+      RAISE EXCEPTION 'INVALID_UNIT_PRICE_CENTS';
+```
+
+**Effect:** a quote with two lines of the same product at prices whose quantity-weighted average is
+not a whole number of cents — one unit at $1.00 and two at $1.01 average to $1.00666… — cannot be
+converted to an order at all. The booking-to-order transaction raises `INVALID_UNIT_PRICE_CENTS`
+and rolls back. Not a money-corruption bug: the guard does its job and nothing wrong is stored.
+It is an availability bug — a legitimate booking is refused with an opaque error.
+
+**Reachability measured live 2026-08-14: 0.** No quote/product group in the database currently has
+a fractional weighted average, so nothing is broken today. It is a trap waiting for the first quote
+with mixed pricing on one product, which is ordinary business behavior.
+
+**Fix written 2026-08-14, not applied, and it collides with a second pending fix.** The fix is a
+forward-only migration adding `v_wavg_price := ROUND(v_wavg_price, 2);` alongside line 137, so price
+and cost settle on one basis at the same point — the fix the existing comment already argues for on
+the cost side. It is committed as
+`supabase/migrations/20260814194500_round_draw_down_weighted_unit_price.sql` on branch
+`claude/draw-down-price-rounding` (worktree `.claude/worktrees/confident-mclean-7f73d6`), unpushed,
+with no PR yet.
+
+**Read this before applying either one.** Two unapplied migrations now `CREATE OR REPLACE` this same
+function, and each preflight pins the *current* live `md5(prosrc)`:
+
+| Migration | Branch | Purpose |
+|---|---|---|
+| `20260814194500_round_draw_down_weighted_unit_price.sql` | `claude/draw-down-price-rounding` | rounds the weighted unit price |
+| `20260813161614_restrict_draw_down_quote_owner.sql` | `claude/restrict-draw-down-owner` | requires quote ownership |
+
+Whichever applies first rewrites `prosrc`, so the second one's preflight fails closed with a drift
+error rather than silently clobbering the first fix. That fail-closed behavior is correct and
+deliberate — but it means **the two bodies must be reconciled into a single migration before either
+is applied live.** Applying one and then relaxing the other's preflight would drop a fix.
+
+Mason's decision 2026-08-14 was to log this bug and fix it separately rather than entangle it with
+the recovery PR. **Neither migration is approved for apply.** Do not re-diagnose this from scratch;
+the live evidence is above.
+
+---
+
 ## CLOSED 2026-08-13 — six migrations applied live on 2026-08-12 have no file on `main`
 
 **Severity: was MATERIAL — resolved by PR #392 (files landed on `main`).** Six migrations
