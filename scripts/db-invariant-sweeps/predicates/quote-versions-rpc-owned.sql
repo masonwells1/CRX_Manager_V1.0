@@ -534,7 +534,12 @@ SELECT 'quote_versions:second-authoritative-writer' AS violation_key,
         AND p.prosrc LIKE '%_create_quote_version_owner_impl%'
         AND regexp_count(
           p.prosrc,
-          'update\s+public\.quote_versions\s+set\s+restore_trusted_at\s*=\s*clock_timestamp\(\)\s+where\s+id\s*=\s*v_version_id\s+and\s+quote_id\s*=\s*p_quote_id\s+and\s+restore_trusted_at\s+is\s+null',
+          'update\s+public\.quote_versions\s+set\s+restore_trusted_at\s*=\s*clock_timestamp\(\)\s+where\s+id\s*=\s*v_version_id\s+and\s+quote_id\s*=\s*p_quote_id\s+and\s+restore_trusted_at\s+is\s+null\s*;',
+          'i'
+        ) = 1
+        AND regexp_count(
+          p.prosrc,
+          '\mupdate\s+(only\s+)?("?public"?\s*\.\s*)?"?quote_versions\M',
           'i'
         ) = 1
         AND p.prosrc !~* '(insert\s+into|delete\s+from|merge\s+into)\s+(only\s+)?("?public"?\s*\.\s*)?"?quote_versions\M'
@@ -573,10 +578,49 @@ SELECT 'create_quote_version:trusted-marker-writer-contract' AS violation_key,
       AND p.prosrc LIKE '%_create_quote_version_owner_impl%'
       AND regexp_count(
         p.prosrc,
-        'update\s+public\.quote_versions\s+set\s+restore_trusted_at\s*=\s*clock_timestamp\(\)\s+where\s+id\s*=\s*v_version_id\s+and\s+quote_id\s*=\s*p_quote_id\s+and\s+restore_trusted_at\s+is\s+null',
+        'update\s+public\.quote_versions\s+set\s+restore_trusted_at\s*=\s*clock_timestamp\(\)\s+where\s+id\s*=\s*v_version_id\s+and\s+quote_id\s*=\s*p_quote_id\s+and\s+restore_trusted_at\s+is\s+null\s*;',
+        'i'
+      ) = 1
+      AND regexp_count(
+        p.prosrc,
+        '\mupdate\s+(only\s+)?("?public"?\s*\.\s*)?"?quote_versions\M',
         'i'
       ) = 1
       AND p.prosrc !~* '(insert\s+into|delete\s+from|merge\s+into)\s+(only\s+)?("?public"?\s*\.\s*)?"?quote_versions\M'
+ )
+
+UNION ALL
+
+-- Restoring is the point where a trusted snapshot becomes authoritative money
+-- again. Pin both the marker read and the rejection before the owner-side
+-- restore call, so re-emitting this private implementation cannot silently
+-- remove or move the trust check while preserving its signature and grants.
+SELECT '_restore_quote_version_below_cost_impl_20260810:trust-check-contract' AS violation_key,
+       'the private restore implementation must read restore_trusted_at for the requested quote/version, reject NULL with QUOTE_VERSION_LEGACY_UNTRUSTED, and do so before its sole owner-side restore call' AS reason
+ WHERE NOT EXISTS (
+   SELECT 1
+     FROM pg_proc p
+     JOIN pg_roles r ON r.oid = p.proowner
+    WHERE p.oid = to_regprocedure('public._restore_quote_version_below_cost_impl_20260810(uuid,uuid,uuid,text,bigint)')
+      AND p.prosecdef
+      AND r.rolbypassrls
+      AND EXISTS (
+        SELECT 1 FROM unnest(coalesce(p.proconfig, '{}'::text[])) AS config(value)
+        WHERE replace(config.value, ' ', '') = 'search_path=public,pg_temp'
+      )
+      AND regexp_count(
+        p.prosrc,
+        'select\s+restore_trusted_at\s+into\s+v_restore_trusted_at\s+from\s+public\.quote_versions\s+where\s+id\s*=\s*p_version_id\s+and\s+quote_id\s*=\s*p_quote_id\s+for\s+key\s+share\s*;',
+        'i'
+      ) = 1
+      AND regexp_count(
+        p.prosrc,
+        'if\s+v_restore_trusted_at\s+is\s+null\s+then\s+raise\s+exception\s+''QUOTE_VERSION_LEGACY_UNTRUSTED''\s*;\s+end\s+if\s*;',
+        'i'
+      ) = 1
+      AND regexp_count(p.prosrc, '_restore_quote_version_owner_impl\s*\(', 'i') = 1
+      AND strpos(lower(p.prosrc), 'raise exception ''quote_version_legacy_untrusted''')
+          < strpos(lower(p.prosrc), 'v_result := public._restore_quote_version_owner_impl')
  )
 
 UNION ALL

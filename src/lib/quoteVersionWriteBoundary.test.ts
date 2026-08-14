@@ -666,6 +666,7 @@ describe('quote_versions write boundary — standing predicate', () => {
       'quote_versions:non-bypassing-writer',
       'quote_versions:second-authoritative-writer',
       'create_quote_version:trusted-marker-writer-contract',
+      '_restore_quote_version_below_cost_impl_20260810:trust-check-contract',
       'quote_versions:inheritance-path',
       'quote_versions:service-role-write-lost',
     ]) {
@@ -699,6 +700,15 @@ describe('quote_versions write boundary — standing predicate', () => {
     expect(predicateCode).toContain("'anon', 'public.create_quote_version(uuid,uuid,text,text,bigint)', 'EXECUTE'");
     expect(predicateCode).toContain('restore_trusted_at');
     expect(predicateCode).toContain('regexp_count(');
+    expect(predicateCode).toContain("'\\mupdate\\s+(only\\s+)?(\"?public\"?\\s*\\.\\s*)?\"?quote_versions\\M'");
+  });
+
+  it('pins the restore trust rejection before the only owner-side restore call', () => {
+    expect(predicateCode).toContain("'_restore_quote_version_below_cost_impl_20260810:trust-check-contract' AS violation_key");
+    expect(predicateCode).toContain("'QUOTE_VERSION_LEGACY_UNTRUSTED'");
+    expect(predicateCode).toContain("regexp_count(p.prosrc, '_restore_quote_version_owner_impl\\s*\\(', 'i') = 1");
+    expect(predicateCode).toContain("strpos(lower(p.prosrc), 'raise exception ''quote_version_legacy_untrusted''')");
+    expect(predicateCode).toContain("strpos(lower(p.prosrc), 'v_result := public._restore_quote_version_owner_impl')");
   });
 
   it('keeps the new legacy-restore refusal intelligible in the quote UI', () => {
