@@ -35,12 +35,12 @@ scripts/smoke/fixtures/phase3-live-unapply-credit-memo.sql text eol=lf
 # checkout under core.autocrlf=true would install CRLF bodies whose md5 can never
 # match an LF-computed pin, and every one of these migrations would abort at its
 # own POSTCOND on a machine that merely checked the repo out differently.
-supabase/migrations/20260813010000_wave_a_order_cost_authority_and_finiteness.sql text eol=lf
-supabase/migrations/20260813020000_round_order_header_money.sql text eol=lf
-supabase/migrations/20260813030000_reject_non_finite_money_and_quantities.sql text eol=lf
-supabase/migrations/20260813040000_clamp_negative_commission_remainder.sql text eol=lf
-supabase/migrations/20260813050000_guard_job_commission_split_immutable.sql text eol=lf
-supabase/migrations/20260813060000_require_completed_delivery_before_invoice_post.sql text eol=lf
+scripts/.staging-migrations/20260813010000_wave_a_order_cost_authority_and_finiteness.sql text eol=lf
+scripts/.staging-migrations/20260813020000_round_order_header_money.sql text eol=lf
+scripts/.staging-migrations/20260813030000_reject_non_finite_money_and_quantities.sql text eol=lf
+scripts/.staging-migrations/20260813040000_clamp_negative_commission_remainder.sql text eol=lf
+scripts/.staging-migrations/20260813050000_guard_job_commission_split_immutable.sql text eol=lf
+scripts/.staging-migrations/20260813060000_require_completed_delivery_before_invoice_post.sql text eol=lf
 
 # Generated clean-rebuild baselines are hash-verified release artifacts.
 supabase/baselines/*.sql  text eol=lf

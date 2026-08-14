@@ -66,6 +66,19 @@ Highest blast radius in the set. Needs a full test pass and a careful look at ev
 ### Wave D — MED maintenance (36, batched)
 Missing `deleted_at` filters (the soft-deleted draft invoice that permanently hides Create Invoice), reused page-scoped idempotency keys on Quotes and Deliveries, the three inconsistent AR derivations, and the reporting/docs drift items. Group into 2–3 PRs by area rather than one large diff.
 
+## Open follow-ups on the record itself
+
+Found while writing this up. None affect a finding's validity — they are defects in the summary layer and its tooling. Fix opportunistically; nothing here blocks remediation.
+
+| Item | Where | Why it matters |
+|---|---|---|
+| The hold-leak summary overstates the dated case | `README.md` HIGH item 3, and the same wave text in `report.html` | It says orphaned holds shrink available stock **forever**. True only when the booking has no `needed_by_date` — then `expires_at` is NULL and the hold never expires. With a date set, `expires_at` is `needed_by_date + 14 days` and the inventory queries filter expired holds, so the dated case is a temporary capacity distortion plus an unreclaimed row. The defect is real either way; the permanence claim is not. Confirmed in the finding's own verifier text (`20260702171000:101`). |
+| The report's remediation prose is hand-written, not generated | `build-report.mjs` wave list | Totals and severity counts regenerate from `findings.json`, but the wave text does not. If triage refutes or demotes a money finding, the report would still name three money fixes beside totals that disagree. Mitigated today by the section stating `REMEDIATION-PLAN.md` is authoritative — but the mitigation is a sentence, not a mechanism. Raised by Codex on PR #356. |
+| A killed agent is indistinguishable from a clean one | `workflow.mjs` finder/verifier error handling | The harness returns `null` for an agent that dies on a terminal API error, and the script turns that into a finder with zero findings; failed verifiers are dropped rather than flagged. A re-run interrupted mid-flight would publish partial coverage that reads as complete. This run's totals came from a pass reporting 112/112 agents with zero errors — but the next run needs that checked explicitly. Details in `README.md` under *Method*. |
+| The workflow embeds one session's absolute repo path | `workflow.mjs` reviewer prompt | Re-running from any other checkout points all agents at a directory that does not exist. Documented in `README.md`; kept unedited so the file stays a faithful record of what ran. |
+
+If a Step 2 triage verdict changes, remember `build-report.mjs` now honours `verdict.refuted` and derives the distinct-defect estimate — edit `findings.json`, run `node docs/audits/ordering-cycle-review-2026-08-09/build-report.mjs` from the repository root, and do not hand-edit `report.html`.
+
 ## Out of scope
 
 - The 22 parked LOW findings.

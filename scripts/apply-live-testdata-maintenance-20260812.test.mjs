@@ -68,12 +68,12 @@ assert.match(
   "Codex guard output binds producer execution to committed reviewed HEAD",
 );
 assert.equal(
-  producerProtection.outputs.codexGuard.includes(`export ${maintenanceProducerCommandMentioned.toString()}`),
+  producerProtection.outputs.codexGuard.includes(`export ${normalizeLineEndings(maintenanceProducerCommandMentioned.toString())}`),
   true,
   "generated guard embeds the invocation matcher exercised below",
 );
 assert.equal(
-  producerProtection.outputs.codexGuard.includes(`export ${maintenanceProducerInvocationAllowed.toString()}`),
+  producerProtection.outputs.codexGuard.includes(`export ${normalizeLineEndings(maintenanceProducerInvocationAllowed.toString())}`),
   true,
   "generated guard embeds the strict invocation allowlist exercised below",
 );

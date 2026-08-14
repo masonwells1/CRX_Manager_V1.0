@@ -2,7 +2,7 @@
 
 **Last verified: 2026-08-12 UTC, post-apply.** Live ledger high-water is `20260812003315` at 962 rows, carrying submitted name `20260811230423_log_customer_sales_rep_assignment`. The Customer 360 assignment RPC is live with atomic customer timestamp/activity logging, one overload, the reviewed security/search-path/grant shape, and no table, column, enum, generated-column, signature, or public-function-name-count change. The schema registry was genuinely refreshed through the same high-water. Ledger versions are UTC and Supabase applies may assign a version different from the submitted filename, so match the recorded name when reconciling an apply. The historical Team Board, money, and commission-payout details below remain separately dated evidence rather than claims that their older high-waters are current.
 
-**Branch `claude/wave-a-money` — six unapplied migration candidates.** That branch carries six local migration files prefixed `20260811…` that are **not applied**, confirmed absent from the ledger by a read-only re-read on 2026-08-11 at the then-current high-water `20260811220045` / 961 rows. Nothing in this document describes state they created. All six sit *below* the live high-water — now `20260812003315` — and must be renumbered forward before any apply is even considered.
+**Wave A — six parked migration drafts.** This branch carries `20260813010000` through `20260813060000` under `scripts/.staging-migrations/`. They are intentionally absent from `supabase/migrations/`, are not armed for apply, and create no live state. Nothing in this document describes state they created.
 
 **Repository/production gap on the whole-cent migrations: CLOSED 2026-08-11.** History rows 868–870 (`20260810150000`, `20260810150500`, `20260810151000`; ledger versions `20260810152935`, `20260810154721`, `20260810155629`) were applied live before they existed on `main`. **PR #371 landed as merge `465458a0`**, bringing those three plus `20260811200000_blend_ticket_order_whole_cent_totals` (applied live as ledger `20260811220045`) onto `main`. Disk and production now agree on all four — independently re-verified against live `pg_proc` on 2026-08-11.
 The remaining fractional historical rows described below are still tracked data debt and were not rewritten by that repository closeout.
@@ -19,6 +19,49 @@ The remaining fractional historical rows described below are still tracked data 
 **Update triggers:** when a finding is parked/resolved, a migration is parked/applied, or an owner decision lands. Agents must update THIS file, not create new issue lists. Do not re-discover or re-fix something listed here as already known — read the pointer first.
 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
+
+---
+
+## OPEN 2026-08-12 — six migrations applied live on 2026-08-12 have no file on `main`
+
+**Severity: MATERIAL — `main` cannot currently reconstruct production schema.** Six migrations
+were applied live on 2026-08-12 from another session and their files are absent from
+`origin/main` (verified by `git ls-tree` against the live ledger on 2026-08-13):
+
+| Submitted name | Ledger version |
+|---|---|
+| `20260812010000_blend_ticket_order_header_runtime_assert` | `20260812034831` |
+| `20260812011000_restore_quote_version_whole_cent_money` | `20260812034951` |
+| `20260812115235_snapshot_cost_reporting` | `20260812145628` |
+| `20260812115236_quote_items_cost_at_quote_snapshot` | `20260812151606` |
+| `20260812115237_enforce_below_cost_admin_approval` | `20260812154028` |
+| `20260812115238_repair_historical_order_line_cents` | `20260812154757` |
+
+The files have since been **recovered onto remote branches** (`recovery/live-no-file-six` and
+`claude/recover-applied-migrations-20260812`), so they are no longer file-less — but until a
+recovery PR merges, do not plan against `main`'s `supabase/migrations/` as a complete
+reconstruction source for 2026-08-12. Closeout: land the recovery branch onto `main` through the
+normal PR pipeline (the recovery session owns it), then re-verify with `git ls-tree` against the
+ledger and close this entry. `20260812130145_bind_return_receipts_to_intent_and_restore_overdue`
+and `20260813070000_pin_return_idempotency_helper_contract` from the same window are already on
+`main` and are not part of this gap.
+
+---
+
+## OPEN 2026-08-12 — `20260813060000`'s guarded-function set has a fragile membership rule
+
+**Severity: LOW, but it is a live tripwire on an unapplied file.** The delivery-before-billing
+migration `20260813060000` asserts over a set of four function names. `_save_invoice_scoped_impl`
+qualifies for that set only because the string `'posted'` appears in its body — and in the current
+body it appears inside a **code comment**, not in executable SQL. `20260813040000`, which rewrites
+that function, deliberately preserves the comment.
+
+The migration is therefore one comment edit away from silently dropping a function out of its own
+assertion set. Nothing is wrong today and the two files are consistent as written; this is recorded
+so that whoever next edits `_save_invoice_scoped_impl` knows that deleting an innocuous-looking
+comment changes what `20260813060000` checks. The durable fix is to select that set by a structural
+property rather than a substring match, which is a rewrite of an unapplied file and not worth doing
+mid-wave.
 
 ---
 
@@ -88,11 +131,16 @@ semantics.
 
 ---
 
-## OPEN — the Codex `read_only=true` guard may not describe the connection Codex actually uses
+## CLOSED 2026-08-14 — Codex Supabase read-only guard withdrawn: write access is now the deliberate policy
 
-**Found 2026-08-10.** No production write was performed during the investigation.
-Production write capability remains unverified. This affects how much assurance
-the read-only guard is entitled to claim.
+**Found 2026-08-10; closed by owner decision 2026-08-14.** Mason explicitly approved
+write-enabled Supabase access for Codex (see `docs/manual/DECISION_LOG.md`, 2026-08-14).
+`.codex/config.toml` now declares `read_only=false`, and both guard assertions were
+updated to pin the new declared state. The original finding below is preserved because
+its core observation — the tracked entry's OAuth grant is dead and real traffic flows
+through the separate `codex_apps/supabase` App — is still true and still matters:
+enabling write for the App is a toggle in the Codex app's own connector settings that
+only Mason can perform, and no guard in this repository verifies that channel's scope.
 
 `check-agent-workflows.mjs:92` and `check-agent-guidance.mjs:121` both assert
 that `.codex/config.toml` contains `read_only=true`, and that assertion is the
@@ -128,13 +176,14 @@ attempting a write against the production database, which is not an acceptable
 test. A capability probe (asking Codex to list its Supabase tool names without
 calling them) was attempted twice and produced no usable output.
 
-**Owed to Mason (owner decision):** confirm in the Codex app's own connector
-settings whether the Supabase App is scoped read-only. If it is not, Codex has
-had unverified write capability against production for as long as the App has
-been serving traffic, and the guard has been reporting green throughout.
-
-**Do not** "fix" this by deleting the `read_only=true` line or by relaxing either
-check — both guards correctly refused the change that prompted this entry.
+**Closure (2026-08-14).** Mason decided Codex should have write access, which
+dissolves the false-assurance problem: the repository no longer claims Codex is
+read-only. Remaining owner action: if the `codex_apps/supabase` App is scoped
+read-only in the Codex app's connector settings, Mason flips it there — no file
+in this repository controls that channel. Operative safety note: the migration
+apply-guard proof system gates Claude's applies only; Codex writes to production
+are gated by Codex-side discipline (AGENTS.md hard rules and the standing
+"Codex builds files, gated operator applies" workflow), not by a repo hook.
 
 ---
 

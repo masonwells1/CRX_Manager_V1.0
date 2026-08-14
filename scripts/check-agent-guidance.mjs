@@ -118,7 +118,25 @@ record(codexHooksText.includes(".claude/hooks/sql-safety.mjs"), "Codex invokes s
 record(codexHooksText.includes("production-action-guard.mjs"), "Codex production action guard is registered");
 record(codexHooksText.includes("review-proof-guard.mjs"), "Codex review proof guard is registered");
 record(!gitignore.split(/\r?\n/).some((line) => line.trim() === ".agents/" || line.trim() === ".codex/"), "tracked agent configuration is not blanket-ignored");
-record(read(".codex/config.toml").includes("read_only=true"), "Codex Supabase MCP is read-only");
+// Scope to the [mcp_servers.supabase] url line, parsed line-by-line so a
+// commented heading, a commented url, a backup_url key, or a url in a later
+// TOML table can never satisfy the check; the read_only flag is matched at
+// query-parameter boundaries so read_only=false0 / other_read_only=false fail.
+let codexSupabaseUrl = "";
+{
+  let inSupabase = false;
+  for (const line of read(".codex/config.toml").split(/\r?\n/)) {
+    const heading = line.match(/^\s*\[([^\]]+)\]\s*$/);
+    if (heading) { inSupabase = heading[1].trim() === "mcp_servers.supabase"; continue; }
+    if (!inSupabase) continue;
+    const url = line.match(/^\s*url\s*=\s*"([^"]+)"\s*(?:#.*)?$/);
+    if (url) { codexSupabaseUrl = url[1]; break; }
+  }
+}
+record(
+  /[?&]read_only=false(?:&|$)/.test(codexSupabaseUrl) && !/[?&]read_only=true(?:&|$)/.test(codexSupabaseUrl),
+  "Codex Supabase MCP url declares write access (Mason approved 2026-08-14)",
+);
 
 const sync = spawnSync(process.execPath, [path.join(ROOT, "scripts", "sync-agent-workflows.mjs"), "--check"], {
   cwd: ROOT,

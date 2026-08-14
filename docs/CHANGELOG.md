@@ -2,6 +2,108 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-14 — Codex Supabase guard: exact read-only allowlist (Sol HIGH finding)
+
+Sol's adversarial review of the write-scope PR found that the Codex production-action guard
+blocked only three Supabase tool suffixes (apply_migration, deploy_edge_function, delete_branch),
+so branch-lifecycle mutations like merge_branch and reset_branch would have passed once the
+connector went write-enabled. The guard now governs every `supabase__`-prefixed tool with an
+exact read-only allowlist that fails closed on unrecognized tools; `execute_sql` remains the one
+pass-through to the existing read-only SQL content gate. A defense-in-depth suffix blocklist
+(mirroring the Claude-side autopilot deny set) covers connectors whose MCP prefix is a UUID rather
+than the literal server name. Regression tests assert every lifecycle mutation is blocked under
+both prefixes, an unknown future tool is blocked, and each read-only tool still passes. The
+protected-producer blob pins were re-pinned to the hardened guard.
+
+CodeRabbit follow-up on the same PR: the app connector's UUID MCP prefix now hits the same
+fail-closed allowlist (unknown tools under that prefix previously fell through to the suffix
+blocklist only), with regression tests for unknown, read-only, and `execute_sql` tools under both
+prefixes. The two agent-guidance checkers also parse `.codex/config.toml` line-by-line and match
+`read_only` at query-parameter boundaries, so commented headings, `backup_url` keys, later-table
+urls, and `read_only=false0`-style decoys can no longer satisfy the write-access assertion
+(mutation-tested against seven decoy configs).
+
+Codex-review P1 follow-up on the same PR: the built-in `codex_apps/supabase` channel — the one
+actually serving Codex's Supabase traffic per `docs/manual/KNOWN_ISSUES.md` — normalizes tool
+names with a single underscore (`mcp__codex_apps__supabase_<leaf>`), which the allowlist regex
+did not match, so an unknown write tool on that channel would have bypassed the fail-closed gate
+(only the suffix blocklist applied). The regex now accepts both naming forms (`_{1,2}`, the same
+dual-form handling the guard already uses for GitHub tools), with regression tests for unknown,
+mutating, read-only, and `execute_sql` tools under the `codex_apps` name, and the producer blob
+pins re-pinned.
+
+Second Codex-review P1 on the same PR: PostgreSQL's `SELECT ... INTO new_table` creates and
+populates a table while beginning with `SELECT`, so it passed the read-only SQL gate's
+leading-keyword and deny-keyword checks. The deny list now includes bare `INTO` — in a statement
+that begins with `SELECT`, that word is only ever the table-creating form (string literals are
+blanked before the check, and `INTO` is a reserved word, so read-only queries cannot contain it).
+Regression tests cover plain and `TEMP` `SELECT INTO` denial plus an `'into'`-in-a-string query
+that stays readable.
+
+## 2026-08-14 — Write-access assertion scoped to the Supabase connector url
+
+CodeRabbit follow-up on the Codex write-scope PR: the two agent-guidance checkers asserted the
+connector's write-enabled state with a whole-file substring match on `read_only=false`, which a
+stale comment anywhere in `.codex/config.toml` could satisfy while the active connector stayed
+read-only. Both checkers now extract the `[mcp_servers.supabase]` `url` value and require it to
+contain `read_only=false` and not `read_only=true`. Mutation-tested: a reverted flag fails the
+check even with a decoy comment present.
+
+## 2026-08-12 — Wave A round 5: four migrations self-aborted, all for the same reason
+
+The 2026-08-12 Wave A apply attempt refused four of the six Wave A migrations. That rejected
+attempt wrote nothing to the live database, and this change applies none of those migrations either
+— these are file fixes only. (This statement is about the Wave A attempt alone; it does not cover
+the six unrelated migrations applied live on 2026-08-12 from another session, described at the end
+of this entry.)
+
+All four failures were one defect wearing four costumes: **an assertion broader than its own
+remedy**. A migration that asserts a state it never enforces is a migration that aborts itself on
+first apply. Each file is now scoped to what it actually does.
+
+`20260813010000` — the rewrite is retargeted off `public.create_direct_order` and onto
+`_create_direct_order_below_cost_impl_20260810`. Rewriting the wrapper would have silently deleted
+the below-cost approval gate a concurrent session installed there. Both the pre- and postcondition
+now assert that the wrapper still declares below-cost operation context, so if that gate is ever
+removed this retarget stops rather than proceeding into a shape it no longer fits. The file also now
+emits the `REVOKE` its postcondition asserts: `CREATE OR REPLACE` preserves the existing ACL, so
+asserting an owner-only grant state without revoking anything was an assertion with nothing behind
+it. Finally the file is deliberately single-shot: only the pinned pre-apply baseline may proceed. A
+draft that also accepted "any body carrying this migration's marker variables" as a replay was
+withdrawn after adversarial review — a later security or money fix to the same function would keep
+those markers too, so the structural test would have accepted the newer body and this file would
+have overwritten it with its own older text, silently, in a `SECURITY DEFINER` money writer. Pinning
+the post-apply hash instead is not honestly available: obtaining it requires applying. A re-run now
+aborts and names what to diff, which costs one human comparison; the alternative cost a reverted
+money fix nobody would have seen.
+
+`20260813020000` — the `create_order_from_blend_ticket` precondition is removed rather than
+corrected. It was vacuous in both directions: the concurrent fix to that function no longer updates
+order headers at all, and a `prosrc LIKE` was only ever evidence about prose. The remedy here is a
+table-attached `BEFORE INSERT OR UPDATE` trigger, which covers every writer regardless of its name,
+and what proves it works is the behavioural probe already in the postcondition. Two stale claims in
+the file's own prose are corrected in the same pass: the live open writer is `_update_order_items_impl`,
+and `BEFORE INSERT OR UPDATE OF (columns)` fires on *every* insert — the column list restricts the
+update event only, never the insert.
+
+`20260813040000` — same assertion-without-remedy defect, same fix: emit `REVOKE ALL` on
+`_save_invoice_scoped_impl`.
+
+Two test registries move with the retarget. `_create_direct_order_below_cost_impl_20260810` is
+registered in `src/lib/rpcIdempotencyScope.test.ts` as sharing the public `create_direct_order`
+operation literal — the guard flags a mismatch between function name and operation literal, and here
+the mismatch is the correct state. Renaming the literal to match the function is the dangerous
+change: it would strand every idempotency key written under the old literal, so a client retry would
+re-execute and duplicate an order. It is also registered in `MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY`
+in `src/lib/rpcContracts.test.ts`, which becomes inert once the migration applies.
+
+The drift review of this round returned no blockers. Its findings are owner-facing rather than code
+fixes and are recorded in `docs/manual/KNOWN_ISSUES.md`. The first is material and was widened during
+verification: the review reported one applied-but-unpushed migration and named a carrier branch that
+does not exist. Checking the live ledger against every remote branch found **six** migrations applied
+on 2026-08-12 whose files are on no branch and in no worktree. `main` does not currently describe
+production. That is somebody else's session to close, not this wave's, but no one should be planning
+against `main` as if it were accurate until it is.
 ## 2026-08-12 — Restore a governed maintenance path for the live SQL safety boundary
 
 The weekly adversarial review confirmed two active fail-open paths in the live SQL classifier, but
