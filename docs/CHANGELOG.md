@@ -2,6 +2,22 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-14 — Recovery-validation hardening from PR #403 review comments (round 3)
+
+CodeRabbit and the Codex GitHub reviewer raised five follow-ups on the round-2 fix below, all
+addressed in the same PR. The live-ledger query now refuses to run in a Node process launched with
+module preloads (`--require`/`--import`/`--loader`, directly or via `NODE_OPTIONS`), closing the
+one remaining way to replace the process's own `fetch` before the trusted transport loads; it also
+aborts at a fixed 30-second deadline so a stalled connection fails closed instead of blocking the
+proof workflow indefinitely. The helper gained a wrapper-owned
+`--clear-attestation` mode — the supported way to discard a stale or superseded attestation now
+that both guards deny direct tool deletion of the session-state files — and was registered as a
+pre-commit ledger-guard trigger so it can never change without a written record in the same commit.
+CLI argument errors now follow the normal refusal path instead of an unhandled rejection, and the
+trust-boundary wording in the guardrails reference, decision log, and the entry below was narrowed:
+local evidence/attestation files are validation and binding inputs; what prevents forged or altered
+evidence from producing an accepted push proof is the independent live re-query.
+
 ## 2026-08-14 — Recovery validation now independently re-queries the live ledger (Sol adversarial review round 2, PR #403)
 
 Sol's second adversarial pass found the remaining HIGH hole in the trusted-capture design below: the
@@ -9,7 +25,8 @@ evidence file still lived on local disk, the capture path exposed injectable fet
 parameters plus an exported writer, and the guard only matches protected basenames in tool
 commands — so any innocuously named local script (or a plain filesystem write, since the
 session-state directory is gitignored) could fabricate evidence and an attestation that local
-validation would accept. Fixed by moving trust off the local file entirely: the push-proof wrapper
+validation would accept. Fixed by making proof acceptance independent of the local files (which
+remain validation and binding inputs, never the trust root): the push-proof wrapper
 now performs its own independent live-ledger re-query at validation time and refuses unless every
 attested recovery's name, apply-stamp version, and statements digest match the live rows. The
 transport is non-injectable (always the process's own `fetch` and `SUPABASE_ACCESS_TOKEN`; no

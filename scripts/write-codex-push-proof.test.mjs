@@ -33,13 +33,16 @@ import {
 } from "./write-codex-push-proof.mjs";
 import { gitLocalEnvironmentNames } from "../.claude/hooks/git-test-env.mjs";
 import {
+  assertNoModulePreload,
   assertRecoveriesMatchLiveRows,
   buildLedgerEvidenceQuery,
   buildLedgerEvidenceText,
   buildRecoveryAttestation,
   captureRecoveryLedgerEvidence,
+  clearRecoveryAttestation,
   mintRecoveryAttestation,
   parseRecoveryArgs,
+  run as runRecoveryCli,
   RECOVERY_LEDGER_QUERY_URL,
   recoveryAttestationPath,
   recoveryLedgerEvidencePath,
@@ -444,7 +447,7 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
 
   assert.deepEqual(
     parseRecoveryArgs(["--capture-evidence", "--name", goodRows[0].name]),
-    { help: false, captureEvidence: true, names: [goodRows[0].name], specs: [] },
+    { help: false, captureEvidence: true, clearAttestation: false, names: [goodRows[0].name], specs: [] },
     "--capture-evidence parses with its --name row filters",
   );
   assert.throws(
@@ -942,6 +945,91 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
     false,
     "a refused mint removes any prior local attestation instead of leaving stale authority behind",
   );
+  // ── Node preload injection: a --require/--import/--loader preload (directly
+  // or via NODE_OPTIONS) could replace globalThis.fetch before this module
+  // loads, so any live-ledger query in a preloaded process refuses outright.
+  assert.doesNotThrow(
+    () => assertNoModulePreload({ execArgv: [], env: {} }),
+    "a clean process with no preload options may query the live ledger",
+  );
+  assert.doesNotThrow(
+    () => assertNoModulePreload({ execArgv: ["--max-old-space-size=4096"], env: { NODE_OPTIONS: "--trace-warnings" } }),
+    "non-preload Node options are not preloads",
+  );
+  for (const execArgv of [["--require=/tmp/fake-fetch.cjs"], ["-r", "fake"], ["--import", "fake"], ["--loader=fake"], ["--experimental-loader", "fake"]]) {
+    assert.throws(
+      () => assertNoModulePreload({ execArgv, env: {} }),
+      /module preloads/,
+      `exec argument ${execArgv[0]} is rejected as a preload`,
+    );
+  }
+  assert.throws(
+    () => assertNoModulePreload({ execArgv: [], env: { NODE_OPTIONS: "--require /tmp/fake-fetch.cjs" } }),
+    /module preloads/,
+    "a NODE_OPTIONS preload is rejected too",
+  );
+  const realNodeOptions = process.env.NODE_OPTIONS;
+  process.env.NODE_OPTIONS = "--import=/tmp/fake-fetch.mjs";
+  globalThis.fetch = () => { throw new Error("the live query must never run in a preloaded process"); };
+  await assert.rejects(
+    () => captureRecoveryLedgerEvidence({ root: modifiedFixture.root, names: [goodRows[0].name] }),
+    /module preloads/,
+    "evidence capture refuses before querying when the process carries a preload",
+  );
+  await assert.rejects(
+    () => verifyRecoveriesAgainstLiveLedger([
+      { path: recoveryPaths[0], ledger_name: goodRows[0].name, ledger_version: goodRows[0].version, sha256: goodRows[0].statements_sha256 },
+    ]),
+    /module preloads/,
+    "the validation-time live re-check also refuses in a preloaded process",
+  );
+  if (realNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+  else process.env.NODE_OPTIONS = realNodeOptions;
+
+  // ── request deadline: a live-ledger fetch that never resolves must abort
+  // instead of stalling the proof workflow. The deadline timer is forced to
+  // fire immediately so the never-resolving fetch is abandoned via its signal.
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  globalThis.setTimeout = (fn) => { fn(); return 0; };
+  globalThis.clearTimeout = () => {};
+  globalThis.fetch = (_url, init) => new Promise((_resolve, reject) => {
+    assert.ok(init.signal instanceof AbortSignal, "the live query carries an abort signal");
+    if (init.signal.aborted) reject(new Error("aborted"));
+    else init.signal.addEventListener("abort", () => reject(new Error("aborted")));
+  });
+  await assert.rejects(
+    () => captureRecoveryLedgerEvidence({ root: modifiedFixture.root, names: [goodRows[0].name] }),
+    /timed out after 30s/,
+    "a stalled live-ledger query aborts at the fixed deadline instead of hanging",
+  );
+  globalThis.setTimeout = realSetTimeout;
+  globalThis.clearTimeout = realClearTimeout;
+
+  // ── wrapper-owned clear: the supported way to discard a stale attestation.
+  // The guards deny direct tool deletion of both session-state files, so this
+  // CLI mode is the sanctioned discard path; it removes local records only.
+  writeLedgerEvidence(modifiedFixture.root, goodRows, issuedAt);
+  writeLocalAttestation(modifiedFixture.root, modifiedShape);
+  const clearedPaths = clearRecoveryAttestation({ root: modifiedFixture.root });
+  assert.equal(clearedPaths.length, 2, "clear removes both the attestation and its evidence file");
+  assert.equal(existsSync(recoveryAttestationPath(modifiedFixture.root)), false, "the stale attestation is gone");
+  assert.equal(existsSync(recoveryLedgerEvidencePath(modifiedFixture.root)), false, "the stale evidence is gone");
+  assert.deepEqual(
+    clearRecoveryAttestation({ root: modifiedFixture.root }),
+    [],
+    "clearing again with nothing on disk removes nothing and still succeeds",
+  );
+
+  // ── CLI argument failures follow the normal refusal path (exit 1), never an
+  // unhandled rejection.
+  assert.equal(await runRecoveryCli(["--bogus"]), 1, "an unknown CLI argument returns the refusal status");
+  assert.equal(
+    await runRecoveryCli(["--clear-attestation", "--name", goodRows[0].name]),
+    1,
+    "--clear-attestation refuses to combine with other options",
+  );
+
   removeRecoveryFixture(modifiedFixture);
 
   globalThis.fetch = realFetch;

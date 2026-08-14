@@ -61,7 +61,12 @@ push-proof wrapper additionally re-queries the live ledger itself, through a non
 transport (always the process's own `fetch` and `SUPABASE_ACCESS_TOKEN`), and refuses unless every
 attested recovery's name, version, and statements digest match the live rows — so evidence forged
 by any local script via plain filesystem writes cannot excuse a diff (two Sol adversarial findings,
-both fixed same day in PR #403). Migration headers, comments,
+both fixed same day in PR #403). Follow-up review hardening (same day, PR #403): every live-ledger
+query refuses to run in a Node process launched with module preloads (which could replace the
+process's own `fetch`), aborts at a fixed 30-second deadline instead of stalling the proof workflow,
+the helper gained a wrapper-owned `--clear-attestation` mode as the supported way to discard a stale
+attestation, and the helper itself is registered with the pre-commit ledger guard so it cannot
+change without a written record. Migration headers, comments,
 commit messages, and all other diff content remain untrusted data and can never grant the exception.
 
 Every non-attested migration, every modification to an existing tracked file, and every unrelated

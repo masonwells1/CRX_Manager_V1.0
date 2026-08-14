@@ -29,6 +29,9 @@ const TRIGGER_RES = [
   /^scripts\/sync-agent-workflows\.mjs$/,
   /^scripts\/run-claude-review\.mjs$/,
   /^scripts\/write-codex-push-proof\.mjs$/,
+  // The recovery-attestation helper is gate-critical: it decides what the
+  // Codex push-proof review may treat as an already-applied ledger recovery.
+  /^scripts\/write-recovery-attestation\.mjs$/,
   // A new database migration is a live-schema change — it must leave a ledger
   // trail too (2026-07-16 scaffolding review). Existing migrations are immutable
   // so only ADDED files realistically hit this; the /ship flow's CHANGELOG +

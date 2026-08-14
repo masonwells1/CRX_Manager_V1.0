@@ -44,6 +44,10 @@ export const RECOVERY_LEDGER_EVIDENCE_MAX_ROWS = 512;
 // redirected host) cannot produce acceptable evidence.
 export const RECOVERY_LEDGER_QUERY_URL =
   `https://api.supabase.com/v1/projects/${RECOVERY_LEDGER_EVIDENCE_PROJECT_ID}/database/query`;
+// Hard deadline for the live ledger query. The push-proof wrapper awaits this
+// query before its own Codex timeout starts, so an unbounded request could
+// stall the whole proof workflow; a stalled query aborts and fails closed.
+export const RECOVERY_LEDGER_QUERY_TIMEOUT_MS = 30_000;
 
 const GUARDED_BASE = "origin/main";
 const SHA_RE = /^[a-f0-9]{40}$/;
@@ -536,24 +540,58 @@ export function buildLedgerEvidenceText({ names, rows, fetchedAt }) {
   return `${JSON.stringify(evidence, null, 2)}\n`;
 }
 
+// The trusted transport relies on this process's own globalThis.fetch, which a
+// Node preload module (--require/--import/--loader, directly or via
+// NODE_OPTIONS) could replace before this module ever loads. A preloaded fake
+// fetch could answer the live re-query with candidate-derived rows, so any
+// preload option present at query time refuses the query outright.
+const NODE_PRELOAD_OPTION_RE =
+  /(^|\s)(--require(=|\s|$)|-r(\s|$)|--import(=|\s|$)|--loader(=|\s|$)|--experimental-loader(=|\s|$))/;
+
+export function assertNoModulePreload({ execArgv = process.execArgv, env = process.env } = {}) {
+  const joinedExecArgv = (execArgv || []).join(" ");
+  for (const [label, value] of [["Node exec arguments", joinedExecArgv], ["NODE_OPTIONS", env?.NODE_OPTIONS || ""]]) {
+    if (NODE_PRELOAD_OPTION_RE.test(String(value))) {
+      throw new Error(
+        `Live ledger queries refuse to run with Node module preloads (${label}: ${String(value).trim()}); ` +
+        `re-run without --require/--import/--loader and with NODE_OPTIONS unset.`,
+      );
+    }
+  }
+}
+
 // The one trusted transport to the live ledger. Deliberately accepts NO
 // injectable fetch implementation, token, or clock: it always uses this
 // process's own globalThis.fetch and SUPABASE_ACCESS_TOKEN, so a local script
-// cannot hand it a fake transport. (A hostile process stubbing its OWN fetch
-// gains nothing — the trusted invocation is the push-proof wrapper's process.)
+// cannot hand it a fake transport, and it refuses to run at all in a process
+// launched with module preloads that could have replaced that global fetch.
 async function fetchLedgerRows(names) {
+  assertNoModulePreload();
   if (!process.env.SUPABASE_ACCESS_TOKEN) {
     throw new Error("SUPABASE_ACCESS_TOKEN is required to query the live ledger.");
   }
   const query = buildLedgerEvidenceQuery(names);
-  const response = await globalThis.fetch(RECOVERY_LEDGER_QUERY_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.SUPABASE_ACCESS_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ query }),
-  });
+  const controller = new AbortController();
+  const deadline = setTimeout(() => controller.abort(), RECOVERY_LEDGER_QUERY_TIMEOUT_MS);
+  let response;
+  try {
+    response = await globalThis.fetch(RECOVERY_LEDGER_QUERY_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.SUPABASE_ACCESS_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ query }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(`Live ledger query timed out after ${RECOVERY_LEDGER_QUERY_TIMEOUT_MS / 1000}s.`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(deadline);
+  }
   if (!response.ok) {
     throw new Error(`Live ledger query failed: HTTP ${response.status}.`);
   }
@@ -611,12 +649,31 @@ export async function verifyRecoveriesAgainstLiveLedger(recoveries) {
   assertRecoveriesMatchLiveRows(recoveries, rows);
 }
 
+// Wrapper-owned discard path for a stale or superseded attestation. Both
+// guards deliberately deny direct tool deletion of the two session-state JSON
+// files, and validation is unconditional whenever the attestation exists — so
+// without this mode, one expired attestation would block every later ordinary
+// proof. Clearing only removes local, ignored records; it can never mint.
+export function clearRecoveryAttestation({ root = process.cwd() } = {}) {
+  const repoRoot = String(gitOutput(["rev-parse", "--show-toplevel"], { cwd: root })).trim();
+  const removed = [];
+  for (const filePath of [recoveryAttestationPath(repoRoot), recoveryLedgerEvidencePath(repoRoot)]) {
+    if (existsSync(filePath)) {
+      unlinkSync(filePath);
+      removed.push(filePath);
+    }
+  }
+  return removed;
+}
+
 export function parseRecoveryArgs(argv) {
-  const parsed = { help: false, captureEvidence: false, names: [], specs: [] };
+  const parsed = { help: false, captureEvidence: false, clearAttestation: false, names: [], specs: [] };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--capture-evidence") {
       parsed.captureEvidence = true;
+    } else if (arg === "--clear-attestation") {
+      parsed.clearAttestation = true;
     } else if (arg === "--name") {
       const value = argv[++index];
       if (!value) throw new Error("--name requires a ledger slug value.");
@@ -642,6 +699,10 @@ function usage() {
   return [
     "Usage: node scripts/write-recovery-attestation.mjs --migration <repo-path>=<live-ledger-version> [--migration ...]",
     "       node scripts/write-recovery-attestation.mjs --capture-evidence --name <ledger-slug> [--name ...]",
+    "       node scripts/write-recovery-attestation.mjs --clear-attestation",
+    "",
+    "--clear-attestation removes the local attestation and ledger-evidence files (the supported way",
+    "to discard a stale or superseded attestation so later ordinary proofs are not blocked).",
     "",
     "Capture live ledger evidence first with --capture-evidence: this helper itself runs the one",
     "fixed read-only ledger query against the pinned production project (management API; requires",
@@ -658,12 +719,24 @@ function usage() {
 }
 
 export async function run(argv = process.argv.slice(2)) {
-  const options = parseRecoveryArgs(argv);
-  if (options.help) {
-    process.stdout.write(`${usage()}\n`);
-    return 0;
-  }
   try {
+    const options = parseRecoveryArgs(argv);
+    if (options.help) {
+      process.stdout.write(`${usage()}\n`);
+      return 0;
+    }
+    if (options.clearAttestation) {
+      if (options.captureEvidence || options.specs.length || options.names.length) {
+        throw new Error("--clear-attestation cannot be combined with other options.");
+      }
+      const removed = clearRecoveryAttestation({ root: process.cwd() });
+      process.stdout.write(
+        removed.length
+          ? `Recovery attestation cleared: removed ${removed.join(", ")}.\n`
+          : "Recovery attestation cleared: nothing to remove.\n",
+      );
+      return 0;
+    }
     if (options.captureEvidence) {
       if (options.specs.length) {
         throw new Error("--capture-evidence cannot be combined with --migration; capture evidence first, then mint.");

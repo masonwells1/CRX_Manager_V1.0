@@ -153,8 +153,11 @@ Minting itself never queries the database — it trusts only the evidence its ow
 wrote. It requires a clean committed candidate, verifies each path
 is a regular migration file newly added versus `origin/main`, matches each file to its ledger row
 by the file's own slug, requires the supplied version to equal that row's apply-stamp version, and
-refuses unless the candidate's bytes hash-match the row's applied statements byte-for-byte — a
-redacted or otherwise altered recovery can never attest. The attestation is bound to the exact HEAD
+refuses unless the candidate's bytes hash-match the row's applied statements byte-for-byte, so a
+redacted or otherwise altered recovery cannot mint against genuine evidence. These mint-time checks
+are validation and binding inputs, not the trust boundary — what prevents a forged or altered
+recovery from ever producing an accepted push proof is the wrapper's independent live re-query
+described below. The attestation is bound to the exact HEAD
 and base, pins the evidence file's own SHA-256, expires after the same 30-minute window as a push
 proof, and records each file's ledger name and version. The review wrapper independently rechecks
 the JSON shape, time window, HEAD/base, added-file status, candidate snapshot path, Git mode, all
@@ -167,6 +170,14 @@ transport, token, or clock) and refuses unless every attested recovery's name, a
 and statements digest match the live rows. A locally forged evidence file — written by any
 innocuously named script through plain filesystem calls — therefore cannot excuse a diff: its
 digests do not exist in the real ledger, and a regression test exercises exactly that attack.
+Follow-up hardening on the same transport: every live-ledger query refuses to run at all in a Node
+process launched with module preloads (`--require`/`--import`/`--loader`, directly or via
+`NODE_OPTIONS`), because a preloaded module could replace the process's own `fetch` before this code
+loads; and the query aborts at a fixed 30-second deadline so a stalled connection fails closed
+instead of blocking the proof workflow. A stale or superseded attestation is discarded only through
+the helper's own `node scripts/write-recovery-attestation.mjs --clear-attestation` (the guards deny
+direct tool deletion of both session-state files), and the helper itself is a pre-commit
+ledger-guard trigger: it cannot change without a CHANGELOG/manual record in the same commit.
 
 For the attested files only, Sol treats the already-applied SQL as a historical record: applied-SQL
 concerns become forward-only follow-up recommendations. Actual secret/private-data exposure remains
