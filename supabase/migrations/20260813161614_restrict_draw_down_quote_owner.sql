@@ -10,7 +10,9 @@
 -- another rep's sent/revised quote or a deleted booking.
 --
 -- This forward-only migration changes only the private implementation behind
--- the governed five-argument public wrapper. It preserves the public signature,
+-- the governed five-argument public wrapper: it adds the ownership/deletion
+-- guard and settles both weighted money inputs to whole cents before deriving
+-- the order line. It preserves the public signature,
 -- below-cost approval context, idempotency ordering, inventory/order behavior,
 -- grants, and generated TypeScript contract. Both new checks execute after the
 -- existing quote row lock and before any idempotency result can be returned or
@@ -226,13 +228,12 @@ BEGIN
     FROM quote_items qi
     WHERE qi.quote_id = p_quote_id AND qi.product_id = v_product_id;
 
-    -- SNAPSHOT<<< settle the weighted cost to whole cents ONCE, here, before
-    -- anything derives from it. Several quote lines of one product with
-    -- different snapshots average to fractional cents; rounding only at the
-    -- cost_at_time_cents stamp would leave the order header, line profit and
-    -- commissions on the unrounded figure and the reports on the rounded one --
-    -- e.g. two units backed equally by $1.00 and $1.01 record $2.01 in the
-    -- header but report $2.02. One basis, fixed at the source.
+    -- SNAPSHOT<<< settle both weighted money inputs to whole cents ONCE, here,
+    -- before anything derives from them. Several quote lines of one product can
+    -- average to fractional cents. The order_items invariant rejects a
+    -- fractional price_per_unit, and leaving either input unsettled would make
+    -- line totals, profit, commissions and reports use different bases.
+    v_wavg_price := ROUND(v_wavg_price, 2);
     v_wavg_cost := ROUND(v_wavg_cost, 2);
     -- >>>SNAPSHOT
 
@@ -457,7 +458,7 @@ BEGIN
 
   IF v_impl IS NULL
      OR v_wrapper IS NULL
-     OR md5(v_impl_source) <> '313ef19f5d604b9e35b341a22fdb75b8'
+     OR md5(v_impl_source) <> '2ff7a345a555b1cdeee16a890bb65034'
      OR position('v_quote.deleted_at IS NOT NULL' in v_impl_source) = 0
      OR position('v_quote.created_by IS DISTINCT FROM v_actor' in v_impl_source) = 0
      OR position('NOT_QUOTE_OWNER' in v_impl_source) = 0

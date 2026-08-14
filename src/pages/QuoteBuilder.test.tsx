@@ -1265,7 +1265,7 @@ describe('QuoteBuilder', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/orders/order-1');
   });
 
-  it('returns a newly accepted quote to its open status when below-cost conversion approval is cancelled', async () => {
+  it('leaves a newly accepted quote accepted without a compensating write when below-cost approval is cancelled', async () => {
     const fixture = makeQuoteFixture('draft', 7);
     const { product, section, item } = fixture;
     const quote = { ...fixture.quote, status: 'sent' };
@@ -1317,8 +1317,13 @@ describe('QuoteBuilder', () => {
     const approvalDialog = await screen.findByRole('dialog', { name: 'Approve below-cost price' });
     fireEvent.click(within(approvalDialog).getByRole('button', { name: 'Cancel' }));
 
-    await waitFor(() => expect(updatePayloads).toContainEqual({ status: 'sent' }));
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'info',
+      expect.stringContaining('remains accepted'),
+    ));
+    expect(updatePayloads).toEqual([]);
     expect(mockRpc.mock.calls.filter(([name]) => name === 'convert_quote_to_order')).toHaveLength(1);
+    expect(mockRpc.mock.calls.some(([name]) => name === 'revert_quote_status')).toBe(false);
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 

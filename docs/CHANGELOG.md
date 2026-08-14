@@ -2,6 +2,10 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-14 — Closed final PR #397 quote conversion safety blockers
+
+Removed Quote Builder's race-prone direct accepted-to-sent compensation after a cancelled below-cost conversion prompt. A cancelled prompt now leaves the already-committed quote accepted, makes no second mutation, and tells staff that no order was created; conversion can be retried from that truthful state without overwriting a concurrent change. Added pending `20260814063000_quote_sections_rpc_owned.sql` to remove application-role write privileges and obsolete write policies from `quote_sections` while retaining RLS-backed SELECT and governed RPC writers. The existing pending draw-down candidate now rounds weighted unit price, as well as weighted cost, before dependent order money and insertion. Added a rollback smoke and static contract coverage; the 970-row captured-ledger reconstruction applied all five pending candidates in order, passed every registered deny/positive-control chain, and left zero residue. Focused UI/migration/contract tests (187), typecheck, lint, production build, documentation checks, and the changed-only SQL audit passed. No migration was applied and no live data changed.
+
 ## 2026-08-13 — Closed exact-head PR #397 safety findings
 
 Hardened the direct one-shot migration replay guard so a relative SQL file cannot escape byte-identity checks through a preceding Bash or PowerShell directory change; the hook now fails closed and its 117-assertion suite covers both forms. Added forward candidate `20260814041419_fresh_below_cost_reason.sql` plus compatible browser transport so an explicit current-attempt reason (including null) takes precedence over older persisted below-cost note markers. Single-order creation and bulk import now pass a reason already approved in their local modal through that authoritative transport on the first database attempt. The captured-ledger proof applies the candidate in order and the rollback smoke proves stale-marker denial and fresh-reason acceptance. No live migration or live data change occurred.

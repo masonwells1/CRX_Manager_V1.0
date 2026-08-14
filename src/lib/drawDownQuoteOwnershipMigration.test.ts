@@ -33,7 +33,7 @@ function md5(source: string): string {
 }
 
 describe('draw_down_quote owner and deletion boundary migration', () => {
-  it('pins the exact applied private body and changes only the authorization guard', () => {
+  it('pins the exact applied private body and changes only authorization plus cent settlement', () => {
     const baselineBody = storedFunctionSource(
       baselineSql,
       'CREATE OR REPLACE FUNCTION public.draw_down_quote(',
@@ -53,13 +53,36 @@ describe('draw_down_quote owner and deletion boundary migration', () => {
     ].join('\n');
 
     expect(md5(baselineBody)).toBe('87bf7adcdc63d94684676da5ab09bfde');
-    expect(md5(patchedBody)).toBe('313ef19f5d604b9e35b341a22fdb75b8');
+    expect(md5(patchedBody)).toBe('2ff7a345a555b1cdeee16a890bb65034');
     expect(
-      patchedBody.replace(
-        newGuard,
-        "  IF NOT FOUND THEN RAISE EXCEPTION 'Quote not found'; END IF;\n\n",
-      ),
-    ).toBe(baselineBody);
+      patchedBody
+        .replace(
+          newGuard,
+          "  IF NOT FOUND THEN RAISE EXCEPTION 'Quote not found'; END IF;\n\n",
+        )
+        .replace('    v_wavg_price := ROUND(v_wavg_price, 2);\n', '')
+        .replace(/^[ \t]*--.*$/gm, '')
+        .replace(/\s+/g, ' ')
+        .trim(),
+    ).toBe(
+      baselineBody.replace(/^[ \t]*--.*$/gm, '').replace(/\s+/g, ' ').trim(),
+    );
+  });
+
+  it('settles weighted price and cost before deriving order-line money', () => {
+    const body = storedFunctionSource(
+      migrationSql,
+      'CREATE OR REPLACE FUNCTION public._draw_down_quote_below_cost_impl_20260810(',
+    );
+    const roundedPrice = body.indexOf('v_wavg_price := ROUND(v_wavg_price, 2);');
+    const roundedCost = body.indexOf('v_wavg_cost := ROUND(v_wavg_cost, 2);');
+    const lineTotal = body.indexOf('v_line_total := ROUND(v_wavg_price * v_qty, 2);');
+    const orderInsert = body.indexOf('INSERT INTO order_items');
+
+    expect(roundedPrice).toBeGreaterThan(-1);
+    expect(roundedCost).toBeGreaterThan(roundedPrice);
+    expect(lineTotal).toBeGreaterThan(roundedCost);
+    expect(orderInsert).toBeGreaterThan(lineTotal);
   });
 
   it('locks before authorizing and authorizes before cache reads or writes', () => {

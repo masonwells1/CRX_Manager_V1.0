@@ -57,6 +57,7 @@ const smokeFiles = [
   'smoke-below-cost-quote-lifecycle.sql',
   'smoke-draw-down-quote-owner-boundary.sql',
   'smoke-quote-version-restore-quarantine.sql',
+  'smoke-quote-section-write-boundary.sql',
   'smoke-remaining-money-inventory-hardening.sql',
 ].map((name) => path.join(ROOT, 'scripts', 'smoke', name));
 const oneShotDataReplayExclusions = new Map([
@@ -81,6 +82,10 @@ const pendingCandidateMigrationExclusions = new Map([
   [
     '20260814041419_fresh_below_cost_reason.sql',
     'below-cost follow-up: explicit current-attempt reason blocks persisted-note reuse',
+  ],
+  [
+    '20260814063000_quote_sections_rpc_owned.sql',
+    'quote-section follow-up: remove browser write-capable grants and obsolete write policies',
   ],
 ]);
 const pendingCandidateMigrations = [...pendingCandidateMigrationExclusions.keys()]
@@ -623,6 +628,7 @@ try {
     'smoke_quote_lifecycle=SMOKE_PASS_ROLLBACK ' +
     'smoke_draw_down_owner=SMOKE_PASS_ROLLBACK ' +
     'smoke_quote_version_quarantine=SMOKE_PASS_ROLLBACK ' +
+    'smoke_quote_section_boundary=SMOKE_PASS_ROLLBACK ' +
     'smoke_profitability_inventory=SMOKE_PASS_ROLLBACK residue=0',
   );
 } catch (error) {

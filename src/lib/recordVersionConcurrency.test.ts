@@ -54,8 +54,11 @@ describe('whole-record row-version client contract', () => {
   it('routes every direct quote/customer mutation through the exact-next-token guard', () => {
     const quoteBuilder = readFileSync(resolve(process.cwd(), 'src/pages/QuoteBuilder.tsx'), 'utf8');
     const customerDetail = readFileSync(resolve(process.cwd(), 'src/pages/CustomerDetail.tsx'), 'utf8');
-    expect(quoteBuilder.match(/applyDirectQuoteMutationRowVersion\(/g)).toHaveLength(2);
+    expect(quoteBuilder.match(/applyDirectQuoteMutationRowVersion\(/g)).toHaveLength(1);
     expect(quoteBuilder).toContain('const previousRowVersion = quoteRowVersionRef.current;');
+    expect(quoteBuilder).toContain("setStatus('accepted');");
+    expect(quoteBuilder).toContain('The quote remains accepted and no order was created.');
+    expect(quoteBuilder).not.toContain('revert_quote_status_after_cancelled_below_cost');
     expect(customerDetail).toContain('const previousRowVersion = customerRowVersionRef.current;');
     expect(customerDetail).toContain('resolveDirectMutationRowVersion(previousRowVersion, nextRowVersion)');
   });

@@ -2661,35 +2661,6 @@ export default function QuoteBuilder() {
       return;
     }
 
-    const restoreOpenQuoteStatus = async (
-      action: string,
-      failureMessage: string,
-    ): Promise<void> => {
-      const revertTo = status === 'accepted' || status === 'draft'
-        ? 'sent'
-        : (status || 'sent');
-      try {
-        const previousRowVersion = quoteRowVersionRef.current;
-        const revertResult = await supabase
-          .from('quotes')
-          .update({ status: revertTo })
-          .eq('id', savedId)
-          .select('*');
-        checkMutationResult(revertResult, 'Revert quote status');
-        setStatus(revertTo);
-        applyDirectQuoteMutationRowVersion(
-          previousRowVersion,
-          (revertResult.data as Array<{ row_version?: unknown }>)[0]?.row_version,
-          'reverted',
-        );
-      } catch (revertErr) {
-        Sentry.captureException(revertErr, {
-          tags: { source: 'mutation', action },
-        });
-        toast('error', `${failureMessage} — its status may need a manual fix`);
-      }
-    };
-
     try {
       // Atomic RPC: order creation + items + inventory prebooking + commissions
       const idemKey = convertQuoteIdem.getKey();
@@ -2763,10 +2734,13 @@ export default function QuoteBuilder() {
     } catch (error: unknown) {
       if (isBelowCostApprovalHandledError(error)) {
         if (status !== 'accepted') {
-          await restoreOpenQuoteStatus(
-            'revert_quote_status_after_cancelled_below_cost',
-            'The below-cost approval was cancelled, but the quote could not be returned to its open status',
-          );
+          // The accepted save already committed. Do not attempt a compensating
+          // browser write after cancellation: another tab may have changed the
+          // quote or created its Order. Keeping the accepted state is the safe,
+          // truthful outcome; staff can retry conversion from that state.
+          setStatus('accepted');
+          setIsDirty(false);
+          toast('info', 'Below-cost approval was cancelled. The quote remains accepted and no order was created.');
         }
         setConverting(false);
         return;
@@ -2855,13 +2829,6 @@ export default function QuoteBuilder() {
         || 'Failed to create order';
       toast('error', errMsg);
       }
-      // A successful status check proved the quote was not accepted. A draft can
-      // only reach this path through Book as Order, whose mark-presented step
-      // already committed it as sent; keep it sent so normal Convert remains.
-      await restoreOpenQuoteStatus(
-        'revert_quote_status_after_failed_convert',
-        'Order creation failed AND the quote could not be returned to its open status',
-      );
     }
     setConverting(false);
   };
@@ -2869,8 +2836,9 @@ export default function QuoteBuilder() {
   // U16b: one-step booking for a clean, saved draft. Mark Presented uses the
   // existing create_quote_version path (snapshot + sent), then the existing
   // conversion handler applies all stale/duplicate/draw-down guards. If the
-  // first step succeeds but conversion fails, executeConvertToOrder restores the
-  // quote to sent, so staff can retry with the normal Convert button.
+  // first step succeeds but below-cost approval is cancelled, the quote remains
+  // accepted so no race-prone compensating browser write can overwrite another
+  // tab; staff can retry conversion from the accepted state.
   const handleBookAsOrder = async () => {
     setBookingAsOrder(true);
     try {

@@ -586,6 +586,20 @@
         "lifecycle"
       ]
     },
+    "quote_section_write_boundary": {
+      "chain": "smoke-quote-section-write-boundary.sql",
+      "description": "Container-only rollback proof for 20260814063000: application-role direct writes are absent; authenticated INSERT, UPDATE, DELETE, and TRUNCATE CASCADE on quote_sections each fail with insufficient_privilege; the original section remains unchanged; and the existing authenticated RLS SELECT path still renders it.",
+      "container_only": true,
+      "container_prover": "prove-pricing-audit-real-schema.mjs",
+      "covers": [
+        "save_quote"
+      ],
+      "area": [
+        "security",
+        "regression",
+        "lifecycle"
+      ]
+    },
     "get_customer_statement": {
       "chain": "smoke-customer_statement_blind_spots.sql",
       "description": "Statement blind-spot fix (CHIP task_25d25699, migrations 20260611131549 + 20260716160000): legacy, NULL-order, and allocation-set payments each appear exactly once; paid/overdue invoices keep their charge lines; soft-deleted payments excluded; credit memo single-count; unapplied overpayment prepay NOT pre-counted (DEDUP RULE); the exact same allocate_payment key is replayed after the committed result and must return the cached result without a second allocation set or statement change (regression proof for the atomic idempotency-claim guard); running balance never negative; unknown-actor auth probe rejected by the in-body gate.",
