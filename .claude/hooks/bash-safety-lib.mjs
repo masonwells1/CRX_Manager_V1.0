@@ -23,7 +23,7 @@ const MAINTENANCE_PRODUCER_ALLOWED_COMMANDS = new Set([
 
 export function maintenanceProducerCommandMentioned(command) {
   const value = String(command || "");
-  if (/\bnode(?:\.exe)?\b/i.test(value) && /[*?\[\]{}$`]|[<>]\(/.test(value)) return true;
+  if (/\bnode(?:\.exe)?\b/i.test(value) && /[*?\[\]{}$`]|[<>]\(|\([^()\r\n]*\+[^()\r\n]*\)|![^!\r\n]+!|%[^%\r\n]+%/.test(value)) return true;
   const nodeScript = /\bnode(?:\.exe)?\s+(?:"([^"]*)"|'([^']*)'|([^\s;&|]+))/i.exec(value);
   const scriptPath = nodeScript?.[1] || nodeScript?.[2] || nodeScript?.[3] || "";
   if (/[*?\[\]]|\$\(|\$\{/.test(scriptPath)) return true;
@@ -31,8 +31,6 @@ export function maintenanceProducerCommandMentioned(command) {
     .toLowerCase()
     .replace(/[\s\\/"'`^]/g, "");
   return compact.includes(MAINTENANCE_PRODUCER_NAME)
-    || compact.includes("apply-live-testdata-")
-    || compact.includes("20260812.mjs")
     || compact.includes("--approved-by-mason=");
 }
 

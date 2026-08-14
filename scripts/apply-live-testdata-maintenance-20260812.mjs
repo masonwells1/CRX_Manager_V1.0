@@ -40,13 +40,13 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "e24d0fa880ea65327fb9ebd346952b17e628d458",
+  codexGuard: "6ee6bda779d82c03d1d63b8d97c096ecf72404aa",
   pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
 };
 
 export function maintenanceProducerCommandMentioned(command) {
   const value = String(command || "");
-  if (/\bnode(?:\.exe)?\b/i.test(value) && /[*?\[\]{}$`]|[<>]\(/.test(value)) return true;
+  if (/\bnode(?:\.exe)?\b/i.test(value) && /[*?\[\]{}$`]|[<>]\(|\([^()\r\n]*\+[^()\r\n]*\)|![^!\r\n]+!|%[^%\r\n]+%/.test(value)) return true;
   const nodeScript = /\bnode(?:\.exe)?\s+(?:"([^"]*)"|'([^']*)'|([^\s;&|]+))/i.exec(value);
   const scriptPath = nodeScript?.[1] || nodeScript?.[2] || nodeScript?.[3] || "";
   if (/[*?\[\]]|\$\(|\$\{/.test(scriptPath)) return true;
@@ -54,8 +54,6 @@ export function maintenanceProducerCommandMentioned(command) {
     .toLowerCase()
     .replace(/[\s\\/"'`^]/g, "");
   return compact.includes("apply-live-testdata-maintenance-20260812.mjs")
-    || compact.includes("apply-live-testdata-")
-    || compact.includes("20260812.mjs")
     || compact.includes("--approved-by-mason=");
 }
 

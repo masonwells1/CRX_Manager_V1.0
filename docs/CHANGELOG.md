@@ -86,7 +86,7 @@ latest pass found that ordinary shell quoting could bypass the producer invocati
 guard now recognizes quoted, absolute, alternate-separator, wrapper-prefixed, and escaped spellings, and
 fails closed whenever a Node command uses dynamic shell syntax anywhere in its complete command text, while
 the producer itself independently requires its exact committed blob plus a fresh HEAD-and-base-bound
-Sol-high proof before any write mode can run. Forty-nine counted producer assertions pin those boundaries,
+Sol-high proof before any write mode can run. Fifty-two counted producer assertions pin those boundaries,
 including option-prefixed, value-taking-option, redirection, opaque substitution, and escaped-newline forms. The
 generated guard also normalizes `Function#toString()` line endings before hashing, so Windows worktrees and
 the isolated exact-review snapshot reproduce the same protected output blob.

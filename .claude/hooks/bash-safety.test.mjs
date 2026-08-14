@@ -87,10 +87,16 @@ for (const command of [
   "node </dev/null --no-warnings scripts/$(printf YXBwbHktbGl2ZS10ZXN0ZGF0YS1tYWludGVuYW5jZS0yMDI2MDgxMi5tanM= | base64 -d) --approved-by-$(printf bWFzb24= | base64 -d)=2026-08-12",
   "node --no-warnings \\\nscripts/$(printf YXBwbHktbGl2ZS10ZXN0ZGF0YS1tYWludGVuYW5jZS0yMDI2MDgxMi5tanM= | base64 -d) --approved-by-$(printf bWFzb24= | base64 -d)=2026-08-12",
   "node --require ./preload.cjs scripts/apply-l{i..i}ve-testdata-maintenance-20260{8..8}12.mjs --approved-by-ma{s..s}on=2026-08-12",
+  "node (\"--req\"+\"uire\") ./preload.cjs (\"scripts/apply-\"+\"live-testdata-maintenance-20260812.mjs\") (\"--approved-by-\"+\"mason=2026-08-12\")",
+  'cmd /v:on /c "set a=--requ&set b=ire&set c=scripts/apply-live-testdata-maintenance-20260812.mjs&node !a!!b! ./preload.cjs !c! --approved-by-mason=2026-08-12"',
 ]) {
   ok(maintenanceProducerCommandMentioned(command), `producer spelling recognized by shell guard: ${command}`);
   ok(checkDangerousCommand(command), `non-literal producer invocation denied by shell guard: ${command}`);
 }
+const focusedProducerHarness = "node scripts/apply-live-testdata-maintenance-20260812.test.mjs";
+ok(!maintenanceProducerCommandMentioned(focusedProducerHarness), "focused producer test harness is not classified as the protected producer");
+eq(checkMaintenanceProducerInvocation(focusedProducerHarness), null, "focused producer test harness stays allowed by the shell guard");
+ok(!checkDangerousCommand(focusedProducerHarness), "focused producer test harness stays runnable");
 ok(!checkDangerousCommand("echo $PATH"), "ordinary environment-variable display stays allowed");
 ok(!checkDangerousCommand("Get-ChildItem *.mjs"), "ordinary non-Node file glob stays allowed");
 ok(checkDangerousCommand("node --require ./preload.cjs scripts/ordinary-check.mjs"), "Node require preload is denied");
