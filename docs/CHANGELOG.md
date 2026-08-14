@@ -2,6 +2,10 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-13 — Reconciled PR #397 with the parked Wave A split
+
+Merged current `main` after PR #393 and preserved its safety boundary: the six Wave A drafts now live only under `scripts/.staging-migrations/20260813010000`–`20260813060000`, so normal migration replay cannot apply them. PR #397 keeps the separately reviewed pricing recovery, exact-cent quote math, below-cost lifecycle UX, atomic quote-version quarantine, restore ACL, and draw-down ownership candidates. Older entries below describe the review history that produced the Wave A SQL; their former active-migration paths are superseded by this parked disposition. The changed-only SQL audit now distinguishes a migration path already absent from the current base-ref tip from a deletion newly introduced by the branch, preventing a mid-merge false positive without weakening the append-only check for paths still present on the base. The rollback-probe artifact registry now authorizes no active migration: the former Wave A probes are parked and must receive a fresh exact-artifact review before any waiver can return to the executable migration lane. No live migration or live data change occurred during this reconciliation.
+
 ## 2026-08-13 — Addressed PR 397 review findings across exact-cent quote math,…
 
 Addressed PR 397 review findings across exact-cent quote math, below-cost lifecycle UX, RPC and migration guards, rollback smokes, quarantine sweeps, and recovery replay proof; full tests, build, lint, SQL audit, 68-case mutation suite, captured-ledger disposable replay, and rendered UI checks passed.

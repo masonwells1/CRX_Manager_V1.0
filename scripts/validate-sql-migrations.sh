@@ -154,15 +154,9 @@ for (const row of snapshot.entries || []) {
 # same migration-review gate. This is an artifact allowlist, not a syntax bet.
 approved_rollback_probe_hash() {
   case "$1" in
-    20260813020000_round_order_header_money.sql)
-      printf '%s\n' '6e4ebcc72758c6c78bc0acc07632b45e197c93c7edcaf2cc6d23d19ca907e720'
-      ;;
-    20260813050000_guard_job_commission_split_immutable.sql)
-      printf '%s\n' 'ea3026e9b38e0b317fb2850f76312f7a0b722299bc15ed4ed4c0aae8262785de'
-      ;;
-    20260813060000_require_completed_delivery_before_invoice_post.sql)
-      printf '%s\n' 'e9ad644578a86fc11dd45249f6c46eae92ce2810b231785980ad16bc3c731e0d'
-      ;;
+    # No active migration currently has this waiver. The former Wave A probes
+    # are parked outside supabase/migrations and must be reviewed again before
+    # any exact artifact can enter this executable allowlist.
     *) return 1 ;;
   esac
 }
@@ -287,6 +281,16 @@ fi
 # so --changed-only can never silently bless a destructive change. Renames are
 # classified R (not D) by rename detection, so legitimate B7 renames are exempt.
 for d in $DELETED; do
+  # A branch can be mid-merge with a newer BASE_REF whose tip already removed a
+  # never-applied draft (for example, by parking it under
+  # scripts/.staging-migrations). In that state the merge-base diff reports the
+  # path as deleted even though this branch is merely accepting the base tip.
+  # Keep the append-only red line for every path that still exists on the current
+  # base ref; skip only when the current base ref independently lacks it.
+  if ! git cat-file -e "${BASE_REF}:${d}" 2>/dev/null; then
+    echo "NOTE: $d is already absent from the current $BASE_REF tip; not a branch-owned migration deletion."
+    continue
+  fi
   echo "VIOLATION: $d"
   echo "  Migration DELETED vs $BASE_REF — migrations are append-only; NEVER delete an existing migration file."
   echo ""

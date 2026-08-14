@@ -178,7 +178,7 @@
 -- commission rows, writes one `financial_audit_log` row, and binds an idempotency receipt.
 -- It then proves exact replay and changed-job rejection. All of that is inside the
 -- rolled-back subtransaction, so none survives. The probe also forges
--- `request.jwt.claim.sub` locally to stand in for a signed-in session — that GUC is
+-- `request.jwt.claims` locally to stand in for a signed-in session — that GUC is
 -- transaction-local too, and is cleared before the block ends.
 
 SET statement_timeout = '60s';
@@ -1309,7 +1309,6 @@ BEGIN
 
   v_idempotency_key := 'probe-job-split-' || gen_random_uuid()::text;
 
-  -- APPROVED_SET_DIGEST: ROLLBACK-PROBE (jobs, commissions) - every selected-row mutation and synthetic commission write is inside this PROBE_OK_ROLLBACK exception subtransaction; full-row fingerprints and counts are checked afterward
   BEGIN
     -- Seed exactly two pending, unbatched rows in one synthetic generation. These
     -- rows are deliberately inserted only after the whole-row fingerprint/count
@@ -1477,7 +1476,7 @@ BEGIN
     -- ------------------------------------------------------------------------
     -- (f) A NON-ADMIN CANNOT CORRECT. Mason chose reps-blocked, admins-with-a-record,
     -- so the refusal is a product decision and gets a real test. auth.uid() reads
-    -- request.jwt.claim.sub, so setting that GUC locally is exactly what an ordinary
+    -- request.jwt.claims, so forging that GUC locally is exactly what an ordinary
     -- signed-in session presents to the RPC.
     -- ------------------------------------------------------------------------
     SELECT id INTO v_non_admin_id
@@ -1490,7 +1489,7 @@ BEGIN
     END IF;
     v_blocked := false;
     BEGIN
-      EXECUTE format('SET LOCAL request.jwt.claim.sub = %L', v_non_admin_id::text);
+      EXECUTE format('SET LOCAL request.jwt.claims = %L', json_build_object('sub', v_non_admin_id)::text);
       PERFORM public.correct_job_commission_split(
         v_job_id, '{"splits":[]}'::jsonb, 'probe: non-admin must be refused'
       );
@@ -1526,7 +1525,7 @@ BEGIN
         RAISE EXCEPTION 'POSTCOND PROBE: paid-row setup touched % synthetic commission rows rather than 1', v_count;
       END IF;
 
-      EXECUTE format('SET LOCAL request.jwt.claim.sub = %L', v_admin_id::text);
+      EXECUTE format('SET LOCAL request.jwt.claims = %L', json_build_object('sub', v_admin_id)::text);
       PERFORM public.correct_job_commission_split(
         v_job_id,
         v_probe_split,
@@ -1571,7 +1570,7 @@ BEGIN
       FROM public.financial_audit_log
      WHERE entity_id = v_job_id AND operation_type = 'split_modified';
 
-    EXECUTE format('SET LOCAL request.jwt.claim.sub = %L', v_admin_id::text);
+    EXECUTE format('SET LOCAL request.jwt.claims = %L', json_build_object('sub', v_admin_id)::text);
     v_rpc_result := public.correct_job_commission_split(
       v_job_id,
       v_probe_split,
@@ -1640,7 +1639,7 @@ BEGIN
       RAISE EXCEPTION 'POSTCOND PROBE: changed-intent idempotency refusal did not run';
     END IF;
 
-    PERFORM set_config('request.jwt.claim.sub', '', true);
+    PERFORM set_config('request.jwt.claims', '', true);
 
     SELECT count(*) INTO v_audit_after
       FROM public.financial_audit_log

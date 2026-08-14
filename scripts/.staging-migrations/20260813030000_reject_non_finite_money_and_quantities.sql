@@ -21,7 +21,7 @@
 -- the overlap makes these constraints redundant.
 --
 -- 20260805220757 closed this at the bulk_import_order boundary, and
--- 20260813015000 closes it at the create_direct_order boundary. Both are
+-- 20260813010000 closes it at the create_direct_order boundary. Both are
 -- per-RPC. The columns themselves were still unguarded, so any OTHER writer
 -- could still land a non-finite value.
 --
@@ -45,7 +45,7 @@
 -- including the frontend and any future RPC, and cannot be bypassed by adding a
 -- caller — the same argument 20260809170800 made for the rounding trigger.
 --
--- ERROR-MESSAGE QUALITY, STATED HONESTLY. 20260813015000 adds an actionable
+-- ERROR-MESSAGE QUALITY, STATED HONESTLY. 20260813010000 adds an actionable
 -- ITEM_INVALID at the create_direct_order boundary, and that is the only RPC
 -- with such a boundary check. Two other writers get the raw constraint name
 -- instead, and no boundary check is added for them here:
@@ -408,7 +408,11 @@ BEGIN
     AND p.current_cost::text NOT IN ('NaN', 'Infinity', '-Infinity')
     AND p.current_cost > 0
     AND p.current_cost = round(p.current_cost, 2)
-  LIMIT 1;
+  LIMIT 1
+  -- Hold the product row so a concurrent cost increase between this read and
+  -- the INSERT below cannot turn the at-cost probe into a below-cost row (the
+  -- trigger takes the same FOR SHARE lock when it reads the cost).
+  FOR SHARE OF p;
 
   IF v_quote_id IS NULL THEN
     RAISE NOTICE 'POSTCOND: no quote_items row with a costed product available to source FK values from — behavioural probe SKIPPED (semantic and structural proofs still ran)';

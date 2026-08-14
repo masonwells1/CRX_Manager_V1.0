@@ -41,12 +41,11 @@
 -- the POST does not interfere with getting paid early.
 --
 -- HOW THIS FILE MUST BE APPLIED.
--- Through `apply_migration` or `psql --single-transaction`, NEVER through
--- `execute_sql`. The Supabase
--- MCP `execute_sql` path is not the migration runner: it does not provide the
--- same whole-file transaction plus ledger stamp. Supabase apply_migration owns
--- that outer transaction. Do not add BEGIN/COMMIT here because an inner COMMIT
--- could split the schema change from its migration-ledger record.
+-- Through `apply_migration` or psql, NEVER through `execute_sql`. The Supabase
+-- MCP `execute_sql` path runs only the LAST statement of a multi-statement
+-- script — here that is the bare `COMMIT;` — so it would report a clean, empty
+-- success while installing nothing at all. That failure mode is silent and would
+-- be indistinguishable from a successful apply.
 --
 -- THE HOLE, exactly as it exists on production today.
 -- `_create_quick_delivery_intent_impl_20260802` — the current implementation
@@ -171,7 +170,7 @@
 -- itself. That is deliberate — there is no staging copy of this database, and a
 -- probe that had already been rehearsed elsewhere would be proving something
 -- about the rehearsal. It fails closed: any unexpected outcome raises, and the
--- apply_migration-owned transaction reverts the whole file including the gate.
+-- enclosing BEGIN/COMMIT reverts the whole file including the gate.
 --
 -- THIS FILE IS NOT RERUNNABLE after a successful apply, by design. PRECOND C
 -- refuses if the gate marker is already present in the live function body, so a
@@ -240,10 +239,11 @@
 -- properly means reordering the locks in `_complete_delivery_authorized_impl`,
 -- which is a separate change with its own deadlock analysis.
 --
--- ATOMICITY. The approved apply_migration runner owns one transaction covering
--- this whole file and its migration-ledger stamp. A top-level BEGIN/COMMIT here
--- would be unsafe because an inner COMMIT could split those outcomes. Any RAISE
--- in this file aborts the runner-owned transaction and restores the old function.
+-- ATOMICITY. The whole migration runs inside one explicit BEGIN/COMMIT — the
+-- same shape 30 already-applied migrations in this repo use. Without it, a
+-- non-transactional applier could leave the gate installed on production while
+-- the proof below reported failure. Any RAISE anywhere in this file now aborts
+-- the transaction and the function reverts to exactly what it was.
 --
 -- PROOF. The postcondition block below does not merely re-read the catalog. It
 -- picks a real delivery-linked draft invoice, flips its delivery to 'scheduled',
@@ -281,7 +281,7 @@
 -- show a small gap in a generated number. That is cosmetic and expected.
 --
 -- The probe uses three transaction-local settings and clears all three:
---   * `request.jwt.claim.sub` stands in for a signed-in admin session.
+--   * `request.jwt.claims` stands in for a signed-in admin session.
 --   * `app.admin_override` is set ONLY around the delivery-status UPDATEs that
 --     move a row away from completed or into in_progress. It does NOT bypass the
 --     new completion-provenance guard. The authorized RPC itself sets and clears
@@ -295,7 +295,9 @@
 --     back to 'false' BEFORE each post attempt, so the gate is always exercised
 --     without it.
 
--- Transaction-local: reverted when the runner commits, so nothing leaks into a pooled session.
+BEGIN;
+
+-- Transaction-local: reverted at COMMIT, so nothing leaks into a pooled session.
 -- lock_timeout bounds how long this transaction WAITS for a lock, so a probe that
 -- collides with an office session fails fast instead of hanging the apply. It does
 -- NOT bound how long the probe HOLDS the locks it already took — those are held
@@ -1349,9 +1351,8 @@ BEGIN
   SELECT md5(to_jsonb(d)::text) INTO v_row_del_before
     FROM public.deliveries d WHERE d.id = v_delivery_id;
 
-  -- APPROVED_SET_DIGEST: ROLLBACK-PROBE (deliveries, invoices) - the real completion/post allow-and-deny mutations are enclosed by PROBE_OK_ROLLBACK; exact whole-row hashes are checked afterward
   BEGIN
-    EXECUTE format('SET LOCAL request.jwt.claim.sub = %L', v_admin_id::text);
+    EXECUTE format('SET LOCAL request.jwt.claims = %L', json_build_object('sub', v_admin_id)::text);
 
     -- (a) A delivery that has not happened yet must refuse the post. 'scheduled'
     -- is the exact quick-delivery shape and the whole reason this migration
@@ -1487,13 +1488,13 @@ BEGIN
       RAISE EXCEPTION 'POSTCOND PROBE: the allowed post left the invoice at "%" rather than posted', v_status;
     END IF;
 
-    PERFORM set_config('request.jwt.claim.sub', '', true);
+    PERFORM set_config('request.jwt.claims', '', true);
     PERFORM set_config('app.admin_override', 'false', true);
     PERFORM set_config('crx.delivery_completion_authorized', '', true);
     RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'PROBE_OK_ROLLBACK';
   EXCEPTION
     WHEN OTHERS THEN
-      PERFORM set_config('request.jwt.claim.sub', '', true);
+      PERFORM set_config('request.jwt.claims', '', true);
       PERFORM set_config('app.admin_override', 'false', true);
       PERFORM set_config('crx.delivery_completion_authorized', '', true);
       IF SQLERRM <> 'PROBE_OK_ROLLBACK' THEN RAISE; END IF;
@@ -1537,3 +1538,5 @@ BEGIN
   END IF;
 END;
 $postcond$;
+
+COMMIT;

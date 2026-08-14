@@ -13,7 +13,7 @@ const CANDIDATE = path.join(ROOT, 'supabase', 'migrations', '20260812130145_bind
 const HELPER_GUARD = path.join(ROOT, 'supabase', 'migrations', '20260813070000_pin_return_idempotency_helper_contract.sql');
 const FORWARD_COMPATIBILITY_REPLAY = [
   '20260813060000_require_completed_delivery_before_invoice_post.sql',
-].map((name) => path.join(ROOT, 'supabase', 'migrations', name));
+].map((name) => path.join(ROOT, 'scripts', '.staging-migrations', name));
 const SMOKE = path.join(ROOT, 'scripts', 'smoke', 'smoke-return-credit-chain.sql');
 const PREDICATE = path.join(ROOT, 'scripts', 'db-invariant-sweeps', 'predicates', 'return-credit-intent-binding.sql');
 const LIFECYCLE_PREDICATE = path.join(ROOT, 'scripts', 'db-invariant-sweeps', 'predicates', 'returns-lifecycle-rpc-owned.sql');

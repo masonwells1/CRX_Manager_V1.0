@@ -2568,8 +2568,13 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // MUTATING_RPCS_WITH_IDEMPOTENCY. This bucket remains for the normal pre-apply
   // window: an RPC introduced by a PR migration that is not yet live belongs
   // here until the next truthful live type regeneration.
-  'correct_job_commission_split',
 
+  // Wave A drafts are parked under scripts/.staging-migrations and therefore
+  // intentionally absent from the active migration inventory. Restore their
+  // classifications only when the drafts are promoted back to
+  // supabase/migrations:
+  // - correct_job_commission_split (20260813050000)
+  // - _create_direct_order_below_cost_impl_20260810 (20260813010000)
 ]);
 
 /**
@@ -2588,10 +2593,6 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
  * anything, they are simply no longer discovered.
  */
 const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
-  _guard_delivery_completion_authorized:
-    'pending trigger-only authorization guard; PostgreSQL invokes it from delivery status updates and direct application-role EXECUTE is revoked',
-  _guard_job_commission_split_immutable:
-    'pending trigger-only immutability guard; PostgreSQL invokes it from job split updates and direct application-role EXECUTE is revoked',
   check_idempotency_intent:
     'internal receipt-check helper: it deletes only expired idempotency rows, serializes by key, and is executable only by postgres; the three authenticated payout wrappers own request idempotency',
   _close_undelivered_order_remainder_20260718:
@@ -2602,8 +2603,17 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
     'idempotency infrastructure helper (sections 2-6 closeout): binds a completed lifecycle result to its key; direct client EXECUTE is revoked',
   _claim_bound_lifecycle_idempotency:
     'idempotency infrastructure helper (sections 2-6 closeout): claims a bound lifecycle key for replay; direct client EXECUTE is revoked',
+  // Pruned on the 2026-08-11 merge of origin/main, per the standing rule below that a
+  // dead exemption silently pre-suppresses any future RPC reusing the name:
+  //   _guard_job_commission_split_immutable remains parked with Wave A under
+  //     scripts/.staging-migrations. Restore its narrow trigger exemption only
+  //     when 20260813050000 is promoted back to supabase/migrations.
+  //   _crx_payout_assert_impl_20260809 / _crx_payout_assert_replay_20260809 — 20260811130000
+  //     landed on main and applied live; it drops both helpers before finishing.
   _insert_commissions_for_job: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
   _insert_commissions_for_order: 'internal helper; caller owns idempotency and direct EXECUTE is revoked',
+  // _guard_delivery_completion_authorized is also parked with Wave A in
+  // 20260813060000. Restore its trigger exemption when that draft is promoted.
   _reverse_credit_memo_application: 'internal helper called only by idempotent credit-memo reversal RPCs',
   // Pruned on 2026-08-12 when 20260812130145 applied live (ledger version
   // 20260812212323) and the registry high-water moved past it:

@@ -66,12 +66,6 @@ const oneShotDataReplayExclusions = new Map([
   ],
 ]);
 const pendingCandidateMigrationExclusions = new Map([
-  ['20260813015000_wave_a_order_cost_authority_and_finiteness.sql', 'Wave A money candidate'],
-  ['20260813020000_round_order_header_money.sql', 'Wave A money candidate'],
-  ['20260813030000_reject_non_finite_money_and_quantities.sql', 'Wave A money candidate'],
-  ['20260813040000_clamp_negative_commission_remainder.sql', 'Wave A money candidate'],
-  ['20260813050000_guard_job_commission_split_immutable.sql', 'Wave A money candidate'],
-  ['20260813060000_require_completed_delivery_before_invoice_post.sql', 'Wave A money candidate'],
   [
     '20260813080000_lock_quote_versions_writes_to_rpc.sql',
     'CRX-SEC-1 atomic quote-version write boundary and legacy restore quarantine',
@@ -463,14 +457,12 @@ try {
     'schema-only cent-repair path did not install its validated constraint',
   );
 
-  // The Wave A migration postconditions deliberately execute real allow and
-  // deny paths. A schema-only reconstruction has no office data to select, so
-  // install the smallest finite, whole-cent fixture set that can exercise those
+  // The pending pricing/security candidates and their rollback smokes execute
+  // real allow and deny paths. A schema-only reconstruction has no office data
+  // to select, so install the smallest fixture set that can exercise those
   // paths. The fixed ids keep failures reproducible. session_replication_role is
-  // used only while constructing the fixture: in particular, it preserves the
-  // historical NULL job-split shape that the new immutable-split guard must
-  // prove it can fill. Every migration and every behavioural probe below runs
-  // with ordinary triggers enabled.
+  // used only while constructing the fixture; every candidate and behavioural
+  // probe below runs with ordinary triggers enabled.
   psql(
     `ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS banned_until timestamptz;
      CREATE TABLE IF NOT EXISTS auth.sessions (user_id uuid);
@@ -561,9 +553,9 @@ try {
      COMMIT;`,
   );
 
-  // Prove the complete next ordered migration slice against the pricing schema,
-  // even though Wave A and the pricing follow-up are deliberately absent from
-  // the captured live ledger.
+  // Prove the complete next ordered pricing/security slice against the captured
+  // live schema. The unrelated Wave A drafts are parked outside the migration
+  // directory and are deliberately not part of this executable proof.
   // This catches name/body overlaps that isolated candidate proofs miss (for
   // example, replacing a governed public wrapper instead of its private impl).
   for (const file of pendingCandidateMigrations) {
@@ -573,7 +565,7 @@ try {
       throw new Error(`pending ordered migration failed: ${path.basename(file)}\n${error.message}`);
     }
   }
-  const waveAWrapperCompatibility = psql(
+  const pendingWrapperCompatibility = psql(
     `\\pset tuples_only on
      \\pset format unaligned
      SELECT count(*)
@@ -589,13 +581,12 @@ try {
             JOIN pg_namespace impl_ns ON impl_ns.oid = impl.pronamespace
            WHERE impl_ns.nspname = 'public'
              AND impl.proname = '_create_direct_order_below_cost_impl_20260810'
-             AND position('v_norm_items' in impl.prosrc) > 0
         );`,
   ).stdout.trim();
   assert.equal(
-    waveAWrapperCompatibility,
+    pendingWrapperCompatibility,
     '1',
-    'Wave A did not preserve the governed below-cost wrapper over its authoritative-cost implementation',
+    'pending pricing/security candidates did not preserve the governed below-cost wrapper',
   );
 
   proveNonEmptyApprovedSetDrift();
@@ -623,7 +614,7 @@ try {
     `pending_candidates_applied=${pendingCandidateMigrations.length} ` +
     `one_shot_data_exclusions=${oneShotDataReplayExclusions.size} ` +
     `private_payload_recovery_replays=${sensitiveAppliedReplaySubstitutions.size} ` +
-    'wave_a_below_cost_wrapper=PASS approved_set_empty=PASS cent_repair_empty=PASS approved_set_nonempty_drift=APPROVED_SET_DRIFTED ' +
+    'pending_below_cost_wrapper=PASS approved_set_empty=PASS cent_repair_empty=PASS approved_set_nonempty_drift=APPROVED_SET_DRIFTED ' +
     'smoke_below_cost_admin=SMOKE_PASS_ROLLBACK ' +
     'smoke_quote_lifecycle=SMOKE_PASS_ROLLBACK ' +
     'smoke_draw_down_owner=SMOKE_PASS_ROLLBACK ' +

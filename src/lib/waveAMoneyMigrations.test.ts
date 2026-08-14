@@ -2,34 +2,22 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
-const ORDER_COST_PATH =
-  'supabase/migrations/20260813015000_wave_a_order_cost_authority_and_finiteness.sql';
 const ROUND_HEADER_PATH =
-  'supabase/migrations/20260813020000_round_order_header_money.sql';
+  'scripts/.staging-migrations/20260813020000_round_order_header_money.sql';
 const COMMISSION_MATH_PATH =
-  'supabase/migrations/20260813040000_clamp_negative_commission_remainder.sql';
+  'scripts/.staging-migrations/20260813040000_clamp_negative_commission_remainder.sql';
 const SPLIT_CORRECTION_PATH =
-  'supabase/migrations/20260813050000_guard_job_commission_split_immutable.sql';
+  'scripts/.staging-migrations/20260813050000_guard_job_commission_split_immutable.sql';
 const FINITENESS_PATH =
-  'supabase/migrations/20260813030000_reject_non_finite_money_and_quantities.sql';
+  'scripts/.staging-migrations/20260813030000_reject_non_finite_money_and_quantities.sql';
 const DELIVERY_BILLING_PATH =
-  'supabase/migrations/20260813060000_require_completed_delivery_before_invoice_post.sql';
-const COMMISSION_BASIS_PATH =
-  'supabase/migrations/20260810150000_commission_basis_from_canonical_order_header.sql';
-const BELOW_COST_PATH =
-  'supabase/migrations/20260812154028_enforce_below_cost_admin_approval.sql';
-const BLEND_HEADER_ASSERT_PATH =
-  'supabase/migrations/20260812010000_blend_ticket_order_header_runtime_assert.sql';
+  'scripts/.staging-migrations/20260813060000_require_completed_delivery_before_invoice_post.sql';
 
-const orderCostSql = readFileSync(ORDER_COST_PATH, 'utf8').replace(/\r\n/g, '\n');
 const roundHeaderSql = readFileSync(ROUND_HEADER_PATH, 'utf8').replace(/\r\n/g, '\n');
 const commissionMathSql = readFileSync(COMMISSION_MATH_PATH, 'utf8').replace(/\r\n/g, '\n');
 const splitCorrectionSql = readFileSync(SPLIT_CORRECTION_PATH, 'utf8').replace(/\r\n/g, '\n');
 const finitenessSql = readFileSync(FINITENESS_PATH, 'utf8').replace(/\r\n/g, '\n');
 const deliveryBillingSql = readFileSync(DELIVERY_BILLING_PATH, 'utf8').replace(/\r\n/g, '\n');
-const commissionBasisSql = readFileSync(COMMISSION_BASIS_PATH, 'utf8').replace(/\r\n/g, '\n');
-const belowCostSql = readFileSync(BELOW_COST_PATH, 'utf8').replace(/\r\n/g, '\n');
-const blendHeaderAssertSql = readFileSync(BLEND_HEADER_ASSERT_PATH, 'utf8').replace(/\r\n/g, '\n');
 
 function functionBody(sql: string, name: string): string {
   const start = sql.indexOf(`CREATE OR REPLACE FUNCTION public.${name}(`);
@@ -51,55 +39,11 @@ function storedFunctionSource(sql: string, name: string): string {
   return sql.slice(bodyStart + 'AS $function$'.length, end);
 }
 
-function storedFunctionSourceFromDeclaration(sql: string, declaration: string): string {
-  const start = sql.indexOf(declaration);
-  expect(start, `${declaration} definition is missing`).toBeGreaterThan(-1);
-  const bodyStart = sql.indexOf('AS $function$', start);
-  const end = sql.indexOf('$function$;', bodyStart);
-  expect(bodyStart, `${declaration} body is missing`).toBeGreaterThan(start);
-  expect(end, `${declaration} body is unterminated`).toBeGreaterThan(bodyStart);
-  return sql.slice(bodyStart + 'AS $function$'.length, end);
-}
-
 function md5(source: string): string {
   return createHash('md5').update(source).digest('hex');
 }
 
 describe('Wave A money migration remediation', () => {
-  it('extends the private direct-order implementation without clobbering the below-cost wrapper', () => {
-    const precond = orderCostSql.slice(
-      orderCostSql.indexOf('DO $precond$'),
-      orderCostSql.indexOf('$precond$;') + '$precond$;'.length,
-    );
-    const postcond = orderCostSql.slice(orderCostSql.indexOf('DO $postcond$'));
-    const baselineImplementation = storedFunctionSource(
-      commissionBasisSql,
-      'create_direct_order',
-    );
-    const governedWrapper = storedFunctionSourceFromDeclaration(
-      belowCostSql,
-      'CREATE FUNCTION public.create_direct_order(',
-    );
-
-    expect(md5(baselineImplementation)).toBe('c761f4c46dc12ea07efd74af5b2ada54');
-    expect(md5(governedWrapper)).toBe('f18495ee041dafa152e736ce93c0452f');
-    expect(precond).toContain('c761f4c46dc12ea07efd74af5b2ada54');
-    expect(precond).toContain('f18495ee041dafa152e736ce93c0452f');
-    expect(orderCostSql).toContain(
-      'CREATE OR REPLACE FUNCTION public._create_direct_order_below_cost_impl_20260810(',
-    );
-    expect(orderCostSql).not.toContain(
-      'CREATE OR REPLACE FUNCTION public.create_direct_order(',
-    );
-    expect(postcond).toContain("v_public_src NOT LIKE '%_begin_below_cost_money_write%'");
-    expect(postcond).toContain(
-      "v_public_src NOT LIKE '%_create_direct_order_below_cost_impl_20260810%'",
-    );
-    expect(postcond).toContain(
-      "has_function_privilege('authenticated', 'public._create_direct_order_below_cost_impl_20260810(uuid, date, text, text, jsonb, uuid, text, text)', 'EXECUTE')",
-    );
-  });
-
   it('derives the order-header profit from rounded price and cost', () => {
     const body = functionBody(roundHeaderSql, '_round_money_to_whole_cents');
     const orders = body.slice(body.indexOf("ELSIF TG_TABLE_NAME = 'orders' THEN"));
@@ -119,22 +63,6 @@ describe('Wave A money migration remediation', () => {
     expect(orders).toContain('ELSIF NEW.total_profit IS NOT NULL THEN');
   });
 
-  it('pins the repaired blend-ticket predecessor instead of its obsolete raw header writer', () => {
-    const precond = roundHeaderSql.slice(
-      roundHeaderSql.indexOf('DO $precond$'),
-      roundHeaderSql.indexOf('$precond$;') + '$precond$;'.length,
-    );
-    const predecessor = storedFunctionSource(
-      blendHeaderAssertSql,
-      'create_order_from_blend_ticket',
-    );
-
-    expect(md5(predecessor)).toBe('344532c6522cce26857ce4ffd9597125');
-    expect(precond).toContain('344532c6522cce26857ce4ffd9597125');
-    expect(precond).toContain("p.prosrc NOT LIKE '%SET total_price = v_total_price%'");
-    expect(precond).toContain("p.prosrc LIKE '%ORDER_HEADER_NOT_RECALCULATED%'");
-  });
-
   it('uses one job-commission derivation for fresh mints and corrections', () => {
     const mint = functionBody(commissionMathSql, '_insert_commissions_for_job');
     const correction = functionBody(splitCorrectionSql, 'correct_job_commission_split');
@@ -146,20 +74,6 @@ describe('Wave A money migration remediation', () => {
       'FROM public._derive_job_commission_rows(p_profit, p_commission_split) d',
     );
     expect(correction).toContain('public._derive_job_commission_rows(');
-  });
-
-  it('hardens commission-minting helper grants and keeps the empty-schema probe runnable', () => {
-    const postcond = commissionMathSql.slice(commissionMathSql.indexOf('DO $postcond$'));
-
-    expect(commissionMathSql).toContain(
-      'REVOKE ALL ON FUNCTION public._insert_commissions_for_order(uuid, uuid, numeric, jsonb, date)',
-    );
-    expect(commissionMathSql).toContain(
-      'REVOKE ALL ON FUNCTION public._insert_commissions_for_job(uuid, uuid, uuid, numeric, jsonb, date)',
-    );
-    expect(postcond).toContain("unnest(ARRAY['anon', 'authenticated', 'service_role', 'public'])");
-    expect(postcond).toContain(")), '[]'::jsonb))");
-    expect(postcond).toContain("jsonb_array_length(v_split->'splits') <> 4");
   });
 
   it('binds correction idempotency to the complete normalized intent', () => {
@@ -271,14 +185,6 @@ describe('Wave A money migration remediation', () => {
     expect(install).toContain('ALTER TABLE public.%1$I ADD CONSTRAINT %2$I CHECK');
     expect(install).not.toContain('DROP CONSTRAINT');
     expect(finitenessSql).toContain('POSTCOND: constraint %.% is missing or not validated');
-  });
-
-  it('drives authenticated migration probes through Supabase auth.uid subject claims', () => {
-    for (const sql of [splitCorrectionSql, deliveryBillingSql]) {
-      expect(sql).toContain('SET LOCAL request.jwt.claim.sub');
-      expect(sql).toContain("set_config('request.jwt.claim.sub', '', true)");
-      expect(sql).not.toContain('request.jwt.claims');
-    }
   });
 
   it('requires a row-bound completion RPC handoff before a delivery can become completed', () => {

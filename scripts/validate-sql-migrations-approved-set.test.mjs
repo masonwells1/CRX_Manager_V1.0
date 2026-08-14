@@ -641,11 +641,6 @@ const IN_FORCE = 29990101;
 // A stamp before the cutoff: history, never retro-checked.
 const PRE_CUTOFF = '20260101000001_pre_cutoff.sql';
 const EXACT_LIVE_APPLIED = '20260810235207_reconcile_pending_commission_snapshots.sql';
-const EXACT_REVIEWED_ROLLBACK_PROBES = [
-  '20260813020000_round_order_header_money.sql',
-  '20260813050000_guard_job_commission_split_immutable.sql',
-  '20260813060000_require_completed_delivery_before_invoice_post.sql',
-];
 
 function classify(output, fileName) {
   const lines = output.split(/\r?\n/);
@@ -684,10 +679,6 @@ function run() {
   writeFileSync(join(migrations, PRE_CUTOFF), `UPDATE public.orders SET total_profit = 0;\n`, 'utf8');
   const exactLiveSql = readFileSync(join(ROOT, 'supabase', 'migrations', EXACT_LIVE_APPLIED), 'utf8');
   writeFileSync(join(migrations, EXACT_LIVE_APPLIED), exactLiveSql, 'utf8');
-  for (const name of EXACT_REVIEWED_ROLLBACK_PROBES) {
-    const sql = readFileSync(join(ROOT, 'supabase', 'migrations', name), 'utf8');
-    writeFileSync(join(migrations, name), sql, 'utf8');
-  }
 
   const res = spawnSync(BASH, [SCRIPT, '--max-violations=999'], {
     cwd: dir,
@@ -709,26 +700,13 @@ function run() {
   if (exactLiveGot !== 'silent') {
     failures.push(`  exact live-applied source is immutable history\n    expected silent, got ${exactLiveGot}`);
   }
-  for (const name of EXACT_REVIEWED_ROLLBACK_PROBES) {
-    const got = classify(out, name);
-    if (got !== 'warning') {
-      failures.push(`  exact reviewed rollback probe ${name}\n    expected warning, got ${got}`);
-    }
-  }
-
   // The exemption is an exact-byte proof, not a filename allowlist. A single
   // appended comment must break the live hash and reactivate the normal guard.
   // That second invocation needs only the mutated live file; rescanning every
   // synthetic case again adds minutes without testing another condition.
   for (const name of names) rmSync(join(migrations, name), { force: true });
   rmSync(join(migrations, PRE_CUTOFF), { force: true });
-  for (const name of EXACT_REVIEWED_ROLLBACK_PROBES) rmSync(join(migrations, name), { force: true });
   writeFileSync(join(migrations, EXACT_LIVE_APPLIED), `${exactLiveSql}\n-- mutation\n`, 'utf8');
-  const reviewedName = EXACT_REVIEWED_ROLLBACK_PROBES[0];
-  const reviewedSql = readFileSync(join(ROOT, 'supabase', 'migrations', reviewedName), 'utf8');
-  writeFileSync(join(migrations, reviewedName), `${reviewedSql}\n-- mutation\n`, 'utf8');
-  const renamedProbe = '29991231235959_renamed_reviewed_rollback_probe.sql';
-  writeFileSync(join(migrations, renamedProbe), reviewedSql, 'utf8');
   const mutated = spawnSync(BASH, [SCRIPT, '--max-violations=999'], {
     cwd: dir,
     encoding: 'utf8',
@@ -738,14 +716,6 @@ function run() {
   const mutatedGot = classify(mutatedOut, EXACT_LIVE_APPLIED);
   if (mutatedGot !== 'violation') {
     failures.push(`  mutated live-applied source loses exact-hash exemption\n    expected violation, got ${mutatedGot}`);
-  }
-  const mutatedProbeGot = classify(mutatedOut, reviewedName);
-  if (mutatedProbeGot !== 'violation') {
-    failures.push(`  mutated reviewed rollback probe loses exact-artifact approval\n    expected violation, got ${mutatedProbeGot}`);
-  }
-  const renamedProbeGot = classify(mutatedOut, renamedProbe);
-  if (renamedProbeGot !== 'violation') {
-    failures.push(`  renamed reviewed rollback probe loses filename-bound approval\n    expected violation, got ${renamedProbeGot}`);
   }
 
   // Git Bash can release its Windows cwd handle a fraction after spawnSync
@@ -761,7 +731,7 @@ function run() {
     process.exit(1);
   }
   console.log(
-    `✅ approved-set guard: ${CASES.length + EXACT_REVIEWED_ROLLBACK_PROBES.length + 5} mutation cases behaved correctly`,
+    `✅ approved-set guard: ${CASES.length + 3} mutation cases behaved correctly`,
   );
 }
 
