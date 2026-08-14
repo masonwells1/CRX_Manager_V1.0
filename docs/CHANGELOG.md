@@ -776,6 +776,61 @@ authors toward the waiver for no safety gained.
 Three fixtures added: a DELETE hashing ids only (the bypass), a DELETE from a
 table with no material state (refused), and a correctly bound DELETE (passes).
 Mutating the substitution away turns the first two green, which is the point.
+## 2026-08-12 — Wave A round 5: four migrations self-aborted, all for the same reason
+
+The 2026-08-12 Wave A apply attempt refused four of the six Wave A migrations. That rejected
+attempt wrote nothing to the live database, and this change applies none of those migrations either
+— these are file fixes only. (This statement is about the Wave A attempt alone; it does not cover
+the six unrelated migrations applied live on 2026-08-12 from another session, described at the end
+of this entry.)
+
+All four failures were one defect wearing four costumes: **an assertion broader than its own
+remedy**. A migration that asserts a state it never enforces is a migration that aborts itself on
+first apply. Each file is now scoped to what it actually does.
+
+`20260813010000` — the rewrite is retargeted off `public.create_direct_order` and onto
+`_create_direct_order_below_cost_impl_20260810`. Rewriting the wrapper would have silently deleted
+the below-cost approval gate a concurrent session installed there. Both the pre- and postcondition
+now assert that the wrapper still declares below-cost operation context, so if that gate is ever
+removed this retarget stops rather than proceeding into a shape it no longer fits. The file also now
+emits the `REVOKE` its postcondition asserts: `CREATE OR REPLACE` preserves the existing ACL, so
+asserting an owner-only grant state without revoking anything was an assertion with nothing behind
+it. Finally the file is deliberately single-shot: only the pinned pre-apply baseline may proceed. A
+draft that also accepted "any body carrying this migration's marker variables" as a replay was
+withdrawn after adversarial review — a later security or money fix to the same function would keep
+those markers too, so the structural test would have accepted the newer body and this file would
+have overwritten it with its own older text, silently, in a `SECURITY DEFINER` money writer. Pinning
+the post-apply hash instead is not honestly available: obtaining it requires applying. A re-run now
+aborts and names what to diff, which costs one human comparison; the alternative cost a reverted
+money fix nobody would have seen.
+
+`20260813020000` — the `create_order_from_blend_ticket` precondition is removed rather than
+corrected. It was vacuous in both directions: the concurrent fix to that function no longer updates
+order headers at all, and a `prosrc LIKE` was only ever evidence about prose. The remedy here is a
+table-attached `BEFORE INSERT OR UPDATE` trigger, which covers every writer regardless of its name,
+and what proves it works is the behavioural probe already in the postcondition. Two stale claims in
+the file's own prose are corrected in the same pass: the live open writer is `_update_order_items_impl`,
+and `BEFORE INSERT OR UPDATE OF (columns)` fires on *every* insert — the column list restricts the
+update event only, never the insert.
+
+`20260813040000` — same assertion-without-remedy defect, same fix: emit `REVOKE ALL` on
+`_save_invoice_scoped_impl`.
+
+Two test registries move with the retarget. `_create_direct_order_below_cost_impl_20260810` is
+registered in `src/lib/rpcIdempotencyScope.test.ts` as sharing the public `create_direct_order`
+operation literal — the guard flags a mismatch between function name and operation literal, and here
+the mismatch is the correct state. Renaming the literal to match the function is the dangerous
+change: it would strand every idempotency key written under the old literal, so a client retry would
+re-execute and duplicate an order. It is also registered in `MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY`
+in `src/lib/rpcContracts.test.ts`, which becomes inert once the migration applies.
+
+The drift review of this round returned no blockers. Its findings are owner-facing rather than code
+fixes and are recorded in `docs/manual/KNOWN_ISSUES.md`. The first is material and was widened during
+verification: the review reported one applied-but-unpushed migration and named a carrier branch that
+does not exist. Checking the live ledger against every remote branch found **six** migrations applied
+on 2026-08-12 whose files are on no branch and in no worktree. `main` does not currently describe
+production. That is somebody else's session to close, not this wave's, but no one should be planning
+against `main` as if it were accurate until it is.
 ## 2026-08-12 — Restore a governed maintenance path for the live SQL safety boundary
 
 The weekly adversarial review confirmed two active fail-open paths in the live SQL classifier, but

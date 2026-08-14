@@ -36,6 +36,7 @@ import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { useToast } from '../components/ui/Toast';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useAuth } from '../contexts/AuthContext';
+import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import {
@@ -48,6 +49,7 @@ import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { formatUSD, formatCents } from '../lib/money';
+import { isBelowCostApprovalHandledError, withBelowCostReason } from '../lib/belowCostApproval';
 import { catalogPricePerAcre, validateCommissionSplits } from '../lib/quoteCalc';
 import { buildCommissionSplitPatch, nextLoadedSplitSnapshot } from '../lib/commissionSplitConcurrency';
 import {
@@ -220,6 +222,7 @@ export default function QuoteBuilder() {
   const location = useLocation();
   const { toast } = useToast();
   const { profile } = useAuth();
+  const { runWithBelowCostApproval } = useBelowCostApproval();
   const {
     getKey: getSaveQuoteIdempotencyKey,
     resetKey: resetSaveQuoteIdempotencyKey,
@@ -1475,13 +1478,13 @@ export default function QuoteBuilder() {
 
     try {
       const idemKey = getSaveQuoteIdempotencyKey();
-      const { data, error } = await supabase.rpc('save_quote', {
+      const { data, error } = await runWithBelowCostApproval((reason) => supabase.rpc('save_quote', withBelowCostReason('save_quote', {
         p_quote_id: ((quoteId && isEditing) ? quoteId : null) as string,
         p_quote_payload: quotePayload as Json,
         p_sections: sectionsPayload,
         p_performed_by: profile.id,
         p_idempotency_key: idemKey,
-      });
+      }, reason)));
 
       if (error) {
         if (hasRpcCode(error, RpcErrorCodes.QUOTE_STALE_WRITE)
@@ -1522,6 +1525,7 @@ export default function QuoteBuilder() {
       }
       return savedQuoteId;
     } catch (err: unknown) {
+      if (isBelowCostApprovalHandledError(err)) return null;
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'save_quote' } });
       toast('error', err instanceof Error ? err.message : 'Failed to save quote');
       return null;
@@ -2219,13 +2223,22 @@ export default function QuoteBuilder() {
       return;
     }
     const restoreAttempt = getRestoreVersionAttempt(versionId);
-    const { data, error } = await restoreQuoteVersionWithRowVersion({
-      p_quote_id: quoteId,
-      p_version_id: versionId,
-      p_performed_by: profile.id,
-      p_idempotency_key: restoreAttempt.key,
-      p_expected_row_version: restoreAttempt.expectedRowVersion,
-    });
+    let restoreResponse;
+    try {
+      restoreResponse = await runWithBelowCostApproval((reason) => restoreQuoteVersionWithRowVersion(
+        withBelowCostReason('restore_quote_version', {
+          p_quote_id: quoteId,
+          p_version_id: versionId,
+          p_performed_by: profile.id,
+          p_idempotency_key: restoreAttempt.key,
+          p_expected_row_version: restoreAttempt.expectedRowVersion,
+        }, reason),
+      ));
+    } catch (error: unknown) {
+      if (isBelowCostApprovalHandledError(error)) return;
+      throw error;
+    }
+    const { data, error } = restoreResponse;
     if (error) {
       // Drawn-version guard (Codex r2 MED): the server blocks restoring a
       // snapshot that would drop a drawn product or fall below its drawn
@@ -2385,12 +2398,12 @@ export default function QuoteBuilder() {
     }
     setDrawing(true);
     try {
-      const { data, error } = await supabase.rpc('draw_down_quote', {
+      const { data, error } = await runWithBelowCostApproval((reason) => supabaseUntyped.rpc('draw_down_quote', withBelowCostReason('draw_down_quote', {
         p_quote_id: id,
         p_draws: draws.map((d) => ({ product_id: d.product_id, quantity: d.quantity })),
         p_performed_by: profile!.id,
         p_idempotency_key: drawDownIdem.getKey(),
-      });
+      }, reason)));
       if (error) throw error;
       drawDownIdem.resetKey();
       const result = assertRpcResult<{ status: string; order_id?: string; order_number?: string; warnings?: string[]; fully_drawn?: boolean }>(data, 'draw_down_quote');
@@ -2407,6 +2420,10 @@ export default function QuoteBuilder() {
       setShowDrawModal(false);
       navigate(`/orders/${result.order_id}`);
     } catch (error: unknown) {
+      if (isBelowCostApprovalHandledError(error)) {
+        setDrawing(false);
+        return;
+      }
       Sentry.captureException(error, { tags: { source: 'critical_action', action: 'draw_down_quote' } });
       const errObj = error as Record<string, unknown> | null;
       const errMsg = (error instanceof Error ? error.message : null)
@@ -2530,12 +2547,14 @@ export default function QuoteBuilder() {
       // Atomic RPC: order creation + items + inventory prebooking + commissions
       const idemKey = convertQuoteIdem.getKey();
       const expectedRowVersion = quoteRowVersionRef.current;
-      const { data, error } = await convertQuoteToOrderWithRowVersion({
-        p_quote_id: savedId,
-        p_performed_by: profile!.id,
-        p_idempotency_key: idemKey,
-        p_expected_row_version: expectedRowVersion,
-      });
+      const { data, error } = await runWithBelowCostApproval((reason) => convertQuoteToOrderWithRowVersion(
+        withBelowCostReason('convert_quote_to_order', {
+          p_quote_id: savedId,
+          p_performed_by: profile!.id,
+          p_idempotency_key: idemKey,
+          p_expected_row_version: expectedRowVersion,
+        }, reason),
+      ));
 
       if (error) throw error;
 
@@ -2595,6 +2614,10 @@ export default function QuoteBuilder() {
       setIsDirty(false);
       navigate(`/orders/${result.order_id}`);
     } catch (error: unknown) {
+      if (isBelowCostApprovalHandledError(error)) {
+        setConverting(false);
+        return;
+      }
       Sentry.captureException(error, { tags: { source: 'critical_action', action: 'convert_quote_to_order' } });
 
       if (hasRpcCode(error, RpcErrorCodes.QUOTE_STALE_WRITE)
