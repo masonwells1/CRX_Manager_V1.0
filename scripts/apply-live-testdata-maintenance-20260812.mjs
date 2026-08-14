@@ -2,7 +2,7 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,7 +40,7 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "714f593d004418dbcc86b8517a393f0d616d2fd3",
+  codexGuard: "d4e7da9631efaaf17fef09c3d93e7ba2a1b862a7",
   pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
 };
 
@@ -170,6 +170,31 @@ export function maintenanceProducerCommandMentioned(command) {
     return list.slice(segmentStart, index).every((entry) => /^[A-Za-z_]\w*=/.test(entry.value));
   };
   if (dynamicSyntax && tokens.some(opaqueExecutablePosition)) return true;
+  const opaqueInlineInterpreterInvocation = (token, index, list) => {
+    if (!invocationPosition(list, index)) return false;
+    const python = ["python", "python2", "python3", "py"].some((name) => executableNamed(token, name, true));
+    const nodeLike = ["node", "nodejs", "bun"].some((name) => executableNamed(token, name, true));
+    const shortEval = ["perl", "ruby"].some((name) => executableNamed(token, name, true));
+    const php = executableNamed(token, "php", true);
+    const deno = executableNamed(token, "deno", true);
+    if (!(python || nodeLike || shortEval || php || deno)) return false;
+    for (let cursor = index + 1; cursor < list.length && !list[cursor].control; cursor += 1) {
+      const argument = normalizeShellToken(list[cursor].value);
+      if (python && argument === "-c") return true;
+      if (nodeLike && /^(?:-e|--eval|-p|--print)(?:=|$)/i.test(argument)) return true;
+      if (shortEval && /^-[eE](?:$|.)/.test(argument)) return true;
+      if (php && /^-r(?:$|.)/i.test(argument)) return true;
+      if (deno && /^eval$/i.test(argument)) return true;
+      if (argument === "--") return false;
+      if (python && /^(?:-W|-X)$/.test(argument)) {
+        cursor += 1;
+        continue;
+      }
+      if (!argument.startsWith("-")) return false;
+    }
+    return false;
+  };
+  if (tokens.some(opaqueInlineInterpreterInvocation)) return true;
   const powerShellValueOption = (argument) => /^(?:--?|\/)(?:configuration(?:name|file)|config|cus(?:t(?:o(?:m(?:p(?:i(?:p(?:e(?:n(?:a(?:m(?:e)?)?)?)?)?)?)?)?)?)?)?|settings(?:f(?:i(?:l(?:e)?)?)?)?|executionpolicy|ex|ep|inputformat|inp|input|if|outputformat|o|of|out|windowstyle|w|workingdirectory|wd)(?::|=)?/i.test(argument);
   const commandStringContainsEncodedPowerShell = (text) => {
     const cmdTokens = tokenize(text);
@@ -528,7 +553,10 @@ function main() {
   }
   if (retireProducer) {
     rmSync(PRODUCER_PATH);
-    process.stdout.write(`Retired reviewed one-use maintenance producer (${PRODUCER}).\n`);
+    if (existsSync(PRODUCER_PATH)) {
+      throw new Error(`failed to remove the maintenance producer: ${PRODUCER}`);
+    }
+    process.stdout.write(`Removed reviewed one-use maintenance producer (${PRODUCER}) from the worktree. Commit this deletion to complete retirement.\n`);
     return;
   }
   const currentBlob = gitBlob(readNormalized(TARGET));

@@ -105,6 +105,7 @@ const producerInvocations = [
   "node </dev/null --no-warnings scripts/$(printf YXBwbHktbGl2ZS10ZXN0ZGF0YS1tYWludGVuYW5jZS0yMDI2MDgxMi5tanM= | base64 -d) --approved-by-$(printf bWFzb24= | base64 -d)=2026-08-12",
   "node --no-warnings \\\nscripts/$(printf YXBwbHktbGl2ZS10ZXN0ZGF0YS1tYWludGVuYW5jZS0yMDI2MDgxMi5tanM= | base64 -d) --approved-by-$(printf bWFzb24= | base64 -d)=2026-08-12",
   "node --require ./preload.cjs scripts/apply-l{i..i}ve-testdata-maintenance-20260{8..8}12.mjs --approved-by-ma{s..s}on=2026-08-12",
+  'python -c "import base64; exec(base64.b64decode(PAYLOAD))"',
   "node (\"--req\"+\"uire\") ./preload.cjs (\"scripts/apply-\"+\"live-testdata-maintenance-20260812.mjs\") (\"--approved-by-\"+\"mason=2026-08-12\")",
   'cmd /v:on /c "set a=--requ&set b=ire&set c=scripts/apply-live-testdata-maintenance-20260812.mjs&node !a!!b! ./preload.cjs !c! --approved-by-mason=2026-08-12"',
   'F=$(decode); P=$(decode); S=$(decode); T=$(decode); command node --no-warnings "$F" "$P" "$S" "$T"',
@@ -219,6 +220,7 @@ assert.equal(
 );
 const wrappedDynamicProducer = 'F=$(decode); P=$(decode); S=$(decode); T=$(decode); command node --no-warnings "$F" "$P" "$S" "$T"';
 const wrappedDynamicProducers = [
+  'python -c "import base64; exec(base64.b64decode(PAYLOAD))"',
   "Start-Process pwsh -ArgumentList '-" + "Encoded" + "Command','ZW5jb2RlZA==' -Wait",
   "Write-Output payload | xargs pwsh --" + "Encoded" + "Command ZW5jb2RlZA==",
   'Write-Output payload | pwsh -Command -',
@@ -334,6 +336,8 @@ for (const command of powerShellLookupCommands) {
 }
 const nestedShellAsData = "Write-Output bash -c 'pwsh /EncodedCommand text'";
 assert.equal(maintenanceProducerCommandMentioned(nestedShellAsData), false, "nested shell spelling after a non-wrapper command is not classified as an invocation");
+const inlineInterpreterAsData = "rg -n 'python -c' docs";
+assert.equal(maintenanceProducerCommandMentioned(inlineInterpreterAsData), false, "inline interpreter spelling used as quoted search data is not classified as an invocation");
 const terminalWrapperCommands = ["env --help pwsh /EncodedCommand", "timeout --help pwsh /EncodedCommand"];
 for (const command of terminalWrapperCommands) {
   assert.equal(maintenanceProducerCommandMentioned(command), false, `terminal wrapper mode is not classified as execution: ${command}`);
@@ -354,6 +358,7 @@ for (const command of [
   "node scripts\\apply-live-testdata-maintenance-20260812.mjs --verify",
   "cmd /c node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
   "env FLAG=1 node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
+  'python -c "import base64; exec(base64.b64decode(PAYLOAD))"',
   wrappedDynamicProducer,
   "[IO.File]::WriteAllText('scripts/apply-live-testdata-maintenance-20260812.mjs','owned'); node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
 ]) {
@@ -383,6 +388,7 @@ for (const command of powerShellLookupCommands) {
   assert.equal(generatedMatcherModule.maintenanceProducerCommandMentioned(command), false, `generated guard preserves PowerShell lookup negative: ${command}`);
 }
 assert.equal(generatedMatcherModule.maintenanceProducerCommandMentioned(nestedShellAsData), false, "generated guard preserves nested-shell data negative");
+assert.equal(generatedMatcherModule.maintenanceProducerCommandMentioned(inlineInterpreterAsData), false, "generated guard preserves inline-interpreter quoted-data negative");
 for (const command of terminalWrapperCommands) {
   assert.equal(generatedMatcherModule.maintenanceProducerCommandMentioned(command), false, `generated guard preserves terminal-wrapper negative: ${command}`);
 }

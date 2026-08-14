@@ -147,6 +147,31 @@ export function maintenanceProducerCommandMentioned(command) {
     return list.slice(segmentStart, index).every((entry) => /^[A-Za-z_]\w*=/.test(entry.value));
   };
   if (dynamicSyntax && tokens.some(opaqueExecutablePosition)) return true;
+  const opaqueInlineInterpreterInvocation = (token, index, list) => {
+    if (!invocationPosition(list, index)) return false;
+    const python = ["python", "python2", "python3", "py"].some((name) => executableNamed(token, name, true));
+    const nodeLike = ["node", "nodejs", "bun"].some((name) => executableNamed(token, name, true));
+    const shortEval = ["perl", "ruby"].some((name) => executableNamed(token, name, true));
+    const php = executableNamed(token, "php", true);
+    const deno = executableNamed(token, "deno", true);
+    if (!(python || nodeLike || shortEval || php || deno)) return false;
+    for (let cursor = index + 1; cursor < list.length && !list[cursor].control; cursor += 1) {
+      const argument = normalizeShellToken(list[cursor].value);
+      if (python && argument === "-c") return true;
+      if (nodeLike && /^(?:-e|--eval|-p|--print)(?:=|$)/i.test(argument)) return true;
+      if (shortEval && /^-[eE](?:$|.)/.test(argument)) return true;
+      if (php && /^-r(?:$|.)/i.test(argument)) return true;
+      if (deno && /^eval$/i.test(argument)) return true;
+      if (argument === "--") return false;
+      if (python && /^(?:-W|-X)$/.test(argument)) {
+        cursor += 1;
+        continue;
+      }
+      if (!argument.startsWith("-")) return false;
+    }
+    return false;
+  };
+  if (tokens.some(opaqueInlineInterpreterInvocation)) return true;
   const powerShellValueOption = (argument) => /^(?:--?|\/)(?:configuration(?:name|file)|config|cus(?:t(?:o(?:m(?:p(?:i(?:p(?:e(?:n(?:a(?:m(?:e)?)?)?)?)?)?)?)?)?)?)?|settings(?:f(?:i(?:l(?:e)?)?)?)?|executionpolicy|ex|ep|inputformat|inp|input|if|outputformat|o|of|out|windowstyle|w|workingdirectory|wd)(?::|=)?/i.test(argument);
   const commandStringContainsEncodedPowerShell = (text) => {
     const cmdTokens = tokenize(text);
@@ -297,7 +322,7 @@ export function checkMaintenanceProducerInvocation(command) {
 // original bash-safety.mjs inline table (2026-07 extraction), plus one addition
 // marked below.
 export const DANGEROUS_CMD_CHECKS = [
-  [/\bNODE_OPTIONS\s*=|\bnode(?:\.exe)?\b[^\r\n;&|]*(?:--require(?:=|\s)|(?:^|\s)-r(?:\s|\S)|--import(?:=|\s)|--(?:experimental-)?loader(?:=|\s))/i, "Blocked Node pre-execution loading. NODE_OPTIONS, require/import, and loader hooks can run code before a reviewed script's own safety checks."],
+  [/(?:^|[\r\n;&|])\s*(?:(?:export|set|setx)\s+|env(?:\s+(?:-\S+|[A-Za-z_]\w*=\S+))*\s+)?(?:[A-Za-z_]\w*=\S+\s+)*NODE_OPTIONS\s*=|\bnode(?:\.exe)?\b[^\r\n;&|]*(?:--require(?:=|\s)|(?:^|\s)-r(?:\s|\S)|--import(?:=|\s)|--(?:experimental-)?loader(?:=|\s))/i, "Blocked Node pre-execution loading. NODE_OPTIONS, require/import, and loader hooks can run code before a reviewed script's own safety checks."],
   [/\bgit\b[^\r\n;&|]*\bpush\b[^\r\n;&|]*(?:--force(?:-with-lease)?(?:=\S+)?\b|--force-if-includes\b|(?:^|\s)-[A-Za-z]*f[A-Za-z]*\b|(?:^|\s)\+\S+)/, "Blocked force push. Force pushing any branch requires Mason's explicit approval."],
   // Tolerate intervening git options (`git -C <path> reset --hard`, `git -c x=y clean -fd`)
   // — the adjacent-words-only spellings were bypassable (Codex P1, PR #352).
