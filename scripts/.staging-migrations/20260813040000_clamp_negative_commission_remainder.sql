@@ -381,6 +381,22 @@ BEGIN
 END;
 $function$;
 
+-- CREATE OR REPLACE preserves pre-existing grants, so replacing the body above
+-- does NOT by itself close the grant the POSTCOND below refuses. This project
+-- carries ALTER DEFAULT PRIVILEGES granting EXECUTE on every new public function
+-- to anon/authenticated/service_role. 20260513060000 revoked anon and
+-- 20260513070000 revoked authenticated/PUBLIC, but service_role was never
+-- revoked, so it has held EXECUTE on this helper since creation. Asserting that
+-- grant is absent without ever removing it is what aborted this migration.
+--
+-- Removing service_role costs no capability: every caller of this helper is a
+-- SECURITY DEFINER function owned by postgres, so the inner call already runs
+-- with postgres privileges. What this closes is the direct PostgREST route, in
+-- which a service-key holder POSTs to /rpc/_insert_commissions_for_order and
+-- mints commission rows outside the order flow meant to authorize them.
+REVOKE ALL ON FUNCTION public._insert_commissions_for_order(uuid, uuid, numeric, jsonb, date)
+  FROM PUBLIC, anon, authenticated, service_role;
+
 -- =============================================================================
 -- Shared job-commission derivation.
 --
@@ -546,12 +562,38 @@ BEGIN
 END;
 $function$;
 
+-- Same reasoning as the order helper above: service_role has held EXECUTE on
+-- this job helper since creation via ALTER DEFAULT PRIVILEGES, and the POSTCOND
+-- below refuses that grant without this migration ever removing it. Every caller
+-- is a SECURITY DEFINER function owned by postgres, so no working path loses
+-- access; only the direct PostgREST mint route closes.
+--
+REVOKE ALL ON FUNCTION public._insert_commissions_for_job(uuid, uuid, uuid, numeric, jsonb, date)
+  FROM PUBLIC, anon, authenticated, service_role;
+
 -- =============================================================================
 -- 3 of 3 — public._save_invoice_scoped_impl  [SECURITY DEFINER]
 -- Recomputes an invoice's still-pending commission rows when the invoice is
 -- saved. Only the reconciliation CASE changes; the mixed-generation branch is
 -- preserved exactly.
 -- =============================================================================
+
+-- The POSTCOND below refuses anon/authenticated/PUBLIC/service_role EXECUTE on
+-- this function too, so it needs the same remedy as the two helpers above.
+-- Verified against live while writing this: its ACL is already {postgres=X/
+-- postgres}, owner-only, and the grants live on the public save_invoice wrapper
+-- instead — so this REVOKE changes nothing today and breaks no caller. It is
+-- here so the assertion is backed by an action rather than by an expectation: if
+-- a concurrent session grants EXECUTE before this migration runs, the file now
+-- corrects that instead of aborting on it. An assertion broader than its remedy
+-- is a self-aborting migration, which is exactly what stalled this wave once.
+--
+-- Emitted BEFORE the CREATE OR REPLACE rather than after it, unlike the two
+-- helpers above, purely so the edit stays inside one lexable block. The effect
+-- is identical: CREATE OR REPLACE preserves ACLs, and the PRECOND already
+-- refuses any database where this function does not already exist.
+REVOKE ALL ON FUNCTION public._save_invoice_scoped_impl(jsonb, jsonb, text)
+  FROM PUBLIC, anon, authenticated, service_role;
 CREATE OR REPLACE FUNCTION public._save_invoice_scoped_impl(
   p_invoice jsonb,
   p_items jsonb DEFAULT '[]'::jsonb,
