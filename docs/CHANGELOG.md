@@ -51,7 +51,7 @@ check even with a decoy comment present.
 
 ## 2026-08-14 — PR #364 evidence provenance and fail-closed follow-up
 
-Seventeen adversarial findings in the migration authorization guards are repaired. The applied
+Eighteen adversarial findings in the migration authorization guards are repaired. The applied
 migration snapshot and trigger fan-out manifest now query the verified linked CRX Supabase
 project themselves instead of trusting pasted JSON with a caller-supplied project label. The shared
 capture helper accepts only two named built-in queries; caller-supplied SQL is impossible. The
@@ -77,7 +77,9 @@ routine calls, and unreadable `VALIDATE CONSTRAINT` expressions fail closed. The
 artifact has no independent base trust root, so its captured 389 edges remain review evidence
 while all 157 schema-registry tables are operationally opaque; a later change may narrow that only
 with independent live-capture attestation. The live catalog was read only; no migration or business
-row was changed.
+row was changed. PostgreSQL identifiers containing `$`, including quoted names such as `"$count"`,
+are canonicalized consistently through definition, invocation, trigger, and mutating-function
+matching so a legal routine name cannot split into unrelated tokens and hide its protected write.
 
 ## 2026-08-13 — PR #364 Windows compatibility with the governed maintenance producer
 

@@ -22,7 +22,8 @@ export function changedTriggerInputs(sqlFiles) {
     const name = text.startsWith('"') && text.endsWith('"')
       ? text.slice(1, -1).replaceAll('""', '"')
       : text.toLowerCase();
-    return /^[a-z0-9_]+$/.test(name) ? name : null;
+    const normalized = name.replaceAll('$', '_dollar_');
+    return /^[a-z0-9_]+$/.test(normalized) ? normalized : null;
   };
   for (const file of sqlFiles) {
     const sql = readFileSync(file, 'utf8');

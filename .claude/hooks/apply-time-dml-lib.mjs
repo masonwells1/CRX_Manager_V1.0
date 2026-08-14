@@ -56,7 +56,9 @@ const IDENT_CHAR = /[A-Za-z0-9_$\u0080-\uFFFF]/;
 const QUOTED_IDENT_PREFIX = "_crxq_";
 
 function canonicalQuotedIdentifier(value) {
-  const canonical = String(value || "").replace(/[^A-Za-z0-9_$\u0080-\uFFFF]/g, "_");
+  const canonical = String(value || "")
+    .replace(/\$/g, "_dollar_")
+    .replace(/[^A-Za-z0-9_\u0080-\uFFFF]/g, "_");
   // Keep the token visibly quoted until its syntactic role is known. Without
   // this tag a legal name such as public."on" is flattened to the keyword ON:
   // relation readers then discard the write, and trigger readers can mistake a
@@ -163,6 +165,13 @@ export function applyTimeCode(sql, depth = 0) {
         i = close === -1 ? n : close + tag.length;
         continue;
       }
+      // Outside a dollar-quote delimiter this is an identifier character.
+      // Canonicalize it before later definition/call regexes so foo$bar and a
+      // quoted "$count" keep the same identity at both sites instead of being
+      // truncated at `$`. Collisions only union extra bodies and fail closed.
+      code += "_dollar_";
+      i += 1;
+      continue;
     }
 
     // 'string literal' — kept aside; `''` escapes an embedded quote.

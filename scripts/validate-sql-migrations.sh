@@ -543,7 +543,7 @@ AWK_STRIP_NOISE=$(cat <<'AWK_SN'
               out = out "_"; i += 2; continue
             }
             if (c == "\"") { inident = 0; i++; continue }
-            out = out (c ~ /[a-z0-9_$]/ ? c : "_")
+            out = out (c == "$" ? "_dollar_" : (c ~ /[a-z0-9_]/ ? c : "_"))
             i++; continue
           }
           if (d == "/*") { inblk++; i += 2; out = out " "; continue }
@@ -555,6 +555,17 @@ AWK_STRIP_NOISE=$(cat <<'AWK_SN'
             instr = 1; out = out " "; i++; continue
           }
           if (c == "\"") { inident = 1; i++; continue }
+          if (c == "$") {
+            # Preserve dollar-quote delimiters for the routine-body extent
+            # tracker, but canonicalize every other dollar sign as part of an
+            # identifier. This keeps unquoted foo$bar paired with its call while
+            # leaving $body$ ... $body$ parseable.
+            tail = substr(s, i)
+            if (match(tail, /^\$[a-z0-9_]*\$/)) {
+              out = out substr(tail, 1, RLENGTH); i += RLENGTH; continue
+            }
+            out = out "_dollar_"; i++; continue
+          }
           out = out c; i++
         }
         return out
@@ -589,7 +600,7 @@ build_mutating_fn_index() {
             if (l !~ /create[ \t]+(or[ \t]+replace[ \t]+)?function[ \t]/) next
             f = l
             sub(/^.*create[ \t]+(or[ \t]+replace[ \t]+)?function[ \t]+/, "", f)
-            sub(/[^a-z0-9_.].*$/, "", f)
+            sub(/[^a-z0-9_.$].*$/, "", f)
             sub(/^public\./, "", f)
             if (f == "") next
             curfn = f; infn = 1; tag = ""
@@ -631,9 +642,9 @@ build_mutating_fn_index() {
             ne = split(e, part, /\(/)
             for (pi = 1; pi < ne; pi++) {
               nm = part[pi]
-              sub(/^.*[^a-z0-9_.]/, "", nm)
+              sub(/^.*[^a-z0-9_.$]/, "", nm)
               sub(/^.*\./, "", nm)
-              if (nm ~ /^[a-z_][a-z0-9_]*$/ && nm != f) print "C\t" f "\t" nm
+              if (nm ~ /^[a-z_][a-z0-9_$]*$/ && nm != f) print "C\t" f "\t" nm
             }
             if (b ~ ("(^|[^a-z0-9_])(update|merge[ \t]+into|delete[ \t]+from|insert[ \t]+into|truncate([ \t]+table)?)[ \t]+(only[ \t]+)?(public\\.)?(" tables ")([^a-z0-9_]|$)")) {
               print "M\t" f
@@ -1343,7 +1354,7 @@ $MIG_BASENAME
         gsub(/;/, " ; ", line)
         gsub(/,/, " , ", line)
         gsub(/=/, " = ", line)
-        gsub(/[^a-z0-9_.;,=]+/, " ", line)
+        gsub(/[^a-z0-9_.$;,=]+/, " ", line)
         n = split(line, t, / +/)
         for (i = 1; i <= n; i++) {
           if (t[i] != "") { ntok++; tok[ntok] = t[i]; tokln[ntok] = FNR }

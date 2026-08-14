@@ -813,6 +813,27 @@ const CASES = [
       `DEFAULT public.alter_default_repair_r35();\n`,
   },
   {
+    // ROUND 36 (Sol High). PostgreSQL permits `$` in identifiers. The quoted
+    // form previously became an empty function identity in the mutating index
+    // and an unrelated `count` token at the call site.
+    name: 'round-36: quoted dollar routine identity cannot hide a protected rewrite',
+    expect: 'violation',
+    mustReport: '_dollar_count',
+    sql:
+      `CREATE FUNCTION public."$count"() RETURNS void LANGUAGE plpgsql AS $body$\n` +
+      `BEGIN\n  UPDATE public.order_items SET total_price = total_price;\nEND\n$body$;\n` +
+      `SELECT public."$count"();\nDROP FUNCTION public."$count"();\n`,
+  },
+  {
+    name: 'round-36: unquoted embedded dollar routine identity is preserved too',
+    expect: 'violation',
+    mustReport: 'repair_dollar_orders',
+    sql:
+      `CREATE FUNCTION public.repair$orders() RETURNS void LANGUAGE plpgsql AS $$\n` +
+      `BEGIN\n  UPDATE public.orders SET total_profit = total_profit;\nEND\n$$;\n` +
+      `SELECT public.repair$orders();\n`,
+  },
+  {
     // ROUND 27 (Codex High). The allowlist above was the bypass one more time.
     // `pg_temp` is on it because a temp table is scratch — but a temp VIEW is
     // not scratch, it is a writable alias for permanent rows. A single-table

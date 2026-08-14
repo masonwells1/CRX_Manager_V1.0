@@ -33,7 +33,7 @@ reintroduce a `read_only=true` assertion without a fresh owner decision.
 
 ## 2026-08-14 — Guard evidence must establish its own production provenance
 
-**Source:** final adversarial follow-up on PR #364 (seventeen findings).
+**Source:** final adversarial follow-up on PR #364 (eighteen findings).
 
 **Decision.** An evidence producer may not label caller-supplied JSON as production evidence.
 The applied-migration snapshot and trigger fan-out manifest now run fixed read-only queries
@@ -64,6 +64,8 @@ as executable, not schema-only. Because this is the first checked-in trigger fan
 there is no independently trusted base graph, every schema-registry table remains opaque even
 though the linked capture records its reviewable edges. Narrowing that bootstrap opacity requires
 an independently bound live-capture attestation; a candidate cannot self-assert the first trust root.
+PostgreSQL's complete identifier grammar is preserved through routine pairing; embedded dollar
+signs are canonicalized consistently rather than truncated by downstream regular expressions.
 
 **Operative rule.** Production evidence establishes where it came from by performing the read
 through a verified link. A caller assertion or branch-authored hash is never provenance, helper

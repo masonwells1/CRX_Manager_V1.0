@@ -663,6 +663,27 @@ eq(T(null), [], "a null body does not throw");
     'round-35: SET DEFAULT changes future rows but does not evaluate existing rows');
 }
 
+// ------------------------- ROUND 36: dollar signs belong to identifiers too
+{
+  const quotedDollar = applyTimeWriteTargets(
+    'CREATE FUNCTION public."$count"() RETURNS void LANGUAGE plpgsql AS $body$ BEGIN ' +
+    'UPDATE public.order_items SET total_price = total_price; END $body$; ' +
+    'SELECT public."$count"(); DROP FUNCTION public."$count"();',
+  );
+  ok(quotedDollar.targets.has('order_items.total_price'),
+    'round-36: quoted $ routine identity pairs its definition with its call');
+  ok(!quotedDollar.unresolved,
+    'round-36: a losslessly paired quoted $ routine does not become ambiguous');
+
+  const unquotedDollar = applyTimeWriteTargets(
+    'CREATE FUNCTION public.repair$orders() RETURNS void LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.orders SET total_profit = total_profit; END $$; ' +
+    'SELECT public.repair$orders();',
+  );
+  ok(unquotedDollar.targets.has('orders.total_profit'),
+    'round-36: unquoted embedded $ routine identity pairs definition and call');
+}
+
 // -------- ROUND 32: PL/pgSQL conditions and assignments are executable too
 {
   const refuses = (sql) => {
