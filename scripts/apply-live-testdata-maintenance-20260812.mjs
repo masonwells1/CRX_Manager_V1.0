@@ -33,11 +33,18 @@ const PROTECTED_SOURCES = {
   pushLib: [".claude", "hooks", "codex-push-" + "lib.mjs"].join("/"),
 };
 const EXPECTED_PROTECTED_INPUT_BLOBS = {
-  codexGuard: "fc72a09819632e29ab6273f0cb480c6ac560a430",
+  // Re-pinned 2026-08-14: the guard gained the Supabase read-only allowlist
+  // (Sol HIGH finding on the write-scope review), then the app-connector UUID
+  // prefix (CodeRabbit follow-up), then the codex_apps single-underscore
+  // naming form and the SELECT INTO denial in the read-only SQL gate
+  // (Codex-review P1 follow-ups). This PR cohort also wrapped matcherAnchor
+  // in normalizeLineEndings; the anchor text itself is unchanged, so the
+  // transform still applies cleanly.
+  codexGuard: "05499cfe34a3246b2400a22c343562fbd8fd0c33",
   pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "b89cfa2c3f980e6965f2f7a50ab2d836c8109ac5",
+  codexGuard: "58a037fbf2f563ac3ced27d2b33c09a9979422cc",
   pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
 };
 
@@ -179,7 +186,11 @@ export function buildProducerProtectionSources() {
   const constantsReplacement = constantsAnchor;
   const constantsWithMatcher = constantsReplacement;
   codexGuard = replaceExactly(codexGuard, constantsAnchor, constantsWithMatcher, "maintenance producer command constants");
-  const matcherAnchor = normalizeLineEndings(`export ${maintenanceProducerCommandMentioned.toString()}`);
+  // Function.prototype.toString() preserves the line endings of the module file
+  // ON DISK. With core.autocrlf=true a fresh Windows checkout is CRLF, while the
+  // guard source is LF-normalized before anchoring — normalize the anchor too or
+  // it can never match (found 2026-08-14 as a latent red on every fresh checkout).
+  const matcherAnchor = `export ${normalizeLineEndings(maintenanceProducerCommandMentioned.toString())}`;
   codexGuard = replaceExactly(
     codexGuard,
     matcherAnchor,
