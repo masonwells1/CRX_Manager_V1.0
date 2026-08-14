@@ -573,9 +573,11 @@ async function fetchLedgerRows(names) {
   const query = buildLedgerEvidenceQuery(names);
   const controller = new AbortController();
   const deadline = setTimeout(() => controller.abort(), RECOVERY_LEDGER_QUERY_TIMEOUT_MS);
-  let response;
+  // The deadline must stay armed through the body read: a server can return
+  // headers promptly and then stall the JSON stream, so json() is covered too.
+  let parsed;
   try {
-    response = await globalThis.fetch(RECOVERY_LEDGER_QUERY_URL, {
+    const response = await globalThis.fetch(RECOVERY_LEDGER_QUERY_URL, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${process.env.SUPABASE_ACCESS_TOKEN}`,
@@ -584,6 +586,10 @@ async function fetchLedgerRows(names) {
       body: JSON.stringify({ query }),
       signal: controller.signal,
     });
+    if (!response.ok) {
+      throw new Error(`Live ledger query failed: HTTP ${response.status}.`);
+    }
+    parsed = await response.json();
   } catch (error) {
     if (controller.signal.aborted) {
       throw new Error(`Live ledger query timed out after ${RECOVERY_LEDGER_QUERY_TIMEOUT_MS / 1000}s.`);
@@ -592,10 +598,6 @@ async function fetchLedgerRows(names) {
   } finally {
     clearTimeout(deadline);
   }
-  if (!response.ok) {
-    throw new Error(`Live ledger query failed: HTTP ${response.status}.`);
-  }
-  const parsed = await response.json();
   const rows = Array.isArray(parsed) ? parsed : parsed?.result ?? parsed?.rows;
   if (!Array.isArray(rows)) throw new Error("Live ledger query returned an unexpected response shape.");
   return rows;

@@ -1006,6 +1006,25 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
   globalThis.setTimeout = realSetTimeout;
   globalThis.clearTimeout = realClearTimeout;
 
+  // ── body-stall deadline: headers can arrive promptly while the JSON body
+  // stream stalls, so the same deadline must still abort the body read.
+  globalThis.setTimeout = (fn) => { fn(); return 0; };
+  globalThis.clearTimeout = () => {};
+  globalThis.fetch = (_url, init) => Promise.resolve({
+    ok: true,
+    json: () => new Promise((_resolve, reject) => {
+      if (init.signal.aborted) reject(new Error("aborted"));
+      else init.signal.addEventListener("abort", () => reject(new Error("aborted")));
+    }),
+  });
+  await assert.rejects(
+    () => captureRecoveryLedgerEvidence({ root: modifiedFixture.root, names: [goodRows[0].name] }),
+    /timed out after 30s/,
+    "a response body that stalls after headers still aborts at the fixed deadline",
+  );
+  globalThis.setTimeout = realSetTimeout;
+  globalThis.clearTimeout = realClearTimeout;
+
   // ── wrapper-owned clear: the supported way to discard a stale attestation.
   // The guards deny direct tool deletion of both session-state files, so this
   // CLI mode is the sanctioned discard path; it removes local records only.

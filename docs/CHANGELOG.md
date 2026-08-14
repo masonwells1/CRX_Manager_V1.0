@@ -9,7 +9,8 @@ addressed in the same PR. The live-ledger query now refuses to run in a Node pro
 module preloads (`--require`/`--import`/`--loader`, directly or via `NODE_OPTIONS`), closing the
 one remaining way to replace the process's own `fetch` before the trusted transport loads; it also
 aborts at a fixed 30-second deadline so a stalled connection fails closed instead of blocking the
-proof workflow indefinitely. The helper gained a wrapper-owned
+proof workflow indefinitely (a round-4 follow-up kept that deadline armed through the response body
+read as well, so a server that returns headers promptly but stalls the JSON stream also aborts). The helper gained a wrapper-owned
 `--clear-attestation` mode — the supported way to discard a stale or superseded attestation now
 that both guards deny direct tool deletion of the session-state files — and was registered as a
 pre-commit ledger-guard trigger so it can never change without a written record in the same commit.
