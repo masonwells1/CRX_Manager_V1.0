@@ -32,6 +32,14 @@ dual-form handling the guard already uses for GitHub tools), with regression tes
 mutating, read-only, and `execute_sql` tools under the `codex_apps` name, and the producer blob
 pins re-pinned.
 
+Second Codex-review P1 on the same PR: PostgreSQL's `SELECT ... INTO new_table` creates and
+populates a table while beginning with `SELECT`, so it passed the read-only SQL gate's
+leading-keyword and deny-keyword checks. The deny list now includes bare `INTO` — in a statement
+that begins with `SELECT`, that word is only ever the table-creating form (string literals are
+blanked before the check, and `INTO` is a reserved word, so read-only queries cannot contain it).
+Regression tests cover plain and `TEMP` `SELECT INTO` denial plus an `'into'`-in-a-string query
+that stays readable.
+
 ## 2026-08-14 — Write-access assertion scoped to the Supabase connector url
 
 CodeRabbit follow-up on the Codex write-scope PR: the two agent-guidance checkers asserted the

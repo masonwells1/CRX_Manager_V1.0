@@ -91,6 +91,11 @@ try {
   assert.equal(isClearlyReadOnlySql("select public.\"allocate_payment\"('x', 100)"), false);
   assert.equal(isClearlyReadOnlySql("select set_config('role', 'service_role', true)"), false);
   assert.equal(isClearlyReadOnlySql("select 1; select 2"), false);
+  // Codex P1 (2026-08-14): SELECT ... INTO creates and populates a table while
+  // beginning with SELECT — it must fail the read-only gate.
+  assert.equal(isClearlyReadOnlySql("select * into public.new_table from public.customers"), false);
+  assert.equal(isClearlyReadOnlySql("SELECT id INTO TEMP t FROM invoices"), false);
+  assert.equal(isClearlyReadOnlySql("select 'into the void'"), true, "the word into inside a string literal stays readable");
 
   assert.equal(evaluateProductionAction({ toolName: "mcp__supabase__execute_sql", toolInput: { query: "select 1" } }).blocked, false);
   assert.equal(evaluateProductionAction({ toolName: "mcp__supabase__execute_sql", toolInput: { query: "delete from invoices" } }).blocked, true);

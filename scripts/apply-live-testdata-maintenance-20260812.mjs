@@ -36,14 +36,15 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // Re-pinned 2026-08-14: the guard gained the Supabase read-only allowlist
   // (Sol HIGH finding on the write-scope review), then the app-connector UUID
   // prefix (CodeRabbit follow-up), then the codex_apps single-underscore
-  // naming form (Codex-review P1 follow-up). This PR cohort also wrapped
-  // matcherAnchor in normalizeLineEndings; the anchor text itself is
-  // unchanged, so the transform still applies cleanly.
-  codexGuard: "21d4ad01d5e05c2921b845e4065ab4d18bd314d7",
+  // naming form and the SELECT INTO denial in the read-only SQL gate
+  // (Codex-review P1 follow-ups). This PR cohort also wrapped matcherAnchor
+  // in normalizeLineEndings; the anchor text itself is unchanged, so the
+  // transform still applies cleanly.
+  codexGuard: "05499cfe34a3246b2400a22c343562fbd8fd0c33",
   pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "4c578bcd9d168791ea126443839a0e0b7dc2176d",
+  codexGuard: "58a037fbf2f563ac3ced27d2b33c09a9979422cc",
   pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
 };
 

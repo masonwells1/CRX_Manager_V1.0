@@ -103,7 +103,12 @@ export function isClearlyReadOnlySql(sql) {
   const statement = value.replace(/;+\s*$/, "");
   if (statement.includes(";")) return false;
   if (!/^(?:select|with|explain|show)\b/i.test(value)) return false;
-  if (/\b(?:insert|update|delete|merge|truncate|alter|drop|create|grant|revoke|comment|vacuum|reindex|cluster|refresh|call|copy|set|reset|notify|listen|unlisten|lock|discard|execute|perform)\b/i.test(value)) {
+  // `into` covers PostgreSQL's `SELECT ... INTO new_table`, which CREATES and
+  // populates a table from inside a statement that begins with SELECT — the
+  // one write form the leading-keyword check alone cannot see (Codex P1,
+  // 2026-08-14). String literals are blanked before this test, and bare
+  // `into` is a reserved word, so it cannot appear in read-only SELECTs.
+  if (/\b(?:insert|update|delete|merge|truncate|alter|drop|create|grant|revoke|comment|vacuum|reindex|cluster|refresh|call|copy|set|reset|notify|listen|unlisten|lock|discard|execute|perform|into)\b/i.test(value)) {
     return false;
   }
 
