@@ -11,22 +11,13 @@ import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  APPLIED_MIGRATIONS_SQL,
   CRX_SUPABASE_PROJECT_ID,
+  LINKED_READ_QUERY_IDS,
   runLinkedRead,
 } from './supabase-linked-read.mjs';
 
-export const APPLIED_MIGRATIONS_SQL = `
-WITH ledger AS (
-  SELECT version::text AS version, name::text AS name
-  FROM supabase_migrations.schema_migrations
-  ORDER BY version
-)
-SELECT jsonb_build_object(
-  'captured_at', to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
-  'applied', COALESCE(jsonb_agg(to_jsonb(ledger) ORDER BY version), '[]'::jsonb)
-) AS migration_ledger
-FROM ledger;
-`.trim();
+export { APPLIED_MIGRATIONS_SQL };
 
 const TS = /\d{14}/;
 
@@ -98,7 +89,7 @@ export function captureAppliedMigrations({
   const capture = runLinkedRead({
     projectRoot: projectDir,
     linkedRoot,
-    sql: APPLIED_MIGRATIONS_SQL,
+    queryId: LINKED_READ_QUERY_IDS.APPLIED_MIGRATIONS,
     ...(run ? { run } : {}),
   });
   if (capture.rows.length !== 1) fail('linked query did not return exactly one row');

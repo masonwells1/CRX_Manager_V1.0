@@ -8,56 +8,22 @@
 // unreadable bodies, or writes outside the scanned public tables make the source
 // table opaque so the validator refuses it instead of assuming no fan-out.
 
+import { createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { applyTimeCode, applyTimeWriteTargets } from '../.claude/hooks/apply-time-dml-lib.mjs';
 import {
   CRX_SUPABASE_PROJECT_ID,
+  LINKED_READ_QUERY_IDS,
   runLinkedRead,
+  TRIGGER_FANOUT_SQL,
 } from './supabase-linked-read.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const OUT = path.join(HERE, 'trigger-fanout.json');
-export const TRIGGER_FANOUT_FORMAT = 2;
-
-export const TRIGGER_FANOUT_SQL = `
-WITH tables AS (
-  SELECT tablename
-  FROM pg_tables
-  WHERE schemaname = 'public'
-  ORDER BY tablename
-), routines AS (
-  SELECT
-    p.oid::text AS oid,
-    p.proname AS name,
-    l.lanname AS language,
-    COALESCE(p.prosrc, '') AS source,
-    (p.prosqlbody IS NOT NULL) AS has_sql_body
-  FROM pg_proc p
-  JOIN pg_namespace n ON n.oid = p.pronamespace
-  JOIN pg_language l ON l.oid = p.prolang
-  WHERE n.nspname = 'public' AND p.prokind IN ('f', 'p')
-  ORDER BY p.oid
-), triggers AS (
-  SELECT DISTINCT
-    c.relname AS on_table,
-    p.oid::text AS routine_oid,
-    p.proname AS routine_name
-  FROM pg_trigger t
-  JOIN pg_class c ON c.oid = t.tgrelid
-  JOIN pg_namespace n ON n.oid = c.relnamespace
-  JOIN pg_proc p ON p.oid = t.tgfoid
-  WHERE NOT t.tgisinternal AND n.nspname = 'public'
-  ORDER BY on_table, routine_name, routine_oid
-)
-SELECT jsonb_build_object(
-  'captured_at', to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
-  'tables_scanned', COALESCE((SELECT jsonb_agg(tablename) FROM tables), '[]'::jsonb),
-  'routines', COALESCE((SELECT jsonb_agg(to_jsonb(routines)) FROM routines), '[]'::jsonb),
-  'triggers', COALESCE((SELECT jsonb_agg(to_jsonb(triggers)) FROM triggers), '[]'::jsonb)
-) AS trigger_fanout_capture;
-`.trim();
+export const TRIGGER_FANOUT_FORMAT = 3;
+export { TRIGGER_FANOUT_SQL };
 
 function fail(message) {
   throw new Error(`generate-trigger-fanout: ${message}`);
@@ -81,11 +47,15 @@ function routineDefinition(routine, index) {
   return `CREATE FUNCTION public.${routine.name}() RETURNS void LANGUAGE plpgsql AS ${tag}\n${routine.source}\n${tag};`;
 }
 
+function sha256(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
 export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PROJECT_ID) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     fail('linked query returned an invalid trigger_fanout_capture envelope');
   }
-  const expectedKeys = ['captured_at', 'routines', 'tables_scanned', 'triggers'];
+  const expectedKeys = ['captured_at', 'foreign_keys', 'routines', 'tables_scanned', 'triggers'];
   if (JSON.stringify(Object.keys(payload).sort()) !== JSON.stringify(expectedKeys)) {
     fail('linked query returned an unexpected trigger_fanout_capture shape');
   }
@@ -100,8 +70,9 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
     fail(`tables_scanned holds only ${tablesScanned.length} tables; the capture looks truncated`);
   }
   const tableSet = new Set(tablesScanned);
-  if (!Array.isArray(payload.routines) || !Array.isArray(payload.triggers)) {
-    fail('routines and triggers must be arrays');
+  if (!Array.isArray(payload.routines) || !Array.isArray(payload.triggers) ||
+      !Array.isArray(payload.foreign_keys)) {
+    fail('routines, triggers, and foreign_keys must be arrays');
   }
 
   const routines = payload.routines.map((routine) => {
@@ -120,6 +91,21 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
     return { ...routine, name: bareName(routine.name, 'routine name') };
   });
   const routineByOid = new Map(routines.map((routine) => [routine.oid, routine]));
+  const routineBodiesByName = new Map();
+  for (const routine of routines) {
+    const bodies = routineBodiesByName.get(routine.name) || [];
+    bodies.push(JSON.stringify({
+      language: routine.language,
+      has_sql_body: routine.has_sql_body,
+      source: routine.source,
+    }));
+    routineBodiesByName.set(routine.name, bodies);
+  }
+  const allRoutineHashes = Object.fromEntries(
+    [...routineBodiesByName]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, bodies]) => [name, sha256(bodies.sort().join('\n'))]),
+  );
   const opaqueRoutineNames = new Set(
     routines
       .filter((routine) =>
@@ -155,8 +141,39 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
     return { onTable, routineName };
   });
 
+  const writeAction = new Set(['c', 'n', 'd']);
+  const foreignKeys = payload.foreign_keys.map((foreignKey) => {
+    if (!foreignKey || typeof foreignKey !== 'object' || Array.isArray(foreignKey)) {
+      fail('foreign key is invalid');
+    }
+    const keys = Object.keys(foreignKey).sort();
+    if (JSON.stringify(keys) !==
+        JSON.stringify(['child_table', 'oid', 'on_delete', 'on_update', 'parent_table'])) {
+      fail('foreign key has an unexpected shape');
+    }
+    if (typeof foreignKey.oid !== 'string' || !/^\d+$/.test(foreignKey.oid)) {
+      fail('foreign key oid is invalid');
+    }
+    const parent = bareName(foreignKey.parent_table, 'foreign key parent table');
+    const child = bareName(foreignKey.child_table, 'foreign key child table');
+    if (!tableSet.has(parent) || !tableSet.has(child)) {
+      fail(`foreign key ${foreignKey.oid} names a table outside tables_scanned`);
+    }
+    if (typeof foreignKey.on_update !== 'string' || !/^[acdnr]$/.test(foreignKey.on_update) ||
+        typeof foreignKey.on_delete !== 'string' || !/^[acdnr]$/.test(foreignKey.on_delete)) {
+      fail(`foreign key ${foreignKey.oid} has an invalid referential action`);
+    }
+    return {
+      parent,
+      child,
+      via: `foreign_key_${foreignKey.oid}`,
+      writesChild: writeAction.has(foreignKey.on_update) || writeAction.has(foreignKey.on_delete),
+    };
+  });
+
   const directFanout = {};
   const directlyOpaque = new Set();
+  const directRoutineDependencies = {};
   for (const trigger of triggers) {
     const invokeTag = '$crx_fanout_run$';
     const analysed = applyTimeWriteTargets(
@@ -169,10 +186,21 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
         invokedOpaque || invokedNonPublic) {
       directlyOpaque.add(trigger.onTable);
     }
+    const dependencies = (directRoutineDependencies[trigger.onTable] ??= new Set());
+    for (const name of analysed.invokedRoutines) {
+      if (Object.hasOwn(allRoutineHashes, name)) dependencies.add(name);
+    }
     for (const target of [...analysed.tables].sort()) {
       if (target === trigger.onTable || !tableSet.has(target)) continue;
       (directFanout[trigger.onTable] ??= []).push({ target, via: trigger.routineName });
     }
+  }
+  for (const foreignKey of foreignKeys) {
+    if (!foreignKey.writesChild || foreignKey.parent === foreignKey.child) continue;
+    (directFanout[foreignKey.parent] ??= []).push({
+      target: foreignKey.child,
+      via: foreignKey.via,
+    });
   }
 
   // A trigger write can fire another captured trigger. Close over the table
@@ -180,24 +208,29 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
   // propagates the same way: if any reached table has an unreadable/dynamic
   // trigger, the original source is not safe to approve by a finite edge list.
   const fanout = {};
+  const reachableRoutines = {};
   const opaque = new Set(directlyOpaque);
   const sourceTables = new Set([
     ...Object.keys(directFanout),
+    ...Object.keys(directRoutineDependencies),
     ...directlyOpaque,
   ]);
   for (const source of sourceTables) {
     const edges = [];
     const queued = [...(directFanout[source] || [])];
     const expandedTables = new Set();
+    const dependencies = new Set(directRoutineDependencies[source] || []);
     for (let index = 0; index < queued.length; index += 1) {
       const edge = queued[index];
       edges.push(edge);
       if (expandedTables.has(edge.target)) continue;
       expandedTables.add(edge.target);
       if (directlyOpaque.has(edge.target)) opaque.add(source);
+      for (const name of directRoutineDependencies[edge.target] || []) dependencies.add(name);
       for (const downstream of directFanout[edge.target] || []) queued.push(downstream);
     }
     if (edges.length) fanout[source] = edges;
+    if (dependencies.size) reachableRoutines[source] = [...dependencies].sort();
   }
 
   const sorted = {};
@@ -213,6 +246,11 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
       .sort((a, b) => a.target.localeCompare(b.target) || a.via.localeCompare(b.via));
   }
 
+  const usedRoutineNames = new Set(Object.values(reachableRoutines).flat());
+  const routineHashes = Object.fromEntries(
+    [...usedRoutineNames].sort().map((name) => [name, allRoutineHashes[name]]),
+  );
+
   return {
     _meta: {
       format_version: TRIGGER_FANOUT_FORMAT,
@@ -221,11 +259,15 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
       capture_method: 'supabase-cli-db-query-linked',
       source_project: projectId,
       scope:
-        'Transitive UPDATE/DELETE/MERGE and UPSERT-conflict writes; unresolved calls or dynamic targets are opaque.',
+        'Transitive trigger and FK referential-action writes; unresolved calls or dynamic targets are opaque.',
       regenerate: 'node scripts/generate-trigger-fanout.mjs',
     },
     tables_scanned: tablesScanned,
     opaque_on_tables: [...opaque].sort(),
+    reachable_routines: Object.fromEntries(
+      Object.entries(reachableRoutines).sort(([a], [b]) => a.localeCompare(b)),
+    ),
+    routine_hashes: routineHashes,
     fanout: sorted,
   };
 }
@@ -239,7 +281,7 @@ export function captureTriggerFanout({
   const capture = runLinkedRead({
     projectRoot: projectDir,
     linkedRoot,
-    sql: TRIGGER_FANOUT_SQL,
+    queryId: LINKED_READ_QUERY_IDS.TRIGGER_FANOUT,
     ...(run ? { run } : {}),
   });
   if (capture.rows.length !== 1) fail('linked query did not return exactly one row');

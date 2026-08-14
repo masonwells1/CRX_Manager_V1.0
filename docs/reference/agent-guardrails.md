@@ -239,11 +239,12 @@ invisible to all of them, so a repair on `order_items` that captured an id set, 
 those rows, compared fail-closed and asserted the row count read as airtight while
 `trg_recalc_order_totals` fired underneath and rewrote money on `orders`: rows never
 captured, never hashed, not counted. A text scanner cannot know the live trigger graph,
-so the graph is checked in as `scripts/trigger-fanout.json` (15 opaque source tables and
-63 cascade edges in the 2026-08-14 linked-production capture), generated from the live
+so the graph is checked in as `scripts/trigger-fanout.json` (18 opaque source tables and
+389 transitive trigger/foreign-key cascade edges in the 2026-08-14 linked-production capture), generated from the live
 catalog by `scripts/generate-trigger-fanout.mjs`. The producer verifies the linked CRX
 project itself; pasted JSON and a caller-supplied project label are not provenance. It
-walks every trigger through public helper routines and trigger-to-trigger cascades before folding the transitive rewrite
+walks every trigger through public helper routines and trigger-to-trigger cascades, and includes
+foreign-key `CASCADE`, `SET NULL`, and `SET DEFAULT` actions, before folding the transitive rewrite
 set into the migration proof — so a cascade target picks
 up material-column binding, the per-table captured set, and the one-table-per-repair
 rule with no new machinery. `UPDATE`/`DELETE`/`MERGE` only: an `INSERT` creates rows no
@@ -253,7 +254,10 @@ PostgreSQL stores parsed rather than as source (`BEGIN ATOMIC`, where `prosrc` r
 blank), fails closed with a regenerate message; unsupported routine languages, dynamic SQL, unresolved routine calls,
 and an unreadable manifest do the same. The manifest carries the verified project,
 capture method and database timestamp, and the consumer rejects missing or mismatched
-provenance. **Cost:** a repair
+provenance. Each source table also records its transitively reachable routines and body hashes;
+a changed helper must refresh that exact source's live evidence or mark it opaque, so an unrelated
+edge cannot hide stale evidence. The shared live-read helper accepts only named built-in queries
+and cannot submit an arbitrary `SELECT` with side effects. **Cost:** a repair
 on a table with a cascading trigger can no longer take the one-table shape at all — it
 must be restructured, or waived with a `NOT-REQUIRED` marker naming both tables.
 

@@ -230,7 +230,7 @@ TRIGGER_FANOUT_RAW=$(node -e "
 const fs = require('fs');
 const m = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
 const ok = (n) => typeof n === 'string' && /^[a-z0-9_]+\$/.test(n);
-if (!m._meta || m._meta.format_version !== 2 ||
+if (!m._meta || m._meta.format_version !== 3 ||
     m._meta.generator !== 'scripts/generate-trigger-fanout.mjs' ||
     m._meta.capture_method !== 'supabase-cli-db-query-linked' ||
     m._meta.source_project !== 'rhyzpcqhnizqbxphqdkr' ||
@@ -240,6 +240,22 @@ if (!m._meta || m._meta.format_version !== 2 ||
 const scanned = (m.tables_scanned || []).filter(ok);
 if (scanned.length < 100) {
   throw new Error('trigger fan-out manifest scanned only ' + scanned.length + ' tables');
+}
+if (!m.reachable_routines || typeof m.reachable_routines !== 'object' ||
+    Array.isArray(m.reachable_routines) || !m.routine_hashes ||
+    typeof m.routine_hashes !== 'object' || Array.isArray(m.routine_hashes)) {
+  throw new Error('trigger fan-out manifest has no routine dependency binding');
+}
+for (const [src, names] of Object.entries(m.reachable_routines)) {
+  if (!ok(src) || !scanned.includes(src) || !Array.isArray(names) || names.length === 0) {
+    throw new Error('trigger fan-out manifest has an invalid routine dependency source');
+  }
+  for (const name of names) {
+    if (!ok(name) || typeof m.routine_hashes[name] !== 'string' ||
+        !/^[0-9a-f]{64}$/.test(m.routine_hashes[name])) {
+      throw new Error('trigger fan-out manifest has an invalid routine dependency hash');
+    }
+  }
 }
 const out = [];
 for (const n of scanned) out.push('s:' + n);
@@ -855,46 +871,23 @@ if [ "$CHANGED_ONLY" = true ]; then
     ALL_SQL=$(printf '%s\n' $EXISTING)
     SCAN_MODE="changed-only vs $BASE_REF (merge-base)"
 
-    # ROUND 32. The checked-in fan-out is a catalog snapshot. A new trigger or
-    # replacement trigger-function body can change its cross-table rewrites
-    # without changing the number of tables in the manifest, so the old
-    # `tables_scanned >= 100` completeness test stayed green on stale data.
-    # Require the same change to update the graph itself (fanout, opaque tables,
-    # or scanned tables). Metadata-only edits do not count. A trigger with no
-    # statically provable cross-table rewrite can add its source table to
-    # opaque_on_tables until a post-apply live regeneration proves it clear.
-    TRIGGER_DEFINITION_CHANGED=false
-    for f in $CHANGED; do
-      if [ -f "$f" ] && grep -Eiq \
-        'create[[:space:]]+(or[[:space:]]+replace[[:space:]]+)?(constraint[[:space:]]+)?trigger|returns[[:space:]]+(event_)?trigger' \
-        "$f"; then
-        TRIGGER_DEFINITION_CHANGED=true
-        break
-      fi
-    done
-    if [ "$TRIGGER_DEFINITION_CHANGED" = true ]; then
-      FANOUT_GRAPH_CHANGED=$(node -e "
-const cp = require('child_process');
-const fs = require('fs');
-const path = 'scripts/trigger-fanout.json';
-const pick = (m) => ({
-  tables_scanned: m.tables_scanned || [],
-  opaque_on_tables: m.opaque_on_tables || [],
-  fanout: m.fanout || {},
-});
-try {
-  const before = JSON.parse(cp.execFileSync('git', ['show', process.argv[1] + ':' + path], { encoding: 'utf8' }));
-  const after = JSON.parse(fs.readFileSync(path, 'utf8'));
-  process.stdout.write(JSON.stringify(pick(before)) === JSON.stringify(pick(after)) ? 'no' : 'yes');
-} catch { process.stdout.write('no'); }
-" "$MB" 2>/dev/null || echo no)
-      if [ "$FANOUT_GRAPH_CHANGED" != "yes" ]; then
-        echo "VIOLATION: scripts/trigger-fanout.json"
-        echo "  Trigger definitions changed, but the trigger fan-out graph did not."
-        echo "  Regenerate it from live catalog evidence, or fail closed by adding the affected source table to opaque_on_tables."
-        echo ""
-        VIOLATIONS=$((VIOLATIONS + 1))
-      fi
+    # ROUND 33. Bind routine changes to the exact trigger sources that depend on
+    # them. A generic "some graph field changed" check is not evidence: an
+    # unrelated edge can hide a changed ordinary helper called by a trigger.
+    # The live manifest therefore records transitive routine dependencies and
+    # body hashes per source table. Affected sources must be explicitly opaque,
+    # or a live regeneration must change the affected routine hash/source slice.
+    # Use a file-backed parser so Bash interpolation cannot alter JavaScript
+    # regular expressions or the routine names they extract.
+    TRIGGER_FANOUT_STALENESS_CHECK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-trigger-fanout-staleness.mjs"
+    FANOUT_STALE_SOURCES=$(node "$TRIGGER_FANOUT_STALENESS_CHECK" \
+      "$MB" scripts/trigger-fanout.json $CHANGED 2>/dev/null || echo __analysis_failed__)
+    if [ -n "$FANOUT_STALE_SOURCES" ]; then
+      echo "VIOLATION: scripts/trigger-fanout.json"
+      echo "  Trigger fan-out evidence is stale for affected source(s): $FANOUT_STALE_SOURCES"
+      echo "  Regenerate from the linked live catalog after apply, or fail closed by adding each affected source table to opaque_on_tables."
+      echo ""
+      VIOLATIONS=$((VIOLATIONS + 1))
     fi
 
     # Zero baseline applies ONLY on the real changed-only path: the scanned set is just

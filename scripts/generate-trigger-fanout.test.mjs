@@ -14,7 +14,8 @@ import { CRX_SUPABASE_PROJECT_ID } from './supabase-linked-read.mjs';
 const CAPTURED_AT = '2026-08-14T04:00:00.000000Z';
 const tables = [
   'chain_source', 'direct_source', 'dynamic_source', 'helper_source', 'middle_source',
-  'orders', 'self_source', 'sink_table', 'unknown_source', 'unsupported_source',
+  'fk_child', 'fk_parent', 'orders', 'self_source', 'sink_table', 'unknown_source',
+  'unsupported_source',
   ...Array.from({ length: 100 }, (_, index) => `fixture_table_${String(index).padStart(3, '0')}`),
 ].sort();
 const routine = (oid, name, source, extra = {}) => ({
@@ -34,6 +35,7 @@ const payload = {
     routine(8, 'unsupported_trigger', 'native_trigger_symbol', { language: 'c' }),
     routine(9, 'self_rewriter', 'BEGIN UPDATE public.self_source SET id = id; RETURN NEW; END;'),
     routine(10, 'self_sink_writer', 'BEGIN UPDATE public.sink_table SET id = id; RETURN NEW; END;'),
+    routine(11, 'fk_child_writer', 'BEGIN UPDATE public.sink_table SET id = id; RETURN NEW; END;'),
   ],
   triggers: [
     { on_table: 'direct_source', routine_oid: '1', routine_name: 'direct_trigger' },
@@ -45,6 +47,11 @@ const payload = {
     { on_table: 'unsupported_source', routine_oid: '8', routine_name: 'unsupported_trigger' },
     { on_table: 'self_source', routine_oid: '9', routine_name: 'self_rewriter' },
     { on_table: 'self_source', routine_oid: '10', routine_name: 'self_sink_writer' },
+    { on_table: 'fk_child', routine_oid: '11', routine_name: 'fk_child_writer' },
+  ],
+  foreign_keys: [
+    { oid: '501', parent_table: 'fk_parent', child_table: 'fk_child', on_update: 'a', on_delete: 'c' },
+    { oid: '502', parent_table: 'orders', child_table: 'direct_source', on_update: 'a', on_delete: 'a' },
   ],
 };
 
@@ -80,6 +87,20 @@ check('trigger-to-trigger writes close transitively', () => {
     { target: 'middle_source', via: 'chain_trigger' },
     { target: 'sink_table', via: 'middle_trigger' },
   ]);
+});
+check('foreign-key referential actions participate in transitive closure', () => {
+  const manifest = buildTriggerFanoutManifest(payload);
+  assert.deepEqual(manifest.fanout.fk_parent, [
+    { target: 'fk_child', via: 'foreign_key_501' },
+    { target: 'sink_table', via: 'fk_child_writer' },
+  ]);
+  assert.equal(manifest.fanout.orders, undefined, 'NO ACTION foreign keys are not writes');
+});
+check('manifest binds source tables to transitive routine body hashes', () => {
+  const manifest = buildTriggerFanoutManifest(payload);
+  assert.deepEqual(manifest.reachable_routines.helper_source, ['helper_trigger', 'recompute_order']);
+  assert.deepEqual(manifest.reachable_routines.fk_parent, ['fk_child_writer']);
+  assert.match(manifest.routine_hashes.recompute_order, /^[0-9a-f]{64}$/);
 });
 check('unsupported trigger languages are opaque', () => {
   assert(buildTriggerFanoutManifest(payload).opaque_on_tables.includes('unsupported_source'));

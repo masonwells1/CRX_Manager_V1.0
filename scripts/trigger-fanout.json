@@ -1,11 +1,11 @@
 {
   "_meta": {
-    "format_version": 2,
-    "captured_at": "2026-08-14T05:43:22.897136Z",
+    "format_version": 3,
+    "captured_at": "2026-08-14T07:41:10.444825Z",
     "generator": "scripts/generate-trigger-fanout.mjs",
     "capture_method": "supabase-cli-db-query-linked",
     "source_project": "rhyzpcqhnizqbxphqdkr",
-    "scope": "Transitive UPDATE/DELETE/MERGE and UPSERT-conflict writes; unresolved calls or dynamic targets are opaque.",
+    "scope": "Transitive trigger and FK referential-action writes; unresolved calls or dynamic targets are opaque.",
     "regenerate": "node scripts/generate-trigger-fanout.mjs"
   },
   "tables_scanned": [
@@ -176,51 +176,1289 @@
     "invoices",
     "offline_action_receipts",
     "order_items",
+    "orders",
     "profiles",
     "purchase_orders",
     "quote_items",
+    "quote_sections",
+    "quotes",
     "receiving_records",
     "return_items",
     "returns",
     "team_notes"
   ],
-  "fanout": {
+  "reachable_routines": {
+    "allocation_sets": [
+      "_enforce_allocation_not_over_payment"
+    ],
+    "application_records": [
+      "update_updated_at"
+    ],
+    "application_services": [
+      "update_updated_at"
+    ],
+    "applicator_licenses": [
+      "update_updated_at"
+    ],
+    "below_cost_approvals": [
+      "_guard_below_cost_approval_immutable",
+      "update_updated_at"
+    ],
+    "blend_recipes": [
+      "update_updated_at"
+    ],
+    "blend_ticket_fields": [
+      "enforce_blend_ticket_fields_billed_lock",
+      "enforce_blend_ticket_fields_downstream_lock"
+    ],
     "blend_ticket_products": [
+      "enforce_blend_ticket_fields_billed_lock",
+      "enforce_blend_ticket_fields_downstream_lock",
+      "enforce_blend_ticket_products_billed_lock",
+      "enforce_linked_blend_ticket_header_lock",
+      "enforce_linked_blend_ticket_product_lock",
+      "touch_blend_ticket_product_parent_version",
+      "update_blend_ticket_updated_at"
+    ],
+    "blend_tickets": [
+      "enforce_blend_ticket_fields_billed_lock",
+      "enforce_blend_ticket_fields_downstream_lock",
+      "enforce_blend_ticket_products_billed_lock",
+      "enforce_linked_blend_ticket_header_lock",
+      "enforce_linked_blend_ticket_product_lock",
+      "touch_blend_ticket_product_parent_version",
+      "update_blend_ticket_updated_at"
+    ],
+    "commissions": [
+      "_round_money_to_whole_cents",
+      "enforce_commission_recipient_resolved"
+    ],
+    "credit_memo_applications": [
+      "_guard_credit_memo_application_immutable"
+    ],
+    "customer_contacts": [
+      "_enforce_field_billing_defaults_sum_100",
+      "bump_record_row_version",
+      "commission_recipient_name_for_id",
+      "commission_split_with_recipient_ids",
+      "compute_season",
+      "fields_acre_authority_guard",
+      "normalize_phone_e164",
+      "resolve_commission_recipient_id",
+      "resolve_commission_split_recipient",
+      "snapshot_field_crop_history",
+      "stamp_commission_split_recipient_ids",
+      "sync_customer_to_primary_contact",
+      "sync_primary_contact_to_customer",
+      "update_fields_updated_at",
+      "update_updated_at"
+    ],
+    "customer_documents": [
+      "guard_customer_document_update",
+      "update_updated_at"
+    ],
+    "customer_facts": [
+      "guard_customer_fact_provenance",
+      "update_updated_at"
+    ],
+    "customer_interactions": [
+      "guard_interaction_attribution",
+      "is_admin",
+      "update_updated_at"
+    ],
+    "customers": [
+      "_enforce_field_billing_defaults_sum_100",
+      "bump_record_row_version",
+      "commission_recipient_name_for_id",
+      "commission_split_with_recipient_ids",
+      "compute_season",
+      "fields_acre_authority_guard",
+      "normalize_phone_e164",
+      "resolve_commission_recipient_id",
+      "resolve_commission_split_recipient",
+      "snapshot_field_crop_history",
+      "stamp_commission_split_recipient_ids",
+      "sync_customer_to_primary_contact",
+      "sync_primary_contact_to_customer",
+      "update_fields_updated_at",
+      "update_updated_at"
+    ],
+    "deliveries": [
+      "_enforce_delivery_items_parent_lock",
+      "_enforce_delivery_status_transition",
+      "_guard_delivery_delete",
+      "_is_admin_override",
+      "check_period_open",
+      "enforce_delivery_accounting_period",
+      "guard_completed_delivery_signature",
+      "trg_delivery_status_change"
+    ],
+    "delivery_items": [
+      "_enforce_delivery_items_parent_lock",
+      "_is_admin_override"
+    ],
+    "external_identities": [
+      "update_updated_at"
+    ],
+    "field_app_billing_lines": [
+      "prevent_invoice_line_shares_edit_after_post"
+    ],
+    "field_app_billing_sets": [
+      "prevent_invoice_line_shares_edit_after_post"
+    ],
+    "field_billing_defaults": [
+      "_enforce_field_billing_defaults_sum_100",
+      "update_fields_updated_at"
+    ],
+    "field_obstacles": [
+      "update_updated_at"
+    ],
+    "fields": [
+      "_enforce_field_billing_defaults_sum_100",
+      "compute_season",
+      "fields_acre_authority_guard",
+      "snapshot_field_crop_history",
+      "update_fields_updated_at",
+      "update_updated_at"
+    ],
+    "financial_audit_log": [
+      "_fill_audit_actor",
+      "guard_audit_log_immutable"
+    ],
+    "ground_crew_members": [
+      "_enforce_billed_job_applied_record_immutability",
+      "_is_admin_override",
+      "is_admin",
+      "update_updated_at"
+    ],
+    "ground_crews": [
+      "_close_job_location_dispatch_on_job_terminal",
+      "_enforce_applicator_license",
+      "_enforce_billed_job_applied_record_immutability",
+      "_enforce_billed_job_immutability",
+      "_enforce_job_status_transition",
+      "_is_admin_override",
+      "_preserve_job_location_dispatch_on_field_delete",
+      "_sync_job_holds",
+      "_sync_job_location_dispatch_on_applicator_change",
+      "_sync_job_location_dispatch_on_field_insert",
+      "_sync_planned_holds",
+      "_sync_quote_job_reservations",
+      "_trg_release_job_holds_on_lifecycle",
+      "_trg_sync_job_holds",
+      "commission_recipient_name_for_id",
+      "commission_split_with_recipient_ids",
+      "field_app_priced_quantity",
+      "is_admin",
+      "jobs_snapshot_commission_split",
+      "normalize_rate_unit",
+      "recompute_job_applied_acres",
+      "resolve_commission_recipient_id",
+      "resolve_commission_split_recipient",
+      "settle_applied_record_acres",
+      "stamp_commission_split_recipient_ids",
+      "trg_jarf_recompute",
+      "trg_job_applied_record_recompute",
+      "update_updated_at"
+    ],
+    "idempotency_keys": [
+      "_guard_idempotency_key_insert"
+    ],
+    "interaction_transcripts": [
+      "update_updated_at"
+    ],
+    "inventory": [
+      "_guard_inventory_location_change",
+      "trg_inventory_significant_change"
+    ],
+    "inventory_transactions": [
+      "_guard_inventory_transactions_immutable",
+      "_mark_delivery_aggregate_short_stock"
+    ],
+    "invoice_items": [
+      "_enforce_below_cost_line",
+      "_guard_below_cost_approval_immutable",
+      "_is_admin_override",
+      "guard_split_invoice_items",
+      "guard_split_invoice_provenance_items",
+      "guard_terminal_order_invoice_items",
+      "prevent_invoice_line_shares_edit_after_post",
+      "update_updated_at"
+    ],
+    "invoice_line_shares": [
+      "prevent_invoice_line_shares_edit_after_post"
+    ],
+    "invoices": [
+      "_enforce_below_cost_line",
+      "_enforce_invoice_status_transition",
+      "_guard_below_cost_approval_immutable",
+      "_guard_invoice_delete",
+      "_is_admin_override",
+      "_round_money_to_whole_cents",
+      "_split_invoice_content_claim",
+      "enforce_blend_ticket_fields_billed_lock",
+      "enforce_blend_ticket_fields_downstream_lock",
+      "enforce_blend_ticket_products_billed_lock",
+      "enforce_commission_recipient_resolved",
+      "enforce_field_application_type_lock",
+      "enforce_invoice_draft_on_insert",
+      "enforce_linked_blend_ticket_header_lock",
+      "enforce_linked_blend_ticket_product_lock",
+      "guard_invoice_terminal_order",
+      "guard_mono_invoice_split_billing_post",
+      "guard_split_invoice_items",
+      "guard_split_invoice_provenance_identity",
+      "guard_split_invoice_provenance_items",
+      "guard_terminal_order_invoice_items",
+      "prevent_invoice_line_shares_edit_after_post",
+      "require_split_invoice_creation_claim",
+      "snapshot_invoice_line_shares_on_post",
+      "sync_blend_ticket_payment_status",
+      "touch_blend_ticket_product_parent_version",
+      "update_blend_ticket_updated_at",
+      "update_updated_at"
+    ],
+    "job_applied_info": [
+      "update_updated_at"
+    ],
+    "job_applied_record_crew": [
+      "_enforce_billed_job_applied_record_immutability",
+      "_is_admin_override",
+      "is_admin"
+    ],
+    "job_applied_record_fields": [
+      "_close_job_location_dispatch_on_job_terminal",
+      "_enforce_applicator_license",
+      "_enforce_billed_job_applied_record_immutability",
+      "_enforce_billed_job_immutability",
+      "_enforce_job_status_transition",
+      "_is_admin_override",
+      "_preserve_job_location_dispatch_on_field_delete",
+      "_sync_job_holds",
+      "_sync_job_location_dispatch_on_applicator_change",
+      "_sync_job_location_dispatch_on_field_insert",
+      "_sync_planned_holds",
+      "_sync_quote_job_reservations",
+      "_trg_release_job_holds_on_lifecycle",
+      "_trg_sync_job_holds",
+      "commission_recipient_name_for_id",
+      "commission_split_with_recipient_ids",
+      "field_app_priced_quantity",
+      "is_admin",
+      "jobs_snapshot_commission_split",
+      "normalize_rate_unit",
+      "recompute_job_applied_acres",
+      "resolve_commission_recipient_id",
+      "resolve_commission_split_recipient",
+      "settle_applied_record_acres",
+      "stamp_commission_split_recipient_ids",
+      "trg_jarf_recompute",
+      "trg_job_applied_record_recompute",
+      "update_updated_at"
+    ],
+    "job_applied_records": [
+      "_close_job_location_dispatch_on_job_terminal",
+      "_enforce_applicator_license",
+      "_enforce_billed_job_applied_record_immutability",
+      "_enforce_billed_job_immutability",
+      "_enforce_job_status_transition",
+      "_is_admin_override",
+      "_preserve_job_location_dispatch_on_field_delete",
+      "_sync_job_holds",
+      "_sync_job_location_dispatch_on_applicator_change",
+      "_sync_job_location_dispatch_on_field_insert",
+      "_sync_planned_holds",
+      "_sync_quote_job_reservations",
+      "_trg_release_job_holds_on_lifecycle",
+      "_trg_sync_job_holds",
+      "commission_recipient_name_for_id",
+      "commission_split_with_recipient_ids",
+      "field_app_priced_quantity",
+      "is_admin",
+      "jobs_snapshot_commission_split",
+      "normalize_rate_unit",
+      "recompute_job_applied_acres",
+      "resolve_commission_recipient_id",
+      "resolve_commission_split_recipient",
+      "settle_applied_record_acres",
+      "stamp_commission_split_recipient_ids",
+      "trg_jarf_recompute",
+      "trg_job_applied_record_recompute",
+      "update_updated_at"
+    ],
+    "job_batches": [
+      "_close_job_location_dispatch_on_job_terminal",
+      "_enforce_applicator_license",
+      "_enforce_billed_job_applied_record_immutability",
+      "_enforce_billed_job_immutability",
+      "_enforce_job_status_transition",
+      "_is_admin_override",
+      "_preserve_job_location_dispatch_on_field_delete",
+      "_sync_job_holds",
+      "_sync_job_location_dispatch_on_applicator_change",
+      "_sync_job_location_dispatch_on_field_insert",
+      "_sync_planned_holds",
+      "_sync_quote_job_reservations",
+      "_trg_release_job_holds_on_lifecycle",
+      "_trg_sync_job_holds",
+      "commission_recipient_name_for_id",
+      "commission_split_with_recipient_ids",
+      "field_app_priced_quantity",
+      "is_admin",
+      "jobs_snapshot_commission_split",
+      "normalize_rate_unit",
+      "recompute_job_applied_acres",
+      "resolve_commission_recipient_id",
+      "resolve_commission_split_recipient",
+      "settle_applied_record_acres",
+      "stamp_commission_split_recipient_ids",
+      "trg_jarf_recompute",
+      "trg_job_applied_record_recompute",
+      "update_updated_at"
+    ],
+    "job_chemicals": [
+      "_sync_job_holds",
+      "_sync_planned_holds",
+      "_sync_quote_job_reservations",
+      "_trg_sync_job_holds",
+      "field_app_priced_quantity",
+      "normalize_rate_unit"
+    ],
+    "job_fields": [
+      "_preserve_job_location_dispatch_on_field_delete",
+      "_sync_job_location_dispatch_on_field_insert",
+      "update_updated_at"
+    ],
+    "job_loader_worksheets": [
+      "update_updated_at"
+    ],
+    "job_location_dispatches": [
+      "update_updated_at"
+    ],
+    "job_tags": [
+      "update_updated_at"
+    ],
+    "jobs": [
+      "_close_job_location_dispatch_on_job_terminal",
+      "_enforce_applicator_license",
+      "_enforce_billed_job_applied_record_immutability",
+      "_enforce_billed_job_immutability",
+      "_enforce_job_status_transition",
+      "_is_admin_override",
+      "_preserve_job_location_dispatch_on_field_delete",
+      "_sync_job_holds",
+      "_sync_job_location_dispatch_on_applicator_change",
+      "_sync_job_location_dispatch_on_field_insert",
+      "_sync_planned_holds",
+      "_sync_quote_job_reservations",
+      "_trg_release_job_holds_on_lifecycle",
+      "_trg_sync_job_holds",
+      "commission_recipient_name_for_id",
+      "commission_split_with_recipient_ids",
+      "field_app_priced_quantity",
+      "is_admin",
+      "jobs_snapshot_commission_split",
+      "normalize_rate_unit",
+      "recompute_job_applied_acres",
+      "resolve_commission_recipient_id",
+      "resolve_commission_split_recipient",
+      "settle_applied_record_acres",
+      "stamp_commission_split_recipient_ids",
+      "trg_jarf_recompute",
+      "trg_job_applied_record_recompute",
+      "update_updated_at"
+    ],
+    "legacy_vendor_resolution": [
+      "set_supplier_evidence_updated_at"
+    ],
+    "ocr_processing_queue": [
+      "update_blend_ticket_updated_at"
+    ],
+    "offline_action_receipts": [
+      "_guard_offline_action_receipt_insert",
+      "update_updated_at"
+    ],
+    "order_item_field_allocations": [
+      "prevent_oifa_edit_after_post"
+    ],
+    "order_items": [
+      "_enforce_below_cost_line",
+      "_enforce_order_status_transition",
+      "_guard_below_cost_approval_immutable",
+      "_guard_order_customer_source_lineage",
+      "_guard_order_delete",
+      "_guard_order_item_delivery_lineage",
+      "_is_admin_override",
+      "_resnapshot_order_item_cost_on_product_change",
+      "_round_money_to_whole_cents",
+      "_snapshot_order_item_cost",
+      "_validate_order_shares_total",
+      "commission_recipient_name_for_id",
+      "commission_split_with_recipient_ids",
+      "guard_order_delivered_activity_cancel",
+      "prevent_oifa_edit_after_post",
+      "prevent_order_shares_edit_after_post",
+      "resolve_commission_recipient_id",
+      "resolve_commission_split_recipient",
+      "stamp_commission_split_recipient_ids",
+      "trg_order_status_change",
+      "trg_recalc_order_totals",
+      "update_updated_at"
+    ],
+    "order_shares": [
+      "_validate_order_shares_total",
+      "prevent_order_shares_edit_after_post"
+    ],
+    "orders": [
+      "_enforce_below_cost_line",
+      "_enforce_order_status_transition",
+      "_guard_below_cost_approval_immutable",
+      "_guard_order_customer_source_lineage",
+      "_guard_order_delete",
+      "_guard_order_item_delivery_lineage",
+      "_is_admin_override",
+      "_resnapshot_order_item_cost_on_product_change",
+      "_round_money_to_whole_cents",
+      "_snapshot_order_item_cost",
+      "_validate_order_shares_total",
+      "commission_recipient_name_for_id",
+      "commission_split_with_recipient_ids",
+      "guard_order_delivered_activity_cancel",
+      "prevent_oifa_edit_after_post",
+      "prevent_order_shares_edit_after_post",
+      "resolve_commission_recipient_id",
+      "resolve_commission_split_recipient",
+      "stamp_commission_split_recipient_ids",
+      "trg_order_status_change",
+      "trg_recalc_order_totals",
+      "update_updated_at"
+    ],
+    "prepay_applications": [
+      "_guard_prepay_applications_immutable",
+      "_recompute_prepay_credit_balance",
+      "update_updated_at"
+    ],
+    "prepay_credits": [
+      "update_updated_at"
+    ],
+    "product_cost_basis": [
+      "protect_product_cost_basis_history"
+    ],
+    "product_families": [
+      "update_updated_at"
+    ],
+    "product_label_drafts": [
+      "trg_product_label_drafts_updated_at"
+    ],
+    "product_supplier_links": [
+      "set_supplier_evidence_updated_at"
+    ],
+    "products": [
+      "_calculate_product_pricing",
+      "_supplier_cost_basis_enabled_for_product",
+      "assert_phase3_product_metadata_change_safe",
+      "calculate_prices_from_margin",
+      "guard_and_version_product_pricing",
+      "guard_phase3_product_metadata",
+      "guard_product_cost_basis_unit_change",
+      "is_admin",
+      "normalize_product_category",
+      "product_price_per_acre",
+      "protect_product_cost_basis_history",
+      "recalc_product_price_per_acre",
+      "require_governed_product_pricing",
+      "require_product_cost_basis_context",
+      "sync_legacy_product_cost_basis",
+      "trg_product_label_drafts_updated_at",
+      "validate_product_units",
+      "write_product_pricing_history"
+    ],
+    "profiles": [
+      "_close_job_location_dispatch_on_job_terminal",
+      "_enforce_applicator_license",
+      "_enforce_billed_job_applied_record_immutability",
+      "_enforce_billed_job_immutability",
+      "_enforce_job_status_transition",
+      "_guard_last_active_admin",
+      "_guard_profile_role_lock",
+      "_guard_recipient_name_reuse",
+      "_is_admin_override",
+      "_preserve_job_location_dispatch_on_field_delete",
+      "_sync_auth_access_on_profile_active",
+      "_sync_job_holds",
+      "_sync_job_location_dispatch_on_applicator_change",
+      "_sync_job_location_dispatch_on_field_insert",
+      "_sync_planned_holds",
+      "_sync_quote_job_reservations",
+      "_trg_release_job_holds_on_lifecycle",
+      "_trg_sync_job_holds",
+      "commission_recipient_name_for_id",
+      "commission_split_with_recipient_ids",
+      "field_app_priced_quantity",
+      "is_admin",
+      "jobs_snapshot_commission_split",
+      "normalize_rate_unit",
+      "recompute_job_applied_acres",
+      "resolve_commission_recipient_id",
+      "resolve_commission_split_recipient",
+      "settle_applied_record_acres",
+      "stamp_commission_split_recipient_ids",
+      "sync_profile_public_directory",
+      "trg_jarf_recompute",
+      "trg_job_applied_record_recompute",
+      "update_updated_at"
+    ],
+    "purchase_order_import_intents": [
+      "_require_bulk_po_content_fingerprint"
+    ],
+    "purchase_order_items": [
+      "_guard_inventory_location_change",
+      "_recompute_po_on_order_for_products",
+      "_supplier_cost_basis_enabled_for_product",
+      "capture_purchase_order_item_cost_snapshot",
+      "trg_inventory_significant_change",
+      "trg_po_items_recompute_on_order"
+    ],
+    "purchase_orders": [
+      "_enforce_po_status_transition",
+      "_guard_idempotency_key_insert",
+      "_guard_inventory_location_change",
+      "_guard_po_delete",
+      "_invalidate_deleted_purchase_order_retry_state",
+      "_is_admin_override",
+      "_recompute_po_on_order_for_products",
+      "_require_bulk_po_content_fingerprint",
+      "_supplier_cost_basis_enabled_for_product",
+      "capture_purchase_order_item_cost_snapshot",
+      "trg_inventory_significant_change",
+      "trg_po_items_recompute_on_order",
+      "trg_po_status_change",
+      "trg_po_status_recompute_on_order"
+    ],
+    "quote_items": [
+      "_enforce_below_cost_line",
+      "_guard_below_cost_approval_immutable",
+      "_guard_quote_item_cost_snapshot",
+      "_snapshot_quote_item_cost",
+      "update_updated_at"
+    ],
+    "quote_sections": [
+      "_enforce_below_cost_line",
+      "_guard_below_cost_approval_immutable",
+      "_guard_quote_item_cost_snapshot",
+      "_snapshot_quote_item_cost",
+      "update_updated_at"
+    ],
+    "quotes": [
+      "_enforce_below_cost_line",
+      "_enforce_quote_status_transition",
+      "_enforce_quote_terminal_not_drawn",
+      "_guard_below_cost_approval_immutable",
+      "_guard_quote_item_cost_snapshot",
+      "_is_admin_override",
+      "_snapshot_quote_item_cost",
+      "bump_record_row_version",
+      "commission_recipient_name_for_id",
+      "commission_split_with_recipient_ids",
+      "enforce_quote_accepted_fully_drawn",
+      "guard_quote_commission_split_valid",
+      "release_holds_on_quote_status_change",
+      "resolve_commission_recipient_id",
+      "resolve_commission_split_recipient",
+      "stamp_commission_split_recipient_ids",
+      "update_updated_at",
+      "validate_commission_split_json"
+    ],
+    "rebate_claims": [
+      "update_updated_at"
+    ],
+    "rebate_programs": [
+      "update_updated_at"
+    ],
+    "receiving_records": [
+      "_enforce_po_status_transition",
+      "_guard_idempotency_key_insert",
+      "_guard_inventory_location_change",
+      "_guard_inventory_transactions_immutable",
+      "_guard_po_delete",
+      "_invalidate_deleted_purchase_order_retry_state",
+      "_is_admin_override",
+      "_mark_delivery_aggregate_short_stock",
+      "_receiving_records_before_delete",
+      "_recompute_po_on_order_for_products",
+      "_require_bulk_po_content_fingerprint",
+      "_supplier_cost_basis_enabled_for_product",
+      "capture_purchase_order_item_cost_snapshot",
+      "trg_inventory_significant_change",
+      "trg_po_items_recompute_on_order",
+      "trg_po_status_change",
+      "trg_po_status_recompute_on_order"
+    ],
+    "return_items": [
+      "assert_phase3_return_policy",
+      "defer_phase3_return_item_product_fk",
+      "lock_and_assert_phase3_return_item_insert_policy",
+      "lock_and_assert_phase3_return_item_update_policy",
+      "lock_phase3_product_policy_products",
+      "validate_phase3_return_item_policy"
+    ],
+    "returns": [
+      "_enforce_return_status_transition",
+      "_is_admin_override",
+      "assert_phase3_return_policy",
+      "defer_phase3_return_item_product_fk",
+      "enforce_return_lifecycle_rpc_owned",
+      "enforce_return_source_immutable",
+      "lock_and_assert_phase3_return_item_insert_policy",
+      "lock_and_assert_phase3_return_item_update_policy",
+      "lock_phase3_product_policy_products",
+      "lock_phase3_return_status_products",
+      "update_updated_at",
+      "validate_phase3_return_item_policy"
+    ],
+    "supplier_price_import_rows": [
+      "set_supplier_evidence_updated_at"
+    ],
+    "supplier_price_imports": [
+      "set_supplier_evidence_updated_at"
+    ],
+    "supplier_price_observations": [
+      "guard_supplier_price_observation_immutable",
+      "validate_supplier_price_observation_insert"
+    ],
+    "team_note_comments": [
+      "log_comment_activity",
+      "notify_mentioned_users_in_comment",
+      "update_note_comment_timestamp"
+    ],
+    "team_notes": [
+      "log_comment_activity",
+      "log_note_activity",
+      "notify_mentioned_users_in_comment",
+      "notify_team_note_assignment",
+      "update_note_comment_timestamp"
+    ],
+    "user_list_settings": [
+      "update_updated_at"
+    ],
+    "vehicles": [
+      "_close_job_location_dispatch_on_job_terminal",
+      "_enforce_applicator_license",
+      "_enforce_billed_job_applied_record_immutability",
+      "_enforce_billed_job_immutability",
+      "_enforce_job_status_transition",
+      "_is_admin_override",
+      "_preserve_job_location_dispatch_on_field_delete",
+      "_sync_job_holds",
+      "_sync_job_location_dispatch_on_applicator_change",
+      "_sync_job_location_dispatch_on_field_insert",
+      "_sync_planned_holds",
+      "_sync_quote_job_reservations",
+      "_trg_release_job_holds_on_lifecycle",
+      "_trg_sync_job_holds",
+      "commission_recipient_name_for_id",
+      "commission_split_with_recipient_ids",
+      "field_app_priced_quantity",
+      "is_admin",
+      "jobs_snapshot_commission_split",
+      "normalize_rate_unit",
+      "recompute_job_applied_acres",
+      "resolve_commission_recipient_id",
+      "resolve_commission_split_recipient",
+      "settle_applied_record_acres",
+      "stamp_commission_split_recipient_ids",
+      "trg_jarf_recompute",
+      "trg_job_applied_record_recompute",
+      "update_updated_at"
+    ],
+    "vendor_aliases": [
+      "set_supplier_evidence_updated_at"
+    ],
+    "vendor_bills": [
+      "vendor_bills_positive_subtotal_trigger"
+    ]
+  },
+  "routine_hashes": {
+    "_calculate_product_pricing": "a2ebca79d0d359fc4548aa309d47397999d60b240a397bed9da5a2bd2d7dfb27",
+    "_close_job_location_dispatch_on_job_terminal": "fc1046f8d80906af924e35fd294c04d88dbd42904e9f946c9f0f4174a36472a0",
+    "_enforce_allocation_not_over_payment": "9a082699706d102e78e0144e158d78682fb20266ba3d2eb13b3fcbbf4a96bb37",
+    "_enforce_applicator_license": "89bb81b2488d9bf21240e0580402861d2ad7df03605f2f7936f59c5491993e2e",
+    "_enforce_below_cost_line": "8d999dcbdaeed553656311a7ad4579010c678b528eff2402a84f152eb1480928",
+    "_enforce_billed_job_applied_record_immutability": "d75d59617894b6b71af88acae607a8893b4b9063f4109bb945fe415f0ee0b068",
+    "_enforce_billed_job_immutability": "b4f7368044f536d4365cceac8b6fbed49cafb7863b2d17d57c7e749df9fa1880",
+    "_enforce_delivery_items_parent_lock": "f6c67862f4df59f1b720307293f5a03a0297f22983f6d30545ba178ed6a3229a",
+    "_enforce_delivery_status_transition": "1b8ac467b22858a7cdf5324173cd5cab06ad146ab2070a6a47f4aee68a3e0262",
+    "_enforce_field_billing_defaults_sum_100": "83f8a4c5a121d6406e29d9e8f91b3f4d7403ab4be2745a89cd17fd3af9f0d71c",
+    "_enforce_invoice_status_transition": "8685a1324d91e9ac174aee12a18854a4c8061b437f7e63fcaa8a89c17bb28088",
+    "_enforce_job_status_transition": "bfa85b776a1f6bc2eda59b9f788c0291bd4b5c04debe1bc7521ff1701f7f5906",
+    "_enforce_order_status_transition": "7a7a16ec7ae93f0cce170a70e1bada8716cc1bc22ccf40301df4089bac4379c2",
+    "_enforce_po_status_transition": "e0f28d1cca95ed55a92ba677163161d1e3feab49ee2d95b8fc92c9befdeb0d0f",
+    "_enforce_quote_status_transition": "88dd7a2c4b7ea3d8c93c0941601c9bab6a2d837f9d5011687d241451290c2505",
+    "_enforce_quote_terminal_not_drawn": "a48b4c72325a65d60c60b48b5fbeb1dc8a0fb3108245e2099c193e10db19d29a",
+    "_enforce_return_status_transition": "cd378eb7dd7781b3f43a05112c47914c818badb20c97218ddc0bde8154194dc5",
+    "_fill_audit_actor": "4c759aaf8e5696c0fdfaeb8009f1e48520a6213745063b0f42221bc4b35805de",
+    "_guard_below_cost_approval_immutable": "1fc5718574547d1ed0d320f732d7c3271933dc4b3edb6081de2faa0a39855128",
+    "_guard_credit_memo_application_immutable": "0ffdf181a9c8533713b266247edacaecdc2f5f3a32c2a1be2e9c3a4500d593ec",
+    "_guard_delivery_delete": "e13ac935bba8683945bcc9875c9dd7ab6b8c963f8ba45b9875de9e2d065e8bf0",
+    "_guard_idempotency_key_insert": "9a302f1b03900a54858393596cf3a3a482194b93e95f7cb124145a0e828f5e37",
+    "_guard_inventory_location_change": "fa41b0d524fc920af8856437cf5ee6da773645c24f65ac772d546be13349bbd9",
+    "_guard_inventory_transactions_immutable": "7edc165ccf9fce3445aab6c31af8fb59c9519016508dbfb9efea08cbda86b4a7",
+    "_guard_invoice_delete": "728e6cc264848aac07d420ddeebfdc6d56553797d9e5c37b56eeb7bb8553ca76",
+    "_guard_last_active_admin": "f1419f5646e9779feed0c15d7af5bf04eb88a96fcb16553e0d7bd7a79a1d03cd",
+    "_guard_offline_action_receipt_insert": "071666d7e4f6904e93fb94e0f52a2fa5989830759232fdd1c6bb8dabf77a2cd7",
+    "_guard_order_customer_source_lineage": "e724869949ca0e8a150711c1e02d290cfb8a58152a852fcb6bba9f8d20a304b4",
+    "_guard_order_delete": "16f319f1fde2adf3725f3ed83da5f78e68a3025bf970cee4402fea6b852cc9eb",
+    "_guard_order_item_delivery_lineage": "850acbe85c3d01bfd4190296650d20b73f337348bdd67da42c9242d74f50c659",
+    "_guard_po_delete": "75d739a016f57be688584ee39eaee214325a2efef92eb411854ff28ea5efc0b0",
+    "_guard_prepay_applications_immutable": "508d72d992ce39304b0cbf54909904c1d46c143cd8488131dc4811fd45b9eae5",
+    "_guard_profile_role_lock": "4e79ca5264aa456aeb8388ffc323b2bb84a02672934f36773ab2b628c04c956e",
+    "_guard_quote_item_cost_snapshot": "576280e723328d465b83fe50f1aac33860a096cc894e55b523b3834cf5e76aff",
+    "_guard_recipient_name_reuse": "5ba382aef78e280065c3631765a49cbdfbbe7703211e7e55dcee36e7bcae88ff",
+    "_invalidate_deleted_purchase_order_retry_state": "34a31cc6978c463767498dc9f4a1ae4baff8210e7791ddd85eaa6e1bd5d1308c",
+    "_is_admin_override": "1d2435b3f3e49bdd636f14659d8ddc23c872b29d5b7d4ac0cb95190530721e51",
+    "_mark_delivery_aggregate_short_stock": "129564ed9f271a1eb49f5b89a8728745711f7f8dc30f0d92d50ca131972b195d",
+    "_preserve_job_location_dispatch_on_field_delete": "b1c1cd7dcd04db19a63d6ce0972471f1c7d83b0e479c6d4c7d86def7d1d40173",
+    "_receiving_records_before_delete": "b6dcb917a9942896386ff2d57f47bcd3755e9d08c9ccd2c7bda9e58172c30167",
+    "_recompute_po_on_order_for_products": "8d2f382e5999c042178f74ba1741c7e1c27e114621f6b651373942d26f63055c",
+    "_recompute_prepay_credit_balance": "97f47c479eb98a5b0913d6e2ac4be8dd5fe3ad0266e43c9f786e94e374e5bfea",
+    "_require_bulk_po_content_fingerprint": "c5782110d9480f6eedb49fc1013a55b32e992abd3f1c1688f111f7e3fdd36a82",
+    "_resnapshot_order_item_cost_on_product_change": "736660f50879a1a54af6ceb86778ee4ddc03e775984ccb74e6f62d9e4226d9df",
+    "_round_money_to_whole_cents": "a6c5d8d39f1754743c65aa86a619c9f36343970d7aabdfc10f5325ad4195017a",
+    "_snapshot_order_item_cost": "f713d2df304ef89c0fb3e97e442aca7631115e18b269a74a05c9904d009ec0b1",
+    "_snapshot_quote_item_cost": "8ccdc75a71e5a6d95fd77fa17bde82df793c03dd138e8587c5ccbb2a476ce89a",
+    "_split_invoice_content_claim": "46f4845dfc9d4215b5d5c322a2c9f0c22312934f5ff09ae3abe1e1673538c4eb",
+    "_supplier_cost_basis_enabled_for_product": "8e006c72ed52708cd4db0b8b127899b0260c7c237f59eff38f2265c7f0f71707",
+    "_sync_auth_access_on_profile_active": "53e2f391b6ffbe81b02abbd38e0e8b0aa58ed04b2081213ca69c85cba342e615",
+    "_sync_job_holds": "b6e85ad950c20aa5255468bad106b44f5d9a50e928e7660589f8219b13a868df",
+    "_sync_job_location_dispatch_on_applicator_change": "e554f8e3420d278f35056e5998bab09d7524085fe8961681ebac40b6e014aef6",
+    "_sync_job_location_dispatch_on_field_insert": "aa0d26eb5a1875dad792488071a5422be1a1f2a4f9c98091eb72833608fdf1d3",
+    "_sync_planned_holds": "180e20e356a04f9c05864b11a79dd5a89984ab46880528be68b1faeba778ec14",
+    "_sync_quote_job_reservations": "53de7cb6959cee56ea3963ac1f969882b65e13a46c166a113ab85fd944765402",
+    "_trg_release_job_holds_on_lifecycle": "137043b5ded5a4ce33b04cbd01cb365087161b5be510862a81257d78ad52476b",
+    "_trg_sync_job_holds": "dd6f4ef80858abef10de63b9be0651b33f8810ed0c0accd24fc4a736cd27405d",
+    "_validate_order_shares_total": "a555419c07854f902bc86ed819806980fdcdc4dc11bc90c2b3338a02f6526040",
+    "assert_phase3_product_metadata_change_safe": "1db489873b73916b88b61526ac22165c16f2ba773cecc06bd18f0b8219cd4f9b",
+    "assert_phase3_return_policy": "e084fa37198995ce0afaf87c67c3d3e4939100730ed8a08dc5aeb68ee104a8f3",
+    "bump_record_row_version": "101660e05684baba241503505ba37e03913692bd94cc64a593240b7397f9e598",
+    "calculate_prices_from_margin": "e0994c3d5c435e36c6f7e41ce41b2f7376e8822c7764406c4ec6dd000fe17e04",
+    "capture_purchase_order_item_cost_snapshot": "85cdb3d41210ff9d2c7aa0db4d19709aeb89ea7faeb5b7c8675d80c1a9e79d34",
+    "check_period_open": "ebec4eb7e86c8877b5d6e15c96f8a0c014bc22f6eeb16a285cd9fff3b6958002",
+    "commission_recipient_name_for_id": "8339f8b52a6b70a19243b450e92109c7788dc22ab2088911c085683bbc78a32b",
+    "commission_split_with_recipient_ids": "abac81223b90ec209b5c6f921ff2cb3929231ab73a9ca64476baa6d3a0f8a4df",
+    "compute_season": "bc2a0ad4c6ba7dd0138f62307908a0780369e3cc1ae02239e8ab54fd44821b48",
+    "defer_phase3_return_item_product_fk": "a685b1255f9a67aa115e0947c89cc606877ceef95ee303f277a70c4348afda89",
+    "enforce_blend_ticket_fields_billed_lock": "c090579980a7e7fa9f57f4db64f77766f4041e6f863e8bbfe5f7405e044a1844",
+    "enforce_blend_ticket_fields_downstream_lock": "a4a3f662249264f4b4770b1fa58001cebefeca325a1562a6a936b5d83a9279c6",
+    "enforce_blend_ticket_products_billed_lock": "9fcdbbfd9103260c2122f91335dd1f8d0971abfe10738d2a2ce1d48450e31556",
+    "enforce_commission_recipient_resolved": "e6aa993a6daea9b8830c0e9a98a1731080315fc8ba06b165403734ee14443a02",
+    "enforce_delivery_accounting_period": "f20bd0ab476218570f021b82dcd596405d7c50064ff43f9096466a01a9aae1f5",
+    "enforce_field_application_type_lock": "28eed2d87b16cf3e206cec80ce52825907c0ee5d8ac40a03422f52352faa7430",
+    "enforce_invoice_draft_on_insert": "f85950131f3679a435587650a16676d98b0bb1496de513631f8f9707606aba0d",
+    "enforce_linked_blend_ticket_header_lock": "b81666ba2379e7b91e7157403898271bc8eca03b99c37141ee3f56fe2c4333b8",
+    "enforce_linked_blend_ticket_product_lock": "75c36360daf7cb178b262fed8f7c82b350f4acefaa3cdf996e7efde7603f063b",
+    "enforce_quote_accepted_fully_drawn": "c482c8fa2e35af4995365df4a19c59e600a9b13d7dfcc5fd76bfb0b0435d77a6",
+    "enforce_return_lifecycle_rpc_owned": "f58784d561355273938a599b4f3adc4f3d091116572a1432a5f98b0b3e7602e4",
+    "enforce_return_source_immutable": "9f7f3ded7755b52a07f459fecbeb24644681a3c1a58530dfc77e94fb1015ff75",
+    "field_app_priced_quantity": "8e00c5afdf6e75ae647aa4578c422684a47326c82b090866cdb0c4631adc6393",
+    "fields_acre_authority_guard": "b7757a8787dabf5daf8aae994bcc4d6c73368ae1bfc0860ad7e13f8c56e3fa63",
+    "guard_and_version_product_pricing": "f33926750c07644df1e1d86162f7cb59d534438dee424c0b12d07a69b8022d58",
+    "guard_audit_log_immutable": "84b869fda0b0521d6345165f0e15308160a053ea67695082991e602ff271312c",
+    "guard_completed_delivery_signature": "b88f478d9b43fa4aa91047f858dfddf00ed47f1176a355f37799fdbcacd9c68f",
+    "guard_customer_document_update": "8dd5c5a137547b783f4c7187b87abb834d8612970d786624fee4be74acc4d768",
+    "guard_customer_fact_provenance": "1478d466043649966ffb601724945b7f10294e406302f825361a54f1a2881b22",
+    "guard_interaction_attribution": "905e35f57668a6efd0e6f00f96e6d393e8ce37b1a24562da4c3e4429806e4e68",
+    "guard_invoice_terminal_order": "2c1f6bf009190fb100b40a1652b52655a4c6cd65e54c30d3a6bf16e9c22cacd4",
+    "guard_mono_invoice_split_billing_post": "fae21d76a3b193c4c5b5a14a2c66c38813e5e471f5426d2f8265437f32b011c2",
+    "guard_order_delivered_activity_cancel": "067c3d2ffc46b3498968c5c9df030b685c7c16a2a8697cf64bf9258f0cde49a9",
+    "guard_phase3_product_metadata": "171580c72b0037cf46bb7b0f46a941fd43fa1f67f0f38a2646d19ebcb700c2a3",
+    "guard_product_cost_basis_unit_change": "d4be30935fa5f04199c8f1530ca88bbfa61ee9325cd529dbc26a057253e5f16a",
+    "guard_quote_commission_split_valid": "8da89d2186ac6536bf04c5e1eb76d1b47774b0f158074facb493146c47a572ff",
+    "guard_split_invoice_items": "b5d6e206aa050344cae25231f0a3868709c4fd399196af79f7e6631c9a26d1db",
+    "guard_split_invoice_provenance_identity": "9b695f3143f26105528e85d810c01a914b1c891ac9de224c7787b22a07cf84fa",
+    "guard_split_invoice_provenance_items": "3076ba265f58898ac8ef469f88bfec9d46b29592584bc5ee58b5a371f63d3619",
+    "guard_supplier_price_observation_immutable": "8dd7834197cfcba99807863184695440e9f37ac2ec1c93cb5a3181f877e37750",
+    "guard_terminal_order_invoice_items": "e1d60735c6efeabaf14112eb237c55d4f125d814e3af7f28e609d2699a34d7fe",
+    "is_admin": "e1aa381f7941cbf3bad3dbbc49d48d7bc7345ce3082970d33604dccd556a43cc",
+    "jobs_snapshot_commission_split": "7993f77bd8adc8a8a9602ad0b2ef34fec52a07f6f6d357c6af0f7a5f170b760e",
+    "lock_and_assert_phase3_return_item_insert_policy": "cdf7be485b065cc62a08a4646b9c08711a13567623687b76fc54534ebc2753a2",
+    "lock_and_assert_phase3_return_item_update_policy": "fd237233a63934d86c9d2307092535032488c082aa9cb2dcf7d58ed3c2b09906",
+    "lock_phase3_product_policy_products": "f052f7b0aac27223de7efe9b9d0a5698b9ccde1d0235f842d6e1643483479b52",
+    "lock_phase3_return_status_products": "a7c48587cf156941df26f2a7614ec2e5ba525d04e3728db6494ba156498677d5",
+    "log_comment_activity": "b53ee6b3f56243a0e13a17ef888af25e7e8370d276eb2fd0423654103c994bb4",
+    "log_note_activity": "82861170917203669a08dc070e80f20cc4fe8e07663239ff7d0cf7a6a1ff6d7f",
+    "normalize_phone_e164": "90ae00c657114034f4a86405faf51c40cee31cb2e1e441999b145408c4f1f742",
+    "normalize_product_category": "5cb6a6b16b93a2e34eb3d6e1ca54103d36ae08016078ab9f3b6116b9d66ba7f6",
+    "normalize_rate_unit": "a2e0a3a198ed5318c496c57c5bfda78fc58a9c817c9a24ebda9351a64506a555",
+    "notify_mentioned_users_in_comment": "b5c864f05f0594ad131c23f617ba54b4c6fd793a97b43690496c13f993c220db",
+    "notify_team_note_assignment": "78221b13e830c5d120a849d40a1f8ab64115bbcc6ae55f6a362a227101dea8e0",
+    "prevent_invoice_line_shares_edit_after_post": "de87d43eabd58c2bfbbc076f28b8855182e02860c9befcf3658ab78b9e2e59bb",
+    "prevent_oifa_edit_after_post": "c4344811dce600c368fe67c5917b6ad8446a9f9eb87bf3ece561abbc7a230660",
+    "prevent_order_shares_edit_after_post": "5cfbbe4bd0ee7727e11ac822ec4151be102db5537fe377f98ebfd6ce5532a9e9",
+    "product_price_per_acre": "abf2bcd774fd0ae637f6c9706a42dc4a0d9a944310b7a77999f77ffdda9c281f",
+    "protect_product_cost_basis_history": "344f8895176206973f8a3c2ad0de0a7f599a81a904c5392fd4787532f5651b2a",
+    "recalc_product_price_per_acre": "c1d491e98d4c99a1f6932d7f03add8407f69b0158442c0150a5233fad3dc7e64",
+    "recompute_job_applied_acres": "7bbce4752c3db77b0b6c94f6f47bf0e20e7b52968f394abce3643b6083d7e666",
+    "release_holds_on_quote_status_change": "8089f102cacb86f07601f70c251a6e857ff09085fe46a3b0139460d412e36d60",
+    "require_governed_product_pricing": "f0d2c840e636183772c6ec535a96c91838f78ce74c12362a70885548d78e8655",
+    "require_product_cost_basis_context": "eecd613146345c9e08e1f7cab908b7a9e30480d53da4749cbf4426d9fb7a7e1d",
+    "require_split_invoice_creation_claim": "7a0b706ca680a4ef6775e058ab766641f0703e05e3390400867edc94690fd6fc",
+    "resolve_commission_recipient_id": "9d286f0389ae406381e728c74b00c451e127c6ffb75ecb1c6e25b5ebc0690740",
+    "resolve_commission_split_recipient": "3ad8bee0c4f7b5ced58da46b5b64e6f0c42474bf2d395814985676b0fd904115",
+    "set_supplier_evidence_updated_at": "203fa81fcbdfa3f6815d04d11cc2197f998e7b36a5e6db01c3f1163924176e7b",
+    "settle_applied_record_acres": "55273d28422f79b8ffc2763c49e93089799240b418ec04ea3e0449267afb7c59",
+    "snapshot_field_crop_history": "90a64361210f946614311b8060d26dd6509d74d7f097962831f0890b26ef5476",
+    "snapshot_invoice_line_shares_on_post": "9d3abf08ced4a10800ba199ada2e17358f6eb65bf01f57a1a9a73e43a1307520",
+    "stamp_commission_split_recipient_ids": "940e0b10c846e05f3f02b6df2c74d89fe81f6d0b73264857e0c020215e01d683",
+    "sync_blend_ticket_payment_status": "b836993b860baa0258d6386b4faf1e9cf33e2ea27e6deef476def1974d87afab",
+    "sync_customer_to_primary_contact": "4abba462bbe5e391dee8e6038a77a5b1909d9136e6e748cd99828b0e39505c1b",
+    "sync_legacy_product_cost_basis": "f8a04c7445711dd4bc9c07f1fa3382c42b83c6ba492d9b07c550f81bceb5efd0",
+    "sync_primary_contact_to_customer": "0f6fcc5fe2c271dad27c4a3347c95f5ae7544a6844426083180ff24f5d01bd6d",
+    "sync_profile_public_directory": "8907ca42df60d86cea1c13565cf37d2bd95a6c3783fdfc3942526dd98e2242f7",
+    "touch_blend_ticket_product_parent_version": "870aad16043cc1c513322b2aaa6aa73fd5bebf2d603936a25780cc55cd907d2a",
+    "trg_delivery_status_change": "f8b88b1fdf8acafcfc99c4104825c852b895cc31e7b8b3b5e2e7947af630a80f",
+    "trg_inventory_significant_change": "b1c65048874db1d648f79f710896d97675a77d5c0103d413ad674efd39a9688d",
+    "trg_jarf_recompute": "3d8ba3b9a89a3966d4a5a8026faedccb4c62876da5f335b8e0b7f21a992baed6",
+    "trg_job_applied_record_recompute": "e0dcf4aa9a6b17353472babf8f3fdc0f397ffa32c542bec45fdc2a025d5c5f12",
+    "trg_order_status_change": "562c2a0b6fa7539d5a4fc39a5163c1f95e0739decdb8681a74d22d4b5355aec3",
+    "trg_po_items_recompute_on_order": "f903c388188b6e9f724362babea714a6a0c727815bd154278f6d84868d75f9d2",
+    "trg_po_status_change": "790b31d06d9424fc7c14501690940bc588629f90bae055ce318181497a83fa30",
+    "trg_po_status_recompute_on_order": "f266bae875f8730c96798ffb210b01c18793e9dc3ec7f4d943cffa29a792142b",
+    "trg_product_label_drafts_updated_at": "203fa81fcbdfa3f6815d04d11cc2197f998e7b36a5e6db01c3f1163924176e7b",
+    "trg_recalc_order_totals": "016f5371ae2798394a43c53684e2499347dab2d1f9971d53a86088b6c15d042e",
+    "update_blend_ticket_updated_at": "7429af4600e43f990f8d9d41ce79715cdc98810531bb8f90d16dad516974a428",
+    "update_fields_updated_at": "e82d552121528a16101776a6585ea379344fbc9f5ef6d99f522b58f76e79e818",
+    "update_note_comment_timestamp": "a9fd417190f68f24e4f1d404792e9d6ab23749c9b0a06a7d82014e9f370a35c3",
+    "update_updated_at": "ea1570e0db8bcd54c66fdbc8c6707cdeb05b3d0d2ea181c11c3187baf4d88bb9",
+    "validate_commission_split_json": "4e75be8b8bd50e5300caa710a36121c0157bfdb85af8165e4d077683fbff1a88",
+    "validate_phase3_return_item_policy": "74a5e8bf4d77d39b6e95c5abbef5945f30c7c13ca0abcd4504413eaeb93643dd",
+    "validate_product_units": "b02635458e4d2027592b421810e5694e0da82cecc81ca6afd688bd0fc9d42896",
+    "validate_supplier_price_observation_insert": "bbae0e208ace2fc6e0f39d2d400bc60322bad4348c94d0e2954990080c8700b4",
+    "vendor_bills_positive_subtotal_trigger": "327d298988c42979c07916005a79904b7730895e5729a5f3629ae544ba8dc608",
+    "write_product_pricing_history": "9e7958526f09732bcd92f32212440d0099aa2e7bb252aa8e313c133d8ee4524a"
+  },
+  "fanout": {
+    "allocation_sets": [
+      {
+        "target": "invoice_line_allocations",
+        "via": "foreign_key_27289"
+      },
+      {
+        "target": "order_line_allocations",
+        "via": "foreign_key_27266"
+      }
+    ],
+    "application_records": [
+      {
+        "target": "application_record_fields",
+        "via": "foreign_key_87485"
+      },
+      {
+        "target": "application_record_lots",
+        "via": "foreign_key_90320"
+      }
+    ],
+    "application_services": [
+      {
+        "target": "customer_application_rates",
+        "via": "foreign_key_81436"
+      }
+    ],
+    "blend_recipes": [
+      {
+        "target": "blend_recipe_items",
+        "via": "foreign_key_27520"
+      }
+    ],
+    "blend_ticket_products": [
+      {
+        "target": "blend_ticket_fields",
+        "via": "foreign_key_75593"
+      },
+      {
+        "target": "blend_ticket_images",
+        "via": "foreign_key_18642"
+      },
+      {
+        "target": "blend_ticket_products",
+        "via": "foreign_key_18620"
+      },
+      {
+        "target": "blend_ticket_to_order_items",
+        "via": "foreign_key_27456"
+      },
+      {
+        "target": "blend_ticket_to_order_items",
+        "via": "foreign_key_98028"
+      },
       {
         "target": "blend_tickets",
         "via": "touch_blend_ticket_product_parent_version"
+      },
+      {
+        "target": "ocr_processing_queue",
+        "via": "foreign_key_18662"
+      }
+    ],
+    "blend_tickets": [
+      {
+        "target": "blend_ticket_fields",
+        "via": "foreign_key_75593"
+      },
+      {
+        "target": "blend_ticket_images",
+        "via": "foreign_key_18642"
+      },
+      {
+        "target": "blend_ticket_products",
+        "via": "foreign_key_18620"
+      },
+      {
+        "target": "blend_ticket_to_order_items",
+        "via": "foreign_key_27456"
+      },
+      {
+        "target": "blend_ticket_to_order_items",
+        "via": "foreign_key_98028"
+      },
+      {
+        "target": "blend_tickets",
+        "via": "touch_blend_ticket_product_parent_version"
+      },
+      {
+        "target": "ocr_processing_queue",
+        "via": "foreign_key_18662"
+      }
+    ],
+    "commission_payments": [
+      {
+        "target": "commission_payment_items",
+        "via": "foreign_key_29306"
       }
     ],
     "customer_contacts": [
       {
+        "target": "ar_reminder_tracking",
+        "via": "foreign_key_55608"
+      },
+      {
+        "target": "ar_reminder_tracking",
+        "via": "foreign_key_55613"
+      },
+      {
+        "target": "customer_addresses",
+        "via": "foreign_key_17664"
+      },
+      {
         "target": "customer_contacts",
         "via": "sync_customer_to_primary_contact"
       },
       {
         "target": "customers",
         "via": "sync_primary_contact_to_customer"
+      },
+      {
+        "target": "email_log",
+        "via": "foreign_key_55582"
+      },
+      {
+        "target": "field_billing_defaults",
+        "via": "foreign_key_26832"
+      },
+      {
+        "target": "field_billing_defaults",
+        "via": "foreign_key_26837"
+      },
+      {
+        "target": "field_crop_history",
+        "via": "foreign_key_78010"
+      },
+      {
+        "target": "field_crop_history",
+        "via": "snapshot_field_crop_history"
+      },
+      {
+        "target": "field_obstacles",
+        "via": "foreign_key_93274"
+      },
+      {
+        "target": "field_polygons",
+        "via": "foreign_key_76830"
+      },
+      {
+        "target": "fields",
+        "via": "foreign_key_26809"
+      },
+      {
+        "target": "inventory_holds",
+        "via": "foreign_key_22119"
+      },
+      {
+        "target": "job_notifications",
+        "via": "foreign_key_91114"
       }
     ],
     "customers": [
       {
+        "target": "ar_reminder_tracking",
+        "via": "foreign_key_55608"
+      },
+      {
+        "target": "ar_reminder_tracking",
+        "via": "foreign_key_55613"
+      },
+      {
+        "target": "customer_addresses",
+        "via": "foreign_key_17664"
+      },
+      {
         "target": "customer_contacts",
         "via": "sync_customer_to_primary_contact"
       },
       {
         "target": "customers",
         "via": "sync_primary_contact_to_customer"
+      },
+      {
+        "target": "email_log",
+        "via": "foreign_key_55582"
+      },
+      {
+        "target": "field_billing_defaults",
+        "via": "foreign_key_26832"
+      },
+      {
+        "target": "field_billing_defaults",
+        "via": "foreign_key_26837"
+      },
+      {
+        "target": "field_crop_history",
+        "via": "foreign_key_78010"
+      },
+      {
+        "target": "field_crop_history",
+        "via": "snapshot_field_crop_history"
+      },
+      {
+        "target": "field_obstacles",
+        "via": "foreign_key_93274"
+      },
+      {
+        "target": "field_polygons",
+        "via": "foreign_key_76830"
+      },
+      {
+        "target": "fields",
+        "via": "foreign_key_26809"
+      },
+      {
+        "target": "inventory_holds",
+        "via": "foreign_key_22119"
+      },
+      {
+        "target": "job_notifications",
+        "via": "foreign_key_91114"
+      }
+    ],
+    "cycle_counts": [
+      {
+        "target": "cycle_count_items",
+        "via": "foreign_key_27600"
       }
     ],
     "deliveries": [
       {
         "target": "activity_feed",
         "via": "trg_delivery_status_change"
+      },
+      {
+        "target": "delivery_items",
+        "via": "foreign_key_17961"
+      },
+      {
+        "target": "delivery_photos",
+        "via": "foreign_key_32843"
+      }
+    ],
+    "email_log": [
+      {
+        "target": "ar_reminder_tracking",
+        "via": "foreign_key_55613"
+      }
+    ],
+    "field_app_billing_lines": [
+      {
+        "target": "invoice_line_shares",
+        "via": "foreign_key_105657"
+      }
+    ],
+    "field_app_billing_sets": [
+      {
+        "target": "field_app_billing_lines",
+        "via": "foreign_key_105624"
+      },
+      {
+        "target": "invoice_line_shares",
+        "via": "foreign_key_105657"
+      }
+    ],
+    "field_app_locations": [
+      {
+        "target": "field_app_location_shares",
+        "via": "foreign_key_81573"
       }
     ],
     "fields": [
       {
+        "target": "field_billing_defaults",
+        "via": "foreign_key_26832"
+      },
+      {
+        "target": "field_crop_history",
+        "via": "foreign_key_78010"
+      },
+      {
         "target": "field_crop_history",
         "via": "snapshot_field_crop_history"
+      },
+      {
+        "target": "field_obstacles",
+        "via": "foreign_key_93274"
+      },
+      {
+        "target": "field_polygons",
+        "via": "foreign_key_76830"
+      }
+    ],
+    "ground_crew_members": [
+      {
+        "target": "job_applied_record_crew",
+        "via": "foreign_key_90908"
+      }
+    ],
+    "ground_crews": [
+      {
+        "target": "field_app_location_shares",
+        "via": "foreign_key_81573"
+      },
+      {
+        "target": "field_app_locations",
+        "via": "foreign_key_81547"
+      },
+      {
+        "target": "ground_crew_members",
+        "via": "foreign_key_90700"
+      },
+      {
+        "target": "inventory_holds",
+        "via": "_trg_release_job_holds_on_lifecycle"
+      },
+      {
+        "target": "inventory_holds",
+        "via": "_trg_sync_job_holds"
+      },
+      {
+        "target": "job_applied_record_crew",
+        "via": "foreign_key_90903"
+      },
+      {
+        "target": "job_applied_record_crew",
+        "via": "foreign_key_90908"
+      },
+      {
+        "target": "job_applied_record_fields",
+        "via": "foreign_key_90836"
+      },
+      {
+        "target": "job_applied_records",
+        "via": "foreign_key_90791"
+      },
+      {
+        "target": "job_applied_records",
+        "via": "trg_jarf_recompute"
+      },
+      {
+        "target": "job_attachments",
+        "via": "foreign_key_90986"
+      },
+      {
+        "target": "job_chemicals",
+        "via": "foreign_key_29153"
+      },
+      {
+        "target": "job_dispatch_preservation",
+        "via": "_preserve_job_location_dispatch_on_field_delete"
+      },
+      {
+        "target": "job_dispatch_preservation",
+        "via": "_sync_job_location_dispatch_on_field_insert"
+      },
+      {
+        "target": "job_field_shares",
+        "via": "foreign_key_90595"
+      },
+      {
+        "target": "job_fields",
+        "via": "foreign_key_29130"
+      },
+      {
+        "target": "job_loader_worksheets",
+        "via": "foreign_key_93201"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "_close_job_location_dispatch_on_job_terminal"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "_sync_job_location_dispatch_on_applicator_change"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "_sync_job_location_dispatch_on_field_insert"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "foreign_key_91036"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "foreign_key_91041"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "foreign_key_91051"
+      },
+      {
+        "target": "job_notifications",
+        "via": "foreign_key_91109"
+      },
+      {
+        "target": "job_product_draws",
+        "via": "_trg_release_job_holds_on_lifecycle"
+      },
+      {
+        "target": "job_product_draws",
+        "via": "_trg_sync_job_holds"
+      },
+      {
+        "target": "job_product_draws",
+        "via": "foreign_key_91925"
+      },
+      {
+        "target": "job_tag_assignments",
+        "via": "foreign_key_90650"
+      },
+      {
+        "target": "jobs",
+        "via": "foreign_key_90716"
+      },
+      {
+        "target": "jobs",
+        "via": "trg_jarf_recompute"
+      },
+      {
+        "target": "jobs",
+        "via": "trg_job_applied_record_recompute"
       }
     ],
     "inventory": [
@@ -233,26 +1471,138 @@
       {
         "target": "below_cost_approvals",
         "via": "_enforce_below_cost_line"
+      },
+      {
+        "target": "invoice_line_shares",
+        "via": "foreign_key_105662"
       }
     ],
     "invoices": [
+      {
+        "target": "below_cost_approvals",
+        "via": "_enforce_below_cost_line"
+      },
+      {
+        "target": "blend_ticket_fields",
+        "via": "foreign_key_75593"
+      },
+      {
+        "target": "blend_ticket_images",
+        "via": "foreign_key_18642"
+      },
+      {
+        "target": "blend_ticket_products",
+        "via": "foreign_key_18620"
+      },
+      {
+        "target": "blend_ticket_to_order_items",
+        "via": "foreign_key_27456"
+      },
+      {
+        "target": "blend_ticket_to_order_items",
+        "via": "foreign_key_98028"
+      },
       {
         "target": "blend_tickets",
         "via": "sync_blend_ticket_payment_status"
       },
       {
+        "target": "blend_tickets",
+        "via": "touch_blend_ticket_product_parent_version"
+      },
+      {
+        "target": "commissions",
+        "via": "foreign_key_92585"
+      },
+      {
+        "target": "field_app_location_shares",
+        "via": "foreign_key_81573"
+      },
+      {
+        "target": "field_app_locations",
+        "via": "foreign_key_81542"
+      },
+      {
+        "target": "invoice_items",
+        "via": "foreign_key_27223"
+      },
+      {
         "target": "invoice_line_share_snapshots",
         "via": "snapshot_invoice_line_shares_on_post"
+      },
+      {
+        "target": "invoice_line_shares",
+        "via": "foreign_key_105662"
+      },
+      {
+        "target": "invoice_shares",
+        "via": "foreign_key_30537"
+      },
+      {
+        "target": "ocr_processing_queue",
+        "via": "foreign_key_18662"
       }
     ],
     "job_applied_record_fields": [
+      {
+        "target": "field_app_location_shares",
+        "via": "foreign_key_81573"
+      },
+      {
+        "target": "field_app_locations",
+        "via": "foreign_key_81547"
+      },
       {
         "target": "inventory_holds",
         "via": "_trg_release_job_holds_on_lifecycle"
       },
       {
+        "target": "inventory_holds",
+        "via": "_trg_sync_job_holds"
+      },
+      {
+        "target": "job_applied_record_crew",
+        "via": "foreign_key_90903"
+      },
+      {
+        "target": "job_applied_record_fields",
+        "via": "foreign_key_90836"
+      },
+      {
+        "target": "job_applied_records",
+        "via": "foreign_key_90791"
+      },
+      {
         "target": "job_applied_records",
         "via": "trg_jarf_recompute"
+      },
+      {
+        "target": "job_attachments",
+        "via": "foreign_key_90986"
+      },
+      {
+        "target": "job_chemicals",
+        "via": "foreign_key_29153"
+      },
+      {
+        "target": "job_dispatch_preservation",
+        "via": "_preserve_job_location_dispatch_on_field_delete"
+      },
+      {
+        "target": "job_dispatch_preservation",
+        "via": "_sync_job_location_dispatch_on_field_insert"
+      },
+      {
+        "target": "job_field_shares",
+        "via": "foreign_key_90595"
+      },
+      {
+        "target": "job_fields",
+        "via": "foreign_key_29130"
+      },
+      {
+        "target": "job_loader_worksheets",
+        "via": "foreign_key_93201"
       },
       {
         "target": "job_location_dispatches",
@@ -263,8 +1613,36 @@
         "via": "_sync_job_location_dispatch_on_applicator_change"
       },
       {
+        "target": "job_location_dispatches",
+        "via": "_sync_job_location_dispatch_on_field_insert"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "foreign_key_91036"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "foreign_key_91041"
+      },
+      {
+        "target": "job_notifications",
+        "via": "foreign_key_91109"
+      },
+      {
         "target": "job_product_draws",
         "via": "_trg_release_job_holds_on_lifecycle"
+      },
+      {
+        "target": "job_product_draws",
+        "via": "_trg_sync_job_holds"
+      },
+      {
+        "target": "job_product_draws",
+        "via": "foreign_key_91925"
+      },
+      {
+        "target": "job_tag_assignments",
+        "via": "foreign_key_90650"
       },
       {
         "target": "jobs",
@@ -277,8 +1655,64 @@
     ],
     "job_applied_records": [
       {
+        "target": "field_app_location_shares",
+        "via": "foreign_key_81573"
+      },
+      {
+        "target": "field_app_locations",
+        "via": "foreign_key_81547"
+      },
+      {
         "target": "inventory_holds",
         "via": "_trg_release_job_holds_on_lifecycle"
+      },
+      {
+        "target": "inventory_holds",
+        "via": "_trg_sync_job_holds"
+      },
+      {
+        "target": "job_applied_record_crew",
+        "via": "foreign_key_90903"
+      },
+      {
+        "target": "job_applied_record_fields",
+        "via": "foreign_key_90836"
+      },
+      {
+        "target": "job_applied_records",
+        "via": "foreign_key_90791"
+      },
+      {
+        "target": "job_applied_records",
+        "via": "trg_jarf_recompute"
+      },
+      {
+        "target": "job_attachments",
+        "via": "foreign_key_90986"
+      },
+      {
+        "target": "job_chemicals",
+        "via": "foreign_key_29153"
+      },
+      {
+        "target": "job_dispatch_preservation",
+        "via": "_preserve_job_location_dispatch_on_field_delete"
+      },
+      {
+        "target": "job_dispatch_preservation",
+        "via": "_sync_job_location_dispatch_on_field_insert"
+      },
+      {
+        "target": "job_field_shares",
+        "via": "foreign_key_90595"
+      },
+      {
+        "target": "job_fields",
+        "via": "foreign_key_29130"
+      },
+      {
+        "target": "job_loader_worksheets",
+        "via": "foreign_key_93201"
       },
       {
         "target": "job_location_dispatches",
@@ -289,8 +1723,154 @@
         "via": "_sync_job_location_dispatch_on_applicator_change"
       },
       {
+        "target": "job_location_dispatches",
+        "via": "_sync_job_location_dispatch_on_field_insert"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "foreign_key_91036"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "foreign_key_91041"
+      },
+      {
+        "target": "job_notifications",
+        "via": "foreign_key_91109"
+      },
+      {
         "target": "job_product_draws",
         "via": "_trg_release_job_holds_on_lifecycle"
+      },
+      {
+        "target": "job_product_draws",
+        "via": "_trg_sync_job_holds"
+      },
+      {
+        "target": "job_product_draws",
+        "via": "foreign_key_91925"
+      },
+      {
+        "target": "job_tag_assignments",
+        "via": "foreign_key_90650"
+      },
+      {
+        "target": "jobs",
+        "via": "trg_jarf_recompute"
+      },
+      {
+        "target": "jobs",
+        "via": "trg_job_applied_record_recompute"
+      }
+    ],
+    "job_batches": [
+      {
+        "target": "field_app_location_shares",
+        "via": "foreign_key_81573"
+      },
+      {
+        "target": "field_app_locations",
+        "via": "foreign_key_81547"
+      },
+      {
+        "target": "inventory_holds",
+        "via": "_trg_release_job_holds_on_lifecycle"
+      },
+      {
+        "target": "inventory_holds",
+        "via": "_trg_sync_job_holds"
+      },
+      {
+        "target": "job_applied_record_crew",
+        "via": "foreign_key_90903"
+      },
+      {
+        "target": "job_applied_record_fields",
+        "via": "foreign_key_90836"
+      },
+      {
+        "target": "job_applied_records",
+        "via": "foreign_key_90791"
+      },
+      {
+        "target": "job_applied_records",
+        "via": "trg_jarf_recompute"
+      },
+      {
+        "target": "job_attachments",
+        "via": "foreign_key_90986"
+      },
+      {
+        "target": "job_chemicals",
+        "via": "foreign_key_29153"
+      },
+      {
+        "target": "job_dispatch_preservation",
+        "via": "_preserve_job_location_dispatch_on_field_delete"
+      },
+      {
+        "target": "job_dispatch_preservation",
+        "via": "_sync_job_location_dispatch_on_field_insert"
+      },
+      {
+        "target": "job_field_shares",
+        "via": "foreign_key_90595"
+      },
+      {
+        "target": "job_fields",
+        "via": "foreign_key_29130"
+      },
+      {
+        "target": "job_loader_worksheets",
+        "via": "foreign_key_93201"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "_close_job_location_dispatch_on_job_terminal"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "_sync_job_location_dispatch_on_applicator_change"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "_sync_job_location_dispatch_on_field_insert"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "foreign_key_91036"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "foreign_key_91041"
+      },
+      {
+        "target": "job_notifications",
+        "via": "foreign_key_91109"
+      },
+      {
+        "target": "job_product_draws",
+        "via": "_trg_release_job_holds_on_lifecycle"
+      },
+      {
+        "target": "job_product_draws",
+        "via": "_trg_sync_job_holds"
+      },
+      {
+        "target": "job_product_draws",
+        "via": "foreign_key_91925"
+      },
+      {
+        "target": "job_tag_assignments",
+        "via": "foreign_key_90650"
+      },
+      {
+        "target": "jobs",
+        "via": "foreign_key_90748"
+      },
+      {
+        "target": "jobs",
+        "via": "trg_jarf_recompute"
       },
       {
         "target": "jobs",
@@ -319,12 +1899,78 @@
       {
         "target": "job_location_dispatches",
         "via": "_sync_job_location_dispatch_on_field_insert"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "foreign_key_91036"
+      }
+    ],
+    "job_tags": [
+      {
+        "target": "job_tag_assignments",
+        "via": "foreign_key_90655"
       }
     ],
     "jobs": [
       {
+        "target": "field_app_location_shares",
+        "via": "foreign_key_81573"
+      },
+      {
+        "target": "field_app_locations",
+        "via": "foreign_key_81547"
+      },
+      {
         "target": "inventory_holds",
         "via": "_trg_release_job_holds_on_lifecycle"
+      },
+      {
+        "target": "inventory_holds",
+        "via": "_trg_sync_job_holds"
+      },
+      {
+        "target": "job_applied_record_crew",
+        "via": "foreign_key_90903"
+      },
+      {
+        "target": "job_applied_record_fields",
+        "via": "foreign_key_90836"
+      },
+      {
+        "target": "job_applied_records",
+        "via": "foreign_key_90791"
+      },
+      {
+        "target": "job_applied_records",
+        "via": "trg_jarf_recompute"
+      },
+      {
+        "target": "job_attachments",
+        "via": "foreign_key_90986"
+      },
+      {
+        "target": "job_chemicals",
+        "via": "foreign_key_29153"
+      },
+      {
+        "target": "job_dispatch_preservation",
+        "via": "_preserve_job_location_dispatch_on_field_delete"
+      },
+      {
+        "target": "job_dispatch_preservation",
+        "via": "_sync_job_location_dispatch_on_field_insert"
+      },
+      {
+        "target": "job_field_shares",
+        "via": "foreign_key_90595"
+      },
+      {
+        "target": "job_fields",
+        "via": "foreign_key_29130"
+      },
+      {
+        "target": "job_loader_worksheets",
+        "via": "foreign_key_93201"
       },
       {
         "target": "job_location_dispatches",
@@ -335,8 +1981,50 @@
         "via": "_sync_job_location_dispatch_on_applicator_change"
       },
       {
+        "target": "job_location_dispatches",
+        "via": "_sync_job_location_dispatch_on_field_insert"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "foreign_key_91036"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "foreign_key_91041"
+      },
+      {
+        "target": "job_notifications",
+        "via": "foreign_key_91109"
+      },
+      {
         "target": "job_product_draws",
         "via": "_trg_release_job_holds_on_lifecycle"
+      },
+      {
+        "target": "job_product_draws",
+        "via": "_trg_sync_job_holds"
+      },
+      {
+        "target": "job_product_draws",
+        "via": "foreign_key_91925"
+      },
+      {
+        "target": "job_tag_assignments",
+        "via": "foreign_key_90650"
+      },
+      {
+        "target": "jobs",
+        "via": "trg_jarf_recompute"
+      },
+      {
+        "target": "jobs",
+        "via": "trg_job_applied_record_recompute"
+      }
+    ],
+    "note_tags": [
+      {
+        "target": "team_note_tags",
+        "via": "foreign_key_18451"
       }
     ],
     "order_items": [
@@ -349,6 +2037,26 @@
         "via": "_enforce_below_cost_line"
       },
       {
+        "target": "blend_ticket_to_order_items",
+        "via": "foreign_key_27461"
+      },
+      {
+        "target": "blend_ticket_to_order_items",
+        "via": "foreign_key_27466"
+      },
+      {
+        "target": "order_item_field_allocations",
+        "via": "foreign_key_89549"
+      },
+      {
+        "target": "order_items",
+        "via": "foreign_key_17811"
+      },
+      {
+        "target": "order_shares",
+        "via": "foreign_key_56784"
+      },
+      {
         "target": "orders",
         "via": "trg_recalc_order_totals"
       }
@@ -357,6 +2065,34 @@
       {
         "target": "activity_feed",
         "via": "trg_order_status_change"
+      },
+      {
+        "target": "below_cost_approvals",
+        "via": "_enforce_below_cost_line"
+      },
+      {
+        "target": "blend_ticket_to_order_items",
+        "via": "foreign_key_27461"
+      },
+      {
+        "target": "blend_ticket_to_order_items",
+        "via": "foreign_key_27466"
+      },
+      {
+        "target": "order_item_field_allocations",
+        "via": "foreign_key_89549"
+      },
+      {
+        "target": "order_items",
+        "via": "foreign_key_17811"
+      },
+      {
+        "target": "order_shares",
+        "via": "foreign_key_56784"
+      },
+      {
+        "target": "orders",
+        "via": "trg_recalc_order_totals"
       }
     ],
     "prepay_applications": [
@@ -365,10 +2101,50 @@
         "via": "_recompute_prepay_credit_balance"
       }
     ],
+    "pricing_change_sets": [
+      {
+        "target": "cost_history",
+        "via": "foreign_key_98911"
+      },
+      {
+        "target": "pricing_change_set_preview_rows",
+        "via": "foreign_key_98888"
+      },
+      {
+        "target": "pricing_change_set_rows",
+        "via": "foreign_key_98868"
+      },
+      {
+        "target": "product_cost_basis_change_rows",
+        "via": "foreign_key_106480"
+      },
+      {
+        "target": "product_info_change_set_rows",
+        "via": "foreign_key_106647"
+      }
+    ],
+    "pricing_workbook_exports": [
+      {
+        "target": "pricing_workbook_export_rows",
+        "via": "foreign_key_98807"
+      }
+    ],
     "products": [
       {
         "target": "cost_history",
+        "via": "foreign_key_17625"
+      },
+      {
+        "target": "cost_history",
         "via": "write_product_pricing_history"
+      },
+      {
+        "target": "integrity_negative_baseline",
+        "via": "foreign_key_92228"
+      },
+      {
+        "target": "inventory_holds",
+        "via": "foreign_key_22114"
       },
       {
         "target": "product_cost_basis",
@@ -377,12 +2153,212 @@
       {
         "target": "product_cost_basis",
         "via": "sync_legacy_product_cost_basis"
+      },
+      {
+        "target": "product_label_drafts",
+        "via": "foreign_key_91258"
       }
     ],
     "profiles": [
       {
+        "target": "field_app_location_shares",
+        "via": "foreign_key_81573"
+      },
+      {
+        "target": "field_app_locations",
+        "via": "foreign_key_81547"
+      },
+      {
+        "target": "ground_crew_members",
+        "via": "foreign_key_90700"
+      },
+      {
+        "target": "ground_crew_members",
+        "via": "foreign_key_90705"
+      },
+      {
+        "target": "ground_crews",
+        "via": "foreign_key_90679"
+      },
+      {
+        "target": "inventory_holds",
+        "via": "_trg_release_job_holds_on_lifecycle"
+      },
+      {
+        "target": "inventory_holds",
+        "via": "_trg_sync_job_holds"
+      },
+      {
+        "target": "job_applied_record_crew",
+        "via": "foreign_key_90903"
+      },
+      {
+        "target": "job_applied_record_crew",
+        "via": "foreign_key_90908"
+      },
+      {
+        "target": "job_applied_record_fields",
+        "via": "foreign_key_90836"
+      },
+      {
+        "target": "job_applied_records",
+        "via": "foreign_key_90791"
+      },
+      {
+        "target": "job_applied_records",
+        "via": "foreign_key_90796"
+      },
+      {
+        "target": "job_applied_records",
+        "via": "foreign_key_90806"
+      },
+      {
+        "target": "job_applied_records",
+        "via": "trg_jarf_recompute"
+      },
+      {
+        "target": "job_attachments",
+        "via": "foreign_key_90986"
+      },
+      {
+        "target": "job_attachments",
+        "via": "foreign_key_91014"
+      },
+      {
+        "target": "job_batches",
+        "via": "foreign_key_90738"
+      },
+      {
+        "target": "job_chemicals",
+        "via": "foreign_key_29153"
+      },
+      {
+        "target": "job_dispatch_preservation",
+        "via": "_preserve_job_location_dispatch_on_field_delete"
+      },
+      {
+        "target": "job_dispatch_preservation",
+        "via": "_sync_job_location_dispatch_on_field_insert"
+      },
+      {
+        "target": "job_field_shares",
+        "via": "foreign_key_90595"
+      },
+      {
+        "target": "job_fields",
+        "via": "foreign_key_29130"
+      },
+      {
+        "target": "job_loader_worksheets",
+        "via": "foreign_key_93201"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "_close_job_location_dispatch_on_job_terminal"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "_sync_job_location_dispatch_on_applicator_change"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "_sync_job_location_dispatch_on_field_insert"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "foreign_key_91036"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "foreign_key_91041"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "foreign_key_91046"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "foreign_key_91051"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "foreign_key_91056"
+      },
+      {
+        "target": "job_notifications",
+        "via": "foreign_key_91109"
+      },
+      {
+        "target": "job_notifications",
+        "via": "foreign_key_91119"
+      },
+      {
+        "target": "job_product_draws",
+        "via": "_trg_release_job_holds_on_lifecycle"
+      },
+      {
+        "target": "job_product_draws",
+        "via": "_trg_sync_job_holds"
+      },
+      {
+        "target": "job_product_draws",
+        "via": "foreign_key_91925"
+      },
+      {
+        "target": "job_tag_assignments",
+        "via": "foreign_key_90650"
+      },
+      {
+        "target": "job_tag_assignments",
+        "via": "foreign_key_90655"
+      },
+      {
+        "target": "job_tags",
+        "via": "foreign_key_90634"
+      },
+      {
+        "target": "jobs",
+        "via": "foreign_key_90716"
+      },
+      {
+        "target": "jobs",
+        "via": "foreign_key_90748"
+      },
+      {
+        "target": "jobs",
+        "via": "foreign_key_90959"
+      },
+      {
+        "target": "jobs",
+        "via": "trg_jarf_recompute"
+      },
+      {
+        "target": "jobs",
+        "via": "trg_job_applied_record_recompute"
+      },
+      {
+        "target": "note_activity_log",
+        "via": "foreign_key_18473"
+      },
+      {
+        "target": "note_tags",
+        "via": "foreign_key_18434"
+      },
+      {
+        "target": "profile_public_directory",
+        "via": "foreign_key_107181"
+      },
+      {
         "target": "profile_public_directory",
         "via": "sync_profile_public_directory"
+      },
+      {
+        "target": "team_note_tags",
+        "via": "foreign_key_18451"
+      },
+      {
+        "target": "user_list_settings",
+        "via": "foreign_key_90769"
       }
     ],
     "purchase_order_items": [
@@ -410,7 +2386,19 @@
       },
       {
         "target": "inventory",
+        "via": "trg_po_items_recompute_on_order"
+      },
+      {
+        "target": "inventory",
         "via": "trg_po_status_recompute_on_order"
+      },
+      {
+        "target": "purchase_order_import_intents",
+        "via": "foreign_key_98484"
+      },
+      {
+        "target": "purchase_order_items",
+        "via": "foreign_key_17902"
       }
     ],
     "quote_items": [
@@ -419,14 +2407,56 @@
         "via": "_enforce_below_cost_line"
       }
     ],
+    "quote_sections": [
+      {
+        "target": "below_cost_approvals",
+        "via": "_enforce_below_cost_line"
+      },
+      {
+        "target": "quote_items",
+        "via": "foreign_key_17734"
+      }
+    ],
     "quotes": [
       {
         "target": "activity_feed",
         "via": "release_holds_on_quote_status_change"
       },
       {
+        "target": "below_cost_approvals",
+        "via": "_enforce_below_cost_line"
+      },
+      {
         "target": "inventory_holds",
         "via": "release_holds_on_quote_status_change"
+      },
+      {
+        "target": "job_product_draws",
+        "via": "foreign_key_91930"
+      },
+      {
+        "target": "prepay_credits",
+        "via": "foreign_key_89287"
+      },
+      {
+        "target": "quote_items",
+        "via": "foreign_key_17729"
+      },
+      {
+        "target": "quote_items",
+        "via": "foreign_key_17734"
+      },
+      {
+        "target": "quote_product_draws",
+        "via": "foreign_key_88926"
+      },
+      {
+        "target": "quote_sections",
+        "via": "foreign_key_17710"
+      },
+      {
+        "target": "quote_versions",
+        "via": "foreign_key_17755"
       }
     ],
     "receiving_records": [
@@ -437,6 +2467,10 @@
       {
         "target": "activity_feed",
         "via": "trg_po_status_change"
+      },
+      {
+        "target": "application_record_lots",
+        "via": "foreign_key_90330"
       },
       {
         "target": "idempotency_keys",
@@ -459,12 +2493,30 @@
         "via": "_receiving_records_before_delete"
       },
       {
+        "target": "purchase_order_import_intents",
+        "via": "foreign_key_98484"
+      },
+      {
         "target": "purchase_order_items",
         "via": "_receiving_records_before_delete"
       },
       {
+        "target": "purchase_order_items",
+        "via": "foreign_key_17902"
+      },
+      {
         "target": "purchase_orders",
         "via": "_receiving_records_before_delete"
+      },
+      {
+        "target": "receiving_photos",
+        "via": "foreign_key_32981"
+      }
+    ],
+    "returns": [
+      {
+        "target": "return_items",
+        "via": "foreign_key_27701"
       }
     ],
     "team_note_comments": [
@@ -480,11 +2532,159 @@
     "team_notes": [
       {
         "target": "note_activity_log",
+        "via": "foreign_key_18468"
+      },
+      {
+        "target": "note_activity_log",
+        "via": "log_comment_activity"
+      },
+      {
+        "target": "note_activity_log",
         "via": "log_note_activity"
       },
       {
         "target": "notifications",
+        "via": "notify_mentioned_users_in_comment"
+      },
+      {
+        "target": "notifications",
         "via": "notify_team_note_assignment"
+      },
+      {
+        "target": "team_note_attachments",
+        "via": "foreign_key_62794"
+      },
+      {
+        "target": "team_note_comments",
+        "via": "foreign_key_18069"
+      },
+      {
+        "target": "team_note_tags",
+        "via": "foreign_key_18446"
+      }
+    ],
+    "vehicles": [
+      {
+        "target": "field_app_location_shares",
+        "via": "foreign_key_81573"
+      },
+      {
+        "target": "field_app_locations",
+        "via": "foreign_key_81547"
+      },
+      {
+        "target": "inventory_holds",
+        "via": "_trg_release_job_holds_on_lifecycle"
+      },
+      {
+        "target": "inventory_holds",
+        "via": "_trg_sync_job_holds"
+      },
+      {
+        "target": "job_applied_record_crew",
+        "via": "foreign_key_90903"
+      },
+      {
+        "target": "job_applied_record_fields",
+        "via": "foreign_key_90836"
+      },
+      {
+        "target": "job_applied_records",
+        "via": "foreign_key_90791"
+      },
+      {
+        "target": "job_applied_records",
+        "via": "foreign_key_90801"
+      },
+      {
+        "target": "job_applied_records",
+        "via": "trg_jarf_recompute"
+      },
+      {
+        "target": "job_attachments",
+        "via": "foreign_key_90986"
+      },
+      {
+        "target": "job_chemicals",
+        "via": "foreign_key_29153"
+      },
+      {
+        "target": "job_dispatch_preservation",
+        "via": "_preserve_job_location_dispatch_on_field_delete"
+      },
+      {
+        "target": "job_dispatch_preservation",
+        "via": "_sync_job_location_dispatch_on_field_insert"
+      },
+      {
+        "target": "job_field_shares",
+        "via": "foreign_key_90595"
+      },
+      {
+        "target": "job_fields",
+        "via": "foreign_key_29130"
+      },
+      {
+        "target": "job_loader_worksheets",
+        "via": "foreign_key_93201"
+      },
+      {
+        "target": "job_loader_worksheets",
+        "via": "foreign_key_93206"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "_close_job_location_dispatch_on_job_terminal"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "_sync_job_location_dispatch_on_applicator_change"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "_sync_job_location_dispatch_on_field_insert"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "foreign_key_91036"
+      },
+      {
+        "target": "job_location_dispatches",
+        "via": "foreign_key_91041"
+      },
+      {
+        "target": "job_notifications",
+        "via": "foreign_key_91109"
+      },
+      {
+        "target": "job_product_draws",
+        "via": "_trg_release_job_holds_on_lifecycle"
+      },
+      {
+        "target": "job_product_draws",
+        "via": "_trg_sync_job_holds"
+      },
+      {
+        "target": "job_product_draws",
+        "via": "foreign_key_91925"
+      },
+      {
+        "target": "job_tag_assignments",
+        "via": "foreign_key_90650"
+      },
+      {
+        "target": "jobs",
+        "via": "trg_jarf_recompute"
+      },
+      {
+        "target": "jobs",
+        "via": "trg_job_applied_record_recompute"
+      }
+    ],
+    "watchdog_flags": [
+      {
+        "target": "watchdog_flag_dismissals",
+        "via": "foreign_key_91323"
       }
     ]
   }

@@ -149,17 +149,22 @@ check('a project-link change during the query is refused before writing evidence
   }
 });
 
-check('writable CTEs are refused before the linked query executes', () => {
+check('caller-supplied SQL is refused before the linked query executes', () => {
   const dir = linkedFixture();
   try {
-    let called = false;
-    assert.throws(() => runLinkedRead({
-      projectRoot: dir,
-      linkedRoot: dir,
-      sql: 'WITH changed AS (DELETE FROM public.orders RETURNING id) SELECT id FROM changed;',
-      run: () => { called = true; return { status: 0, stdout: '' }; },
-    }), /not provably read-only/);
-    assert.equal(called, false);
+    for (const sql of [
+      'WITH changed AS (DELETE FROM public.orders RETURNING id) SELECT id FROM changed;',
+      "SELECT setval('public.some_sequence', 1);",
+    ]) {
+      let called = false;
+      assert.throws(() => runLinkedRead({
+        projectRoot: dir,
+        linkedRoot: dir,
+        sql,
+        run: () => { called = true; return { status: 0, stdout: '' }; },
+      }), /caller-supplied SQL is refused/);
+      assert.equal(called, false);
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

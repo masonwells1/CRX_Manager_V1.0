@@ -2200,7 +2200,8 @@ function runTriggerFanoutFailsClosed() {
     const mirror = join(root, 'scripts');
     mkdirSync(mirror, { recursive: true });
     mkdirSync(join(root, '.claude'), { recursive: true });
-    for (const f of ['validate-sql-migrations.sh', 'approved-set-grandfathered.txt',
+    for (const f of ['validate-sql-migrations.sh', 'check-trigger-fanout-staleness.mjs',
+                     'approved-set-grandfathered.txt',
                      'sql-audit-hash-exemptions.txt', 'trigger-fanout.json']) {
       copyFileSync(join(HERE, f), join(mirror, f));
     }
@@ -2289,9 +2290,10 @@ function runTriggerFanoutFailsClosed() {
 }
 
 /**
- * A trigger definition can change the live graph without changing its table
- * count. The changed-only path must therefore reject a trigger migration whose
- * graph is byte-for-byte equivalent in its trust-bearing sections.
+ * A trigger helper can change the live graph without changing its table count,
+ * and an unrelated graph edit is not evidence for that helper. The changed-only
+ * path must bind the changed routine to each exact source that transitively
+ * depends on it.
  *
  * @returns {string[]} failure descriptions, empty when the guard behaved
  */
@@ -2302,7 +2304,15 @@ function runTriggerDefinitionRequiresFanoutRefresh() {
     mkdirSync(join(dir, 'supabase', 'migrations'), { recursive: true });
     mkdirSync(join(dir, 'scripts'), { recursive: true });
     writeFileSync(join(dir, 'supabase', 'migrations', '20200101000000_base.sql'), '-- base\n', 'utf8');
-    copyFileSync(join(HERE, 'trigger-fanout.json'), join(dir, 'scripts', 'trigger-fanout.json'));
+    const manifestPath = join(dir, 'scripts', 'trigger-fanout.json');
+    const baseManifest = JSON.parse(readFileSync(join(HERE, 'trigger-fanout.json'), 'utf8'));
+    baseManifest.opaque_on_tables = (baseManifest.opaque_on_tables || [])
+      .filter((table) => table !== 'orders');
+    baseManifest.reachable_routines.orders = [
+      ...new Set([...(baseManifest.reachable_routines.orders || []), 'ordinary_helper']),
+    ].sort();
+    baseManifest.routine_hashes.ordinary_helper = 'a'.repeat(64);
+    writeFileSync(manifestPath, `${JSON.stringify(baseManifest, null, 2)}\n`, 'utf8');
 
     const git = (args) => spawnSync('git', args, {
       cwd: dir, encoding: 'utf8', env: envWithoutGit(),
@@ -2317,27 +2327,41 @@ function runTriggerDefinitionRequiresFanoutRefresh() {
     const base = git(['rev-parse', 'HEAD']).stdout.trim();
     writeFileSync(
       join(dir, 'supabase', 'migrations', '20200102000000_trigger.sql'),
-      `CREATE FUNCTION public.t32() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;\n` +
+      `CREATE OR REPLACE FUNCTION public.ordinary_helper() RETURNS void LANGUAGE plpgsql AS $$ BEGIN NULL; END $$;\n` +
+        `CREATE FUNCTION public.t32() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;\n` +
         `CREATE TRIGGER t32 BEFORE UPDATE ON public.orders FOR EACH ROW EXECUTE FUNCTION public.t32();\n`,
       'utf8',
     );
+    const unrelated = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    (unrelated.fanout.customers ??= []).push({ target: 'orders', via: 'ordinary_helper' });
+    writeFileSync(manifestPath, `${JSON.stringify(unrelated, null, 2)}\n`, 'utf8');
     const stale = runBash([SCRIPT, '--changed-only', `--base=${base}`, '--max-violations=999'], {
       cwd: dir, encoding: 'utf8', env: envWithoutGit(),
     });
     const staleOut = `${stale.stdout || ''}\n${stale.stderr || ''}`;
-    if (!staleOut.includes('Trigger definitions changed, but the trigger fan-out graph did not')) {
-      failures.push('  round-32 trigger definition with stale fan-out was not rejected');
+    if (!staleOut.includes('Trigger fan-out evidence is stale for affected source(s): orders')) {
+      const direct = spawnSync(process.execPath, [
+        join(HERE, 'check-trigger-fanout-staleness.mjs'),
+        base,
+        'scripts/trigger-fanout.json',
+        'supabase/migrations/20200102000000_trigger.sql',
+      ], { cwd: dir, encoding: 'utf8', env: envWithoutGit() });
+      failures.push(
+        '  round-33 helper change with only an unrelated fan-out edit was not rejected\n' +
+        `      direct helper: status=${direct.status} stdout=${JSON.stringify(direct.stdout)} stderr=${JSON.stringify(direct.stderr)}\n` +
+        staleOut.split('\n').map((line) => `      | ${line}`).join('\n'),
+      );
     }
 
-    const refreshed = JSON.parse(readFileSync(join(dir, 'scripts', 'trigger-fanout.json'), 'utf8'));
+    const refreshed = JSON.parse(readFileSync(manifestPath, 'utf8'));
     refreshed.opaque_on_tables = [...new Set([...(refreshed.opaque_on_tables || []), 'orders'])].sort();
-    writeFileSync(join(dir, 'scripts', 'trigger-fanout.json'), `${JSON.stringify(refreshed, null, 2)}\n`, 'utf8');
+    writeFileSync(manifestPath, `${JSON.stringify(refreshed, null, 2)}\n`, 'utf8');
     const guarded = runBash([SCRIPT, '--changed-only', `--base=${base}`, '--max-violations=999'], {
       cwd: dir, encoding: 'utf8', env: envWithoutGit(),
     });
     const guardedOut = `${guarded.stdout || ''}\n${guarded.stderr || ''}`;
-    if (guardedOut.includes('Trigger definitions changed, but the trigger fan-out graph did not')) {
-      failures.push('  round-32 semantic fan-out refresh was still classified as stale');
+    if (guardedOut.includes('Trigger fan-out evidence is stale for affected source(s)')) {
+      failures.push('  round-33 exact affected-source opacity was still classified as stale');
     }
   } finally {
     removeFixtureTree(dir);
@@ -2349,6 +2373,36 @@ function run() {
   const dir = mkdtempSync(join(tmpdir(), 'crx-approved-set-'));
   const migrations = join(dir, 'supabase', 'migrations');
   mkdirSync(migrations, { recursive: true });
+  mkdirSync(join(dir, 'scripts'), { recursive: true });
+  mkdirSync(join(dir, '.claude'), { recursive: true });
+  for (const file of ['validate-sql-migrations.sh', 'check-trigger-fanout-staleness.mjs',
+                      'approved-set-grandfathered.txt',
+                      'sql-audit-hash-exemptions.txt']) {
+    copyFileSync(join(HERE, file), join(dir, 'scripts', file));
+  }
+  copyFileSync(
+    join(HERE, '..', '.claude', 'schema-registry.json'),
+    join(dir, '.claude', 'schema-registry.json'),
+  );
+  // The main battery tests approved-set identity mechanics, not catalog fan-out.
+  // Give it a complete, provenance-valid but no-cascade manifest so a newly
+  // discovered live FK or opaque trigger cannot shadow the rule each case is
+  // trying to mutate. Dedicated round-31/33 fixtures below attack fan-out itself.
+  const isolatedManifest = JSON.parse(readFileSync(join(HERE, 'trigger-fanout.json'), 'utf8'));
+  isolatedManifest.opaque_on_tables = [];
+  isolatedManifest.fanout = {
+    products: [
+      { target: 'cost_history', via: 'write_product_pricing_history' },
+      { target: 'product_cost_basis', via: 'guard_product_cost_basis_unit_change' },
+      { target: 'product_cost_basis', via: 'sync_legacy_product_cost_basis' },
+    ],
+  };
+  writeFileSync(
+    join(dir, 'scripts', 'trigger-fanout.json'),
+    `${JSON.stringify(isolatedManifest, null, 2)}\n`,
+    'utf8',
+  );
+  const isolatedScript = join(dir, 'scripts', 'validate-sql-migrations.sh');
 
   const names = [];
   const registered = [];
@@ -2375,7 +2429,7 @@ function run() {
   writeFileSync(join(migrations, GRANDFATHERED), GRANDFATHERED_BODY, 'utf8');
   writeFileSync(join(migrations, BACKDATED), GRANDFATHERED_BODY, 'utf8');
 
-  const res = runBash([SCRIPT, '--max-violations=999'], {
+  const res = runBash([isolatedScript, '--max-violations=999'], {
     cwd: dir,
     encoding: 'utf8',
     env: envWithoutGit(),
@@ -2431,4 +2485,13 @@ function run() {
   console.log(`✅ approved-set guard: ${CASES.length + 12} mutation cases behaved correctly`);
 }
 
-run();
+if (process.argv.includes('--staleness-only')) {
+  const failures = runTriggerDefinitionRequiresFanoutRefresh();
+  if (failures.length) {
+    console.error(failures.join('\n'));
+    process.exit(1);
+  }
+  console.log('✅ trigger fan-out staleness mutations behaved correctly');
+} else {
+  run();
+}

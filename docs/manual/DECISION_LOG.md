@@ -11,15 +11,18 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ## 2026-08-14 — Guard evidence must establish its own production provenance
 
-**Source:** final adversarial follow-up on PR #364 (five findings).
+**Source:** final adversarial follow-up on PR #364 (eight findings).
 
 **Decision.** An evidence producer may not label caller-supplied JSON as production evidence.
 The applied-migration snapshot and trigger fan-out manifest now run fixed read-only queries
 through the linked Supabase CLI, verify the linked project before and after the query, validate
 the CLI envelope, and stamp the database clock returned by that query. Their consumers reject
-missing or mismatched provenance. Trigger fan-out follows public helper routines and
-trigger-to-trigger cascades transitively; dynamic SQL, unresolved calls, unsupported routine
-languages and unreadable SQL-standard bodies make the source table opaque.
+missing or mismatched provenance. The shared helper exposes named built-in queries, not arbitrary
+SQL. Trigger fan-out follows public helper routines, trigger-to-trigger cascades, and foreign-key
+referential actions transitively; dynamic SQL, unresolved calls, unsupported routine languages
+and unreadable SQL-standard bodies make the source table opaque. Source tables are bound to the
+hashes of every transitively reachable routine, so a helper change requires evidence for the
+specific affected sources rather than any unrelated graph edit.
 
 The material-money classifier treats compound names such as `total_margin_pct`,
 `price_per_unit` and `net_margin` as material. A registered one-shot repair is also invalid if
@@ -27,9 +30,9 @@ its canonical source file is missing or unreadable in every verified checkout: a
 does not excuse the missing source because the exact source body is the replay identity.
 
 **Operative rule.** Production evidence establishes where it came from by performing the read
-through a verified link. A caller assertion is never provenance, helper indirection never makes
-a trigger write disappear, and missing replay identity blocks rather than silently disabling a
-one-shot guard.
+through a verified link. A caller assertion is never provenance, helper indirection and foreign-key
+actions never make a write disappear, and missing replay identity blocks rather than silently
+disabling a one-shot guard.
 
 ---
 

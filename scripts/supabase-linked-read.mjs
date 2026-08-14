@@ -10,9 +10,86 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { applyTimeWriteTargets } from '../.claude/hooks/apply-time-dml-lib.mjs';
 
 export const CRX_SUPABASE_PROJECT_ID = 'rhyzpcqhnizqbxphqdkr';
+
+export const APPLIED_MIGRATIONS_SQL = `
+WITH ledger AS (
+  SELECT version::text AS version, name::text AS name
+  FROM supabase_migrations.schema_migrations
+  ORDER BY version
+)
+SELECT jsonb_build_object(
+  'captured_at', to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+  'applied', COALESCE(jsonb_agg(to_jsonb(ledger) ORDER BY version), '[]'::jsonb)
+) AS migration_ledger
+FROM ledger;
+`.trim();
+
+export const TRIGGER_FANOUT_SQL = `
+WITH tables AS (
+  SELECT tablename
+  FROM pg_tables
+  WHERE schemaname = 'public'
+  ORDER BY tablename
+), routines AS (
+  SELECT
+    p.oid::text AS oid,
+    p.proname AS name,
+    l.lanname AS language,
+    COALESCE(p.prosrc, '') AS source,
+    (p.prosqlbody IS NOT NULL) AS has_sql_body
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  JOIN pg_language l ON l.oid = p.prolang
+  WHERE n.nspname = 'public' AND p.prokind IN ('f', 'p')
+  ORDER BY p.oid
+), triggers AS (
+  SELECT DISTINCT
+    c.relname AS on_table,
+    p.oid::text AS routine_oid,
+    p.proname AS routine_name
+  FROM pg_trigger t
+  JOIN pg_class c ON c.oid = t.tgrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_proc p ON p.oid = t.tgfoid
+  WHERE NOT t.tgisinternal AND n.nspname = 'public'
+  ORDER BY on_table, routine_name, routine_oid
+), foreign_keys AS (
+  SELECT
+    con.oid::text AS oid,
+    parent.relname AS parent_table,
+    child.relname AS child_table,
+    con.confupdtype AS on_update,
+    con.confdeltype AS on_delete
+  FROM pg_constraint con
+  JOIN pg_class child ON child.oid = con.conrelid
+  JOIN pg_namespace child_ns ON child_ns.oid = child.relnamespace
+  JOIN pg_class parent ON parent.oid = con.confrelid
+  JOIN pg_namespace parent_ns ON parent_ns.oid = parent.relnamespace
+  WHERE con.contype = 'f'
+    AND child_ns.nspname = 'public'
+    AND parent_ns.nspname = 'public'
+  ORDER BY con.oid
+)
+SELECT jsonb_build_object(
+  'captured_at', to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+  'tables_scanned', COALESCE((SELECT jsonb_agg(tablename) FROM tables), '[]'::jsonb),
+  'routines', COALESCE((SELECT jsonb_agg(to_jsonb(routines)) FROM routines), '[]'::jsonb),
+  'triggers', COALESCE((SELECT jsonb_agg(to_jsonb(triggers)) FROM triggers), '[]'::jsonb),
+  'foreign_keys', COALESCE((SELECT jsonb_agg(to_jsonb(foreign_keys)) FROM foreign_keys), '[]'::jsonb)
+) AS trigger_fanout_capture;
+`.trim();
+
+export const LINKED_READ_QUERY_IDS = Object.freeze({
+  APPLIED_MIGRATIONS: 'applied_migrations',
+  TRIGGER_FANOUT: 'trigger_fanout',
+});
+
+const LINKED_READ_QUERIES = Object.freeze({
+  [LINKED_READ_QUERY_IDS.APPLIED_MIGRATIONS]: APPLIED_MIGRATIONS_SQL,
+  [LINKED_READ_QUERY_IDS.TRIGGER_FANOUT]: TRIGGER_FANOUT_SQL,
+});
 
 function fail(message) {
   throw new Error(message);
@@ -85,22 +162,20 @@ export function parseSupabaseJsonRows(stdout) {
   return parsed.rows;
 }
 
-export function runLinkedRead({
+export function runLinkedRead(options = {}) {
+  const {
   projectRoot,
   linkedRoot,
-  sql,
+  queryId,
   run = spawnSync,
   expectedProjectId = CRX_SUPABASE_PROJECT_ID,
   maxBuffer = 50 * 1024 * 1024,
-}) {
-  if (typeof sql !== 'string' || !/^\s*(with|select)\b/i.test(sql)) {
-    fail('linked capture accepts one fixed read-only SELECT/WITH statement only');
+  } = options;
+  if (Object.hasOwn(options, 'sql')) {
+    fail('caller-supplied SQL is refused; linked capture accepts named built-in queries only');
   }
-  const analysed = applyTimeWriteTargets(sql);
-  if (analysed.tables.size || analysed.targets.size || analysed.dynamicWrites.length ||
-      analysed.unresolved || analysed.unknownCalls.length) {
-    fail('linked capture query is not provably read-only; writable CTEs and effectful calls are refused');
-  }
+  const sql = LINKED_READ_QUERIES[queryId];
+  if (!sql) fail(`unknown linked read query id: ${JSON.stringify(queryId)}`);
   const root = verifyLinkedProjectRoot(
     linkedRoot || resolveLinkedProjectRoot(projectRoot, run),
     expectedProjectId,
