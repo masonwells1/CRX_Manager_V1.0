@@ -82,7 +82,9 @@ assert.match(
   /if \(!maintenanceProducerInvocationAllowed\(command\)\)/,
   "generated execution gate enforces the strict invocation allowlist",
 );
+const decodedPowerShellProcessLaunch = "Set-Item Env:NODE_OPTIONS ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('LS1yZXF1aXJlPS4vcHJlbG9hZC5janM='))); Set-Variable E ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('bm9kZQ=='))); Set-Variable A @(([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('c2NyaXB0cy9hcHBseS1saXZlLXRlc3RkYXRhLW1haW50ZW5hbmNlLTIwMjYwODEyLm1qcw=='))),([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('LS1hcHByb3ZlZC1ieS1tYXNvbj0yMDI2LTA4LTEy')))); Start-Process (Get-Variable E -ValueOnly) -ArgumentList (Get-Variable A -ValueOnly) -Wait -NoNewWindow";
 const producerInvocations = [
+  decodedPowerShellProcessLaunch,
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
   'node "scripts/apply-live-testdata-maintenance-20260812.mjs" --protect-producer',
   "node 'scripts/apply-live-testdata-maintenance-20260812.mjs' --protect-producer",
@@ -107,7 +109,17 @@ const producerInvocations = [
   "node --require ./preload.cjs scripts/apply-l{i..i}ve-testdata-maintenance-20260{8..8}12.mjs --approved-by-ma{s..s}on=2026-08-12",
   'python -c "import base64; exec(base64.b64decode(PAYLOAD))"',
   "printf %s ENCODED | base64 -d | sh",
+  "printf %s ENCODED | base64 -d | xargs",
   "sh -- < encoded-command.txt",
+  "bash launch.sh",
+  ". ./launch.ps1",
+  'Invoke-Expression "$COMMAND"',
+  "Invoke-Command -ScriptBlock ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('ZW5jb2RlZA=='))))",
+  "icm -ScriptBlock ([ScriptBlock]::Create('encoded'))",
+  "Start-Job -ScriptBlock ([ScriptBlock]::Create('encoded'))",
+  "Start-ThreadJob -ScriptBlock ([ScriptBlock]::Create('encoded'))",
+  "Start-RSJob -ScriptBlock ([ScriptBlock]::Create('encoded'))",
+  "[ScriptBlock]::Create('encoded').Invoke()",
   'F=$(decode); nodejs --require ./preload.cjs "$F" "$P" "$S" "$T"',
   'F=$(decode); bun --preload ./preload.mjs "$F" "$P" "$S" "$T"',
   'F=$(decode); deno run "$F" "$P" "$S" "$T"',
@@ -226,9 +238,21 @@ assert.equal(
 );
 const wrappedDynamicProducer = 'F=$(decode); P=$(decode); S=$(decode); T=$(decode); command node --no-warnings "$F" "$P" "$S" "$T"';
 const wrappedDynamicProducers = [
+  decodedPowerShellProcessLaunch,
   'python -c "import base64; exec(base64.b64decode(PAYLOAD))"',
   "printf %s ENCODED | base64 -d | sh",
+  "printf %s ENCODED | base64 -d | xargs",
   "sh -- < encoded-command.txt",
+  "pwsh -File C:\\Temp\\launch.ps1",
+  "bash launch.sh",
+  ". ./launch.ps1",
+  'Invoke-Expression "$COMMAND"',
+  "Invoke-Command -ScriptBlock ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('ZW5jb2RlZA=='))))",
+  "icm -ScriptBlock ([ScriptBlock]::Create('encoded'))",
+  "Start-Job -ScriptBlock ([ScriptBlock]::Create('encoded'))",
+  "Start-ThreadJob -ScriptBlock ([ScriptBlock]::Create('encoded'))",
+  "Start-RSJob -ScriptBlock ([ScriptBlock]::Create('encoded'))",
+  "[ScriptBlock]::Create('encoded').Invoke()",
   'F=$(decode); nodejs --require ./preload.cjs "$F" "$P" "$S" "$T"',
   'F=$(decode); bun --preload ./preload.mjs "$F" "$P" "$S" "$T"',
   'F=$(decode); deno run "$F" "$P" "$S" "$T"',
@@ -341,7 +365,7 @@ assert.equal(maintenanceProducerCommandMentioned(encodedPowerShellAsData), false
 const encodedPowerShellAsPlainData = "Write-Output pwsh /EncodedCommand";
 assert.equal(maintenanceProducerCommandMentioned(encodedPowerShellAsPlainData), false, "PowerShell encoded-command spelling after a non-wrapper command is not classified as an invocation");
 const encodedPowerShellAsScriptArgument = "pwsh -File script.ps1 /EncodedCommand";
-assert.equal(maintenanceProducerCommandMentioned(encodedPowerShellAsScriptArgument), false, "PowerShell option scanning stops at -File");
+assert.equal(maintenanceProducerCommandMentioned(encodedPowerShellAsScriptArgument), true, "PowerShell script-file launch is classified as opaque");
 const powerShellLookupCommands = ["command -v pwsh /EncodedCommand", "command -V pwsh /EncodedCommand"];
 for (const command of powerShellLookupCommands) {
   assert.equal(maintenanceProducerCommandMentioned(command), false, `PowerShell name lookup is not classified as an invocation: ${command}`);
@@ -399,7 +423,7 @@ assert.equal(generatedMatcherModule.maintenanceProducerCommandMentioned(envPostC
 assert.equal(generatedMatcherModule.maintenanceProducerCommandMentioned(powershellOptionData), false, "generated guard preserves PowerShell option-data negative");
 assert.equal(generatedMatcherModule.maintenanceProducerCommandMentioned(encodedPowerShellAsData), false, "generated guard preserves encoded-command quoted-data negative");
 assert.equal(generatedMatcherModule.maintenanceProducerCommandMentioned(encodedPowerShellAsPlainData), false, "generated guard preserves encoded-command plain-data negative");
-assert.equal(generatedMatcherModule.maintenanceProducerCommandMentioned(encodedPowerShellAsScriptArgument), false, "generated guard preserves -File argument negative");
+assert.equal(generatedMatcherModule.maintenanceProducerCommandMentioned(encodedPowerShellAsScriptArgument), true, "generated guard rejects opaque -File launch");
 for (const command of powerShellLookupCommands) {
   assert.equal(generatedMatcherModule.maintenanceProducerCommandMentioned(command), false, `generated guard preserves PowerShell lookup negative: ${command}`);
 }

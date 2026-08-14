@@ -157,6 +157,40 @@ export function maintenanceProducerCommandMentioned(command) {
       && argumentsInSegment.some((argument) => dynamicArgument(argument));
   };
   if (dynamicSyntax && tokens.some(opaqueJavaScriptLoaderInvocation)) return true;
+  const opaquePowerShellEvaluationInvocation = (token, index, list) => {
+    if (!invocationPosition(list, index)) return false;
+    return token.value === "."
+      || ["invoke-expression", "iex", "invoke-command", "icm", "start-job", "sajb", "start-threadjob", "start-rsjob"]
+        .some((name) => executableNamed(token, name, true));
+  };
+  if (tokens.some(opaquePowerShellEvaluationInvocation)) return true;
+  const dynamicPowerShellProcessLauncher = (token, index, list) => {
+    if (!invocationPosition(list, index)) return false;
+    return executableNamed(token, "start-process", true)
+      || executableNamed(token, "saps", true)
+      || executableNamed(token, "start", true);
+  };
+  if (dynamicSyntax && tokens.some(dynamicPowerShellProcessLauncher)) return true;
+  const powerShellNodeOptionsMutation = (token, index, list) => {
+    if (!invocationPosition(list, index)) return false;
+    const cmdlet = ["set-item", "new-item", "set-content", "add-content", "clear-item", "remove-item"]
+      .some((name) => executableNamed(token, name, true));
+    if (!cmdlet) return false;
+    for (let cursor = index + 1; cursor < list.length && !list[cursor].control; cursor += 1) {
+      if (/^env:\\?node_options$/i.test(normalizeShellToken(list[cursor].value))) return true;
+    }
+    return false;
+  };
+  if (tokens.some(powerShellNodeOptionsMutation)) return true;
+  const opaqueStdinExecutorInvocation = (token, index, list) => {
+    if (!invocationPosition(list, index)) return false;
+    const executor = executableNamed(token, "xargs", true) || executableNamed(token, "parallel", true);
+    if (!executor) return false;
+    let segmentStart = index;
+    while (segmentStart > 0 && !list[segmentStart - 1].control) segmentStart -= 1;
+    return list[segmentStart - 1]?.value === "|";
+  };
+  if (tokens.some(opaqueStdinExecutorInvocation)) return true;
   const opaqueInlineInterpreterInvocation = (token, index, list) => {
     if (!invocationPosition(list, index)) return false;
     const python = ["python", "python2", "python3", "py"].some((name) => executableNamed(token, name, true));
@@ -187,13 +221,14 @@ export function maintenanceProducerCommandMentioned(command) {
       if (argument === "-") return true;
       if (argument === "--") {
         const operand = list[cursor + 1];
+        if (shell) return true;
         return !operand || operand.control || operand.value === "-";
       }
       if (python && /^(?:-W|-X)$/.test(argument)) {
         cursor += 1;
         continue;
       }
-      if (!argument.startsWith("-")) return false;
+      if (!argument.startsWith("-")) return shell;
     }
     return true;
   };
@@ -221,7 +256,7 @@ export function maintenanceProducerCommandMentioned(command) {
     if (!(executableNamed(token, "pwsh", true) || executableNamed(token, "powershell", true)) || !invocationPosition(list, index)) return false;
     for (let cursor = index + 1; cursor < list.length && !list[cursor].control; cursor += 1) {
       const argument = normalizeShellOption(list[cursor].value);
-      if (/^(?:--?|\/)f(?:i(?:l(?:e)?)?)?(?:(?::|=).*)?$/i.test(argument)) return false;
+      if (/^(?:--?|\/)f(?:i(?:l(?:e)?)?)?(?:(?::|=).*)?$/i.test(argument)) return true;
       if (/^(?:--?|\/)e(?:c|n[a-z]*)?(?:(?::|=).*)?$/i.test(argument)) return true;
       if (powerShellValueOption(argument) && !/[:=]/.test(argument)) cursor += 1;
       else if (!argument.startsWith("-") && !argument.startsWith("/")) break;
@@ -296,7 +331,7 @@ export function maintenanceProducerCommandMentioned(command) {
             const rawArgument = candidateTokens[cursor].value;
             const argument = powerShell ? normalizeShellOption(rawArgument) : normalizeShellToken(rawArgument);
             if (powerShell && !commandString && dynamicArgument(rawArgument)) return true;
-            if (powerShell && !commandString && /^(?:--?|\/)f(?:i(?:l(?:e)?)?)?(?:(?::|=).*)?$/i.test(argument)) break;
+            if (powerShell && !commandString && /^(?:--?|\/)f(?:i(?:l(?:e)?)?)?(?:(?::|=).*)?$/i.test(argument)) return true;
             if (powerShell && !commandString && powerShellValueOption(argument)) {
               if (!/[:=]/.test(argument)) cursor += 1;
               continue;

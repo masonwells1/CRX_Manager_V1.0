@@ -121,7 +121,7 @@ write, so verification mode follows the same fail-closed cleanliness contract as
 blob verification normalizes Windows CRLF bytes before hashing, matching the producer's normalized
 assembly path and the reviewed Git blob on every checkout.
 
-The final PR review also closed opaque inline-interpreter, alternate-runtime preload, and decoded-stdin bootstrap paths before
+The final PR review also closed opaque script-file, dynamic process/script-block launch, inline-interpreter, alternate-runtime preload, and decoded-stdin bootstrap paths before
 merge, while preserving quoted search text as data. The shared preload rule now treats `NODE_OPTIONS=` as dangerous
 only in an executable assignment position, and producer retirement verifies the worktree removal and
 states plainly that the deletion still must be committed.
@@ -145,6 +145,11 @@ standalone Node tokens behind shell builtins, external wrappers, grouping, `env 
 while preserving quoted-data and environment-assignment negatives. The
 generated guard also normalizes `Function#toString()` line endings before hashing, so Windows worktrees and
 the isolated exact-review snapshot reproduce the same protected output blob.
+The latest review found that a decoded command stream could be piped to a generic argument executor before
+the producer's own argument and proof checks ran. The shared matcher now fails closed for pipeline-fed
+`xargs` and `parallel` invocations, and exercises that boundary in the outer shell hook, the focused
+producer harness, and the generated production guard. The current focused proof covers 87 classifier and
+308 producer assertions, with 411 shell-safety assertions.
 next pass found PostgreSQL's optional `ONLY` keyword could hide persistent targets from CTE-wrapped
 `UPDATE`, `DELETE`, and `MERGE`. Target enumeration now accepts `ONLY`, and any `WITH` statement that still
 contains an unaccounted DML verb fails closed. Three exact regressions pin those forms.

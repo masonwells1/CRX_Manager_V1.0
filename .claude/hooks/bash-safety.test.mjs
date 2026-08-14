@@ -57,6 +57,7 @@ ok(!checkDangerousCommand(null), "null command allowed (no throw)");
 
 // ── maintenance producer: current outer shell guard closes the pre-bootstrap
 //    TOCTOU gap before the generated production-action guard is installed. ──
+const decodedPowerShellProcessLaunch = "Set-Item Env:NODE_OPTIONS ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('LS1yZXF1aXJlPS4vcHJlbG9hZC5janM='))); Set-Variable E ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('bm9kZQ=='))); Set-Variable A @(([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('c2NyaXB0cy9hcHBseS1saXZlLXRlc3RkYXRhLW1haW50ZW5hbmNlLTIwMjYwODEyLm1qcw=='))),([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('LS1hcHByb3ZlZC1ieS1tYXNvbj0yMDI2LTA4LTEy')))); Start-Process (Get-Variable E -ValueOnly) -ArgumentList (Get-Variable A -ValueOnly) -Wait -NoNewWindow";
 for (const command of [
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12",
@@ -66,6 +67,7 @@ for (const command of [
   eq(checkMaintenanceProducerInvocation(command), null, `exact producer invocation allowed by shell guard: ${command}`);
 }
 for (const command of [
+  decodedPowerShellProcessLaunch,
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify; Write-Output chained",
   "[IO.File]::WriteAllText('scripts/apply-live-testdata-maintenance-20260812.mjs','owned'); node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify --unknown",
@@ -89,7 +91,17 @@ for (const command of [
   "node --require ./preload.cjs scripts/apply-l{i..i}ve-testdata-maintenance-20260{8..8}12.mjs --approved-by-ma{s..s}on=2026-08-12",
   'python -c "import base64; exec(base64.b64decode(PAYLOAD))"',
   "printf %s ENCODED | base64 -d | sh",
+  "printf %s ENCODED | base64 -d | xargs",
   "sh -- < encoded-command.txt",
+  "bash launch.sh",
+  ". ./launch.ps1",
+  'Invoke-Expression "$COMMAND"',
+  "Invoke-Command -ScriptBlock ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('ZW5jb2RlZA=='))))",
+  "icm -ScriptBlock ([ScriptBlock]::Create('encoded'))",
+  "Start-Job -ScriptBlock ([ScriptBlock]::Create('encoded'))",
+  "Start-ThreadJob -ScriptBlock ([ScriptBlock]::Create('encoded'))",
+  "Start-RSJob -ScriptBlock ([ScriptBlock]::Create('encoded'))",
+  "[ScriptBlock]::Create('encoded').Invoke()",
   'F=$(decode); nodejs --require ./preload.cjs "$F" "$P" "$S" "$T"',
   'F=$(decode); bun --preload ./preload.mjs "$F" "$P" "$S" "$T"',
   'F=$(decode); deno run "$F" "$P" "$S" "$T"',
@@ -226,9 +238,9 @@ ok(!maintenanceProducerCommandMentioned(encodedPowerShellAsPlainData), "PowerShe
 eq(checkMaintenanceProducerInvocation(encodedPowerShellAsPlainData), null, "encoded-command plain data stays outside the producer gate");
 ok(!checkDangerousCommand(encodedPowerShellAsPlainData), "ordinary encoded-command plain output stays allowed");
 const encodedPowerShellAsScriptArgument = "pwsh -File script.ps1 /EncodedCommand";
-ok(!maintenanceProducerCommandMentioned(encodedPowerShellAsScriptArgument), "PowerShell option scanning stops at -File");
-eq(checkMaintenanceProducerInvocation(encodedPowerShellAsScriptArgument), null, "script argument stays outside the producer gate");
-ok(!checkDangerousCommand(encodedPowerShellAsScriptArgument), "ordinary PowerShell script argument stays allowed");
+ok(maintenanceProducerCommandMentioned(encodedPowerShellAsScriptArgument), "PowerShell script-file launch is classified as opaque");
+ok(checkMaintenanceProducerInvocation(encodedPowerShellAsScriptArgument), "PowerShell script-file launch enters the producer gate");
+ok(checkDangerousCommand(encodedPowerShellAsScriptArgument), "PowerShell script-file launch is denied while the producer exists");
 for (const lookupCommand of ["command -v pwsh /EncodedCommand", "command -V pwsh /EncodedCommand"]) {
   ok(!maintenanceProducerCommandMentioned(lookupCommand), `PowerShell name lookup is not classified as an invocation: ${lookupCommand}`);
   eq(checkMaintenanceProducerInvocation(lookupCommand), null, `PowerShell lookup stays outside the producer gate: ${lookupCommand}`);
@@ -258,7 +270,11 @@ ok(!checkDangerousCommand(terminalWrapperAfterOption), "terminal wrapper mode af
 ok(checkDangerousCommand("node --require ./preload.cjs scripts/ordinary-check.mjs"), "Node require preload is denied");
 ok(checkDangerousCommand("NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "NODE_OPTIONS preload is denied");
 ok(checkDangerousCommand("FOO=1 NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "prefixed NODE_OPTIONS preload is denied");
+ok(checkDangerousCommand("Set-Item Env:NODE_OPTIONS $PRELOAD"), "PowerShell Set-Item NODE_OPTIONS mutation is denied");
+ok(checkDangerousCommand("$env:NODE_OPTIONS = $PRELOAD"), "PowerShell env assignment to NODE_OPTIONS is denied");
+ok(checkDangerousCommand("[Environment]::SetEnvironmentVariable('NODE_OPTIONS', $PRELOAD)"), ".NET NODE_OPTIONS mutation is denied");
 ok(!checkDangerousCommand("rg -n 'NODE_OPTIONS=' docs"), "NODE_OPTIONS spelling used as quoted search data stays allowed");
+ok(!checkDangerousCommand("rg -n 'Set-Item Env:NODE_OPTIONS' docs"), "PowerShell NODE_OPTIONS mutation spelling used as quoted search data stays allowed");
 
 // ── net-new: shell-redirect .env write (2026-07-13, shared with mcp-tool-guard) ──
 ok(checkDangerousCommand("echo SECRET=x > .env"), "shell-redirect write to .env blocked");
