@@ -67,29 +67,52 @@ It is an availability bug — a legitimate booking is refused with an opaque err
 a fractional weighted average, so nothing is broken today. It is a trap waiting for the first quote
 with mixed pricing on one product, which is ordinary business behavior.
 
-**Fix written 2026-08-14, not applied, and it collides with a second pending fix.** The fix is a
-forward-only migration adding `v_wavg_price := ROUND(v_wavg_price, 2);` alongside line 137, so price
-and cost settle on one basis at the same point — the fix the existing comment already argues for on
-the cost side. It is committed as
-`supabase/migrations/20260814194500_round_draw_down_weighted_unit_price.sql` on branch
-`claude/draw-down-price-rounding` (worktree `.claude/worktrees/confident-mclean-7f73d6`), unpushed,
-with no PR yet.
+**The obvious fix is wrong. Do not round the weighted average unit price.** Adding
+`v_wavg_price := ROUND(v_wavg_price, 2);` alongside line 137 — mirroring what the code already does
+on the cost side — makes the guard pass and silently overcharges the customer. The unit price is a
+*derived average* that is then multiplied by the quantity, so rounding it moves the line total by up
+to half a cent **times the quantity**, not by one cent. Measured in PostgreSQL 17 on 2026-08-14 with
+the body's own expressions: a quote holding 1,000 units at $1.00 and 2,000 units at $1.01 has an
+exact value of $3,020.00; rounding the average unit price to $1.01 and extending it produces
+$3,030.00, a **$10.00 overcharge** that flows into order revenue, profit, commissions and audit. The
+cost-side rounding at line 137 is not a precedent for this — a cost snapshot is not re-multiplied
+the same way. **Round after extension, never a per-unit figure.**
 
-**Read this before applying either one.** Two unapplied migrations now `CREATE OR REPLACE` this same
-function, and each preflight pins the *current* live `md5(prosrc)`:
+Two attempts at this rounding fix were written and both are withdrawn, not applied:
 
-| Migration | Branch | Purpose |
+| Migration | Branch | Status |
 |---|---|---|
-| `20260814194500_round_draw_down_weighted_unit_price.sql` | `claude/draw-down-price-rounding` | rounds the weighted unit price |
-| `20260813161614_restrict_draw_down_quote_owner.sql` | `claude/restrict-draw-down-owner` | requires quote ownership |
+| `20260814194500_round_draw_down_weighted_unit_price.sql` | `claude/draw-down-price-rounding` | **BLOCKED** by its own adversarial push-proof gate for this defect; unpushed, no PR |
+| `20260814210000_reconcile_draw_down_owner_and_price_rounding.sql` | `fix/draw-down-weighted-price-rounding` | **WITHDRAWN AND DELETED** 2026-08-14 — it merged the defect with the ownership fix and would have carried the overcharge forward |
 
-Whichever applies first rewrites `prosrc`, so the second one's preflight fails closed with a drift
-error rather than silently clobbering the first fix. That fail-closed behavior is correct and
-deliberate — but it means **the two bodies must be reconciled into a single migration before either
-is applied live.** Applying one and then relaxing the other's preflight would drop a fix.
+**The collision is dissolved, but a second blocker applies to everything here.** These two files
+previously collided with the ownership migration because all three `CREATE OR REPLACE` this function
+and each preflight pins the *current* live `md5(prosrc)`, so the second to apply fails closed. With
+both rounding attempts withdrawn, only one pending migration touches this function —
+`20260813161614_restrict_draw_down_quote_owner.sql` on `claude/restrict-draw-down-owner` — and it no
+longer needs reconciling with anything. It is a separate, sound security fix (quote ownership plus
+soft-delete exclusion), unaffected by the rounding defect.
+
+It is still not ready to apply. Verified against `origin/main` on 2026-08-14: **no tracked migration
+defines `_draw_down_quote_below_cost_impl_20260810` or the five-argument `draw_down_quote` wrapper.**
+Both exist only in the live database. Every candidate above pins those live bodies by `md5`, so none
+of them could be satisfied by a clean rebuild or a disaster-recovery replay. Any migration on this
+function stays blocked until the missing prerequisites are recovered into source control — see the
+recovery work on `recovery/live-no-file-six`.
+
+**The real fix is still unwritten, and it is smaller than a redesign.** The trigger that rejects the
+draw-down (`zz_crx_below_cost_order_items` → `_enforce_below_cost_line`, raising
+`INVALID_UNIT_PRICE_CENTS`) demands a whole-cent `price_per_unit`. It does **not** demand that the
+line total be derived from it. `order_items` stores `price_per_unit` and `total_price` as separate
+columns and the order header sums the per-line `total_price`, so the exact total can be kept while
+only the stored unit price is rounded — satisfying the guard without moving any money. The cost is a
+line whose unit price does not multiply out to its total, which is customer-visible on an invoice.
+The alternative floated on the blocked branch — keeping the source price tiers as separate order
+lines instead of averaging them — avoids that oddity but is a redesign of how a partial draw-down
+builds order lines. Neither has been built, costed, or chosen.
 
 Mason's decision 2026-08-14 was to log this bug and fix it separately rather than entangle it with
-the recovery PR. **Neither migration is approved for apply.** Do not re-diagnose this from scratch;
+the recovery PR. **No migration here is approved for apply.** Do not re-diagnose this from scratch;
 the live evidence is above.
 
 ---
