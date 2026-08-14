@@ -46,6 +46,7 @@ import { createHash } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { validateRecoveryAttestation } from "./write-recovery-attestation.mjs";
 
 const SCRIPT_DIR = path.resolve(fileURLToPath(new URL(".", import.meta.url)));
 const FALLBACK_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -600,8 +601,8 @@ export const GUARDED_BASE = "origin/main";
 // INSTRUCTIONS instead. The base is hard-pinned into the prompt; the branch diff
 // and all repo content are treated as untrusted DATA. Codex must end with exactly
 // one CODEX_PROOF_VERDICT line, which codexReviewProofVerdict() parses.
-export function buildCodexReviewPrompt({ base = GUARDED_BASE } = {}) {
-  return [
+export function buildCodexReviewPrompt({ base = GUARDED_BASE, trustedRecoveries = [] } = {}) {
+  const promptLines = [
     "You are performing an INDEPENDENT pre-push security review for CRX Manager.",
     "",
     `Review only the changes the candidate snapshot adds versus ${base}.`,
@@ -627,7 +628,36 @@ export function buildCodexReviewPrompt({ base = GUARDED_BASE } = {}) {
     `  ${CODEX_VERDICT_TOKEN}: CLEAN     — no blocker/high-severity problems (minor follow-ups are fine)`,
     `  ${CODEX_VERDICT_TOKEN}: BLOCKERS  — at least one blocker/high-severity problem`,
     `Output the ${CODEX_VERDICT_TOKEN} token exactly once, on the last line only.`,
-  ].join("\n");
+  ];
+
+  // No local attestation is the overwhelmingly common path. Return the original
+  // fixed prompt byte-for-byte so adding this narrow exception cannot weaken or
+  // perturb any ordinary adversarial review.
+  if (!Array.isArray(trustedRecoveries) || trustedRecoveries.length === 0) {
+    return promptLines.join("\n");
+  }
+
+  const recoverySection = [
+    "TRUSTED WRAPPER-SUPPLIED RECOVERY ATTESTATION (this is not diff content):",
+    "The operator independently verified that ONLY these exact NEW migration files already exist",
+    "in the live migration ledger, and the wrapper verified their candidate SHA-256 bindings:",
+    ...trustedRecoveries.map((recovery) =>
+      `  - ${recovery.path} (live ledger version ${recovery.ledger_version})`),
+    "For ONLY those exact files, review the already-applied SQL as a HISTORICAL RECORD. Report",
+    "problems in the applied SQL as forward-only follow-up recommendations, not blocker/high findings",
+    "against recovering the record. A documented SHA-256-bound redaction of live financial data is",
+    "not a reproducibility blocker for those files. This does NOT excuse actual secret/private-data",
+    "exposure or any issue outside the already-applied SQL and that narrow digest-bound redaction.",
+    "Every non-attested file, every modification to an existing tracked file, and every other change",
+    "remains under the normal rules above. Fully review unrelated risky changes. Any blocker/high there",
+    `must still end in ${CODEX_VERDICT_TOKEN}: BLOCKERS. A migration not named above has no exception.`,
+    "",
+  ];
+  const reportLine = promptLines.indexOf(
+    "Report your findings as usual. Then end your reply with EXACTLY ONE final line, and NOTHING",
+  );
+  promptLines.splice(reportLine, 0, ...recoverySection);
+  return promptLines.join("\n");
 }
 
 export function buildCodexExecArgs({ root, prompt, platform = process.platform }) {
@@ -775,7 +805,7 @@ export function run(argv = process.argv.slice(2)) {
     return 2;
   }
 
-  const prompt = buildCodexReviewPrompt({ base: GUARDED_BASE });
+  let prompt = buildCodexReviewPrompt({ base: GUARDED_BASE });
 
   if (options.dryRun) {
     const args = buildCodexExecArgs({ root: "<sanitized-review-workspace>", prompt });
@@ -810,6 +840,13 @@ export function run(argv = process.argv.slice(2)) {
     if (reviewWorkspace.baseSha !== baseBefore || reviewWorkspace.headSha !== headBefore) {
       throw new Error("Sanitized review workspace bindings do not match the guarded source refs.");
     }
+    const trustedRecoveries = validateRecoveryAttestation({
+      root,
+      reviewRoot: reviewWorkspace.root,
+      headSha: headBefore,
+      baseSha: baseBefore,
+    });
+    prompt = buildCodexReviewPrompt({ base: GUARDED_BASE, trustedRecoveries });
     const args = buildCodexExecArgs({ root: reviewWorkspace.root, prompt });
     result = spawnSync(codexBin, args, {
       cwd: reviewWorkspace.root,

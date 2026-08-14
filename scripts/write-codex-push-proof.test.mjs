@@ -2,6 +2,7 @@
 // Tests for the Codex push-proof wrapper (scripts/write-codex-push-proof.mjs).
 // Run: node scripts/write-codex-push-proof.test.mjs
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -31,6 +32,13 @@ import {
   worktreeIsClean,
 } from "./write-codex-push-proof.mjs";
 import { gitLocalEnvironmentNames } from "../.claude/hooks/git-test-env.mjs";
+import {
+  buildRecoveryAttestation,
+  mintRecoveryAttestation,
+  parseRecoveryArgs,
+  recoveryAttestationPath,
+  validateRecoveryAttestation,
+} from "./write-recovery-attestation.mjs";
 // Cross-check against the REAL guard validator so the minted proof shape can
 // never silently drift from what codex-push-guard actually accepts.
 import { proofValid } from "../.claude/hooks/codex-push-lib.mjs";
@@ -41,6 +49,65 @@ import { proofValid } from "../.claude/hooks/codex-push-lib.mjs";
 for (const name of gitLocalEnvironmentNames()) delete process.env[name];
 for (const name of Object.keys(process.env)) {
   if (/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(name)) delete process.env[name];
+}
+
+function commitFixture(root, message) {
+  execFileSync("git", ["add", "."], { cwd: root, stdio: "ignore" });
+  execFileSync(
+    "git",
+    ["-c", "user.name=Review Test", "-c", "user.email=review@example.invalid", "commit", "-qm", message],
+    { cwd: root, stdio: "ignore" },
+  );
+}
+
+function createRecoveryFixture({ recoveryPaths, baseContainsRecovery = false, includeUnrelatedRisk = true }) {
+  const root = mkdtempSync(path.join(tmpdir(), "crx-recovery-review-"));
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root, stdio: "ignore" });
+  writeFileSync(path.join(root, ".gitignore"), ".claude/session-state/\n");
+  writeFileSync(path.join(root, "README.md"), "base\n");
+  mkdirSync(path.join(root, "supabase", "migrations"), { recursive: true });
+  if (baseContainsRecovery) {
+    writeFileSync(path.join(root, ...recoveryPaths[0].split("/")), "-- existing base migration\n");
+  }
+  commitFixture(root, "base");
+  execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: root, stdio: "ignore" });
+  const baseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+
+  for (const recoveryPath of recoveryPaths) {
+    writeFileSync(
+      path.join(root, ...recoveryPath.split("/")),
+      `-- candidate historical record for ${path.posix.basename(recoveryPath)}\n`,
+    );
+  }
+  if (includeUnrelatedRisk) {
+    mkdirSync(path.join(root, "src", "lib"), { recursive: true });
+    writeFileSync(path.join(root, "src", "lib", "db.ts"), "export const unrelatedRiskyChange = true;\n");
+  }
+  commitFixture(root, "candidate");
+  const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  const packet = createSanitizedReviewWorkspace({
+    sourceRoot: root,
+    baseRef: "origin/main",
+    candidateRef: "HEAD",
+  });
+  return { root, baseSha, headSha, packet };
+}
+
+function candidateSnapshotSha(fixture, repoPath) {
+  return createHash("sha256")
+    .update(readFileSync(path.join(fixture.packet.root, "CANDIDATE_SNAPSHOT", ...repoPath.split("/"))))
+    .digest("hex");
+}
+
+function writeLocalAttestation(root, attestation) {
+  const attestationPath = recoveryAttestationPath(root);
+  mkdirSync(path.dirname(attestationPath), { recursive: true });
+  writeFileSync(attestationPath, `${JSON.stringify(attestation, null, 2)}\n`, "utf8");
+}
+
+function removeRecoveryFixture(fixture) {
+  removeSanitizedReviewWorkspace(fixture.packet.root);
+  rmSync(fixture.root, { recursive: true, force: true });
 }
 
 // ── arg parsing ──────────────────────────────────────────────────────────────
@@ -86,9 +153,35 @@ assert.throws(() => parseArgs(["--bogus"]), /Unknown argument/, "unknown args th
 // HEAD-bound proof the guard accepts.
 assert.throws(() => parseArgs(["--base", "HEAD"]), /Unknown argument/, "--base is rejected (base is pinned)");
 assert.equal(GUARDED_BASE, "origin/main", "review base is pinned to the guard's origin/main...HEAD base");
+assert.deepEqual(
+  parseRecoveryArgs([
+    "--migration",
+    "supabase\\migrations\\20260812120000_recovered_alpha.sql=20260812120001",
+  ]).specs,
+  [{
+    repoPath: "supabase/migrations/20260812120000_recovered_alpha.sql",
+    ledgerVersion: "20260812120001",
+  }],
+  "recovery helper accepts an explicit path-to-ledger-version binding and normalizes Windows separators",
+);
+assert.throws(
+  () => parseRecoveryArgs(["--migration", "supabase/migrations/not_timestamped.sql=20260812120001"]),
+  /timestamped migration/,
+  "recovery helper refuses paths outside the narrow timestamped migration shape",
+);
 
 // ── Codex invocation: fixed review prompt + read-only exec args ───────────────
 const prompt = buildCodexReviewPrompt();
+assert.equal(
+  createHash("sha256").update(prompt).digest("hex"),
+  "25c64755ed545fd21cadeed518ba23650c0f6a4e7391f5494098a6949d2c7a80",
+  "no-attestation prompt remains byte-for-byte identical to the pre-exception fixed prompt",
+);
+assert.equal(
+  buildCodexReviewPrompt({ trustedRecoveries: [] }),
+  prompt,
+  "an explicitly empty trusted list behaves exactly like no attestation",
+);
 assert.match(prompt, /INDEPENDENT pre-push security review/i);
 assert.match(prompt, /candidate snapshot adds versus origin\/main/, "prompt pins the guarded base");
 assert.match(prompt, /sanitized, Git-free review packet/i, "prompt restricts review to the sanitized packet");
@@ -268,6 +361,211 @@ assert.match(safeReviewCaptureText("ordinary clean review", "STDOUT"), /ordinary
   assert.equal(existsSync(path.join(workingPacket.root, "CANDIDATE_SNAPSHOT", ".env")), false, "working-tree packet still excludes ignored secrets");
   removeSanitizedReviewWorkspace(workingPacket.root);
   rmSync(source, { recursive: true, force: true });
+}
+
+// ── trusted live-ledger recovery attestation ─────────────────────────────────
+// The file is local + ignored and is minted only after an operator independently
+// supplies ledger truth. The wrapper still verifies every commit/path/byte/time
+// binding itself before changing one word of the fixed review prompt.
+{
+  const recoveryPaths = [
+    "supabase/migrations/20260812120000_recovered_alpha.sql",
+    "supabase/migrations/20260812130000_recovered_beta.sql",
+  ];
+  const ledgerVersions = ["20260812120001", "20260812130001"];
+  const issuedAt = "2026-08-14T12:00:00.000Z";
+  const nowMs = Date.parse("2026-08-14T12:05:00.000Z");
+  const fixture = createRecoveryFixture({ recoveryPaths, includeUnrelatedRisk: true });
+
+  assert.deepEqual(
+    validateRecoveryAttestation({
+      root: fixture.root,
+      reviewRoot: fixture.packet.root,
+      headSha: fixture.headSha,
+      baseSha: fixture.baseSha,
+      nowMs,
+    }),
+    [],
+    "no local attestation leaves the wrapper on its unchanged ordinary-review path",
+  );
+
+  const minted = mintRecoveryAttestation({
+    root: fixture.root,
+    issuedAt,
+    specs: recoveryPaths.map((repoPath, index) => ({
+      repoPath,
+      ledgerVersion: ledgerVersions[index],
+    })),
+  });
+  assert.equal(minted.path, recoveryAttestationPath(fixture.root));
+  assert.deepEqual(
+    minted.attestation.recoveries.map((recovery) => recovery.path),
+    recoveryPaths,
+    "minting helper binds exactly the operator-supplied migration paths",
+  );
+  const trustedRecoveries = validateRecoveryAttestation({
+    root: fixture.root,
+    reviewRoot: fixture.packet.root,
+    headSha: fixture.headSha,
+    baseSha: fixture.baseSha,
+    nowMs,
+  });
+  assert.deepEqual(
+    trustedRecoveries.map((recovery) => recovery.path),
+    recoveryPaths,
+    "valid attestation survives independent wrapper validation",
+  );
+
+  const trustedPrompt = buildCodexReviewPrompt({ trustedRecoveries });
+  assert.match(trustedPrompt, /TRUSTED WRAPPER-SUPPLIED RECOVERY ATTESTATION/);
+  assert.equal(
+    (trustedPrompt.match(/^  - supabase\/migrations\//gm) || []).length,
+    recoveryPaths.length,
+    "trusted prompt names exactly the attested recovery files",
+  );
+  for (const recoveryPath of recoveryPaths) assert.ok(trustedPrompt.includes(recoveryPath));
+  assert.match(trustedPrompt, /HISTORICAL RECORD/);
+  assert.match(trustedPrompt, /forward-only follow-up recommendations/);
+  assert.match(trustedPrompt, /documented SHA-256-bound redaction of live financial data/);
+  assert.match(
+    trustedPrompt,
+    /Every non-attested file, every modification to an existing tracked file, and every other change/,
+    "exception explicitly preserves ordinary review for everything outside the exact recovery list",
+  );
+  assert.match(
+    trustedPrompt,
+    /Fully review unrelated risky changes/,
+    "unrelated risky changes remain fully reviewed",
+  );
+  assert.match(
+    readFileSync(path.join(fixture.packet.root, "REVIEW_DIFF.patch"), "utf8").replace(/\\/g, "/"),
+    /src\/lib\/db\.ts/,
+    "valid-attestation fixture really contains an unrelated risky change in the reviewed diff",
+  );
+
+  const validRecoveries = recoveryPaths.map((repoPath, index) => ({
+    path: repoPath,
+    ledger_version: ledgerVersions[index],
+    sha256: candidateSnapshotSha(fixture, repoPath),
+  }));
+  const validShape = buildRecoveryAttestation({
+    headSha: fixture.headSha,
+    baseSha: fixture.baseSha,
+    recoveries: validRecoveries,
+    issuedAt,
+  });
+
+  writeLocalAttestation(fixture.root, buildRecoveryAttestation({
+    headSha: fixture.headSha,
+    baseSha: fixture.baseSha,
+    recoveries: validRecoveries,
+    issuedAt: "2026-08-14T11:00:00.000Z",
+  }));
+  assert.throws(
+    () => validateRecoveryAttestation({
+      root: fixture.root,
+      reviewRoot: fixture.packet.root,
+      headSha: fixture.headSha,
+      baseSha: fixture.baseSha,
+      nowMs,
+    }),
+    /expired or not yet valid/,
+    "expired attestation is refused",
+  );
+
+  writeLocalAttestation(fixture.root, { ...validShape, head_sha: "f".repeat(40) });
+  assert.throws(
+    () => validateRecoveryAttestation({
+      root: fixture.root,
+      reviewRoot: fixture.packet.root,
+      headSha: fixture.headSha,
+      baseSha: fixture.baseSha,
+      nowMs,
+    }),
+    /HEAD does not match/,
+    "attestation for another candidate HEAD is refused",
+  );
+
+  writeLocalAttestation(fixture.root, {
+    ...validShape,
+    recoveries: [{
+      path: "supabase/migrations/20260812140000_missing_recovery.sql",
+      ledger_version: "20260812140001",
+      sha256: "a".repeat(64),
+    }],
+  });
+  assert.throws(
+    () => validateRecoveryAttestation({
+      root: fixture.root,
+      reviewRoot: fixture.packet.root,
+      headSha: fixture.headSha,
+      baseSha: fixture.baseSha,
+      nowMs,
+    }),
+    /missing from the candidate snapshot/,
+    "attestation cannot name a missing candidate file",
+  );
+
+  writeLocalAttestation(fixture.root, {
+    ...validShape,
+    recoveries: [{ ...validRecoveries[0], sha256: "b".repeat(64) }],
+  });
+  assert.throws(
+    () => validateRecoveryAttestation({
+      root: fixture.root,
+      reviewRoot: fixture.packet.root,
+      headSha: fixture.headSha,
+      baseSha: fixture.baseSha,
+      nowMs,
+    }),
+    /SHA-256 does not match/,
+    "attestation cannot widen to different candidate bytes",
+  );
+
+  removeRecoveryFixture(fixture);
+
+  const modifiedFixture = createRecoveryFixture({
+    recoveryPaths: [recoveryPaths[0]],
+    baseContainsRecovery: true,
+    includeUnrelatedRisk: false,
+  });
+  const modifiedShape = buildRecoveryAttestation({
+    headSha: modifiedFixture.headSha,
+    baseSha: modifiedFixture.baseSha,
+    recoveries: [{
+      path: recoveryPaths[0],
+      ledger_version: ledgerVersions[0],
+      sha256: candidateSnapshotSha(modifiedFixture, recoveryPaths[0]),
+    }],
+    issuedAt,
+  });
+  writeLocalAttestation(modifiedFixture.root, modifiedShape);
+  assert.throws(
+    () => validateRecoveryAttestation({
+      root: modifiedFixture.root,
+      reviewRoot: modifiedFixture.packet.root,
+      headSha: modifiedFixture.headSha,
+      baseSha: modifiedFixture.baseSha,
+      nowMs,
+    }),
+    /modifies an existing base path/,
+    "a modification to an existing migration can never receive the recovery exception",
+  );
+  assert.throws(
+    () => mintRecoveryAttestation({
+      root: modifiedFixture.root,
+      issuedAt,
+      specs: [{ repoPath: recoveryPaths[0], ledgerVersion: ledgerVersions[0] }],
+    }),
+    /modifies an existing base path/,
+    "minting helper also refuses modified base files before writing an attestation",
+  );
+  assert.equal(
+    existsSync(recoveryAttestationPath(modifiedFixture.root)),
+    false,
+    "a refused mint removes any prior local attestation instead of leaving stale authority behind",
+  );
+  removeRecoveryFixture(modifiedFixture);
 }
 
 // ── verdict parsing: DETERMINISTIC machine token, no prose heuristics ─────────

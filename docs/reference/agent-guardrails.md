@@ -127,6 +127,33 @@ Built from a workflow that mined the last 50 sessions (524 Mason-typed messages 
 | `live-testdata-guard.mjs` (+ `live-testdata-lib.mjs`) | PreToolUse(*) | Blocks `execute_sql` that INSERTs into a live business table without `[E2E]`, or DELETE/void of a financial table. Also (2026-07-13) blocks ANY OTHER UPDATE against a live business table without `[E2E]` — the same standard already applied to INSERT (previously only money-column UPDATEs and cancel/void status UPDATEs were caught; a plain `UPDATE customers SET phone = ...` with no marker used to sail through). Override: create `.claude/session-state/REAL-DATA-OK`. | "use only fake fields/customers… delete them after"; cancel/void of real financial records is Mason's job. |
 | `active-area-guard.mjs` | PreToolUse(Bash) | Blocks destructive ops (`rm -rf`, `git worktree remove`, `git branch -D`, `git clean -f`, force-push) against a folder/branch listed in `.claude/active-areas.json`. Inert when that file is absent. | "we're working in beyond-parity now, don't mess with it" — sweeping a folder marked active. |
 
+### Historical migration-recovery exception
+
+Mason approved one narrow push-proof prompt exception on 2026-08-14. It does not weaken proof
+shape, freshness, clean-worktree, model, effort, exact-verdict, base, or HEAD checks. After an
+operator has confirmed the migration versions through a live read-only ledger query, run:
+
+```text
+node scripts/write-recovery-attestation.mjs --migration supabase/migrations/<timestamp>_<name>.sql=<live-ledger-version> [--migration ...]
+```
+
+The helper never queries the database. It requires a clean committed candidate, verifies each path
+is a regular migration file newly added versus `origin/main`, computes the candidate SHA-256, and
+writes ignored local state under `.claude/session-state/`. The attestation is bound to the exact HEAD
+and base, expires after the same 30-minute window as a push proof, and records each file's live ledger
+version. The review wrapper independently rechecks the JSON shape, time window, HEAD/base,
+added-file status, candidate snapshot path, Git mode, and all byte digests before injecting a trusted
+paragraph naming exactly those files.
+
+For the attested files only, Sol treats the already-applied SQL as a historical record: applied-SQL
+concerns become forward-only follow-up recommendations, and a documented digest-bound redaction of
+live financial data is not a reproducibility blocker. Actual secret/private-data exposure remains a
+normal finding. Every non-attested file, every modification to an existing tracked file, and every
+unrelated risky change remains fully reviewed; a blocker or high-severity issue there still yields
+`CODEX_PROOF_VERDICT: BLOCKERS`. With no attestation file, the fixed prompt is byte-for-byte the
+pre-exception prompt. Any malformed, expired, shifted, missing-file, modified-file, or digest
+mismatch fails closed before the reviewer runs and clears any proof for that HEAD.
+
 ### Conditionally-wired guards
 
 These two are not always "on" for a given session — one is only *registered* in specific worktrees, the other is registered everywhere but only *active* when armed.
