@@ -77,7 +77,7 @@ Found while writing this up. None affect a finding's validity — they are defec
 | A killed agent is indistinguishable from a clean one | `workflow.mjs` finder/verifier error handling | The harness returns `null` for an agent that dies on a terminal API error, and the script turns that into a finder with zero findings; failed verifiers are dropped rather than flagged. A re-run interrupted mid-flight would publish partial coverage that reads as complete. This run's totals came from a pass reporting 112/112 agents with zero errors — but the next run needs that checked explicitly. Details in `README.md` under *Method*. |
 | The workflow embeds one session's absolute repo path | `workflow.mjs` reviewer prompt | Re-running from any other checkout points all agents at a directory that does not exist. Documented in `README.md`; kept unedited so the file stays a faithful record of what ran. |
 
-If a Step 2 triage verdict changes, remember `build-report.mjs` now honours `verdict.refuted` and derives the distinct-defect estimate — edit `findings.json` and re-run rather than hand-editing `report.html`.
+If a Step 2 triage verdict changes, remember `build-report.mjs` now honours `verdict.refuted` and derives the distinct-defect estimate — edit `findings.json`, run `node docs/audits/ordering-cycle-review-2026-08-09/build-report.mjs` from the repository root, and do not hand-edit `report.html`.
 
 ## Out of scope
 
