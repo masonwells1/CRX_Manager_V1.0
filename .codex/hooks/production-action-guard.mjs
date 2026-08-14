@@ -23,7 +23,26 @@ import {
 } from "../../.claude/hooks/codex-push-lib.mjs";
 import { stripCommentsQuoteAware } from "../../.claude/hooks/live-testdata-lib.mjs";
 
-const LIVE_TOOL_ACTIONS = /(?:apply_migration|deploy_edge_function|delete_branch)$/i;
+// Sol HIGH finding (2026-08-14, write-scope review): with the Supabase connector
+// write-enabled, ANY mutating Supabase tool Codex can reach is a route to
+// production schema/data changes that bypasses the migration gates. Supabase
+// tools are therefore governed by an EXACT read-only allowlist — a tool this
+// guard has never heard of fails closed instead of failing open. execute_sql is
+// the one deliberate exception: it passes through to the content gate below,
+// which only admits clearly read-only SQL.
+const SUPABASE_TOOL_RE = /(?:^|__)supabase__([a-z0-9_]+)$/i;
+const SUPABASE_READ_ONLY_TOOLS = new Set([
+  "generate_typescript_types", "get_advisors", "get_cost", "get_edge_function",
+  "get_logs", "get_organization", "get_project", "get_project_url",
+  "get_publishable_keys", "list_branches", "list_edge_functions",
+  "list_extensions", "list_migrations", "list_organizations", "list_projects",
+  "list_tables", "query_logs", "search_docs",
+]);
+// Defense-in-depth for connectors whose MCP prefix is NOT the literal
+// `supabase` server name (e.g. UUID-named app connectors): the known mutating
+// lifecycle leaves stay blocked by suffix regardless of prefix. Mirrors the
+// branch/project lifecycle deny set in .claude/hooks/autopilot-lib.mjs.
+const LIVE_TOOL_ACTIONS = /(?:apply_migration|deploy_edge_function|delete_branch|merge_branch|reset_branch|rebase_branch|create_branch|create_project|pause_project|restore_project|confirm_cost)$/i;
 const GITHUB_MERGE_TOOL = /merge_pull_request$/i;
 // Both MCP naming (mcp__github__create_file) and app naming
 // (mcp__codex_apps__github_create_file) — Codex round-5.
@@ -592,7 +611,19 @@ export function evaluateProductionAction({
   }
 
   if (LIVE_TOOL_ACTIONS.test(name)) {
-    return denied("Live migrations, edge-function deployments, and protected-branch deletion remain outside Codex's standing authorization.");
+    return denied("Live migrations, edge-function deployments, and Supabase branch/project lifecycle mutations remain outside Codex's standing authorization.");
+  }
+
+  const supabaseTool = SUPABASE_TOOL_RE.exec(name);
+  if (supabaseTool) {
+    const leaf = supabaseTool[1].toLowerCase();
+    if (leaf !== "execute_sql" && !SUPABASE_READ_ONLY_TOOLS.has(leaf)) {
+      return denied(
+        `CODEX PRODUCTION GATE: Supabase tool "${leaf}" is not on the exact read-only allowlist and is denied (fail closed). ` +
+        "With the connector write-enabled, every mutating or unrecognized Supabase tool is blocked so production schema and data " +
+        "changes can only travel the reviewed migration path."
+      );
+    }
   }
 
   if (/execute_sql$/i.test(name)) {

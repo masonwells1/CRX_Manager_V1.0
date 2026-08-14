@@ -2,6 +2,19 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-14 — Codex Supabase guard: exact read-only allowlist (Sol HIGH finding)
+
+Sol's adversarial review of the write-scope PR found that the Codex production-action guard
+blocked only three Supabase tool suffixes (apply_migration, deploy_edge_function, delete_branch),
+so branch-lifecycle mutations like merge_branch and reset_branch would have passed once the
+connector went write-enabled. The guard now governs every `supabase__`-prefixed tool with an
+exact read-only allowlist that fails closed on unrecognized tools; `execute_sql` remains the one
+pass-through to the existing read-only SQL content gate. A defense-in-depth suffix blocklist
+(mirroring the Claude-side autopilot deny set) covers connectors whose MCP prefix is a UUID rather
+than the literal server name. Regression tests assert every lifecycle mutation is blocked under
+both prefixes, an unknown future tool is blocked, and each read-only tool still passes. The
+protected-producer blob pins were re-pinned to the hardened guard.
+
 ## 2026-08-14 — Write-access assertion scoped to the Supabase connector url
 
 CodeRabbit follow-up on the Codex write-scope PR: the two agent-guidance checkers asserted the

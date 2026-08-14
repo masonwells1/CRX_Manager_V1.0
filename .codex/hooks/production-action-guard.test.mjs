@@ -96,6 +96,44 @@ try {
   assert.equal(evaluateProductionAction({ toolName: "mcp__supabase__execute_sql", toolInput: { query: "delete from invoices" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "mcp__supabase__apply_migration" }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "mcp__supabase__delete_branch" }).blocked, true);
+
+  // Sol HIGH (2026-08-14, write-scope review): with the connector write-enabled,
+  // every mutating Supabase branch/project lifecycle tool must fail closed —
+  // merge_branch/reset_branch/rebase_branch previously returned blocked=false,
+  // a route to production schema changes around the migration gates.
+  for (const leaf of [
+    "merge_branch", "reset_branch", "rebase_branch", "create_branch",
+    "create_project", "pause_project", "restore_project", "confirm_cost",
+    "apply_migration", "deploy_edge_function", "delete_branch",
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: `mcp__supabase__${leaf}` }).blocked,
+      true,
+      `mutating Supabase tool denied: ${leaf}`,
+    );
+    // Suffix defense-in-depth: UUID-named app connectors are blocked too.
+    assert.equal(
+      evaluateProductionAction({ toolName: `mcp__50e15046-cf2c-49da-b8df-ceef27768f63__${leaf}` }).blocked,
+      true,
+      `mutating Supabase tool denied under app-connector prefix: ${leaf}`,
+    );
+  }
+  // A Supabase tool the guard has never heard of fails CLOSED, not open.
+  const unknownSupabase = evaluateProductionAction({ toolName: "mcp__supabase__future_write_tool" });
+  assert.equal(unknownSupabase.blocked, true, "unrecognized Supabase tool fails closed");
+  assert.match(unknownSupabase.reason, /read-only allowlist/i, "unknown-tool denial names the allowlist");
+  // The exact read-only allowlist stays usable.
+  for (const leaf of [
+    "list_tables", "list_migrations", "list_branches", "list_extensions",
+    "list_edge_functions", "get_advisors", "get_project", "get_edge_function",
+    "query_logs", "search_docs", "generate_typescript_types",
+  ]) {
+    assert.equal(
+      evaluateProductionAction({ toolName: `mcp__supabase__${leaf}` }).blocked,
+      false,
+      `read-only Supabase tool stays allowed: ${leaf}`,
+    );
+  }
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "vercel --prod" } }).blocked, true);
   assert.equal(evaluateProductionAction({ toolName: "PowerShell", toolInput: { command: "npm run build" } }).blocked, false);
   const producerName = "apply-live-testdata-" + "maintenance-20260812.mjs";

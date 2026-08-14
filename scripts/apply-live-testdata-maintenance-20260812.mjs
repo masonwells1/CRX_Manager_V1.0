@@ -33,11 +33,14 @@ const PROTECTED_SOURCES = {
   pushLib: [".claude", "hooks", "codex-push-" + "lib.mjs"].join("/"),
 };
 const EXPECTED_PROTECTED_INPUT_BLOBS = {
-  codexGuard: "fc72a09819632e29ab6273f0cb480c6ac560a430",
+  // Re-pinned 2026-08-14: the guard gained the Supabase read-only allowlist
+  // (Sol HIGH finding on the write-scope review); none of this producer's
+  // transform anchors changed.
+  codexGuard: "89750dbca9ed9524e2aa19a063474b782494ccc4",
   pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "b89cfa2c3f980e6965f2f7a50ab2d836c8109ac5",
+  codexGuard: "6cbe0ba1ad94088edce28b66b8544910ace9beee",
   pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
 };
 
