@@ -129,6 +129,7 @@
         "anon-exec-secdef",
         "auth-bound-role-ungated",
         "office-only-pricing-secdef-gates",
+        "quote-versions-rpc-owned",
         "save-field-actor-binding",
         "secdef-searchpath",
         "section9-po-ap-controls",

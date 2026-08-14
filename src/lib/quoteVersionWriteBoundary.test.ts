@@ -39,6 +39,7 @@ const predicate = read(
   'quote-versions-rpc-owned.sql',
 );
 const smoke = read('scripts', 'smoke', 'smoke-quote-version-write-boundary.sql');
+const restoreTrustSmoke = read('scripts', 'smoke', 'smoke-quote-version-restore-trust.sql');
 const quoteBuilder = read('src', 'pages', 'QuoteBuilder.tsx');
 const db = read('src', 'lib', 'db.ts');
 const testAreas = read('scripts', 'test-areas.json');
@@ -717,13 +718,12 @@ describe('quote_versions write boundary — standing predicate', () => {
     expect(quoteBuilder).toContain('This older saved version cannot be restored');
   });
 
-  it('holds the post-boundary predicate out of ordinary pre-apply security runs', () => {
-    // The live database deliberately fails this predicate until BOTH quote
-    // migrations are applied. It remains a discoverable predicate and must be
-    // run explicitly during the post-apply gate, not used to make every normal
-    // security area run fail before the boundary exists.
+  it('keeps the post-boundary predicate in the scoped security gate', () => {
+    // This is deliberately red until both quote migrations apply. Excluding it
+    // would make every later `test:security -- --with-db` silently omit the
+    // trust-marker and restore-routing drift checks after deployment.
     const security = JSON.parse(testAreas).areas.security as { sweeps: string[] };
-    expect(security.sweeps).not.toContain('quote-versions-rpc-owned');
+    expect(security.sweeps).toContain('quote-versions-rpc-owned');
   });
 
   it('stays in lockstep with every privilege the migration revokes', () => {
@@ -765,6 +765,45 @@ describe('quote_versions write boundary — standing predicate', () => {
       );
     }
     expect(predicate).toContain('EXPECT ZERO rows');
+  });
+});
+
+describe('quote_versions restore trust boundary — rollback smoke', () => {
+  it('is registered as a psql-only security/regression/lifecycle chain', () => {
+    const specs = JSON.parse(read('scripts', 'smoke', 'smoke-specs.json')) as {
+      specs: Record<string, { chain?: string; covers?: string[]; area?: string[]; psql_only?: boolean }>;
+    };
+    const entry = specs.specs.restore_quote_version_trust_boundary;
+    expect(entry?.chain).toBe('smoke-quote-version-restore-trust.sql');
+    expect(entry?.psql_only).toBe(true);
+    expect(entry?.covers).toEqual(expect.arrayContaining(['create_quote_version', 'restore_quote_version']));
+    expect(entry?.area).toEqual(expect.arrayContaining(['security', 'regression', 'lifecycle']));
+  });
+
+  it('refuses to run before the trust migration is deployed', () => {
+    expect(restoreTrustSmoke).toContain("a.attname = 'restore_trusted_at'");
+    expect(restoreTrustSmoke).toContain('SMOKE_PREREQ: 20260813180000 quote-version restore trust boundary is not deployed');
+  });
+
+  it('creates both an RPC-trusted version and an owner-only unmarked fixture', () => {
+    expect(restoreTrustSmoke).toContain('SELECT public.create_quote_version(');
+    expect(restoreTrustSmoke).toMatch(/restore_trusted_at IS NOT NULL/);
+    expect(restoreTrustSmoke).toMatch(/INSERT INTO public\.quote_versions[\s\S]*restore_trusted_at[\s\S]*NULL/);
+  });
+
+  it('requires the exact legacy refusal before any quote state changes', () => {
+    expect(restoreTrustSmoke).toContain("IF SQLERRM <> 'QUOTE_VERSION_LEGACY_UNTRUSTED' THEN");
+    expect(restoreTrustSmoke).toMatch(/to_jsonb\(q\), q\.row_version[\s\S]*FOR UPDATE/);
+    expect(restoreTrustSmoke).toMatch(/v_quote_after IS DISTINCT FROM v_quote_before/);
+    expect(restoreTrustSmoke).toMatch(/v_sections_after IS DISTINCT FROM v_sections_before/);
+    expect(restoreTrustSmoke).toMatch(/v_items_after IS DISTINCT FROM v_items_before/);
+  });
+
+  it('also restores the marked version and proves the N+1 token', () => {
+    expect(restoreTrustSmoke).toContain('v_trusted_version_id');
+    expect(restoreTrustSmoke).toMatch(/v_restore_result->>'status', ''\) <> 'restored'/);
+    expect(restoreTrustSmoke).toContain("(v_restore_result->>'row_version')::bigint <> v_expected_row_version + 1");
+    expect(restoreTrustSmoke).toContain("RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK quote-version restore trust boundary'");
   });
 });
 

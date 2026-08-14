@@ -844,6 +844,20 @@
         "security",
         "billing"
       ]
+    },
+    "restore_quote_version_trust_boundary": {
+      "chain": "smoke-quote-version-restore-trust.sql",
+      "psql_only": true,
+      "description": "Rollback-only proof for 20260813180000: an owner-created unmarked legacy version must raise QUOTE_VERSION_LEGACY_UNTRUSTED before quote/header/section/item mutation, while a newly RPC-created marked version restores successfully with the authoritative N+1 row-version token. EXPECT SMOKE_PREREQ until the trust-boundary migration is deployed.",
+      "covers": [
+        "create_quote_version",
+        "restore_quote_version"
+      ],
+      "area": [
+        "security",
+        "regression",
+        "lifecycle"
+      ]
     }
   }
 }
