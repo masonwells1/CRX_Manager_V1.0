@@ -64,6 +64,28 @@ ok(r.stdout.includes("ACTOR BINDING VIOLATION"), "block message is labelled");
 ok(r.stdout.includes("p_performed_by"), "block message names the forgeable parameter");
 ok(r.stdout.includes("20260617171500"), "block message cites the link_blend_ticket_to_order fix");
 
+const MERGE_INSERT_MUTATION = `
+BEGIN
+  MERGE INTO public.invoices AS target
+  USING (VALUES (p_performed_by)) AS source(actor_id)
+  ON false
+  WHEN NOT MATCHED THEN INSERT (created_by) VALUES (source.actor_id);
+END;
+`;
+r = runHook(fn(MERGE_INSERT_MUTATION));
+ok(isDeny(r), "an unbound SECURITY DEFINER function cannot hide an actor write in a MERGE insert branch");
+
+const MERGE_DELETE_MUTATION = `
+BEGIN
+  MERGE INTO public.invoices AS target
+  USING (VALUES (p_performed_by)) AS source(actor_id)
+  ON target.created_by = source.actor_id
+  WHEN MATCHED THEN DELETE;
+END;
+`;
+r = runHook(proc(MERGE_DELETE_MUTATION));
+ok(isDeny(r), "an unbound SECURITY DEFINER procedure cannot hide an actor write in a MERGE delete branch");
+
 const POST_BODY_UNBOUND = `CREATE OR REPLACE FUNCTION public.post_body_actor(p_performed_by uuid)
 RETURNS void AS $function$
 BEGIN

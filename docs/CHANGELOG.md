@@ -54,6 +54,12 @@ matches both to the created routine's exact identity; a wrong-overload revoke
 remains under actor-binding review. The focused hook suite now passes 384
 assertions.
 
+The fourth authorized review round found that a `MERGE INTO` branch could
+mutate from an unbound actor parameter while escaping the hook's otherwise
+consistent mutation reader. The hook and its read-only live companion sweep
+now classify that form, with function-insert and procedure-delete regressions.
+The focused hook suite now passes 388 assertions.
+
 The next exact-head review found that a direct internal-only execute ACL could
 still become browser-reachable through a newly granted role membership. The
 guard now refuses that ambiguity anywhere in the same migration, before or

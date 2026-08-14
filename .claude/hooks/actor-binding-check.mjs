@@ -2426,8 +2426,8 @@ try {
       `\\b(?:CALL|PERFORM)\\b[^;]*?(?:${actorParamReference})`,
       "i"
     );
-    const hasMutation = /\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM)\b/i.test(maskedBody) ||
-      /\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM)\b/i.test(commentBlankedBody) ||
+    const hasMutation = /\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM|MERGE\s+INTO)\b/i.test(maskedBody) ||
+      /\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM|MERGE\s+INTO)\b/i.test(commentBlankedBody) ||
       /\bEXECUTE\b/i.test(maskedBody) ||
       actorForwardedInvocation.test(maskedBody) ||
       actorForwardedInvocation.test(commentBlankedBody);

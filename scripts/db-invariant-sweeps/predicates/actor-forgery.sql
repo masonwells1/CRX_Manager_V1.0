@@ -1,6 +1,6 @@
 -- predicate (c): actor-forgery   (over-broad BY DESIGN — allowlist the semantic-safe ones)
 -- authenticated-executable SECDEF routines that take an actor-shaped parameter (p_%by / p_actor% / p_user%)
--- AND appear to role-check or COALESCE that parameter, WITHOUT raising the canonical ACTOR_MISMATCH token.
+-- AND appear to role-check, COALESCE, or use that parameter in a MERGE, WITHOUT raising the canonical ACTOR_MISMATCH token.
 -- Would have caught (the recurring six-date actor-forgery class): save_blend_ticket (2026-06-08),
 --   cancel_return (2026-06-08), restore_cancelled_order/restore_cancelled_delivery (2026-06-08),
 --   the 9 strict-actor RPCs of 2026-06-09 (void_payment, reopen_accounting_period, ...), batch_apply_all_prepayments
@@ -34,5 +34,6 @@ WHERE prosrc !~* 'ACTOR_MISMATCH'
   AND (prosrc ~* ('coalesce\s*\(\s*' || argname)
        OR prosrc ~* (argname || '\s*,\s*auth\.uid')
        OR prosrc ~* ('role[^;]{0,120}' || argname)
-       OR prosrc ~* (argname || '[^;]{0,120}role'))
+       OR prosrc ~* (argname || '[^;]{0,120}role')
+       OR prosrc ~* ('merge\s+into[^;]*\m' || argname || '\M'))
 ORDER BY violation_key;
