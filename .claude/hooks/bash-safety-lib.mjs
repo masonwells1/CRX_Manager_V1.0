@@ -174,7 +174,21 @@ export function checkOneShotReplayCommand(cmd, cwd) {
       // `--file=copy.sql` resolves to a fictitious file named `--file=...` and
       // a byte-identical one-shot replay bypasses the hash check.
       .replace(/^--?[a-z][\w-]*=/i, "");
-    if (candidate) referencedSql.add(path.isAbsolute(candidate) ? candidate : path.resolve(base, candidate));
+    if (!candidate) continue;
+
+    // A command such as `cd /tmp && psql -f renamed-copy.sql` resolves the SQL
+    // path from the shell's new directory, not from the hook's original cwd.
+    // Fully parsing every Bash/PowerShell directory mutation (variables,
+    // substitutions, pushd stacks, aliases) would be brittle, so fail closed
+    // whenever a database command combines a relative SQL path with an earlier
+    // directory-changing segment. Absolute paths remain resolvable and still
+    // go through the byte-identity check below.
+    if (!path.isAbsolute(candidate)
+        && /(?:^|[;&|]\s*)(?:cd|pushd|set-location|sl|push-location)\b/i.test(text)) {
+      return "Blocked database SQL execution with a relative .sql path after a shell directory change. Use an absolute SQL path so the one-shot replay guard can hash the exact file.";
+    }
+
+    referencedSql.add(path.isAbsolute(candidate) ? candidate : path.resolve(base, candidate));
   }
 
   const referencedSqlHashes = new Set();

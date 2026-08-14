@@ -2,6 +2,10 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-13 — Closed exact-head PR #397 safety findings
+
+Hardened the direct one-shot migration replay guard so a relative SQL file cannot escape byte-identity checks through a preceding Bash or PowerShell directory change; the hook now fails closed and its 117-assertion suite covers both forms. Added forward candidate `20260814041419_fresh_below_cost_reason.sql` plus compatible browser transport so an explicit current-attempt reason (including null) takes precedence over older persisted below-cost note markers. Single-order creation and bulk import now pass a reason already approved in their local modal through that authoritative transport on the first database attempt. The captured-ledger proof applies the candidate in order and the rollback smoke proves stale-marker denial and fresh-reason acceptance. No live migration or live data change occurred.
+
 ## 2026-08-13 — Reconciled PR #397 with the parked Wave A split
 
 Merged current `main` after PR #393 and preserved its safety boundary: the six Wave A drafts now live only under `scripts/.staging-migrations/20260813010000`–`20260813060000`, so normal migration replay cannot apply them. PR #397 keeps the separately reviewed pricing recovery, exact-cent quote math, below-cost lifecycle UX, atomic quote-version quarantine, restore ACL, and draw-down ownership candidates. Older entries below describe the review history that produced the Wave A SQL; their former active-migration paths are superseded by this parked disposition. The changed-only SQL audit now distinguishes a migration path already absent from the current base-ref tip from a deletion newly introduced by the branch, preventing a mid-merge false positive without weakening the append-only check for paths still present on the base. The rollback-probe artifact registry now authorizes no active migration: the former Wave A probes are parked and must receive a fresh exact-artifact review before any waiver can return to the executable migration lane. No live migration or live data change occurred during this reconciliation.

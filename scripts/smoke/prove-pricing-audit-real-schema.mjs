@@ -78,6 +78,10 @@ const pendingCandidateMigrationExclusions = new Map([
     '20260813161614_restrict_draw_down_quote_owner.sql',
     'draw-down follow-up: require quote ownership and reject soft-deleted bookings',
   ],
+  [
+    '20260814041419_fresh_below_cost_reason.sql',
+    'below-cost follow-up: explicit current-attempt reason blocks persisted-note reuse',
+  ],
 ]);
 const pendingCandidateMigrations = [...pendingCandidateMigrationExclusions.keys()]
   .map((name) => path.join(migrationsDir, name));

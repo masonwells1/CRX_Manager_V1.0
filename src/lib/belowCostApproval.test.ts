@@ -68,6 +68,36 @@ describe('withBelowCostReason', () => {
       .toEqual({ p_id: 'entity-1', p_below_cost_reason: null });
   });
 
+  it('marks JSON payloads as a fresh reasonless attempt', () => {
+    expect(withBelowCostReason('save_invoice', {
+      p_items: [{ id: 'line-1', notes: 'Below-cost approved: old price match' }],
+    }, null)).toEqual({
+      p_items: [{
+        id: 'line-1',
+        notes: 'Below-cost approved: old price match',
+        below_cost_reason: null,
+      }],
+    });
+    expect(withBelowCostReason('save_quote', {
+      p_sections: [{ section_name: 'A', items: [{ notes: 'Below-cost approved: old quote' }] }],
+    }, null)).toEqual({
+      p_sections: [{
+        section_name: 'A',
+        items: [{ notes: 'Below-cost approved: old quote' }],
+        below_cost_reason: null,
+      }],
+    });
+  });
+
+  it.each([
+    'create_direct_order',
+    'bulk_import_order',
+  ] as const)('strips a persisted note marker before the reasonless %s attempt', (operation) => {
+    expect(withBelowCostReason(operation, {
+      p_notes: 'Deliver south\nBelow-cost approved: old price match',
+    }, null)).toEqual({ p_notes: 'Deliver south' });
+  });
+
   it('strips the internal order-note marker from customer output', () => {
     expect(stripBelowCostApprovalNote('Deliver south\nBelow-cost approved: price match'))
       .toBe('Deliver south');

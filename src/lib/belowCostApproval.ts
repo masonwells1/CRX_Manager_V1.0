@@ -74,7 +74,7 @@ export function parseBelowCostApprovalError(error: unknown): BelowCostApprovalEr
   return null;
 }
 
-function addReasonToJson(value: unknown, reason: string): unknown {
+function addReasonToJson(value: unknown, reason: string | null): unknown {
   if (Array.isArray(value)) {
     return value.map((entry) => (
       entry && typeof entry === 'object' && !Array.isArray(entry)
@@ -111,6 +111,24 @@ export function withBelowCostReason<T extends Record<string, unknown>>(
 ): T {
   if (!reason) {
     switch (operation) {
+      case 'create_direct_order':
+      case 'bulk_import_order':
+        // These older wrappers carry the reason in p_notes. Remove any marker
+        // persisted by an earlier attempt before the reasonless call so it
+        // cannot be mistaken for fresh authorization.
+        return { ...args, p_notes: stripInternalNotes(
+          typeof args.p_notes === 'string' ? args.p_notes : null,
+        ) } as T;
+      case 'create_rush_order':
+      case 'update_order_items':
+      case 'price_order':
+      case 'save_invoice':
+        // The forward migration makes this explicit null authoritative for the
+        // current attempt. Without it, the recursive database parser could
+        // rediscover an old approval marker inside persisted line notes.
+        return { ...args, p_items: addReasonToJson(args.p_items, null) } as T;
+      case 'save_quote':
+        return { ...args, p_sections: addReasonToJson(args.p_sections, null) } as T;
       case 'convert_quote_to_order':
       case 'draw_down_quote':
       case 'restore_quote_version':
@@ -119,8 +137,6 @@ export function withBelowCostReason<T extends Record<string, unknown>>(
         // optional argument explicitly—even as null—makes a stale database
         // fail with PGRST202 instead of resolving an older ungoverned shape.
         return { ...args, p_below_cost_reason: null } as T;
-      default:
-        return args;
     }
   }
   switch (operation) {

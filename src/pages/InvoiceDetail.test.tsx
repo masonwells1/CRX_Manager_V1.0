@@ -589,7 +589,7 @@ describe('InvoiceDetail — chemical-sale payment terms', () => {
     const firstSaveKey = saveCalls[0][1].p_idempotency_key;
     expect(firstSaveKey).toMatch(/^test-idem-key-\d+$/);
     expect(saveCalls[1][1].p_idempotency_key).toBe(firstSaveKey);
-    expect(saveCalls[0][1].p_items[0]).not.toHaveProperty('below_cost_reason');
+    expect(saveCalls[0][1].p_items[0].below_cost_reason).toBeNull();
     expect(saveCalls[1][1].p_items[0].below_cost_reason).toBe('Price match approved by manager');
     expect(mockToast).toHaveBeenCalledWith('success', 'Invoice saved');
   });

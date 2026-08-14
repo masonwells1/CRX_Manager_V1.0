@@ -14,7 +14,6 @@ import { useBelowCostApproval } from '../../contexts/BelowCostApprovalContext';
 import { isBelowCostApprovalHandledError, withBelowCostReason } from '../../lib/belowCostApproval';
 import { resolveExactProductIdentity } from '../../lib/productIdentityResolver';
 import BelowCostConfirmModal, { type BelowCostLine } from '../ui/BelowCostConfirmModal';
-import { appendBelowCostApproval } from '../../lib/internalNotes';
 
 interface BulkOrderImportProps {
   open: boolean;
@@ -582,6 +581,10 @@ export default function BulkOrderImport({
         // the ParsedOrder, so retrying handleUpload (e.g. after a network
         // timeout on an earlier order in the batch) sends the SAME key and
         // bulk_import_order's check_idempotency short-circuits the dupe.
+        // The batch prompt may already have collected a fresh reason before
+        // the shared server-challenge runner starts its first attempt. Pass
+        // that reason through the authoritative transport instead of hiding
+        // it in p_notes before the helper can distinguish fresh from stale.
         const { data: rpcResult, error: rpcError } = await runWithBelowCostApproval((reason) => supabase.rpc('bulk_import_order', withBelowCostReason('bulk_import_order', {
           p_order_number: order.order_number,
           p_customer_id: customer.id,
@@ -592,13 +595,13 @@ export default function BulkOrderImport({
           p_total_margin_pct: totalMarginPct,
           p_order_date: order.order_date,
           p_items: itemsPayload,
-          // The approval reason rides along with the same import that creates
-          // the below-cost lines, so it is durable even if activity logging fails.
-          p_notes: belowCostReason && belowCostOrderNumbers.has(order.order_number)
-            ? appendBelowCostApproval(order.notes, belowCostReason)
-            : order.notes,
+          p_notes: order.notes,
           p_idempotency_key: order.idempotency_key,
-        }, reason)));
+        }, reason ?? (
+          belowCostReason && belowCostOrderNumbers.has(order.order_number)
+            ? belowCostReason
+            : null
+        ))));
 
         if (rpcError) throw rpcError;
         const result = assertRpcResult<{ order_id: string; warnings?: string[] }>(rpcResult, 'bulk_import_order');

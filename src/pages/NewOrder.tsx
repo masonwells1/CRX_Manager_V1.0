@@ -37,7 +37,6 @@ import { fetchOpenBookings, type OpenBooking } from '../lib/openBookings';
 import { validateInventoryPositionShape } from '../lib/inventoryPositionValidator';
 import { inventoryPositionByProduct } from '../lib/inventoryPositionLookup';
 import { ProductOptionDetails } from '../components/products/ProductOptionPresentation';
-import { appendBelowCostApproval } from '../lib/internalNotes';
 import type { Product, Customer, InventoryPositionRow } from '../types';
 
 interface LocalItem {
@@ -503,13 +502,6 @@ export default function NewOrder() {
   const submitOrder = async (belowCostReason: string | null = null) => {
     if (!profile) return;
     const validItems = items.filter((item) => item.product_id && item.quantity > 0);
-    // Record the below-cost approval on the order's notes so the reason
-    // travels with the entity. (Rush orders never carry a reason — the
-    // below-cost gate is skipped for the unpriced path.) The order summary PDF
-    // strips this marker before printing; see src/lib/internalNotes.ts.
-    const notesWithApproval = belowCostReason
-      ? appendBelowCostApproval(notes, belowCostReason)
-      : notes;
     setSaving(true);
 
     await runCriticalAction({
@@ -558,16 +550,20 @@ export default function NewOrder() {
           unit_size: item.unit_size,
         }));
 
+        // The local price comparison may already have collected a fresh
+        // reason before the shared server-challenge runner's first attempt.
+        // Let the transport helper append only that fresh reason; it strips
+        // any marker persisted in the user's existing notes otherwise.
         const { data, error } = await runWithBelowCostApproval((reason) => supabase.rpc('create_direct_order', withBelowCostReason('create_direct_order', {
           p_customer_id: customerId,
           p_order_date: orderDate,
           p_order_name: orderName || undefined,
-          p_notes: notesWithApproval || undefined,
+          p_notes: notes || undefined,
           p_items: rpcItems,
           p_performed_by: profile.id,
           p_idempotency_key: idemKey,
           p_customer_po_number: customerPoNumber.trim() || undefined,
-        }, reason)));
+        }, reason ?? belowCostReason)));
 
         if (error) throw error;
 

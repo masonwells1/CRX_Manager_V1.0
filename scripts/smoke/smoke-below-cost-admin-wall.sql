@@ -48,6 +48,22 @@ BEGIN
   IF v_admin IS NULL THEN RAISE EXCEPTION 'SMOKE_SETUP: no active admin'; END IF;
   IF v_sales IS NULL THEN RAISE EXCEPTION 'SMOKE_SETUP: no active sales rep'; END IF;
 
+  -- An explicit current-attempt key is authoritative even when old persisted
+  -- notes contain an approval marker. This is the regression covered by the
+  -- forward 20260814041419 parser hardening.
+  IF public._below_cost_reason_from_json(jsonb_build_object(
+    'below_cost_reason', NULL,
+    'notes', 'Below-cost approved: stale historical reason'
+  )) IS NOT NULL THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: explicit null reused a persisted approval marker';
+  END IF;
+  IF public._below_cost_reason_from_json(jsonb_build_object(
+    'below_cost_reason', 'fresh current reason',
+    'notes', 'Below-cost approved: stale historical reason'
+  )) IS DISTINCT FROM 'fresh current reason' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: explicit fresh reason did not win over persisted notes';
+  END IF;
+
   INSERT INTO public.customers (farm_name, assigned_sales_rep)
   VALUES ('[SMOKE] Below Cost ' || v_sfx, v_sales)
   RETURNING id INTO v_customer;
