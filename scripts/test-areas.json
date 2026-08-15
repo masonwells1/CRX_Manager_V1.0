@@ -113,6 +113,7 @@
       "description": "Access control: RLS contracts, role gates, SECURITY DEFINER hygiene, actor forgery, page permissions, error sanitization.",
       "vitest": [
         "src/lib/rlsContracts.test.ts",
+        "src/lib/quoteVersionWriteBoundary.test.ts",
         "src/lib/pagePermissions.test.ts",
         "src/lib/sqlRoleGateNullFailOpen.test.ts",
         "src/lib/e2eSafetyGuards.test.ts",
@@ -128,6 +129,7 @@
         "anon-exec-secdef",
         "auth-bound-role-ungated",
         "office-only-pricing-secdef-gates",
+        "quote-versions-rpc-owned",
         "save-field-actor-binding",
         "secdef-searchpath",
         "section9-po-ap-controls",
