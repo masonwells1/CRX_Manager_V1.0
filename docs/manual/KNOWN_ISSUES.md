@@ -26,6 +26,139 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-08-14 — `draw_down_quote` never rounds the weighted average PRICE, and the whole-cent guard rejects it
+
+**Severity: HIGH, live in production, currently latent (0 reachable rows).** Found by the
+independent Codex review of PR #392 and re-verified directly against live `pg_proc` and live data
+on 2026-08-14. **This is a defect in already-applied SQL — it is not caused by the recovery PR, and
+it cannot be fixed by editing the recovered files, which must stay byte-identical to what ran.**
+
+Live `_draw_down_quote_below_cost_impl_20260810` aggregates the quote lines of one product into a
+quantity-weighted average price and a quantity-weighted average cost:
+
+```sql
+118    CASE WHEN SUM(COALESCE(qi.total_units_needed, 0)) > 0
+119      THEN SUM(qi.price_per_unit * COALESCE(qi.total_units_needed, 0)) / SUM(COALESCE(qi.total_units_needed, 0))
+...
+126  INTO v_booked, v_wavg_price, v_wavg_cost, v_total_acres, v_unit_size
+137  v_wavg_cost := ROUND(v_wavg_cost, 2);      -- cost settled to whole cents
+176    v_wavg_price, v_wavg_cost, v_acres,      -- price inserted UNROUNDED
+```
+
+Line 137 settles the weighted **cost** to whole cents, behind a seven-line comment explaining
+precisely why an average of several differently-priced lines lands on fractional cents. There is no
+matching `v_wavg_price := ROUND(v_wavg_price, 2);`. The unrounded price goes straight into
+`order_items.price_per_unit` at line 176.
+
+Live `_enforce_below_cost_line` then rejects exactly that value — twice, at lines 40–41 and 148–149:
+
+```sql
+       OR NEW.price_per_unit <> round(NEW.price_per_unit, 2) THEN
+      RAISE EXCEPTION 'INVALID_UNIT_PRICE_CENTS';
+```
+
+**Effect:** a quote with two lines of the same product at prices whose quantity-weighted average is
+not a whole number of cents — one unit at $1.00 and two at $1.01 average to $1.00666… — cannot be
+converted to an order at all. The booking-to-order transaction raises `INVALID_UNIT_PRICE_CENTS`
+and rolls back. Not a money-corruption bug: the guard does its job and nothing wrong is stored.
+It is an availability bug — a legitimate booking is refused with an opaque error.
+
+**Reachability measured live 2026-08-14: 0.** No quote/product group in the database currently has
+a fractional weighted average, so nothing is broken today. It is a trap waiting for the first quote
+with mixed pricing on one product, which is ordinary business behavior.
+
+**The obvious fix is wrong. Do not round the weighted average unit price.** Adding
+`v_wavg_price := ROUND(v_wavg_price, 2);` alongside line 137 — mirroring what the code already does
+on the cost side — makes the guard pass and silently mis-prices the line. The unit price is a
+*derived average* that is then multiplied by the quantity, so rounding it moves the line total by up
+to half a cent **times the quantity**, not by one cent. The direction follows the rounding: an
+average that rounds **up** overcharges the customer, one that rounds **down** undercharges and eats
+the margin. Both are wrong and both are silent. Measured in PostgreSQL 17 on 2026-08-14 with
+the body's own expressions: a quote holding 1,000 units at $1.00 and 2,000 units at $1.01 has an
+exact value of $3,020.00; rounding the average unit price to $1.01 and extending it produces
+$3,030.00, a **$10.00 overcharge** that flows into order revenue, profit, commissions and audit. The
+cost-side rounding at line 137 is not a precedent for this — a cost snapshot is not re-multiplied
+the same way. **Round after extension, never a per-unit figure.**
+
+Two attempts at this rounding fix were written and both are withdrawn, not applied:
+
+| Migration | Branch | Status |
+|---|---|---|
+| `20260814194500_round_draw_down_weighted_unit_price.sql` | `claude/draw-down-price-rounding` | **BLOCKED** by its own adversarial push-proof gate for this defect; unpushed, no PR |
+| `20260814210000_reconcile_draw_down_owner_and_price_rounding.sql` | `fix/draw-down-weighted-price-rounding` | **WITHDRAWN AND DELETED** 2026-08-14 — it merged the defect with the ownership fix and would have carried the mispricing forward |
+
+**The collision is dissolved, but a second blocker applies to everything here.** These two files
+previously collided with the ownership migration because all three `CREATE OR REPLACE` this function
+and each preflight pins the *current* live `md5(prosrc)`, so the second to apply fails closed. With
+both rounding attempts withdrawn, only one pending migration touches this function —
+`20260813161614_restrict_draw_down_quote_owner.sql` on `claude/restrict-draw-down-owner` — and it no
+longer needs reconciling with anything. It is a separate, sound security fix (quote ownership plus
+soft-delete exclusion), unaffected by the rounding defect.
+
+**CORRECTED 2026-08-16 — the source-control blocker is dissolved.** This section originally said no
+tracked migration defined `_draw_down_quote_below_cost_impl_20260810` or the five-argument
+`draw_down_quote` wrapper, so every candidate's `md5(prosrc)` preflight pinned a body that existed
+only in the live database and could never survive a clean rebuild. That was true when written and is
+false now: PR #392 merged on 2026-08-15 — the recovery tracked in the CLOSED section immediately
+below — and both definitions are on `origin/main`, re-verified there on 2026-08-16:
+
+| Definition | Tracked at |
+|---|---|
+| four-argument body (the one later renamed) | `20260812115236_quote_items_cost_at_quote_snapshot.sql:1516` |
+| `RENAME TO _draw_down_quote_below_cost_impl_20260810` | `20260812115237_enforce_below_cost_admin_approval.sql:779` |
+| five-argument `draw_down_quote` wrapper | `20260812115237_enforce_below_cost_admin_approval.sql:815` |
+
+A clean rebuild now reproduces both bodies, so the `md5` pins are satisfiable from source rather than
+only from live state. `20260813161614_restrict_draw_down_quote_owner.sql` is therefore unblocked on
+this ground. Confirm the pinned hash still matches live at apply time — recovery restores the source,
+it does not by itself prove the live body has not since drifted.
+
+**THE FIX IS THE TIER SPLIT, NOT THE ROUNDING — Mason changed his answer on 2026-08-16, and the
+later answer governs.** Two options were put to him. The first, at 09:51 Central, was mine: keep the
+exact line total and round only the stored unit price. He answered "Option a". Later the same
+morning a concurrent session re-explained both options and he chose the other one — **write one
+order line per booked price tier and stop averaging them at all**. That session's work is
+`supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql` on branch
+`claude/draw-down-price-tier-lines` (PR #404, commits 11:59–13:16 Central). The canonical record is
+the 2026-08-16 entry "Draw-down writes one order line per booked price tier" in
+`docs/manual/DECISION_LOG.md`.
+
+**The rounding fix is therefore withdrawn and must not be built.** Both branches that attempted it
+are already dead (table above). A third attempt would `CREATE OR REPLACE` the same function as the
+tier-split migration, and each preflight pins the *current* live `md5(prosrc)`, so whichever applied
+second would fail closed — the collision this file has been tracking all along.
+
+Why the split is the better answer, in one line: rounding a *unit* price and then multiplying it by
+the quantity moves the line total by up to half a cent **per unit**, so on a large mixed-price
+booking it is a real mispricing in whichever direction the average happens to round — an overcharge
+when it rounds up, a silent margin loss when it rounds down. Splitting the lines removes the average
+entirely, so every unit is billed at a price the customer actually booked and there is no per-unit
+figure left to round; the existing post-extension rounding of the line total stays exactly as it is.
+
+Three facts verified against live `pg_proc` and live catalogs on 2026-08-16 stay recorded, because
+the tier-split migration depends on the second one and a future change to any of them is a
+regression risk on this path:
+
+1. `draw_down_quote` computes `v_line_total := ROUND(v_wavg_price * v_qty, 2)` — the total is rounded
+   **after** extension, never before. That ordering is preserved by the tier-split
+   (`ROUND(v_tier.price * v_take, 2)`) and must not be inverted.
+2. `_enforce_below_cost_line` re-derives `NEW.total_price := round(NEW.price_per_unit *
+   NEW.total_units_needed, 2)` **only** when the operation is one of `create_direct_order`,
+   `bulk_import_order`, `update_order_items`, `price_order`. The five-argument `draw_down_quote`
+   wrapper declares the operation `draw_down_quote`, outside that list, so the per-tier price and
+   cost written by the draw survive the trigger. **If `draw_down_quote` is ever added to that list,
+   the tier split's snapshot costs get overwritten with today's catalog cost.**
+3. `trg_order_items_round_money` → `_round_money_to_whole_cents` rounds `total_price` and derives
+   `profit`, but never touches `price_per_unit`. No CHECK constraint ties `price_per_unit * qty` to
+   `total_price`.
+
+Mason's decision 2026-08-14 was to log this bug and fix it separately rather than entangle it with
+the recovery PR. **No migration here is approved for apply** — PR #404 landing on `main` does not
+apply anything; the live apply is a separate, explicit decision. Do not re-diagnose this from
+scratch; the live evidence is above.
+
+---
+
 ## CLOSED 2026-08-13 — six migrations applied live on 2026-08-12 have no file on `main`
 
 **Severity: was MATERIAL — resolved by PR #392 (files landed on `main`).** Six migrations
