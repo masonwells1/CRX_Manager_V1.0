@@ -120,12 +120,23 @@
 -- barrier inside the OLD body -- an advisory lock taken at its entry -- which
 -- has to ship in an earlier, separate migration and cannot be done from here.
 --
--- What IS done from here is the net underneath it: the runtime
+-- What IS done from here is the net underneath it, in two layers. The runtime
 -- DRAW_MIXED_TIER_UNMATCHED_LINE guard further down refuses the NEXT draw on
--- any mixed-tier booking that carries a billed line matching no tier, which is
--- exactly the trace a late legacy averaged draw leaves. The window is narrow
--- and no longer silent. It is not eliminated, and this comment does not claim
--- it is.
+-- any mixed-tier booking carrying a billed line that matches no tier, which is
+-- the trace a late legacy averaged draw normally leaves. An average CAN land
+-- exactly on a real tier key and slip past that (Codex review 2026-08-16,
+-- first HIGH), so DRAW_TIER_OVERCONSUMED is the second layer: such a draw is
+-- attributed wholly to the one tier it coincidentally matches while it really
+-- consumed several, so it over-bills that tier and is refused there.
+--
+-- The window is narrow and no longer silent. It is NOT eliminated, and this
+-- comment does not claim it is. Eliminating it needs either a barrier inside
+-- the old body (a separate earlier migration) or an apply run with no draws in
+-- flight -- an operational choice for Mason, not something this file can make.
+-- Note also that the race needs a mixed-tier booking to exist and be drawn
+-- concurrently, and live evidence recorded above is that no quote carries more
+-- than one price tier for the same product today. Re-verify that immediately
+-- before applying.
 LOCK TABLE public.quote_product_draws IN SHARE ROW EXCLUSIVE MODE;
 
 -- --- Preflight: refuse to run against an unexpected body ----------------------
@@ -341,6 +352,7 @@ DECLARE
   v_tier_cost_unit numeric;
   v_tier_acres numeric;
   v_unmatched numeric;
+  v_over numeric := 0;
   v_tier_count integer;
   v_skip numeric;
   v_take numeric;
@@ -771,6 +783,7 @@ BEGIN
 
     -- Job reservations consume from the front alongside the legacy lines.
     v_skip := COALESCE(v_unmatched, 0) + COALESCE(v_job_drawn, 0);
+    v_over := 0;
 
     v_alloc_left := v_qty;
 
@@ -860,13 +873,21 @@ BEGIN
         t.price,
         t.cost_cents,
         t.unit_size,
-        -- GREATEST(..., 0) clamps PER TIER (drift review 2026-08-16, L7). If a
-        -- tier is somehow over-billed, its excess is not charged back against
-        -- the other tiers, so the available pool reads slightly high rather
-        -- than a negative tier silently eating a neighbour's units. Bounded on
-        -- both sides regardless: the v_remaining balance guard caps the draw
-        -- before the split, and DRAW_ALLOCATION_MISMATCH refuses it after.
-        GREATEST(t.units - COALESCE(b.units, 0), 0) AS units
+        -- GREATEST(..., 0) clamps PER TIER (drift review 2026-08-16, L7) so a
+        -- negative tier cannot silently eat a neighbour's units.
+        --
+        -- The clamp alone is NOT sufficient, and an earlier version of this
+        -- comment wrongly said it was ("bounded on both sides regardless by the
+        -- v_remaining balance guard and DRAW_ALLOCATION_MISMATCH"). Neither
+        -- bound sees an over-billed tier. v_remaining works on PER-PRODUCT
+        -- aggregates, and DRAW_ALLOCATION_MISMATCH fires only when the pool is
+        -- too SMALL. So the excess this clamp discards was invisible. It is
+        -- carried out as the "over" column below and refused after the loop
+        -- (DRAW_TIER_OVERCONSUMED). See that guard for the worked example.
+        GREATEST(t.units - COALESCE(b.units, 0), 0) AS units,
+        -- Units billed against this tier BEYOND what the tier now holds --
+        -- exactly the quantity the clamp above throws away.
+        GREATEST(COALESCE(b.units, 0) - t.units, 0) AS over
       FROM tiers t
       LEFT JOIN billed b
         -- Both halves use IS NOT DISTINCT FROM deliberately, and the mirror
@@ -890,7 +911,12 @@ BEGIN
        AND b.cost_cents IS NOT DISTINCT FROM t.cost_cents
       ORDER BY t.section_ord, t.ord, t.price, t.cost_cents
     LOOP
-      EXIT WHEN v_alloc_left <= 0;
+      -- Over-consumption is accumulated across EVERY tier, so this loop no
+      -- longer EXITs at the allocation boundary -- it CONTINUEs, leaving the
+      -- tiers past that point still inspected. Tier counts per product are in
+      -- the single digits, so walking the tail costs nothing.
+      v_over := v_over + COALESCE(v_tier.over, 0);
+      IF v_alloc_left <= 0 THEN CONTINUE; END IF;
 
       v_tier_units := v_tier.units;
 
@@ -982,6 +1008,40 @@ BEGIN
       v_total_price := v_total_price + v_line_total;
       v_total_cost := v_total_cost + v_line_cost;
     END LOOP;
+
+    -- Fail closed when a tier is billed for more units than it now holds. That
+    -- means the units already drawn can no longer be attributed to the tiers as
+    -- they stand, so any further split is a guess.
+    --
+    -- This is reachable through a SUPPORTED workflow, not just a hand-edit
+    -- (Codex review 2026-08-16, second HIGH). Revising a booking is allowed by
+    -- save_quote's drawn-product guard on the PER-PRODUCT aggregate alone --
+    -- 20260812115236:844 groups by product_id and compares total booked against
+    -- total drawn, with no tier attribution preserved. So: book 200 units at
+    -- one price, draw 150 of them, then revise the booking to 100 units at a
+    -- lower price plus 100 at the original one. Booked (200) still covers drawn
+    -- (150), so the revision saves. The 150 billed units still match the
+    -- original tier, which now holds only 100 -- the clamp above silently
+    -- discarded that 50-unit overhang, the remaining 50 units were drawn from
+    -- the cheaper tier, and the booking billed more than its revised total.
+    -- v_remaining could not catch it (per-product aggregate) and
+    -- DRAW_ALLOCATION_MISMATCH could not catch it (the pool was large enough).
+    --
+    -- This guard is also the net under the coincidental-average case of the
+    -- cutover race described at the top of this file: a late legacy averaged
+    -- draw whose average happens to equal a real tier key escapes the unmatched
+    -- -line guard, but it is attributed wholly to that one tier while it
+    -- actually consumed several, so it over-bills that tier and stops here.
+    --
+    -- The proper fix for both is immutable tier provenance -- a quote_item_id
+    -- on the order line, or a per-tier draw ledger. That is a schema change
+    -- beyond this migration; this refusal is the fail-closed stand-in, and it
+    -- is deliberately stricter than necessary rather than looser.
+    IF v_over > 0 THEN
+      RAISE EXCEPTION
+        'DRAW_TIER_OVERCONSUMED: % unit(s) already billed against this booking for % exceed what its price tiers now hold, so which tiers the earlier draws consumed can no longer be determined. This usually follows a booking revision that repriced or resized a tier after part of it was drawn. Restore the tier quantities that were in place when those units were drawn, or void and re-book the affected orders, then re-try.',
+        v_over, COALESCE(v_product_name, v_product_id::text);
+    END IF;
 
     -- Fail closed: the split must conserve quantity exactly. If the booked tiers
     -- could not absorb the requested quantity, refuse the entire draw rather
@@ -1168,8 +1228,12 @@ REVOKE ALL ON FUNCTION public._draw_down_quote_below_cost_impl_20260810(uuid, js
 -- rule stops the apply rather than being adopted unread.
 DO $qty_check$
 DECLARE
-  -- Captured from PostgreSQL 17's own pg_get_constraintdef output for the CHECK
-  -- written below, on a throwaway database, not hand-written.
+  -- Captured from pg_get_constraintdef's own output for the CHECK written
+  -- below, on a throwaway database, not hand-written. Confirmed byte-identical
+  -- on PostgreSQL 17.10 and 16.14 (Codex review 2026-08-16, eighth pass -- an
+  -- earlier version of this comment claimed a 17 capture that had in fact only
+  -- been taken on 16, so the version is now stated from a run on both). Live is
+  -- 17.6, so the create path here is the one this server will normalise to.
   c_expected constant text :=
     'CHECK (((total_units_needed IS NULL) OR ((total_units_needed >= (0)::numeric) AND (total_units_needed < ''Infinity''::numeric))))';
   v_def text;
@@ -1247,6 +1311,14 @@ BEGIN
 
   IF position('DRAW_ALLOCATION_MISMATCH' IN v_src) = 0 THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: the quantity-conservation assertion is missing';
+  END IF;
+
+  IF position('DRAW_MIXED_TIER_UNMATCHED_LINE' IN v_src) = 0 THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: the unmatched-billed-line refusal is missing';
+  END IF;
+
+  IF position('DRAW_TIER_OVERCONSUMED' IN v_src) = 0 THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: the over-consumed-tier refusal is missing';
   END IF;
 
   -- The implementation must stay unreachable from the app roles; only the

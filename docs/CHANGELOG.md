@@ -2,6 +2,27 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-16 — draw-down tier split: eighth adversarial pass closed
+
+draw-down tier split: eighth adversarial pass closed. Added DRAW_TIER_OVERCONSUMED, a second runtime refusal that catches a tier billed for more units than it now holds. This covers two confirmed HIGHs: a legacy weighted average that coincidentally equals a real tier key (which slipped past the seventh pass's unmatched-line guard), and a supported quote revision that reattributes already-drawn units between tiers (save_quote's drawn-product guard is aggregate-only and preserves no per-tier attribution). The per-tier GREATEST clamp used to discard the overhang silently; it is now carried out of the tier query and refused. Postflight asserts both new guard identifiers, mutation-checked. Also corrected a documentation defect: five earlier ledger claims described the throwaway proof server as PostgreSQL 17 when it was 16.14; the two version-sensitive claims were re-proven on a real 17.10 throwaway and the CHECK normalisation is byte-identical on both. Migration remains a LOCAL CANDIDATE, not applied.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `24a3bf67 Refuse a tier draw when a billed line names no tier`
+  - `22c10c7f Guard the mixed-tier cutover on a stable predicate, and serialize it`
+  - `c54946f0 Prove the quantity constraint by definition, not by substring`
+  - `7c205ee6 Merge remote-tracking branch 'origin/main' into claude/draw-down-price-tier-lines`
+  - `20c66927 Refuse a draw against a negative or non-finite booked quantity`
+  - `1c075f76 Widen the pre-migration draw refusal past the price-match test`
+  - `f719d165 Merge origin/main; refuse to apply over a legacy averaged draw line`
+  - `c73ea5d2 docs(changelog): log the soft-deleted-booking draw-down fix`
+  - `93cfe0f0 fix(draw-down): refuse a draw against a soft-deleted booking`
+  - `134a7d06 fix(draw-down): take each tier's document position from one quote line`
+  - `357f4f4a docs(changelog): log the 2026-08-16 draw-down tier-split session`
+  - `d6e90afc docs: record the draw-down tier-split and rep-access owner decisions`
+  - `f7e48f5a fix(draw-down): split a drawn booking into one order line per booked price tier`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`
+
 ## 2026-08-16 — Draw-down tier split, seventh adversarial pass: refuse a draw when a…
 
 Draw-down tier split, seventh adversarial pass: refuse a draw when a mixed-tier booking carries a billed line matching no tier (an edited price/cost snapshot could otherwise re-sell its own units), extend the apply-time scan to soft-deleted bookings, and correct the cutover-lock comment, which claimed a guarantee the lock does not provide. Migration remains a LOCAL CANDIDATE; nothing applied to the live database.
