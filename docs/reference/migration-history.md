@@ -8,6 +8,49 @@ count; one entry can index multiple reconstruction sources restored together.
 Sequence reflects entry/landing order, so a migration renamed to its server-assigned
 version can have a newer timestamp without changing its documentation sequence.
 
+**Live-ledger read — 2026-08-16, pre-apply evidence for `20260813080000`.** Read read-only from
+`supabase_migrations.schema_migrations` on `rhyzpcqhnizqbxphqdkr`. **970 ledger rows** (344 carry a
+14-digit `name` prefix; the remainder are older bare-slug rows).
+
+| Measure | Value |
+|---|---|
+| **Current live high-water by `name` stamp (authoritative for ordering)** | **`20260813070000`** |
+| `max(version)` | `20260813011751` |
+| Row holding both | `20260813070000_pin_return_idempotency_helper_contract` |
+
+**These two figures are not interchangeable, and using the wrong one understates the high-water by
+three days.** Supabase assigns a fresh `version` at apply time while `name` preserves the authored
+filename stamp, so a migration authored on 08-13 and applied on 08-12 lands with a `version` below
+its `name`. The ordering guard compares `name` stamps. Row 49 below records only the `version`
+(`20260813011751`), which is why the 2026-08-16 `migration-drift-reviewer` run read the recorded
+high-water as three days stale — the recorded value was a `version`, not a `name` stamp.
+
+CHECK 6 cleared for `20260813080000_lock_quote_versions_writes_to_rpc`: `20260813080000` sorts
+strictly above the live `name` high-water `20260813070000`. Also confirmed unapplied in the same
+read: `20260813030000_reject_non_finite_money_and_quantities` and
+`20260813060000_require_completed_delivery_before_invoice_post` have no ledger row.
+
+**Live-ledger closeout — 2026-08-16, post-apply.** `20260813080000_lock_quote_versions_writes_to_rpc`
+applied to `rhyzpcqhnizqbxphqdkr` with Mason's in-chat approval. Supabase assigned
+`version = 20260816174353`; `name` remains `20260813080000_lock_quote_versions_writes_to_rpc`, so
+this is another instance of the version/name divergence described above. **971 ledger rows**, and
+`20260813080000` is the current live high-water by `name` stamp.
+
+**No B7 rename for this one.** The rename convention exists so a disk filename matches its
+server-assigned version, but the ordering guard compares the ledger `name`, and that `name` already
+equals the disk filename here. Renaming the file to `20260816174353_…` would break that match and
+manufacture the exact drift the guard is there to catch. The version is recorded above instead.
+
+Independent read-only postflight on the live database confirmed the intended end state:
+`anon` and `authenticated` hold no INSERT/UPDATE/DELETE/TRUNCATE/TRIGGER/REFERENCES on
+`quote_versions` (MAINTAIN is deliberately retained — the accepted availability residual documented
+at lines 955–982 of the migration); `authenticated` keeps SELECT; `service_role` and `postgres` are
+unchanged. Policy `qversions_insert` is gone and `qversions_select` is intact with its original
+`is_admin() OR is_sales_rep()` predicate. All five affected functions carry exactly one overload,
+are `SECURITY DEFINER`, and grant no EXECUTE to `anon` or to `PUBLIC`. Still unapplied as of this
+read: `20260813030000_reject_non_finite_money_and_quantities` and
+`20260813060000_require_completed_delivery_before_invoice_post`.
+
 **Live-ledger closeout — 2026-07-29 11:32 America/Chicago.** Read read-only from `supabase_migrations.schema_migrations` on `rhyzpcqhnizqbxphqdkr`. **Current live high-water: `20260729163243`** (924 ledger rows). The four approved migrations applied sequentially and Supabase assigned `20260729125227_secure_profile_public_directory`, `20260729125251_pin_contact_sync_search_path`, `20260729125314_application_service_cost_exact_text`, and `20260729163243_harden_profile_directory_followups`. All in-file postflights passed. Independent live proof confirmed the directory has all 11 profiles with RLS and `security_invoker=true`, both contact-sync functions remain invoker functions with fixed search paths, the cost getter returns exact text cents to an admin, and a sales rep receives SQLSTATE 42501. The follow-up leaves `service_role` with SELECT-only access, keeps the owner-run directory trigger enabled, and has zero profile/directory mismatches; rollback-only `service_role` and authenticated role probes preserved trigger synchronization while denying direct writes. Disk filenames were B7-renamed to the assigned versions; SQL bodies are unchanged.
 
 **Latest live-ledger closeout — 2026-07-29 17:23 America/Chicago.** Supplier Pricing Stage C applied as `20260729213733`, followed by `20260729222311_bind_save_field_actor`; the latter is the current high-water with 926 ledger rows. Both disk filenames match their server-assigned versions. Rows 840–841 below carry the separate apply and postflight evidence.
