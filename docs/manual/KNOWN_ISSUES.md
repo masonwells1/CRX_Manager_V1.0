@@ -93,15 +93,26 @@ both rounding attempts withdrawn, only one pending migration touches this functi
 longer needs reconciling with anything. It is a separate, sound security fix (quote ownership plus
 soft-delete exclusion), unaffected by the rounding defect.
 
-It is still not ready to apply. Verified against `origin/main` on 2026-08-14: **no tracked migration
-defines `_draw_down_quote_below_cost_impl_20260810` or the five-argument `draw_down_quote` wrapper.**
-Both exist only in the live database. Every candidate above pins those live bodies by `md5`, so none
-of them could be satisfied by a clean rebuild or a disaster-recovery replay. Any migration on this
-function stays blocked until the missing prerequisites are recovered into source control — see the
-recovery work on `recovery/live-no-file-six`.
+**CORRECTED 2026-08-16 — the source-control blocker is dissolved.** This section originally said no
+tracked migration defined `_draw_down_quote_below_cost_impl_20260810` or the five-argument
+`draw_down_quote` wrapper, so every candidate's `md5(prosrc)` preflight pinned a body that existed
+only in the live database and could never survive a clean rebuild. That was true when written and is
+false now: PR #392 merged on 2026-08-15 — the recovery tracked in the CLOSED section immediately
+below — and both definitions are on `origin/main`, re-verified there on 2026-08-16:
 
-**The real fix is still unwritten, and it is smaller than a redesign.** The trigger that rejects the
-draw-down (`zz_crx_below_cost_order_items` → `_enforce_below_cost_line`, raising
+| Definition | Tracked at |
+|---|---|
+| four-argument body (the one later renamed) | `20260812115236_quote_items_cost_at_quote_snapshot.sql:1516` |
+| `RENAME TO _draw_down_quote_below_cost_impl_20260810` | `20260812115237_enforce_below_cost_admin_approval.sql:779` |
+| five-argument `draw_down_quote` wrapper | `20260812115237_enforce_below_cost_admin_approval.sql:815` |
+
+A clean rebuild now reproduces both bodies, so the `md5` pins are satisfiable from source rather than
+only from live state. `20260813161614_restrict_draw_down_quote_owner.sql` is therefore unblocked on
+this ground. Confirm the pinned hash still matches live at apply time — recovery restores the source,
+it does not by itself prove the live body has not since drifted.
+
+**The real fix is smaller than a redesign, and Mason chose it on 2026-08-16.** The trigger that
+rejects the draw-down (`zz_crx_below_cost_order_items` → `_enforce_below_cost_line`, raising
 `INVALID_UNIT_PRICE_CENTS`) demands a whole-cent `price_per_unit`. It does **not** demand that the
 line total be derived from it. `order_items` stores `price_per_unit` and `total_price` as separate
 columns and the order header sums the per-line `total_price`, so the exact total can be kept while
@@ -109,11 +120,30 @@ only the stored unit price is rounded — satisfying the guard without moving an
 line whose unit price does not multiply out to its total, which is customer-visible on an invoice.
 The alternative floated on the blocked branch — keeping the source price tiers as separate order
 lines instead of averaging them — avoids that oddity but is a redesign of how a partial draw-down
-builds order lines. Neither has been built, costed, or chosen.
+builds order lines.
+
+**Chosen: keep the customer's exact line total, round only the stored/displayed unit price.** The
+tier-splitting redesign is not pursued. Three facts verified against live `pg_proc` and live catalogs
+on 2026-08-16 make the chosen fix viable, and all three must stay true or it silently becomes an
+overcharge:
+
+1. `draw_down_quote` already computes `v_line_total := ROUND(v_wavg_price * v_qty, 2)` — the total is
+   rounded **after** extension and is independent of the unrounded `v_wavg_price` it stores in
+   `price_per_unit`. Only the per-unit figure needs to change.
+2. `_enforce_below_cost_line` re-derives `NEW.total_price := round(NEW.price_per_unit *
+   NEW.total_units_needed, 2)` **only** when the operation is one of `create_direct_order`,
+   `bulk_import_order`, `update_order_items`, `price_order`. The five-argument `draw_down_quote`
+   wrapper sets the operation to `draw_down_quote`, which is outside that list, so the exact total
+   survives the trigger. **If `draw_down_quote` is ever added to that list, this fix breaks.**
+3. `trg_order_items_round_money` → `_round_money_to_whole_cents` sorts first and rounds
+   `total_price` and derives `profit`, but never touches `price_per_unit` — so it neither masks the
+   defect nor interferes with the fix. No CHECK constraint ties `price_per_unit * qty` to
+   `total_price`.
 
 Mason's decision 2026-08-14 was to log this bug and fix it separately rather than entangle it with
-the recovery PR. **No migration here is approved for apply.** Do not re-diagnose this from scratch;
-the live evidence is above.
+the recovery PR; on 2026-08-16 he approved building the fix above. **No migration here is approved
+for apply** — the apply is a separate, explicit decision. Do not re-diagnose this from scratch; the
+live evidence is above.
 
 ---
 
