@@ -9,53 +9,59 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
-## 2026-08-16 — Any sales rep may draw down any rep's booking
+## 2026-08-16 — Any sales rep may draw down any customer's booking
 
-**Source:** Mason's in-chat selection, 2026-08-16, answering a direct question raised by the
-`rls-security-reviewer` pass on the draw-down tier-split migration. Options offered were "any rep can
-draw any booking" (today's behaviour) and "only the booking's owning rep, plus admins". Mason chose
-**any rep**.
+**Source:** Mason's explicit in-chat answer, 2026-08-16, verbatim: "Any rep" — given after the
+trade-off was put to him in plain English (owner-only tightens commission attribution and
+accountability; any-rep keeps a booking fulfillable when the rep who took it is unavailable).
 
-**Decision.** `draw_down_quote` does not gate on which sales rep created the quote. Any
-authenticated rep may draw down any customer's booking. Admin-only and below-cost approval gates are
-unaffected — this settles the *rep-to-rep* question only.
+**Decision.** Draw-down is not restricted to the rep who created the quote. The parked migration
+`20260813161614_restrict_draw_down_quote_owner.sql` does **not** ship its owner gate: the
+`NOT_QUOTE_OWNER` check (`v_actor_role <> 'admin' AND v_quote.created_by IS DISTINCT FROM v_actor`)
+is removed before that migration is rebuilt and applied.
 
-**Why.** Field coverage. Whoever is physically with the customer fulfils the order, including
-covering for a rep who is out, on another farm, or off for the season. A per-rep lock would strand a
-customer's booking behind an absent employee during application season.
+**Operative rule.** Removing the owner gate removes *only* the owner gate. The other protections in
+that migration are unaffected by this decision and still ship: the five `DRAW_DOWN_OWNER_GUARD_DRIFT`
+preflights that refuse to run against an unexpected wrapper chain, overload set, implementation body
+or wrapper ACL; `AUTH_REQUIRED` and `ACTOR_MISMATCH` (an unauthenticated or forged actor is
+rejected); `INSUFFICIENT_ROLE` (the actor must resolve to `admin` or `sales_rep`); the soft-delete
+exclusion (a `deleted_at` quote reads as "Quote not found"); and the `BOOKING_CLOSED` status gate
+(only `sent` or `revised` quotes can be drawn down). Mason's basis was operational continuity in a
+seasonal business, not a judgement that draw-down needs less protection — attribution and audit of
+who drew a booking down are unchanged, because every draw is still logged against the acting user.
 
-**Operative rule.** Reviewers must stop raising per-rep quote ownership on the draw-down path as an
-open finding; it is settled behaviour, not an oversight. This does **not** authorize removing any
-existing owner check elsewhere — `20260813161614_restrict_draw_down_quote_owner.sql`, still pending,
-addresses a different concern (soft-deleted and cross-tenant quotes) and is unaffected. Revisit only
-if Mason asks for per-rep restriction, which would be a business decision, not a security fix.
+**Sequencing this implies.** That migration and PR #404's price-tier split both
+`CREATE OR REPLACE` `_draw_down_quote_below_cost_impl_20260810`, and each pins the live
+`md5(prosrc)` it expects, so whichever applies second fails its own drift preflight. Settled order:
+**PR #404 first**, then the owner migration is rebuilt against #404's applied body. Do not re-derive
+this ordering from scratch — it is a consequence of the md5 pin, not a preference.
 
 ---
 
-## 2026-08-16 — Draw-down writes one order line per booked price tier; it does not average them
+## 2026-08-16 — The draw-down price fix is the price-tier split, finally
 
-**Source:** Mason's in-chat selection, 2026-08-16, choosing "Split the lines" over "round only the
-stored unit price" after both were explained in plain English.
+**Source:** Mason's explicit in-chat confirmation, 2026-08-16, verbatim: "Yes settle it your right",
+closing a conflict between two records — an earlier same-day "Option (a)" answer given to one
+session, and the price-tier split chosen later the same day in a concurrent session.
 
-**Decision.** When a booking holds the same product at more than one price, a draw-down writes **one
-`order_items` row per distinct booked price**, each at that tier's own unit price, consuming tiers in
-the booking's own section/line order. It no longer collapses them into one quantity-weighted average
-line. Implemented by
-`supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`.
+**Decision.** The tier split (PR #404) is the answer of record. When a customer has booked the same
+product at more than one price, the draw-down emits **one order line per booked price tier** rather
+than one line at a quantity-weighted average price.
 
-**Why.** The live function averages the tiers and stores the raw average as the unit price. That
-average routinely lands on a fraction of a cent, which the whole-cent guard rejects, so the draw
-fails outright — an availability bug, not a money-corruption one. The obvious repair, rounding the
-average, is worse: a unit price is multiplied by the quantity, so rounding it shifts the line total
-by up to half a cent *per unit*. On a large mixed-price booking that is a real overcharge into
-revenue, profit and commissions. Splitting the lines removes the average entirely, so there is
-nothing to round — every unit is billed at a price the customer actually booked, and the line total
-is exact by construction.
+**Operative rule.** Do not reopen this as an averaging-plus-rounding problem. The split is preferred
+precisely because it removes the average: with per-tier lines there is no derived per-unit figure
+left to round, so the whole-cent guard can no longer reject a legitimate draw-down, and no line is
+mispriced in either direction. The existing rounding of a line total *after* extension by quantity
+stays exactly as it is — rounding a *unit* price before multiplying is what this fix eliminates, and
+re-introducing it would move a line total by up to half a cent **per unit**. Background and the
+measured worked example are in `docs/manual/KNOWN_ISSUES.md`.
 
-**Operative rule.** Do not reintroduce a weighted-average unit price on this path under any variable
-name. Two structural guards enforce it: the migration's postflight refuses a body containing the old
-averaging identifier, and `DRAW_ALLOCATION_MISMATCH` fails the draw closed if the per-tier quantities
-ever stop summing to the requested quantity.
+**Implementation and structural guards.** Implemented by
+`supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`. Two guards stop
+the average returning under another variable name: the migration's postflight refuses a body
+containing the old averaging identifier, and `DRAW_ALLOCATION_MISMATCH` fails the draw closed if the
+per-tier quantities stop summing to the requested quantity. `DRAW_ALLOCATION_MISMATCH` proves
+*quantity* only — it is not a money assertion and must not be cited as one.
 
 **Supersedes.** The opposite conclusion recorded on the local-only branch
 `claude/known-issues-drawdown-defect` ("keep the exact line total, round only the stored unit
