@@ -2,6 +2,16 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-16 — Draw-down now splits a booking into one order line per booked price…
+
+Draw-down now splits a booking into one order line per booked price tier instead of averaging them, fixing a live defect where any booking holding one product at two prices could not be converted to an order at all. The stored weighted-average unit price landed off a whole cent and the below-cost guard refused the whole transaction; splitting the lines removes the average, so there is nothing to round and every unit bills at a price the customer actually booked. Rounding the average was rejected as a repair because a unit price is multiplied by quantity, so rounding it overcharges in proportion to the order size. The migration is a LOCAL CANDIDATE and is NOT applied - the live apply is held for Mason's separate approval. Also records two owner decisions from 2026-08-16: the tier-split choice, and that any sales rep may draw down any rep's booking.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `d6e90afc docs: record the draw-down tier-split and rep-access owner decisions`
+  - `f7e48f5a fix(draw-down): split a drawn booking into one order line per booked price tier`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`
+
 ## 2026-08-14 — CRX-SEC-1: quote versions become RPC-owned (folded into the recovery PR)
 
 `public.quote_versions` was client-writable. Its RLS INSERT policy (`qversions_insert`) checked
