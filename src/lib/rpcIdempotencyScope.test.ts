@@ -251,6 +251,19 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // migration 20260810150000 is the first to CREATE the function under its
   // post-rename name (the rename itself defined no function body on disk).
   _convert_quote_to_order_owner_impl: ['convert_quote_to_order'],
+  // Direct EXECUTE is revoked from anon/authenticated/service_role. This IS the
+  // original public draw_down_quote body: migration 20260812115237 renamed it
+  // with `ALTER FUNCTION ... RENAME TO
+  // _draw_down_quote_below_cost_impl_20260810` and created a thin public
+  // wrapper that declares the below-cost context and forwards p_idempotency_key
+  // to it, so both layers use the one 'draw_down_quote' cache namespace on
+  // purpose — a replay through the wrapper must find the result the impl saved.
+  // Giving the impl its own namespace would strand that cache and let a retried
+  // draw create a second order. The shape is pre-existing and unchanged; it
+  // entered this test's scope only because migration 20260816120000 is the
+  // first to CREATE the function under its post-rename name (the rename itself
+  // defined no function body on disk).
+  _draw_down_quote_below_cost_impl_20260810: ['draw_down_quote'],
   // Direct EXECUTE is revoked. This is the idempotent implementation behind
   // the public restore_quote_version wrapper; both intentionally use the one
   // public restore_quote_version cache namespace so a replay through the

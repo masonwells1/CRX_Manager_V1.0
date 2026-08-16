@@ -109,6 +109,12 @@ export const RpcErrorCodes = {
   BOOKING_FULLY_DRAWN: 'BOOKING_FULLY_DRAWN',
   BOOKING_DRAW_ORDER_LOCKED: 'BOOKING_DRAW_ORDER_LOCKED',
   EMPTY_DRAW: 'EMPTY_DRAW',
+  // draw_down_quote per-tier order lines (migration 20260816120000). A booked
+  // line with no unit price cannot be billed, and the split lines must add back
+  // up to the quantity requested.
+  BOOKED_PRICE_REQUIRED: 'BOOKED_PRICE_REQUIRED',
+  COST_BASIS_REQUIRED: 'COST_BASIS_REQUIRED',
+  DRAW_ALLOCATION_MISMATCH: 'DRAW_ALLOCATION_MISMATCH',
   // close_quote_as_short — refuses while scheduled/in-progress jobs still exist (U5 #1)
   BOOKING_HAS_ACTIVE_JOBS: 'BOOKING_HAS_ACTIVE_JOBS',
   // create_job_from_quote_section — an accepted booking is a chemical sale; make a standalone job (U5 #103)

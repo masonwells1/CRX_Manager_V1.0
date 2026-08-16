@@ -63,6 +63,13 @@ scripts/.staging-migrations/20260813060000_require_completed_delivery_before_inv
 # under review.
 supabase/migrations/20260813080000_lock_quote_versions_writes_to_rpc.sql text eol=lf
 
+# Draw-down price-tier split. Pinned for two reasons: its preflight compares the
+# live function body against an md5 computed on LF bytes, and the
+# migration-apply-guard proof binds a hash of the exact bytes handed to the
+# applier, so a CRLF checkout would abort the preflight or mint a proof that no
+# longer matches the file under review.
+supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql text eol=lf
+
 # Generated clean-rebuild baselines are hash-verified release artifacts.
 supabase/baselines/*.sql  text eol=lf
 supabase/baselines/*.json text eol=lf
