@@ -1,11 +1,68 @@
 # Decision Log
 
-Last verified: 2026-08-14
+Last verified: 2026-08-16
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-08-16 — Any sales rep may draw down any rep's booking
+
+**Source:** Mason's in-chat selection, 2026-08-16, answering a direct question raised by the
+`rls-security-reviewer` pass on the draw-down tier-split migration. Options offered were "any rep can
+draw any booking" (today's behaviour) and "only the booking's owning rep, plus admins". Mason chose
+**any rep**.
+
+**Decision.** `draw_down_quote` does not gate on which sales rep created the quote. Any
+authenticated rep may draw down any customer's booking. Admin-only and below-cost approval gates are
+unaffected — this settles the *rep-to-rep* question only.
+
+**Why.** Field coverage. Whoever is physically with the customer fulfils the order, including
+covering for a rep who is out, on another farm, or off for the season. A per-rep lock would strand a
+customer's booking behind an absent employee during application season.
+
+**Operative rule.** Reviewers must stop raising per-rep quote ownership on the draw-down path as an
+open finding; it is settled behaviour, not an oversight. This does **not** authorize removing any
+existing owner check elsewhere — `20260813161614_restrict_draw_down_quote_owner.sql`, still pending,
+addresses a different concern (soft-deleted and cross-tenant quotes) and is unaffected. Revisit only
+if Mason asks for per-rep restriction, which would be a business decision, not a security fix.
+
+---
+
+## 2026-08-16 — Draw-down writes one order line per booked price tier; it does not average them
+
+**Source:** Mason's in-chat selection, 2026-08-16, choosing "Split the lines" over "round only the
+stored unit price" after both were explained in plain English.
+
+**Decision.** When a booking holds the same product at more than one price, a draw-down writes **one
+`order_items` row per distinct booked price**, each at that tier's own unit price, consuming tiers in
+the booking's own section/line order. It no longer collapses them into one quantity-weighted average
+line. Implemented by
+`supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`.
+
+**Why.** The live function averages the tiers and stores the raw average as the unit price. That
+average routinely lands on a fraction of a cent, which the whole-cent guard rejects, so the draw
+fails outright — an availability bug, not a money-corruption one. The obvious repair, rounding the
+average, is worse: a unit price is multiplied by the quantity, so rounding it shifts the line total
+by up to half a cent *per unit*. On a large mixed-price booking that is a real overcharge into
+revenue, profit and commissions. Splitting the lines removes the average entirely, so there is
+nothing to round — every unit is billed at a price the customer actually booked, and the line total
+is exact by construction.
+
+**Operative rule.** Do not reintroduce a weighted-average unit price on this path under any variable
+name. Two structural guards enforce it: the migration's postflight refuses a body containing the old
+averaging identifier, and `DRAW_ALLOCATION_MISMATCH` fails the draw closed if the per-tier quantities
+ever stop summing to the requested quantity.
+
+**Supersedes.** The opposite conclusion recorded on the local-only branch
+`claude/known-issues-drawdown-defect` ("keep the exact line total, round only the stored unit
+price"). That entry was written by a concurrent session, was never pushed and has no pull request;
+it attributes a choice to Mason that he did not make. This log is authoritative. Its one genuinely
+useful finding is preserved separately: the live ledger's ordering high-water must be read from the
+`name` stamp, not `max(version)`.
 
 ---
 

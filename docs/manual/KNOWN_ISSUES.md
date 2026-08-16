@@ -26,6 +26,55 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-08-16 — a mixed-price booking cannot be drawn down at all; fix written, NOT applied
+
+**Severity: HIGH, live in production, currently latent (measured 0 reachable rows on 2026-08-14).**
+Found by the independent Codex review of PR #392, re-verified against live `pg_proc` and live data.
+A defect in already-applied SQL — not caused by the recovery PR.
+
+**What breaks.** The live `_draw_down_quote_below_cost_impl_20260810` collapses every quote line of
+one product into a single quantity-weighted average unit price and stores that raw average in
+`order_items.price_per_unit`. It rounds the weighted *cost* to whole cents but never the price. The
+below-cost trigger `_enforce_below_cost_line` then rejects any non-whole-cent `price_per_unit` with
+`INVALID_UNIT_PRICE_CENTS`, so the whole booking-to-order transaction rolls back. A booking holding
+one product at two different prices whose weighted average is not a whole number of cents is refused
+outright with an opaque error. Nothing wrong is stored — the guard does its job — so this is an
+availability bug, not money corruption. It is a trap waiting for the first ordinary mixed-price
+booking.
+
+**Do not "fix" it by rounding the average.** A unit price is multiplied by the quantity, so rounding
+it moves the line total by up to half a cent *per unit*, not by one cent overall. On a large booking
+that is a real overcharge flowing into revenue, profit, commissions and audit. Measured in
+PostgreSQL 17 against the body's own expressions. Two rounding attempts were written and both are
+withdrawn:
+
+| Migration | Branch | Status |
+|---|---|---|
+| `20260814194500_round_draw_down_weighted_unit_price.sql` | `claude/draw-down-price-rounding` | **ABANDONED** — blocked by its own adversarial push-proof gate; never pushed, no PR. Branch deleted 2026-08-16; tip preserved as tag `abandoned/draw-down-price-rounding`. |
+| `20260814210000_reconcile_draw_down_owner_and_price_rounding.sql` | `fix/draw-down-weighted-price-rounding` | **WITHDRAWN AND DELETED** 2026-08-14 — merged the defect with the ownership fix and would have carried the overcharge forward. |
+
+**The chosen fix: split the lines.** Mason settled this on 2026-08-16 — see the Decision Log entry
+of that date. A draw-down now writes one `order_items` row per distinct booked price, each at that
+tier's own unit price, consuming tiers in the booking's own section/line order. There is no average,
+so there is nothing to round and every unit is billed at a price the customer actually booked.
+Written as `supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`.
+
+**Status: LOCAL CANDIDATE — NOT APPLIED.** Both required gate reviewers returned zero blockers, all
+findings were fixed in-file, ten scenarios were re-proven end-to-end on throwaway PostgreSQL 17
+databases, and the full typecheck/lint/test/build pipeline is green. **Nothing has touched the live
+database.** The live apply still needs Mason's explicit approval and the standard apply-guard proof.
+Row 887 of `docs/reference/migration-history.md` carries the file's pinned SQL hash and the apply
+obligations.
+
+**Ignore the contrary record on `claude/known-issues-drawdown-defect`.** That local-only, unpushed
+branch records the opposite choice ("keep the exact line total, round only the stored unit price")
+and attributes it to Mason, who did not make it. It has no pull request and cannot reach `main`. One
+finding on it is genuine and worth keeping: the live ledger's ordering high-water must be read from
+the `name` stamp, not `max(version)` — on 2026-08-16 those read `20260813070000` and
+`20260813011751` respectively, a three-day understatement.
+
+---
+
 ## CLOSED 2026-08-13 — six migrations applied live on 2026-08-12 have no file on `main`
 
 **Severity: was MATERIAL — resolved by PR #392 (files landed on `main`).** Six migrations
