@@ -2,6 +2,26 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-16 — Draw-down tier split, seventh adversarial pass: refuse a draw when a…
+
+Draw-down tier split, seventh adversarial pass: refuse a draw when a mixed-tier booking carries a billed line matching no tier (an edited price/cost snapshot could otherwise re-sell its own units), extend the apply-time scan to soft-deleted bookings, and correct the cutover-lock comment, which claimed a guarantee the lock does not provide. Migration remains a LOCAL CANDIDATE; nothing applied to the live database.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `22c10c7f Guard the mixed-tier cutover on a stable predicate, and serialize it`
+  - `c54946f0 Prove the quantity constraint by definition, not by substring`
+  - `7c205ee6 Merge remote-tracking branch 'origin/main' into claude/draw-down-price-tier-lines`
+  - `20c66927 Refuse a draw against a negative or non-finite booked quantity`
+  - `1c075f76 Widen the pre-migration draw refusal past the price-match test`
+  - `f719d165 Merge origin/main; refuse to apply over a legacy averaged draw line`
+  - `c73ea5d2 docs(changelog): log the soft-deleted-booking draw-down fix`
+  - `93cfe0f0 fix(draw-down): refuse a draw against a soft-deleted booking`
+  - `134a7d06 fix(draw-down): take each tier's document position from one quote line`
+  - `357f4f4a docs(changelog): log the 2026-08-16 draw-down tier-split session`
+  - `d6e90afc docs: record the draw-down tier-split and rep-access owner decisions`
+  - `f7e48f5a fix(draw-down): split a drawn booking into one order line per booked price tier`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`
+
 ## 2026-08-16 — Draw-down tier split: closed a sixth-pass money finding
 
 Draw-down tier split: closed a sixth-pass money finding — the pre-migration mixed-tier guard only scanned drawable bookings, but a fully-drawn 'accepted' booking reopens via every void/cancel path, so it could pass the guard and misbill its remainder later. Status filter removed; cutover now takes SHARE ROW EXCLUSIVE on the draw ledger so a concurrent legacy draw cannot slip past the scan. Both proven on throwaway PostgreSQL 17. Still a LOCAL CANDIDATE — not applied.

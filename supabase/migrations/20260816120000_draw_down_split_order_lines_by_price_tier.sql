@@ -107,9 +107,25 @@
 -- operation. SHARE ROW EXCLUSIVE conflicts with the ROW EXCLUSIVE that
 -- INSERT/UPDATE takes, but not with plain SELECT, so readers are unaffected.
 -- The applier wraps this migration in a single transaction (see the note
--- above), so the lock is held until the new body is in place: a concurrent
--- legacy draw either commits before the lock and is therefore visible to the
--- scan, or it blocks and resumes against the new body.
+-- above), so the lock is held until the new body is in place. A draw that has
+-- not yet reached its ledger write blocks there until this migration commits,
+-- and a draw that committed before the lock is visible to the scan.
+--
+-- What the lock does NOT do, stated plainly (Codex review 2026-08-16,
+-- CRX-MIG-CUTOVER-001): it cannot drain a draw that is ALREADY RUNNING. That
+-- call is executing the old function body out of its own plan cache and keeps
+-- executing it after the replacement commits, and its uncommitted rows are
+-- invisible to the scan. So a legacy averaged draw can still land just after
+-- the scan believed itself authoritative. Closing that window properly needs a
+-- barrier inside the OLD body -- an advisory lock taken at its entry -- which
+-- has to ship in an earlier, separate migration and cannot be done from here.
+--
+-- What IS done from here is the net underneath it: the runtime
+-- DRAW_MIXED_TIER_UNMATCHED_LINE guard further down refuses the NEXT draw on
+-- any mixed-tier booking that carries a billed line matching no tier, which is
+-- exactly the trace a late legacy averaged draw leaves. The window is narrow
+-- and no longer silent. It is not eliminated, and this comment does not claim
+-- it is.
 LOCK TABLE public.quote_product_draws IN SHARE ROW EXCLUSIVE MODE;
 
 -- --- Preflight: refuse to run against an unexpected body ----------------------
@@ -227,6 +243,16 @@ BEGIN
   -- direction, and the correct trade against writing a guess into customer
   -- money.
   --
+  -- Soft deletion is not a scope either, and for the same reason (Codex review
+  -- 2026-08-16, CRX-LIFECYCLE-001). quotes.deleted_at can be set straight back
+  -- to NULL by any admin, or by the owning sales rep, under the live
+  -- quotes_update policy -- USING/WITH CHECK
+  -- (is_admin() OR (is_sales_rep() AND created_by = auth.uid())), verified
+  -- read-only 2026-08-16 -- and no trigger on quotes stands in the way. A
+  -- soft-deleted booking carrying legacy draw evidence can therefore be
+  -- restored after this migration ships and walk straight into the state the
+  -- preflight exists to prevent. The scan covers deleted quotes too.
+  --
   -- The tier key is the (price, cost) PAIR, matching the tiers CTE below. Two
   -- lines at the same price but different snapshot costs are different tiers.
   SELECT count(*) INTO v_legacy
@@ -234,8 +260,7 @@ BEGIN
     SELECT q.id AS quote_id, qi.product_id AS product_id
     FROM quotes q
     JOIN quote_items qi ON qi.quote_id = q.id
-    WHERE q.deleted_at IS NULL
-      AND COALESCE(qi.total_units_needed, 0) > 0
+    WHERE COALESCE(qi.total_units_needed, 0) > 0
     GROUP BY q.id, qi.product_id
     HAVING count(DISTINCT (qi.price_per_unit, qi.cost_at_quote_cents)) > 1
   ) mixed
@@ -315,6 +340,8 @@ DECLARE
   v_tier_units numeric;
   v_tier_cost_unit numeric;
   v_tier_acres numeric;
+  v_unmatched numeric;
+  v_tier_count integer;
   v_skip numeric;
   v_take numeric;
   v_alloc_left numeric;
@@ -668,7 +695,7 @@ BEGIN
                   THEN COALESCE(oi.quantity_delivered, 0)
                   ELSE COALESCE(oi.total_units_needed, 0)
              END), 0)
-    INTO v_skip
+    INTO v_unmatched
     FROM order_items oi
     JOIN orders o ON o.id = oi.order_id
     WHERE o.quote_id = p_quote_id
@@ -700,8 +727,50 @@ BEGIN
           AND qi.cost_at_quote_cents IS NOT DISTINCT FROM oi.cost_at_time_cents
       );
 
+    -- Fail closed on a mixed-tier booking whose billed lines no longer name a
+    -- tier. Consuming those units off the FRONT of the list, as the block above
+    -- does, is only sound when they really did come off the front -- true of
+    -- the legacy averaged body, which had a single price for the whole product.
+    -- It is NOT true when a tier key was rewritten after the line was billed:
+    -- order_items UPDATE is open to any admin (live policy oitems_update,
+    -- USING/WITH CHECK is_admin(), verified read-only 2026-08-16) and no
+    -- trigger pins price_per_unit or cost_at_time_cents, so an edit can orphan
+    -- a billed line while the tier it was actually drawn from stays in the
+    -- pool. Both then get sold.
+    --
+    -- Worked example (Codex review 2026-08-16, CRX-MONEY-TIER-001): book 100
+    -- units at $1.00 and 100 at $2.00; draw the $1.00 tier in full and 50 of
+    -- the $2.00 tier; void the $1.00 order, which returns that tier to the
+    -- pool; edit the surviving line's cost snapshot so it matches no tier; draw
+    -- the remaining 150. The orphaned 50 units come off the front, and the
+    -- booking bills $350.00 against a $300.00 order. DRAW_ALLOCATION_MISMATCH
+    -- below cannot see it: that assertion fires only when the pool is too
+    -- SMALL to absorb the draw, never when it is too large.
+    --
+    -- This same refusal is the net under the cutover race described at the top
+    -- of this file. A legacy averaged draw that commits just after the preflight
+    -- scan leaves precisely this trace -- billed units at a price that matches
+    -- no tier -- so the next draw on that booking stops loudly instead of
+    -- quietly misbilling the remainder.
+    --
+    -- Single-tier bookings keep the front-walk unchanged: with one tier there
+    -- is nowhere else the units could have come from, so the attribution is
+    -- exact and there is nothing to refuse.
+    SELECT count(DISTINCT (qi.price_per_unit, qi.cost_at_quote_cents))
+    INTO v_tier_count
+    FROM quote_items qi
+    WHERE qi.quote_id = p_quote_id
+      AND qi.product_id = v_product_id
+      AND COALESCE(qi.total_units_needed, 0) > 0;
+
+    IF COALESCE(v_tier_count, 0) > 1 AND COALESCE(v_unmatched, 0) > 0 THEN
+      RAISE EXCEPTION
+        'DRAW_MIXED_TIER_UNMATCHED_LINE: % unit(s) already billed against this booking for % match none of its % booked price tiers, so which tiers those units consumed is not known. Drawing more could bill the same units twice. Restore that order line''s original price and cost snapshot, or void and re-book the order, then re-try.',
+        v_unmatched, COALESCE(v_product_name, v_product_id::text), v_tier_count;
+    END IF;
+
     -- Job reservations consume from the front alongside the legacy lines.
-    v_skip := v_skip + COALESCE(v_job_drawn, 0);
+    v_skip := COALESCE(v_unmatched, 0) + COALESCE(v_job_drawn, 0);
 
     v_alloc_left := v_qty;
 
