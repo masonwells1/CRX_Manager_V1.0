@@ -2446,8 +2446,12 @@ export default function QuoteBuilder() {
         toast('error', errMsg);
       } else if (hasRpcCode(error, RpcErrorCodes.COST_BASIS_REQUIRED)) {
         // This one carries only a product id, which means nothing to an
-        // operator — say what to do instead.
-        toast('error', 'A booked product on this quote has no cost recorded. Set its cost on the quote before drawing it down.');
+        // operator — say what to do instead. Cost is NOT editable here: this
+        // page only displays item.current_cost. The quote-time cost snapshot
+        // is stamped from the product when a line is inserted and is immutable
+        // after that, so the repair is to fix the product, then rebuild the
+        // line (CodeRabbit PR #404 — a reload alone changes nothing).
+        toast('error', 'A booked product on this quote has no cost recorded. Set the cost on the product under Products, then remove and re-add that line on this quote and save it, then draw down again.');
       } else if (hasRpcCode(error, RpcErrorCodes.DRAW_ALLOCATION_MISMATCH)) {
         // Safety net, not an operator mistake: the draw refused rather than
         // billing units it could not match to a booked price.

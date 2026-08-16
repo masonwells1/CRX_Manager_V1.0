@@ -540,8 +540,20 @@ BEGIN
           -- on it alone ties two lines that sit in different sections and falls
           -- through to price -- which is not the order the customer sees.
           -- Both columns are NOT NULL live, so no COALESCE is needed.
-          MIN(qs.sort_order)     AS section_ord,
-          MIN(qi.sort_order)     AS ord
+          --
+          -- The pair must come from ONE row, not from two independent minima
+          -- (Codex review 2026-08-16, P1). The same (price, cost) tier can
+          -- appear in more than one section: a tier sitting at (section 1,
+          -- line 10) and (section 2, line 1) would report (1, 1) -- a document
+          -- position no quote line occupies -- and would sort ahead of a tier
+          -- that genuinely sits at (1, 5). The ORDER BY below consumes tiers in
+          -- exactly this order, so an invented position bills the wrong price
+          -- first on a partial draw. PostgreSQL has no min() over ROW(...), so
+          -- take element 1 of an array_agg ordered by the SAME lexicographic
+          -- key on both columns; that yields the tier's genuine first document
+          -- position as an atomic pair.
+          (array_agg(qs.sort_order ORDER BY qs.sort_order, qi.sort_order))[1] AS section_ord,
+          (array_agg(qi.sort_order ORDER BY qs.sort_order, qi.sort_order))[1] AS ord
         FROM quote_items qi
         JOIN quote_sections qs ON qs.id = qi.section_id
         WHERE qi.quote_id = p_quote_id
