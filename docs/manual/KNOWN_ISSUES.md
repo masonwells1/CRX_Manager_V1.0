@@ -36,7 +36,7 @@ it cannot be fixed by editing the recovered files, which must stay byte-identica
 Live `_draw_down_quote_below_cost_impl_20260810` aggregates the quote lines of one product into a
 quantity-weighted average price and a quantity-weighted average cost:
 
-```
+```sql
 118    CASE WHEN SUM(COALESCE(qi.total_units_needed, 0)) > 0
 119      THEN SUM(qi.price_per_unit * COALESCE(qi.total_units_needed, 0)) / SUM(COALESCE(qi.total_units_needed, 0))
 ...
@@ -52,7 +52,7 @@ matching `v_wavg_price := ROUND(v_wavg_price, 2);`. The unrounded price goes str
 
 Live `_enforce_below_cost_line` then rejects exactly that value — twice, at lines 40–41 and 148–149:
 
-```
+```sql
        OR NEW.price_per_unit <> round(NEW.price_per_unit, 2) THEN
       RAISE EXCEPTION 'INVALID_UNIT_PRICE_CENTS';
 ```
@@ -69,9 +69,11 @@ with mixed pricing on one product, which is ordinary business behavior.
 
 **The obvious fix is wrong. Do not round the weighted average unit price.** Adding
 `v_wavg_price := ROUND(v_wavg_price, 2);` alongside line 137 — mirroring what the code already does
-on the cost side — makes the guard pass and silently overcharges the customer. The unit price is a
+on the cost side — makes the guard pass and silently mis-prices the line. The unit price is a
 *derived average* that is then multiplied by the quantity, so rounding it moves the line total by up
-to half a cent **times the quantity**, not by one cent. Measured in PostgreSQL 17 on 2026-08-14 with
+to half a cent **times the quantity**, not by one cent. The direction follows the rounding: an
+average that rounds **up** overcharges the customer, one that rounds **down** undercharges and eats
+the margin. Both are wrong and both are silent. Measured in PostgreSQL 17 on 2026-08-14 with
 the body's own expressions: a quote holding 1,000 units at $1.00 and 2,000 units at $1.01 has an
 exact value of $3,020.00; rounding the average unit price to $1.01 and extending it produces
 $3,030.00, a **$10.00 overcharge** that flows into order revenue, profit, commissions and audit. The
@@ -83,7 +85,7 @@ Two attempts at this rounding fix were written and both are withdrawn, not appli
 | Migration | Branch | Status |
 |---|---|---|
 | `20260814194500_round_draw_down_weighted_unit_price.sql` | `claude/draw-down-price-rounding` | **BLOCKED** by its own adversarial push-proof gate for this defect; unpushed, no PR |
-| `20260814210000_reconcile_draw_down_owner_and_price_rounding.sql` | `fix/draw-down-weighted-price-rounding` | **WITHDRAWN AND DELETED** 2026-08-14 — it merged the defect with the ownership fix and would have carried the overcharge forward |
+| `20260814210000_reconcile_draw_down_owner_and_price_rounding.sql` | `fix/draw-down-weighted-price-rounding` | **WITHDRAWN AND DELETED** 2026-08-14 — it merged the defect with the ownership fix and would have carried the mispricing forward |
 
 **The collision is dissolved, but a second blocker applies to everything here.** These two files
 previously collided with the ownership migration because all three `CREATE OR REPLACE` this function
@@ -128,8 +130,10 @@ second would fail closed — the collision this file has been tracking all along
 
 Why the split is the better answer, in one line: rounding a *unit* price and then multiplying it by
 the quantity moves the line total by up to half a cent **per unit**, so on a large mixed-price
-booking it is a real overcharge; splitting the lines removes the average entirely, so every unit is
-billed at a price the customer actually booked and no rounding is needed.
+booking it is a real mispricing in whichever direction the average happens to round — an overcharge
+when it rounds up, a silent margin loss when it rounds down. Splitting the lines removes the average
+entirely, so every unit is billed at a price the customer actually booked and there is no per-unit
+figure left to round; the existing post-extension rounding of the line total stays exactly as it is.
 
 Three facts verified against live `pg_proc` and live catalogs on 2026-08-16 stay recorded, because
 the tier-split migration depends on the second one and a future change to any of them is a
