@@ -2,6 +2,19 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-16 — Draw-down tier split: fixed two adversarial-review findings on PR #404
+
+Draw-down tier split: fixed two adversarial-review findings on PR #404. A tier appearing in two quote sections could report a document position no line occupies, billing the wrong price tier on a partial draw; both halves of the position now come from one row under a shared ordering. The quote lock also selected on id alone, so a soft-deleted booking still read as sent and stayed drawable by anyone holding its id -- a pre-existing hole carried from 20260702172000, now closed with deleted_at IS NULL. Cross-representative access deliberately unchanged per owner decision. Added a focused idempotency-forwarding test and a soft-delete guard test, both mutation-checked. Proven in both directions on throwaway PostgreSQL 17 databases. Migration remains a LOCAL CANDIDATE; not applied, no apply approved.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `93cfe0f0 fix(draw-down): refuse a draw against a soft-deleted booking`
+  - `134a7d06 fix(draw-down): take each tier's document position from one quote line`
+  - `357f4f4a docs(changelog): log the 2026-08-16 draw-down tier-split session`
+  - `d6e90afc docs: record the draw-down tier-split and rep-access owner decisions`
+  - `f7e48f5a fix(draw-down): split a drawn booking into one order line per booked price tier`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`
+
 ## 2026-08-16 — Draw-down now splits a booking into one order line per booked price…
 
 Draw-down now splits a booking into one order line per booked price tier instead of averaging them, fixing a live defect where any booking holding one product at two prices could not be converted to an order at all. The stored weighted-average unit price landed off a whole cent and the below-cost guard refused the whole transaction; splitting the lines removes the average, so there is nothing to round and every unit bills at a price the customer actually booked. Rounding the average was rejected as a repair because a unit price is multiplied by quantity, so rounding it overcharges in proportion to the order size. The migration is a LOCAL CANDIDATE and is NOT applied - the live apply is held for Mason's separate approval. Also records two owner decisions from 2026-08-16: the tier-split choice, and that any sales rep may draw down any rep's booking.
