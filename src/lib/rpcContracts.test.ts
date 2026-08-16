@@ -2167,6 +2167,65 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
     expect(IDEMPOTENCY_BODY_EXEMPT.save_invoice).toBe('delegated');
   });
 
+  // The generic body scan skips draw_down_quote because it is marked
+  // 'delegated', so without this the forwarding is asserted only in prose
+  // (adversarial review 2026-08-16, non-blocking follow-up). Assert the chain
+  // for real: the wrapper hands the caller's key straight to the private
+  // implementation, and the implementation owns the replay pair.
+  it('draw_down_quote forwards the caller key to the implementation that owns replay', () => {
+    const files = getMigrationFiles();
+    const wrapper = files.find(
+      ({ name }) => name === '20260812115237_enforce_below_cost_admin_approval.sql'
+    )?.content;
+    const implementationSource = files.find(
+      ({ name }) => name === '20260816120000_draw_down_split_order_lines_by_price_tier.sql'
+    )?.content;
+
+    expect(wrapper).toBeDefined();
+    expect(implementationSource).toBeDefined();
+
+    // The public entry point is the ONLY reachable one: the original body was
+    // renamed to the private implementation and stripped of every direct grant.
+    expect(wrapper).toContain('RENAME TO _draw_down_quote_below_cost_impl_20260810');
+    expect(wrapper).toMatch(
+      /REVOKE ALL ON FUNCTION public\._draw_down_quote_below_cost_impl_20260810\(uuid, jsonb, uuid, text\) FROM PUBLIC, anon, authenticated, service_role/
+    );
+
+    // The wrapper declares the key and forwards it verbatim as the 4th
+    // argument — it must not drop it, rename it, or substitute NULL.
+    expect(wrapper).toMatch(
+      /CREATE FUNCTION public\.draw_down_quote\([\s\S]*p_idempotency_key text DEFAULT NULL/
+    );
+    expect(wrapper).toMatch(
+      /RETURN public\._draw_down_quote_below_cost_impl_20260810\(\s*p_quote_id, p_draws, p_performed_by, p_idempotency_key\s*\)/
+    );
+
+    // The implementation owns the canonical pair, under the SAME operation
+    // name the wrapper is called by, so a replay through the wrapper finds
+    // what the implementation saved.
+    expect(implementationSource).toContain(
+      "v_existing := check_idempotency(p_idempotency_key, 'draw_down_quote')"
+    );
+    expect(implementationSource).toContain(
+      "PERFORM save_idempotency(p_idempotency_key, 'draw_down_quote', v_result)"
+    );
+    expect(IDEMPOTENCY_BODY_EXEMPT.draw_down_quote).toBe('delegated');
+  });
+
+  // CRX-RLS-001 (adversarial review 2026-08-16): quotes are soft-deleted by
+  // stamping deleted_at only, so a deleted booking still reads as 'sent' and
+  // would pass the BOOKING_CLOSED guard. The lock must exclude it.
+  it('draw_down_quote refuses a soft-deleted booking at the quote lock', () => {
+    const implementationSource = getMigrationFiles().find(
+      ({ name }) => name === '20260816120000_draw_down_split_order_lines_by_price_tier.sql'
+    )?.content;
+
+    expect(implementationSource).toBeDefined();
+    expect(implementationSource).toMatch(
+      /SELECT \* INTO v_quote\s*FROM quotes\s*WHERE id = p_quote_id AND deleted_at IS NULL\s*FOR UPDATE;/
+    );
+  });
+
   it('split provenance wrappers preserve the idempotent implementations and forward the exact key', () => {
     const files = getMigrationFiles();
     const wrapper = files.find(

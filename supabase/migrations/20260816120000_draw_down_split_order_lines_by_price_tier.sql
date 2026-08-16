@@ -205,7 +205,24 @@ BEGIN
   END IF;
 
   -- Lock the quote: serializes concurrent draws on the same booking.
-  SELECT * INTO v_quote FROM quotes WHERE id = p_quote_id FOR UPDATE;
+  --
+  -- deleted_at IS NULL is REQUIRED here (adversarial review 2026-08-16,
+  -- CRX-RLS-001). Quotes are soft-deleted by stamping deleted_at only --
+  -- src/pages/Quotes.tsx leaves status untouched -- so a deleted booking still
+  -- reads as 'sent' and would sail past the BOOKING_CLOSED guard below. Without
+  -- this predicate a deleted booking stays drawable by anyone holding its id,
+  -- minting order lines, commissions, inventory reservations and ledger rows
+  -- against a booking the business considers gone. The pre-existing body
+  -- (20260702172000) omitted it; this migration closes that hole.
+  --
+  -- Cross-representative access is DELIBERATE, not an oversight: any active
+  -- admin or sales_rep may draw any booking (owner decision, re-confirmed
+  -- 2026-08-16), so reps can cover for one another. Do not add a created_by or
+  -- customer-assignment predicate here without a fresh owner decision.
+  SELECT * INTO v_quote
+  FROM quotes
+  WHERE id = p_quote_id AND deleted_at IS NULL
+  FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'Quote not found'; END IF;
 
   -- Idempotency check AFTER the lock (2026-06-10 HIGH fix): the row lock
