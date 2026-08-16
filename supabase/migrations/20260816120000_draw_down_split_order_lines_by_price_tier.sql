@@ -94,6 +94,24 @@
 -- postflight running outside it.
 -- =============================================================================
 
+-- --- Serialize the cutover against in-flight legacy draws ---------------------
+-- The preflight below scans for evidence of draws taken under the old averaging
+-- body, and this migration then replaces that body. Those two steps are not
+-- atomic with respect to a concurrent draw: one that started before the scan
+-- can commit after it, so the scan would miss it and the new body would inherit
+-- exactly the untrustworthy average the preflight exists to refuse (Codex
+-- review 2026-08-16, CRX-MONEY-001).
+--
+-- Every draw path writes public.quote_product_draws -- the ON CONFLICT upsert
+-- further down this file -- so locking that one table serializes the whole draw
+-- operation. SHARE ROW EXCLUSIVE conflicts with the ROW EXCLUSIVE that
+-- INSERT/UPDATE takes, but not with plain SELECT, so readers are unaffected.
+-- The applier wraps this migration in a single transaction (see the note
+-- above), so the lock is held until the new body is in place: a concurrent
+-- legacy draw either commits before the lock and is therefore visible to the
+-- scan, or it blocks and resumes against the new body.
+LOCK TABLE public.quote_product_draws IN SHARE ROW EXCLUSIVE MODE;
+
 -- --- Preflight: refuse to run against an unexpected body ----------------------
 DO $preflight$
 DECLARE
@@ -184,9 +202,30 @@ BEGIN
   -- Deliberately NOT fixed by inferring the historical allocation. The average
   -- does not carry the information needed to invert it, so any inference would
   -- be a guess written into customer money. Failing closed and letting a human
-  -- price the one stranded booking is the smaller risk. Scoped to bookings that
-  -- are still drawable; one that can no longer be drawn cannot be mispriced by
-  -- this path.
+  -- price the one stranded booking is the smaller risk.
+  --
+  -- Deliberately NOT scoped by quote status (Codex review 2026-08-16,
+  -- CRX-MONEY-001). An earlier draft scanned only 'sent' and 'revised' -- the
+  -- two statuses a draw is allowed from -- reasoning that a booking which
+  -- cannot be drawn today cannot be mispriced by this path. That reasoning is
+  -- wrong, because "drawable" is not a stable property of a booking. Drawing
+  -- one to completion flips it to 'accepted', and every void/cancel reversal
+  -- path flips 'accepted' back to 'sent' as soon as a partial cancel, cancel or
+  -- void leaves it no longer fully drawn (20260610185806, 20260613191323,
+  -- 20260616142001, 20260620130000, 20260721014858).
+  --
+  -- So a booking drawn to completion under the averaging code would have passed
+  -- a status-scoped preflight, reopened later, and had its remainder allocated
+  -- by the new body with no record of which tiers the average consumed -- the
+  -- same misbill described above, just deferred. Quantity still conserves, so
+  -- DRAW_ALLOCATION_MISMATCH would not catch it either.
+  --
+  -- The predicate that actually matters is the stable one: this product on this
+  -- booking carries more than one tier AND already carries draw evidence. A
+  -- booking that is genuinely finished and can never reopen will also be
+  -- refused, which is a false refusal a human clears once -- the fail-closed
+  -- direction, and the correct trade against writing a guess into customer
+  -- money.
   --
   -- The tier key is the (price, cost) PAIR, matching the tiers CTE below. Two
   -- lines at the same price but different snapshot costs are different tiers.
@@ -196,7 +235,6 @@ BEGIN
     FROM quotes q
     JOIN quote_items qi ON qi.quote_id = q.id
     WHERE q.deleted_at IS NULL
-      AND q.status IN ('sent', 'revised')
       AND COALESCE(qi.total_units_needed, 0) > 0
     GROUP BY q.id, qi.product_id
     HAVING count(DISTINCT (qi.price_per_unit, qi.cost_at_quote_cents)) > 1
