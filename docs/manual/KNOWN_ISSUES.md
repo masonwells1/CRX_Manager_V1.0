@@ -111,39 +111,47 @@ only from live state. `20260813161614_restrict_draw_down_quote_owner.sql` is the
 this ground. Confirm the pinned hash still matches live at apply time — recovery restores the source,
 it does not by itself prove the live body has not since drifted.
 
-**The real fix is smaller than a redesign, and Mason chose it on 2026-08-16.** The trigger that
-rejects the draw-down (`zz_crx_below_cost_order_items` → `_enforce_below_cost_line`, raising
-`INVALID_UNIT_PRICE_CENTS`) demands a whole-cent `price_per_unit`. It does **not** demand that the
-line total be derived from it. `order_items` stores `price_per_unit` and `total_price` as separate
-columns and the order header sums the per-line `total_price`, so the exact total can be kept while
-only the stored unit price is rounded — satisfying the guard without moving any money. The cost is a
-line whose unit price does not multiply out to its total, which is customer-visible on an invoice.
-The alternative floated on the blocked branch — keeping the source price tiers as separate order
-lines instead of averaging them — avoids that oddity but is a redesign of how a partial draw-down
-builds order lines.
+**THE FIX IS THE TIER SPLIT, NOT THE ROUNDING — Mason changed his answer on 2026-08-16, and the
+later answer governs.** Two options were put to him. The first, at 09:51 Central, was mine: keep the
+exact line total and round only the stored unit price. He answered "Option a". Later the same
+morning a concurrent session re-explained both options and he chose the other one — **write one
+order line per booked price tier and stop averaging them at all**. That session's work is
+`supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql` on branch
+`claude/draw-down-price-tier-lines` (PR #404, commits 11:59–13:16 Central). The canonical record is
+the 2026-08-16 entry "Draw-down writes one order line per booked price tier" in
+`docs/manual/DECISION_LOG.md`.
 
-**Chosen: keep the customer's exact line total, round only the stored/displayed unit price.** The
-tier-splitting redesign is not pursued. Three facts verified against live `pg_proc` and live catalogs
-on 2026-08-16 make the chosen fix viable, and all three must stay true or it silently becomes an
-overcharge:
+**The rounding fix is therefore withdrawn and must not be built.** Both branches that attempted it
+are already dead (table above). A third attempt would `CREATE OR REPLACE` the same function as the
+tier-split migration, and each preflight pins the *current* live `md5(prosrc)`, so whichever applied
+second would fail closed — the collision this file has been tracking all along.
 
-1. `draw_down_quote` already computes `v_line_total := ROUND(v_wavg_price * v_qty, 2)` — the total is
-   rounded **after** extension and is independent of the unrounded `v_wavg_price` it stores in
-   `price_per_unit`. Only the per-unit figure needs to change.
+Why the split is the better answer, in one line: rounding a *unit* price and then multiplying it by
+the quantity moves the line total by up to half a cent **per unit**, so on a large mixed-price
+booking it is a real overcharge; splitting the lines removes the average entirely, so every unit is
+billed at a price the customer actually booked and no rounding is needed.
+
+Three facts verified against live `pg_proc` and live catalogs on 2026-08-16 stay recorded, because
+the tier-split migration depends on the second one and a future change to any of them is a
+regression risk on this path:
+
+1. `draw_down_quote` computes `v_line_total := ROUND(v_wavg_price * v_qty, 2)` — the total is rounded
+   **after** extension, never before. That ordering is preserved by the tier-split
+   (`ROUND(v_tier.price * v_take, 2)`) and must not be inverted.
 2. `_enforce_below_cost_line` re-derives `NEW.total_price := round(NEW.price_per_unit *
    NEW.total_units_needed, 2)` **only** when the operation is one of `create_direct_order`,
    `bulk_import_order`, `update_order_items`, `price_order`. The five-argument `draw_down_quote`
-   wrapper sets the operation to `draw_down_quote`, which is outside that list, so the exact total
-   survives the trigger. **If `draw_down_quote` is ever added to that list, this fix breaks.**
-3. `trg_order_items_round_money` → `_round_money_to_whole_cents` sorts first and rounds
-   `total_price` and derives `profit`, but never touches `price_per_unit` — so it neither masks the
-   defect nor interferes with the fix. No CHECK constraint ties `price_per_unit * qty` to
+   wrapper declares the operation `draw_down_quote`, outside that list, so the per-tier price and
+   cost written by the draw survive the trigger. **If `draw_down_quote` is ever added to that list,
+   the tier split's snapshot costs get overwritten with today's catalog cost.**
+3. `trg_order_items_round_money` → `_round_money_to_whole_cents` rounds `total_price` and derives
+   `profit`, but never touches `price_per_unit`. No CHECK constraint ties `price_per_unit * qty` to
    `total_price`.
 
 Mason's decision 2026-08-14 was to log this bug and fix it separately rather than entangle it with
-the recovery PR; on 2026-08-16 he approved building the fix above. **No migration here is approved
-for apply** — the apply is a separate, explicit decision. Do not re-diagnose this from scratch; the
-live evidence is above.
+the recovery PR. **No migration here is approved for apply** — PR #404 landing on `main` does not
+apply anything; the live apply is a separate, explicit decision. Do not re-diagnose this from
+scratch; the live evidence is above.
 
 ---
 
