@@ -375,6 +375,46 @@ BEGIN
       RAISE EXCEPTION 'COST_BASIS_REQUIRED:%', v_product_id;
     END IF;
 
+    -- TIERSPLIT / CRX-MONEY-002: refuse a draw whose booking carries a negative
+    -- or non-finite quantity for this product.
+    --
+    -- v_booked below sums EVERY quote line for the product, negatives included,
+    -- while the tier pool further down takes only lines with
+    -- total_units_needed > 0. The averaging code this replaces read one
+    -- weighted price over the same negative-inclusive set, so a negative line
+    -- pulled the billed price DOWN. The split cannot do that, because a
+    -- negative line has no tier to be billed at. A booking of 100 units at
+    -- 2.00 and -50 units at 4.00 is worth nothing and still reports 50 units
+    -- drawable: the old code billed those 50 at the 0.00 average, while the
+    -- split would take all 50 from the 2.00 tier and invoice 100.00 against a
+    -- booking worth 0.00. The conservation assertion cannot catch it -- the
+    -- excluded negative line makes the tier pool LARGER than the balance, never
+    -- smaller, and that assertion only fires when the pool is too small.
+    --
+    -- Nothing legitimate writes a negative: every quantity is either entered as
+    -- a count or computed as acres x rate. Verified read-only against
+    -- production on 2026-08-16 that no quote line holds a negative or
+    -- non-finite quantity, and the CHECK added at the end of this migration
+    -- makes that permanent. This body still refuses rather than trusting the
+    -- constraint, because a constraint can be dropped and this path prices
+    -- customer money.
+    --
+    -- NaN is caught by the finiteness half rather than the sign half:
+    -- PostgreSQL orders NaN above every number, so NaN >= 0 is TRUE and only
+    -- NaN < 'Infinity' rejects it. (Codex adversarial review 2026-08-16.)
+    IF EXISTS (
+      SELECT 1
+      FROM quote_items qi
+      WHERE qi.quote_id = p_quote_id
+        AND qi.product_id = v_product_id
+        AND qi.total_units_needed IS NOT NULL
+        AND NOT (qi.total_units_needed >= 0 AND qi.total_units_needed < 'Infinity'::numeric)
+    ) THEN
+      RAISE EXCEPTION
+        'BOOKING_QUANTITY_INVALID: % is booked on this quote with a negative or non-finite quantity, so the booking has no honest value to draw against; correct the quote first',
+        COALESCE((SELECT product_name FROM products WHERE id = v_product_id), v_product_id::text);
+    END IF;
+
     -- Per-product booking balance (locked quote => stable within this txn).
     -- TIERSPLIT: the weighted-average price and cost that used to be computed
     -- here are gone. They were the whole defect: an average of whole-cent tier
@@ -1004,6 +1044,31 @@ $function$;
 REVOKE ALL ON FUNCTION public._draw_down_quote_below_cost_impl_20260810(uuid, jsonb, uuid, text)
   FROM PUBLIC, anon, authenticated, service_role;
 
+-- --- CRX-MONEY-002, durable half: make the bad value unrepresentable ---------
+-- The refusal inside the function body above is the fail-closed half; this is
+-- the half that stops such a row from ever being written. Verified read-only
+-- against production on 2026-08-16 that no existing row violates it, so the
+-- constraint is added VALIDATED rather than NOT VALID -- a NOT VALID constraint
+-- would let the very rows it exists to prevent survive a later backfill.
+-- NULL stays legal because a booked line may legitimately carry no quantity
+-- yet; the draw path already treats NULL as zero.
+DO $qty_check$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.quote_items'::regclass
+      AND conname = 'quote_items_total_units_needed_nonneg_finite_chk'
+  ) THEN
+    ALTER TABLE public.quote_items
+      ADD CONSTRAINT quote_items_total_units_needed_nonneg_finite_chk
+      CHECK (
+        total_units_needed IS NULL
+        OR (total_units_needed >= 0 AND total_units_needed < 'Infinity'::numeric)
+      );
+  END IF;
+END;
+$qty_check$;
+
 -- --- Postflight: prove the shape and the security posture --------------------
 DO $postflight$
 DECLARE
@@ -1171,3 +1236,37 @@ BEGIN
   RAISE NOTICE 'DRAW_DOWN_TIER_SPLIT_OK: order lines now split per booked price tier; no averaged unit price remains';
 END;
 $postflight$;
+
+-- --- Postflight: prove the CRX-MONEY-002 constraint landed and is enforcing --
+DO $qty_postflight$
+DECLARE
+  v_validated boolean;
+  v_def text;
+BEGIN
+  SELECT c.convalidated, pg_get_constraintdef(c.oid)
+  INTO v_validated, v_def
+  FROM pg_constraint c
+  WHERE c.conrelid = 'public.quote_items'::regclass
+    AND c.conname = 'quote_items_total_units_needed_nonneg_finite_chk';
+
+  IF v_validated IS NULL THEN
+    RAISE EXCEPTION
+      'POSTFLIGHT_FAILED: quote_items_total_units_needed_nonneg_finite_chk is absent, so a negative or non-finite booked quantity is still writable';
+  END IF;
+
+  IF NOT v_validated THEN
+    RAISE EXCEPTION
+      'POSTFLIGHT_FAILED: quote_items_total_units_needed_nonneg_finite_chk exists but is NOT VALID, so it does not cover the rows already on the table';
+  END IF;
+
+  -- Existence is not enforcement, and the sign half alone would let NaN
+  -- through, so assert both halves are actually present in the stored
+  -- expression. That the constraint REJECTS is proven separately on a
+  -- throwaway database rather than by probing this one: an INSERT probe here
+  -- would trip the table's NOT NULL columns before ever reaching the CHECK.
+  IF v_def NOT LIKE '%>= (0)%' OR v_def NOT LIKE '%Infinity%' THEN
+    RAISE EXCEPTION
+      'POSTFLIGHT_FAILED: quote_items_total_units_needed_nonneg_finite_chk is present but its definition (%) is missing the non-negative or the finiteness half', v_def;
+  END IF;
+END;
+$qty_postflight$;
