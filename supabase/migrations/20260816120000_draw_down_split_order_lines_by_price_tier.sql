@@ -132,70 +132,95 @@ BEGIN
       'DRAW_DOWN_IMPL_DRIFTED: expected body md5 87bf7adcdc63d94684676da5ab09bfde, found %; another migration has redefined this function -- reconcile before applying', v_md5;
   END IF;
 
-  -- Apply-time guard for the legacy averaged line (money review 2026-08-16,
-  -- CRX-MONEY-001). The new body consumes tiers in document order and takes
-  -- any already-billed line that matches NO tier key off the FRONT of the
-  -- list. Such a line can only come from a draw made BEFORE this migration,
-  -- when the old code collapsed every tier into one quantity-weighted average
-  -- price that by construction matches no tier. Front-of-list is the position
-  -- that averaging implicitly assumed and it conserves quantity, but it does
-  -- not conserve MONEY: the average consumed the tiers PROPORTIONALLY, so
-  -- retiring the cheapest units first leaves the dearer tiers to bill and the
-  -- booking bills out above its own value. Worked example -- 100 units at
-  -- $1.00 plus 100 at $2.00 is a $300.00 booking; a pre-migration draw of 50
-  -- units at the $1.50 average bills $75.00; afterwards the remaining 150
-  -- units skip 50 off the $1.00 tier and bill 50 at $1.00 plus 100 at $2.00 =
-  -- $250.00, so the booking bills $325.00 in total. Nothing raises, because
-  -- DRAW_ALLOCATION_MISMATCH proves the requested QUANTITY was allocated, not
-  -- that the right monetary tiers were consumed.
+  -- Apply-time guard for pre-migration draws on a mixed-price booking (money
+  -- review 2026-08-16, CRX-MONEY-001).
+  --
+  -- The old code collapsed every tier of a product into ONE quantity-weighted
+  -- average price and billed the draw at that average. It left no record of
+  -- WHICH tiers those units came from, and the average does not determine it:
+  -- the same average is produced by many different tier consumptions. The new
+  -- body has to reconstruct the remaining tiers from what was billed, and on a
+  -- booking drawn under the old code that reconstruction is guesswork.
+  --
+  -- Two distinct ways it goes wrong, both silent:
+  --
+  --   1. The averaged price matches NO tier, so the line falls through to the
+  --      legacy skip and is retired off the FRONT of the list. That conserves
+  --      quantity but not money -- the average consumed the tiers
+  --      proportionally, so retiring the cheapest units first leaves the dearer
+  --      tiers to bill. 100 units at $1.00 plus 100 at $2.00 is a $300.00
+  --      booking; a draw of 50 at the $1.50 average bills $75.00, then the
+  --      remaining 150 skip 50 off the $1.00 tier and bill $250.00 -- $325.00
+  --      in total, a $25.00 overbill.
+  --
+  --   2. The averaged price COINCIDENTALLY equals a real tier (Codex review
+  --      2026-08-16). 100 units each at $1.00, $2.00 and $3.00 at one cost is a
+  --      $600.00 booking; a draw of 250 at the exact $2.00 average matches the
+  --      middle tier, so the LEFT JOIN below subtracts all 250 from a tier
+  --      holding 100 and GREATEST(...,0) clamps the 150-unit excess away
+  --      instead of carrying it forward. The remaining 50 ledger units then
+  --      bill from the $1.00 tier and the booking closes at $550.00 -- a
+  --      $50.00 underbill.
+  --
+  -- Case 2 is why this guard does NOT test whether the billed line matches a
+  -- tier: that test passes precisely when the coincidence happens. Any
+  -- pre-migration draw against a multi-tier product is untrustworthy, so the
+  -- guard refuses on the draw existing at all. It looks at both the draw ledger
+  -- and surviving booking-draw order lines, because a draw can be recorded in
+  -- quote_product_draws while its order was later voided.
+  --
+  -- DRAW_ALLOCATION_MISMATCH does not catch either case: it proves the
+  -- requested QUANTITY was allocated, never that the right monetary tiers were
+  -- consumed.
   --
   -- Measured read-only against live on 2026-08-15 and again on 2026-08-16: no
-  -- quote carries more than one price tier for the same product, so no such
-  -- line exists and this guard is a no-op today. A measurement is not a
-  -- guarantee, though: the CURRENT live code still accepts a mixed-price
-  -- booking whenever its weighted average happens to land on a whole cent
-  -- ($1.00 and $2.00 average to exactly $1.50), so an affected booking can be
-  -- created and partially drawn in the window between review and apply. This
-  -- turns that race from a silent mispricing into a refusal to apply.
+  -- quote carries more than one price tier for the same product, so this is a
+  -- no-op today. A measurement is not an apply-time guarantee, though -- the
+  -- CURRENT live code still accepts a mixed-price booking whenever its weighted
+  -- average lands on a whole cent ($1.00 and $2.00 average to exactly $1.50) --
+  -- so an affected booking can be created and drawn between review and apply.
+  -- This turns that race from a silent mispricing into a refusal to apply.
   --
-  -- Deliberately NOT fixed by making the skip proportional. That would be new
-  -- integer-allocation money math on a path that holds zero rows now and can
-  -- hold none after apply -- every draw from here on writes tier-keyed lines
-  -- that match. Failing closed and letting a human price the one stranded
-  -- booking is the smaller risk. Scoped to bookings that are still drawable
-  -- (status sent/revised, not soft-deleted); a booking that can no longer be
-  -- drawn cannot be mispriced by this path.
+  -- Deliberately NOT fixed by inferring the historical allocation. The average
+  -- does not carry the information needed to invert it, so any inference would
+  -- be a guess written into customer money. Failing closed and letting a human
+  -- price the one stranded booking is the smaller risk. Scoped to bookings that
+  -- are still drawable; one that can no longer be drawn cannot be mispriced by
+  -- this path.
+  --
+  -- The tier key is the (price, cost) PAIR, matching the tiers CTE below. Two
+  -- lines at the same price but different snapshot costs are different tiers.
   SELECT count(*) INTO v_legacy
-  FROM order_items oi
-  JOIN orders o ON o.id = oi.order_id
-  JOIN quotes q ON q.id = o.quote_id
-  WHERE o.booking_draw IS TRUE
-    AND o.status <> 'voided'
-    AND q.deleted_at IS NULL
-    AND q.status IN ('sent', 'revised')
-    AND (
-      SELECT count(DISTINCT qi.price_per_unit)
-      FROM quote_items qi
-      WHERE qi.quote_id = q.id
-        AND qi.product_id = oi.product_id
-        AND COALESCE(qi.total_units_needed, 0) > 0
-    ) > 1
-    -- Mirrors the v_skip NOT EXISTS in the body token for token, including
-    -- IS NOT DISTINCT FROM on BOTH halves (cost_at_quote_cents is nullable).
-    -- If these two ever diverge this guard stops matching what it guards.
-    AND NOT EXISTS (
-      SELECT 1
-      FROM quote_items qi
-      WHERE qi.quote_id = q.id
-        AND qi.product_id = oi.product_id
-        AND COALESCE(qi.total_units_needed, 0) > 0
-        AND qi.price_per_unit IS NOT DISTINCT FROM oi.price_per_unit
-        AND qi.cost_at_quote_cents IS NOT DISTINCT FROM oi.cost_at_time_cents
-    );
+  FROM (
+    SELECT q.id AS quote_id, qi.product_id AS product_id
+    FROM quotes q
+    JOIN quote_items qi ON qi.quote_id = q.id
+    WHERE q.deleted_at IS NULL
+      AND q.status IN ('sent', 'revised')
+      AND COALESCE(qi.total_units_needed, 0) > 0
+    GROUP BY q.id, qi.product_id
+    HAVING count(DISTINCT (qi.price_per_unit, qi.cost_at_quote_cents)) > 1
+  ) mixed
+  WHERE EXISTS (
+          SELECT 1
+          FROM quote_product_draws d
+          WHERE d.quote_id = mixed.quote_id
+            AND d.product_id = mixed.product_id
+            AND COALESCE(d.quantity_drawn, 0) > 0
+        )
+     OR EXISTS (
+          SELECT 1
+          FROM order_items oi
+          JOIN orders o ON o.id = oi.order_id
+          WHERE o.quote_id = mixed.quote_id
+            AND o.booking_draw IS TRUE
+            AND o.status <> 'voided'
+            AND oi.product_id = mixed.product_id
+        );
 
   IF v_legacy > 0 THEN
     RAISE EXCEPTION
-      'DRAW_DOWN_LEGACY_AVERAGED_LINE: % order line(s) on still-drawable mixed-price booking(s) were billed at a weighted average that matches no price tier. Splitting the lines now would bill the remaining units above the booking value. Reprice or close those bookings, then re-apply.', v_legacy;
+      'DRAW_DOWN_PREMIGRATION_MIXED_TIER_DRAW: % still-drawable booking/product pair(s) carry more than one price tier AND were already drawn under the weighted-average code. Which tiers those units consumed is not recoverable from the average, so splitting the lines now would misbill the remainder. Reprice or close those bookings, then re-apply.', v_legacy;
   END IF;
 END;
 $preflight$;
