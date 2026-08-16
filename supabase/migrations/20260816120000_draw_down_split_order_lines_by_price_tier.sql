@@ -1052,19 +1052,36 @@ REVOKE ALL ON FUNCTION public._draw_down_quote_below_cost_impl_20260810(uuid, js
 -- would let the very rows it exists to prevent survive a later backfill.
 -- NULL stays legal because a booked line may legitimately carry no quantity
 -- yet; the draw path already treats NULL as zero.
+-- CRX-MIG-002 (Codex adversarial review, 2026-08-16): creating only when the
+-- NAME is free would silently inherit a same-named weaker rule under constraint
+-- drift, and the postflight's substring test would still pass it. So the
+-- "already exists" path now proves the existing constraint IS this constraint,
+-- by comparing the stored expression to the exact text PostgreSQL normalizes
+-- ours to, and aborts the migration otherwise. Fails closed: an unrecognised
+-- rule stops the apply rather than being adopted unread.
 DO $qty_check$
+DECLARE
+  -- Captured from PostgreSQL 17's own pg_get_constraintdef output for the CHECK
+  -- written below, on a throwaway database, not hand-written.
+  c_expected constant text :=
+    'CHECK (((total_units_needed IS NULL) OR ((total_units_needed >= (0)::numeric) AND (total_units_needed < ''Infinity''::numeric))))';
+  v_def text;
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conrelid = 'public.quote_items'::regclass
-      AND conname = 'quote_items_total_units_needed_nonneg_finite_chk'
-  ) THEN
+  SELECT pg_get_constraintdef(oid) INTO v_def
+  FROM pg_constraint
+  WHERE conrelid = 'public.quote_items'::regclass
+    AND conname = 'quote_items_total_units_needed_nonneg_finite_chk';
+
+  IF v_def IS NULL THEN
     ALTER TABLE public.quote_items
       ADD CONSTRAINT quote_items_total_units_needed_nonneg_finite_chk
       CHECK (
         total_units_needed IS NULL
         OR (total_units_needed >= 0 AND total_units_needed < 'Infinity'::numeric)
       );
+  ELSIF v_def IS DISTINCT FROM c_expected THEN
+    RAISE EXCEPTION
+      'CONSTRAINT_NAME_DRIFT: quote_items_total_units_needed_nonneg_finite_chk already exists on quote_items with a different rule (%); refusing to skip creation and adopt an unverified constraint', v_def;
   END IF;
 END;
 $qty_check$;
@@ -1240,6 +1257,8 @@ $postflight$;
 -- --- Postflight: prove the CRX-MONEY-002 constraint landed and is enforcing --
 DO $qty_postflight$
 DECLARE
+  c_expected constant text :=
+    'CHECK (((total_units_needed IS NULL) OR ((total_units_needed >= (0)::numeric) AND (total_units_needed < ''Infinity''::numeric))))';
   v_validated boolean;
   v_def text;
 BEGIN
@@ -1259,14 +1278,16 @@ BEGIN
       'POSTFLIGHT_FAILED: quote_items_total_units_needed_nonneg_finite_chk exists but is NOT VALID, so it does not cover the rows already on the table';
   END IF;
 
-  -- Existence is not enforcement, and the sign half alone would let NaN
-  -- through, so assert both halves are actually present in the stored
-  -- expression. That the constraint REJECTS is proven separately on a
-  -- throwaway database rather than by probing this one: an INSERT probe here
-  -- would trip the table's NOT NULL columns before ever reaching the CHECK.
-  IF v_def NOT LIKE '%>= (0)%' OR v_def NOT LIKE '%Infinity%' THEN
+  -- Existence is not enforcement. A substring test is not enough either: a
+  -- weaker same-named rule can contain both '>= (0)' and 'Infinity' and still
+  -- admit the values this exists to stop (CRX-MIG-002). So assert the stored
+  -- expression is exactly the one whose rejection behaviour was proven. That it
+  -- REJECTS is proven on a throwaway database rather than by probing this one:
+  -- an INSERT probe here would trip the table's NOT NULL columns before ever
+  -- reaching the CHECK.
+  IF v_def IS DISTINCT FROM c_expected THEN
     RAISE EXCEPTION
-      'POSTFLIGHT_FAILED: quote_items_total_units_needed_nonneg_finite_chk is present but its definition (%) is missing the non-negative or the finiteness half', v_def;
+      'POSTFLIGHT_FAILED: quote_items_total_units_needed_nonneg_finite_chk is present but its rule (%) is not the expression proven to reject negative and non-finite quantities', v_def;
   END IF;
 END;
 $qty_postflight$;

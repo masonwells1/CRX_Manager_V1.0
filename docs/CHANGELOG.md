@@ -2,6 +2,23 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-16 — Draw-down tier split: closed two adversarial-review money findings on…
+
+Draw-down tier split: closed two adversarial-review money findings on the unapplied candidate migration. CRX-MONEY-001 guard widened past its price-match test after review showed a weighted average can coincidentally equal a real tier; it now refuses to apply over any still-drawable mixed-tier booking already drawn under the averaging code, proven across seven scenarios. CRX-MONEY-002 added: a negative or non-finite booked quantity let the split bill a booking worth nothing, closed by a fail-closed refusal in the draw body plus a validated CHECK on quote_items.total_units_needed, mutation-checked against the pre-fix body. Migration remains a LOCAL CANDIDATE; no live apply, no merge.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `20c66927 Refuse a draw against a negative or non-finite booked quantity`
+  - `1c075f76 Widen the pre-migration draw refusal past the price-match test`
+  - `f719d165 Merge origin/main; refuse to apply over a legacy averaged draw line`
+  - `c73ea5d2 docs(changelog): log the soft-deleted-booking draw-down fix`
+  - `93cfe0f0 fix(draw-down): refuse a draw against a soft-deleted booking`
+  - `134a7d06 fix(draw-down): take each tier's document position from one quote line`
+  - `357f4f4a docs(changelog): log the 2026-08-16 draw-down tier-split session`
+  - `d6e90afc docs: record the draw-down tier-split and rep-access owner decisions`
+  - `f7e48f5a fix(draw-down): split a drawn booking into one order line per booked price tier`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`
+
 ## 2026-08-16 — Draw-down tier split: fixed two adversarial-review findings on PR #404
 
 Draw-down tier split: fixed two adversarial-review findings on PR #404. A tier appearing in two quote sections could report a document position no line occupies, billing the wrong price tier on a partial draw; both halves of the position now come from one row under a shared ordering. The quote lock also selected on id alone, so a soft-deleted booking still read as sent and stayed drawable by anyone holding its id -- a pre-existing hole carried from 20260702172000, now closed with deleted_at IS NULL. Cross-representative access deliberately unchanged per owner decision. Added a focused idempotency-forwarding test and a soft-delete guard test, both mutation-checked. Proven in both directions on throwaway PostgreSQL 17 databases. Migration remains a LOCAL CANDIDATE; not applied, no apply approved.
