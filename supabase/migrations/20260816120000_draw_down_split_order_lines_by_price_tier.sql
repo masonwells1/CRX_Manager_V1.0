@@ -43,10 +43,19 @@
 --
 -- What is now guaranteed is narrower and true: each tier's lines are rounded
 -- against that tier's RUNNING TOTAL, so however a tier is drawn down -- one
--- draw or twenty, whole or fractional -- the lines written against it sum to
--- exactly ROUND(tier_price x units_drawn, 2).  No residual accumulates and the
--- result does not depend on how the draw was split up.  See the telescoping
--- comment at v_line_total for the arithmetic.
+-- draw or twenty, whole or fractional -- the lines still billing the customer
+-- sum to exactly ROUND(tier_price x units_billed_at_that_tier, 2).  No residual
+-- accumulates and the result does not depend on how the draw was split up.
+--
+-- Nor does it depend on which draws were later REVERSED.  A second push-proof
+-- finding (CRX-MONEY-LIFECYCLE-001, High) showed that re-basing on surviving
+-- UNITS was not enough: after a void, the surviving lines no longer hold the
+-- amount that formula assumes they hold, and voiding the first of two identical
+-- draws billed a different total than voiding the second.  The running total is
+-- therefore re-based on the cents ACTUALLY standing against the tier, which is
+-- path-independent through voids and cancellations and additionally self-heals
+-- a tier that older per-draw rounding had already mis-billed.  See the
+-- telescoping comment at v_line_total for the arithmetic.
 --
 -- WHAT ELSE THIS FIXES
 -- --------------------
@@ -56,6 +65,18 @@
 -- quote_items.cost_at_quote_cents (already stored as integer cents), so the
 -- cost basis is exact too, and the order line's profit, the order header, the
 -- commission basis and the cost_at_time_cents stamp all agree on one value.
+--
+-- That agreement is not free, and the third push-proof finding
+-- (CRX-MONEY-PROFIT-001, High) is what pins it down.  order_items.profit is
+-- owned by the canonical trigger from 20260809230500, which discards any
+-- supplied profit and recomputes it PER LINE.  So the cost figure this function
+-- accumulates into the header has to be computed the trigger's way, not
+-- cumulatively; otherwise the header quietly disagrees with the very lines it
+-- summarises.  The consequence, stated plainly: the REVENUE side is exact to
+-- the cent, while the COST side still carries the ordinary per-line rounding
+-- residual on fractional quantities -- identical to every other order path in
+-- the system.  Removing that too would mean changing the shared trigger for all
+-- order lines, and is deliberately out of scope here.
 --
 -- WHAT DOES NOT CHANGE
 -- --------------------
@@ -1138,7 +1159,31 @@ BEGIN
             CASE WHEN o.status = 'cancelled'
                  THEN COALESCE(oi.quantity_delivered, 0)
                  ELSE COALESCE(oi.total_units_needed, 0)
-            END) AS units
+            END) AS units,
+          -- MONEY actually standing against this tier key, in dollars, on the
+          -- same surviving quantity the units column counts (Codex push-proof
+          -- 2026-08-16, CRX-MONEY-LIFECYCLE-001, High).
+          --
+          -- The money and the units MUST describe the same surviving rows, so
+          -- the cancelled branch is mirrored here: a cancelled order keeps only
+          -- its delivered units, so it may keep only the value of those units,
+          -- not the whole line's total_price. Valuing them at the line's own
+          -- price_per_unit is exact -- that is the price they were billed at.
+          --
+          -- Why this column has to exist at all: the previous version re-based
+          -- the running total on surviving UNITS and assumed the surviving
+          -- lines held ROUND(price * units, 2) cents. A void breaks that
+          -- assumption. Two 0.25-unit draws at $0.50 write $0.13 and $0.12;
+          -- void the FIRST and 0.25 surviving units carry $0.12, not $0.13, so
+          -- a units-only basis re-billed $0.12 and left the customer charged
+          -- $0.24 for half a unit that costs $0.25. Which of two identical
+          -- draws was voided must not change the bill.
+          SUM(
+            CASE WHEN o.status = 'cancelled'
+                 THEN ROUND(COALESCE(oi.price_per_unit, 0)
+                            * COALESCE(oi.quantity_delivered, 0), 2)
+                 ELSE COALESCE(oi.total_price, 0)
+            END) AS money
         FROM order_items oi
         JOIN orders o ON o.id = oi.order_id
         WHERE o.quote_id = p_quote_id
@@ -1174,7 +1219,17 @@ BEGIN
         --
         -- This is the rounding BASIS for the money below, not a quantity the
         -- loop spends. See the telescoping comment at v_line_total.
-        LEAST(COALESCE(b.units, 0), t.units) AS prior
+        LEAST(COALESCE(b.units, 0), t.units) AS prior,
+        -- Cents already standing against this tier key. Deliberately NOT
+        -- clamped the way "prior" is: this is a statement of fact about money
+        -- that has been billed, and shrinking it would re-invent the very
+        -- assumption CRX-MONEY-LIFECYCLE-001 was about -- that the surviving
+        -- lines hold whatever the arithmetic says they should. The one case
+        -- where it can exceed the tier's own extension is an over-billed tier,
+        -- which DRAW_TIER_OVERCONSUMED refuses outright after the loop; the
+        -- GREATEST at v_line_total keeps the interim value in range until that
+        -- guard aborts the transaction.
+        COALESCE(b.money, 0) AS money
       FROM tiers t
       LEFT JOIN billed b
         -- Both halves use IS NOT DISTINCT FROM deliberately, and the mirror
@@ -1249,30 +1304,69 @@ BEGIN
       -- draws the old form billed 2 x $0.13 + 2 x $0.38 = $1.02. Two cents
       -- invented out of rounding, and it grows with the number of partial draws.
       --
-      -- The fix is to round the RUNNING TOTAL and bill the difference. After
-      -- this draw the tier has been billed for (prior + take) units, whose
-      -- authoritative value is ROUND(price * (prior + take), 2); it has already
-      -- been billed ROUND(price * prior, 2). The difference is what this line
-      -- owes. Successive draws therefore telescope: whatever sequence of partial
-      -- draws consumes a tier, the sum of the lines written is EXACTLY
-      -- ROUND(price * units_drawn_from_that_tier, 2), with no path-dependence
-      -- and no accumulating residual. On a whole-unit draw this is identical to
-      -- the old expression, so nothing changes for the ordinary case.
+      -- The fix is to round the RUNNING TOTAL and subtract what is already
+      -- charged. After this draw the tier has been billed for (prior + take)
+      -- units, whose authoritative value is ROUND(price * (prior + take), 2).
+      -- Subtract the money already standing against the tier and the remainder
+      -- is what this line owes. Successive draws therefore telescope: whatever
+      -- sequence of partial draws consumes a tier, the surviving lines sum to
+      -- EXACTLY ROUND(price * units_billed_at_that_tier, 2), with no
+      -- path-dependence and no accumulating residual. On a whole-unit draw this
+      -- is identical to the old expression, so nothing changes for the ordinary
+      -- case.
       --
-      -- prior is the units already billed at this tier key, which is what the
-      -- earlier lines were actually rounded against -- not units-drawn-from-the-
-      -- product. Legacy averaged lines carry a DIFFERENT price and so land under
-      -- a different key; they are handled by v_skip and correctly contribute 0
-      -- here, because this tier has genuinely not been billed for them.
+      -- The subtrahend is v_tier.money -- the cents ACTUALLY standing on the
+      -- surviving lines -- and NOT the computed ROUND(price * prior, 2). Those
+      -- two agree in the ordinary case but diverge after a void, and using the
+      -- computed figure made the final bill depend on WHICH of two identical
+      -- draws had been reversed (Codex push-proof 2026-08-16,
+      -- CRX-MONEY-LIFECYCLE-001, High). Reading the real money instead makes
+      -- every path self-correcting, and it also repairs, on the next draw
+      -- against that tier, a tier that legacy per-draw rounding had already
+      -- over- or under-billed.
       --
-      -- A void or a cancellation shrinks prior (see the billed CTE), which
-      -- re-bases the running total against the reduced history. That is the
-      -- intended behaviour -- the reversal changed what the customer owes -- and
-      -- the re-basing artefact is bounded by one cent on the next draw.
-      v_line_total := ROUND(v_tier.price * (v_tier.prior + v_take), 2)
-                    - ROUND(v_tier.price * v_tier.prior, 2);
-      v_line_cost  := ROUND(v_tier_cost_unit * (v_tier.prior + v_take), 2)
-                    - ROUND(v_tier_cost_unit * v_tier.prior, 2);
+      -- prior and money are keyed on the tier each line was WRITTEN at, not on
+      -- units-drawn-from-the-product. Legacy averaged lines carry a DIFFERENT
+      -- price and so land under a different key; they are handled by v_skip and
+      -- correctly contribute 0 here, because this tier has genuinely not been
+      -- billed for them.
+      --
+      -- GREATEST(..., 0): on an already over-billed tier the remainder can come
+      -- out negative -- a credit. This path does not issue one. Refunding a
+      -- historical over-charge belongs in a credit memo against the order that
+      -- carries it, not silently inside an unrelated draw line, and a negative
+      -- total_price would be refused by the whole-cent money CHECKs anyway. The
+      -- clamp writes 0 and the over-charge stands, visible, on the line that
+      -- created it. It hides nothing that is not already surfaced: the quantity
+      -- form of the same condition is carried out as "over" and refused after
+      -- the loop by DRAW_TIER_OVERCONSUMED.
+      v_line_total := GREATEST(
+                        ROUND(v_tier.price * (v_tier.prior + v_take), 2)
+                        - v_tier.money, 0);
+
+      -- COST is deliberately NOT telescoped. This asymmetry is load-bearing
+      -- (Codex push-proof 2026-08-16, CRX-MONEY-PROFIT-001, High).
+      --
+      -- order_items.profit is not the caller's to choose. The canonical trigger
+      -- from 20260809230500 overwrites any supplied profit with total_price -
+      -- ROUND(cost_per_unit * total_units_needed, 2) -- a PER-LINE, explicitly
+      -- non-cumulative cost. A cumulative v_line_cost therefore never reaches
+      -- the stored line profit at all; it only desynchronises the order header
+      -- and the commission basis from the lines they are meant to summarise.
+      -- Measured shape: a $1.50 sale at $0.50 cost drawn as two 0.25-unit draws
+      -- stores line profits of $0.25 + $0.24 = $0.49 under a header claiming
+      -- $0.50.
+      --
+      -- So the cost basis is computed with the SAME expression the trigger
+      -- uses, and the header below accumulates exactly the per-line figures the
+      -- trigger will go on to store. Header, lines, and commission basis then
+      -- agree by construction -- the invariant the 2026-08-09 decision exists
+      -- to hold. The cost side keeps the per-draw rounding residual that the
+      -- revenue side now sheds: a sub-cent artefact on internal margin, and the
+      -- same one every other order path already carries. Shedding it there too
+      -- means changing the shared canonical trigger for ALL order lines, which
+      -- is a wider, separate change and is deliberately not made here.
+      v_line_cost  := ROUND(v_tier_cost_unit * v_take, 2);
 
       IF v_alloc_left = 0 THEN
         -- Last line for this product absorbs the acres rounding residual.
