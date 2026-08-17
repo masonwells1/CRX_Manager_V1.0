@@ -272,6 +272,65 @@ Two more consequences worth knowing before you carve a column out:
 
 ---
 
+## A green CodeRabbit check does not mean a review happened (2026-08-17)
+
+`AGENTS.md` makes reading CodeRabbit's review a standing pre-merge step. The check row is **not**
+evidence that step is satisfiable. On PR #411, `gh pr checks` reported:
+
+```
+CodeRabbit	pass	0		Review completed
+```
+
+while CodeRabbit's own comment on the same PR said:
+
+> **Review failed** — An error occurred during the review process. Please try again later.
+
+No review ran, and the status text asserted the opposite. PR #402 showed a milder version of the
+same thing — check green, body reading "Review rate limited". Read the **comment body**, never the
+check row:
+
+```bash
+gh pr view <N> --repo masonwells1/CRX_Manager_V1.0 --json reviews,comments
+```
+
+Zero `reviews` plus a `coderabbitai` comment containing "Review failed" or "rate limited" means the
+advisory gate did not run. Say so rather than treating green as clean. This is also a live argument
+against promoting CodeRabbit to a merge-blocking required check (the "hard-block soon" half of the
+2026-07-30 decision) until the green-on-failure case is understood — as a required check it would
+pass while doing nothing.
+
+---
+
+## Creating a branch ref via the GitHub API can cost you the Vercel status (2026-08-17)
+
+`new-branch-push-scans-full-history` prescribes creating the remote ref first (GitHub API, from
+`main`) so the pre-push containment scan stays bounded. That works — but on PR #411 the resulting
+branch never got a `Vercel` commit status, and `Vercel` is one of three required checks in the
+`protect-main` ruleset, so the PR sat at `BLOCKED` with every other check green.
+
+Vercel **did** build it: the deployment reached `state: READY` and carried the right
+`githubPrId`/`githubCommitSha`. It simply never posted back. Two observable tells:
+
+| Signal | Healthy PR | API-created ref |
+|---|---|---|
+| `commits/<sha>/status` contexts | `CodeRabbit`, `Vercel` | `CodeRabbit` only |
+| Vercel deployment `meta.repoPushedAt` | present | **absent** |
+| `repos/.../deployments?sha=<sha>` | deployment object | empty |
+
+`meta.repoPushedAt` comes from a GitHub push event, so its absence is the fingerprint. Closing and
+reopening the PR re-runs the Actions checks but does **not** bring the status back.
+
+Diagnose by comparing status contexts against a known-good PR rather than waiting:
+
+```bash
+gh api "repos/masonwells1/CRX_Manager_V1.0/commits/<sha>/status" --jq '[.statuses[].context]'
+```
+
+The remedy is a genuine push event on the branch — land the next real commit rather than an empty
+one. Never work around it by relaxing the required check.
+
+---
+
 ## Source
 
 This file consolidates lessons from `~/.claude/projects/.../memory/feedback.md` and historical debugging sessions. Add new entries here whenever a non-obvious quirk causes a bug.
