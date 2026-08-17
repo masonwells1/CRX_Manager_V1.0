@@ -23,7 +23,24 @@ wrong — the status turned up on its own, on the same commit, with no push even
 entry now records the lag and the wrong turn, since a close/reopen and an extra commit were both
 spent chasing a problem that did not exist.
 
+Both traps then resolved themselves in ways worth recording. A `@coderabbitai review` comment
+turned the failed review into a real one — so a CodeRabbit failure is recoverable by asking again,
+not a dead end for the standing pre-merge policy — and it returned six findings against these very
+docs. Five were applied. The substantive one: the entry's own copy-paste example read
+`gh pr view <N>`, which a shell parses as input redirection and never runs; both `bash` blocks now
+define variables, and both were executed verbatim rather than assumed. The others corrected
+overclaiming in prose written earlier the same session — "no review ran" became "the review did not
+complete", and a `READY` Vercel deployment no longer stands in for "the pipeline is fine" when it
+proves only that one required check finished. The one-hour lag now rests on two measurements
+(`711aecfb` ~69 min, `8b1e86f8` ~56 min) and is framed as an escalation threshold rather than a
+timing guarantee. The sixth finding — a wording change inside the preserved Codex handoff document
+— was declined on the PR: that file is a verbatim record, and editing its prose would falsify the
+archive it exists to be.
+
 - **Commits this session** (git log origin/main..HEAD):
+  - `0a15eab4 docs(gotchas): resolve CodeRabbit review on PR #411`
+  - `8b1e86f8 docs(gotchas): correct the Vercel-status entry — it is a lag, not a lost status`
+  - `732d516d docs(changelog): log the 2026-08-17 docs-only session`
   - `84505a65 docs(gotchas): record two CI-signal traps found landing PR #411`
   - `711aecfb docs(audits): preserve Codex fleet-takeover handoff inventory (2026-08-17)`
 - **Migrations touched** (git diff --name-only origin/main...HEAD):
