@@ -277,7 +277,7 @@ Two more consequences worth knowing before you carve a column out:
 `AGENTS.md` makes reading CodeRabbit's review a standing pre-merge step. The check row is **not**
 evidence that step is satisfiable. On PR #411, `gh pr checks` reported:
 
-```
+```text
 CodeRabbit	pass	0		Review completed
 ```
 
@@ -285,16 +285,20 @@ while CodeRabbit's own comment on the same PR said:
 
 > **Review failed** — An error occurred during the review process. Please try again later.
 
-No review ran, and the status text asserted the opposite. PR #402 showed a milder version of the
-same thing — check green, body reading "Review rate limited". Read the **comment body**, never the
-check row:
+The review was attempted and did not complete — no findings were ever submitted — and the status
+text asserted the opposite. PR #402 showed a milder version of the same thing — check green, body
+reading "Review rate limited". Read the **comment body**, never the check row:
 
 ```bash
-gh pr view <N> --repo masonwells1/CRX_Manager_V1.0 --json reviews,comments
+PR_NUMBER=411
+REPO="masonwells1/CRX_Manager_V1.0"
+gh pr view "$PR_NUMBER" --repo "$REPO" --json reviews,comments
 ```
 
-Zero `reviews` plus a `coderabbitai` comment containing "Review failed" or "rate limited" means the
-advisory gate did not run. Say so rather than treating green as clean. This is also a live argument
+Zero `reviews` plus a `coderabbitai` comment containing "Review failed" or "rate limited" means no
+CodeRabbit review was submitted, so the advisory gate produced nothing to read. Say so rather than
+treating green as clean. Re-request one with a `@coderabbitai review` comment on the PR; on #411
+that turned the failure into a real 6-finding review. This is also a live argument
 against promoting CodeRabbit to a merge-blocking required check (the "hard-block soon" half of the
 2026-07-30 decision) until the green-on-failure case is understood — as a required check it would
 pass while doing nothing.
@@ -304,19 +308,20 @@ pass while doing nothing.
 ## The `Vercel` required status lags the deployment by up to an hour (2026-08-17)
 
 `Vercel` is one of three required checks in the `protect-main` ruleset, so a PR sits at
-`BLOCKED` until it posts — and it posts **long** after the build is actually finished. Measured on
-PR #411, commit `711aecfb`:
+`BLOCKED` until it posts — and it posts **long** after the build is actually finished. Two
+measurements, both on PR #411:
 
-| Event | Time (UTC) |
-|---|---|
-| commit authored | 13:42:32 |
-| Vercel deployment `state: READY` | ~13:51 |
-| `CodeRabbit` status posted | 14:32:34 |
-| **`Vercel` status posted** | **14:51:03** |
+| Event | `711aecfb` | `8b1e86f8` |
+|---|---|---|
+| commit authored | 13:42:32 | 15:23:22 |
+| Vercel deployment `state: READY` | ~13:51 | — |
+| **`Vercel` status posted** | **14:51:03** | **16:19:32** |
+| **delay from commit** | **~69 min** | **~56 min** |
 
-That is ~69 minutes from commit and ~60 from a green deployment. Three consecutive 10-minute polls
-saw nothing and it still arrived on its own. **Do not diagnose a missing `Vercel` status until at
-least an hour has passed.**
+Two observations are not a published SLA, so treat the hour as an escalation threshold rather than
+a guarantee: **do not start diagnosing a missing `Vercel` status until at least an hour has
+passed** — before that, waiting is the correct action. Three consecutive 10-minute polls saw
+nothing on `711aecfb` and it still arrived on its own.
 
 Everything below was a wrong turn on this PR, recorded so nobody repeats it. The absence was read
 as a causal failure of creating the remote ref through the GitHub API first (the fix
@@ -326,11 +331,14 @@ signals looked like a fingerprint — the deployment lacked `meta.repoPushedAt`,
 commit, with no push event of its own. A close/reopen and an extra pushed commit were both spent
 chasing it and neither was what fixed anything.
 
-Confirm the build independently instead of inferring from GitHub. If a deployment for the SHA is
-`READY`, the pipeline is fine and the status is merely in transit:
+Confirm the build independently instead of inferring from GitHub. A `READY` deployment for the SHA
+proves only that **the Vercel deployment finished** — it says nothing about whether the other
+required checks passed, so read those separately rather than concluding the PR is healthy:
 
 ```bash
-gh api "repos/masonwells1/CRX_Manager_V1.0/commits/<sha>/status" --jq '[.statuses[].context]'
+REPO="masonwells1/CRX_Manager_V1.0"
+SHA="711aecfb"
+gh api "repos/$REPO/commits/$SHA/status" --jq '[.statuses[].context]'
 ```
 
 Cross-check the SHA against Vercel's own `list_deployments` for project
