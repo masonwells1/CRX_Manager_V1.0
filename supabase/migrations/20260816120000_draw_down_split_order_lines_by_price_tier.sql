@@ -82,8 +82,12 @@
 -- Read-only preflight pins the live function body (md5
 -- 87bf7adcdc63d94684676da5ab09bfde) and refuses to run if a second overload of
 -- the same name exists, so this fails closed if anything else has redefined it
--- since this migration was written.  No business rows are read, written, moved
--- or deleted by this migration -- it replaces one function body.
+-- since this migration was written.  No business rows are written, moved or
+-- deleted by this migration.  It replaces one function body and adds one
+-- validated CHECK constraint to public.quote_items; validation READS every
+-- existing row of that table and holds ACCESS EXCLUSIVE on it until commit, so
+-- the apply is not free of a lock footprint and must not be sized as if it
+-- were.  See the lock_timeout note at the lock block below.
 -- CREATE OR REPLACE preserves the existing owner and the deliberate
 -- postgres-only EXECUTE grant established by 20260812115237; the REVOKE below
 -- re-states that posture defensively rather than relying on inheritance.
@@ -111,32 +115,108 @@
 -- not yet reached its ledger write blocks there until this migration commits,
 -- and a draw that committed before the lock is visible to the scan.
 --
--- What the lock does NOT do, stated plainly (Codex review 2026-08-16,
--- CRX-MIG-CUTOVER-001): it cannot drain a draw that is ALREADY RUNNING. That
--- call is executing the old function body out of its own plan cache and keeps
+-- A table lock alone does NOT close the window, and earlier revisions of this
+-- comment said so and left it open (Codex review 2026-08-16, CRX-MIG-CUTOVER-001
+-- and CRX-MONEY-CUTOVER-001). It cannot drain a draw that is ALREADY RUNNING:
+-- that call is executing the old body out of its own session plan cache, keeps
 -- executing it after the replacement commits, and its uncommitted rows are
--- invisible to the scan. So a legacy averaged draw can still land just after
--- the scan believed itself authoritative. Closing that window properly needs a
--- barrier inside the OLD body -- an advisory lock taken at its entry -- which
--- has to ship in an earlier, separate migration and cannot be done from here.
+-- invisible to the scan. So a legacy averaged draw could land just after the
+-- scan believed itself authoritative.
 --
--- What IS done from here is the net underneath it, in two layers. The runtime
--- DRAW_MIXED_TIER_UNMATCHED_LINE guard further down refuses the NEXT draw on
--- any mixed-tier booking carrying a billed line that matches no tier, which is
--- the trace a late legacy averaged draw normally leaves. An average CAN land
--- exactly on a real tier key and slip past that (Codex review 2026-08-16,
--- first HIGH), so DRAW_TIER_OVERCONSUMED is the second layer: such a draw is
--- attributed wholly to the one tier it coincidentally matches while it really
--- consumed several, so it over-bills that tier and is refused there.
+-- That window is now ELIMINATED, by the advisory lock taken immediately below
+-- together with the cutover barrier shipped in 20260816110000. That migration
+-- rewrote public.draw_down_quote -- the only entry point that can reach this
+-- implementation -- so that every draw first calls
+-- pg_try_advisory_xact_lock_shared(20260816, 1) and refuses outright, writing
+-- nothing, if the key is held exclusively. Taking the same key EXCLUSIVE here
+-- gives three cases, exhaustive over every draw PLANNED after 20260816110000
+-- committed:
 --
--- The window is narrow and no longer silent. It is NOT eliminated, and this
--- comment does not claim it is. Eliminating it needs either a barrier inside
--- the old body (a separate earlier migration) or an apply run with no draws in
--- flight -- an operational choice for Mason, not something this file can make.
--- Note also that the race needs a mixed-tier booking to exist and be drawn
--- concurrently, and live evidence recorded above is that no quote carries more
--- than one price tier for the same product today. Re-verify that immediately
--- before applying.
+--   * a draw that took SHARE before this request holds it to commit, so this
+--     migration blocks until that draw has committed and the preflight scan
+--     below sees its rows;
+--   * a draw arriving while this migration holds EXCLUSIVE is refused and
+--     records nothing;
+--   * a draw arriving after this migration commits finds the key free and is
+--     planned fresh, so it runs the new body.
+--
+-- A draw already EXECUTING the pre-barrier wrapper when 20260816110000
+-- committed falls outside all three: CREATE OR REPLACE FUNCTION does not
+-- interrupt a running call, so it takes no key. The preflight below closes that
+-- separately, by refusing to run while any other client-backend transaction
+-- older than this one is still open (CRX-MONEY-CUTOVER-002). With that gate
+-- there is no interval in which the old body can commit a row this scan did not
+-- see -- but it holds only if the two migrations are applied as two SEPARATELY
+-- COMMITTED calls. Bundled into one transaction the barrier never becomes
+-- visible to any other session, every concurrent draw runs unbarriered, and the
+-- catalog assertions below would still pass by reading this transaction's own
+-- uncommitted catalog. That is not left to the operator: the preflight compares
+-- pg_proc.xmin on the wrapper row against this transaction's own id and raises
+-- DRAW_DOWN_CUTOVER_BARRIER_UNCOMMITTED if the barrier was installed here,
+-- so a bundled apply fails and rolls back instead of silently proceeding.
+--
+-- The barrier deliberately does NOT wait: measured on PostgreSQL 17.10, a
+-- session with a warm plan cache that blocks on a waiting advisory lock across
+-- the replacement resumes and still runs the OLD body, because a backend does
+-- not re-check plan invalidations mid-command. Waiting would have made the race
+-- reliable instead of rare. See the header of 20260816110000.
+--
+-- Lock ordering: advisory key first, table lock second, on both sides. The
+-- barrier takes the advisory lock as the first statement in the wrapper, before
+-- any table is touched, and this migration does the same, so no cycle and no
+-- deadlock is possible between a draw and this cutover.
+--
+-- The preflight below refuses to run at all unless the barrier is live, so this
+-- file cannot be applied out of order.
+--
+-- Two runtime nets remain underneath, for legacy draws taken before the barrier
+-- shipped rather than during the cutover. DRAW_MIXED_TIER_UNMATCHED_LINE
+-- refuses the next draw on a mixed-tier booking carrying a billed line matching
+-- no tier -- the trace a legacy averaged draw normally leaves. An average CAN
+-- land exactly on a real tier key and slip past that. DRAW_TIER_OVERCONSUMED is
+-- only a PARTIAL second layer: it fires when the quantity attributed to the
+-- coincidentally-matched tier EXCEEDS the units booked at that tier, and stays
+-- silent when the draw fits inside it. Worked example -- the same one
+-- 20260816110000's header uses -- 100 units each at three prices, the average
+-- landing exactly on the middle price, and a legacy draw of 50 units: the draw
+-- matches the middle tier, 50 is well under its 100 booked units, nothing is
+-- over-consumed, and BOTH nets pass. That case is closed by the barrier and the
+-- quiet gate alone. Do not read these two nets as an independent proof of the
+-- cutover; they are defence in depth for legacy rows
+-- (RLS/security review 2026-08-16, HIGH).
+--
+-- Live evidence recorded further down this header (below, not above) is that no
+-- quote carries more than one price tier for the same product today. Re-verify
+-- that read-only immediately before applying.
+-- Fail fast rather than freeze the app (RLS/security review 2026-08-16, MED).
+-- This transaction takes three blocking locks: the cutover advisory key below,
+-- SHARE ROW EXCLUSIVE on quote_product_draws (which queues every other writer
+-- of that table, including void/cancel reversals), and -- much later, at the
+-- CHECK constraint -- ACCESS EXCLUSIVE on quote_items, which blocks all READS
+-- of the quote builder's main table until commit. With no lock_timeout a
+-- blocked apply waits forever and takes the quote pages down with it.
+--
+-- 15s bounds EACH lock acquisition, not the apply as a whole: worst case is
+-- three separate 15s waits, so roughly 45s before the apply gives up, and even
+-- a FAILING apply queues quote_items readers behind its pending ACCESS
+-- EXCLUSIVE request for up to that last 15s. The number is also unmeasured --
+-- chosen as comfortably longer than a real draw so the intended hand-off below
+-- still works, not derived from a timing run. Wrong either way it fails closed:
+-- too short aborts an apply that changed nothing, too long only lengthens the
+-- window before that same abort (RLS/security review 2026-08-16, LOW).
+--
+-- The draw-refusal window is longer than the function replace. This transaction
+-- holds the cutover key EXCLUSIVE from the statement below through COMMIT, and
+-- that span includes building the quote_items CHECK constraint near the end of
+-- this file -- so every draw is refused with DRAW_DOWN_CUTOVER_IN_PROGRESS for
+-- the constraint's validation scan too, not just for the function swap.
+-- Accepted rather than split into a third migration: another file would add a
+-- third ordered apply to an already delicate two-file sequence, and the refusal
+-- is instant, writes nothing and is retryable
+-- (RLS/security review 2026-08-16, MED).
+SET LOCAL lock_timeout = '15s';
+
+SELECT pg_advisory_xact_lock(20260816, 1);
 LOCK TABLE public.quote_product_draws IN SHARE ROW EXCLUSIVE MODE;
 
 -- --- Preflight: refuse to run against an unexpected body ----------------------
@@ -145,7 +225,27 @@ DECLARE
   v_md5 text;
   v_overloads integer;
   v_legacy integer;
+  v_wrapper_src text;
+  v_wrapper_overloads integer;
+  v_stats_visible boolean;
+  v_inflight integer;
+  v_oldest interval;
+  v_barrier_same_txn boolean;
+  v_prepared integer;
 BEGIN
+  -- Everything in this file depends on it running inside ONE transaction: the
+  -- advisory-key handshake with 20260816110000, the 15s abort, and the
+  -- all-or-nothing rollback. Outside a transaction block SET LOCAL is a no-op
+  -- that emits only a WARNING and pg_advisory_xact_lock releases at statement
+  -- end, so the entire cutover mechanism would silently evaporate while every
+  -- catalog assertion below still passed. current_setting reads back '0' in
+  -- that case, which makes this a direct test of the assumption rather than the
+  -- prose claim it replaces (migration-drift review 2026-08-16, MED).
+  IF current_setting('lock_timeout') <> '15s' THEN
+    RAISE EXCEPTION
+      'DRAW_DOWN_CUTOVER_NOT_IN_TRANSACTION: lock_timeout reads %, not 15s, so the SET LOCAL above did not take effect and this migration is not running inside a single transaction. The advisory-lock cutover handshake would do nothing. Apply through a client that wraps each migration in one transaction -- nothing has been changed.', current_setting('lock_timeout');
+  END IF;
+
   -- Identify the target unambiguously. proname + pronargs alone would still be
   -- ambiguous if a same-name overload with four differently-typed arguments
   -- existed, so assert first that exactly one function carries this name.
@@ -175,6 +275,167 @@ BEGIN
   IF v_md5 <> '87bf7adcdc63d94684676da5ab09bfde' THEN
     RAISE EXCEPTION
       'DRAW_DOWN_IMPL_DRIFTED: expected body md5 87bf7adcdc63d94684676da5ab09bfde, found %; another migration has redefined this function -- reconcile before applying', v_md5;
+  END IF;
+
+  -- The cutover barrier must already be live (20260816110000). The advisory
+  -- lock taken above is only half of a handshake: it serializes this migration
+  -- against draws that TAKE the same key, and a draw entry point without the
+  -- barrier takes nothing, so it would sail straight past. Asserting the
+  -- barrier here is what makes the ordering a proof gate rather than a hope,
+  -- and answers Codex review 2026-08-16 CRX-MONEY-CUTOVER-001, which required a
+  -- deterministic barrier rather than an operational "apply when quiet"
+  -- instruction.
+  --
+  -- Checked structurally rather than by body md5 on purpose: 20260816110000
+  -- already pins the pre-barrier body it replaces, and a second md5 pin here
+  -- would break this file every time the wrapper legitimately changes for an
+  -- unrelated reason, which is a refusal that teaches people to delete the
+  -- guard.
+  SELECT count(*) INTO v_wrapper_overloads
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public'
+    AND p.proname = 'draw_down_quote';
+
+  IF v_wrapper_overloads <> 1 THEN
+    RAISE EXCEPTION
+      'DRAW_DOWN_WRAPPER_OVERLOADED: expected exactly 1 function named public.draw_down_quote, found % -- an unbarriered overload could still reach the old body', v_wrapper_overloads;
+  END IF;
+
+  SELECT p.prosrc INTO v_wrapper_src
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public'
+    AND p.proname = 'draw_down_quote'
+    AND p.pronargs = 5;
+
+  IF v_wrapper_src IS NULL THEN
+    RAISE EXCEPTION
+      'DRAW_DOWN_CUTOVER_BARRIER_MISSING: public.draw_down_quote(uuid, jsonb, uuid, text, text) not found; migration 20260816110000 must be applied before this one';
+  END IF;
+
+  IF position('pg_try_advisory_xact_lock_shared' IN v_wrapper_src) = 0
+     OR position('DRAW_DOWN_CUTOVER_IN_PROGRESS' IN v_wrapper_src) = 0 THEN
+    RAISE EXCEPTION
+      'DRAW_DOWN_CUTOVER_BARRIER_MISSING: the live draw_down_quote wrapper does not carry the fail-fast cutover barrier; apply migration 20260816110000 first, then re-run this one';
+  END IF;
+
+  -- Order matters as much as presence: a barrier that runs after the forwarded
+  -- call is not a barrier. Both operands are proven nonzero immediately above,
+  -- so this comparison cannot be satisfied by a missing string.
+  IF position('pg_try_advisory_xact_lock_shared' IN v_wrapper_src)
+     > position('_draw_down_quote_below_cost_impl_20260810' IN v_wrapper_src) THEN
+    RAISE EXCEPTION
+      'DRAW_DOWN_CUTOVER_BARRIER_MISORDERED: the live draw_down_quote wrapper takes the cutover barrier after forwarding to the draw-down implementation, so the barrier cannot hold this cutover -- reconcile before applying';
+  END IF;
+
+  -- The barrier must already be COMMITTED, not merely present in this
+  -- transaction's own snapshot. If 20260816110000 and this migration are
+  -- bundled into one transaction, every check above still passes -- they read
+  -- this transaction's uncommitted catalog -- while no other session ever sees
+  -- the barrier, so every concurrent draw runs unbarriered for the whole apply.
+  -- That is the worst case the two headers warn about, and prose is not a
+  -- guard. pg_proc.xmin is the transaction that wrote the wrapper row; if it
+  -- equals this transaction's id, the barrier was installed here and has not
+  -- been committed. Refuse.
+  SELECT p.xmin = pg_current_xact_id()::xid INTO v_barrier_same_txn
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public'
+    AND p.proname = 'draw_down_quote'
+    AND p.pronargs = 5;
+
+  -- IS NOT FALSE, not a bare truth test: SELECT ... INTO leaves the variable
+  -- NULL if no row matched, and a bare IF would read that blindness as "not
+  -- bundled" and continue. The row's existence is proven above, so this is
+  -- unreachable today, but it matches the fail-closed form this file uses
+  -- everywhere else (migration-drift review 2026-08-16, LOW).
+  --
+  -- Known narrow gap, recorded rather than papered over: pg_current_xact_id()
+  -- returns the TOP-LEVEL transaction id. If the barrier's CREATE OR REPLACE
+  -- ran inside a savepoint or a PL/pgSQL block with an EXCEPTION handler, xmin
+  -- holds a subtransaction id that never equals it, and a genuinely bundled
+  -- apply would slip through. PostgreSQL exposes no in-transaction "is this xid
+  -- mine or my subtransaction's" test, so this is close to the best achievable;
+  -- the direct top-level path that apply_migration uses is caught correctly.
+  IF v_barrier_same_txn IS NOT FALSE THEN
+    RAISE EXCEPTION
+      'DRAW_DOWN_CUTOVER_BARRIER_UNCOMMITTED: migration 20260816110000 was applied inside THIS transaction, so no other session can see the barrier and concurrent draws are running unbarriered. Apply 20260816110000 as its own committed migration first, then apply this one separately -- nothing has been changed.';
+  END IF;
+
+  -- CRX-MONEY-CUTOVER-002 (RLS/security review 2026-08-16, HIGH). The barrier
+  -- installed by 20260816110000 binds every draw PLANNED after that migration
+  -- commits. It cannot bind a backend that was ALREADY EXECUTING the
+  -- pre-barrier wrapper when the barrier landed: CREATE OR REPLACE FUNCTION
+  -- neither interrupts nor drains a running call, and that backend took no
+  -- advisory key at all. If it has not yet reached its INSERT INTO
+  -- quote_product_draws -- which is late in the body, after the tier loop and
+  -- the order_items inserts -- the SHARE ROW EXCLUSIVE lock above finds nothing
+  -- to conflict with, the scan below cannot see its uncommitted rows, and it
+  -- then commits an averaged line against a booking this migration has already
+  -- declared clean. That is exactly the case both runtime nets miss when the
+  -- average lands on a real tier and fits inside it.
+  --
+  -- The dangerous set is precisely: transactions that began before
+  -- 20260816110000 committed and are still open. This transaction necessarily
+  -- began after that commit, so "any other client-backend transaction older
+  -- than mine" is a strict superset of it -- and needs no record of when the
+  -- barrier actually committed, which is unobtainable from inside the
+  -- transaction that installs it. Deliberately conservative: an unrelated
+  -- long-running session also refuses the apply. That costs a retry at a
+  -- quieter moment. The alternative costs money.
+  --
+  -- Fail closed on blindness first. A role without pg_read_all_stats sees NULL
+  -- xact_start for other users' backends, so the count below would read zero
+  -- for the wrong reason and this whole gate would pass vacuously. Verified
+  -- read-only on 2026-08-16 that the applying role (postgres) is a member of
+  -- pg_monitor on this project, so this branch is satisfiable, not a wall.
+  SELECT current_setting('is_superuser') = 'on'
+         OR pg_has_role(current_user, 'pg_read_all_stats', 'USAGE')
+    INTO v_stats_visible;
+
+  IF NOT v_stats_visible THEN
+    RAISE EXCEPTION
+      'DRAW_DOWN_CUTOVER_STATS_BLIND: role % cannot read other backends'' transaction times, so this migration cannot prove no pre-barrier draw is still in flight. Apply as a role holding pg_monitor (or pg_read_all_stats) -- nothing has been changed.', current_user;
+  END IF;
+
+  -- Deliberately NO "xact_start <= now()" filter. now() is fixed at THIS
+  -- transaction's start, so that filter would mean "began before me", which is
+  -- a superset of the dangerous set only if this transaction began after the
+  -- barrier committed. Nothing enforces that: if this apply opens and then
+  -- waits on the advisory key or the table lock (up to 15s each) while
+  -- 20260816110000 commits in another session, a pre-barrier backend starting
+  -- inside that gap sorts after now() and goes uncounted. Counting every other
+  -- open client-backend transaction drops the assumption entirely and is
+  -- strictly more conservative. clock_timestamp() rather than now() for the
+  -- reported age, so a backend younger than this transaction reports a positive
+  -- age instead of a negative one (RLS/security review 2026-08-16, MED).
+  SELECT count(*), max(clock_timestamp() - a.xact_start)
+    INTO v_inflight, v_oldest
+  FROM pg_stat_activity a
+  WHERE a.datname = current_database()
+    AND a.pid <> pg_backend_pid()
+    AND a.backend_type = 'client backend'
+    AND a.xact_start IS NOT NULL;
+
+  IF v_inflight > 0 THEN
+    RAISE EXCEPTION
+      'DRAW_DOWN_CUTOVER_NOT_QUIET: % other client transaction(s) are open in this database (oldest has been running %). Any of them may still be executing the pre-barrier draw code, whose uncommitted rows this migration cannot see. Wait for them to finish, then re-apply -- nothing has been changed.', v_inflight, v_oldest;
+  END IF;
+
+  -- backend_type = 'client backend' above covers PostgREST and pg_cron (whose
+  -- job runner connects over libpq and reports as a client backend). It does
+  -- NOT cover prepared (two-phase) transactions, which never appear in
+  -- pg_stat_activity at all and could hold uncommitted pre-barrier draw rows
+  -- invisibly. This project does not use two-phase commit; refuse rather than
+  -- assume that stays true (RLS/security review 2026-08-16, MED).
+  SELECT count(*) INTO v_prepared
+  FROM pg_prepared_xacts
+  WHERE database = current_database();
+
+  IF v_prepared > 0 THEN
+    RAISE EXCEPTION
+      'DRAW_DOWN_CUTOVER_PREPARED_XACT: % prepared (two-phase) transaction(s) exist in this database. They are invisible to pg_stat_activity, so this migration cannot prove none of them holds an uncommitted pre-barrier draw. Resolve or roll them back, then re-apply -- nothing has been changed.', v_prepared;
   END IF;
 
   -- Apply-time guard for pre-migration draws on a mixed-price booking (money

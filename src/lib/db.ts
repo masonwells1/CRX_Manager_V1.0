@@ -115,6 +115,21 @@ export const RpcErrorCodes = {
   BOOKED_PRICE_REQUIRED: 'BOOKED_PRICE_REQUIRED',
   COST_BASIS_REQUIRED: 'COST_BASIS_REQUIRED',
   DRAW_ALLOCATION_MISMATCH: 'DRAW_ALLOCATION_MISMATCH',
+  // Same migration: a draw line that matches no booked price tier, and a tier
+  // asked to give up more units than were booked at it. Both are fail-closed
+  // refusals with plain-English server messages, surfaced verbatim by the draw
+  // modal's generic error branch — registered here so they are inside the typed
+  // contract rather than only inside the SQL.
+  DRAW_MIXED_TIER_UNMATCHED_LINE: 'DRAW_MIXED_TIER_UNMATCHED_LINE',
+  DRAW_TIER_OVERCONSUMED: 'DRAW_TIER_OVERCONSUMED',
+  // Same migration: a booked line carrying a negative or non-finite quantity
+  // has no honest value to draw against. Runtime-reachable by the same draw
+  // modal path as the two above, so it belongs in the typed contract too.
+  BOOKING_QUANTITY_INVALID: 'BOOKING_QUANTITY_INVALID',
+  // draw_down_quote cutover barrier (migration 20260816110000). Raised only
+  // while the tier-split cutover holds its advisory key; the draw is refused
+  // instantly having written nothing, and retrying after the cutover succeeds.
+  DRAW_DOWN_CUTOVER_IN_PROGRESS: 'DRAW_DOWN_CUTOVER_IN_PROGRESS',
   // close_quote_as_short — refuses while scheduled/in-progress jobs still exist (U5 #1)
   BOOKING_HAS_ACTIVE_JOBS: 'BOOKING_HAS_ACTIVE_JOBS',
   // create_job_from_quote_section — an accepted booking is a chemical sale; make a standalone job (U5 #103)
