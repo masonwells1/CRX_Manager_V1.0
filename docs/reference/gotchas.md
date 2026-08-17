@@ -305,23 +305,27 @@ pass while doing nothing.
 
 ---
 
-## The `Vercel` required status lags the deployment by up to an hour (2026-08-17)
+## The `Vercel` required status can take an hour — or a minute (2026-08-17)
 
-`Vercel` is one of three required checks in the `protect-main` ruleset, so a PR sits at
-`BLOCKED` until it posts — and it posts **long** after the build is actually finished. Two
-measurements, both on PR #411:
+`Vercel` is one of three required checks in the `protect-main` ruleset, so a PR sits at `BLOCKED`
+until it posts. **How long that takes is wildly variable**, which is the whole point of this entry.
+Three measurements, all on PR #411, all the same branch and same day:
 
-| Event | `711aecfb` | `8b1e86f8` |
-|---|---|---|
-| commit authored | 13:42:32 | 15:23:22 |
-| Vercel deployment `state: READY` | ~13:51 | — |
-| **`Vercel` status posted** | **14:51:03** | **16:19:32** |
-| **delay from commit** | **~69 min** | **~56 min** |
+| Commit | authored (UTC) | `Vercel` status posted | delay |
+|---|---|---|---|
+| `711aecfb` | 13:42:32 | 14:51:03 | **~69 min** |
+| `8b1e86f8` | 15:23:22 | 16:19:32 | **~56 min** |
+| `0a15eab4` | 16:56:51 | 17:06:02 | **~9 min** |
 
-Two observations are not a published SLA, so treat the hour as an escalation threshold rather than
-a guarantee: **do not start diagnosing a missing `Vercel` status until at least an hour has
-passed** — before that, waiting is the correct action. Three consecutive 10-minute polls saw
-nothing on `711aecfb` and it still arrived on its own.
+Do not read a fast one as normal or a slow one as broken. The two slow samples landed in a window
+where GitHub's own infrastructure was visibly congested — the CodeQL job on this PR failed the same
+afternoon on repeated `429 Too Many Requests` fetching `github/codeql-action` — so treat the delay
+as queue depth, not as a property of the commit or of how the branch was created.
+
+Operationally: **do not start diagnosing a missing `Vercel` status until at least an hour has
+passed.** Waiting is free and is the correct action; the two slow samples both arrived on their own,
+and three consecutive 10-minute polls on `711aecfb` saw nothing before it turned up. An hour is an
+escalation threshold chosen to sit past the worst observed wait, not a published SLA.
 
 Everything below was a wrong turn on this PR, recorded so nobody repeats it. The absence was read
 as a causal failure of creating the remote ref through the GitHub API first (the fix
