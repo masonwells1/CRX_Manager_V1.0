@@ -28,8 +28,25 @@
 -- its own order line, carrying the quote's own price -- which is already
 -- guaranteed to be a whole number of cents by
 -- quote_items_price_per_unit_cent_scale_chk.  Nothing is rounded at the unit
--- level, so nothing can be scaled up by quantity.  Money is exact by
--- construction rather than exact by rounding.
+-- level, so nothing can be scaled up by quantity.
+--
+-- The UNIT price is therefore exact by construction.  The line EXTENSION is a
+-- separate question, and an earlier draft of this header overstated it as
+-- "money is exact by construction rather than exact by rounding" full stop.
+-- That is true only while quantities are whole.  They are not: the draw
+-- quantity box and the quote-line quantity boxes are all step="any", so
+-- price x quantity can legitimately land on a fraction of a cent and must be
+-- rounded somewhere.  The 2026-08-16 push-proof found the first version of this
+-- migration rounding EACH DRAW in isolation (CRX-MONEY-TIER-ROUND-001, High),
+-- which let the residual accumulate across partial draws -- billing $1.02 on a
+-- $1.00 booking drawn in four fractional pieces.
+--
+-- What is now guaranteed is narrower and true: each tier's lines are rounded
+-- against that tier's RUNNING TOTAL, so however a tier is drawn down -- one
+-- draw or twenty, whole or fractional -- the lines written against it sum to
+-- exactly ROUND(tier_price x units_drawn, 2).  No residual accumulates and the
+-- result does not depend on how the draw was split up.  See the telescoping
+-- comment at v_line_total for the arithmetic.
 --
 -- WHAT ELSE THIS FIXES
 -- --------------------
@@ -1148,7 +1165,16 @@ BEGIN
         GREATEST(t.units - COALESCE(b.units, 0), 0) AS units,
         -- Units billed against this tier BEYOND what the tier now holds --
         -- exactly the quantity the clamp above throws away.
-        GREATEST(COALESCE(b.units, 0) - t.units, 0) AS over
+        GREATEST(COALESCE(b.units, 0) - t.units, 0) AS over,
+        -- Units ALREADY billed at this tier key by earlier draws, clamped to
+        -- what the tier holds (the over-billed excess is refused separately by
+        -- DRAW_TIER_OVERCONSUMED, and that guard aborts the whole transaction,
+        -- so the clamp cannot ship a wrong number -- it only keeps this column
+        -- from going out of range on a run that is about to roll back anyway).
+        --
+        -- This is the rounding BASIS for the money below, not a quantity the
+        -- loop spends. See the telescoping comment at v_line_total.
+        LEAST(COALESCE(b.units, 0), t.units) AS prior
       FROM tiers t
       LEFT JOIN billed b
         -- Both halves use IS NOT DISTINCT FROM deliberately, and the mirror
@@ -1208,9 +1234,45 @@ BEGIN
       -- snapshot cost written here survives the trigger.
       v_tier_cost_unit := ROUND(v_tier.cost_cents::numeric / 100, 2);
 
-      -- Money is rounded only AFTER extension by quantity, never before.
-      v_line_total := ROUND(v_tier.price * v_take, 2);
-      v_line_cost  := ROUND(v_tier_cost_unit * v_take, 2);
+      -- Money is rounded only AFTER extension by quantity, never before -- and,
+      -- since the 2026-08-16 push-proof (CRX-MONEY-TIER-ROUND-001, High), the
+      -- extension is CUMULATIVE per tier rather than per draw.
+      --
+      -- The earlier form was ROUND(price * take, 2) on each draw in isolation.
+      -- That is exact for whole-unit draws, but draw quantities are genuinely
+      -- fractional -- the draw box in QuoteBuilder is step="any", and so are the
+      -- quote-line quantity boxes it draws against -- and on a fractional draw
+      -- the per-draw rounding residual does not cancel. It ACCUMULATES across
+      -- partial draws, so the tier ends up billed for more (or less) than its
+      -- own authoritative extension. Worked case from the proof: 0.50 units at
+      -- $0.50 plus 0.50 units at $1.50 books $1.00; drawn as four 0.25-unit
+      -- draws the old form billed 2 x $0.13 + 2 x $0.38 = $1.02. Two cents
+      -- invented out of rounding, and it grows with the number of partial draws.
+      --
+      -- The fix is to round the RUNNING TOTAL and bill the difference. After
+      -- this draw the tier has been billed for (prior + take) units, whose
+      -- authoritative value is ROUND(price * (prior + take), 2); it has already
+      -- been billed ROUND(price * prior, 2). The difference is what this line
+      -- owes. Successive draws therefore telescope: whatever sequence of partial
+      -- draws consumes a tier, the sum of the lines written is EXACTLY
+      -- ROUND(price * units_drawn_from_that_tier, 2), with no path-dependence
+      -- and no accumulating residual. On a whole-unit draw this is identical to
+      -- the old expression, so nothing changes for the ordinary case.
+      --
+      -- prior is the units already billed at this tier key, which is what the
+      -- earlier lines were actually rounded against -- not units-drawn-from-the-
+      -- product. Legacy averaged lines carry a DIFFERENT price and so land under
+      -- a different key; they are handled by v_skip and correctly contribute 0
+      -- here, because this tier has genuinely not been billed for them.
+      --
+      -- A void or a cancellation shrinks prior (see the billed CTE), which
+      -- re-bases the running total against the reduced history. That is the
+      -- intended behaviour -- the reversal changed what the customer owes -- and
+      -- the re-basing artefact is bounded by one cent on the next draw.
+      v_line_total := ROUND(v_tier.price * (v_tier.prior + v_take), 2)
+                    - ROUND(v_tier.price * v_tier.prior, 2);
+      v_line_cost  := ROUND(v_tier_cost_unit * (v_tier.prior + v_take), 2)
+                    - ROUND(v_tier_cost_unit * v_tier.prior, 2);
 
       IF v_alloc_left = 0 THEN
         -- Last line for this product absorbs the acres rounding residual.
