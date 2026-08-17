@@ -2,6 +2,30 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-16 — draw-down tier split: closed two adversarial money findings
+
+draw-down tier split: closed two adversarial money findings — bill each line against the cents already standing on surviving lines rather than a recomputed figure (makes the total independent of which draw was reversed), and compute line cost with the canonical profit trigger own per-line expression so header, lines, and commission basis agree. Drove the real draw_down_quote end to end for the first time on an extended fixture, which caught an unprojected CTE column that every model-level proof had missed. Both migrations remain local candidates; live apply not approved.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `b82e1338 fix(draw-down): bill on cents already standing, and keep line cost per-line`
+  - `f16d205e fix(draw-down): bill each tier off its running total, not per draw`
+  - `3c41dfac fix(draw-down): split order lines by booked price tier, with a proven cutover barrier`
+  - `3d194aab Refuse a draw when a price tier is billed past what it holds`
+  - `24a3bf67 Refuse a tier draw when a billed line names no tier`
+  - `22c10c7f Guard the mixed-tier cutover on a stable predicate, and serialize it`
+  - `c54946f0 Prove the quantity constraint by definition, not by substring`
+  - `7c205ee6 Merge remote-tracking branch 'origin/main' into claude/draw-down-price-tier-lines`
+  - `20c66927 Refuse a draw against a negative or non-finite booked quantity`
+  - `1c075f76 Widen the pre-migration draw refusal past the price-match test`
+  - `f719d165 Merge origin/main; refuse to apply over a legacy averaged draw line`
+  - `c73ea5d2 docs(changelog): log the soft-deleted-booking draw-down fix`
+  - `93cfe0f0 fix(draw-down): refuse a draw against a soft-deleted booking`
+  - `134a7d06 fix(draw-down): take each tier's document position from one quote line`
+  - `357f4f4a docs(changelog): log the 2026-08-16 draw-down tier-split session`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260816110000_draw_down_cutover_barrier.sql`
+  - `supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`
+
 ## 2026-08-16 — draw-down tier split: eighth adversarial pass closed
 
 draw-down tier split: eighth adversarial pass closed. Added DRAW_TIER_OVERCONSUMED, a second runtime refusal that catches a tier billed for more units than it now holds. This covers two confirmed HIGHs: a legacy weighted average that coincidentally equals a real tier key (which slipped past the seventh pass's unmatched-line guard), and a supported quote revision that reattributes already-drawn units between tiers (save_quote's drawn-product guard is aggregate-only and preserves no per-tier attribution). The per-tier GREATEST clamp used to discard the overhang silently; it is now carried out of the tier query and refused. Postflight asserts both new guard identifiers, mutation-checked. Also corrected a documentation defect: five earlier ledger claims described the throwaway proof server as PostgreSQL 17 when it was 16.14; the two version-sensitive claims were re-proven on a real 17.10 throwaway and the CHECK normalisation is byte-identical on both. Migration remains a LOCAL CANDIDATE, not applied.
