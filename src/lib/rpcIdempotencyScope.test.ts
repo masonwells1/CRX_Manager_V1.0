@@ -285,6 +285,27 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // both intentionally share the wrapper's single 'save_field_app_split_invoice' cache
   // namespace, exactly like the save_purchase_order pair above.
   _save_field_app_split_invoice_impl: ['save_field_app_split_invoice'],
+  // Direct EXECUTE is revoked from anon/authenticated/service_role (postflight
+  // in mig 20260721014858 asserts it). This IS the original public
+  // complete_delivery body: migration 20260716173342 renamed it with
+  // `ALTER FUNCTION ... RENAME TO _complete_delivery_authorized_impl` and
+  // created a new public wrapper that authorizes and then delegates, so both
+  // layers use the one 'complete_delivery' cache namespace on purpose — a
+  // replay through the wrapper must find the result the impl saved. Giving the
+  // impl its own namespace would strand that cache and let a retried
+  // completion invoice the same delivery twice. The shape is pre-existing and
+  // unchanged; it entered this test's scope only because migration
+  // 20260817120000 is the first to CREATE the function under its post-rename
+  // name (the rename itself defined no function body on disk).
+  _complete_delivery_authorized_impl: ['complete_delivery'],
+  // Direct EXECUTE is revoked from anon/authenticated/service_role (same
+  // postflight). Implementation half of the public
+  // create_invoice_for_unbilled_delivery RPC, which delegates to it
+  // (mig 20260721014858); both layers intentionally share that one cache
+  // namespace. Pre-existing and unchanged — mig 20260817120000 re-emits the
+  // body only to consume the order line's allocated cents instead of
+  // re-extending price x quantity.
+  _create_invoice_for_unbilled_delivery_impl_20260718: ['create_invoice_for_unbilled_delivery'],
   // Restore the Wave A alias exemption when its drafts are promoted from
   // scripts/.staging-migrations/.
 };
