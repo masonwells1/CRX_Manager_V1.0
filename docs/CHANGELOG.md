@@ -16,10 +16,12 @@ credits return. Spark (`gpt-5.3-codex-spark`) does not substitute for that gate.
 Landing that one docs commit surfaced two CI-signal traps, now in `docs/reference/gotchas.md`:
 CodeRabbit's check row can read `pass` / "Review completed" while its own PR comment says the
 review failed — so the standing "read CodeRabbit's review" policy cannot be satisfied by looking
-at the check; and creating a branch ref through the GitHub API (the documented workaround for the
-Phase 3C containment hang on a brand-new ref) leaves the branch with no `Vercel` commit status,
-which is a required check on `protect-main`. Close/reopen does not recover it; only a genuine push
-event does.
+at the check; and the `Vercel` required status can arrive more than an hour after the deployment is
+already `READY`, so a PR sits `BLOCKED` on a build that has in fact succeeded. The second entry was
+first written as a causal failure of creating the branch ref through the GitHub API, and that was
+wrong — the status turned up on its own, on the same commit, with no push event of its own. The
+entry now records the lag and the wrong turn, since a close/reopen and an extra commit were both
+spent chasing a problem that did not exist.
 
 - **Commits this session** (git log origin/main..HEAD):
   - `84505a65 docs(gotchas): record two CI-signal traps found landing PR #411`

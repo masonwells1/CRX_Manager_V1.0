@@ -301,33 +301,41 @@ pass while doing nothing.
 
 ---
 
-## Creating a branch ref via the GitHub API can cost you the Vercel status (2026-08-17)
+## The `Vercel` required status lags the deployment by up to an hour (2026-08-17)
 
-`new-branch-push-scans-full-history` prescribes creating the remote ref first (GitHub API, from
-`main`) so the pre-push containment scan stays bounded. That works — but on PR #411 the resulting
-branch never got a `Vercel` commit status, and `Vercel` is one of three required checks in the
-`protect-main` ruleset, so the PR sat at `BLOCKED` with every other check green.
+`Vercel` is one of three required checks in the `protect-main` ruleset, so a PR sits at
+`BLOCKED` until it posts — and it posts **long** after the build is actually finished. Measured on
+PR #411, commit `711aecfb`:
 
-Vercel **did** build it: the deployment reached `state: READY` and carried the right
-`githubPrId`/`githubCommitSha`. It simply never posted back. Two observable tells:
+| Event | Time (UTC) |
+|---|---|
+| commit authored | 13:42:32 |
+| Vercel deployment `state: READY` | ~13:51 |
+| `CodeRabbit` status posted | 14:32:34 |
+| **`Vercel` status posted** | **14:51:03** |
 
-| Signal | Healthy PR | API-created ref |
-|---|---|---|
-| `commits/<sha>/status` contexts | `CodeRabbit`, `Vercel` | `CodeRabbit` only |
-| Vercel deployment `meta.repoPushedAt` | present | **absent** |
-| `repos/.../deployments?sha=<sha>` | deployment object | empty |
+That is ~69 minutes from commit and ~60 from a green deployment. Three consecutive 10-minute polls
+saw nothing and it still arrived on its own. **Do not diagnose a missing `Vercel` status until at
+least an hour has passed.**
 
-`meta.repoPushedAt` comes from a GitHub push event, so its absence is the fingerprint. Closing and
-reopening the PR re-runs the Actions checks but does **not** bring the status back.
+Everything below was a wrong turn on this PR, recorded so nobody repeats it. The absence was read
+as a causal failure of creating the remote ref through the GitHub API first (the fix
+`new-branch-push-scans-full-history` prescribes for the unbounded pre-push containment scan). Two
+signals looked like a fingerprint — the deployment lacked `meta.repoPushedAt`, and
+`repos/.../deployments?sha=` was empty. Neither held: the status arrived anyway, on that exact
+commit, with no push event of its own. A close/reopen and an extra pushed commit were both spent
+chasing it and neither was what fixed anything.
 
-Diagnose by comparing status contexts against a known-good PR rather than waiting:
+Confirm the build independently instead of inferring from GitHub. If a deployment for the SHA is
+`READY`, the pipeline is fine and the status is merely in transit:
 
 ```bash
 gh api "repos/masonwells1/CRX_Manager_V1.0/commits/<sha>/status" --jq '[.statuses[].context]'
 ```
 
-The remedy is a genuine push event on the branch — land the next real commit rather than an empty
-one. Never work around it by relaxing the required check.
+Cross-check the SHA against Vercel's own `list_deployments` for project
+`prj_cp2ZVn0RueHHYXCxNkTD0YwCBET6` (team `team_jQyqY8P8Kt3qEoT5hg5zlmpT`) and read
+`state` + `meta.githubCommitSha`. Never work around a late status by relaxing the required check.
 
 ---
 
