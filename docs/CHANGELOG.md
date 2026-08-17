@@ -2,6 +2,51 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-14 — CRX-SEC-1: quote versions become RPC-owned (folded into the recovery PR)
+
+`public.quote_versions` was client-writable. Its RLS INSERT policy (`qversions_insert`) checked
+only WHO owned the quote — never what the row contained — and the browser roles still held the
+raw table write grants, so a sales rep could PostgREST-INSERT a version row of their own
+construction onto their own quote, including a forged `sent_by`.
+
+That turned into a money defect once `20260812115236` made `snapshot_data` an authoritative cost
+source: the restore path arms the cost-snapshot passthrough and writes the snapshot's
+`current_cost` straight into the immutable `quote_items.cost_at_quote_cents`, whose only check is
+`<= 0`. `convert_quote_to_order` then copies that into the order line, and canonical profit and
+commission derive from it. The below-cost approval trigger from `20260812115237` does not catch
+this — it compares the SALE PRICE against the LIVE product cost, and understating the historical
+cost basis raises apparent margin, so the trigger never fires. Net effect: a sales rep could
+understate COGS on their own quote and inflate margin reporting and their own commission with no
+admin approval in the path. Live since 2026-08-12; the read-only exploitation check against live
+came back CLEAN, so nothing needs repairing — only closing.
+
+That clean result is now proven exactly rather than approximately. The first revision of the
+migration's pre-apply check flagged a snapshot line only when its stored cost sat below HALF the
+product's catalog cost, and the independent review of 2026-08-14 (finding CRX-QV-001, High) was
+right to refuse it: a basis forged at 60% of a $100 cost clears a 50% band, and a percentage
+threshold cannot prove provenance at all. The check is now exact equality against
+`products.current_cost`, which the only legitimate writer copies verbatim, so any line that does
+not match to the last digit aborts the apply for a human read. Re-measured read-only against live
+on 2026-08-14: three version rows, five snapshot lines, every stored basis exactly equal to its
+product's catalog cost. The exact test is deliberately fail-closed — a legitimate catalog price
+move between measurement and apply will also abort it, and the answer there is to re-measure and
+read the differing line, not to widen the test.
+
+`20260813080000_lock_quote_versions_writes_to_rpc.sql` closes it with the same RPC-owned shape
+`20260715203911` used for returns: drop the ownership-only INSERT policy, revoke the six
+write-capable table grants from the browser roles (MAINTAIN deliberately kept and explained at the
+REVOKE), leave `qversions_select` and the authenticated SELECT grant untouched so version history
+keeps rendering, and re-state the callable boundary on `create_quote_version` and
+`restore_quote_version`. The legitimate writer is a SECURITY DEFINER owned by `postgres` with no
+authenticated EXECUTE, so it bypasses RLS and holds its own grants — dropping the policy cannot
+reach it. Ships with a write-boundary smoke test, RLS contract assertions, and a DB-invariant
+predicate. **STATUS: NOT APPLIED** — the file lands on `main` as source; the live apply is a
+separate approval.
+
+This PR also folds in what was PR #394 (split 3/3 of #389). The recovery split and this fix land
+together because the adversarial review correctly refused to clear migrations that create a
+client-writable authoritative cost path without the fix present in the same diff.
+
 ## 2026-08-14 — Codex Supabase guard: exact read-only allowlist (Sol HIGH finding)
 
 Sol's adversarial review of the write-scope PR found that the Codex production-action guard
@@ -48,6 +93,118 @@ stale comment anywhere in `.codex/config.toml` could satisfy while the active co
 read-only. Both checkers now extract the `[mcp_servers.supabase]` `url` value and require it to
 contain `read_only=false` and not `read_only=true`. Mutation-tested: a reverted flag fails the
 check even with a decoy comment present.
+
+## 2026-08-12 — Six migrations were running in production with no file in the repository
+
+Recovered and landed. **Nothing is applied by this change and no live behaviour changes** — all six
+were already live before the first line of this entry was written. What changes is that `main` now
+describes production again.
+
+**What went wrong.** Six migrations were applied to the live database on 2026-08-12 by concurrent
+sessions that never landed their files. No branch, no worktree and no pull request carried them. For
+part of that day, six migrations touching order money, quote cost, report math and a new
+approval table were running against production and **no one could review them**, because the SQL
+existed nowhere except inside the database. A clean rebuild from `main` would have produced a schema
+without them. This is the same class of gap PR #371 closed on 2026-08-11; it reopened the next day,
+six files wide.
+
+**Why the files are trustworthy.** They are not reconstructions. Rebuilding a migration from live
+`pg_proc.prosrc` loses the header, the preconditions and the review history, and produces a file
+nobody actually reviewed. Instead each file is the exact `apply_migration` payload recovered verbatim
+from the applying session's transcript. Fidelity was then proven rather than asserted: function
+bodies extracted from the recovered text were md5-compared against live `pg_proc.prosrc` and matched
+exactly, at identical length, for `_guard_below_cost_approval_immutable`,
+`_resnapshot_order_item_cost_on_product_change`, `_snapshot_quote_item_cost` and
+`_guard_quote_item_cost_snapshot`. `bash scripts/validate-sql-migrations.sh --changed-only` reports
+0 violations across the six.
+
+**All six are published byte-identical, including the one that carries live figures.**
+`20260812115238` embedded a 35-row map of the exact order lines it repaired, with their prices and
+profit. That map was withheld when the file first landed, because this repository is public. On
+2026-08-14 Mason directed that it be published in full, on his stated basis that the figures in this
+system are not real or operational, so the file now matches the applied payload exactly. Fidelity is
+measured, not asserted: this one was recovered from the live ledger rather than a transcript —
+`statements[1]` of ledger version `20260812154757` in `supabase_migrations.schema_migrations`, 18,770
+bytes, md5 `f31409684f7f01eee19042468f1e6998`, LF endings — and the committed file hashes identically.
+The two edits the earlier redaction required are gone with it: the publication note in the header, and
+the `APPROVED_SET_WITHHELD` guard that existed only to fail closed when the map had been emptied. The
+file defines no functions, so the md5 fidelity proof above is unaffected. This decision covers this
+map and nothing else; the standing rule against publishing live financial data is unchanged
+(`docs/manual/DECISION_LOG.md`, 2026-08-14).
+
+**What the six do**, in apply order (full detail in `docs/reference/migration-history.md`, rows
+880-885):
+
+- `20260812010000` — blend-ticket order creation now proves its own order header at run time, not
+  just at apply time. A dropped or repointed totals trigger would previously have left a zero header
+  and still returned success.
+- `20260812011000` — quote-version restore normalizes constrained snapshot money to whole cents and
+  rejects non-finite values before the first write, so a historical snapshot holding a fractional
+  cent can no longer make a version permanently un-restorable.
+- `20260812115235` — every order-basis report now derives line cost from the immutable as-of-sale
+  snapshot instead of the mutable product cost or the stored order header, so editing a product cost
+  no longer rewrites the margin on sales already made. Unpriced rush lines are excluded from
+  profit-bearing aggregations so they cannot show up as a phantom loss.
+- `20260812115236` — adds `quote_items.cost_at_quote_cents`. A quote's line cost no longer drifts:
+  re-saving an old quote to fix a note used to silently reprice its cost, profit and margin at
+  today's catalog cost, and that drifted cost then followed the quote into the order.
+- `20260812115237` — adds `below_cost_approvals` (with RLS) and moves the below-cost sale check out
+  of the browser and into the database for the seven sell-side write paths. The browser
+  confirmation was never an authorization boundary; a direct API caller skipped it.
+- `20260812115238` — the one live-data correction in the group, approved by Mason in chat on
+  2026-08-12: rounds the historical order lines that still carried fractions of a cent, recomputes
+  the affected order headers, and installs the whole-cent rule as a validated constraint. Published
+  in full, including the 35-row map of the lines it repaired, per Mason's 2026-08-14 decision.
+
+Also in this change: the six files are pinned `text eol=lf` in `.gitattributes` — several carry md5
+pins computed against the live catalog, and a Windows checkout under `core.autocrlf=true` would
+install bytes those pins were never computed against.
+
+**Prevention is not addressed here.** Nothing in this change stops the next session from applying a
+migration without landing its file. That gap is recorded in `docs/manual/KNOWN_ISSUES.md`.
+
+### What review found once the files were finally readable
+
+This is the point of landing them. Two automated reviewers read the six files on the pull request —
+the first time any reviewer could — and between them raised six findings. Each was checked against
+current source and read-only live schema rather than accepted on the reviewer's word. **Four describe
+production as it already stands; none is caused by landing the files.** Three held up, one did not:
+
+- **Confirmed — the below-cost approval path has no front end.** The database now requires an active
+  admin *and* a written reason for any line priced under cost, carried by `p_below_cost_reason`. No
+  caller in `src/` passes it, and `src/lib/internalNotes.ts`, referenced by the migration's own
+  notes, does not exist. The approval audit table has never recorded a row. Below-cost saves
+  therefore fail with a generic error and no path forward. Sales at or above cost are unaffected —
+  the guard returns early before any of this is reached.
+- **Confirmed — a quote carrying the same product on two lines cannot be re-saved.** `save_quote`
+  identifies existing lines by id, but the QuoteBuilder payload
+  (`src/pages/QuoteBuilder.tsx`) omits `id` and `client_key` entirely, so every line arrives
+  unidentified and two lines of one product are unresolvable. The resulting
+  `QUOTE_ITEM_AMBIGUOUS_COST` tells the user to reload the quote, which cannot help, because the
+  reload strips the ids again. New quotes are unaffected; the guard only engages where prior lines of
+  that product already exist. No quote in the live database is currently shaped this way, so this is
+  latent rather than active.
+- **Confirmed — `get_profitability_report` is not wired to anything.** `20260812115235` added it so
+  the profitability tabs would stop re-implementing cost basis in the browser, but no caller exists
+  and `src/pages/Reports.tsx` still groups stored header and line profit client-side. The corrected
+  basis is in the database and is not reaching the screen.
+- **Not confirmed — blend-ticket lines without a product.** The claim was that a NULL `product_id`
+  would leave the cost NULL, and that `price >= NULL` (which is NULL, not true) would fall through
+  into the fail-closed branch. The control flow is exactly that. The case is nonetheless unreachable:
+  `order_items.product_id` is `NOT NULL` live, verified by introspection. Dismissed.
+- **Fixed here — `quote_items.cost_at_quote_cents` was missing from `src/types/index.ts`.** Declared
+  optional, and the reason is itself a finding: typing it as required broke the cast at
+  `src/pages/QuoteBuilder.tsx:834`, which proved the quote loader's explicit column list never
+  fetches the snapshot at all.
+- **Deferred with cause — `.claude/schema-registry.json`.** It is stale by far more than this one
+  column (high-water `20260812003315` against a live `20260812154757`), so the correct fix is a full
+  `--from-introspection` rebuild. Doing that here would resync the entire schema and bury a six-file
+  recovery record inside an unrelated diff. Tracked in `docs/manual/KNOWN_ISSUES.md`.
+
+Both reviewers also noted that the already-applied files assert privileges against literal role names
+without first checking `pg_roles`, and that the non-finite money guard in `20260812011000` covers only
+the constrained fields. Both are correct and both are **forward-only**: an applied migration is never
+edited, so these belong in a future migration.
 
 ## 2026-08-12 — Wave A round 5: four migrations self-aborted, all for the same reason
 
@@ -104,6 +261,9 @@ does not exist. Checking the live ledger against every remote branch found **six
 on 2026-08-12 whose files are on no branch and in no worktree. `main` does not currently describe
 production. That is somebody else's session to close, not this wave's, but no one should be planning
 against `main` as if it were accurate until it is.
+
+*(Update, 2026-08-13: the six file-less migrations flagged at the end of this entry were recovered and landed on `main` by PR #392 — see the entry above.)*
+
 ## 2026-08-12 — Restore a governed maintenance path for the live SQL safety boundary
 
 The weekly adversarial review confirmed two active fail-open paths in the live SQL classifier, but
@@ -333,15 +493,6 @@ aborted the migration on every apply. It now seeds the rows it needs inside its 
 rolled-back subtransaction, so it exercises the reconciliation for real on any database state rather
 than skipping, and proves it left nothing behind by whole-row fingerprint, row count, and explicit
 absence of the synthetic ids.
-## 2026-08-12 — Return retries are actor/payload-bound and credit reversal restores overdue immediately (applied live)
-
-Section 08 of the refreshed Returns/Credit Memos gauntlet found six return RPCs whose receipts were keyed only by operation and key text, an Apply Credit dialog that discarded the only safe retry key when reopened, a shared reversal helper that reopened every fully credited invoice as `posted`, and a stale Returns schema row. Migration `20260812130145_bind_return_receipts_to_intent_and_restore_overdue.sql` moves the verified current return and reversal bodies behind postgres-only implementations and adds thin public guards: every return key is required and bound to the authenticated actor plus the exact return id or exact create JSON payload; cancel also binds its exact reason. Exact retries replay once, while a changed actor, return, reason, header, or ordered line payload raises and performs no second mutation. The existing source-derived credit math, locks, immutable ledger, generated balances, period gates, RLS, grants, search paths, and statement history remain in the renamed bodies.
-
-The Returns page now records and locks an unresolved create header, ordered line payload, and key before sending; after an uncertain response, close/reopen restores that exact request even if fresh server data changed. A pre-migration unbound receipt is reconciled from the fail-closed mismatch detail instead of issuing another create or trapping the form. Lifecycle keys likewise remain scoped per return. Apply Credit records the unresolved memo, target invoice, parsed integer-cent amount, and key before sending; after an uncertain response it restores and locks that exact intent across close/reopen even when a fresh server read shows a changed or exhausted memo balance. These keys and locks retire only after a confirmed replay result. Escape, backdrop, X, and Cancel are also blocked while Apply Credit is pending. The shared reversal boundary derives an open invoice status from its due date (`overdue` when past due, otherwise `posted`) and scopes the established transition override to that status-only re-derivation so a corrected-forward due date can safely restore `overdue` to `posted` without widening the global transition matrix.
-
-The final exact-head review caught that nonblank runtime codes such as `ECONNRESET` and `ETIMEDOUT` were being mistaken for definitive database refusals. Coded transport failures and unusable-receipt errors now retain the unresolved key; only recognized PostgreSQL SQLSTATE or PostgREST codes can unlock the intent, and focused React tests prove a coded lost response reuses the exact key. A forward-only assertion migration plus the durable invariant now also pin the shared intent helper's exact body, overload count, owner, security mode, search path, and browser/service grants without editing the already-applied migration. The assertion-only migration applied live on 2026-08-12 as ledger version `20260813011751`, name `20260813070000_pin_return_idempotency_helper_contract`; post-apply catalog verification matched the exact reviewed helper contract, and a real live-introspection registry refresh recorded the new high-water/name. A later exact-head review then found that the parked completed-delivery posting migration's paid-only reversal precondition would reject this new wrapper during forward replay. That parked precondition now accepts only the exact legacy body or the exact reviewed wrapper/private topology, and the Section 08 disposable prover applies that later migration with synthetic rows before rerunning the invariant and rollback smoke. The smoke now completes its delivery through the canonical RPC, so the forward proof does not depend on a direct status-write escape hatch.
-
-The Apply Credit and reversal cases were added after the first exact-SHA adversarial review blocked the earlier implementation; the Create Return lock/reconciliation followed a second blocking review. A later proof-renewal review found that the existing Returns lifecycle invariant still expected attribution writes directly in the public bodies and that migration preflight did not pin overload count, owner, security mode, search path, and ACLs. The invariant now verifies the strict wrapper and private attribution-writing implementation together, and the migration fails closed on each catalog attribute both before rename and after installation. The fresh migration-security proof then caught that the recreated reversal helper had lost its explicit internal-idempotency exemption marker and still accepted its audit actor without validating it; the helper now derives `auth.uid()`, rejects missing or mismatched attribution, and has mutation coverage for both protections. PR review then found four more fail-closed details: definitive database refusals must release Create/Apply retry locks while uncertain transport failures retain them; Cancel keys must include the normalized reason available only at submit time; reversal-only invoice status changes must not create a second split-billing post snapshot; and the rollback prover must neither disable product triggers nor expose CLI credentials on failure. Focused behavior tests, exact-body/static mutation guards, the governed pricing fixture, and snapshot-count assertions now cover those paths. The real-schema prover runs both the new and pre-existing Returns invariants before the rollback smoke. The Returns reference row now matches the live-regenerated registry, and the docs check derives its required status set and high-risk columns from that registry. **Applied live 2026-08-12** with Mason's explicit approval, through the governed proof gate: renewed migration-security and drift reviews were clean, the apply ran through `apply_migration`, and the ledger recorded version `20260812212323` carrying name `20260812130145_bind_return_receipts_to_intent_and_restore_overdue` (the apply tool stamps its own clock, so this row matches on name, not on the file timestamp; the disk filename is deliberately left unrenamed so the ledger name and the file stay in sync). Post-apply verification against live: the ledger grew by exactly one row (968 → 969), all eight function bodies match the migration file byte-for-byte, the seven renamed private implementations kept their pre-migration body hashes — proving rename-not-retype rather than a silent rewrite — and owner, security mode, fixed search path, overload count, and grants all match what was reviewed. A disposable-PostgreSQL replay of a fresh read-only dump of the live schema returned `RETURN_CREDIT_POSTAPPLY_LIVE_PASS invariant_violations=0 smoke=SMOKE_PASS_ROLLBACK residue=0`, and the schema registry was rebuilt from live introspection to high-water `20260812212323`.
 
 ## 2026-08-12 — Live SQL maintenance producer: first Sol findings closed
 
@@ -423,6 +574,16 @@ sequence changes, so the smoke boundary was still fail-open. Raw function and pr
 now fail closed categorically, matching the existing raw-`DO` rule and requiring the reviewed
 migration smoke harness instead. The exact `pg_temp.get_pwn()` sequence payload is pinned, bringing
 the generated-module suite to 56 cases; the classifier SHA-256 and generated Git blob were re-bound.
+
+## 2026-08-12 — Return retries are actor/payload-bound and credit reversal restores overdue immediately (applied live)
+
+Section 08 of the refreshed Returns/Credit Memos gauntlet found six return RPCs whose receipts were keyed only by operation and key text, an Apply Credit dialog that discarded the only safe retry key when reopened, a shared reversal helper that reopened every fully credited invoice as `posted`, and a stale Returns schema row. Migration `20260812130145_bind_return_receipts_to_intent_and_restore_overdue.sql` moves the verified current return and reversal bodies behind postgres-only implementations and adds thin public guards: every return key is required and bound to the authenticated actor plus the exact return id or exact create JSON payload; cancel also binds its exact reason. Exact retries replay once, while a changed actor, return, reason, header, or ordered line payload raises and performs no second mutation. The existing source-derived credit math, locks, immutable ledger, generated balances, period gates, RLS, grants, search paths, and statement history remain in the renamed bodies.
+
+The Returns page now records and locks an unresolved create header, ordered line payload, and key before sending; after an uncertain response, close/reopen restores that exact request even if fresh server data changed. A pre-migration unbound receipt is reconciled from the fail-closed mismatch detail instead of issuing another create or trapping the form. Lifecycle keys likewise remain scoped per return. Apply Credit records the unresolved memo, target invoice, parsed integer-cent amount, and key before sending; after an uncertain response it restores and locks that exact intent across close/reopen even when a fresh server read shows a changed or exhausted memo balance. These keys and locks retire only after a confirmed replay result. Escape, backdrop, X, and Cancel are also blocked while Apply Credit is pending. The shared reversal boundary derives an open invoice status from its due date (`overdue` when past due, otherwise `posted`) and scopes the established transition override to that status-only re-derivation so a corrected-forward due date can safely restore `overdue` to `posted` without widening the global transition matrix.
+
+The final exact-head review caught that nonblank runtime codes such as `ECONNRESET` and `ETIMEDOUT` were being mistaken for definitive database refusals. Coded transport failures and unusable-receipt errors now retain the unresolved key; only recognized PostgreSQL SQLSTATE or PostgREST codes can unlock the intent, and focused React tests prove a coded lost response reuses the exact key. A forward-only assertion migration plus the durable invariant now also pin the shared intent helper's exact body, overload count, owner, security mode, search path, and browser/service grants without editing the already-applied migration. The assertion-only migration applied live on 2026-08-12 as ledger version `20260813011751`, name `20260813070000_pin_return_idempotency_helper_contract`; post-apply catalog verification matched the exact reviewed helper contract, and a real live-introspection registry refresh recorded the new high-water/name. A later exact-head review then found that the parked completed-delivery posting migration's paid-only reversal precondition would reject this new wrapper during forward replay. That parked precondition now accepts only the exact legacy body or the exact reviewed wrapper/private topology, and the Section 08 disposable prover applies that later migration with synthetic rows before rerunning the invariant and rollback smoke. The smoke now completes its delivery through the canonical RPC, so the forward proof does not depend on a direct status-write escape hatch.
+
+The Apply Credit and reversal cases were added after the first exact-SHA adversarial review blocked the earlier implementation; the Create Return lock/reconciliation followed a second blocking review. A later proof-renewal review found that the existing Returns lifecycle invariant still expected attribution writes directly in the public bodies and that migration preflight did not pin overload count, owner, security mode, search path, and ACLs. The invariant now verifies the strict wrapper and private attribution-writing implementation together, and the migration fails closed on each catalog attribute both before rename and after installation. The fresh migration-security proof then caught that the recreated reversal helper had lost its explicit internal-idempotency exemption marker and still accepted its audit actor without validating it; the helper now derives `auth.uid()`, rejects missing or mismatched attribution, and has mutation coverage for both protections. PR review then found four more fail-closed details: definitive database refusals must release Create/Apply retry locks while uncertain transport failures retain them; Cancel keys must include the normalized reason available only at submit time; reversal-only invoice status changes must not create a second split-billing post snapshot; and the rollback prover must neither disable product triggers nor expose CLI credentials on failure. Focused behavior tests, exact-body/static mutation guards, the governed pricing fixture, and snapshot-count assertions now cover those paths. The real-schema prover runs both the new and pre-existing Returns invariants before the rollback smoke. The Returns reference row now matches the live-regenerated registry, and the docs check derives its required status set and high-risk columns from that registry. **Applied live 2026-08-12** with Mason's explicit approval, through the governed proof gate: renewed migration-security and drift reviews were clean, the apply ran through `apply_migration`, and the ledger recorded version `20260812212323` carrying name `20260812130145_bind_return_receipts_to_intent_and_restore_overdue` (the apply tool stamps its own clock, so this row matches on name, not on the file timestamp; the disk filename is deliberately left unrenamed so the ledger name and the file stay in sync). Post-apply verification against live: the ledger grew by exactly one row (968 → 969), all eight function bodies match the migration file byte-for-byte, the seven renamed private implementations kept their pre-migration body hashes — proving rename-not-retype rather than a silent rewrite — and owner, security mode, fixed search path, overload count, and grants all match what was reviewed. A disposable-PostgreSQL replay of a fresh read-only dump of the live schema returned `RETURN_CREDIT_POSTAPPLY_LIVE_PASS invariant_violations=0 smoke=SMOKE_PASS_ROLLBACK residue=0`, and the schema registry was rebuilt from live introspection to high-water `20260812212323`.
 
 ## 2026-08-11 — A smoke selection that runs nothing no longer reports success
 

@@ -1,11 +1,91 @@
 # Decision Log
 
-Last verified: 2026-08-10
+Last verified: 2026-08-16
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-08-16 — Any sales rep may draw down any customer's booking
+
+**Source:** Mason's explicit in-chat answer, 2026-08-16, verbatim: "Any rep" — given after the
+trade-off was put to him in plain English (owner-only tightens commission attribution and
+accountability; any-rep keeps a booking fulfillable when the rep who took it is unavailable).
+
+**Decision.** Draw-down is not restricted to the rep who created the quote. The parked migration
+`20260813161614_restrict_draw_down_quote_owner.sql` does **not** ship its owner gate: the
+`NOT_QUOTE_OWNER` check (`v_actor_role <> 'admin' AND v_quote.created_by IS DISTINCT FROM v_actor`)
+is removed before that migration is rebuilt and applied.
+
+**Operative rule.** Removing the owner gate removes *only* the owner gate. The other protections in
+that migration are unaffected by this decision and still ship: the five `DRAW_DOWN_OWNER_GUARD_DRIFT`
+preflights that refuse to run against an unexpected wrapper chain, overload set, implementation body
+or wrapper ACL; `AUTH_REQUIRED` and `ACTOR_MISMATCH` (an unauthenticated or forged actor is
+rejected); `INSUFFICIENT_ROLE` (the actor must resolve to `admin` or `sales_rep`); the soft-delete
+exclusion (a `deleted_at` quote reads as "Quote not found"); and the `BOOKING_CLOSED` status gate
+(only `sent` or `revised` quotes can be drawn down). Mason's basis was operational continuity in a
+seasonal business, not a judgement that draw-down needs less protection — attribution and audit of
+who drew a booking down are unchanged, because every draw is still logged against the acting user.
+
+**Sequencing this implies.** That migration and PR #404's price-tier split both
+`CREATE OR REPLACE` `_draw_down_quote_below_cost_impl_20260810`, and each pins the live
+`md5(prosrc)` it expects, so whichever applies second fails its own drift preflight. Settled order:
+**PR #404 first**, then the owner migration is rebuilt against #404's applied body. Do not re-derive
+this ordering from scratch — it is a consequence of the md5 pin, not a preference.
+
+---
+
+## 2026-08-16 — The draw-down price fix is the price-tier split, finally
+
+**Source:** Mason's explicit in-chat confirmation, 2026-08-16, verbatim: "Yes settle it your right",
+closing a conflict between two records — an earlier same-day "Option (a)" answer given to one
+session, and the price-tier split chosen later the same day in a concurrent session.
+
+**Decision.** The tier split (PR #404) is the answer of record. When a customer has booked the same
+product at more than one price, the draw-down emits **one order line per booked price tier** rather
+than one line at a quantity-weighted average price.
+
+**Operative rule.** Do not reopen this as an averaging-plus-rounding problem. The split is preferred
+precisely because it removes the average: with per-tier lines there is no derived per-unit figure
+left to round, so the whole-cent guard can no longer reject a legitimate draw-down, and no line is
+mispriced in either direction. The existing rounding of a line total *after* extension by quantity
+stays exactly as it is — rounding a *unit* price before multiplying is what this fix eliminates, and
+re-introducing it would move a line total by up to half a cent **per unit**. Background and the
+measured worked example are in `docs/manual/KNOWN_ISSUES.md`.
+
+---
+
+## 2026-08-14 — One-time override: `20260812115238`'s order-line map is published in full
+
+**Source:** Mason's explicit in-chat instruction, 2026-08-14, verbatim: "I don't care all the numbers
+in my system arnt real or operational so do it all" — given after the trade-off was explained in
+plain English (publishing puts 35 real order-line identifiers, prices and profit figures into a
+permanently public Git history).
+
+**Decision.** The recovered migration
+`supabase/migrations/20260812115238_repair_historical_order_line_cents.sql` is committed
+byte-for-byte as applied, including the 35-row approved preimage map that was withheld when the file
+first landed. The redaction-era header note and the `APPROVED_SET_WITHHELD` guard — both added only
+because the map had been emptied — are removed with it. The committed bytes are verified against the
+live ledger: `statements[1]` of `supabase_migrations.schema_migrations` version `20260812154757`,
+18,770 bytes, md5 `f31409684f7f01eee19042468f1e6998`, LF endings.
+
+**Operative rule.** This override covers this one map and nothing else. The standing rule — no live
+financial data, customer identifiers, or operational figures in the public repository — is unchanged
+and still binds every other file, commit message, changelog entry and pull request. Do not cite this
+entry as precedent for publishing any other live data; a fresh owner decision is required each time.
+Mason's stated basis was that the data in this system is not real or operational, so the basis does
+not carry to data that is.
+
+**Related, and deliberately not restated here:** the narrow live-ledger recovery exception (the rule
+that lets an already-applied migration be recovered to Git without its already-live SQL blocking the
+push proof) was settled the same day, but its Decision Log entry lives on PR #403 and **is not on
+`main` yet**. Until #403 merges, `main`'s Decision Log does not record that approval. That entry is
+also what makes this change necessary: as amended in #403, the exception is **byte-verbatim only** —
+a redacted recovery cannot attest — so publishing this file in full is what makes it eligible.
 
 ---
 
