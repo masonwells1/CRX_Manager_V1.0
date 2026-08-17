@@ -2,6 +2,15 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-17 — fix(tests): strip comments before extracting fixture RPC-name arrays in…
+
+fix(tests): strip comments before extracting fixture RPC-name arrays in rpcFixtureLiveDiff.test.ts, so a quoted word in an explanatory comment can no longer become a phantom entry that fails the live-pg_proc ghost check (PR #410)
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `fc385ad0 fix(tests): stop comments in fixture arrays creating phantom RPC entries`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
 ## 2026-08-14 — CRX-SEC-1: quote versions become RPC-owned (folded into the recovery PR)
 
 `public.quote_versions` was client-writable. Its RLS INSERT policy (`qversions_insert`) checked
