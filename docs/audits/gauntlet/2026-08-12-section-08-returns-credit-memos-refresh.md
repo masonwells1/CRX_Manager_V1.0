@@ -4,16 +4,16 @@
 - Section: Returns and credit memos, including issue, unapply, reversal, and statement impact
 - Verdict at time of review: **REMEDIATION REQUIRED**
 - Findings: **0 BLOCKER / 2 HIGH / 1 MED / 1 LOW**
-- Status now: **ALL FOUR FINDINGS REMEDIATED AND APPLIED LIVE 2026-08-12** — migration `20260812130145_bind_return_receipts_to_intent_and_restore_overdue` (ledger version `20260812212323`), landed in [#388](https://github.com/masonwells1/CRX_Manager_V1.0/pull/388). See the 2026-08-12 entry in `docs/CHANGELOG.md` for the post-apply live evidence. The body below is preserved as the dated record of what was found, not as open work.
+- Status now: **ALL FOUR FINDINGS REMEDIATED** — the three runtime findings (1–3) were applied to the live database by migration `20260812130145_bind_return_receipts_to_intent_and_restore_overdue` (ledger version `20260812212323`, applied 2026-08-12) plus follow-up `20260813070000_pin_return_idempotency_helper_contract` (ledger version `20260813011751`, applied 2026-08-13); the schema-reference finding (4) was corrected in repository documentation, not by a live database change. All four fixes landed in [#388](https://github.com/masonwells1/CRX_Manager_V1.0/pull/388) (merged 2026-08-13). See the 2026-08-12 entry in `docs/CHANGELOG.md` for the post-apply live evidence. The body below is preserved as the dated record of what was found at audit time, not as open work.
 
 ## Executive Summary
 
-Two current, evidence-backed production risks remain in the return/credit foundation:
+At audit time, two evidence-backed production risks remained in the return/credit foundation (both since remediated — see the Status line above):
 
 1. Every return action retains one idempotency key for the whole operation instead of the exact return or create payload. After a committed request loses its response, an action on Return B can replay Return A's cached success without changing Return B.
 2. Invoice Detail deliberately creates a new credit-application key whenever the Apply Credit modal opens. If a partial application commits but its response is lost, closing, reopening, and retrying can apply the same partial credit a second time.
 
-A third lifecycle defect reopens a fully credited overdue invoice as `posted`, not `overdue`, after reversal or unapply. The generated balance remains correct, but the invoice can temporarily disappear from overdue-only workflows. The Returns schema reference is also stale relative to the live catalog.
+At audit time, a third lifecycle defect reopened a fully credited overdue invoice as `posted`, not `overdue`, after reversal or unapply. The generated balance remained correct, but the invoice could temporarily disappear from overdue-only workflows. The Returns schema reference was also stale relative to the live catalog. All of these are likewise remediated per the Status line above.
 
 The server-side accounting foundation otherwise held: credit application locks and exact-key replay binding are present, unapply binds the receipt to the requested memo, application rows are append-only, return mutations are RPC-owned, invoice balance is generated, and detailed statements reconstruct credit activity from the immutable application ledger at the requested cutoff. No business rows were queried.
 
@@ -153,10 +153,10 @@ An initial combined catalog statement and a trigger-definition helper were block
 
 ## Ranked Fix Queue From This Section
 
-1. **HIGH — bind return receipts to actor and exact target/payload.**
-2. **HIGH — preserve the partial-credit intent key across modal close/reopen.**
-3. **MED — restore overdue status synchronously on credit reversal/unapply.**
-4. **LOW — align the Returns schema reference with the live catalog.**
+1. **RESOLVED (HIGH at audit time) — bind return receipts to actor and exact target/payload.** Fixed live by ledger `20260812212323` with contract follow-up `20260813011751` (PR #388).
+2. **RESOLVED (HIGH at audit time) — preserve the partial-credit intent key across modal close/reopen.** Fixed live in the same rollout (PR #388).
+3. **RESOLVED (MED at audit time) — restore overdue status synchronously on credit reversal/unapply.** Fixed live in the same rollout (PR #388).
+4. **RESOLVED (LOW at audit time) — align the Returns schema reference with the live catalog.** Fixed in repository documentation (PR #388) — a docs change, not a live database change.
 
 ## Next Section
 
@@ -166,6 +166,6 @@ An initial combined catalog statement and a trigger-definition helper were block
 
 - Audit report written under the permitted gauntlet folder.
 - Index and ranked summary updated.
-- No remediation attempted.
-- No tests were executed because ordinary test/tool caches could write outside the automation's permitted folder. Source, migration, static guard, and live catalog evidence were inspected directly.
-- No app/source code, migration, live database state, commit, push, deploy, deletion, ref, or forbidden external system was touched.
+- No remediation was attempted during this audit run; the remediation recorded in the Status line landed afterward via PR #388.
+- No tests were executed during this audit run because ordinary test/tool caches could write outside the automation's permitted folder. Source, migration, static guard, and live catalog evidence were inspected directly.
+- No app/source code, migration, live database state, commit, push, deploy, deletion, ref, or forbidden external system was touched during this audit run.
