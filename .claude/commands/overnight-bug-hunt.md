@@ -123,7 +123,7 @@ Add one prevention action, strongest first: a **regression test that FAILS on th
 
 ## Morning handoff (what Mason reads)
 
-`REPORT.md`, top to bottom: per cycle — what was found, what was **auto-fixed** (green, already committed + Codex-blessed + green toolchain), and what's **parked** (yellow — plain-English explanation + validation proof + Codex note). Mason approves the parked items he wants; ship them through `/ship` the normal way. Nothing needs rolling back — every green fix is a local commit on a non-prod branch; one PR from the hunt branch (Vercel check + CodeRabbit review) lands the ones he likes.
+`REPORT.md`, top to bottom: per cycle — what was found, what was **auto-fixed** (green, already committed + Codex-blessed + green toolchain), and what's **parked** (yellow — plain-English explanation + validation proof + Codex note). Mason approves the parked items he wants; ship them through `/ship` the normal way. Nothing needs rolling back — every green fix is a local commit on a non-prod branch; one PR from the hunt branch lands the ones he likes — Vercel check passing, and CodeRabbit's review read and resolved (fix each real issue; dismiss nitpicks with a one-line reason) before merge.
 
 ## Final response each cycle (keep it short for Mason)
 

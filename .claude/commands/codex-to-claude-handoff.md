@@ -85,7 +85,7 @@ Write one Markdown file:
 Use today's local date from a real clock (America/Chicago — never UTC, and never a remembered date):
 
 ```bash
-date +%F
+TZ='America/Chicago' date +%F
 ```
 
 Slug rules: lowercase kebab-case, under 50 characters, topic-specific.

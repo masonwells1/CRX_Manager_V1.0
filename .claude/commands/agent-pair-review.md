@@ -85,7 +85,7 @@ Use this structure:
 ## Step 4 - Act Only On Verified Findings
 
 - Confirm BLOCKER/HIGH findings before fixing.
-- If both agents agree on a BLOCKER/HIGH, route the fix through /ship (it sizes the work, writes a plain-English plan for Mason on substantial / SQL / money / RLS changes, and runs the review gate; it stops for Mason's explicit OK only at the gated actions — interactive live-migration apply, edge-function deploy, data deletion, force-push — while green-pipeline pushes of regular code follow the standing 2026-06-16 policy).
+- If both agents agree on a BLOCKER/HIGH, route the fix through /ship (it sizes the work, writes a plain-English plan for Mason on substantial / SQL / money / RLS changes, and runs the review gate; it stops for Mason's explicit OK at every gated action in `AGENTS.md` — force-pushes or any push that skipped the green pipeline, interactive live-migration apply or live-data changes, edge-function deploys or out-of-band production deploys, data deletion, and changes to secrets/auth/permissions/billing/customer-visible production state — while green-pipeline pushes of regular code follow the standing 2026-06-16 policy).
 - If the agents disagree on a BLOCKER/HIGH, stop and show Mason both positions with evidence.
 - Every BLOCKER/HIGH row MUST carry a file:line or command-output citation in the Evidence column; an unsupported BLOCKER/HIGH is downgraded until evidence is attached.
 - MED/LOW/NIT findings can be fixed if cheap or deferred with a clear note.

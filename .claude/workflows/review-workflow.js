@@ -11,12 +11,12 @@ export const meta = {
 }
 
 // The ONE rule, passed to every layer: trust nothing pre-written. The workflow map,
-// CLAUDE.md lifecycles, and prior audit docs are LEADS to confirm by reading the
+// documented lifecycles, and prior audit docs are LEADS to confirm by reading the
 // actual code + live DB — never facts. A past grep-heuristic pass asserted ~6
 // problems that were ALL false once someone read the code (Returns "broken",
 // /notifications "orphan", "drop get_field_geojson" would have caused an outage).
 const GROUND_RULE =
-  'TRUST NOTHING PRE-WRITTEN. The workflow map (docs/app-workflow-map.html), CLAUDE.md lifecycles, and prior docs/audits are leads to CONFIRM by reading actual code and querying the live Supabase DB — never facts. Return executionStatus=BLOCKED if any required code or live-DB evidence source is unavailable; an empty findings array is valid only with executionStatus=VERIFIED and a concrete evidenceSummary. A finding with no file:line, constraint name, or migration citation does not belong in the output. Explicitly separate "verified real" from "looked suspicious but checked out fine".'
+  'TRUST NOTHING PRE-WRITTEN. The workflow map (docs/app-workflow-map.html), the documented lifecycles (docs/manual/ARCHITECTURE.md, docs/reference/database-schema.md), and prior docs/audits are leads to CONFIRM by reading actual code and querying the live Supabase DB — never facts. Return executionStatus=BLOCKED if any required code or live-DB evidence source is unavailable; an empty findings array is valid only with executionStatus=VERIFIED and a concrete evidenceSummary. A finding with no file:line, constraint name, or migration citation does not belong in the output. Explicitly separate "verified real" from "looked suspicious but checked out fine".'
 
 const FINDINGS = {
   type: 'object',

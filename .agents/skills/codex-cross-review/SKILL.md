@@ -24,7 +24,7 @@ If the user is mid-conversation and you already have the context, infer answers 
 
 Per `docs/audits/2026-06-10-error-prevention-review.md` §4–§5, Codex round 1 must start from executed live evidence, not claims:
 
-1. **Run the db-invariant sweeps live, first.** `npm run db-sweeps` prints each predicate's SQL — execute every block read-only via Supabase MCP `execute_sql` (project `rhyzpcqhnizqbxphqdkr`). Run **one statement per `execute_sql` call** — the MCP returns only the last statement's result, so a multi-statement block silently drops rows; and if the live-data guard false-positives on probe text, rewrite the probe rather than skipping it. Build the per-predicate results table (predicate | flagged live | allowlisted | real findings) and capture the **allowlist diff** (any `scripts/db-invariant-sweeps/allowlist.json` entries added/changed for this batch, with their justifications). Both go INTO the packet — adjudicating exemptions is exactly what a second model is good at, so hand Codex the diff to attack.
+1. **Run the db-invariant sweeps live, first.** `npm run db-sweeps` prints each predicate's SQL — execute every block read-only via Supabase MCP `execute_sql` (project `rhyzpcqhnizqbxphqdkr`). Run **one statement per `execute_sql` call** — the MCP returns only the last statement's result, so a multi-statement block silently drops rows; and if the live-data guard false-positives on probe text, rewrite the probe rather than skipping it — keep both the original and rewritten SQL in the packet and state why the rewrite is still read-only and tests the same predicate. Build the per-predicate results table (predicate | flagged live | allowlisted | real findings) and capture the **allowlist diff** (any `scripts/db-invariant-sweeps/allowlist.json` entries added/changed for this batch, with their justifications). Both go INTO the packet — adjudicating exemptions is exactly what a second model is good at, so hand Codex the diff to attack.
 2. **Collect smoke-chain PASS evidence for every touched RPC.** For each RPC the batch created or modified, run `node scripts/smoke/run-smoke.mjs --spec <rpc>` and execute the chain via MCP — record the spec key + `SMOKE_PASS_ROLLBACK` result. A touched RPC with no covering spec, or without a fresh chain PASS, is a gap to close (write/extend the chain) before the packet goes out — isolated-probe claims don't count.
 
 Any unallowlisted sweep violation found here is a real finding: fix or report it — do NOT draft a "review my clean change" packet over a dirty live catalog.
@@ -33,7 +33,7 @@ Any unallowlisted sweep violation found here is a real finding: fix or report it
 
 Filename: `docs/audits/<YYYY-MM-DD>-codex-<short-slug>-prompt.md`
 
-Date is today in local time (America/Chicago, Mason's business timezone — check Bash `date +%F` if unsure; never UTC, which crosses midnight during evening sessions).
+Date is today in local time (America/Chicago, Mason's business timezone — check Bash `TZ='America/Chicago' date +%F` if unsure; never UTC, which crosses midnight during evening sessions).
 Slug is kebab-case, under 50 chars, e.g. `post-b10-followup` or `rls-secdef-sweep-v2`.
 
 Structure (the template below is authoritative; `docs/audits/2026-06-09-codex-foundation-audit-remediation-prompt.md` is a real worked example if you want one):

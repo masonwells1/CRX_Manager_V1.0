@@ -38,10 +38,9 @@ If this fails:
 git diff .claude/schema-registry.json
 ```
 
-Capture and summarize the changes:
-- New status enums added
-- New generated columns
-- Tables added to / removed from `tables_without_updated_at`
+Capture and summarize the changes across all 8 sections:
+- New/removed status enums, generated columns, and `tables_without_updated_at` entries
+- Added/changed/removed entries in `check_constraints`, `skipped_constraints`, `not_null_columns`, `columns`, and `sequences`
 
 If the diff is empty: the registry was already up to date. Tell Mason and skip to Step 5 (a genuine introspection run that changes nothing still counts for clearing the stale flag â€” see Step 5).
 
@@ -96,10 +95,15 @@ The cutoff is the moment Step 1.0 stamped BEFORE the first introspection query â
 
 Status: SUCCESS / FAILED / NO CHANGES
 
-Changes from previous version:
+Changes from previous version (all 8 sections):
   Generated columns:    + <N added>, - <N removed>
   Status enums:         + <N added>, - <N removed>
   No-updated_at tables: + <N added>, - <N removed>
+  Check constraints:    + <N added>, ~ <N changed>, - <N removed>
+  Skipped constraints:  + <N added>, - <N removed>
+  NOT NULL columns:     + <N added>, - <N removed>
+  Columns:              + <N added>, ~ <N changed>, - <N removed>
+  Sequences:            + <N added>, - <N removed>
 
 Details:
   <bulleted list of specific additions/removals>

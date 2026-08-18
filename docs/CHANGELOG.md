@@ -28,6 +28,13 @@ Harness only — no app source, migration, or live-state change. A four-agent au
   `npm run test:agent-workflows` green (30 PASS). A handful of proposed wordings that would have
   added carve-outs to hard safety-gate approval lines were deliberately NOT applied — the stricter
   existing text stands.
+- **CodeRabbit follow-up (PR #421):** completed the approval-gate lists in `agent-pair-review`
+  and `/ship` (added non-green pushes, billing, customer-visible production state); both bug-hunt
+  handoffs now spell out the read/fix/dismiss CodeRabbit gate; packet dates pinned to
+  `TZ='America/Chicago'`; rollback's edge-function check excludes `_shared/`; regen-schema-registry
+  diffs/summarizes all 8 registry sections; spot-check-prod reports unversioned functions as
+  `NO BASELINE`; probe rewrites must retain both SQLs with read-only equivalence; review-workflow's
+  GROUND_RULE points at the manual/reference lifecycle docs instead of `CLAUDE.md`.
 
 ## 2026-08-18 — session-staleness backup check now consults the real off-site workflow
 

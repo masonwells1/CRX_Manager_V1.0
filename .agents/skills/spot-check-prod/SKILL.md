@@ -102,8 +102,9 @@ mcp__<supabase>__list_edge_functions
 
 Capture each function name, current live version, last update timestamp. Compare against the
 version references in `docs/manual/CURRENT_STATE.md` (e.g. "send-email v11") — flag drift only
-for functions whose version CURRENT_STATE.md actually records; a function with no recorded
-version is not drift. Do not look for these in `CLAUDE.md`; that section moved.
+for functions whose version CURRENT_STATE.md actually records; report a function with no
+recorded version as `NO BASELINE` (neither drift nor clean) so the gap is visible — it does not
+downgrade the overall result on its own. Do not look for these in `CLAUDE.md`; that section moved.
 
 ## Step 5: Recent Supabase logs (5min scan)
 
