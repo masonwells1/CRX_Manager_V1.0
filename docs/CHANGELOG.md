@@ -15,6 +15,8 @@ excluded from the downgrade; and every loop obeys the new global session-size se
 (`~/.claude/hooks/session-size-sentinel.mjs`, user scope, outside this repo), which advises
 a handoff at 12MB of transcript and at 25MB instructs the running agent to checkpoint the
 ledger, write a handoff, transfer the driver role to a fresh session, and wind down —
+(CodeRabbit review on PR #416 asked for the cap boundary to be explicit: finish only the
+atomic step already in flight, never start another cycle in a capped session) —
 pre-authorized, so overnight loops no longer accumulate 40-80MB transcripts waiting for
 Mason to wake up. Hard gates transfer unchanged; a handoff never launders an approval.
 
