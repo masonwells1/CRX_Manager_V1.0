@@ -2,7 +2,7 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-18 — Hook performance cleanup (Phase 1): matcher gating, dead prompt hooks revived, eslint/fetch speedups
+## 2026-08-18 — Hook performance cleanup (Phase 1): matcher gating, dead prompt hooks replaced, eslint/fetch speedups
 
 Harness only — no app source, migration, or live-state change. No guard logic changed; every
 narrowed matcher keeps the guard's own in-script tool-name gate as the safety boundary.
@@ -27,8 +27,11 @@ approved by Mason as Phase 1:
    (FETCH_HEAD mtime); a stale `origin/main` only makes the merged-branch classifier more
    conservative.
 4. **eslint-autofix direct + cached.** Invokes the project's local eslint binary with `--cache`
-   instead of `npx` (warm runs ~1.2s, verified); npx fallback kept; a timeout kill now stays
-   silent instead of reporting a fake lint failure.
+   instead of `npx` (warm runs ~1.2s, verified); a timeout kill now stays silent instead of
+   reporting a fake lint failure. Post-review (CodeRabbit on PR #413): the npx fallback was
+   removed entirely — it interpolated the edited file's path into a shell string (injection
+   surface); with no local eslint the hook now skips silently. The cache directory is created
+   before the run so a fresh checkout doesn't error.
 5. **PreToolUse matcher narrowing.** `migration-apply-guard`, `mcp-tool-guard`, and
    `live-testdata-guard` moved to the `mcp__.*` matcher; `pr-merge-guard` to
    `Bash|PowerShell|mcp__.*`; `review-proof-guard`, `hold-latch-guard`, and
