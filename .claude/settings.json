@@ -245,13 +245,8 @@
         ]
       },
       {
-        "matcher": "*",
+        "matcher": "mcp__.*",
         "hooks": [
-          {
-            "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/review-proof-guard.mjs\"",
-            "timeout": 15
-          },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/migration-apply-guard.mjs\"",
@@ -264,23 +259,38 @@
           },
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/hold-latch-guard.mjs\"",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/live-testdata-guard.mjs\"",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|PowerShell|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/pr-merge-guard.mjs\"",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/review-proof-guard.mjs\"",
             "timeout": 15
           },
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/live-testdata-guard.mjs\"",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/hold-latch-guard.mjs\"",
             "timeout": 15
           },
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/unattended-autopilot.mjs\"",
             "timeout": 15
-          },
-          {
-            "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/pr-merge-guard.mjs\"",
-            "timeout": 30
           }
         ]
       }
@@ -380,17 +390,6 @@
         ]
       }
     ],
-    "PreCompact": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "prompt",
-            "prompt": "CONTEXT COMPACTION is about to happen. Summarize: files modified this session; migrations created (and whether src/types/index.ts was updated); current task and next step; last build/test status. Always include these reminders: idempotency_keys columns are idempotency_key/operation/result (jsonb, no ::text); money = exact whole cents — new storage uses bigint cents, documented legacy PostgreSQL numeric-dollar columns keep exact numeric math and whole-cent constraints once clean, and authoritative TypeScript rejects amounts with more than two fractional digits or applies one approved exact decimal rounding rule before converting to integer cents; parseDollarsToCents() currently truncates excess precision and is insufficient without that validation; binary-floating-point rounding is prohibited for money; .update/.delete need checkMutationResult; RPC usage needs assertRpcResult; SECURITY DEFINER functions need SET search_path = public, pg_temp; Mason has zero coding experience — explain in plain English."
-          }
-        ]
-      }
-    ],
     "SessionStart": [
       {
         "hooks": [
@@ -399,6 +398,16 @@
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-heartbeat.mjs\"",
             "timeout": 10
           },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-context-reminder.mjs\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-snapshot.mjs\"",
@@ -411,17 +420,18 @@
           },
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/worktree-cleanup.mjs\"",
-            "timeout": 30
-          },
-          {
-            "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/worktree-awareness.mjs\"",
             "timeout": 10
-          },
+          }
+        ]
+      },
+      {
+        "matcher": "startup",
+        "hooks": [
           {
-            "type": "prompt",
-            "prompt": "You are starting a new session on the CRX Manager project. Silently read AGENTS.md (the shared contract), CLAUDE.md (Claude-only routing), and docs/workflows/SAFE_DEVELOPMENT_RULES.md, then briefly confirm context is loaded. CRITICAL CONTEXT: Mason has ZERO coding experience — always explain in plain English; show a plan and wait for approval before multi-file or risky edits; never assume he knows code terminology."
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/worktree-cleanup.mjs\"",
+            "timeout": 30
           }
         ]
       }

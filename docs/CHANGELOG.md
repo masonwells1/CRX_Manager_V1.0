@@ -2,6 +2,45 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-18 — Hook performance cleanup (Phase 1): matcher gating, dead prompt hooks revived, eslint/fetch speedups
+
+Harness only — no app source, migration, or live-state change. No guard logic changed; every
+narrowed matcher keeps the guard's own in-script tool-name gate as the safety boundary.
+
+A timing audit of the last 50 session transcripts (all projects) found the SessionStart hook set
+re-running in full on every auto-compact — 1,228 compact firings, p90 ~11s, 14% timeout rate —
+plus `eslint-autofix` re-resolving eslint through `npx` on every edit (p90 ~15.5s) and seven
+`*`-matched PreToolUse guards spawning a node process on every single tool call. Five fixes,
+approved by Mason as Phase 1:
+
+1. **SessionStart matcher gating.** `session-snapshot`, `session-staleness`, and
+   `worktree-awareness` now run on `startup|resume|clear` only; `worktree-cleanup` on `startup`
+   only. This also fixes a correctness bug: re-running `session-snapshot` on compact overwrote
+   the pre-session dirty-file baseline mid-session, degrading `stop-wrap`'s comparison.
+2. **Dead prompt hooks replaced.** The PreCompact money/RLS re-anchor and SessionStart onboarding
+   were `"type": "prompt"` hooks, which fail outside the interactive REPL ("Prompt stop hooks are
+   not yet supported outside REPL") — both silently dead in the desktop harness. New
+   `session-context-reminder.mjs` command hook emits the same content via SessionStart
+   `additionalContext`, branching on source (`compact` → rule re-anchor; otherwise onboarding).
+   Declared in `CLAUDE_ONLY_HOOKS` (Codex has no SessionStart event).
+3. **worktree-cleanup fetch TTL.** Its `git fetch origin` now runs at most once per 30 minutes
+   (FETCH_HEAD mtime); a stale `origin/main` only makes the merged-branch classifier more
+   conservative.
+4. **eslint-autofix direct + cached.** Invokes the project's local eslint binary with `--cache`
+   instead of `npx` (warm runs ~1.2s, verified); npx fallback kept; a timeout kill now stays
+   silent instead of reporting a fake lint failure.
+5. **PreToolUse matcher narrowing.** `migration-apply-guard`, `mcp-tool-guard`, and
+   `live-testdata-guard` moved to the `mcp__.*` matcher; `pr-merge-guard` to
+   `Bash|PowerShell|mcp__.*`; `review-proof-guard`, `hold-latch-guard`, and
+   `unattended-autopilot` stay on `*` because they must see every call. Patterns chosen to work
+   under both anchored and unanchored matcher-regex semantics.
+
+Verified: `sync-agent-workflows --write`, `test:agent-workflows` (all pass, parity included),
+`agent-health` (pass), plus manual stdin runs of the new/changed hooks (compact/startup/garbage
+payloads; dry-run cleanup; eslint cold vs warm). Residual risk stated in the PR: the narrowed
+matchers themselves cannot fire in the session that edits them (hook config loads at session
+start); a safe next-session mutation test is documented there.
+
 ## 2026-08-17 — Codex fleet inventory preserved; two CI-signal traps recorded
 
 Docs only — no source, migration, or live-state change.
