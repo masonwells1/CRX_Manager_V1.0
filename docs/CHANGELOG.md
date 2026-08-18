@@ -2,6 +2,15 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-18 — Fixed stale moddatetime references in…
+
+Fixed stale moddatetime references in docs/workflows/DATABASE_CHANGE_CHECKLIST.md to the house public.update_updated_at trigger convention; PR 419 green and parked at the Sol merge gate until Codex credits return Aug 19.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `a8b03228 docs(workflows): use house update_updated_at() trigger in database change checklist`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
 ## 2026-08-18 — session-staleness backup check now consults the real off-site workflow
 
 Harness only — no app source, migration, or live-state change. The SessionStart backup-staleness
