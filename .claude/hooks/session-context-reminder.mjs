@@ -8,8 +8,10 @@
 // silently dead there (observed live 2026-08-18; also the source of the
 // hook_error noise on startup/resume in transcript telemetry). A command hook
 // printing the same text through SessionStart additionalContext works in every
-// harness, and landing the money rules AFTER the compact is equivalent to
-// steering the summarizer: the rules are for future behavior, not the summary.
+// harness. Only the old PreCompact re-anchor's rules half was carried forward
+// here (as COMPACT_REANCHOR, fired on source === "compact"); its other half —
+// steering what the summarizer keeps — was dropped with no replacement, since
+// additionalContext lands AFTER the compact has already run and cannot shape it.
 //
 // Branches on the SessionStart payload's `source`:
 //   compact              → the money/idempotency/RLS re-anchor

@@ -4,13 +4,14 @@
 > automated safety net; `CLAUDE.md` keeps only a short summary + a pointer here. Regenerate the schema registry the
 > hooks read after schema changes: `node scripts/regenerate-schema-registry.mjs`.
 >
-> Last reconciled against `.claude/settings.json` and `.codex/hooks.json` hook wiring on 2026-08-18 (hook-performance
-> pass: PreToolUse matchers narrowed for the three MCP-only guards and `pr-merge-guard`; SessionStart hooks
-> matcher-gated by source so the heavy ones stop re-running on every compact; the two dead `"type": "prompt"` hooks
-> (PreCompact re-anchor + SessionStart onboarding) replaced by the `session-context-reminder.mjs` command hook —
-> prompt-type hooks only work in the interactive REPL; `worktree-cleanup`'s network fetch rate-limited to once per
-> 30 min; `eslint-autofix` switched from `npx` to the project's local eslint binary with `--cache`. No guard logic
-> changed.) Previous reconciliation 2026-08-07 (Governed
+> Last reconciled against `.claude/settings.json` hook wiring on 2026-08-18 (hook-performance pass: PreToolUse
+> matchers narrowed for the three MCP-only guards and `pr-merge-guard` — Claude side only, `.codex/hooks.json` still
+> runs them on `*`; SessionStart hooks matcher-gated by source so the heavy ones stop re-running on every compact;
+> the two dead `"type": "prompt"` hooks (PreCompact re-anchor + SessionStart onboarding) replaced by the
+> `session-context-reminder.mjs` command hook — prompt-type hooks only work in the interactive REPL;
+> `worktree-cleanup`'s network fetch rate-limited to once per 30 min; `eslint-autofix` switched from `npx` to the
+> project's local eslint binary, which is the actual source of the speedup — `--cache` is still passed but never
+> helps, since this hook only ever runs on a file just edited. No guard logic changed.) Previous reconciliation 2026-08-07 (Governed
 > Software Factory removal: the three factory hooks — `factory-state-integrity`, the factory lane guard, and
 > `factory-owner-input` — were deregistered from both manifests; `ship-intent-reminder` and every pre-factory
 > guard remain wired exactly as before). Previous reconciliation 2026-07-16 (scaffolding-review pass: `pr-merge-guard.mjs` added — the PR-merge twin of `codex-push-guard` for the post-2026-07-14 branch-protection landing path; `bash-safety-lib.mjs` db-push pattern made npx-optional and `supabase migration up` added; `write-apply-proofs.mjs` proof stamping made unconditionally machine-minted: every stamp executes EACH required reviewer charter as its own trusted-Codex machine-verdict run; the caller-supplied `--codex-verdict` form and the say-so reviewer-only stamp were both removed). Previous pass 2026-07-13 (guard-hardening: `mcp-tool-guard.mjs` and `review-proof-guard.mjs` added; `bash-safety.mjs`, `hold-latch-lib.mjs`, `codex-push-lib.mjs`, `live-testdata-lib.mjs`, `idempotency-body-check.mjs` broadened — see their rows below).
