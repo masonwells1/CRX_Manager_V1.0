@@ -2,6 +2,50 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-17 — Codex fleet inventory preserved; two CI-signal traps recorded
+
+Docs only — no source, migration, or live-state change.
+
+A Codex session left a 22-worktree ownership inventory in a worktree that was about to be
+deleted. The document is preserved as `docs/audits/2026-08-17-codex-to-claude-fleet-takeover-handoff.md`
+and is treated strictly as data: its own recommendation (take over the actor-binding lane in
+`codex/actor-binding-mixed-notation-repair-20260810`) is exactly what Mason declined this session,
+alongside his decision to keep Sol-gated money/RLS/migration work parked until `gpt-5.6-sol`
+credits return. Spark (`gpt-5.3-codex-spark`) does not substitute for that gate.
+
+Landing that one docs commit surfaced two CI-signal traps, now in `docs/reference/gotchas.md`:
+CodeRabbit's check row can read `pass` / "Review completed" while its own PR comment says the
+review failed — so the standing "read CodeRabbit's review" policy cannot be satisfied by looking
+at the check; and the `Vercel` required status can arrive more than an hour after the deployment is
+already `READY`, so a PR sits `BLOCKED` on a build that has in fact succeeded. The second entry was
+first written as a causal failure of creating the branch ref through the GitHub API, and that was
+wrong — the status turned up on its own, on the same commit, with no push event of its own. The
+entry now records the lag and the wrong turn, since a close/reopen and an extra commit were both
+spent chasing a problem that did not exist.
+
+Both traps then resolved themselves in ways worth recording. A `@coderabbitai review` comment
+turned the failed review into a real one — so a CodeRabbit failure is recoverable by asking again,
+not a dead end for the standing pre-merge policy — and it returned six findings against these very
+docs. Five were applied. The substantive one: the entry's own copy-paste example read
+`gh pr view <N>`, which a shell parses as input redirection and never runs; both `bash` blocks now
+define variables, and both were executed verbatim rather than assumed. The others corrected
+overclaiming in prose written earlier the same session — "no review ran" became "the review did not
+complete", and a `READY` Vercel deployment no longer stands in for "the pipeline is fine" when it
+proves only that one required check finished. The one-hour lag now rests on two measurements
+(`711aecfb` ~69 min, `8b1e86f8` ~56 min) and is framed as an escalation threshold rather than a
+timing guarantee. The sixth finding — a wording change inside the preserved Codex handoff document
+— was declined on the PR: that file is a verbatim record, and editing its prose would falsify the
+archive it exists to be.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `0a15eab4 docs(gotchas): resolve CodeRabbit review on PR #411`
+  - `8b1e86f8 docs(gotchas): correct the Vercel-status entry — it is a lag, not a lost status`
+  - `732d516d docs(changelog): log the 2026-08-17 docs-only session`
+  - `84505a65 docs(gotchas): record two CI-signal traps found landing PR #411`
+  - `711aecfb docs(audits): preserve Codex fleet-takeover handoff inventory (2026-08-17)`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
 ## 2026-08-14 — CRX-SEC-1: quote versions become RPC-owned (folded into the recovery PR)
 
 `public.quote_versions` was client-writable. Its RLS INSERT policy (`qversions_insert`) checked
