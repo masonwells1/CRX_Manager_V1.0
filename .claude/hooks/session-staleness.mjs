@@ -273,12 +273,14 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // consulted, in which case the caller falls back to the local marker alone.
 // Test seams: CRX_OFFSITE_BACKUP_DISABLE=1 skips the check entirely,
 // CRX_OFFSITE_BACKUP_CACHE overrides the cache file, CRX_OFFSITE_BACKUP_GH
-// overrides the gh executable. The cache deliberately lives in the per-USER
-// temp dir, not the checkout: one fleet-wide answer instead of one per worktree.
+// overrides the gh executable. The cache deliberately lives in the user's HOME
+// directory, not the checkout (one fleet-wide answer instead of one per
+// worktree) and not the shared temp dir (another local user must not be able
+// to plant a fake answer that suppresses or triggers the backup warning).
 function offsiteBackupEvidence() {
   if (process.env.CRX_OFFSITE_BACKUP_DISABLE === "1") return { available: false };
   const cachePath = process.env.CRX_OFFSITE_BACKUP_CACHE ||
-    path.join(os.tmpdir(), "crx-offsite-backup-check.json");
+    path.join(os.homedir(), ".crx-offsite-backup-check.json");
 
   try {
     const cached = JSON.parse(readFileSync(cachePath, "utf8"));
@@ -313,7 +315,7 @@ function offsiteBackupEvidence() {
     entry = { ok: false };
   }
   try {
-    writeFileSync(cachePath, JSON.stringify({ fetched_at: new Date().toISOString(), ...entry }));
+    writeFileSync(cachePath, JSON.stringify({ fetched_at: new Date().toISOString(), ...entry }), { mode: 0o600 });
   } catch { /* the cache is an optimization; failing to write it is not an error */ }
   if (!entry.ok) return { available: false };
   const at = Date.parse(entry.completed_at);

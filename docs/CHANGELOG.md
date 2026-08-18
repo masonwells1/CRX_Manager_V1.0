@@ -13,8 +13,8 @@ on 2026-08-16 and again on 2026-08-18).
 
 The check now uses two evidence sources, newest wins: the local marker and the workflow's last
 successful run via `gh run list` — consulted only when the marker alone would alarm, with a 1.5s
-timeout and a per-USER temp-dir cache (6h TTL on success, 10min on failure) so the hook stays
-inside its ~2s budget and one answer serves the whole worktree fleet. When `gh` is unreachable
+timeout and an owner-only cache in the user's home directory (6h TTL on success, 10min on failure)
+so the hook stays inside its ~2s budget and one answer serves the whole worktree fleet. When `gh` is unreachable
 (offline/unauthenticated) the marker-only warning still fires, explicitly labeled unverified.
 Six new offline-deterministic test cases (seeded cache + bogus `gh` binary) cover the veto, the
 real-alarm, the fallback, both TTL directions, and the never-succeeded answer.
