@@ -141,8 +141,12 @@ Used on: `financial_audit_log`
 > the source of truth and is not machine-verified. Later migrations have already
 > changed several rows below — e.g. as of 2026-07-15 the browser roles' direct
 > INSERT on `returns` and INSERT/UPDATE/DELETE on `return_items` were REVOKED
-> (mutations are now RPC-owned; migration `20260715203911`), and `payments`
-> direct writes were removed (`20260714223000`). **Before trusting any row,
+> (mutations are now RPC-owned; migration `20260715203911`), `payments`
+> direct writes were removed (`20260714223000`), and as of 2026-08-16 the
+> browser roles' direct INSERT on `quote_versions` was REVOKED along with the
+> `qversions_insert` policy (**CRX-SEC-1**, migration `20260813080000`, ledger
+> version `20260816174353`; writes are now `create_quote_version` RPC only).
+> **Before trusting any row,
 > query the live policies** — `select * from pg_policies where schemaname='public'
 > and tablename='<table>'` (read-only) — and if you're debugging a silent RLS
 > denial, believe `pg_policies`, not this table. Do NOT "fix" reality to match
@@ -159,7 +163,7 @@ Used on: `financial_audit_log`
 | quotes | Admin / Sales Rep (own) | Admin / Sales Rep (own) | Admin / Sales Rep (own) | Admin |
 | quote_sections | All authenticated | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) |
 | quote_items | All authenticated | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) |
-| quote_versions | All authenticated | Admin / Sales Rep (quote owner) | - | - |
+| quote_versions | Admin / Sales Rep | - (`create_quote_version` RPC only, since `20260813080000` applied live 2026-08-16) | - | - |
 | orders | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | order_items | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | inventory | Admin / Sales Rep / Driver | Admin | Admin | Admin |
