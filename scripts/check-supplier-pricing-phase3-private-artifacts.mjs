@@ -1630,26 +1630,68 @@ function sameDirectory(left, right) {
  */
 function registeredWorktreeDirectories(root, execute) {
   const registered = new Set();
+  const containerDirectories = new Set();
   const lexicalRoot = path.resolve(root);
   let records;
   let commonDirectory;
   try {
     records = gitLines(['worktree', 'list', '--porcelain'], root, execute);
     const [commonDirLine] = gitLines(['rev-parse', '--git-common-dir'], root, execute);
-    if (!commonDirLine) return { paths: registered, worktreesDirectory: null };
+    if (!commonDirLine) return { paths: registered, worktreesDirectory: null, containerDirectories };
     commonDirectory = path.resolve(lexicalRoot, commonDirLine);
-  } catch { return { paths: registered, worktreesDirectory: null }; }
+  } catch { return { paths: registered, worktreesDirectory: null, containerDirectories }; }
   const worktreesDirectory = path.join(commonDirectory, 'worktrees');
   for (const record of records) {
     if (!record.startsWith('worktree ')) continue;
     const absolute = path.resolve(lexicalRoot, record.slice('worktree '.length).trim());
     if (!isContainedDirectory(absolute, lexicalRoot)) continue;
     if (!ownWorktreeMarker(absolute, worktreesDirectory)) continue;
+    const relative = path.relative(lexicalRoot, absolute).split(path.sep).join('/');
     // Normalized like every other containment comparison: membership must not
     // hinge on the casing `git worktree list --porcelain` happened to print.
-    registered.add(containmentPathKey(path.relative(lexicalRoot, absolute).split(path.sep).join('/')));
+    registered.add(containmentPathKey(relative));
+    // A verified worktree's parent directory is where sibling worktrees of the
+    // same checkout live, alive or stale: Git already collapses this worktree
+    // itself to one line, but a directory Git no longer registers (removed by
+    // hand instead of `git worktree remove`) does not collapse and its own
+    // dependency tree is enumerated in full below. The parent is recorded here,
+    // from the un-normalized path, so the ignored-file scan can name it in a
+    // real Git pathspec. A worktree registered directly at the repository root
+    // has no such parent to name without naming the repository itself, so it
+    // contributes nothing here.
+    const parent = path.posix.dirname(relative);
+    if (parent && parent !== '.') containerDirectories.add(parent);
   }
-  return { paths: registered, worktreesDirectory };
+  return { paths: registered, worktreesDirectory, containerDirectories };
+}
+
+/**
+ * Builds Git pathspec excludes that keep the ignored-file scan below out of
+ * a worktree container's dependency/build bulk without hiding real content.
+ * Scope is deliberately narrow: only the exact top-level names this file
+ * already treats as tool-owned (see TOOL_OWNED_IGNORED_PREFIXES), only when
+ * nested under a verified worktree's own parent directory, matched with `**`
+ * so it also catches the same bulk sitting in a stale sibling directory Git
+ * no longer registers. Everything else under a worktree container — source
+ * files, session state, anything not named after a known tool-owned root —
+ * remains fully enumerated and scanned. An empty `containerDirectories` (no
+ * registered worktrees, or `git worktree list` unavailable) yields no
+ * excludes at all, leaving the scan identical to before this exemption
+ * existed.
+ */
+function worktreeContainerToolOwnedExcludePathspecs(containerDirectories) {
+  const names = [...TOOL_OWNED_IGNORED_PREFIXES].map(prefix => prefix.replace(/\/$/, ''));
+  const pathspecs = [];
+  for (const container of [...containerDirectories].sort()) {
+    // `container` is a filesystem-derived path segment, not a literal we wrote
+    // ourselves — a worktree parent directory could in principle contain glob
+    // metacharacters (`*`, `?`, `[`, `\`). Escaping them keeps this a literal
+    // path match instead of an accidental glob that could exclude paths
+    // outside the intended worktree container.
+    const escapedContainer = container.replace(/[\\*?[\]]/g, '\\$&');
+    for (const name of names) pathspecs.push(`:(exclude,glob)${escapedContainer}/**/${name}/**`);
+  }
+  return pathspecs;
 }
 
 function worktreeEntryKind(root, repoPath, ownWorktrees = { paths: new Set(), worktreesDirectory: null }) {
@@ -1701,11 +1743,13 @@ function worktreeEntryKind(root, repoPath, ownWorktrees = { paths: new Set(), wo
   return 'non-regular';
 }
 
-function worktreeContentViolations(root, execute, budget, { includeIgnored = true } = {}) {
+function worktreeContentViolations(root, execute, budget, { includeIgnored = true, ownWorktrees: providedOwnWorktrees } = {}) {
+  const ownWorktrees = providedOwnWorktrees ?? registeredWorktreeDirectories(root, execute);
   const modified = new Set(gitPaths(['diff', '--name-only', '-z', '--diff-filter=ACMRT'], root, execute));
   const untracked = new Set(gitPaths(['ls-files', '--others', '--exclude-standard', '-z'], root, execute));
+  const ignoreExcludes = worktreeContainerToolOwnedExcludePathspecs(ownWorktrees.containerDirectories);
   const ignored = includeIgnored
-    ? new Set(gitPaths(['ls-files', '--others', '--ignored', '--exclude-standard', '-z'], root, execute))
+    ? new Set(gitPaths(['ls-files', '--others', '--ignored', '--exclude-standard', '-z', ...(ignoreExcludes.length ? ['--', ...ignoreExcludes] : [])], root, execute))
     : new Set();
   const violations = [];
   const candidates = new Map();
@@ -1714,7 +1758,6 @@ function worktreeContentViolations(root, execute, budget, { includeIgnored = tru
   for (const repoPath of ignored) if (!candidates.has(repoPath)) candidates.set(repoPath, 'ignored');
   const started = performance.now();
   const cache = { roots: new Map(), parents: new Map() };
-  const ownWorktrees = registeredWorktreeDirectories(root, execute);
   const bareRoots = bareRepositoryRoots([...candidates.keys()]);
   const bareRootList = [...bareRoots];
   for (const bareRoot of bareRoots) violations.push({ repoPath: bareRoot, reason: 'bare Git repository' });
@@ -1860,8 +1903,10 @@ function executeWithAuthoritativeIndex(execute, root, indexFile) {
 
 export async function checkPrivateArtifactContainment({ root = REPO_ROOT, execute = execFileSync, ranges = [], commits = [], includeIgnored = true, indexFile = null, testLimits = {}, budget = new ScanBudget() } = {}) {
   const authoritativeExecute = executeWithAuthoritativeIndex(execute, root, indexFile);
+  const ownWorktrees = registeredWorktreeDirectories(root, authoritativeExecute);
+  const ignoreExcludes = worktreeContainerToolOwnedExcludePathspecs(ownWorktrees.containerDirectories);
   const ignoredVisible = includeIgnored
-    ? gitPaths(['ls-files', '--others', '--ignored', '--exclude-standard', '-z'], root, authoritativeExecute)
+    ? gitPaths(['ls-files', '--others', '--ignored', '--exclude-standard', '-z', ...(ignoreExcludes.length ? ['--', ...ignoreExcludes] : [])], root, authoritativeExecute)
     : [];
   const visible = new Set(uniqueValidatedGitPaths([
     ...gitPaths(['ls-files', '-z'], root, authoritativeExecute),
@@ -1874,7 +1919,7 @@ export async function checkPrivateArtifactContainment({ root = REPO_ROOT, execut
   const checkedCommits = [...new Set([...commits.map(commit => assertCommitSha(commit, 'history')), ...rangeCommits])];
   if (checkedCommits.length > reducedContainmentLimit(testLimits.maxCheckedCommits, MAX_HISTORY_COMMITS)) throw new Error('private Phase 3C containment checked-commit cap exceeded');
   const index = await currentIndexCandidateViolations(root, authoritativeExecute, budget);
-  const worktree = worktreeContentViolations(root, authoritativeExecute, budget, { includeIgnored });
+  const worktree = worktreeContentViolations(root, authoritativeExecute, budget, { includeIgnored, ownWorktrees });
   const historyBudget = new HistoryTraversalBudget(reducedContainmentLimit(testLimits.maxHistoryPaths, MAX_STRUCTURAL_SCAN_CANDIDATES - budget.candidates));
   const violations = [
     ...findForbiddenPrivateArtifactPaths([...visible]),
