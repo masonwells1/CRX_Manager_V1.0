@@ -74,10 +74,21 @@ try {
     }
   }
 
-  // Best-effort refresh of origin/main. If it fails we proceed anyway: a STALE
-  // origin/main can only make us MORE conservative (fewer things look merged),
-  // never less — so acting on it is still safe.
-  gitTry(["fetch", "origin", "--quiet"]);
+  // Best-effort refresh of origin/main — at most once per 30 minutes. This hook
+  // fires on session startup, and a network fetch every time made session starts
+  // slow and timeout-prone (2026-08-18 hook audit: SessionStart p90 ~11s). A
+  // ≤30-min-old FETCH_HEAD is fresh enough here, and skipping is safe for the
+  // same reason a failed fetch is: a STALE origin/main can only make us MORE
+  // conservative (fewer things look merged), never less.
+  const FETCH_TTL_MS = 30 * 60 * 1000;
+  let fetchedRecently = false;
+  const fetchHeadPath = gitTry(["rev-parse", "--git-path", "FETCH_HEAD"]);
+  if (fetchHeadPath.ok) {
+    try {
+      fetchedRecently = Date.now() - statSync(path.resolve(projectDir, fetchHeadPath.out.trim())).mtimeMs < FETCH_TTL_MS;
+    } catch { /* no FETCH_HEAD yet → fetch below */ }
+  }
+  if (!fetchedRecently) gitTry(["fetch", "origin", "--quiet"]);
 
   // Need origin/main to judge "merged". Without it, do nothing (fail safe).
   if (!gitTry(["rev-parse", "--verify", "--quiet", "origin/main"]).ok) done(null);
