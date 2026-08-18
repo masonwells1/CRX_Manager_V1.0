@@ -24,11 +24,13 @@ approved by Mason as Phase 1:
    branching on source (`compact` → rule re-anchor; otherwise onboarding). This carries only the
    rules half of the old PreCompact prompt forward; its other half — REPL-only guidance steering
    the auto-compact summarizer to list open files/migrations/build status in its summary — had no
-   command-hook equivalent and was dropped with no replacement. Declared in `CLAUDE_ONLY_HOOKS` —
-   not because Codex lacks a SessionStart event (`.codex/hooks.json` registers three: `session-snapshot`,
-   `session-staleness`, `worktree-awareness`, the last of which injects `additionalContext` the same
-   way this hook does), but because Codex already gets its onboarding contract from AGENTS.md
-   directly, so this hook wasn't wired for it.
+   command-hook equivalent and was dropped with no replacement. Declared in `CLAUDE_ONLY_HOOKS`.
+   The reason recorded alongside that declaration was "Codex has no SessionStart event" — that is
+   false, and this pass corrects it in `scripts/agent-manifest-parity.mjs` too: `.codex/hooks.json`
+   registers three SessionStart hooks (`session-snapshot`, `session-staleness`,
+   `worktree-awareness`), the last of which injects `additionalContext` exactly the way this hook
+   does. Why it was never wired for Codex isn't recorded anywhere in the repo, so no replacement
+   reason is asserted here.
 3. **worktree-cleanup fetch TTL.** Its `git fetch origin` now runs at most once per 30 minutes
    (FETCH_HEAD mtime); a stale `origin/main` only makes the merged-branch classifier more
    conservative.
@@ -53,8 +55,10 @@ approved by Mason as Phase 1:
    and `hold-latch-guard` are wired there too and still run on `*`, with only the shared in-script
    tool-name filter protecting both harnesses. `pr-merge-guard` and `unattended-autopilot` aren't
    wired in `.codex/hooks.json` at all — both are declared Claude-only in
-   `scripts/agent-manifest-parity.mjs` (Codex has its own separate merge/autopilot mechanisms), so
-   the narrowing question doesn't apply to them there.
+   `scripts/agent-manifest-parity.mjs`, for two different reasons: Codex has its own merge guard
+   (`production-action-guard.mjs`, covering pushes and PR merges), whereas autopilot is a
+   Claude-session mechanism Codex has no equivalent of at all. Either way, the narrowing question
+   doesn't apply to them there.
 
 Verified: `sync-agent-workflows --write`, `test:agent-workflows` (all pass, parity included), plus
 manual stdin runs of the new/changed hooks (compact/startup/garbage payloads; dry-run cleanup;

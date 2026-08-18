@@ -28,10 +28,9 @@ export const CLAUDE_ONLY_HOOKS = new Set([
   "session-heartbeat.mjs",
   // SessionStart context injection (post-compact money/RLS re-anchor + session
   // onboarding) replaces the former prompt-type hooks, which fail outside the
-  // REPL. Codex does have a SessionStart event (wired to session-snapshot.mjs,
-  // session-staleness.mjs, worktree-awareness.mjs in .codex/hooks.json) — this
-  // one just isn't wired for Codex because it already gets its onboarding
-  // contract from AGENTS.md directly.
+  // REPL. Codex DOES have a SessionStart event (session-snapshot.mjs,
+  // session-staleness.mjs, and worktree-awareness.mjs are wired to it in
+  // .codex/hooks.json) — this hook simply was never wired for Codex.
   "session-context-reminder.mjs",
 ]);
 
