@@ -243,11 +243,10 @@ if (newOrChanged.length >= 5) {
 // Sync") that no longer exists — the live requirement is the hard guard's.
 //
 // Heuristic: commits landed during THIS session (git log since the session-start
-// snapshot's mtime) but no ledger file has been touched since that snapshot —
-// neither edited in the working tree nor written to disk after session start.
-// Fail-open: no snapshot / git error / unreadable file → skip silently (parallel
-// sessions share tmpdir snapshots, so this is a prompt, not a proof — same
-// block-by-listing semantics as the items above).
+// snapshot's mtime) but no ledger file was touched — neither still dirty in the
+// working tree nor already committed during the session. Fail-open: no snapshot
+// / git error → skip silently (parallel sessions share tmpdir snapshots, so this
+// is a prompt, not a proof — same block-by-listing semantics as the items above).
 const LEDGER_RES = [
   /^docs\/CHANGELOG\.md$/,
   /^docs\/manual\/[^/]+\.md$/,
@@ -255,37 +254,38 @@ const LEDGER_RES = [
   /^docs\/reference\/migration-history\.md$/,
   /^docs\/loops\//,
 ];
-// Concrete files the mtime fallback can stat. A docs/loops/ ledger or a manual
-// file beyond these still satisfies the check via the working-tree scan above.
-const LEDGER_STAT_PATHS = [
-  "docs/CHANGELOG.md",
-  "docs/manual/DECISION_LOG.md",
-  "docs/manual/KNOWN_ISSUES.md",
-  "docs/reference/agent-guardrails.md",
-  "docs/reference/migration-history.md",
-];
+// Normalize one `git status --porcelain` record to its path. Rename and copy
+// records read `R  old -> new`; the DESTINATION is the file that now carries the
+// ledger entry, so match on that, not on the whole rename expression.
+const porcelainPath = (l) => {
+  const rel = l.slice(3).replace(/\\/g, "/").trim();
+  const arrow = rel.lastIndexOf(" -> ");
+  return (arrow === -1 ? rel : rel.slice(arrow + 4)).replace(/^"|"$/g, "").trim();
+};
 try {
   if (existsSync(snapPath)) {
     const sessionStartMs = statSync(snapPath).mtimeMs;
-    const sessionCommits = runGit([
-      "log", "--oneline", `--since=${new Date(sessionStartMs).toISOString()}`,
-    ]).trim();
+    const since = `--since=${new Date(sessionStartMs).toISOString()}`;
+    const sessionCommits = runGit(["log", "--oneline", since]).trim();
     if (sessionCommits) {
-      const ledgerInTree = lines.some(l => {
-        const rel = l.slice(3).replace(/\\/g, "/").trim();
-        return LEDGER_RES.some(re => re.test(rel));
-      });
-      const ledgerWritten = LEDGER_STAT_PATHS.some(rel => {
-        try {
-          return statSync(path.join(projectDir, ...rel.split("/"))).mtimeMs >= sessionStartMs;
-        } catch { return false; /* missing file cannot satisfy the ledger */ }
-      });
-      if (!ledgerInTree && !ledgerWritten) {
+      // Two sources, which together cover the whole accepted set: files still
+      // dirty in the working tree, plus files already COMMITTED this session —
+      // those have left the status listing entirely. An earlier version stat'd
+      // a hardcoded file list instead, so committing a docs/manual/ file beyond
+      // that list, or a docs/loops/ ledger — both accepted here and by the hard
+      // guard — still produced a false "no ledger" warning.
+      const touched = [
+        ...lines.map(porcelainPath),
+        ...runGit(["log", "--name-only", "--pretty=format:", since])
+          .split("\n").map(s => s.replace(/\\/g, "/").trim()).filter(Boolean),
+      ];
+      if (!touched.some(f => LEDGER_RES.some(re => re.test(f)))) {
         issues.push(
-          `📓 Commits exist this session but no ledger file is touched since the session snapshot —\n` +
-          `     record the work where it belongs: docs/manual/DECISION_LOG.md (a policy or business call),\n` +
-          `     docs/reference/migration-history.md (a schema change), docs/manual/KNOWN_ISSUES.md (a bug),\n` +
-          `     or docs/CHANGELOG.md for general work (node scripts/log-session.mjs --summary '...').`
+          `📓 Commits exist this session but no ledger file was touched —\n` +
+          `     record the work where it belongs: docs/manual/*.md (DECISION_LOG for a policy or business\n` +
+          `     call, KNOWN_ISSUES for a bug, OWNER_PLAYBOOK for a how-to), docs/reference/migration-history.md\n` +
+          `     (a schema change), docs/reference/agent-guardrails.md (guard or hook behavior), a docs/loops/\n` +
+          `     ledger, or docs/CHANGELOG.md for general work (node scripts/log-session.mjs --summary '...').`
         );
       }
     }

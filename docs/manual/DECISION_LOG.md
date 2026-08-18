@@ -40,6 +40,20 @@ money-safety guard and is deliberately left for its own separately-reviewed PR. 
 work was. Reach for `docs/CHANGELOG.md` for general work; do not force a policy or schema record
 into it. `scripts/log-session.mjs` remains the scaffold for the CHANGELOG case only.
 
+**Review round (PR #412).** CodeRabbit raised four findings against the first implementation and all
+four were real. The substantive one was a bug introduced by this very change: the accepted set was
+widened to a pattern list (any `docs/manual/*.md`, any `docs/loops/` ledger) while the on-disk
+fallback still stat'd a *hardcoded five-file list*, so committing `OWNER_PLAYBOOK.md` or a loop
+ledger — both valid — still produced a false "no ledger" warning. The fallback is gone; the check now
+unions the working-tree status with the files in this session's commits, which covers the accepted
+set by construction. Git rename records (`R old -> new`) are now normalized to the destination, the
+reminder text lists every accepted destination, and the `log-session.mjs` header no longer claims the
+hard guard fires on *every* commit — it fires on agent-surface and migration commits only.
+Verified by running the hook against purpose-built git repositories: with the pre-fix hook, a
+committed `OWNER_PLAYBOOK.md`, a committed `docs/loops/` ledger, and a rename into a ledger path each
+produced a false warning; with the fixed hook all three are silent, and a genuinely unlogged session
+still warns.
+
 ---
 
 ## 2026-08-16 — Any sales rep may draw down any customer's booking
