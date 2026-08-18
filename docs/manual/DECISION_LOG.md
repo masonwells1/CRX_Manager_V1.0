@@ -1,11 +1,52 @@
 # Decision Log
 
-Last verified: 2026-08-16
+Last verified: 2026-08-18
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-08-18 — Mission loops: cheaper-model delegation + hand off at the 25MB marathon cap
+
+**Source:** Mason's in-chat approvals, 2026-08-18 — "ok lets do this, cap the marathon and make it
+handoff after so long" and "can we automate this so i dont have to remembver" during the 30-day
+usage/setup review, reaffirmed with "fix them all" after adversarial review of PR #416.
+
+**Context.** The 30-day usage analysis attributed the bulk of the month's token spend (estimated at
+roughly 40%) to a handful of marathon loop sessions — almost entirely premium-model re-reads of an
+ever-growing conversation. The two habits that prevent it (delegate mechanical steps down-model;
+hand off before a session becomes a marathon) previously relied on someone remembering them
+mid-loop, which is exactly when nobody does.
+
+**Decision.**
+
+1. **Cheaper-model delegation is standing policy for mission loops.** Mechanical cycle steps
+   (status checks, doc syncs, read sweeps, evidence gathering) may run on cheaper subagent models,
+   *within the loop's existing structure* — it re-tiers work the loop already does; it never adds
+   agents beyond a workflow's defined fan-out. Excluded, always: ledger writes and PROOF lines
+   (the driver runs the decisive verification and records what it observed), money/RLS/migration
+   judgment (never below the session model, and never below `sonnet`), and any reviewer's pinned
+   model/effort.
+2. **Handing off at the marathon cap is pre-authorized.** At 25MB of transcript a loop session
+   finishes only the atomic step in flight, checkpoints its ledger, writes a handoff, continues in
+   a fresh session, and winds down — without waiting for a fresh in-chat OK. The cap is enforced
+   as advisory text by a global user-scope hook on Mason's machine
+   (`~/.claude/hooks/session-size-sentinel.mjs`, soft 12MB / hard 25MB, firing on prompt submission
+   and mid-turn after tool calls) plus a statusline flag; where the hook is absent the written cap
+   in `.claude/commands/run-loop.md` binds on its own.
+
+**What this does NOT authorize.** Nothing about a handoff widens authority: hard gates (push
+approval, deploys, live migration applies, deletes) transfer unchanged to the successor session; a
+lapsed or expired autopilot flag stays lapsed; the successor re-verifies the flag itself before any
+gated action; and the driver role transferred by an orchestrator is exactly the role the mission
+doc's Driver slot defined, no wider.
+
+**Operative rule.** Every `/run-loop` launch obeys the Model & Context Budget section of
+`.claude/commands/run-loop.md`. A capped session that keeps cycling is violating a settled decision,
+not exercising judgment.
 
 ---
 
