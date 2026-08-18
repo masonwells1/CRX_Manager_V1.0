@@ -2,6 +2,15 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-18 — Product data model: design plan + PRD written and amended after…
+
+Product data model: design plan + PRD written and amended after adversarial review (canonical ingredient/ae_fraction, product_rates child table, density warn band, phases re-ordered). Docs only - no code, schema, or data changed.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `09573605 docs(products): product data model plan + PRD, amended after adversarial review`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
 ## 2026-08-18 — Hook performance cleanup (Phase 1): matcher gating, dead prompt hooks replaced, eslint/fetch speedups
 
 Harness only — no app source, migration, or live-state change. No guard logic changed; every
