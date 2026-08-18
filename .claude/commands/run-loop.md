@@ -44,6 +44,13 @@ Follow the doc **exactly as written** — its hard gates, per-cycle protocol, wo
 - **Prove each cycle ran** per the doc's protocol (PROOF — Ran: … · Saw: … lines in the ledger) — tests passing alone is not proof.
 - At the end, land the doc's definition-of-done deliverables (ledger handoff, parked-migration apply-order, plain-English summary for Mason) before declaring the loop finished.
 
+## Model & Context Budget (standing, Mason 2026-08-18)
+
+Mason's 30-day usage analysis showed marathon loop sessions were ~40% of all token spend, almost entirely premium-model context re-reads. Two standing rules apply to every loop this launcher starts:
+
+- **Delegate mechanical cycle steps to cheaper models.** Status checks, ledger reads/writes, doc syncs, grep/read sweeps, and evidence gathering go to subagents on a cheaper model (`sonnet`; `haiku` for pure reads) via the Agent tool's `model` option. The session's own model is reserved for judgment: plans, money/RLS/migration reasoning, reviews, and fixes. Never push a money, RLS, or migration decision below the session model, and never lower a reviewer's pinned model/effort — the effort table in `CLAUDE.md` still governs.
+- **Obey the session-size sentinel.** A global hook (`~/.claude/hooks/session-size-sentinel.mjs`) injects a size advisory at 12MB of transcript and a hard MARATHON CAP at 25MB. At the hard cap, the handoff procedure in the hook's message is part of this launcher's contract, pre-authorized by Mason — checkpoint the ledger mid-cycle-boundary, write the handoff, start or transfer to a fresh session (an orchestrator also transfers the driver role and tells worker sessions where the new orchestrator lives), then wind down. Do not keep cycling in a capped session, and do not wait for Mason to say so. Hard gates transfer unchanged — a handoff never launders an approval.
+
 ## Hard Rules
 
 - NEVER skip or soften Step 1. A mission doc that fails validation does not run — period.

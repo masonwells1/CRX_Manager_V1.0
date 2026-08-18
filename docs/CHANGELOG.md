@@ -2,6 +2,22 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-18 — Mission loops get a standing model/context budget
+
+Agent-surface docs only — no source, migration, or live-state change.
+
+Mason's 30-day usage analysis found his ten longest sessions consumed ~40% of the month's
+token spend, almost entirely premium-model context re-reads inside marathon loop sessions.
+`/run-loop` now carries two standing rules (Mason, 2026-08-18): mechanical cycle steps
+(status checks, ledger writes, doc syncs, read sweeps) are delegated to cheaper-model
+subagents, with money/RLS/migration judgment and pinned reviewer models/effort explicitly
+excluded from the downgrade; and every loop obeys the new global session-size sentinel
+(`~/.claude/hooks/session-size-sentinel.mjs`, user scope, outside this repo), which advises
+a handoff at 12MB of transcript and at 25MB instructs the running agent to checkpoint the
+ledger, write a handoff, transfer the driver role to a fresh session, and wind down —
+pre-authorized, so overnight loops no longer accumulate 40-80MB transcripts waiting for
+Mason to wake up. Hard gates transfer unchanged; a handoff never launders an approval.
+
 ## 2026-08-18 — Hook performance cleanup (Phase 1): matcher gating, dead prompt hooks replaced, eslint/fetch speedups
 
 Harness only — no app source, migration, or live-state change. No guard logic changed; every
