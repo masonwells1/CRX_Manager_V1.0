@@ -47,9 +47,10 @@ if (!isTs || isTest || !inSrc || excluded) emit();
 
 // Run eslint --fix on the single file. Invoke the project's own eslint through
 // the current node binary — `npx` via a shell re-resolves the package on every
-// edit and was the single slowest hook in the 2026-08-18 audit (p90 ~15s).
+// edit and was the single slowest hook in the 2026-08-18 audit (p90 ~15.5s).
 // --cache is passed but can't actually hit: this hook only ever runs right after
-// the file it checks was just edited, so the cached mtime never matches.
+// the file it checks was just edited, and --cache-strategy defaults to "metadata"
+// (size + mtime), so the just-written file never matches its cache entry.
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const eslintBin = path.join(projectDir, "node_modules", "eslint", "bin", "eslint.js");
 

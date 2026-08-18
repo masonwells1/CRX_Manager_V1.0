@@ -8,10 +8,13 @@
 // silently dead there (observed live 2026-08-18; also the source of the
 // hook_error noise on startup/resume in transcript telemetry). A command hook
 // printing the surviving half of that text through SessionStart additionalContext
-// works in every harness. Only the old PreCompact re-anchor's rules half was carried forward
+// works in the harnesses this hook is wired to (verified on the desktop harness
+// 2026-08-18). Only the old PreCompact re-anchor's rules half was carried forward
 // here (as COMPACT_REANCHOR, fired on source === "compact"); its other half —
-// steering what the summarizer keeps — was dropped with no replacement, since
-// additionalContext lands AFTER the compact has already run and cannot shape it.
+// steering what the summarizer keeps — was dropped with no replacement. Reasoning
+// (not measured): additionalContext on a SessionStart source === "compact" fires
+// after the compact has run, so it cannot shape the summary. Whether a PreCompact
+// *command* hook could have carried that half was never tested.
 //
 // Branches on the SessionStart payload's `source`:
 //   compact              → the money/idempotency/RLS re-anchor

@@ -22,58 +22,53 @@ approved by Mason as Phase 1:
    not yet supported outside REPL") — both silently dead in the desktop harness. New
    `session-context-reminder.mjs` command hook emits content via SessionStart `additionalContext`,
    branching on source (`compact` → rule re-anchor; otherwise onboarding). This carries only the
-   rules half of the old PreCompact prompt forward; its other half — REPL-only guidance steering
-   the auto-compact summarizer to list open files/migrations/build status in its summary — had no
-   command-hook equivalent and was dropped with no replacement. Declared in `CLAUDE_ONLY_HOOKS`.
-   The reason recorded alongside that declaration was "Codex has no SessionStart event" — that is
-   false, and this pass corrects it in `scripts/agent-manifest-parity.mjs` too: `.codex/hooks.json`
-   registers three SessionStart hooks (`session-snapshot`, `session-staleness`,
-   `worktree-awareness`), the last of which injects `additionalContext` exactly the way this hook
-   does. Why it was never wired for Codex isn't recorded anywhere in the repo, so no replacement
-   reason is asserted here.
+   rules half of the old PreCompact prompt forward. Its other half asked the summarizer to cover
+   "files modified this session; migrations created (and whether `src/types/index.ts` was updated);
+   current task and next step; last build/test status" — that half was dropped with no replacement.
+   The repo doesn't record why, and whether a PreCompact *command* hook could have carried it was
+   never tested. Declared in `CLAUDE_ONLY_HOOKS`. The reason recorded alongside that declaration was
+   "Codex has no SessionStart event" — that is false, and this pass corrects it in
+   `scripts/agent-manifest-parity.mjs` too: `.codex/hooks.json` registers three SessionStart hooks
+   (`session-snapshot`, `session-staleness`, `worktree-awareness`), two of which
+   (`session-staleness`, `worktree-awareness`) emit `additionalContext` the same way this hook does.
+   Why it was never wired for Codex isn't recorded anywhere in the repo, so no replacement reason is
+   asserted here.
 3. **worktree-cleanup fetch TTL.** Its `git fetch origin` now runs at most once per 30 minutes
    (FETCH_HEAD mtime); a stale `origin/main` only makes the merged-branch classifier more
    conservative.
 4. **eslint-autofix direct + cached.** Invokes the project's local eslint binary directly instead
-   of through `npx` — dropping npx's re-resolve is the actual source of the speedup (~1.2s warm,
-   verified), since this hook always runs on a file that was just edited, so `--cache`'s mtime
-   check can never hit in practice. `--cache` is still passed but never helps: the hook has only
-   one registration (PostToolUse `Write|Edit`, in both `.claude/settings.json` and
-   `.codex/hooks.json`), so there is no other invocation path where it could hit; it costs a small
+   of through `npx` — dropping npx's re-resolve is the actual source of the speedup (~1.2s,
+   verified), since this hook always runs on a file that was just edited, so `--cache`'s default
+   `metadata` strategy (size + mtime) can never hit in practice. `--cache` is still passed but never
+   helps: the hook has one registration per manifest and nothing else (PostToolUse `Write|Edit`, in
+   `.claude/settings.json` and again in `.codex/hooks.json`), so there is no other invocation path
+   where it could hit; it costs a small
    cache read plus a full rewrite on every edit and is left in only because removing it is out of
    scope for a docs-only pass. A timeout kill now stays silent instead of reporting a fake lint
    failure. Post-review (CodeRabbit on PR #413): the npx fallback was removed entirely — it
    interpolated the edited file's path into a shell string (injection surface); with no local
-   eslint the hook now skips silently. The hook creates the cache directory defensively, though
-   ESLint's flat-cache creates it too.
+   eslint the hook now skips silently. The hook creates the cache file's parent directory
+   defensively, though ESLint's flat-cache creates it too.
 5. **PreToolUse matcher narrowing (Claude side only).** In `.claude/settings.json`,
    `migration-apply-guard`, `mcp-tool-guard`, and `live-testdata-guard` moved to the `mcp__.*`
    matcher; `pr-merge-guard` to `Bash|PowerShell|mcp__.*`; `review-proof-guard`, `hold-latch-guard`,
    and `unattended-autopilot` stay on `*` because they must see every call. Patterns chosen to work
    under both anchored and unanchored matcher-regex semantics. `.codex/hooks.json` was not touched
-   by this pass: `migration-apply-guard`, `mcp-tool-guard`, `live-testdata-guard`, `review-proof-guard`,
-   and `hold-latch-guard` are wired there too and still run on `*`, with only the shared in-script
-   tool-name filter protecting both harnesses. `pr-merge-guard` and `unattended-autopilot` aren't
-   wired in `.codex/hooks.json` at all — both are declared Claude-only in
-   `scripts/agent-manifest-parity.mjs`, for two different reasons: Codex has its own merge guard
+   by this pass, so three guards now diverge across the two harnesses: `migration-apply-guard`,
+   `mcp-tool-guard`, and `live-testdata-guard` are narrowed to `mcp__.*` for Claude but still run on
+   `*` for Codex, where only the shared in-script tool-name filter narrows them. (`review-proof-guard`
+   and `hold-latch-guard` are wired in `.codex/hooks.json` too, but they sit on `*` in both manifests
+   by design — no divergence.) `pr-merge-guard` and `unattended-autopilot` aren't wired in
+   `.codex/hooks.json` at all — both are declared Claude-only in `scripts/agent-manifest-parity.mjs`,
+   for two different reasons recorded there: Codex has its own merge guard
    (`production-action-guard.mjs`, covering pushes and PR merges), whereas autopilot is a
-   Claude-session mechanism Codex has no equivalent of at all. Either way, the narrowing question
-   doesn't apply to them there.
+   Claude-session mechanism and Codex has no autopilot flag. (Codex does have its own hands-free
+   mode — `approval_policy="never"` in `scripts/codex-build.mjs` — it just isn't gated by this
+   hook.) Either way, the narrowing question doesn't apply to them there.
 
 Verified: `sync-agent-workflows --write`, `test:agent-workflows` (all pass, parity included), plus
 manual stdin runs of the new/changed hooks (compact/startup/garbage payloads; dry-run cleanup;
-eslint cold vs warm). `agent-health`'s CRLF/LF check on the 4 paired
-`.claude/skills/*/SKILL.md` ↔ `.agents/skills/*/SKILL.md` files is checkout-dependent: it fails on
-a checkout with `core.autocrlf=true` (confirmed — that setting rewrites the LF-committed working
-copy to CRLF on checkout, e.g. `git config core.autocrlf` → `true` plus `grep -c $'\r'` finding CR
-bytes in the working tree on this machine) and passes on a checkout without it (confirmed on a
-fresh worktree), even though the committed Git blobs on both sides are byte-identical LF in every
-case (`git show HEAD:` confirms, and `.gitattributes` pins both trees to `eol=lf`). The real cause:
-`scripts/agent-health-check.mjs`'s `compareSyncedFiles()` compares raw file bytes with no
-line-ending normalization, unlike its sibling `scripts/sync-agent-workflows.mjs`, which defines and
-applies `normalizeEol` before comparing — a pre-existing gap in `agent-health-check.mjs` that only
-manifests on `autocrlf`-enabled checkouts, left unfixed here since it's out of scope for a
-docs-only pass. Residual risk stated in the PR: the narrowed matchers themselves cannot fire in the
+eslint cold vs repeat run), and `agent-health` (pass). Residual risk stated in the PR: the narrowed matchers themselves cannot fire in the
 session that edits them (hook config loads at session start); a safe next-session mutation test is
 documented there.
 
