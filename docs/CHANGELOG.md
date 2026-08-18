@@ -58,13 +58,17 @@ approved by Mason as Phase 1:
 
 Verified: `sync-agent-workflows --write`, `test:agent-workflows` (all pass, parity included), plus
 manual stdin runs of the new/changed hooks (compact/startup/garbage payloads; dry-run cleanup;
-eslint cold vs warm). `agent-health` currently fails its CRLF/LF check on the 4 paired
-`.claude/skills/*/SKILL.md` ↔ `.agents/skills/*/SKILL.md` files on this checkout, even though the
-committed Git blobs on both sides are byte-identical LF (`git show HEAD:` confirms, and
-`.gitattributes` pins both trees to `eol=lf`). The real cause: `scripts/agent-health-check.mjs`'s
-`compareSyncedFiles()` compares raw file bytes with no line-ending normalization, unlike its sibling
-`scripts/sync-agent-workflows.mjs`, which defines and applies `normalizeEol` before comparing —
-a pre-existing gap in `agent-health-check.mjs`, left unfixed here since it's out of scope for a
+eslint cold vs warm). `agent-health`'s CRLF/LF check on the 4 paired
+`.claude/skills/*/SKILL.md` ↔ `.agents/skills/*/SKILL.md` files is checkout-dependent: it fails on
+a checkout with `core.autocrlf=true` (confirmed — that setting rewrites the LF-committed working
+copy to CRLF on checkout, e.g. `git config core.autocrlf` → `true` plus `grep -c $'\r'` finding CR
+bytes in the working tree on this machine) and passes on a checkout without it (confirmed on a
+fresh worktree), even though the committed Git blobs on both sides are byte-identical LF in every
+case (`git show HEAD:` confirms, and `.gitattributes` pins both trees to `eol=lf`). The real cause:
+`scripts/agent-health-check.mjs`'s `compareSyncedFiles()` compares raw file bytes with no
+line-ending normalization, unlike its sibling `scripts/sync-agent-workflows.mjs`, which defines and
+applies `normalizeEol` before comparing — a pre-existing gap in `agent-health-check.mjs` that only
+manifests on `autocrlf`-enabled checkouts, left unfixed here since it's out of scope for a
 docs-only pass. Residual risk stated in the PR: the narrowed matchers themselves cannot fire in the
 session that edits them (hook config loads at session start); a safe next-session mutation test is
 documented there.
