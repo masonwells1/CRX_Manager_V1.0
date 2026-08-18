@@ -306,9 +306,18 @@ transfer to the executing session.
 3. Restricted-use product count is known wrong (2 recorded, owner says materially more).
    Parked with the deferred label work, but the RUP compliance report must be treated as
    **known incomplete** in the meantime, not as a clean result.
-4. **Owner choice, not a technical question:** ship Phase 3 (the comparison tool) straight
-   after Phase 1 with a typed-in rate, or wait for the Phase 2 rate correction. Faster
-   payoff versus a cleaner sequence.
+4. ~~Owner choice: ship Phase 3 straight after Phase 1 with a typed-in rate, or wait for
+   the Phase 2 rate correction.~~ **SETTLED by Mason 2026-08-18: after the rate cleanup.**
+   His words: *"After rate cleanup it's not important intill a month from now."*
+
+   **Two consequences the executor must respect:**
+   - Phase 3 keeps its place in the sequence — **do not** shortcut it forward.
+   - **The comparison tool has a real target date of roughly 2026-09-18.** Phases 0, 0b, 1,
+     1b and 2 all land before it. If that schedule comes under pressure, the thing to
+     protect is the *quality* of the Phase 2 rate review (573 values, owner-reviewed, no
+     bulk auto-rewrite) — not the date. Raise a slip with Mason rather than rushing the
+     rate correction, which is the one phase that can put wrong quantities on customer
+     documents.
 5. **Owner-only check:** confirm the Supabase connector in the Codex app's settings is
    live and appropriately scoped before the executor relies on live-database access. The
    tracked `.codex/config.toml` connector's OAuth grant was recorded dead (`invalid_grant`)

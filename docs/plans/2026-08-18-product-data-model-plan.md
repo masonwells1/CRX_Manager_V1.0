@@ -570,13 +570,12 @@ before this phase ships. No code needed.
   `Qt`/`qt`) plus the `Unit`/`Ea` synonym, conversion factors are identical, so remapping
   provably cannot move any price.
 
-**[REV] Why before the comparison tool — downgraded from prerequisite to preference.**
-The original plan called this a hard dependency. It isn't. The comparison divides
-*concentrations* and takes the branded rate as an **input** — it never reads
-`rate_per_acre`, and it can accept a typed-in rate, which is exactly what Mason's
-spreadsheet does today. **If Mason wants his top-priority payoff sooner, Phase 3 can ship
-against Phase 1 data with a typed rate**, and pick up rate autofill when Phase 2 lands.
-This is a choice for Mason, not a technical constraint.
+**Why before the comparison tool.** Technically this is a preference, not a hard
+dependency — the comparison divides *concentrations* and takes the branded rate as an
+**input**, never reading `rate_per_acre`, so it could run on a typed-in rate exactly as
+Mason's spreadsheet does. **Mason settled it on 2026-08-18: the comparison tool comes after
+the rate cleanup.** His words: *"After rate cleanup it's not important intill a month from
+now."* So the rate correction gets the clean run, and Phase 3 targets roughly 2026-09-18.
 
 **Risk:** Medium-high — `rate_per_acre` feeds applicator sheets, chemical application
 reports, blend-math validation, and invoices. Every changed value is reviewed before it
@@ -697,7 +696,14 @@ Mason: "save this for the end or last, not a high priority at the moment."
    the ingredient foundation 1st." **However — Mason has additional design input on the
    plan before Phase 1 begins.** Phase 1 does not start until that brainstorm is captured
    and folded in.
-3. **Restricted-use products — the live count of 2 is WRONG.** Mason: "there are alot more
+3. **Phase 3 comes after the Phase 2 rate cleanup — SETTLED 2026-08-18.** Mason: *"After
+   rate cleanup it's not important intill a month from now."* The comparison tool is not
+   pulled forward, and it carries a soft target of roughly **2026-09-18**. Everything
+   before it — hygiene, return policy, ingredients + density, the workbook, and the rate
+   correction — lands first. If the schedule tightens, protect the owner-reviewed rate
+   correction and slip the date; that phase is the one that can put wrong quantities on
+   customer paperwork.
+4. **Restricted-use products — the live count of 2 is WRONG.** Mason: "there are alot more
    but not important today." Parked with finding #1 (label rate / REI / PHI). When #1 is
    picked up, `is_rup` must be re-derived from EPA label data, not trusted as-is. Until
    then, treat the RUP compliance report (`src/lib/rupCompliance.ts`,
