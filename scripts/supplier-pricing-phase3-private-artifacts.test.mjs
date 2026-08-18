@@ -1083,6 +1083,43 @@ git() { return 0; }
     rmSync(staleOrphanDependencies, { recursive: true, force: true });
     git(staleWorktreeHost, ['worktree', 'remove', '--force', staleLiveWorktree]);
   }
+  {
+    // A worktree container directory name is filesystem-derived, not a
+    // literal this file wrote — it can contain Git glob metacharacters.
+    // Unescaped, a bracket in the name becomes a character class instead of
+    // a literal: "worktrees[legacy]" would accidentally also match
+    // "worktreesl", "worktreese", etc. (any single char from the bracket
+    // set), sweeping an unrelated top-level directory's own node_modules
+    // into the same exclude and hiding a private artifact planted there.
+    // This proves the escaped container still excludes its own real
+    // dependency bulk while a same-looking decoy outside the real container
+    // stays fully scanned.
+    const globHost = fixtureRepo('containment-worktree-glob-metacharacters');
+    writeFileSync(path.join(globHost, '.gitignore'), '.claude/\n');
+    git(globHost, ['add', '.gitignore']);
+    git(globHost, ['commit', '--quiet', '-m', 'ignore session state']);
+    const globContainer = path.join(globHost, '.claude', 'worktrees[legacy]');
+    const globLiveWorktree = path.join(globContainer, 'live-session');
+    git(globHost, ['worktree', 'add', '--quiet', '-b', 'glob-metacharacter-live-session', globLiveWorktree]);
+    const globOrphanDependencies = path.join(globContainer, 'orphaned-session', 'node_modules');
+    for (let index = 0; index < 50; index += 1) {
+      const packagePath = path.join(globOrphanDependencies, `synthetic-package-${index}`);
+      mkdirSync(packagePath, { recursive: true });
+      writeFileSync(path.join(packagePath, 'index.js'), 'module.exports = {};\n');
+    }
+    await fixtureContainment(globHost);
+    // "worktreesl" shares no real relationship with the bracketed container
+    // beyond the accidental single-character glob match: it sits alongside
+    // it, ignored the same way, but is not itself a registered worktree or
+    // named after a tool-owned root at its own top level.
+    const globDecoyPrivate = path.join(globHost, '.claude', 'worktreesl', 'node_modules', 'private-packet.json');
+    mkdirSync(path.dirname(globDecoyPrivate), { recursive: true });
+    writeFileSync(globDecoyPrivate, JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }));
+    await containmentFails(globHost, 'private-packet.json', 'private JSON format marker in malformed candidate');
+    rmSync(path.dirname(globDecoyPrivate), { recursive: true, force: true });
+    rmSync(globOrphanDependencies, { recursive: true, force: true });
+    git(globHost, ['worktree', 'remove', '--force', globLiveWorktree]);
+  }
   const bareRepoHost = fixtureRepo('containment-bare-repository'); const bareRepoBase = git(bareRepoHost, ['rev-parse', 'HEAD']).trim(); const bareRepoPath = path.join(bareRepoHost, 'catalog.git'); git(bareRepoHost, ['init', '--bare', '--quiet', bareRepoPath]); execFileSync('git', ['--git-dir', bareRepoPath, 'hash-object', '-w', '--stdin'], { input: JSON.stringify({ format: POST_STAGE_A_SNAPSHOT_FORMAT }), encoding: 'utf8', env: sanitizedFixtureGitEnv() }); mkdirSync(path.join(bareRepoPath, 'objects', 'info'), { recursive: true }); writeFileSync(path.join(bareRepoPath, 'objects', 'info', 'alternates'), '../alternate-objects\n');
   await assert.rejects(() => fixtureContainment(bareRepoHost), /catalog\.git \(bare Git repository\)/);
   git(bareRepoHost, ['add', 'catalog.git']); git(bareRepoHost, ['commit', '--quiet', '-m', 'synthetic bare repository']); git(bareRepoHost, ['rm', '--quiet', '-r', 'catalog.git']); git(bareRepoHost, ['commit', '--quiet', '-m', 'delete synthetic bare repository']); const bareRepoHead = git(bareRepoHost, ['rev-parse', 'HEAD']).trim();

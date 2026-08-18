@@ -25,6 +25,15 @@ tree. Reproduced the original ENOBUFS crash and confirmed the fix against the re
 `C:\CRX_Manager` checkout (53,850 paths, ~1GB scanned, no crash) via direct invocation of the
 same `--pre-push` code path the hook calls.
 
+CodeRabbit's review of the PR caught a follow-on bug in the fix itself: the worktree container
+path is filesystem-derived, not a literal this file wrote, and was spliced unescaped into the
+new `:(exclude,glob)` pathspec. A container name containing `*`, `?`, `[`, or `\` would have let
+Git treat it as a glob instead of a literal path — e.g. a bracketed name could accidentally
+exclude an unrelated top-level directory sharing only a coincidental single-character match,
+hiding a private artifact planted there from the ignored-file scan. Now escaped before
+interpolation. Added a regression fixture with a bracketed worktree container plus an outside
+decoy directory; confirmed the new test fails without the escaping fix and passes with it.
+
 ## 2026-08-18 — session-staleness backup check now consults the real off-site workflow
 
 Harness only — no app source, migration, or live-state change. The SessionStart backup-staleness

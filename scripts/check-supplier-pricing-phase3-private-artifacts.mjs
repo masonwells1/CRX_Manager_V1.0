@@ -1683,7 +1683,13 @@ function worktreeContainerToolOwnedExcludePathspecs(containerDirectories) {
   const names = [...TOOL_OWNED_IGNORED_PREFIXES].map(prefix => prefix.replace(/\/$/, ''));
   const pathspecs = [];
   for (const container of [...containerDirectories].sort()) {
-    for (const name of names) pathspecs.push(`:(exclude,glob)${container}/**/${name}/**`);
+    // `container` is a filesystem-derived path segment, not a literal we wrote
+    // ourselves — a worktree parent directory could in principle contain glob
+    // metacharacters (`*`, `?`, `[`, `\`). Escaping them keeps this a literal
+    // path match instead of an accidental glob that could exclude paths
+    // outside the intended worktree container.
+    const escapedContainer = container.replace(/[\\*?[\]]/g, '\\$&');
+    for (const name of names) pathspecs.push(`:(exclude,glob)${escapedContainer}/**/${name}/**`);
   }
   return pathspecs;
 }
