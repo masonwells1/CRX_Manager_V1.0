@@ -6,19 +6,40 @@ All significant development milestones, in reverse chronological order.
 
 Agent-surface docs only — no source, migration, or live-state change.
 
-Mason's 30-day usage analysis found his ten longest sessions consumed ~40% of the month's
-token spend, almost entirely premium-model context re-reads inside marathon loop sessions.
-`/run-loop` now carries two standing rules (Mason, 2026-08-18): mechanical cycle steps
-(status checks, ledger writes, doc syncs, read sweeps) are delegated to cheaper-model
-subagents, with money/RLS/migration judgment and pinned reviewer models/effort explicitly
-excluded from the downgrade; and every loop obeys the new global session-size sentinel
-(`~/.claude/hooks/session-size-sentinel.mjs`, user scope, outside this repo), which advises
-a handoff at 12MB of transcript and at 25MB instructs the running agent to checkpoint the
-ledger, write a handoff, transfer the driver role to a fresh session, and wind down —
-(CodeRabbit review on PR #416 asked for the cap boundary to be explicit: finish only the
-atomic step already in flight, never start another cycle in a capped session) —
-pre-authorized, so overnight loops no longer accumulate 40-80MB transcripts waiting for
-Mason to wake up. Hard gates transfer unchanged; a handoff never launders an approval.
+Mason's 30-day usage analysis attributed the bulk of the month's token spend (estimated at
+roughly 40%) to a handful of marathon loop sessions — almost entirely premium-model context
+re-reads, because every message re-reads the whole conversation. `/run-loop` now carries two
+standing rules, recorded as Mason's 2026-08-18 decision in `docs/manual/DECISION_LOG.md`:
+mechanical cycle steps (status checks, doc syncs, read sweeps, evidence gathering) may be
+delegated to cheaper-model subagents *within the loop's existing structure* — ledger PROOF
+lines, money/RLS/migration judgment, and pinned reviewer models/effort are explicitly
+excluded, and no agents are added on top of a workflow's defined fan-out; and every loop
+obeys the session-size sentinel's marathon cap (advisory at 12MB of transcript; at 25MB:
+finish only the atomic step already in flight, checkpoint the ledger, write a handoff,
+continue in a fresh session, wind down). The sentinel is a global user-scope hook outside
+this repo (`~/.claude/hooks/session-size-sentinel.mjs`), and after adversarial review of
+PR #416 it fires both on prompt submission and mid-turn after tool calls, so unattended
+loops — which may run for hours off one prompt — actually see it; where the hook is absent
+(Codex sandbox, remote runners) the written cap in `run-loop.md` binds on its own. Hard
+gates transfer unchanged across a handoff; a handoff never launders an approval, and a
+lapsed autopilot flag stays lapsed in the successor session.
+
+## 2026-08-18 — session-staleness backup check now consults the real off-site workflow
+
+Harness only — no app source, migration, or live-state change. The SessionStart backup-staleness
+warning was driven solely by the per-checkout `backups/LATEST-OK.json` marker, which only a
+locally-run `/backup-db` stamps — the scheduled backup runs as the "Off-site DB backup" GitHub
+Actions workflow in `masonwells1/CRX_Backups` and never touches that file, so every fresh worktree
+cried "backup died" (2026-08-18: claimed 9 days stale while the workflow had succeeded on schedule
+on 2026-08-16 and again on 2026-08-18).
+
+The check now uses two evidence sources, newest wins: the local marker and the workflow's last
+successful run via `gh run list` — consulted only when the marker alone would alarm, with a 1.5s
+timeout and an owner-only cache in the user's home directory (6h TTL on success, 10min on failure)
+so the hook stays inside its ~2s budget and one answer serves the whole worktree fleet. When `gh` is unreachable
+(offline/unauthenticated) the marker-only warning still fires, explicitly labeled unverified.
+Six new offline-deterministic test cases (seeded cache + bogus `gh` binary) cover the veto, the
+real-alarm, the fallback, both TTL directions, and the never-succeeded answer.
 
 ## 2026-08-18 — Hook performance cleanup (Phase 1): matcher gating, dead prompt hooks replaced, eslint/fetch speedups
 
