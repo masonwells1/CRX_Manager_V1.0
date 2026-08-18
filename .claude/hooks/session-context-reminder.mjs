@@ -7,14 +7,18 @@
 // with "Prompt stop hooks are not yet supported outside REPL", so both were
 // silently dead there (observed live 2026-08-18; also the source of the
 // hook_error noise on startup/resume in transcript telemetry). A command hook
-// printing the surviving half of that text through SessionStart additionalContext
-// works in the harnesses this hook is wired to (verified on the desktop harness
-// 2026-08-18). Only the old PreCompact re-anchor's rules half was carried forward
-// here (as COMPACT_REANCHOR, fired on source === "compact"); its other half —
-// steering what the summarizer keeps — was dropped with no replacement. Reasoning
-// (not measured): additionalContext on a SessionStart source === "compact" fires
-// after the compact has run, so it cannot shape the summary. Whether a PreCompact
-// *command* hook could have carried that half was never tested.
+// printing that text through SessionStart additionalContext works on the one
+// harness this hook is wired to (Claude only — it is declared in CLAUDE_ONLY_HOOKS
+// and is absent from .codex/hooks.json; verified on the desktop harness 2026-08-18).
+// Only the old PreCompact re-anchor's rules half was carried forward here (as
+// COMPACT_REANCHOR, fired on source === "compact"), and not verbatim: the
+// "POST-COMPACT RULE RE-ANCHOR" header and the "treat files changed before the
+// compact as UNVERIFIED" rule are both new here, with no ancestor in the old prompt.
+// The old prompt's other half — steering what the summarizer keeps — was dropped
+// with no replacement. Reasoning (not measured): additionalContext on a SessionStart
+// source === "compact" fires after the compact has run, so it cannot shape the
+// summary. The repo records no test of whether a PreCompact *command* hook could
+// have carried that half.
 //
 // Branches on the SessionStart payload's `source`:
 //   compact              → the money/idempotency/RLS re-anchor

@@ -28,9 +28,13 @@ export const CLAUDE_ONLY_HOOKS = new Set([
   "session-heartbeat.mjs",
   // SessionStart context injection (post-compact money/RLS re-anchor + session
   // onboarding) replaces the former prompt-type hooks, which fail outside the
-  // REPL. Codex DOES have a SessionStart event (session-snapshot.mjs,
-  // session-staleness.mjs, and worktree-awareness.mjs are wired to it in
-  // .codex/hooks.json) — this hook simply was never wired for Codex.
+  // REPL. NOTE: the reason previously recorded here — "Codex has no SessionStart
+  // event" — was false. .codex/hooks.json registers a SessionStart group
+  // (session-snapshot.mjs, session-staleness.mjs, worktree-awareness.mjs), so the
+  // event exists on that side; whether the Codex harness consumes additionalContext
+  // from it is not verified here. REASON NOT RECORDED (PR #414): nothing in the repo
+  // says why this hook was never wired for Codex. Left Claude-only pending an owner
+  // decision rather than asserting an invented motive.
   "session-context-reminder.mjs",
 ]);
 
