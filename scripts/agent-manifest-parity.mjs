@@ -10,7 +10,8 @@
 // or add it to CLAUDE_ONLY_HOOKS / CODEX_ONLY_HOOKS below with the reason. The
 // check can't be satisfied by accident.
 
-// Deliberately Claude-only hooks (NOT wired for Codex), each with why:
+// Claude-only hooks (NOT wired for Codex), each with why — or, where the repo
+// records no rationale, an explicit note saying so rather than an invented motive:
 export const CLAUDE_ONLY_HOOKS = new Set([
   // Codex has its OWN production guard (.codex/hooks/production-action-guard.mjs)
   // that covers pushes AND PR merges, so Codex doesn't wire Claude's push/merge
@@ -28,11 +29,12 @@ export const CLAUDE_ONLY_HOOKS = new Set([
   "session-heartbeat.mjs",
   // SessionStart context injection (post-compact money/RLS re-anchor + session
   // onboarding) replaces the former prompt-type hooks, which fail outside the
-  // REPL. NOTE: the reason previously recorded here — "Codex has no SessionStart
+  // REPL. NOTE: the reason recorded here before PR #414 — "Codex has no SessionStart
   // event" — was false. .codex/hooks.json registers a SessionStart group
   // (session-snapshot.mjs, session-staleness.mjs, worktree-awareness.mjs), so the
-  // event exists on that side; whether the Codex harness consumes additionalContext
-  // from it is not verified here. REASON NOT RECORDED (PR #414): nothing in the repo
+  // event is wired on that side; what the Codex harness does with that registration,
+  // including whether it consumes additionalContext, is not verified here.
+  // REASON NOT RECORDED (PR #414): nothing in the repo
   // says why this hook was never wired for Codex. Left Claude-only pending an owner
   // decision rather than asserting an invented motive.
   "session-context-reminder.mjs",

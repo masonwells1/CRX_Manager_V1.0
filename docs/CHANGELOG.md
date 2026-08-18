@@ -36,23 +36,22 @@ approved by Mason as Phase 1:
    the pre-session dirty-file baseline mid-session, degrading `stop-wrap`'s comparison. Like the
    PreToolUse narrowing in item 5, this gating is **Claude-side only**: `.codex/hooks.json`'s
    SessionStart group carries no `matcher` key, so the three hooks Codex wires there
-   (`session-snapshot`, `session-staleness`, `worktree-awareness`) still run on every SessionStart,
-   compacts included. Counting these, six hooks now diverge across the two manifests, not three.
+   (`session-snapshot`, `session-staleness`, `worktree-awareness`) are not source-gated there.
+   Counting these, six hooks are wired on different matchers across the two manifests, not three.
 2. **Dead prompt hooks replaced.** The PreCompact money/RLS re-anchor and SessionStart onboarding
    were `"type": "prompt"` hooks, which fail outside the interactive REPL ("Prompt stop hooks are
    not yet supported outside REPL") — both silently dead in the desktop harness. New
    `session-context-reminder.mjs` command hook emits content via SessionStart `additionalContext`,
    branching on source (`compact` → rule re-anchor; otherwise onboarding). It carries the rules
-   half of the old PreCompact prompt forward — not verbatim: it prepends a "POST-COMPACT RULE
-   RE-ANCHOR" header and adds one rule that has no ancestor in the old prompt ("treat files changed
+   half of the old PreCompact prompt forward — not verbatim: the lead-in and some wording differ,
+   and it adds one rule with no ancestor in the old prompt ("treat files changed
    before the compact as UNVERIFIED unless the summary says they were run and observed"). The old
    prompt's other half asked the summarizer to cover "files modified this session; migrations
    created (and whether src/types/index.ts was updated); current task and next step; last
    build/test status" — that half was dropped with no replacement. The repo doesn't record why, and
    it records no test of whether a PreCompact *command* hook could have carried it. Declared in
    `CLAUDE_ONLY_HOOKS`. The reason recorded alongside that declaration was
-   "Codex has no SessionStart event" — that is false, and this pass corrects it in
-   `scripts/agent-manifest-parity.mjs` too: `.codex/hooks.json` registers three SessionStart hooks
+   "Codex has no SessionStart event" — that is false: `.codex/hooks.json` registers three SessionStart hooks
    (`session-snapshot`, `session-staleness`, `worktree-awareness`), two of which
    (`session-staleness`, `worktree-awareness`) emit `additionalContext` in the same output shape
    this hook does — the registration is verified; whether the Codex harness consumes that
@@ -97,7 +96,7 @@ approved by Mason as Phase 1:
 
 Verified: `sync-agent-workflows --write`, `test:agent-workflows` (all pass, parity included), plus
 manual stdin runs of the new/changed hooks (compact/startup/garbage payloads; dry-run cleanup;
-eslint cold vs repeat run), and `agent-health` (pass in a clean checkout). Residual risk stated in
+eslint cold vs repeat run). Residual risk stated in
 the PR: the narrowed matchers themselves cannot fire in the
 session that edits them (hook config loads at session start); a safe next-session mutation test is
 documented there.

@@ -11,9 +11,10 @@
 // harness this hook is wired to (Claude only — it is declared in CLAUDE_ONLY_HOOKS
 // and is absent from .codex/hooks.json; verified on the desktop harness 2026-08-18).
 // Only the old PreCompact re-anchor's rules half was carried forward here (as
-// COMPACT_REANCHOR, fired on source === "compact"), and not verbatim: the
-// "POST-COMPACT RULE RE-ANCHOR" header and the "treat files changed before the
-// compact as UNVERIFIED" rule are both new here, with no ancestor in the old prompt.
+// COMPACT_REANCHOR, fired on source === "compact"), and not verbatim: the old
+// lead-in was replaced by the "POST-COMPACT RULE RE-ANCHOR" header, some wording
+// differs, and the "treat files changed before the compact as UNVERIFIED" rule is
+// new here, with no ancestor in the old prompt.
 // The old prompt's other half — steering what the summarizer keeps — was dropped
 // with no replacement. Reasoning (not measured): additionalContext on a SessionStart
 // source === "compact" fires after the compact has run, so it cannot shape the

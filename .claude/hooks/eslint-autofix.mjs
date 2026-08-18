@@ -59,9 +59,9 @@ const eslintBin = path.join(projectDir, "node_modules", "eslint", "bin", "eslint
 // path into a shell string is a command-injection surface (CodeRabbit, PR #413).
 if (!existsSync(eslintBin)) emit();
 
-// flat-cache (4.0.1) also creates this directory, in writeJSON at save time — so
-// this mkdir is a no-op in steady state. It is NOT redundant on the very first run:
-// if node_modules/.cache doesn't exist yet, this call is what creates it.
+// Redundant: flat-cache (4.0.1) creates this directory itself in writeJSON, with
+// { recursive: true }, so it covers the first run and a missing parent chain too.
+// Kept as a cheap defensive no-op, not a required step.
 const cacheLocation = path.join(projectDir, "node_modules", ".cache", "eslint-autofix");
 try { mkdirSync(path.dirname(cacheLocation), { recursive: true }); } catch { /* best effort */ }
 
