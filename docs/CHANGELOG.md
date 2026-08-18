@@ -60,6 +60,13 @@ consistent mutation reader. The hook and its read-only live companion sweep
 now classify that form, with function-insert and procedure-delete regressions.
 The focused hook suite now passes 388 assertions.
 
+The next exact-head review found a quoted-schema ACL bypass in the internal
+helper compatibility path: `GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA "public"`
+and Unicode-escaped spellings were not recognized as schema-wide grants. The
+guard now keeps every later schema-wide EXECUTE grant fail-closed rather than
+attempting to normalize an identifier whose effective target may be ambiguous.
+Quoted and Unicode-escaped regressions prove the real hook denies both forms.
+
 The next exact-head review found that a direct internal-only execute ACL could
 still become browser-reachable through a newly granted role membership. The
 guard now refuses that ambiguity anywhere in the same migration, before or

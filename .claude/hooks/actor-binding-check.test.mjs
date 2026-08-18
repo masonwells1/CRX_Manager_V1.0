@@ -2491,6 +2491,14 @@ r = runHook(`${INTERNAL_ONLY_FN}
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO authenticated;`);
 ok(isDeny(r), "a schema-wide authenticated grant cannot hide an unbound actor mutator");
 
+r = runHook(`${INTERNAL_ONLY_FN}
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA "public" TO authenticated;`);
+ok(isDeny(r), "a quoted schema-wide authenticated grant cannot hide an unbound actor mutator");
+
+r = runHook(`${INTERNAL_ONLY_FN}
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA U&"\\0070ublic" TO authenticated;`);
+ok(isDeny(r), "a Unicode-escaped schema-wide authenticated grant cannot hide an unbound actor mutator");
+
 r = runHook(proc(`
   BEGIN
   IF p_created_by IS DISTINCT FROM auth.uid() THEN

@@ -2104,7 +2104,6 @@ function routineExplicitlyNonAuthenticated(structuralSql, fromIndex, routine) {
       return false;
     }
   }
-  const [schema] = routine.name.split(".");
   const tail = structuralSql.slice(fromIndex);
   const aclHeadRe = new RegExp(
     `\\b(REVOKE\\s+ALL\\s+ON|GRANT\\s+EXECUTE\\s+ON)\\s+` +
@@ -2140,10 +2139,10 @@ function routineExplicitlyNonAuthenticated(structuralSql, fromIndex, routine) {
   }
   if (revocationEnd === -1) return false;
   const later = tail.slice(revocationEnd);
-  const schemaGrantRe = new RegExp(
-    `\\bGRANT\\s+EXECUTE\\s+ON\\s+ALL\\s+(?:FUNCTIONS|PROCEDURES|ROUTINES)\\s+IN\\s+SCHEMA\\s+${escapedRegexLiteral(schema)}\\b`,
-    "i"
-  );
+  // A quoted or Unicode-escaped schema name is deliberately not normalized
+  // here. Any later schema-wide EXECUTE grant leaves the helper's effective
+  // reachability ambiguous, so retain full actor-binding review instead.
+  const schemaGrantRe = /\bGRANT\s+EXECUTE\s+ON\s+ALL\s+(?:FUNCTIONS|PROCEDURES|ROUTINES)\s+IN\s+SCHEMA\b/i;
   if (schemaGrantRe.test(later)) return false;
   for (const statement of aclStatements) {
     if (statement.action !== "GRANT" || statement.end <= revocationEnd) continue;
