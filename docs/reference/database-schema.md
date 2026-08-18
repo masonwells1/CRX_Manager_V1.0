@@ -21,7 +21,7 @@
 - `quotes` - Quote headers (quote_number, customer_id, status, tier, totals, is_planned, expires_at, `row_version bigint`). The trigger increments the stored version on every quote update; clients use the value returned by `save_quote`, never calculate an increment. Applied live 2026-07-30 alongside the `customers` half above — same migration, same ledger version `20260730235031`.
 - `quote_sections` - Sections within a quote (section_name, sort_order, field_id)
 - `quote_items` - Line items (product_id, section_id, pricing, rates, acres, totals)
-- `quote_versions` - Frozen snapshots of sent quotes (version_number, snapshot_data jsonb)
+- `quote_versions` - Frozen snapshots of sent quotes (version_number, snapshot_data jsonb). Client-writable no longer: `20260813080000_lock_quote_versions_writes_to_rpc` (**CRX-SEC-1**) applied live as ledger version `20260816174353` and dropped the `qversions_insert` policy, leaving `qversions_select` as the only policy and `create_quote_version` as the only writer. Re-read live 2026-08-18: `has_table_privilege('authenticated', …, 'INSERT'/'UPDATE'/'DELETE')` all false. The "LOCAL ONLY pending apply" marker that stood on the RLS matrix row below was stale from that apply.
 - `quote_product_draws` - Per-(quote, product) booking draw-down ledger (quantity_drawn, UNIQUE(quote_id, product_id)). Survives quote edits (save_quote recreates quote_items); written only by `draw_down_quote`/`convert_quote_to_order` SECDEF RPCs. Added `20260610145253`
 - `quote_pdf_templates` - Saved column presets for quote PDF generation (template_name, columns jsonb)
 - `quote_templates` - Reusable quote structures (template_name, description, created_by)
@@ -198,7 +198,7 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | quote_sections | All authenticated | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) |
 | quote_product_draws | Admin / Sales Rep | - (SECDEF RPCs only) | - (SECDEF RPCs only) | - (SECDEF RPCs only) |
 | quote_items | Admin / Sales Rep | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) |
-| quote_versions | Admin / Sales Rep | Admin / Sales Rep (own quote); **LOCAL ONLY pending apply** (`20260813080000`, CRX-SEC-1): becomes `create_quote_version` RPC only | - | - |
+| quote_versions | Admin / Sales Rep | - (`create_quote_version` RPC only) | - | - |
 | orders | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | order_items | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | inventory | Admin / Sales Rep / Driver | Admin | Admin | Admin |

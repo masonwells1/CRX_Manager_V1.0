@@ -2,6 +2,48 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-18 — CRX-SEC-1 is LIVE (applied 2026-08-16); four docs corrected, and a grant claim retracted
+
+Documentation only — no app source, migration, or live-state change; every live read in this entry
+was read-only.
+
+**The apply.** `20260813080000_lock_quote_versions_writes_to_rpc` (**CRX-SEC-1**) is **APPLIED LIVE**
+as ledger version `20260816174353`. The 2026-08-14 entry below still ends `**STATUS: NOT APPLIED**`;
+that was accurate when written and is now superseded by this entry. The ledger has no timestamp
+column, so the commonly quoted 2026-08-16 17:43:53 UTC is read off the version stamp — the apply is
+observed, the clock time is inferred.
+
+**Four docs, not three.** A doc pass on 2026-08-18 found `docs/manual/CURRENT_STATE.md`,
+`docs/manual/KNOWN_ISSUES.md` and `docs/reference/migration-history.md` row 886 all still calling the
+fix an unapplied local candidate. Adversarial review then found a fourth: the RLS Policy Matrix in
+`docs/reference/database-schema.md` still listed `quote_versions` INSERT as `Admin / Sales Rep` with a
+`LOCAL ONLY pending apply` marker — the canonical "who can write what" reference asserting the exact
+inverse of live. `npm run check:docs` does not cover that row, so nothing caught it.
+
+**A grant claim retracted.** Those same docs stated as post-apply proof that `authenticated` holds
+"SELECT only" on `quote_versions` and `anon` "holds nothing". **Both are wrong.** `pg_class.relacl` is
+`{postgres=arwdDxtm/postgres,anon=m/postgres,authenticated=rm/postgres,service_role=arwdDxtm/postgres,metabase_ro=r/postgres}`
+— `authenticated` holds SELECT **and MAINTAIN**, `anon` holds **MAINTAIN**. The migration retains
+MAINTAIN deliberately and says so in its own body, so the claim contradicted the source it described.
+The cause was reading grants from `information_schema.role_table_grants`, which does not report
+MAINTAIN at all, and presenting that as a complete grant proof. **No security impact:** MAINTAIN
+permits VACUUM/ANALYZE/CLUSTER/REINDEX/LOCK and reaches no row.
+
+**The write lock itself was re-proved independently**, not inferred from the ledger row: exactly one
+policy (`qversions_select`) remains, `has_table_privilege('authenticated', …)` returns INSERT/UPDATE/
+DELETE false, the only function that inserts into the table is a postgres-owned SECURITY DEFINER with
+no `authenticated` EXECUTE, and its only caller takes **no client cost snapshot** and enforces
+`auth.uid()`, active-profile role, quote ownership and row version. No triggers, no view, no other
+writer. A sales rep cannot forge a cost basis.
+
+**Also corrected:** the `migration-history.md` header claim 885 → 886 (a high-water row number, not a
+file count — the two `check:docs` rows measure different things), both manual freshness stamps, live
+counts in `CURRENT_STATE.md` section 2, and a whole-cent money re-measure showing 2 dirty rows where
+43 were recorded. That re-measure opened a new tracked item: **stored commission money changed on live
+with no identified cause** — see `docs/manual/KNOWN_ISSUES.md`. `20260813080000`'s own first line still
+reads `-- STATUS: NOT APPLIED`; that header is stale and is deliberately left alone, because CRX Manager
+never edits an applied migration.
+
 ## 2026-08-18 — session-staleness backup check now consults the real off-site workflow
 
 Harness only — no app source, migration, or live-state change. The SessionStart backup-staleness
