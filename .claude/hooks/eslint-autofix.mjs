@@ -57,7 +57,8 @@ const eslintBin = path.join(projectDir, "node_modules", "eslint", "bin", "eslint
 // path into a shell string is a command-injection surface (CodeRabbit, PR #413).
 if (!existsSync(eslintBin)) emit();
 
-// ESLint does not create the cache file's parent directory itself.
+// ESLint's flat-cache actually creates this directory itself; mkdir here is a
+// harmless no-op safety net, not a required step.
 const cacheLocation = path.join(projectDir, "node_modules", ".cache", "eslint-autofix");
 try { mkdirSync(path.dirname(cacheLocation), { recursive: true }); } catch { /* best effort */ }
 

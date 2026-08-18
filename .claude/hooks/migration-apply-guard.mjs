@@ -14,8 +14,8 @@
 // The file is written by Claude after subagents return clean. Without it, this
 // hook blocks the apply_migration call with explicit instructions.
 //
-// Setup matcher: this hook is registered against matcher "*" and filters
-// in-script for tool names containing "apply_migration".
+// Setup matcher: this hook is registered against matcher "mcp__.*" (narrowed
+// 2026-08-18) and filters in-script for tool names containing "apply_migration".
 
 import { readFileSync, existsSync, readdirSync, statSync, mkdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";

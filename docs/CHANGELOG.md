@@ -20,29 +20,37 @@ approved by Mason as Phase 1:
 2. **Dead prompt hooks replaced.** The PreCompact money/RLS re-anchor and SessionStart onboarding
    were `"type": "prompt"` hooks, which fail outside the interactive REPL ("Prompt stop hooks are
    not yet supported outside REPL") — both silently dead in the desktop harness. New
-   `session-context-reminder.mjs` command hook emits the same content via SessionStart
-   `additionalContext`, branching on source (`compact` → rule re-anchor; otherwise onboarding).
-   Declared in `CLAUDE_ONLY_HOOKS` (Codex has no SessionStart event).
+   `session-context-reminder.mjs` command hook emits content via SessionStart `additionalContext`,
+   branching on source (`compact` → rule re-anchor; otherwise onboarding). This carries only the
+   rules half of the old PreCompact prompt forward; its other half — REPL-only guidance steering
+   the auto-compact summarizer to list open files/migrations/build status in its summary — had no
+   command-hook equivalent and was dropped with no replacement. Declared in `CLAUDE_ONLY_HOOKS`
+   (Codex has no SessionStart event).
 3. **worktree-cleanup fetch TTL.** Its `git fetch origin` now runs at most once per 30 minutes
    (FETCH_HEAD mtime); a stale `origin/main` only makes the merged-branch classifier more
    conservative.
-4. **eslint-autofix direct + cached.** Invokes the project's local eslint binary with `--cache`
-   instead of `npx` (warm runs ~1.2s, verified); a timeout kill now stays silent instead of
-   reporting a fake lint failure. Post-review (CodeRabbit on PR #413): the npx fallback was
-   removed entirely — it interpolated the edited file's path into a shell string (injection
-   surface); with no local eslint the hook now skips silently. The cache directory is created
-   before the run so a fresh checkout doesn't error.
+4. **eslint-autofix direct + cached.** Invokes the project's local eslint binary directly instead
+   of through `npx` — dropping npx's re-resolve is the actual source of the speedup (~1.2s warm,
+   verified), since this hook always runs on a file that was just edited, so `--cache`'s mtime
+   check can never hit in practice; `--cache` is passed for when the hook is invoked outside that
+   always-just-edited path. A timeout kill now stays silent instead of reporting a fake lint
+   failure. Post-review (CodeRabbit on PR #413): the npx fallback was removed entirely — it
+   interpolated the edited file's path into a shell string (injection surface); with no local
+   eslint the hook now skips silently. The hook creates the cache directory defensively, though
+   ESLint's flat-cache creates it too.
 5. **PreToolUse matcher narrowing.** `migration-apply-guard`, `mcp-tool-guard`, and
    `live-testdata-guard` moved to the `mcp__.*` matcher; `pr-merge-guard` to
    `Bash|PowerShell|mcp__.*`; `review-proof-guard`, `hold-latch-guard`, and
    `unattended-autopilot` stay on `*` because they must see every call. Patterns chosen to work
    under both anchored and unanchored matcher-regex semantics.
 
-Verified: `sync-agent-workflows --write`, `test:agent-workflows` (all pass, parity included),
-`agent-health` (pass), plus manual stdin runs of the new/changed hooks (compact/startup/garbage
-payloads; dry-run cleanup; eslint cold vs warm). Residual risk stated in the PR: the narrowed
-matchers themselves cannot fire in the session that edits them (hook config loads at session
-start); a safe next-session mutation test is documented there.
+Verified: `sync-agent-workflows --write`, `test:agent-workflows` (all pass, parity included), plus
+manual stdin runs of the new/changed hooks (compact/startup/garbage payloads; dry-run cleanup;
+eslint cold vs warm). `agent-health` was NOT clean at review time — it reports pre-existing CRLF
+line-ending drift on 4 `.agents/skills` files inherited from PR #102, unrelated to this change;
+that drift is still open. Residual risk stated in the PR: the narrowed matchers themselves cannot
+fire in the session that edits them (hook config loads at session start); a safe next-session
+mutation test is documented there.
 
 ## 2026-08-17 — Codex fleet inventory preserved; two CI-signal traps recorded
 
