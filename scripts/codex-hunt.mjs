@@ -78,7 +78,9 @@ function resolveCodex() {
 const codex = resolveCodex()
 // Prompt goes on STDIN (codex reads instructions from stdin when no positional
 // prompt is given), so there is no argv length limit.
-const args = ['exec', '--ignore-user-config', '--sandbox', 'read-only', '--ephemeral', '-C', repoRoot]
+// Model is pinned to the read-only spark hunter — `--ignore-user-config` drops any
+// workstation default, so an unpinned run would fall to the CLI's built-in model.
+const args = ['exec', '--ignore-user-config', '--model', 'gpt-5.3-codex-spark', '--sandbox', 'read-only', '--ephemeral', '-C', repoRoot]
 
 const res = spawnSync(codex, args, {
   input: prompt,                         // prompt via stdin — no argv length cap

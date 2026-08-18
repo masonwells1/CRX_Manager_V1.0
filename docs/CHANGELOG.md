@@ -2,6 +2,33 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-18 — Skills/commands accuracy sweep: ~50 stale facts fixed across the agent workflow surface
+
+Harness only — no app source, migration, or live-state change. A four-agent audit of every
+`.claude/skills/` and `.claude/commands/` file (plus the global handoff/new-project skills) found
+~60 findings; all approved fixes are applied. Highlights:
+
+- **Landing mechanics current everywhere:** `/ship`, `/deploy-check`, `/codex-gauntlet`, and the
+  review-family files now all state the post-2026-07-30 chain — branch → PR → Vercel check →
+  **read and resolve CodeRabbit's review** → merge — and the hands-free-migration carve-outs
+  reference the settled 2026-07-13 policy instead of contradicting it.
+- **Model pins:** `scripts/codex-hunt.mjs` now pins `gpt-5.3-codex-spark` explicitly (was falling
+  to the CLI default under `--ignore-user-config`); codex-cross-review's template pins
+  `gpt-5.6-sol`/high with an exact SHA; the global handoff skill no longer claims Codex cannot
+  reach the live DB (its Supabase connector is write-enabled, 2026-08-14).
+- **Renamed/stale tool references:** Supabase `get_logs` → `query_logs` (settings allowlist +
+  deploy-edge-function + spot-check-prod); hard-coded connector UUID prefixes replaced with
+  suffix-resolution; `moddatetime` trigger template replaced with the house
+  `public.update_updated_at()` in create-migration/explain-migration.
+- **Registry/review accuracy:** regen-schema-registry now checks registry_version 2 and all
+  8 top-level keys; review prompts ask for EVERY finding with filtering moved to reconciliation;
+  migration-review gained the post-apply Step 5 (smoke chains, registry refresh, sweeps);
+  backup-db documents both backup evidence channels.
+- Codex adapters regenerated (`sync-agent-workflows --write`, 37 files) and
+  `npm run test:agent-workflows` green (30 PASS). A handful of proposed wordings that would have
+  added carve-outs to hard safety-gate approval lines were deliberately NOT applied — the stricter
+  existing text stands.
+
 ## 2026-08-18 — session-staleness backup check now consults the real off-site workflow
 
 Harness only — no app source, migration, or live-state change. The SessionStart backup-staleness

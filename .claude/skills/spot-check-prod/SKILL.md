@@ -30,14 +30,15 @@ Notes:
 
 ## Step 2: Supabase — security & performance advisors
 
-Run both in parallel via Supabase MCP:
+Run both in parallel via Supabase MCP. Like the other connectors, resolve the tool by **name
+suffix** (`get_advisors`) — never hard-code the UUID prefix; a reinstall rebinds it:
 
 ```
-mcp__50e15046-cf2c-49da-b8df-ceef27768f63__get_advisors
+mcp__<supabase>__get_advisors
   project_id: rhyzpcqhnizqbxphqdkr
   type: security
 
-mcp__50e15046-cf2c-49da-b8df-ceef27768f63__get_advisors
+mcp__<supabase>__get_advisors
   project_id: rhyzpcqhnizqbxphqdkr
   type: performance
 ```
@@ -95,21 +96,24 @@ plugin is disabled.
 For each Edge Function in `supabase/functions/`, check live version:
 
 ```
-mcp__50e15046-cf2c-49da-b8df-ceef27768f63__list_edge_functions
+mcp__<supabase>__list_edge_functions
   project_id: rhyzpcqhnizqbxphqdkr
 ```
 
 Capture each function name, current live version, last update timestamp. Compare against the
-version references in `docs/manual/CURRENT_STATE.md` (e.g. "send-email v11") — flag any that
-drifted. Do not look for these in `CLAUDE.md`; that section moved.
+version references in `docs/manual/CURRENT_STATE.md` (e.g. "send-email v11") — flag drift only
+for functions whose version CURRENT_STATE.md actually records; a function with no recorded
+version is not drift. Do not look for these in `CLAUDE.md`; that section moved.
 
 ## Step 5: Recent Supabase logs (5min scan)
 
 ```
-mcp__50e15046-cf2c-49da-b8df-ceef27768f63__get_logs
+mcp__<supabase>__query_logs
   project_id: rhyzpcqhnizqbxphqdkr
   service: api
 ```
+
+(The tool was previously named `get_logs`; resolve by suffix if the connector still exposes the old name.)
 
 Scan for any error-level events in the last 5 minutes. Don't dump the whole log — count, and surface the top 3 distinct error messages.
 

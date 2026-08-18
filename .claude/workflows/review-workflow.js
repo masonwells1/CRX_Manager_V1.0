@@ -132,7 +132,7 @@ const LAYERS = [
       `Layer B — Lifecycle / state-machine integrity. ${GROUND_RULE}\n\n` +
       `For each entity — Quote, Order, Delivery, Invoice, Job, PurchaseOrder, Return, BlendTicket, Commission, CommissionPayment — do a 4-way reconciliation:\n` +
       `1. Live CHECK constraint (query via Supabase MCP): SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='<table>'::regclass AND contype='c';\n` +
-      `2. CLAUDE.md documented lifecycle.\n` +
+      `2. The documented lifecycle (docs/manual/ARCHITECTURE.md and docs/reference/database-schema.md).\n` +
       `3. The map SVG in docs/app-workflow-map.html.\n` +
       `4. The statuses the actual transition RPCs move between.\n\n` +
       `Flag where these four disagree. Hunt for: ghost states (a status set in code/RPC that is NOT in the live CHECK — would crash); orphan states (a CHECK value no RPC reaches); undocumented lifecycles; and status string drift ('void' vs 'voided', 'pending' vs 'requested' for returns).\n\n` +

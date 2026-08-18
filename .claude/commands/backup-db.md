@@ -1,6 +1,6 @@
 Run a full read-only backup of the live CRX Supabase database (project `rhyzpcqhnizqbxphqdkr`) into dated JSON files under `backups/`. The Supabase project is on the FREE plan — there is **no point-in-time recovery**, so this weekly dump is the only restorable copy of production data.
 
-Mason does not type this command name. Run this flow when the weekly scheduled backup session starts, or when he says anything like: "back up the database", "backup the db", "make a backup", "run the backup". (If he asks "is my data backed up?", just read `backups/LATEST-OK.json` and report its `completed_at` / table / row counts — no new backup needed.)
+Mason does not type this command name. Run this flow when the weekly scheduled backup session starts, or when he says anything like: "back up the database", "backup the db", "make a backup", "run the backup". (If he asks "is my data backed up?", check BOTH channels — this local dump's `backups/LATEST-OK.json` AND the "Off-site DB backup" GitHub Action in the private `masonwells1/CRX_Backups` repo — and report the **newest** successful one; the staleness hook already consults the off-site workflow, so a fresh off-site run counts even when the local marker is old. No new backup needed just to answer the question.)
 
 **Read-only guarantee:** every database call in this flow is a `SELECT` via the Supabase MCP `execute_sql`. Never any INSERT/UPDATE/DELETE/DDL. No service keys ever land on disk — the MCP holds the credentials; the script (`scripts/backup-db.mjs`) has no DB access at all.
 
@@ -45,7 +45,7 @@ The script: verifies every dump parses as a row array, FAILS on a table-count mi
 ### 5. Confirm
 
 - Exit code 0.
-- `backups/LATEST-OK.json` exists with today's `completed_at`. (This is the marker `session-staleness.mjs` watches — a stale or missing marker warns every new session.)
+- `backups/LATEST-OK.json` exists with today's `completed_at`. (This marker is one of the two evidence sources `session-staleness.mjs` consults — the other is the "Off-site DB backup" GitHub Action in `masonwells1/CRX_Backups`; the hook warns only when BOTH are stale.)
 
 ### 6. Report — one line, plain English
 

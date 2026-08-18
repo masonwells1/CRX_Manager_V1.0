@@ -12,7 +12,7 @@ Mason does not type this command name. Treat plain-English requests like these a
 | **Hunts** the bugs | Claude (Workflow) | **Codex** — `scripts/codex-hunt.mjs`, read-only |
 | **Confirms** a finding is real | Codex (finding-gate) | **Claude** — verifies against the LIVE DB + code, refutes false positives |
 | **Writes** the fix | Claude | **Claude** — through the project's seatbelt hooks |
-| **Reviews** the finished fix | Codex (fix-gate) | **Codex** — `scripts/codex-hunt.mjs` fix-glance |
+| **Reviews** the finished fix | Codex (fix-gate) | **Codex** — `scripts/overnight-codex-gate.mjs` fix-glance (Sol/high) |
 
 **Independence is preserved on BOTH ends:** the model that *finds* (Codex) is not the model that *verifies* (Claude); the model that *writes* the fix (Claude) is not the model that *reviews* it (Codex). Codex's read-only sandbox cannot reach the live database, so Codex hunts against repo + migration files and **Claude does the live-DB grounding** — the two halves are complementary, not redundant.
 
@@ -61,7 +61,7 @@ mkdir -p .claude/session-state
 Then read `docs/audits/codex-driven-bug-hunt/{LEDGER.json,PHASE-PLAN.md}` (create them if absent). Pick the next undrained subsystem slice; decide this cycle's 1–3 keys. **Release `$LOCK` when the loop stops.**
 
 ### Step 1 — CODEX HUNTS (the driver step)
-Write the hunt prompt for this slice to a file, then run Codex read-only as the hunter:
+Write the hunt prompt for this slice to a file, then run Codex read-only as the hunter (the wrapper pins the read-only spark hunter model `gpt-5.3-codex-spark` — with `--ignore-user-config` an unpinned run would fall to the CLI's built-in default):
 ```bash
 mkdir -p .claude/session-state
 cat > .claude/session-state/codex-hunt-prompt.txt <<'EOF'
@@ -106,8 +106,9 @@ git add <the-fix's-files>
 git diff --quiet -- docs/app-workflow-map.html || git add docs/app-workflow-map.html   # stage the map IFF this fix changed it
 git status --porcelain                       # the staged set MUST equal what the commit will contain
 { echo "Review this staged diff for the CRX codex-driven hunt. It must fully fix: <finding>. Judge correctness + money / idempotency / actor / lifecycle bugs + whether it introduces a NEW bug. Output 'VERDICT: SHIP' or 'VERDICT: NEEDS-WORK — <reason>'. Diff:"; git diff --cached; } > .claude/session-state/codex-fix-glance-prompt.txt
-# Same HARDENED, isolated wrapper as the hunt (--ignore-user-config, read-only). stdout = verdict, stderr = trace.
-node scripts/codex-hunt.mjs .claude/session-state/codex-fix-glance-prompt.txt --timeout 600 \
+# Adversarial review gate — use the Sol/high gate wrapper (pins gpt-5.6-sol at high effort,
+# --ignore-user-config, read-only), NOT the spark hunter wrapper. stdout = verdict, stderr = trace.
+node scripts/overnight-codex-gate.mjs .claude/session-state/codex-fix-glance-prompt.txt --timeout 600 \
   > .claude/session-state/codex-fix-glance-latest.txt 2> .claude/session-state/codex-fix-glance-trace.txt
 [ $? -ne 0 ] && echo "Codex fix-glance run FAILED — treat as NEEDS-WORK; do NOT commit."
 cat .claude/session-state/codex-fix-glance-latest.txt
@@ -132,7 +133,7 @@ Add one prevention action, strongest first: a **regression test that FAILS on th
 
 ## Morning handoff (what Mason reads)
 
-`REPORT.md`, top to bottom: per cycle — what **Codex found**, what **Claude confirmed vs refuted**, what was **auto-fixed** (green — already committed, Codex-reviewed, green toolchain), and what's **parked** (yellow — plain-English explanation + validation proof + Codex note). Nothing needs rolling back — every green fix is a local commit on a non-prod branch; one `git merge` lands the ones he likes.
+`REPORT.md`, top to bottom: per cycle — what **Codex found**, what **Claude confirmed vs refuted**, what was **auto-fixed** (green — already committed, Codex-reviewed, green toolchain), and what's **parked** (yellow — plain-English explanation + validation proof + Codex note). Nothing needs rolling back — every green fix is a local commit on a non-prod branch; one PR from the hunt branch (Vercel check + CodeRabbit review) lands the ones he likes.
 
 ## Final response each cycle (keep it short for Mason)
 
