@@ -2,6 +2,23 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-18 — session-staleness backup check now consults the real off-site workflow
+
+Harness only — no app source, migration, or live-state change. The SessionStart backup-staleness
+warning was driven solely by the per-checkout `backups/LATEST-OK.json` marker, which only a
+locally-run `/backup-db` stamps — the scheduled backup runs as the "Off-site DB backup" GitHub
+Actions workflow in `masonwells1/CRX_Backups` and never touches that file, so every fresh worktree
+cried "backup died" (2026-08-18: claimed 9 days stale while the workflow had succeeded on schedule
+on 2026-08-16 and again on 2026-08-18).
+
+The check now uses two evidence sources, newest wins: the local marker and the workflow's last
+successful run via `gh run list` — consulted only when the marker alone would alarm, with a 1.5s
+timeout and a per-USER temp-dir cache (6h TTL on success, 10min on failure) so the hook stays
+inside its ~2s budget and one answer serves the whole worktree fleet. When `gh` is unreachable
+(offline/unauthenticated) the marker-only warning still fires, explicitly labeled unverified.
+Six new offline-deterministic test cases (seeded cache + bogus `gh` binary) cover the veto, the
+real-alarm, the fallback, both TTL directions, and the never-succeeded answer.
+
 ## 2026-08-18 — Hook performance cleanup (Phase 1): matcher gating, dead prompt hooks replaced, eslint/fetch speedups
 
 Harness only — no app source, migration, or live-state change. No guard logic changed; every
