@@ -2,6 +2,29 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-18 — pre-push private-artifact scan no longer ENOBUFS on nested worktrees
+
+Harness only — no app source, migration, or live-state change. Every `git push` from
+`C:\CRX_Manager` was failing at the pre-push hook with `spawnSync git ENOBUFS`. Unlike pre-commit
+mode, pre-push mode enumerates ignored files repo-wide, and with 16+ session worktrees nested
+under `.claude/worktrees/`, a stale/orphaned sibling directory Git no longer registers (removed
+by hand instead of `git worktree remove`) gets fully recursed into instead of collapsed to one
+line like a live registered worktree — its dependency tree alone was 88MB of ignored-file output,
+overflowing the 64MB Git output buffer.
+
+`check-supplier-pricing-phase3-private-artifacts.mjs` now excludes only the specific tool-owned
+bulk directory names (`node_modules`, `dist`, etc.) nested under a verified worktree's own parent
+directory, scoped narrowly via a real Git pathspec built from `git worktree list`. Non-bulk
+content sitting in an orphaned worktree directory, and any same-named decoy directory outside a
+worktree container, remains fully scanned — the existing anti-decoy containment design (only
+top-level-named generated roots are tool-owned) is unchanged. `GIT_OUTPUT_MAX_BUFFER` was not
+raised — moving the cliff wasn't the fix.
+
+Added a regression test reproducing a stale sibling worktree with a large ignored dependency
+tree. Reproduced the original ENOBUFS crash and confirmed the fix against the real
+`C:\CRX_Manager` checkout (53,850 paths, ~1GB scanned, no crash) via direct invocation of the
+same `--pre-push` code path the hook calls.
+
 ## 2026-08-18 — session-staleness backup check now consults the real off-site workflow
 
 Harness only — no app source, migration, or live-state change. The SessionStart backup-staleness
