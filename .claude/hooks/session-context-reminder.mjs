@@ -12,10 +12,12 @@
 // and is absent from .codex/hooks.json; verified on the desktop harness 2026-08-18).
 // Only the old PreCompact re-anchor's rules half was carried forward here (as
 // COMPACT_REANCHOR, fired on source === "compact"), and not verbatim: the old
-// lead-in was replaced by the "POST-COMPACT RULE RE-ANCHOR" header, some wording
-// differs, and the "treat files changed before the compact as UNVERIFIED" rule is
-// new here, with no ancestor in the old prompt.
-// The old prompt's other half — steering what the summarizer keeps — was dropped
+// prompt's "Always include these reminders:" connective became the "POST-COMPACT
+// RULE RE-ANCHOR" header, .update/.delete gained parentheses, one semicolon became
+// a period, and the "treat files changed before the compact as UNVERIFIED" rule is
+// new here, with no ancestor in the old prompt. Otherwise the rules text is
+// carried over byte-for-byte.
+// The old prompt's other half — its opening summarizer instruction — was dropped
 // with no replacement. Reasoning (not measured): additionalContext on a SessionStart
 // source === "compact" fires after the compact has run, so it cannot shape the
 // summary. The repo records no test of whether a PreCompact *command* hook could

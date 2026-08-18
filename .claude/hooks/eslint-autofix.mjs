@@ -60,8 +60,8 @@ const eslintBin = path.join(projectDir, "node_modules", "eslint", "bin", "eslint
 if (!existsSync(eslintBin)) emit();
 
 // Redundant: flat-cache (4.0.1) creates this directory itself in writeJSON, with
-// { recursive: true }, so it covers the first run and a missing parent chain too.
-// Kept as a cheap defensive no-op, not a required step.
+// { recursive: true }, so the first run is covered too. Kept as a cheap defensive
+// call; nothing downstream depends on it.
 const cacheLocation = path.join(projectDir, "node_modules", ".cache", "eslint-autofix");
 try { mkdirSync(path.dirname(cacheLocation), { recursive: true }); } catch { /* best effort */ }
 

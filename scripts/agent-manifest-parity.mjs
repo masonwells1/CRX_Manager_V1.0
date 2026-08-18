@@ -10,8 +10,7 @@
 // or add it to CLAUDE_ONLY_HOOKS / CODEX_ONLY_HOOKS below with the reason. The
 // check can't be satisfied by accident.
 
-// Claude-only hooks (NOT wired for Codex), each with why — or, where the repo
-// records no rationale, an explicit note saying so rather than an invented motive:
+// Deliberately Claude-only hooks (NOT wired for Codex), each with why:
 export const CLAUDE_ONLY_HOOKS = new Set([
   // Codex has its OWN production guard (.codex/hooks/production-action-guard.mjs)
   // that covers pushes AND PR merges, so Codex doesn't wire Claude's push/merge
@@ -29,14 +28,14 @@ export const CLAUDE_ONLY_HOOKS = new Set([
   "session-heartbeat.mjs",
   // SessionStart context injection (post-compact money/RLS re-anchor + session
   // onboarding) replaces the former prompt-type hooks, which fail outside the
-  // REPL. NOTE: the reason recorded here before PR #414 — "Codex has no SessionStart
-  // event" — was false. .codex/hooks.json registers a SessionStart group
-  // (session-snapshot.mjs, session-staleness.mjs, worktree-awareness.mjs), so the
-  // event is wired on that side; what the Codex harness does with that registration,
-  // including whether it consumes additionalContext, is not verified here.
-  // REASON NOT RECORDED (PR #414): nothing in the repo
-  // says why this hook was never wired for Codex. Left Claude-only pending an owner
-  // decision rather than asserting an invented motive.
+  // REPL. The note recorded here before PR #414 read: "Codex has no SessionStart
+  // event; its contract comes from AGENTS.md." The first clause is false —
+  // .codex/hooks.json registers a SessionStart group (session-snapshot.mjs,
+  // session-staleness.mjs, worktree-awareness.mjs), so the event is wired on that
+  // side; what the Codex harness does with that registration, including whether it
+  // consumes additionalContext, is not verified here. The second clause stands as
+  // recorded (AGENTS.md is the shared contract for every agent), but nothing
+  // establishes it as the operative reason for leaving this hook Claude-only.
   "session-context-reminder.mjs",
 ]);
 

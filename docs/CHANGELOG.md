@@ -43,20 +43,23 @@ approved by Mason as Phase 1:
    not yet supported outside REPL") — both silently dead in the desktop harness. New
    `session-context-reminder.mjs` command hook emits content via SessionStart `additionalContext`,
    branching on source (`compact` → rule re-anchor; otherwise onboarding). It carries the rules
-   half of the old PreCompact prompt forward — not verbatim: the lead-in and some wording differ,
+   half of the old PreCompact prompt forward — not verbatim: the old "Always include these
+   reminders:" lead-in became a "POST-COMPACT RULE RE-ANCHOR" header, `.update/.delete` gained
+   parentheses and one semicolon became a period,
    and it adds one rule with no ancestor in the old prompt ("treat files changed
    before the compact as UNVERIFIED unless the summary says they were run and observed"). The old
    prompt's other half asked the summarizer to cover "files modified this session; migrations
    created (and whether src/types/index.ts was updated); current task and next step; last
    build/test status" — that half was dropped with no replacement. The repo doesn't record why, and
    it records no test of whether a PreCompact *command* hook could have carried it. Declared in
-   `CLAUDE_ONLY_HOOKS`. The reason recorded alongside that declaration was
-   "Codex has no SessionStart event" — that is false: `.codex/hooks.json` registers three SessionStart hooks
+   `CLAUDE_ONLY_HOOKS`. The note recorded alongside that declaration read "Codex has no
+   SessionStart event; its contract comes from AGENTS.md." The first clause is false:
+   `.codex/hooks.json` registers three SessionStart hooks
    (`session-snapshot`, `session-staleness`, `worktree-awareness`), two of which
    (`session-staleness`, `worktree-awareness`) emit `additionalContext` in the same output shape
    this hook does — the registration is verified; whether the Codex harness consumes that
-   `additionalContext` is not. Why this hook was never wired for Codex isn't recorded anywhere in
-   the repo, so no replacement reason is asserted here.
+   `additionalContext` is not. The second clause stands as recorded, but nothing establishes it as
+   the operative reason for leaving this hook Claude-only.
 3. **worktree-cleanup fetch TTL.** Its `git fetch origin` now runs at most once per 30 minutes
    (FETCH_HEAD mtime); a stale `origin/main` only makes the merged-branch classifier more
    conservative.
@@ -81,12 +84,13 @@ approved by Mason as Phase 1:
    matcher; `pr-merge-guard` to `Bash|PowerShell|mcp__.*`; `review-proof-guard`, `hold-latch-guard`,
    and `unattended-autopilot` stay on `*` because they must see every call. Patterns chosen to work
    under both anchored and unanchored matcher-regex semantics. `.codex/hooks.json` was not touched
-   by this pass, so three *PreToolUse* guards now diverge across the two harnesses (item 1 adds
+   by this pass, so three *PreToolUse* guards are wired on different matchers across the two
+   harnesses (item 1 adds
    three more on SessionStart, for six total): `migration-apply-guard`,
    `mcp-tool-guard`, and `live-testdata-guard` are narrowed to `mcp__.*` for Claude but still run on
    `*` for Codex, where only the shared in-script tool-name filter narrows them. (`review-proof-guard`
    and `hold-latch-guard` are wired in `.codex/hooks.json` too, but they sit on `*` in both manifests
-   by design — no divergence.) `pr-merge-guard` and `unattended-autopilot` aren't wired in
+   by design — no matcher difference.) `pr-merge-guard` and `unattended-autopilot` aren't wired in
    `.codex/hooks.json` at all — both are declared Claude-only in `scripts/agent-manifest-parity.mjs`,
    for two different reasons recorded there: Codex has its own merge guard
    (`production-action-guard.mjs`, covering pushes and PR merges), whereas autopilot is a
@@ -95,8 +99,8 @@ approved by Mason as Phase 1:
    hook.) Either way, the narrowing question doesn't apply to them there.
 
 Verified: `sync-agent-workflows --write`, `test:agent-workflows` (all pass, parity included), plus
-manual stdin runs of the new/changed hooks (compact/startup/garbage payloads; dry-run cleanup;
-eslint cold vs repeat run). Residual risk stated in
+manual stdin runs of the new/changed hooks (compact/startup/garbage payloads; dry-run cleanup).
+Residual risk stated in
 the PR: the narrowed matchers themselves cannot fire in the
 session that edits them (hook config loads at session start); a safe next-session mutation test is
 documented there.
