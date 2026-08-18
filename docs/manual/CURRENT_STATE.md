@@ -1,8 +1,10 @@
 # CRX Manager — Current State
 
-**Last verified:** 2026-08-12 UTC, post-apply Customer 360 release check. The live ledger has 962 rows and ends at `20260812003315`, carrying submitted migration name `20260811230423_log_customer_sales_rep_assignment`. It re-emits the approved Customer 360 assignment RPC to advance `customers.updated_at` and write one customer-scoped activity row in the same atomic transaction. Live catalog proof found one overload, `SECURITY DEFINER`, `search_path=public, pg_temp`, `postgres` ownership, no PUBLIC/anon EXECUTE, and authenticated/service access; the active-admin, target-lock, exact-set, audit-count, and payload-bound replay guards are present in the stored body. The schema registry was genuinely refreshed from all six live introspection queries through this 962-row high-water. No table, column, enum, generated column, function signature, or public-function-name count changed, so generated Supabase types and the 566-name `pg_proc` fixture remain structurally current and only their verification stamp advances. Team Board deployment details below remain current; operational counts below remain the separately dated 2026-07-18 snapshot.
+**Last verified:** 2026-08-18 UTC, read-only live re-read of the ledger, the `quote_versions` write surface, the return-idempotency helper contract, and the section 2 counts. **The live ledger has 971 rows.** Its highest `version` is `20260816174353`, carrying submitted migration name `20260813080000_lock_quote_versions_writes_to_rpc`, which is also the highest `name` stamp — so both orderings agree on the same row. That migration (**CRX-SEC-1**, history row 886) applied live on 2026-08-16 at 17:43:53 UTC and is the security fix that closes the client-writable path into `public.quote_versions`; a doc pass on 2026-08-18 found this document, `KNOWN_ISSUES.md`, and history row 886 all still describing it as an unapplied local candidate, and that is corrected here. Post-apply live proof: `quote_versions` carries exactly one policy, `qversions_select`, and `authenticated` holds **SELECT only** on the table. The migration immediately before it, `20260813070000_pin_return_idempotency_helper_contract` (ledger `20260813011751`), is assertion-only — it changes no table, function body or business row — and its contract still holds live: `check_idempotency_intent` has exactly one public overload, is `postgres`-owned `SECURITY DEFINER` on `search_path=public, pg_temp`, with no anon/authenticated/service_role EXECUTE. `.claude/schema-registry.json` was regenerated from live introspection on 2026-08-16 and records `migrations_high_water` `20260816174353`, so the registry matches this ledger high-water and was **not** re-derived in this pass. The section 2 operational counts below were re-read live on 2026-08-18 and are restamped.
 
-**Wave A — six migrations are PARKED DRAFTS (STAGED), NOT APPLIED.** As of PR #393 (2026-08-13) the six Wave A files live at `scripts/.staging-migrations/20260813010000`–`20260813060000` — moved **out** of `supabase/migrations/` so nothing can replay them. Their `20260813` stamps are **no longer forward of live**: a concurrent 2026-08-13 apply carries ledger name stamp `20260813070000`, ahead of the whole parked range, so the Phase 2 governed apply must restamp all six against the then-current high-water before applying (content is what the sha256 pins bind; the stamps are expected to change). They are **not applied**; no statement in this document describes state they created. Each is pinned byte-for-byte by a SQL sha256 in `docs/reference/migration-history.md` rows 872–877. They apply only through the Phase 2 governed apply pipeline with fresh proofs; the older `20260811…` copies on branch `claude/wave-a-money` are superseded.
+**Superseded 2026-08-12 header, kept for provenance:** the ledger then had 962 rows and ended at `20260812003315`, carrying submitted migration name `20260811230423_log_customer_sales_rep_assignment`. It re-emits the approved Customer 360 assignment RPC to advance `customers.updated_at` and write one customer-scoped activity row in the same atomic transaction. Live catalog proof found one overload, `SECURITY DEFINER`, `search_path=public, pg_temp`, `postgres` ownership, no PUBLIC/anon EXECUTE, and authenticated/service access; the active-admin, target-lock, exact-set, audit-count, and payload-bound replay guards are present in the stored body. The schema registry was genuinely refreshed from all six live introspection queries through this 962-row high-water. No table, column, enum, generated column, function signature, or public-function-name count changed, so generated Supabase types and the 566-name `pg_proc` fixture remain structurally current and only their verification stamp advances. Team Board deployment details below remain current. (That paragraph's closing claim that the operational counts were a 2026-07-18 snapshot is superseded — see the 2026-08-18 header above and the restamped table in section 2.)
+
+**Wave A — six migrations are PARKED DRAFTS (STAGED), NOT APPLIED.** As of PR #393 (2026-08-13) the six Wave A files live at `scripts/.staging-migrations/20260813010000`–`20260813060000` — moved **out** of `supabase/migrations/` so nothing can replay them. Their `20260813` stamps are **no longer forward of live**: live now carries ledger name stamps `20260813070000` and `20260813080000` (re-read 2026-08-18), both ahead of the whole parked `20260813010000`–`20260813060000` range, so the Phase 2 governed apply must restamp all six against the then-current high-water before applying (content is what the sha256 pins bind; the stamps are expected to change). They are **not applied**; no statement in this document describes state they created. Each is pinned byte-for-byte by a SQL sha256 in `docs/reference/migration-history.md` rows 872–877. They apply only through the Phase 2 governed apply pipeline with fresh proofs; the older `20260811…` copies on branch `claude/wave-a-money` are superseded.
 
 **2026-08-10 live re-read, second read — the source gap it reported is now CLOSED.** That read recorded live ledger high-water **`20260810235207`**, **958 ledger rows / 951 distinct names**; an earlier read the same day, taken right after this session's three applies, showed `20260810155629` / 957 rows, a fourth migration having landed live from a concurrent session in between. Of the earlier `20260810` rows, `20260810000427` is the version Supabase assigned to merged file `20260809230500_single_canonical_line_profit.sql` (history row 862). That read also flagged two live rows as having no file in `origin/main`: `20260810025159_backfill_stale_line_profit` and `20260810235207` / name `20260810183629_reconcile_pending_commission_snapshots`, the latter having existed nowhere in git at all despite already having mutated real commission money — it was recovered byte-for-byte from `supabase_migrations.schema_migrations.statements` on 2026-08-10 (live md5 `b14d3dd7f8c5aa8fecd0549886d8bbb3`). **Both files are now present on `origin/main`, verified by `git ls-tree` on 2026-08-11**, so `supabase/migrations/` is once again a complete reconstruction source for that date. Full per-column conformance figures and the recovery detail are in `docs/manual/KNOWN_ISSUES.md` under the same date.
 
@@ -84,25 +86,42 @@ below.
 ## 2. Live operational snapshot
 
 Read-only counts against the live database (project `rhyzpcqhnizqbxphqdkr`),
-**re-read 2026-08-09** (from that day's off-site backup manifest plus two direct
-read-only queries). These age immediately — re-run before relying on them.
+**re-read 2026-08-18** by direct read-only query (the previous stamp was
+2026-08-09). These age immediately — re-run before relying on them.
 
 | Table | Count | Notes |
 |---|---|---|
 | customers | 153 | unchanged since 2026-07-12 |
 | products | 604 | unchanged since 2026-07-12 |
 | fields | 5 | field mapping/per-acre billing shipped, but growers not yet loaded in bulk |
-| quotes | 4 | |
-| orders | 65 | was 64 on 2026-07-18 |
-| invoices | 13 | 9 draft / 2 posted / 1 paid / 1 unposted |
-| payments | 0 | **dead legacy table, zero writers** — real payments live in `allocation_sets` (1) / `prepay_credits` (1) |
-| order_items | 288 | 46 of these carry sub-cent `total_price`/`profit` — see history rows 860–861 |
-| commissions | 35 | 3 carry sub-cent `commission_amount`, incl. a $5,245.195 pending payout |
-| jobs | 4 | |
-| deliveries | 108 | deliveries are the most-used transactional surface |
+| quotes | 4 | unchanged |
+| orders | 65 | was 64 on 2026-07-18; unchanged since 2026-08-09 |
+| invoices | 15 | 9 draft / 3 posted / 1 paid / 1 overdue / 1 unposted — was 13 on 2026-08-09; the new statuses are 1 more `posted` and the first `overdue` |
+| payments | 0 | **dead legacy table, zero writers** — real payments live in `allocation_sets` (1) / `prepay_credits` (1), both unchanged |
+| order_items | 288 | unchanged in count. **Sub-cent rows are now 0** — see the whole-cent note below |
+| commissions | 35 | unchanged in count. **Sub-cent rows are now 0** — see the whole-cent note below |
+| jobs | 4 | unchanged |
+| deliveries | 108 | deliveries are the most-used transactional surface; unchanged since 2026-08-09 |
 | blend_tickets | 0 | none recorded yet |
+| quote_versions | 3 | append-only snapshots; writable only through the reviewed RPCs since `20260813080000` applied live 2026-08-16 |
 | negative inventory | 19 rows | `inventory.quantity_available < 0` — owner re-base pending (unchanged since 2026-07-18) |
-| backup_snapshots | 723 rows | cumulative across the weekly in-DB snapshot runs |
+| backup_snapshots | 878 rows | cumulative across the weekly in-DB snapshot runs; was 723 on 2026-08-09 |
+
+> **Whole-cent money re-measure, read-only live 2026-08-18 — the historical
+> sub-cent debt is nearly cleared.** Counting rows where the stored `numeric`
+> value differs from itself rounded to two decimals (all six columns are
+> unconstrained `numeric`, so this test is genuine and not masked by a column
+> scale): `order_items.total_price` **0**, `order_items.profit` **0**,
+> `commissions.commission_amount` **0**, `commissions.order_profit` **0**. Only
+> `quotes.total_cost` still holds **2** sub-cent rows. This supersedes the
+> 2026-08-10 figures still quoted in `docs/manual/KNOWN_ISSUES.md`
+> (35 `order_items.total_price` + 3 + 3 `commissions` = 43 dirty rows) and the
+> older 46 + 3 = 49 figure. The repair migration `20260812115238_repair_historical_order_line_cents`
+> (history row 885, applied live 2026-08-12 with Mason's in-chat approval) is the
+> only migration in that window documented as moving live money. **What is not
+> established here:** this pass measured the current state only — it did not
+> re-derive which statement cleared each row, so do not cite it as proof that
+> `20260812115238` alone repaired the commission rows.
 
 > **Correction:** the 2026-07-13 snapshot reported jobs = 104 and deliveries = 0;
 > the 2026-07-16 live read shows jobs = 4 and deliveries = 106. The two columns
