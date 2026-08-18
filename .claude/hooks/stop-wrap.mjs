@@ -231,14 +231,39 @@ if (newOrChanged.length >= 5) {
   );
 }
 
-// ─── Changelog entry per session ──────────────────────────────────────────
-// CLAUDE.md ("Keeping Docs In Sync") mandates a docs/CHANGELOG.md entry every
-// session. Heuristic: commits landed during THIS session (git log since the
-// session-start snapshot's mtime) but docs/CHANGELOG.md hasn't been touched
-// since that snapshot — neither edited in the working tree nor written to
-// disk after session start. Fail-open: no snapshot / git error / unreadable
-// file → skip silently (parallel sessions share tmpdir snapshots, so this is
-// a prompt, not a proof — same block-by-listing semantics as the items above).
+// ─── Ledger entry per session ─────────────────────────────────────────────
+// A session that lands commits should leave a written record Mason can find.
+// This mirrors the HARD pre-commit guard (scripts/check-ledger-update.mjs) and
+// accepts the SAME ledger set rather than demanding docs/CHANGELOG.md
+// specifically (2026-08-17, Mason). Two reasons: a policy call belongs in
+// docs/manual/DECISION_LOG.md and a schema change in migration-history.md, so
+// insisting on CHANGELOG.md misfiles the record; and it churned the one file
+// every single session, which is noise in the file Mason is most likely to
+// actually read. The prior comment cited a CLAUDE.md section ("Keeping Docs In
+// Sync") that no longer exists — the live requirement is the hard guard's.
+//
+// Heuristic: commits landed during THIS session (git log since the session-start
+// snapshot's mtime) but no ledger file has been touched since that snapshot —
+// neither edited in the working tree nor written to disk after session start.
+// Fail-open: no snapshot / git error / unreadable file → skip silently (parallel
+// sessions share tmpdir snapshots, so this is a prompt, not a proof — same
+// block-by-listing semantics as the items above).
+const LEDGER_RES = [
+  /^docs\/CHANGELOG\.md$/,
+  /^docs\/manual\/[^/]+\.md$/,
+  /^docs\/reference\/agent-guardrails\.md$/,
+  /^docs\/reference\/migration-history\.md$/,
+  /^docs\/loops\//,
+];
+// Concrete files the mtime fallback can stat. A docs/loops/ ledger or a manual
+// file beyond these still satisfies the check via the working-tree scan above.
+const LEDGER_STAT_PATHS = [
+  "docs/CHANGELOG.md",
+  "docs/manual/DECISION_LOG.md",
+  "docs/manual/KNOWN_ISSUES.md",
+  "docs/reference/agent-guardrails.md",
+  "docs/reference/migration-history.md",
+];
 try {
   if (existsSync(snapPath)) {
     const sessionStartMs = statSync(snapPath).mtimeMs;
@@ -246,17 +271,21 @@ try {
       "log", "--oneline", `--since=${new Date(sessionStartMs).toISOString()}`,
     ]).trim();
     if (sessionCommits) {
-      const changelogInTree = lines.some(
-        l => l.slice(3).replace(/\\/g, "/").trim() === "docs/CHANGELOG.md"
-      );
-      let changelogMtimeMs = 0;
-      try {
-        changelogMtimeMs = statSync(path.join(projectDir, "docs", "CHANGELOG.md")).mtimeMs;
-      } catch { /* missing changelog — treated as untouched, flagged below */ }
-      if (!changelogInTree && changelogMtimeMs < sessionStartMs) {
+      const ledgerInTree = lines.some(l => {
+        const rel = l.slice(3).replace(/\\/g, "/").trim();
+        return LEDGER_RES.some(re => re.test(rel));
+      });
+      const ledgerWritten = LEDGER_STAT_PATHS.some(rel => {
+        try {
+          return statSync(path.join(projectDir, ...rel.split("/"))).mtimeMs >= sessionStartMs;
+        } catch { return false; /* missing file cannot satisfy the ledger */ }
+      });
+      if (!ledgerInTree && !ledgerWritten) {
         issues.push(
-          `📓 Commits exist this session but docs/CHANGELOG.md is untouched since the session snapshot —\n` +
-          `     run node scripts/log-session.mjs --summary '...' (CLAUDE.md mandates a changelog entry per session).`
+          `📓 Commits exist this session but no ledger file is touched since the session snapshot —\n` +
+          `     record the work where it belongs: docs/manual/DECISION_LOG.md (a policy or business call),\n` +
+          `     docs/reference/migration-history.md (a schema change), docs/manual/KNOWN_ISSUES.md (a bug),\n` +
+          `     or docs/CHANGELOG.md for general work (node scripts/log-session.mjs --summary '...').`
         );
       }
     }

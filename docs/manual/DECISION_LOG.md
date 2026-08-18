@@ -9,6 +9,39 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-17 — The per-session CHANGELOG entry becomes a per-session *ledger* entry
+
+**Source:** Mason's in-chat agreement, 2026-08-17, after he asked whether the changelog entry was
+"worth the effort to maintain or should that be removed."
+
+**Decision.** Keep the written record, drop the requirement that it live in `docs/CHANGELOG.md`
+specifically. The end-of-session reminder in `.claude/hooks/stop-wrap.mjs` now accepts the same
+ledger set the HARD pre-commit guard (`scripts/check-ledger-update.mjs`) already accepts —
+`docs/CHANGELOG.md`, any `docs/manual/*.md`, `agent-guardrails.md`, `migration-history.md`, or a
+`docs/loops/` ledger — instead of demanding the CHANGELOG alone.
+
+**Why.** Three things were wrong with the old rule. It **misfiled records**: a policy call belongs
+in this file and a schema change in `migration-history.md`, but the reminder pushed both into the
+CHANGELOG. It **churned the one file Mason actually reads**, turning it into a session diary rather
+than a record of what changed and why it matters. And it cited a `CLAUDE.md` section — "Keeping Docs
+In Sync" — that **no longer exists anywhere in the repo**; the live requirement has been the hard
+guard for some time, so the soft layer was quoting a rule that had already been superseded.
+
+**What this does NOT fix.** It was considered as relief for the `PR MERGE GATE` firing on docs-only
+PRs, and measured against that: it is not. The gate scans the **whole content** of each changed
+file, and every candidate ledger file already carries money identifiers from past entries
+(`CHANGELOG.md` 142, `migration-history.md` 135, `KNOWN_ISSUES.md` 20, `agent-guardrails.md` 5,
+this file 4). Any count above zero arms the gate, so no choice of ledger file avoids it. Only
+changing the gate to scan **added lines** rather than whole files would — that is a change to a
+money-safety guard and is deliberately left for its own separately-reviewed PR. See
+`docs/reference/gotchas.md` and the 2026-08-17 CHANGELOG entry.
+
+**Operative rule.** A session that lands commits must update **one** ledger file, chosen by what the
+work was. Reach for `docs/CHANGELOG.md` for general work; do not force a policy or schema record
+into it. `scripts/log-session.mjs` remains the scaffold for the CHANGELOG case only.
+
+---
+
 ## 2026-08-16 — Any sales rep may draw down any customer's booking
 
 **Source:** Mason's explicit in-chat answer, 2026-08-16, verbatim: "Any rep" — given after the

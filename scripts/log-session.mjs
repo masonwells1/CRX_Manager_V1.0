@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 // Session → changelog scaffold.
-// CLAUDE.md ("Keeping Docs In Sync") mandates a docs/CHANGELOG.md entry every
-// session, and it's the item Mason most often has to chase. This script does
+// A session that lands commits must leave a ledger record (enforced by
+// scripts/check-ledger-update.mjs); docs/CHANGELOG.md is the right home for
+// general work, while a policy call goes to docs/manual/DECISION_LOG.md and a
+// schema change to docs/reference/migration-history.md. Since 2026-08-17 the
+// CHANGELOG is no longer demanded every session — use this script when the
+// CHANGELOG is genuinely the right ledger. This script does
 // the MECHANICAL part: it derives this session's commits + touched migrations
 // from git, inserts a dated section at the TOP of docs/CHANGELOG.md in the
 // file's existing entry format ("## YYYY-MM-DD — Title" + prose paragraph +
