@@ -24,8 +24,11 @@ approved by Mason as Phase 1:
    branching on source (`compact` → rule re-anchor; otherwise onboarding). This carries only the
    rules half of the old PreCompact prompt forward; its other half — REPL-only guidance steering
    the auto-compact summarizer to list open files/migrations/build status in its summary — had no
-   command-hook equivalent and was dropped with no replacement. Declared in `CLAUDE_ONLY_HOOKS`
-   (Codex has no SessionStart event).
+   command-hook equivalent and was dropped with no replacement. Declared in `CLAUDE_ONLY_HOOKS` —
+   not because Codex lacks a SessionStart event (`.codex/hooks.json` registers three: `session-snapshot`,
+   `session-staleness`, `worktree-awareness`, the last of which injects `additionalContext` the same
+   way this hook does), but because Codex already gets its onboarding contract from AGENTS.md
+   directly, so this hook wasn't wired for it.
 3. **worktree-cleanup fetch TTL.** Its `git fetch origin` now runs at most once per 30 minutes
    (FETCH_HEAD mtime); a stale `origin/main` only makes the merged-branch classifier more
    conservative.
@@ -46,18 +49,25 @@ approved by Mason as Phase 1:
    matcher; `pr-merge-guard` to `Bash|PowerShell|mcp__.*`; `review-proof-guard`, `hold-latch-guard`,
    and `unattended-autopilot` stay on `*` because they must see every call. Patterns chosen to work
    under both anchored and unanchored matcher-regex semantics. `.codex/hooks.json` was not touched
-   by this pass — those hooks still run on `*` there; only the shared in-script tool-name filter
-   protects both harnesses either way.
+   by this pass: `migration-apply-guard`, `mcp-tool-guard`, `live-testdata-guard`, `review-proof-guard`,
+   and `hold-latch-guard` are wired there too and still run on `*`, with only the shared in-script
+   tool-name filter protecting both harnesses. `pr-merge-guard` and `unattended-autopilot` aren't
+   wired in `.codex/hooks.json` at all — both are declared Claude-only in
+   `scripts/agent-manifest-parity.mjs` (Codex has its own separate merge/autopilot mechanisms), so
+   the narrowing question doesn't apply to them there.
 
 Verified: `sync-agent-workflows --write`, `test:agent-workflows` (all pass, parity included), plus
 manual stdin runs of the new/changed hooks (compact/startup/garbage payloads; dry-run cleanup;
-eslint cold vs warm). `agent-health`'s CRLF/LF check on the 4 paired `.claude/skills/*/SKILL.md` ↔
-`.agents/skills/*/SKILL.md` files did not reproduce against committed content — `git show HEAD:`
-returns byte-identical LF blobs on both sides, and `.gitattributes` pins both trees to `eol=lf`; a
-failure some local Windows checkouts see there is a working-tree line-ending artifact of that
-checkout, not a tracked repo defect, and no PR #102 connection is established. Residual risk stated
-in the PR: the narrowed matchers themselves cannot fire in the session that edits them (hook config
-loads at session start); a safe next-session mutation test is documented there.
+eslint cold vs warm). `agent-health` currently fails its CRLF/LF check on the 4 paired
+`.claude/skills/*/SKILL.md` ↔ `.agents/skills/*/SKILL.md` files on this checkout, even though the
+committed Git blobs on both sides are byte-identical LF (`git show HEAD:` confirms, and
+`.gitattributes` pins both trees to `eol=lf`). The real cause: `scripts/agent-health-check.mjs`'s
+`compareSyncedFiles()` compares raw file bytes with no line-ending normalization, unlike its sibling
+`scripts/sync-agent-workflows.mjs`, which defines and applies `normalizeEol` before comparing —
+a pre-existing gap in `agent-health-check.mjs`, left unfixed here since it's out of scope for a
+docs-only pass. Residual risk stated in the PR: the narrowed matchers themselves cannot fire in the
+session that edits them (hook config loads at session start); a safe next-session mutation test is
+documented there.
 
 ## 2026-08-17 — Codex fleet inventory preserved; two CI-signal traps recorded
 

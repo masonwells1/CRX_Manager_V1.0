@@ -7,8 +7,8 @@
 // with "Prompt stop hooks are not yet supported outside REPL", so both were
 // silently dead there (observed live 2026-08-18; also the source of the
 // hook_error noise on startup/resume in transcript telemetry). A command hook
-// printing the same text through SessionStart additionalContext works in every
-// harness. Only the old PreCompact re-anchor's rules half was carried forward
+// printing the surviving half of that text through SessionStart additionalContext
+// works in every harness. Only the old PreCompact re-anchor's rules half was carried forward
 // here (as COMPACT_REANCHOR, fired on source === "compact"); its other half —
 // steering what the summarizer keeps — was dropped with no replacement, since
 // additionalContext lands AFTER the compact has already run and cannot shape it.
