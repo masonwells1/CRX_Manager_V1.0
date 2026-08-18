@@ -88,6 +88,30 @@ archive it exists to be.
 - **Migrations touched** (git diff --name-only origin/main...HEAD):
   - none
 
+## 2026-08-17 — fix(tests): strip comments before extracting fixture RPC-name arrays in…
+
+fix(tests): strip comments before extracting fixture RPC-name arrays in rpcFixtureLiveDiff.test.ts, so a quoted word in an explanatory comment can no longer become a phantom entry that fails the live-pg_proc ghost check (PR #410)
+
+The follow-up commit closes the other half of the same bug, raised by CodeRabbit as Major: the lazy
+`[\s\S]*?\];` capture ran over the raw source, so a `];` or `};` inside a comment ended the
+captured literal early and every real entry after it was silently dropped — comment stripping only
+ever saw the already-truncated body. Injecting such a comment near the top of the real
+`MUTATING_RPCS_WITH_IDEMPOTENCY` made the old regex read 3 entries instead of 126, which below a
+bucket's floor fails confusingly and above it quietly narrows the fixture-vs-live drift check. The
+regex capture is now a balanced-bracket scanner that skips string literals and comments as it
+walks, anchors the const name on a word boundary, and throws rather than guessing on an
+unterminated or mismatched literal. Entry counts on the real fixtures are unchanged (126 / 0 / 82 /
+32 / 2), so no `toBeGreaterThanOrEqual` floor had been propped up by phantom matches.
+
+Pre-existing and deliberately not changed: deleting a real entry from `HELPER_SCOPED` turns nothing
+red — 82 entries against a floor of 70 tolerate up to 12 removals by design (shrink-only snapshot).
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `fc385ad0 fix(tests): stop comments in fixture arrays creating phantom RPC entries`
+  - `172e09e1 fix(tests): find the fixture literal boundary before stripping comments`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
 ## 2026-08-14 — CRX-SEC-1: quote versions become RPC-owned (folded into the recovery PR)
 
 `public.quote_versions` was client-writable. Its RLS INSERT policy (`qversions_insert`) checked
