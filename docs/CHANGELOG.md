@@ -36,6 +36,28 @@ Harness only — no app source, migration, or live-state change. A four-agent au
   `NO BASELINE`; probe rewrites must retain both SQLs with read-only equivalence; review-workflow's
   GROUND_RULE points at the manual/reference lifecycle docs instead of `CLAUDE.md`.
 
+## 2026-08-18 — Mission loops get a standing model/context budget
+
+Agent-surface docs only — no source, migration, or live-state change.
+
+Mason's 30-day usage analysis attributed the bulk of the month's token spend (estimated at
+roughly 40%) to a handful of marathon loop sessions — almost entirely premium-model context
+re-reads, because every message re-reads the whole conversation. `/run-loop` now carries two
+standing rules, recorded as Mason's 2026-08-18 decision in `docs/manual/DECISION_LOG.md`:
+mechanical cycle steps (status checks, doc syncs, read sweeps, evidence gathering) may be
+delegated to cheaper-model subagents *within the loop's existing structure* — ledger PROOF
+lines, money/RLS/migration judgment, and pinned reviewer models/effort are explicitly
+excluded, and no agents are added on top of a workflow's defined fan-out; and every loop
+obeys the session-size sentinel's marathon cap (advisory at 12MB of transcript; at 25MB:
+finish only the atomic step already in flight, checkpoint the ledger, write a handoff,
+continue in a fresh session, wind down). The sentinel is a global user-scope hook outside
+this repo (`~/.claude/hooks/session-size-sentinel.mjs`), and after adversarial review of
+PR #416 it fires both on prompt submission and mid-turn after tool calls, so unattended
+loops — which may run for hours off one prompt — actually see it; where the hook is absent
+(Codex sandbox, remote runners) the written cap in `run-loop.md` binds on its own. Hard
+gates transfer unchanged across a handoff; a handoff never launders an approval, and a
+lapsed autopilot flag stays lapsed in the successor session.
+
 ## 2026-08-18 — session-staleness backup check now consults the real off-site workflow
 
 Harness only — no app source, migration, or live-state change. The SessionStart backup-staleness
