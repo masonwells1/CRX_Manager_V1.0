@@ -1457,6 +1457,11 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'delete_prepay_credit',
   'delete_purchase_order',
   'dismiss_watchdog_flag',
+  // Public below-cost wrapper; the replay pair lives in its private impl. See
+  // its delegated note in IDEMPOTENCY_BODY_EXEMPT below. (No quoted word may
+  // appear in a comment inside this array: rpcFixtureLiveDiff.test.ts extracts
+  // entries by regex over the whole literal and would read it as an RPC name.)
+  'draw_down_quote',
   'duplicate_quote',
   'edit_delivery',
   'edit_prepay_credit',
@@ -1657,6 +1662,18 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // _impl has no `authenticated` EXECUTE, so the wrapper is the only reachable
   // entry point.
   batch_apply_prepayments: 'delegated',
+  // Verified against the live body 2026-08-15: the public wrapper is two
+  // statements — PERFORM _begin_below_cost_money_write('draw_down_quote', ...)
+  // to declare the below-cost operation context and authorize, then RETURN
+  // _draw_down_quote_below_cost_impl_20260810(p_quote_id, p_draws,
+  // p_performed_by, p_idempotency_key). It forwards the key and deliberately
+  // holds no replay logic of its own; the impl owns the canonical
+  // check_idempotency/save_idempotency pair under the one 'draw_down_quote'
+  // namespace, so a replay through the wrapper finds what the impl saved.
+  // Duplicating the check here would record the same key twice. The impl has no
+  // anon/authenticated/service_role EXECUTE — asserted by the postflight in
+  // migration 20260816120000 — so the wrapper is the only reachable entry point.
+  draw_down_quote: 'delegated',
   // Required-key wrappers fail closed before delegating to the preserved,
   // directly non-executable implementations that own replay and mutation.
   create_invoice_for_unbilled_delivery: 'delegated',
@@ -2150,6 +2167,65 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
     expect(IDEMPOTENCY_BODY_EXEMPT.save_invoice).toBe('delegated');
   });
 
+  // The generic body scan skips draw_down_quote because it is marked
+  // 'delegated', so without this the forwarding is asserted only in prose
+  // (adversarial review 2026-08-16, non-blocking follow-up). Assert the chain
+  // for real: the wrapper hands the caller's key straight to the private
+  // implementation, and the implementation owns the replay pair.
+  it('draw_down_quote forwards the caller key to the implementation that owns replay', () => {
+    const files = getMigrationFiles();
+    const wrapper = files.find(
+      ({ name }) => name === '20260812115237_enforce_below_cost_admin_approval.sql'
+    )?.content;
+    const implementationSource = files.find(
+      ({ name }) => name === '20260816120000_draw_down_split_order_lines_by_price_tier.sql'
+    )?.content;
+
+    expect(wrapper).toBeDefined();
+    expect(implementationSource).toBeDefined();
+
+    // The public entry point is the ONLY reachable one: the original body was
+    // renamed to the private implementation and stripped of every direct grant.
+    expect(wrapper).toContain('RENAME TO _draw_down_quote_below_cost_impl_20260810');
+    expect(wrapper).toMatch(
+      /REVOKE ALL ON FUNCTION public\._draw_down_quote_below_cost_impl_20260810\(uuid, jsonb, uuid, text\) FROM PUBLIC, anon, authenticated, service_role/
+    );
+
+    // The wrapper declares the key and forwards it verbatim as the 4th
+    // argument — it must not drop it, rename it, or substitute NULL.
+    expect(wrapper).toMatch(
+      /CREATE FUNCTION public\.draw_down_quote\([\s\S]*p_idempotency_key text DEFAULT NULL/
+    );
+    expect(wrapper).toMatch(
+      /RETURN public\._draw_down_quote_below_cost_impl_20260810\(\s*p_quote_id, p_draws, p_performed_by, p_idempotency_key\s*\)/
+    );
+
+    // The implementation owns the canonical pair, under the SAME operation
+    // name the wrapper is called by, so a replay through the wrapper finds
+    // what the implementation saved.
+    expect(implementationSource).toContain(
+      "v_existing := check_idempotency(p_idempotency_key, 'draw_down_quote')"
+    );
+    expect(implementationSource).toContain(
+      "PERFORM save_idempotency(p_idempotency_key, 'draw_down_quote', v_result)"
+    );
+    expect(IDEMPOTENCY_BODY_EXEMPT.draw_down_quote).toBe('delegated');
+  });
+
+  // CRX-RLS-001 (adversarial review 2026-08-16): quotes are soft-deleted by
+  // stamping deleted_at only, so a deleted booking still reads as 'sent' and
+  // would pass the BOOKING_CLOSED guard. The lock must exclude it.
+  it('draw_down_quote refuses a soft-deleted booking at the quote lock', () => {
+    const implementationSource = getMigrationFiles().find(
+      ({ name }) => name === '20260816120000_draw_down_split_order_lines_by_price_tier.sql'
+    )?.content;
+
+    expect(implementationSource).toBeDefined();
+    expect(implementationSource).toMatch(
+      /SELECT \* INTO v_quote\s*FROM quotes\s*WHERE id = p_quote_id AND deleted_at IS NULL\s*FOR UPDATE;/
+    );
+  });
+
   it('split provenance wrappers preserve the idempotent implementations and forward the exact key', () => {
     const files = getMigrationFiles();
     const wrapper = files.find(
@@ -2553,6 +2629,19 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // supabase/migrations:
   // - correct_job_commission_split (20260813050000)
   // - _create_direct_order_below_cost_impl_20260810 (20260813010000)
+
+  // Private implementation behind the public draw_down_quote RPC, so it is
+  // absent from the generated types by design. It declares p_idempotency_key
+  // text and owns the canonical check_idempotency/save_idempotency pair for the
+  // 'draw_down_quote' operation (the public wrapper holds none of its own and
+  // forwards the key straight through) — the test below re-asserts all three.
+  // Pre-apply-window entry: it enters the inventory because migration
+  // 20260816120000 is the FIRST on-disk CREATE of this function under its
+  // post-rename name. 20260812115237 renamed the original public body with
+  // ALTER FUNCTION ... RENAME TO and defined no body on disk, so the
+  // transitive-mutation walker could not see it until now. Move this to
+  // MUTATING_RPCS_WITH_IDEMPOTENCY only if the function ever becomes public.
+  '_draw_down_quote_below_cost_impl_20260810',
 ]);
 
 /**
