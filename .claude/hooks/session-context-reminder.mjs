@@ -7,9 +7,21 @@
 // with "Prompt stop hooks are not yet supported outside REPL", so both were
 // silently dead there (observed live 2026-08-18; also the source of the
 // hook_error noise on startup/resume in transcript telemetry). A command hook
-// printing the same text through SessionStart additionalContext works in every
-// harness, and landing the money rules AFTER the compact is equivalent to
-// steering the summarizer: the rules are for future behavior, not the summary.
+// printing that text through SessionStart additionalContext works on the one
+// harness this hook is wired to (Claude only — it is declared in CLAUDE_ONLY_HOOKS
+// and is absent from .codex/hooks.json; verified on the desktop harness 2026-08-18).
+// Only the old PreCompact re-anchor's rules half was carried forward here (as
+// COMPACT_REANCHOR, fired on source === "compact"), and not verbatim: the old
+// prompt's "Always include these reminders:" connective became the "POST-COMPACT
+// RULE RE-ANCHOR" header, .update/.delete gained parentheses, one semicolon became
+// a period, and the "treat files changed before the compact as UNVERIFIED" rule is
+// new here, with no ancestor in the old prompt. Otherwise the rules text is
+// carried over byte-for-byte.
+// The old prompt's other half — its opening summarizer instruction — was dropped
+// with no replacement. Reasoning (not measured): additionalContext on a SessionStart
+// source === "compact" fires after the compact has run, so it cannot shape the
+// summary. The repo records no test of whether a PreCompact *command* hook could
+// have carried that half.
 //
 // Branches on the SessionStart payload's `source`:
 //   compact              → the money/idempotency/RLS re-anchor
