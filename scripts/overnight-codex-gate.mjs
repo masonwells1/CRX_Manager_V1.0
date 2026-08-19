@@ -83,10 +83,23 @@ const res = spawnSync(codex, args, {
   windowsHide: true,
 })
 
-if (res.error) {
-  if (res.error.code === 'ETIMEDOUT') fail(`codex timed out after ${timeoutSec}s — split into a smaller batch`, 124)
-  fail(`failed to launch codex (${codex}): ${res.error.message}`)
-}
+// Preserve whatever output we got — even on timeout/error — so a partial Codex run
+// is never silently mistaken for "clean" (same discipline as codex-hunt.mjs).
 process.stdout.write(res.stdout || '')
 if (res.stderr) process.stderr.write(res.stderr)
+
+if (res.error) {
+  // GATE-FAILED goes to STDOUT: overnight runs redirect stdout to the verdict file
+  // and stderr to a trace file, so a stderr-only failure would leave the verdict
+  // file empty — indistinguishable from "gate found nothing".
+  if (res.error.code === 'ETIMEDOUT') {
+    process.stdout.write(`\nGATE-FAILED: codex timed out after ${timeoutSec}s — split into a smaller batch\n`)
+    fail(`codex timed out after ${timeoutSec}s — split into a smaller batch`, 124)
+  }
+  process.stdout.write(`\nGATE-FAILED: failed to launch codex (${codex}): ${res.error.message}\n`)
+  fail(`failed to launch codex (${codex}): ${res.error.message}`)
+}
+if (res.status !== 0) {
+  process.stdout.write(`\nGATE-FAILED: codex exited with code ${res.status == null ? 'null' : res.status}\n`)
+}
 process.exit(res.status == null ? 1 : res.status)

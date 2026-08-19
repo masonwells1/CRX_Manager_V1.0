@@ -26,7 +26,6 @@ If unsure of the current version, check via Supabase MCP:
 
 ```
 mcp__<supabase>__get_edge_function
-  project_id: rhyzpcqhnizqbxphqdkr
   function_slug: <name>
 ```
 
@@ -124,7 +123,6 @@ Call:
 
 ```
 mcp__<supabase>__deploy_edge_function
-  project_id: rhyzpcqhnizqbxphqdkr
   name: <function name>
   files: [
     { name: "index.ts", content: "<full content>" },
@@ -143,7 +141,6 @@ returned version number.
 
 ```
 mcp__<supabase>__get_edge_function
-  project_id: rhyzpcqhnizqbxphqdkr
   function_slug: <name>
 ```
 
@@ -168,11 +165,11 @@ proof is missing rather than printing a clean summary.
 
 ```
 mcp__<supabase>__query_logs
-  sql: select timestamp, event_message from logs where source = 'function_edge_logs' order by timestamp desc limit 50
+  sql: select timestamp, event_message from logs where source = 'edge_logs' and event_message like '%/functions/v1/%' order by timestamp desc limit 50
   iso_timestamp_start: <5 minutes ago, ISO 8601 with Z>
 ```
 
-(The tool was previously named `get_logs` and took `service:`; `query_logs` instead takes a read-only ClickHouse `sql` query against the unified `logs` table — filter by `source` (`'function_edge_logs'` for edge functions). Resolve by suffix if the connector still exposes the old name.)
+(The tool was previously named `get_logs` and took `service:`; `query_logs` instead takes a read-only ClickHouse `sql` query against the unified `logs` table, filtered by `source`. Resolve by suffix if the connector still exposes the old name.) **Empty is not clean:** run `select distinct source from logs` once first — sources vary by project, and a query against a source that doesn't exist (this project has NO `function_edge_logs`) returns zero rows with no error. If the invocation you just triggered doesn't appear, the check is UNVERIFIED, not passing.
 
 Scan for any error events from the new version in the last 5 minutes.
 

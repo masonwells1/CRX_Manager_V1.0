@@ -95,7 +95,6 @@ For each Edge Function in `supabase/functions/`, check live version:
 
 ```
 mcp__<supabase>__list_edge_functions
-  project_id: rhyzpcqhnizqbxphqdkr
 ```
 
 Capture each function name, current live version, last update timestamp. Compare against the
@@ -116,7 +115,11 @@ mcp__<supabase>__query_logs
 
 Scan for any error-level events in the last 5 minutes. Don't dump the whole log — count, and surface the top 3 distinct error messages.
 
-Repeat with `source = 'function_edge_logs'` (edge functions) and `source = 'postgres_logs'` if time permits.
+Repeat with `source = 'postgres_logs'` if time permits. **Empty is not clean:** run
+`select distinct source from logs` once first — sources vary by project (this project exposes
+`edge_logs`, `postgres_logs`, `auth_logs`, etc., and has NO `function_edge_logs`); a query
+against a source that doesn't exist returns zero rows with no error, which would read as a
+false pass. Edge-function requests surface as `/functions/v1/...` rows in `edge_logs`.
 
 ## Step 6: Print the Dashboard
 

@@ -2,11 +2,12 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-18 — Skills/commands accuracy sweep: ~50 stale facts fixed across the agent workflow surface
+## 2026-08-18 — Skills/commands accuracy sweep across the agent workflow surface
 
 Harness only — no app source, migration, or live-state change. A four-agent audit of every
 `.claude/skills/` and `.claude/commands/` file (plus the global handoff/new-project skills) found
-~60 findings; all approved fixes are applied. Highlights:
+~60 findings; all confirmed ones are fixed (the remainder were duplicates or refuted on
+verification). Highlights:
 
 - **Landing mechanics current everywhere:** `/ship`, `/deploy-check`, `/codex-gauntlet`, and the
   review-family files now all state the post-2026-07-30 chain — branch → PR → Vercel check →
@@ -37,15 +38,22 @@ Harness only — no app source, migration, or live-state change. A four-agent au
   diffs/summarizes all 8 registry sections; spot-check-prod reports unversioned functions as
   `NO BASELINE`; probe rewrites must retain both SQLs with read-only equivalence; review-workflow's
   GROUND_RULE points at the manual/reference lifecycle docs instead of `CLAUDE.md`.
-- **Blind double-Opus adversarial round (PR #421, Codex usage-limited):** two independent Opus
-  reviewers re-audited the full diff. Fixed from their findings: the `agent-pair-review` and
-  `codex-gauntlet` gate sentences re-tightened (live-data changes and destructive actions are
-  never hands-free; the 2026-07-13 proof gate named explicitly); `query_logs` call shapes
-  corrected to the real `sql`-based schema (deploy-edge-function, spot-check-prod) and stale
-  `get_advisors project_id`/`get_logs` params/allowlist entries dropped; `codex-gauntlet` no
-  longer claims preflight/deploy-check invoke it automatically; `overnight-codex-gate.mjs` now
-  feeds the prompt via stdin (Windows ~32K argv cap); migration-review's read-only rule scoped
-  around post-apply Step 5; stale map-count figures dropped from the architecture-audit prompt.
+- **Blind double-Opus adversarial rounds (PR #421, Codex usage-limited):** independent blind
+  Opus reviewer pairs re-audited the full diff, one round per fix commit until clean. Fixed from
+  their findings: the `agent-pair-review` and `codex-gauntlet` gate sentences re-tightened
+  (live-data changes and destructive actions are never hands-free; the 2026-07-13 proof gate
+  named explicitly); `query_logs` call shapes corrected to the real `sql`-based schema
+  (deploy-edge-function, spot-check-prod) and stale `project_id`/`get_logs` params/allowlist
+  entries dropped; `codex-gauntlet` no longer claims preflight/deploy-check invoke it
+  automatically; `overnight-codex-gate.mjs` now feeds the prompt via stdin (Windows ~32K argv
+  cap) and emits an explicit `GATE-FAILED:` line on stdout for timeout/launch/non-zero exits so
+  an empty verdict file is never mistaken for "nothing found" (overnight-bug-hunt's read
+  instructions say the same); log checks now verify the log `source` exists before trusting an
+  empty result (this project has no `function_edge_logs`); migration-review's read-only carve-out
+  now enumerates everything post-apply Step 5 actually does (registry write, B7 rename,
+  rolled-back live smoke transactions); the last `.codex\sync-from-claude.ps1` remedies replaced
+  with `node scripts/sync-agent-workflows.mjs --write`; audit-report dates pinned to
+  `TZ='America/Chicago'`; stale map-count figures dropped from the architecture-audit prompt.
 
 ## 2026-08-18 — pre-push private-artifact scan no longer ENOBUFS on nested worktrees
 

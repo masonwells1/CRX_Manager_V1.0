@@ -59,7 +59,7 @@ De-duplicate across layers. The workflow already assigned severity and verified 
 
 ## Step 3 — Write the report
 
-Write to `docs/audits/<YYYY-MM-DD>-workflow-review.md` (get the date from a real clock — `date +%F`) with this structure:
+Write to `docs/audits/<YYYY-MM-DD>-workflow-review.md` (get the date from a real clock — `TZ='America/Chicago' date +%F`) with this structure:
 
 ```markdown
 # Workflow & Business-Logic Review — <YYYY-MM-DD>

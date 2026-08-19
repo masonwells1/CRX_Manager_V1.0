@@ -85,6 +85,9 @@ EOF
 node scripts/overnight-codex-gate.mjs .claude/session-state/finding-gate-prompt.txt \
   > .claude/session-state/codex-finding-gate-latest.txt 2> .claude/session-state/codex-finding-gate-trace.txt
 cat .claude/session-state/codex-finding-gate-latest.txt   # ← read THIS (the verdicts)
+# An EMPTY verdict file or a GATE-FAILED line means the gate FAILED (timeout /
+# launch error / usage limit) — read the trace file for the reason and re-run.
+# "gate produced nothing" is never "gate found nothing".
 ```
 Keep only findings Codex marks **REAL**. Where Codex and Claude disagree on a BLOCKER/HIGH (e.g. a severity split), **keep both positions** in `REPORT.md` for Mason — never silently resolve. (For a DB-touching candidate, Claude runs the live evidence gate first on its side — `npm run db-sweeps` predicates executed read-only via Supabase MCP + the RPC's smoke chain — since Codex's sandbox can't.)
 
@@ -99,6 +102,8 @@ git add <the-fix's-files>                                  # ONLY this fix's fil
 node scripts/overnight-codex-gate.mjs .claude/session-state/fix-gate-prompt.txt \
   > .claude/session-state/codex-fix-gate-latest.txt 2> .claude/session-state/codex-fix-gate-trace.txt
 cat .claude/session-state/codex-fix-gate-latest.txt   # ← read THIS (the verdict), not the trace
+# An EMPTY verdict file or a GATE-FAILED line means the gate FAILED — read the
+# trace for the reason and re-run; never treat a failed gate as a pass.
 ```
 (The wrapper runs `codex exec` over the staged diff — NOT `codex review --uncommitted`, which **stashes** the working tree and would review nothing.) Address every Codex NEEDS-WORK and re-run the gate. **Hard cap: 3 fix-gate rounds** per finding — if still NEEDS-WORK after 3, revert that edit (`git restore --staged --worktree <files>`) and re-tier the finding to **yellow/park** (it's subtler than a green fix).
 

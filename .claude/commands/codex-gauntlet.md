@@ -150,8 +150,9 @@ Note the deterministic floor that now runs beneath this review loop (so you don'
 
 If Claude skills or hooks changed, run:
 
-```powershell
-.codex\sync-from-claude.ps1 -IncludeHooks
+```bash
+node scripts/sync-agent-workflows.mjs --write
+npm run test:agent-workflows
 ```
 
 ## Foundation Audit Mode
