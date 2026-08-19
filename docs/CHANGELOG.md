@@ -89,6 +89,335 @@ re-derive" live facts (Mason caught it; the PRD was fixed, the source was not).
   App connector is currently read-only or write-enabled. Mason's 2026-08-14 approval may or may not
   have been applied to that toggle; recording its actual state would close the blind spot.
 
+## 2026-08-18 — Hook audit fixes: C3 source-containment guard, worktree-sweep unblock, cd-target fix
+
+Harness only — no app source, migration, or live-state change. The 30-day hook-vs-reality audit
+found one unguarded mistake class that reached production three times and two false-positive/noise
+defects; Mason approved fixing all three:
+
+- **NEW guard — applied-migration source containment (C3):** `applied-snapshot-invalidate.mjs`
+  now records every Supabase MCP `apply_migration` into
+  `.claude/session-state/applied-source-ledger.json`, and `stop-wrap.mjs` blocks session end while
+  any recorded apply has no `supabase/migrations/*.sql` match committed to HEAD (basename or
+  stamp-stripped slug). Entries persist across sessions until the file is committed, then prune;
+  unresolved applies fold into the stop-wrap ack signature so a stale acknowledgment can't mask a
+  new one. Previously the only defence was "someone notices" (2026-08-09, PR #371, and the
+  six-file 2026-08-12 incident). Tests: `.claude/hooks/applied-source-containment.test.mjs`,
+  added to `test:correction-guards`.
+- **worktree-cleanup ignores harness noise:** a machine-local `.claude/settings.local.json`
+  modification as the SOLE dirt no longer classifies a worktree as dirty
+  (`meaningfulDirt()`/`IGNORABLE_DIRT_PATH` in `worktree-cleanup-lib.mjs`) — that one file kept 11
+  fully-merged agent worktrees unsweepable. Removal re-checks porcelain at delete time and, only
+  when the ignorable file is still the only dirt, restores it from HEAD (or deletes it if
+  untracked) before one plain-`remove` retry — never `--force`. Dry run against the real fleet:
+  10 zombie worktrees + 1 dead branch now classified removable.
+- **review-proof-guard cd fix:** the shell-cd rule now checks the ACTUAL
+  `cd`/`pushd`/`Set-Location` target instead of denying any command containing both a cd token and
+  a state-dir mention (which blocked legitimate work like
+  `cd <worktree-root> && ls .claude/session-state`). Component steps (`cd .claude` +
+  `cd session-state`) and unresolvable `$VAR` targets alongside a state-dir mention still deny.
+
+Docs updated in `docs/reference/agent-guardrails.md` (four rows). `test:correction-guards` green
+(all suites, 1,200+ assertions incl. the new file).
+
+CodeRabbit review round (2026-08-19, PR #423 — all three findings confirmed and fixed): the
+applied-source ledger's read-modify-write is now serialized by a cross-process lock
+(`ledger-lock-lib.mjs`; mutation-proved — in one measured run with the lock disabled, 4 of 12
+concurrent recorder processes lost their entries; the loss count is nondeterministic, the point
+is that unlocked losses are real and reproducible); stop-wrap's containment check reads `git ls-tree HEAD` instead of
+`ls-files`, so an intent-to-add (`git add -N`) or staged-only filename can no longer satisfy or
+prune the guard; and review-proof-guard's cd parser resolves targets past option tokens
+(`cd --`, `-P`, `-Path:`) and shell-joined quoting (`.claude/"session-state"`), which previously
+bypassed the deny.
+
+Round 2 (same PR, incremental review of the fixes — all three findings confirmed and fixed,
+each mutation-proved red-without/green-with): review-proof-guard also checks the
+Bash-escape-decoded cd target (`session-\state` executes as `session-state`; the raw form still
+covers Windows `\` paths); stop-wrap skips the containment check when the git call itself fails
+(binary missing/timeout) instead of phantom-blocking on an empty listing — an unborn HEAD still
+blocks, since nothing-committed is exactly the uncontained case; and the guard test's allow case
+now asserts exit code 0, not just empty output. Round 3 (one Minor follow-up, confirmed and
+fixed): the `ls-tree` listing itself is now failure-aware — a transient git failure despite a
+valid HEAD skips the check instead of reading as "no committed migrations", while an unborn HEAD
+keeps blocking. Both failure branches are regression-tested and mutation-proved: an unborn-HEAD
+case (fresh repo → still blocks) and a failed-`ls-tree`-with-valid-HEAD case (deleted tree
+object → skips without pruning the ledger). Round 4 (one Major, confirmed with a narrower fix
+than proposed): on a ledger-lock timeout the callback now receives `locked=false` — the
+recorder still appends (dropping the record would silently disarm the guard), but the
+stop-wrap prune skips its rewrite, since an unlocked rewrite could erase a concurrent
+recorder's append (lock-held regression test added, mutation-proved).
+
+Blind adversarial Opus round (2026-08-19, PR #423 — Codex usage exhausted, so per the settled
+PR #413/#414 precedent two independent blind Opus reviewers substituted for the Codex gate; both
+returned BLOCKERS, all confirmed findings fixed and the new protections mutation-proved
+red-without/green-with):
+
+- **cd-guard newline bypass (proven):** the argument-run separator swallowed line breaks, so in
+  `cd /tmp` ⏎ `cd .claude/session-state` only the FIRST target was ever resolved. Separator is
+  now horizontal-whitespace-only; newline-separated invocations each get checked. Also fixed:
+  split-quote runs (`".claude/session"-state`) now join like the shell joins them,
+  `Push-Location` counts as a cd verb, and glob/brace metacharacters make a target unresolvable
+  (fail closed when the command also mentions the state dir). Accepted residual: a pure-glob cd
+  with no literal state-dir mention anywhere still passes.
+- **Slug containment time-gated:** the repo has duplicate migration slugs years apart, so a bare
+  slug match could let an OLD same-named file contain a FRESH apply. A slug-only match now
+  requires a committed file stamped within 7 days before the recorded apply (or later); exact
+  stamped basenames still always match; an unparseable entry timestamp stays blocked.
+- **Recorder correctness:** applies whose tool response carries the explicit `isError` marker
+  are not recorded (error-shaped text still records — fail closed); same-name re-applies dedup;
+  both ledger writers write atomically (temp + rename) so a crash can't leave truncated JSON
+  that would disarm the guard.
+- **Ack valve hard-gated:** a signature-matching stop-wrap acknowledgment can never end the
+  session while any apply is uncontained; entry names are sanitized and truncated before they
+  reach the signature or the block message. Malformed ledger rows prune without masking real
+  entries beside them, and the block message now distinguishes "commit the source file" from
+  "the apply never really happened — verify live and remove the ledger entry".
+- **Unborn-HEAD discriminator tightened:** only a `git rev-parse` failure with the specific
+  unborn-revision error counts as unborn (blocks); any other git failure skips the check for
+  that stop instead of misreading, e.g., "not a repository" as "nothing committed".
+- **worktree-cleanup:** a worktree whose applied-source ledger still holds unresolved entries is
+  kept even when merged+clean (the gitignored ledger is invisible to those gates; sweeping would
+  destroy the only record), and a failed removal retry restores the settings.local.json content
+  it deleted.
+
+Documented follow-ups deliberately not fixed in this PR: ledger-lock holder-token eviction and
+the stale-eviction/timeout window mismatch (single-machine harness, bounded impact), and the
+empty-`tool_input.name` recorder skip (no observed producer).
+
+Second blind adversarial Opus round (2026-08-19, PR #423, commit `61e946af`): both reviewers
+again returned BLOCKERS with one shared root cause — the cd-scanner already ran over normalized
+command views, but the sibling destructive-verb net and the proof/ledger path matcher scanned the
+raw string only. A `shellCommandViews` helper now yields four views (raw, quote-stripped,
+backslash-dropped, both) and both nets run over every view, closing quote-composed verbs
+(`r"m" -rf`), a backslash-dropped `.claude` ancestor (`.clau\de`), and quote/backslash-split
+ledger/proof filenames. `find` used as a traversal delete (`-delete`/`-exec`/`-execdir`) is now a
+destructive verb (a traversal delete never names the basename). stop-wrap forces the C locale
+around its unborn-HEAD probe so the English-stderr match holds on a non-English git, and its
+dedup key uses a visible escape sequence instead of a raw control byte (byte-identical, keeps the
+file clean text). All mutation-proved red-without/green-with.
+
+Third blind adversarial Opus round (2026-08-19, PR #423): both reviewers found the round-2 net
+still matched the state-dir path and the destructive verbs LITERALLY, missing three evasion
+classes, all now fixed and each mutation-proved load-bearing (neutering the detector lets the
+exploit through; the shipped guard denies it):
+
+- **Glob on a protected path component:** a wildcard whose literal prefix could expand to
+  `.claude`, `session-state`, or `applied-source-ledger.json` (`rm -rf .clau*/session-state`,
+  `rm -rf .clau*/sess*`, `find .clau*/session-state -delete`) is now treated as naming the state
+  dir. The path matcher is component-aware (splits on shell separators) and fails closed on any
+  glob whose leading literal is a prefix of a protected name — a bare-`*` glob with no such prefix
+  (`rm dist/*.js`) still passes.
+- **Redirect INTO the state dir with no destructive verb:** a `>`/`>>` write that lands a file in
+  the state dir overwrites a wrapper-owned proof or the ledger even though the verb (`printf`,
+  `echo`) is not destructive and the basename may be globbed
+  (`printf "[]" > .claude/session-state/x.jso*`). Such a redirect target is now its own deny
+  trigger, independent of the verb net.
+- **Omitted deleting verbs:** `git clean`, `rsync --delete`, and `truncate` delete or zero files
+  but were absent from the destructive-verb set; all three are added, and each denies only when it
+  also names the state dir (`git clean -fdx dist`, `rsync --delete /tmp/a/ /tmp/b/`,
+  `truncate -s0 /tmp/log` all still pass).
+
+**worktree-cleanup fail-closed on an unreadable ledger (CodeRabbit Major, 2026-08-19):** the
+applied-source-ledger read now keeps the worktree unless the ledger is provably absent. Only
+`ENOENT` (truly no file) is sweepable; a present-but-unreadable ledger (EACCES/EISDIR/I/O) or a
+malformed/unparseable one keeps the worktree, because a read or parse failure is exactly when the
+worktree can least be proven safe to destroy and sweeping it could erase the sole record of an
+un-committed live apply. The decision is a pure `ledgerKeepsWorktree` helper in
+`worktree-cleanup-lib.mjs` with unit tests for every branch (absent / unreadable / malformed /
+real-entry / empty / junk-only). This reverses the earlier "corrupt reads as no entries" stance,
+which was wrong.
+
+**Accepted residual ceiling (both reviewers, independently):** a destructive-verb/path DENYLIST is
+inherently incomplete and cannot be finished by enumeration. Proof FORGERY is content-bound
+(hash-checked) and fully contained; ledger DELETION has partial tamper-evidence (C3 source
+containment) but no local hook can catch every possible deleter — a repo-root `git clean -fdx`
+that names nothing, interpreter indirection (`node -e`, write-a-script-then-run), or a novel tool
+can still remove local state. These are LOCAL dev-machine defense-in-depth. The real boundary is
+GitHub branch protection (`protect-main`: no direct pushes, PR + passing checks required) plus the
+C3 tamper-evidence that makes an un-committed live apply visible at session end — not the shell
+denylist. The denylist raises the cost of the easy paths; it is explicitly not claimed to be
+exhaustive.
+
+Blind adversarial Opus round 2 (2026-08-19, same PR — two fresh independent blind Opus
+reviewers, both returned BLOCKERS; every confirmed finding fixed and each new protection
+mutation-proved red-without/green-with, 7 mutations total):
+
+- **cd-guard, seven more proven bypasses closed:** quoted/escaped/eval-wrapped/composed verbs
+  (`"cd"`, `'cd'`, `\cd`, `c"d"`, `eval "cd …"`) via a widened prefix class plus a second
+  quote-stripped scan pass; PowerShell's default `sl` alias (lookahead keeps `sleep` from
+  matching); `$IFS` glued to the verb (empty argument run + expansion char → unresolvable, fail
+  closed); backslash line continuations spliced into one invocation; and ANSI-C `$'…'` quoting
+  statically decoded before scanning.
+- **Ledger deletability closed (both reviewers proved deletion was unguarded):** a destructive
+  verb (`rm`, `Remove-Item`, `mv`, `del`, …) in any shell command that also mentions the state
+  directory is denied outright, and the applied-source ledger's basename joined the proof-file
+  name guard on every channel. The sanctioned stale-entry path is the new
+  `scripts/remove-applied-ledger-entry.mjs` (`--list` / `--name <exact>`, lock-held atomic
+  rewrite, sanitized output, exit 1 on no match) — used only after verifying the live migration
+  ledger.
+- **Content binding:** the recorder now fingerprints the applied SQL (EOL-normalized hash), and
+  containment requires a committed file whose content hash MATCHES — a same-named empty or
+  unrelated file no longer satisfies or prunes the guard. Legacy hashless entries keep the
+  name/slug rules.
+- **isError decision reversed:** a failed apply IS recorded, flagged `failed: true` — an error
+  response cannot prove nothing landed (non-transactional/multi-statement SQL can change live
+  state before erroring). Round-1 had skipped these; the reviewers showed that skip was itself
+  a bypass. Dedup still prevents retry stacking; stale failed rows go through the removal
+  script.
+- **Injection/robustness:** ledger `ts` values are sanitized before reaching the block message
+  or ack signature (names already were); implausible candidate stamps (month 99, hour 99)
+  satisfy NO slug window instead of parsing as garbage; recorder and stop-wrap both prefer the
+  hook payload's `cwd` over `CLAUDE_PROJECT_DIR` so a worktree session's ledger can't land in a
+  directory the checks never read; the guard's shell-tool matcher widened to
+  cmd/shell/terminal/exec/run_command.
+- **worktree-cleanup:** the applied-ledger gate moved to a tested pure helper
+  (`ledgerHasEntries`) — junk-only rows no longer pin a worktree forever — and the docs now
+  state honestly that it is a presence check, not a containment check.
+
+Documented follow-ups deliberately not fixed in this round (in addition to the round-1 list,
+which still stands): raw `execute_sql` DDL is not recorded in the ledger (only `apply_migration`
+is; the interactive rules and live-data guard cover that channel); a worktree with any real
+ledger entry stays kept until stop-wrap prunes it or the removal script clears it, even when the
+source is already committed (presence-not-containment, accepted); the theoretical prune/append
+race when a prune proceeds after a lock timeout (the prune skips its rewrite, so the failure
+mode is a kept-too-long entry, never a lost one); the worktree-cleanup settings-restore branch
+remains untested (exercising it needs a throwaway git worktree fixture); and a stale
+`CLAUDE_PROJECT_DIR`-first comment in `migration-apply-guard.mjs` (behavior there is unchanged
+and correct for the current harness).
+
+Blind adversarial Opus round 3 (2026-08-19, same PR — two fresh independent blind Opus
+reviewers; every confirmed finding fixed and each new protection mutation-proved
+red-without/green-with):
+
+- **cd-guard, three more proven bypasses closed:** the scan now de-glues a cmd.exe verb fused to
+  its target (`cd/d …`, `cd.claude\session-state`, composed `c"d".claude\…`) before resolving; a
+  location verb (`sl`, `cd`) left with an EMPTY target run by a move/pipe (`… | sl`) is treated as
+  statically unresolvable and fails closed when the state dir is named elsewhere; and the
+  destructive-verb deny now also fires on the `.claude` PARENT directory itself (`rm -rf .claude`,
+  `mv .claude /tmp`), not just the `session-state` subpath — while a `.claude`-PREFIXED but
+  distinct path (`.claude-cache`, `.clauderc`) stays allowed.
+- **Removal script hard-gated behind an explicit verify flag:** `remove-applied-ledger-entry.mjs`
+  now REFUSES to remove anything without `--i-verified-against-live`, printing the live
+  `supabase_migrations.schema_migrations` query to confirm against first — so the C3 alarm can't
+  be cleared by reflex, only after a human checks the live ledger. Its lock callback no longer
+  calls `process.exit()` inside `withFileLock` (that bypassed the `finally` and leaked the lock
+  dir); output and exit now happen after the lock releases. The script joined `RISKY_PATH_RES` in
+  `codex-push-lib.mjs`, so a Codex push touching it needs an exact-head proof; the
+  maintenance-producer blob pins were re-pinned to match (verified against the real builder).
+- **Recorder dedup keys on name AND content-hash:** an identical-SQL retry still collapses to one
+  row, but a same-name apply with DIFFERENT SQL — a distinct change that hit live — is retained,
+  not evicted, and a later hashless re-record can't erase a fingerprinted entry (the v2→v1
+  downgrade-erase bypass).
+- **Per-entry fail-closed containment:** a git-show/hash failure for ONE ledger entry now marks
+  only THAT entry uncontained (blocks, naming it) instead of throwing out of the whole check;
+  a genuinely git-unavailable environment still skips loudly (a non-blocking stderr notice that
+  live applies were NOT verified this session) rather than silently disarming. Classification runs
+  on a snapshot outside the lock; the prune re-reads and rewrites under the lock keyed on
+  name+hash.
+- **cwd normalization:** recorder and stop-wrap both resolve the project dir to its git top-level
+  (`git rev-parse --show-toplevel`), so a hook invoked from a subdirectory of the worktree still
+  reads/writes the one canonical ledger.
+- **Docs honesty:** `agent-guardrails.md` now states the guard's honest scope plainly — it stops
+  NAMED destruction and accidental self-certification, not a determined interpreter that hides the
+  target from the command text; the durable boundary is GitHub `protect-main` branch protection
+  plus the C3 tamper-EVIDENCE (an uncontained apply blocks session end and pins the worktree), not
+  command-string prevention.
+
+Documented follow-up deliberately not chased (all rounds): interpreter-indirection where the
+ledger path never appears literally in the command (`node -e`, write-script-then-run, base64) is
+outside any command-text guard — accepted, with the honest-scope note above and branch protection
+as the real boundary.
+
+Blind adversarial Opus round 4 (2026-08-19, same PR — two fresh independent blind Opus reviewers,
+both returned BLOCKERS; every confirmed finding fixed and each new protection mutation-proved
+red-without/green-with). Shared root cause: the cd-scanner already ran its checks over several
+NORMALIZED views of the command (quote-stripped, backslash-decoded, ANSI-C-decoded), but the
+sibling destructive-verb net and the proof-path matcher still scanned the RAW string only — so the
+same disguises the cd-scanner defeats slipped past them:
+
+- **Proof-path / ledger-name matcher normalized (proven bypass, disarms C3):** the shell joins
+  quote-split and backslash-escaped tokens into the real filename before running the command, so
+  `printf "[]" > .claude/session-state/applied-source"-"ledger.json` and
+  `printf {} > codex-review"-"forged.json` executed as writes to the protected ledger/proof while a
+  raw-string regex missed them. The shell-`command` path matcher now tests every normalized view
+  (raw + quote-stripped + backslash-dropped) via a shared `shellCommandViews` helper and denies if
+  any matches. The literal filesystem-path predicates (`file_path`, patch destinations, `cwd`) stay
+  raw — they are real paths, not shell syntax, so quote-stripping them would be wrong.
+- **Destructive-verb net normalized (proven bypasses):** a quote-composed verb
+  (`r"m" -rf .claude/session-state`) and a backslash-dropped `.claude` ancestor
+  (`rm -rf .clau\de`, which bash runs as `.claude`) both reached the state dir undenied. The
+  destructive check now runs over the same `shellCommandViews`, so the verb and the state-dir
+  mention are seen in whichever view the shell would actually execute; the raw view still covers
+  Windows `\`-separated paths, where the backslash is a real separator.
+- **`find`-traversal delete closed (proven bypass):** `find` deletes by traversal and never names
+  the basename, so neither the destructive-verb regex nor the basename guard fired —
+  `find .claude/session-state -delete` (and `-exec rm` / `-execdir rm`) wiped the exact ledger +
+  proofs that `rm -rf .claude/session-state` is blocked for. `find` paired with a delete/exec
+  action is now treated as a destructive verb; a `find … -delete` on an unrelated `.claudex` glob
+  stays allowed (only bare `.claude` as a whole path component counts).
+- **Unborn-HEAD probe made locale-independent (fail-open closed):** `stop-wrap.mjs` detects an
+  unborn HEAD by matching git's English stderr; without a forced locale a non-English git would
+  fail the match and SKIP containment (fail open). The `git rev-parse --verify HEAD` probe now runs
+  with `LC_ALL=C`/`LANG=C` so the English match holds everywhere.
+- **NUL delimiter made reviewable:** the dedup key in `stop-wrap.mjs` joined name and SQL-hash with
+  a raw NUL byte, which made git classify the file binary past its 8 KB sniff window and left the
+  delimiter invisible to reviewers. Switched to the byte-identical visible escape `"\u0000"` — same
+  runtime delimiter, clean text, line-level diffs restored (this is why this file shows a one-time
+  whole-file rewrite in the diff: the old blob had a NUL and diffed as binary).
+- **worktree-cleanup failed-remove restore hardened:** the restore branch now captures the exact
+  prior `settings.local.json` bytes before the checkout and, on a failed `worktree remove`, restores
+  those bytes (or deletes the file if it did not exist before) instead of a blind `checkout HEAD`.
+
+CodeRabbit precision language (finding #7): C3 records only qualifying non-error
+`apply_migration` responses; a slug-only containment match must satisfy the ±7-day stamp window;
+ledger entries are pruned only after a successful git content-hash verify AND under the
+cross-process lock. CodeRabbit findings deliberately dismissed with reason: #2 (variable/interpreter
+indirection, e.g. `X=…; cd "$X"`) is the same accepted interpreter-indirection residual documented
+above — the guard denies on the visible mention, prevention of a hidden target is out of scope; #5
+(worktree-cleanup treats a missing/corrupt ledger as "no entries" and sweeps) is the DELIBERATE,
+documented fail-open — a machine-local, unreadable ledger must not pin the whole fleet forever, and
+neither Opus reviewer corroborated it as a real risk.
+
+CodeRabbit re-review (2026-08-19, PR #423 — variable-target cd, auto-"addressed" marker overturned):
+CodeRabbit finding 3813087972 flagged `part=state; cd .claude/session-$part`. The target resolves to
+`.claude/session-state`, but the contiguous `.claude/session-state` string is never spelled out in
+the command, so the cd-scanner's second-literal-reference test missed it and the command was still
+ALLOWED — despite CodeRabbit's own auto-"✅ Addressed" marker, which an empirical test overturned (per
+"done = ran and proven", the marker was not trusted). This is DISTINCT from the earlier-dismissed
+`X=…; cd "$X"` residual: there the whole path hides in a variable with no literal skeleton, whereas
+here the target's OWN literal skeleton (`.claude/session-…`) already names a protected component. The
+cd-scanner's unresolvable-target branch now fails closed when the target's literal skeleton hits a
+protected component (`segmentsHitStateDir` on the target and its Bash-escape-decoded form, parity
+with the destructive-verb net), so `part=state; cd .claude/session-$part`,
+`X=session-state; cd .claude/$X`, and `cd .clau[d]e/session-state` all deny; a fully-hidden
+`cd "$X"` (no literal `.claude` in the target) stays the accepted interpreter-indirection residual,
+and benign `.claude`-prefixed siblings (`cd .claude-cache/$sub`, `cd $HOME/session-state-notes`) stay
+allowed. Mutation-proved load-bearing (detector neutered → ALLOW, live → DENY).
+
+Blind adversarial Opus round 8 (2026-08-19, PR #423, commit `8c4a07ac` — Codex usage exhausted,
+two fresh independent blind Opus reviewers): both flagged a short-lead glob bypass; one also flagged
+a directory-level MCP-tool bypass. Two proven holes, both fixed:
+
+- **Short-lead glob on the `.claude` component.** The component-aware glob detector floored a glob
+  segment's literal lead at length 3, so a DOTTED 2-char lead (`.c`) fell through — yet the only
+  protected name starting with `.` is `.claude`, and `.c*` is already a real glob for it. `rm -rf
+  .c*/s*`, `rm -rf .c*`, `mv .c*/s* /tmp/x`, `find .c*/s* -delete`, and `cd .c*/s* && …` all expand
+  to `.claude` / `.claude/session-state` at runtime and were ALLOWED. The floor is now dotted-aware
+  (min lead 2 when the lead starts with `.`, 3 otherwise), so those deny while ordinary deletes
+  whose lead is a bare `s`/`a` (`rm s*.o`, `rm a*.log`) stay allowed.
+- **Directory-level file-tool bypass.** A native or MCP file-mutation tool (`Write`/`Edit`,
+  `move_file`, `delete_directory`) whose path field is the state DIRECTORY itself — not a protected
+  basename — moves or deletes the whole ledger + every proof at once, and the basename matcher never
+  sees a protected filename. `move_file source=".claude/session-state"`, `move_file source=".claude"`,
+  `delete_directory path=".claude/session-state"`, and a forge-by-move whose DESTINATION lands in the
+  state dir all slipped through. The guard now denies any path candidate that ENTERS the state dir
+  (`cdTargetEntersStateDir` over `pathCandidates`), which leaves an edit to a file inside `.claude`
+  but outside `session-state` (`.claude/settings.json`, `.claude/hooks/*.mjs`, a hook-file move)
+  still allowed. Both detectors mutation-proved load-bearing (detector neutered → exploit ALLOW,
+  live → DENY); 9 new DENY + 6 new ALLOW regression cases added to `review-proof-guard.test.mjs`.
+  Both reviewers again noted a verb/path denylist is inherently incompletable; the real boundary
+  remains GitHub `protect-main` branch protection plus C3 tamper-evidence, both in place.
+
 ## 2026-08-18 — CRX-SEC-1 is LIVE (applied 2026-08-16); seven docs corrected, two claims retracted, and both RLS matrices reconciled against live
 
 Documentation only — no app source, migration, or live-state change; every live read in this entry
