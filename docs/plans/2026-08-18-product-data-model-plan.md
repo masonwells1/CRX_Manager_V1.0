@@ -465,18 +465,31 @@ Then **at order, receiving or delivery, record which brand actually filled the l
 is what puts a real EPA registration number onto an application record — the number that
 matters if a field record is ever audited — without disturbing how anything is sold.
 
-> **[REV3] Corrected — read this before building the paragraph above.** "At order, receiving
-> or delivery" was too loose, and round 3 established the right answer: **brand attaches at
-> receiving, to the lot chain the app already has.** `receiving_records.lot_number` →
-> `blend_ticket_products.lot_number` → `application_record_lots` (with `quantity_from_lot`)
-> already tracks physical product identity end to end. **A lot number is a specific branded
-> batch.** Bolting a `brand_id` onto delivery or application lines instead would create a
-> second provenance system that can contradict the lot data. Mason confirmed on 2026-08-18
-> that brand selection is acceptable as a required step at receiving, and that split loads
-> must show **every** contributing brand with its amount — which `application_record_lots`
-> already models for free. Records must **snapshot** the brand's EPA number at write time
-> rather than dereference the brand row later, so correcting a typo cannot rewrite history.
-> See §11.1 item 2 and PRD 1.9a / 1.9a-i / 1.9a-ii / 1.9a-iii.
+> **[REV3b] Corrected — read this before building the paragraph above, and disregard the
+> round-3 version of this note, which was wrong.** Round 3 said brand should attach to the
+> existing lot chain (`receiving_records.lot_number` → `blend_ticket_products.lot_number` →
+> `application_record_lots`), on the reasoning that a lot number *is* a specific branded
+> batch. Mason rejected that on 2026-08-18: *"a lot of totes don't have lot numbers so some
+> will not… don't make tote number / lot the focus because not all have it."*
+>
+> **Verified live, and the reality is stronger than his caution:** `receiving_records` has
+> **0 of 130** rows with a lot number; `delivery_items` **1 of 400** with a tote number;
+> `invoice_items` **0 of 19**; and `blend_tickets`, `blend_ticket_products` and
+> `application_record_lots` are **entirely empty**. The lot chain exists in code and is
+> **not in use**. Round 3 verified the *file footprint* of that infrastructure, never its row
+> counts, and this plan repeated the conclusion without checking.
+>
+> **Correct design: `brand_id` is its own column on the receiving record, independent of any
+> batch identifier.** A lot or tote number, where one exists, is optional supporting detail
+> recorded beside the brand — never the key it hangs from. Split loads get their own
+> per-line brand-plus-quantity shape rather than riding `application_record_lots`, which is
+> unproven. The dormant lot/tote columns are left alone: not extended, not deleted, and never
+> a condition of any brand behavior. See §11.1 item 2 and PRD 1.9a through 1.9a-iv.
+>
+> Unchanged from round 3: brand selection is required when product arrives (Mason's
+> 2026-08-18 answer), split loads show **every** contributing brand with its amount, and
+> records **snapshot** the brand's name and EPA number at write time so correcting a typo
+> cannot rewrite history.
 >
 > Two further corrections to the bullet list above: **`density_value` on a brand row needs a
 > stated precedence rule against the spec's density** (§11.1 item 3, PRD 1.18) — "whichever
@@ -1217,16 +1230,15 @@ dies. Worse, it is invisible to anyone testing as service-role. Now PRD requirem
 and a §7 hard constraint. `docs/reference/gotchas.md` lists only `application_services` as
 column-carved and is stale — it must be corrected in the same change.
 
-**2. The brand layer ignored provenance tracking the app already has.** This was the
-round's best catch. `receiving_records.lot_number` → `blend_ticket_products.lot_number` →
-`application_record_lots` (carrying `quantity_from_lot`) already tracks physical product
-identity end to end, with supporting files across `LotsEditorModal.tsx`, `lotRpc.ts`,
-`QuickReceivePanel.tsx`, `receivingPdf.ts` and `ManualTicketCreate.tsx`. **A lot number is
-a specific branded batch.** PRD 1.9a as written invited a `brand_id` bolted onto delivery
-and application lines — a second provenance system that could contradict the lot data.
-Corrected: brand attaches at receiving, and everything downstream inherits it through the
-chain that already exists. This also answers the split-load case for free, since
-`application_record_lots` already models multiple lots with a quantity each.
+**2. ~~The brand layer ignored provenance tracking the app already has.~~ RETRACTED
+2026-08-18 — see §11.8.** Round 3 called this its best catch and recommended hanging brand
+tracking on `receiving_records.lot_number` → `blend_ticket_products.lot_number` →
+`application_record_lots`. Mason rejected it the same day, and live row counts confirm he
+was right: that infrastructure has **no data in it at all**. The finding verified the
+existence of the *code* (`LotsEditorModal.tsx`, `lotRpc.ts`, `QuickReceivePanel.tsx`,
+`receivingPdf.ts`, `ManualTicketCreate.tsx`) and inferred that the workflow was in use. It
+is not. Brand attaches directly to the receiving record instead, with no dependence on any
+batch identifier. Full correction and evidence in §11.8.
 
 **3. Density existed in two places with no precedence rule.** 1.3 put `density_value` on the
 spec; 1.9 put one on brand rows; nothing said which the scale-weight math uses. That is the
@@ -1294,8 +1306,8 @@ unit-type-versus-`product_form` check. Neither document mentioned it. Consequenc
 
 | Question | Mason's answer | Where it lands |
 |---|---|---|
-| Split loads — must paperwork show both brands and how much of each? | **Both brands, with amounts** | PRD 1.9a-ii. Needs no new shape; `application_record_lots` already carries per-lot quantities |
-| Make picking the brand required when the crew types the lot number at receiving? | **Yes, capture at receiving** | PRD 1.9a-i. Cheapest capture point — the person unloading is holding the jug |
+| Split loads — must paperwork show both brands and how much of each? | **Both brands, with amounts** | PRD 1.9a-ii. **[REV3b]** Needs a real per-line brand+quantity shape — the round-3 claim that `application_record_lots` gives this for free was wrong; that table is empty and unused (§11.8) |
+| Make picking the brand required when product arrives? | **Yes, capture at receiving** | PRD 1.9a-i. Cheapest capture point — the person unloading is holding the jug. **[REV3b]** Must work with the lot/tote field left blank, which is the normal case (§11.8) |
 | Blank rate instead of a guessed one on quote lines with no true per-acre rate? | **Blank is better than a guess** | PRD 2.3 / 2.4b. Confirms removing the `'oz'` fallback rather than flagging it |
 | Fertilizer nitrogen — total N, or split into ammoniacal/urea/nitrate? | **Total nitrogen is enough** | PRD 1.10c. Schema must not forbid the breakdown later, but no entry requirement ships now |
 
@@ -1318,3 +1330,42 @@ plausible and self-consistent); the HRAC/FRAC coding-scheme claims; and the exec
 Codex connector assumptions in PRD §8. Everything else in §2 of this plan was re-verified
 digit-for-digit against the live database, along with the cited source lines and function
 bodies.
+
+### 11.8 [REV3b] Retraction — brand tracking must not depend on lot or tote numbers
+
+**Mason, 2026-08-18:** *"A lot of totes don't have lot numbers so some will not, make sure
+and note that — don't make tote number / lot the focus because not all have it."*
+
+He is right, and the live data is more emphatic than his caution:
+
+| Table / column | Rows | Populated |
+|---|---|---|
+| `receiving_records.lot_number` | 130 | **0** |
+| `delivery_items.tote_number` | 400 | **1** |
+| `invoice_items.tote_number` | 19 | **0** |
+| `blend_ticket_products` | **0 rows — table never used** | — |
+| `application_record_lots` | **0 rows — table never used** | — |
+| `blend_tickets` | **0 rows — table never used** | — |
+| `application_records` | 1 | — |
+
+**The lot/tote infrastructure exists in code and is not in use.** Round 3 verified its
+*file footprint* — `LotsEditorModal.tsx`, `lotRpc.ts`, `QuickReceivePanel.tsx`,
+`receivingPdf.ts`, `ManualTicketCreate.tsx` — and inferred a working end-to-end workflow
+from the presence of those files. It never checked the row counts. This plan then repeated
+the conclusion without checking either. **Existing code is not evidence of an existing
+workflow**; only data is. That is the general lesson worth keeping from this correction.
+
+**What replaces it.** `brand_id` is its own column on the receiving record, independent of
+any batch identifier. Where a lot or tote number happens to exist it is recorded alongside
+the brand as optional supporting detail — never as the key the brand hangs from. Split
+loads get a per-line brand-plus-quantity shape of their own rather than riding
+`application_record_lots`, which is unproven and empty. The dormant lot/tote columns are
+left strictly alone: not extended, not deleted, and never a precondition of any brand
+behavior. Whether that infrastructure is ever adopted is a separate question for Mason and
+has no bearing on this plan.
+
+**Acceptance test that encodes the correction:** receive product with **no lot number and
+no tote number**, and every brand behavior — capture, split-load quantities, EPA number on
+paperwork — works completely. That is the *normal* case, not a degraded one.
+
+Requirements: PRD **1.9a**, **1.9a-i**, **1.9a-ii**, **1.9a-iv**.
