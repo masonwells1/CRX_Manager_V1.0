@@ -2,38 +2,60 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-19 — Blend-ticket total-volume check no longer adds quantities across…
+## 2026-08-19 — Blend-ticket total-volume check no longer adds quantities across different units
 
 `validateBlendMath` summed every product quantity regardless of unit, so a ticket holding
 10 Gal + 32 oz + 5 Lb summed to 47 and was compared against a total volume expressed in
 gallons — a spurious warning, or a masked real mismatch when the errors cancelled.
-`ProductData.unit` was declared but never read. The check now compares only when every
-contributing row shares the ticket's unit, and otherwise says the check was skipped and why.
+`ProductData.unit` was declared but never read. The check now runs only when every quantity
+feeding the sum is *known* to be in the ticket's unit, and otherwise says the check was
+skipped and why.
 
 - **`unit_conversions` deliberately NOT joined.** It cannot bridge a mixed-unit ticket:
   `factor_oz` is within-family only (Lb = 16 **dry** oz, Gal = 128 **fluid** oz, Ea/Unit = a
   dimensionless count), and crossing liquid↔dry needs a per-product density the table does not
-  carry. Not joining it also sidesteps the known duplicate-row join risk on its case aliases
-  (`Lb`/`LB`, `oz`/`Oz`, `qt`/`Qt`) — the same frozen-key surface `save_quote` joins on.
-- **Unit equality rules.** Case and surrounding whitespace ignored; the two synonym pairs the
-  live rows themselves declare (`oz`/`fl oz`, `Ea`/`Unit` — identical `factor_oz` *and*
-  `unit_type`) treated as one unit. `oz` vs `Dry oz` stays correctly separate. The alias map
-  holds no factors: it decides only *whether* to compare, never rescales a quantity.
-- **Zero-quantity rows ignored** when deciding whether units are mixed — a half-entered row
-  (unit picked, quantity still blank) no longer suppresses the check for the whole ticket.
+  carry. Not joining it also sidesteps a duplicate-row join risk on its case aliases
+  (`Lb`/`LB`, `oz`/`Oz`, `qt`/`Qt`) — the same frozen-key surface `save_quote` joins on. That
+  risk was raised in a prior review; it is not otherwise recorded in this repo, and it is a
+  pre-existing money-path concern independent of this change (see the open item below).
+- **Unit equality rules.** Only *lossless* differences are folded away — case (the live rows
+  carry deliberate case aliases with identical factors), any run of whitespace including
+  non-breaking and zero-width characters, and periods (`fl. oz` = `fl oz`, `gal.` = `gal`) —
+  plus the two synonym pairs the live rows themselves declare (`oz`/`fl oz`, `Ea`/`Unit`,
+  identical `factor_oz` *and* `unit_type`). `oz` vs `Dry oz` stays correctly separate. The
+  alias map holds no factors: it decides only *whether* to compare, never rescales a quantity.
+  It is deliberately **not** extended to guessed spellings — the fields are free text, and
+  merging `ounces` into liquid `oz` would restore the silent bad arithmetic. An unrecognised
+  spelling costs one "verify by hand" message instead.
+- **A quantity with no unit recorded blocks the comparison** rather than being absorbed into
+  the ticket's unit. The unit fields are free text and a new row starts blank, so "quantity
+  typed, unit left blank" is a likely real state; treating it as agreement would mask exactly
+  the cross-unit mismatch this change exists to catch. A ticket with no units recorded
+  *anywhere* still gets the plain comparison it always had, so unit-less tickets stay quiet.
+- **Zero-quantity rows ignored** when deciding whether units agree — a half-entered row
+  (unit typed, quantity still blank) no longer suppresses the check for the whole ticket.
 - **Scope: warning text only.** No change to stored quantities, pricing, or inventory; the
   callers (`ManualTicketCreate.tsx:333`, `BlendTicketDetail.tsx:433`) only render the result,
   and it never gates a save. Severity **low** — `blend_tickets` and `blend_ticket_products` are
   both empty on live.
-- **Verified in a browser**, not by tests alone: drove the real validator module through the
-  mixed-unit, alias, and half-entered-row cases and read the rendered banner back. 15 new tests
-  (26 total in the file); mutation-tested by reverting each fix and confirming exactly the
-  expected tests went red.
-- **Known gap, deliberately out of scope:** the per-product `rate_per_acre × total_acres` check
-  in the same file is still unit-blind (`rate_per_acre_unit` is never compared to `unit`).
+- **Verified by running it, not by tests alone.** The real `blendMathValidator` module was
+  imported into a page served by the dev server and driven through the mixed-unit, alias,
+  blank-unit and half-entered-row cases, with each returned warning read back in the browser.
+  The production banner component itself was not exercised (both caller test files mock the
+  validator away), so that rendering path remains unverified. 20 new tests (31 total in the
+  file); mutation-tested by reverting each guard in turn and confirming exactly the expected
+  tests went red.
+- **Reviewed** by two independent adversarial Opus passes, which confirmed the display-only
+  blast radius by exhaustive caller trace and drove the blank-unit hole, the free-text
+  spelling drift, and several doc inaccuracies above. CodeRabbit was rate-limited on the PR
+  and did not review.
+- **Known gaps, deliberately out of scope:** the per-product `rate_per_acre × total_acres`
+  check in the same file is still unit-blind, and the unit fields are free text rather than
+  the picker the Field App already uses. Both recorded in `docs/manual/KNOWN_ISSUES.md`.
 
-- **Commits this session** (git log origin/main..HEAD):
-  - `051e60d1 fix(blend): stop adding gallons to pounds in the total-volume check`
+- **Landed via** [PR #426](https://github.com/masonwells1/CRX_Manager_V1.0/pull/426) from
+  `claude/loving-hofstadter-6b1f5e`. (Commit SHAs are deliberately not cited here — this branch
+  was rebased, and an earlier version of this entry cited a SHA that the rebase orphaned.)
 - **Migrations touched** (git diff --name-only origin/main...HEAD):
   - none
 

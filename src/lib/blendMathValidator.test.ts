@@ -215,8 +215,12 @@ describe('validateBlendMath', () => {
       expect(warnings[0]).toContain('200.00');
     });
 
-    it('treats a blank product unit alongside a recorded one as unknown, not mixed', () => {
-      // A half-filled row must not fire the mixed-unit notice on its own.
+    // The unit fields are free text and a new product row starts with unit '',
+    // so "quantity typed, unit left blank" is a likely real state. That quantity
+    // is already inside the sum, so treating it as agreeing with the ticket unit
+    // would mask exactly the cross-unit mismatch this check exists to catch:
+    // if the 200 below is pounds, 100 + 200 = 300 "matches" 300 gal by accident.
+    it('refuses to compare when a contributing row has a quantity but no unit', () => {
       const warnings = validateBlendMath(
         { total_acres: null, total_volume: 300, total_volume_unit: 'gal' },
         [
@@ -224,10 +228,70 @@ describe('validateBlendMath', () => {
           { product_name: 'B', quantity: 200, unit: null, rate_per_acre: null, rate_per_acre_unit: null },
         ]
       );
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('quantity but no unit');
+    });
+
+    it('treats a whitespace-only unit as not recorded, not as its own unit', () => {
+      const warnings = validateBlendMath(
+        { total_acres: null, total_volume: 300, total_volume_unit: 'gal' },
+        [
+          { product_name: 'A', quantity: 100, unit: 'gal', rate_per_acre: null, rate_per_acre_unit: null },
+          { product_name: 'B', quantity: 200, unit: '   ', rate_per_acre: null, rate_per_acre_unit: null },
+        ]
+      );
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('quantity but no unit');
+    });
+
+    it('ignores a blank unit on a row that contributes nothing to the sum', () => {
+      const warnings = validateBlendMath(
+        { total_acres: null, total_volume: 300, total_volume_unit: 'gal' },
+        [
+          { product_name: 'A', quantity: 300, unit: 'gal', rate_per_acre: null, rate_per_acre_unit: null },
+          { product_name: 'B', quantity: 0, unit: null, rate_per_acre: null, rate_per_acre_unit: null },
+        ]
+      );
       expect(warnings).toHaveLength(0);
     });
 
-    it('stays silent on a mixed-unit ticket before any quantity is entered', () => {
+    it('strips periods so an abbreviation still matches its plain spelling', () => {
+      const warnings = validateBlendMath(
+        { total_acres: null, total_volume: 300, total_volume_unit: 'gal' },
+        [
+          { product_name: 'A', quantity: 100, unit: 'gal.', rate_per_acre: null, rate_per_acre_unit: null },
+          { product_name: 'B', quantity: 200, unit: 'Gal', rate_per_acre: null, rate_per_acre_unit: null },
+        ]
+      );
+      expect(warnings).toHaveLength(0);
+    });
+
+    it('collapses interior whitespace so "fl.  oz" still matches "oz"', () => {
+      const warnings = validateBlendMath(
+        { total_acres: null, total_volume: 300, total_volume_unit: 'oz' },
+        [
+          { product_name: 'A', quantity: 100, unit: 'fl.  oz', rate_per_acre: null, rate_per_acre_unit: null },
+          { product_name: 'B', quantity: 200, unit: 'oz', rate_per_acre: null, rate_per_acre_unit: null },
+        ]
+      );
+      expect(warnings).toHaveLength(0);
+    });
+
+    it('does not let a unit named like an Object property inherit a value', () => {
+      // 'constructor' must behave like any other unrecognised free-text unit.
+      const warnings = validateBlendMath(
+        { total_acres: null, total_volume: 300, total_volume_unit: 'constructor' },
+        [
+          { product_name: 'A', quantity: 300, unit: 'constructor', rate_per_acre: null, rate_per_acre_unit: null },
+        ]
+      );
+      expect(warnings).toHaveLength(0);
+    });
+
+    // Guards the `sumQuantities > 0` gate rather than the unit logic: with both
+    // quantities still 0 there is nothing to compare, so the ticket stays quiet
+    // while it is being filled in.
+    it('stays silent before any quantity is entered, whatever the units say', () => {
       const warnings = validateBlendMath(
         { total_acres: null, total_volume: 300, total_volume_unit: 'Gal' },
         [

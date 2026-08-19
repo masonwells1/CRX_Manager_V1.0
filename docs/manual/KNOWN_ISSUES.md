@@ -30,24 +30,56 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 **Severity: LOW, warning text only, currently unreachable (0 rows in `blend_tickets` and
 `blend_ticket_products` on live, verified read-only 2026-08-19).** The sibling total-volume defect
-in the same file was fixed and committed on 2026-08-19 (`051e60d1`); this one was left deliberately
-out of scope and is recorded here so it is not re-discovered as new.
+in the same file was fixed on 2026-08-19 via
+[PR #426](https://github.com/masonwells1/CRX_Manager_V1.0/pull/426); this one was left
+deliberately out of scope and is recorded here so it is not re-discovered as new.
 
 `validateBlendMath` compares each product's `quantity` against `rate_per_acre × total_acres`
-without ever comparing `unit` to `rate_per_acre_unit`. Both fields exist on `ProductData` and both
-are populated by the callers, but the rate arm reads neither. A product entered as 25 **Gal** at a
-rate of 32 **oz**/acre over 100 acres is arithmetically correct — 32 × 100 = 3200 fl oz = 25 gal —
-yet the check compares the bare numbers 25 vs 3200 and flags it. The mirror case hides a real
-error: quantities that happen to be numerically close across different units pass silently.
+without ever comparing `unit` to `rate_per_acre_unit`. Both fields exist on `ProductData`, but the
+rate arm reads neither. A product entered as 25 **Gal** at a rate of 32 **oz**/acre over 100 acres
+is arithmetically correct — 32 × 100 = 3200 fl oz = 25 gal — yet the check compares the bare
+numbers 25 vs 3200 and flags it. The mirror case hides a real error: quantities that happen to be
+numerically close across different units pass silently.
 
-`unit_conversions` **can** legitimately serve this arm where the total-volume arm it cannot: a rate
-and a quantity for the *same product* are usually in the same family, so `factor_oz` would convert
-correctly — but the fix must handle the liquid↔dry crossing (no density column) and must not join
-`LOWER(unit)` naively, because the table carries case-alias rows (`Lb`/`LB`, `oz`/`Oz`, `qt`/`Qt`)
-that duplicate on that join. The total-volume fix sidestepped the table entirely for this reason.
+Three things a fix must handle that the total-volume arm did not:
+
+- `rate_per_acre_unit` is a **per-acre** string — the form's placeholder is literally `oz/ac` — so
+  it will never match `unit_conversions.unit` directly. `chemCalculator.ts` already has
+  `baseUnitFromRateUnit` to strip the `/ac` suffix; reuse it rather than writing a second parser.
+- `rate_per_acre_unit` is **not always populated**: the recipe-load path in
+  `ManualTicketCreate.tsx` hardcodes `rate_per_acre_unit: ''`, so recipe-derived rows carry none.
+  A missing unit must skip the check, never be assumed to match.
+- `unit_conversions` **can** legitimately serve this arm, unlike the total-volume arm: a rate and a
+  quantity for the *same product* are usually in the same family, so `factor_oz` converts exactly
+  within liquid or within dry. But the fix must still refuse the liquid↔dry crossing (no density
+  column), must not treat `Ea`/`Unit` (`factor_oz = 1`, `unit_type = 'both'`) as convertible — they
+  are a dimensionless count, and converting a jug count to fluid ounces 1:1 is nonsense — and must
+  not join `LOWER(unit)` naively, because the case-alias rows (`Lb`/`LB`, `oz`/`Oz`, `qt`/`Qt`)
+  duplicate on that join.
 
 **Not started.** No migration, no live state, no money path. Fix alongside the next blend-ticket
 change rather than on its own.
+
+---
+
+## OPEN 2026-08-19 — blend-ticket unit fields are free text, so spellings drift
+
+**Severity: LOW, data-quality.** The `unit` and `rate_per_acre_unit` inputs on
+`ManualTicketCreate.tsx` and `BlendTicketDetail.tsx` are plain `<Input type="text">` boxes with a
+placeholder, and a new product row starts with `unit: ''`. Nothing constrains an operator to the
+vocabulary in `unit_conversions`, so `gallons`, `lbs`, `gal`, and a blank are all equally storable.
+
+The Field App already solves this: `FieldAppChemicalEntry.tsx` renders a picker from
+`unitOptionsForForm(unitConversions, product_form)` and uses `isKnownUnit` to grandfather existing
+odd values. Making the blend-ticket fields use the same helpers is the real fix and would turn a
+prose rule into a hard guard.
+
+Until then the total-volume check fails safe: an unrecognised spelling or a missing unit produces a
+"verify the total by hand" message instead of a comparison. That is deliberate — see the alias-map
+comment in `src/lib/blendMathValidator.ts` — but it means an operator who types `gallons` on one
+row and `Gal` on another loses the check on that ticket.
+
+**Not started.** No migration, no live state, no money path.
 
 ---
 
