@@ -291,6 +291,22 @@ above — the guard denies on the visible mention, prevention of a hidden target
 documented fail-open — a machine-local, unreadable ledger must not pin the whole fleet forever, and
 neither Opus reviewer corroborated it as a real risk.
 
+CodeRabbit re-review (2026-08-19, PR #423 — variable-target cd, auto-"addressed" marker overturned):
+CodeRabbit finding 3813087972 flagged `part=state; cd .claude/session-$part`. The target resolves to
+`.claude/session-state`, but the contiguous `.claude/session-state` string is never spelled out in
+the command, so the cd-scanner's second-literal-reference test missed it and the command was still
+ALLOWED — despite CodeRabbit's own auto-"✅ Addressed" marker, which an empirical test overturned (per
+"done = ran and proven", the marker was not trusted). This is DISTINCT from the earlier-dismissed
+`X=…; cd "$X"` residual: there the whole path hides in a variable with no literal skeleton, whereas
+here the target's OWN literal skeleton (`.claude/session-…`) already names a protected component. The
+cd-scanner's unresolvable-target branch now fails closed when the target's literal skeleton hits a
+protected component (`segmentsHitStateDir` on the target and its Bash-escape-decoded form, parity
+with the destructive-verb net), so `part=state; cd .claude/session-$part`,
+`X=session-state; cd .claude/$X`, and `cd .clau[d]e/session-state` all deny; a fully-hidden
+`cd "$X"` (no literal `.claude` in the target) stays the accepted interpreter-indirection residual,
+and benign `.claude`-prefixed siblings (`cd .claude-cache/$sub`, `cd $HOME/session-state-notes`) stay
+allowed. Mutation-proved load-bearing (detector neutered → ALLOW, live → DENY).
+
 ## 2026-08-18 — CRX-SEC-1 is LIVE (applied 2026-08-16); seven docs corrected, two claims retracted, and both RLS matrices reconciled against live
 
 Documentation only — no app source, migration, or live-state change; every live read in this entry

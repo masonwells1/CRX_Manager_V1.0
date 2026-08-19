@@ -221,7 +221,16 @@ function scanCdInvocations(scan) {
     // directory (Opus review 2026-08-19, round 3 — an empty-target `sl` was a
     // proven gap).
     const unresolvable = /[$%`*?[\]{}]/.test(target) || !target || /[$%`]/.test(afterToken);
-    if (cdTargetEntersStateDir(target) || cdTargetEntersStateDir(decoded) || (unresolvable && reviewStateDirectoryMentioned(command))) {
+    // An unresolvable target whose OWN literal skeleton already names a
+    // protected component (`cd .claude/session-$part`, `cd .clau[d]e/…`) can
+    // enter the state dir regardless of what else the command says — the
+    // second-literal-reference test below misses it because the contiguous
+    // `.claude/session-state` string is never spelled out. Fail closed on the
+    // target itself, component-aware (parity with the destructive-verb net;
+    // CodeRabbit PR #423, still-open despite the auto-"addressed" marker).
+    const targetSkeletonHitsStateDir = segmentsHitStateDir(target) || segmentsHitStateDir(decoded);
+    if (cdTargetEntersStateDir(target) || cdTargetEntersStateDir(decoded) ||
+        (unresolvable && (reviewStateDirectoryMentioned(command) || targetSkeletonHitsStateDir))) {
       deny("REVIEW PROOF GUARD: the review state directory is wrapper-owned and cannot become an interactive shell working directory.");
     }
   }

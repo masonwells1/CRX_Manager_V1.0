@@ -146,6 +146,14 @@ for (const payload of [
   { tool_name: "Bash", tool_input: { command: "git clean -fdx .claude/session-state" } },
   { tool_name: "Bash", tool_input: { command: "rsync -a --delete /tmp/empty/ .claude/session-state/" } },
   { tool_name: "Bash", tool_input: { command: "truncate -s0 .claude/session-state/applied-source-ledger.json" } },
+  //   (d) a cd whose target is unresolvable BUT whose own literal skeleton names
+  //       a protected component (`.claude/session-$part`) enters the state dir at
+  //       runtime — the whole `.claude/session-state` string is never spelled out,
+  //       so the second-literal-reference test missed it (CodeRabbit PR #423, the
+  //       auto-"addressed" marker was wrong — verified still-ALLOW before the fix).
+  { tool_name: "Bash", tool_input: { command: "part=state; cd .claude/session-$part" } },
+  { tool_name: "Bash", tool_input: { command: "X=session-state; cd .claude/$X" } },
+  { tool_name: "Bash", tool_input: { command: "cd .clau[d]e/session-state" } },
 ]) {
   const result = run(payload);
   assert.equal(result.status, 0);
@@ -205,5 +213,10 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: "echo x > .claude-n
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "git clean -fdx dist" } }).stdout, "");
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "rsync -a --delete /tmp/a/ /tmp/b/" } }).stdout, "");
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "truncate -s0 /tmp/log" } }).stdout, "");
+// The unresolvable-target skeleton check must not over-match: a `$VAR` target whose
+// literal parts are NOT protected components stays allowed, and a `.claude`-PREFIXED
+// but distinct component (`.claude-cache`) stays allowed even unresolved.
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd $HOME/session-state-notes && ls" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd .claude-cache/$sub && ls" } }).stdout, "");
 
 console.log("OK - review proof guard checks passed.");
