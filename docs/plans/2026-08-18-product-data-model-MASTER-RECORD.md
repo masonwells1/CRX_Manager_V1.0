@@ -32,7 +32,7 @@ folded in below. That is why this document is long: the mistakes are in it, not 
 
 # PART 1 — EVERY ISSUE
 
-Forty-two issues, grouped by where they came from. Each one says what is wrong, the
+Forty-three issues, grouped by where they came from. Each one says what is wrong, the
 evidence, what it costs you, and where it gets fixed.
 
 Severity: **BLOCKER** = would break the build or produce wrong numbers.
@@ -125,11 +125,11 @@ Your call: *"not concerned right now."* → **Parked.**
 These were not in the original review. They surfaced once the design met real chemistry,
 and two of them would have silently produced wrong numbers forever.
 
-### B-8 · The salt-name trap — **BLOCKER**
+### B-8 · The same-name-different-substance trap — **BLOCKER**
 
-The EPA does not return "glyphosate." It returns **"glyphosate, isopropylamine salt,"
-"glyphosate, potassium salt," "glyphosate, dimethylamine salt"** — three separate ingredient
-names for what you call one chemical.
+Glyphosate is the clearest example, not the only one. The EPA does not return "glyphosate."
+It returns **"glyphosate, isopropylamine salt," "glyphosate, potassium salt," "glyphosate,
+dimethylamine salt"** — three separate ingredient names for what you call one chemical.
 
 If ingredients are seeded straight from EPA lookups with the name as the unique key, the
 database ends up with three or more different "glyphosates." Your headline query — *"show me
@@ -137,7 +137,25 @@ everything containing glyphosate"* — then returns a **partial list, with no er
 warning.** That is the single worst thing this project could produce: a confidently wrong
 answer to the question the whole project exists to answer.
 
-→ Fixed by `canonical_ingredient_id` (see decision T-2).
+**The same trap has at least three shapes, and your catalog carries all three:**
+
+| Shape | Live example in your catalog |
+|---|---|
+| **Salt forms** | `Roundup 5.4#` (IPA salt) vs `Roundup 5.5#` (potassium salt); `Gen Banvel: (Dicamba DMA, Disha DMA)` names the salt in the product name |
+| **Ester vs amine** | 2,4-D LV ester vs DMA amine — same acid, not field-interchangeable (D-11) |
+| **Isomers** | `Gen Dual R Moc` vs `Gen Dual S Moc` — **both exist as separate products.** R is racemic metolachlor, S is S-metolachlor. Same ingredient name, and **a pound of one is not a pound of the other** |
+
+The isomer row is the one the glyphosate example hid. It is not a salt and has no acid
+equivalent, so `ae_fraction` does not touch it — the fix is that they must stay **separate
+ingredient rows that never merge for math.**
+
+**The rule that keeps all three correct, stated once:** *search merges forms; math never
+does.* `canonical_ingredient_id` exists so one search finds every form. Every calculation —
+rebuild quantity, family matching, scale weight — uses the **specific ingredient row** the
+product actually contains.
+
+→ Fixed by `canonical_ingredient_id` (see decision T-2), with the search-versus-math rule
+now explicit rather than implied.
 
 ### B-9 · Acid equivalent versus salt weight — **BLOCKER**
 
@@ -264,6 +282,27 @@ One text string is carrying the sellable spec, the generic-versus-branded distin
 list of acceptable fulfilment brands, the return policy, and the package size. At scale:
 **129 names carry a parenthetical brand list** and **561 of 604 use the `" - <size>"`
 suffix**.
+
+**This is not ad-hoc — it is a systematic convention covering 90 products**, written as
+`Gen <benchmark>: (acceptable brands) - size`:
+
+```
+Gen Boundary: (Ledger, MetalliS MTZ, Presidual) - 2.5 Gal
+Gen Authority MTZ: (Sulfen MTZ, Aquesta MTZ) - 12#
+Gen Quilt Xcel: (Aquila XL, Azoxyprop Xtra, Cover XL, Propaz) - 2.5 Gal
+Gen Liberty: Higher Quality (Interline, Inflame) - 2.5 Gal
+```
+
+Note that **the benchmark is frequently a premix** — Boundary is two actives, Authority MTZ
+is two, Quilt Xcel is two, Resicore and SureStart are three. The brand-and-generic problem
+and the multiple-actives problem are **the same rows**, not two separate populations.
+
+Two consequences worth naming. First, the search term "Generic" finds only 5 products — the
+convention spells it **`Gen`** — so any hand-built list keyed on the wrong word silently
+misses 90% of the pattern. Second, **48 names carry the loading as a `#` number**
+(`Gen Sencor Liquid 4#`, `Gen Capture LFR 1.75#`, `Gen Warrior 1LB` vs `2LB`,
+`Roundup 5.4#` vs `5.5#`). That number **is** the ingredient concentration — the exact fact
+the ingredient table will hold, currently living only in a text string nothing validates.
 
 **The naming convention is the current schema, and it has already been mined once.** 21
 names contain "NO RETURN" and exactly 21 rows carry `return_policy = 'no_return'`; 10 names
@@ -522,8 +561,9 @@ Chemically true, agronomically unsafe. Three things an ingredient-only compariso
 
 And separately: `canonical_ingredient_id` correctly merges 2,4-D ester and amine **for
 search**, but they are **not interchangeable in the field** — same for dicamba DGA versus
-BAPMA. Family matching must key on the **specific ingredient row**, never the canonical
-parent.
+BAPMA, and same for the R/S metolachlor pair that exists as two live products in your
+catalog (B-8). Family matching must key on the **specific ingredient row**, never the
+canonical parent.
 
 Your call: *"Warn loudly we pretty much only use ester."* → Propose with a loud warning,
 never refuse, never substitute silently.
@@ -609,6 +649,36 @@ permission revoke **and** a BEFORE trigger. Nothing else *could* write them.
 
 That is the pattern being reused for the rate columns in decision T-11 — it is proven in this
 codebase, not invented for this plan.
+
+### C-43 · Identical ingredients, deliberately different products — **HIGH**
+
+Found on 2026-08-18 while checking that this design generalizes past glyphosate. Your catalog
+already splits the *same chemistry at the same loading* into separate products on a
+**sourcing-quality** basis:
+
+```
+Gen Liberty: (Cheetah, Glufosinate, Opportunity, Reckon) - 2.5 Gal
+Gen Liberty: Higher Quality (Interline, Inflame) - 2.5 Gal
+
+Gen Callisto: (Argos, Calleron, Cavallo, Meso 4SC, Mesotrione) - 1 or 2.5
+Gen Callisto: High Quality (Explorer, Incinerate) - 1 Gal
+```
+
+The same split appears without the word "quality" at all: `Roundup 5.4# (Bucc 5 Extra)` and
+`Roundup 5.4# Generic (Ag Saver 5.4, Slam 5.4)` are two separate products at one loading with
+two different acceptable-brand sets.
+
+**The active ingredients are identical.** So as the plan currently stands, Phase 5 would group
+them into one family and the comparison tool would present them as drop-in equivalents —
+**and you clearly do not treat them that way,** or they would not be separate rows carrying
+separate prices.
+
+Ingredient data alone cannot see this. It is a sourcing judgement, not a chemistry fact, and
+it is the fourth thing C-33 could not see.
+
+→ **Fix:** the brand row carries a quality/sourcing tier, family grouping respects it, and the
+comparison tool labels a cross-tier substitution rather than presenting it as equivalent. It
+never refuses — same posture as ester-versus-amine (D-11). Added to Phase 1 and Phase 5.
 
 ---
 
@@ -1214,6 +1284,7 @@ starts on screens will build them against tables that then change shape.
 | Density | Value, unit, and **source** (label / SDS / supplier / measured / assumed) |
 | Fertilizer analysis | Complete guaranteed analysis, including CFU units for biologicals |
 | Formulation type + safener | Because identical ingredients are not always interchangeable (C-33) |
+| Sourcing-quality tier on the brand row | Because identical ingredients are sometimes *deliberately* different products (C-43) |
 | Nickname | Plain text on the product — **and searchable**, because that is how you look products up |
 | EPA status signals | Persist `productStatus` and `isCancelled`, currently fetched and discarded — the **only automatic rot detector available** |
 | Audit trail | Who changed a concentration, density or analysis, when, and from what (C-37) |
@@ -1347,6 +1418,8 @@ cents (T-22).
 - Families **derived, not typed.** Same ingredients at the same concentrations = drop-in
   equivalents. **The app proposes; you approve.**
 - **Exclude products with zero ingredient rows** (T-19)
+- **Respect the sourcing-quality tier** (C-43) — `Gen Liberty` and `Gen Liberty: Higher
+  Quality` have identical actives and must not be silently merged into one equivalence
 - **Family-drift check** (T-20)
 - **Same ingredients ≠ interchangeable** — safeners, formulation type, built-in adjuvant load,
   and matching on the **specific** ingredient row, not the canonical parent (C-33)
