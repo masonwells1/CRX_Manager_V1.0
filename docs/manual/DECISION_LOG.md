@@ -29,9 +29,10 @@ The **mirror form** carries no `round()` and no finiteness bound. Does a CHECK t
 `Infinity` satisfy a gate whose wording is "finite"?
 
 **What was measured, read-only against live on 2026-08-19.** The mirrored cents columns are
-`GENERATED ALWAYS AS (round(<dollars> * 100))::bigint STORED` (`pg_attribute.attgenerated = 's'`),
-and both dollar columns are `numeric NOT NULL DEFAULT 0`. Every route a bad value could take is
-closed *before* the CHECK is consulted:
+`GENERATED ALWAYS AS (round(<dollars> * 100)::bigint) STORED` (`pg_attribute.attgenerated = 's'`),
+and both dollar columns are `numeric NOT NULL DEFAULT 0`. Every *non-finite or overflowing* route
+is closed before the CHECK is ever consulted, because the generation expression is computed first
+and its cast raises; fractional cents are what the CHECK itself rejects:
 
 | Probe | Live result |
 |---|---|
@@ -45,10 +46,14 @@ closed *before* the CHECK is consulted:
 | Live data | 34 `purchase_orders`, 194 `purchase_order_items`, **0** fractional-cent rows; both constraints `convalidated = true` |
 
 **No fail-open exists.** An adversarial sweep for a non-whole-cent value the mirror form would
-*accept* found none. Above roughly $9.2 × 10¹⁶ PostgreSQL rounds `n / 100.0` to 18 significant
-digits (`9223372036854775807 / 100.0` returns `92233720368547758.1`), so the form starts rejecting
-a few legitimate whole-cent values — it errs closed, never open, and the threshold is sixteen
-orders of magnitude above any real purchase order.
+*accept* found none. Two ceilings sit far above any real order, and both reject rather than accept.
+Above roughly $10¹⁶ `numeric` division stops carrying two decimals, so the form starts rejecting a
+few legitimate whole-cent values (`1234567890123456789 / 100.0` returns `12345678901234567.9`); the
+exact onset is leading-digit dependent, since `numeric` picks its result scale in four-digit groups
+(`1000000000000000899 / 100.0` is still exact at `10000000000000008.9900`). Higher still, at
+`9223372036854775807 / 100.0` = `92233720368547758.1`, the generated cents column overflows bigint
+outright. In both regimes the form errs closed, never open, and the nearer of the two ceilings is
+more than ten orders of magnitude above any real purchase order.
 
 **Decision.** The two constraints above **satisfy the money gate**, as a named exception covering
 those two columns only. The gate's purpose — no fractional cent and no non-finite value reaches
@@ -58,21 +63,28 @@ guarantee already enforced would spend real risk for no change in behavior.
 **Operative rule.**
 
 1. `purchase_orders.total_cost` and `purchase_order_items.unit_cost` are **approved compatibility
-   exceptions**, not tracked debt. Do not re-raise them.
+   exceptions**, not tracked debt. Do not re-raise their **gate status**. This settles the gate
+   question only: converting them to authoritative bigint cents remains open programme work under
+   the standing rule, exactly as the 2026-08-10 entry says, and nothing here closes that.
 2. The exception is **closed**. The mirror form is not a second approved shape. Every new or
    changed money column uses the rounding form this log specifies, named
-   `<table>_<column>_whole_cents_chk`. The mirror form only holds when paired with a generated
-   cents column *and* a `NOT NULL` dollar column; copied onto an ordinary nullable cents column it
-   fails open silently, because `col = NULL` is NULL and a NULL CHECK passes.
-3. A money column with **neither** shape still does not clear the gate. Unchanged.
+   `<table>_<column>_whole_cents_chk`. The mirror form only holds when the cents side is a
+   generated column that can never be independently NULL; copied onto an ordinary nullable cents
+   column it fails open silently, because `col = NULL` is NULL and a NULL CHECK passes. (The dollar
+   columns here are also `NOT NULL`, which is belt-and-braces rather than what closes the hole.)
+3. A money column with **neither** shape still does not clear the gate. Unchanged — and that is
+   most of them: 11 live columns carry the rounding form, these 2 carry the mirror form, and the
+   remaining ~29 `numeric` money columns carry no scale CHECK at all and stay tracked findings.
 
 **The obvious hardening is the wrong hardening.** Appending `> '-Infinity' AND < 'Infinity'` to the
 mirror constraints would look like a fix without being one. The genuine weak point is that
 enforcement here is split across three schema objects — the CHECK, the generation expression, and
-the dollar column's `NOT NULL` — and only the first is a constraint. `ALTER TABLE ... ALTER COLUMN
-total_cost_cents DROP EXPRESSION` turns the cents column into an ordinary nullable column, at which
-point the CHECK evaluates to NULL and silently stops protecting anything. An appended finiteness
-clause would not prevent that; the rounding form would, because it is self-contained in one object.
+the dollar column's `NOT NULL` — and only the first is a CHECK an auditor would grep for.
+`ALTER TABLE ... ALTER COLUMN total_cost_cents DROP EXPRESSION` turns the cents column into an
+ordinary nullable column; from then on any row written without an explicit cents value — which is
+every write the app makes, since no caller names that column — evaluates the CHECK to NULL and
+passes unexamined. An appended finiteness clause would not prevent that; the rounding form would,
+because it is self-contained in one object.
 
 **Follow-up (low priority, not scheduled, needs its own approval).** If these two are ever
 hardened, the change is to **replace** each mirror predicate with the rounding form
@@ -89,9 +101,13 @@ cents", but the implementation made cents a `GENERATED` mirror *derived from* do
 dollars authoritative. The shape was never chosen as an alternative to the gate — it simply arrived
 first, and no conversion to authoritative cents has happened anywhere on this schema.
 
-**Naming.** These two constraint names end in `_whole_cents`, not `_whole_cents_chk`. That
-divergence is pre-existing and is not evidence of a problem; it is recorded here so it stops being
-rediscovered.
+**Naming — the convention describes what to write next, not what is already there.** These two
+constraint names end in `_whole_cents`, not `_whole_cents_chk`. Three of the eleven rounding-form
+constraints diverge too, ending in `_cent_scale_chk`
+(`products_current_cost`, `order_items_price_per_unit`, `quote_items_price_per_unit`). All four
+divergences are pre-existing and none is evidence of a problem. Identify a constraint by its
+predicate shape, never by its name, and do not open a renaming migration on live money tables to
+chase the convention.
 
 ---
 
