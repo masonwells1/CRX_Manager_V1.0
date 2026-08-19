@@ -109,6 +109,11 @@ secondary macros (calcium, magnesium, sulfur) and the full micronutrient list. Y
 that total nitrogen is enough; we won't require the ammoniacal/urea/nitrate breakdown, but
 the design won't forbid adding it later.
 
+You asked for this so the system can *"do recs etc and know poundage of actual applied."*
+That second half is the reason liquid fertilizer specifically needs a density: the label
+states a percentage by weight, and turning that into pounds actually applied per acre
+requires knowing what a gallon weighs.
+
 ### Layer 4 — Density, because you blend on scales
 
 Your words: *"we do a lot of blending based off scales so have to have weight of everything
@@ -204,7 +209,7 @@ the bug.
 | **1** | Ingredients, mode of action, density, brands, fertilizer analysis | One product can be given ingredients, a density and a brand, saved and read back **through the running app as a normal user** | Phase 0 |
 | **1b** | Excel workbook round-trip, so 604 products aren't edited one at a time | Download, edit, upload, preview, save — with the existing safety guards intact | Phase 1 |
 | **2** | Rate correction and unit standardization | A product with no per-acre rate autofills blank; quote totals identical before and after the unit remap | Phase 1 |
-| **3** | Comparison tool — the payoff | "Which products contain X" and "what does it cost to rebuild brand Y from generics" both answer correctly | Phase 2 |
+| **3** | Comparison tool — the payoff. The old Brand-vs-Generic page is retired and replaced, at your direction | "Which products contain X" and "what does it cost to rebuild brand Y from generics" both answer correctly; the old page and its empty table are gone with no dead references | Phase 2 |
 | **4** | Label links, required adjuvants, crop and timing, quote notes | Each visible on a real product | Phase 1 |
 | **5** | Product families and packaging variants | Families derived and populated | Phase 1 |
 | **7** | Retire the redundant size field | No behavior change | Phase 2 |
@@ -393,9 +398,12 @@ the three copies drift apart. This applies to brands as much as to ingredients.
 - **Fertilizer phosphate and potash are reported as oxides**, and agronomic math often needs
   the elemental figure. Same shape of problem as acid equivalent; must be expressible.
 - **Retiring the old ingredient map** touches more than its screen — a security-rules test
-  fixture and generated type files too.
-- **The restricted-use product count is known wrong** (2 recorded; you say materially more).
-  The compliance report must be treated as known-incomplete until the label work happens.
+  fixture and generated type files too. It holds zero rows, so dropping it destroys no data,
+  but it is still a live database change needing your in-chat OK, and a table drop is
+  hard-refused in any hands-free run. It gets scheduled for a session you're in.
+- **The restricted-use product count is known wrong** (2 recorded; you say materially more —
+  and you parked it: *"not important today"*). The compliance report must be treated as
+  known-incomplete until the label work happens.
 - **Concentrations and densities are measurements, not money.** They must not be forced into
   the whole-cents pattern the project uses for money.
 - **New tables need security rules, update timestamps, and safe repeat-protection on any
@@ -418,7 +426,7 @@ the three copies drift apart. This applies to brands as much as to ingredients.
 |---|---|---|
 | Density is required, for scale-based blending | *"we do a lot of blending based off scales so have to have weight of everything"* | 2026-08-18 |
 | Show both prices, with a customer-tier selector | "Yes both and be able to select tier of customer price" | 2026-08-18 |
-| Adjuvant cost — no | "no" | 2026-08-18 |
+| Adjuvant cost is not priced in — **but the exclusion is stated on screen** | "no" to pricing it; the note is required so the generic route isn't understated | 2026-08-18 |
 | **Return windows stay on paperwork — no date modeling** | *"don't worry about that we send out paperwork on those dates we can keep system simple on returns"* | 2026-08-18 |
 | Ester/amine substitution — warn loudly | *"Warn loudly we pretty much only use ester"* | 2026-08-18 |
 | You enter most data yourself | "i enter most data" | 2026-08-18 |
@@ -431,6 +439,15 @@ the three copies drift apart. This applies to brands as much as to ingredients.
 | Total nitrogen is enough | Chosen | 2026-08-18 |
 | **Brand tracking never depends on lot/tote numbers** | *"not all have it"* | 2026-08-18 |
 | Comparison tool comes after the rate cleanup | *"After rate cleanup it's not important until a month from now"* | 2026-08-18 |
+| **Retire the old Brand-vs-Generic page and build a fresh one** — do not extend it | *"retire it and we will build a new page in future"* | 2026-08-18 |
+| Ingredient foundation gets built before anything else | *"i agree i want to do the ingredient foundation 1st"* | 2026-08-18 |
+| A bulk-edit workbook is needed — one-by-one editing doesn't scale | *"very hard to navigate all these products going one by one"* | 2026-08-18 |
+| Restricted-use flag is known wrong, and **parked for now** | *"there are alot more but not important today"* | 2026-08-18 |
+| Product images come last | *"save this for the end or last, not a high priority at the moment"* | 2026-08-18 |
+| Required-adjuvant tracking is in scope | *"some chemistry HAS to have a certain adjuvant"* | 2026-08-18 |
+| Crop-and-timing restrictions are in scope, kept simple | *"some products can be used pre emerge only on certain crops but also post on 1 crop"* / *"dont want to get to complicated"* | 2026-08-18 |
+| Mode-of-action codes are worth storing | "great idea" | 2026-08-18 |
+| Label links are in scope | "ok" | 2026-08-18 |
 
 **Deliberately not in scope:** label max rate / REI / PHI, required fields on product
 create, tank-mix companions, successor-product pointers, storage and freeze risk (all
