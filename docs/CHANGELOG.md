@@ -51,7 +51,9 @@ blocks, since nothing-committed is exactly the uncontained case; and the guard t
 now asserts exit code 0, not just empty output. Round 3 (one Minor follow-up, confirmed and
 fixed): the `ls-tree` listing itself is now failure-aware — a transient git failure despite a
 valid HEAD skips the check instead of reading as "no committed migrations", while an unborn HEAD
-keeps blocking (regression test added, mutation-proved).
+keeps blocking. Both failure branches are regression-tested and mutation-proved: an unborn-HEAD
+case (fresh repo → still blocks) and a failed-`ls-tree`-with-valid-HEAD case (deleted tree
+object → skips without pruning the ledger).
 
 ## 2026-08-18 — Skills/commands accuracy sweep across the agent workflow surface
 

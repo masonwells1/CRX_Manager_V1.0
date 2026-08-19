@@ -189,6 +189,39 @@ try {
     try { rmSync(tmp2, { recursive: true, force: true }); } catch { /* best-effort */ }
   }
 
+  // ls-tree FAILING while HEAD is valid must SKIP (no block, no prune) —
+  // the transient-failure branch of the round-3 fix (CodeRabbit PR #423).
+  // Simulated by deleting the commit's root tree object from the loose object
+  // store: rev-parse --verify HEAD still succeeds (the commit object exists),
+  // but ls-tree cannot read the tree and exits non-zero.
+  const tmp3 = mkdtempSync(path.join(os.tmpdir(), "crx-c3-lstree-"));
+  try {
+    git(["init", "-q"], tmp3);
+    const top3 = git(["rev-parse", "--show-toplevel"], tmp3).trim();
+    assert.equal(path.resolve(top3), path.resolve(tmp3), "third git init must land in its temp dir");
+    git(["config", "user.email", "test@test"], tmp3);
+    git(["config", "user.name", "test"], tmp3);
+    writeFileSync(path.join(tmp3, "README.md"), "x\n");
+    git(["add", "."], tmp3);
+    git(["commit", "-qm", "init"], tmp3);
+    const treeHash = git(["rev-parse", "HEAD^{tree}"], tmp3).trim();
+    rmSync(path.join(tmp3, ".git", "objects", treeHash.slice(0, 2), treeHash.slice(2)));
+    // Sanity: the simulation really is "valid HEAD, broken ls-tree".
+    assert.ok(git(["rev-parse", "--verify", "HEAD"], tmp3).trim(), "HEAD must still verify after tree deletion");
+    const brokenLs = spawnSync("git", ["-C", tmp3, "ls-tree", "-r", "HEAD", "--name-only"], { encoding: "utf8", env: cleanEnv });
+    assert.notEqual(brokenLs.status, 0, "ls-tree must fail once the tree object is gone");
+    const ledger3 = path.join(tmp3, ".claude", "session-state", "applied-source-ledger.json");
+    mkdirSync(path.dirname(ledger3), { recursive: true });
+    writeFileSync(ledger3, JSON.stringify([{ name: "lstree_fail_probe", ts: "t", session: "s" }]) + "\n");
+    const lsFail = runHook(stopWrapPath, { session_id: "c3-test-lstree-fail" }, tmp3);
+    assert.equal(lsFail.status, 0, "checker exits cleanly on an ls-tree failure with a valid HEAD");
+    assert.ok(!/APPLIED TO LIVE/.test(lsFail.stdout), "ls-tree failure with a valid HEAD skips instead of phantom-blocking");
+    const entries3 = JSON.parse(readFileSync(ledger3, "utf8"));
+    assert.equal(entries3.length, 1, "skipped ls-tree check must not prune the entry");
+  } finally {
+    try { rmSync(tmp3, { recursive: true, force: true }); } catch { /* best-effort */ }
+  }
+
   // A corrupt ledger never bricks session end (fail-open).
   writeFileSync(ledgerPath, "{not json");
   const wrap = runHook(stopWrapPath, { session_id: "c3-test-corrupt" }, tmp);
