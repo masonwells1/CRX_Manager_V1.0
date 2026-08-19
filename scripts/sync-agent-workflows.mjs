@@ -14,7 +14,6 @@ import { normalizeEol } from "./normalize-eol.mjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const TARGET_ROOT = path.join(ROOT, ".agents");
-const MANIFEST_PATH = path.join(TARGET_ROOT, "generated-manifest.json");
 
 function unix(relativePath) {
   return relativePath.split(path.sep).join("/");
@@ -72,31 +71,36 @@ function buildExpected() {
   return expected;
 }
 
-function previousManagedFiles() {
+function previousManagedFiles(targetRoot = TARGET_ROOT) {
   try {
-    const parsed = JSON.parse(readFileSync(MANIFEST_PATH, "utf8"));
+    const parsed = JSON.parse(readFileSync(path.join(targetRoot, "generated-manifest.json"), "utf8"));
     return Array.isArray(parsed.managed) ? parsed.managed : [];
   } catch {
     return [];
   }
 }
 
-function writeExpected(expected) {
+export function writeExpected(expected, targetRoot = TARGET_ROOT) {
   const expectedNames = new Set(expected.keys());
-  for (const stale of previousManagedFiles()) {
-    if (!expectedNames.has(stale)) rmSync(path.join(TARGET_ROOT, stale), { force: true });
+  for (const stale of previousManagedFiles(targetRoot)) {
+    if (!expectedNames.has(stale)) rmSync(path.join(targetRoot, stale), { force: true });
   }
   for (const [relative, content] of expected) {
-    const target = path.join(TARGET_ROOT, relative);
+    const target = path.join(targetRoot, relative);
     mkdirSync(path.dirname(target), { recursive: true });
-    // Write the LF form, and compare the same way checkExpected does. Skill and
+    // Write the LF form, then compare the target's RAW bytes against it. Skill and
     // command mirrors are byte copies of their .claude sources, so a CRLF-smudged
-    // source used to make --write copy CRLF straight into .agents/** - which meant
-    // the "run --write" remedy the health check prints could not actually repair a
-    // smudged mirror. Normalizing here makes that remedy real and keeps this loop
-    // idempotent instead of rewriting every file on every run.
+    // source used to make --write copy CRLF straight into .agents/**.
+    //
+    // Do NOT normalize the target before comparing. That was the first attempt at
+    // this fix and it is a no-op on the case that matters: a CRLF mirror
+    // normalizes to `canonical`, the write is skipped, and the file stays CRLF
+    // while --write prints "Synced". Comparing raw is what makes the "run
+    // --write" remedy the health check prints actually repair a smudged mirror.
+    // It is still idempotent - an already-LF mirror equals `canonical` byte for
+    // byte, so the common case writes nothing.
     const canonical = normalizeEol(content);
-    if (!existsSync(target) || normalizeEol(readFileSync(target, "utf8")) !== canonical) {
+    if (!existsSync(target) || readFileSync(target, "utf8") !== canonical) {
       writeFileSync(target, canonical);
     }
   }
@@ -134,11 +138,19 @@ function checkExpected(expected) {
   console.log(`PASS - ${expected.size - 2} Codex workflow file(s) match .claude sources.`);
 }
 
-const mode = process.argv[2] || "--check";
-const expected = buildExpected();
-if (mode === "--write") writeExpected(expected);
-else if (mode === "--check") checkExpected(expected);
-else {
-  console.error("Usage: node scripts/sync-agent-workflows.mjs --write|--check");
-  process.exit(2);
+// Run the CLI only when this file IS the entry point. sync-agent-workflows.test.mjs
+// imports writeExpected to prove the CRLF-mirror repair, and importing a module
+// whose top level regenerates .agents/** would rewrite the real tree as a side
+// effect of running the test suite. Compare resolved paths rather than basenames:
+// .husky and CI invoke this as `node scripts/sync-agent-workflows.mjs --write`,
+// check-agent-workflows.mjs spawns it by absolute path, and both must still run.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const mode = process.argv[2] || "--check";
+  const expected = buildExpected();
+  if (mode === "--write") writeExpected(expected);
+  else if (mode === "--check") checkExpected(expected);
+  else {
+    console.error("Usage: node scripts/sync-agent-workflows.mjs --write|--check");
+    process.exit(2);
+  }
 }
