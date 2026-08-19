@@ -61,7 +61,11 @@ the unambiguous class — every cell claiming **"All authenticated"** where live
 cells had been "corrected" *into* existence by a presence-diff that mistook a RESTRICTIVE policy for
 a granting one.
 
-That same pass flagged **89 cells across 113 rows / 452 cells checked**. The two classes corrected
+That same pass flagged **89 cells across 113 rows / 452 cells checked**. (113 = the 79 rows of the
+`database-schema.md` matrix plus the 37 of the `RLS_SECURITY_GUIDE.md` matrix, minus the 3 whose
+table-name cell carries an inline annotation — `product_cost_basis`,
+`product_cost_basis_change_rows` and `product_cost_basis_rollout` — which the classifier's bare
+identifier match skips. 113 rows x 4 commands = 452 cells.) The two classes corrected
 above account for 28 of them; re-running the pass against the corrected matrices now reports **61
 remaining flags**, all at the level of *which named role* rather than whether access exists. **Those
 61 are not triaged, and they are not all real.** The classifier detects roles by matching helper-function names (`is_admin()`,
@@ -69,8 +73,10 @@ remaining flags**, all at the level of *which named role* rather than whether ac
 known families of false positive:
 
 1. A policy that inlines `profiles.role = 'admin'` as a subquery instead of calling `is_admin()`
-   reads as "no role named" — e.g. `vendors_select` — and the doc cell saying `Admin` is right
-   while the classifier flags it.
+   reads as "no role named", so the doc cell saying `Admin` is right while the classifier flags it.
+   Worked example: `email_log` INSERT is governed by the single policy `email_log_admin_insert`,
+   whose `WITH CHECK` is `EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND
+   profiles.role = 'admin' AND profiles.is_active)`. The matrix cell reads `Admin` and is correct.
 2. A cell that names a role by how the row is reached rather than by a role check — e.g. the
    `Driver (assigned)` cells on `deliveries`, where access is `driver_id = auth.uid()` — is
    correct English and reads as an unmatched role name to the classifier.

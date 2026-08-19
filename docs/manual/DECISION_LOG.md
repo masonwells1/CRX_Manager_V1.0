@@ -270,7 +270,11 @@ Extending the programme to them is unstarted work.
 > opposite of a conversion. `data_type = bigint` alone cannot tell the two apart; only
 > `is_generated`/`generation_expression` can. (One useful side effect: the generation expression
 > rejects non-finite input on its own — `round('NaN'::numeric * 100)::bigint` raises
-> `cannot convert NaN to bigint` — so a NaN or Infinity can never reach the mirror column.)
+> `cannot convert NaN to bigint`, and the Infinity case raises `cannot convert infinity to
+> bigint` — so neither can ever reach the mirror column. Note that this cast, **not** the CHECK, is
+> where finiteness is actually enforced here: both constraints read
+> `CHECK (col >= 0 AND col = col_cents::numeric / 100.0)` and carry no explicit
+> `> '-Infinity' AND < 'Infinity'` bound of their own.)
 >
 > **So these two columns are the same approved compatibility exception as `orders.total_cost`** —
 > numeric-dollar authoritative storage, exact `numeric` math, clean whole-cent values, validated

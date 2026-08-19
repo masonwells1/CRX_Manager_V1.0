@@ -184,7 +184,9 @@ Used on: `financial_audit_log`
 > `USING`/`WITH CHECK` expressions across **both** matrices and corrected
 > every cell claiming **"All authenticated"** where live is role-gated —
 > `profiles`, `blend_recipes` and `financial_audit_log` in this table.
-> Of the **89** cells that pass flagged, that class accounted for 28; it now
+> Of the **89** cells that pass flagged, that class — together with the
+> `rate_limit_log` row and the `blend_recipes` write cells, which sit in the
+> `database-schema.md` matrix rather than this one — accounted for 28; it now
 > reports **61 remaining candidate mismatches** at the level of *which named
 > role*, not yet triaged and tracked as an OPEN entry in
 > `docs/manual/KNOWN_ISSUES.md`. See the fuller note in the matching banner

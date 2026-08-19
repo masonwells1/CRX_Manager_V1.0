@@ -20,17 +20,27 @@ timestamp column, so the commonly quoted 2026-08-16 17:43:53 UTC is read off the
 apply is observed, the clock time is inferred.
 
 **Five docs were stale about it, not three — and only two of them called it unapplied.** (Seven
-docs are corrected overall; the other two are covered under "Also corrected" below.) A doc pass on
-2026-08-18 found three. `docs/manual/CURRENT_STATE.md` and `docs/reference/migration-history.md`
-row 886 both still called the fix an unapplied local candidate. `docs/manual/KNOWN_ISSUES.md` was
-stale a different way: by its own text it had no entry for CRX-SEC-1 at all — it was "never entered
-in this file while it was open" — behind a ledger high-water nine applies out of date. It never
-asserted the fix was unapplied; it omitted the fix. Adversarial review then found a fourth: the RLS Policy Matrix in
-`docs/reference/database-schema.md` still listed `quote_versions` INSERT as `Admin / Sales Rep` with a
-`LOCAL ONLY pending apply` marker — the canonical "who can write what" reference asserting the exact
-inverse of live. `npm run check:docs` does not cover that row, so nothing caught it. CodeRabbit then
-found a fifth, the same claim in the RLS Policy Matrix in `docs/workflows/RLS_SECURITY_GUIDE.md`,
-corrected in line with that matrix's own banner convention of naming superseding migrations inline.
+docs are corrected overall; the other two are covered under "Also corrected" below.)
+
+The **two that actually asserted "unapplied"** were `docs/reference/migration-history.md` row 886
+(`LOCAL CANDIDATE — NOT APPLIED`) and the RLS Policy Matrix in
+`docs/reference/database-schema.md`, which listed `quote_versions` INSERT as `Admin / Sales Rep`
+behind a `LOCAL ONLY pending apply` marker — the canonical "who can write what" reference asserting
+the exact inverse of live.
+
+The **other three were stale in two further ways**. `docs/manual/CURRENT_STATE.md` and
+`docs/manual/KNOWN_ISSUES.md` were stale **by omission**: neither carried an entry for CRX-SEC-1 at
+all — KNOWN_ISSUES by its own text "never entered in this file while it was open" — behind a ledger
+high-water nine applies out of date. Neither asserted the fix was unapplied; both left it out. The
+RLS Policy Matrix in `docs/workflows/RLS_SECURITY_GUIDE.md` was stale a third way again: it carried
+the pre-fix write model with **no pending marker of any kind**, so nothing in it said "unapplied"
+for a reader to notice.
+
+They were **not found together**, which is the point. A doc pass on 2026-08-18 found three
+(`CURRENT_STATE.md`, `KNOWN_ISSUES.md`, history row 886). Adversarial review then found the
+`database-schema.md` matrix — `npm run check:docs` does not cover that row, so nothing caught it.
+CodeRabbit then found the `RLS_SECURITY_GUIDE.md` matrix, corrected in line with that matrix's own
+banner convention of naming superseding migrations inline.
 
 **A grant claim retracted.** Those same docs stated as post-apply proof that `authenticated` holds
 "SELECT only" on `quote_versions` and `anon` "holds nothing". **Both are wrong.** `pg_class.relacl` is

@@ -209,8 +209,10 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 > access**: `idempotency_keys`, `product_cost_basis` and
 > `product_cost_basis_change_rows` were each stating their deny-all shape one
 > way in some commands and another way in the rest, and now state it
-> consistently across all four. That is 32 changed rows in total — 29
-> corrections plus 3 notation fixes.
+> consistently across all four. That is 32 rows from the presence pass — 29
+> corrections plus 3 notation fixes. The later role-wording pass described
+> below changed 7 *further* rows (its other 4 were already among the 29), so
+> this file's matrix has **39 changed rows against `main` overall**.
 >
 > Two shapes to read carefully. A cell reading `-` **or** `RPC only` means the
 > same thing: **no direct browser-role path**. That is true both when no
@@ -238,8 +240,10 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 > each cell was transcribed by hand. A later mechanical pass re-derived each
 > cell's role set from live `USING`/`WITH CHECK` expressions and corrected
 > every cell in both matrices that claimed **"All authenticated"** where live
-> is role-gated, plus the `rate_limit_log` row above. Of the **89** cells that
-> pass flagged, those two classes accounted for 28; re-running it now reports
+> is role-gated, plus the `rate_limit_log` row above and the `blend_recipes`
+> INSERT/UPDATE cells, where live is `is_admin() OR created_by = auth.uid()` —
+> narrower than the `Admin / Sales Rep` those two cells had claimed. Of the
+> **89** cells that pass flagged, those corrections accounted for 28; re-running it now reports
 > **61 remaining candidate mismatches** at the level of *which named role*, many
 > of which are expected to be artifacts of matching helper functions by name
 > (a policy that inlines a `profiles.role = 'admin'` subquery instead of
@@ -332,7 +336,7 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | field_app_location_shares | Admin / Sales Rep / Applicator | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
 
 ## Field Application Workflow V2 / Phase 1 (2026-04-29)
-- `field_app_locations` - Links fields to invoices or jobs (id uuid PK, invoice_id, job_id, **invoice_group_id**, field_id, map_number, total_acres, planted_acres, applied_acres, crop_type, wind_direction, sort_order). **Phase 1:** added `invoice_group_id` and updated CHECK to allow `invoice_id IS NOT NULL OR job_id IS NOT NULL OR invoice_group_id IS NOT NULL`. For multi-customer grouped invoices, locations live at the group level; single-customer invoices keep `invoice_id`. RLS: all ops for authenticated.
-- `field_app_location_shares` - Per-location customer billing splits (id uuid PK, location_id FK, customer_id FK, split_pct numeric, acres numeric, amount_cents bigint). **Phase 1:** carries the TRUE per-customer split for each field — even for grouped invoices, each field has one row per customer with their actual `split_pct`. Canonical audit source for "what fields contributed to which customer's invoice." RLS: all ops for authenticated.
+- `field_app_locations` - Links fields to invoices or jobs (id uuid PK, invoice_id, job_id, **invoice_group_id**, field_id, map_number, total_acres, planted_acres, applied_acres, crop_type, wind_direction, sort_order). **Phase 1:** added `invoice_group_id` and updated CHECK to allow `invoice_id IS NOT NULL OR job_id IS NOT NULL OR invoice_group_id IS NOT NULL`. For multi-customer grouped invoices, locations live at the group level; single-customer invoices keep `invoice_id`. RLS: SELECT admin / sales rep / applicator; INSERT, UPDATE and DELETE admin / sales rep — see the matrix above.
+- `field_app_location_shares` - Per-location customer billing splits (id uuid PK, location_id FK, customer_id FK, split_pct numeric, acres numeric, amount_cents bigint). **Phase 1:** carries the TRUE per-customer split for each field — even for grouped invoices, each field has one row per customer with their actual `split_pct`. Canonical audit source for "what fields contributed to which customer's invoice." RLS: SELECT admin / sales rep / applicator; INSERT, UPDATE and DELETE admin / sales rep — see the matrix above.
 
 > **Note (Phase 1):** `invoice_shares` is still populated for every invoice (one 100% row per child invoice with `price_per_acre_cents`/`pricing_note` propagated when grower-share mode applies) for PDF/statement compatibility, but it is NOT the AR keying surface — AR is keyed off `invoices.customer_id` directly. For per-field per-customer audit, use `field_app_location_shares`.
