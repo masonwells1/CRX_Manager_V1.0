@@ -51,6 +51,23 @@ const pathCandidates = [
 if (pathCandidates.some((candidate) => reviewProofPathMentioned(candidate))) {
   deny("REVIEW PROOF GUARD: Claude/Codex review proof files are wrapper-owned. Run the real review workflow; do not write, edit, move, or delete proof JSON directly.");
 }
+// A native or MCP file-mutation tool (Write/Edit, move_file, delete_directory,
+// …) that targets the state DIRECTORY itself — not a protected basename — moves
+// or deletes the whole ledger + every proof at once, and the basename matcher
+// above never sees a protected filename (blind Opus review 2026-08-19 — proven
+// HIGH bypass: `move_file source=".claude/session-state"`,
+// `delete_directory path=".claude/session-state"`, `move_file source=".claude"`
+// all slipped through). Every pathCandidate is a mutation target, so deny any
+// that ENTERS the state dir (`.claude/session-state`, a `session-state`
+// component, or the whole `.claude` parent). cdTargetEntersStateDir leaves a
+// file INSIDE `.claude` but outside session-state alone (`.claude/settings.json`,
+// `.claude/hooks/*.mjs`) allowed, so ordinary hook/settings edits still pass.
+// Also catches a forge-by-move whose destination lands a NON-ledger basename in
+// the state dir. MCP path fields are literal (no shell glob expansion), so the
+// literal component check is sufficient here.
+if (pathCandidates.some((candidate) => candidate != null && cdTargetEntersStateDir(candidate))) {
+  deny("REVIEW PROOF GUARD: the review state directory (.claude/session-state) and its wrapper-owned contents cannot be created, moved, or deleted through a file tool. Stale ledger entries are removed with node scripts/remove-applied-ledger-entry.mjs after verifying the live migration ledger.");
+}
 
 const command = String(input.command ?? input.cmd ?? "");
 // The shell resolves ANSI-C escapes, drops unquoted backslashes, and joins
@@ -120,7 +137,16 @@ const PROTECTED_GLOB_TARGETS = [".claude", "session-state", "applied-source-ledg
 function globSegCouldTargetProtected(seg) {
   if (!/[*?[\]{}]/.test(seg)) return false;
   const lead = (seg.match(/^[^*?[\]{}]*/)[0] || "").toLowerCase();
-  if (lead.length < 3) return false;
+  // Floor the lead length so a too-generic glob (`*`, `s*`, `a*`) is ignored and
+  // ordinary deletes (`rm dist/*.js`, `rm s*.o`, `rm a*.log`) are not over-blocked.
+  // A DOTTED lead is specific enough at length 2: the only protected name starting
+  // with `.` is `.claude`, and `.c*` is a real glob for it — `rm -rf .c*/s*`,
+  // `mv .c*/s* /tmp/x`, `find .c*/s* -delete`, `cd .c*/s*` all expand to
+  // `.claude/session-state` at runtime, and the length-3 floor let them through
+  // (blind Opus review 2026-08-19 — proven bypass; the whole `.claude` parent is
+  // the gateway to the state dir). A non-dotted lead keeps the length-3 floor.
+  const minLead = lead.startsWith(".") ? 2 : 3;
+  if (lead.length < minLead) return false;
   return PROTECTED_GLOB_TARGETS.some((name) => name.startsWith(lead));
 }
 // Component-aware state-dir reference (parity with cdTargetEntersStateDir): any

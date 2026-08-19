@@ -307,6 +307,30 @@ with the destructive-verb net), so `part=state; cd .claude/session-$part`,
 and benign `.claude`-prefixed siblings (`cd .claude-cache/$sub`, `cd $HOME/session-state-notes`) stay
 allowed. Mutation-proved load-bearing (detector neutered → ALLOW, live → DENY).
 
+Blind adversarial Opus round 8 (2026-08-19, PR #423, commit `8c4a07ac` — Codex usage exhausted,
+two fresh independent blind Opus reviewers): both flagged a short-lead glob bypass; one also flagged
+a directory-level MCP-tool bypass. Two proven holes, both fixed:
+
+- **Short-lead glob on the `.claude` component.** The component-aware glob detector floored a glob
+  segment's literal lead at length 3, so a DOTTED 2-char lead (`.c`) fell through — yet the only
+  protected name starting with `.` is `.claude`, and `.c*` is already a real glob for it. `rm -rf
+  .c*/s*`, `rm -rf .c*`, `mv .c*/s* /tmp/x`, `find .c*/s* -delete`, and `cd .c*/s* && …` all expand
+  to `.claude` / `.claude/session-state` at runtime and were ALLOWED. The floor is now dotted-aware
+  (min lead 2 when the lead starts with `.`, 3 otherwise), so those deny while ordinary deletes
+  whose lead is a bare `s`/`a` (`rm s*.o`, `rm a*.log`) stay allowed.
+- **Directory-level file-tool bypass.** A native or MCP file-mutation tool (`Write`/`Edit`,
+  `move_file`, `delete_directory`) whose path field is the state DIRECTORY itself — not a protected
+  basename — moves or deletes the whole ledger + every proof at once, and the basename matcher never
+  sees a protected filename. `move_file source=".claude/session-state"`, `move_file source=".claude"`,
+  `delete_directory path=".claude/session-state"`, and a forge-by-move whose DESTINATION lands in the
+  state dir all slipped through. The guard now denies any path candidate that ENTERS the state dir
+  (`cdTargetEntersStateDir` over `pathCandidates`), which leaves an edit to a file inside `.claude`
+  but outside `session-state` (`.claude/settings.json`, `.claude/hooks/*.mjs`, a hook-file move)
+  still allowed. Both detectors mutation-proved load-bearing (detector neutered → exploit ALLOW,
+  live → DENY); 9 new DENY + 6 new ALLOW regression cases added to `review-proof-guard.test.mjs`.
+  Both reviewers again noted a verb/path denylist is inherently incompletable; the real boundary
+  remains GitHub `protect-main` branch protection plus C3 tamper-evidence, both in place.
+
 ## 2026-08-18 — CRX-SEC-1 is LIVE (applied 2026-08-16); seven docs corrected, two claims retracted, and both RLS matrices reconciled against live
 
 Documentation only — no app source, migration, or live-state change; every live read in this entry

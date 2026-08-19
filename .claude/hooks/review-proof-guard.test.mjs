@@ -154,6 +154,28 @@ for (const payload of [
   { tool_name: "Bash", tool_input: { command: "part=state; cd .claude/session-$part" } },
   { tool_name: "Bash", tool_input: { command: "X=session-state; cd .claude/$X" } },
   { tool_name: "Bash", tool_input: { command: "cd .clau[d]e/session-state" } },
+  // Opus review 2026-08-19 round 8 (blind adversarial, both reviewers) —
+  //   (a) short-lead glob on the `.claude` component: `.c*` / `.c*/s*` expand to
+  //       `.claude` / `.claude/session-state` at runtime. The length-3 lead floor
+  //       let a DOTTED 2-char lead (`.c`) through, because the ONLY protected name
+  //       starting with `.` is `.claude` and `.c*` is already a real glob for it.
+  //       The floor is now dotted-aware (min lead 2 when dotted, 3 otherwise).
+  { tool_name: "Bash", tool_input: { command: "rm -rf .c*/s*" } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf .c*" } },
+  { tool_name: "Bash", tool_input: { command: "mv .c*/s* /tmp/x" } },
+  { tool_name: "Bash", tool_input: { command: "find .c*/s* -delete" } },
+  { tool_name: "Bash", tool_input: { command: "cd .c*/s* && printf {} > x.json" } },
+  //   (b) a native/MCP file tool (Write/Edit, move_file, delete_directory) whose
+  //       path field is the state DIRECTORY itself — not a protected basename —
+  //       moves or deletes the whole ledger + every proof at once, and the
+  //       basename matcher never sees a protected filename. Deny any path
+  //       candidate that ENTERS the state dir (session-state component, or the
+  //       whole `.claude` parent). A forge-by-move whose DESTINATION lands in the
+  //       state dir is caught the same way.
+  { tool_name: "mcp__filesystem__move_file", tool_input: { source: ".claude/session-state", destination: "/tmp/aside" } },
+  { tool_name: "mcp__filesystem__move_file", tool_input: { source: ".claude", destination: "/tmp/aside" } },
+  { tool_name: "mcp__filesystem__delete_directory", tool_input: { path: ".claude/session-state" } },
+  { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x.json", destination: ".claude/session-state/forged.json" } },
 ]) {
   const result = run(payload);
   assert.equal(result.status, 0);
@@ -218,5 +240,16 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: "truncate -s0 /tmp/
 // but distinct component (`.claude-cache`) stays allowed even unresolved.
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd $HOME/session-state-notes && ls" } }).stdout, "");
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd .claude-cache/$sub && ls" } }).stdout, "");
+// Round 8 non-regressions: the dotted-lead glob floor must not over-block an
+// ordinary delete whose glob lead is a bare `s`/`a` (a prefix of `session-state`
+// / `applied-source-ledger.json` but too generic to be a real target of them),
+// and the MCP directory-level deny must still allow a legit hook/settings edit
+// or a hook-file move that never enters `.claude/session-state`.
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm s*.o" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm a*.log" } }).stdout, "");
+assert.equal(run({ tool_name: "Write", tool_input: { file_path: ".claude/hooks/review-proof-guard.mjs", content: "// edit" } }).stdout, "");
+assert.equal(run({ tool_name: "Write", tool_input: { file_path: ".claude/settings.json", content: "{}" } }).stdout, "");
+assert.equal(run({ tool_name: "Edit", tool_input: { file_path: ".claude/hooks/stop-wrap.mjs" } }).stdout, "");
+assert.equal(run({ tool_name: "mcp__filesystem__move_file", tool_input: { source: ".claude/hooks/a.mjs", destination: ".claude/hooks/b.mjs" } }).stdout, "");
 
 console.log("OK - review proof guard checks passed.");
