@@ -110,13 +110,16 @@ try {
       const n = String(e.name).trim().replace(/\.sql$/i, "");
       return trackedNames.has(n) || trackedNames.has(n.replace(/^\d{8,14}_/, ""));
     };
-    withFileLock(appliedLedgerPath + ".lock", () => {
+    withFileLock(appliedLedgerPath + ".lock", (locked) => {
       const rawEntries = JSON.parse(readFileSync(appliedLedgerPath, "utf8"));
       const entries = Array.isArray(rawEntries) ? rawEntries.filter(e => e && String(e.name || "").trim()) : [];
       if (entries.length === 0) return;
       appliedUncontained = entries.filter(e => !isContained(e));
-      // Prune satisfied entries (best-effort; never block the stop over a write).
-      if (appliedUncontained.length < entries.length) {
+      // Prune satisfied entries (best-effort; never block the stop over a
+      // write) — but ONLY while actually holding the lock: an unlocked
+      // rewrite could erase a concurrent recorder's append (CodeRabbit
+      // PR #423 round 4). Skipping costs nothing; the next stop re-prunes.
+      if (locked && appliedUncontained.length < entries.length) {
         try { writeFileSync(appliedLedgerPath, JSON.stringify(appliedUncontained, null, 2) + "\n"); } catch { /* fail-open */ }
       }
     });

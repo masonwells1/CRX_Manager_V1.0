@@ -222,6 +222,28 @@ try {
     try { rmSync(tmp3, { recursive: true, force: true }); } catch { /* best-effort */ }
   }
 
+  // Lock-timeout semantics (CodeRabbit PR #423 round 4): while another
+  // process HOLDS the ledger lock, the checker still evaluates (read-only,
+  // fail-open) but must NOT prune — an unlocked rewrite could erase a
+  // concurrent recorder's append. Once the lock is free, the prune resumes.
+  // "add_widget_flag" is satisfied by the migration committed above, so a
+  // prune WOULD fire here if it ignored the lock.
+  writeFileSync(ledgerPath, JSON.stringify([{ name: "add_widget_flag", ts: "t", session: "s" }]) + "\n");
+  const lockDir = ledgerPath + ".lock";
+  mkdirSync(lockDir, { recursive: true });
+  try {
+    const held = runHook(stopWrapPath, { session_id: "c3-test-lockheld" }, tmp);
+    assert.equal(held.status, 0, "checker exits cleanly while the ledger lock is held");
+    assert.ok(!/APPLIED TO LIVE/.test(held.stdout), "satisfied entry does not block while the lock is held");
+    entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
+    assert.equal(entries.length, 1, "a held lock must prevent the prune — no unlocked rewrite");
+  } finally {
+    try { rmSync(lockDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+  }
+  runHook(stopWrapPath, { session_id: "c3-test-lockfree" }, tmp);
+  entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  assert.equal(entries.length, 0, "prune resumes once the lock is released");
+
   // A corrupt ledger never bricks session end (fail-open).
   writeFileSync(ledgerPath, "{not json");
   const wrap = runHook(stopWrapPath, { session_id: "c3-test-corrupt" }, tmp);

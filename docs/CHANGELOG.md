@@ -53,7 +53,11 @@ fixed): the `ls-tree` listing itself is now failure-aware — a transient git fa
 valid HEAD skips the check instead of reading as "no committed migrations", while an unborn HEAD
 keeps blocking. Both failure branches are regression-tested and mutation-proved: an unborn-HEAD
 case (fresh repo → still blocks) and a failed-`ls-tree`-with-valid-HEAD case (deleted tree
-object → skips without pruning the ledger).
+object → skips without pruning the ledger). Round 4 (one Major, confirmed with a narrower fix
+than proposed): on a ledger-lock timeout the callback now receives `locked=false` — the
+recorder still appends (dropping the record would silently disarm the guard), but the
+stop-wrap prune skips its rewrite, since an unlocked rewrite could erase a concurrent
+recorder's append (lock-held regression test added, mutation-proved).
 
 ## 2026-08-18 — Skills/commands accuracy sweep across the agent workflow surface
 

@@ -6,9 +6,13 @@
 //
 // mkdir is the lock primitive because it is atomic on every platform we run
 // on. A holder that died is detected by lock age and evicted. If the lock
-// still cannot be acquired inside timeoutMs, fn runs UNLOCKED: recording with
-// a residual race beats dropping the record, and every caller is already
-// fail-open by contract.
+// still cannot be acquired inside timeoutMs, fn STILL runs but receives
+// locked=false so each caller applies its own asymmetry (CodeRabbit PR #423
+// round 4): an APPEND (recorder) writes anyway — recording with a residual
+// race beats silently dropping the record, which would disarm the guard for
+// that migration — while a REWRITE (the stop-wrap prune) must skip its write,
+// because an unlocked rewrite could erase a concurrent recorder's append.
+// Every caller is already fail-open by contract.
 
 import { mkdirSync, rmdirSync, statSync } from "node:fs";
 
@@ -37,7 +41,7 @@ export function withFileLock(lockPath, fn, timeoutMs = 2000) {
     }
   }
   try {
-    return fn();
+    return fn(locked);
   } finally {
     if (locked) {
       try { rmdirSync(lockPath); } catch { /* best effort */ }
