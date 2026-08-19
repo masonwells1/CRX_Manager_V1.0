@@ -2,11 +2,14 @@
 
 **Date:** 2026-08-18
 **Status:** DRAFT — awaiting Mason's approval. No code written, no database changed.
-**Revision:** amended twice on 2026-08-18 after two adversarial review rounds (Fable,
-read-only, live-verified). Round 1 asked *"is this design sound?"* — changes marked **[REV]**,
-listed in §9. Round 2 asked *"what is missing?"* — changes marked **[REV2]**, listed in §10.
-The largest round-2 addition (the spec-versus-brand layer in §4b) came from Mason, not from
-a reviewer.
+**Revision:** amended three times on 2026-08-18 after three adversarial review rounds
+(Fable, read-only, live-verified). Round 1 asked *"is this design sound?"* — changes marked
+**[REV]**, listed in §9. Round 2 asked *"what is missing?"* — changes marked **[REV2]**,
+listed in §10. Round 3 reviewed the result of rounds 1–2 in full context — changes marked
+**[REV3]**, listed in §11, and it corrected eight factual claims this document had been
+carrying. The largest round-2 addition (the spec-versus-brand layer in §4b) came from Mason,
+not from a reviewer; round 3 then established that its implementation must ride the lot
+chain that already exists rather than introduce a parallel one.
 
 ---
 
@@ -352,9 +355,17 @@ given a density and read back; it is **not** gated on the catalog being filled.
 
 ### [REV2] Fertilizer analysis — Mason, 2026-08-18: "yes I want fertilizer analysis stored"
 
-Roughly 190 products carry no EPA active ingredients at all: Liquid Fertilizer 55, Foliar
-Fertilizer 53, Adjuvant 48, Dry Water Soluble Fertilizer 13, Nitrogen Stabilizer 9,
-Biological 9. The original design had no home for them. Mason's direction: *"Yes I want
+**[REV3] Corrected: 317 products have no usable EPA registration number, not ~190.** The
+earlier figure — Liquid Fertilizer 55, Foliar Fertilizer 53, Adjuvant 48, Dry Water Soluble
+Fertilizer 13, Nitrogen Stabilizer 9, Biological 9 — listed **category totals**, not
+no-EPA counts; 3 of the 9 nitrogen stabilizers are in fact EPA-registered. The ~123
+products the old number missed are **pesticides** (Herbicide 85, Insecticide 18, Fungicide
+13, Seed Treatment 6, Other 11) that have real active ingredients but **no registration
+number on file**, so they cannot auto-seed from the EPA API until someone first enters the
+registration number by hand. The convenient framing "287 auto-seed, the rest are
+fertilizers" is wrong, and it hides a meaningful block of Mason's time — see PRD §9 item 16.
+
+The original design had no home for the genuinely EPA-less products. Mason's direction: *"Yes I want
 fertilizer analysis stored for future so we can do recs etc and know poundage of actual
 applied etc make sure you can also store micronutrients and secondary macros, all complete
 analysis."*
@@ -454,6 +465,25 @@ Then **at order, receiving or delivery, record which brand actually filled the l
 is what puts a real EPA registration number onto an application record — the number that
 matters if a field record is ever audited — without disturbing how anything is sold.
 
+> **[REV3] Corrected — read this before building the paragraph above.** "At order, receiving
+> or delivery" was too loose, and round 3 established the right answer: **brand attaches at
+> receiving, to the lot chain the app already has.** `receiving_records.lot_number` →
+> `blend_ticket_products.lot_number` → `application_record_lots` (with `quantity_from_lot`)
+> already tracks physical product identity end to end. **A lot number is a specific branded
+> batch.** Bolting a `brand_id` onto delivery or application lines instead would create a
+> second provenance system that can contradict the lot data. Mason confirmed on 2026-08-18
+> that brand selection is acceptable as a required step at receiving, and that split loads
+> must show **every** contributing brand with its amount — which `application_record_lots`
+> already models for free. Records must **snapshot** the brand's EPA number at write time
+> rather than dereference the brand row later, so correcting a typo cannot rewrite history.
+> See §11.1 item 2 and PRD 1.9a / 1.9a-i / 1.9a-ii / 1.9a-iii.
+>
+> Two further corrections to the bullet list above: **`density_value` on a brand row needs a
+> stated precedence rule against the spec's density** (§11.1 item 3, PRD 1.18) — "whichever
+> row is authoritative" is not implementable. And brand rows must not re-create the
+> packaging-sibling double-entry problem: "Ag Saver 5.4" would otherwise be typed onto the
+> 2.5 Gal, Bulk and 265G rows separately (PRD 1.9c).
+
 **Alternatives considered and rejected:**
 
 - *Every brand becomes its own product row, grouped by family, and quotes reference the
@@ -465,13 +495,26 @@ matters if a field record is ever audited — without disturbing how anything is
   and delivers none of the three things Mason asked for — per-brand EPA number, per-brand
   density, per-brand label.
 
-**Open for the executor, not for Mason:** whether the brand child table is genuinely
+~~**Open for the executor, not for Mason:** whether the brand child table is genuinely
 distinct from `product_families`, or whether families should be retired in favour of it.
-Both exist to say "these things are the same chemistry." `product_families` has 0 rows and
-no writer, so there is no migration cost to choosing either way — but the plan must not ship
-two overlapping ways to express one idea. Fable's second review flagged a related signal
-worth using here: EPA distributor registrations share a parent number, which is the cheapest
-reliable evidence that two catalog rows are the same formulation.
+`product_families` has 0 rows and no writer, so there is no migration cost to choosing
+either way.~~
+
+**[REV3] Settled — and the struck-through paragraph above was wrong.** They are **different
+axes and both are needed.** `product_families` groups **sibling product rows** — packaging
+variants and equivalent chemistry *across* specs — and Phase 5 (5.1–5.5) explicitly derives
+and writes it. Brand rows live **under a single product row** as the fulfilment articles for
+that one spec. Retiring families leaves Phase 5 with nothing to write to; retiring brands
+forces every brand to become its own product row, which is the alternative this section
+already rejected. The zero row count made the choice look free; it is not. The one genuine
+overlap is `product_families.active_ingredient` and `.formulation` — two free-text columns
+that become conflicting duplicates once real ingredient tables exist, and which should be
+flagged for retirement or derivation when Phase 5 populates families. See §11.1 item 4 and
+PRD 1.9b.
+
+Fable's second review flagged a related signal worth using here: EPA distributor
+registrations share a parent number, which is the cheapest reliable evidence that two
+catalog rows are the same formulation.
 
 **Sequencing:** this is Phase 1 work — it is part of the ingredient foundation, not a later
 nicety, because the spec/brand distinction determines *where the ingredient rows hang*. Get
@@ -974,7 +1017,7 @@ layer — are not repeated here.
 
 ### 10.1 The Phase 2 undercount, and what it means
 
-**`rate_per_acre` is referenced by 82 files, not the 5 this plan named.** The original
+**`rate_per_acre` is referenced by 83 files, not the 5 this plan named.** (Round 2 recorded 82; the true count is 83.) The original
 consumer list (applicator sheets, blend math validator, chemical application report,
 invoice PDF) is a fraction of reality. It is also in the field app
 (`src/components/field-app/FieldAppChemicalEntry.tsx:304`), blend tickets
@@ -986,7 +1029,7 @@ notices and year-end PDFs.
 **The plan defines the consumption rule for quotes only.** It never says what happens to
 the legacy `products.rate_per_acre` column once `product_rates` becomes the source of
 truth. The three live options — leave it and sync it from the quoting-default row,
-dual-write, or rewire all 82 consumers — have very different costs, and choosing late is
+dual-write, or rewire all 83 consumers — have very different costs, and choosing late is
 what turns Phase 2 into a multi-week surprise. **This must be decided in writing before
 Phase 2 starts.** It does not block Phases 0, 0b or 1.
 
@@ -1152,3 +1195,126 @@ see they were considered rather than missed.
 so gallons, pints and pounds are added together before being compared against the ticket's
 total volume. Warning-text only — it does not alter stored quantities, pricing or
 inventory — so it is moderate, not a money defect. Tracked outside this plan.
+
+---
+
+## 11. [REV3] Third review round — 2026-08-18
+
+Round 3 read the combined output of rounds 1 and 2 with full context on *why* the design is
+shaped as it is, and returned **"not ready to hand to an executor."** Phases 0 and 0b were
+judged buildable after small edits; **Phase 1 was not.** Four defects would have produced
+wrong or broken work on day one, and eight factual claims in these documents were wrong.
+
+### 11.1 The four Phase-1 blockers
+
+**1. `products` is a column-carved table, and neither document said so.** `authenticated`
+holds no table-level INSERT or UPDATE on `products`; 27 of its 48 columns instead carry
+explicit column-level grants — a consequence of the earlier phase-3 governance work. Every
+Phase 1 column (density, nickname, formulation, safener, registration status) would have
+been **unwritable by the app** until a matching `GRANT INSERT(col), UPDATE(col)` shipped.
+The failure mode is the worst kind: the field renders, the user types into it, and the save
+dies. Worse, it is invisible to anyone testing as service-role. Now PRD requirement **1.17**
+and a §7 hard constraint. `docs/reference/gotchas.md` lists only `application_services` as
+column-carved and is stale — it must be corrected in the same change.
+
+**2. The brand layer ignored provenance tracking the app already has.** This was the
+round's best catch. `receiving_records.lot_number` → `blend_ticket_products.lot_number` →
+`application_record_lots` (carrying `quantity_from_lot`) already tracks physical product
+identity end to end, with supporting files across `LotsEditorModal.tsx`, `lotRpc.ts`,
+`QuickReceivePanel.tsx`, `receivingPdf.ts` and `ManualTicketCreate.tsx`. **A lot number is
+a specific branded batch.** PRD 1.9a as written invited a `brand_id` bolted onto delivery
+and application lines — a second provenance system that could contradict the lot data.
+Corrected: brand attaches at receiving, and everything downstream inherits it through the
+chain that already exists. This also answers the split-load case for free, since
+`application_record_lots` already models multiple lots with a quantity each.
+
+**3. Density existed in two places with no precedence rule.** 1.3 put `density_value` on the
+spec; 1.9 put one on brand rows; nothing said which the scale-weight math uses. That is the
+exact dual-source ambiguity this project exists to eliminate, re-planted on its most
+safety-critical path — a wrong answer here is a wrong weight on a scale. Now settled in
+requirement **1.18**: spec density is the working value, a brand may override it, the
+calculation prefers the recorded brand's density when one exists, and the screen shows
+which it used. The same rule governs per-brand ingredient rows.
+
+**4. "Brand table versus `product_families` — either choice is free" was false.** They are
+different axes. `product_families` groups **sibling product rows** across specs and Phase 5
+explicitly writes to it; brand rows live **under one product row**. Retiring families leaves
+Phase 5 with nothing to write; retiring brands forces every brand to become its own product
+row, which this plan rejected outright. Both ship. The only genuine overlap is
+`product_families.active_ingredient` and `.formulation`, two free-text columns that become
+conflicting duplicates once real ingredient tables exist — flagged for retirement or
+derivation when Phase 5 runs. Now a settled answer in **1.9b**, not an open question.
+
+### 11.2 Corrections to facts these documents were carrying
+
+| Claim | Truth |
+|---|---|
+| ~190 products carry no EPA ingredients | **317** have no usable registration number. The old figure used category totals; ~123 of the miss are pesticides with real ingredients but no number on file, which cannot auto-seed until one is typed in |
+| The `2 qt/100 Gal` cleanup is 12 rows | 12 rows for that literal string, but the full per-100-gallon class is **37 rows**, including weight-based entries like `17 lb/100 Gal` |
+| 30 products have a blank `rate_unit`, silently becoming ounces | True about the blanks, but **zero** rows have a filled rate *and* a blank unit — the trap is real and prospective, not active damage |
+| The four return RPCs enforce `assert_phase3_return_policy` | They delegate to `_*_intent_impl_20260812` functions which carry the guard. Same enforcement, wrong stated mechanism — an executor grepping the public functions finds nothing |
+| "12-16 oz/acre" drifts between two stored values | **Three**: 12, 8.5 and 8 — which strengthens Phase 2's case |
+| 129 names carry a parenthetical brand list | 129 contain parentheses, but several are not brands ("(Full pallets)", "(New Formulation of Resicore XL)"). Extraction needs human review, not parsing |
+| `ingredient_map` is referenced by `BrandVsGeneric.tsx` and its test | Also `src/lib/rlsContracts.test.ts` and the generated `src/types/supabase.ts` — retirement must update the RLS fixture, regenerate types, refresh the schema registry |
+| `rate_per_acre` appears in 82 files | 83 |
+
+### 11.3 Resolved by this round
+
+**The fate of `products.rate_per_acre`** — open since round 2 and the largest remaining
+Phase 2 unknown — now has a recommended answer that needs no decision from Mason: keep the
+columns as a **trigger-synced projection** of the quoting-default `product_rates` row and
+revoke the app's direct write access, reusing the governance pattern already proven on the
+four phase-3 columns. All 83 consumers keep working with one consistent meaning, and the
+three write paths are *forced* through the new rate RPC because their direct writes begin
+failing. PRD **2.9**.
+
+Also settled: the blank-unit rejection belongs in a database CHECK rather than UI validation
+(2.4); the hardcoded `'oz'` fallback at `FieldAppChemicalEntry.tsx:304` must be removed in
+the same change (2.4b); Phase 0's duplicate SKU is two genuinely different sellables, so
+re-SKU — not merge or deactivate — is the right fix (0.1a); and Phase 0b has a cheaper third
+option in an evidence-backed classification migration, precedent
+`20260729213733_supplier_pricing_phase3c_return_policy_classification.sql` (0b.5).
+
+### 11.4 A live trigger that constrains two phases
+
+`validate_product_units` is a BEFORE trigger on `products` doing a **case-sensitive exact
+match** of `inventory_unit`/`container_unit` against `unit_conversions.unit`, plus a
+unit-type-versus-`product_form` check. Neither document mentioned it. Consequences:
+
+- **Phase 2 has a forced order** — remap every product's unit spelling *first*, then delete
+  alias rows, and keep exactly the spellings products use. Reverse it and every subsequent
+  edit to an affected product fails (2.7a).
+- **Phase 0.3's form classification can be rejected by the database** if a row's current
+  units disagree with the chosen form; check units first (0.3a).
+- **Five functions join `unit_conversions`**, not just the quote path: `validate_product_units`,
+  `product_price_per_acre`, `apply_product_pricing_change_set`,
+  `preview_product_cost_basis_changes`, `_save_quote_below_cost_impl_20260810` (2.7b).
+
+### 11.5 Owner decisions settled 2026-08-18 (round 3)
+
+| Question | Mason's answer | Where it lands |
+|---|---|---|
+| Split loads — must paperwork show both brands and how much of each? | **Both brands, with amounts** | PRD 1.9a-ii. Needs no new shape; `application_record_lots` already carries per-lot quantities |
+| Make picking the brand required when the crew types the lot number at receiving? | **Yes, capture at receiving** | PRD 1.9a-i. Cheapest capture point — the person unloading is holding the jug |
+| Blank rate instead of a guessed one on quote lines with no true per-acre rate? | **Blank is better than a guess** | PRD 2.3 / 2.4b. Confirms removing the `'oz'` fallback rather than flagging it |
+| Fertilizer nitrogen — total N, or split into ammoniacal/urea/nitrate? | **Total nitrogen is enough** | PRD 1.10c. Schema must not forbid the breakdown later, but no entry requirement ships now |
+
+### 11.6 Endorsed as correct — recorded so they are not reopened
+
+Density's warn-on-entry (~6.5–14 lb/gal) with a hard block only on scale-weight *use*; the
+scope of all 508 liquids rather than only the ~300 EPA-linked ones; the `"5.4#"`-is-not-a-density
+trap as documented; co-locating fertilizer nutrients in `product_active_ingredients` with a
+nutrient class; and `is_currently_sourced` as sufficient handling for a brand discontinued
+mid-season. Already-quoted-not-delivered lines need no special handling — quotes key the
+spec and copy values at add time (`QuoteBuilder.tsx:1222`), so recording a brand at delivery
+changes nothing upstream.
+
+### 11.7 What round 3 could not verify
+
+Mason's Google Sheet and its Apps Script (no access — sheet-derived numbers were checked
+only for internal arithmetic consistency); chemistry constants (2,4-D acid-equivalent
+fractions 0.74/0.817, Roundup ~10.2 lb/gal, crop-oil density 7.6–7.8 — domain knowledge,
+plausible and self-consistent); the HRAC/FRAC coding-scheme claims; and the executor-side
+Codex connector assumptions in PRD §8. Everything else in §2 of this plan was re-verified
+digit-for-digit against the live database, along with the cited source lines and function
+bodies.
