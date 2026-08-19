@@ -41,11 +41,16 @@ writer. A sales rep cannot forge a cost basis.
 
 **Both RLS matrices reconciled against live — the fix for the pattern, not just the row.** Four
 consecutive adversarial passes each found one more wrong claim, because each pass corrected the row
-it was pointed at rather than the table it lived in. So every row of both matrices was
-machine-compared against live `pg_policies`, per command, on 2026-08-19: **29 of 79 rows** in
-`docs/reference/database-schema.md` and **12 of 37** in `docs/workflows/RLS_SECURITY_GUIDE.md`
-disagreed with live, and all were corrected from the live policy expressions. Both now read zero
-disagreements. Wrong in both directions: `vendors`, `quote_items`, `payments` and others documented
+it was pointed at rather than the table it lived in. So every row of both matrices was compared
+against live `pg_policies`, per command, on 2026-08-19 UTC (the evening of 2026-08-18 local):
+112 of the 116 rows mechanically, and the 4 deny-all tables by reading their policy bodies, for the
+reason in the trap note below. **29 of 79 rows** in `docs/reference/database-schema.md` and **12 of
+37** in `docs/workflows/RLS_SECURITY_GUIDE.md` disagreed with live, and all were corrected from the
+live policy expressions. Both now read zero presence disagreements. A 13th guide row, `quotes`, was
+corrected afterwards by hand — its SELECT cell claimed sales reps see only their own quotes where
+live `quotes_select` is `is_admin() OR is_sales_rep()` with no ownership test. That was a
+role-wording error, which is exactly what the second trap below says the mechanical pass cannot
+catch. Wrong in both directions: `vendors`, `quote_items`, `payments` and others documented
 write access that live grants to nobody, while `rate_limit_log` documented no access where live
 grants admin full access. Two traps worth recording — a `-` cell is correct both when no policy
 exists *and* when a deny-all `USING (false)` policy exists (`idempotency_keys` and the three

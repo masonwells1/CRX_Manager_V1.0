@@ -52,7 +52,7 @@ on the right one.
 ledger row for `20260813030000_reject_non_finite_money_and_quantities` or
 `20260813060000_require_completed_delivery_before_invoice_post`. `20260813080000` has since been
 applied (see the closeout immediately below); the other two were still unapplied on a read-only
-re-check on 2026-08-19, but treat that as a dated observation and re-read the ledger before relying
+re-check on 2026-08-19 UTC (the evening of 2026-08-18 local), but treat that as a dated observation and re-read the ledger before relying
 on it.
 
 **Live-ledger closeout — 2026-08-16, post-apply.** `20260813080000_lock_quote_versions_writes_to_rpc`

@@ -189,10 +189,13 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 > "fix" reality to match a row here (re-adding a revoked permissive policy
 > re-opens a closed hole).
 >
-> **Last full reconcile: 2026-08-19.** All 79 rows were machine-compared against
-> live `pg_policies` (read-only), per command. 29 rows disagreed and were
-> corrected from the live policy expressions — 12 of them shared with the matrix
-> in `docs/workflows/RLS_SECURITY_GUIDE.md` (`cost_history`, `quote_items`,
+> **Last full reconcile: 2026-08-19 UTC** (the evening of 2026-08-18 local;
+> UTC runs one calendar day ahead here). All 79 rows were compared against
+> live `pg_policies` (read-only), per command — 75 of them mechanically, and
+> the 4 deny-all tables by reading their policy bodies instead, for the reason
+> given below. 29 rows disagreed with live and were corrected from the live
+> policy expressions: 12 shared with the matrix in
+> `docs/workflows/RLS_SECURITY_GUIDE.md` (`cost_history`, `quote_items`,
 > `quote_versions`, `inventory_holds`, `receiving_records`, `delivery_photos`,
 > `commissions`, `payments`, `team_note_comments`, `notifications`, `returns`,
 > `return_items`) and 17 appearing only here (`receiving_photos`,
@@ -202,15 +205,25 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 > `vendor_payments`, `ar_reminder_tracking`, `failed_notifications`,
 > `invoice_shares`, `order_shares`, `rate_limit_log`, `field_crop_history`).
 >
-> Two shapes to read carefully. A `-` cell means **no direct browser-role path**,
-> which is true both when no policy exists and when a deny-all policy
-> (`USING (false)`) exists. `idempotency_keys` and the three
-> `product_cost_basis*` tables are the deny-all kind — a policy is present but
-> grants nothing — so they were excluded from the mechanical comparison and
-> checked by reading their policy bodies instead. And policy *presence* per
-> command is what was compared mechanically; the role wording inside each cell
-> was transcribed by hand from the policy's `USING`/`WITH CHECK` expression, so a
-> cell can still be imprecise even though its `-` vs non-`-` shape is verified.
+> Three further rows changed here for **notation only, with no change in
+> access**: `idempotency_keys`, `product_cost_basis` and
+> `product_cost_basis_change_rows` were each stating their deny-all shape one
+> way in some commands and another way in the rest, and now state it
+> consistently across all four. That is 32 changed rows in total — 29
+> corrections plus 3 notation fixes.
+>
+> Two shapes to read carefully. A cell reading `-` **or** `RPC only` means the
+> same thing: **no direct browser-role path**. That is true both when no
+> policy exists and when a deny-all policy (`USING (false)` / `WITH CHECK
+> (false)`) exists. `idempotency_keys` and the three `product_cost_basis*`
+> tables are the deny-all kind — one `ALL` policy is present, and it grants
+> nothing — so a mechanical presence-diff would have "corrected" them into
+> appearing to grant access. They were excluded from the mechanical pass and
+> checked by reading their policy bodies against live instead. And policy
+> *presence* per command is what was compared mechanically; the role wording
+> inside each cell was transcribed by hand from the policy's `USING`/`WITH
+> CHECK` expression, so a cell can still be imprecise even though its "grants
+> something" vs "grants nothing" shape is verified.
 
 | Table | SELECT | INSERT | UPDATE | DELETE |
 |-------|--------|--------|--------|--------|
@@ -291,7 +304,6 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | team_note_tags | All authenticated | All authenticated | - | All authenticated |
 | note_activity_log | All authenticated | All authenticated | - | - |
 | field_crop_history | Admin / Sales Rep / Applicator | Admin / Sales Rep | Admin / Sales Rep | Admin |
-
 | field_app_locations | All authenticated | All authenticated | All authenticated | All authenticated |
 | field_app_location_shares | All authenticated | All authenticated | All authenticated | All authenticated |
 

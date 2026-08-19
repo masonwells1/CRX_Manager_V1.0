@@ -155,18 +155,29 @@ Used on: `financial_audit_log`
 > and tablename='<table>'` (read-only) — and if you're debugging a silent RLS
 > denial, believe `pg_policies`, not this table. Do NOT "fix" reality to match
 > this matrix (re-adding a revoked permissive policy re-opens a closed hole).
-> **Last full reconcile: 2026-08-19.** On that date all 37 rows of this matrix
-> were machine-compared against live `pg_policies` (read-only), per command. The
-> 12 rows that disagreed were corrected from the live policy expressions:
-> `cost_history`, `quote_items`, `quote_versions`, `inventory_holds`,
-> `receiving_records`, `delivery_photos`, `commissions`, `payments`,
-> `team_note_comments`, `notifications`, `returns`, `return_items`. All 37 rows
-> now agree with live on which commands have a policy.
+> **Last full reconcile: 2026-08-19 UTC** (the evening of 2026-08-18 local;
+> UTC runs one calendar day ahead here). All 37 rows of this matrix were
+> machine-compared against live `pg_policies` (read-only), per command. The 12
+> rows that disagreed on which commands have a policy were corrected from the
+> live policy expressions: `cost_history`, `quote_items`, `quote_versions`,
+> `inventory_holds`, `receiving_records`, `delivery_photos`, `commissions`,
+> `payments`, `team_note_comments`, `notifications`, `returns`,
+> `return_items`. All 37 rows now agree with live on which commands have a
+> policy.
 >
-> Note what that does and does not prove. Policy *presence* per command is what
-> was compared mechanically; the role wording inside each cell was transcribed by
-> hand from the policy's `USING`/`WITH CHECK` expression, so a cell can still be
-> imprecise even though its `-` vs non-`-` shape is verified.
+> A 13th row, `quotes`, was corrected separately and by hand: its SELECT cell
+> read "Admin / Sales Rep (own)" where live `quotes_select` is `is_admin() OR
+> is_sales_rep()` with no ownership test — a sales rep reads **every** quote,
+> and only INSERT and UPDATE are own-scoped. That was a role-wording error,
+> not a presence error, so the mechanical pass could not have caught it. See
+> the caveat below.
+>
+> Note what that does and does not prove. Policy *presence* per command is
+> what was compared mechanically; the role wording inside each cell was
+> transcribed by hand from the policy's `USING`/`WITH CHECK` expression, so a
+> cell can still be imprecise even though its `-` vs non-`-` shape is
+> verified. The `quotes` correction above is exactly that failure mode, found
+> by a later review rather than by the sweep.
 
 | Table | SELECT | INSERT | UPDATE | DELETE |
 |-------|--------|--------|--------|--------|
@@ -175,7 +186,7 @@ Used on: `financial_audit_log`
 | cost_history | Admin | - (no INSERT policy) | - | - |
 | customers | Admin / Sales Rep (assigned) / Driver (has delivery) | Admin / Sales Rep | Admin / Sales Rep (assigned) | Admin |
 | customer_addresses | All authenticated | Admin / Sales Rep (own customer) | Admin / Sales Rep (own customer) | Admin |
-| quotes | Admin / Sales Rep (own) | Admin / Sales Rep (own) | Admin / Sales Rep (own) | Admin |
+| quotes | Admin / Sales Rep | Admin / Sales Rep (own) | Admin / Sales Rep (own) | Admin |
 | quote_sections | All authenticated | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) |
 | quote_items | Admin / Sales Rep | - (RPC only, since `20260812115236` dropped `qitems_insert`/`qitems_update`/`qitems_delete`) | - (RPC only) | - (RPC only) |
 | quote_versions | Admin / Sales Rep | - (`create_quote_version` RPC only, since `20260813080000`, ledger version `20260816174353`) | - | - |
