@@ -237,9 +237,13 @@ to show was stale: live also pins the actor.
 > no timestamp column, so the apply is observed but its clock time is not — the
 > browser roles' direct INSERT on `quote_versions` was REVOKED along with the
 > `qversions_insert` policy (**CRX-SEC-1**, migration `20260813080000`, ledger
-> version `20260816174353`; writes are now `create_quote_version` RPC only), and
-> `quote_items` now carries **only** `qitems_select` (admin or sales rep) with no
-> INSERT/UPDATE/DELETE policy at all — its writes are RPC-only too.
+> version `20260816174353`; **browser-role** writes are now `create_quote_version`
+> RPC only, while `service_role` and `postgres` keep direct INSERT/UPDATE/DELETE
+> grants and bypass RLS), and `quote_items` now carries **only** `qitems_select`
+> (admin or sales rep) with no INSERT/UPDATE/DELETE policy at all — its writes are
+> RPC-only too, and there the scope is tighter: `service_role` holds SELECT only on
+> `quote_items`, so `postgres` (the table owner) is the sole remaining direct
+> writer. Grants for both tables re-read live 2026-08-19.
 > **Before trusting any row,
 > query the live policies** — `select * from pg_policies where schemaname='public'
 > and tablename='<table>'` (read-only) — and if you're debugging a silent RLS
@@ -322,7 +326,7 @@ to show was stale: live also pins the actor.
 | quotes | Admin / Sales Rep | Admin / Sales Rep (own) | Admin / Sales Rep (own) | Admin |
 | quote_sections | All authenticated | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) |
 | quote_items | Admin / Sales Rep | - (RPC only, since `20260812115236` dropped `qitems_insert`/`qitems_update`/`qitems_delete`) | - (RPC only) | - (RPC only) |
-| quote_versions | Admin / Sales Rep | - (`create_quote_version` RPC only, since `20260813080000`, ledger version `20260816174353`) | - | - |
+| quote_versions | Admin / Sales Rep | - for browser roles (`create_quote_version` RPC only, since `20260813080000`, ledger version `20260816174353`; `service_role` and `postgres` retain direct write grants and bypass RLS) | - (same scope) | - (same scope) |
 | orders | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | order_items | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | inventory | Admin / Sales Rep / Driver | Admin | Admin | Admin |
