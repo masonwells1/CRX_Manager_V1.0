@@ -53,7 +53,26 @@ if (pathCandidates.some((candidate) => reviewProofPathMentioned(candidate))) {
 }
 
 const command = String(input.command ?? input.cmd ?? "");
-if (reviewProofPathMentioned(command)) {
+// The shell resolves ANSI-C escapes, drops unquoted backslashes, and joins
+// quote-split tokens before running a command, so `applied-source"-"ledger.json`
+// or `.clau\de` EXECUTES as the real path/verb while a raw-string regex misses
+// it. Return every normalized view and fail closed if ANY matches; the raw
+// (base) view still covers Windows `\`-separated paths, where the backslash is a
+// real separator (Opus review 2026-08-19, round 4 — both a proof-path forge,
+// `printf "[]" > .claude/session-state/applied-source"-"ledger.json`, and a
+// composed-verb deletion, `r"m" -rf .claude/session-state`, were proven bypasses
+// of the raw-only scans; the cd scanner already ran over a quote-stripped view,
+// these matchers did not).
+function shellCommandViews(cmd) {
+  const base = decodeAnsiCQuotes(String(cmd || "")).replace(/[\\`]\r?\n/g, "");
+  const stripQuotes = (v) => v.replace(/["']/g, "");
+  const dropBackslash = (v) => v.replace(/\\(.)/g, "$1");
+  return [base, stripQuotes(base), dropBackslash(base), dropBackslash(stripQuotes(base))];
+}
+// Applies ONLY to the shell `command` string (shell syntax). The pathCandidates
+// and hookCwd predicates above/below are literal filesystem paths, NOT shell
+// syntax — quote-stripping them would be wrong, so they stay raw.
+if (shellCommandViews(command).some((v) => reviewProofPathMentioned(v))) {
   deny("REVIEW PROOF GUARD: direct shell access to Claude/Codex review proof JSON is blocked. Run the real review wrapper instead.");
 }
 
@@ -193,6 +212,15 @@ if (shellTool) {
   // state dir is denied when a destructive verb appears anywhere in it; run
   // reads and deletions of other files as separate commands.
   const DESTRUCTIVE_VERB_RE = /(?:^|[;&|\r\n()"'\\]|\s)(?:rm|rmdir|del|erase|rd|ri|remove-item|unlink|shred|mv|move|mi|move-item|ren|rni|rename-item|trash)(?![\w.-])/i;
+  // `find` deletes by TRAVERSAL, never naming the target basename, so neither
+  // DESTRUCTIVE_VERB_RE nor the basename protection fires — `find
+  // .claude/session-state -delete` (or `-exec rm`/`-execdir`) wipes the exact
+  // ledger + proofs that `rm -rf .claude/session-state` is blocked for (Opus
+  // review 2026-08-19, round 4 — a proven bypass). Treat `find` paired with a
+  // deletion/exec action as a destructive verb. `-exec cat` is read-only but is
+  // still denied when it names the state dir — consistent with the fail-closed
+  // stance below; run reads of other files as a separate command.
+  const FIND_TRAVERSAL_DELETE_RE = /(?:^|[;&|\r\n()"'\\]|\s)find(?![\w.-])[\s\S]*?-(?:delete|exec(?:dir)?)\b/i;
   // Also deny when the destructive verb reaches the `.claude` ANCESTOR, not only
   // the full `.claude/session-state` path: `rm -rf .claude` and `mv .claude
   // /tmp` wipe the state dir (and the applied-source ledger) as collateral, yet
@@ -200,7 +228,19 @@ if (shellTool) {
   // review 2026-08-19, round 3 — deleting the parent was unguarded). `.claude`
   // must be a whole path component: `.claude-cache` / `foo.claude` do not match.
   const STATE_DIR_ANCESTOR_RE = /(?:^|[\s"'=:/\\(])\.claude(?![\w-])/i;
-  if (DESTRUCTIVE_VERB_RE.test(spliced) && (reviewStateDirectoryMentioned(spliced) || STATE_DIR_ANCESTOR_RE.test(spliced))) {
+  // Check EVERY normalized view (parity with scanCdInvocations and the
+  // proof-path matcher): the shell collapses `r"m"` → `rm` (quote-stripped view)
+  // and drops the `\` in `.clau\de` → `.claude` (backslash-dropped view), but
+  // with quotes/backslashes intact the regexes never match the composed verb or
+  // ancestor (Opus review 2026-08-19, round 4 — `r"m" -rf .claude/session-state`
+  // AND `rm -rf .clau\de` were both proven bypasses). The verb and the state-dir
+  // mention must appear in the SAME view, so test per-view; the raw (base) view
+  // still covers Windows `\`-separated paths, where the backslash is a real
+  // separator and dropping it would corrupt the path.
+  const destructiveViews = shellCommandViews(command);
+  const hitsDestructiveVerb = (v) => DESTRUCTIVE_VERB_RE.test(v) || FIND_TRAVERSAL_DELETE_RE.test(v);
+  const namesStateDir = (v) => reviewStateDirectoryMentioned(v) || STATE_DIR_ANCESTOR_RE.test(v);
+  if (destructiveViews.some((v) => hitsDestructiveVerb(v) && namesStateDir(v))) {
     deny("REVIEW PROOF GUARD: destructive shell commands touching the .claude review state directory (or its parent) are blocked — it holds wrapper-owned proofs and the applied-source ledger. Stale ledger entries are removed with node scripts/remove-applied-ledger-entry.mjs after verifying the live migration ledger.");
   }
 }

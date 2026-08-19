@@ -204,13 +204,26 @@ try {
           // removing it would be a destructive edit with no payoff (Opus
           // review 2026-08-19). Restore is best-effort.
           const dirtAbs = path.join(w.path, IGNORABLE_DIRT_PATH);
+          const existedBefore = existsSync(dirtAbs);
           let savedDirt = null;
-          try { savedDirt = readFileSync(dirtAbs); } catch { /* missing → nothing to restore */ }
+          if (existedBefore) { try { savedDirt = readFileSync(dirtAbs); } catch { /* present but unreadable */ } }
           const co = gitTry(["checkout", "HEAD", "--", IGNORABLE_DIRT_PATH], w.path); // tracked → restore index+worktree
           if (!co.ok) { try { rmSync(dirtAbs); } catch { /* untracked/missing */ } }
           rm = gitTry(["worktree", "remove", w.path]);
-          if (!rm.ok && savedDirt !== null) {
-            try { writeFileSync(dirtAbs, savedDirt); } catch { /* best-effort restore */ }
+          if (!rm.ok) {
+            // Retry failed → the worktree survives, so leave it in its ORIGINAL
+            // state rather than whatever `checkout HEAD` re-materialized. If the
+            // file EXISTED and we snapshotted it, restore those bytes. If it was
+            // ABSENT originally (a deletion the user made, or genuinely missing),
+            // the checkout may have re-created it from HEAD — remove it so the
+            // surviving worktree isn't silently modified back to a file the user
+            // had deleted (CodeRabbit PR #423). A present-but-unsnapshotted file
+            // (read failed) is left as checked out — the best available state.
+            if (existedBefore) {
+              if (savedDirt !== null) { try { writeFileSync(dirtAbs, savedDirt); } catch { /* best-effort restore */ } }
+            } else {
+              try { rmSync(dirtAbs); } catch { /* nothing to undo */ }
+            }
           }
         }
       }

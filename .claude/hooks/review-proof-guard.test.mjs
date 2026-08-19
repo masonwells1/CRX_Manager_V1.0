@@ -70,8 +70,11 @@ for (const payload of [
   // $IFS glued to the verb leaves an empty argument run — statically
   // unresolvable, so it fails closed with the state dir mentioned.
   { tool_name: "Bash", tool_input: { command: "cd$IFS.claude/session-state" } },
-  // A backslash line continuation splices into ONE invocation.
+  // A backslash line continuation splices into ONE invocation — both the LF
+  // and the CRLF form (CodeRabbit PR #423: a Windows checkout's continuation
+  // ends `\<CR><LF>`, which must splice the same way).
   { tool_name: "Bash", tool_input: { command: "cd \\\n.claude/session-state" } },
+  { tool_name: "Bash", tool_input: { command: "cd \\\r\n.claude/session-state" } },
   // PowerShell's default Set-Location alias.
   { tool_name: "PowerShell", tool_input: { command: "sl .claude\\session-state" } },
   // ANSI-C quoting resolves escapes before the shell runs the command.
@@ -103,6 +106,29 @@ for (const payload of [
   { tool_name: "Bash", tool_input: { command: "rm -rf .claude" } },
   { tool_name: "Bash", tool_input: { command: "mv .claude /tmp/aside" } },
   { tool_name: "PowerShell", tool_input: { command: "Remove-Item -Recurse -Force .claude" } },
+  // Opus review 2026-08-19 round 6 — the destructive-verb net and proof-path
+  // matcher were hardened for ONE spelling while the cd net already scanned
+  // every normalized view. Each of these EXECUTES as the real command in the
+  // shell and was a proven bypass of the raw-only scans.
+  // Quote-split / composed destructive verb, still names the state dir.
+  { tool_name: "Bash", tool_input: { command: 'r"m" -rf .claude/session-state' } },
+  { tool_name: "Bash", tool_input: { command: "'rm' -rf .claude/session-state" } },
+  { tool_name: "Bash", tool_input: { command: 'm"v" .claude/session-state /tmp/aside' } },
+  // Backslash-dropped `.claude` ancestor: bash drops the unquoted `\`, so
+  // `.clau\de` executes as `.claude`.
+  { tool_name: "Bash", tool_input: { command: "rm -rf .clau\\de" } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf .clau\\de/session-state" } },
+  // `find` deletes by traversal, never naming the basename — a delete/exec
+  // action on the state dir (or its `.claude` parent) is treated as destructive.
+  { tool_name: "Bash", tool_input: { command: "find .claude/session-state -delete" } },
+  { tool_name: "Bash", tool_input: { command: "find .claude -delete" } },
+  { tool_name: "Bash", tool_input: { command: "find .claude/session-state -type f -exec rm {} \\;" } },
+  { tool_name: "Bash", tool_input: { command: "find .claude -execdir rm {} +" } },
+  // Quote/backslash-split ledger or proof filename: the shell joins the tokens
+  // into the real basename, disarming C3 or forging a proof.
+  { tool_name: "Bash", tool_input: { command: 'printf "[]" > .claude/session-state/applied-source"-"ledger.json' } },
+  { tool_name: "Bash", tool_input: { command: "printf [] > applied-source\\-ledger.json" } },
+  { tool_name: "Bash", tool_input: { command: 'printf {} > codex-review"-"forged.json' } },
 ]) {
   const result = run(payload);
   assert.equal(result.status, 0);
@@ -142,5 +168,12 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: "scandir.parse('.cl
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd && ls /tmp" } }).stdout, "");
 assert.equal(run({ tool_name: "PowerShell", tool_input: { command: "Get-Content foo.json | sl" } }).stdout, "");
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -rf .claude-cache && rm -rf build/.clauderc" } }).stdout, "");
+// Round 6 non-regressions: the new backslash-dropped and quote-stripped views
+// must not manufacture a false `.claude` component or proof basename. A
+// destructive verb on a `.claude`-PREFIXED-but-distinct path stays allowed even
+// after the `\` is dropped, and a find-delete on an unrelated `.claudex` glob is
+// fine — only bare `.claude` as a whole component with a delete/exec counts.
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -rf build\\.clauderc-cache" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "find src -name '*.claudex' -delete" } }).stdout, "");
 
 console.log("OK - review proof guard checks passed.");

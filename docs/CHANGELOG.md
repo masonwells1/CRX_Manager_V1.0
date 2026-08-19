@@ -187,6 +187,56 @@ ledger path never appears literally in the command (`node -e`, write-script-then
 outside any command-text guard — accepted, with the honest-scope note above and branch protection
 as the real boundary.
 
+Blind adversarial Opus round 4 (2026-08-19, same PR — two fresh independent blind Opus reviewers,
+both returned BLOCKERS; every confirmed finding fixed and each new protection mutation-proved
+red-without/green-with). Shared root cause: the cd-scanner already ran its checks over several
+NORMALIZED views of the command (quote-stripped, backslash-decoded, ANSI-C-decoded), but the
+sibling destructive-verb net and the proof-path matcher still scanned the RAW string only — so the
+same disguises the cd-scanner defeats slipped past them:
+
+- **Proof-path / ledger-name matcher normalized (proven bypass, disarms C3):** the shell joins
+  quote-split and backslash-escaped tokens into the real filename before running the command, so
+  `printf "[]" > .claude/session-state/applied-source"-"ledger.json` and
+  `printf {} > codex-review"-"forged.json` executed as writes to the protected ledger/proof while a
+  raw-string regex missed them. The shell-`command` path matcher now tests every normalized view
+  (raw + quote-stripped + backslash-dropped) via a shared `shellCommandViews` helper and denies if
+  any matches. The literal filesystem-path predicates (`file_path`, patch destinations, `cwd`) stay
+  raw — they are real paths, not shell syntax, so quote-stripping them would be wrong.
+- **Destructive-verb net normalized (proven bypasses):** a quote-composed verb
+  (`r"m" -rf .claude/session-state`) and a backslash-dropped `.claude` ancestor
+  (`rm -rf .clau\de`, which bash runs as `.claude`) both reached the state dir undenied. The
+  destructive check now runs over the same `shellCommandViews`, so the verb and the state-dir
+  mention are seen in whichever view the shell would actually execute; the raw view still covers
+  Windows `\`-separated paths, where the backslash is a real separator.
+- **`find`-traversal delete closed (proven bypass):** `find` deletes by traversal and never names
+  the basename, so neither the destructive-verb regex nor the basename guard fired —
+  `find .claude/session-state -delete` (and `-exec rm` / `-execdir rm`) wiped the exact ledger +
+  proofs that `rm -rf .claude/session-state` is blocked for. `find` paired with a delete/exec
+  action is now treated as a destructive verb; a `find … -delete` on an unrelated `.claudex` glob
+  stays allowed (only bare `.claude` as a whole path component counts).
+- **Unborn-HEAD probe made locale-independent (fail-open closed):** `stop-wrap.mjs` detects an
+  unborn HEAD by matching git's English stderr; without a forced locale a non-English git would
+  fail the match and SKIP containment (fail open). The `git rev-parse --verify HEAD` probe now runs
+  with `LC_ALL=C`/`LANG=C` so the English match holds everywhere.
+- **NUL delimiter made reviewable:** the dedup key in `stop-wrap.mjs` joined name and SQL-hash with
+  a raw NUL byte, which made git classify the file binary past its 8 KB sniff window and left the
+  delimiter invisible to reviewers. Switched to the byte-identical visible escape `"\u0000"` — same
+  runtime delimiter, clean text, line-level diffs restored (this is why this file shows a one-time
+  whole-file rewrite in the diff: the old blob had a NUL and diffed as binary).
+- **worktree-cleanup failed-remove restore hardened:** the restore branch now captures the exact
+  prior `settings.local.json` bytes before the checkout and, on a failed `worktree remove`, restores
+  those bytes (or deletes the file if it did not exist before) instead of a blind `checkout HEAD`.
+
+CodeRabbit precision language (finding #7): C3 records only qualifying non-error
+`apply_migration` responses; a slug-only containment match must satisfy the ±7-day stamp window;
+ledger entries are pruned only after a successful git content-hash verify AND under the
+cross-process lock. CodeRabbit findings deliberately dismissed with reason: #2 (variable/interpreter
+indirection, e.g. `X=…; cd "$X"`) is the same accepted interpreter-indirection residual documented
+above — the guard denies on the visible mention, prevention of a hidden target is out of scope; #5
+(worktree-cleanup treats a missing/corrupt ledger as "no entries" and sweeps) is the DELIBERATE,
+documented fail-open — a machine-local, unreadable ledger must not pin the whole fleet forever, and
+neither Opus reviewer corroborated it as a real risk.
+
 ## 2026-08-18 — CRX-SEC-1 is LIVE (applied 2026-08-16); seven docs corrected, two claims retracted, and both RLS matrices reconciled against live
 
 Documentation only — no app source, migration, or live-state change; every live read in this entry

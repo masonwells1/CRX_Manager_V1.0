@@ -136,8 +136,15 @@ try {
       // which can never phantom-block.
       let headOut = "", headErr = null;
       try {
+        // Force the C locale so the unborn-HEAD stderr below is the English
+        // Git emits by default. Under a localized LANG, git's "unknown
+        // revision" diagnostic is translated, the regex misses, and an unborn
+        // HEAD would fall through to the skip instead of blocking — a
+        // locale-dependent fail-open (CodeRabbit PR #423). LC_ALL wins over
+        // every other locale var.
         headOut = execFileSync("git", ["rev-parse", "--verify", "HEAD"], {
           encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "pipe"], cwd: projectDir,
+          env: { ...process.env, LC_ALL: "C", LANG: "C" },
         });
       } catch (e) { headErr = e; }
       if (headOut.trim()) {
@@ -211,7 +218,7 @@ try {
     // earlier content-bound row). So prune by (name, sqlHash), never by name
     // alone — else pruning one contained row would drop its still-uncontained
     // same-name sibling (Opus review 2026-08-19, round 3).
-    const idOf = (e) => String(e.name).trim() + " " + String(e.sqlHash || "");
+    const idOf = (e) => String(e.name).trim() + "\u0000" + String(e.sqlHash || "");
     // Per-entry FAIL-CLOSED. isContained runs `git show` per candidate and can
     // throw on a transient blob-read failure. Letting that reach the OUTER
     // fail-open catch would skip the WHOLE sweep and silently disarm the guard
