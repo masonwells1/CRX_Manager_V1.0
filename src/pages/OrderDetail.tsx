@@ -32,6 +32,7 @@ import RelatedNotes from '../components/team/RelatedNotes';
 import TransactionThread from '../components/ui/TransactionThread';
 import { downloadOrderSummaryPdf } from '../lib/orderSummaryPdf';
 import { downloadPickListPdf } from '../lib/orderPickListPdf';
+import { sumNeedByProduct } from '../lib/inventoryShortage';
 import { buildInvoicePostTargets } from '../lib/invoiceBatchPosting';
 import type { OrderSummaryData } from '../lib/orderSummaryPdf';
 import type { PickListData } from '../lib/orderPickListPdf';
@@ -386,6 +387,22 @@ export default function OrderDetail() {
         invMap[pid].prebooked += Number(row.quantity_prebooked);
       }
 
+      // Flag the shortage against the product's TOTAL remaining on this order.
+      // A tier-split booking puts the same product on several lines, and
+      // comparing each line alone against the full net-free stock lets two
+      // half-sized tier lines both look covered when together they are not.
+      // See src/lib/inventoryShortage.ts.
+      const remainingByProduct: Record<string, number> = {};
+      for (const need of sumNeedByProduct(
+        items.map((it) => ({
+          productId: it.product_id,
+          label: it.product_name,
+          quantity: Number(it.quantity_remaining),
+        }))
+      )) {
+        remainingByProduct[need.productId] = need.quantity;
+      }
+
       // Format delivery addresses
       const addresses = (addrRes.data || []).map((a: Record<string, unknown>) => {
         const parts = [a.label, a.address_line, a.city, a.state, a.zip].filter(Boolean);
@@ -408,6 +425,7 @@ export default function OrderDetail() {
         items: items.map((it) => {
           const inv = invMap[it.product_id];
           const netFree = inv ? inv.available - inv.prebooked : null;
+          const remaining = remainingByProduct[it.product_id] ?? it.quantity_remaining;
           return {
             product_name: it.product_name,
             unit_size: it.unit_size,
@@ -415,7 +433,7 @@ export default function OrderDetail() {
             quantity_delivered: it.quantity_delivered,
             quantity_remaining: it.quantity_remaining,
             inventory_available: netFree,
-            has_shortage: netFree !== null ? it.quantity_remaining > netFree : false,
+            has_shortage: netFree !== null ? remaining > netFree : false,
           };
         }),
         notes: order.notes,

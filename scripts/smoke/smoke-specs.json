@@ -44,38 +44,86 @@
     "complete_team_note": {
       "chain": "smoke-complete-team-note-chain.sql",
       "description": "Team Board delegation chain (migrations 20260809130108 + 20260810010308): INSERT-with-assignee fires exactly one task_assigned notification; a rollback-only synthetic inactive auth/profile fixture proves inactive actors are rejected and inactive assignees stay silent without touching a real teammate's auth state; no-auth and anon calls raise AUTH_REQUIRED; an authenticated outsider (not creator/assignee/admin) is rejected; the non-admin ASSIGNEE completes a note they did not create with completed_by stamped from auth.uid(); exact idempotent replay returns the saved result without double activity logging; same-key different-payload raises COMPLETE_REPLAY_PAYLOAD_MISMATCH; the creator reopens; reassignment notifies only the new assignee; self-assignment and unchanged-assignee updates stay silent; a soft-deleted note raises NOTE_NOT_FOUND; anon EXECUTE is denied on the RPC and client roles cannot EXECUTE the trigger function. Terminal rollback.",
-      "covers": ["complete_team_note", "notify_team_note_assignment"],
-      "area": ["lifecycle", "security", "idempotency"]
+      "covers": [
+        "complete_team_note",
+        "notify_team_note_assignment"
+      ],
+      "area": [
+        "lifecycle",
+        "security",
+        "idempotency"
+      ]
     },
     "pending_commission_snapshot_reconcile": {
       "chain": "smoke-pending-commission-snapshot-reconcile.sql",
       "description": "Post-apply read-only invariant for the forward-only stale-profit follow-up: every eligible pending, non-deleted, unbatched order-channel commission matches the canonical order header and compute_commission_amount result; paid/cancelled/deleted/batched and job/application commissions remain outside the repair boundary. Terminal rollback marker.",
-      "covers": ["commissions"],
-      "area": ["billing", "regression"]
+      "covers": [
+        "commissions"
+      ],
+      "area": [
+        "billing",
+        "regression"
+      ]
     },
     "historical_ar_report_cutoffs": {
       "chain": "smoke-historical-ar-report-cutoffs.sql",
       "description": "Section 2 historical AR report proof: an overdue invoice remains visible in both AR Aging and Customer Balance Listing, a fully paid invoice remains in cumulative invoiced/paid/count totals without entering open balance, a future-dated invoice is excluded, a post-cutoff credit application is replayed to the exact gross/open-credit cutoff, later prepay activity fails closed, and anonymous/private-helper grants remain denied. Self-contained fixtures and terminal rollback.",
-      "covers": ["get_ar_aging", "get_customer_balance_listing", "assert_customer_balance_reconstructable_as_of"],
-      "area": ["billing", "security", "regression"]
+      "covers": [
+        "get_ar_aging",
+        "get_customer_balance_listing",
+        "assert_customer_balance_reconstructable_as_of"
+      ],
+      "area": [
+        "billing",
+        "security",
+        "regression"
+      ]
     },
     "save_quote_customer_row_version": {
       "chain": "smoke-save-quote-customer-row-version.sql",
       "description": "LOCAL ONLY pending-apply rollback fixture: executes the real save_quote/save_customer contracts for exact +1 tokens, payload-bound/current-token-verified idempotent replay, draft->sent->sent lifecycle persistence, stale header/child/address rejection, concurrent Customer money-path invalidation, split-conflict precedence, auth/role gates, sales-rep non-owner Customer rejection, and sales-rep non-owner Quote save, replay, version, and conversion rejection before mutation or result release, plus server-authoritative quote item math. As an authenticated browser role it proves stable parent-version reads while direct child INSERT/UPDATE/DELETE are denied; SECURITY DEFINER parent saves still replace child collections. The companion network-isolated PostgreSQL 17 prover demonstrates the pre-fix overwrite, both lock orders, payload-conflict and advanced-token replay rejection, exact split-conflict < stale-token < lifecycle/unplan < write ordering, mutation-resistant ownership gates, and normalized canonical-body preservation outside the audited row-version/security delta. Run smoke-planned-holds-drawn-sync.sql alongside this chain for planned-hold preservation; no PASS is a live-apply claim.",
-      "covers": ["save_quote", "save_customer"],
-      "area": ["lifecycle", "security", "idempotency"]
+      "covers": [
+        "save_quote",
+        "save_customer"
+      ],
+      "area": [
+        "lifecycle",
+        "security",
+        "idempotency"
+      ]
     },
     "save_field": {
       "chain": "smoke-save-field-actor-binding.sql",
       "description": "save_field actor-binding rollback proof: no-auth and forged actors fail before field writes, a legacy NULL actor is bound to the authenticated admin, request replay returns the same field without duplicate activity, and the sole SECURITY DEFINER overload retains its fixed search_path and narrow grants.",
-      "covers": ["save_field"],
-      "area": ["security", "idempotency"]
+      "covers": [
+        "save_field"
+      ],
+      "area": [
+        "security",
+        "idempotency"
+      ]
     },
     "supplier_pricing_phase3_return_policy": {
       "chain": "smoke-supplier-pricing-phase3-return-policy.sql",
       "description": "Supplier Pricing Phase 3 Stage A rollback matrix: dormant unknown/default Product compatibility; full returnable create/approve/receive/restock/credit lifecycle; governed metadata refusal at requested/approved/received; exact no-return create/re-credit and direct return-items refusals; received cancellation inventory reversal; linked and unrelated-credit-memo unapply boundaries; reject/cancel/unapply reversal boundaries; and forced late-failure atomic rollback for requested, approved, received/restock, credit-issued, rejected, cancelled, and credit-memo-unapplied effects. The companion prove-supplier-pricing-phase3-return-policy-concurrency.mjs proves autocommit and explicit deferred-FK timing plus two independent-session sorted advisory-lock races for wrappers, direct return_items writes, unapply, and a regression-sensitive received-cancel versus approved-receive race on the same Product/inventory row.",
-      "covers": ["create_return", "approve_return", "reject_return", "receive_return", "issue_return_credit", "set_product_phase3_metadata", "return_items", "product_families"],
-      "area": ["billing", "inventory", "lifecycle", "pricing", "security", "idempotency"]
+      "covers": [
+        "create_return",
+        "approve_return",
+        "reject_return",
+        "receive_return",
+        "issue_return_credit",
+        "set_product_phase3_metadata",
+        "return_items",
+        "product_families"
+      ],
+      "area": [
+        "billing",
+        "inventory",
+        "lifecycle",
+        "pricing",
+        "security",
+        "idempotency"
+      ]
     },
     "section9_po_ap_high_remediation": {
       "chain": "smoke-section9-po-ap-high-remediation.sql",
@@ -843,6 +891,27 @@
         "idempotency",
         "security",
         "billing"
+      ]
+    },
+    "allocated_line_cents": {
+      "chain": "smoke-allocated-line-cents.sql",
+      "container_only": true,
+      "container_prover": "prove-allocated-line-cents.mjs",
+      "description": "CONTAINER ONLY - run via scripts/smoke/prove-allocated-line-cents.mjs, never through run-smoke.mjs against the live database: the chain INSERTs orders, deliveries and invoices, which the LIVE-DATA GUARD correctly refuses, and it depends on the disposable scaffolding in fixtures/allocated-line-cents-base.sql. CRX-MONEY-LIFECYCLE-001 (fixed by 20260817120000): the tier-split draw-down deliberately makes an order line total_price differ from ROUND(price_per_unit * quantity, 2) - a drawn line carries the tier cumulative rounded value minus cents already committed - but delivery invoicing, the backfill invoicing path and Cancel Remaining each threw that allocation away and re-derived money by multiplying unit price by quantity again, so every fractional segment rounded independently and the total drifted from the booking (order says 25c, invoice bills 26c). Six scenarios: two draws off one booking both delivered; one line delivered as two deliveries; deliver-then-Cancel-Remaining; the backfill invoicing path; three fractional draws telescoping 4+3+4 to exactly 11c; and a voided invoice that must not consume allocation. The prover plants the three lifecycle bodies sliced byte-exact from their migration files (md5-pinned to the 2026-08-17 production snapshot, including the CRLF storage form of _close_undelivered_order_remainder_20260718 so the migration md5 preconditions are exercised for real), runs the chain against the PRE-FIX bodies and requires all six scenarios to report ALLOCATION_DRIFT, applies the migration verbatim in one transaction, then requires the same chain to reach SMOKE_PASS_ROLLBACK. A chain that passes pre-fix aborts the proof. Ends in SMOKE_PASS_ROLLBACK.",
+      "covers": [
+        "complete_delivery",
+        "_complete_delivery_authorized_impl",
+        "create_invoice_for_unbilled_delivery",
+        "_create_invoice_for_unbilled_delivery_impl_20260718",
+        "_close_undelivered_order_remainder_20260718",
+        "_allocated_cumulative_cents",
+        "_allocated_delivery_cents"
+      ],
+      "area": [
+        "billing",
+        "lifecycle",
+        "pricing",
+        "regression"
       ]
     }
   }

@@ -259,7 +259,21 @@ invisible and unwritable to `authenticated` until someone adds it to that list. 
 PostgREST `permission denied for column …` on a field that plainly exists — reads like an app bug,
 is actually a missing grant. **Any `ALTER TABLE … ADD COLUMN` on a column-carved table must ship a
 `GRANT` for the new column in the same migration.** Tables in this state today:
-`public.application_services`.
+`public.application_services` **and `public.products`**.
+
+**`public.products` (verified live 2026-08-18).** `authenticated` has **no** table-level
+`INSERT` or `UPDATE` — `has_table_privilege('authenticated','public.products','UPDATE')` is
+**false** — and **27 of its 48 columns** instead carry explicit column-level `INSERT`/`UPDATE`
+grants, a consequence of the phase-3 product-governance work
+(`20260723193312_product_families_return_policy_foundation.sql` and successors). `SELECT`
+remains table-wide. This entry previously listed only `application_services` and was stale.
+
+Any work adding columns to `products` — the 2026-08-18 product data model plan adds density,
+nickname, formulation type, safener and registration status among others — must ship
+`GRANT INSERT(col), UPDATE(col) ON public.products TO authenticated` in the same migration.
+**Verify by editing the field through the running app as an ordinary authenticated user:**
+service-role access bypasses column grants entirely and will show a working save on a column
+no real user can write.
 
 Two more consequences worth knowing before you carve a column out:
 
