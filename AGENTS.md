@@ -75,7 +75,9 @@ Never commit `.env` files or reveal keys. Never use `--no-verify`. Never use des
   New or changed authoritative TypeScript
   money math must parse decimal operands into integer cents before arithmetic; never introduce
   binary floating-point rounding for money. See the 2026-08-10 decision in
-  `docs/manual/DECISION_LOG.md`.
+  `docs/manual/DECISION_LOG.md`. Per Mason's 2026-08-19 decision recorded there, the two
+  purchase-order "mirror" constraints satisfy this gate as a closed two-column exception; every
+  other money column uses the rounding form named `<table>_<column>_whole_cents_chk`.
 - Inventory and financial invariants belong in PostgreSQL RPCs/triggers, not only in React.
 - Use `src/lib/db.ts` as the only Supabase client.
 - Call `assertRpcResult()` after RPCs and `checkMutationResult()` after `.update()` or `.delete()`.
