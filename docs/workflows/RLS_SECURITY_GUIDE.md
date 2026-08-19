@@ -33,7 +33,7 @@ All five, with the four **app roles** — the ones every policy below branches o
 
 (The `applicator` row used to sit outside this table, after a prose line, so it
 rendered as loose text rather than a fourth row — and the heading said three.
-There are four.)
+There are four **app roles**; the fifth stored value is the row added below them.)
 
 ---
 
@@ -73,6 +73,34 @@ USING (customer_id = (select auth.uid()))
 ```
 
 The parentheses and `select` keyword make PostgreSQL evaluate `auth.uid()` once per query instead of once per row. This is a major performance difference on large tables.
+
+**Live does not fully satisfy this rule.** Read from live `pg_policies` on 2026-08-19 UTC, exactly
+**three** policies in `public` still use bare `auth.uid()`:
+
+| Policy | Command | Expression |
+|--------|---------|-----------|
+| `tnotes_insert` | INSERT | `(created_by = auth.uid()) AND is_active_profile()` |
+| `below_cost_approvals_admin_read` | SELECT | `... WHERE p.id = auth.uid() AND p.is_active AND p.role = 'admin'` |
+| `credit_memo_apps_select` | SELECT | `... WHERE profiles.id = auth.uid() AND profiles.is_active AND profiles.role IN ('admin','sales_rep')` |
+
+All three are **correct on access** — this rule is about per-row evaluation cost, not security —
+and all three sit on small tables (`team_notes` 55 rows, `credit_memo_applications` 1,
+`below_cost_approvals` 0, read live 2026-08-19 UTC), so no fix ships here. It is recorded because a
+reader taking this section as a description of live would be wrong three times, and because the
+Safety Checklist at the bottom of this file asserts the same rule as if it held.
+
+Re-check by stripping the *wrapped* form first and seeing what `auth.uid` is left — a plain
+`like '%auth.uid()%'` matches every policy, since the correct form contains the same text:
+
+```sql
+with p as (
+  select policyname, cmd,
+         regexp_replace(coalesce(qual,'') || ' ~~ ' || coalesce(with_check,''),
+                        '[(] SELECT auth[.]uid[(][)] AS uid[)]', 'OK', 'g') as s
+    from pg_policies where schemaname = 'public'
+)
+select policyname, cmd from p where s ~ 'auth[.]uid' order by policyname;
+```
 
 ---
 
@@ -161,18 +189,26 @@ form, which is narrower than live.
 ### Pattern 5: Own data only
 ```sql
 -- Users can only see their own notifications
-CREATE POLICY "notifications_select" ON public.notifications
+CREATE POLICY "notif_select" ON public.notifications
   FOR SELECT TO authenticated
   USING (user_id = (select auth.uid()));
 ```
-Used on: `notifications`
+Used on: `notifications`. Re-read against live 2026-08-19 UTC: the predicate is right, but this
+block named the policy `notifications_select` and live is **`notif_select`**. Worth spelling out,
+because `notifications` carries *both* prefixes live — `notif_select`, `notif_insert` and
+`notif_update` for three commands, `notifications_admin_delete` for DELETE — so the wrong name
+does not look wrong.
 
 ### Pattern 6: Insert own data
 ```sql
-CREATE POLICY "activity_feed_insert" ON public.activity_feed
+CREATE POLICY "activity_insert" ON public.activity_feed
   FOR INSERT TO authenticated
   WITH CHECK (performed_by = (select auth.uid()));
 ```
+Used on: `activity_feed`. Same correction: predicate right, name wrong — this block said
+`activity_feed_insert`, live is **`activity_insert`**. Patterns 5 and 6 are the two an earlier
+sweep of this section checked and passed, and they were the two still wrong, because that sweep
+compared predicates and never compared names.
 
 ### Pattern 7: Append-only (no updates or deletes)
 ```sql
@@ -255,16 +291,23 @@ to show was stale: live also pins the actor.
 >
 > **The 162 -> 89 -> 61 -> 33 trajectory came from an in-session script that was never
 > committed, so no reader can reproduce those four numbers from this repo.** They are narrative
-> context, not evidence. What *is* evidence: the 33 survivors are enumerated by name in the
-> banner and KNOWN_ISSUES entry just referenced, and each was read individually against live
-> `pg_policies`, which anyone can re-check. Treat the trajectory as a description of how the work
-> proceeded and the enumeration as the auditable part.
+> context, not evidence — and the enumeration in the KNOWN_ISSUES entry does **not** stand in for
+> them. That entry's *"What the hand-triage corrected"* list is given by table, not by cell: its
+> first bullet names 12 tables with no command at all, and two further entries read "writes"
+> instead of naming which commands. It cannot be summed back to 33 either. An earlier revision of
+> this note offered it as the auditable equivalent of the count; that was too strong.
 >
-> Two cells in this table (`inventory_holds` and `team_note_comments` SELECT)
-> now use that one defined term. (An earlier revision of this banner said they "used to render
-> that expression as *Any active profile*". They did not: on `origin/main` those cells read
-> `Admin / Sales Rep` and `All authenticated`, and the "Any active profile" wording never
-> appeared in a committed matrix cell in this repo. The claim is withdrawn.) So this matrix
+> The auditable claim, and the only one worth relying on, is the one the rest of this banner makes:
+> every cell of both matrices was read against live `pg_policies` and is reproduced here, row by
+> row, for anyone to re-check. Take the trajectory as a description of how the work proceeded, not
+> as a measurement.
+>
+> **One** cell in this table newly reads it: `inventory_holds` SELECT, which read
+> `Admin / Sales Rep` on `origin/main`. `team_note_comments` SELECT already read
+> `All authenticated` there, so that cell is unchanged. (An earlier revision of this banner named
+> both and said they "used to render that expression as *Any active profile*" — wrong twice over:
+> the wording never appeared in a committed matrix cell in this repo, and the second cell did not
+> change. Both claims are withdrawn.) So this matrix
 > carries 8
 > cells reading **"All authenticated"** and all 8 also appear in the
 > `database-schema.md` matrix.

@@ -68,7 +68,10 @@ reason in the trap note below. **29 of 79 rows** in `docs/reference/database-sch
 live policy expressions. Three further schema-matrix rows — `idempotency_keys`,
 `product_cost_basis` and `product_cost_basis_change_rows` — changed for notation only, with no
 change in access, which is why that file's banner counts 32 changed rows against 29 corrections.
-Both now read zero presence disagreements. A 13th guide row, `quotes`, was
+Both now read zero presence disagreements. Those are per-pass figures, not totals — re-measured
+against `origin/main` at this branch's head by keying both matrices on table name and comparing all
+four command cells, the guide matrix carries **26 changed rows of 37** and the schema matrix **62 of
+79**. A 13th guide row, `quotes`, was
 corrected afterwards by hand — its SELECT cell claimed sales reps see only their own quotes where
 live `quotes_select` is `is_admin() OR is_sales_rep()` with no ownership test. That was a
 role-wording error, which is exactly what the second trap below says the mechanical pass cannot
@@ -108,9 +111,14 @@ Against `origin/main` the `database-schema.md` matrix now carries **62** changed
 79, re-measured by comparing all four command cells of all 79 rows (an earlier figure of 61 summed
 the per-pass counts instead of re-running the comparison).
 Also re-read the guide's "Common RLS Policy Patterns" section against live, which the earlier
-passes had left alone while rewriting the matrix above it: Patterns 1, 2, 3, 4 and 7 each described
-a policy shape live does not have, and Pattern 3 taught `quotes_select` **with** an ownership
-test that the same file's banner corrects 90 lines below. All five fixed.
+passes had left alone while rewriting the matrix above it. **All seven patterns were wrong**, in two
+different ways. Patterns 1, 2, 3, 4 and 7 each described a policy *shape* live does not have —
+including Pattern 3, which taught `quotes_select` **with** an ownership test that the same file's
+own banner corrects. Patterns 5 and 6 had correct predicates but named policies that do not exist:
+`notifications_select` for live `notif_select`, `activity_feed_insert` for live
+`activity_insert`. An earlier revision of this entry said five were wrong and that the section had
+been re-read; the sweep behind it compared predicates and never compared names, so 5 and 6 passed
+while wrong. All seven are fixed.
 
 **Also corrected:** the `migration-history.md` header claim 885 → 886 (a high-water row number, not a
 file count — the two `check:docs` rows measure different things), both manual freshness stamps, live
@@ -120,6 +128,13 @@ counts in `CURRENT_STATE.md` section 2, the live signatures of `create_quote_ver
 the now-stale money table in `docs/manual/DECISION_LOG.md`, and a whole-cent money re-measure showing
 2 dirty column-values where 43 were recorded — 43 being a sum across four columns rather than four
 disjoint row sets, so the distinct-row count then was 40–43, not 43.
+
+**One rendering fix, pre-existing rather than introduced here.** In `migration-history.md`'s
+"Staged 2026-06-11" section a `>` blockquote banner sat *between* two rows of a pipe table. A
+blockquote line ends a Markdown table the same way a blank line does, so the 11 rows below it
+rendered as loose text instead of table rows. The banner moved up to sit beside the batch banner it
+is already cross-referenced from; no row text changed, and the table is now 12 unbroken rows. This
+was the last such break in the file.
 
 **A money column was recorded as unapproved debt while live was enforcing it.**
 `docs/manual/DECISION_LOG.md` listed `order_items.total_price` among the deferred columns under

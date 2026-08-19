@@ -313,13 +313,15 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 > **"All authenticated"** in these matrices is shorthand for live
 > `is_active_profile()`: any signed-in user whose `profiles.is_active` is true.
 > A deactivated profile is authenticated but denied, so "all authenticated" is
-> the looser of the two readings. Three cells here — `inventory_holds`,
-> `team_note_attachments` and `team_note_comments` SELECT — now use that one
-> defined term.
+> the looser of the two readings. **One** cell here newly reads it:
+> `inventory_holds` SELECT, which read `Admin / Sales Rep` on `origin/main`.
+> `team_note_attachments` and `team_note_comments` SELECT already read
+> `All authenticated` there, so the term is not new to them.
 >
-> An earlier revision of this banner said they "used to render that identical
-> live expression as *Any active profile*". **That is not this file's history
-> and the claim is withdrawn.** `git log -S"Any active profile" origin/main`
+> An earlier revision of this banner named all three and said they "used to
+> render that identical live expression as *Any active profile*". **Both halves
+> are withdrawn** — the second and third cells did not change at all, and the
+> provenance is not this file's history: `git log -S"Any active profile" origin/main`
 > returns nothing: the phrase never appeared in any committed version of either
 > matrix. It existed only in banner prose on an intermediate commit of this
 > branch (`76e755d2`), never in a matrix cell. On `origin/main` those three
@@ -340,6 +342,11 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 >  where schemaname = 'public' and cmd = 'SELECT'
 >    and qual like '%is_active_profile%';
 > ```
+>
+> That query returns **27** rows live (read 2026-08-19 UTC), not 17. It finds
+> every SELECT policy in `public` built on `is_active_profile()`; the 17 cells
+> counted above are the subset whose tables this matrix carries. All 17 are in
+> the result — the extra 10 are on tables the matrix does not list.
 
 | Table | SELECT | INSERT | UPDATE | DELETE |
 |-------|--------|--------|--------|--------|

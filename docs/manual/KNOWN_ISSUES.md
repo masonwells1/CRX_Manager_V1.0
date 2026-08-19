@@ -1,6 +1,7 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-08-19 UTC, read-only live re-read.** **Live ledger high-water is `20260816174353` at 971 rows**, carrying submitted name `20260813080000_lock_quote_versions_writes_to_rpc` — which is also the highest *timestamp-prefixed* `name`, so both orderings agree on the same row. (Stated that way deliberately: only **345** of the 971 ledger names carry a 14-digit timestamp prefix — 346 if the single 8-digit `20260207_gap_analysis_fixes` is counted, and `docs/reference/migration-history.md` uses the 14-digit definition, so this file now matches it. A plain `max(name)` returns the slug `year_end_summary`. The ordering claim holds over the prefixed subset, not over the raw column.) Two things this pass corrected in this file: (1) the header below claimed `20260812003315` / 962 rows, **nine applies** and six days of ledger staleness out of date — the six 2026-08-12 recoveries listed below, then `20260812212323`, `20260813011751` and `20260816174353`, which is 962 + 9 = 971; (2) CRX-SEC-1 **applied live on 2026-08-16** — see the new CLOSED entry immediately below — while `docs/reference/migration-history.md` row 886 still called it an unapplied local candidate. `.claude/schema-registry.json` was regenerated from live introspection on 2026-08-16 and records `migrations_high_water` `20260816174353`, matching this ledger; it was **not** re-derived in this pass. **The 2026-08-10 money figures quoted further down this file are stale** — a read-only re-measure on 2026-08-18 finds `order_items.total_price`, `order_items.profit`, `commissions.commission_amount` and `commissions.order_profit` all at **0** sub-cent rows, with only `quotes.total_cost` still holding **2**; the "43 dirty rows" and "49 rows" figures below are superseded by that measurement (recorded in full in `docs/manual/CURRENT_STATE.md` section 2). Everything else below was left as separately dated historical evidence and was not re-verified in this pass.
+**Last verified: 2026-08-19 UTC, read-only live re-read.** **Live ledger high-water is `20260816174353` at 971 rows**, carrying submitted name `20260813080000_lock_quote_versions_writes_to_rpc` — which is also the highest *timestamp-prefixed* `name`, so both orderings agree on the same row. (Stated that way deliberately: only **345** of the 971 ledger names carry a 14-digit timestamp prefix — 346 if the single 8-digit `20260207_gap_analysis_fixes.sql` is counted (the `.sql` suffix is part
+of the stored ledger name), and `docs/reference/migration-history.md` uses the 14-digit definition, so this file now matches it. A plain `max(name)` returns the slug `year_end_summary`. The ordering claim holds over the prefixed subset, not over the raw column.) Two things this pass corrected in this file: (1) the header below claimed `20260812003315` / 962 rows, **nine applies** and six days of ledger staleness out of date — the six 2026-08-12 recoveries listed below, then `20260812212323`, `20260813011751` and `20260816174353`, which is 962 + 9 = 971; (2) CRX-SEC-1 **applied live on 2026-08-16** — see the new CLOSED entry immediately below — while `docs/reference/migration-history.md` row 886 still called it an unapplied local candidate. `.claude/schema-registry.json` was regenerated from live introspection on 2026-08-16 and records `migrations_high_water` `20260816174353`, matching this ledger; it was **not** re-derived in this pass. **The 2026-08-10 money figures quoted further down this file are stale** — a read-only re-measure on 2026-08-18 finds `order_items.total_price`, `order_items.profit`, `commissions.commission_amount` and `commissions.order_profit` all at **0** sub-cent rows, with only `quotes.total_cost` still holding **2**; the "43 dirty rows" and "49 rows" figures below are superseded by that measurement (recorded in full in `docs/manual/CURRENT_STATE.md` section 2). Everything else below was left as separately dated historical evidence and was not re-verified in this pass.
 
 **Superseded 2026-08-12 header, kept for provenance:** live ledger high-water was `20260812003315` at 962 rows, carrying submitted name `20260811230423_log_customer_sales_rep_assignment`. The Customer 360 assignment RPC is live with atomic customer timestamp/activity logging, one overload, the reviewed security/search-path/grant shape, and no table, column, enum, generated-column, signature, or public-function-name-count change. The schema registry was genuinely refreshed through the same high-water. Ledger versions are UTC and Supabase applies may assign a version different from the submitted filename, so match the recorded name when reconciling an apply. The historical Team Board, money, and commission-payout details below remain separately dated evidence rather than claims that their older high-waters are current.
 
@@ -149,11 +150,13 @@ rewritten:
   un-deleted), and `team_notes` INSERT (an active profile as well as ownership).
 
 **"All authenticated"** in both matrices means live `is_active_profile()`: signed in *and*
-`profiles.is_active`. A deactivated profile is authenticated but denied. Three cells
-(`inventory_holds`, `team_note_attachments` and `team_note_comments` SELECT) now use that one
-defined term. (An earlier draft said they had "rendered that same live expression as *Any active
-profile*". `git log -S` finds that phrase nowhere in `origin/main`'s history — it existed only
-in branch-internal prose — so the claim is withdrawn.) That makes **17**
+`profiles.is_active`. A deactivated profile is authenticated but denied. **One** cell newly reads
+it: `inventory_holds` SELECT, which read `Admin / Sales Rep` on `origin/main`.
+`team_note_attachments` and `team_note_comments` SELECT already read `All authenticated` there.
+(An earlier draft named all three and said they had "rendered that same live expression as *Any
+active profile*". Both halves are withdrawn: `git log -S` finds that phrase nowhere in
+`origin/main`'s history — it existed only in branch-internal prose — and the other two cells did
+not change.) That makes **17**
 distinct table/command pairs carrying the phrase — 17 cells in the `database-schema.md` matrix and
 8 of them repeated in `RLS_SECURITY_GUIDE.md`, 25 cell instances in all. An earlier draft of this
 entry said "all 14 cells ... in both matrices", which was the count for one matrix described as
@@ -165,6 +168,10 @@ re-checked without the classifier:
 select tablename, policyname, cmd, qual from pg_policies
  where schemaname = 'public' and cmd = 'SELECT' and qual like '%is_active_profile%';
 ```
+
+That returns **27** rows live (2026-08-19 UTC), not 17 — every SELECT policy in `public` built on
+`is_active_profile()`. The 17 are the subset whose tables the matrices carry; all 17 are in the
+result.
 
 **If this is ever re-run, do not bulk-apply the classifier's output** — that is exactly the mistake
 that produced the `rate_limit_log` row. The classifier locates candidates; live `pg_policies` is
@@ -199,6 +206,14 @@ notice.
 own change with a guard test that fails before the fix and passes after. The fix is to compare against
 the high-water **name** stamp, which `docs/reference/migration-history.md` records alongside the
 version for exactly this reason, or to resolve the version to its name before comparing.
+
+Neither is a one-line hook edit, which is worth saying plainly rather than leaving the fix sounding
+cheap: `.claude/schema-registry.json` stores `"migrations_high_water"` as a **version**
+(`20260816174353`) and nothing else, so the hook has no name to compare against. Either the registry
+starts storing the name too — a schema-registry format change, with the refresh path updated to
+match — or the hook resolves version to name at run time, which means a live ledger read on a path
+that is currently offline. That choice is the actual work, and it is why this is filed rather than
+patched.
 
 ---
 
