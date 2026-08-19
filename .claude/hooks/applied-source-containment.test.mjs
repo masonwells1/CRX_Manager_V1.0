@@ -171,6 +171,24 @@ try {
   entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
   assert.equal(entries.length, 1, "skipped check must not prune the entry");
 
+  // An UNBORN HEAD (fresh repo, nothing ever committed) must still BLOCK —
+  // nothing committed is exactly the uncontained case. Guards against a
+  // "skip when HEAD doesn't resolve" regression (CodeRabbit PR #423 round 3):
+  // only a transient git failure may skip, never a genuinely empty history.
+  const tmp2 = mkdtempSync(path.join(os.tmpdir(), "crx-c3-unborn-"));
+  try {
+    git(["init", "-q"], tmp2);
+    const top2 = git(["rev-parse", "--show-toplevel"], tmp2).trim();
+    assert.equal(path.resolve(top2), path.resolve(tmp2), "second git init must land in its temp dir");
+    mkdirSync(path.join(tmp2, ".claude", "session-state"), { recursive: true });
+    writeFileSync(path.join(tmp2, ".claude", "session-state", "applied-source-ledger.json"),
+      JSON.stringify([{ name: "unborn_probe", ts: "t", session: "s" }]) + "\n");
+    const unborn = runHook(stopWrapPath, { session_id: "c3-test-unborn" }, tmp2);
+    assert.match(unborn.stdout, /APPLIED TO LIVE with no committed source/, "unborn HEAD still blocks — nothing is committed");
+  } finally {
+    try { rmSync(tmp2, { recursive: true, force: true }); } catch { /* best-effort */ }
+  }
+
   // A corrupt ledger never bricks session end (fail-open).
   writeFileSync(ledgerPath, "{not json");
   const wrap = runHook(stopWrapPath, { session_id: "c3-test-corrupt" }, tmp);

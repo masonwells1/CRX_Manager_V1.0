@@ -79,8 +79,27 @@ try {
     if (runGit(["rev-parse", "--is-inside-work-tree"]).trim() !== "true") {
       throw new Error("git unavailable — containment check skipped");
     }
+    // runGit folds failure into "", which here would read as "no committed
+    // migrations" — a phantom block one layer deeper (CodeRabbit PR #423
+    // round 3). Call ls-tree unwrapped: a throw means EITHER an unborn HEAD
+    // (nothing committed — the containment case, keep blocking with an empty
+    // set) OR a transient failure despite a valid HEAD (skip via the outer
+    // fail-open catch). rev-parse --verify HEAD tells the two apart. A
+    // SUCCESSFUL empty listing stays authoritative: commits exist but no
+    // migration files do, so a recorded apply is genuinely uncontained.
+    let lsTree;
+    try {
+      lsTree = execFileSync("git", ["ls-tree", "-r", "HEAD", "--name-only", "--", "supabase/migrations"], {
+        encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"], cwd: projectDir,
+      });
+    } catch {
+      if (runGit(["rev-parse", "--verify", "HEAD"]).trim()) {
+        throw new Error("git ls-tree failed despite a valid HEAD — containment check skipped");
+      }
+      lsTree = ""; // unborn HEAD: nothing is committed, so containment must block
+    }
     const trackedNames = new Set();
-    for (const f of runGit(["ls-tree", "-r", "HEAD", "--name-only", "--", "supabase/migrations"]).split("\n")) {
+    for (const f of lsTree.split("\n")) {
       const rel = f.replace(/\\/g, "/").trim();
       if (!rel.endsWith(".sql")) continue;
       const base = rel.slice(rel.lastIndexOf("/") + 1, -".sql".length);

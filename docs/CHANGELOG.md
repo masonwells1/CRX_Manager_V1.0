@@ -48,7 +48,10 @@ Bash-escape-decoded cd target (`session-\state` executes as `session-state`; the
 covers Windows `\` paths); stop-wrap skips the containment check when the git call itself fails
 (binary missing/timeout) instead of phantom-blocking on an empty listing — an unborn HEAD still
 blocks, since nothing-committed is exactly the uncontained case; and the guard test's allow case
-now asserts exit code 0, not just empty output.
+now asserts exit code 0, not just empty output. Round 3 (one Minor follow-up, confirmed and
+fixed): the `ls-tree` listing itself is now failure-aware — a transient git failure despite a
+valid HEAD skips the check instead of reading as "no committed migrations", while an unborn HEAD
+keeps blocking (regression test added, mutation-proved).
 
 ## 2026-08-18 — Skills/commands accuracy sweep across the agent workflow surface
 
