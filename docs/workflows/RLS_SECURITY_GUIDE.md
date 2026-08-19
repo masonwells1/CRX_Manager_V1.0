@@ -142,7 +142,9 @@ Used on: `financial_audit_log`
 > changed several rows below — e.g. as of 2026-07-15 the browser roles' direct
 > INSERT on `returns` and INSERT/UPDATE/DELETE on `return_items` were REVOKED
 > (mutations are now RPC-owned; migration `20260715203911`), `payments`
-> direct writes were removed (`20260714223000`), and as of 2026-08-16 the
+> direct writes were removed (`20260714223000`), and as of 2026-08-16 — a date
+> **inferred** from the ledger version stamp `20260816174353`, since the ledger has
+> no timestamp column, so the apply is observed but its clock time is not — the
 > browser roles' direct INSERT on `quote_versions` was REVOKED along with the
 > `qversions_insert` policy (**CRX-SEC-1**, migration `20260813080000`, ledger
 > version `20260816174353`; writes are now `create_quote_version` RPC only), and
@@ -153,48 +155,56 @@ Used on: `financial_audit_log`
 > and tablename='<table>'` (read-only) — and if you're debugging a silent RLS
 > denial, believe `pg_policies`, not this table. Do NOT "fix" reality to match
 > this matrix (re-adding a revoked permissive policy re-opens a closed hole).
-> Last full hand-reconcile: pre-2026-07-14 — treat anything touched since as stale.
-> On 2026-08-18 the `quote_versions` and `quote_items` rows only were re-verified
-> against live `pg_policies` (read-only); every other row still dates from that
-> pre-2026-07-14 reconcile.
+> **Last full reconcile: 2026-08-19.** On that date all 37 rows of this matrix
+> were machine-compared against live `pg_policies` (read-only), per command. The
+> 12 rows that disagreed were corrected from the live policy expressions:
+> `cost_history`, `quote_items`, `quote_versions`, `inventory_holds`,
+> `receiving_records`, `delivery_photos`, `commissions`, `payments`,
+> `team_note_comments`, `notifications`, `returns`, `return_items`. All 37 rows
+> now agree with live on which commands have a policy.
+>
+> Note what that does and does not prove. Policy *presence* per command is what
+> was compared mechanically; the role wording inside each cell was transcribed by
+> hand from the policy's `USING`/`WITH CHECK` expression, so a cell can still be
+> imprecise even though its `-` vs non-`-` shape is verified.
 
 | Table | SELECT | INSERT | UPDATE | DELETE |
 |-------|--------|--------|--------|--------|
 | profiles | All authenticated | Own/Admin | Own/Admin | - |
 | products | All authenticated | Admin | Admin | Admin |
-| cost_history | Admin | Admin | - | - |
+| cost_history | Admin | - (no INSERT policy) | - | - |
 | customers | Admin / Sales Rep (assigned) / Driver (has delivery) | Admin / Sales Rep | Admin / Sales Rep (assigned) | Admin |
 | customer_addresses | All authenticated | Admin / Sales Rep (own customer) | Admin / Sales Rep (own customer) | Admin |
 | quotes | Admin / Sales Rep (own) | Admin / Sales Rep (own) | Admin / Sales Rep (own) | Admin |
 | quote_sections | All authenticated | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) |
-| quote_items | Admin / Sales Rep | - (RPC only) | - (RPC only) | - (RPC only) |
-| quote_versions | Admin / Sales Rep | - (`create_quote_version` RPC only, since `20260813080000` applied live 2026-08-16) | - | - |
+| quote_items | Admin / Sales Rep | - (RPC only, since `20260812115236` dropped `qitems_insert`/`qitems_update`/`qitems_delete`) | - (RPC only) | - (RPC only) |
+| quote_versions | Admin / Sales Rep | - (`create_quote_version` RPC only, since `20260813080000`, ledger version `20260816174353`) | - | - |
 | orders | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | order_items | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | inventory | Admin / Sales Rep / Driver | Admin | Admin | Admin |
 | inventory_transactions | Admin / Sales Rep | Admin / Sales Rep | - | - |
-| inventory_holds | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
+| inventory_holds | Any active profile | - (no write policy; SECDEF RPCs only) | - (no write policy) | - (no write policy) |
 | purchase_orders | Admin / Sales Rep | Admin | Admin | Admin |
 | purchase_order_items | Admin / Sales Rep | Admin | Admin | Admin |
-| receiving_records | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
+| receiving_records | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | deliveries | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep | Admin / Sales Rep / Driver (assigned) | Admin |
 | delivery_items | Admin / Sales Rep / Driver (via delivery) | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
-| delivery_photos | Admin / Sales Rep / Driver | Admin / Sales Rep / Driver | - | Admin |
+| delivery_photos | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep / active Driver | Admin | Admin |
 | delivery_remainders | Admin / Sales Rep / Driver | Admin / Sales Rep | Admin / Sales Rep | Admin |
-| commissions | Admin / Sales Rep (own recipient) | Admin | Admin | - |
-| payments | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
+| commissions | Admin / Sales Rep (own recipient) | Admin | Admin | Admin |
+| payments | Admin / Sales Rep | - (RPC only, since `20260714223000`) | - (RPC only) | - (RPC only) |
 | team_notes | All authenticated | Own created_by | Own created_by / Admin | Admin |
-| team_note_comments | All authenticated | Own created_by | - | - |
+| team_note_comments | Any active profile | Own created_by | Own created_by / Admin | Own created_by / Admin |
 | activity_feed | All authenticated | Own performed_by | - | - |
-| notifications | Own user_id | All authenticated | Own user_id | - |
+| notifications | Own user_id | Admin / Sales Rep / own user_id | Own user_id | Admin |
 | invoices | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | invoice_items | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | financial_audit_log | Admin | All authenticated | - | - |
 | blend_recipes | All authenticated | Admin / Sales Rep | Admin / Sales Rep | Admin |
 | warehouses | All authenticated | Admin | Admin | Admin |
 | cycle_counts | Admin | Admin | Admin | Admin |
-| returns | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
-| return_items | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
+| returns | Admin / Sales Rep / requester | - (RPC only, since `20260715203911`) | Admin / requester | Admin |
+| return_items | Admin / Sales Rep / return requester | - (RPC only, since `20260715203911`) | - (RPC only) | - (RPC only) |
 | rebate_programs | Admin | Admin | Admin | Admin |
 | rebate_claims | Admin | Admin | Admin | Admin |
 

@@ -2,7 +2,7 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-18 — CRX-SEC-1 is LIVE (applied 2026-08-16); five docs corrected, and two claims retracted
+## 2026-08-18 — CRX-SEC-1 is LIVE (applied 2026-08-16); seven docs corrected, two claims retracted, and both RLS matrices reconciled against live
 
 Documentation only — no app source, migration, or live-state change; every live read in this entry
 was read-only.
@@ -13,7 +13,8 @@ marker; that was accurate when written and is now superseded by this entry. The 
 timestamp column, so the commonly quoted 2026-08-16 17:43:53 UTC is read off the version stamp — the
 apply is observed, the clock time is inferred.
 
-**Five docs, not three.** A doc pass on 2026-08-18 found `docs/manual/CURRENT_STATE.md`,
+**Five docs called it unapplied, not three.** (Seven docs are corrected overall; the other two are
+covered under "Also corrected" below.) A doc pass on 2026-08-18 found `docs/manual/CURRENT_STATE.md`,
 `docs/manual/KNOWN_ISSUES.md` and `docs/reference/migration-history.md` row 886 all still calling the
 fix an unapplied local candidate. Adversarial review then found a fourth: the RLS Policy Matrix in
 `docs/reference/database-schema.md` still listed `quote_versions` INSERT as `Admin / Sales Rep` with a
@@ -38,10 +39,28 @@ no `authenticated` EXECUTE, and its only caller takes **no client cost snapshot*
 `auth.uid()`, active-profile role, quote ownership and row version. No triggers, no view, no other
 writer. A sales rep cannot forge a cost basis.
 
+**Both RLS matrices reconciled against live — the fix for the pattern, not just the row.** Four
+consecutive adversarial passes each found one more wrong claim, because each pass corrected the row
+it was pointed at rather than the table it lived in. So every row of both matrices was
+machine-compared against live `pg_policies`, per command, on 2026-08-19: **29 of 79 rows** in
+`docs/reference/database-schema.md` and **12 of 37** in `docs/workflows/RLS_SECURITY_GUIDE.md`
+disagreed with live, and all were corrected from the live policy expressions. Both now read zero
+disagreements. Wrong in both directions: `vendors`, `quote_items`, `payments` and others documented
+write access that live grants to nobody, while `rate_limit_log` documented no access where live
+grants admin full access. Two traps worth recording — a `-` cell is correct both when no policy
+exists *and* when a deny-all `USING (false)` policy exists (`idempotency_keys` and the three
+`product_cost_basis*` tables are the second kind, so a naive presence-diff would have *introduced*
+errors there), and what was verified mechanically is policy presence per command, not the role
+wording inside each cell.
+
 **Also corrected:** the `migration-history.md` header claim 885 → 886 (a high-water row number, not a
 file count — the two `check:docs` rows measure different things), both manual freshness stamps, live
-counts in `CURRENT_STATE.md` section 2, and a whole-cent money re-measure showing 2 dirty rows where
-43 were recorded.
+counts in `CURRENT_STATE.md` section 2, the live signatures of `create_quote_version` and
+`restore_quote_version` in `docs/reference/rpc-functions.md` (both had drifted, and
+`restore_quote_version` takes `p_quote_id` first, which the doc had wrong), a supersession marker on
+the now-stale money table in `docs/manual/DECISION_LOG.md`, and a whole-cent money re-measure showing
+2 dirty column-values where 43 were recorded — 43 being a sum across four columns rather than four
+disjoint row sets, so the distinct-row count then was 40–43, not 43.
 
 **A second claim retracted.** That money re-measure was first written up as a new OPEN incident —
 "stored commission money changed on live with no identified cause". It was wrong, and adversarial
@@ -54,9 +73,62 @@ single $0.01 gap on one pending snapshot. The first draft asserted an absence wi
 the writer, which the retracted entry in `docs/manual/KNOWN_ISSUES.md` was already describing further
 down the same file. No production money moved outside a recorded decision.
 
-`20260813080000`'s own first line still
-reads `-- STATUS: NOT APPLIED`; that header is stale and is deliberately left alone, because CRX Manager
-never edits an applied migration.
+**One deliberate non-fix.** `20260813080000`'s own first line still reads `-- STATUS: NOT APPLIED`.
+That header is stale and is deliberately left alone, because CRX Manager never edits an applied
+migration.
+
+## 2026-08-18 — Skills/commands accuracy sweep across the agent workflow surface
+
+Harness only — no app source, migration, or live-state change. A four-agent audit of every
+`.claude/skills/` and `.claude/commands/` file (plus the global handoff/new-project skills) found
+~60 findings; all confirmed ones are fixed (the remainder were duplicates or refuted on
+verification). Highlights:
+
+- **Landing mechanics current everywhere:** `/ship`, `/deploy-check`, `/codex-gauntlet`, and the
+  review-family files now all state the post-2026-07-30 chain — branch → PR → Vercel check →
+  **read and resolve CodeRabbit's review** → merge — and the hands-free-migration carve-outs
+  reference the settled 2026-07-13 policy instead of contradicting it.
+- **Model pins:** `scripts/codex-hunt.mjs` now pins `gpt-5.3-codex-spark` explicitly (was falling
+  to the CLI default under `--ignore-user-config`); codex-cross-review's template pins
+  `gpt-5.6-sol`/high with an exact SHA; the global handoff skill (outside this repo, at
+  `~/.claude/skills/handoff` — noted here for the audit record only) no longer claims Codex
+  cannot reach the live DB (its Supabase connector is write-enabled, 2026-08-14).
+- **Renamed/stale tool references:** Supabase `get_logs` → `query_logs` (settings allowlist +
+  deploy-edge-function + spot-check-prod); hard-coded connector UUID prefixes replaced with
+  suffix-resolution; `moddatetime` trigger template replaced with the house
+  `public.update_updated_at()` in create-migration/explain-migration.
+- **Registry/review accuracy:** regen-schema-registry now checks registry_version 2 and all
+  8 top-level keys; review prompts ask for EVERY finding with filtering moved to reconciliation;
+  migration-review gained the post-apply Step 5 (smoke chains, registry refresh, sweeps);
+  backup-db documents both backup evidence channels.
+- Codex adapters regenerated (`sync-agent-workflows --write`, 37 files) and
+  `npm run test:agent-workflows` green. Proposed wordings that would have added unscoped
+  carve-outs to hard safety-gate approval lines were rejected; the two gate sentences that were
+  reworded (`agent-pair-review`, `codex-gauntlet`) were then re-tightened in the blind
+  double-Opus review round below.
+- **CodeRabbit follow-up (PR #421):** completed the approval-gate lists in `agent-pair-review`
+  and `/ship` (added non-green pushes, billing, customer-visible production state); both bug-hunt
+  handoffs now spell out the read/fix/dismiss CodeRabbit gate; packet dates pinned to
+  `TZ='America/Chicago'`; rollback's edge-function check excludes `_shared/`; regen-schema-registry
+  diffs/summarizes all 8 registry sections; spot-check-prod reports unversioned functions as
+  `NO BASELINE`; probe rewrites must retain both SQLs with read-only equivalence; review-workflow's
+  GROUND_RULE points at the manual/reference lifecycle docs instead of `CLAUDE.md`.
+- **Blind double-Opus adversarial rounds (PR #421, Codex usage-limited):** independent blind
+  Opus reviewer pairs re-audited the full diff, one round per fix commit until clean. Fixed from
+  their findings: the `agent-pair-review` and `codex-gauntlet` gate sentences re-tightened
+  (live-data changes and destructive actions are never hands-free; the 2026-07-13 proof gate
+  named explicitly); `query_logs` call shapes corrected to the real `sql`-based schema
+  (deploy-edge-function, spot-check-prod) and stale `project_id`/`get_logs` params/allowlist
+  entries dropped; `codex-gauntlet` no longer claims preflight/deploy-check invoke it
+  automatically; `overnight-codex-gate.mjs` now feeds the prompt via stdin (Windows ~32K argv
+  cap) and emits an explicit `GATE-FAILED:` line on stdout for timeout/launch/non-zero exits so
+  an empty verdict file is never mistaken for "nothing found" (overnight-bug-hunt's read
+  instructions say the same); log checks now verify the log `source` exists before trusting an
+  empty result (this project has no `function_edge_logs`); migration-review's read-only carve-out
+  now enumerates everything post-apply Step 5 actually does (registry write, B7 rename,
+  rolled-back live smoke transactions); the last `.codex\sync-from-claude.ps1` remedies replaced
+  with `node scripts/sync-agent-workflows.mjs --write`; audit-report dates pinned to
+  `TZ='America/Chicago'`; stale map-count figures dropped from the architecture-audit prompt.
 
 ## 2026-08-18 — pre-push private-artifact scan no longer ENOBUFS on nested worktrees
 

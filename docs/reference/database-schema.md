@@ -184,56 +184,84 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 
 ## RLS Policy Matrix
 
+> ⚠️ **Hand-kept snapshot — `pg_policies` on live is the source of truth.** If you
+> are debugging a silent RLS denial, believe live, not this table, and never
+> "fix" reality to match a row here (re-adding a revoked permissive policy
+> re-opens a closed hole).
+>
+> **Last full reconcile: 2026-08-19.** All 79 rows were machine-compared against
+> live `pg_policies` (read-only), per command. 29 rows disagreed and were
+> corrected from the live policy expressions — 12 of them shared with the matrix
+> in `docs/workflows/RLS_SECURITY_GUIDE.md` (`cost_history`, `quote_items`,
+> `quote_versions`, `inventory_holds`, `receiving_records`, `delivery_photos`,
+> `commissions`, `payments`, `team_note_comments`, `notifications`, `returns`,
+> `return_items`) and 17 appearing only here (`receiving_photos`,
+> `team_note_attachments`, `blend_tickets`, `allocation_sets`,
+> `order_line_allocations`, `invoice_line_allocations`, `prepay_credits`,
+> `prepay_applications`, `blend_ticket_to_order_items`, `vendors`,
+> `vendor_payments`, `ar_reminder_tracking`, `failed_notifications`,
+> `invoice_shares`, `order_shares`, `rate_limit_log`, `field_crop_history`).
+>
+> Two shapes to read carefully. A `-` cell means **no direct browser-role path**,
+> which is true both when no policy exists and when a deny-all policy
+> (`USING (false)`) exists. `idempotency_keys` and the three
+> `product_cost_basis*` tables are the deny-all kind — a policy is present but
+> grants nothing — so they were excluded from the mechanical comparison and
+> checked by reading their policy bodies instead. And policy *presence* per
+> command is what was compared mechanically; the role wording inside each cell
+> was transcribed by hand from the policy's `USING`/`WITH CHECK` expression, so a
+> cell can still be imprecise even though its `-` vs non-`-` shape is verified.
+
 | Table | SELECT | INSERT | UPDATE | DELETE |
 |-------|--------|--------|--------|--------|
 | profiles | All authenticated | Own/Admin | Own/Admin | - |
 | products | All authenticated | Admin | Admin | Admin |
-| cost_history | Admin | Admin | - | - |
-| product_cost_basis *(Phase 2 live)* | RPC only | RPC only | RPC only (close active row) | - |
-| product_cost_basis_change_rows *(Phase 2 live)* | RPC only | RPC only | - | - |
+| cost_history | Admin | - (no INSERT policy) | - | - |
+| product_cost_basis *(Phase 2 live)* | RPC only | RPC only | RPC only (close active row) | RPC only |
+| product_cost_basis_change_rows *(Phase 2 live)* | RPC only | RPC only | RPC only | RPC only |
 | product_cost_basis_rollout *(live Wells canary)* | RPC only | RPC only | RPC only | RPC only |
 | customers | Admin / Sales Rep (assigned) / Driver (has delivery) | Admin / Sales Rep | Admin / Sales Rep (assigned) | Admin |
 | customer_addresses | All authenticated | Admin / Sales Rep (own customer) | Admin / Sales Rep (own customer) | Admin |
 | quotes | Admin / Sales Rep | Admin / Sales Rep (own) | Admin / Sales Rep (own) | Admin |
 | quote_sections | All authenticated | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) |
 | quote_product_draws | Admin / Sales Rep | - (SECDEF RPCs only) | - (SECDEF RPCs only) | - (SECDEF RPCs only) |
-| quote_items | Admin / Sales Rep | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) |
+| quote_items | Admin / Sales Rep | - (RPC only, since `20260812115236` dropped `qitems_insert`/`qitems_update`/`qitems_delete`) | - (RPC only) | - (RPC only) |
 | quote_versions | Admin / Sales Rep | - (`create_quote_version` RPC only) | - | - |
 | orders | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | order_items | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | inventory | Admin / Sales Rep / Driver | Admin | Admin | Admin |
 | inventory_transactions | Admin / Sales Rep | Admin / Sales Rep | - | - |
-| inventory_holds | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
+| inventory_holds | Any active profile | - (no write policy; SECDEF RPCs only) | - (no write policy) | - (no write policy) |
 | purchase_orders | Admin / Sales Rep | Admin | Admin | Admin |
 | purchase_order_items | Admin / Sales Rep | Admin | Admin | Admin |
-| receiving_records | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
-| receiving_photos | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
+| receiving_records | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
+| receiving_photos | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | deliveries | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep | Admin / Sales Rep / Driver (assigned) | Admin |
 | delivery_items | Admin / Sales Rep / Driver (via delivery) | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
-| delivery_photos | Admin / Sales Rep / Driver | Admin / Sales Rep / Driver | - | Admin |
+| delivery_photos | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep / active Driver | Admin | Admin |
 | delivery_remainders | Admin / Sales Rep / Driver | Admin / Sales Rep | Admin / Sales Rep | Admin |
-| commissions | Admin / Sales Rep (own recipient) | Admin | Admin | - |
-| payments | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
+| commissions | Admin / Sales Rep (own recipient) | Admin | Admin | Admin |
+| payments | Admin / Sales Rep | - (RPC only, since `20260714223000`) | - (RPC only) | - (RPC only) |
 | team_notes | All authenticated | Own created_by | Own created_by / Admin | Admin |
-| team_note_attachments | All authenticated | Own uploaded_by | Own uploaded_by / Admin | - |
-| team_note_comments | All authenticated | Own created_by | - | - |
+| team_note_attachments | Any active profile | Own uploaded_by | - (no UPDATE policy) | Own uploaded_by / Admin |
+| team_note_comments | Any active profile | Own created_by | Own created_by / Admin | Own created_by / Admin |
 | activity_feed | All authenticated | Own performed_by | - | - |
-| notifications | Own user_id | All authenticated | Own user_id | - |
+| notifications | Own user_id | Admin / Sales Rep / own user_id | Own user_id | Admin |
 | app_settings | All authenticated | Admin | Admin | - |
-| blend_tickets | All authenticated | Own uploaded_by | Own uploaded_by / Admin | - |
+| blend_tickets | All authenticated | - (no INSERT policy) | Own uploaded_by / Admin | - |
 | ingredient_map | All authenticated | Admin | Admin | Admin |
 | unit_conversions | All authenticated | Admin | Admin | - |
 | invoices | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | invoice_items | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
-| allocation_sets | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
-| order_line_allocations | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
-| invoice_line_allocations | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
-| prepay_credits | Admin / Sales Rep | Admin / Sales Rep | Admin | - |
-| prepay_applications | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
+| allocation_sets | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
+| order_line_allocations | Admin / Sales Rep | Admin / Sales Rep | - | - (no DELETE policy) |
+| invoice_line_allocations | Admin / Sales Rep | Admin / Sales Rep | - | - (no DELETE policy) |
+| prepay_credits | Admin / Sales Rep | Admin | Admin | Admin |
+| prepay_applications | Admin / Sales Rep | Admin / Sales Rep | - | - (no DELETE policy) |
 | financial_audit_log | Admin | All authenticated | - | - |
 | blend_recipes | All authenticated | Admin / Sales Rep | Admin / Sales Rep | Admin |
 | blend_recipe_items | All authenticated | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
-| blend_ticket_to_order_items | All authenticated | Admin / Sales Rep | - | Admin |
+| blend_ticket_to_order_items | All authenticated | - (no INSERT policy) | - | - (no DELETE policy) |
 | blend_ticket_fields | All authenticated | All authenticated | All authenticated | All authenticated |
 | warehouses | All authenticated | Admin | Admin | Admin |
 | cycle_counts | Admin | Admin | Admin | Admin |
@@ -242,27 +270,27 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | field_obstacles | Admin / Sales Rep / Applicator | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
 | job_loader_worksheets | Job-visible (Admin / Sales / assigned Applicator / dispatched) | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
 | field_billing_defaults | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
-| returns | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
-| return_items | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
+| returns | Admin / Sales Rep / requester | - (RPC only, since `20260715203911`) | Admin / requester | Admin |
+| return_items | Admin / Sales Rep / return requester | - (RPC only, since `20260715203911`) | - (RPC only) | - (RPC only) |
 | applicator_licenses | Admin / Sales Rep | Admin | Admin | Admin |
 | rebate_programs | Admin | Admin | Admin | Admin |
 | rebate_claims | Admin | Admin | Admin | Admin |
-| vendors | All authenticated | Admin | Admin | Admin |
+| vendors | All authenticated | - (no write policy) | - (no write policy) | - (no write policy) |
 | vendor_bills | Admin | Admin | Admin | Admin |
-| vendor_payments | Admin | Admin | - | - |
+| vendor_payments | Admin | Admin | - | Admin |
 | rup_sales_records | Admin | Admin | - | - |
 | email_log | Admin | Admin | - | - |
-| ar_reminder_tracking | Admin | - | - | - |
-| failed_notifications | Admin | Admin | Admin | - |
-| invoice_shares | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
-| order_shares | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
-| idempotency_keys | - (SECURITY DEFINER only) | - (SECURITY DEFINER only) | - | - |
+| ar_reminder_tracking | Admin | Admin | - | - |
+| failed_notifications | Admin | Admin | Admin | Admin |
+| invoice_shares | Admin / invoice creator / salesman | Admin / Sales Rep | Admin | Admin |
+| order_shares | Admin / order salesman | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
+| idempotency_keys | - (policy exists but is `USING (false)`; SECURITY DEFINER only) | - (same) | - (same) | - (same) |
 | offline_action_receipts | Owner / Admin / Sales via sanitized RPC only | - (SECURITY DEFINER RPC only) | - (SECURITY DEFINER RPC only) | - |
-| rate_limit_log | - (SECURITY DEFINER only) | - (SECURITY DEFINER only) | - | - |
+| rate_limit_log | Admin | Admin | Admin | Admin |
 | note_tags | All authenticated | All authenticated | Admin / Own | Admin |
 | team_note_tags | All authenticated | All authenticated | - | All authenticated |
 | note_activity_log | All authenticated | All authenticated | - | - |
-| field_crop_history | All authenticated | All authenticated | All authenticated | - |
+| field_crop_history | Admin / Sales Rep / Applicator | Admin / Sales Rep | Admin / Sales Rep | Admin |
 
 | field_app_locations | All authenticated | All authenticated | All authenticated | All authenticated |
 | field_app_location_shares | All authenticated | All authenticated | All authenticated | All authenticated |

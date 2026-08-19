@@ -264,8 +264,17 @@ tracked debt, not grandfathered. Extending the programme to them is unstarted wo
 | `commissions.order_profit` | holds 3 of 35 legacy fractional-cent rows | awaiting data repair |
 | `orders.total_price` | data is clean; `_update_order_items_impl` overwrites it with the raw un-rounded line sum, so constraining it would reject ordinary edits | blocked on fixing that writer |
 
-Repairing the 43 dirty rows across the first four rewrites stored money and needs Mason's separate
+Repairing the dirty values across the first four rewrites stored money and needs Mason's separate
 approval on its own migration — it is **not** covered by the 2026-08-10 decision.
+
+> **The four counts in the table above are the 2026-08-10 measurement and are stale as live state
+> (read-only re-measure, 2026-08-18).** Live now returns `order_items.total_price` **0**,
+> `commissions.commission_amount` **0**, `commissions.order_profit` **0**, and only
+> `quotes.total_cost` still **2**. The 43 figure was also a sum of *column-values* across four
+> columns, not four disjoint row sets — the two `commissions` counts are 3/35 each and may be the
+> same 3 rows, so distinct dirty rows were 40–43, and that overlap can no longer be re-derived.
+> Current figures and the enforced-vs-measured distinction live in `docs/manual/CURRENT_STATE.md`
+> section 2. The **decision** recorded here still stands unchanged; only the row counts moved.
 
 **Measured cost of the conversion that was declined** (live, 2026-08-10): 12 money columns, 46 live
 functions naming them, 101 functions touching those tables, 17 non-test `src/` files. Dollars→cents

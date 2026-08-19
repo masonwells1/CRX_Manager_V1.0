@@ -134,6 +134,7 @@ After all checks, print a summary table:
 | Migrations         | XX        | XX     | OK / UPDATED |
 | Edge Functions     | XX        | XX     | OK / UPDATED |
 | Test files         | XX        | XX     | OK / UPDATED |
+| E2E test files     | XX        | XX     | OK / UPDATED (vs TESTING.md) |
 | migration-history  | —         | —      | OK / X entries added |
 | pages-routes       | —         | —      | OK / X entries added |
 | database-schema    | —         | —      | OK / X tables added |

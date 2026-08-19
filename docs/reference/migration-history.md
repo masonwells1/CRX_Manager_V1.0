@@ -41,14 +41,19 @@ Both directions are present in this table: in the row above, `20260813080000` wa
 applied 08-16, so its `version` (`20260816174353`) runs **three days ahead** of its `name`; at row 879
 below, `20260813070000` was applied the evening of 08-12 and its `version` (`20260813011751`) runs
 **behind** its `name`. **The ordering guard compares `name` stamps** — that is the rule that matters,
-and it does not depend on which way `version` fell. Row 879 records only the `version`, which is why
-the 2026-08-16 `migration-drift-reviewer` run read the recorded high-water as stale: the recorded
-value was a `version`, not a `name` stamp.
+and it does not depend on which way `version` fell. The 2026-08-16 `migration-drift-reviewer` run
+read the recorded high-water as stale because the value it compared was a `version`
+(`20260813011751`), not a `name` stamp. Row 879 below now records both, so the comparison can be made
+on the right one.
 
-CHECK 6 cleared for `20260813080000_lock_quote_versions_writes_to_rpc`: `20260813080000` sorts
-strictly above the live `name` high-water `20260813070000`. Also confirmed unapplied in the same
-read: `20260813030000_reject_non_finite_money_and_quantities` and
-`20260813060000_require_completed_delivery_before_invoice_post` have no ledger row.
+**Pre-apply read, 2026-08-16 (historical — not current state).** CHECK 6 cleared for
+`20260813080000_lock_quote_versions_writes_to_rpc`: `20260813080000` sorted strictly above the live
+`name` high-water `20260813070000` **as the ledger stood at that moment**. The same read found no
+ledger row for `20260813030000_reject_non_finite_money_and_quantities` or
+`20260813060000_require_completed_delivery_before_invoice_post`. `20260813080000` has since been
+applied (see the closeout immediately below); the other two were still unapplied on a read-only
+re-check on 2026-08-19, but treat that as a dated observation and re-read the ledger before relying
+on it.
 
 **Live-ledger closeout — 2026-08-16, post-apply.** `20260813080000_lock_quote_versions_writes_to_rpc`
 applied to `rhyzpcqhnizqbxphqdkr` with Mason's in-chat approval. Supabase assigned
