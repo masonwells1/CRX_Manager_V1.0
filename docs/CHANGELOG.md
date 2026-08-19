@@ -2,6 +2,55 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-19 — `baseUnitOfRate` mirrors `normalize_rate_unit` on a non-acre denominator
+
+Frontend only — one function in `src/lib/chemCalculator.ts` plus its tests. No migration, no live
+state, no stored money touched.
+
+`baseUnitOfRate` stripped a per-acre suffix by splitting on the **first** `/` unconditionally, so any
+non-acre denominator collapsed to its numerator: `oz/cwt` read as `oz`. The live
+`normalize_rate_unit` does the opposite — when a denominator other than acres is present it returns
+the **whole string**, precisely so it cannot match a bare unit and the conversion refuses. So the
+client called such a line convertible and priced it, while the server raised
+`BLEND_TICKET_UNIT_UNCONVERTIBLE` (or the equivalent refusal in `complete_job`) later at invoicing.
+Nothing warned on screen — silent on screen, hard error at billing.
+
+**Live exposure was measured before any code was written, and it is zero.** Across every
+unit-bearing column — `products.rate_unit`/`inventory_unit`/`unit_size`/`container_unit`/
+`max_label_rate_unit`, `quote_items`, `order_items`, `job_chemicals`, `invoice_items`,
+`blend_ticket_products`, `blend_recipe_items`, `inventory`, `return_items`,
+`application_record_lots`, `unit_conversions` — exactly **2** stored values contain a `/` and both
+are `pt/ac`. 574 products carry a rate unit and every one is bare. This is latent hardening, not an
+active bug: no customer was mis-billed by it and no data repair is owed.
+
+- The scope is wider than blend tickets, which have 0 live rows. **Nine** live functions consume
+  `normalize_rate_unit` — `create_invoice_from_blend_ticket`, `create_order_from_blend_ticket`,
+  `create_application_record_from_blend_ticket`, `complete_job`, `_sync_job_holds`,
+  `_sync_quote_job_reservations`, `get_job_inventory_shortfalls`, `get_dispatch_stock_status`,
+  `refresh_watchdog_flags` — so the divergence reached the daily-use job surface. `baseUnitOfRate`
+  itself is consumed only by `reconcileChemAutofillUnits`, reached from `cropProgramHelpers.ts` and
+  `JobDetail.tsx`.
+- The function now strips only `/ac`, `/acre`, `/acres`, `/a` or a spelled-out ` per acre`, and
+  otherwise returns the string unchanged. An unmatched string misses the size tables, so
+  `reconcileChemAutofillUnits` lands on its **already-documented safe fallback**: keep the stock unit
+  and per-stock cost/price rather than guess a conversion. Behaviour is byte-identical for every
+  value in the database today.
+- Synonym folding (`gallons` → `gal`) is deliberately **not** repeated client-side, matching the
+  reasoning at `blendMathValidator.rateBaseUnit`: the size tables already list every spelling the
+  server lists, so folding twice would be a second place to drift.
+- Tests are **mutation-tested** — restoring the split makes exactly two assertions fail, including
+  the money one (`expected 'oz' to be 'GAL'`).
+- Proof beyond tests: typecheck, lint, full suite (4577 passed / 331 files), production build, and
+  the shipped module executed in a real browser against the running dev server — every live unit
+  value unchanged, `pt/ac` still converting GAL→pt at 281¢/350¢, and `oz/cwt` on a GAL product now
+  keeping GAL at 2250¢/2800¢ instead of relabelling and re-pricing it.
+
+Two things found while measuring, both left alone: `job_chemicals.rate_unit` holds a row whose value
+is `32` (a number typed into a free-text unit box), and the `KNOWN_ISSUES` entry describing this bug
+lives on the unmerged `claude/blend-unit-rebuild-step1` branch rather than on `main`, alongside the
+`rateBaseUnit` helper it references. That entry lands with that branch; this change does not
+duplicate it.
+
 ## 2026-08-19 — `agent-health` and the sync generator now agree on line endings
 
 Harness only — no app source, migration, or live-state change.
