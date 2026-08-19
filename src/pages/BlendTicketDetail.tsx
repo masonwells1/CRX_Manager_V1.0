@@ -423,12 +423,20 @@ export function BlendTicketDetail() {
       total_volume: formData.total_volume ? parseFloat(formData.total_volume) : null,
       total_volume_unit: formData.total_volume_unit || null,
     };
+    // The rate check guards a billing path: create_invoice_from_blend_ticket prices
+    // each line from rate_per_acre and its unit, falling back to the product's own
+    // rate_unit when the line leaves it blank. The joined catalog row carries the
+    // units the invoice will actually use, so hand them over rather than letting the
+    // check guess.
     const productData = products.map(p => ({
       product_name: p.product_name,
       quantity: p.quantity,
       unit: p.unit,
       rate_per_acre: p.rate_per_acre,
       rate_per_acre_unit: p.rate_per_acre_unit,
+      product_form: p.product?.product_form ?? null,
+      product_rate_unit: p.product?.rate_unit ?? null,
+      product_inventory_unit: p.product?.inventory_unit || p.product?.unit_size || null,
     }));
     setWarnings(validateBlendMath(ticketData, productData));
   }, [products, formData.total_acres, formData.total_volume, formData.total_volume_unit]);

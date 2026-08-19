@@ -2,6 +2,50 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-19 — Blend-ticket rate check is unit-aware, and it guards a billing path
+
+**Correction to the entry below: this file is not display-only.** `create_invoice_from_blend_ticket`
+bills each line from `rate_per_acre` and its unit — never from `quantity` (verified against live
+`pg_proc`). A rate recorded in the wrong unit becomes a wrong invoice, not just a wrong number on
+screen. Earlier notes calling `blendMathValidator` "warning text only, severity low" were describing
+its output, not the fields it validates, and understated the risk.
+
+The per-acre rate check was completely unit-blind: it compared `quantity` against
+`rate_per_acre × total_acres` without ever looking at `unit` or `rate_per_acre_unit`. A product
+dosed at 2 gal/ac over 100 acres and entered as `200 oz` — a 128× error — was reported as a perfect
+match. It now converts before comparing, and refuses rather than guessing when it cannot.
+
+- **Conversion goes through `fieldAppPricedQuantity`** (`src/lib/chemCalculator.ts`), which mirrors
+  the live SQL `field_app_priced_quantity` the invoice bills through. Using `unit_conversions.factor_oz`
+  instead was considered and rejected: it knows grams and milligrams that billing cannot price, so the
+  warning and the invoice would disagree about the same line.
+- **`oz` is read by the product's form** — a weight ounce for a dry product, a fluid ounce for a
+  liquid, matching both the server and Mason's 2026-08-19 answer. A null form is treated as liquid,
+  as the server does.
+- **A blank line rate unit falls back to the product's own `rate_unit`,** mirroring billing's
+  `COALESCE(NULLIF(btrim(rate_per_acre_unit), ''), p.rate_unit)`. Refusing instead would have gone
+  silent on recipe-applied rows, which *always* arrive with a blank rate unit, and which bill anyway.
+- **New invoice pre-flight warning.** When a line's rate unit cannot reach the unit the product is
+  sold in, `create_invoice_from_blend_ticket` hard-raises `BLEND_TICKET_UNIT_UNCONVERTIBLE`. That is
+  now surfaced while the ticket is open instead of surfacing weeks later at invoicing.
+- **MG is deliberately supported.** No MG size exists anywhere, but the pricing function returns the
+  quantity untouched when the rate unit already equals the sold unit. All 3 live MG products are
+  MG-rated and MG-sold, so they price correctly through that identity path. MG only fails when paired
+  with a different sold unit — which is exactly what the pre-flight warning now catches.
+- **Per-acre suffix stripping is done here rather than reusing `baseUnitOfRate`,** which splits on the
+  first `/` unconditionally and so reads `oz/cwt` as `oz`. The live `normalize_rate_unit` keeps a
+  non-acre denominator whole so it can never match a bare unit. The existing helper's behaviour fails
+  in the dangerous direction — silent on screen, hard error at billing — so this file mirrors the
+  server instead. **The same divergence exists in `chemCalculator` itself, which the job chemical grid
+  uses; recorded as an open issue rather than changed here.**
+- **Callers now pass the catalog product's form and units** (`ManualTicketCreate.tsx`,
+  `BlendTicketDetail.tsx`). The fields are required on `ProductData`, so the compiler forces any future
+  caller to supply them rather than silently weakening the check on a billing path.
+- 10 new tests (43 in the file); the form split, the billing fallback, and the `oz/cwt` guard were each
+  mutation-tested by reverting them and confirming exactly the expected test went red. Verified by
+  driving the real module in a browser across all nine cases, including both MG shapes.
+
+
 ## 2026-08-19 — Blend-ticket total-volume check no longer adds quantities across different units
 
 `validateBlendMath` summed every product quantity regardless of unit, so a ticket holding

@@ -1,3 +1,11 @@
+// Server-parity conversion. `fieldAppPricedQuantity` mirrors the live SQL
+// `field_app_priced_quantity` that create_invoice_from_blend_ticket bills through,
+// including its identity short-circuit for a rate unit that already equals the
+// target unit — which is why an MG-rated, MG-sold product prices correctly even
+// though no MG size is defined anywhere. Any other factor table used here would let
+// this warning and the invoice disagree about the same line.
+import { fieldAppPricedQuantity } from './chemCalculator';
+
 interface TicketData {
   total_acres: number | null;
   total_volume: number | null;
@@ -10,6 +18,26 @@ interface ProductData {
   unit: string | null;
   rate_per_acre: number | null;
   rate_per_acre_unit: string | null;
+  /**
+   * The catalog product's own form. Decides whether 'oz' means a FLUID ounce or a
+   * WEIGHT ounce — the live `field_app_priced_quantity` makes the same split, and a
+   * null/unknown form is treated as liquid there, so it is treated as liquid here.
+   */
+  product_form: string | null;
+  /**
+   * The catalog product's default rate unit. Billing falls back to this when a line
+   * leaves its rate unit blank (`COALESCE(NULLIF(btrim(btp.rate_per_acre_unit), ''),
+   * p.rate_unit)` inside `create_invoice_from_blend_ticket`), so this check must use
+   * the same fallback — otherwise it goes quiet on exactly the rows that still bill.
+   * Recipe-applied rows always arrive with a blank rate unit, so this is the norm.
+   */
+  product_rate_unit: string | null;
+  /**
+   * The unit the product is SOLD in — `COALESCE(NULLIF(inventory_unit,''), unit_size)`,
+   * matching billing. Used only to predict the invoice-time failure below; never to
+   * rescale anything shown on the ticket.
+   */
+  product_inventory_unit: string | null;
 }
 
 const TOLERANCE = 0.05; // 5%
@@ -40,6 +68,31 @@ const UNIT_ALIASES: Record<string, string> = Object.assign(Object.create(null), 
   'fl oz': 'oz',
   unit: 'ea',
 });
+
+/**
+ * Strip a PER-ACRE denominator from a rate unit, mirroring the live SQL
+ * `normalize_rate_unit` exactly: 'pt/ac' and 'pt per acre' become 'pt'.
+ *
+ * The important detail is the last branch. If some OTHER denominator is present
+ * ('oz/cwt'), the server keeps the whole string so it can never match a bare unit
+ * and the conversion refuses. `chemCalculator.baseUnitOfRate` instead splits on the
+ * first '/' unconditionally, so it would read 'oz/cwt' as 'oz' and claim a
+ * conversion the invoice will reject — silence here, a hard error at billing. That
+ * is the one direction this check must never fail in, so it does its own stripping.
+ *
+ * Synonym folding ('gallons' → 'gal') is deliberately NOT repeated here: the size
+ * tables inside `fieldAppPricedQuantity` already list every spelling the server
+ * lists, so folding twice would be a second place to drift.
+ */
+function rateBaseUnit(unit: string | null | undefined): string {
+  const raw = (unit ?? '').trim().toLowerCase();
+  if (raw === '') return '';
+  const perAcreSlash = /\s*\/\s*(ac|acre|acres|a)\s*$/;
+  const perAcreSpelled = /\s+per\s+acre$/;
+  if (perAcreSlash.test(raw)) return raw.replace(perAcreSlash, '').trim();
+  if (perAcreSpelled.test(raw)) return raw.replace(perAcreSpelled, '').trim();
+  return raw;
+}
 
 /**
  * A run of whitespace, including the invisible characters that JS `\s` misses.
@@ -86,18 +139,61 @@ export function validateBlendMath(
   const totalAcres = ticketData.total_acres;
   const totalVolume = ticketData.total_volume;
 
-  // Per-product: quantity should ≈ rate_per_acre × total_acres
+  // Per-product: quantity should ≈ rate_per_acre × total_acres.
+  //
+  // This arm guards a MONEY path. `create_invoice_from_blend_ticket` bills each line
+  // from `rate_per_acre` and its unit — never from `quantity` — so a rate recorded in
+  // the wrong unit becomes a wrong invoice, not just a wrong number on screen. The
+  // conversion therefore goes through `fieldAppPricedQuantity`, which mirrors the live
+  // SQL `field_app_priced_quantity` exactly; using any other factor table would let
+  // this warning and the invoice disagree about the same line.
   if (totalAcres && totalAcres > 0) {
     for (const product of products) {
-      if (product.rate_per_acre && product.rate_per_acre > 0 && product.quantity > 0) {
-        const expected = product.rate_per_acre * totalAcres;
-        const diff = Math.abs(product.quantity - expected);
-        const pctDiff = diff / expected;
+      if (!product.rate_per_acre || product.rate_per_acre <= 0 || product.quantity <= 0) continue;
+
+      const name = product.product_name || 'Unnamed product';
+      const form = product.product_form?.trim().toLowerCase() === 'dry' ? 'dry' : 'liquid';
+
+      // Billing's own fallback for a blank line rate unit.
+      const lineRateUnit = (product.rate_per_acre_unit ?? '').trim();
+      const rateUnit = rateBaseUnit(lineRateUnit !== '' ? lineRateUnit : product.product_rate_unit);
+      const qtyUnit = rateBaseUnit(product.unit);
+
+      // The rate is per acre, so acres cancel and the product is in the RATE's unit.
+      const expectedInRateUnit = product.rate_per_acre * totalAcres;
+
+      let expected: number | null;
+      if (rateUnit === '' || qtyUnit === '' || rateUnit === qtyUnit) {
+        // Nothing recorded to disagree, or the units already match: compare the bare
+        // numbers, exactly as this check always did.
+        expected = expectedInRateUnit;
+      } else {
+        expected = fieldAppPricedQuantity(expectedInRateUnit, rateUnit, qtyUnit, form);
+      }
+
+      if (expected === null) {
+        warnings.push(
+          `Not checked — ${name}: the rate is in ${rateUnit} but the quantity is in ${qtyUnit}, which can't be converted${form === 'dry' ? ' for a dry product' : ''}. Please verify this line by hand.`
+        );
+      } else if (expected > 0) {
+        const pctDiff = Math.abs(product.quantity - expected) / expected;
         if (pctDiff > TOLERANCE) {
+          const inUnit = qtyUnit !== '' && qtyUnit !== rateUnit ? ` ${qtyUnit}` : '';
           warnings.push(
-            `${product.product_name || 'Unnamed product'}: quantity (${product.quantity}) doesn't match rate/acre (${product.rate_per_acre}) × acres (${totalAcres}) = ${expected.toFixed(2)}`
+            `${name}: quantity (${product.quantity}) doesn't match rate/acre (${product.rate_per_acre}${rateUnit ? ' ' + rateUnit : ''}) × acres (${totalAcres}) = ${expected.toFixed(2)}${inUnit}`
           );
         }
+      }
+
+      // Invoice pre-flight. `create_invoice_from_blend_ticket` hard-raises
+      // BLEND_TICKET_UNIT_UNCONVERTIBLE when a billable line's rate unit cannot be
+      // converted to the unit the product is sold in. Catching it here turns an error
+      // discovered weeks later at invoicing into a note while the ticket is open.
+      const soldUnit = rateBaseUnit(product.product_inventory_unit);
+      if (rateUnit !== '' && soldUnit !== '' && fieldAppPricedQuantity(1, rateUnit, soldUnit, form) === null) {
+        warnings.push(
+          `${name}: the rate unit (${rateUnit}) can't be converted to the unit this product is sold in (${soldUnit}), so this ticket will fail when you invoice it.`
+        );
       }
     }
   }

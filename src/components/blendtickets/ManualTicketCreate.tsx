@@ -323,15 +323,25 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
       total_volume: formData.total_volume ? parseFloat(formData.total_volume) : null,
       total_volume_unit: formData.total_volume_unit || null,
     };
-    const productData = products.map(p => ({
-      product_name: p.product_name,
-      quantity: p.quantity,
-      unit: p.unit || null,
-      rate_per_acre: p.rate_per_acre,
-      rate_per_acre_unit: p.rate_per_acre_unit || null,
-    }));
+    const productData = products.map(p => {
+      // The rate check guards a billing path: create_invoice_from_blend_ticket
+      // prices each line from rate_per_acre and its unit, falling back to the
+      // product's own rate_unit when the line leaves it blank. Hand the catalog
+      // row's units over so the warning and the invoice agree about the line.
+      const catalog = allProducts.find((candidate) => candidate.id === p.product_id);
+      return {
+        product_name: p.product_name,
+        quantity: p.quantity,
+        unit: p.unit || null,
+        rate_per_acre: p.rate_per_acre,
+        rate_per_acre_unit: p.rate_per_acre_unit || null,
+        product_form: catalog?.product_form ?? null,
+        product_rate_unit: catalog?.rate_unit ?? null,
+        product_inventory_unit: catalog?.inventory_unit || catalog?.unit_size || null,
+      };
+    });
     setWarnings(validateBlendMath(ticketData, productData));
-  }, [products, formData.total_acres, formData.total_volume, formData.total_volume_unit]);
+  }, [products, allProducts, formData.total_acres, formData.total_volume, formData.total_volume_unit]);
 
   function addProduct() {
     setProducts([

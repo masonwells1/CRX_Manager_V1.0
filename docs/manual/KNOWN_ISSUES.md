@@ -62,6 +62,30 @@ change rather than on its own.
 
 ---
 
+## OPEN 2026-08-19 — `baseUnitOfRate` reads `oz/cwt` as `oz`; the database refuses it
+
+**Severity: MED, money path, not yet reproduced on live data.** `baseUnitOfRate`
+(`src/lib/chemCalculator.ts`) strips a per-acre suffix by splitting on the first `/`
+unconditionally, so any non-acre denominator collapses to its numerator: `oz/cwt` → `oz`.
+
+The live `normalize_rate_unit` does the opposite. When a denominator other than acres is present it
+returns the **whole string**, precisely so it cannot match a bare unit and the conversion refuses.
+
+So for a rate unit like `oz/cwt` the client says "convertible, priced fine" while
+`create_invoice_from_blend_ticket` raises `BLEND_TICKET_UNIT_UNCONVERTIBLE`. That is the dangerous
+direction: nothing on screen, a hard failure at billing.
+
+`baseUnitOfRate` is **not** confined to blend tickets — it is used by the job chemical grid, in code
+whose own comments describe it as a P1 money fix. Whether any live rate unit actually carries a
+non-acre denominator has **not** been checked, so the real-world exposure is unknown.
+
+`blendMathValidator.ts` deliberately does its own suffix stripping rather than reuse this helper, and
+documents why at `rateBaseUnit`. That sidesteps the problem for blend tickets only.
+
+**Not started.** Investigate live `rate_unit` values first; a fix without that is speculative.
+
+---
+
 ## OPEN 2026-08-19 — blend-ticket unit fields are free text, so spellings drift
 
 **Severity: LOW, data-quality.** The `unit` and `rate_per_acre_unit` inputs on
