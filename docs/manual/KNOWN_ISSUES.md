@@ -39,30 +39,38 @@ This file consolidates (does not replace) the source documents it points to. If 
 **Status: reworked on branch `claude/draw-down-price-tier-lines`, NOT applied, NOT merged. Awaiting
 Mason's explicit approval for both.**
 
-**BLOCKING, found by the RLS gate on 2026-08-19 and confirmed against live `prosrc` the same
-day: `restore_quote_version` would break.** `save_quote` is not the only path that deletes and
-reinserts a quote's lines. `_restore_quote_version_owner_impl` does the same, and its reinsert
-**omits the `id` column entirely** — every restored line takes a fresh `gen_random_uuid()`, so no
-id is ever reused. Under the deferred FK, restoring an earlier version of a **partially drawn**
-booking finds every stamp dangling at COMMIT and aborts the whole restore with a raw foreign-key
-error. That path is reachable from the UI today and works today; the existing drawn-version guard
-only asserts restored booked ≥ drawn per product and does not require id preservation. It is
-fail-closed (the restore rolls back whole, no money moves), so it is a functional regression rather
-than a correctness hazard — but the retired `ON DELETE SET NULL` design did **not** have it, so it
-is a real cost of deferring, not an inherited defect. The migration's own text previously claimed
-the delete-and-reinsert chain had been read link by link; it had not.
+**FIXED in the same migration — `restore_quote_version` releases the stamps it can no longer
+honour.** Found by the RLS gate on 2026-08-19 and confirmed against live `prosrc` the same day:
+`save_quote` was not the only path that deletes and reinserts a quote's lines.
+`_restore_quote_version_owner_impl` does the same, and its reinsert **omits the `id` column
+entirely** — every restored line takes a fresh `gen_random_uuid()`, so no id is ever reused. Under
+the deferred FK that would have left every stamp dangling at COMMIT and aborted the restore with a
+raw foreign-key error, on a UI-reachable path that works today. The retired `ON DELETE SET NULL`
+design did not have this problem, so it was a genuine cost of deferring, not an inherited defect.
 
-Two candidate fixes, both touching a **second** function and therefore widening the PR — Mason's
-call, not this document's:
+**Mason chose option (A) on 2026-08-19:** the restore path now clears `order_items.quote_item_id`
+for that quote's lines immediately **before** deleting the sections. This is *not* the retired SET
+NULL rule — SET NULL fired on every save, including a save that changed nothing; this fires only on
+an explicit restore, where the lines the stamps pointed at genuinely cease to exist, so there is no
+longer a true answer to record. The released lines still bill the customer and still count against
+`quote_product_draws`, so `v_remaining` cannot re-sell them; they become `v_unmatched` on the next
+draw and walk off the front of the tier list; and `DRAW_MIXED_TIER_UNMATCHED_LINE` refuses that draw
+outright the moment the product carries more than one distinct `(price, cost)` — exactly when losing
+the stamp could change a bill.
 
-- **(a)** have restore **clear** the stamps deliberately before rebuilding. A version restore
-  genuinely discards the old lines, so losing provenance there is honest — unlike an ordinary save,
-  which is exactly why SET NULL was wrong. The front-walk plus `DRAW_MIXED_TIER_UNMATCHED_LINE`
-  then covers the next draw as before, and restore keeps working. **Recommended.**
-- **(b)** have restore **refuse** with a plain-English message on a partly drawn booking. Smaller,
-  but it removes a capability that exists today.
+It ships in the **same transaction** as the FK change, because deferring the constraint is what
+creates the obligation; shipping them apart would leave a window where restore is broken. The body
+is reproduced **byte-exactly** from the live definition (md5 `d8408e3b19b536f1210e51da3970272e`)
+with exactly one statement added, a preflight pins that md5 and refuses to run if live has moved,
+and a postflight asserts the release is present, sits **before** the delete, and did not weaken the
+function's `SECURITY DEFINER` posture, `search_path` pin or grants.
 
-**Until one is chosen and written, this migration is not ready to apply.**
+**Proven on PostgreSQL 17.6 (2026-08-19; live never written to):** without the release, a restore of
+a partly-drawn booking aborts with a foreign-key violation — so the regression reproduces and the
+test is not vacuous. With it, the restore succeeds, every stamp is released, the billed total is
+unchanged at the same figure, and the released order line still stands against the customer for its
+40 units. The replacement installs the exact intended body and keeps `SECURITY DEFINER` and
+`search_path=public, pg_temp`.
 
 **Also fixed in the same pass (both gate reviewers, 2026-08-19):** the migration locked
 `quote_product_draws` before `order_items` while the draw path writes `order_items` first — a real
