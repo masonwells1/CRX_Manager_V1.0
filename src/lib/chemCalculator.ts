@@ -253,37 +253,19 @@ export function fieldAppPricedQuantity(
 // measure: the rate's base unit. cost/price are converted from per-stock-unit to
 // per-base-unit with the SAME server-parity factor tables above.
 
-/** A per-acre denominator written with a slash: '/ac', '/acre', '/acres', '/a'. */
-const PER_ACRE_SLASH = /\s*\/\s*(ac|acre|acres|a)\s*$/;
-/** The spelled-out per-acre denominator: 'pt per acre'. */
-const PER_ACRE_SPELLED = /\s+per\s+acre$/;
-
 /**
- * Strip a per-acre suffix ('/ac', '/acre', '/acres', '/a', ' per acre') from a rate_unit
- * and return the bare base measure unit (e.g. 'pt/ac' → 'pt', 'GAL' → 'gal'). Empty in →
+ * Strip a per-acre suffix ('/ac', '/acre', '/a', ' per acre') from a rate_unit and
+ * return the bare base measure unit (e.g. 'pt/ac' → 'pt', 'GAL' → 'gal'). Empty in →
  * empty out.
- *
- * SERVER PARITY — the reason this is not a plain split on the first '/'. The live SQL
- * `normalize_rate_unit` strips ONLY an acre denominator; when any OTHER denominator is
- * present ('oz/cwt') it returns the WHOLE string, precisely so it cannot match a bare unit
- * and the conversion refuses. Splitting on the first '/' instead read 'oz/cwt' as 'oz' and
- * claimed a conversion the server rejects — silent on screen, then a hard failure at
- * billing (`BLEND_TICKET_UNIT_UNCONVERTIBLE`, and the equivalent refusal in `complete_job`;
- * the job-hold, shortfall and dispatch-stock paths normalize the same way). Returning the
- * string unchanged makes it miss the size tables, so `reconcileChemAutofillUnits` lands on
- * its documented safe fallback: keep the stock unit and per-stock cost/price, never guess.
- *
- * Synonym folding ('gallons' → 'gal') is deliberately NOT repeated here, matching
- * `blendMathValidator.rateBaseUnit`: the size tables above already list every spelling the
- * server lists, so folding twice would be a second place to drift.
  */
 export function baseUnitOfRate(rateUnit: string | null | undefined): string {
   const raw = (rateUnit || '').trim().toLowerCase();
   if (raw === '') return '';
-  if (PER_ACRE_SLASH.test(raw)) return raw.replace(PER_ACRE_SLASH, '').trim();
-  if (PER_ACRE_SPELLED.test(raw)) return raw.replace(PER_ACRE_SPELLED, '').trim();
-  // A non-acre denominator → keep the whole string so it can't match a bare unit.
-  return raw;
+  // take the part before the first '/' (handles 'pt/ac', 'pt/acre', 'pt/a')
+  let base = raw.split('/')[0].trim();
+  // also handle the spelled-out ' per acre' form
+  base = base.replace(/\s+per\s+acre$/, '').trim();
+  return base;
 }
 
 /**

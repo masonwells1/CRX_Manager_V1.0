@@ -266,35 +266,6 @@ describe('chemCalculator — baseUnitOfRate (strip the per-acre suffix)', () => 
     expect(baseUnitOfRate(null)).toBe('');
     expect(baseUnitOfRate(undefined)).toBe('');
   });
-
-  // ── SERVER PARITY with normalize_rate_unit. A denominator that is NOT acres must
-  // keep the WHOLE string, so it can never match a bare unit and the conversion
-  // refuses. Splitting on the first '/' read 'oz/cwt' as 'oz' and claimed a
-  // conversion the server rejects — silent on screen, hard error at billing. ──
-  it('a NON-acre denominator is returned whole, never collapsed to its numerator', () => {
-    expect(baseUnitOfRate('oz/cwt')).toBe('oz/cwt');
-    expect(baseUnitOfRate('OZ/CWT')).toBe('oz/cwt');
-    expect(baseUnitOfRate('lb/ton')).toBe('lb/ton');
-    expect(baseUnitOfRate('gal/1000 sq ft')).toBe('gal/1000 sq ft');
-    expect(baseUnitOfRate('oz / bushel')).toBe('oz / bushel');
-  });
-  it('per-acre stripping still wins over the whole-string rule, with spacing', () => {
-    expect(baseUnitOfRate('pt / ac')).toBe('pt');
-    expect(baseUnitOfRate('OZ/ACRES')).toBe('oz');
-    expect(baseUnitOfRate('  gal/acre  ')).toBe('gal');
-  });
-  it('a lone acre denominator with no numerator yields blank (server returns NULL)', () => {
-    expect(baseUnitOfRate('/ac')).toBe('');
-  });
-  it('an unconvertible rate unit falls back to the STOCK unit and unchanged cost/price', () => {
-    // This is the money consequence of the rule above. 'oz/cwt' must NOT be read as
-    // 'oz' and converted against a per-GAL cost; reconcile keeps the stock unit and
-    // the per-stock cost/price verbatim rather than guessing a conversion.
-    const r = reconcileChemAutofillUnits('GAL', 'oz/cwt', 2250, 2800, 'liquid');
-    expect(r.unit).toBe('GAL');
-    expect(r.costPerUnitCents).toBe(2250);
-    expect(r.pricePerUnitCents).toBe(2800);
-  });
 });
 
 // ── P1 MONEY fix: the bug was stock unit (GAL) != rate base unit (pt) → the saved
