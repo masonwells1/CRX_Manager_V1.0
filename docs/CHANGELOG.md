@@ -61,7 +61,7 @@ writer. A sales rep cannot forge a cost basis.
 **Both RLS matrices reconciled against live — the fix for the pattern, not just the row.** Four
 consecutive adversarial passes each found one more wrong claim, because each pass corrected the row
 it was pointed at rather than the table it lived in. So every row of both matrices was compared
-against live `pg_policies`, per command, on 2026-08-19 UTC (the evening of 2026-08-18 local):
+against live `pg_policies`, per command, on 2026-08-19 UTC:
 112 of the 116 rows mechanically, and the 4 deny-all tables by reading their policy bodies, for the
 reason in the trap note below. **29 of 79 rows** in `docs/reference/database-schema.md` and **12 of
 37** in `docs/workflows/RLS_SECURITY_GUIDE.md` disagreed with live, and all were corrected from the
@@ -136,6 +136,24 @@ rendered as loose text instead of table rows. The banner moved up to sit beside 
 is already cross-referenced from; no row text changed, and the table is now 12 unbroken rows. This
 was the last such break in the file.
 
+**The three files nobody had reviewed turned out to carry the worst error on the branch.** Passes 1
+through 13 reviewed 6 of the 9 files this change touches. A fourteenth pass over the other three
+found 16 findings. The one that mattered: the `KNOWN_ISSUES.md` entry filing the session-staleness
+hook bug justified *not* fixing it by claiming `.claude/schema-registry.json` stores only a version
+"and nothing else, so the hook has no name to compare against", leaving a choice between a registry
+format change and a live ledger read. The registry already stores `_meta.applied_migration_names`
+— 964 names, including the one the entry says is unavailable — and the hook already loads it. The
+stated blocker did not exist. Also corrected: `DECISION_LOG.md` called the purchase-order pair
+"converted" fifty lines before proving from live that it is not; the "mirror form" constraint shape
+was recommended on a precondition **zero** live instances meet, without noting that it fails open on
+a nullable cents column; "Both forms clear the gate" was withdrawn as a widening of a money gate that
+Mason never decided, and is now recorded as an open question for him; "none of those are constrained"
+was refuted by three live `*_cent_scale_chk` constraints; two deferred-column row counts still read
+as present-tense when live measures 0; and `rpc-functions.md` called `create_quote_version` "the
+only write path" when `service_role` and `postgres` retain direct write grants and bypass RLS.
+The "(evening of 2026-08-18 local)" gloss was dropped from all 9 places it appeared — the branch's
+commits straddle both local dates, so it was unreliable and added nothing to the UTC stamp beside it.
+
 **A money column was recorded as unapproved debt while live was enforcing it.**
 `docs/manual/DECISION_LOG.md` listed `order_items.total_price` among the deferred columns under
 "no CHECK, therefore not an approved exception". Live disagrees:
@@ -148,7 +166,7 @@ approval. The enforced/deferred counts are now **8 and 4**, not 7 and 5. The sam
 declined conversion — as has `purchase_order_items.unit_cost`. Both errors pointed the same way:
 they told a future agent that settled, enforced money work was still open, which is how a closed
 decision gets re-opened. The 2026-08-10 **decision** itself is unchanged; what moved is which columns
-pass its gate. Read-only live checks, 2026-08-19 UTC (the evening of 2026-08-18 local).
+pass its gate. Read-only live checks, 2026-08-19 UTC.
 
 **One new tracked issue, not fixed here.** `docs/manual/KNOWN_ISSUES.md` gains an OPEN LOW entry:
 `.claude/hooks/session-staleness.mjs` compares migration *filename* stamps on disk against

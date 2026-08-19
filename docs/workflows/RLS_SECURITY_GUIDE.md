@@ -245,7 +245,7 @@ to show was stale: live also pins the actor.
 > and tablename='<table>'` (read-only) — and if you're debugging a silent RLS
 > denial, believe `pg_policies`, not this table. Do NOT "fix" reality to match
 > this matrix (re-adding a revoked permissive policy re-opens a closed hole).
-> **Last full reconcile: 2026-08-19 UTC** (the evening of 2026-08-18 local;
+> **Last full reconcile: 2026-08-19 UTC** (
 > UTC runs one calendar day ahead here). All 37 rows of this matrix were
 > machine-compared against live `pg_policies` (read-only), per command. The 12
 > rows that disagreed on which commands have a policy were corrected from the

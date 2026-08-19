@@ -195,6 +195,12 @@ where a file authored `20260813080000` was recorded live as version `20260816174
 it walks `supabase/migrations/`, matches `^(\d{14})_`, and does `if (!m || m[1] <= String(highWater))
 continue;`. The two sides are not the same clock.
 
+That `continue` is only the candidate-window filter; files that survive it are then checked for name
+membership against `_meta.applied_migration_names`, with a comment explaining that a pure name check
+over all history was tried and rejected (~100+ historical ledger rows carry prefix-less names). The
+skip still happens **before** the name check ever runs, which is what makes the finding real — but
+quoting the numeric compare on its own makes the hook look simpler than it is.
+
 **Why that can skip a real finding.** Because Supabase assigns the version at apply time, the recorded
 high-water runs ahead of the authored stamp whenever a migration sits on disk before it is applied — by
 three days in the CRX-SEC-1 case. Every migration file stamped at or below `20260816174353` is
@@ -207,13 +213,24 @@ own change with a guard test that fails before the fix and passes after. The fix
 the high-water **name** stamp, which `docs/reference/migration-history.md` records alongside the
 version for exactly this reason, or to resolve the version to its name before comparing.
 
-Neither is a one-line hook edit, which is worth saying plainly rather than leaving the fix sounding
-cheap: `.claude/schema-registry.json` stores `"migrations_high_water"` as a **version**
-(`20260816174353`) and nothing else, so the hook has no name to compare against. Either the registry
-starts storing the name too — a schema-registry format change, with the refresh path updated to
-match — or the hook resolves version to name at run time, which means a live ledger read on a path
-that is currently offline. That choice is the actual work, and it is why this is filed rather than
-patched.
+**Correction, 2026-08-19 — the fix is smaller than this entry first claimed.** An earlier revision
+said the fix was "not a one-line hook edit" because `.claude/schema-registry.json` stores
+`"migrations_high_water"` as a version "and nothing else, so the hook has no name to compare
+against", leaving a choice between a registry format change and a live ledger read on an offline
+path. **That premise is false, and it was the entire stated reason this was filed rather than
+fixed.** The registry already stores `_meta.applied_migration_names` — 964 ledger names, 344 of
+them carrying a 14-digit prefix — and it already contains
+`20260813080000_lock_quote_versions_writes_to_rpc`. `session-staleness.mjs` already loads that
+array (line 115) and already uses it for the membership check (lines 139-148). The name high-water is
+therefore derivable in-process as the largest `^\d{14}_` entry of the array, which evaluates to
+exactly the CRX-SEC-1 name the entry says is unavailable. No format change and no live read are
+needed.
+
+So the remaining work is local: compare disk stamps against that derived name high-water instead of
+against the server-assigned version. It is still filed rather than patched here for the reason given
+above — this is a documentation-only pass, and a hook-logic change belongs in its own commit with a
+guard test that fails before the fix and passes after — but it is a bounded hook change, not a
+registry redesign.
 
 ---
 

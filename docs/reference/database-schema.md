@@ -189,7 +189,7 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 > "fix" reality to match a row here (re-adding a revoked permissive policy
 > re-opens a closed hole).
 >
-> **Last full reconcile: 2026-08-19 UTC** (the evening of 2026-08-18 local;
+> **Last full reconcile: 2026-08-19 UTC** (
 > UTC runs one calendar day ahead here). All 79 rows were compared against
 > live `pg_policies` (read-only), per command — 75 of them mechanically, and
 > the 4 deny-all tables by reading their policy bodies instead, for the reason

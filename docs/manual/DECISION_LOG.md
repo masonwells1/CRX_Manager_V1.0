@@ -230,8 +230,11 @@ constraint is named `<table>_<column>_whole_cents_chk`.
 CHECK (col IS NULL OR (col = ROUND(col, 2) AND col > '-Infinity' AND col < 'Infinity'))
 ```
 
-That is the **rounding form**, and it is what eight of the ten live `whole_cents` constraints
-use. Two details, both read from live on 2026-08-19 UTC:
+That is the **rounding form**, and it is what eight of the ten live constraints *whose name
+contains* `whole_cents` use. That scoping matters: counted by shape rather than by name, live
+carries **13** money-scale CHECKs, **11** of them rounding-form — the extra three are named
+`*_cent_scale_chk` (see the correction further down). Two details, both read from live on
+2026-08-19 UTC:
 
 - On a `NOT NULL` column the `IS NULL` branch is redundant and may be omitted.
   `order_items_total_price_whole_cents_chk` is live as
@@ -240,8 +243,9 @@ use. Two details, both read from live on 2026-08-19 UTC:
 - Within the rounding form, neither finiteness bound may be dropped. `round()` alone does not
   exclude `Infinity` or `NaN` in `numeric`, which is the whole reason both bounds are written.
 
-**A second form also satisfies the gate, and an earlier draft of this paragraph wrongly implied it
-could not.** The two constraints on the converted purchase-order pair are live as:
+**A second constraint shape exists live, and an earlier draft of this paragraph wrongly implied it
+could not.** The two constraints on the purchase-order pair — which is **not** converted; the detail
+block further down proves that from live — are live as:
 
 ```sql
 -- purchase_orders_total_cost_whole_cents
@@ -250,16 +254,35 @@ CHECK (total_cost >= 0 AND total_cost = (total_cost_cents::numeric / 100.0))
 CHECK (unit_cost >= 0 AND unit_cost = (unit_cost_cents::numeric / 100.0))
 ```
 
-These carry **no** `round()` and **no** finiteness bounds, yet they are *stronger* than the
-rounding form: pinning the numeric dollar column to a `bigint` cents column divided by 100 makes
-whole cents and finiteness structural rather than asserted, and `>= 0` additionally forbids
-negatives, which the rounding form permits. Call this the **mirror form**. It is available only
-where an authoritative `*_cents` bigint column exists — which is exactly the converted state the
-whole programme is aiming at, so the mirror form is the preferred shape wherever conversion has
-happened, and the rounding form is the compatibility shape for columns still stored as dollars
-only.
+These carry **no** `round()` and **no** finiteness bounds. Call this the **mirror form**. Pinning
+the numeric dollar column to `cents / 100.0` does make whole cents structural rather than asserted,
+and `>= 0` additionally forbids negatives, which the rounding form permits. Two caveats that an
+earlier draft of this paragraph left out, both of which change how it should be read:
 
-Both forms clear the gate. What is **not** acceptable is a column with neither.
+- **It only enforces anything while the cents column is non-NULL.** `col = NULL` evaluates to NULL,
+  and a NULL CHECK passes, so on a plain nullable `*_cents` column the mirror form **fails open** —
+  it would silently admit fractional dollars. Live is safe from this only because both cents columns
+  are `GENERATED ALWAYS`, so they are NULL exactly when the dollar column is. Copied onto a
+  hand-written nullable cents column it would not be. Pair it with `NOT NULL`, or with a generated
+  column.
+- **Its stated precondition is met by zero live instances.** The earlier draft said the form is
+  "available only where an *authoritative* `*_cents` bigint column exists — which is exactly the
+  converted state the whole programme is aiming at", and called it the preferred shape "wherever
+  conversion has happened". Both cents columns behind the only two live instances are
+  `GENERATED ALWAYS AS (round(<numeric dollars> * 100))::bigint` — **derived mirrors, not
+  authoritative stores**, exactly as the "Converted: no" block below states. So the form is
+  currently a derived-mirror shape, and no conversion has happened anywhere on this schema for it to
+  be preferred over.
+
+**Open, not settled: whether the mirror form clears the AGENTS.md gate.** The gate's wording is "an
+active **finite** whole-cent CHECK", and the mirror form carries no finiteness clause of its own;
+what rejects `NaN`/`Infinity` here is the generated column's cast, not the CHECK (see the note
+under the deferred table). It also does not follow the `<table>_<column>_whole_cents_chk` naming
+this entry sets out. A previous revision resolved this by asserting "Both forms clear the gate" —
+but that is a **widening of a gate**, it was written into an entry attributed to Mason's 2026-08-10
+instruction, and Mason did not decide it. It is withdrawn and recorded here as an open question for
+him. What is not in question either way: a money column with **neither** shape does not clear the
+gate.
 
 **Both halves are load-bearing — a `ROUND`-only constraint does NOT clear the gate.** PostgreSQL
 `numeric` deliberately does not use IEEE-754 NaN semantics: so values stay sortable and indexable,
@@ -273,18 +296,24 @@ UPDATE, whatever column actually changed — so each legacy dirty row becomes pe
 and the damage is invisible until a user tries to edit an old record. Repair the data first, then
 add the constraint `VALID` from the start.
 
-**Where each audited column stands.** Verified read-only against the live database on 2026-08-11.
+**Where each audited column stands.** Verified read-only against the live database on 2026-08-11;
+the dirty-row counts were re-measured 2026-08-18 and the constraint inventory 2026-08-19 — both
+corrections are inline below, so do not read the 2026-08-11 date as covering the whole section.
 The 2026-08-10 order-profit evaluation measured 12 order/quote/commission columns; those are the
 only ones whose gate status is established. Other legacy dollar columns exist across the schema
 (`payments.amount`, `commission_payments.total_amount`, `commission_payment_items.amount`, the
-`products` price tiers, the `cost_history` snapshots and more). None of those are converted, and
-none are constrained — under the rule above they are unapproved tracked debt, not grandfathered.
-Extending the programme to them is unstarted work.
+`products` price tiers, the `cost_history` snapshots and more). None of those are converted.
+**Most, but not all, are unconstrained** — an earlier revision of this sentence said "none are
+constrained", and live refutes it: `products.current_cost`, `order_items.price_per_unit` and
+`quote_items.price_per_unit` each carry a validated rounding-form CHECK named
+`*_cent_scale_chk`. Those three are why the live money-scale CHECK count is 13 rather than 10.
+The unconstrained remainder is unapproved tracked debt under the rule above, not grandfathered.
+Extending the programme to it is unstarted work.
 
 > **`purchase_orders.total_cost` was listed in that sentence as unconverted *and* unconstrained
 > until 2026-08-18. The "unconstrained" half was wrong; the "unconverted" half was right, and a
 > correction written on 2026-08-18 overshot by claiming the column was converted. Both halves are
-> restated here from live.** Read-only live check, 2026-08-19 UTC (the evening of 2026-08-18 local).
+> restated here from live.** Read-only live check, 2026-08-19 UTC.
 >
 > **Constrained: yes.** `purchase_orders_total_cost_whole_cents` and
 > `purchase_order_items_unit_cost_whole_cents` are present and validated, and each pins its numeric
@@ -323,8 +352,8 @@ Extending the programme to them is unstarted work.
 | Column | Why deferred | Status |
 |---|---|---|
 | `quotes.total_cost` | holds 2 of 4 legacy fractional-cent rows | awaiting data repair |
-| `commissions.commission_amount` | holds 3 of 35 legacy fractional-cent rows | awaiting data repair |
-| `commissions.order_profit` | holds 3 of 35 legacy fractional-cent rows | awaiting data repair |
+| `commissions.commission_amount` | held 3 of 35 legacy fractional-cent rows **as measured 2026-08-10; live now reads 0** | see note below |
+| `commissions.order_profit` | held 3 of 35 legacy fractional-cent rows **as measured 2026-08-10; live now reads 0** | see note below |
 | `orders.total_price` | data is clean; `_update_order_items_impl` overwrites it with the raw un-rounded line sum, so constraining it would reject ordinary edits | blocked on fixing that writer |
 
 Repairing the dirty values in the first three rows above — `quotes.total_cost`,
@@ -342,12 +371,13 @@ repair scope is smaller than this table's 2026-08-10 counts suggest.
 > `20260812115238_repair_historical_order_line_cents` repaired those 35 lines with Mason's in-chat
 > approval and added the validated CHECK `order_items_total_price_whole_cents_chk` in the same
 > migration, which is why it now sits in the enforced list above. Leaving it in the deferred table
-> told every later agent that an enforced money column was unapproved tracked debt. The 43 figure was also a sum of *column-values* across four
-> columns, not four disjoint row sets — the two `commissions` counts are 3/35 each and may be the
-> same 3 rows, so distinct dirty rows were 40–43, and that overlap can no longer be re-derived.
+> told every later agent that an enforced money column was unapproved tracked debt. The 43 figure
+> was also a sum of *column-values* across four columns, not four disjoint row sets — the two
+> `commissions` counts are 3/35 each and may be the same 3 rows, so distinct dirty rows were
+> 40–43, and that overlap can no longer be re-derived.
 > Current figures and the enforced-vs-measured distinction live in `docs/manual/CURRENT_STATE.md`
 > section 2. All eight `*_whole_cents_chk` constraints read `convalidated` on live (read-only,
-> 2026-08-19 UTC / the evening of 2026-08-18 local). The **decision** recorded here still stands
+> 2026-08-19 UTC). The **decision** recorded here still stands
 > unchanged — the gate is exactly what it was; what moved is that one more column now passes it.
 
 **Measured cost of the conversion that was declined** (live, 2026-08-10): 12 money columns, 46 live
