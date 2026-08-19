@@ -10,18 +10,20 @@ Row Level Security (RLS) controls which rows each user can see and modify in the
 
 ---
 
-## The 3 Roles
+## The 4 Roles
 
-CRX Manager has 3 main roles stored in `profiles.role`:
+CRX Manager has 4 roles stored in `profiles.role`:
 
 | Role | Who | Access level |
 |------|-----|-------------|
 | `admin` | Mason and other administrators | Full access to everything |
 | `sales_rep` | Sales representatives | Access to own customers, quotes, orders. No access to month-end, commissions, settings. |
 | `driver` | Delivery drivers | Access to own assigned deliveries. Can confirm, complete, upload photos, report issues. |
-
-There's also an `applicator` role for job scheduling:
 | `applicator` | Chemical applicators | Access to own assigned jobs. Can record applied info. |
+
+(The `applicator` row used to sit outside this table, after a prose line, so it
+rendered as loose text rather than a fourth row — and the heading said three.
+There are four.)
 
 ---
 
@@ -195,6 +197,12 @@ Used on: `financial_audit_log`
 > as live `is_active_profile()` are in the matching banner in
 > `docs/reference/database-schema.md`; the per-cell working is in the CLOSED
 > entry in `docs/manual/KNOWN_ISSUES.md`.
+>
+> Two cells in this table (`inventory_holds` and `team_note_comments` SELECT)
+> used to render that same live `is_active_profile()` expression as "Any
+> active profile"; they now use the one defined term, so this matrix carries 8
+> cells reading **"All authenticated"** and all 8 also appear in the
+> `database-schema.md` matrix.
 
 | Table | SELECT | INSERT | UPDATE | DELETE |
 |-------|--------|--------|--------|--------|
@@ -211,7 +219,7 @@ Used on: `financial_audit_log`
 | order_items | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | inventory | Admin / Sales Rep / Driver | Admin | Admin | Admin |
 | inventory_transactions | Admin / Sales Rep | Admin / Sales Rep | - | - |
-| inventory_holds | Any active profile | - (no write policy; SECDEF RPCs only) | - (no write policy) | - (no write policy) |
+| inventory_holds | All authenticated | - (no write policy; SECDEF RPCs only) | - (no write policy) | - (no write policy) |
 | purchase_orders | Admin / Sales Rep | Admin | Admin | Admin |
 | purchase_order_items | Admin / Sales Rep | Admin | Admin | Admin |
 | receiving_records | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
@@ -221,8 +229,8 @@ Used on: `financial_audit_log`
 | delivery_remainders | Admin / Sales Rep / Driver (assigned to the original delivery) | Admin / Sales Rep | Admin / Sales Rep | Admin |
 | commissions | Admin / Sales Rep (own recipient) | Admin | Admin | Admin |
 | payments | Admin / Sales Rep | - (RPC only, since `20260714223000`) | - (RPC only) | - (RPC only) |
-| team_notes | All authenticated | Own created_by | Own created_by / Admin | Admin |
-| team_note_comments | Any active profile | Own created_by | Own created_by / Admin | Own created_by / Admin |
+| team_notes | All authenticated | Own created_by (active profile) | Own created_by / Admin | Admin |
+| team_note_comments | All authenticated | Own created_by | Own created_by / Admin | Own created_by / Admin |
 | activity_feed | All authenticated | Own performed_by | - | - |
 | notifications | Own user_id | Admin / Sales Rep / own user_id | Own user_id | Admin |
 | invoices | Admin / Own created_by / Assigned salesman | Admin / Sales Rep | Admin | Admin |

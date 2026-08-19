@@ -72,7 +72,7 @@ revision of PR #420:
 | Revision | Flags | What changed |
 |---|---|---|
 | `origin/main` | 162 | pre-PR baseline |
-| `7d5d5d80` | 89 | presence pass (which incidentally closed 73) |
+| `7d5d5d80` | 89 | after the presence pass (`a4b4e9ce`), which incidentally closed 73 |
 | `21f29c4a` | 61 | role-wording pass — the "All authenticated" class, 28 cells |
 | this commit | 33 | hand-triage of every remaining flag against live |
 
@@ -87,23 +87,31 @@ role test as a scalar subquery.
 **All 33 remaining flags were read individually against live `pg_policies` on 2026-08-19 UTC and
 are false positives**, in three families:
 
-1. **Inlined role test.** A policy that spells out `profiles.role = 'admin'` as a subquery instead
-   of calling `is_admin()` reads as "no role named", so a cell saying `Admin` is right while the
-   classifier flags it. Worked example: `email_log` INSERT is governed by the single policy
-   `email_log_admin_insert`, whose `WITH CHECK` is `EXISTS (SELECT 1 FROM profiles WHERE
-   profiles.id = auth.uid() AND profiles.role = 'admin' AND profiles.is_active)`. The matrix cell
-   reads `Admin` and is correct. Same family: `ar_reminder_tracking`, `failed_notifications` (one
-   `FOR ALL` policy covering all four commands), `rup_sales_records`, `team_note_attachments`
-   DELETE, `vendor_bills`, `vendor_payments`, and `vendors` SELECT (two policies — live rows for
-   admin and sales_rep, soft-deleted rows for admin only).
+1. **Inlined role test.** A policy that spells out a `profiles.role` test as a subquery instead
+   of calling `is_admin()` or `is_sales_rep()` reads as "no role named", so a cell saying `Admin`
+   is right while the classifier flags it. Worked example: `email_log` INSERT is governed by the
+   single policy `email_log_admin_insert`, whose `WITH CHECK` is `EXISTS (SELECT 1 FROM profiles
+   WHERE profiles.id = auth.uid() AND profiles.role = 'admin' AND profiles.is_active)`. The matrix
+   cell reads `Admin` and is correct. Same family, inlined as `= 'admin'`:
+   `ar_reminder_tracking`, `failed_notifications` (one `FOR ALL` policy covering all four
+   commands), `team_note_attachments` DELETE, `vendor_bills`, `vendor_payments`, and the
+   soft-deleted-rows policy on `vendors`. Inlined as `= ANY (ARRAY['admin','sales_rep'])`:
+   `rup_sales_records`, `offline_action_receipts` SELECT, and the main `vendors` SELECT policy
+   (`vendors` carries two policies — live rows for admin and sales_rep, soft-deleted rows for
+   admin only). An earlier draft of this entry defined the family as `= 'admin'` only, which did
+   not describe three of its own members.
 2. **Role named by how the row is reached.** The `Driver` cells on `deliveries`, `delivery_items`,
    `delivery_photos` and `delivery_remainders`, where live is `assigned_driver = auth.uid()` — for
    `delivery_remainders`, the *original* delivery's assigned driver. Correct English, unmatched
    role name. (An earlier draft of this entry gave the column as `driver_id`; live is
    `assigned_driver`.)
-3. **Deferred to another table's RLS.** `invoice_items` SELECT is an `EXISTS` over the parent
-   invoice carrying exactly the `invoices_select` predicate and no auth test of its own;
-   `offline_action_receipts` SELECT is owner-or-(admin/sales_rep) with the role test inlined.
+3. **Deferred to another table's RLS.** One member: `invoice_items` SELECT, an `EXISTS` over the
+   parent invoice carrying exactly the `invoices_select` predicate and no auth test of its own.
+   An earlier draft also filed `offline_action_receipts` here. That was wrong — its `EXISTS` is
+   over `profiles`, with `role = ANY (ARRAY['admin','sales_rep'])` inlined and an
+   `actor_id = p.id` owner branch. It defers to nothing, and belongs in family 1. (The matrix
+   cell itself, `Owner / Admin / Sales via sanitized RPC only`, is correct: `authenticated` holds
+   no SELECT grant on the table, so the permissive policy is unreachable from the browser.)
 
 **What the hand-triage corrected**, each verified against live `pg_policies` before the cell was
 rewritten:
@@ -125,15 +133,39 @@ rewritten:
   `cycle_count_items` writes — the cell named the right roles but dropped a condition live
   enforces (delivery status `in_progress`/`completed`, the original delivery's driver,
   `created_by = auth.uid()`, parent count `in_progress`).
+- That last shape is the one the classifier structurally cannot flag — the role names match, so
+  nothing is raised — so a final sweep read every matrix cell that is a bare role list against its
+  live expression, looking only for conditions the cell omitted. Six more turned up:
+  `field_obstacles` INSERT (`created_by = auth.uid()`, so an admin cannot insert a row
+  attributed to someone else), `vendors` and `vendor_bills` SELECT (`deleted_at IS NULL`),
+  `invoice_shares` and `order_shares` SELECT (the parent invoice or order must also be
+  un-deleted), and `team_notes` INSERT (an active profile as well as ownership).
 
 **"All authenticated"** in both matrices means live `is_active_profile()`: signed in *and*
-`profiles.is_active`. A deactivated profile is authenticated but denied. All 14 cells using the
-phrase were re-read on 2026-08-19 UTC and each is governed by exactly one policy whose `USING` is
-`( SELECT is_active_profile() )`. Both matrix banners now say so.
+`profiles.is_active`. A deactivated profile is authenticated but denied. Three cells
+(`inventory_holds`, `team_note_attachments` and `team_note_comments` SELECT) rendered that same
+live expression as "Any active profile"; they now use the one defined term. That makes **17**
+distinct table/command pairs carrying the phrase — 17 cells in the `database-schema.md` matrix and
+8 of them repeated in `RLS_SECURITY_GUIDE.md`, 25 cell instances in all. An earlier draft of this
+entry said "all 14 cells ... in both matrices", which was the count for one matrix described as
+covering two. Every one was re-read on 2026-08-19 UTC and is governed by exactly one policy whose
+`USING` is `( SELECT is_active_profile() )`. Both matrix banners now say so, and the claim can be
+re-checked without the classifier:
+
+```sql
+select tablename, policyname, cmd, qual from pg_policies
+ where schemaname = 'public' and cmd = 'SELECT' and qual like '%is_active_profile%';
+```
 
 **If this is ever re-run, do not bulk-apply the classifier's output** — that is exactly the mistake
 that produced the `rate_limit_log` row. The classifier locates candidates; live `pg_policies` is
 the proof.
+
+**The classifier is not checked in.** It was an ad-hoc script run against a live `pg_policies`
+snapshot, so the flag counts above cannot be reproduced from this repository alone — treat them as
+a narrative of the sweep, not as evidence. Everything that actually rests on them is enumerated by
+name instead: each false-positive family lists its members above, each corrected cell is named, and
+every one can be re-checked with a direct read of `pg_policies` for that table.
 
 ---
 

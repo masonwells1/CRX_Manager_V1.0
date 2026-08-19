@@ -210,9 +210,15 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 > `product_cost_basis_change_rows` were each stating their deny-all shape one
 > way in some commands and another way in the rest, and now state it
 > consistently across all four. That is 32 rows from the presence pass — 29
-> corrections plus 3 notation fixes. The later role-wording pass described
-> below changed 7 *further* rows (its other 4 were already among the 29), so
-> this file's matrix has **39 changed rows against `main` overall**.
+> corrections plus 3 notation fixes. The role-wording pass described below
+> then changed 12 rows, 7 of them *further* rows (the other 5 were already
+> among the 32), and the hand-triage after it changed 31 rows, 22 of them new
+> again. So this file's matrix carries **61 changed rows against `main`
+> overall** — 32 + 7 + 22, out of 79. An earlier revision of this banner said
+> **39**, which counted the presence and role-wording passes and silently
+> stopped before the hand-triage. No row was added or removed by any pass:
+> `main` and this revision both have 79 rows, every one of them rewritten in
+> place or left alone.
 >
 > Two shapes to read carefully. A cell reading `-` **or** `RPC only` means the
 > same thing: **no direct browser-role path**. That is true both when no
@@ -247,6 +253,18 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 > hand and either corrected or confirmed, so as of **2026-08-19 UTC** both the
 > presence shape *and* the named roles are verified.
 >
+> **What the classifier cannot see, and how those were found.** It compares
+> role *names*, so a cell that names the right roles but omits a condition
+> live *also* enforces raises no flag at all — the roles match. Those were
+> found by reading live expressions directly rather than from the flag list:
+> `field_obstacles` INSERT (live also requires `created_by = auth.uid()`, so
+> an admin cannot insert a row attributed to someone else), `vendors` and
+> `vendor_bills` SELECT (live also requires `deleted_at IS NULL`, with a
+> second policy handing admin the soft-deleted `vendors` rows),
+> `invoice_shares` and `order_shares` SELECT (the parent invoice or order must
+> also be un-deleted), and `team_notes` INSERT (live requires an active
+> profile as well as ownership). All six are corrected in the matrix above.
+>
 > The classifier's flag count across both matrices, measured at each revision:
 > **162** on `origin/main`, **89** after the presence pass (`7d5d5d80`), **61**
 > after the role-wording pass (`21f29c4a`), **33** now. Read that as a *proxy*,
@@ -256,24 +274,42 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 > helper-function names (`is_admin()`, `is_sales_rep()`, `is_applicator()`,
 > `is_driver()`) and that policy inlines its role test as a scalar subquery.
 >
-> All **33** surviving flags are false positives of three kinds: (1) a policy
-> that inlines `profiles.role = 'admin'` rather than calling `is_admin()` reads
-> as "no role named" — `ar_reminder_tracking`, `email_log`,
-> `failed_notifications`, `rup_sales_records`, `team_note_attachments`,
-> `vendor_bills`, `vendor_payments`, `vendors`; (2) a cell that names a role by
-> *how the row is reached* rather than by a role check — the `Driver` cells on
-> `deliveries`, `delivery_items`, `delivery_photos` and `delivery_remainders`,
-> where live is `assigned_driver = auth.uid()`; (3) a cell that defers to
-> another table's RLS — `invoice_items`, `offline_action_receipts`. The
-> per-cell working is in the now-CLOSED entry in
-> `docs/manual/KNOWN_ISSUES.md`.
+> All **33** surviving flags are false positives of three kinds. (1) A policy
+> that inlines a `profiles.role` test rather than calling `is_admin()` or
+> `is_sales_rep()` reads as "no role named". The inlined form is
+> `= 'admin'` on `ar_reminder_tracking`, `email_log`, `failed_notifications`,
+> `team_note_attachments`, `vendor_bills`, `vendor_payments` and the
+> soft-deleted-rows policy on `vendors`; it is
+> `= ANY (ARRAY['admin','sales_rep'])` on `rup_sales_records`,
+> `offline_action_receipts` and the main `vendors` SELECT policy. (2) A cell
+> that names a role by *how the row is reached* rather than by a role check —
+> the `Driver` cells on `deliveries`, `delivery_items`, `delivery_photos` and
+> `delivery_remainders`, where live is `assigned_driver = auth.uid()`. (3) A
+> cell that defers to another table's RLS — `invoice_items`, whose `EXISTS`
+> carries exactly the `invoices_select` predicate and no auth test of its own.
+> That third family has exactly one member: an earlier revision of this banner
+> also listed `offline_action_receipts` there, but its `EXISTS` is over
+> `profiles` with the role test inlined, which makes it family 1. The per-cell
+> working is in the now-CLOSED entry in `docs/manual/KNOWN_ISSUES.md`.
 >
 > **"All authenticated"** in these matrices is shorthand for live
 > `is_active_profile()`: any signed-in user whose `profiles.is_active` is true.
 > A deactivated profile is authenticated but denied, so "all authenticated" is
-> the looser of the two readings. All 14 cells that use the phrase were re-read
-> on 2026-08-19 UTC and each is governed by exactly one policy whose `USING` is
-> `( SELECT is_active_profile() )`.
+> the looser of the two readings. Three cells here — `inventory_holds`,
+> `team_note_attachments` and `team_note_comments` SELECT — used to render
+> that identical live expression as "Any active profile"; they now use the one
+> defined term. That makes **17** cells in this file's matrix, of which 8 also
+> appear in the `RLS_SECURITY_GUIDE.md` matrix — 25 cell instances across the
+> two matrices, covering the same 17 table/command pairs. Every one was
+> re-read on 2026-08-19 UTC and is governed by exactly one policy whose
+> `USING` is `( SELECT is_active_profile() )`. That does not depend on the
+> classifier and can be re-checked directly:
+>
+> ```sql
+> select tablename, policyname, cmd, qual from pg_policies
+>  where schemaname = 'public' and cmd = 'SELECT'
+>    and qual like '%is_active_profile%';
+> ```
 
 | Table | SELECT | INSERT | UPDATE | DELETE |
 |-------|--------|--------|--------|--------|
@@ -294,7 +330,7 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | order_items | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | inventory | Admin / Sales Rep / Driver | Admin | Admin | Admin |
 | inventory_transactions | Admin / Sales Rep | Admin / Sales Rep | - | - |
-| inventory_holds | Any active profile | - (no write policy; SECDEF RPCs only) | - (no write policy) | - (no write policy) |
+| inventory_holds | All authenticated | - (no write policy; SECDEF RPCs only) | - (no write policy) | - (no write policy) |
 | purchase_orders | Admin / Sales Rep | Admin | Admin | Admin |
 | purchase_order_items | Admin / Sales Rep | Admin | Admin | Admin |
 | receiving_records | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
@@ -305,9 +341,9 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | delivery_remainders | Admin / Sales Rep / Driver (assigned to the original delivery) | Admin / Sales Rep | Admin / Sales Rep | Admin |
 | commissions | Admin / Sales Rep (own recipient) | Admin | Admin | Admin |
 | payments | Admin / Sales Rep | - (RPC only, since `20260714223000`) | - (RPC only) | - (RPC only) |
-| team_notes | All authenticated | Own created_by | Own created_by / Admin | Admin |
-| team_note_attachments | Any active profile | Own uploaded_by | - (no UPDATE policy) | Own uploaded_by / Admin |
-| team_note_comments | Any active profile | Own created_by | Own created_by / Admin | Own created_by / Admin |
+| team_notes | All authenticated | Own created_by (active profile) | Own created_by / Admin | Admin |
+| team_note_attachments | All authenticated | Own uploaded_by | - (no UPDATE policy) | Own uploaded_by / Admin |
+| team_note_comments | All authenticated | Own created_by | Own created_by / Admin | Own created_by / Admin |
 | activity_feed | All authenticated | Own performed_by | - | - |
 | notifications | Own user_id | Admin / Sales Rep / own user_id | Own user_id | Admin |
 | app_settings | All authenticated | Admin | Admin | - |
@@ -330,7 +366,7 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | cycle_counts | Admin / Sales Rep | Admin | Admin | Admin |
 | cycle_count_items | Admin / Sales Rep | Admin (count in progress) | Admin (count in progress) | Admin (count in progress) |
 | fields | Admin / Sales Rep / Applicator | Admin / Sales Rep | Admin / Sales Rep | Admin |
-| field_obstacles | Admin / Sales Rep / Applicator | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
+| field_obstacles | Admin / Sales Rep / Applicator | Admin / Sales Rep (own created_by) | Admin / Sales Rep | Admin / Sales Rep |
 | job_loader_worksheets | Job-visible (Admin / Sales Rep / assigned Applicator / dispatched) | Admin / Sales Rep (own created_by) | Admin / Sales Rep | Admin / Sales Rep |
 | field_billing_defaults | All authenticated | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
 | returns | Admin / Sales Rep / requester | - (RPC only, since `20260715203911`) | Admin / requester | Admin |
@@ -338,15 +374,15 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | applicator_licenses | All authenticated | Admin / Sales Rep | Admin / Sales Rep | Admin |
 | rebate_programs | Admin / Sales Rep | Admin | Admin | Admin |
 | rebate_claims | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
-| vendors | Admin / Sales Rep | - (no write policy) | - (no write policy) | - (no write policy) |
-| vendor_bills | Admin | Admin | Admin | Admin |
+| vendors | Admin / Sales Rep (not soft-deleted) / Admin (soft-deleted) | - (no write policy) | - (no write policy) | - (no write policy) |
+| vendor_bills | Admin (not soft-deleted) | Admin | Admin | Admin |
 | vendor_payments | Admin | Admin | - | Admin |
 | rup_sales_records | Admin / Sales Rep | Admin | - | - |
 | email_log | Admin / Own created_by | Admin | - | - |
 | ar_reminder_tracking | Admin | Admin | - | - |
 | failed_notifications | Admin | Admin | Admin | Admin |
-| invoice_shares | Admin / invoice creator / salesman | Admin / Sales Rep | Admin | Admin |
-| order_shares | Admin / order salesman | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
+| invoice_shares | Admin / invoice creator / salesman (invoice not soft-deleted) | Admin / Sales Rep | Admin | Admin |
+| order_shares | Admin / order salesman (order not soft-deleted) | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
 | idempotency_keys | - (policy exists but is `USING (false)`; SECURITY DEFINER only) | - (same) | - (same) | - (same) |
 | offline_action_receipts | Owner / Admin / Sales via sanitized RPC only | - (SECURITY DEFINER RPC only) | - (SECURITY DEFINER RPC only) | - |
 | rate_limit_log | Admin | - (restrictive only) | - (restrictive only) | - (restrictive only) |

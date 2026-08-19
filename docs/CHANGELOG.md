@@ -97,7 +97,12 @@ at once), `cycle_count_items` and `field_billing_defaults` and `rup_sales_record
 grants a role the doc omitted), and four cells that named the right roles but dropped a condition
 live enforces. `docs/manual/KNOWN_ISSUES.md` now records that entry as CLOSED, and both matrix
 banners define **"All authenticated"** as live `is_active_profile()` — signed in *and*
-`profiles.is_active`, re-read across all 14 cells that use the phrase.
+`profiles.is_active`, re-read across all 17 cells that use the phrase (three of which used to
+render the identical live expression as "Any active profile"). A final sweep then covered the one
+shape the classifier structurally cannot flag — a cell that names the right roles but omits a
+condition live also enforces — and corrected six more: `field_obstacles` INSERT, `vendors` and
+`vendor_bills` SELECT, `invoice_shares` and `order_shares` SELECT, and `team_notes` INSERT.
+Against `origin/main` the `database-schema.md` matrix now carries 61 changed rows out of 79.
 
 **Also corrected:** the `migration-history.md` header claim 885 → 886 (a high-water row number, not a
 file count — the two `check:docs` rows measure different things), both manual freshness stamps, live
