@@ -58,6 +58,608 @@ skipped and why.
   was rebased, and an earlier version of this entry cited a SHA that the rebase orphaned.)
 - **Migrations touched** (git diff --name-only origin/main...HEAD):
   - none
+## 2026-08-19 — `agent-health` and the sync generator now agree on line endings
+
+Harness only — no app source, migration, or live-state change.
+
+`compareSyncedFiles()` in `scripts/agent-health-check.mjs` compared the `.claude/skills/**` sources
+with their `.agents/**` mirrors **byte-for-byte**, while `scripts/sync-agent-workflows.mjs` compared
+them **EOL-normalized**. Both compared raw bytes until 2026-07-16, when `be4f00a7` (#147) normalized
+the generator side only; from that date one commit could FAIL `npm run agent-health` while the
+generator reported everything already in sync. Two reviewers on the same commit hit exactly that
+during the PR #414 review — a session observation with no durable artifact, but the condition itself
+was live in a worktree here and is reproducible.
+
+This was already on the books. `docs/audits/2026-07-16-scaffolding-design-review.md:89` recorded the
+CRLF false-"stale" failure and prescribed newline-normalizing before compare; line 191 carries the
+still-open LOW "agent-health sync-failure remedy … duplicates CRLF-fragile byte-compare". Only the
+generator half was fixed at the time. This closes the other half.
+
+Why the state survives: `.gitattributes` pins these paths `text eol=lf`, so a CRLF working-tree file
+hashes to the same blob as its LF committed form — `git diff` is empty and committing it changes
+nothing, so ordinary Git operations never rewrite it. It is not literally unreachable: `git checkout
+-- <path>` does repair it, and `git status` may or may not flag it depending on the stat cache.
+Neither happens on its own. What wrote CRLF into `.claude/skills/**` in that worktree is not
+established.
+
+- Both comparisons import one `normalizeEol` from **`scripts/normalize-eol.mjs`**. It is deliberately
+  narrow — CRLF to LF, nothing else — so a lone CR, a BOM, or a trailing-newline difference still
+  reports as drift. It fails closed: it can raise a false alarm, never grant a false pass.
+- `sync-agent-workflows.mjs --write` now writes the LF form. It previously copied a CRLF-smudged
+  source verbatim into `.agents/**`, so the "run `--write`" remedy the health check prints could not
+  repair a smudged mirror. It can now.
+- `scripts/agent-health-check.test.mjs` pins the contract: CRLF-vs-LF is PASS, real content drift is
+  still FAIL, the normalizer's narrowness is asserted, and both callers are checked for importing the
+  shared module instead of redefining it. Mutation-tested — each assertion goes red when the behavior
+  it guards is reverted.
+- `scripts/normalize-eol.mjs` is registered in the required-file lists of `check-agent-workflows.mjs`
+  and `agent-health-check.mjs`, so deleting it reports a clean failure rather than crashing, and is
+  added to the ledger guard's triggers along with `agent-health-check.mjs`.
+- Rewrote the `.gitattributes` header, which described the check as byte-for-byte, misattributed the
+  comparison to `check-agent-workflows.mjs` (it delegates), and carried a "keep both sides on the same
+  ending" rule that this change itself made unenforced. The pinning is unchanged.
+- Verified by reproducing the FAIL against the live CRLF/LF split in this worktree, confirming PASS
+  after the fix with that split still in place, then `npm run agent-health` and
+  `npm run test:agent-workflows` clean.
+
+## 2026-08-19 — Corrected the false "Codex cannot reach the live DB" premise in the bug-hunt commands
+
+Harness only — no app source, migration, or live-state change. `codex-driven-bug-hunt.md:17`
+justified the Claude/Codex division of labor with "Codex's read-only sandbox cannot reach the live
+database." That is false as a capability statement, and it is the same sentence that propagated into
+`docs/plans/2026-08-18-product-data-model-PRD.md` on 2026-08-18 and told an executor Codex "cannot
+re-derive" live facts (Mason caught it; the PRD was fixed, the source was not).
+
+- **What is actually true.** Codex's Supabase access is **write-enabled** by Mason's 2026-08-14
+  decision (`docs/manual/DECISION_LOG.md`); `.codex/config.toml` declares `read_only=false` with
+  `features=database,...`. The bug-hunt runs genuinely have no database connector, but because
+  `scripts/codex-hunt.mjs` and `scripts/overnight-codex-gate.mjs` both pass **`--ignore-user-config`**,
+  which drops the Supabase/Vercel/GitHub plugins for that invocation — a deliberate launch flag for
+  those runs, not a limit on Codex.
+- **Current-state caveats, verified 2026-08-19 and now recorded inline.** The tracked
+  `.codex/config.toml` entry's OAuth grant is **still dead** — real
+  `failed to refresh OAuth tokens for server supabase` / `invalid_grant` runtime errors in
+  `~/.codex/sessions` as recently as 2026-08-17 — so it carries essentially no traffic. The channel
+  last observed serving real Supabase calls is the built-in `codex_apps/supabase` App connector,
+  whose scope is an **owner-only toggle in the Codex app's settings, not represented in or verified
+  by any repo file**. Capability is therefore unproven in both directions, and the command now carries
+  an explicit "do not restate this as 'Codex cannot reach the live database'" warning.
+- **The design rationale survives on its original footing.** The load-bearing independence argument
+  was always the two-model split — the model that *finds* is not the model that *verifies*, and the
+  model that *writes* the fix is not the model that *reviews* it. That never depended on DB reach.
+  Keeping the hunter connector-free stays the deliberate choice: it keeps a write-capable connector
+  out of an unattended loop and forces the Claude-side live grounding to actually happen.
+- Same wrong reason fixed in two downstream copies (the hunter prompt at `:73`, Claude's verify step
+  at `:100`) and in `overnight-bug-hunt.md`'s mirrored Codex finding-gate prompt. **The first sweep
+  missed two more copies** because it searched the long phrasing ("cannot reach") and not the
+  contraction: `codex-driven-bug-hunt.md:1` — the description line, the first sentence any agent
+  reads — still said "which Codex's sandbox can't reach", contradicting the new warning 20 lines
+  below it, and `overnight-bug-hunt.md:92` said "since Codex's sandbox can't". Both are now fixed;
+  an adversarial `claude-fable-5` review of the branch caught them. Sweep the *concept*
+  (`can't reach`, `cannot reach`, `sandbox can't`, `Codex can't`), not one phrasing. The remaining
+  `CHANGELOG`/`KNOWN_ISSUES` mentions are correct historical records of the old state and are
+  deliberately left alone. Adapters regenerated (`sync-agent-workflows --write`, 37 files — the two
+  bug-hunt adapters are pointer stubs, so their content is unchanged) and
+  `npm run test:agent-workflows` green.
+- **Still open (owner-only):** nobody can verify from this repo whether the `codex_apps/supabase`
+  App connector is currently read-only or write-enabled. Mason's 2026-08-14 approval may or may not
+  have been applied to that toggle; recording its actual state would close the blind spot.
+
+## 2026-08-18 — Hook audit fixes: C3 source-containment guard, worktree-sweep unblock, cd-target fix
+
+Harness only — no app source, migration, or live-state change. The 30-day hook-vs-reality audit
+found one unguarded mistake class that reached production three times and two false-positive/noise
+defects; Mason approved fixing all three:
+
+- **NEW guard — applied-migration source containment (C3):** `applied-snapshot-invalidate.mjs`
+  now records every Supabase MCP `apply_migration` into
+  `.claude/session-state/applied-source-ledger.json`, and `stop-wrap.mjs` blocks session end while
+  any recorded apply has no `supabase/migrations/*.sql` match committed to HEAD (basename or
+  stamp-stripped slug). Entries persist across sessions until the file is committed, then prune;
+  unresolved applies fold into the stop-wrap ack signature so a stale acknowledgment can't mask a
+  new one. Previously the only defence was "someone notices" (2026-08-09, PR #371, and the
+  six-file 2026-08-12 incident). Tests: `.claude/hooks/applied-source-containment.test.mjs`,
+  added to `test:correction-guards`.
+- **worktree-cleanup ignores harness noise:** a machine-local `.claude/settings.local.json`
+  modification as the SOLE dirt no longer classifies a worktree as dirty
+  (`meaningfulDirt()`/`IGNORABLE_DIRT_PATH` in `worktree-cleanup-lib.mjs`) — that one file kept 11
+  fully-merged agent worktrees unsweepable. Removal re-checks porcelain at delete time and, only
+  when the ignorable file is still the only dirt, restores it from HEAD (or deletes it if
+  untracked) before one plain-`remove` retry — never `--force`. Dry run against the real fleet:
+  10 zombie worktrees + 1 dead branch now classified removable.
+- **review-proof-guard cd fix:** the shell-cd rule now checks the ACTUAL
+  `cd`/`pushd`/`Set-Location` target instead of denying any command containing both a cd token and
+  a state-dir mention (which blocked legitimate work like
+  `cd <worktree-root> && ls .claude/session-state`). Component steps (`cd .claude` +
+  `cd session-state`) and unresolvable `$VAR` targets alongside a state-dir mention still deny.
+
+Docs updated in `docs/reference/agent-guardrails.md` (four rows). `test:correction-guards` green
+(all suites, 1,200+ assertions incl. the new file).
+
+CodeRabbit review round (2026-08-19, PR #423 — all three findings confirmed and fixed): the
+applied-source ledger's read-modify-write is now serialized by a cross-process lock
+(`ledger-lock-lib.mjs`; mutation-proved — in one measured run with the lock disabled, 4 of 12
+concurrent recorder processes lost their entries; the loss count is nondeterministic, the point
+is that unlocked losses are real and reproducible); stop-wrap's containment check reads `git ls-tree HEAD` instead of
+`ls-files`, so an intent-to-add (`git add -N`) or staged-only filename can no longer satisfy or
+prune the guard; and review-proof-guard's cd parser resolves targets past option tokens
+(`cd --`, `-P`, `-Path:`) and shell-joined quoting (`.claude/"session-state"`), which previously
+bypassed the deny.
+
+Round 2 (same PR, incremental review of the fixes — all three findings confirmed and fixed,
+each mutation-proved red-without/green-with): review-proof-guard also checks the
+Bash-escape-decoded cd target (`session-\state` executes as `session-state`; the raw form still
+covers Windows `\` paths); stop-wrap skips the containment check when the git call itself fails
+(binary missing/timeout) instead of phantom-blocking on an empty listing — an unborn HEAD still
+blocks, since nothing-committed is exactly the uncontained case; and the guard test's allow case
+now asserts exit code 0, not just empty output. Round 3 (one Minor follow-up, confirmed and
+fixed): the `ls-tree` listing itself is now failure-aware — a transient git failure despite a
+valid HEAD skips the check instead of reading as "no committed migrations", while an unborn HEAD
+keeps blocking. Both failure branches are regression-tested and mutation-proved: an unborn-HEAD
+case (fresh repo → still blocks) and a failed-`ls-tree`-with-valid-HEAD case (deleted tree
+object → skips without pruning the ledger). Round 4 (one Major, confirmed with a narrower fix
+than proposed): on a ledger-lock timeout the callback now receives `locked=false` — the
+recorder still appends (dropping the record would silently disarm the guard), but the
+stop-wrap prune skips its rewrite, since an unlocked rewrite could erase a concurrent
+recorder's append (lock-held regression test added, mutation-proved).
+
+Blind adversarial Opus round (2026-08-19, PR #423 — Codex usage exhausted, so per the settled
+PR #413/#414 precedent two independent blind Opus reviewers substituted for the Codex gate; both
+returned BLOCKERS, all confirmed findings fixed and the new protections mutation-proved
+red-without/green-with):
+
+- **cd-guard newline bypass (proven):** the argument-run separator swallowed line breaks, so in
+  `cd /tmp` ⏎ `cd .claude/session-state` only the FIRST target was ever resolved. Separator is
+  now horizontal-whitespace-only; newline-separated invocations each get checked. Also fixed:
+  split-quote runs (`".claude/session"-state`) now join like the shell joins them,
+  `Push-Location` counts as a cd verb, and glob/brace metacharacters make a target unresolvable
+  (fail closed when the command also mentions the state dir). Accepted residual: a pure-glob cd
+  with no literal state-dir mention anywhere still passes.
+- **Slug containment time-gated:** the repo has duplicate migration slugs years apart, so a bare
+  slug match could let an OLD same-named file contain a FRESH apply. A slug-only match now
+  requires a committed file stamped within 7 days before the recorded apply (or later); exact
+  stamped basenames still always match; an unparseable entry timestamp stays blocked.
+- **Recorder correctness:** applies whose tool response carries the explicit `isError` marker
+  are not recorded (error-shaped text still records — fail closed); same-name re-applies dedup;
+  both ledger writers write atomically (temp + rename) so a crash can't leave truncated JSON
+  that would disarm the guard.
+- **Ack valve hard-gated:** a signature-matching stop-wrap acknowledgment can never end the
+  session while any apply is uncontained; entry names are sanitized and truncated before they
+  reach the signature or the block message. Malformed ledger rows prune without masking real
+  entries beside them, and the block message now distinguishes "commit the source file" from
+  "the apply never really happened — verify live and remove the ledger entry".
+- **Unborn-HEAD discriminator tightened:** only a `git rev-parse` failure with the specific
+  unborn-revision error counts as unborn (blocks); any other git failure skips the check for
+  that stop instead of misreading, e.g., "not a repository" as "nothing committed".
+- **worktree-cleanup:** a worktree whose applied-source ledger still holds unresolved entries is
+  kept even when merged+clean (the gitignored ledger is invisible to those gates; sweeping would
+  destroy the only record), and a failed removal retry restores the settings.local.json content
+  it deleted.
+
+Documented follow-ups deliberately not fixed in this PR: ledger-lock holder-token eviction and
+the stale-eviction/timeout window mismatch (single-machine harness, bounded impact), and the
+empty-`tool_input.name` recorder skip (no observed producer).
+
+Second blind adversarial Opus round (2026-08-19, PR #423, commit `61e946af`): both reviewers
+again returned BLOCKERS with one shared root cause — the cd-scanner already ran over normalized
+command views, but the sibling destructive-verb net and the proof/ledger path matcher scanned the
+raw string only. A `shellCommandViews` helper now yields four views (raw, quote-stripped,
+backslash-dropped, both) and both nets run over every view, closing quote-composed verbs
+(`r"m" -rf`), a backslash-dropped `.claude` ancestor (`.clau\de`), and quote/backslash-split
+ledger/proof filenames. `find` used as a traversal delete (`-delete`/`-exec`/`-execdir`) is now a
+destructive verb (a traversal delete never names the basename). stop-wrap forces the C locale
+around its unborn-HEAD probe so the English-stderr match holds on a non-English git, and its
+dedup key uses a visible escape sequence instead of a raw control byte (byte-identical, keeps the
+file clean text). All mutation-proved red-without/green-with.
+
+Third blind adversarial Opus round (2026-08-19, PR #423): both reviewers found the round-2 net
+still matched the state-dir path and the destructive verbs LITERALLY, missing three evasion
+classes, all now fixed and each mutation-proved load-bearing (neutering the detector lets the
+exploit through; the shipped guard denies it):
+
+- **Glob on a protected path component:** a wildcard whose literal prefix could expand to
+  `.claude`, `session-state`, or `applied-source-ledger.json` (`rm -rf .clau*/session-state`,
+  `rm -rf .clau*/sess*`, `find .clau*/session-state -delete`) is now treated as naming the state
+  dir. The path matcher is component-aware (splits on shell separators) and fails closed on any
+  glob whose leading literal is a prefix of a protected name — a bare-`*` glob with no such prefix
+  (`rm dist/*.js`) still passes.
+- **Redirect INTO the state dir with no destructive verb:** a `>`/`>>` write that lands a file in
+  the state dir overwrites a wrapper-owned proof or the ledger even though the verb (`printf`,
+  `echo`) is not destructive and the basename may be globbed
+  (`printf "[]" > .claude/session-state/x.jso*`). Such a redirect target is now its own deny
+  trigger, independent of the verb net.
+- **Omitted deleting verbs:** `git clean`, `rsync --delete`, and `truncate` delete or zero files
+  but were absent from the destructive-verb set; all three are added, and each denies only when it
+  also names the state dir (`git clean -fdx dist`, `rsync --delete /tmp/a/ /tmp/b/`,
+  `truncate -s0 /tmp/log` all still pass).
+
+**worktree-cleanup fail-closed on an unreadable ledger (CodeRabbit Major, 2026-08-19):** the
+applied-source-ledger read now keeps the worktree unless the ledger is provably absent. Only
+`ENOENT` (truly no file) is sweepable; a present-but-unreadable ledger (EACCES/EISDIR/I/O) or a
+malformed/unparseable one keeps the worktree, because a read or parse failure is exactly when the
+worktree can least be proven safe to destroy and sweeping it could erase the sole record of an
+un-committed live apply. The decision is a pure `ledgerKeepsWorktree` helper in
+`worktree-cleanup-lib.mjs` with unit tests for every branch (absent / unreadable / malformed /
+real-entry / empty / junk-only). This reverses the earlier "corrupt reads as no entries" stance,
+which was wrong.
+
+**Accepted residual ceiling (both reviewers, independently):** a destructive-verb/path DENYLIST is
+inherently incomplete and cannot be finished by enumeration. Proof FORGERY is content-bound
+(hash-checked) and fully contained; ledger DELETION has partial tamper-evidence (C3 source
+containment) but no local hook can catch every possible deleter — a repo-root `git clean -fdx`
+that names nothing, interpreter indirection (`node -e`, write-a-script-then-run), or a novel tool
+can still remove local state. These are LOCAL dev-machine defense-in-depth. The real boundary is
+GitHub branch protection (`protect-main`: no direct pushes, PR + passing checks required) plus the
+C3 tamper-evidence that makes an un-committed live apply visible at session end — not the shell
+denylist. The denylist raises the cost of the easy paths; it is explicitly not claimed to be
+exhaustive.
+
+Blind adversarial Opus round 2 (2026-08-19, same PR — two fresh independent blind Opus
+reviewers, both returned BLOCKERS; every confirmed finding fixed and each new protection
+mutation-proved red-without/green-with, 7 mutations total):
+
+- **cd-guard, seven more proven bypasses closed:** quoted/escaped/eval-wrapped/composed verbs
+  (`"cd"`, `'cd'`, `\cd`, `c"d"`, `eval "cd …"`) via a widened prefix class plus a second
+  quote-stripped scan pass; PowerShell's default `sl` alias (lookahead keeps `sleep` from
+  matching); `$IFS` glued to the verb (empty argument run + expansion char → unresolvable, fail
+  closed); backslash line continuations spliced into one invocation; and ANSI-C `$'…'` quoting
+  statically decoded before scanning.
+- **Ledger deletability closed (both reviewers proved deletion was unguarded):** a destructive
+  verb (`rm`, `Remove-Item`, `mv`, `del`, …) in any shell command that also mentions the state
+  directory is denied outright, and the applied-source ledger's basename joined the proof-file
+  name guard on every channel. The sanctioned stale-entry path is the new
+  `scripts/remove-applied-ledger-entry.mjs` (`--list` / `--name <exact>`, lock-held atomic
+  rewrite, sanitized output, exit 1 on no match) — used only after verifying the live migration
+  ledger.
+- **Content binding:** the recorder now fingerprints the applied SQL (EOL-normalized hash), and
+  containment requires a committed file whose content hash MATCHES — a same-named empty or
+  unrelated file no longer satisfies or prunes the guard. Legacy hashless entries keep the
+  name/slug rules.
+- **isError decision reversed:** a failed apply IS recorded, flagged `failed: true` — an error
+  response cannot prove nothing landed (non-transactional/multi-statement SQL can change live
+  state before erroring). Round-1 had skipped these; the reviewers showed that skip was itself
+  a bypass. Dedup still prevents retry stacking; stale failed rows go through the removal
+  script.
+- **Injection/robustness:** ledger `ts` values are sanitized before reaching the block message
+  or ack signature (names already were); implausible candidate stamps (month 99, hour 99)
+  satisfy NO slug window instead of parsing as garbage; recorder and stop-wrap both prefer the
+  hook payload's `cwd` over `CLAUDE_PROJECT_DIR` so a worktree session's ledger can't land in a
+  directory the checks never read; the guard's shell-tool matcher widened to
+  cmd/shell/terminal/exec/run_command.
+- **worktree-cleanup:** the applied-ledger gate moved to a tested pure helper
+  (`ledgerHasEntries`) — junk-only rows no longer pin a worktree forever — and the docs now
+  state honestly that it is a presence check, not a containment check.
+
+Documented follow-ups deliberately not fixed in this round (in addition to the round-1 list,
+which still stands): raw `execute_sql` DDL is not recorded in the ledger (only `apply_migration`
+is; the interactive rules and live-data guard cover that channel); a worktree with any real
+ledger entry stays kept until stop-wrap prunes it or the removal script clears it, even when the
+source is already committed (presence-not-containment, accepted); the theoretical prune/append
+race when a prune proceeds after a lock timeout (the prune skips its rewrite, so the failure
+mode is a kept-too-long entry, never a lost one); the worktree-cleanup settings-restore branch
+remains untested (exercising it needs a throwaway git worktree fixture); and a stale
+`CLAUDE_PROJECT_DIR`-first comment in `migration-apply-guard.mjs` (behavior there is unchanged
+and correct for the current harness).
+
+Blind adversarial Opus round 3 (2026-08-19, same PR — two fresh independent blind Opus
+reviewers; every confirmed finding fixed and each new protection mutation-proved
+red-without/green-with):
+
+- **cd-guard, three more proven bypasses closed:** the scan now de-glues a cmd.exe verb fused to
+  its target (`cd/d …`, `cd.claude\session-state`, composed `c"d".claude\…`) before resolving; a
+  location verb (`sl`, `cd`) left with an EMPTY target run by a move/pipe (`… | sl`) is treated as
+  statically unresolvable and fails closed when the state dir is named elsewhere; and the
+  destructive-verb deny now also fires on the `.claude` PARENT directory itself (`rm -rf .claude`,
+  `mv .claude /tmp`), not just the `session-state` subpath — while a `.claude`-PREFIXED but
+  distinct path (`.claude-cache`, `.clauderc`) stays allowed.
+- **Removal script hard-gated behind an explicit verify flag:** `remove-applied-ledger-entry.mjs`
+  now REFUSES to remove anything without `--i-verified-against-live`, printing the live
+  `supabase_migrations.schema_migrations` query to confirm against first — so the C3 alarm can't
+  be cleared by reflex, only after a human checks the live ledger. Its lock callback no longer
+  calls `process.exit()` inside `withFileLock` (that bypassed the `finally` and leaked the lock
+  dir); output and exit now happen after the lock releases. The script joined `RISKY_PATH_RES` in
+  `codex-push-lib.mjs`, so a Codex push touching it needs an exact-head proof; the
+  maintenance-producer blob pins were re-pinned to match (verified against the real builder).
+- **Recorder dedup keys on name AND content-hash:** an identical-SQL retry still collapses to one
+  row, but a same-name apply with DIFFERENT SQL — a distinct change that hit live — is retained,
+  not evicted, and a later hashless re-record can't erase a fingerprinted entry (the v2→v1
+  downgrade-erase bypass).
+- **Per-entry fail-closed containment:** a git-show/hash failure for ONE ledger entry now marks
+  only THAT entry uncontained (blocks, naming it) instead of throwing out of the whole check;
+  a genuinely git-unavailable environment still skips loudly (a non-blocking stderr notice that
+  live applies were NOT verified this session) rather than silently disarming. Classification runs
+  on a snapshot outside the lock; the prune re-reads and rewrites under the lock keyed on
+  name+hash.
+- **cwd normalization:** recorder and stop-wrap both resolve the project dir to its git top-level
+  (`git rev-parse --show-toplevel`), so a hook invoked from a subdirectory of the worktree still
+  reads/writes the one canonical ledger.
+- **Docs honesty:** `agent-guardrails.md` now states the guard's honest scope plainly — it stops
+  NAMED destruction and accidental self-certification, not a determined interpreter that hides the
+  target from the command text; the durable boundary is GitHub `protect-main` branch protection
+  plus the C3 tamper-EVIDENCE (an uncontained apply blocks session end and pins the worktree), not
+  command-string prevention.
+
+Documented follow-up deliberately not chased (all rounds): interpreter-indirection where the
+ledger path never appears literally in the command (`node -e`, write-script-then-run, base64) is
+outside any command-text guard — accepted, with the honest-scope note above and branch protection
+as the real boundary.
+
+Blind adversarial Opus round 4 (2026-08-19, same PR — two fresh independent blind Opus reviewers,
+both returned BLOCKERS; every confirmed finding fixed and each new protection mutation-proved
+red-without/green-with). Shared root cause: the cd-scanner already ran its checks over several
+NORMALIZED views of the command (quote-stripped, backslash-decoded, ANSI-C-decoded), but the
+sibling destructive-verb net and the proof-path matcher still scanned the RAW string only — so the
+same disguises the cd-scanner defeats slipped past them:
+
+- **Proof-path / ledger-name matcher normalized (proven bypass, disarms C3):** the shell joins
+  quote-split and backslash-escaped tokens into the real filename before running the command, so
+  `printf "[]" > .claude/session-state/applied-source"-"ledger.json` and
+  `printf {} > codex-review"-"forged.json` executed as writes to the protected ledger/proof while a
+  raw-string regex missed them. The shell-`command` path matcher now tests every normalized view
+  (raw + quote-stripped + backslash-dropped) via a shared `shellCommandViews` helper and denies if
+  any matches. The literal filesystem-path predicates (`file_path`, patch destinations, `cwd`) stay
+  raw — they are real paths, not shell syntax, so quote-stripping them would be wrong.
+- **Destructive-verb net normalized (proven bypasses):** a quote-composed verb
+  (`r"m" -rf .claude/session-state`) and a backslash-dropped `.claude` ancestor
+  (`rm -rf .clau\de`, which bash runs as `.claude`) both reached the state dir undenied. The
+  destructive check now runs over the same `shellCommandViews`, so the verb and the state-dir
+  mention are seen in whichever view the shell would actually execute; the raw view still covers
+  Windows `\`-separated paths, where the backslash is a real separator.
+- **`find`-traversal delete closed (proven bypass):** `find` deletes by traversal and never names
+  the basename, so neither the destructive-verb regex nor the basename guard fired —
+  `find .claude/session-state -delete` (and `-exec rm` / `-execdir rm`) wiped the exact ledger +
+  proofs that `rm -rf .claude/session-state` is blocked for. `find` paired with a delete/exec
+  action is now treated as a destructive verb; a `find … -delete` on an unrelated `.claudex` glob
+  stays allowed (only bare `.claude` as a whole path component counts).
+- **Unborn-HEAD probe made locale-independent (fail-open closed):** `stop-wrap.mjs` detects an
+  unborn HEAD by matching git's English stderr; without a forced locale a non-English git would
+  fail the match and SKIP containment (fail open). The `git rev-parse --verify HEAD` probe now runs
+  with `LC_ALL=C`/`LANG=C` so the English match holds everywhere.
+- **NUL delimiter made reviewable:** the dedup key in `stop-wrap.mjs` joined name and SQL-hash with
+  a raw NUL byte, which made git classify the file binary past its 8 KB sniff window and left the
+  delimiter invisible to reviewers. Switched to the byte-identical visible escape `"\u0000"` — same
+  runtime delimiter, clean text, line-level diffs restored (this is why this file shows a one-time
+  whole-file rewrite in the diff: the old blob had a NUL and diffed as binary).
+- **worktree-cleanup failed-remove restore hardened:** the restore branch now captures the exact
+  prior `settings.local.json` bytes before the checkout and, on a failed `worktree remove`, restores
+  those bytes (or deletes the file if it did not exist before) instead of a blind `checkout HEAD`.
+
+CodeRabbit precision language (finding #7): C3 records only qualifying non-error
+`apply_migration` responses; a slug-only containment match must satisfy the ±7-day stamp window;
+ledger entries are pruned only after a successful git content-hash verify AND under the
+cross-process lock. CodeRabbit findings deliberately dismissed with reason: #2 (variable/interpreter
+indirection, e.g. `X=…; cd "$X"`) is the same accepted interpreter-indirection residual documented
+above — the guard denies on the visible mention, prevention of a hidden target is out of scope; #5
+(worktree-cleanup treats a missing/corrupt ledger as "no entries" and sweeps) is the DELIBERATE,
+documented fail-open — a machine-local, unreadable ledger must not pin the whole fleet forever, and
+neither Opus reviewer corroborated it as a real risk.
+
+CodeRabbit re-review (2026-08-19, PR #423 — variable-target cd, auto-"addressed" marker overturned):
+CodeRabbit finding 3813087972 flagged `part=state; cd .claude/session-$part`. The target resolves to
+`.claude/session-state`, but the contiguous `.claude/session-state` string is never spelled out in
+the command, so the cd-scanner's second-literal-reference test missed it and the command was still
+ALLOWED — despite CodeRabbit's own auto-"✅ Addressed" marker, which an empirical test overturned (per
+"done = ran and proven", the marker was not trusted). This is DISTINCT from the earlier-dismissed
+`X=…; cd "$X"` residual: there the whole path hides in a variable with no literal skeleton, whereas
+here the target's OWN literal skeleton (`.claude/session-…`) already names a protected component. The
+cd-scanner's unresolvable-target branch now fails closed when the target's literal skeleton hits a
+protected component (`segmentsHitStateDir` on the target and its Bash-escape-decoded form, parity
+with the destructive-verb net), so `part=state; cd .claude/session-$part`,
+`X=session-state; cd .claude/$X`, and `cd .clau[d]e/session-state` all deny; a fully-hidden
+`cd "$X"` (no literal `.claude` in the target) stays the accepted interpreter-indirection residual,
+and benign `.claude`-prefixed siblings (`cd .claude-cache/$sub`, `cd $HOME/session-state-notes`) stay
+allowed. Mutation-proved load-bearing (detector neutered → ALLOW, live → DENY).
+
+Blind adversarial Opus round 8 (2026-08-19, PR #423, commit `8c4a07ac` — Codex usage exhausted,
+two fresh independent blind Opus reviewers): both flagged a short-lead glob bypass; one also flagged
+a directory-level MCP-tool bypass. Two proven holes, both fixed:
+
+- **Short-lead glob on the `.claude` component.** The component-aware glob detector floored a glob
+  segment's literal lead at length 3, so a DOTTED 2-char lead (`.c`) fell through — yet the only
+  protected name starting with `.` is `.claude`, and `.c*` is already a real glob for it. `rm -rf
+  .c*/s*`, `rm -rf .c*`, `mv .c*/s* /tmp/x`, `find .c*/s* -delete`, and `cd .c*/s* && …` all expand
+  to `.claude` / `.claude/session-state` at runtime and were ALLOWED. The floor is now dotted-aware
+  (min lead 2 when the lead starts with `.`, 3 otherwise), so those deny while ordinary deletes
+  whose lead is a bare `s`/`a` (`rm s*.o`, `rm a*.log`) stay allowed.
+- **Directory-level file-tool bypass.** A native or MCP file-mutation tool (`Write`/`Edit`,
+  `move_file`, `delete_directory`) whose path field is the state DIRECTORY itself — not a protected
+  basename — moves or deletes the whole ledger + every proof at once, and the basename matcher never
+  sees a protected filename. `move_file source=".claude/session-state"`, `move_file source=".claude"`,
+  `delete_directory path=".claude/session-state"`, and a forge-by-move whose DESTINATION lands in the
+  state dir all slipped through. The guard now denies any path candidate that ENTERS the state dir
+  (`cdTargetEntersStateDir` over `pathCandidates`), which leaves an edit to a file inside `.claude`
+  but outside `session-state` (`.claude/settings.json`, `.claude/hooks/*.mjs`, a hook-file move)
+  still allowed. Both detectors mutation-proved load-bearing (detector neutered → exploit ALLOW,
+  live → DENY); 9 new DENY + 6 new ALLOW regression cases added to `review-proof-guard.test.mjs`.
+  Both reviewers again noted a verb/path denylist is inherently incompletable; the real boundary
+  remains GitHub `protect-main` branch protection plus C3 tamper-evidence, both in place.
+
+## 2026-08-18 — CRX-SEC-1 is LIVE (applied 2026-08-16); seven docs corrected, two claims retracted, and both RLS matrices reconciled against live
+
+Documentation only — no app source, migration, or live-state change; every live read in this entry
+was read-only.
+
+**On the two dates in this entry.** Work started on the local afternoon of 2026-08-18, when UTC was
+also 08-18; reads taken later the same local evening fall on 2026-08-19 in UTC. Both stamps describe
+one working session. A date written without a `UTC` suffix is the local working date; the handful
+stamped `2026-08-19 UTC` say so explicitly so they do not read as a freshness date pushed forward to
+clear `check:docs`.
+
+**The apply.** `20260813080000_lock_quote_versions_writes_to_rpc` (**CRX-SEC-1**) is **APPLIED LIVE**
+as ledger version `20260816174353`. The 2026-08-14 entry below carries a `**STATUS: NOT APPLIED**`
+marker; that was accurate when written and is now superseded by this entry. The ledger has no
+timestamp column, so the commonly quoted 2026-08-16 17:43:53 UTC is read off the version stamp — the
+apply is observed, the clock time is inferred.
+
+**Five docs were stale about it, not three — and only two of them called it unapplied.** (Seven
+docs are corrected overall; the other two are covered under "Also corrected" below.)
+
+The **two that actually asserted "unapplied"** were `docs/reference/migration-history.md` row 886
+(`LOCAL CANDIDATE — NOT APPLIED`) and the RLS Policy Matrix in
+`docs/reference/database-schema.md`, which listed `quote_versions` INSERT as `Admin / Sales Rep`
+behind a `LOCAL ONLY pending apply` marker — the canonical "who can write what" reference asserting
+the exact inverse of live.
+
+The **other three were stale in two further ways**. `docs/manual/CURRENT_STATE.md` and
+`docs/manual/KNOWN_ISSUES.md` were stale **by omission**: neither carried an entry for CRX-SEC-1 at
+all — KNOWN_ISSUES by its own text "never entered in this file while it was open" — behind a ledger
+high-water nine applies out of date. Neither asserted the fix was unapplied; both left it out. The
+RLS Policy Matrix in `docs/workflows/RLS_SECURITY_GUIDE.md` was stale a third way again: it carried
+the pre-fix write model with **no pending marker of any kind**, so nothing in it said "unapplied"
+for a reader to notice.
+
+They were **not found together**, which is the point. A doc pass on 2026-08-18 found three
+(`CURRENT_STATE.md`, `KNOWN_ISSUES.md`, history row 886). Adversarial review then found the
+`database-schema.md` matrix — `npm run check:docs` does not cover that row, so nothing caught it.
+CodeRabbit then found the `RLS_SECURITY_GUIDE.md` matrix, corrected in line with that matrix's own
+banner convention of naming superseding migrations inline.
+
+**A grant claim retracted.** Those same docs stated as post-apply proof that `authenticated` holds
+"SELECT only" on `quote_versions` and `anon` "holds nothing". **Both are wrong.** `pg_class.relacl` is
+`{postgres=arwdDxtm/postgres,anon=m/postgres,authenticated=rm/postgres,service_role=arwdDxtm/postgres,metabase_ro=r/postgres}`
+— `authenticated` holds SELECT **and MAINTAIN**, `anon` holds **MAINTAIN**. The migration retains
+MAINTAIN deliberately and says so in its own body, so the claim contradicted the source it described.
+The cause was reading grants from `information_schema.role_table_grants`, which does not report
+MAINTAIN at all, and presenting that as a complete grant proof. **No security impact:** MAINTAIN
+permits VACUUM/ANALYZE/CLUSTER/REINDEX/LOCK and reaches no row.
+
+**The write lock itself was re-proved independently**, not inferred from the ledger row: exactly one
+policy (`qversions_select`) remains, `has_table_privilege('authenticated', …)` returns INSERT/UPDATE/
+DELETE false, the only function that inserts into the table is a postgres-owned SECURITY DEFINER with
+no `authenticated` EXECUTE, and its only caller takes **no client cost snapshot** and enforces
+`auth.uid()`, active-profile role, quote ownership and row version. No triggers, no view, no other
+writer. A sales rep cannot forge a cost basis.
+
+**Both RLS matrices reconciled against live — the fix for the pattern, not just the row.** Four
+consecutive adversarial passes each found one more wrong claim, because each pass corrected the row
+it was pointed at rather than the table it lived in. So every row of both matrices was compared
+against live `pg_policies`, per command, on 2026-08-19 UTC:
+112 of the 116 rows mechanically, and the 4 deny-all tables by reading their policy bodies, for the
+reason in the trap note below. **29 of 79 rows** in `docs/reference/database-schema.md` and **12 of
+37** in `docs/workflows/RLS_SECURITY_GUIDE.md` disagreed with live, and all were corrected from the
+live policy expressions. Three further schema-matrix rows — `idempotency_keys`,
+`product_cost_basis` and `product_cost_basis_change_rows` — changed for notation only, with no
+change in access, which is why that file's banner counts 32 changed rows against 29 corrections.
+Both now read zero presence disagreements. Those are per-pass figures, not totals — re-measured
+against `origin/main` at this branch's head by keying both matrices on table name and comparing all
+four command cells, the guide matrix carries **26 changed rows of 37** and the schema matrix **62 of
+79**. A 13th guide row, `quotes`, was
+corrected afterwards by hand — its SELECT cell claimed sales reps see only their own quotes where
+live `quotes_select` is `is_admin() OR is_sales_rep()` with no ownership test. That was a
+role-wording error, which is exactly what the second trap below says the mechanical pass cannot
+catch. Wrong in both directions: `vendors`, `quote_items`, `payments` and others documented
+write access that live grants to nobody, while `rate_limit_log` documented no access where live
+grants admin `SELECT` — one permissive admin SELECT policy, plus a RESTRICTIVE `FOR ALL` that
+narrows rather than grants, so no browser role writes it directly. Two traps worth recording — a `-` cell is correct both when no policy
+exists *and* when a deny-all `USING (false)` policy exists (`idempotency_keys` and the three
+`product_cost_basis*` tables are the second kind, so a naive presence-diff would have *introduced*
+errors there), and what was verified mechanically is policy presence per command, not the role
+wording inside each cell.
+
+**And then the role wording too.** That second trap stood for four more passes. A classifier
+re-derived every cell's role set from the live `USING`/`WITH CHECK` expressions, and every flag it
+raised was then read against live `pg_policies` by hand — the classifier locates candidates, it does
+not prove anything. Flags fell 162 (`origin/main`) → 89 (after the presence pass) → 61 (after the
+"All authenticated" class) → 33, and all 33 survivors were confirmed correct: policies that inline
+`profiles.role = 'admin'` instead of calling `is_admin()`, cells that name a role by how the row is
+reached (`assigned_driver = auth.uid()`), and cells that defer to a parent table's RLS. The count is
+a proxy, not a defect count — correcting `rup_sales_records` SELECT from `Admin` to
+`Admin / Sales Rep` *raised* it by one. Newly corrected in that triage: `invoices`/`invoice_items`
+SELECT (there is no `is_sales_rep()` branch — live is admin, creator, or assigned salesman),
+`blend_recipe_items` writes (recipe-creator-gated, the same shape as the `blend_recipes` parent row
+this PR had already fixed while missing the child), `applicator_licenses` (wrong in both directions
+at once), `cycle_count_items` and `field_billing_defaults` and `rup_sales_records` SELECT (live
+grants a role the doc omitted), and four cells that named the right roles but dropped a condition
+live enforces. `docs/manual/KNOWN_ISSUES.md` now records that entry as CLOSED, and both matrix
+banners define **"All authenticated"** as live `is_active_profile()` — signed in *and*
+`profiles.is_active`, re-read across all 17 cells that use the phrase. (An earlier revision of this entry said three of
+them "used to render the identical live expression as *Any active profile*"; that phrase never
+appeared in any committed matrix on `origin/main` and the claim is withdrawn.) A final sweep then
+covered the one
+shape the classifier structurally cannot flag — a cell that names the right roles but omits a
+condition live also enforces — and corrected six more: `field_obstacles` INSERT, `vendors` and
+`vendor_bills` SELECT, `invoice_shares` and `order_shares` SELECT, and `team_notes` INSERT.
+Against `origin/main` the `database-schema.md` matrix now carries **62** changed rows out of
+79, re-measured by comparing all four command cells of all 79 rows (an earlier figure of 61 summed
+the per-pass counts instead of re-running the comparison).
+Also re-read the guide's "Common RLS Policy Patterns" section against live, which the earlier
+passes had left alone while rewriting the matrix above it. **All seven patterns were wrong**, in two
+different ways. Patterns 1, 2, 3, 4 and 7 each described a policy *shape* live does not have —
+including Pattern 3, which taught `quotes_select` **with** an ownership test that the same file's
+own banner corrects. Patterns 5 and 6 had correct predicates but named policies that do not exist:
+`notifications_select` for live `notif_select`, `activity_feed_insert` for live
+`activity_insert`. An earlier revision of this entry said five were wrong and that the section had
+been re-read; the sweep behind it compared predicates and never compared names, so 5 and 6 passed
+while wrong. All seven are fixed.
+
+**Also corrected:** the `migration-history.md` header claim 885 → 886 (a high-water row number, not a
+file count — the two `check:docs` rows measure different things), both manual freshness stamps, live
+counts in `CURRENT_STATE.md` section 2, the live signatures of `create_quote_version` and
+`restore_quote_version` in `docs/reference/rpc-functions.md` (both had drifted, and
+`restore_quote_version` takes `p_quote_id` first, which the doc had wrong), a supersession marker on
+the now-stale money table in `docs/manual/DECISION_LOG.md`, and a whole-cent money re-measure showing
+2 dirty column-values where 43 were recorded — 43 being a sum across four columns rather than four
+disjoint row sets, so the distinct-row count then was 40–43, not 43.
+
+**One rendering fix, pre-existing rather than introduced here.** In `migration-history.md`'s
+"Staged 2026-06-11" section a `>` blockquote banner sat *between* two rows of a pipe table. A
+blockquote line ends a Markdown table the same way a blank line does, so the 11 rows below it
+rendered as loose text instead of table rows. The banner moved up to sit beside the batch banner it
+is already cross-referenced from; no row text changed, and the table is now 12 unbroken rows. This
+was the last such break in the file.
+
+**The three files nobody had reviewed turned out to carry the worst error on the branch.** Passes 1
+through 13 reviewed 6 of the 9 files this change touches. A fourteenth pass over the other three
+found 16 findings. The one that mattered: the `KNOWN_ISSUES.md` entry filing the session-staleness
+hook bug justified *not* fixing it by claiming `.claude/schema-registry.json` stores only a version
+"and nothing else, so the hook has no name to compare against", leaving a choice between a registry
+format change and a live ledger read. The registry already stores `_meta.applied_migration_names`
+— 964 names, including the one the entry says is unavailable — and the hook already loads it. The
+stated blocker did not exist. Also corrected: `DECISION_LOG.md` called the purchase-order pair
+"converted" fifty lines before proving from live that it is not; the "mirror form" constraint shape
+was recommended on a precondition **zero** live instances meet, without noting that it fails open on
+a nullable cents column; "Both forms clear the gate" was withdrawn as a widening of a money gate that
+Mason never decided, and is now recorded as an open question for him; "none of those are constrained"
+was refuted by three live `*_cent_scale_chk` constraints; two deferred-column row counts still read
+as present-tense when live measures 0; and `rpc-functions.md` called `create_quote_version` "the
+only write path" when `service_role` and `postgres` retain direct write grants and bypass RLS.
+The "(evening of 2026-08-18 local)" gloss was dropped from all 9 places it appeared — the branch's
+commits straddle both local dates, so it was unreliable and added nothing to the UTC stamp beside it.
+
+**A money column was recorded as unapproved debt while live was enforcing it.**
+`docs/manual/DECISION_LOG.md` listed `order_items.total_price` among the deferred columns under
+"no CHECK, therefore not an approved exception". Live disagrees:
+`order_items_total_price_whole_cents_chk` exists and is `convalidated`, added alongside the 35-row
+repair by `20260812115238_repair_historical_order_line_cents` on 2026-08-12 with Mason's in-chat
+approval. The enforced/deferred counts are now **8 and 4**, not 7 and 5. The same paragraph also named
+`purchase_orders.total_cost` as neither converted nor constrained; that column has carried a `bigint`
+`total_cost_cents` companion and a validated CHECK pinning the numeric to `cents / 100.0` since
+`20260716183501_purchase_order_integer_cents` — 25 days *before* the 2026-08-10 evaluation that
+declined conversion — as has `purchase_order_items.unit_cost`. Both errors pointed the same way:
+they told a future agent that settled, enforced money work was still open, which is how a closed
+decision gets re-opened. The 2026-08-10 **decision** itself is unchanged; what moved is which columns
+pass its gate. Read-only live checks, 2026-08-19 UTC.
+
+**One new tracked issue, not fixed here.** `docs/manual/KNOWN_ISSUES.md` gains an OPEN LOW entry:
+`.claude/hooks/session-staleness.mjs` compares migration *filename* stamps on disk against
+`schema-registry.json`'s `migrations_high_water`, which is a server-assigned ledger *version*. Because
+a version runs ahead of the authored stamp, unapplied migration files can be skipped silently. Hook
+logic is out of scope for a documentation-only PR and needs its own guard test.
+
+**A second claim retracted.** That money re-measure was first written up as a new OPEN incident —
+"stored commission money changed on live with no identified cause". It was wrong, and adversarial
+review caught it. Both writers are tracked, approved, applied migrations:
+`reconcile_pending_commission_snapshots` (ledger `20260810235207`, 2026-08-10) rounded `order_profit`
+to whole cents and recomputed `commission_amount` across exactly 11 pending rows, deliberately
+skipping cancelled ones; and `20260812115238_repair_historical_order_line_cents` (ledger
+`20260812154757`, 2026-08-12) rewrote order lines, whose trigger-refreshed order header re-opened a
+single $0.01 gap on one pending snapshot. The first draft asserted an absence without searching for
+the writer, which the retracted entry in `docs/manual/KNOWN_ISSUES.md` was already describing further
+down the same file. No production money moved outside a recorded decision.
+
+**One deliberate non-fix.** `20260813080000`'s own first line still reads `-- STATUS: NOT APPLIED`.
+That header is stale and is deliberately left alone, because CRX Manager never edits an applied
+migration.
 
 ## 2026-08-18 — Skills/commands accuracy sweep across the agent workflow surface
 
