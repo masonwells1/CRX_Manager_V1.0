@@ -44,6 +44,30 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-08-18 — the session-staleness hook measures disk filename stamps against a server-assigned ledger version
+
+**Severity: LOW (latent silent skip; no incident observed).** `.claude/schema-registry.json` stores
+`"migrations_high_water": "20260816174353"`. That value is a Supabase-assigned ledger **version**, not
+a migration **filename** stamp — the same version/name split described in the CRX-SEC-1 entry above,
+where a file authored `20260813080000` was recorded live as version `20260816174353`.
+`.claude/hooks/session-staleness.mjs` then uses that value as the floor for disk *filename* stamps:
+it walks `supabase/migrations/`, matches `^(\d{14})_`, and does `if (!m || m[1] <= String(highWater))
+continue;`. The two sides are not the same clock.
+
+**Why that can skip a real finding.** Because Supabase assigns the version at apply time, the recorded
+high-water runs ahead of the authored stamp whenever a migration sits on disk before it is applied — by
+three days in the CRX-SEC-1 case. Every migration file stamped at or below `20260816174353` is
+therefore skipped without being checked, including a genuinely unapplied file that would change the
+schema registry. The hook stays silent rather than reporting, which is the failure mode hardest to
+notice.
+
+**Not fixed here.** This was found during a documentation-only pass; changing hook logic belongs in its
+own change with a guard test that fails before the fix and passes after. The fix is to compare against
+the high-water **name** stamp, which `docs/reference/migration-history.md` records alongside the
+version for exactly this reason, or to resolve the version to its name before comparing.
+
+---
+
 ## CLOSED 2026-08-18 — RETRACTED: the "unexplained commission money change" was two approved, applied migrations
 
 **This entry was first published in PR #420 as an OPEN production-money incident — "stored commission money changed on live and no statement has been identified as the cause". That framing was wrong and is retracted.** The writer was already recorded in this same file (the 2026-08-10 team-board closeout entry below, which names `reconcile_pending_commission_snapshots` and Mason's approval of it) and in `docs/CHANGELOG.md`. The entry asserted an absence without searching for the writer, which is the same overstated-evidence error as the `role_table_grants` grant claim retracted earlier on that PR. It is kept here, corrected, because the wrong version was published and because the attribution is worth having written down.

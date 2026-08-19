@@ -245,36 +245,53 @@ add the constraint `VALID` from the start.
 **Where each audited column stands.** Verified read-only against the live database on 2026-08-11.
 The 2026-08-10 order-profit evaluation measured 12 order/quote/commission columns; those are the
 only ones whose gate status is established. Other legacy dollar columns exist across the schema
-(`payments.amount`, `commission_payments.total_amount`, `commission_payment_items.amount`,
-`purchase_orders.total_cost`, the `products` price tiers, the `cost_history` snapshots and more).
-None of those are converted, and none are constrained — under the rule above they are unapproved
-tracked debt, not grandfathered. Extending the programme to them is unstarted work.
+(`payments.amount`, `commission_payments.total_amount`, `commission_payment_items.amount`, the
+`products` price tiers, the `cost_history` snapshots and more). None of those are converted, and
+none are constrained — under the rule above they are unapproved tracked debt, not grandfathered.
+Extending the programme to them is unstarted work.
 
-**Gate satisfied — CHECK enforced (7):** `orders.total_cost`, `orders.total_profit`,
-`order_items.profit`, `quotes.total_price`, `quotes.total_profit`, `quote_items.total_price`,
-`quote_items.profit`.
+> **`purchase_orders.total_cost` was listed in that sentence as unconverted and unconstrained until
+> 2026-08-18; it was wrong when written.** Read-only live check, 2026-08-19 UTC (the evening of
+> 2026-08-18 local): `purchase_orders.total_cost_cents` and `purchase_order_items.unit_cost_cents`
+> are `bigint` and have been since `20260716183501_purchase_order_integer_cents`, three weeks
+> before the 2026-08-10 evaluation, and the validated CHECKs `purchase_orders_total_cost_whole_cents`
+> and `purchase_order_items_unit_cost_whole_cents` pin each numeric column to `cents / 100.0`.
+> That is the *converted* shape this decision declined for orders and quotes — the numeric column is
+> a derived mirror of an authoritative bigint. Those two columns are not tracked debt, and an agent
+> should not open a conversion task for them.
 
-**Gate NOT satisfied — no CHECK, therefore not an approved exception (5):**
+**Gate satisfied — CHECK enforced (8):** `orders.total_cost`, `orders.total_profit`,
+`order_items.total_price`, `order_items.profit`, `quotes.total_price`, `quotes.total_profit`,
+`quote_items.total_price`, `quote_items.profit`. Seven of these were constrained on 2026-08-10;
+`order_items.total_price` joined them on 2026-08-12 and is the row moved out of the table below.
+
+**Gate NOT satisfied — no CHECK, therefore not an approved exception (4):**
 
 | Column | Why deferred | Status |
 |---|---|---|
-| `order_items.total_price` | holds 35 of 288 legacy fractional-cent rows | awaiting data repair |
 | `quotes.total_cost` | holds 2 of 4 legacy fractional-cent rows | awaiting data repair |
 | `commissions.commission_amount` | holds 3 of 35 legacy fractional-cent rows | awaiting data repair |
 | `commissions.order_profit` | holds 3 of 35 legacy fractional-cent rows | awaiting data repair |
 | `orders.total_price` | data is clean; `_update_order_items_impl` overwrites it with the raw un-rounded line sum, so constraining it would reject ordinary edits | blocked on fixing that writer |
 
-Repairing the dirty values across the first four rewrites stored money and needs Mason's separate
-approval on its own migration — it is **not** covered by the 2026-08-10 decision.
+Repairing the dirty values across the first three rows rewrites stored money and needs Mason's
+separate approval on its own migration — it is **not** covered by the 2026-08-10 decision.
 
-> **The four counts in the table above are the 2026-08-10 measurement and are stale as live state
-> (read-only re-measure, 2026-08-18).** Live now returns `order_items.total_price` **0**,
-> `commissions.commission_amount` **0**, `commissions.order_profit` **0**, and only
-> `quotes.total_cost` still **2**. The 43 figure was also a sum of *column-values* across four
+> **The counts in the table above are the 2026-08-10 measurement and are stale as live state
+> (read-only re-measure, 2026-08-18).** Live now returns `commissions.commission_amount` **0**,
+> `commissions.order_profit` **0**, and only `quotes.total_cost` still **2**.
+> `order_items.total_price`, which this table listed as a deferred column until 2026-08-18, also
+> returns **0** — and it is no longer deferred at all:
+> `20260812115238_repair_historical_order_line_cents` repaired those 35 lines with Mason's in-chat
+> approval and added the validated CHECK `order_items_total_price_whole_cents_chk` in the same
+> migration, which is why it now sits in the enforced list above. Leaving it in the deferred table
+> told every later agent that an enforced money column was unapproved tracked debt. The 43 figure was also a sum of *column-values* across four
 > columns, not four disjoint row sets — the two `commissions` counts are 3/35 each and may be the
 > same 3 rows, so distinct dirty rows were 40–43, and that overlap can no longer be re-derived.
 > Current figures and the enforced-vs-measured distinction live in `docs/manual/CURRENT_STATE.md`
-> section 2. The **decision** recorded here still stands unchanged; only the row counts moved.
+> section 2. All eight `*_whole_cents_chk` constraints read `convalidated` on live (read-only,
+> 2026-08-19 UTC / the evening of 2026-08-18 local). The **decision** recorded here still stands
+> unchanged — the gate is exactly what it was; what moved is that one more column now passes it.
 
 **Measured cost of the conversion that was declined** (live, 2026-08-10): 12 money columns, 46 live
 functions naming them, 101 functions touching those tables, 17 non-test `src/` files. Dollars→cents
