@@ -216,9 +216,16 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 > again. So this file's matrix carries **61 changed rows against `main`
 > overall** — 32 + 7 + 22, out of 79. An earlier revision of this banner said
 > **39**, which counted the presence and role-wording passes and silently
-> stopped before the hand-triage. No row was added or removed by any pass:
-> `main` and this revision both have 79 rows, every one of them rewritten in
-> place or left alone.
+> stopped before the hand-triage. No row was *added or removed* by any pass:
+> `main` and this revision carry the same 79 table rows, every one of them
+> rewritten in place or left alone. One caveat, because an earlier revision of
+> this banner rejected a review finding too broadly: on `main` a **blank line**
+> sat between `field_crop_history` and `field_app_locations`, and a blank line
+> terminates a Markdown table — so `main` *rendered* 77 rows and showed the last
+> two as loose text. This revision removed it, so all 79 render. The reviewer who
+> reported "77 → 79" was reading the rendered table and was right about that; the
+> claim that two rows were newly *added* is what does not hold. It is the same
+> defect this PR fixes in the guide's roles table.
 >
 > Two shapes to read carefully. A cell reading `-` **or** `RPC only` means the
 > same thing: **no direct browser-role path**. That is true both when no
@@ -264,9 +271,15 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 > `invoice_shares` and `order_shares` SELECT (the parent invoice or order must
 > also be un-deleted), and `team_notes` INSERT (live requires an active
 > profile as well as ownership). All six are corrected in the matrix above.
+> Only three of them — `field_obstacles` INSERT, `vendors` SELECT,
+> `vendor_bills` SELECT — were *bare* role lists, which is all an automated
+> bare-cell sweep can match on. The other three already named a qualifier
+> alongside the roles, so no sweep flagged them; they were found by reading the
+> neighbouring policies while fixing the first three.
 >
 > The classifier's flag count across both matrices, measured at each revision:
-> **162** on `origin/main`, **89** after the presence pass (`7d5d5d80`), **61**
+> **162** on `origin/main`, **89** measured at `7d5d5d80` (the presence pass
+> itself is `a4b4e9ce`; nothing between them touched a role word), **61**
 > after the role-wording pass (`21f29c4a`), **33** now. Read that as a *proxy*,
 > not a defect count: correcting `rup_sales_records` SELECT from `Admin` to
 > `Admin / Sales Rep` — live is `role = ANY (ARRAY['admin','sales_rep'])`, so
@@ -384,7 +397,7 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | invoice_shares | Admin / invoice creator / salesman (invoice not soft-deleted) | Admin / Sales Rep | Admin | Admin |
 | order_shares | Admin / order salesman (order not soft-deleted) | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
 | idempotency_keys | - (policy exists but is `USING (false)`; SECURITY DEFINER only) | - (same) | - (same) | - (same) |
-| offline_action_receipts | Owner / Admin / Sales via sanitized RPC only | - (SECURITY DEFINER RPC only) | - (SECURITY DEFINER RPC only) | - |
+| offline_action_receipts | Owner / Admin / Sales Rep (app reads via a sanitized RPC) | - (SECURITY DEFINER RPC only) | - (SECURITY DEFINER RPC only) | - |
 | rate_limit_log | Admin | - (restrictive only) | - (restrictive only) | - (restrictive only) |
 | note_tags | All authenticated | Own created_by | Own created_by | Own created_by |
 | team_note_tags | Any visible team note (inherits `team_notes` RLS) | Note creator / Admin | - | Note creator / Admin |

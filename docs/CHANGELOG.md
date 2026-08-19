@@ -103,6 +103,10 @@ shape the classifier structurally cannot flag — a cell that names the right ro
 condition live also enforces — and corrected six more: `field_obstacles` INSERT, `vendors` and
 `vendor_bills` SELECT, `invoice_shares` and `order_shares` SELECT, and `team_notes` INSERT.
 Against `origin/main` the `database-schema.md` matrix now carries 61 changed rows out of 79.
+Also re-read the guide's "Common RLS Policy Patterns" section against live, which the earlier
+passes had left alone while rewriting the matrix above it: Patterns 1, 2, 3, 4 and 7 each described
+a policy shape live does not have, and Pattern 3 taught `quotes_select` **with** an ownership
+test that the same file's banner corrects 90 lines below. All five fixed.
 
 **Also corrected:** the `migration-history.md` header claim 885 → 886 (a high-water row number, not a
 file count — the two `check:docs` rows measure different things), both manual freshness stamps, live

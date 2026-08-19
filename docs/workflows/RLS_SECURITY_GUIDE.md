@@ -74,27 +74,48 @@ CREATE POLICY "table_select" ON public.table_name
   FOR SELECT TO authenticated
   USING (is_admin());
 ```
-Used on: `cost_history`, `cycle_counts`, `cycle_count_items`, `rebate_programs`, `rebate_claims`
+Used on: `cost_history`. Re-read against live on 2026-08-19 UTC: that is the only admin-only
+*read* among the tables this line used to name. `cycle_counts`, `cycle_count_items`,
+`rebate_programs` and `rebate_claims` all read as `is_admin() OR is_sales_rep()`, which is
+what the matrix below has always said — so this section contradicted its own file. Their *writes*
+are mostly admin-only but not uniformly: `rebate_claims` INSERT is `is_admin() OR
+is_sales_rep()`, and the three `cycle_count_items` write policies are `is_admin() AND EXISTS
+(… cycle_counts.status = 'in_progress')`, so even an admin cannot edit a closed count.
 
-### Pattern 2: All authenticated users can read
+### Pattern 2: Any active profile can read
 ```sql
 CREATE POLICY "table_select" ON public.table_name
   FOR SELECT TO authenticated
-  USING (true);
+  USING ((select is_active_profile()));
 ```
-Used on: `products`, `app_settings`, `team_notes`, `activity_feed`, `blend_recipes`, `warehouses`
+Used on: `products`, `app_settings`, `team_notes`, `activity_feed`, `warehouses`.
+
+This block used to read `USING (true)` and to include `blend_recipes`. Both were stale.
+`20260727174657_broad_reads_require_active_profile` (history row 828, applied live 2026-07-27)
+narrowed the broad reads to `is_active_profile()`, so a deactivated profile is authenticated but
+denied — and live `blend_recipes_select` is `is_admin() OR is_sales_rep() OR is_applicator()`,
+which is why the matrix below reads `Admin / Sales Rep / Applicator` for it. **"All
+authenticated" in the matrix means exactly this `is_active_profile()` predicate, not `true`.**
 
 ### Pattern 3: Admin + Sales Rep (with ownership)
 ```sql
--- Sales reps see their own, admin sees all
-CREATE POLICY "quotes_select" ON public.quotes
-  FOR SELECT TO authenticated
+-- Sales reps write their own, admin writes all
+CREATE POLICY "quotes_update" ON public.quotes
+  FOR UPDATE TO authenticated
   USING (
     is_admin()
     OR (is_sales_rep() AND created_by = (select auth.uid()))
   );
 ```
-Used on: `quotes`, `quote_sections`, `quote_items`
+Used on the **write** side of `quotes` (INSERT and UPDATE), and on `quote_sections`
+INSERT/UPDATE/DELETE through an `EXISTS` on the parent quote's `created_by`.
+
+**Not on the read side, which is what this block used to show.** Live `quotes_select` is
+`is_admin() OR is_sales_rep()` with **no** ownership test; `qitems_select` is the same; and
+`qsections_select` is `is_active_profile()`. The old example named `quotes_select` and added
+the ownership half, so anyone copying it would have written a policy narrower than the one actually
+deployed — and it contradicted the `quotes` row in this file's own matrix below, which reads
+`Admin / Sales Rep` for SELECT and marks only UPDATE and INSERT `(own)`.
 
 ### Pattern 4: Admin + Sales Rep + Driver (for deliveries)
 ```sql
@@ -104,9 +125,13 @@ CREATE POLICY "deliveries_select" ON public.deliveries
   USING (
     is_admin()
     OR is_sales_rep()
-    OR (is_driver() AND assigned_driver = (select auth.uid()))
+    OR assigned_driver = (select auth.uid())
   );
 ```
+Live carries no `is_driver()` conjunct: the ownership test alone decides it, so a driver reaches
+a delivery by being assigned to it rather than by holding the role. That is the same distinction
+the matrix banner draws for the `Driver` cells. This block used to show the `is_driver() AND`
+form, which is narrower than live.
 
 ### Pattern 5: Own data only
 ```sql
@@ -127,13 +152,15 @@ CREATE POLICY "activity_feed_insert" ON public.activity_feed
 ### Pattern 7: Append-only (no updates or deletes)
 ```sql
 -- financial_audit_log: insert only, no updates, no deletes
-CREATE POLICY "audit_log_insert" ON public.financial_audit_log
+CREATE POLICY "financial_audit_insert" ON public.financial_audit_log
   FOR INSERT TO authenticated
-  WITH CHECK (true);
+  WITH CHECK (is_admin() OR actor_user_id = (select auth.uid()));
 
 -- No UPDATE or DELETE policies = nobody can modify/delete rows
 ```
-Used on: `financial_audit_log`
+Used on: `financial_audit_log` (its SELECT is `is_admin()`). The append-only half is the point
+and it holds — live has no UPDATE and no DELETE policy. The `WITH CHECK (true)` this block used
+to show was stale: live also pins the actor.
 
 ---
 

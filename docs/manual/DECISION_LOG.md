@@ -230,6 +230,11 @@ constraint is named `<table>_<column>_whole_cents_chk`.
 CHECK (col IS NULL OR (col = ROUND(col, 2) AND col > '-Infinity' AND col < 'Infinity'))
 ```
 
+On a `NOT NULL` column the `IS NULL` branch is redundant and may be omitted — one of the eight
+enforced constraints, `order_items_total_price_whole_cents_chk`, is live as
+`CHECK (total_price = round(total_price, 2) AND total_price > '-Infinity' AND total_price <
+'Infinity')` and clears the gate. What may **not** be omitted is either finiteness bound.
+
 **Both halves are load-bearing — a `ROUND`-only constraint does NOT clear the gate.** PostgreSQL
 `numeric` deliberately does not use IEEE-754 NaN semantics: so values stay sortable and indexable,
 it treats `NaN` as equal to `NaN` and greater than every finite value. `'NaN' = ROUND('NaN', 2)` is
