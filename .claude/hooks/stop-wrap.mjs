@@ -14,7 +14,7 @@
 // before declaring the session done.
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, statSync, writeFileSync, renameSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import os from "node:os";
@@ -61,11 +61,15 @@ const meaningful = lines.filter(l => {
 // not `ls-files`, so an intent-to-add `git add -N` filename with no content
 // cannot satisfy the guard) is a live schema change whose SQL exists nowhere
 // in the repo — the exact failure that reached production three times in 30
-// days. Match by full basename or by slug (basename minus the numeric stamp),
-// since MCP apply names may omit or differ in the stamp. Satisfied entries are
-// pruned so the nag ends once the file is committed; unsatisfied entries
-// persist ACROSS sessions until resolved. The prune holds the same lock as the
-// recorder so a concurrent apply cannot be dropped by the rewrite.
+// days. Match by full basename, or by slug (basename minus the numeric stamp,
+// since MCP apply names may omit or differ in the stamp) — but a slug match
+// only counts when some committed file with that slug is stamped near or after
+// the recorded apply time: the repo already holds duplicate slugs years apart,
+// so an unrelated old file must not satisfy (and then prune) a fresh apply
+// (Opus review 2026-08-19). Satisfied entries are pruned so the nag ends once
+// the file is committed; unsatisfied entries persist across sessions (in this
+// checkout's .claude/session-state) until resolved. The prune holds the same
+// lock as the recorder so a concurrent apply cannot be dropped by the rewrite.
 const appliedLedgerPath = path.join(projectDir, ".claude", "session-state", "applied-source-ledger.json");
 let appliedUncontained = [];
 try {
@@ -87,40 +91,91 @@ try {
     // fail-open catch). rev-parse --verify HEAD tells the two apart. A
     // SUCCESSFUL empty listing stays authoritative: commits exist but no
     // migration files do, so a recorded apply is genuinely uncontained.
+    // -z output: git C-quotes non-ASCII paths in newline mode, which would
+    // mangle a stamped basename and phantom-block a correctly committed file.
     let lsTree;
     try {
-      lsTree = execFileSync("git", ["ls-tree", "-r", "HEAD", "--name-only", "--", "supabase/migrations"], {
-        encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"], cwd: projectDir,
+      lsTree = execFileSync("git", ["ls-tree", "-r", "-z", "HEAD", "--name-only", "--", "supabase/migrations"], {
+        encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "pipe"], cwd: projectDir,
       });
     } catch {
-      if (runGit(["rev-parse", "--verify", "HEAD"]).trim()) {
+      // Tell "unborn HEAD" (nothing committed — containment must block) apart
+      // from "git broke" (skip). The probe itself must be failure-aware:
+      // folding ANY rev-parse failure into "unborn" would recreate the phantom
+      // block one layer deeper (Opus review 2026-08-19) — only git exiting
+      // with a revision-resolution error proves an unborn HEAD. A spawn
+      // failure, timeout, or localized error text falls through to the skip,
+      // which can never phantom-block.
+      let headOut = "", headErr = null;
+      try {
+        headOut = execFileSync("git", ["rev-parse", "--verify", "HEAD"], {
+          encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "pipe"], cwd: projectDir,
+        });
+      } catch (e) { headErr = e; }
+      if (headOut.trim()) {
         throw new Error("git ls-tree failed despite a valid HEAD — containment check skipped");
+      }
+      const unborn = !!headErr && headErr.status === 128 &&
+        /(unknown revision|needed a single revision|bad revision|ambiguous argument)/i.test(String(headErr.stderr || ""));
+      if (!unborn) {
+        throw new Error("git HEAD probe failed — containment check skipped");
       }
       lsTree = ""; // unborn HEAD: nothing is committed, so containment must block
     }
-    const trackedNames = new Set();
-    for (const f of lsTree.split("\n")) {
+    // Exact stamped basenames pin identity outright. Slug matches are gated by
+    // stamp time: the committed file must be stamped no earlier than ~7 days
+    // before the recorded apply (the legitimate flow stamps the file around
+    // apply time). A stampless committed file can't be windowed and matches
+    // any time; an entry whose ts won't parse can't be windowed either, and
+    // fails toward blocking — the exact-name match still clears it.
+    const SLUG_STAMP_SLACK_MS = 7 * 24 * 60 * 60 * 1000;
+    const stampToMs = (stamp) => {
+      const m = /^(\d{4})(\d{2})(\d{2})(?:(\d{2})(\d{2})(\d{2}))?/.exec(String(stamp || ""));
+      if (!m) return null;
+      const ms = Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0));
+      return Number.isFinite(ms) ? ms : null;
+    };
+    const exactNames = new Set();
+    const slugStampsMs = new Map(); // slug -> stamp ms per committed file (null = stampless)
+    for (const f of lsTree.split("\0")) {
       const rel = f.replace(/\\/g, "/").trim();
       if (!rel.endsWith(".sql")) continue;
       const base = rel.slice(rel.lastIndexOf("/") + 1, -".sql".length);
-      trackedNames.add(base);
-      trackedNames.add(base.replace(/^\d{8,14}_/, ""));
+      exactNames.add(base);
+      const m = /^(\d{8,14})_(.+)$/.exec(base);
+      const slug = m ? m[2] : base;
+      if (!slugStampsMs.has(slug)) slugStampsMs.set(slug, []);
+      slugStampsMs.get(slug).push(m ? stampToMs(m[1]) : null);
     }
     const isContained = (e) => {
       const n = String(e.name).trim().replace(/\.sql$/i, "");
-      return trackedNames.has(n) || trackedNames.has(n.replace(/^\d{8,14}_/, ""));
+      if (exactNames.has(n)) return true;
+      const stamps = slugStampsMs.get(n.replace(/^\d{8,14}_/, ""));
+      if (!stamps) return false;
+      const entryMs = Date.parse(String(e.ts || ""));
+      if (!Number.isFinite(entryMs)) return false; // undatable entry: a slug alone can't prove it
+      return stamps.some((s) => s === null || s >= entryMs - SLUG_STAMP_SLACK_MS);
     };
     withFileLock(appliedLedgerPath + ".lock", (locked) => {
       const rawEntries = JSON.parse(readFileSync(appliedLedgerPath, "utf8"));
-      const entries = Array.isArray(rawEntries) ? rawEntries.filter(e => e && String(e.name || "").trim()) : [];
-      if (entries.length === 0) return;
+      const arr = Array.isArray(rawEntries) ? rawEntries : [];
+      // Per-entry hygiene: one malformed row (non-string name, junk object)
+      // must not throw here and disable the WHOLE check via the outer
+      // fail-open catch (Opus review 2026-08-19). Junk rows carry nothing the
+      // recorder could have written, so the prune rewrite drops them too.
+      const entries = arr.filter(e => e && typeof e.name === "string" && e.name.trim());
       appliedUncontained = entries.filter(e => !isContained(e));
-      // Prune satisfied entries (best-effort; never block the stop over a
-      // write) — but ONLY while actually holding the lock: an unlocked
+      // Prune satisfied/junk entries (best-effort; never block the stop over
+      // a write) — but ONLY while actually holding the lock: an unlocked
       // rewrite could erase a concurrent recorder's append (CodeRabbit
       // PR #423 round 4). Skipping costs nothing; the next stop re-prunes.
-      if (locked && appliedUncontained.length < entries.length) {
-        try { writeFileSync(appliedLedgerPath, JSON.stringify(appliedUncontained, null, 2) + "\n"); } catch { /* fail-open */ }
+      // Write-then-rename so a crash mid-write can't corrupt the ledger.
+      if (locked && appliedUncontained.length < arr.length) {
+        try {
+          const tmpPath = appliedLedgerPath + "." + process.pid + ".tmp";
+          writeFileSync(tmpPath, JSON.stringify(appliedUncontained, null, 2) + "\n");
+          renameSync(tmpPath, appliedLedgerPath);
+        } catch { /* fail-open */ }
       }
     });
   }
@@ -158,12 +213,19 @@ function fileContentHash(statusLine) {
     return "na";
   }
 }
-// Unresolved live-applies fold into the signature too: Mason may acknowledge
-// one deliberately, but a NEW apply (or a clean tree with an old empty-set ack
-// lying around) re-arms the hook rather than slipping through silently.
+// Unresolved live-applies still fold into the signature (a NEW apply shifts
+// it, so an old ack can never describe the new state) — but the valve itself
+// NEVER opens while one exists: an alarm the agent can self-acknowledge is
+// not a guard (Opus review 2026-08-19 — a single ack would have silenced the
+// C3 alarm in every later session once the tree was clean). Resolution is
+// committing the file or clearing a stale ledger entry, both spelled out in
+// the block message below.
+// Entry names are tool input: strip non-printables and cap length before they
+// reach any output (the signature is echoed verbatim in the block message).
+const sanitizedAppliedName = (e) => String(e.name).replace(/[^\x20-\x7E]/g, "?").slice(0, 80);
 const ackSignature = [
   ...meaningful.map(l => l.trim() + "\t" + fileContentHash(l)),
-  ...appliedUncontained.map(e => "APPLIED-NO-SOURCE\t" + String(e.name).trim()),
+  ...appliedUncontained.map(e => "APPLIED-NO-SOURCE\t" + sanitizedAppliedName(e).trim()),
 ]
   .sort()
   .join("\n");
@@ -171,16 +233,18 @@ try {
   const ack = JSON.parse(
     readFileSync(path.join(projectDir, ".claude", "session-state", "stop-wrap-ack.json"), "utf8")
   );
-  if (ack && ack.signature === ackSignature) {
+  if (ack && ack.signature === ackSignature && appliedUncontained.length === 0) {
     process.exit(0);
   }
 } catch { /* no/unreadable ack file — fall through and block as usual */ }
 
 if (appliedUncontained.length > 0) {
   issues.push(
-    `🚨 ${appliedUncontained.length} migration(s) APPLIED TO LIVE with no committed source file — the SQL is running in production but exists nowhere in the repo. Commit the migration file (supabase/migrations/<stamp>_<name>.sql) before ending the session:\n` +
-    appliedUncontained.slice(0, 8).map(e => `     ${e.name}  (applied ${e.ts || "this session"})`).join("\n") +
-    (appliedUncontained.length > 8 ? `\n     ... and ${appliedUncontained.length - 8} more` : "")
+    `🚨 ${appliedUncontained.length} migration(s) recorded as APPLIED TO LIVE with no committed source file:\n` +
+    appliedUncontained.slice(0, 8).map(e => `     ${sanitizedAppliedName(e)}  (recorded ${e.ts || "this session"})`).join("\n") +
+    (appliedUncontained.length > 8 ? `\n     ... and ${appliedUncontained.length - 8} more` : "") +
+    `\n     If the apply really ran: commit the migration file (supabase/migrations/<stamp>_<name>.sql) — a slug-only match needs a stamp near the recorded apply time.` +
+    `\n     If the apply FAILED or the entry is stale: verify against the live ledger (select version, name from supabase_migrations.schema_migrations) and remove the entry from .claude/session-state/applied-source-ledger.json.`
   );
 }
 

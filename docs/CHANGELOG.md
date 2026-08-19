@@ -11,8 +11,8 @@ defects; Mason approved fixing all three:
 - **NEW guard — applied-migration source containment (C3):** `applied-snapshot-invalidate.mjs`
   now records every Supabase MCP `apply_migration` into
   `.claude/session-state/applied-source-ledger.json`, and `stop-wrap.mjs` blocks session end while
-  any recorded apply has no git-tracked `supabase/migrations/*.sql` match (basename or
-  stamp-stripped slug). Entries persist across sessions until the file is tracked, then prune;
+  any recorded apply has no `supabase/migrations/*.sql` match committed to HEAD (basename or
+  stamp-stripped slug). Entries persist across sessions until the file is committed, then prune;
   unresolved applies fold into the stop-wrap ack signature so a stale acknowledgment can't mask a
   new one. Previously the only defence was "someone notices" (2026-08-09, PR #371, and the
   six-file 2026-08-12 incident). Tests: `.claude/hooks/applied-source-containment.test.mjs`,
@@ -35,8 +35,9 @@ Docs updated in `docs/reference/agent-guardrails.md` (four rows). `test:correcti
 
 CodeRabbit review round (2026-08-19, PR #423 — all three findings confirmed and fixed): the
 applied-source ledger's read-modify-write is now serialized by a cross-process lock
-(`ledger-lock-lib.mjs`; mutation-proved — with the lock disabled, 4 of 12 concurrent recorder
-processes lost their entries); stop-wrap's containment check reads `git ls-tree HEAD` instead of
+(`ledger-lock-lib.mjs`; mutation-proved — in one measured run with the lock disabled, 4 of 12
+concurrent recorder processes lost their entries; the loss count is nondeterministic, the point
+is that unlocked losses are real and reproducible); stop-wrap's containment check reads `git ls-tree HEAD` instead of
 `ls-files`, so an intent-to-add (`git add -N`) or staged-only filename can no longer satisfy or
 prune the guard; and review-proof-guard's cd parser resolves targets past option tokens
 (`cd --`, `-P`, `-Path:`) and shell-joined quoting (`.claude/"session-state"`), which previously
@@ -58,6 +59,43 @@ than proposed): on a ledger-lock timeout the callback now receives `locked=false
 recorder still appends (dropping the record would silently disarm the guard), but the
 stop-wrap prune skips its rewrite, since an unlocked rewrite could erase a concurrent
 recorder's append (lock-held regression test added, mutation-proved).
+
+Blind adversarial Opus round (2026-08-19, PR #423 — Codex usage exhausted, so per the settled
+PR #413/#414 precedent two independent blind Opus reviewers substituted for the Codex gate; both
+returned BLOCKERS, all confirmed findings fixed and the new protections mutation-proved
+red-without/green-with):
+
+- **cd-guard newline bypass (proven):** the argument-run separator swallowed line breaks, so in
+  `cd /tmp` ⏎ `cd .claude/session-state` only the FIRST target was ever resolved. Separator is
+  now horizontal-whitespace-only; newline-separated invocations each get checked. Also fixed:
+  split-quote runs (`".claude/session"-state`) now join like the shell joins them,
+  `Push-Location` counts as a cd verb, and glob/brace metacharacters make a target unresolvable
+  (fail closed when the command also mentions the state dir). Accepted residual: a pure-glob cd
+  with no literal state-dir mention anywhere still passes.
+- **Slug containment time-gated:** the repo has duplicate migration slugs years apart, so a bare
+  slug match could let an OLD same-named file contain a FRESH apply. A slug-only match now
+  requires a committed file stamped within 7 days before the recorded apply (or later); exact
+  stamped basenames still always match; an unparseable entry timestamp stays blocked.
+- **Recorder correctness:** applies whose tool response carries the explicit `isError` marker
+  are not recorded (error-shaped text still records — fail closed); same-name re-applies dedup;
+  both ledger writers write atomically (temp + rename) so a crash can't leave truncated JSON
+  that would disarm the guard.
+- **Ack valve hard-gated:** a signature-matching stop-wrap acknowledgment can never end the
+  session while any apply is uncontained; entry names are sanitized and truncated before they
+  reach the signature or the block message. Malformed ledger rows prune without masking real
+  entries beside them, and the block message now distinguishes "commit the source file" from
+  "the apply never really happened — verify live and remove the ledger entry".
+- **Unborn-HEAD discriminator tightened:** only a `git rev-parse` failure with the specific
+  unborn-revision error counts as unborn (blocks); any other git failure skips the check for
+  that stop instead of misreading, e.g., "not a repository" as "nothing committed".
+- **worktree-cleanup:** a worktree whose applied-source ledger still holds unresolved entries is
+  kept even when merged+clean (the gitignored ledger is invisible to those gates; sweeping would
+  destroy the only record), and a failed removal retry restores the settings.local.json content
+  it deleted.
+
+Documented follow-ups deliberately not fixed in this PR: ledger-lock holder-token eviction and
+the stale-eviction/timeout window mismatch (single-machine harness, bounded impact), and the
+empty-`tool_input.name` recorder skip (no observed producer).
 
 ## 2026-08-18 — Skills/commands accuracy sweep across the agent workflow surface
 

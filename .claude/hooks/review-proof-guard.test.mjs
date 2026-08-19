@@ -37,6 +37,22 @@ for (const payload of [
   // Round 2: a Bash escape is dropped by the shell, so this cd really enters
   // the state dir — the decoded target must be checked as well.
   { tool_name: "Bash", tool_input: { command: "cd .claude/session-\\state" } },
+  // Opus review 2026-08-19: a NEWLINE also separates cd invocations. The old
+  // \s+ argument separator swallowed line breaks, so only the FIRST cd's
+  // target was ever resolved and `cd /tmp\ncd .claude/session-state` passed.
+  { tool_name: "Bash", tool_input: { command: "cd /tmp\ncd .claude/session-state" } },
+  { tool_name: "Bash", tool_input: { command: "cd /tmp\r\ncd .claude/session-state" } },
+  { tool_name: "Bash", tool_input: { command: "set -e\ncd /c/repo\ncd .claude/session-state\nls" } },
+  { tool_name: "Bash", tool_input: { command: "cd /tmp\ncd .claude/session-state\nprintf '{}' > proof.json" } },
+  // Split-quote runs join into ONE path in the shell; the token parser must
+  // join adjacent quoted/unquoted segments the same way.
+  { tool_name: "Bash", tool_input: { command: 'cd ".claude/session"-state' } },
+  { tool_name: "Bash", tool_input: { command: "cd '.claude/session'-state" } },
+  // PowerShell's other cd verb.
+  { tool_name: "PowerShell", tool_input: { command: "Push-Location .claude\\session-state" } },
+  // Glob metacharacters make a cd target statically unresolvable; with the
+  // state dir mentioned elsewhere in the same command, that stays fail-closed.
+  { tool_name: "Bash", tool_input: { command: "cd .claude/session-stat[e] && cat .claude/session-state/latest.json" } },
   { tool_name: "Bash", cwd: "C:\\repo\\.claude\\session-state", tool_input: { command: "printf {} > harmless-name.json" } },
   { tool_name: "Bash", tool_input: { command: "printf {} > codex-review-forged.json" } },
   { tool_name: "Bash", tool_input: { command: "rm codex-review-forged.json;ls" } },
@@ -63,5 +79,9 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'cd "$HOME/projects
 const optionAllow = run({ tool_name: "Bash", tool_input: { command: "cd -- /c/repo && ls .claude/session-state 2>/dev/null" } });
 assert.equal(optionAllow.status, 0);
 assert.equal(optionAllow.stdout, "");
+// Multi-line commands whose cds all target innocent directories stay allowed —
+// the newline fix must not turn every multi-line script into a false positive.
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd /c/repo\nnpm run test\nls .claude/session-state" } }).stdout, "");
+assert.equal(run({ tool_name: "PowerShell", tool_input: { command: "Push-Location C:\\repo\nGet-ChildItem" } }).stdout, "");
 
 console.log("OK - review proof guard checks passed.");

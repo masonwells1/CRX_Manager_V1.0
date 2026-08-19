@@ -5,8 +5,9 @@
 //   recorder: applied-snapshot-invalidate.mjs appends every apply_migration to
 //             .claude/session-state/applied-source-ledger.json
 //   checker:  stop-wrap.mjs blocks session end while a recorded apply has no
-//             git-tracked supabase/migrations/*.sql match, and prunes entries
-//             once the file is tracked.
+//             committed supabase/migrations/*.sql match (exact basename, or a
+//             slug whose committed stamp is near the recorded apply time), and
+//             prunes entries once the file is committed.
 //
 // Run: node .claude/hooks/applied-source-containment.test.mjs
 
@@ -84,6 +85,33 @@ try {
   entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
   assert.equal(entries.length, 1, "corrupt ledger restarted with the new entry");
 
+  // A retried apply of the SAME name refreshes its entry instead of stacking
+  // duplicates (each duplicate would need separate clearing).
+  runHook(recorderPath, { tool_name: "mcp__supabase__apply_migration", tool_input: { name: "after_corruption" }, session_id: "s2" }, tmp);
+  entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  assert.equal(entries.length, 1, "same-name retry dedups to one entry");
+  assert.equal(entries[0].session, "s2", "the retry refreshed the entry in place");
+
+  // An EXPLICITLY failed apply (tool_response.isError) must not mint an entry:
+  // the block message asserts the SQL is live, and a syntax-error retry loop
+  // would stack phantom blocks that committing a file can never clear.
+  runHook(recorderPath, {
+    tool_name: "mcp__supabase__apply_migration",
+    tool_input: { name: "failed_apply_probe" },
+    tool_response: { isError: true, content: [{ type: "text", text: "syntax error at or near" }] },
+  }, tmp);
+  entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  assert.ok(!entries.some(e => e.name === "failed_apply_probe"), "an isError apply is not recorded");
+  // ...but error-ish TEXT without the explicit marker still records — only the
+  // unambiguous flag skips; everything else fails toward the alarm.
+  runHook(recorderPath, {
+    tool_name: "mcp__supabase__apply_migration",
+    tool_input: { name: "texty_error_probe" },
+    tool_response: { content: [{ type: "text", text: "ERROR: relation does not exist" }] },
+  }, tmp);
+  entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  assert.ok(entries.some(e => e.name === "texty_error_probe"), "error text alone still records — only the explicit isError marker skips");
+
   // CONCURRENT recorders must not lose entries (CodeRabbit PR #423): the
   // read-modify-write is serialized by a cross-process lock, so parallel
   // apply_migration hooks in one message all land in the ledger.
@@ -130,7 +158,35 @@ try {
   entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
   assert.equal(entries.length, 0, "satisfied entry is pruned from the ledger");
 
-  // Full-stamped recorded name also matches the same file by slug.
+  // ── Slug matching is TIME-GATED (Opus review 2026-08-19) ──
+  // The real repo holds duplicate slugs years apart; an unrelated OLD file
+  // with the same slug must not satisfy — and then silently prune — a fresh
+  // apply. Only a file stamped near (or after) the recorded apply time counts.
+  writeFileSync(path.join(tmp, "supabase", "migrations", "20240101000000_legacy_slug.sql"), "select 4;\n");
+  git(["add", "supabase/migrations/20240101000000_legacy_slug.sql"], tmp);
+  git(["commit", "-qm", "old migration"], tmp);
+  writeFileSync(ledgerPath, JSON.stringify([{ name: "legacy_slug", ts: "2026-08-18T00:00:00Z", session: "s" }]) + "\n");
+  out = runHook(stopWrapPath, { session_id: "c3-test-slug-old" }, tmp).stdout;
+  assert.match(out, /APPLIED TO LIVE with no committed source/, "an old-stamped same-slug file cannot contain a fresh apply");
+  entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  assert.equal(entries.length, 1, "the old-slug mismatch must not prune the entry");
+  // A same-slug file stamped within the window DOES contain and prune it.
+  writeFileSync(path.join(tmp, "supabase", "migrations", "20260817000000_legacy_slug.sql"), "select 5;\n");
+  git(["add", "supabase/migrations/20260817000000_legacy_slug.sql"], tmp);
+  git(["commit", "-qm", "fresh migration"], tmp);
+  out = runHook(stopWrapPath, { session_id: "c3-test-slug-fresh" }, tmp).stdout;
+  assert.ok(!/APPLIED TO LIVE/.test(out), "a near-time same-slug file contains the apply");
+  entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  assert.equal(entries.length, 0, "a time-valid slug match prunes");
+
+  // An entry whose ts cannot be parsed is cleared only by an EXACT basename
+  // match — a slug alone fails toward blocking.
+  writeFileSync(ledgerPath, JSON.stringify([{ name: "add_widget_flag", ts: "t", session: "s" }]) + "\n");
+  out = runHook(stopWrapPath, { session_id: "c3-test-undatable" }, tmp).stdout;
+  assert.match(out, /APPLIED TO LIVE with no committed source/, "an undatable entry is not cleared by a slug-only match");
+
+  // A full-stamped recorded name matches the committed file EXACTLY — no
+  // timestamp needed, because the stamp itself pins identity.
   writeFileSync(ledgerPath, JSON.stringify([{ name: "20260818999999_add_widget_flag.sql", ts: "t", session: "s" }]) + "\n");
   out = runHook(stopWrapPath, { session_id: "c3-test-stamp" }, tmp).stdout;
   assert.ok(!/APPLIED TO LIVE/.test(out), "stamped name + .sql suffix matches the tracked file");
@@ -151,6 +207,32 @@ try {
   assert.match(out, /APPLIED TO LIVE with no committed source/, "intent-to-add is not committed — still blocks");
   entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
   assert.equal(entries.length, 1, "intent-to-add must not prune the ledger entry");
+
+  // One malformed ledger row must not disable the whole check (Opus review
+  // 2026-08-19): the real uncontained entry still blocks, and junk rows are
+  // dropped by the same locked rewrite that prunes satisfied entries.
+  writeFileSync(ledgerPath, JSON.stringify([
+    { name: 12345, ts: "x" },
+    { bogus: true },
+    { name: "real_orphan_probe", ts: "2026-08-18T00:00:00Z", session: "s" },
+  ]) + "\n");
+  out = runHook(stopWrapPath, { session_id: "c3-test-junk" }, tmp).stdout;
+  assert.match(out, /APPLIED TO LIVE with no committed source/, "junk rows must not mask a real uncontained apply");
+  assert.match(out, /real_orphan_probe/, "the real entry is still named");
+  entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  assert.equal(entries.length, 1, "junk rows are pruned by the rewrite");
+  assert.equal(entries[0].name, "real_orphan_probe");
+
+  // Entry names are attacker-influenced tool input: control characters are
+  // stripped and long names truncated before the block message interpolates
+  // them.
+  writeFileSync(ledgerPath, JSON.stringify([
+    { name: "badname_" + "x".repeat(200), ts: "2026-08-18T00:00:00Z", session: "s" },
+  ]) + "\n");
+  out = runHook(stopWrapPath, { session_id: "c3-test-sanitize" }, tmp).stdout;
+  assert.match(out, /APPLIED TO LIVE with no committed source/, "the sanitized entry still blocks");
+  assert.ok(!out.includes("") && !out.includes("\\u0007"), "control characters are stripped from the block message");
+  assert.ok(!out.includes("x".repeat(120)), "over-long names are truncated in the block message");
 
   // A BROKEN git call (binary missing / timeout) must not masquerade as
   // "nothing committed" and phantom-block (CodeRabbit PR #423 round 2): the
@@ -226,9 +308,10 @@ try {
   // process HOLDS the ledger lock, the checker still evaluates (read-only,
   // fail-open) but must NOT prune — an unlocked rewrite could erase a
   // concurrent recorder's append. Once the lock is free, the prune resumes.
-  // "add_widget_flag" is satisfied by the migration committed above, so a
-  // prune WOULD fire here if it ignored the lock.
-  writeFileSync(ledgerPath, JSON.stringify([{ name: "add_widget_flag", ts: "t", session: "s" }]) + "\n");
+  // "add_widget_flag" is satisfied by the migration committed above (slug
+  // match with a valid apply time), so a prune WOULD fire here if it ignored
+  // the lock.
+  writeFileSync(ledgerPath, JSON.stringify([{ name: "add_widget_flag", ts: "2026-08-18T00:00:00Z", session: "s" }]) + "\n");
   const lockDir = ledgerPath + ".lock";
   mkdirSync(lockDir, { recursive: true });
   try {
@@ -243,6 +326,39 @@ try {
   runHook(stopWrapPath, { session_id: "c3-test-lockfree" }, tmp);
   entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
   assert.equal(entries.length, 0, "prune resumes once the lock is released");
+
+  // ── Ack valve NEVER masks an uncontained apply (Opus review 2026-08-19) ──
+  // The earlier stale-ack test ran in a tree with untracked files, so the ack
+  // signature could never match and the scenario was untested. Here the tree
+  // is genuinely CLEAN (.claude/ is gitignored), the signature reduces to just
+  // the APPLIED-NO-SOURCE component, and an EXACTLY matching ack is planted —
+  // the session must still refuse to end.
+  const tmp4 = mkdtempSync(path.join(os.tmpdir(), "crx-c3-ackgate-"));
+  try {
+    git(["init", "-q"], tmp4);
+    const top4 = git(["rev-parse", "--show-toplevel"], tmp4).trim();
+    assert.equal(path.resolve(top4), path.resolve(tmp4), "fourth git init must land in its temp dir");
+    git(["config", "user.email", "test@test"], tmp4);
+    git(["config", "user.name", "test"], tmp4);
+    writeFileSync(path.join(tmp4, ".gitignore"), ".claude/\n");
+    git(["add", "."], tmp4);
+    git(["commit", "-qm", "init"], tmp4);
+    const state4 = path.join(tmp4, ".claude", "session-state");
+    mkdirSync(state4, { recursive: true });
+    writeFileSync(path.join(state4, "applied-source-ledger.json"),
+      JSON.stringify([{ name: "ack_mask_probe", ts: "2026-08-18T00:00:00Z", session: "s" }]) + "\n");
+    // Sanity: the tree really is clean, or this scenario silently degrades
+    // into the untestable one above.
+    const dirt4 = git(["status", "--porcelain"], tmp4).split("\n").filter(l => l.trim());
+    assert.equal(dirt4.length, 0, "tmp4 tree must be clean for the ack-gate scenario to be real");
+    writeFileSync(path.join(state4, "stop-wrap-ack.json"),
+      JSON.stringify({ signature: "APPLIED-NO-SOURCE\tack_mask_probe" }));
+    const ackGate = runHook(stopWrapPath, { session_id: "c3-test-ackgate" }, tmp4);
+    assert.match(ackGate.stdout, /"decision":"block"/, "a signature-matching ack must NOT end the session while an apply is uncontained");
+    assert.match(ackGate.stdout, /ack_mask_probe/, "the block names the uncontained apply, not some other issue");
+  } finally {
+    try { rmSync(tmp4, { recursive: true, force: true }); } catch { /* best-effort */ }
+  }
 
   // A corrupt ledger never bricks session end (fail-open).
   writeFileSync(ledgerPath, "{not json");

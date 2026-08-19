@@ -18,7 +18,7 @@
 //   --report          DRY RUN: print the plan in plain text, delete nothing
 //   --write           perform cleanup and print a plain-text report (manual use)
 
-import { readFileSync, existsSync, statSync, readdirSync, rmSync } from "node:fs";
+import { readFileSync, existsSync, statSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import path from "node:path";
 import { parseWorktreePorcelain } from "./worktree-awareness-lib.mjs";
@@ -140,6 +140,19 @@ try {
     return newest;
   }
 
+  // Unresolved applied-source ledger = a recorded live apply whose committed
+  // source stop-wrap never proved. Gitignored, so merged+clean can't see it;
+  // sweeping the worktree would destroy the only record (Opus review
+  // 2026-08-19). Fail toward KEEP: unreadable/corrupt reads as no entries only
+  // because a corrupt ledger also fail-opens in stop-wrap — the classifier's
+  // other gates still apply.
+  function hasAppliedLedgerEntries(wtPath) {
+    try {
+      const ledger = JSON.parse(readFileSync(path.join(wtPath, ".claude", "session-state", "applied-source-ledger.json"), "utf8"));
+      return Array.isArray(ledger) && ledger.some((e) => e && typeof e.name === "string" && e.name.trim());
+    } catch { return false; }
+  }
+
   // Build worktree facts.
   const worktreeFacts = entries.map((e) => ({
     path: e.path,
@@ -149,6 +162,7 @@ try {
     dirty: e.detached || !e.branch ? false : dirty(e.path),
     merged: e.detached || !e.branch ? false : isMerged(e.branch),
     lastActivityMs: lastActivityMs(e.path),
+    hasAppliedLedgerEntries: hasAppliedLedgerEntries(e.path),
   }));
   const worktreeBranches = new Set(entries.map((e) => e.branch).filter(Boolean));
 
@@ -183,9 +197,19 @@ try {
         const lines = out === null ? [] : out.split("\n").filter((l) => l.trim());
         const onlyIgnorableDirt = lines.length > 0 && meaningfulDirt(out).length === 0;
         if (onlyIgnorableDirt) {
+          // Save the file's bytes first: if the retry ALSO fails, the worktree
+          // survives, and having reverted/deleted its permission grants without
+          // removing it would be a destructive edit with no payoff (Opus
+          // review 2026-08-19). Restore is best-effort.
+          const dirtAbs = path.join(w.path, IGNORABLE_DIRT_PATH);
+          let savedDirt = null;
+          try { savedDirt = readFileSync(dirtAbs); } catch { /* missing → nothing to restore */ }
           const co = gitTry(["checkout", "HEAD", "--", IGNORABLE_DIRT_PATH], w.path); // tracked → restore index+worktree
-          if (!co.ok) { try { rmSync(path.join(w.path, IGNORABLE_DIRT_PATH)); } catch { /* untracked/missing */ } }
+          if (!co.ok) { try { rmSync(dirtAbs); } catch { /* untracked/missing */ } }
           rm = gitTry(["worktree", "remove", w.path]);
+          if (!rm.ok && savedDirt !== null) {
+            try { writeFileSync(dirtAbs, savedDirt); } catch { /* best-effort restore */ }
+          }
         }
       }
       if (!rm.ok) { failed.push({ ...w, kind: "worktree" }); continue; }

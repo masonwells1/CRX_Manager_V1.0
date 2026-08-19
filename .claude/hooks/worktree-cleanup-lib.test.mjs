@@ -47,6 +47,14 @@ eq(classifyWorktree({ ...finished, locked: true }, ctx).reason, "locked", "locke
 // 5. dirty (uncommitted work)
 eq(classifyWorktree({ ...finished, dirty: true }, ctx).reason, "dirty", "dirty → keep");
 
+// 5b. unresolved applied-source ledger (a live apply with no committed source
+//     yet — Opus review 2026-08-19). Merged+clean can't see the gitignored
+//     ledger, so it needs its own gate; sweeping would destroy the only record.
+eq(classifyWorktree({ ...finished, hasAppliedLedgerEntries: true }, ctx).reason, "applied-ledger",
+  "unresolved applied-source ledger → keep even when merged+clean");
+eq(classifyWorktree({ ...finished, hasAppliedLedgerEntries: false }, ctx).action, "remove",
+  "resolved/absent ledger → still removable when finished");
+
 // 6. unmerged (real un-shipped commits)
 eq(classifyWorktree({ ...finished, merged: false }, ctx).reason, "unmerged", "unmerged → keep");
 

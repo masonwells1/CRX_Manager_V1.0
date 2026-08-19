@@ -83,10 +83,20 @@ function cdTargetEntersStateDir(target) {
 // target token by token (CodeRabbit PR #423): `cd -- <dir>`, `cd -P <dir>`,
 // `Set-Location -Path <dir>` / `-Path:<dir>`, and shell-joined quoting like
 // `.claude/"session-state"` must all resolve to the real destination instead
-// of an option token. Quotes are stripped EVERYWHERE in a token, not just at
-// its edges, because the shell joins quoted segments into one path.
-const CD_CMD_RE = /(?:^|[;&|\r\n()]|\s)(?:cd|chdir|pushd|set-location)((?:\s+(?:"[^"]*"|'[^']*'|[^\s;&|()]+))*)/gi;
-const CD_ARG_RE = /"[^"]*"|'[^']*'|[^\s;&|()]+/g;
+// of an option token. The argument-run separator is [^\S\r\n]+ (horizontal
+// whitespace ONLY): with plain \s+ a newline-separated `cd A\ncd B` collapsed
+// into one invocation whose target resolved to A, so the second cd was never
+// checked (Opus review 2026-08-19 — a proven bypass of the state-dir deny).
+// Each token is a RUN of adjacent quoted/unquoted segments, because the shell
+// joins `".claude/session"-state` into one path; quotes are stripped from the
+// whole run.
+const CD_TOKEN_RE = /(?:cd|chdir|pushd|set-location|push-location)/;
+const CD_SEG_RE = /(?:"[^"]*"|'[^']*'|[^\s;&|()"']+)+/;
+const CD_CMD_RE = new RegExp(
+  `(?:^|[;&|\\r\\n()]|\\s)${CD_TOKEN_RE.source}((?:[^\\S\\r\\n]+${CD_SEG_RE.source})*)`,
+  "gi"
+);
+const CD_ARG_RE = new RegExp(CD_SEG_RE.source, "g");
 if (shellTool) {
   for (const match of command.matchAll(CD_CMD_RE)) {
     let target = "";
@@ -109,7 +119,12 @@ if (shellTool) {
     // 2). Check the decoded form too; the RAW form still covers Windows
     // `\`-separated paths, where the backslash is a real separator.
     const decoded = target.replace(/\\(.)/g, "$1");
-    const unresolvable = /[$%`]/.test(target);
+    // Statically unresolvable: variable expansion ($VAR/%VAR%/backtick) and
+    // shell glob/brace expansion (Opus review 2026-08-19 — `cd .clau[d]e/...`
+    // resolves at runtime to a path the literal matcher never sees). This is a
+    // self-certification gate, so fail closed whenever such a target appears
+    // in a command that also mentions the state directory.
+    const unresolvable = /[$%`*?[\]{}]/.test(target);
     if (cdTargetEntersStateDir(target) || cdTargetEntersStateDir(decoded) || (unresolvable && reviewStateDirectoryMentioned(command))) {
       deny("REVIEW PROOF GUARD: the review state directory is wrapper-owned and cannot become an interactive shell working directory.");
     }

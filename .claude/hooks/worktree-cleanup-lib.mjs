@@ -67,7 +67,8 @@ export function normPath(p) {
 }
 
 // Decide the fate of ONE worktree.
-//   fact: { path, branch, detached, locked, dirty, merged, lastActivityMs? }
+//   fact: { path, branch, detached, locked, dirty, merged, lastActivityMs?,
+//           hasAppliedLedgerEntries? }
 //     - merged: true iff the branch has ZERO commits whose patch is not already
 //       in origin/main (computed by the runner via `git cherry`, so squash/rebase
 //       merges count as merged — a plain ancestor check would miss those).
@@ -99,6 +100,13 @@ export function classifyWorktree(fact, ctx = {}) {
   if (fact.locked) return { action: "keep", reason: "locked" };
   // 5. Uncommitted changes = unfinished work; never discard.
   if (fact.dirty) return { action: "keep", reason: "dirty" };
+  // 5b. An unresolved applied-source ledger = a live apply recorded in this
+  //     worktree whose committed source was never proven (stop-wrap C3 guard).
+  //     The ledger lives in gitignored session-state, so "merged + clean"
+  //     cannot see it — sweeping the worktree would destroy the only record of
+  //     the un-contained apply (Opus review 2026-08-19). stop-wrap prunes the
+  //     ledger once the source is committed, which releases this keep.
+  if (fact.hasAppliedLedgerEntries) return { action: "keep", reason: "applied-ledger" };
   // 6. Unmerged commits = real un-shipped work; leave for human triage.
   if (!fact.merged) return { action: "keep", reason: "unmerged" };
   // 7. Only auto-remove harness-managed worktrees, never manual long-lived ones.

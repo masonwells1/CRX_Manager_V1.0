@@ -27,7 +27,7 @@
 // this hook cannot break a session. It only ever DELETES a regenerable cache
 // file — it never touches migrations, data, or source.
 
-import { readFileSync, existsSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, existsSync, rmSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
 import path from "node:path";
 
 import { withFileLock } from "./ledger-lock-lib.mjs";
@@ -62,7 +62,16 @@ try {
   // an apply, and it happens BEFORE the snapshot early-exit below so an apply
   // is recorded even when no snapshot file exists.
   const appliedName = String((payload?.tool_input || payload?.toolInput || {})?.name || "").trim();
-  if (appliedName) {
+  // A CLEARLY failed apply must not mint a ledger entry: the stop-wrap block
+  // message asserts "this SQL is running in production", and a syntax-error
+  // retry loop would otherwise stack phantom entries that committing a file can
+  // never clear (Opus review 2026-08-19). Only the EXPLICIT isError marker
+  // skips — error text buried in content still records, failing toward the
+  // alarm; stop-wrap's message documents how to clear a stale entry.
+  const toolResponse = payload?.tool_response ?? payload?.toolResponse;
+  const applyFailed = !!toolResponse && typeof toolResponse === "object" &&
+    (toolResponse.isError === true || toolResponse.is_error === true);
+  if (appliedName && !applyFailed) {
     try {
       const ledgerPath = path.join(projectDir, ".claude", "session-state", "applied-source-ledger.json");
       mkdirSync(path.dirname(ledgerPath), { recursive: true });
@@ -72,12 +81,20 @@ try {
         let entries = [];
         try { entries = JSON.parse(readFileSync(ledgerPath, "utf8")); } catch { /* new or corrupt → start fresh */ }
         if (!Array.isArray(entries)) entries = [];
+        // One row per migration name: a retried apply refreshes its timestamp
+        // instead of accumulating duplicates that each need separate clearing.
+        entries = entries.filter((e) => !(e && e.name === appliedName));
         entries.push({
           name: appliedName,
           ts: new Date().toISOString(),
           session: String(payload?.session_id || ""),
         });
-        writeFileSync(ledgerPath, JSON.stringify(entries, null, 2) + "\n");
+        // Write-then-rename so a reader (or a crash mid-write) never sees a
+        // truncated JSON file, which stop-wrap's corrupt-ledger path would
+        // fail-open on — silently disarming the guard.
+        const tmpPath = ledgerPath + "." + process.pid + ".tmp";
+        writeFileSync(tmpPath, JSON.stringify(entries, null, 2) + "\n");
+        renameSync(tmpPath, ledgerPath);
       });
     } catch { /* fail-open */ }
   }
