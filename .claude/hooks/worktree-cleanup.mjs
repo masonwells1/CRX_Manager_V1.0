@@ -22,7 +22,7 @@ import { readFileSync, existsSync, statSync, readdirSync, rmSync, writeFileSync 
 import { execFileSync, spawnSync } from "node:child_process";
 import path from "node:path";
 import { parseWorktreePorcelain } from "./worktree-awareness-lib.mjs";
-import { planCleanup, meaningfulDirt, ledgerHasEntries, IGNORABLE_DIRT_PATH, HARNESS_MARKER } from "./worktree-cleanup-lib.mjs";
+import { planCleanup, meaningfulDirt, ledgerKeepsWorktree, IGNORABLE_DIRT_PATH, HARNESS_MARKER } from "./worktree-cleanup-lib.mjs";
 
 const argv = process.argv.slice(2);
 const REPORT_ONLY = argv.includes("--report");
@@ -143,16 +143,19 @@ try {
   // Unresolved applied-source ledger = a recorded live apply whose committed
   // source stop-wrap never proved. Gitignored, so merged+clean can't see it;
   // sweeping the worktree would destroy the only record (Opus review
-  // 2026-08-19). NOTE this is NOT fail-toward-keep: a missing, unreadable, or
-  // corrupt ledger reads as "no entries" and the worktree stays sweepable —
-  // a corrupt ledger has no recoverable record to preserve, stop-wrap
-  // fail-opens on the same corruption, and failing toward keep would pin
-  // every worktree forever on any read error. Entry-shape rules live in
-  // ledgerHasEntries (worktree-cleanup-lib.mjs) so they are unit-tested.
+  // 2026-08-19). Fail toward KEEP on any doubt (CodeRabbit 2026-08-19): ENOENT
+  // (truly absent) is the ONLY sweepable case — unreadable or malformed keeps
+  // the worktree. The full decision lives in ledgerKeepsWorktree
+  // (worktree-cleanup-lib.mjs), where every branch is unit-tested.
   function hasAppliedLedgerEntries(wtPath) {
+    let rawText;
+    let readError = null;
     try {
-      return ledgerHasEntries(readFileSync(path.join(wtPath, ".claude", "session-state", "applied-source-ledger.json"), "utf8"));
-    } catch { return false; }
+      rawText = readFileSync(path.join(wtPath, ".claude", "session-state", "applied-source-ledger.json"), "utf8");
+    } catch (err) {
+      readError = err;
+    }
+    return ledgerKeepsWorktree({ readError, rawText });
   }
 
   // Build worktree facts.

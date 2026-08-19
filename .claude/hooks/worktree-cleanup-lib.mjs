@@ -60,14 +60,32 @@ export function meaningfulDirt(porcelainText) {
 // Does raw applied-source-ledger JSON text contain at least one REAL entry
 // (an object with a non-empty string name — the only shape the recorder
 // writes)? Pure so the parse/shape rules are unit-testable; the runner wraps
-// the file read. Throws on unparseable text — the caller decides what an
-// unreadable ledger means (worktree-cleanup.mjs treats it as "no entries":
-// a corrupt ledger has no recoverable record to preserve, and stop-wrap
-// fail-opens on the same corruption, so keeping the worktree would pin it
-// forever for a record nothing can read).
+// the file read. Throws on unparseable text — ledgerKeepsWorktree below decides
+// what an unreadable/malformed ledger means.
 export function ledgerHasEntries(rawText) {
   const ledger = JSON.parse(String(rawText));
   return Array.isArray(ledger) && ledger.some((e) => e && typeof e.name === "string" && e.name.trim());
+}
+
+// Given the result of trying to read a worktree's applied-source ledger, decide
+// whether that ledger's state should KEEP the worktree (block auto-cleanup).
+//   arg: { readError?: Error|null, rawText?: string }
+// Rules (fail toward KEEP on any doubt — CodeRabbit 2026-08-19):
+//   - readError with code "ENOENT"  → ledger truly absent → nothing recorded → DON'T keep (false)
+//   - any other readError (EACCES/EISDIR/I/O) → present but unreadable → KEEP (true)
+//   - rawText that parses            → keep iff it has a real entry (ledgerHasEntries)
+//   - rawText that fails to parse     → malformed, contents unknown → KEEP (true)
+// The earlier "corrupt/unreadable reads as no entries → sweepable" stance was
+// wrong: a read/parse failure is exactly when we can LEAST prove the worktree is
+// safe to destroy, and sweeping it can erase the sole record of an un-committed
+// live apply. Keeping costs only a manual cleanup.
+export function ledgerKeepsWorktree({ readError = null, rawText } = {}) {
+  if (readError) return Boolean(readError.code !== "ENOENT");
+  try {
+    return ledgerHasEntries(rawText);
+  } catch {
+    return true;
+  }
 }
 
 // Normalize a filesystem path for comparison: forward slashes, no trailing

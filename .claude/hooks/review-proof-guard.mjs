@@ -86,7 +86,13 @@ if (shellCommandViews(command).some((v) => reviewProofPathMentioned(v))) {
 // (read-only listing after a cd to somewhere unrelated). Targets that cannot be
 // resolved statically (contain $VAR/%VAR%/backtick) stay fail-closed whenever
 // the command also mentions the state directory.
-const shellTool = /(?:bash|powershell|pwsh|cmd|shell|terminal|exec|run_command)/i.test(toolName);
+// Gate on the PRESENCE of a command field, not only a known tool name: a shell-
+// capable MCP runner named e.g. `start_process`/`execute_command` carries a
+// `command` and would otherwise skip the destructive/cd checks entirely (Opus
+// review 2026-08-19, round 5 — HIGH: a name-only gate is bypassable). Known
+// shell tool names still match so a command-less shell tool is covered too.
+const shellTool = input.command != null || input.cmd != null ||
+  /(?:bash|powershell|pwsh|cmd|shell|terminal|exec|run_command)/i.test(toolName);
 
 // Deny targets that enter the state dir, either directly or as a component
 // step (`cd .claude` then `cd session-state` must not assemble the cwd).
@@ -96,6 +102,46 @@ function cdTargetEntersStateDir(target) {
   const parts = t.split("/").filter(Boolean);
   if (parts.some((p) => /^session-state$/i.test(p))) return true;
   return /^\.claude$/i.test(parts[parts.length - 1] || "");
+}
+
+// Protected directory/file names the state-dir guard must recognize even when a
+// shell glob obscures them. `rm -rf .clau*/session-state`, `find .clau*/... -delete`,
+// and `printf "[]" > …applied-source-ledger.jso*` all resolve to the real path at
+// runtime, yet the literal matchers (reviewStateDirectoryMentioned /
+// STATE_DIR_ANCESTOR_RE / reviewProofPathMentioned) never see a literal `.claude`
+// or `…ledger.json`, so they missed all three (Opus review 2026-08-19, round 5 —
+// two independent reviewers reproduced them). The cd scanner already failed
+// closed on glob metacharacters; these matchers did not.
+const PROTECTED_GLOB_TARGETS = [".claude", "session-state", "applied-source-ledger.json"];
+// A glob SEGMENT whose leading literal run could still expand to a protected name
+// (`.clau*` → `.claude`, `sess*` → `session-state`, `…ledger.jso*` → `…ledger.json`).
+// Fail closed. A too-generic lead (`*`, `*.tmp`, `x*`) is ignored so ordinary
+// deletes like `rm dist/*.js` or `rm -rf node_modules/.cache` are not over-blocked.
+function globSegCouldTargetProtected(seg) {
+  if (!/[*?[\]{}]/.test(seg)) return false;
+  const lead = (seg.match(/^[^*?[\]{}]*/)[0] || "").toLowerCase();
+  if (lead.length < 3) return false;
+  return PROTECTED_GLOB_TARGETS.some((name) => name.startsWith(lead));
+}
+// Component-aware state-dir reference (parity with cdTargetEntersStateDir): any
+// `/`- or `\`-separated segment that is exactly `.claude`/`session-state`, or a
+// glob that could expand to one. Catches a globbed ANCESTOR (`.clau*/session-state`
+// carries a literal `session-state` segment) without needing a literal `.claude`.
+function segmentsHitStateDir(value) {
+  const segs = String(value || "").replace(/\\/g, "/").split(/[\s"'=:/(){}|;&<>]+/);
+  return segs.some((s) => /^\.claude$/i.test(s) || /^session-state$/i.test(s) || globSegCouldTargetProtected(s));
+}
+// A redirect (`>`/`>>`) whose target enters the state dir truncates/overwrites a
+// wrapper-owned file even when the basename is globbed (`…ledger.jso*`) — which
+// the literal-basename proof-path matcher misses (Opus review 2026-08-19, round
+// 5). The wrappers write internally via Node fs and never shell-redirect into the
+// state dir, so any such redirect is illegitimate; fail closed.
+function redirectTargetsStateDir(value) {
+  const norm = String(value || "").replace(/\\/g, "/");
+  for (const m of norm.matchAll(/>>?\s*("[^"]*"|'[^']*'|[^\s;&|()<>]+)/g)) {
+    if (segmentsHitStateDir(m[1].replace(/["']/g, ""))) return true;
+  }
+  return false;
 }
 
 // Capture the whole argument run of each cd-like invocation, then resolve its
@@ -211,7 +257,7 @@ if (shellTool) {
   // Fail-closed by design: even a read-only command that merely MENTIONS the
   // state dir is denied when a destructive verb appears anywhere in it; run
   // reads and deletions of other files as separate commands.
-  const DESTRUCTIVE_VERB_RE = /(?:^|[;&|\r\n()"'\\]|\s)(?:rm|rmdir|del|erase|rd|ri|remove-item|unlink|shred|mv|move|mi|move-item|ren|rni|rename-item|trash)(?![\w.-])/i;
+  const DESTRUCTIVE_VERB_RE = /(?:^|[;&|\r\n()"'\\]|\s)(?:rm|rmdir|del|erase|rd|ri|remove-item|unlink|shred|mv|move|mi|move-item|ren|rni|rename-item|trash|truncate)(?![\w.-])/i;
   // `find` deletes by TRAVERSAL, never naming the target basename, so neither
   // DESTRUCTIVE_VERB_RE nor the basename protection fires — `find
   // .claude/session-state -delete` (or `-exec rm`/`-execdir`) wipes the exact
@@ -221,6 +267,17 @@ if (shellTool) {
   // still denied when it names the state dir — consistent with the fail-closed
   // stance below; run reads of other files as a separate command.
   const FIND_TRAVERSAL_DELETE_RE = /(?:^|[;&|\r\n()"'\\]|\s)find(?![\w.-])[\s\S]*?-(?:delete|exec(?:dir)?)\b/i;
+  // `git clean` (with -x/-X it reaches the git-ignored session-state dir) and
+  // `rsync --delete` (mirrors an empty source, emptying the target) wipe the
+  // ledger + proofs with NO rm/mv verb — a mundane "clean my worktree" command
+  // that silently erases the C3 record, which unlike proof forgery leaves no
+  // tamper-evidence (Opus review 2026-08-19, round 5 — both reproduced). Treated
+  // as destructive verbs alongside rm/find. NOTE the honest ceiling: a repo-root
+  // `git clean -fdx` that names NO path can never be name-caught, exactly like
+  // `node -e` deletion; those remain accepted residuals whose real boundary is
+  // GitHub branch protection + C3 tamper-evidence (see docs/reference/agent-guardrails.md).
+  const GIT_CLEAN_RE = /(?:^|[;&|\r\n()"'\\]|\s)git\s+clean(?![\w-])/i;
+  const RSYNC_DELETE_RE = /(?:^|[;&|\r\n()"'\\]|\s)rsync(?![\w.-])[\s\S]*?--delete/i;
   // Also deny when the destructive verb reaches the `.claude` ANCESTOR, not only
   // the full `.claude/session-state` path: `rm -rf .claude` and `mv .claude
   // /tmp` wipe the state dir (and the applied-source ledger) as collateral, yet
@@ -238,10 +295,17 @@ if (shellTool) {
   // still covers Windows `\`-separated paths, where the backslash is a real
   // separator and dropping it would corrupt the path.
   const destructiveViews = shellCommandViews(command);
-  const hitsDestructiveVerb = (v) => DESTRUCTIVE_VERB_RE.test(v) || FIND_TRAVERSAL_DELETE_RE.test(v);
-  const namesStateDir = (v) => reviewStateDirectoryMentioned(v) || STATE_DIR_ANCESTOR_RE.test(v);
-  if (destructiveViews.some((v) => hitsDestructiveVerb(v) && namesStateDir(v))) {
-    deny("REVIEW PROOF GUARD: destructive shell commands touching the .claude review state directory (or its parent) are blocked — it holds wrapper-owned proofs and the applied-source ledger. Stale ledger entries are removed with node scripts/remove-applied-ledger-entry.mjs after verifying the live migration ledger.");
+  const hitsDestructiveVerb = (v) =>
+    DESTRUCTIVE_VERB_RE.test(v) || FIND_TRAVERSAL_DELETE_RE.test(v) || GIT_CLEAN_RE.test(v) || RSYNC_DELETE_RE.test(v);
+  // namesStateDir now also matches a component-aware / glob-obscured reference
+  // (segmentsHitStateDir), so a globbed ancestor like `.clau*/session-state` is
+  // caught. redirectTargetsStateDir is a SEPARATE trigger (no destructive verb
+  // needed): a `>`/`>>` write into the state dir overwrites a wrapper-owned file
+  // even when its basename is globbed.
+  const namesStateDir = (v) =>
+    reviewStateDirectoryMentioned(v) || STATE_DIR_ANCESTOR_RE.test(v) || segmentsHitStateDir(v);
+  if (destructiveViews.some((v) => (hitsDestructiveVerb(v) && namesStateDir(v)) || redirectTargetsStateDir(v))) {
+    deny("REVIEW PROOF GUARD: destructive or overwriting shell commands touching the .claude review state directory (or its parent) are blocked — it holds wrapper-owned proofs and the applied-source ledger. Stale ledger entries are removed with node scripts/remove-applied-ledger-entry.mjs after verifying the live migration ledger.");
   }
 }
 if (shellTool && reviewStateDirectoryMentioned(hookCwd)) {

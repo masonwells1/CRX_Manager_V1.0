@@ -129,6 +129,23 @@ for (const payload of [
   { tool_name: "Bash", tool_input: { command: 'printf "[]" > .claude/session-state/applied-source"-"ledger.json' } },
   { tool_name: "Bash", tool_input: { command: "printf [] > applied-source\\-ledger.json" } },
   { tool_name: "Bash", tool_input: { command: 'printf {} > codex-review"-"forged.json' } },
+  // Opus review 2026-08-19 round 7 — the round-6 net still matched the state-dir
+  // path and the destructive verbs LITERALLY. Each of these executes against the
+  // real state dir but hid from the literal matcher:
+  //   (a) a glob on the `.claude` / `session-state` / ledger component expands to
+  //       the protected name at runtime (component-aware + glob-fail-closed);
+  { tool_name: "Bash", tool_input: { command: "rm -rf .clau*/session-state" } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf .clau*/sess*" } },
+  { tool_name: "Bash", tool_input: { command: "find .clau*/session-state -delete" } },
+  { tool_name: "Bash", tool_input: { command: "mv .clau*/session-state/applied-source-ledger.jso* /tmp/x" } },
+  //   (b) a `>`/`>>` write into the state dir overwrites a wrapper-owned file
+  //       even with NO destructive verb and a globbed basename;
+  { tool_name: "Bash", tool_input: { command: 'printf "[]" > .clau*/session-state/applied-source-ledger.jso*' } },
+  //   (c) `git clean` / `rsync --delete` / `truncate` delete or zero files but
+  //       were absent from the destructive-verb net.
+  { tool_name: "Bash", tool_input: { command: "git clean -fdx .claude/session-state" } },
+  { tool_name: "Bash", tool_input: { command: "rsync -a --delete /tmp/empty/ .claude/session-state/" } },
+  { tool_name: "Bash", tool_input: { command: "truncate -s0 .claude/session-state/applied-source-ledger.json" } },
 ]) {
   const result = run(payload);
   assert.equal(result.status, 0);
@@ -175,5 +192,18 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -rf .claude-cac
 // fine — only bare `.claude` as a whole component with a delete/exec counts.
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -rf build\\.clauderc-cache" } }).stdout, "");
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "find src -name '*.claudex' -delete" } }).stdout, "");
+// Round 7 non-regressions: the component-aware / glob-fail-closed / new-verb net
+// must not over-match. A glob with NO literal prefix (`*.js`), a destructive verb
+// on an unrelated path, and `git clean` / `rsync --delete` / `truncate` that name
+// no protected component all stay allowed. Only a glob whose LITERAL prefix could
+// expand to `.claude` / `session-state` / the ledger — or a redirect INTO the
+// state dir — is denied.
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm dist/*.js" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -rf node_modules/.cache" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "echo hi > /tmp/out" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "echo x > .claude-notes.txt" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "git clean -fdx dist" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "rsync -a --delete /tmp/a/ /tmp/b/" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "truncate -s0 /tmp/log" } }).stdout, "");
 
 console.log("OK - review proof guard checks passed.");

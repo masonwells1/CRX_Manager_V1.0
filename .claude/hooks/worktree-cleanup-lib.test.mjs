@@ -7,7 +7,7 @@ import {
   classifyWorktree, classifyBranch, planCleanup, normPath,
   meaningfulDirt, isIgnorableDirtLine, IGNORABLE_DIRT_PATH,
   PROTECTED_BRANCHES, HARNESS_MARKER, ACTIVE_WINDOW_MS,
-  ledgerHasEntries,
+  ledgerHasEntries, ledgerKeepsWorktree,
 } from "./worktree-cleanup-lib.mjs";
 
 let pass = 0;
@@ -152,6 +152,26 @@ ok(!ledgerHasEntries(JSON.stringify([{ bogus: true }, { name: 123 }, { name: "  
 ok(!ledgerHasEntries(JSON.stringify({ name: "not-an-array" })), "a non-array ledger has no entries");
 assert.throws(() => ledgerHasEntries("{not json"), "unparseable text throws — the caller decides");
 pass++;
+
+// ── ledgerKeepsWorktree — the read-result → keep decision (CodeRabbit 2026-08-19) ──
+// Fail toward KEEP on any doubt: ENOENT (truly absent) is the ONLY case that
+// lets a worktree be swept; unreadable or malformed keeps it.
+ok(!ledgerKeepsWorktree({ readError: Object.assign(new Error("no such file"), { code: "ENOENT" }) }),
+  "absent ledger (ENOENT) → does NOT keep (sweepable)");
+ok(ledgerKeepsWorktree({ readError: Object.assign(new Error("permission denied"), { code: "EACCES" }) }),
+  "present-but-unreadable (EACCES) → KEEP");
+ok(ledgerKeepsWorktree({ readError: Object.assign(new Error("is a directory"), { code: "EISDIR" }) }),
+  "present-but-unreadable (EISDIR) → KEEP");
+ok(ledgerKeepsWorktree({ readError: new Error("mystery I/O") }),
+  "read error with NO code → present, cause unknown → KEEP");
+ok(ledgerKeepsWorktree({ rawText: "{not json" }),
+  "malformed ledger text → contents unknown → KEEP");
+ok(ledgerKeepsWorktree({ rawText: JSON.stringify([{ name: "add_widget_flag" }]) }),
+  "readable ledger WITH a real entry → KEEP");
+ok(!ledgerKeepsWorktree({ rawText: JSON.stringify([]) }),
+  "readable EMPTY ledger → no entries → does NOT keep");
+ok(!ledgerKeepsWorktree({ rawText: JSON.stringify([{ bogus: true }]) }),
+  "readable junk-only ledger → no real entry → does NOT keep");
 
 // normPath sanity
 eq(normPath("C:\\A\\B\\"), "c:/a/b", "normPath lowercases + forward-slashes + strips trailing");

@@ -97,6 +97,60 @@ Documented follow-ups deliberately not fixed in this PR: ledger-lock holder-toke
 the stale-eviction/timeout window mismatch (single-machine harness, bounded impact), and the
 empty-`tool_input.name` recorder skip (no observed producer).
 
+Second blind adversarial Opus round (2026-08-19, PR #423, commit `61e946af`): both reviewers
+again returned BLOCKERS with one shared root cause — the cd-scanner already ran over normalized
+command views, but the sibling destructive-verb net and the proof/ledger path matcher scanned the
+raw string only. A `shellCommandViews` helper now yields four views (raw, quote-stripped,
+backslash-dropped, both) and both nets run over every view, closing quote-composed verbs
+(`r"m" -rf`), a backslash-dropped `.claude` ancestor (`.clau\de`), and quote/backslash-split
+ledger/proof filenames. `find` used as a traversal delete (`-delete`/`-exec`/`-execdir`) is now a
+destructive verb (a traversal delete never names the basename). stop-wrap forces the C locale
+around its unborn-HEAD probe so the English-stderr match holds on a non-English git, and its
+dedup key uses a visible escape sequence instead of a raw control byte (byte-identical, keeps the
+file clean text). All mutation-proved red-without/green-with.
+
+Third blind adversarial Opus round (2026-08-19, PR #423): both reviewers found the round-2 net
+still matched the state-dir path and the destructive verbs LITERALLY, missing three evasion
+classes, all now fixed and each mutation-proved load-bearing (neutering the detector lets the
+exploit through; the shipped guard denies it):
+
+- **Glob on a protected path component:** a wildcard whose literal prefix could expand to
+  `.claude`, `session-state`, or `applied-source-ledger.json` (`rm -rf .clau*/session-state`,
+  `rm -rf .clau*/sess*`, `find .clau*/session-state -delete`) is now treated as naming the state
+  dir. The path matcher is component-aware (splits on shell separators) and fails closed on any
+  glob whose leading literal is a prefix of a protected name — a bare-`*` glob with no such prefix
+  (`rm dist/*.js`) still passes.
+- **Redirect INTO the state dir with no destructive verb:** a `>`/`>>` write that lands a file in
+  the state dir overwrites a wrapper-owned proof or the ledger even though the verb (`printf`,
+  `echo`) is not destructive and the basename may be globbed
+  (`printf "[]" > .claude/session-state/x.jso*`). Such a redirect target is now its own deny
+  trigger, independent of the verb net.
+- **Omitted deleting verbs:** `git clean`, `rsync --delete`, and `truncate` delete or zero files
+  but were absent from the destructive-verb set; all three are added, and each denies only when it
+  also names the state dir (`git clean -fdx dist`, `rsync --delete /tmp/a/ /tmp/b/`,
+  `truncate -s0 /tmp/log` all still pass).
+
+**worktree-cleanup fail-closed on an unreadable ledger (CodeRabbit Major, 2026-08-19):** the
+applied-source-ledger read now keeps the worktree unless the ledger is provably absent. Only
+`ENOENT` (truly no file) is sweepable; a present-but-unreadable ledger (EACCES/EISDIR/I/O) or a
+malformed/unparseable one keeps the worktree, because a read or parse failure is exactly when the
+worktree can least be proven safe to destroy and sweeping it could erase the sole record of an
+un-committed live apply. The decision is a pure `ledgerKeepsWorktree` helper in
+`worktree-cleanup-lib.mjs` with unit tests for every branch (absent / unreadable / malformed /
+real-entry / empty / junk-only). This reverses the earlier "corrupt reads as no entries" stance,
+which was wrong.
+
+**Accepted residual ceiling (both reviewers, independently):** a destructive-verb/path DENYLIST is
+inherently incomplete and cannot be finished by enumeration. Proof FORGERY is content-bound
+(hash-checked) and fully contained; ledger DELETION has partial tamper-evidence (C3 source
+containment) but no local hook can catch every possible deleter — a repo-root `git clean -fdx`
+that names nothing, interpreter indirection (`node -e`, write-a-script-then-run), or a novel tool
+can still remove local state. These are LOCAL dev-machine defense-in-depth. The real boundary is
+GitHub branch protection (`protect-main`: no direct pushes, PR + passing checks required) plus the
+C3 tamper-evidence that makes an un-committed live apply visible at session end — not the shell
+denylist. The denylist raises the cost of the easy paths; it is explicitly not claimed to be
+exhaustive.
+
 Blind adversarial Opus round 2 (2026-08-19, same PR — two fresh independent blind Opus
 reviewers, both returned BLOCKERS; every confirmed finding fixed and each new protection
 mutation-proved red-without/green-with, 7 mutations total):
