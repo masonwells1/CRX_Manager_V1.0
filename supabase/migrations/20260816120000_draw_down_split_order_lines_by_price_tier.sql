@@ -101,16 +101,19 @@
 -- EXACTLY.  A fail-closed assertion (DRAW_ALLOCATION_MISMATCH) refuses the
 -- whole draw if they ever do not.
 --
--- Lines written before this migration carry no stamp, and revising the quote
--- clears the stamps on its drawn lines: save_quote rebuilds a quote by deleting
--- and reinserting its sections, and this migration switches
--- order_items_quote_item_id_fkey to ON DELETE SET NULL so that rebuild succeeds
--- instead of aborting on a foreign key.  (See the FK block near the end of this
--- file for why SET NULL rather than a deferred constraint.)  Those unstamped
--- units walk off the FRONT of the tier list, and
--- DRAW_MIXED_TIER_UNMATCHED_LINE refuses the draw outright the moment the
--- product carries more than one distinct (price, cost) -- so the front-walk
--- only ever runs where it cannot change what the customer is billed.
+-- Lines written before this migration carry no stamp.  Revising a quote does
+-- NOT clear the stamps on its drawn lines: save_quote rebuilds a quote by
+-- deleting and reinserting its sections, and this migration makes
+-- order_items_quote_item_id_fkey DEFERRABLE INITIALLY DEFERRED while keeping
+-- ON DELETE NO ACTION, so the link may be transiently broken inside that one
+-- transaction and is re-checked at COMMIT -- by which time save_quote has
+-- reinserted the same quote_items ids.  (See the FK block near the end of
+-- this file for the reuse path it rests on, and for the one narrow shape
+-- that still fails closed.)  Genuinely unstamped units walk off the FRONT of
+-- the tier list, and DRAW_MIXED_TIER_UNMATCHED_LINE refuses the draw outright
+-- the moment the product carries more than one distinct (price, cost) -- so
+-- the front-walk only ever runs where it cannot change what the customer is
+-- billed.
 --
 -- Acres are per-line, not prorated.  Each emitted line takes the share of ITS
 -- OWN booked line's acreage that the draw takes of ITS OWN units, so a line is
@@ -1002,12 +1005,19 @@ BEGIN
     -- snapshot, and anything else that reasons off that pair inherits the
     -- problem -- but they no longer reach tier attribution.
     --
-    -- THE ONE THING THE STAMP DOES NOT SURVIVE, and what covers that:
+    -- WHAT THE STAMP SURVIVES, and what still gets past it:
     -- save_quote DELETEs quote_sections on every revision, cascading to
-    -- quote_items, and re-mints them. It re-uses ids positionally per product
-    -- on a best-effort basis but does not guarantee it, so a revision can
-    -- orphan a stamp. Those lines -- together with lines written before this
-    -- migration, which carry no stamp at all -- fall into v_unmatched below,
+    -- quote_items, and reinserts them. The deferred FK installed near the end
+    -- of this file moves the referential check to COMMIT, and save_quote reuses
+    -- the same quote_items id on both of its paths, so an ordinary revision
+    -- leaves every stamp intact. A stamp can no longer be ORPHANED at all: the
+    -- FK is still NO ACTION, so a save that failed to bring an id back would
+    -- abort the whole transaction rather than commit a dangling reference.
+    --
+    -- What still lands unattributed is narrower, and both cases are covered the
+    -- same way: lines written before this migration, which carry no stamp; and
+    -- lines whose quote line survives but is no longer a TIER, because its
+    -- total_units_needed was edited to 0. Those fall into v_unmatched below,
     -- walk off the FRONT of the list, and are REFUSED outright by
     -- DRAW_MIXED_TIER_UNMATCHED_LINE the moment the product carries more than
     -- one distinct (price, cost). So the front-walk only ever runs where every
@@ -1090,17 +1100,22 @@ BEGIN
       -- half of the LEFT JOIN further down, which is now keyed on the same
       -- identity (Codex review 2026-08-16, P1 3792521137 / 3792687211).
       --
-      -- Three populations fall in here, and all three want the same treatment:
+      -- Two populations fall in here, and both want the same treatment:
       --
       --   1. quote_item_id IS NULL -- written by the pre-cutover body, which
       --      stamped nothing. `qi.id = NULL` is never true, so these are caught
       --      with no special case.
-      --   2. quote_item_id names a quote line that no longer exists. save_quote
-      --      DELETEs quote_sections and re-mints quote_items on every revision
-      --      (it re-uses ids positionally per product on a best-effort basis,
-      --      but does not guarantee it), so a revision can orphan a stamp.
-      --   3. quote_item_id names a line that survives but is no longer a tier
+      --   2. quote_item_id names a line that survives but is no longer a tier
       --      (its total_units_needed was edited to 0 or below).
+      --
+      -- A third population -- "quote_item_id names a quote line that no longer
+      -- exists" -- was listed here while the FK was ON DELETE SET NULL, and is
+      -- now unreachable. The FK is NO ACTION DEFERRABLE INITIALLY DEFERRED, so
+      -- a revision that failed to bring an id back aborts at COMMIT instead of
+      -- committing an orphan. Nothing can leave a stamp pointing at a deleted
+      -- quote line. This test still tolerates it (the NOT EXISTS simply
+      -- matches), so the code stays correct if that ever changes -- but no live
+      -- route produces it.
       --
       -- All three are counted into v_unmatched, walked off the FRONT of the
       -- document-ordered tier list by v_skip, and -- crucially -- refused
@@ -1151,8 +1166,13 @@ BEGIN
     -- Two live routes still land here:
     --
     --   1. Lines drawn before this migration, which carry no stamp at all.
-    --   2. save_quote re-minting quote_items on a revision and not landing on
-    --      the same id, which orphans a stamp that used to resolve.
+    --   2. A quote line that survives a revision but is edited down to zero
+    --      units, so it stops being a tier while lines billed against it are
+    --      still standing.
+    --
+    -- A revision ORPHANING a stamp is no longer one of them: the deferred FK
+    -- keeps the id alive across save_quote's delete-and-reinsert, and refuses
+    -- to commit if it ever did not.
     --
     -- Worked example (Codex review 2026-08-16, CRX-MONEY-TIER-001, restated for
     -- the stamp): book 100 units at $1.00 and 100 at $2.00; draw the $1.00 tier
@@ -1284,28 +1304,85 @@ BEGIN
       -- above -- see the long comment there for why the two reversal states
       -- differ.
       --
-      -- SPLIT IN TWO by provenance (Codex review 2026-08-16, P1 3792521137 /
-      -- 3792687211). Every line this body writes now carries the id of the
-      -- quote line it was drawn from, so it can be matched back EXACTLY. Lines
+      -- KEYED BY PROVENANCE (Codex review 2026-08-16, P1 3792521137 /
+      -- 3792687211). Every line this body writes carries the id of the quote
+      -- line it was drawn from, so it can be matched back EXACTLY. Lines
       -- written by the OLD body carry NULL there and are handled separately
       -- below, by the same front-walk v_skip has always used.
+      --
+      -- SPLIT AGAIN BY PRICE (Mason's rule, 2026-08-19). Changing the price on
+      -- a partly-drawn booking must not rewrite what the customer was already
+      -- billed: already-drawn units KEEP the price they were billed at, and
+      -- only the units still owing use the new price. A genuine early-price
+      -- error is corrected with a credit memo, not by silently rebilling
+      -- delivered product.
+      --
+      -- So each tier's history divides in two, on whether the order line was
+      -- billed at the price the quote line carries TODAY:
+      --
+      --   * units_current / money -- billed at the current price. These are
+      --     still "live" against this price, so they remain the telescoping
+      --     rounding basis: the next draw bills the running total of the whole
+      --     price band minus the cents already standing in it, which is what
+      --     stops four 0.25-unit draws on a $1.01 tier from billing $1.00.
+      --   * units_settled -- billed at some other price. These are FINISHED.
+      --     They still consume the tier's capacity (the customer has had that
+      --     product and been billed for it, so it is no longer available to
+      --     draw), but they are never re-based and their money never enters
+      --     the basis. Re-basing them is exactly the rebilling Mason ruled out.
+      --
+      -- The comparison is against ti.price -- the quote line's price_per_unit
+      -- as it stands now -- not against a remembered figure, so it re-partitions
+      -- correctly if the price is changed again, or changed back.
+      --
+      -- IS NOT DISTINCT FROM, not =, so a NULL price on a billed line lands in
+      -- units_settled rather than vanishing from both halves. ti.price itself
+      -- cannot be NULL here: BOOKED_PRICE_REQUIRED above refuses the draw on a
+      -- booked line with units > 0 and no price, and tiers only carries lines
+      -- with units > 0. Numeric equality is exact-decimal in PostgreSQL and
+      -- ignores trailing-zero scale, so 1.00 and 1.0000 match as they should.
+      --
+      -- The JOIN to tiers is what makes ti.price reachable. It cannot change
+      -- which rows are counted: the outer LEFT JOIN below already keeps only
+      -- billed rows whose quote_item_id names a live tier, and every billed row
+      -- that does NOT is counted by the v_unmatched front-walk instead. The
+      -- partition against v_unmatched is therefore unchanged -- still exactly
+      -- one side per billed line.
       billed_stamped AS (
         SELECT
           oi.quote_item_id       AS quote_item_id,
+          -- Units billed at the tier's CURRENT price -- the live rounding basis.
           SUM(
-            CASE WHEN o.status = 'cancelled'
-                 THEN COALESCE(oi.quantity_delivered, 0)
-                 ELSE COALESCE(oi.total_units_needed, 0)
-            END) AS units,
-          -- MONEY actually standing against this tier key, in dollars, on the
-          -- same surviving quantity the units column counts (Codex push-proof
-          -- 2026-08-16, CRX-MONEY-LIFECYCLE-001, High).
+            CASE WHEN oi.price_per_unit IS NOT DISTINCT FROM ti.price
+                 THEN CASE WHEN o.status = 'cancelled'
+                           THEN COALESCE(oi.quantity_delivered, 0)
+                           ELSE COALESCE(oi.total_units_needed, 0)
+                      END
+                 ELSE 0
+            END) AS units_current,
+          -- Units billed at some OTHER price -- settled. Capacity only.
+          SUM(
+            CASE WHEN oi.price_per_unit IS DISTINCT FROM ti.price
+                 THEN CASE WHEN o.status = 'cancelled'
+                           THEN COALESCE(oi.quantity_delivered, 0)
+                           ELSE COALESCE(oi.total_units_needed, 0)
+                      END
+                 ELSE 0
+            END) AS units_settled,
+          -- MONEY actually standing against this tier key AT THE CURRENT PRICE,
+          -- in dollars, on the same surviving quantity units_current counts
+          -- (Codex push-proof 2026-08-16, CRX-MONEY-LIFECYCLE-001, High).
           --
           -- The money and the units MUST describe the same surviving rows, so
           -- the cancelled branch is mirrored here: a cancelled order keeps only
           -- its delivered units, so it may keep only the value of those units,
           -- not the whole line's total_price. Valuing them at the line's own
           -- price_per_unit is exact -- that is the price they were billed at.
+          --
+          -- Settled money is deliberately absent. It is not zero and it is not
+          -- forgotten: it stands on the invoice exactly as billed. It simply
+          -- takes no part in the arithmetic for the units still owing, because
+          -- those units are priced from a fresh basis at the new price.
           --
           -- Why this column has to exist at all: the previous version re-based
           -- the running total on surviving UNITS and assumed the surviving
@@ -1316,13 +1393,17 @@ BEGIN
           -- $0.24 for half a unit that costs $0.25. Which of two identical
           -- draws was voided must not change the bill.
           SUM(
-            CASE WHEN o.status = 'cancelled'
-                 THEN ROUND(COALESCE(oi.price_per_unit, 0)
-                            * COALESCE(oi.quantity_delivered, 0), 2)
-                 ELSE COALESCE(oi.total_price, 0)
+            CASE WHEN oi.price_per_unit IS NOT DISTINCT FROM ti.price
+                 THEN CASE WHEN o.status = 'cancelled'
+                           THEN ROUND(COALESCE(oi.price_per_unit, 0)
+                                      * COALESCE(oi.quantity_delivered, 0), 2)
+                           ELSE COALESCE(oi.total_price, 0)
+                      END
+                 ELSE 0
             END) AS money
         FROM order_items oi
         JOIN orders o ON o.id = oi.order_id
+        JOIN tiers ti ON ti.quote_item_id = oi.quote_item_id
         WHERE o.quote_id = p_quote_id
           AND o.booking_draw IS TRUE
           AND o.status <> 'voided'
@@ -1337,6 +1418,13 @@ BEGIN
         t.unit_size,
         t.line_acres,
         t.line_units,
+        -- What this tier still has available to draw. BOTH halves of the
+        -- billed history are subtracted: units already billed at the current
+        -- price, and units settled at an earlier price. A settled unit has been
+        -- delivered and charged, so it is gone from the booking whatever price
+        -- it went out at -- treating it as still available would sell the same
+        -- product twice.
+        --
         -- GREATEST(..., 0) clamps PER TIER (drift review 2026-08-16, L7) so a
         -- negative tier cannot silently eat a neighbour's units.
         --
@@ -1348,28 +1436,47 @@ BEGIN
         -- too SMALL. So the excess this clamp discards was invisible. It is
         -- carried out as the "over" column below and refused after the loop
         -- (DRAW_TIER_OVERCONSUMED). See that guard for the worked example.
-        GREATEST(t.units - COALESCE(b.units, 0), 0) AS units,
+        GREATEST(
+          t.units
+            - COALESCE(b.units_current, 0)
+            - COALESCE(b.units_settled, 0), 0) AS units,
         -- Units billed against this tier BEYOND what the tier now holds --
-        -- exactly the quantity the clamp above throws away.
-        GREATEST(COALESCE(b.units, 0) - t.units, 0) AS over,
-        -- Units ALREADY billed at this tier key by earlier draws, clamped to
-        -- what the tier holds (the over-billed excess is refused separately by
-        -- DRAW_TIER_OVERCONSUMED, and that guard aborts the whole transaction,
-        -- so the clamp cannot ship a wrong number -- it only keeps this column
-        -- from going out of range on a run that is about to roll back anyway).
-        --
+        -- exactly the quantity the clamp above throws away. Counted across both
+        -- halves, for the same reason: an over-draw is an over-draw whether the
+        -- excess was billed at today's price or an earlier one.
+        GREATEST(
+          COALESCE(b.units_current, 0)
+            + COALESCE(b.units_settled, 0)
+            - t.units, 0) AS over,
+        -- Units already billed at this tier's CURRENT price by earlier draws.
         -- This is the rounding BASIS for the money below, not a quantity the
         -- loop spends. See the telescoping comment at v_line_total.
-        LEAST(COALESCE(b.units, 0), t.units) AS prior,
-        -- Cents already standing against this tier key. Deliberately NOT
-        -- clamped the way "prior" is: this is a statement of fact about money
-        -- that has been billed, and shrinking it would re-invent the very
-        -- assumption CRX-MONEY-LIFECYCLE-001 was about -- that the surviving
-        -- lines hold whatever the arithmetic says they should. The one case
-        -- where it can exceed the tier's own extension is an over-billed tier,
-        -- which DRAW_TIER_OVERCONSUMED refuses outright after the loop; the
-        -- GREATEST at v_line_total keeps the interim value in range until that
-        -- guard aborts the transaction.
+        --
+        -- Settled units are excluded on purpose. That is the whole of Mason's
+        -- rule in one expression: a unit billed at a price the quote no longer
+        -- carries is finished, so it must not appear in a running total that
+        -- the next draw subtracts money from. If it did, the new units would be
+        -- billed the difference between the old and new price on quantity the
+        -- customer has already paid for -- a silent rebill.
+        --
+        -- Clamped to the current-price budget the line still has, which is its
+        -- booked units less what is settled. (The over-billed excess is refused
+        -- separately by DRAW_TIER_OVERCONSUMED, and that guard aborts the whole
+        -- transaction, so the clamp cannot ship a wrong number -- it only keeps
+        -- this column from going out of range on a run that is about to roll
+        -- back anyway.)
+        LEAST(
+          COALESCE(b.units_current, 0),
+          GREATEST(t.units - COALESCE(b.units_settled, 0), 0)) AS prior,
+        -- Cents already standing against this tier key AT THE CURRENT PRICE.
+        -- Deliberately NOT clamped the way "prior" is: this is a statement of
+        -- fact about money that has been billed, and shrinking it would
+        -- re-invent the very assumption CRX-MONEY-LIFECYCLE-001 was about --
+        -- that the surviving lines hold whatever the arithmetic says they
+        -- should. The one case where it can exceed the tier's own extension is
+        -- an over-billed tier, which DRAW_TIER_OVERCONSUMED refuses outright
+        -- after the loop; the GREATEST at v_line_total keeps the interim value
+        -- in range until that guard aborts the transaction.
         COALESCE(b.money, 0) AS money
       FROM tiers t
       LEFT JOIN billed_stamped b
@@ -1637,11 +1744,12 @@ BEGIN
     -- This migration now carries the provenance an earlier draft of this
     -- comment described as out of scope: every line written below stamps
     -- order_items.quote_item_id, so both scenarios are normally caught EARLIER
-    -- and more precisely than here. In the revision case the stamps are cleared
-    -- by the FK ON DELETE SET NULL installed further down, and the unmatched
-    -- -line guard refuses the next draw on any multi-tier product before the
-    -- arithmetic above ever runs; in the cutover-race case a late legacy line
-    -- carries no stamp and is caught the same way.
+    -- and more precisely than here. In the revision case the stamps SURVIVE:
+    -- the deferred FK installed further down lets save_quote delete and
+    -- reinsert the same quote_items ids inside one transaction, so the next
+    -- draw resolves attribution by identity and never reaches this net at
+    -- all; in the cutover-race case a late legacy line carries no stamp and
+    -- is caught the same way.
     --
     -- This refusal stays as the net beneath both, for the residue the stamp
     -- cannot reach: a product whose tiers all share ONE (price, cost) -- which
@@ -1868,7 +1976,7 @@ BEGIN
 END;
 $qty_check$;
 
--- --- Make the stamp survivable: order_items.quote_item_id ON DELETE SET NULL --
+-- --- Make the stamp survivable: defer order_items_quote_item_id_fkey --------
 -- Without this the stamp introduced above BREAKS QUOTE EDITING outright.
 --
 -- The chain, each link read from live on 2026-08-19:
@@ -1887,30 +1995,53 @@ $qty_check$;
 -- contains no reference to orders, to booking_draw, or to a QUOTE_LOCKED
 -- refusal.
 --
--- ON DELETE SET NULL is the fix, and it is chosen over the two alternatives
--- deliberately:
---   * DEFERRABLE INITIALLY DEFERRED would let provenance survive a revision,
---     because save_quote reuses a quote line uuid when the client echoes it.
---     But that reuse is CONDITIONAL on the client echoing ids, so editing would
---     work or hard-fail depending on which page saved the quote -- a raw
---     PostgreSQL error at COMMIT, at unpredictable moments, in front of a
---     non-technical owner.
---   * Not stamping at all abandons the provenance this migration exists for.
--- Under SET NULL a revision clears the stamps on that quote drawn lines and
--- nothing errors. Those lines then fall into the already-documented front-walk,
--- and DRAW_MIXED_TIER_UNMATCHED_LINE refuses the next draw the moment the
--- product carries more than one distinct (price, cost) -- i.e. exactly when the
--- lost stamp could change what the customer is billed, and never otherwise. A
--- single-tier booking loses nothing at all. Fail-closed in both directions:
--- editing never breaks, and money is never guessed.
+-- DEFERRABLE INITIALLY DEFERRED, keeping ON DELETE NO ACTION, is the fix. The
+-- check moves from the end of that DELETE to COMMIT, and by COMMIT save_quote
+-- has already reinserted the quote's lines under the SAME ids. The link is
+-- therefore only transiently broken, inside one transaction, and the
+-- provenance stamp SURVIVES an ordinary revision -- which is the entire point
+-- of stamping it.
 --
--- This also fixes a pre-existing latent bug on the full-conversion path, whose
--- one stamped line today would have blocked a revision of its own quote.
+-- That rests on save_quote reusing the same quote_items id, which it does on
+-- BOTH of its paths (live prosrc, read 2026-08-19):
+--   * the primary path reuses an id the client echoes in the payload;
+--   * the id-less fallback matches unconsumed prior lines of the same product
+--     and reuses one of their ids. This is the path that actually runs today:
+--     QuoteBuilder.tsx and BulkQuoteImport.tsx both send lines with no id.
+-- An earlier draft of this file rejected DEFERRABLE on the belief that reuse
+-- required the client to echo ids, so editing would "work or hard-fail
+-- depending on which page saved the quote". That premise was wrong in both
+-- halves: no current page echoes ids, and the fallback reuses without them.
+--
+-- ON DELETE SET NULL was that earlier choice and is now REJECTED, because
+-- save_quote runs its DELETE on EVERY save of an existing quote -- including a
+-- save that changes nothing. SET NULL would therefore wipe every stamp on
+-- every save, which (a) resets the telescoping rounding basis and re-opens the
+-- fractional overbill this migration exists to close, and (b) strands a
+-- partly-drawn two-price booking behind DRAW_MIXED_TIER_UNMATCHED_LINE, whose
+-- message tells the operator to undo a quote revision that SET NULL has
+-- already made impossible to undo. Deferring the check keeps both doors open.
+--
+-- Residual, deliberately NOT closed in this migration (recorded in
+-- docs/manual/KNOWN_ISSUES.md): the id-less fallback reuses the LOWEST
+-- unconsumed prior id for a product, not the operator's line. On a quote
+-- carrying TWO lines of one product this is normally unreachable, because
+-- re-saving such a quote already fails closed on QUOTE_ITEM_AMBIGUOUS_COST.
+-- The one crack is deleting one of the two lines -- that sends a single id-less
+-- row, so the ambiguity test passes -- while the two lines share a cost. One
+-- prior id then never returns, and if an order line was stamped with it the
+-- save aborts at COMMIT on a raw foreign-key error. That is fail-closed: the
+-- whole save rolls back, no money moves, and no stamp is silently lost.
+-- Closing it properly means giving save_quote real line identity, which is the
+-- same defect QUOTE_ITEM_AMBIGUOUS_COST already is, with its own blast radius
+-- and its own PR.
 --
 -- Same drift discipline as the CHECK above: adopt nothing unread. If the FK is
--- already SET NULL this is a no-op; if it is anything other than the exact rule
--- captured from live, the apply stops.
-DO $fk_setnull$
+-- already the deferred rule this is a no-op; anything else stops the apply. ON
+-- DELETE SET NULL in particular is NOT adopted silently -- it is the retired
+-- design, and finding it live would mean something other than this file put it
+-- there.
+DO $fk_deferred$
 DECLARE
   -- Compared STRUCTURALLY, on catalog columns, not on pg_get_constraintdef
   -- text. That rendering schema-qualifies the referenced table only when it is
@@ -1918,18 +2049,23 @@ DECLARE
   -- a false FK_RULE_DRIFT abort under an apply session with a different
   -- search_path. This file pins search_path only inside the function body, not
   -- for the session, so the difference is real. Catalog columns do not move.
-  --   confdeltype  'a' = NO ACTION, 'n' = SET NULL
-  --   confupdtype  'a' = NO ACTION on update
+  --   confdeltype   'a' = NO ACTION, 'n' = SET NULL
+  --   confupdtype   'a' = NO ACTION on update
   --   confmatchtype 's' = MATCH SIMPLE
+  --   condeferrable / condeferred are checked separately from the shape below,
+  --   because deferrability is precisely what this block changes.
   -- Every value below was read from live on 2026-08-19.
   v_deltype "char";
+  v_deferrable boolean;
+  v_deferred boolean;
   v_shape_ok boolean;
   v_def text;
 BEGIN
   SELECT c.confdeltype,
+         c.condeferrable,
+         c.condeferred,
          (c.confupdtype = 'a'
           AND c.confmatchtype = 's'
-          AND c.condeferrable IS FALSE
           AND c.convalidated IS TRUE
           AND c.confrelid = 'public.quote_items'::regclass
           AND array_length(c.conkey, 1) = 1
@@ -1939,7 +2075,7 @@ BEGIN
           AND (SELECT a.attname FROM pg_attribute a
                WHERE a.attrelid = c.confrelid AND a.attnum = c.confkey[1]) = 'id'),
          pg_get_constraintdef(c.oid)
-  INTO v_deltype, v_shape_ok, v_def
+  INTO v_deltype, v_deferrable, v_deferred, v_shape_ok, v_def
   FROM pg_constraint c
   WHERE c.conrelid = 'public.order_items'::regclass
     AND c.conname = 'order_items_quote_item_id_fkey'
@@ -1950,10 +2086,11 @@ BEGIN
       'FK_MISSING: order_items_quote_item_id_fkey does not exist as a foreign key, so the provenance stamp this migration writes would reference quote lines with nothing enforcing that they exist. Refusing to install a stamp with no referential integrity behind it.';
   ELSIF NOT v_shape_ok THEN
     RAISE EXCEPTION
-      'FK_RULE_DRIFT: order_items_quote_item_id_fkey is (%), which is not the single-column, non-deferrable, validated quote_item_id -> quote_items(id) reference this migration was written against; refusing to replace an unverified constraint', v_def;
-  ELSIF v_deltype = 'n' THEN
+      'FK_RULE_DRIFT: order_items_quote_item_id_fkey is (%), which is not the single-column, validated quote_item_id -> quote_items(id) reference this migration was written against; refusing to replace an unverified constraint', v_def;
+  ELSIF v_deltype = 'a' AND v_deferrable IS TRUE AND v_deferred IS TRUE THEN
+    -- Already exactly the rule this block installs.
     NULL;
-  ELSIF v_deltype = 'a' THEN
+  ELSIF v_deltype = 'a' AND v_deferrable IS FALSE THEN
     ALTER TABLE public.order_items
       DROP CONSTRAINT order_items_quote_item_id_fkey;
     -- Re-added VALIDATED, not NOT VALID: idx_order_items_quote_item already
@@ -1962,13 +2099,14 @@ BEGIN
     ALTER TABLE public.order_items
       ADD CONSTRAINT order_items_quote_item_id_fkey
       FOREIGN KEY (quote_item_id) REFERENCES public.quote_items(id)
-      ON DELETE SET NULL;
+      ON DELETE NO ACTION
+      DEFERRABLE INITIALLY DEFERRED;
   ELSE
     RAISE EXCEPTION
       'FK_RULE_DRIFT: order_items_quote_item_id_fkey is (%), which is neither the rule this migration was written against nor the rule it installs; refusing to replace an unverified constraint', v_def;
   END IF;
 END;
-$fk_setnull$;
+$fk_deferred$;
 
 -- --- Postflight: prove the shape and the security posture --------------------
 DO $postflight$
@@ -2058,17 +2196,39 @@ BEGIN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: the draw no longer stamps order_items.quote_item_id -- tier attribution would be reading a column the writes never populate, and every new line would fall through to the front-walk';
   END IF;
 
-  -- The stamp and the FK rule are one mechanism, not two. If the constraint is
-  -- left at NO ACTION while the draw stamps, save_quote raises a raw
-  -- foreign-key violation on the next edit of any partially drawn quote, so
-  -- this asserts the rule that makes the stamp survivable actually landed.
+  -- PRICE-PARTITION TRIPWIRE (Mason's rule, 2026-08-19).
+  --
+  -- The two names above prove the body still reads and writes the provenance
+  -- stamp. This one proves it still SPLITS that history by price. Drop the
+  -- split and every previously billed unit silently re-enters the telescoping
+  -- basis, so changing the price on a partly-drawn booking would rebill units
+  -- the customer has already been charged for -- the exact outcome Mason ruled
+  -- out in favour of a credit memo. That failure is silent: the allocation
+  -- still sums, so DRAW_ALLOCATION_MISMATCH would not catch it.
+  --
+  -- Same honest limit as the tripwires above: this proves the identifiers are
+  -- present, not that the arithmetic around them is right.
+  IF position('units_settled' IN v_src) = 0
+     OR position('units_current' IN v_src) = 0 THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: the draw no longer partitions a tier''s billed history by price -- units billed at a superseded price would re-enter the telescoping basis, so changing a price on a partly-drawn booking would silently rebill units the customer has already paid for';
+  END IF;
+
+  -- The stamp and the FK rule are one mechanism, not two. Both halves of the
+  -- rule are asserted here:
+  --   * still ON DELETE NO ACTION -- SET NULL is the retired design and would
+  --     wipe every stamp on every save of the quote;
+  --   * now DEFERRABLE INITIALLY DEFERRED -- left non-deferrable, save_quote
+  --     raises a raw foreign-key violation on the next edit of any partially
+  --     drawn quote.
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
     WHERE conrelid = 'public.order_items'::regclass
       AND conname = 'order_items_quote_item_id_fkey'
-      AND confdeltype = 'n'
+      AND confdeltype = 'a'
+      AND condeferrable IS TRUE
+      AND condeferred IS TRUE
   ) THEN
-    RAISE EXCEPTION 'POSTFLIGHT_FAILED: order_items_quote_item_id_fkey is not ON DELETE SET NULL -- with the draw now stamping quote_item_id, revising any partially drawn quote would abort with a foreign-key violation';
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: order_items_quote_item_id_fkey is not ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED -- with the draw now stamping quote_item_id, revising a partially drawn quote would either abort with a foreign-key violation (if left non-deferrable) or silently lose the stamp (if left ON DELETE SET NULL)';
   END IF;
 
   -- The implementation must stay unreachable from the app roles; only the

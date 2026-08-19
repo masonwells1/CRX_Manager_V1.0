@@ -2,6 +2,45 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-19 — draw-down: the provenance stamp now SURVIVES a quote revision, and a price change never rebills delivered product
+
+Reworked PR #404. Two committed decisions were reviewed and found wrong; both are replaced here.
+
+**1. The foreign key is deferred, not nulled.** `order_items_quote_item_id_fkey` becomes
+`ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED` instead of `ON DELETE SET NULL`. `save_quote`
+deletes and reinserts a quote's lines on *every* save, so SET NULL wiped every provenance stamp
+every time — even on a save that changed nothing. Deferring the check to COMMIT lets the link be
+broken transiently inside that one transaction; by COMMIT the same `quote_items` ids are back, so
+the stamp survives. The earlier draft rejected DEFERRABLE on the belief that id reuse required the
+client to echo ids. Live `prosrc` read this session shows that is wrong twice over: no current page
+echoes ids, and `save_quote`'s id-less fallback reuses prior ids without them.
+
+**2. A superseded price is settled, not re-based.** Each tier's billed history is now partitioned by
+whether the order line was billed at the price the quote line carries today. Units billed at the
+current price stay in the telescoping rounding basis; units billed at any other price are settled —
+they still consume the tier's capacity, so nothing can be re-sold, but they are never re-based.
+New units bill at the new price from a fresh basis. Without this split, raising a price on a
+partly-drawn booking silently rebilled the units already delivered.
+
+**Proof (throwaway PostgreSQL 17.6 in Docker; live was never written to).** The tier query was
+lifted verbatim from the migration and exercised directly. Seven money scenarios pass against
+expected values, including `40 × $1.00 + 60 × $1.50 = $130.00` after a mid-booking price rise, the
+`$1.01`-unit telescoping case, and a two-tier booking billing `$350.00`. Mutation-tested: the
+pre-rework projection bills `$150.00` on that first scenario — a silent $20 rebill — so the test
+detects the regression rather than passing vacuously. The migration's real FK `DO` block was
+executed: it installs the deferred rule, is idempotent, and refuses a drifted SET NULL rule. A
+`save_quote`-shaped revision preserves the stamp under the new rule, aborts under the old
+non-deferrable rule, and silently wipes the stamp under the retired SET NULL rule.
+
+A postflight tripwire (`units_current` / `units_settled`) refuses the apply if the price split is
+ever dropped, because that failure is silent — the allocation still sums, so
+`DRAW_ALLOCATION_MISMATCH` would not catch it.
+
+Not applied and not merged; both still need Mason's explicit approval. One residual is recorded
+rather than fixed: `save_quote`'s id-less fallback can reassign line ids on a quote carrying two
+lines of one product, which in one narrow shape aborts the save at COMMIT. It fails closed, and
+fixing it properly is the same defect as `QUOTE_ITEM_AMBIGUOUS_COST`, with its own PR.
+
 ## 2026-08-19 — `agent-health` and the sync generator now agree on line endings
 
 Harness only — no app source, migration, or live-state change.

@@ -34,7 +34,7 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## OPEN 2026-08-19 — PR #404 stamps quote-line provenance; the FK had to change or quote editing would break
+## OPEN 2026-08-19 — PR #404 stamps quote-line provenance, defers the FK, and settles superseded prices
 
 **Status: reworked on branch `claude/draw-down-price-tier-lines`, NOT applied, NOT merged. Awaiting
 Mason's explicit approval for both.**
@@ -57,25 +57,64 @@ guard that would catch this first: its body contains no reference to `orders`, `
 `QUOTE_LOCKED` refusal. Live blast radius before this migration was 1 stamped line of 288 (written
 by the full-conversion path); after it, every partially drawn booking would be affected.
 
-**Resolution taken in the same migration:** `order_items_quote_item_id_fkey` becomes `ON DELETE SET
-NULL`. A revision clears the stamps on that quote's drawn lines and nothing errors; those units
-then fall into the documented front-walk, and `DRAW_MIXED_TIER_UNMATCHED_LINE` still refuses any
-draw where the lost stamp could change what the customer is billed. `DEFERRABLE INITIALLY DEFERRED`
-was considered and rejected: it would preserve provenance across a revision, but only when the
-client echoes the existing line ids, so editing would work or hard-fail depending on which page
-saved the quote. The constraint is matched **structurally on catalog columns**, not on
-`pg_get_constraintdef` text, because that rendering depends on the applying session's `search_path`
-and a text match could raise a false drift abort. A postflight asserts the rule landed.
+**Resolution: `ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED`** — the check moves to COMMIT, by
+which time `save_quote` has reinserted the same `quote_items` ids, so an ordinary revision leaves
+every stamp intact. **This replaces the `ON DELETE SET NULL` rule an earlier draft of this entry
+described, which was reviewed and found wrong.** SET NULL fires on *every* save of an existing
+quote, including a save that changes nothing, so it wiped every stamp every time: that resets the
+telescoping rounding basis (re-opening the fractional overbill the migration exists to close) and
+strands a partly-drawn two-price booking behind `DRAW_MIXED_TIER_UNMATCHED_LINE`, whose message
+tells the operator to undo a revision SET NULL has already made impossible to undo. The old draft
+rejected DEFERRABLE on the belief that id reuse required the client to echo ids; live `prosrc` read
+on 2026-08-19 shows that is wrong in both halves — no current page echoes ids, and `save_quote`'s
+id-less fallback reuses prior ids without them. The constraint is matched **structurally on catalog
+columns**, not on `pg_get_constraintdef` text, because that rendering depends on the applying
+session's `search_path` and a text match could raise a false drift abort. A postflight asserts both
+halves of the rule (still NO ACTION, now deferred), and the block refuses to adopt a SET NULL rule
+if it finds one.
 
-**Proof standing behind the rework (all read-only; the migration has never been applied or
-parsed by a server).** `npm run typecheck` clean and 4581 tests pass. The constraint-shape
-predicate was run against live and returns `confdeltype 'a'`, shape OK — so the apply takes the
-DROP/ADD branch. The allocator arithmetic was proved with synthetic `VALUES` math on live: the
-telescoped money basis bills a 1-unit tier at $1.01 drawn as four 0.25-unit draws exactly $1.01
-where the old per-draw rounding billed $1.00; document-order allocation on an interleaved A/B/A
-booking bills $1,600.00 where collapsing the two A blocks into one bucket billed $1,500.00; and
-per-line acres return each line's own booked rate where the old whole-draw proration invented a
-third rate. **Not verified: the file has never been parsed by PostgreSQL.** That happens only at
+**Pricing rule (Mason, 2026-08-19): a price change never rebills delivered product.** Each tier's
+billed history is partitioned by whether the order line was billed at the price the quote line
+carries *today*. Units billed at the current price stay in the telescoping rounding basis. Units
+billed at any other price are **settled**: they still consume the tier's capacity, so the product
+cannot be re-sold, but they are never re-based and their money never enters the basis. New units
+bill at the new price from a fresh basis. Genuine early-price errors are corrected with a credit
+memo. A postflight name tripwire (`units_current` / `units_settled`) refuses the apply if that
+split is ever dropped, because the failure is silent — the allocation still sums, so
+`DRAW_ALLOCATION_MISMATCH` would not catch it.
+
+**Residual, deliberately NOT fixed here.** `save_quote`'s id-less fallback reuses the *lowest*
+unconsumed prior id for a product, not the operator's line. On a quote carrying two lines of one
+product this is normally unreachable — re-saving such a quote already fails closed on
+`QUOTE_ITEM_AMBIGUOUS_COST`. The one crack is deleting one of the two lines (which sends a single
+id-less row, so the ambiguity test passes) while the two lines share a cost: one prior id never
+returns, and if an order line was stamped with it the save aborts at COMMIT on a raw foreign-key
+error. That is **fail-closed** — the whole save rolls back, no money moves, no stamp is silently
+lost. Closing it properly means giving `save_quote` real line identity, which is the same defect
+`QUOTE_ITEM_AMBIGUOUS_COST` already is, with its own blast radius and its own PR.
+
+**Proof standing behind the rework (2026-08-19; live was never written to).** Ran on a throwaway
+PostgreSQL 17.6 in Docker, the same version live runs:
+
+- The reworked tier query — lifted **verbatim** out of the migration, not retyped — parses and runs.
+- Seven money scenarios all pass against expected values: a price raised mid-booking bills
+  `40 × $1.00 + 60 × $1.50 = $130.00`; four 0.25-unit draws on a `$1.01` unit still telescope to
+  exactly `$1.01`; a price changed and changed back bills `80 × $1.00 + 20 × $1.50`; a two-tier
+  booking with a price change between draws bills `100 × $1 + 50 × $2 + 50 × $3 = $350.00`; and a
+  fully drawn line whose price is then changed is **refused** (`DRAW_ALLOCATION_MISMATCH`) rather
+  than re-sold.
+- **Mutation-tested:** restoring the pre-rework projection makes that first scenario bill
+  `$150.00` instead of `$130.00` — a silent $20 rebill of 40 already-delivered units — so the
+  scenario genuinely detects the regression rather than passing vacuously.
+- The migration's **real FK `DO` block** was executed: it installs `confdeltype 'a'`,
+  `condeferrable true`, `condeferred true`; it is idempotent on a second run; and it refuses a
+  drifted `ON DELETE SET NULL` rule instead of adopting it.
+- A `save_quote`-shaped delete-and-reinsert **preserves the stamp** under the new rule; the same
+  shape **aborts** under the old non-deferrable rule and **silently wipes the stamp** under the
+  retired SET NULL rule; and the residual case above **fails closed** with no orphan committed.
+
+**Not verified: the file has never been applied end to end by a server** — the preflight requires
+the cutover barrier (`20260816110000`) committed in a prior transaction. That happens only at
 apply, which needs Mason's OK.
 
 ---
