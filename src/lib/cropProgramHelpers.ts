@@ -105,21 +105,22 @@ export function programItemToChemRowSeed(
   }
   const costStockCents = product?.current_cost != null ? Math.round(product.current_cost * 100) : 0;
   const rate = typeof item.rate === 'number' && Number.isFinite(item.rate) ? item.rate : null;
-  // Normalize "Dry oz" → "oz" so the reconciliation below can convert it (dry vs
-  // liquid comes from product_form). Without this, a "Dry oz" line on a per-lb
-  // product falls through reconcile and over-bills 16×.
-  const rateUnit = normalizeProgramRateUnit(item.rate_unit) || product?.rate_unit || '';
+  // The program's unit is kept AS WRITTEN. The "Dry oz" → "oz" strip that used to happen
+  // here existed only because the size tables lacked 'dry oz' and the line would otherwise
+  // fall through reconcile and over-bill 16×. That gap is fixed at the root (unitSizeInForm
+  // now reads the pricing tables, which carry 'dry oz'), so stripping here would only make
+  // this path persist a different string from the JobDetail picker for the same product.
+  const rateUnit = item.rate_unit || product?.rate_unit || '';
 
-  // P1 MONEY fix (mirror the manual product-pick path in JobDetail): quantity =
-  // rate × acres comes out in the RATE's base unit (e.g. oz), but the product's
-  // STOCK unit (unit_size, e.g. GAL) and its per-unit cost/price are per STOCK unit.
-  // Without reconciling, saving an oz/acre program line for a per-gallon product
-  // persists (acres × oz) labeled as GAL at the per-GAL price — a ~128× over-bill.
-  // reconcileChemAutofillUnits expresses unit + cost/price in the rate's base unit
-  // (falls back to the stock unit unchanged when it can't convert). Uses the same
-  // server-parity factors as the invoice math.
+  // P1 MONEY fix (mirror the manual product-pick path in JobDetail). quantity = rate × acres
+  // comes out in the RATE's unit, while cost/price are per the product's SELLING unit
+  // (inventory_unit — `_save_field_app_invoice_impl` calls it "the product's SOLD unit").
+  // The row is therefore expressed in the selling unit with its price exactly as quoted, and
+  // the QUANTITY is what gets carried across (chemQuantityFactor, applied by
+  // recomputeChemRowForAcres once acres are known). Converting the price instead would
+  // divide whole cents into a smaller unit and lose the remainder on every unit sold.
   const reconciled = reconcileChemAutofillUnits(
-    product?.unit_size,
+    product?.inventory_unit || product?.unit_size,
     rateUnit,
     costStockCents,
     priceStockCents,

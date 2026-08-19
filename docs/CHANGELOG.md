@@ -2,6 +2,48 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-19 — the chem line converts its QUANTITY, not its price, so the money is exact
+
+Frontend only — `src/lib/chemCalculator.ts`, `src/lib/cropProgramHelpers.ts`,
+`src/pages/JobDetail.tsx` and tests. No migration, no live state, **no data migration needed**.
+
+Mason's call (2026-08-19), taken over accepting a disclosed rounding error. A chem line is now
+expressed in the product's **selling unit** with its price exactly as quoted, and the
+**quantity** is carried into that unit by `chemQuantityFactor`. Previously the *price* was
+converted into the rate's smaller unit and rounded to whole cents, and the invoice then
+multiplied that rounded figure by the whole quantity.
+
+- **The rounding is gone, not reduced.** Worst live `Dry oz` price ($0.39/lb): billed **$64.00**
+  against a true **$78.00** — a 17.95% under-bill — and now bills **$78.00** exactly. The
+  separate, genuinely pre-existing **+0.57%** on the **463** `oz`-rate / `Gal`-stock products is
+  fixed by the same change: 96 oz/ac × 39.09 ac at $28.00/gal billed $825.58, now **$820.89**.
+- **Prices are per `inventory_unit`, not `unit_size`.** `_save_field_app_invoice_impl` names it
+  outright — *"v_unit_price is per the product's SOLD unit (inventory_unit)"*. Both callers
+  passed `unit_size`, which disagrees with `inventory_unit` on **9** live products and is blank
+  on **8**, so those lines were priced against a unit the money was never quoted in.
+- **No data migration.** The row invariant is *quantity is expressed in the row's own `unit`*,
+  which holds under both schemes — a reloaded legacy row gets a factor of 1 and behaves exactly
+  as before (verified: a legacy `pt` row over 160 acres still derives 240 pt).
+- **Changing a unit now moves the quantity with it.** Picking `Gal` over `pt` converts 240 → 30
+  rather than leaving the old number under a new label; changing the rate unit re-derives it.
+- The warning was re-based accordingly: a rate unit that *differs* from the line's unit is now
+  the normal, correct case and no longer warns. It fires when the two genuinely cannot be
+  converted, when the line has no unit, or when the rate carries a denominator that is not acres.
+- `cropProgramHelpers` no longer rewrites `Dry oz` → `oz`. That existed only because the size
+  tables lacked `dry oz`; with the root fixed, keeping it would make the crop-program path
+  persist different strings from the product picker for the same product.
+
+One visible consequence for the office: on a product sold by the gallon with a per-pint rate,
+the Quantity box reads **30 GAL** where it used to read **240 pt**. The rate, the invoice total
+and the loader's gallon figure are unchanged.
+
+Proof: typecheck, lint, 4608 passed / 335 files, production build. Executed in the running dev
+server across the full pipeline (autofill → derive quantity from rate × acres → bill it): every
+billable case exact, the two unconvertible cases warned, and all four edit paths — typed rate,
+typed total, acreage change, and the rate↔quantity round-trip — returning their inputs.
+**Not verified:** the warning's appearance on screen (no Supabase credentials here, no
+`JobDetail` test file).
+
 ## 2026-08-19 — chem-unit reconciliation reads the pricing tables, and says when it fails
 
 Frontend only — `src/lib/chemCalculator.ts`, its tests, and one warning strip in

@@ -8,6 +8,7 @@ import {
   fieldAppPricedQuantity,
   baseUnitOfRate,
   chemLineUnitMismatch,
+  chemQuantityFactor,
   rateDenominatorIsUnrecognized,
   reconcileChemAutofillUnits,
   type ChemCalcRow,
@@ -273,54 +274,51 @@ describe('chemCalculator — baseUnitOfRate (strip the per-acre suffix)', () => 
 // ── P1 MONEY fix: the bug was stock unit (GAL) != rate base unit (pt) → the saved
 // row read "240 GAL" with per-GAL cost/price, inflating cost/price/loader ~8×. ──
 describe('chemCalculator — reconcileChemAutofillUnits (P1 money fix)', () => {
-  it('THE BUG CASE: GAL stock + pt/ac rate → unit pt, cost/price per pint (÷8), so the line is NOT ~8× inflated', () => {
-    // Roundup PowerMax: unit_size=GAL, rate_unit=pt/ac, cost $22.50/GAL (2250¢),
+  // THE QUANTITY MOVES, NOT THE PRICE. The line is expressed in the product's SELLING unit
+  // with its price exactly as quoted, and `chemQuantityFactor` carries rate x acres into
+  // that unit. Converting the price instead — what this used to do — divided whole cents
+  // into a smaller unit and lost the remainder on every unit sold.
+  it('THE BUG CASE: GAL selling unit + pt/ac rate → 30 GAL at the exact per-GAL price', () => {
+    // Roundup PowerMax: inventory_unit=GAL, rate_unit=pt/ac, cost $22.50/GAL (2250¢),
     // tier1 price $28.00/GAL (2800¢), liquid. 1 GAL = 8 pt.
     const r = reconcileChemAutofillUnits('GAL', 'pt/ac', 2250, 2800, 'liquid');
-    expect(r.unit).toBe('pt');                 // NOT 'GAL'
-    expect(r.costPerUnitCents).toBe(281);      // 2250 / 8 = 281.25 → 281¢ per pint
-    expect(r.pricePerUnitCents).toBe(350);     // 2800 / 8 = 350¢ per pint
+    expect(r.unit).toBe('GAL');
+    expect(r.reconciled).toBe(true);
+    expect(r.costPerUnitCents).toBe(2250);   // EXACT — no division, no rounding
+    expect(r.pricePerUnitCents).toBe(2800);
 
-    // 1.5 pt/ac × 160 ac = 240 (pints). The grid bills quantity × per-unit cents.
-    const quantity = 1.5 * 160; // 240
-    const lineCost = quantity * r.costPerUnitCents;   // 240 × 281 = 67,440¢ = $674.40
-    const linePrice = quantity * r.pricePerUnitCents; // 240 × 350 = 84,000¢ = $840.00
-
-    // The BUGGY row would have billed 240 × per-GAL cents:
-    const buggyLineCost = quantity * 2250;   // 540,000¢ = $5,400 (≈8× too high)
-    const buggyLinePrice = quantity * 2800;  // 672,000¢ = $6,720
-
-    // Correct line ≈ the gal-equivalent (30 gal) × per-GAL price.
-    expect(lineCost).toBe(67440);
-    expect(linePrice).toBe(84000);
-    // 30 gal × $22.50 = $675 (off by the 281 vs 281.25 rounding); within 1%.
-    expect(Math.abs(lineCost - 30 * 2250)).toBeLessThan(2250 * 0.01 * 30);
-    expect(linePrice).toBe(30 * 2800); // 84,000 exactly
-    // And it is ~8× below the bug.
-    expect(buggyLineCost / lineCost).toBeCloseTo(8, 0);
-    expect(buggyLinePrice / linePrice).toBe(8);
+    // 1.5 pt/ac x 160 ac = 240 pt, carried into GAL by the factor = 30.
+    const qty = 1.5 * 160 * chemQuantityFactor('pt/ac', 'GAL', 'liquid');
+    expect(qty).toBe(30);
+    // The grid bills quantity x per-unit cents, with no conversion at the server.
+    expect(qty * r.costPerUnitCents).toBe(67500);   // $675.00 EXACTLY (was $674.40)
+    expect(qty * r.pricePerUnitCents).toBe(84000);  // $840.00
+    // The old bug billed 240 x per-GAL cents — 8x too high.
+    expect((240 * 2800) / (qty * r.pricePerUnitCents)).toBe(8);
   });
 
-  it('SAME-UNIT case is unchanged: stock unit == rate base unit (most products)', () => {
-    // unit_size=pt, rate_unit=pt/ac → no conversion; stock cost/price kept verbatim.
+  it('SAME-UNIT case is unchanged: selling unit == rate base unit (most products)', () => {
     const r = reconcileChemAutofillUnits('pt', 'pt/ac', 1000, 1500, 'liquid');
     expect(r.unit).toBe('pt');
     expect(r.costPerUnitCents).toBe(1000);
     expect(r.pricePerUnitCents).toBe(1500);
+    expect(chemQuantityFactor('pt/ac', 'pt', 'liquid')).toBe(1);
   });
 
-  it('dry product: LB stock + oz/ac rate → unit oz, cost ÷16', () => {
+  it('dry product: LB selling unit + oz/ac rate → the quantity divides by 16, the price does not', () => {
     const r = reconcileChemAutofillUnits('LB', 'oz/ac', 1600, 3200, 'dry');
-    expect(r.unit).toBe('oz');
-    expect(r.costPerUnitCents).toBe(100);  // 1600 / 16
-    expect(r.pricePerUnitCents).toBe(200); // 3200 / 16
+    expect(r.unit).toBe('LB');
+    expect(r.costPerUnitCents).toBe(1600);
+    expect(r.pricePerUnitCents).toBe(3200);
+    expect(chemQuantityFactor('oz/ac', 'LB', 'dry')).toBe(1 / 16);
   });
 
-  it('infers the form from the stock unit when product_form is omitted', () => {
+  it('infers the form from the selling unit when product_form is omitted', () => {
     const r = reconcileChemAutofillUnits('GAL', 'qt/ac', 400, 800); // 1 GAL = 4 qt
-    expect(r.unit).toBe('qt');
-    expect(r.costPerUnitCents).toBe(100); // 400 / 4
-    expect(r.pricePerUnitCents).toBe(200);
+    expect(r.unit).toBe('GAL');
+    expect(r.reconciled).toBe(true);
+    expect(r.pricePerUnitCents).toBe(800);
+    expect(chemQuantityFactor('qt/ac', 'GAL')).toBe(1 / 4);
   });
 
   // NOT a "safe fallback" — keeping the stock unit while the quantity stays in the rate's
@@ -353,27 +351,37 @@ describe('chemCalculator — reconcileChemAutofillUnits (P1 money fix)', () => {
   // to the unreconciled branch: quantity in ounces, priced per pound. ──
   it('Dry oz on pound stock CONVERTS (was a 16x over-bill on 61 live products)', () => {
     const r = reconcileChemAutofillUnits('Lb', 'Dry oz', 100, 150, 'dry');
-    expect(r.unit).toBe('dry oz');
+    expect(r.unit).toBe('Lb');
     expect(r.reconciled).toBe(true);
-    expect(r.costPerUnitCents).toBe(6);    // 100 / 16 = 6.25 → 6
-    expect(r.pricePerUnitCents).toBe(9);   // 150 / 16 = 9.375 → 9
-    // 32 Dry oz/ac x 100 ac = 3200 oz = 200 lb. At $1.50/lb the line is $300, NOT $4,800.
-    const invoiceDollars = (3200 * r.pricePerUnitCents) / 100;
-    expect(invoiceDollars).toBeCloseTo(288, 0); // 3200 x 9c; exact-cent rounding, not 4800
-    expect(invoiceDollars).toBeLessThan(400);
+    expect(r.costPerUnitCents).toBe(100);   // EXACT $1.00/lb — no 6.25 → 6 rounding
+    expect(r.pricePerUnitCents).toBe(150);  // EXACT $1.50/lb — no 9.375 → 9 rounding
+    // 32 Dry oz/ac x 100 ac = 3200 oz, carried into pounds = 200 lb.
+    const qty = 32 * 100 * chemQuantityFactor('Dry oz', 'Lb', 'dry');
+    expect(qty).toBe(200);
+    // $300.00 exactly — the true charge. The old table bug billed $4,800; converting the
+    // price instead billed $288 (4% under, and up to 17.95% on the worst live price).
+    expect((qty * r.pricePerUnitCents) / 100).toBe(300);
   });
 
-  it('synonym spellings the SERVER folds now convert here too', () => {
+  // The worst real price on those 61 products is $0.39/lb. Converting the price gave
+  // 2.4375c per ounce, stored as 2c — a 17.95% under-bill on every line. Now exact.
+  it('the worst live Dry oz price is exact, not 17.95% under', () => {
+    const r = reconcileChemAutofillUnits('Lb', 'Dry oz', 30, 39, 'dry');
+    const qty = 32 * 100 * chemQuantityFactor('Dry oz', 'Lb', 'dry');
+    expect((qty * r.pricePerUnitCents) / 100).toBe(78);   // $78.00, the true charge
+    expect((qty * r.costPerUnitCents) / 100).toBe(60);
+  });
+
+  it('synonym spellings the SERVER folds are carried across too', () => {
     // normalize_rate_unit('ounces') = 'oz'; the server then prices it. The client used to
-    // miss it entirely and fall through to the stock unit.
+    // miss it entirely and leave the quantity in the wrong unit.
     const r = reconcileChemAutofillUnits('Gal', 'ounces/ac', 2250, 2800, 'liquid');
-    expect(r.unit).toBe('oz');
+    expect(r.unit).toBe('Gal');
     expect(r.reconciled).toBe(true);
-    expect(r.pricePerUnitCents).toBe(22); // 2800 / 128 = 21.875 → 22
-    // and the spelled-out gallon folds to the stock unit → nothing to reconcile
-    const g = reconcileChemAutofillUnits('Gal', 'gallons/ac', 2250, 2800, 'liquid');
-    expect(g.reconciled).toBe(true);
-    expect(g.pricePerUnitCents).toBe(2800);
+    expect(r.pricePerUnitCents).toBe(2800);
+    expect(chemQuantityFactor('ounces/ac', 'Gal', 'liquid')).toBe(1 / 128);
+    // the spelled-out gallon folds to the selling unit → nothing to carry
+    expect(chemQuantityFactor('gallons/ac', 'Gal', 'liquid')).toBe(1);
   });
 
   // Attempt one (bd080626) kept the whole string here to match normalize_rate_unit, which
@@ -381,11 +389,15 @@ describe('chemCalculator — reconcileChemAutofillUnits (P1 money fix)', () => {
   // field_app_priced_quantity does. Reverted. The numerator is used for the money, as on
   // main, and the denominator is surfaced by rateDenominatorIsUnrecognized instead.
   it('a non-acre denominator prices off the NUMERATOR, not the whole string (no 128x over-bill)', () => {
+    // The numerator 'oz' is what sizes the conversion, so the quantity is carried into the
+    // selling unit exactly as a bare 'oz' rate would be — the magnitude main produces, not
+    // the $5,600 that keeping 'oz/cwt' whole produced in the reverted bd080626.
     const r = reconcileChemAutofillUnits('GAL', 'oz/cwt', 2250, 2800, 'liquid');
-    expect(r.unit).toBe('oz');
-    expect(r.pricePerUnitCents).toBe(22);   // 2800 / 128 — NOT 2800
-    // 2 x 100 ac = 200 -> $44.00, the magnitude main produces. Not $5,600.
-    expect((200 * r.pricePerUnitCents) / 100).toBeCloseTo(44, 2);
+    expect(r.unit).toBe('GAL');
+    expect(r.pricePerUnitCents).toBe(2800);
+    expect(baseUnitOfRate('oz/cwt')).toBe('oz');
+    const qty = 2 * 100 * chemQuantityFactor('oz/cwt', 'GAL', 'liquid');
+    expect((qty * r.pricePerUnitCents) / 100).toBeCloseTo(43.75, 2); // ~$44, not $5,600
   });
 
   it('an unrecognized denominator is flagged even though the money follows main', () => {
@@ -448,9 +460,11 @@ describe('chemCalculator — chemLineUnitMismatch', () => {
 
   // With no product_form (every manual line) the form was inferred from the row unit and
   // liquid was tried first, so a dry pairing was declared unconvertible when it converts.
+  // With no product_form (every manual line) the form used to be inferred from the row unit
+  // and liquid tried first, so a dry pairing was declared unconvertible when it converts.
   it('tries BOTH forms when the product form is unknown', () => {
-    expect(chemLineUnitMismatch('oz', 'lb/ac', null)).toMatch(/16x/);
-    expect(chemLineUnitMismatch('oz', 'lb/ac', null)).not.toMatch(/can't be converted/);
+    expect(chemLineUnitMismatch('oz', 'lb/ac', null)).toBeNull();
+    expect(chemQuantityFactor('lb/ac', 'oz', null)).toBe(16);
   });
   it('is silent with no rate unit (a flat / quantity-only line)', () => {
     expect(chemLineUnitMismatch('gal', '', 'liquid')).toBeNull();
@@ -464,14 +478,19 @@ describe('chemCalculator — chemLineUnitMismatch', () => {
     expect(chemLineUnitMismatch('', 'oz', 'liquid')).toMatch(/no unit/);
     expect(chemLineUnitMismatch(null, 'pt/ac', 'liquid')).toMatch(/no unit/);
   });
-  it('names the ratio when both units are known — the 8x GAL/pt case', () => {
-    const w = chemLineUnitMismatch('GAL', 'pt/ac', 'liquid');
-    expect(w).toMatch(/8x/);
-    expect(w).toMatch(/over-bills/);
+  // A rate unit that DIFFERS from the line's unit is now the NORMAL, correct case — the
+  // quantity is carried across before pricing — so it must NOT warn. Warning here was right
+  // only while the price was the thing being converted.
+  it('is silent when the units differ but convert (the everyday case)', () => {
+    expect(chemLineUnitMismatch('GAL', 'pt/ac', 'liquid')).toBeNull();
+    expect(chemLineUnitMismatch('Lb', 'Dry oz', 'dry')).toBeNull();
+    expect(chemLineUnitMismatch('oz', 'lb/ac', null)).toBeNull();
   });
-  it('warns without a ratio when the units cannot be converted at all', () => {
-    const w = chemLineUnitMismatch('Gal', 'widgets', 'liquid');
-    expect(w).toMatch(/can't be converted/);
+  it('warns when the units genuinely cannot be converted', () => {
+    expect(chemLineUnitMismatch('Gal', 'widgets', 'liquid')).toMatch(/isn't a measure/);
+    expect(chemLineUnitMismatch('widgets', 'pt/ac', 'liquid')).toMatch(/isn't a measure/);
+    // cross-form is unconvertible too: a dry-only rate on a liquid selling unit
+    expect(chemLineUnitMismatch('Gal', 'lb/ac', 'liquid')).toMatch(/isn't a measure/);
   });
   it('catches the live junk-unit row (rate_unit typed as a number)', () => {
     expect(chemLineUnitMismatch('Gal', '32', 'liquid')).toMatch(/32/);
@@ -561,22 +580,23 @@ describe('chemCalculator — mechanical parity with the live SQL', () => {
     }
   });
 
-  // Not just "does it convert" — the ACTUAL per-unit price. A drift in a size VALUE (the
-  // number that sets the money) would sail past a convertibility-only fixture.
-  it('the converted per-unit price equals the server ratio for every convertible unit', () => {
+  // Not just "does it convert" — the ACTUAL conversion ratio, which is the number that sets
+  // the money. A drift in a size VALUE would sail past a convertibility-only fixture.
+  // The client carries the QUANTITY into the selling unit exactly as the server's
+  // field_app_priced_quantity does (`qty * sr / si`), so the factors must be identical.
+  it('the quantity factor equals the server ratio for every convertible unit', () => {
     for (const form of ['liquid', 'dry'] as const) {
       const stock = form === 'dry' ? 'lb' : 'gal';
       const stockSize = sqlUnitSize(stock, form)!;
       for (const u of UNITS) {
         const normalized = sqlNormalizeRateUnit(rateDenominatorIsUnrecognized(u) ? u.split('/')[0] : u);
-        if (normalized === null || normalized === stock) continue;
+        if (normalized === null) continue;
         const rateSize = sqlUnitSize(normalized, form);
         if (rateSize == null) continue; // unconvertible on the server; covered above
-        const r = reconcileChemAutofillUnits(stock, u, 1600, 3200, form);
-        expect(`${form}:${u} unit`).toBe(`${form}:${u} unit`);
-        expect(r.unit).toBe(normalized);
-        expect(`${form}:${u} → ${r.pricePerUnitCents}`)
-          .toBe(`${form}:${u} → ${Math.round(3200 * (rateSize / stockSize))}`);
+        expect(`${form}:${u} → ${chemQuantityFactor(u, stock, form)}`)
+          .toBe(`${form}:${u} → ${rateSize / stockSize}`);
+        // and the price is passed through untouched, so no rounding can enter
+        expect(reconcileChemAutofillUnits(stock, u, 1600, 3200, form).pricePerUnitCents).toBe(3200);
       }
     }
   });

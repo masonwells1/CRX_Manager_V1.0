@@ -331,37 +331,31 @@ hole open. Not started — needs Mason's call before code.
   realistic way a `fl oz/cwt` (seed treatment), `lb/ton` (feed additive) or `oz/1000 sq ft`
   (turf) value enters the table. The in-app dropdowns are constrained to `unit_conversions`,
   so free typing is not the vector — the import is.
-### OPEN — per-unit price rounding, and the part of it this change CREATED
+### CLOSED 2026-08-19 — per-unit price rounding on the chem grid (Mason chose the proper fix)
 
-**Owner decision owed.** `reconcileChemAutofillUnits` rounds the converted per-unit price to
-whole cents at the *smallest* unit, then the invoice multiplies by the whole quantity, so the
-rounding error is amplified by every unit sold.
+**Resolved, not deferred.** `reconcileChemAutofillUnits` used to convert the per-unit *price*
+into the rate's smaller unit and round it to whole cents, then the invoice multiplied by the
+whole quantity — so the rounding was amplified by every unit sold.
 
-**Pre-existing half:** the **463 live products** on an `oz` rate against `Gal` stock —
-$28.00/GAL → 21.875¢/oz → 22¢, a systematic **+0.57%**; cost rounds the same way
-($22.50/GAL → 17.578 → 18¢, **+2.4%**), understating margin and therefore commission.
+It now converts the **quantity** into the product's selling unit and leaves the price exactly
+as quoted, which is what the server's `field_app_priced_quantity` already did. Nothing rounds,
+so the error is gone rather than reduced:
 
-**The half this change created, and an earlier revision of this entry wrongly called
-"pre-existing and untouched":** the 61 `Dry oz` products now convert instead of falling
-through, so they are newly subject to this rounding. Measured against their real
-`tier1_price`/`current_cost`: **18 of 61** exceed 1% cost error and **7 of 61** exceed 3%
-price error. Worst case $0.39/lb → 2.4375¢/oz stored as **2¢**: 32 Dry oz/ac over 100 acres
-bills **$64** where the correct charge is **$78** — a **17.95% under-bill**, silently, every
-time. Nothing rounds to zero (checked: 0 of 61).
+- The **61 `Dry oz`** products: worst live price $0.39/lb billed **$64.00** against a true
+  **$78.00** (a 17.95% under-bill) while the price was being converted. Now **$78.00** exactly.
+- The **463** `oz`-rate / `Gal`-stock products carried a systematic **+0.57%** on price and
+  **+2.4%** on cost. That was genuinely pre-existing, and it is **also** fixed — 96 oz/ac over
+  39.09 acres at $28.00/gal billed $825.58 and now bills **$820.89**, the exact figure.
 
-That is still a large improvement on what it replaced — the same line billed **$1,248**
-before, a 16× over-bill — and an under-bill costs margin rather than over-charging a
-customer. But it is a real, permanent, silent error and it is **not** pre-existing for these
-61 products.
+Mason chose this over accepting the disclosed rounding (2026-08-19). **No data migration was
+needed:** the row invariant is "quantity is expressed in the row's own `unit`", which holds for
+rows saved under either scheme, so a reloaded legacy row keeps a conversion factor of 1 and
+behaves exactly as before. Verified by executing the real module: a legacy `pt`-unit row over
+160 acres still derives 240 pt.
 
-**The proper fix is known:** convert the **quantity** into the stock unit and keep the exact
-per-stock price, which is precisely what the server's `field_app_priced_quantity` does. It
-removes the rounding error entirely rather than shrinking it. It was not done here because it
-changes what `quantity` means on every chem row, which reaches `applyChemEdit`,
-`recomputeChemRowForAcres` and the driver logic — a bigger change to a daily-use screen than
-this fix, and one that deserves its own build-and-review cycle rather than being folded into
-a money fix already twice-corrected. Mason's call: accept the disclosed rounding for now, or
-schedule the quantity-side rewrite first.
+One visible consequence for the office: on a product sold by the gallon with a per-pint rate,
+the Quantity box now reads **30 GAL** where it used to read **240 pt**. The rate, the invoice
+total and the loader's gallon figure are unchanged.
 - **`unit_conversions` vocabulary drift.** `src/lib/units.ts` describes those keys as FROZEN,
   and `save_quote` joins on `LOWER(rate_unit) = LOWER(unit)`. Nothing stops a spelling outside
   that set reaching the column.

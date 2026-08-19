@@ -43,7 +43,7 @@ import { overrideSaveApplicatorId, shouldReassignApplicatorAfterSave, canGenerat
 import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
-import { applyChemEdit, chemLineUnitMismatch, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent } from '../lib/chemCalculator';
+import { applyChemEdit, chemLineUnitMismatch, chemQuantityFactor, fmt4, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent } from '../lib/chemCalculator';
 import { compareToMaxRate, phiHarvestWarning } from '../lib/labelGuardrails';
 import type { RateComparison, PhiHarvestResult } from '../lib/labelGuardrails';
 import { unitOptionsForForm, isKnownUnit } from '../lib/units';
@@ -2870,6 +2870,12 @@ export default function JobDetail() {
     updated[i] = { ...updated[i], customer_supplied: !updated[i].customer_supplied };
     setChemRows(updated);
   };
+  /** A chem row's product form, for the unit-conversion helpers. */
+  const chemFormFor = (productId: string): 'liquid' | 'dry' | null => {
+    const f = allProducts.find((p) => p.id === productId)?.product_form ?? null;
+    return f === 'liquid' || f === 'dry' ? f : null;
+  };
+
   const updateChemRow = (i: number, key: keyof ChemRow, value: string) => {
     const updated = [...chemRows];
     updated[i] = { ...updated[i], [key]: value };
@@ -2899,8 +2905,13 @@ export default function JobDetail() {
         const tierPrice = tier === 3 ? p.tier3_price : tier === 2 ? p.tier2_price : p.tier1_price;
         const costPerStockCents = Math.round((p.current_cost || 0) * 100);
         const pricePerStockCents = tierPrice != null ? Math.round(tierPrice * 100) : 0;
+        // inventory_unit, NOT unit_size: the tier price and current_cost are quoted per the
+        // product's SOLD unit, which `_save_field_app_invoice_impl` names as inventory_unit
+        // ("v_unit_price is per the product's SOLD unit (inventory_unit)"). 9 live products
+        // have the two disagreeing and 8 have a blank unit_size, so passing unit_size priced
+        // those lines against a unit the money was never quoted in.
         const reconciled = reconcileChemAutofillUnits(
-          p.unit_size,
+          p.inventory_unit || p.unit_size,
           updated[i].rate_unit || p.rate_unit,
           costPerStockCents,
           pricePerStockCents,
@@ -2914,6 +2925,19 @@ export default function JobDetail() {
         // Re-derive the quantity now that a rate auto-filled.
         updated[i] = recomputeChemRowForAcres(updated[i], sumAcres(fieldRows));
       }
+    }
+    // Changing a UNIT has to move the quantity with it, or the row keeps a number measured
+    // in the old unit under the new unit's label — which is precisely what the invoice
+    // multiplies by the per-unit price. `unit` converts the existing amount (240 pt picked
+    // over to Gal becomes 30); `rate_unit` re-derives it from the rate below.
+    if (key === 'unit') {
+      const prev = chemRows[i];
+      const qty = parseFloat(prev.quantity);
+      const f = chemQuantityFactor(prev.unit, value, chemFormFor(prev.product_id));
+      if (!Number.isNaN(qty) && f !== 1) updated[i].quantity = fmt4(qty * f);
+    }
+    if (key === 'rate_unit' && updated[i].driver !== 'qty') {
+      updated[i] = recomputeChemRowForAcres({ ...updated[i], driver: 'rate' }, sumAcres(fieldRows));
     }
     // 3-way calculator (rate ⇄ quantity via total acres).
     updated[i] = applyChemEdit(updated[i], key, value, sumAcres(fieldRows));

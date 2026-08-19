@@ -19,7 +19,56 @@ export interface ChemCalcRow {
   rate_per_acre: string;
   /** UI-only (NOT persisted): which field the user last drove. */
   driver?: ChemDriver;
+  /**
+   * THE ROW INVARIANT: `quantity` is expressed in `unit`, and `unit` is the unit the
+   * per-unit price is quoted in. `transfer_job_to_invoice` bills the line as a raw
+   * `safe_cents_qty(price_per_unit_cents, quantity)` with no unit conversion of its own,
+   * so this invariant IS the bill.
+   *
+   * The per-acre rate may be quoted in a different unit ('1.5 pt/ac' on a product sold by
+   * the gallon), which is why `quantity = rate x acres` alone is not enough — it comes out
+   * in the RATE's unit and has to be carried into `unit` before it can be priced. These two
+   * optional fields let the calculator do that conversion from the row itself, so it still
+   * holds for a row reloaded from the database, where no product is in hand.
+   *
+   * Omitting them means "no conversion" (factor 1), which is the correct reading of a row
+   * whose rate unit and measure unit are already the same.
+   */
+  unit?: string | null;
+  rate_unit?: string | null;
 }
+
+/**
+ * How many `unit`s one `rate_unit` makes — the multiplier that carries `rate x acres` out
+ * of the rate's unit and into the unit the line is priced in. 1 when the units match, when
+ * either is missing, or when they cannot be converted (the caller warns in that case; see
+ * `chemLineUnitMismatch`).
+ *
+ * Tries the stated product form first, then both, because a saved row carries no form. That
+ * is safe: no (rate, unit) pair converts to a DIFFERENT ratio in the two forms — 'oz' is 1
+ * in both tables, and every other unit belongs to exactly one form.
+ */
+export function chemQuantityFactor(
+  rateUnit: string | null | undefined,
+  unit: string | null | undefined,
+  productForm?: 'liquid' | 'dry' | null,
+): number {
+  const rateKey = baseUnitOfRate(rateUnit);
+  const unitKey = normalizeRateUnit(unit) ?? '';
+  if (rateKey === '' || unitKey === '' || rateKey === unitKey) return 1;
+  const forms: Array<'liquid' | 'dry'> = productForm ? [productForm] : ['liquid', 'dry'];
+  for (const form of forms) {
+    const rateSize = unitSizeInForm(rateKey, form);
+    const unitSize = unitSizeInForm(unitKey, form);
+    if (rateSize == null || unitSize == null || unitSize === 0) continue;
+    return rateSize / unitSize;
+  }
+  return 1; // not convertible — leave the number alone and let the warning speak
+}
+
+/** The row's own rate→unit multiplier, derived from the fields it already carries. */
+const rowQuantityFactor = (row: ChemCalcRow): number =>
+  chemQuantityFactor(row.rate_unit, row.unit);
 
 /** Round to 4 dp and stringify (the grid stores numbers as strings). */
 export const fmt4 = (x: number): string => (Math.round(x * 10000) / 10000).toString();
@@ -45,16 +94,19 @@ export function applyChemEdit<T extends ChemCalcRow>(
   value: string,
   acres: number,
 ): T {
+  const f = rowQuantityFactor(row);
   if (key === 'rate_per_acre' && value.trim() !== '') {
     const rate = parseFloat(value);
     if (!Number.isNaN(rate)) {
-      return { ...row, driver: 'rate', ...(acres > 0 ? { quantity: fmt4(rate * acres) } : {}) };
+      return { ...row, driver: 'rate', ...(acres > 0 ? { quantity: fmt4(rate * acres * f) } : {}) };
     }
   }
   if (key === 'quantity' && value.trim() !== '') {
     const qty = parseFloat(value);
+    // The typed total is in the row's `unit`; the rate is per acre in `rate_unit`, so the
+    // factor divides back out on the way to a rate.
     if (!Number.isNaN(qty)) {
-      return { ...row, driver: 'qty', ...(acres > 0 ? { rate_per_acre: fmt4(qty / acres) } : {}) };
+      return { ...row, driver: 'qty', ...(acres > 0 ? { rate_per_acre: fmt4(qty / acres / f) } : {}) };
     }
   }
   return row;
@@ -75,14 +127,15 @@ export function applyChemEdit<T extends ChemCalcRow>(
 export function recomputeChemRowForAcres<T extends ChemCalcRow>(row: T, acres: number): T {
   const rate = parseFloat(row.rate_per_acre);
   const qty = parseFloat(row.quantity);
+  const f = rowQuantityFactor(row);
   if (row.driver === 'rate') {
     return row.rate_per_acre.trim() !== '' && !Number.isNaN(rate)
-      ? { ...row, quantity: fmt4(rate * acres) }
+      ? { ...row, quantity: fmt4(rate * acres * f) }
       : row;
   }
   if (row.driver === 'qty') {
     return acres > 0 && row.quantity.trim() !== '' && !Number.isNaN(qty) && qty !== 0
-      ? { ...row, rate_per_acre: fmt4(qty / acres) }
+      ? { ...row, rate_per_acre: fmt4(qty / acres / f) }
       : row;
   }
   return row;
@@ -342,8 +395,8 @@ export interface ChemAutofillUnits {
   /** Per-`unit` price in cents (converted from the per-stock-unit price when units differ). */
   pricePerUnitCents: number;
   /**
-   * FALSE when the rate unit and the stock unit could not be reconciled, so the values
-   * above are the untouched stock unit and per-stock cost/price.
+   * FALSE when a rate in `rateUnit` cannot be carried into the selling unit at all, so the
+   * quantity will stay counted in the rate's unit while the price is per the selling unit.
    *
    * This is NOT cosmetic. The row's quantity is rate × acres, expressed in the RATE's
    * unit, while an unreconciled row carries a price per the STOCK unit — and
@@ -442,8 +495,14 @@ export function chemLineUnitMismatch(
 
   if (rowKey === baseKey) return null;
 
+  // A rate unit that DIFFERS from the line's unit is normal and correct — '1.5 pt/ac' on a
+  // product sold by the gallon — because `chemQuantityFactor` carries rate x acres into the
+  // line's unit before it is ever priced. What is NOT recoverable is a pair that cannot be
+  // converted at all: the factor falls back to 1, so the quantity silently stays in the
+  // rate's unit while the price is per the line's unit, and the invoice multiplies them.
+  //
   // Try the stated form first; with none stated (every manual line) try BOTH before
-  // declaring the units unconvertible. Inferring the form from the row unit alone and
+  // declaring the pair unconvertible. Inferring the form from the row unit alone and
   // testing liquid first told the user that 'oz' against a 'lb/ac' rate "can't be
   // converted" when it converts fine as dry.
   const forms: Array<'liquid' | 'dry'> = productForm ? [productForm] : ['liquid', 'dry'];
@@ -451,15 +510,12 @@ export function chemLineUnitMismatch(
     const rowSize = unitSizeInForm(rowKey, form);
     const baseSize = unitSizeInForm(baseKey, form);
     if (rowSize == null || baseSize == null || rowSize === 0) continue;
-    const ratio = baseSize / rowSize;
-    // Equivalent spellings of the same measure ('fl oz' and 'oz') — the money is right.
-    if (ratio === 1) return null;
-    const factor = ratio > 1 ? ratio : 1 / ratio;
-    const rounded = Math.round(factor * 100) / 100;
-    const direction = ratio < 1 ? 'over-bills' : 'under-bills';
-    return `Quantity is counted in "${baseKey}" but the line is priced per "${rowUnit}". As saved this ${direction} by about ${rounded}x — set the unit to "${baseKey}", or change the rate unit.`;
+    return null; // convertible → the quantity was carried across correctly
   }
-  return `Quantity is counted in "${baseKey}" but the line is priced per "${rowUnit}", and those can't be converted, so the amount billed will be wrong. Fix the unit before invoicing.`;
+  const culprit = forms.every((f) => unitSizeInForm(baseKey, f) == null)
+    ? `rate unit "${rateUnit}"`
+    : `unit "${rowUnit}"`;
+  return `The ${culprit} isn't a measure this app can convert, so the quantity stays counted in "${baseKey}" while the price is per "${rowUnit}" — the amount billed and the stock taken out will both be wrong. Fix the unit before invoicing.`;
 }
 
 export function reconcileChemAutofillUnits(
@@ -501,7 +557,7 @@ export function reconcileChemAutofillUnits(
     return unreconciled(`This product has no stock unit recorded, so a rate in "${rateUnit}" can't be priced against it. Set the product's unit size, or fix the unit on this line, before invoicing.`);
   }
 
-  // Determine the form: trust product_form when given, else infer from the stock unit.
+  // Determine the form: trust product_form when given, else infer from the selling unit.
   // Inferred from the PRICING tables, the same ones the sizes below come from.
   let form: 'liquid' | 'dry' | null = productForm ?? null;
   if (form == null) {
@@ -509,25 +565,27 @@ export function reconcileChemAutofillUnits(
     else if (hasOwn(DRY_UNIT_SIZE, stockKey)) form = 'dry';
   }
   if (form == null) {
-    return unreconciled(`Product form is unknown and the stock unit "${stock}" isn't a recognized measure, so "${rateUnit}" can't be converted to it.`);
+    return unreconciled(`Product form is unknown and the selling unit "${stock}" isn't a recognized measure, so "${rateUnit}" can't be converted to it.`);
   }
 
   const stockSize = unitSizeInForm(stockKey, form);
   const baseSize = unitSizeInForm(baseKey, form);
   // Both units must be known in the SAME form to safely convert; otherwise don't guess.
   if (stockSize == null || baseSize == null || baseSize === 0) {
-    const culprit = baseSize == null || baseSize === 0 ? `rate unit "${rateUnit}"` : `stock unit "${stock}"`;
-    return unreconciled(`The ${culprit} isn't a recognized ${form} measure, so the rate can't be converted to the stock unit "${stock}". The quantity is counted in the rate's unit but priced per "${stock}" — check the unit before invoicing.`);
+    const culprit = baseSize == null || baseSize === 0 ? `rate unit "${rateUnit}"` : `selling unit "${stock}"`;
+    return unreconciled(`The ${culprit} isn't a recognized ${form} measure, so a rate in "${rateUnit}" can't be carried into "${stock}". The quantity would be counted in the rate's unit while the price is per "${stock}" — check the unit before invoicing.`);
   }
 
-  // base-units per stock-unit = stockSize / baseSize (e.g. GAL/pt = 1 / (1/8) = 8).
-  // per-base cost = per-stock cost / (base-units per stock-unit) = perStock × baseSize / stockSize.
-  const perBaseFactor = baseSize / stockSize;
-  return {
-    unit: baseKey,
-    costPerUnitCents: Math.round(costPerStockCents * perBaseFactor),
-    pricePerUnitCents: Math.round(pricePerStockCents * perBaseFactor),
-    reconciled: true,
-    reason: null,
-  };
+  // CONVERTIBLE. Keep the SELLING unit and its price EXACTLY as quoted; the quantity is
+  // what moves (`chemQuantityFactor` carries rate x acres into this unit).
+  //
+  // This is the direction the server already works in: `field_app_priced_quantity` converts
+  // the applied quantity into `inventory_unit` and prices it at the per-inventory price. It
+  // is also the only direction that keeps the money exact. Converting the PRICE instead —
+  // what this function used to do — divides whole cents into a smaller unit and loses the
+  // remainder on every unit sold: $0.39/lb becomes 2.4375c/oz, stored as 2c, and 3,200 oz
+  // then bills $64 against a true $78. Measured on the 61 live 'Dry oz' products, 18
+  // exceeded 1% cost error and 7 exceeded 3% price error, worst case a 17.95% under-bill.
+  // Nothing rounds here now, so that error is gone rather than merely smaller.
+  return alreadyAligned;
 }
