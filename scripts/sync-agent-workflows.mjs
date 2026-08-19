@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizeEol } from "./normalize-eol.mjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const TARGET_ROOT = path.join(ROOT, ".agents");
@@ -88,7 +89,16 @@ function writeExpected(expected) {
   for (const [relative, content] of expected) {
     const target = path.join(TARGET_ROOT, relative);
     mkdirSync(path.dirname(target), { recursive: true });
-    if (!existsSync(target) || readFileSync(target, "utf8") !== content) writeFileSync(target, content);
+    // Write the LF form, and compare the same way checkExpected does. Skill and
+    // command mirrors are byte copies of their .claude sources, so a CRLF-smudged
+    // source used to make --write copy CRLF straight into .agents/** - which meant
+    // the "run --write" remedy the health check prints could not actually repair a
+    // smudged mirror. Normalizing here makes that remedy real and keeps this loop
+    // idempotent instead of rewriting every file on every run.
+    const canonical = normalizeEol(content);
+    if (!existsSync(target) || normalizeEol(readFileSync(target, "utf8")) !== canonical) {
+      writeFileSync(target, canonical);
+    }
   }
   console.log(`Synced ${expected.size - 2} Codex workflow file(s) from .claude.`);
 }
@@ -99,7 +109,9 @@ function writeExpected(expected) {
 // false failure that bricked commits in fresh worktrees (2026-07-16 scaffolding
 // review). Line endings are not content drift; the committed form is LF-pinned
 // regardless, so normalizing here tests what the check is FOR (real drift).
-const normalizeEol = (text) => String(text).replace(/\r\n/g, "\n");
+// `normalizeEol` is shared with scripts/agent-health-check.mjs: the two used to
+// define "in sync" differently, so the same commit could FAIL one and PASS the
+// other. Keep the single definition in scripts/normalize-eol.mjs.
 
 function checkExpected(expected) {
   const mismatches = [];
