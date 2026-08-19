@@ -65,7 +65,22 @@ if (pathCandidates.some((candidate) => reviewProofPathMentioned(candidate))) {
 // Also catches a forge-by-move whose destination lands a NON-ledger basename in
 // the state dir. MCP path fields are literal (no shell glob expansion), so the
 // literal component check is sufficient here.
-if (pathCandidates.some((candidate) => candidate != null && cdTargetEntersStateDir(candidate))) {
+//
+// stop-wrap-ack.json is the one designed session-end acknowledgment valve:
+// stop-wrap.mjs instructs the agent to write {"signature": ...} to
+// .claude/session-state/stop-wrap-ack.json to confirm ordinary loose ends are
+// intentional. codex-push-lib.mjs's reviewProofPathMentioned already carves this
+// basename out on purpose; the round-8 whole-dir deny above re-broke it. The
+// carve-out below restores it. Safe: stop-wrap.mjs refuses to honor an ack while
+// any live-applied migration lacks committed source, so the C3 alarm can never
+// be self-acknowledged regardless of this write. Basename-exact (leaf must be
+// stop-wrap-ack.json), so the proof JSON, the applied-source ledger, any other
+// session-state basename, and whole-dir moves/deletes all still deny.
+const ACK_VALVE_RE = /(?:^|\/)\.claude\/session-state\/stop-wrap-ack\.json$/i;
+const isAckValveWrite = (candidate) =>
+  ACK_VALVE_RE.test(String(candidate).replace(/\\/g, "/").replace(/\/+$/, ""));
+if (pathCandidates.some((candidate) =>
+  candidate != null && cdTargetEntersStateDir(candidate) && !isAckValveWrite(candidate))) {
   deny("REVIEW PROOF GUARD: the review state directory (.claude/session-state) and its wrapper-owned contents cannot be created, moved, or deleted through a file tool. Stale ledger entries are removed with node scripts/remove-applied-ledger-entry.mjs after verifying the live migration ledger.");
 }
 
