@@ -164,14 +164,15 @@ will not hold a phase open waiting on data entry.
 
 | Work | Volume | Rough time |
 |---|---|---|
-| Return-policy classification | 581 products, done in evidence-backed batches | 2–4 hrs |
+| ~~Return-policy classification~~ — **deferred, not counted** | ~~581 products~~ | ~~2–4 hrs~~ |
 | Typing EPA registration numbers so ingredients can auto-fill | ~123 pesticides that have ingredients but no number on file | 4–6 hrs |
 | Ingredients for products that will never have an EPA number | ~194 fertilizers, adjuvants, biologicals | 6–10 hrs |
 | **Density lookups (safety data sheet per product)** | up to 508 liquids, no shortcut exists | **15–25 hrs** |
 | Reviewing re-derived rates | 573 values, reviewed not auto-rewritten | 5–10 hrs |
 | Fertilizer guaranteed analyses | ~130 products | 3–5 hrs |
 
-**Total: roughly 35–60 hours of your time**, spread across the project. These are estimates,
+**Total: roughly 33–56 hours of your time**, spread across the project — return-policy
+classification is no longer counted, since you deferred that page. These are estimates,
 not measured — treat them as the right order of magnitude, not a quote.
 
 You've already parked the density backfill: *"Let's wait on that for now I don't have time."*
@@ -205,7 +206,7 @@ the bug.
 | Phase | What it is | Done when | Depends on |
 |---|---|---|---|
 | **0** | Data hygiene — 13 blank SKUs, 1 duplicate SKU, 3 duplicate names, 1 test product | Every SKU unique, no row hard-deleted, all history still resolves | Nothing |
-| **0b** | Return-policy screen (you ranked this "asap") | A product's policy changes from `unknown` and sticks; 581 classifiable without 581 clicks | Nothing — runs alongside Phase 1 |
+| ~~**0b**~~ | ~~Return-policy screen~~ — **DEFERRED at your direction, 2026-08-18:** *"We don't need the returns policy page yet not important."* This supersedes the earlier "asap" ranking. Not built, not scheduled | — | — |
 | **1** | Ingredients, mode of action, density, brands, fertilizer analysis | One product can be given ingredients, a density and a brand, saved and read back **through the running app as a normal user** | Phase 0 |
 | **1b** | Excel workbook round-trip, so 604 products aren't edited one at a time | Download, edit, upload, preview, save — with the existing safety guards intact | Phase 1 |
 | **2** | Rate correction and unit standardization | A product with no per-acre rate autofills blank; quote totals identical before and after the unit remap | Phase 1 |
@@ -340,7 +341,10 @@ writes directly to the database. The CSV importer also has a quirk where one col
 maps to two different fields. All three break loudly when Risk 6's change lands and must be
 updated in the same piece of work.
 
-### Risk 8 — Classifying return policy starts blocking real transactions
+### Risk 8 — Classifying return policy starts blocking real transactions *(deferred — kept on record)*
+
+**You deferred this phase on 2026-08-18, so this risk is not live.** It stays written down
+because the moment the return-policy work is picked up, it applies in full.
 
 Right now `unknown` blocks nothing. Setting a product to `no_return` **starts** blocking
 returns. A misclassification either refuses a legitimate return or wrongly accepts one —
@@ -439,6 +443,7 @@ the three copies drift apart. This applies to brands as much as to ingredients.
 | Total nitrogen is enough | Chosen | 2026-08-18 |
 | **Brand tracking never depends on lot/tote numbers** | *"not all have it"* | 2026-08-18 |
 | Comparison tool comes after the rate cleanup | *"After rate cleanup it's not important until a month from now"* | 2026-08-18 |
+| **Return-policy screen — DEFERRED.** Supersedes the earlier "asap" ranking; drops Phase 0b out of the near-term path and removes 2–4 hrs of data entry | *"We don't need the returns policy page yet not important"* | 2026-08-18 |
 | **Retire the old Brand-vs-Generic page and build a fresh one** — do not extend it | *"retire it and we will build a new page in future"* | 2026-08-18 |
 | Ingredient foundation gets built before anything else | *"i agree i want to do the ingredient foundation 1st"* | 2026-08-18 |
 | A bulk-edit workbook is needed — one-by-one editing doesn't scale | *"very hard to navigate all these products going one by one"* | 2026-08-18 |
@@ -482,7 +487,7 @@ see they were considered, not missed.
 4. **Seed-treatment rate basis** — 18 products measured per hundredweight of seed or per seed
    unit. The value gets added in Phase 2 while it's free; adding it later is a migration.
 5. **Per-phase rollback** — Phases 1, 1b, 3 and 4 are additive, so rollback is "stop using
-   it." Phases 0, 0b and 2 need a real answer. Phase 2 behind an on/off switch is the obvious
+   it." Phases 0 and 2 need a real answer. Phase 2 behind an on/off switch is the obvious
    protection.
 6. **Child-table concurrency** — the existing "don't overwrite someone else's edit" guard
    covers the product row only, not the new lists hanging off it.
@@ -496,7 +501,6 @@ Not "the tests pass." For each phase, the specific thing that gets run and watch
 | Phase | The proof |
 |---|---|
 | 0 | Every SKU unique; open a previously-duplicated product's history and see it intact |
-| 0b | Change a product's return policy in the running app, reload, still changed. Then attempt a return against a `no_return` product and watch it be refused |
 | 1 | **As an ordinary logged-in user, not an administrator** — add ingredients, a density and a brand to a real product, save, reload, all present. Then ask for a scale weight on a product with no density and watch it refuse rather than guess |
 | 1b | Download the workbook, edit a row in the app while it's open, upload, and watch that row be refused rather than silently overwritten |
 | 2 | A quote's total is identical before and after the unit consolidation. A product with no per-acre rate autofills blank. Edit and save a product for each affected unit and watch all succeed |
@@ -526,7 +530,9 @@ commits on branch `claude/product-data-storage-58ba26`.
 **Approve this plan, or tell me what's wrong with it.**
 
 On approval, the order is: bring the branch current with the main line → build Phase 0 (data
-hygiene) and Phase 0b (the return-policy screen you ranked "asap") → show you both running
-before anything goes live.
+hygiene) → move straight into Phase 1, the ingredient/density/brand foundation you ranked
+first → show you each running before anything goes live.
+
+The return-policy screen is **out of the near-term path** at your direction.
 
 Nothing gets pushed, applied, or deployed without you saying so.

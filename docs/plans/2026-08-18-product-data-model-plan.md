@@ -709,7 +709,13 @@ apart in a spreadsheet. Hygiene is cheap and de-noises every phase after it.
 
 **Risk:** Low, but it touches live rows — needs Mason's OK per class of change.
 
-### [REV] Phase 0b — Return-policy admin screen (Mason's #3, "asap") — runs parallel with Phase 1
+### Phase 0b — Return-policy admin screen — **DEFERRED, DO NOT BUILD**
+
+> **Mason, 2026-08-18:** *"We don't need the returns policy page yet not important."* This
+> **supersedes** the "asap" ranking below. Phase 0b leaves the near-term path; the reasoning
+> is kept intact so the phase can be resumed later without re-deriving it.
+
+*(originally: Mason's #3, "asap" — ran parallel with Phase 1; superseded above)*
 
 Split out of the old Phase 5. The return-policy half **depends on nothing** in Phases 1–4:
 the RPC, its guards and its permissions are live today. Only the *family derivation* half

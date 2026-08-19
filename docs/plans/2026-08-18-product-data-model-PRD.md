@@ -203,7 +203,14 @@ Deleting data is an approval-gated, irreversible act under `AGENTS.md`. If any c
 genuinely warrants deletion rather than deactivation, that is a separate request to Mason
 with the FK survey attached — not part of this phase's standing approval.
 
-### Phase 0b — Return-policy admin screen *(split out of Phase 5; owner ranked it "asap")*
+### Phase 0b — Return-policy admin screen — **DEFERRED, DO NOT BUILD**
+
+> **Mason, 2026-08-18:** *"We don't need the returns policy page yet not important."* This
+> **supersedes** the earlier "asap" ranking recorded below and everywhere else in this
+> document. Phase 0b is out of the near-term build path. The requirements stay written down
+> so the phase can be picked up intact later; nothing here is scheduled.
+
+*(split out of Phase 5; owner originally ranked it "asap" — superseded above)*
 
 | # | Requirement | Acceptance |
 |---|---|---|
