@@ -144,6 +144,20 @@ stays exactly as it is — rounding a *unit* price before multiplying is what th
 re-introducing it would move a line total by up to half a cent **per unit**. Background and the
 measured worked example are in `docs/manual/KNOWN_ISSUES.md`.
 
+**Implementation and structural guards.** Implemented by
+`supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`. Two guards stop
+the average returning under another variable name: the migration's postflight refuses a body
+containing the old averaging identifier, and `DRAW_ALLOCATION_MISMATCH` fails the draw closed if the
+per-tier quantities stop summing to the requested quantity. `DRAW_ALLOCATION_MISMATCH` proves
+*quantity* only — it is not a money assertion and must not be cited as one.
+
+**Supersedes.** The opposite conclusion recorded on the local-only branch
+`claude/known-issues-drawdown-defect` ("keep the exact line total, round only the stored unit
+price"). That entry was written by a concurrent session, was never pushed and has no pull request;
+it attributes a choice to Mason that he did not make. This log is authoritative. Its one genuinely
+useful finding is preserved separately: the live ledger's ordering high-water must be read from the
+`name` stamp, not `max(version)`.
+
 ---
 
 ## 2026-08-14 — One-time override: `20260812115238`'s order-line map is published in full
