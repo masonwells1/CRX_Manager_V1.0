@@ -2,8 +2,11 @@
 
 **Date:** 2026-08-18
 **Status:** DRAFT — awaiting Mason's approval. No code written, no database changed.
-**Revision:** amended 2026-08-18 after adversarial review (Fable, read-only, live-verified).
-Changes from that review are marked **[REV]** and listed in §9.
+**Revision:** amended twice on 2026-08-18 after two adversarial review rounds (Fable,
+read-only, live-verified). Round 1 asked *"is this design sound?"* — changes marked **[REV]**,
+listed in §9. Round 2 asked *"what is missing?"* — changes marked **[REV2]**, listed in §10.
+The largest round-2 addition (the spec-versus-brand layer in §4b) came from Mason, not from
+a reviewer.
 
 ---
 
@@ -39,9 +42,12 @@ Read directly from the live database on 2026-08-18. Read-only queries; nothing m
 | `phi_days` filled | **0** |
 | `signal_word` filled | 95 |
 | `is_rup` = true | 2 |
-| `epa_registration` filled | 300 |
+| `epa_registration` filled | 300 non-NULL, **but 13 are whitespace-only → 287 usable** *(corrected 2026-08-18, second review)* |
 | `return_policy` = 'unknown' | **581** |
-| `return_policy` = 'no_return' / 'returnable' | 21 / 2 |
+| `return_policy` = 'no_return' / 'returnable' / 'not_applicable' | 21 / 2 / 0 |
+| `product_form` liquid / dry / **blank** | 508 / 85 / **11** *(added 2026-08-18, second review)* |
+| Product names containing a parenthetical brand list | **129** *(added 2026-08-18, second review)* |
+| Product names using the `" - <size>"` packaging suffix | **561 of 604** *(added 2026-08-18, second review)* |
 | `product_family_id` filled | **0** |
 | `packaging_variant` filled | **0** |
 | `is_full_tote_only` = true | 10 |
@@ -298,6 +304,76 @@ Some suspension concentrates and fertilizer solutions run **above 12**. Correcte
 a liquid-vs-dry comparison. A dry product's `% w/w` converts to lb ai per lb with no
 density at all. The real need is roughly the ~300 EPA-linked liquids.
 
+### [REV2] Density is operational, not just analytical — Mason, 2026-08-18
+
+The scope paragraph immediately above is **superseded**. Mason: *"I need that also because
+we do a lot of blending based off scales so have to have weight of everything for scales
+and mixer."*
+
+That reclassifies density. It is not only the bridge that lets the comparison tool convert
+`% w/w` to `lb/gal` — it is the number that tells a human what to put on a scale. Three
+consequences, all verified against current source:
+
+1. **Nothing in the app does weight today.** `density`, `specific gravity` and `lb_per_gal`
+   appear **zero times** across all of `src/`. `blendMathValidator.ts` works purely in
+   volume and counts; it declares `ProductData.unit` and never reads it. Weight-based
+   blending is a new capability, not an improvement to an existing one.
+2. **Scope widens from ~300 EPA-linked liquids to all 508 liquids**, because the products
+   Mason blends most are fertilizers, which carry no EPA registration at all. Dry products
+   additionally need a net weight per purchase unit where the unit is a package (bag, jug,
+   case) rather than a weight — a dry product already sold in `Lb` needs nothing.
+   The **11 products with a blank `product_form`** must be classified in Phase 0 first,
+   because `product_form` is the key that decides which rule applies to a row.
+3. **The risk tier rises.** A wrong comparison number produces a bad quote. A wrong density
+   puts the wrong weight into a real mixer. Density therefore keeps `density_source` and
+   gains the same `verified_by` / `verified_at` treatment as concentrations, and belongs in
+   the audit trail described later in this section.
+
+**The warn band does not apply to the blending path.** The 6.5–14 warn-never-reject rule
+stays correct for *data entry* — it exists so a legitimate crop oil at 7.6 is not refused.
+But when the app is asked to produce a **weight for a scale** and the product has no
+density, it must **refuse and say so**, not fall back to water, a default, or an estimate.
+Warning on entry and blocking on use are different jobs; do not collapse them into one
+rule.
+
+**[REV2] "5.4#" is not density — keep the two numbers apart.** Mason's catalog names encode
+strengths like `Roundup 5.4#` and `Roundup 5.5#`. That figure is pounds of glyphosate salt
+per gallon — an ingredient concentration, belonging in `product_active_ingredients`. The
+product's own density is roughly 10.2 lb/gal. Both are needed, they are different columns,
+and an executor who conflates them will produce scale weights that are wrong by about half.
+The 5.4 vs 5.5 pair is also a live `ae_fraction` case: 5.5# products in the catalog are K6
+(potassium salt) while 5.4# is the IPA salt, so 5.5 is not "2% stronger than" 5.4.
+
+**Sequencing note:** the *schema* for density lands in Phase 1 as already planned. The
+*backfill* is owner time — roughly 300+ safety-data-sheet lookups — and Mason has parked
+sequencing it (2026-08-18: *"Let's wait on that for now I don't have time"*). Phase 1 is
+therefore done when the columns, validation and entry path exist and one product can be
+given a density and read back; it is **not** gated on the catalog being filled.
+
+### [REV2] Fertilizer analysis — Mason, 2026-08-18: "yes I want fertilizer analysis stored"
+
+Roughly 190 products carry no EPA active ingredients at all: Liquid Fertilizer 55, Foliar
+Fertilizer 53, Adjuvant 48, Dry Water Soluble Fertilizer 13, Nitrogen Stabilizer 9,
+Biological 9. The original design had no home for them. Mason's direction: *"Yes I want
+fertilizer analysis stored for future so we can do recs etc and know poundage of actual
+applied etc make sure you can also store micronutrients and secondary macros, all complete
+analysis."*
+
+- Store the **complete guaranteed analysis**, not just N-P-K: primary macros (N, P₂O₅, K₂O),
+  secondary macros (Ca, Mg, S), and micronutrients (B, Cl, Co, Cu, Fe, Mn, Mo, Ni, Zn).
+- The natural shape is the **same `product_active_ingredients` table with a nutrient
+  ingredient class**, not a parallel table — a percentage of a product is a percentage of a
+  product whether the substance is mesotrione or zinc. This keeps one place to look and one
+  set of unit rules. The executor should confirm this against the constraint design before
+  committing to it; if a nutrient class cannot be expressed cleanly, a sibling table is
+  acceptable, but two tables must not both be able to hold the same fact.
+- Analysis is stored as **`percent_w_w`**, which is how a fertilizer label states it.
+  Combined with density it yields the "poundage of actual applied" Mason asked for — this
+  is the second reason density is required for liquid fertilizer specifically.
+- Biologicals are stated in CFU and fit neither `lb_per_gal` nor `percent_w_w`. Nine
+  products. Either add a CFU unit or leave biologicals unstored and say so; do not force a
+  CFU count into a percentage column.
+
 **[REV] One scalar per product is right**, and per-*product* is the right place (density
 is a property of the formulation). Temperature swings it about 2–3%, well below quoting
 tolerance, and settling does not change as-purchased bulk density. `density_source` stays.
@@ -317,6 +393,89 @@ acid-equivalent basis and needs no density at all.
 conversion involving them arithmetically meaningless — **[REV]** and 8 products' quote
 math currently divides by that fake factor. Related to the `Unit`/`Ea` synonym cleanup in
 Phase 2; flagged so the cleanup does not silently bless it.
+
+### [REV2] What Mason sells is a **spec**; what he delivers is a **brand** — 2026-08-18
+
+This is the largest structural addition from the second review round, and it came from
+Mason, not from an agent. His words:
+
+> *"I sell based off (generic roundup 5.4#) in winter and then we order and now what actual
+> brand we are selling such as agsaver glyphosate, red eagle glyphosate 54, slam 54 etc.
+> Somehow we need to brainstorm how this will work in our system."*
+>
+> *"I will sell or quote early season as just 5.4# glyphosate or LV6 ester 24d, then we might
+> deliver Lima 6 brand lv6 or low vol ester, etc etc depending on what we source so we need
+> to track the actual individual epa number on them."*
+
+**He is already doing this, and the current model stores the answer as prose.** Live product
+names, read from the database on 2026-08-18:
+
+```
+Roundup 5.4# Generic (Ag Saver 5.4, Slam 5.4) - 2.5 Gal
+Roundup 5.4# Generic (Ag Saver 5.4, Slam 5.4) - Bulk
+Roundup 5.4# Generic NO RETURN, Full Tote (Ag Saver 5.4, Slam 5.4) - 265G
+Roundup 5.4# (Bucc 5 Extra) - 2.5 Gal
+Roundup 5.5# Generic (Honcho K6, Mad Dog K6, Envy K-Six) - Bulk
+Generic Stinger: (Bite, CleanSlate, Spur, Stigmata) - 2.5 Gal
+```
+
+A single `product_name` string is carrying five independent facts: the sellable spec, the
+generic-versus-branded distinction, the set of acceptable fulfilment brands, the return
+policy, and the package size. At catalog scale: **129 names carry a parenthetical brand
+list** and **561 of 604 use the `" - <size>"` suffix**.
+
+**The naming convention is the current schema, and it has already been mined once.** 21
+product names contain "NO RETURN" and exactly 21 rows carry `return_policy = 'no_return'`;
+10 names say "Full Tote" and exactly 10 rows carry `is_full_tote_only = true`. Those two
+columns were evidently back-filled from the name strings. That is strong evidence the
+extraction approach works here — and equally, that the name string and the columns can
+drift apart, because nothing keeps them in step.
+
+**Design conclusion: the `products` row stays the sellable spec.** This is the important
+call. Quotes, tiers, per-acre pricing, invoices, cost-at-quote snapshots and inventory all
+key on `products.id` today and none of them need to change. Mason can go on quoting "5.4#
+glyphosate" in December without the system knowing which jug will arrive.
+
+**What is missing is the layer beneath the spec:** the real branded article that fills the
+order, each with **its own EPA registration number**, label, manufacturer and density.
+
+Proposed shape — a child table under `products`, one row per acceptable brand:
+
+- `product_id` → the spec row
+- `brand_name` — e.g. `Ag Saver 5.4`, `Slam 5.4`, `Lima 6`
+- `epa_registration` — **the field Mason explicitly asked to track per brand**
+- `manufacturer` / `basic_supplier`
+- `label_url`, `density_value` — brands genuinely differ, and density feeds the scale
+- `is_currently_sourced` — which brand is actually flowing right now
+- `active_ingredients` — brands of one spec should agree, but they are not required to;
+  the ingredient link belongs on whichever row is authoritative for that formulation
+
+Then **at order, receiving or delivery, record which brand actually filled the line.** That
+is what puts a real EPA registration number onto an application record — the number that
+matters if a field record is ever audited — without disturbing how anything is sold.
+
+**Alternatives considered and rejected:**
+
+- *Every brand becomes its own product row, grouped by family, and quotes reference the
+  family.* Arguably the more "correct" normalization, and it is what `product_families`
+  gestures at. Rejected because it rewrites quoting, pricing and inventory to be
+  family-aware, to fix a workflow that is not broken. Revisit only if the child-table shape
+  proves insufficient in practice.
+- *Parse the parenthetical brands into a plain text column.* Cheapest, keeps search working,
+  and delivers none of the three things Mason asked for — per-brand EPA number, per-brand
+  density, per-brand label.
+
+**Open for the executor, not for Mason:** whether the brand child table is genuinely
+distinct from `product_families`, or whether families should be retired in favour of it.
+Both exist to say "these things are the same chemistry." `product_families` has 0 rows and
+no writer, so there is no migration cost to choosing either way — but the plan must not ship
+two overlapping ways to express one idea. Fable's second review flagged a related signal
+worth using here: EPA distributor registrations share a parent number, which is the cheapest
+reliable evidence that two catalog rows are the same formulation.
+
+**Sequencing:** this is Phase 1 work — it is part of the ingredient foundation, not a later
+nicety, because the spec/brand distinction determines *where the ingredient rows hang*. Get
+it wrong and Phase 1 stores concentrations on the wrong layer.
 
 ### [REV] `unit_conversions` has a latent duplicate-row join
 
@@ -503,6 +662,27 @@ order landed it fifth.
 
 - Admin screen calling the existing `set_product_phase3_metadata` function.
 - Bulk classification, so 581 products do not need 581 clicks.
+
+**[REV2] The screen must offer four values, not three.** The live CHECK constraint is
+`returnable | no_return | not_applicable | unknown` (migration
+`20260723193312_product_families_return_policy_foundation.sql:49`). Both this plan and the
+PRD previously enumerated only three. A screen built from the old text would have omitted a
+legal state.
+
+**[REV2] Bulk classification is not "a screen that calls the existing function."**
+`set_product_phase3_metadata` is strictly per-product and uses compare-and-set arguments
+(`p_expected_return_policy` and siblings). Bulk-classifying 581 products therefore means
+either 581 read-then-CAS round trips with partial-failure and progress handling, or a new
+bulk RPC — which is a migration, and pulls the full RLS + idempotency + drift gate stack
+into Phase 0b. The executor must pick one and say which; the phase as originally written
+budgeted for neither.
+
+**[REV2] Return *windows* are explicitly out of scope — Mason, 2026-08-18.** Vendors do
+have different return deadlines by product class (pre-emerge one date, post chemistry
+another, insecticide and fungicide another). A vendor × class × date model was proposed and
+Mason declined it: *"on the returns don't worry about that we send out paperwork on those
+dates we can keep system simple on returns."* The four-value flag answers "can this ever
+come back"; the deadline stays on paperwork outside the app. Do not build the date table.
 
 **[REV] Risk — and the original plan had this backwards.** Classifying does not *unblock*
 transactions; `unknown` blocks nothing today. Classifying **starts** blocking, for anything
@@ -776,3 +956,199 @@ Phase 2.
 Corrected before the review, from Mason's own challenge: the earlier claim that **Codex
 cannot reach the live database is false** — `.codex/config.toml` configures the Supabase
 MCP against project `rhyzpcqhnizqbxphqdkr` with `read_only=false`.
+
+---
+
+## 10. [REV2] Second review round — 2026-08-18
+
+A second adversarial pass (Fable, read-only, live-verified) was run with a different
+question from the first. The first asked *"is this design sound?"* and answered yes with
+four amendments. The second asked *"what is missing?"* and returned 24 gaps. Its verdict:
+nothing invalidates the settled architecture, but the plan was not complete enough to hand
+to an executor for Phase 2.
+
+Items already folded into the sections above — the four-value return enum, bulk
+classification mechanics, `product_form` and its 11 blanks, the corrected 287 usable EPA
+registrations, density as operational data, fertilizer analysis, and the spec/brand
+layer — are not repeated here.
+
+### 10.1 The Phase 2 undercount, and what it means
+
+**`rate_per_acre` is referenced by 82 files, not the 5 this plan named.** The original
+consumer list (applicator sheets, blend math validator, chemical application report,
+invoice PDF) is a fraction of reality. It is also in the field app
+(`src/components/field-app/FieldAppChemicalEntry.tsx:304`), blend tickets
+(`src/components/blendtickets/ManualTicketCreate.tsx:262`), crop programs
+(`src/lib/cropProgramHelpers.ts:134`), blend recipes (`src/lib/recipeHelpers.ts:96`),
+quote defaults (`src/pages/QuoteBuilder.tsx:1222`), jobs, statements, worker-protection
+notices and year-end PDFs.
+
+**The plan defines the consumption rule for quotes only.** It never says what happens to
+the legacy `products.rate_per_acre` column once `product_rates` becomes the source of
+truth. The three live options — leave it and sync it from the quoting-default row,
+dual-write, or rewire all 82 consumers — have very different costs, and choosing late is
+what turns Phase 2 into a multi-week surprise. **This must be decided in writing before
+Phase 2 starts.** It does not block Phases 0, 0b or 1.
+
+### 10.2 There is already a second bulk import system
+
+`src/components/products/BulkProductImport.tsx:229` inserts products directly from CSV,
+with its own field-alias mapping that includes `suggested_rate`, `rate_per_acre` and
+`rate_unit` (lines 38–40). The plan's "extend the workbook, do not build a second system"
+principle is sound but arrives after the fact.
+
+Three write paths therefore exist: single create at `/products/new`
+(`src/pages/Products.tsx:843`), inline bulk save via `EditableDataTable`, and this CSV
+importer. **After Phase 2, a product created through any of them has zero `product_rates`
+rows** and will autofill blank on a quote. The plan must say what happens to each path —
+extend, gate, or retire — and where the blank-unit rejection actually lives.
+
+### 10.3 Equivalence is not the same as interchangeability
+
+The Phase 5 premise "same ingredients at the same concentrations are drop-in equivalents"
+is chemically true and agronomically unsafe. Three things it cannot see:
+
+- **Safeners.** Benoxacor and furilazole are not EPA active ingredients. Generic
+  s-metolachlor without a safener versus Dual II Magnum with one is a real corn-injury
+  difference, invisible to an ingredient-only comparison.
+- **Formulation type.** SC, EC and OD of the same active are not interchangeable in a tank.
+- **Built-in adjuvant load.** A fully loaded branded glyphosate versus a bare generic that
+  needs NIS or AMS added.
+
+Fix: a formulation-type and safener field carried on the product (or the brand row from the
+spec/brand section), plus a standing caution in Phase 3 output and the Phase 5 approval
+screen. Cheap now; a wrong swap recommended confidently is not cheap later.
+
+**Salt and ester forms must not silently substitute.** `canonical_ingredient_id` correctly
+merges 2,4-D ester and amine for *search*, but they are not interchangeable in the field,
+and the same is true of dicamba DGA versus BAPMA. Family matching must key on the
+**specific ingredient row**, not the canonical parent. **Mason, 2026-08-18: "Warn loudly we
+pretty much only use ester."** So: propose with a loud warning, never refuse, never
+substitute silently.
+
+### 10.4 Owner decisions settled on 2026-08-18
+
+| Question | Mason's answer |
+|---|---|
+| Fertilizers in the model? | **In** — and the reason is blending on scales, see the density section |
+| Store full fertilizer analysis? | **Yes** — including secondary macros and micronutrients |
+| Which price does the comparison show? | **Both cost and customer price, with a selectable customer tier** |
+| Include the adjuvant delta in the generic build? | **No** |
+| Ester versus amine substitution? | **Warn loudly** |
+| Return windows by vendor and class? | **No — keep returns simple, deadlines stay on paperwork** |
+| Who enters the data? | **Mason, personally** |
+| Density backfill sequencing? | **Parked** — *"Let's wait on that for now I don't have time"* |
+
+Three tiers already exist (`tier1_price` … `tier3_price`, plus `tier1_price_per_acre` …
+`tier3_price_per_acre` in `src/types/index.ts:72-83`), so the tier selector needs no new
+schema.
+
+**On the adjuvant answer:** Mason declined including adjuvant cost in the generic build.
+That leaves a known directional bias — rebuilding a loaded branded product from unloaded
+generics understates the true cost of the generic route. Since the number drives real
+offers, Phase 3 must carry a visible on-screen note that the comparison excludes adjuvant
+cost. Stating the exclusion is not the same as pricing it, and does not reopen the decision.
+
+**On data entry:** Mason enters most data himself. That makes the EPA auto-seed and the
+Phase 1b workbook load-bearing rather than convenient. Roughly 287 products can auto-seed
+ingredients from the EPA lookup, which already returns percent, PC code and CAS number
+(`src/types/index.ts:108-113`). Density has no equivalent shortcut — it is a
+safety-data-sheet lookup per product. The plan previously carried no effort estimate at
+all; it should say plainly that the backfill is tens of hours of owner time, and that Phase
+1's definition of done is the *mechanism*, not a filled catalog.
+
+**On Mason's spreadsheet:** he confirmed the Google Sheet is *"not complete and is not
+automatic or have actual ingredients — it is still using brand product names of individual
+generic chemistries."* It is therefore a useful seed for the brand-shorthand layer, not a
+substitute for EPA ingredient data. Do not plan around importing it wholesale.
+
+### 10.5 Smaller gaps to close before the phases they belong to
+
+**Phase 0 (hygiene)**
+
+- Mechanics are undefined: merge versus deactivate is never stated. Duplicate and test rows
+  may carry foreign-key history in quote lines, invoices and inventory movements, which
+  makes a hard delete either impossible or destructive. **Recommendation: deactivate or
+  merge with a pointer; never hard-delete.** Deleting data is an approval-gated,
+  irreversible act under `AGENTS.md`.
+- Normalize `epa_registration`: 13 rows hold whitespace-only strings, and any "run the EPA
+  lookup across the 300" batch fails on them.
+- Classify the 11 blank `product_form` rows — density scoping depends on that column.
+
+**Phase 1 (ingredients, MOA, density)**
+
+- **Unknown-concentration semantics.** A known ingredient with an unknown amount must be
+  representable — state explicitly whether `concentration_value` is nullable. Phase 3's
+  "loud gap" behaviour depends on telling *ingredient missing* apart from *amount unknown*.
+- **Reuse the existing propose-review-commit pipeline.** `product_label_drafts` is live with
+  `LabelReview.tsx`, a status set (`pending/accepted/edited/rejected/needs_manual`),
+  confidence, `reviewed_by` and `run_idempotency_key` (`src/types/index.ts:137-183`). That
+  is the house pattern for machine-sourced data needing human sign-off — exactly what EPA
+  ingredient seeding is. The plan's `source` and `verified_at` columns are a weaker
+  substitute for a pattern that already exists. Reuse it or record why not. Note also that
+  the parked label work will resume through this pipeline, so Phase 4's label-URL
+  persistence must not collide with it.
+- **Persist the registration-status signals the EPA lookup already returns** —
+  `productStatus` and `isCancelled` (`src/types/index.ts:130-131`). The plan currently keeps
+  the label URL and discards the discontinued/lapsed signal, which is the only automatic rot
+  detector available.
+- **`updated_at` plus its trigger** on every new table — the drift gate checks
+  `tables_without_updated_at` and the table specs never mention it.
+- **Idempotency semantics for set-based writes.** "Replaying the same key does not
+  double-write" is clear for inserts; for a replace-the-whole-ingredient-list write, state
+  whether a replay is a no-op or re-applies the same set.
+- **Nickname search.** The plan adds a "Generic Callisto"-style nickname column, but nothing
+  requires the Products page (`searchKeys` at `src/pages/Products.tsx:862` covers name, SKU,
+  category and vendor) or the QuoteBuilder picker to search it — and nickname is how Mason
+  looks products up.
+
+**Phase 1b (workbook)**
+
+- **Absent row: delete or ignore?** The hardest question in any bulk round-trip, unanswered
+  for the new `Ingredients` and `Crop Uses` tabs. Also unspecified: per-row error reporting,
+  partial-failure behaviour, and duplicate-row handling on re-upload.
+- **Concurrency does not currently cover children.** `pricing_version` guards the `products`
+  row only; the child tables have no version token, so the phase's acceptance criteria do
+  not actually cover what the phase writes.
+
+**Phase 2 (rates)**
+
+- **Seed treatments have no valid rate basis.** 18 products; real bases are per
+  hundredweight of seed or per seed unit, and `per_unit` is ambiguous between "per each" and
+  "per seed unit." Adding an enum value now is free; widening a CHECK constraint later is a
+  migration.
+- **Route the re-derivation through the change-set machinery** that records old and new
+  values, rather than any direct write, so the old `rate_per_acre` values are captured.
+
+**Phase 3 (comparison)**
+
+- **`is_rup` is known wrong** (2 products flagged; Mason: *"there are a lot more"*). A
+  proposal that swaps toward a restricted-use product without flagging it is
+  compliance-adjacent. Minimum: display restricted-use status under the same "unverified"
+  marking rule the phase already uses for other gaps, never as fact.
+
+**Cross-cutting**
+
+- **No audit trail for ingredient, rate or density edits.** `cost_history` is the precedent
+  on the pricing side. This data drives customer-visible quantities and, now, scale weights;
+  a silently changed concentration changes every downstream number with no trace.
+- **No per-phase rollback story.** Phases 1, 1b, 3 and 4 are additive, so rollback is "stop
+  using it." Phase 0 (row changes), 0b (starts blocking returns) and 2 (rewires quote
+  autofill) have real reversal questions the plan never answers. Phase 2 behind a flag is
+  the obvious mitigation; Phase 0b is reversible through the same RPC that sets it.
+
+### 10.6 Deliberately parked — recorded so they are not re-litigated as oversights
+
+Rainfast interval, grazing and feeding restrictions, plant-back and rotational-crop
+intervals, carrier-volume minimums, mix order and tank-mix compatibility, PPE, state 24(c)
+and SLN registrations, and application temperature limits. These belong with the parked
+label-data work or were declined outright (Mason rejected tank-mix complexity on
+2026-08-18). None blocks this build. They are listed once, here, so a future reviewer can
+see they were considered rather than missed.
+
+### 10.7 Found in passing — spawned as separate work, not part of this plan
+
+`src/lib/blendMathValidator.ts` sums product quantities without reading `ProductData.unit`,
+so gallons, pints and pounds are added together before being compared against the ticket's
+total volume. Warning-text only — it does not alter stored quantities, pricing or
+inventory — so it is moderate, not a money defect. Tracked outside this plan.
