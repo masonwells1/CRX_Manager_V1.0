@@ -2,6 +2,193 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-18 — CRX-SEC-1 is LIVE (applied 2026-08-16); seven docs corrected, two claims retracted, and both RLS matrices reconciled against live
+
+Documentation only — no app source, migration, or live-state change; every live read in this entry
+was read-only.
+
+**On the two dates in this entry.** Work started on the local afternoon of 2026-08-18, when UTC was
+also 08-18; reads taken later the same local evening fall on 2026-08-19 in UTC. Both stamps describe
+one working session. A date written without a `UTC` suffix is the local working date; the handful
+stamped `2026-08-19 UTC` say so explicitly so they do not read as a freshness date pushed forward to
+clear `check:docs`.
+
+**The apply.** `20260813080000_lock_quote_versions_writes_to_rpc` (**CRX-SEC-1**) is **APPLIED LIVE**
+as ledger version `20260816174353`. The 2026-08-14 entry below carries a `**STATUS: NOT APPLIED**`
+marker; that was accurate when written and is now superseded by this entry. The ledger has no
+timestamp column, so the commonly quoted 2026-08-16 17:43:53 UTC is read off the version stamp — the
+apply is observed, the clock time is inferred.
+
+**Five docs were stale about it, not three — and only two of them called it unapplied.** (Seven
+docs are corrected overall; the other two are covered under "Also corrected" below.)
+
+The **two that actually asserted "unapplied"** were `docs/reference/migration-history.md` row 886
+(`LOCAL CANDIDATE — NOT APPLIED`) and the RLS Policy Matrix in
+`docs/reference/database-schema.md`, which listed `quote_versions` INSERT as `Admin / Sales Rep`
+behind a `LOCAL ONLY pending apply` marker — the canonical "who can write what" reference asserting
+the exact inverse of live.
+
+The **other three were stale in two further ways**. `docs/manual/CURRENT_STATE.md` and
+`docs/manual/KNOWN_ISSUES.md` were stale **by omission**: neither carried an entry for CRX-SEC-1 at
+all — KNOWN_ISSUES by its own text "never entered in this file while it was open" — behind a ledger
+high-water nine applies out of date. Neither asserted the fix was unapplied; both left it out. The
+RLS Policy Matrix in `docs/workflows/RLS_SECURITY_GUIDE.md` was stale a third way again: it carried
+the pre-fix write model with **no pending marker of any kind**, so nothing in it said "unapplied"
+for a reader to notice.
+
+They were **not found together**, which is the point. A doc pass on 2026-08-18 found three
+(`CURRENT_STATE.md`, `KNOWN_ISSUES.md`, history row 886). Adversarial review then found the
+`database-schema.md` matrix — `npm run check:docs` does not cover that row, so nothing caught it.
+CodeRabbit then found the `RLS_SECURITY_GUIDE.md` matrix, corrected in line with that matrix's own
+banner convention of naming superseding migrations inline.
+
+**A grant claim retracted.** Those same docs stated as post-apply proof that `authenticated` holds
+"SELECT only" on `quote_versions` and `anon` "holds nothing". **Both are wrong.** `pg_class.relacl` is
+`{postgres=arwdDxtm/postgres,anon=m/postgres,authenticated=rm/postgres,service_role=arwdDxtm/postgres,metabase_ro=r/postgres}`
+— `authenticated` holds SELECT **and MAINTAIN**, `anon` holds **MAINTAIN**. The migration retains
+MAINTAIN deliberately and says so in its own body, so the claim contradicted the source it described.
+The cause was reading grants from `information_schema.role_table_grants`, which does not report
+MAINTAIN at all, and presenting that as a complete grant proof. **No security impact:** MAINTAIN
+permits VACUUM/ANALYZE/CLUSTER/REINDEX/LOCK and reaches no row.
+
+**The write lock itself was re-proved independently**, not inferred from the ledger row: exactly one
+policy (`qversions_select`) remains, `has_table_privilege('authenticated', …)` returns INSERT/UPDATE/
+DELETE false, the only function that inserts into the table is a postgres-owned SECURITY DEFINER with
+no `authenticated` EXECUTE, and its only caller takes **no client cost snapshot** and enforces
+`auth.uid()`, active-profile role, quote ownership and row version. No triggers, no view, no other
+writer. A sales rep cannot forge a cost basis.
+
+**Both RLS matrices reconciled against live — the fix for the pattern, not just the row.** Four
+consecutive adversarial passes each found one more wrong claim, because each pass corrected the row
+it was pointed at rather than the table it lived in. So every row of both matrices was compared
+against live `pg_policies`, per command, on 2026-08-19 UTC:
+112 of the 116 rows mechanically, and the 4 deny-all tables by reading their policy bodies, for the
+reason in the trap note below. **29 of 79 rows** in `docs/reference/database-schema.md` and **12 of
+37** in `docs/workflows/RLS_SECURITY_GUIDE.md` disagreed with live, and all were corrected from the
+live policy expressions. Three further schema-matrix rows — `idempotency_keys`,
+`product_cost_basis` and `product_cost_basis_change_rows` — changed for notation only, with no
+change in access, which is why that file's banner counts 32 changed rows against 29 corrections.
+Both now read zero presence disagreements. Those are per-pass figures, not totals — re-measured
+against `origin/main` at this branch's head by keying both matrices on table name and comparing all
+four command cells, the guide matrix carries **26 changed rows of 37** and the schema matrix **62 of
+79**. A 13th guide row, `quotes`, was
+corrected afterwards by hand — its SELECT cell claimed sales reps see only their own quotes where
+live `quotes_select` is `is_admin() OR is_sales_rep()` with no ownership test. That was a
+role-wording error, which is exactly what the second trap below says the mechanical pass cannot
+catch. Wrong in both directions: `vendors`, `quote_items`, `payments` and others documented
+write access that live grants to nobody, while `rate_limit_log` documented no access where live
+grants admin `SELECT` — one permissive admin SELECT policy, plus a RESTRICTIVE `FOR ALL` that
+narrows rather than grants, so no browser role writes it directly. Two traps worth recording — a `-` cell is correct both when no policy
+exists *and* when a deny-all `USING (false)` policy exists (`idempotency_keys` and the three
+`product_cost_basis*` tables are the second kind, so a naive presence-diff would have *introduced*
+errors there), and what was verified mechanically is policy presence per command, not the role
+wording inside each cell.
+
+**And then the role wording too.** That second trap stood for four more passes. A classifier
+re-derived every cell's role set from the live `USING`/`WITH CHECK` expressions, and every flag it
+raised was then read against live `pg_policies` by hand — the classifier locates candidates, it does
+not prove anything. Flags fell 162 (`origin/main`) → 89 (after the presence pass) → 61 (after the
+"All authenticated" class) → 33, and all 33 survivors were confirmed correct: policies that inline
+`profiles.role = 'admin'` instead of calling `is_admin()`, cells that name a role by how the row is
+reached (`assigned_driver = auth.uid()`), and cells that defer to a parent table's RLS. The count is
+a proxy, not a defect count — correcting `rup_sales_records` SELECT from `Admin` to
+`Admin / Sales Rep` *raised* it by one. Newly corrected in that triage: `invoices`/`invoice_items`
+SELECT (there is no `is_sales_rep()` branch — live is admin, creator, or assigned salesman),
+`blend_recipe_items` writes (recipe-creator-gated, the same shape as the `blend_recipes` parent row
+this PR had already fixed while missing the child), `applicator_licenses` (wrong in both directions
+at once), `cycle_count_items` and `field_billing_defaults` and `rup_sales_records` SELECT (live
+grants a role the doc omitted), and four cells that named the right roles but dropped a condition
+live enforces. `docs/manual/KNOWN_ISSUES.md` now records that entry as CLOSED, and both matrix
+banners define **"All authenticated"** as live `is_active_profile()` — signed in *and*
+`profiles.is_active`, re-read across all 17 cells that use the phrase. (An earlier revision of this entry said three of
+them "used to render the identical live expression as *Any active profile*"; that phrase never
+appeared in any committed matrix on `origin/main` and the claim is withdrawn.) A final sweep then
+covered the one
+shape the classifier structurally cannot flag — a cell that names the right roles but omits a
+condition live also enforces — and corrected six more: `field_obstacles` INSERT, `vendors` and
+`vendor_bills` SELECT, `invoice_shares` and `order_shares` SELECT, and `team_notes` INSERT.
+Against `origin/main` the `database-schema.md` matrix now carries **62** changed rows out of
+79, re-measured by comparing all four command cells of all 79 rows (an earlier figure of 61 summed
+the per-pass counts instead of re-running the comparison).
+Also re-read the guide's "Common RLS Policy Patterns" section against live, which the earlier
+passes had left alone while rewriting the matrix above it. **All seven patterns were wrong**, in two
+different ways. Patterns 1, 2, 3, 4 and 7 each described a policy *shape* live does not have —
+including Pattern 3, which taught `quotes_select` **with** an ownership test that the same file's
+own banner corrects. Patterns 5 and 6 had correct predicates but named policies that do not exist:
+`notifications_select` for live `notif_select`, `activity_feed_insert` for live
+`activity_insert`. An earlier revision of this entry said five were wrong and that the section had
+been re-read; the sweep behind it compared predicates and never compared names, so 5 and 6 passed
+while wrong. All seven are fixed.
+
+**Also corrected:** the `migration-history.md` header claim 885 → 886 (a high-water row number, not a
+file count — the two `check:docs` rows measure different things), both manual freshness stamps, live
+counts in `CURRENT_STATE.md` section 2, the live signatures of `create_quote_version` and
+`restore_quote_version` in `docs/reference/rpc-functions.md` (both had drifted, and
+`restore_quote_version` takes `p_quote_id` first, which the doc had wrong), a supersession marker on
+the now-stale money table in `docs/manual/DECISION_LOG.md`, and a whole-cent money re-measure showing
+2 dirty column-values where 43 were recorded — 43 being a sum across four columns rather than four
+disjoint row sets, so the distinct-row count then was 40–43, not 43.
+
+**One rendering fix, pre-existing rather than introduced here.** In `migration-history.md`'s
+"Staged 2026-06-11" section a `>` blockquote banner sat *between* two rows of a pipe table. A
+blockquote line ends a Markdown table the same way a blank line does, so the 11 rows below it
+rendered as loose text instead of table rows. The banner moved up to sit beside the batch banner it
+is already cross-referenced from; no row text changed, and the table is now 12 unbroken rows. This
+was the last such break in the file.
+
+**The three files nobody had reviewed turned out to carry the worst error on the branch.** Passes 1
+through 13 reviewed 6 of the 9 files this change touches. A fourteenth pass over the other three
+found 16 findings. The one that mattered: the `KNOWN_ISSUES.md` entry filing the session-staleness
+hook bug justified *not* fixing it by claiming `.claude/schema-registry.json` stores only a version
+"and nothing else, so the hook has no name to compare against", leaving a choice between a registry
+format change and a live ledger read. The registry already stores `_meta.applied_migration_names`
+— 964 names, including the one the entry says is unavailable — and the hook already loads it. The
+stated blocker did not exist. Also corrected: `DECISION_LOG.md` called the purchase-order pair
+"converted" fifty lines before proving from live that it is not; the "mirror form" constraint shape
+was recommended on a precondition **zero** live instances meet, without noting that it fails open on
+a nullable cents column; "Both forms clear the gate" was withdrawn as a widening of a money gate that
+Mason never decided, and is now recorded as an open question for him; "none of those are constrained"
+was refuted by three live `*_cent_scale_chk` constraints; two deferred-column row counts still read
+as present-tense when live measures 0; and `rpc-functions.md` called `create_quote_version` "the
+only write path" when `service_role` and `postgres` retain direct write grants and bypass RLS.
+The "(evening of 2026-08-18 local)" gloss was dropped from all 9 places it appeared — the branch's
+commits straddle both local dates, so it was unreliable and added nothing to the UTC stamp beside it.
+
+**A money column was recorded as unapproved debt while live was enforcing it.**
+`docs/manual/DECISION_LOG.md` listed `order_items.total_price` among the deferred columns under
+"no CHECK, therefore not an approved exception". Live disagrees:
+`order_items_total_price_whole_cents_chk` exists and is `convalidated`, added alongside the 35-row
+repair by `20260812115238_repair_historical_order_line_cents` on 2026-08-12 with Mason's in-chat
+approval. The enforced/deferred counts are now **8 and 4**, not 7 and 5. The same paragraph also named
+`purchase_orders.total_cost` as neither converted nor constrained; that column has carried a `bigint`
+`total_cost_cents` companion and a validated CHECK pinning the numeric to `cents / 100.0` since
+`20260716183501_purchase_order_integer_cents` — 25 days *before* the 2026-08-10 evaluation that
+declined conversion — as has `purchase_order_items.unit_cost`. Both errors pointed the same way:
+they told a future agent that settled, enforced money work was still open, which is how a closed
+decision gets re-opened. The 2026-08-10 **decision** itself is unchanged; what moved is which columns
+pass its gate. Read-only live checks, 2026-08-19 UTC.
+
+**One new tracked issue, not fixed here.** `docs/manual/KNOWN_ISSUES.md` gains an OPEN LOW entry:
+`.claude/hooks/session-staleness.mjs` compares migration *filename* stamps on disk against
+`schema-registry.json`'s `migrations_high_water`, which is a server-assigned ledger *version*. Because
+a version runs ahead of the authored stamp, unapplied migration files can be skipped silently. Hook
+logic is out of scope for a documentation-only PR and needs its own guard test.
+
+**A second claim retracted.** That money re-measure was first written up as a new OPEN incident —
+"stored commission money changed on live with no identified cause". It was wrong, and adversarial
+review caught it. Both writers are tracked, approved, applied migrations:
+`reconcile_pending_commission_snapshots` (ledger `20260810235207`, 2026-08-10) rounded `order_profit`
+to whole cents and recomputed `commission_amount` across exactly 11 pending rows, deliberately
+skipping cancelled ones; and `20260812115238_repair_historical_order_line_cents` (ledger
+`20260812154757`, 2026-08-12) rewrote order lines, whose trigger-refreshed order header re-opened a
+single $0.01 gap on one pending snapshot. The first draft asserted an absence without searching for
+the writer, which the retracted entry in `docs/manual/KNOWN_ISSUES.md` was already describing further
+down the same file. No production money moved outside a recorded decision.
+
+**One deliberate non-fix.** `20260813080000`'s own first line still reads `-- STATUS: NOT APPLIED`.
+That header is stale and is deliberately left alone, because CRX Manager never edits an applied
+migration.
+
 ## 2026-08-18 — Skills/commands accuracy sweep across the agent workflow surface
 
 Harness only — no app source, migration, or live-state change. A four-agent audit of every
