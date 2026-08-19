@@ -336,33 +336,77 @@ approved by Mason as Phase 1:
 1. **SessionStart matcher gating.** `session-snapshot`, `session-staleness`, and
    `worktree-awareness` now run on `startup|resume|clear` only; `worktree-cleanup` on `startup`
    only. This also fixes a correctness bug: re-running `session-snapshot` on compact overwrote
-   the pre-session dirty-file baseline mid-session, degrading `stop-wrap`'s comparison.
+   the pre-session dirty-file baseline mid-session, degrading `stop-wrap`'s comparison. Like the
+   PreToolUse narrowing in item 5, this gating is **Claude-side only**: `.codex/hooks.json`'s
+   SessionStart group carries no `matcher` key, so the three hooks Codex wires there
+   (`session-snapshot`, `session-staleness`, `worktree-awareness`) are not source-gated there.
+   Counting these, six hooks are wired on different matchers across the two manifests, not three.
 2. **Dead prompt hooks replaced.** The PreCompact money/RLS re-anchor and SessionStart onboarding
    were `"type": "prompt"` hooks, which fail outside the interactive REPL ("Prompt stop hooks are
    not yet supported outside REPL") — both silently dead in the desktop harness. New
-   `session-context-reminder.mjs` command hook emits the same content via SessionStart
-   `additionalContext`, branching on source (`compact` → rule re-anchor; otherwise onboarding).
-   Declared in `CLAUDE_ONLY_HOOKS` (Codex has no SessionStart event).
+   `session-context-reminder.mjs` command hook emits content via SessionStart `additionalContext`,
+   branching on source (`compact` → rule re-anchor; otherwise onboarding). It carries the rules
+   half of the old PreCompact prompt forward — not verbatim: the old "Always include these
+   reminders:" lead-in became a "POST-COMPACT RULE RE-ANCHOR" header, `.update/.delete` gained
+   parentheses and one semicolon became a period,
+   and it adds one rule with no ancestor in the old prompt ("treat files changed
+   before the compact as UNVERIFIED unless the summary says they were run and observed"). The old
+   prompt's other half asked the summarizer to cover "files modified this session; migrations
+   created (and whether src/types/index.ts was updated); current task and next step; last
+   build/test status" — that half was dropped with no replacement. The repo doesn't record why, and
+   it records no test of whether a PreCompact *command* hook could have carried it. Declared in
+   `CLAUDE_ONLY_HOOKS`. The note recorded alongside that declaration read "Codex has no
+   SessionStart event; its contract comes from AGENTS.md." The first clause is false:
+   `.codex/hooks.json` registers three SessionStart hooks
+   (`session-snapshot`, `session-staleness`, `worktree-awareness`), two of which
+   (`session-staleness`, `worktree-awareness`) emit `additionalContext` in the same output shape
+   this hook does — the registration is verified; whether the Codex harness consumes that
+   `additionalContext` is not. The second clause stands as recorded, but nothing establishes it as
+   the operative reason for leaving this hook Claude-only.
 3. **worktree-cleanup fetch TTL.** Its `git fetch origin` now runs at most once per 30 minutes
    (FETCH_HEAD mtime); a stale `origin/main` only makes the merged-branch classifier more
    conservative.
-4. **eslint-autofix direct + cached.** Invokes the project's local eslint binary with `--cache`
-   instead of `npx` (warm runs ~1.2s, verified); a timeout kill now stays silent instead of
-   reporting a fake lint failure. Post-review (CodeRabbit on PR #413): the npx fallback was
-   removed entirely — it interpolated the edited file's path into a shell string (injection
-   surface); with no local eslint the hook now skips silently. The cache directory is created
-   before the run so a fresh checkout doesn't error.
-5. **PreToolUse matcher narrowing.** `migration-apply-guard`, `mcp-tool-guard`, and
-   `live-testdata-guard` moved to the `mcp__.*` matcher; `pr-merge-guard` to
-   `Bash|PowerShell|mcp__.*`; `review-proof-guard`, `hold-latch-guard`, and
-   `unattended-autopilot` stay on `*` because they must see every call. Patterns chosen to work
-   under both anchored and unanchored matcher-regex semantics.
+4. **eslint-autofix invoked directly.** Invokes the project's local eslint binary directly instead
+   of through `npx`, removing an npx package re-resolve on every edit. PR #413 timed the hook at
+   1.1–1.2s afterward against the audit's ~15.5s p90 before — but that figure was recorded on a
+   *warm cached run*, and this hook's real path is a guaranteed cache miss (below), so the
+   real-path latency has not been separately measured. `--cache` is still passed but cannot hit
+   here: the hook only ever runs right after the file it checks was just edited, and
+   `--cache-strategy` defaults to `metadata` (size + mtime), so the just-written file never matches
+   its cache entry. The hook has one registration per manifest and nothing else (PostToolUse
+   `Write|Edit`, in `.claude/settings.json` and again in `.codex/hooks.json`), so no other
+   invocation path could hit it either; it costs a small cache read plus a full rewrite on every
+   edit and is left in only because removing it is out of scope for a docs-only pass. A timeout
+   kill now stays silent instead of reporting a fake lint failure. Post-review (CodeRabbit on PR
+   #413): the npx fallback was removed entirely — it interpolated the edited file's path into a
+   shell string (injection surface); with no local eslint the hook now skips silently. The hook
+   creates the cache file's parent directory defensively, though ESLint's flat-cache (4.0.1) does
+   it too in `writeJSON`.
+5. **PreToolUse matcher narrowing (Claude side only).** In `.claude/settings.json`,
+   `migration-apply-guard`, `mcp-tool-guard`, and `live-testdata-guard` moved to the `mcp__.*`
+   matcher; `pr-merge-guard` to `Bash|PowerShell|mcp__.*`; `review-proof-guard`, `hold-latch-guard`,
+   and `unattended-autopilot` stay on `*` because they must see every call. Patterns chosen to work
+   under both anchored and unanchored matcher-regex semantics. `.codex/hooks.json` was not touched
+   by this pass, so three *PreToolUse* guards are wired on different matchers across the two
+   harnesses (item 1 adds
+   three more on SessionStart, for six total): `migration-apply-guard`,
+   `mcp-tool-guard`, and `live-testdata-guard` are narrowed to `mcp__.*` for Claude but still run on
+   `*` for Codex, where only the shared in-script tool-name filter narrows them. (`review-proof-guard`
+   and `hold-latch-guard` are wired in `.codex/hooks.json` too, but they sit on `*` in both manifests
+   by design — no matcher difference.) `pr-merge-guard` and `unattended-autopilot` aren't wired in
+   `.codex/hooks.json` at all — both are declared Claude-only in `scripts/agent-manifest-parity.mjs`,
+   for two different reasons recorded there: Codex has its own merge guard
+   (`production-action-guard.mjs`, covering pushes and PR merges), whereas autopilot is a
+   Claude-session mechanism and Codex has no autopilot flag. (Codex does have its own hands-free
+   mode — `approval_policy="never"` in `scripts/codex-build.mjs` — it just isn't gated by this
+   hook.) Either way, the narrowing question doesn't apply to them there.
 
-Verified: `sync-agent-workflows --write`, `test:agent-workflows` (all pass, parity included),
-`agent-health` (pass), plus manual stdin runs of the new/changed hooks (compact/startup/garbage
-payloads; dry-run cleanup; eslint cold vs warm). Residual risk stated in the PR: the narrowed
-matchers themselves cannot fire in the session that edits them (hook config loads at session
-start); a safe next-session mutation test is documented there.
+Verified: `sync-agent-workflows --write`, `test:agent-workflows` (all pass, parity included), plus
+manual stdin runs of the new/changed hooks (compact/startup/garbage payloads; dry-run cleanup).
+Residual risk stated in
+the PR: the narrowed matchers themselves cannot fire in the
+session that edits them (hook config loads at session start); a safe next-session mutation test is
+documented there.
 
 ## 2026-08-17 — Codex fleet inventory preserved; two CI-signal traps recorded
 
