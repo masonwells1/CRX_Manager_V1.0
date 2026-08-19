@@ -232,6 +232,33 @@ describe('validateBlendMath', () => {
       expect(warnings[0]).toContain('quantity but no unit');
     });
 
+    // The other half of the same hole, found by CodeRabbit on PR #426. Products in
+    // Gal against a total with no unit is not a match — the total's unit is simply
+    // unknown. This is the shape EVERY scanned ticket arrives in, because the OCR
+    // importer writes total_volume and never writes total_volume_unit.
+    it('refuses to compare when the products have units but the ticket total does not', () => {
+      const warnings = validateBlendMath(
+        { total_acres: null, total_volume: 300, total_volume_unit: '' },
+        [
+          { product_name: 'A', quantity: 100, unit: 'Gal', rate_per_acre: null, rate_per_acre_unit: null },
+          { product_name: 'B', quantity: 200, unit: 'Gal', rate_per_acre: null, rate_per_acre_unit: null },
+        ]
+      );
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("total volume doesn't");
+    });
+
+    it('refuses a null ticket total unit the same way as a blank one', () => {
+      const warnings = validateBlendMath(
+        { total_acres: null, total_volume: 250, total_volume_unit: null },
+        [{ product_name: 'A', quantity: 300, unit: 'Lb', rate_per_acre: null, rate_per_acre_unit: null }]
+      );
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('Total volume not checked');
+      // Must NOT report the old numeric mismatch, which would be a guess.
+      expect(warnings[0]).not.toContain('300.00');
+    });
+
     it('treats a whitespace-only unit as not recorded, not as its own unit', () => {
       const warnings = validateBlendMath(
         { total_acres: null, total_volume: 300, total_volume_unit: 'gal' },

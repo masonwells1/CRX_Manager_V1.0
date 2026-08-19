@@ -140,7 +140,14 @@ export function validateBlendMath(
         }
       }
 
+      // The ticket's own total unit is the other half of the same hole. If the
+      // products say Gal and the total says nothing, the total is NOT thereby in
+      // gallons — it is simply unknown, and comparing against it is the same silent
+      // guess. This is not a rare case: the scanned-ticket importer
+      // (`supabase/functions/process-blend-ticket/index.ts`) writes `total_volume`
+      // and never writes `total_volume_unit`, so EVERY imported ticket lands here.
       const ticketUnit = normalizeUnit(ticketData.total_volume_unit);
+      const ticketUnitMissing = ticketUnit === null;
       if (ticketUnit !== null && !unitLabels.has(ticketUnit.key)) {
         unitLabels.set(ticketUnit.key, ticketUnit.label);
       }
@@ -155,6 +162,10 @@ export function validateBlendMath(
       if (someUnitRecorded && hasUnrecordedUnit) {
         warnings.push(
           `Total volume not checked: a product has a quantity but no unit, so it can't be told whether it adds to the rest. Please verify the total by hand.`
+        );
+      } else if (someUnitRecorded && ticketUnitMissing) {
+        warnings.push(
+          `Total volume not checked: the products have units but the total volume doesn't, so there's nothing to compare them against. Please verify the total by hand.`
         );
       } else if (unitLabels.size > 1) {
         const labels = Array.from(unitLabels.values()).join(', ');
