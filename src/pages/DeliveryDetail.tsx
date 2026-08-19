@@ -20,6 +20,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { downloadDeliveryPdf } from '../lib/deliveryPdf';
 import { logActivity } from '../lib/activityLogger';
+import { sumNeedByProduct } from '../lib/inventoryShortage';
 import { sendEmail, buildEmailHtml } from '../lib/emailService';
 import { notifyDeliveryRemainder, notifyDeliveryCompleted } from '../lib/notificationTriggers';
 import { checkRUPCompliance } from '../lib/rupCompliance';
@@ -383,13 +384,19 @@ export default function DeliveryDetail() {
         invMap[row.product_id] = (invMap[row.product_id] || 0) + Number(row.quantity_available);
       }
 
+      // Sum the need per PRODUCT before comparing — a tier-split booking puts
+      // the same product on several lines. See src/lib/inventoryShortage.ts.
       const warnings: string[] = [];
-      for (const item of items) {
-        if (item.quantity <= 0) continue;
-        const available = invMap[item.product_id] ?? 0;
-        if (available < item.quantity) {
-          const productName = (item.product as unknown as { product_name: string })?.product_name || 'Unknown';
-          warnings.push(`${productName}: need ${item.quantity}, only ${available} on hand`);
+      for (const need of sumNeedByProduct(
+        items.map((item) => ({
+          productId: item.product_id,
+          label: (item.product as unknown as { product_name: string })?.product_name || 'Unknown',
+          quantity: item.quantity,
+        }))
+      )) {
+        const available = invMap[need.productId] ?? 0;
+        if (available < need.quantity) {
+          warnings.push(`${need.label}: need ${need.quantity}, only ${available} on hand`);
         }
       }
       if (!cancelled) setInventoryWarnings(warnings);
