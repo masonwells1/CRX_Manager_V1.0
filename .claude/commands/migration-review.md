@@ -45,7 +45,14 @@ The proof unblocks `apply_migration`; it does not authorize it. Two authorizatio
 - **Interactive session (default):** explain the migration (offer `/explain-migration`) and wait for Mason's in-chat approval before the apply call.
 - **Pre-authorized hands-free run** (Mason explicitly asked for the run AND autopilot is armed): no per-migration ask, but the Codex gate is mandatory — run `node scripts/write-apply-proofs.mjs <mig-name>`, which runs the trusted Codex CLI itself and mints the content-bound proof pair only on a CLEAN machine verdict (hand-writing the proof is blocked by review-proof-guard, by design). The apply-guard refuses hands-free applies without it, and refuses DESTRUCTIVE migrations (data deletes, schema/table/column/type drops, MERGE) outright — park those for Mason.
 
+### 5. After the apply
+An applied migration is not finished until the post-apply work in `/ship` Steps 5.4–5.7 runs:
+rolled-back smoke chains for every touched RPC (`node scripts/smoke/run-smoke.mjs --spec <rpc>` →
+`SMOKE_PASS_ROLLBACK`), the B7-class rename check, a real `/regen-schema-registry` refresh when the
+DDL touched tables/columns/constraints/status values, and the db-invariant sweeps. If this command
+ran standalone (not inside `/ship`), run those steps here rather than assuming someone else will.
+
 ## Hard rules
-- **Read-only review.** The workflow and this review step never edit code, apply migrations, or deploy.
+- **Read-only review.** The workflow and this review step never edit code, apply migrations, or deploy. (Step 5 is the one exception, and it runs only after a separately authorized apply has already happened. Be precise about what it does: the `/regen-schema-registry` refresh writes `.claude/schema-registry.json`; the B7 rename check may rename the migration file on disk; and the smoke chains execute real, always-rolled-back transactions against the live DB via `execute_sql`. Rolled back is safe, not read-only.)
 - **A proof file is only ever written after a genuinely clean (or blockers-fixed) verdict.** Never hand-write a proof to skip the review.
 - **Plain English for Mason** — he has zero coding experience.

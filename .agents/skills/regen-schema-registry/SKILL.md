@@ -1,6 +1,6 @@
 ---
 name: regen-schema-registry
-description: Regenerate `.claude/schema-registry.json` from the live Supabase database. The schema registry is the source of truth that powers 3 of the PreToolUse hooks (status-enum-check, generated-column-check, sql-safety), the session-staleness check, and the 2 review subagents. Use after applying any migration that creates a new status enum, generated column, or table — otherwise the hooks will be working from stale data and may miss the very class of bug they're supposed to catch. The registry-freshness PostToolUse hook writes `.claude/session-state/REGISTRY-STALE.flag` after a live apply with registry-relevant DDL — this skill's live-introspection refresh is how that flag gets cleared.
+description: Regenerate `.claude/schema-registry.json` from the live Supabase database. The schema registry is the source of truth that powers 3 of the PreToolUse hooks (status-enum-check, generated-column-check, sql-safety), the session-staleness check, and the 3 schema-aware review subagents (migration-drift, rls-security, typescript-types-drift). Use after applying any migration that creates a new status enum, generated column, or table — otherwise the hooks will be working from stale data and may miss the very class of bug they're supposed to catch. The registry-freshness PostToolUse hook writes `.claude/session-state/REGISTRY-STALE.flag` after a live apply with registry-relevant DDL — this skill's live-introspection refresh is how that flag gets cleared.
 ---
 
 # Regenerate Schema Registry
@@ -38,18 +38,18 @@ If this fails:
 git diff .claude/schema-registry.json
 ```
 
-Capture and summarize the changes:
-- New status enums added
-- New generated columns
-- Tables added to / removed from `tables_without_updated_at`
+Capture and summarize the changes across all 8 sections:
+- New/removed status enums, generated columns, and `tables_without_updated_at` entries
+- Added/changed/removed entries in `check_constraints`, `skipped_constraints`, `not_null_columns`, `columns`, and `sequences`
 
 If the diff is empty: the registry was already up to date. Tell Mason and skip to Step 5 (a genuine introspection run that changes nothing still counts for clearing the stale flag — see Step 5).
 
 ## Step 3: Sanity-Check the New Registry
 
 Read the regenerated `.claude/schema-registry.json` and verify:
-- `_meta.generated_at` matches today
-- All 3 top-level keys present: `generated_columns`, `status_enums`, `tables_without_updated_at`
+- `_meta.generated_at` matches today and `_meta.registry_version` is `2`
+- All 8 top-level keys present: `generated_columns`, `status_enums`, `tables_without_updated_at`,
+  `check_constraints`, `skipped_constraints`, `not_null_columns`, `columns`, `sequences`
 - `status_enums` is non-empty, and its entry count is in the same ballpark as the registry you
   just replaced (compare against `git show HEAD:.claude/schema-registry.json`). A near-empty or
   sharply smaller result means the script silently failed — do not accept it as "the schema
@@ -95,10 +95,15 @@ The cutoff is the moment Step 1.0 stamped BEFORE the first introspection query �
 
 Status: SUCCESS / FAILED / NO CHANGES
 
-Changes from previous version:
+Changes from previous version (all 8 sections):
   Generated columns:    + <N added>, - <N removed>
   Status enums:         + <N added>, - <N removed>
   No-updated_at tables: + <N added>, - <N removed>
+  Check constraints:    + <N added>, ~ <N changed>, - <N removed>
+  Skipped constraints:  + <N added>, - <N removed>
+  NOT NULL columns:     + <N added>, - <N removed>
+  Columns:              + <N added>, ~ <N changed>, - <N removed>
+  Sequences:            + <N added>, - <N removed>
 
 Details:
   <bulleted list of specific additions/removals>

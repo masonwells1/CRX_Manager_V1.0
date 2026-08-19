@@ -2,6 +2,122 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-18 — Skills/commands accuracy sweep across the agent workflow surface
+
+Harness only — no app source, migration, or live-state change. A four-agent audit of every
+`.claude/skills/` and `.claude/commands/` file (plus the global handoff/new-project skills) found
+~60 findings; all confirmed ones are fixed (the remainder were duplicates or refuted on
+verification). Highlights:
+
+- **Landing mechanics current everywhere:** `/ship`, `/deploy-check`, `/codex-gauntlet`, and the
+  review-family files now all state the post-2026-07-30 chain — branch → PR → Vercel check →
+  **read and resolve CodeRabbit's review** → merge — and the hands-free-migration carve-outs
+  reference the settled 2026-07-13 policy instead of contradicting it.
+- **Model pins:** `scripts/codex-hunt.mjs` now pins `gpt-5.3-codex-spark` explicitly (was falling
+  to the CLI default under `--ignore-user-config`); codex-cross-review's template pins
+  `gpt-5.6-sol`/high with an exact SHA; the global handoff skill (outside this repo, at
+  `~/.claude/skills/handoff` — noted here for the audit record only) no longer claims Codex
+  cannot reach the live DB (its Supabase connector is write-enabled, 2026-08-14).
+- **Renamed/stale tool references:** Supabase `get_logs` → `query_logs` (settings allowlist +
+  deploy-edge-function + spot-check-prod); hard-coded connector UUID prefixes replaced with
+  suffix-resolution; `moddatetime` trigger template replaced with the house
+  `public.update_updated_at()` in create-migration/explain-migration.
+- **Registry/review accuracy:** regen-schema-registry now checks registry_version 2 and all
+  8 top-level keys; review prompts ask for EVERY finding with filtering moved to reconciliation;
+  migration-review gained the post-apply Step 5 (smoke chains, registry refresh, sweeps);
+  backup-db documents both backup evidence channels.
+- Codex adapters regenerated (`sync-agent-workflows --write`, 37 files) and
+  `npm run test:agent-workflows` green. Proposed wordings that would have added unscoped
+  carve-outs to hard safety-gate approval lines were rejected; the two gate sentences that were
+  reworded (`agent-pair-review`, `codex-gauntlet`) were then re-tightened in the blind
+  double-Opus review round below.
+- **CodeRabbit follow-up (PR #421):** completed the approval-gate lists in `agent-pair-review`
+  and `/ship` (added non-green pushes, billing, customer-visible production state); both bug-hunt
+  handoffs now spell out the read/fix/dismiss CodeRabbit gate; packet dates pinned to
+  `TZ='America/Chicago'`; rollback's edge-function check excludes `_shared/`; regen-schema-registry
+  diffs/summarizes all 8 registry sections; spot-check-prod reports unversioned functions as
+  `NO BASELINE`; probe rewrites must retain both SQLs with read-only equivalence; review-workflow's
+  GROUND_RULE points at the manual/reference lifecycle docs instead of `CLAUDE.md`.
+- **Blind double-Opus adversarial rounds (PR #421, Codex usage-limited):** independent blind
+  Opus reviewer pairs re-audited the full diff, one round per fix commit until clean. Fixed from
+  their findings: the `agent-pair-review` and `codex-gauntlet` gate sentences re-tightened
+  (live-data changes and destructive actions are never hands-free; the 2026-07-13 proof gate
+  named explicitly); `query_logs` call shapes corrected to the real `sql`-based schema
+  (deploy-edge-function, spot-check-prod) and stale `project_id`/`get_logs` params/allowlist
+  entries dropped; `codex-gauntlet` no longer claims preflight/deploy-check invoke it
+  automatically; `overnight-codex-gate.mjs` now feeds the prompt via stdin (Windows ~32K argv
+  cap) and emits an explicit `GATE-FAILED:` line on stdout for timeout/launch/non-zero exits so
+  an empty verdict file is never mistaken for "nothing found" (overnight-bug-hunt's read
+  instructions say the same); log checks now verify the log `source` exists before trusting an
+  empty result (this project has no `function_edge_logs`); migration-review's read-only carve-out
+  now enumerates everything post-apply Step 5 actually does (registry write, B7 rename,
+  rolled-back live smoke transactions); the last `.codex\sync-from-claude.ps1` remedies replaced
+  with `node scripts/sync-agent-workflows.mjs --write`; audit-report dates pinned to
+  `TZ='America/Chicago'`; stale map-count figures dropped from the architecture-audit prompt.
+
+## 2026-08-18 — pre-push private-artifact scan no longer ENOBUFS on nested worktrees
+
+Harness only — no app source, migration, or live-state change. Every `git push` from
+`C:\CRX_Manager` was failing at the pre-push hook with `spawnSync git ENOBUFS`. Unlike pre-commit
+mode, pre-push mode enumerates ignored files repo-wide, and with 16+ session worktrees nested
+under `.claude/worktrees/`, a stale/orphaned sibling directory Git no longer registers (removed
+by hand instead of `git worktree remove`) gets fully recursed into instead of collapsed to one
+line like a live registered worktree — its dependency tree alone was 88MB of ignored-file output,
+overflowing the 64MB Git output buffer.
+
+`check-supplier-pricing-phase3-private-artifacts.mjs` now excludes only the specific tool-owned
+bulk directory names (`node_modules`, `dist`, etc.) nested under a verified worktree's own parent
+directory, scoped narrowly via a real Git pathspec built from `git worktree list`. Non-bulk
+content sitting in an orphaned worktree directory, and any same-named decoy directory outside a
+worktree container, remains fully scanned — the existing anti-decoy containment design (only
+top-level-named generated roots are tool-owned) is unchanged. `GIT_OUTPUT_MAX_BUFFER` was not
+raised — moving the cliff wasn't the fix.
+
+Added a regression test reproducing a stale sibling worktree with a large ignored dependency
+tree. Reproduced the original ENOBUFS crash and confirmed the fix against the real
+`C:\CRX_Manager` checkout (53,850 paths, ~1GB scanned, no crash) via direct invocation of the
+same `--pre-push` code path the hook calls.
+
+CodeRabbit's review of the PR caught a follow-on bug in the fix itself: the worktree container
+path is filesystem-derived, not a literal this file wrote, and was spliced unescaped into the
+new `:(exclude,glob)` pathspec. A container name containing `*`, `?`, `[`, or `\` would have let
+Git treat it as a glob instead of a literal path — e.g. a bracketed name could accidentally
+exclude an unrelated top-level directory sharing only a coincidental single-character match,
+hiding a private artifact planted there from the ignored-file scan. Now escaped before
+interpolation. Added a regression fixture with a bracketed worktree container plus an outside
+decoy directory; confirmed the new test fails without the escaping fix and passes with it.
+
+## 2026-08-18 — Mission loops get a standing model/context budget
+
+Agent-surface docs only — no source, migration, or live-state change.
+
+Mason's 30-day usage analysis attributed the bulk of the month's token spend (estimated at
+roughly 40%) to a handful of marathon loop sessions — almost entirely premium-model context
+re-reads, because every message re-reads the whole conversation. `/run-loop` now carries two
+standing rules, recorded as Mason's 2026-08-18 decision in `docs/manual/DECISION_LOG.md`:
+mechanical cycle steps (status checks, doc syncs, read sweeps, evidence gathering) may be
+delegated to cheaper-model subagents *within the loop's existing structure* — ledger PROOF
+lines, money/RLS/migration judgment, and pinned reviewer models/effort are explicitly
+excluded, and no agents are added on top of a workflow's defined fan-out; and every loop
+obeys the session-size sentinel's marathon cap (advisory at 12MB of transcript; at 25MB:
+finish only the atomic step already in flight, checkpoint the ledger, write a handoff,
+continue in a fresh session, wind down). The sentinel is a global user-scope hook outside
+this repo (`~/.claude/hooks/session-size-sentinel.mjs`), and after adversarial review of
+PR #416 it fires both on prompt submission and mid-turn after tool calls, so unattended
+loops — which may run for hours off one prompt — actually see it; where the hook is absent
+(Codex sandbox, remote runners) the written cap in `run-loop.md` binds on its own. Hard
+gates transfer unchanged across a handoff; a handoff never launders an approval, and a
+lapsed autopilot flag stays lapsed in the successor session.
+
+## 2026-08-18 — Fixed stale moddatetime references in…
+
+Fixed stale moddatetime references in docs/workflows/DATABASE_CHANGE_CHECKLIST.md to the house public.update_updated_at trigger convention; PR 419 green and parked at the Sol merge gate until Codex credits return Aug 19.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `a8b03228 docs(workflows): use house update_updated_at() trigger in database change checklist`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
 ## 2026-08-18 — session-staleness backup check now consults the real off-site workflow
 
 Harness only — no app source, migration, or live-state change. The SessionStart backup-staleness

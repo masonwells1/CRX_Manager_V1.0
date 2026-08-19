@@ -36,7 +36,7 @@ export function compareSyncedFiles(root, pairs) {
     const matches = readFileSync(leftPath, "utf8") === readFileSync(rightPath, "utf8");
     return matches
       ? check("PASS", `${right} synced from ${left}`)
-      : check("FAIL", `${right} synced from ${left}`, "run .codex\\sync-from-claude.ps1 -IncludeHooks");
+      : check("FAIL", `${right} synced from ${left}`, "run node scripts/sync-agent-workflows.mjs --write");
   });
 }
 
