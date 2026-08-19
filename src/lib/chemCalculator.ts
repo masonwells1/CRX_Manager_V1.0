@@ -9,6 +9,8 @@
  *  • change the ACRES         → the row's DRIVER side is held and the other re-derived
  */
 
+import { normalizeRateUnit } from './labelGuardrails';
+
 export type ChemDriver = 'rate' | 'qty';
 
 /** The minimal row shape the calculator reads/writes. JobDetail's ChemRow is a superset. */
@@ -254,28 +256,53 @@ export function fieldAppPricedQuantity(
 // per-base-unit with the SAME server-parity factor tables above.
 
 /**
- * Strip a per-acre suffix ('/ac', '/acre', '/a', ' per acre') from a rate_unit and
- * return the bare base measure unit (e.g. 'pt/ac' → 'pt', 'GAL' → 'gal'). Empty in →
- * empty out.
+ * Strip a per-acre suffix from a rate_unit and return the bare base measure unit
+ * ('pt/ac' → 'pt', 'GAL' → 'gal', 'gallons/ac' → 'gal'). Empty in → empty out.
+ *
+ * This DELEGATES to `labelGuardrails.normalizeRateUnit`, which is the single mirror of
+ * the live SQL `normalize_rate_unit` — same acre-denominator rule, same synonym folding.
+ * It used to keep its own partial copy that split on the first '/' and folded nothing,
+ * which diverged from the server in two ways that both reached money:
+ *
+ *  • A non-acre denominator collapsed to its numerator ('oz/cwt' → 'oz'), where the
+ *    server keeps the whole string precisely so it cannot match a bare unit.
+ *  • No synonym folding, so 'ounces/ac' missed the size tables the server hits after
+ *    folding to 'oz' — dropping the row into the unreconciled fallback.
+ *
+ * The server pipeline is normalize-then-size: `field_app_priced_quantity(qty,
+ * normalize_rate_unit(unit), ...)`. Matching it means folding here and sizing below.
  */
 export function baseUnitOfRate(rateUnit: string | null | undefined): string {
-  const raw = (rateUnit || '').trim().toLowerCase();
-  if (raw === '') return '';
-  // take the part before the first '/' (handles 'pt/ac', 'pt/acre', 'pt/a')
-  let base = raw.split('/')[0].trim();
-  // also handle the spelled-out ' per acre' form
-  base = base.replace(/\s+per\s+acre$/, '').trim();
-  return base;
+  return normalizeRateUnit(rateUnit) ?? '';
 }
 
 /**
- * Size of a unit within its product form (gallons for liquid, pounds for dry),
- * using the same server-parity tables as toGallonOrLbEquivalent. Returns null when
- * the unit is unknown for the given form.
+ * Size of a unit within its product form, in the form's base unit (fluid ounce for
+ * liquid, ounce for dry). Returns null when the unit is unknown for that form.
+ *
+ * MUST use the PRICING tables (`LIQUID_UNIT_SIZE`/`DRY_UNIT_SIZE`, which mirror the SQL
+ * `field_app_priced_quantity`), NOT the gl/lb display tables that mirror
+ * `convert_to_gl_lb`. Reconciliation exists to make the row's stored money agree with
+ * what the server bills, and the server bills through `field_app_priced_quantity`.
+ *
+ * The two table pairs are NOT interchangeable. `convert_to_gl_lb`'s dry branch has no
+ * `dry oz`, while `field_app_priced_quantity`'s does. Reading the display table meant
+ * `dry oz` was treated as unconvertible, dropping the row into the fallback below with a
+ * quantity in ounces priced per pound — a 16x over-bill, and a 16x over-deduction at
+ * `complete_job`, on the 61 live products that carry `rate_unit = 'Dry oz'` against
+ * pound stock. The ratios the two pairs produce are otherwise identical (gal:oz is
+ * 1:1/128 one way and 128:1 the other), so this changes nothing for any other unit.
+ *
+ * Own-property lookup rather than `in` so a unit literally spelled 'constructor' or
+ * 'toString' cannot inherit a value off Object.prototype and yield NaN money.
+ * (`Object.hasOwn` would need an es2022 lib target; this is the same check.)
  */
+const hasOwn = (o: Record<string, number>, k: string): boolean =>
+  Object.prototype.hasOwnProperty.call(o, k);
+
 function unitSizeInForm(unitKey: string, form: 'liquid' | 'dry'): number | null {
-  if (form === 'liquid') return unitKey in LIQUID_TO_GALLONS ? LIQUID_TO_GALLONS[unitKey] : null;
-  return unitKey in DRY_TO_POUNDS ? DRY_TO_POUNDS[unitKey] : null;
+  const sizes = form === 'dry' ? DRY_UNIT_SIZE : LIQUID_UNIT_SIZE;
+  return hasOwn(sizes, unitKey) ? sizes[unitKey] : null;
 }
 
 export interface ChemAutofillUnits {
@@ -285,6 +312,27 @@ export interface ChemAutofillUnits {
   costPerUnitCents: number;
   /** Per-`unit` price in cents (converted from the per-stock-unit price when units differ). */
   pricePerUnitCents: number;
+  /**
+   * FALSE when the rate unit and the stock unit could not be reconciled, so the values
+   * above are the untouched stock unit and per-stock cost/price.
+   *
+   * This is NOT cosmetic. The row's quantity is rate × acres, expressed in the RATE's
+   * unit, while an unreconciled row carries a price per the STOCK unit — and
+   * `transfer_job_to_invoice` bills the line as a raw
+   * `safe_cents_qty(price_per_unit_cents, quantity)` with no unit conversion of its own.
+   * So an unreconciled row bills the numerator quantity at the stock price. For 'oz/cwt'
+   * on a $28.00/GAL product that is $5,600 where a per-ounce reading would be $44.
+   * `complete_job` deducts stock the same way and does not refuse either — its hard
+   * JOB_INV_UNIT_UNCONVERTIBLE raise was removed under U11 in favour of a raw fallback
+   * plus an office-review flag.
+   *
+   * Callers MUST surface this to the user. Per the house convention set out in
+   * `labelGuardrails` — warn, never block, until Mason authorizes a hard block — the
+   * line still saves; it must not save SILENTLY.
+   */
+  reconciled: boolean;
+  /** Why reconciliation failed, for the on-screen warning. Null when `reconciled`. */
+  reason: string | null;
 }
 
 /**
@@ -302,13 +350,63 @@ export interface ChemAutofillUnits {
  *    (perBase = perStock × sizeOf(baseUnit) / sizeOf(stockUnit)). Example: GAL→pt is
  *    1/8, so a $22.50/GAL cost becomes $2.8125/pt; 240 pt × $2.8125 = $675 = 30 gal ×
  *    $22.50 (the correct, NON-inflated amount).
- *  • Units can't be reconciled (unknown unit, or different forms) → SAFE FALLBACK: keep
- *    the STOCK unit + per-stock cost/price unchanged (never guess a conversion). This is
- *    the pre-fix behavior for those rows; the mismatch is at least no worse than before
- *    and the user can correct the unit/cost manually.
+ *  • Units can't be reconciled (unknown unit, or different forms) → keep the STOCK unit +
+ *    per-stock cost/price unchanged (never guess a conversion) AND return
+ *    `reconciled: false` with a reason. This branch is NOT harmless and must not be
+ *    described as a safe fallback: the row's quantity is still rate × acres in the RATE's
+ *    unit, so pairing it with a per-stock price over-bills by the unit ratio, and nothing
+ *    downstream refuses it. See `ChemAutofillUnits.reconciled`. The caller is responsible
+ *    for surfacing the warning.
  *
  * Pure + tested (chemCalculator.test.ts).
  */
+/**
+ * Does a saved chem line's own quantity unit disagree with its rate unit? Returns a
+ * plain-English warning, or null when the line is coherent.
+ *
+ * THE INVARIANT. `quantity` is rate × acres, so it is expressed in the RATE's unit.
+ * `price_per_unit_cents` is per the row's `unit`. `transfer_job_to_invoice` bills the
+ * line as a raw `safe_cents_qty(price_per_unit_cents, quantity)` — it performs NO unit
+ * conversion — and `complete_job` deducts stock from the same pair without refusing.
+ * So the line is correct only when those two units are THE SAME. Any difference bills
+ * and deducts by exactly the wrong ratio.
+ *
+ * Checked at render time rather than trusted from the autofill moment, so it still holds
+ * after a reload and after a user edits either dropdown by hand — the autofill's own
+ * `reconciled` flag cannot see those.
+ *
+ * Deliberately silent when either unit is blank: an empty unit is a separate, pre-existing
+ * concern and warning on it here would fire on ordinary flat/quantity-only lines.
+ */
+export function chemLineUnitMismatch(
+  rowUnit: string | null | undefined,
+  rateUnit: string | null | undefined,
+  productForm?: 'liquid' | 'dry' | null,
+): string | null {
+  const rowKey = (rowUnit || '').trim().toLowerCase();
+  const baseKey = baseUnitOfRate(rateUnit);
+  if (rowKey === '' || baseKey === '') return null;
+  if (rowKey === baseKey) return null;
+
+  let form: 'liquid' | 'dry' | null = productForm ?? null;
+  if (form == null) {
+    if (hasOwn(LIQUID_UNIT_SIZE, rowKey)) form = 'liquid';
+    else if (hasOwn(DRY_UNIT_SIZE, rowKey)) form = 'dry';
+  }
+  const rowSize = form == null ? null : unitSizeInForm(rowKey, form);
+  const baseSize = form == null ? null : unitSizeInForm(baseKey, form);
+
+  // Both known in the same form → we can say exactly how far off the line is.
+  if (rowSize != null && baseSize != null && rowSize !== 0) {
+    const ratio = baseSize / rowSize;
+    const factor = ratio > 1 ? ratio : 1 / ratio;
+    const rounded = Math.round(factor * 100) / 100;
+    const direction = ratio < 1 ? 'over-bills' : 'under-bills';
+    return `Quantity is counted in "${baseKey}" but the line is priced per "${rowUnit}". As saved this ${direction} by about ${rounded}x — set the unit to "${baseKey}", or change the rate unit.`;
+  }
+  return `Quantity is counted in "${baseKey}" but the line is priced per "${rowUnit}", and those can't be converted, so the amount billed will be wrong. Fix the unit before invoicing.`;
+}
+
 export function reconcileChemAutofillUnits(
   stockUnit: string | null | undefined,
   rateUnit: string | null | undefined,
@@ -320,27 +418,43 @@ export function reconcileChemAutofillUnits(
   const stockKey = stock.toLowerCase();
   const baseKey = baseUnitOfRate(rateUnit);
 
-  const fallback: ChemAutofillUnits = {
+  const unreconciled = (reason: string): ChemAutofillUnits => ({
     unit: stock,
     costPerUnitCents: costPerStockCents,
     pricePerUnitCents: pricePerStockCents,
+    reconciled: false,
+    reason,
+  });
+  /** Nothing to reconcile — the row is already in one measure. Not a warning state. */
+  const alreadyAligned: ChemAutofillUnits = {
+    unit: stock,
+    costPerUnitCents: costPerStockCents,
+    pricePerUnitCents: pricePerStockCents,
+    reconciled: true,
+    reason: null,
   };
 
   // No rate unit, or identical units → nothing to reconcile (common case).
-  if (baseKey === '' || baseKey === stockKey || stockKey === '') return fallback;
+  if (baseKey === '' || baseKey === stockKey || stockKey === '') return alreadyAligned;
 
   // Determine the form: trust product_form when given, else infer from the stock unit.
+  // Inferred from the PRICING tables, the same ones the sizes below come from.
   let form: 'liquid' | 'dry' | null = productForm ?? null;
   if (form == null) {
-    if (stockKey in LIQUID_TO_GALLONS) form = 'liquid';
-    else if (stockKey in DRY_TO_POUNDS) form = 'dry';
+    if (hasOwn(LIQUID_UNIT_SIZE, stockKey)) form = 'liquid';
+    else if (hasOwn(DRY_UNIT_SIZE, stockKey)) form = 'dry';
   }
-  if (form == null) return fallback;
+  if (form == null) {
+    return unreconciled(`Product form is unknown and the stock unit "${stock}" isn't a recognized measure, so "${rateUnit}" can't be converted to it.`);
+  }
 
   const stockSize = unitSizeInForm(stockKey, form);
   const baseSize = unitSizeInForm(baseKey, form);
   // Both units must be known in the SAME form to safely convert; otherwise don't guess.
-  if (stockSize == null || baseSize == null || baseSize === 0) return fallback;
+  if (stockSize == null || baseSize == null || baseSize === 0) {
+    const culprit = baseSize == null || baseSize === 0 ? `rate unit "${rateUnit}"` : `stock unit "${stock}"`;
+    return unreconciled(`The ${culprit} isn't a recognized ${form} measure, so the rate can't be converted to the stock unit "${stock}". The quantity is counted in the rate's unit but priced per "${stock}" — check the unit before invoicing.`);
+  }
 
   // base-units per stock-unit = stockSize / baseSize (e.g. GAL/pt = 1 / (1/8) = 8).
   // per-base cost = per-stock cost / (base-units per stock-unit) = perStock × baseSize / stockSize.
@@ -349,5 +463,7 @@ export function reconcileChemAutofillUnits(
     unit: baseKey,
     costPerUnitCents: Math.round(costPerStockCents * perBaseFactor),
     pricePerUnitCents: Math.round(pricePerStockCents * perBaseFactor),
+    reconciled: true,
+    reason: null,
   };
 }

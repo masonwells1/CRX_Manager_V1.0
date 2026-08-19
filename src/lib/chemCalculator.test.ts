@@ -7,6 +7,7 @@ import {
   toGallonOrLbEquivalent,
   fieldAppPricedQuantity,
   baseUnitOfRate,
+  chemLineUnitMismatch,
   reconcileChemAutofillUnits,
   type ChemCalcRow,
 } from './chemCalculator';
@@ -321,16 +322,184 @@ describe('chemCalculator — reconcileChemAutofillUnits (P1 money fix)', () => {
     expect(r.pricePerUnitCents).toBe(200);
   });
 
-  it('SAFE FALLBACK: unknown / unreconcilable units keep the stock unit + per-stock cost/price', () => {
-    // unknown stock unit → can't convert → keep as-is (no worse than before, no guess).
+  // NOT a "safe fallback" — keeping the stock unit while the quantity stays in the rate's
+  // unit is what over-bills. The values are unchanged, but the result must SAY it failed so
+  // the caller can warn. (Corrected 2026-08-19 after adversarial review.)
+  it('unreconcilable units keep the stock unit + per-stock cost/price AND report reconciled:false', () => {
+    // unknown stock unit → can't convert → keep as-is (never guess) but flag it.
     const r1 = reconcileChemAutofillUnits('widgets', 'pt/ac', 1000, 2000, 'liquid');
-    expect(r1).toEqual({ unit: 'widgets', costPerUnitCents: 1000, pricePerUnitCents: 2000 });
-    // cross-form (liquid stock, dry-only rate unit) → don't guess, keep stock.
+    expect(r1.unit).toBe('widgets');
+    expect(r1.costPerUnitCents).toBe(1000);
+    expect(r1.pricePerUnitCents).toBe(2000);
+    expect(r1.reconciled).toBe(false);
+    expect(r1.reason).toMatch(/widgets/);
+    // cross-form (liquid stock, dry-only rate unit) → don't guess, keep stock, flag it.
     const r2 = reconcileChemAutofillUnits('GAL', 'lb/ac', 1000, 2000, 'liquid');
-    expect(r2).toEqual({ unit: 'GAL', costPerUnitCents: 1000, pricePerUnitCents: 2000 });
-    // no rate unit → keep stock.
+    expect(r2.unit).toBe('GAL');
+    expect(r2.pricePerUnitCents).toBe(2000);
+    expect(r2.reconciled).toBe(false);
+    // no rate unit → nothing to reconcile; that is NOT a failure state.
     const r3 = reconcileChemAutofillUnits('GAL', '', 1000, 2000, 'liquid');
-    expect(r3).toEqual({ unit: 'GAL', costPerUnitCents: 1000, pricePerUnitCents: 2000 });
+    expect(r3.unit).toBe('GAL');
+    expect(r3.pricePerUnitCents).toBe(2000);
+    expect(r3.reconciled).toBe(true);
+    expect(r3.reason).toBeNull();
+  });
+
+  // ── THE LIVE 16x BUG (61 products on 2026-08-19). `unitSizeInForm` read the gl/lb
+  // DISPLAY tables (convert_to_gl_lb, no 'dry oz') instead of the PRICING tables
+  // (field_app_priced_quantity, which has 'dry oz'). So 'Dry oz' on Lb stock fell through
+  // to the unreconciled branch: quantity in ounces, priced per pound. ──
+  it('Dry oz on pound stock CONVERTS (was a 16x over-bill on 61 live products)', () => {
+    const r = reconcileChemAutofillUnits('Lb', 'Dry oz', 100, 150, 'dry');
+    expect(r.unit).toBe('dry oz');
+    expect(r.reconciled).toBe(true);
+    expect(r.costPerUnitCents).toBe(6);    // 100 / 16 = 6.25 → 6
+    expect(r.pricePerUnitCents).toBe(9);   // 150 / 16 = 9.375 → 9
+    // 32 Dry oz/ac x 100 ac = 3200 oz = 200 lb. At $1.50/lb the line is $300, NOT $4,800.
+    const invoiceDollars = (3200 * r.pricePerUnitCents) / 100;
+    expect(invoiceDollars).toBeCloseTo(288, 0); // 3200 x 9c; exact-cent rounding, not 4800
+    expect(invoiceDollars).toBeLessThan(400);
+  });
+
+  it('synonym spellings the SERVER folds now convert here too', () => {
+    // normalize_rate_unit('ounces') = 'oz'; the server then prices it. The client used to
+    // miss it entirely and fall through to the stock unit.
+    const r = reconcileChemAutofillUnits('Gal', 'ounces/ac', 2250, 2800, 'liquid');
+    expect(r.unit).toBe('oz');
+    expect(r.reconciled).toBe(true);
+    expect(r.pricePerUnitCents).toBe(22); // 2800 / 128 = 21.875 → 22
+    // and the spelled-out gallon folds to the stock unit → nothing to reconcile
+    const g = reconcileChemAutofillUnits('Gal', 'gallons/ac', 2250, 2800, 'liquid');
+    expect(g.reconciled).toBe(true);
+    expect(g.pricePerUnitCents).toBe(2800);
+  });
+
+  it('a non-acre denominator is NOT convertible and says so', () => {
+    const r = reconcileChemAutofillUnits('GAL', 'oz/cwt', 2250, 2800, 'liquid');
+    expect(r.unit).toBe('GAL');
+    expect(r.reconciled).toBe(false);
+    expect(r.reason).toMatch(/oz\/cwt/);
+  });
+
+  it('a unit named like an Object prototype key cannot produce NaN money', () => {
+    const r = reconcileChemAutofillUnits('constructor', 'toString/ac', 1000, 2000, 'liquid');
+    expect(Number.isNaN(r.costPerUnitCents)).toBe(false);
+    expect(Number.isNaN(r.pricePerUnitCents)).toBe(false);
+    expect(r.reconciled).toBe(false);
+  });
+});
+
+// ── The render-time invariant that actually decides the bill. transfer_job_to_invoice
+// multiplies quantity x price_per_unit_cents with NO unit conversion. ──
+describe('chemCalculator — chemLineUnitMismatch', () => {
+  it('is silent when the row unit equals the rate unit', () => {
+    expect(chemLineUnitMismatch('oz', 'oz', 'liquid')).toBeNull();
+    expect(chemLineUnitMismatch('pt', 'pt/ac', 'liquid')).toBeNull();
+    expect(chemLineUnitMismatch('gal', 'gallons/ac', 'liquid')).toBeNull(); // folds to the same
+  });
+  it('is silent when either unit is blank (a separate concern)', () => {
+    expect(chemLineUnitMismatch('', 'pt/ac', 'liquid')).toBeNull();
+    expect(chemLineUnitMismatch('gal', '', 'liquid')).toBeNull();
+    expect(chemLineUnitMismatch(null, null, null)).toBeNull();
+  });
+  it('names the ratio when both units are known — the 8x GAL/pt case', () => {
+    const w = chemLineUnitMismatch('GAL', 'pt/ac', 'liquid');
+    expect(w).toMatch(/8x/);
+    expect(w).toMatch(/over-bills/);
+  });
+  it('warns without a ratio when the units cannot be converted at all', () => {
+    const w = chemLineUnitMismatch('Gal', 'oz/cwt', 'liquid');
+    expect(w).toMatch(/can't be converted/);
+  });
+  it('catches the live junk-unit row (rate_unit typed as a number)', () => {
+    expect(chemLineUnitMismatch('Gal', '32', 'liquid')).toMatch(/32/);
+  });
+});
+
+// ── MECHANICAL SERVER-PARITY FIXTURE ─────────────────────────────────────────
+//
+// The parity between this file and the live SQL used to be asserted in prose only, and
+// prose is what drifted: the client kept a partial copy of normalize_rate_unit and sized
+// units off convert_to_gl_lb's tables instead of field_app_priced_quantity's. Both gaps
+// reached money. These two helpers are literal restatements of the live functions (read
+// from pg_proc on 2026-08-19, project rhyzpcqhnizqbxphqdkr), so the matrix below fails if
+// either side drifts again.
+//
+// Server pricing pipeline: field_app_priced_quantity(qty, normalize_rate_unit(u), inv, form).
+
+/** Literal restatement of public.normalize_rate_unit. */
+function sqlNormalizeRateUnit(unit: string | null): string | null {
+  const raw = (unit ?? '').trim().toLowerCase();
+  if (raw === '') return null;
+  let base: string;
+  if (/\s*\/\s*(ac|acre|acres|a)\s*$/.test(raw)) base = raw.replace(/\s*\/\s*(ac|acre|acres|a)\s*$/, '').trim();
+  else if (/\s+per\s+acre$/.test(raw)) base = raw.replace(/\s+per\s+acre$/, '').trim();
+  else if (raw.includes('/')) return raw; // non-acre denominator → whole string
+  else base = raw;
+  if (base === '') return null;
+  const FOLD: Record<string, string> = {
+    oz: 'oz', ounce: 'oz', ounces: 'oz', 'fl oz': 'oz', floz: 'oz', 'fluid ounce': 'oz',
+    pt: 'pt', pint: 'pt', pints: 'pt',
+    qt: 'qt', quart: 'qt', quarts: 'qt',
+    gal: 'gal', gallon: 'gal', gallons: 'gal', gl: 'gal',
+    lb: 'lb', lbs: 'lb', pound: 'lb', pounds: 'lb',
+    ton: 'ton', tons: 'ton',
+    g: 'g', gram: 'g', grams: 'g',
+    kg: 'kg', kilogram: 'kg', kilograms: 'kg',
+    l: 'l', liter: 'l', liters: 'l', litre: 'l', litres: 'l',
+    ml: 'ml',
+  };
+  return FOLD[base] ?? base;
+}
+
+/** Literal restatement of public.field_app_priced_quantity's size CASEs. */
+function sqlUnitSize(u: string, form: 'liquid' | 'dry'): number | null {
+  if (form === 'dry') {
+    if (['oz', 'dry oz', 'ounce', 'ounces'].includes(u)) return 1;
+    if (['lb', 'lbs', 'pound', 'pounds'].includes(u)) return 16;
+    if (['ton', 'tons'].includes(u)) return 32000;
+    return null;
+  }
+  if (['oz', 'fl oz', 'floz', 'fluid ounce'].includes(u)) return 1;
+  if (['pt', 'pint', 'pints'].includes(u)) return 16;
+  if (['qt', 'quart', 'quarts'].includes(u)) return 32;
+  if (['gl', 'gal', 'gallon', 'gallons'].includes(u)) return 128;
+  return null;
+}
+
+describe('chemCalculator — mechanical parity with the live SQL', () => {
+  const UNITS = [
+    'oz', 'OZ', 'Oz', 'fl oz', 'floz', 'fluid ounce', 'ounce', 'ounces',
+    'pt', 'pint', 'pints', 'qt', 'quart', 'quarts',
+    'gal', 'GAL', 'gallon', 'gallons', 'gl',
+    'lb', 'LB', 'lbs', 'pound', 'pounds', 'dry oz', 'Dry oz', 'ton', 'tons',
+    'g', 'kg', 'l', 'ml', 'mg',
+    'pt/ac', 'PT/ACRE', 'gal/a', 'oz/acres', 'pt / ac', 'pt per acre', 'gal Per Acre',
+    'oz/cwt', 'lb/ton', 'oz/1000 sq ft', 'fl oz/cwt', 'oz / bushel',
+    '32', 'widgets', '', '/ac',
+  ];
+
+  it('baseUnitOfRate equals normalize_rate_unit for every probe unit', () => {
+    for (const u of UNITS) {
+      expect(`${u} → ${baseUnitOfRate(u)}`).toBe(`${u} → ${sqlNormalizeRateUnit(u) ?? ''}`);
+    }
+  });
+
+  it('convertibility agrees with the server for every probe unit, both forms', () => {
+    for (const form of ['liquid', 'dry'] as const) {
+      for (const u of UNITS) {
+        const clientConverts = reconcileChemAutofillUnits(
+          form === 'dry' ? 'lb' : 'gal', u, 1600, 3200, form,
+        ).reconciled;
+        const normalized = sqlNormalizeRateUnit(u);
+        const serverConverts =
+          normalized === null ||
+          normalized === (form === 'dry' ? 'lb' : 'gal') ||
+          sqlUnitSize(normalized, form) != null;
+        expect(`${form}:${u} → ${clientConverts}`).toBe(`${form}:${u} → ${serverConverts}`);
+      }
+    }
   });
 });
 

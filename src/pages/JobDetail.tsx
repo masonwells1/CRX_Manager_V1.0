@@ -43,7 +43,7 @@ import { overrideSaveApplicatorId, shouldReassignApplicatorAfterSave, canGenerat
 import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
-import { applyChemEdit, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent } from '../lib/chemCalculator';
+import { applyChemEdit, chemLineUnitMismatch, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent } from '../lib/chemCalculator';
 import { compareToMaxRate, phiHarvestWarning } from '../lib/labelGuardrails';
 import { unitOptionsForForm, isKnownUnit } from '../lib/units';
 import {
@@ -3688,13 +3688,33 @@ export default function JobDetail() {
                         grid (unit-safe; never blocks here — the save gate handles block mode).
                         Label max is read live from allProducts so it works on reopen too. */}
                     {(() => {
-                      if (!c.product_id) return null;
-                      const lbl = labelMaxFor(c.product_id);
-                      const cmp = compareToMaxRate(parseFloat(c.rate_per_acre) || null, c.rate_unit, lbl.max_label_rate, lbl.max_label_rate_unit);
-                      const phi = phiHarvestWarning(parseFloat(c.phi_days) || null, jobEarliestHarvestDate, jobDate);
-                      if (cmp.status === 'no_rate' && phi.status !== 'inside_window') return null;
+                      // MONEY: the invoice multiplies this line's quantity by its per-unit
+                      // price with NO unit conversion (transfer_job_to_invoice), so a
+                      // quantity counted in the rate's unit priced per a different unit
+                      // bills — and deducts stock — by exactly the wrong ratio. Computed
+                      // OUTSIDE the product gate below: a manual line has no product_id but
+                      // still bills, so it needs this warning too. Warn, never block (house
+                      // convention — see labelGuardrails).
+                      const unitMismatch = chemLineUnitMismatch(
+                        c.unit,
+                        c.rate_unit,
+                        allProducts.find((p) => p.id === c.product_id)?.product_form ?? null,
+                      );
+                      const lbl = c.product_id ? labelMaxFor(c.product_id) : { max_label_rate: null, max_label_rate_unit: null };
+                      const cmp = c.product_id
+                        ? compareToMaxRate(parseFloat(c.rate_per_acre) || null, c.rate_unit, lbl.max_label_rate, lbl.max_label_rate_unit)
+                        : { status: 'no_rate' as const, rate: null, maxRate: null };
+                      const phi = c.product_id
+                        ? phiHarvestWarning(parseFloat(c.phi_days) || null, jobEarliestHarvestDate, jobDate)
+                        : { status: 'ok' as const };
+                      if (cmp.status === 'no_rate' && phi.status !== 'inside_window' && !unitMismatch) return null;
                       return (
                         <div className="flex flex-wrap items-center gap-2 text-xs pt-1">
+                          {unitMismatch && (
+                            <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-2 py-0.5 font-medium text-amber-800">
+                              <AlertTriangle className="w-3 h-3 flex-shrink-0" /> {unitMismatch}
+                            </span>
+                          )}
                           {cmp.status === 'over' && (
                             <span className={`inline-flex items-center gap-1 rounded px-2 py-0.5 font-medium ${guardrailMode === 'block' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-800'}`}>
                               <ShieldAlert className="w-3 h-3" /> {guardrailMode === 'block' ? 'Over label rate — override required' : 'Over label rate'} ({cmp.rate} &gt; {cmp.maxRate} {lbl.max_label_rate_unit})
