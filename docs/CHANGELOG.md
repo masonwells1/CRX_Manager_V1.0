@@ -29,8 +29,8 @@ re-derive" live facts (Mason caught it; the PRD was fixed, the source was not).
   model that *writes* the fix is not the model that *reviews* it. That never depended on DB reach.
   Keeping the hunter connector-free stays the deliberate choice: it keeps a write-capable connector
   out of an unattended loop and forces the Claude-side live grounding to actually happen.
-- Same wrong reason fixed in two downstream copies (the hunter prompt at `:69`, Claude's verify step
-  at `:95`) and in `overnight-bug-hunt.md`'s mirrored Codex finding-gate prompt. A repo-wide sweep
+- Same wrong reason fixed in two downstream copies (the hunter prompt at `:73`, Claude's verify step
+  at `:100`) and in `overnight-bug-hunt.md`'s mirrored Codex finding-gate prompt. A repo-wide sweep
   found no other copies; the remaining `CHANGELOG`/`KNOWN_ISSUES` mentions are correct historical
   records of the old state. Adapters regenerated (`sync-agent-workflows --write`, 37 files — the two
   bug-hunt adapters are pointer stubs, so their content is unchanged) and
