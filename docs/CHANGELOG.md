@@ -42,6 +42,14 @@ prune the guard; and review-proof-guard's cd parser resolves targets past option
 (`cd --`, `-P`, `-Path:`) and shell-joined quoting (`.claude/"session-state"`), which previously
 bypassed the deny.
 
+Round 2 (same PR, incremental review of the fixes — all three findings confirmed and fixed,
+each mutation-proved red-without/green-with): review-proof-guard also checks the
+Bash-escape-decoded cd target (`session-\state` executes as `session-state`; the raw form still
+covers Windows `\` paths); stop-wrap skips the containment check when the git call itself fails
+(binary missing/timeout) instead of phantom-blocking on an empty listing — an unborn HEAD still
+blocks, since nothing-committed is exactly the uncontained case; and the guard test's allow case
+now asserts exit code 0, not just empty output.
+
 ## 2026-08-18 — Skills/commands accuracy sweep across the agent workflow surface
 
 Harness only — no app source, migration, or live-state change. A four-agent audit of every

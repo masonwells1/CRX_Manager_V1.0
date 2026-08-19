@@ -104,8 +104,13 @@ if (shellTool) {
       target = token;
       break;
     }
+    // Bash drops an unquoted backslash before the next character, so
+    // `session-\state` executes as `session-state` (CodeRabbit PR #423 round
+    // 2). Check the decoded form too; the RAW form still covers Windows
+    // `\`-separated paths, where the backslash is a real separator.
+    const decoded = target.replace(/\\(.)/g, "$1");
     const unresolvable = /[$%`]/.test(target);
-    if (cdTargetEntersStateDir(target) || (unresolvable && reviewStateDirectoryMentioned(command))) {
+    if (cdTargetEntersStateDir(target) || cdTargetEntersStateDir(decoded) || (unresolvable && reviewStateDirectoryMentioned(command))) {
       deny("REVIEW PROOF GUARD: the review state directory is wrapper-owned and cannot become an interactive shell working directory.");
     }
   }

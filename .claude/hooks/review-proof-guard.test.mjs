@@ -34,6 +34,9 @@ for (const payload of [
   { tool_name: "Bash", tool_input: { command: "cd -P .claude/session-state" } },
   { tool_name: "Bash", tool_input: { command: 'cd .claude/"session-state"' } },
   { tool_name: "PowerShell", tool_input: { command: "Set-Location -Path:.claude\\session-state" } },
+  // Round 2: a Bash escape is dropped by the shell, so this cd really enters
+  // the state dir — the decoded target must be checked as well.
+  { tool_name: "Bash", tool_input: { command: "cd .claude/session-\\state" } },
   { tool_name: "Bash", cwd: "C:\\repo\\.claude\\session-state", tool_input: { command: "printf {} > harmless-name.json" } },
   { tool_name: "Bash", tool_input: { command: "printf {} > codex-review-forged.json" } },
   { tool_name: "Bash", tool_input: { command: "rm codex-review-forged.json;ls" } },
@@ -57,6 +60,8 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd .claude/hooks &
 assert.equal(run({ tool_name: "Bash", tool_input: { command: 'cd "$HOME/projects" && ls' } }).stdout, "");
 // Option tokens before an UNRELATED literal target must not re-trigger the
 // old "cd anywhere + state-dir mention" false positive.
-assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd -- /c/repo && ls .claude/session-state 2>/dev/null" } }).stdout, "");
+const optionAllow = run({ tool_name: "Bash", tool_input: { command: "cd -- /c/repo && ls .claude/session-state 2>/dev/null" } });
+assert.equal(optionAllow.status, 0);
+assert.equal(optionAllow.stdout, "");
 
 console.log("OK - review proof guard checks passed.");

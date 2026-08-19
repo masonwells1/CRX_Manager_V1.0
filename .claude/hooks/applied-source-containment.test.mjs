@@ -152,6 +152,25 @@ try {
   entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
   assert.equal(entries.length, 1, "intent-to-add must not prune the ledger entry");
 
+  // A BROKEN git call (binary missing / timeout) must not masquerade as
+  // "nothing committed" and phantom-block (CodeRabbit PR #423 round 2): the
+  // checker skips containment when git itself is unavailable. Simulated by a
+  // PATH with no git in it; the entry must survive unpruned for the next
+  // session where git works again.
+  writeFileSync(ledgerPath, JSON.stringify([{ name: "git_broken_probe", ts: "t", session: "s" }]) + "\n");
+  const noGitEnv = { ...cleanEnv, CLAUDE_PROJECT_DIR: tmp };
+  for (const k of Object.keys(noGitEnv)) if (/^path$/i.test(k)) delete noGitEnv[k];
+  noGitEnv.PATH = tmp; // a directory that contains no git executable
+  const noGit = spawnSync(process.execPath, [stopWrapPath], {
+    encoding: "utf8",
+    input: JSON.stringify({ session_id: "c3-test-nogit" }),
+    env: noGitEnv,
+  });
+  assert.equal(noGit.status, 0, "checker exits cleanly when git is unavailable");
+  assert.ok(!/APPLIED TO LIVE/.test(noGit.stdout), "a failed git call skips containment instead of phantom-blocking");
+  entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  assert.equal(entries.length, 1, "skipped check must not prune the entry");
+
   // A corrupt ledger never bricks session end (fail-open).
   writeFileSync(ledgerPath, "{not json");
   const wrap = runHook(stopWrapPath, { session_id: "c3-test-corrupt" }, tmp);

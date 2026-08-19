@@ -70,6 +70,15 @@ const appliedLedgerPath = path.join(projectDir, ".claude", "session-state", "app
 let appliedUncontained = [];
 try {
   if (existsSync(appliedLedgerPath)) {
+    // Distinguish "git works and nothing is committed" (block — that IS the
+    // uncontained case, including an unborn HEAD in a fresh repo) from "the
+    // git call itself failed" (binary missing, 5s timeout): a broken git must
+    // not masquerade as an empty repo and raise a block that committing can
+    // never clear (CodeRabbit PR #423 round 2). Throwing lands in the outer
+    // fail-open catch, skipping both the check and the prune.
+    if (runGit(["rev-parse", "--is-inside-work-tree"]).trim() !== "true") {
+      throw new Error("git unavailable — containment check skipped");
+    }
     const trackedNames = new Set();
     for (const f of runGit(["ls-tree", "-r", "HEAD", "--name-only", "--", "supabase/migrations"]).split("\n")) {
       const rel = f.replace(/\\/g, "/").trim();
