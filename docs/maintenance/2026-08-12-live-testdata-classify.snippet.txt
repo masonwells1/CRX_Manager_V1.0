@@ -2,6 +2,18 @@ export function classifySql(query) {
   const q = String(query || "");
   if (!q) return { block: false };
 
+  // The scanner below intentionally uses PostgreSQL's default string rules.
+  // A batch that changes standard_conforming_strings can change how every
+  // later quote is parsed, so even mentioning that parser-mode setting fails
+  // closed before quote-aware tokenization can be confused by the new mode.
+  if (/\bstandard_conforming_strings\b/i.test(q)) {
+    return {
+      block: true,
+      kind: "raw-mutation",
+      reason: "Changing or inspecting standard_conforming_strings is not accepted through raw execute_sql because it changes how later SQL text is parsed. Use the reviewed maintenance path.",
+    };
+  }
+
   const statements = topLevelStatements(q);
   // topLevelStatements() and keywordView() share the same escape-aware quote,
   // comment, and dollar-body rules. Do not hand this security path back to the

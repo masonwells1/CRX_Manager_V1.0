@@ -18,11 +18,11 @@
 //   --report          DRY RUN: print the plan in plain text, delete nothing
 //   --write           perform cleanup and print a plain-text report (manual use)
 
-import { readFileSync, existsSync, statSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, statSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import path from "node:path";
 import { parseWorktreePorcelain } from "./worktree-awareness-lib.mjs";
-import { planCleanup, HARNESS_MARKER } from "./worktree-cleanup-lib.mjs";
+import { planCleanup, meaningfulDirt, ledgerKeepsWorktree, IGNORABLE_DIRT_PATH, HARNESS_MARKER } from "./worktree-cleanup-lib.mjs";
 
 const argv = process.argv.slice(2);
 const REPORT_ONLY = argv.includes("--report");
@@ -74,10 +74,21 @@ try {
     }
   }
 
-  // Best-effort refresh of origin/main. If it fails we proceed anyway: a STALE
-  // origin/main can only make us MORE conservative (fewer things look merged),
-  // never less — so acting on it is still safe.
-  gitTry(["fetch", "origin", "--quiet"]);
+  // Best-effort refresh of origin/main — at most once per 30 minutes. This hook
+  // fires on session startup, and a network fetch every time made session starts
+  // slow and timeout-prone (2026-08-18 hook audit: SessionStart p90 ~11s). A
+  // ≤30-min-old FETCH_HEAD is fresh enough here, and skipping is safe for the
+  // same reason a failed fetch is: a STALE origin/main can only make us MORE
+  // conservative (fewer things look merged), never less.
+  const FETCH_TTL_MS = 30 * 60 * 1000;
+  let fetchedRecently = false;
+  const fetchHeadPath = gitTry(["rev-parse", "--git-path", "FETCH_HEAD"]);
+  if (fetchHeadPath.ok) {
+    try {
+      fetchedRecently = Date.now() - statSync(path.resolve(projectDir, fetchHeadPath.out.trim())).mtimeMs < FETCH_TTL_MS;
+    } catch { /* no FETCH_HEAD yet → fetch below */ }
+  }
+  if (!fetchedRecently) gitTry(["fetch", "origin", "--quiet"]);
 
   // Need origin/main to judge "merged". Without it, do nothing (fail safe).
   if (!gitTry(["rev-parse", "--verify", "--quiet", "origin/main"]).ok) done(null);
@@ -93,10 +104,18 @@ try {
     if (r.status !== 0 || r.error) return false; // unknown → treat as NOT merged (safe)
     return !r.stdout.split("\n").some((l) => l.startsWith("+"));
   }
+  function porcelain(wtPath) {
+    const r = gitTry(["status", "--porcelain"], wtPath);
+    return r.ok ? r.out : null; // null = unreadable
+  }
+  // "Dirty" = has MEANINGFUL uncommitted work. A harness-touched
+  // .claude/settings.local.json as the sole dirt does not count (see
+  // IGNORABLE_DIRT_PATH in worktree-cleanup-lib.mjs) — that one file kept 11
+  // fully-merged worktrees alive forever.
   function dirty(wtPath) {
     if (!existsSync(wtPath)) return false; // absent dir → let `git worktree remove` handle/prune it
-    const r = gitTry(["status", "--porcelain"], wtPath);
-    return r.ok ? r.out.split("\n").some((l) => l.trim()) : true; // unreadable → assume dirty (keep)
+    const out = porcelain(wtPath);
+    return out === null ? true : meaningfulDirt(out).length > 0; // unreadable → assume dirty (keep)
   }
 
   // Newest mtime (ms) among a worktree's live-activity markers: its git index,
@@ -121,6 +140,24 @@ try {
     return newest;
   }
 
+  // Unresolved applied-source ledger = a recorded live apply whose committed
+  // source stop-wrap never proved. Gitignored, so merged+clean can't see it;
+  // sweeping the worktree would destroy the only record (Opus review
+  // 2026-08-19). Fail toward KEEP on any doubt (CodeRabbit 2026-08-19): ENOENT
+  // (truly absent) is the ONLY sweepable case — unreadable or malformed keeps
+  // the worktree. The full decision lives in ledgerKeepsWorktree
+  // (worktree-cleanup-lib.mjs), where every branch is unit-tested.
+  function hasAppliedLedgerEntries(wtPath) {
+    let rawText;
+    let readError = null;
+    try {
+      rawText = readFileSync(path.join(wtPath, ".claude", "session-state", "applied-source-ledger.json"), "utf8");
+    } catch (err) {
+      readError = err;
+    }
+    return ledgerKeepsWorktree({ readError, rawText });
+  }
+
   // Build worktree facts.
   const worktreeFacts = entries.map((e) => ({
     path: e.path,
@@ -130,6 +167,7 @@ try {
     dirty: e.detached || !e.branch ? false : dirty(e.path),
     merged: e.detached || !e.branch ? false : isMerged(e.branch),
     lastActivityMs: lastActivityMs(e.path),
+    hasAppliedLedgerEntries: hasAppliedLedgerEntries(e.path),
   }));
   const worktreeBranches = new Set(entries.map((e) => e.branch).filter(Boolean));
 
@@ -154,7 +192,44 @@ try {
     for (const w of plan.removeWorktrees) {
       // Plain `remove` (no --force): git itself refuses if the tree became dirty
       // or locked in a race — a second safety net under the classifier.
-      const rm = gitTry(["worktree", "remove", w.path]);
+      let rm = gitTry(["worktree", "remove", w.path]);
+      if (!rm.ok) {
+        // git refuses when the ONLY dirt is the ignorable harness file too. In
+        // exactly that case (re-checked NOW, not at classification time — the
+        // race safety net stays intact), restore/drop that one file and retry
+        // plain remove once. Never --force: any other dirt still blocks.
+        const out = existsSync(w.path) ? porcelain(w.path) : null;
+        const lines = out === null ? [] : out.split("\n").filter((l) => l.trim());
+        const onlyIgnorableDirt = lines.length > 0 && meaningfulDirt(out).length === 0;
+        if (onlyIgnorableDirt) {
+          // Save the file's bytes first: if the retry ALSO fails, the worktree
+          // survives, and having reverted/deleted its permission grants without
+          // removing it would be a destructive edit with no payoff (Opus
+          // review 2026-08-19). Restore is best-effort.
+          const dirtAbs = path.join(w.path, IGNORABLE_DIRT_PATH);
+          const existedBefore = existsSync(dirtAbs);
+          let savedDirt = null;
+          if (existedBefore) { try { savedDirt = readFileSync(dirtAbs); } catch { /* present but unreadable */ } }
+          const co = gitTry(["checkout", "HEAD", "--", IGNORABLE_DIRT_PATH], w.path); // tracked → restore index+worktree
+          if (!co.ok) { try { rmSync(dirtAbs); } catch { /* untracked/missing */ } }
+          rm = gitTry(["worktree", "remove", w.path]);
+          if (!rm.ok) {
+            // Retry failed → the worktree survives, so leave it in its ORIGINAL
+            // state rather than whatever `checkout HEAD` re-materialized. If the
+            // file EXISTED and we snapshotted it, restore those bytes. If it was
+            // ABSENT originally (a deletion the user made, or genuinely missing),
+            // the checkout may have re-created it from HEAD — remove it so the
+            // surviving worktree isn't silently modified back to a file the user
+            // had deleted (CodeRabbit PR #423). A present-but-unsnapshotted file
+            // (read failed) is left as checked out — the best available state.
+            if (existedBefore) {
+              if (savedDirt !== null) { try { writeFileSync(dirtAbs, savedDirt); } catch { /* best-effort restore */ } }
+            } else {
+              try { rmSync(dirtAbs); } catch { /* nothing to undo */ }
+            }
+          }
+        }
+      }
       if (!rm.ok) { failed.push({ ...w, kind: "worktree" }); continue; }
       gitTry(["branch", "-D", w.branch]); // free branch now that its worktree is gone
       removed.push({ kind: "worktree", ...w });

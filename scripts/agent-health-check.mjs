@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { normalizeEol } from "./normalize-eol.mjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 
@@ -33,10 +34,13 @@ export function compareSyncedFiles(root, pairs) {
     if (!existsSync(leftPath) || !existsSync(rightPath)) {
       return check("FAIL", `${right} synced from ${left}`, "missing source or copy");
     }
-    const matches = readFileSync(leftPath, "utf8") === readFileSync(rightPath, "utf8");
+    // Compare EOL-normalized, exactly as scripts/sync-agent-workflows.mjs does.
+    // A raw byte compare here disagreed with the generator on CRLF-smudged
+    // checkouts; see scripts/normalize-eol.mjs for why that is a false FAIL.
+    const matches = normalizeEol(readFileSync(leftPath, "utf8")) === normalizeEol(readFileSync(rightPath, "utf8"));
     return matches
       ? check("PASS", `${right} synced from ${left}`)
-      : check("FAIL", `${right} synced from ${left}`, "run .codex\\sync-from-claude.ps1 -IncludeHooks");
+      : check("FAIL", `${right} synced from ${left}`, "run node scripts/sync-agent-workflows.mjs --write");
   });
 }
 
@@ -243,6 +247,7 @@ function buildHealthChecks(root = ROOT) {
     "scripts/check-agent-workflows.mjs",
     "scripts/check-agent-guidance.mjs",
     "scripts/sync-agent-workflows.mjs",
+    "scripts/normalize-eol.mjs",
   ];
 
   const checks = [

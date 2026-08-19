@@ -18,7 +18,9 @@ Ask the user (skip if already described):
 
 ## Step 2: Pre-Flight Checks (CRITICAL)
 
-Before writing ANY SQL, run these checks:
+Before writing ANY SQL, run these checks — read-only via Supabase MCP `execute_sql`
+(project `rhyzpcqhnizqbxphqdkr`), one statement per call (the MCP returns only the
+last statement's result):
 
 ### Check for existing function with same name
 ```sql

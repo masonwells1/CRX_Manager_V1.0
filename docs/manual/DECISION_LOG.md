@@ -1,11 +1,99 @@
 # Decision Log
 
-Last verified: 2026-08-16
+Last verified: 2026-08-18
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-08-18 — Mission loops: cheaper-model delegation + hand off at the 25MB marathon cap
+
+**Source:** Mason's in-chat approvals, 2026-08-18 — "ok lets do this, cap the marathon and make it
+handoff after so long" and "can we automate this so i dont have to remembver" during the 30-day
+usage/setup review, reaffirmed with "fix them all" after adversarial review of PR #416.
+
+**Context.** The 30-day usage analysis attributed the bulk of the month's token spend (estimated at
+roughly 40%) to a handful of marathon loop sessions — almost entirely premium-model re-reads of an
+ever-growing conversation. The two habits that prevent it (delegate mechanical steps down-model;
+hand off before a session becomes a marathon) previously relied on someone remembering them
+mid-loop, which is exactly when nobody does.
+
+**Decision.**
+
+1. **Cheaper-model delegation is standing policy for mission loops.** Mechanical cycle steps
+   (status checks, doc syncs, read sweeps, evidence gathering) may run on cheaper subagent models,
+   *within the loop's existing structure* — it re-tiers work the loop already does; it never adds
+   agents beyond a workflow's defined fan-out. Excluded, always: ledger writes and PROOF lines
+   (the driver runs the decisive verification and records what it observed), money/RLS/migration
+   judgment (never below the session model, and never below `sonnet`), and any reviewer's pinned
+   model/effort.
+2. **Handing off at the marathon cap is pre-authorized.** At 25MB of transcript a loop session
+   finishes only the atomic step in flight, checkpoints its ledger, writes a handoff, continues in
+   a fresh session, and winds down — without waiting for a fresh in-chat OK. The cap is enforced
+   as advisory text by a global user-scope hook on Mason's machine
+   (`~/.claude/hooks/session-size-sentinel.mjs`, soft 12MB / hard 25MB, firing on prompt submission
+   and mid-turn after tool calls) plus a statusline flag; where the hook is absent the written cap
+   in `.claude/commands/run-loop.md` binds on its own.
+
+**What this does NOT authorize.** Nothing about a handoff widens authority: hard gates (push
+approval, deploys, live migration applies, deletes) transfer unchanged to the successor session; a
+lapsed or expired autopilot flag stays lapsed; the successor re-verifies the flag itself before any
+gated action; and the driver role transferred by an orchestrator is exactly the role the mission
+doc's Driver slot defined, no wider.
+
+**Operative rule.** Every `/run-loop` launch obeys the Model & Context Budget section of
+`.claude/commands/run-loop.md`. A capped session that keeps cycling is violating a settled decision,
+not exercising judgment.
+
+---
+
+## 2026-08-17 — The per-session CHANGELOG entry becomes a per-session *ledger* entry
+
+**Source:** Mason's in-chat agreement, 2026-08-17, after he asked whether the changelog entry was
+"worth the effort to maintain or should that be removed."
+
+**Decision.** Keep the written record, drop the requirement that it live in `docs/CHANGELOG.md`
+specifically. The end-of-session reminder in `.claude/hooks/stop-wrap.mjs` now accepts the same
+ledger set the HARD pre-commit guard (`scripts/check-ledger-update.mjs`) already accepts —
+`docs/CHANGELOG.md`, any `docs/manual/*.md`, `agent-guardrails.md`, `migration-history.md`, or a
+`docs/loops/` ledger — instead of demanding the CHANGELOG alone.
+
+**Why.** Three things were wrong with the old rule. It **misfiled records**: a policy call belongs
+in this file and a schema change in `migration-history.md`, but the reminder pushed both into the
+CHANGELOG. It **churned the one file Mason actually reads**, turning it into a session diary rather
+than a record of what changed and why it matters. And it cited a `CLAUDE.md` section — "Keeping Docs
+In Sync" — that **no longer exists anywhere in the repo**; the live requirement has been the hard
+guard for some time, so the soft layer was quoting a rule that had already been superseded.
+
+**What this does NOT fix.** It was considered as relief for the `PR MERGE GATE` firing on docs-only
+PRs, and measured against that: it is not. The gate scans the **whole content** of each changed
+file, and every candidate ledger file already carries money identifiers from past entries
+(`CHANGELOG.md` 142, `migration-history.md` 135, `KNOWN_ISSUES.md` 20, `agent-guardrails.md` 5,
+this file 4). Any count above zero arms the gate, so no choice of ledger file avoids it. Only
+changing the gate to scan **added lines** rather than whole files would — that is a change to a
+money-safety guard and is deliberately left for its own separately-reviewed PR. See
+`docs/reference/gotchas.md` and the 2026-08-17 CHANGELOG entry.
+
+**Operative rule.** A session that lands commits must update **one** ledger file, chosen by what the
+work was. Reach for `docs/CHANGELOG.md` for general work; do not force a policy or schema record
+into it. `scripts/log-session.mjs` remains the scaffold for the CHANGELOG case only.
+
+**Review round (PR #412).** CodeRabbit raised four findings against the first implementation and all
+four were real. The substantive one was a bug introduced by this very change: the accepted set was
+widened to a pattern list (any `docs/manual/*.md`, any `docs/loops/` ledger) while the on-disk
+fallback still stat'd a *hardcoded five-file list*, so committing `OWNER_PLAYBOOK.md` or a loop
+ledger — both valid — still produced a false "no ledger" warning. The fallback is gone; the check now
+unions the working-tree status with the files in this session's commits, which covers the accepted
+set by construction. Git rename records (`R old -> new`) are now normalized to the destination, the
+reminder text lists every accepted destination, and the `log-session.mjs` header no longer claims the
+hard guard fires on *every* commit — it fires on agent-surface and migration commits only.
+Verified by running the hook against purpose-built git repositories: with the pre-fix hook, a
+committed `OWNER_PLAYBOOK.md`, a committed `docs/loops/` ledger, and a rename into a ledger path each
+produced a false warning; with the fixed hook all three are silent, and a genuinely unlogged session
+still warns.
 
 ---
 
@@ -156,6 +244,60 @@ constraint is named `<table>_<column>_whole_cents_chk`.
 CHECK (col IS NULL OR (col = ROUND(col, 2) AND col > '-Infinity' AND col < 'Infinity'))
 ```
 
+That is the **rounding form**, and it is what eight of the ten live constraints *whose name
+contains* `whole_cents` use. That scoping matters: counted by shape rather than by name, live
+carries **13** money-scale CHECKs, **11** of them rounding-form — the extra three are named
+`*_cent_scale_chk` (see the correction further down). Two details, both read from live on
+2026-08-19 UTC:
+
+- On a `NOT NULL` column the `IS NULL` branch is redundant and may be omitted.
+  `order_items_total_price_whole_cents_chk` is live as
+  `CHECK (total_price = round(total_price, 2) AND total_price > '-Infinity' AND total_price <
+  'Infinity')` and clears the gate.
+- Within the rounding form, neither finiteness bound may be dropped. `round()` alone does not
+  exclude `Infinity` or `NaN` in `numeric`, which is the whole reason both bounds are written.
+
+**A second constraint shape exists live, and an earlier draft of this paragraph wrongly implied it
+could not.** The two constraints on the purchase-order pair — which is **not** converted; the detail
+block further down proves that from live — are live as:
+
+```sql
+-- purchase_orders_total_cost_whole_cents
+CHECK (total_cost >= 0 AND total_cost = (total_cost_cents::numeric / 100.0))
+-- purchase_order_items_unit_cost_whole_cents
+CHECK (unit_cost >= 0 AND unit_cost = (unit_cost_cents::numeric / 100.0))
+```
+
+These carry **no** `round()` and **no** finiteness bounds. Call this the **mirror form**. Pinning
+the numeric dollar column to `cents / 100.0` does make whole cents structural rather than asserted,
+and `>= 0` additionally forbids negatives, which the rounding form permits. Two caveats that an
+earlier draft of this paragraph left out, both of which change how it should be read:
+
+- **It only enforces anything while the cents column is non-NULL.** `col = NULL` evaluates to NULL,
+  and a NULL CHECK passes, so on a plain nullable `*_cents` column the mirror form **fails open** —
+  it would silently admit fractional dollars. Live is safe from this only because both cents columns
+  are `GENERATED ALWAYS`, so they are NULL exactly when the dollar column is. Copied onto a
+  hand-written nullable cents column it would not be. Pair it with `NOT NULL`, or with a generated
+  column.
+- **Its stated precondition is met by zero live instances.** The earlier draft said the form is
+  "available only where an *authoritative* `*_cents` bigint column exists — which is exactly the
+  converted state the whole programme is aiming at", and called it the preferred shape "wherever
+  conversion has happened". Both cents columns behind the only two live instances are
+  `GENERATED ALWAYS AS (round(<numeric dollars> * 100))::bigint` — **derived mirrors, not
+  authoritative stores**, exactly as the "Converted: no" block below states. So the form is
+  currently a derived-mirror shape, and no conversion has happened anywhere on this schema for it to
+  be preferred over.
+
+**Open, not settled: whether the mirror form clears the AGENTS.md gate.** The gate's wording is "an
+active **finite** whole-cent CHECK", and the mirror form carries no finiteness clause of its own;
+what rejects `NaN`/`Infinity` here is the generated column's cast, not the CHECK (see the note
+under the deferred table). It also does not follow the `<table>_<column>_whole_cents_chk` naming
+this entry sets out. A previous revision resolved this by asserting "Both forms clear the gate" —
+but that is a **widening of a gate**, it was written into an entry attributed to Mason's 2026-08-10
+instruction, and Mason did not decide it. It is withdrawn and recorded here as an open question for
+him. What is not in question either way: a money column with **neither** shape does not clear the
+gate.
+
 **Both halves are load-bearing — a `ROUND`-only constraint does NOT clear the gate.** PostgreSQL
 `numeric` deliberately does not use IEEE-754 NaN semantics: so values stay sortable and indexable,
 it treats `NaN` as equal to `NaN` and greater than every finite value. `'NaN' = ROUND('NaN', 2)` is
@@ -168,30 +310,101 @@ UPDATE, whatever column actually changed — so each legacy dirty row becomes pe
 and the damage is invisible until a user tries to edit an old record. Repair the data first, then
 add the constraint `VALID` from the start.
 
-**Where each audited column stands.** Verified read-only against the live database on 2026-08-11.
+**Where each audited column stands.** Verified read-only against the live database on 2026-08-11;
+the dirty-row counts were re-measured 2026-08-18 and the constraint inventory 2026-08-19 — both
+corrections are inline below, so do not read the 2026-08-11 date as covering the whole section.
 The 2026-08-10 order-profit evaluation measured 12 order/quote/commission columns; those are the
 only ones whose gate status is established. Other legacy dollar columns exist across the schema
-(`payments.amount`, `commission_payments.total_amount`, `commission_payment_items.amount`,
-`purchase_orders.total_cost`, the `products` price tiers, the `cost_history` snapshots and more).
-None of those are converted, and none are constrained — under the rule above they are unapproved
-tracked debt, not grandfathered. Extending the programme to them is unstarted work.
+(`payments.amount`, `commission_payments.total_amount`, `commission_payment_items.amount`, the
+`products` price tiers, the `cost_history` snapshots and more). None of those are converted.
+**Most, but not all, are unconstrained** — an earlier revision of this sentence said "none are
+constrained", and live refutes it: `products.current_cost`, `order_items.price_per_unit` and
+`quote_items.price_per_unit` each carry a validated rounding-form CHECK named
+`*_cent_scale_chk`. Those three are why the live money-scale CHECK count is 13 rather than 10.
+The unconstrained remainder is unapproved tracked debt under the rule above, not grandfathered.
+Extending the programme to it is unstarted work.
 
-**Gate satisfied — CHECK enforced (7):** `orders.total_cost`, `orders.total_profit`,
-`order_items.profit`, `quotes.total_price`, `quotes.total_profit`, `quote_items.total_price`,
-`quote_items.profit`.
+> **`purchase_orders.total_cost` was listed in that sentence as unconverted *and* unconstrained
+> until 2026-08-18. The "unconstrained" half was wrong; the "unconverted" half was right, and a
+> correction written on 2026-08-18 overshot by claiming the column was converted. Both halves are
+> restated here from live.** Read-only live check, 2026-08-19 UTC.
+>
+> **Constrained: yes.** `purchase_orders_total_cost_whole_cents` and
+> `purchase_order_items_unit_cost_whole_cents` are present and validated, and each pins its numeric
+> dollar column to `cents / 100.0`. Note the names end `_whole_cents`, not `_whole_cents_chk`.
+> That is why they are **not** part of the count of 8 below: that count is the eight
+> `*_whole_cents_chk` constraints on the twelve columns the 2026-08-10 evaluation measured, and
+> these two columns were never in that set of twelve.
+>
+> **Converted: no.** `purchase_orders.total_cost_cents` and `purchase_order_items.unit_cost_cents`
+> are `bigint`, and have been since `20260716183501_purchase_order_integer_cents` — 25 days before
+> the 2026-08-10 evaluation. But `information_schema.columns` reports `is_generated = ALWAYS` for
+> both: they are `GENERATED ALWAYS AS (round(<numeric dollars> * 100))` mirrors. The **numeric
+> dollar column is the authoritative store and the bigint is derived from it**, which is the
+> opposite of a conversion. `data_type = bigint` alone cannot tell the two apart; only
+> `is_generated`/`generation_expression` can. (One useful side effect: the generation expression
+> rejects non-finite input on its own — `round('NaN'::numeric * 100)::bigint` raises
+> `cannot convert NaN to bigint`, and the Infinity case raises `cannot convert infinity to
+> bigint` — so neither can ever reach the mirror column. Note that this cast, **not** the CHECK, is
+> where finiteness is actually enforced here: both constraints read
+> `CHECK (col >= 0 AND col = col_cents::numeric / 100.0)` and carry no explicit
+> `> '-Infinity' AND < 'Infinity'` bound of their own.)
+>
+> **So these two columns are the same approved compatibility exception as `orders.total_cost`** —
+> numeric-dollar authoritative storage, exact `numeric` math, clean whole-cent values, validated
+> whole-cent CHECK — **not** completed conversions, and not tracked debt either. Converting them to
+> authoritative bigint remains open work under the standing rule, exactly as it does for orders and
+> quotes; nothing here closes that, and nothing here re-opens the 2026-08-10 decision.
 
-**Gate NOT satisfied — no CHECK, therefore not an approved exception (5):**
+**Gate satisfied — CHECK enforced (8):** `orders.total_cost`, `orders.total_profit`,
+`order_items.total_price`, `order_items.profit`, `quotes.total_price`, `quotes.total_profit`,
+`quote_items.total_price`, `quote_items.profit`. Seven of these were constrained on 2026-08-10;
+`order_items.total_price` joined them on 2026-08-12 and is the row moved out of the table below.
+
+**Gate NOT satisfied — no CHECK, therefore not an approved exception (4):**
 
 | Column | Why deferred | Status |
 |---|---|---|
-| `order_items.total_price` | holds 35 of 288 legacy fractional-cent rows | awaiting data repair |
 | `quotes.total_cost` | holds 2 of 4 legacy fractional-cent rows | awaiting data repair |
-| `commissions.commission_amount` | holds 3 of 35 legacy fractional-cent rows | awaiting data repair |
-| `commissions.order_profit` | holds 3 of 35 legacy fractional-cent rows | awaiting data repair |
+| `commissions.commission_amount` | held 3 of 35 legacy fractional-cent rows **as measured 2026-08-10; live now reads 0** | see note below |
+| `commissions.order_profit` | held 3 of 35 legacy fractional-cent rows **as measured 2026-08-10; live now reads 0** | see note below |
 | `orders.total_price` | data is clean; `_update_order_items_impl` overwrites it with the raw un-rounded line sum, so constraining it would reject ordinary edits | blocked on fixing that writer |
 
-Repairing the 43 dirty rows across the first four rewrites stored money and needs Mason's separate
-approval on its own migration — it is **not** covered by the 2026-08-10 decision.
+Repairing the dirty values in the first three rows above — `quotes.total_cost`,
+`commissions.commission_amount` and `commissions.order_profit` — rewrites stored money and needs
+Mason's separate approval on its own migration; it is **not** covered by the 2026-08-10 decision.
+(`orders.total_price`, the fourth row, has clean data and is blocked on a writer fix, not a
+repair.) See the note directly below: two of those three now measure **0** dirty rows live, so
+**the only column still carrying unrepaired dirty money is `quotes.total_cost`, at 2 rows** —
+that, and not the three columns this paragraph names, is the whole of the open approval debt under
+this entry.
+
+> **The counts in the table above are the 2026-08-10 measurement and are stale as live state
+> (read-only re-measure, 2026-08-18).** Live now returns `commissions.commission_amount` **0**,
+> `commissions.order_profit` **0**, and only `quotes.total_cost` still **2**. The likely cause
+> of the two commission columns reaching 0 is the migration carried on disk as
+> `20260810235207_reconcile_pending_commission_snapshots`, which **is applied live** — though note
+> the ledger holds it at *version* `20260810235207` under the *name*
+> `20260810183629_reconcile_pending_commission_snapshots`, so the file was re-issued forward and
+> the two stamps disagree; searching the ledger by the disk filename finds nothing. It rewrites
+> `order_profit` and `commission_amount` on **pending** commissions to `ROUND(…, 2)`, which is
+> exactly the repair shape. Recorded as the likely cause and not a proven one: it skips any
+> commission already sitting in a payout batch, so it explains the observed 0 only if all three
+> rows measured on 2026-08-10 were still pending, which is not re-derivable now. The **0 is
+> measured; the attribution is inference** — do not restate it as settled provenance.
+> `order_items.total_price`, which this table listed as a deferred column until 2026-08-18, also
+> returns **0** — and it is no longer deferred at all:
+> `20260812115238_repair_historical_order_line_cents` repaired those 35 lines with Mason's in-chat
+> approval and added the validated CHECK `order_items_total_price_whole_cents_chk` in the same
+> migration, which is why it now sits in the enforced list above. Leaving it in the deferred table
+> told every later agent that an enforced money column was unapproved tracked debt. The 43 figure
+> was also a sum of *column-values* across four columns, not four disjoint row sets — the two
+> `commissions` counts are 3/35 each and may be the same 3 rows, so distinct dirty rows were
+> 40–43, and that overlap can no longer be re-derived.
+> Current figures and the enforced-vs-measured distinction live in `docs/manual/CURRENT_STATE.md`
+> section 2. All eight `*_whole_cents_chk` constraints read `convalidated` on live (read-only,
+> 2026-08-19 UTC). The **decision** recorded here still stands
+> unchanged — the gate is exactly what it was; what moved is that one more column now passes it.
 
 **Measured cost of the conversion that was declined** (live, 2026-08-10): 12 money columns, 46 live
 functions naming them, 101 functions touching those tables, 17 non-test `src/` files. Dollars→cents

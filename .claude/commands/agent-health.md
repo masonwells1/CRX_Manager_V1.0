@@ -11,8 +11,8 @@ Use this when Mason asks whether the agents, hooks, handoff workflow, direct rev
 - Direct Claude review helper exists.
 - Pair review helper exists.
 - PR comment helper exists.
-- Claude CLI is reachable.
-- Codex CLI is reachable through the version-hashed OpenAI binary path.
+- Claude CLI is reachable, and its auth status (a logged-out Claude CLI is a WARN).
+- Codex CLI is reachable through the version-hashed OpenAI binary path, and its login status (a logged-out Codex CLI is a FAIL).
 - GitHub auth is reachable when the GitHub CLI is available.
 - Optional CLI warnings for Vercel and Supabase.
 - Schema/doc/session staleness warnings.

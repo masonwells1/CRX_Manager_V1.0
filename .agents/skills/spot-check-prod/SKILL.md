@@ -30,15 +30,14 @@ Notes:
 
 ## Step 2: Supabase — security & performance advisors
 
-Run both in parallel via Supabase MCP:
+Run both in parallel via Supabase MCP. Like the other connectors, resolve the tool by **name
+suffix** (`get_advisors`) — never hard-code the UUID prefix; a reinstall rebinds it:
 
 ```
-mcp__50e15046-cf2c-49da-b8df-ceef27768f63__get_advisors
-  project_id: rhyzpcqhnizqbxphqdkr
+mcp__<supabase>__get_advisors
   type: security
 
-mcp__50e15046-cf2c-49da-b8df-ceef27768f63__get_advisors
-  project_id: rhyzpcqhnizqbxphqdkr
+mcp__<supabase>__get_advisors
   type: performance
 ```
 
@@ -95,25 +94,32 @@ plugin is disabled.
 For each Edge Function in `supabase/functions/`, check live version:
 
 ```
-mcp__50e15046-cf2c-49da-b8df-ceef27768f63__list_edge_functions
-  project_id: rhyzpcqhnizqbxphqdkr
+mcp__<supabase>__list_edge_functions
 ```
 
 Capture each function name, current live version, last update timestamp. Compare against the
-version references in `docs/manual/CURRENT_STATE.md` (e.g. "send-email v11") — flag any that
-drifted. Do not look for these in `CLAUDE.md`; that section moved.
+version references in `docs/manual/CURRENT_STATE.md` (e.g. "process-document v21") — flag drift only
+for functions whose version CURRENT_STATE.md actually records; report a function with no
+recorded version as `NO BASELINE` (neither drift nor clean) so the gap is visible — it does not
+downgrade the overall result on its own. Do not look for these in `CLAUDE.md`; that section moved.
 
 ## Step 5: Recent Supabase logs (5min scan)
 
 ```
-mcp__50e15046-cf2c-49da-b8df-ceef27768f63__get_logs
-  project_id: rhyzpcqhnizqbxphqdkr
-  service: api
+mcp__<supabase>__query_logs
+  sql: select timestamp, event_message from logs where source = 'edge_logs' order by timestamp desc limit 50
+  iso_timestamp_start: <5 minutes ago, ISO 8601 with Z>
 ```
+
+(The tool was previously named `get_logs` and took `service:`; `query_logs` instead takes a read-only ClickHouse `sql` query against the unified `logs` table, filtered by `source`. Resolve by suffix if the connector still exposes the old name.)
 
 Scan for any error-level events in the last 5 minutes. Don't dump the whole log — count, and surface the top 3 distinct error messages.
 
-Repeat for `service: edge-function` and `service: postgres` if time permits.
+Repeat with `source = 'postgres_logs'` if time permits. **Empty is not clean:** run
+`select distinct source from logs` once first — sources vary by project (this project exposes
+`edge_logs`, `postgres_logs`, `auth_logs`, etc., and has NO `function_edge_logs`); a query
+against a source that doesn't exist returns zero rows with no error, which would read as a
+false pass. Edge-function requests surface as `/functions/v1/...` rows in `edge_logs`.
 
 ## Step 6: Print the Dashboard
 

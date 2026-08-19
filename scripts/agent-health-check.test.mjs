@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { normalizeEol } from "./normalize-eol.mjs";
 
 import {
   checkClaudeAuth,
@@ -41,6 +44,48 @@ try {
     [".claude/skills/claude-review/SKILL.md", ".agents/skills/claude-review/SKILL.md"],
   ]);
   assert.equal(synced[0].status, "PASS");
+
+  // A CRLF-vs-LF difference is NOT drift. sync-agent-workflows.mjs has normalized line
+  // endings before comparing since 2026-07-16; this check still compared raw bytes, so
+  // one commit could FAIL here while the generator reported everything in sync. Both
+  // now share scripts/normalize-eol.mjs.
+  const syncedPair = [".claude/skills/claude-review/SKILL.md", ".agents/skills/claude-review/SKILL.md"];
+  writeFileSync(path.join(root, syncedPair[0]), "line one\r\nline two\r\n");
+  writeFileSync(path.join(root, syncedPair[1]), "line one\nline two\n");
+  assert.equal(compareSyncedFiles(root, [syncedPair])[0].status, "PASS");
+
+  // ...but a real content difference must still FAIL, EOL style notwithstanding.
+  writeFileSync(path.join(root, syncedPair[1]), "line one\nline two CHANGED\n");
+  assert.equal(compareSyncedFiles(root, [syncedPair])[0].status, "FAIL");
+
+  writeFileSync(path.join(root, syncedPair[0]), "same");
+  writeFileSync(path.join(root, syncedPair[1]), "same");
+
+  // The shared normalizer is deliberately narrow, and that narrowness is the
+  // safety argument: it can only turn a real difference into a false alarm,
+  // never a real difference into a false pass.
+  assert.equal(normalizeEol("a\r\nb"), "a\nb");
+  assert.equal(normalizeEol("a\rb"), "a\rb", "a lone CR is left alone, so it still reads as drift");
+  assert.throws(() => normalizeEol(undefined), TypeError, "non-string input must throw, not coerce");
+
+  // HARD guard on the single definition. Both mirror comparisons must import
+  // normalizeEol from the one module: a local copy in either script is exactly
+  // how the two checks diverged between 2026-07-16 and 2026-08-19, and nothing
+  // else in this suite would notice it happening again.
+  const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
+  for (const caller of ["agent-health-check.mjs", "sync-agent-workflows.mjs"]) {
+    const source = readFileSync(path.join(scriptsDir, caller), "utf8");
+    assert.match(
+      source,
+      /import \{ normalizeEol \} from "\.\/normalize-eol\.mjs";/,
+      `${caller} must import the shared normalizeEol`,
+    );
+    assert.equal(
+      /(?:const|let|function)\s+normalizeEol\b/.test(source),
+      false,
+      `${caller} must not define its own normalizeEol`,
+    );
+  }
 
   const staleHooks = {
     hooks: {

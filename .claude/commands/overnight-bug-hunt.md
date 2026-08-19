@@ -77,13 +77,19 @@ candidate digest to a file first, then:
 # Build the prompt file: per finding — title, file, one-line evidence, impact, severity.
 # Keep it to <=3-4 findings per call (more times out at high reasoning).
 cat > .claude/session-state/finding-gate-prompt.txt <<'EOF'
-Independent Sol/high gate for the CRX overnight bug hunt. READ-ONLY repo + migration access (the sandbox CANNOT reach the live DB, so ground against repo/migration files). For EACH finding output: "#N: REAL | NOT-REAL | NEEDS-EVIDENCE — <=2 lines evidence (file:line) — corrected severity". Be skeptical; default NOT-REAL without proof.
+Independent Sol/high gate for the CRX overnight bug hunt. READ-ONLY repo + migration access. This gate runs with `--ignore-user-config`, so NO database connector is loaded for it — ground against repo/migration files. For EACH finding output: "#N: REAL | NOT-REAL | NEEDS-EVIDENCE — <=2 lines evidence (file:line) — corrected severity". Be skeptical; default NOT-REAL without proof.
 <paste the 3-4 candidate findings here>
 EOF
+# Split streams — a `2>&1 | tee` merge pulls the multi-hundred-KB reasoning trace
+# into context (proven 2026-06-29). stdout = verdict, stderr = trace.
 node scripts/overnight-codex-gate.mjs .claude/session-state/finding-gate-prompt.txt \
-  2>&1 | tee .claude/session-state/codex-finding-gate-latest.txt
+  > .claude/session-state/codex-finding-gate-latest.txt 2> .claude/session-state/codex-finding-gate-trace.txt
+cat .claude/session-state/codex-finding-gate-latest.txt   # ← read THIS (the verdicts)
+# An EMPTY verdict file or a GATE-FAILED line means the gate FAILED (timeout /
+# launch error / usage limit) — read the trace file for the reason and re-run.
+# "gate produced nothing" is never "gate found nothing".
 ```
-Keep only findings Codex marks **REAL**. Where Codex and Claude disagree on a BLOCKER/HIGH (e.g. a severity split), **keep both positions** in `REPORT.md` for Mason — never silently resolve. (For a DB-touching candidate, Claude runs the live evidence gate first on its side — `npm run db-sweeps` predicates executed read-only via Supabase MCP + the RPC's smoke chain — since Codex's sandbox can't.)
+Keep only findings Codex marks **REAL**. Where Codex and Claude disagree on a BLOCKER/HIGH (e.g. a severity split), **keep both positions** in `REPORT.md` for Mason — never silently resolve. (For a DB-touching candidate, Claude runs the live evidence gate first on its side — `npm run db-sweeps` predicates executed read-only via Supabase MCP + the RPC's smoke chain — because this gate's Codex run is launched with `--ignore-user-config` and has no DB connector loaded, not because Codex lacks live-DB reach.)
 
 ### Step 3 — Draft fixes (green tier only this cycle)
 For each Codex-confirmed **green** finding (`fixKind` frontend-only / docs-or-test): make the minimal, surgical edit that matches surrounding style. For each **yellow** finding: write the migration/edge-fn draft + rolled-back-validate it against live (multi-statement `execute_sql` in a transaction that ends in ROLLBACK / `plpgsql_check`) — but **do not apply**; it parks.
@@ -94,7 +100,10 @@ Stage **only the files this fix touched** (never `-A`), then hand the real diff 
 git add <the-fix's-files>                                  # ONLY this fix's files
 { echo "Review this staged diff for the CRX overnight bug hunt. It must fully fix: <finding>. Judge correctness + money/idempotency/actor/lifecycle bugs + whether it introduces a new bug. Output 'VERDICT: SHIP' or 'VERDICT: NEEDS-WORK — <reason>'. Diff:"; git diff --cached; } > .claude/session-state/fix-gate-prompt.txt
 node scripts/overnight-codex-gate.mjs .claude/session-state/fix-gate-prompt.txt \
-  2>&1 | tee .claude/session-state/codex-fix-gate-latest.txt
+  > .claude/session-state/codex-fix-gate-latest.txt 2> .claude/session-state/codex-fix-gate-trace.txt
+cat .claude/session-state/codex-fix-gate-latest.txt   # ← read THIS (the verdict), not the trace
+# An EMPTY verdict file or a GATE-FAILED line means the gate FAILED — read the
+# trace for the reason and re-run; never treat a failed gate as a pass.
 ```
 (The wrapper runs `codex exec` over the staged diff — NOT `codex review --uncommitted`, which **stashes** the working tree and would review nothing.) Address every Codex NEEDS-WORK and re-run the gate. **Hard cap: 3 fix-gate rounds** per finding — if still NEEDS-WORK after 3, revert that edit (`git restore --staged --worktree <files>`) and re-tier the finding to **yellow/park** (it's subtler than a green fix).
 
@@ -119,7 +128,7 @@ Add one prevention action, strongest first: a **regression test that FAILS on th
 
 ## Morning handoff (what Mason reads)
 
-`REPORT.md`, top to bottom: per cycle — what was found, what was **auto-fixed** (green, already committed + Codex-blessed + green toolchain), and what's **parked** (yellow — plain-English explanation + validation proof + Codex note). Mason approves the parked items he wants; ship them through `/ship` the normal way. Nothing needs rolling back — every green fix is a local commit on a non-prod branch; one `git merge` (or cherry-pick) lands the ones he likes.
+`REPORT.md`, top to bottom: per cycle — what was found, what was **auto-fixed** (green, already committed + Codex-blessed + green toolchain), and what's **parked** (yellow — plain-English explanation + validation proof + Codex note). Mason approves the parked items he wants; ship them through `/ship` the normal way. Nothing needs rolling back — every green fix is a local commit on a non-prod branch; one PR from the hunt branch lands the ones he likes — Vercel check passing, and CodeRabbit's review read and resolved (fix each real issue; dismiss nitpicks with a one-line reason) before merge.
 
 ## Final response each cycle (keep it short for Mason)
 

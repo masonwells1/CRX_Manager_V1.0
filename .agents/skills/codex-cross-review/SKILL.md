@@ -7,7 +7,7 @@ description: FALLBACK ONLY — do not choose this when the headless Codex CLI wo
 
 > **Deprecated as a first choice (2026-07-13).** The `codex-review` skill supersedes this workflow whenever the `codex` CLI is available — it gets a real verdict back into the session instead of a document Mason must ferry by hand. Reach for this file only when the CLI path is unavailable or a durable handoff packet is explicitly wanted. The live evidence gates below (Step 2) remain the canonical spec and are referenced by other workflows.
 
-Templates a review-prompt doc in `docs/audits/` so Mason can hand the same context to Codex (or another reviewer LLM) for an independent second opinion. This matches the workflow recorded in `feedback_codex_cross_review_workflow` memory.
+Templates a review-prompt doc in `docs/audits/` so Mason can hand the same context to Codex (or another reviewer LLM) for an independent second opinion.
 
 ## Step 1: Gather Context
 
@@ -24,7 +24,7 @@ If the user is mid-conversation and you already have the context, infer answers 
 
 Per `docs/audits/2026-06-10-error-prevention-review.md` §4–§5, Codex round 1 must start from executed live evidence, not claims:
 
-1. **Run the db-invariant sweeps live, first.** `npm run db-sweeps` prints each predicate's SQL — execute every block read-only via Supabase MCP `execute_sql` (project `rhyzpcqhnizqbxphqdkr`). Build the per-predicate results table (predicate | flagged live | allowlisted | real findings) and capture the **allowlist diff** (any `scripts/db-invariant-sweeps/allowlist.json` entries added/changed for this batch, with their justifications). Both go INTO the packet — adjudicating exemptions is exactly what a second model is good at, so hand Codex the diff to attack.
+1. **Run the db-invariant sweeps live, first.** `npm run db-sweeps` prints each predicate's SQL — execute every block read-only via Supabase MCP `execute_sql` (project `rhyzpcqhnizqbxphqdkr`). Run **one statement per `execute_sql` call** — the MCP returns only the last statement's result, so a multi-statement block silently drops rows; and if the live-data guard false-positives on probe text, rewrite the probe rather than skipping it — keep both the original and rewritten SQL in the packet and state why the rewrite is still read-only and tests the same predicate. Build the per-predicate results table (predicate | flagged live | allowlisted | real findings) and capture the **allowlist diff** (any `scripts/db-invariant-sweeps/allowlist.json` entries added/changed for this batch, with their justifications). Both go INTO the packet — adjudicating exemptions is exactly what a second model is good at, so hand Codex the diff to attack.
 2. **Collect smoke-chain PASS evidence for every touched RPC.** For each RPC the batch created or modified, run `node scripts/smoke/run-smoke.mjs --spec <rpc>` and execute the chain via MCP — record the spec key + `SMOKE_PASS_ROLLBACK` result. A touched RPC with no covering spec, or without a fresh chain PASS, is a gap to close (write/extend the chain) before the packet goes out — isolated-probe claims don't count.
 
 Any unallowlisted sweep violation found here is a real finding: fix or report it — do NOT draft a "review my clean change" packet over a dirty live catalog.
@@ -33,7 +33,7 @@ Any unallowlisted sweep violation found here is a real finding: fix or report it
 
 Filename: `docs/audits/<YYYY-MM-DD>-codex-<short-slug>-prompt.md`
 
-Date is today (use the current date — check Bash `date -u +"%Y-%m-%d"` if unsure).
+Date is today in local time (America/Chicago, Mason's business timezone — check Bash `TZ='America/Chicago' date +%F` if unsure; never UTC, which crosses midnight during evening sessions).
 Slug is kebab-case, under 50 chars, e.g. `post-b10-followup` or `rls-secdef-sweep-v2`.
 
 Structure (the template below is authoritative; `docs/audits/2026-06-09-codex-foundation-audit-remediation-prompt.md` is a real worked example if you want one):
@@ -44,6 +44,7 @@ Structure (the template below is authoritative; `docs/audits/2026-06-09-codex-fo
 **Date:** <YYYY-MM-DD>
 **Requested by:** Mason (CRX Manager)
 **Reviewer:** Codex (independent second opinion)
+**Reviewer model (required):** `gpt-5.6-sol` at high reasoning effort — the settled adversarial-gate model (2026-07-30). Do not run this packet on a lighter tier.
 **Claude session:** <one-line context, e.g. "post-implementation review of B7/B8/B9 fixes">
 
 ---
@@ -58,7 +59,7 @@ The exact files / commits / migrations in scope:
 
 - `<file:line-range>` — <what it does>
 - `<file:line-range>` — <what it does>
-- Commit `<sha>` — <one-line>
+- Commit `<sha>` — <one-line; REQUIRED (exact SHA, not a branch name) whenever the scope touches money, RLS, or migrations — the adversarial gate is pinned to an exact SHA>
 
 ## Context Codex needs
 
@@ -150,6 +151,7 @@ draft a disposition doc (`docs/audits/<date>-claude-disposition-of-codex-<slug>.
 
 ## Hard Rules
 
+- A verdict pasted back from this packet does NOT satisfy the merge gate: `.claude/hooks/pr-merge-guard.mjs` only accepts `codex-review-*.json` proof files written by the CLI path. For a money/RLS/migration diff, the real `codex-review` run is still required before merge — this packet is a second opinion, not the proof.
 - NEVER skip the "Claude's current position" section — Codex needs to know what to disagree with.
 - NEVER auto-commit the prompt doc — the user decides when to commit.
 - The output file is a PROMPT, not findings. Don't include Claude's analysis as if it were facts — frame it as "what I currently believe."
