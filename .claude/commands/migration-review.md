@@ -53,6 +53,6 @@ DDL touched tables/columns/constraints/status values, and the db-invariant sweep
 ran standalone (not inside `/ship`), run those steps here rather than assuming someone else will.
 
 ## Hard rules
-- **Read-only review.** The workflow and this review step never edit code, apply migrations, or deploy.
+- **Read-only review.** The workflow and this review step never edit code, apply migrations, or deploy. (Step 5 is the one exception: it runs only after a separately authorized apply has already happened, and its `/regen-schema-registry` refresh writes `.claude/schema-registry.json` — nothing else.)
 - **A proof file is only ever written after a genuinely clean (or blockers-fixed) verdict.** Never hand-write a proof to skip the review.
 - **Plain English for Mason** — he has zero coding experience.

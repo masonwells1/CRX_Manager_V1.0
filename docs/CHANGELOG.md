@@ -14,8 +14,9 @@ Harness only — no app source, migration, or live-state change. A four-agent au
   reference the settled 2026-07-13 policy instead of contradicting it.
 - **Model pins:** `scripts/codex-hunt.mjs` now pins `gpt-5.3-codex-spark` explicitly (was falling
   to the CLI default under `--ignore-user-config`); codex-cross-review's template pins
-  `gpt-5.6-sol`/high with an exact SHA; the global handoff skill no longer claims Codex cannot
-  reach the live DB (its Supabase connector is write-enabled, 2026-08-14).
+  `gpt-5.6-sol`/high with an exact SHA; the global handoff skill (outside this repo, at
+  `~/.claude/skills/handoff` — noted here for the audit record only) no longer claims Codex
+  cannot reach the live DB (its Supabase connector is write-enabled, 2026-08-14).
 - **Renamed/stale tool references:** Supabase `get_logs` → `query_logs` (settings allowlist +
   deploy-edge-function + spot-check-prod); hard-coded connector UUID prefixes replaced with
   suffix-resolution; `moddatetime` trigger template replaced with the house
@@ -25,9 +26,10 @@ Harness only — no app source, migration, or live-state change. A four-agent au
   migration-review gained the post-apply Step 5 (smoke chains, registry refresh, sweeps);
   backup-db documents both backup evidence channels.
 - Codex adapters regenerated (`sync-agent-workflows --write`, 37 files) and
-  `npm run test:agent-workflows` green (30 PASS). A handful of proposed wordings that would have
-  added carve-outs to hard safety-gate approval lines were deliberately NOT applied — the stricter
-  existing text stands.
+  `npm run test:agent-workflows` green. Proposed wordings that would have added unscoped
+  carve-outs to hard safety-gate approval lines were rejected; the two gate sentences that were
+  reworded (`agent-pair-review`, `codex-gauntlet`) were then re-tightened in the blind
+  double-Opus review round below.
 - **CodeRabbit follow-up (PR #421):** completed the approval-gate lists in `agent-pair-review`
   and `/ship` (added non-green pushes, billing, customer-visible production state); both bug-hunt
   handoffs now spell out the read/fix/dismiss CodeRabbit gate; packet dates pinned to
@@ -35,6 +37,15 @@ Harness only — no app source, migration, or live-state change. A four-agent au
   diffs/summarizes all 8 registry sections; spot-check-prod reports unversioned functions as
   `NO BASELINE`; probe rewrites must retain both SQLs with read-only equivalence; review-workflow's
   GROUND_RULE points at the manual/reference lifecycle docs instead of `CLAUDE.md`.
+- **Blind double-Opus adversarial round (PR #421, Codex usage-limited):** two independent Opus
+  reviewers re-audited the full diff. Fixed from their findings: the `agent-pair-review` and
+  `codex-gauntlet` gate sentences re-tightened (live-data changes and destructive actions are
+  never hands-free; the 2026-07-13 proof gate named explicitly); `query_logs` call shapes
+  corrected to the real `sql`-based schema (deploy-edge-function, spot-check-prod) and stale
+  `get_advisors project_id`/`get_logs` params/allowlist entries dropped; `codex-gauntlet` no
+  longer claims preflight/deploy-check invoke it automatically; `overnight-codex-gate.mjs` now
+  feeds the prompt via stdin (Windows ~32K argv cap); migration-review's read-only rule scoped
+  around post-apply Step 5; stale map-count figures dropped from the architecture-audit prompt.
 
 ## 2026-08-18 — pre-push private-artifact scan no longer ENOBUFS on nested worktrees
 

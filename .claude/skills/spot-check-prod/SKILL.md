@@ -35,11 +35,9 @@ suffix** (`get_advisors`) — never hard-code the UUID prefix; a reinstall rebin
 
 ```
 mcp__<supabase>__get_advisors
-  project_id: rhyzpcqhnizqbxphqdkr
   type: security
 
 mcp__<supabase>__get_advisors
-  project_id: rhyzpcqhnizqbxphqdkr
   type: performance
 ```
 
@@ -101,7 +99,7 @@ mcp__<supabase>__list_edge_functions
 ```
 
 Capture each function name, current live version, last update timestamp. Compare against the
-version references in `docs/manual/CURRENT_STATE.md` (e.g. "send-email v11") — flag drift only
+version references in `docs/manual/CURRENT_STATE.md` (e.g. "process-document v21") — flag drift only
 for functions whose version CURRENT_STATE.md actually records; report a function with no
 recorded version as `NO BASELINE` (neither drift nor clean) so the gap is visible — it does not
 downgrade the overall result on its own. Do not look for these in `CLAUDE.md`; that section moved.
@@ -110,15 +108,15 @@ downgrade the overall result on its own. Do not look for these in `CLAUDE.md`; t
 
 ```
 mcp__<supabase>__query_logs
-  project_id: rhyzpcqhnizqbxphqdkr
-  service: api
+  sql: select timestamp, event_message from logs where source = 'edge_logs' order by timestamp desc limit 50
+  iso_timestamp_start: <5 minutes ago, ISO 8601 with Z>
 ```
 
-(The tool was previously named `get_logs`; resolve by suffix if the connector still exposes the old name.)
+(The tool was previously named `get_logs` and took `service:`; `query_logs` instead takes a read-only ClickHouse `sql` query against the unified `logs` table, filtered by `source`. Resolve by suffix if the connector still exposes the old name.)
 
 Scan for any error-level events in the last 5 minutes. Don't dump the whole log — count, and surface the top 3 distinct error messages.
 
-Repeat for `service: edge-function` and `service: postgres` if time permits.
+Repeat with `source = 'function_edge_logs'` (edge functions) and `source = 'postgres_logs'` if time permits.
 
 ## Step 6: Print the Dashboard
 

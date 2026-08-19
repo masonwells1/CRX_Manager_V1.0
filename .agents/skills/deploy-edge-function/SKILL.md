@@ -168,11 +168,11 @@ proof is missing rather than printing a clean summary.
 
 ```
 mcp__<supabase>__query_logs
-  project_id: rhyzpcqhnizqbxphqdkr
-  service: edge-function
+  sql: select timestamp, event_message from logs where source = 'function_edge_logs' order by timestamp desc limit 50
+  iso_timestamp_start: <5 minutes ago, ISO 8601 with Z>
 ```
 
-(The tool was previously named `get_logs`; resolve by suffix if the connector still exposes the old name.)
+(The tool was previously named `get_logs` and took `service:`; `query_logs` instead takes a read-only ClickHouse `sql` query against the unified `logs` table — filter by `source` (`'function_edge_logs'` for edge functions). Resolve by suffix if the connector still exposes the old name.)
 
 Scan for any error events from the new version in the last 5 minutes.
 

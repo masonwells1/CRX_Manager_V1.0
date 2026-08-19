@@ -17,6 +17,8 @@
  *   length limit, however large the slice's file list grows.
  *
  * HARDENED INVOCATION — `codex exec` with:
+ *   --model gpt-5.3-codex-spark : pin the cheap read-only hunter model; the
+ *       gate/glance steps use overnight-codex-gate.mjs (gpt-5.6-sol) instead.
  *   --ignore-user-config : do NOT load ~/.codex/config.toml. That strips the
  *       Supabase / Vercel / GitHub / Sentry marketplace plugins off this run.
  *       Auth still resolves from CODEX_HOME, so the model still works.
