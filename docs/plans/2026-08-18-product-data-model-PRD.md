@@ -454,6 +454,30 @@ transfer to the executing session.
 
 ## 9. Open items
 
+> **STATUS UPDATE 2026-08-19 — read this before treating anything below as open.**
+> `2026-08-19-product-data-model-BUILD-PLAN.md` §0 (revision 2) closed several of these. Where
+> this list and the build plan disagree, **the build plan wins.**
+>
+> | Item below | Now closed by | Decision |
+> |---|---|---|
+> | 8 — absent workbook row | **D-D** | Absent row = **ignore**; deletion needs an explicit `__delete` marker |
+> | 8 — child-table concurrency token | **D-E** | New `products.product_data_version`, compare-and-set via `p_expected_data_version` |
+> | 9 — seed-treatment rate basis | **D-G** | `per_cwt_seed` and `per_seed_unit` added to the CHECK on day one |
+> | 10 — per-phase rollback | **D-F** | `app_settings` key `product_rate_source_mode`. **Read-path switch only** — it does not undo a wrong re-derived value, the revoked grants, or deleted aliases |
+> | 13 — workbook / rate collision | **D-C** | Workbook rate columns ship **read-only** from the start |
+> | 14 — brand back-fill scope | **D-H** | Human-reviewed pass always; a parser may only *propose* into the review queue |
+>
+> Also decided 2026-08-19 and not represented below at all: **D-A** (three rules governing
+> `canonical_fraction`, incl. nullable for isomers), **D-B** (specific gravity normalizes on
+> write; `WATER_LB_PER_GAL = 8.345404`), **D-I** (machine-sourced data lands as a proposal),
+> **D-J** (chemistry edits admin-only), **D-K** (an unlisted brand never blocks receiving).
+>
+> **Still genuinely open:** items **3** (RUP count — parked by Mason), **5** (Codex-app
+> connector — Mason's), **7** (the three product write paths — a Phase 2 decision, not needed
+> for the Phase 0/1 handoff), **15**, **16**, **17** (documented facts and later-phase scope,
+> not decisions).
+
+
 1. ~~Fable adversarial review in flight.~~ **RESOLVED 2026-08-18.** Verdict: architecture
    sound, no redesign. Four substantive amendments folded in above — canonical
    ingredient + `ae_fraction`, `product_rates` child table, corrected density warn band,

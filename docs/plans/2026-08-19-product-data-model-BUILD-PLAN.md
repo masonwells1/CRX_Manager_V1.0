@@ -444,7 +444,9 @@ A merge to `main` deploys production.
 
 ## 8. Orchestration
 
-The full design is in the session record; the operational summary:
+**Full design: `2026-08-19-product-data-model-ORCHESTRATION.md`** — session topology, the
+fifteen-step gate chain for WP-1, the apply-before-merge ordering decision, the collision
+preflight, and the must-build list. Operational summary:
 
 **Topology.** One Claude orchestrator session in a dedicated worktree, running packages
 serially, started each sitting with `/run-loop docs/loops/product-data-model-loop-2026-08.md`.
