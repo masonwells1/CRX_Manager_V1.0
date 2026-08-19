@@ -81,7 +81,12 @@ describe('recipeItemToChemRowSeed', () => {
     expect(seed.quantity).toBe('50');
     expect(seed.unit).toBe('gal');
     expect(seed.rate_per_acre).toBe('2');
-    expect(seed.rate_unit).toBe('pt/ac');
+    // The recipe does not store a rate unit (no such column on blend_recipe_items), so the
+    // rate is read as being per the row's own unit. Taking the PRODUCT's default 'pt/ac'
+    // here would tell the calculator to convert pints into gallons on a number that was
+    // never in pints — a 16x under-bill. Storing the rate unit on the recipe is the real
+    // fix and needs a migration; see KNOWN_ISSUES.
+    expect(seed.rate_unit).toBe('gal');
     expect(seed.cost_per_unit_cents).toBe('500');
     expect(seed.vendor).toBe('Bayer');
     expect(seed.rei_hours).toBe('12');
@@ -106,7 +111,7 @@ describe('recipeItemToChemRowSeed', () => {
     expect(seed.unit).toBe('gal');
     expect(seed.cost_per_unit_cents).toBe('0');
     expect(seed.price_per_unit_cents).toBe('0'); // no product -> no tier price available
-    expect(seed.rate_unit).toBe('');
+    expect(seed.rate_unit).toBe('gal'); // reads as per the row's own unit (see above)
     expect(seed.vendor).toBe('');
   });
 });

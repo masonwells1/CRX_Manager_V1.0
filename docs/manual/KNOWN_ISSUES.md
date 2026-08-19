@@ -356,6 +356,40 @@ behaves exactly as before. Verified by executing the real module: a legacy `pt`-
 One visible consequence for the office: on a product sold by the gallon with a per-pint rate,
 the Quantity box now reads **30 GAL** where it used to read **240 pt**. The rate, the invoice
 total and the loader's gallon figure are unchanged.
+
+**Correction to an earlier revision of this entry:** the pre-existing error on the 463
+`oz`-rate / `Gal`-stock products was described as "+0.57%". That is one $28.00/gal product.
+Measured across all of them, the worst live case is **+10.66%** ("Liquid AMS 34% - Bulk",
+$3.47/gal → 2.7109¢/oz stored as 3¢) and −10.18% in the other direction — cheap bulk products
+round hardest. The fix is correspondingly more valuable than first claimed.
+
+### OPEN — three residuals from the quantity-side rewrite
+
+1. **`blend_recipe_items` has no `rate_unit` column**, so a recipe cannot record the unit its
+   per-acre rate was quoted in. The seed therefore reads the rate as being per the row's own
+   unit, which makes the conversion factor exactly 1 and reproduces the prior behaviour. The
+   real fix is a migration adding `rate_unit` and populating it on save; until then a recipe
+   whose rate was entered in a different unit from the row's unit will display that rate
+   against the row's unit. Not started — needs a migration.
+2. **Old- and new-scheme rows no longer combine in the mixing reports.** `masterMixSummaryData`,
+   `chemicalSummaryReportData` and `projectedUseReportData` key on product name + unit, and
+   `masterMixSummaryData` includes the unit in the batch-grouping signature. The same product
+   is `3752.64 oz` on an existing job and `29.3175 Gal` on a new one, so the combined-mix table
+   shows two lines and two physically identical jobs will not group into one batch until the
+   older rows are re-saved. Each line is individually correct and correctly labelled — the
+   number and its unit always travel together, so this is not a mixing hazard — and only 4
+   live `job_chemicals` rows exist, all test products. No action taken.
+3. **Stored rows keep their old rounded price.** The two live Acuron rows carry 55¢/oz,
+   converted-and-rounded from $70.59/Gal before this change; they bill $2,063.95 against a
+   true $2,069.55. Nothing backfills them. "The rounding is gone" describes rows written from
+   now on, not rows already saved.
+
+Also unresolved and unrelated to money: `reconcileChemAutofillUnits` returns `reconciled` and
+`reason`, and both call sites discard them — the render-time `chemLineUnitMismatch` covers the
+same cases, so nothing is missed today, but the "callers MUST surface this" contract in the
+comment is not enforced anywhere. And the warning is skipped for `customer_supplied` lines on
+the grounds that they bill $0, which is correct for billing but means a wrong unit on a
+grower-supplied line still reaches the applicator sheet unwarned.
 - **`unit_conversions` vocabulary drift.** `src/lib/units.ts` describes those keys as FROZEN,
   and `save_quote` joins on `LOWER(rate_unit) = LOWER(unit)`. Nothing stops a spelling outside
   that set reaching the column.

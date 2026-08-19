@@ -13,10 +13,18 @@ expressed in the product's **selling unit** with its price exactly as quoted, an
 converted into the rate's smaller unit and rounded to whole cents, and the invoice then
 multiplied that rounded figure by the whole quantity.
 
-- **The rounding is gone, not reduced.** Worst live `Dry oz` price ($0.39/lb): billed **$64.00**
-  against a true **$78.00** — a 17.95% under-bill — and now bills **$78.00** exactly. The
-  separate, genuinely pre-existing **+0.57%** on the **463** `oz`-rate / `Gal`-stock products is
-  fixed by the same change: 96 oz/ac × 39.09 ac at $28.00/gal billed $825.58, now **$820.89**.
+- **The rounding is gone.** Worst live `Dry oz` price ($0.39/lb): billed **$64.00** against a
+  true **$78.00** — a 17.95% under-bill — and now bills **$78.00** exactly. The separate,
+  genuinely pre-existing error on the **463** `oz`-rate / `Gal`-stock products is fixed by the
+  same change, and it was **far worse than an earlier revision of this entry claimed**: that
+  said "+0.57%", which is one $28.00/gal product. Cheap bulk products round much harder —
+  worst live case **+10.66%** ("Liquid AMS 34% - Bulk", $3.47/gal → 2.7109¢/oz stored as 3¢),
+  with a −10.18% under-bill right behind it. On a 96 oz/ac × 39.09 ac job that is $112.58
+  billed against a true $101.73, a **$10.85 over-charge on a single line**.
+  A residual remains and it is small but not zero: `quantity` is still a rounded string, now
+  at **6** decimal places rather than 4 because carrying it into a 16–128× larger unit costs
+  that much resolution. Worst case is under a twentieth of a cent per line, against the 8¢
+  four decimals would have lost.
 - **Prices are per `inventory_unit`, not `unit_size`.** `_save_field_app_invoice_impl` names it
   outright — *"v_unit_price is per the product's SOLD unit (inventory_unit)"*. Both callers
   passed `unit_size`, which disagrees with `inventory_unit` on **9** live products and is blank
@@ -24,8 +32,21 @@ multiplied that rounded figure by the whole quantity.
 - **No data migration.** The row invariant is *quantity is expressed in the row's own `unit`*,
   which holds under both schemes — a reloaded legacy row gets a factor of 1 and behaves exactly
   as before (verified: a legacy `pt` row over 160 acres still derives 240 pt).
-- **Changing a unit now moves the quantity with it.** Picking `Gal` over `pt` converts 240 → 30
-  rather than leaving the old number under a new label; changing the rate unit re-derives it.
+- **Changing a unit moves the quantity AND the price together.** Picking `Gal` over `pt`
+  converts 240 → 30 *and* re-quotes 281¢/pt as 2248¢/Gal, so the line total is preserved. An
+  earlier revision moved only the quantity, which broke the row invariant on every use and
+  billed $84.30 against a true $675.00 (and $5,400.00 in the other direction) with no warning,
+  because the units still convert. That is now covered by `chemRowUnitChange` and pinned by
+  tests. A row with a *blank* unit is the exception: its price was never quoted per the blank
+  unit — autofill wrote it per the selling unit — so only the quantity moves there.
+- **Changing the rate unit** re-derives the quantity only for a row that is already
+  rate-driven. Forcing `driver: 'rate'` overwrote a hand-entered total on a reloaded row
+  (the driver is not persisted) and zeroed the quantity at 0 acres.
+- **The blend-recipe seed** now reads its stored rate as being per the row's own unit.
+  `blend_recipe_items` has no `rate_unit` column, so the unit the rate is quoted in is
+  genuinely unknowable; guessing the product's default would apply a conversion the rate was
+  never in (a 16× under-bill on a recipe saved from a `pt/ac` line). It also now falls back to
+  `inventory_unit` rather than the blank-on-8-products `unit_size`.
 - The warning was re-based accordingly: a rate unit that *differs* from the line's unit is now
   the normal, correct case and no longer warns. It fires when the two genuinely cannot be
   converted, when the line has no unit, or when the rate carries a denominator that is not acres.

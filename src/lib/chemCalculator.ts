@@ -70,8 +70,77 @@ export function chemQuantityFactor(
 const rowQuantityFactor = (row: ChemCalcRow): number =>
   chemQuantityFactor(row.rate_unit, row.unit);
 
+export interface ChemUnitChange {
+  quantity: string;
+  costPerUnitCents: number;
+  pricePerUnitCents: number;
+}
+
+/**
+ * Re-express a line in a different unit when the user picks one from the Unit dropdown.
+ *
+ * BOTH SIDES MOVE, OR NEITHER. The row invariant is that `quantity` is in `unit` AND the
+ * per-unit price is quoted per that same `unit`, because the invoice multiplies the two
+ * with no conversion. Converting only the quantity — which an earlier revision did — breaks
+ * the invariant on every use: 240 pt at 281c/pt became 30 Gal still at 281c/pt, billing
+ * $84.30 against a true $675.00, and the reverse direction billed $5,400.00. Neither warned,
+ * because the units convert.
+ *
+ * Multiplying the quantity by `f` and dividing the price by `f` leaves `quantity x price`
+ * unchanged in exact arithmetic, so the line's total is preserved; only the whole-cent
+ * rounding of the per-unit price moves, and that is the user's own explicit override rather
+ * than something the autofill imposes.
+ *
+ * A BLANK current unit takes the RATE's unit as its source. The quantity of such a row is in
+ * the rate's unit (that is where `rate x acres` leaves it), so treating the source as "no
+ * unit" and refusing to scale would leave the number untouched under a new label — which is
+ * precisely what the "set the unit before invoicing" warning invites the user to do. On the
+ * live blank-unit row that path billed $2,785.78 against a true $348.22.
+ */
+export function chemRowUnitChange(
+  quantity: string,
+  fromUnit: string | null | undefined,
+  rateUnit: string | null | undefined,
+  toUnit: string | null | undefined,
+  costPerUnitCents: number,
+  pricePerUnitCents: number,
+  productForm?: 'liquid' | 'dry' | null,
+): ChemUnitChange {
+  const unchanged: ChemUnitChange = { quantity, costPerUnitCents, pricePerUnitCents };
+  const qty = parseFloat(quantity);
+  const hadUnit = (fromUnit || '').trim() !== '';
+  // A blank unit means the quantity is sitting in the rate's unit.
+  const source = hadUnit ? fromUnit : baseUnitOfRate(rateUnit);
+  const f = chemQuantityFactor(source, toUnit, productForm);
+  if (Number.isNaN(qty) || f === 1 || f === 0 || !Number.isFinite(f)) return unchanged;
+  return {
+    quantity: fmtQty(qty * f),
+    // ONLY rescale the price when the row actually HAD a unit for it to be quoted per. With a
+    // blank unit the price is not per nothing — autofill wrote it per the product's selling
+    // unit, which is the unit the user is now choosing. Rescaling it there turned a
+    // $348.22 line into $2,785.78, the same over-bill the blank-unit warning exists to stop.
+    costPerUnitCents: hadUnit ? Math.round(costPerUnitCents / f) : costPerUnitCents,
+    pricePerUnitCents: hadUnit ? Math.round(pricePerUnitCents / f) : pricePerUnitCents,
+  };
+}
+
 /** Round to 4 dp and stringify (the grid stores numbers as strings). */
 export const fmt4 = (x: number): string => (Math.round(x * 10000) / 10000).toString();
+
+/**
+ * Round a QUANTITY and stringify, at 6 dp rather than `fmt4`'s 4.
+ *
+ * Quantities are now carried into the product's SELLING unit, which is typically 16-128x
+ * larger than the rate's unit, so four decimals buy 2-3 fewer orders of magnitude of
+ * resolution than they used to (0.0001 gal is 0.0128 fl oz). At a high per-gallon price that
+ * is real money: 1.7 oz/ac over 137 acres of a $1,490.41/Gal product is 1.81953125 gal,
+ * which `fmt4` stores as 1.8195 — 5c lost, and up to 8c across plausible rate/acreage
+ * combinations. Six decimals put the worst case under a twentieth of a cent.
+ *
+ * `job_chemicals.quantity` is unconstrained `numeric`, so the extra places persist.
+ * `.toString()` still drops trailing zeros, so an exact 30 stays "30".
+ */
+export const fmtQty = (x: number): string => (Math.round(x * 1e6) / 1e6).toString();
 
 /** Total acres across the job's field rows. */
 export function sumAcres(fieldRows: { acres_to_treat: string }[]): number {
@@ -98,7 +167,7 @@ export function applyChemEdit<T extends ChemCalcRow>(
   if (key === 'rate_per_acre' && value.trim() !== '') {
     const rate = parseFloat(value);
     if (!Number.isNaN(rate)) {
-      return { ...row, driver: 'rate', ...(acres > 0 ? { quantity: fmt4(rate * acres * f) } : {}) };
+      return { ...row, driver: 'rate', ...(acres > 0 ? { quantity: fmtQty(rate * acres * f) } : {}) };
     }
   }
   if (key === 'quantity' && value.trim() !== '') {
@@ -130,7 +199,7 @@ export function recomputeChemRowForAcres<T extends ChemCalcRow>(row: T, acres: n
   const f = rowQuantityFactor(row);
   if (row.driver === 'rate') {
     return row.rate_per_acre.trim() !== '' && !Number.isNaN(rate)
-      ? { ...row, quantity: fmt4(rate * acres * f) }
+      ? { ...row, quantity: fmtQty(rate * acres * f) }
       : row;
   }
   if (row.driver === 'qty') {

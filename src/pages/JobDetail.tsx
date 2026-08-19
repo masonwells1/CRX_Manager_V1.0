@@ -43,7 +43,7 @@ import { overrideSaveApplicatorId, shouldReassignApplicatorAfterSave, canGenerat
 import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
-import { applyChemEdit, chemLineUnitMismatch, chemQuantityFactor, fmt4, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent } from '../lib/chemCalculator';
+import { applyChemEdit, chemLineUnitMismatch, chemRowUnitChange, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent } from '../lib/chemCalculator';
 import { compareToMaxRate, phiHarvestWarning } from '../lib/labelGuardrails';
 import type { RateComparison, PhiHarvestResult } from '../lib/labelGuardrails';
 import { unitOptionsForForm, isKnownUnit } from '../lib/units';
@@ -2932,12 +2932,27 @@ export default function JobDetail() {
     // over to Gal becomes 30); `rate_unit` re-derives it from the rate below.
     if (key === 'unit') {
       const prev = chemRows[i];
-      const qty = parseFloat(prev.quantity);
-      const f = chemQuantityFactor(prev.unit, value, chemFormFor(prev.product_id));
-      if (!Number.isNaN(qty) && f !== 1) updated[i].quantity = fmt4(qty * f);
+      // Quantity AND price move together — see chemRowUnitChange. Converting only the
+      // quantity broke the row invariant on every use and mis-billed by the unit ratio.
+      const c = chemRowUnitChange(
+        prev.quantity,
+        prev.unit,
+        prev.rate_unit,
+        value,
+        parseInt(prev.cost_per_unit_cents, 10) || 0,
+        parseInt(prev.price_per_unit_cents, 10) || 0,
+        chemFormFor(prev.product_id),
+      );
+      updated[i].quantity = c.quantity;
+      updated[i].cost_per_unit_cents = c.costPerUnitCents.toString();
+      updated[i].price_per_unit_cents = c.pricePerUnitCents.toString();
     }
-    if (key === 'rate_unit' && updated[i].driver !== 'qty') {
-      updated[i] = recomputeChemRowForAcres({ ...updated[i], driver: 'rate' }, sumAcres(fieldRows));
+    // A new rate unit changes what `rate x acres` means, so a RATE-driven row re-derives.
+    // Only a row that is already rate-driven: forcing driver:'rate' overwrote a hand-entered
+    // total on a reloaded row (driver is not persisted) and zeroed the quantity at 0 acres,
+    // neither of which happened before.
+    if (key === 'rate_unit' && updated[i].driver === 'rate' && sumAcres(fieldRows) > 0) {
+      updated[i] = recomputeChemRowForAcres(updated[i], sumAcres(fieldRows));
     }
     // 3-way calculator (rate ⇄ quantity via total acres).
     updated[i] = applyChemEdit(updated[i], key, value, sumAcres(fieldRows));

@@ -83,10 +83,22 @@ export function recipeItemToChemRowSeed(
   }
 
   const costCents = product?.current_cost != null ? Math.round(product.current_cost * 100) : 0;
-  // Unit of the recipe item wins; fall back to the product's pack unit.
-  const unit = item.unit || product?.unit_size || '';
-  // rate_unit isn't stored on the recipe item — pull the product's default.
-  const rateUnit = product?.rate_unit || '';
+  // Unit of the recipe item wins; fall back to the product's SELLING unit (the unit its
+  // price is quoted in — `_save_field_app_invoice_impl` calls inventory_unit "the product's
+  // SOLD unit"). `unit_size` is blank on 8 live products and would seed an empty unit.
+  const unit = item.unit || product?.inventory_unit || product?.unit_size || '';
+  // `blend_recipe_items` has NO rate_unit column, so the unit the stored rate is quoted in
+  // is genuinely unknowable. It used not to matter: nothing converted, and the rate was only
+  // ever multiplied by acres. It matters now, because `recomputeChemRowForAcres` carries the
+  // result from the rate's unit into the row's unit — and guessing the product's default
+  // rate_unit here would apply a conversion the stored rate may never have been in. On a
+  // recipe saved from a 'pt/ac' line whose product defaults to 'oz', that guess converts by
+  // 1/128 and under-bills 16x.
+  //
+  // So the rate is read as being per the row's own unit, which makes the factor exactly 1
+  // and reproduces `main`'s behaviour for every recipe. Storing the rate unit on the recipe
+  // is the real fix; it needs a migration and is recorded in KNOWN_ISSUES.
+  const rateUnit = unit;
 
   return {
     product_id: item.product_id,

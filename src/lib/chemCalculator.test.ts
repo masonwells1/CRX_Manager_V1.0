@@ -9,6 +9,7 @@ import {
   baseUnitOfRate,
   chemLineUnitMismatch,
   chemQuantityFactor,
+  chemRowUnitChange,
   rateDenominatorIsUnrecognized,
   reconcileChemAutofillUnits,
   type ChemCalcRow,
@@ -432,6 +433,94 @@ describe('chemCalculator — reconcileChemAutofillUnits (P1 money fix)', () => {
 
 // ── The render-time invariant that actually decides the bill. transfer_job_to_invoice
 // multiplies quantity x price_per_unit_cents with NO unit conversion. ──
+// ── THE EDIT PATHS. These had NO unit-aware coverage, which is how a revision that
+// converted the quantity without the price shipped: every existing calculator test used a
+// row with no `unit`/`rate_unit`, so the factor was always 1 and the wiring was invisible. ──
+describe('chemCalculator — the calculator carries quantity into the row unit', () => {
+  const galRow: ChemCalcRow = { quantity: '0', rate_per_acre: '', unit: 'GAL', rate_unit: 'pt/ac' };
+
+  it('a rate edit lands the quantity in the ROW unit, not the rate unit', () => {
+    const r = applyChemEdit({ ...galRow, rate_per_acre: '1.5' }, 'rate_per_acre', '1.5', 160);
+    expect(r.quantity).toBe('30');   // 240 pt carried into GAL — NOT '240'
+    expect(r.driver).toBe('rate');
+  });
+
+  it('a typed total is read in the ROW unit and back-solves the rate in the RATE unit', () => {
+    const r = applyChemEdit({ ...galRow, quantity: '30' }, 'quantity', '30', 160);
+    expect(r.rate_per_acre).toBe('1.5'); // 30 GAL over 160 ac = 1.5 pt/ac
+    expect(r.driver).toBe('qty');
+  });
+
+  it('rate → quantity → rate round-trips exactly at 1/128 and 1/16', () => {
+    for (const [unit, rateUnit, form] of [['Gal', 'oz', 'liquid'], ['lb', 'oz', 'dry']] as const) {
+      const row = { quantity: '0', rate_per_acre: '', unit, rate_unit: rateUnit };
+      const fwd = applyChemEdit({ ...row, rate_per_acre: '96' }, 'rate_per_acre', '96', 137);
+      const back = applyChemEdit({ ...row, quantity: fwd.quantity }, 'quantity', fwd.quantity, 137);
+      expect(`${form}:${back.rate_per_acre}`).toBe(`${form}:96`);
+    }
+  });
+
+  it('an acreage change re-derives in the row unit', () => {
+    expect(recomputeChemRowForAcres({ ...galRow, rate_per_acre: '1.5', driver: 'rate' }, 80).quantity)
+      .toBe('15');
+  });
+
+  it('a LEGACY row (unit == the rate base) is untouched — this is why no migration is needed', () => {
+    const legacy = { quantity: '0', rate_per_acre: '1.5', unit: 'pt', rate_unit: 'pt/ac', driver: 'rate' as const };
+    expect(recomputeChemRowForAcres(legacy, 160).quantity).toBe('240');
+    // and a row carrying no unit context at all behaves exactly as it always did
+    expect(recomputeChemRowForAcres({ quantity: '0', rate_per_acre: '1.5', driver: 'rate' }, 160).quantity)
+      .toBe('240');
+  });
+
+  it('keeps enough precision that a high-value line does not lose a cent', () => {
+    // 1.7 oz/ac x 137 ac = 1.81953125 gal of a $1,490.41/Gal product. Four decimals lost 5c.
+    const r = applyChemEdit(
+      { quantity: '0', rate_per_acre: '1.7', unit: 'Gal', rate_unit: 'oz' }, 'rate_per_acre', '1.7', 137,
+    );
+    const billedCents = parseFloat(r.quantity) * 149041;
+    expect(Math.abs(billedCents - 1.81953125 * 149041)).toBeLessThan(0.5); // under half a cent
+  });
+});
+
+// ── THE UNIT DROPDOWN. Quantity and price must move together or the row invariant breaks
+// and the invoice is wrong by the unit ratio, silently — the units still convert, so the
+// mismatch warning stays quiet. ──
+describe('chemCalculator — chemRowUnitChange', () => {
+  it('moves the price with the quantity, preserving the line total (pt → Gal)', () => {
+    const c = chemRowUnitChange('240', 'pt', 'pt/ac', 'Gal', 281, 281, 'liquid');
+    expect(c.quantity).toBe('30');
+    expect(c.pricePerUnitCents).toBe(2248);           // NOT left at 281
+    expect((parseFloat(c.quantity) * c.pricePerUnitCents) / 100).toBeCloseTo(674.4, 2);
+  });
+
+  it('moves the price with the quantity in the other direction too (Gal → pt)', () => {
+    const c = chemRowUnitChange('30', 'Gal', 'pt/ac', 'pt', 2250, 2250, 'liquid');
+    expect(c.quantity).toBe('240');
+    expect(c.pricePerUnitCents).toBe(281);            // NOT left at 2250 (which billed $5,400)
+    expect((parseFloat(c.quantity) * c.pricePerUnitCents) / 100).toBeCloseTo(674.4, 2);
+  });
+
+  it('a BLANK unit takes the RATE unit as its source (the live no-unit row)', () => {
+    // 73.31 with no unit, rate in pt/ac, priced $38.00 per Gal. Treating the source as "no
+    // unit" left 73.31 under a Gal label and billed $2,785.78 against a true $348.22.
+    const c = chemRowUnitChange('73.31', null, 'pt/ac', 'Gal', 0, 3800, 'liquid');
+    expect(parseFloat(c.quantity)).toBeCloseTo(9.16375, 4);
+    // The price must NOT be rescaled here — it was already per the selling unit, not per the
+    // blank unit. Asserting against the RETURNED price, not the input: an earlier version of
+    // this test used the input and passed while the shipped code billed $2,785.78.
+    expect(c.pricePerUnitCents).toBe(3800);
+    expect((parseFloat(c.quantity) * c.pricePerUnitCents) / 100).toBeCloseTo(348.22, 1);
+  });
+
+  it('is a no-op when the units are the same or cannot be converted', () => {
+    expect(chemRowUnitChange('240', 'pt', 'pt/ac', 'pt', 281, 281, 'liquid').quantity).toBe('240');
+    const u = chemRowUnitChange('240', 'widgets', 'pt/ac', 'Gal', 281, 281, 'liquid');
+    expect(u.quantity).toBe('240');
+    expect(u.pricePerUnitCents).toBe(281);
+  });
+});
+
 describe('chemCalculator — chemLineUnitMismatch', () => {
   it('is silent when the row unit equals the rate unit', () => {
     expect(chemLineUnitMismatch('oz', 'oz', 'liquid')).toBeNull();
