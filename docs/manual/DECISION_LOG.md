@@ -11,10 +11,9 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ## 2026-08-19 — The purchase-order "mirror" CHECK clears the money gate, as a closed two-column exception
 
-**Source:** Mason's in-chat decision, 2026-08-19, answering the question the 2026-08-10 entry below
-records as open ("Open, not settled: whether the mirror form clears the AGENTS.md gate", added by
-PR #420). That paragraph is **superseded by this entry** — whoever merges PR #420 should mark it
-resolved rather than leaving the log asserting the question is still open.
+**Source:** Mason's in-chat decision, 2026-08-19, answering the question PR #420 recorded as open in
+the 2026-08-10 entry below ("Open, not settled: whether the mirror form clears the AGENTS.md gate").
+That paragraph has been marked **SETTLED** and now points here; this entry is the operative text.
 
 **The question.** The AGENTS.md money gate requires "an active finite whole-cent CHECK". Eleven of
 the thirteen live money-scale CHECKs use the rounding form this log specifies. Two do not:
@@ -361,15 +360,19 @@ earlier draft of this paragraph left out, both of which change how it should be 
   currently a derived-mirror shape, and no conversion has happened anywhere on this schema for it to
   be preferred over.
 
-**Open, not settled: whether the mirror form clears the AGENTS.md gate.** The gate's wording is "an
-active **finite** whole-cent CHECK", and the mirror form carries no finiteness clause of its own;
-what rejects `NaN`/`Infinity` here is the generated column's cast, not the CHECK (see the note
-under the deferred table). It also does not follow the `<table>_<column>_whole_cents_chk` naming
-this entry sets out. A previous revision resolved this by asserting "Both forms clear the gate" —
-but that is a **widening of a gate**, it was written into an entry attributed to Mason's 2026-08-10
-instruction, and Mason did not decide it. It is withdrawn and recorded here as an open question for
-him. What is not in question either way: a money column with **neither** shape does not clear the
-gate.
+**SETTLED 2026-08-19 — see the 2026-08-19 entry at the top of this log.** The question was whether
+the mirror form clears the AGENTS.md gate: the gate's wording is "an active **finite** whole-cent
+CHECK", the mirror form carries no finiteness clause of its own, and what rejects `NaN`/`Infinity`
+here is the generated column's cast rather than the CHECK. It also does not follow the
+`<table>_<column>_whole_cents_chk` naming this entry sets out. An earlier revision resolved this by
+asserting "Both forms clear the gate", which was withdrawn as a **widening of a gate** that Mason
+had not decided.
+
+Mason decided it on 2026-08-19, after the cast argument was proven read-only against live: the two
+purchase-order constraints **do** clear the gate, as a closed two-column exception, and the mirror
+form is **not** a second approved shape. Read the 2026-08-19 entry for the probe results, the
+reason an appended finiteness clause would be the wrong fix, and the operative rule. What was never
+in question either way: a money column with **neither** shape does not clear the gate.
 
 **Both halves are load-bearing — a `ROUND`-only constraint does NOT clear the gate.** PostgreSQL
 `numeric` deliberately does not use IEEE-754 NaN semantics: so values stay sortable and indexable,
