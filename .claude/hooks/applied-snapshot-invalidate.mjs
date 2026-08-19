@@ -30,6 +30,8 @@
 import { readFileSync, existsSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 
+import { withFileLock } from "./ledger-lock-lib.mjs";
+
 function emit(text) {
   if (!text) process.exit(0);
   process.stdout.write(JSON.stringify({
@@ -63,16 +65,20 @@ try {
   if (appliedName) {
     try {
       const ledgerPath = path.join(projectDir, ".claude", "session-state", "applied-source-ledger.json");
-      let entries = [];
-      try { entries = JSON.parse(readFileSync(ledgerPath, "utf8")); } catch { /* new or corrupt → start fresh */ }
-      if (!Array.isArray(entries)) entries = [];
-      entries.push({
-        name: appliedName,
-        ts: new Date().toISOString(),
-        session: String(payload?.session_id || ""),
-      });
       mkdirSync(path.dirname(ledgerPath), { recursive: true });
-      writeFileSync(ledgerPath, JSON.stringify(entries, null, 2) + "\n");
+      // Locked read-modify-write: two overlapping recorder hooks must not lose
+      // an entry (a lost entry silently disarms the guard for that migration).
+      withFileLock(ledgerPath + ".lock", () => {
+        let entries = [];
+        try { entries = JSON.parse(readFileSync(ledgerPath, "utf8")); } catch { /* new or corrupt → start fresh */ }
+        if (!Array.isArray(entries)) entries = [];
+        entries.push({
+          name: appliedName,
+          ts: new Date().toISOString(),
+          session: String(payload?.session_id || ""),
+        });
+        writeFileSync(ledgerPath, JSON.stringify(entries, null, 2) + "\n");
+      });
     } catch { /* fail-open */ }
   }
 

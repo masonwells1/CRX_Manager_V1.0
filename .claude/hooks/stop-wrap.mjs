@@ -19,6 +19,8 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import os from "node:os";
 
+import { withFileLock } from "./ledger-lock-lib.mjs";
+
 let payload = {};
 try {
   payload = JSON.parse(readFileSync(0, "utf8"));
@@ -55,37 +57,41 @@ const meaningful = lines.filter(l => {
 // ─── Live-applied migrations must have committed source (C3) ──────────────
 // applied-snapshot-invalidate.mjs records every apply_migration into
 // .claude/session-state/applied-source-ledger.json. Any recorded apply with NO
-// matching migration file tracked by git (committed or staged) is a live
-// schema change whose SQL exists nowhere in the repo — the exact failure that
-// reached production three times in 30 days. Match by full basename or by slug
-// (basename minus the numeric stamp), since MCP apply names may omit or differ
-// in the stamp. Satisfied entries are pruned so the nag ends once the file is
-// tracked; unsatisfied entries persist ACROSS sessions until resolved.
+// matching migration file COMMITTED to git (present in HEAD — `ls-tree HEAD`,
+// not `ls-files`, so an intent-to-add `git add -N` filename with no content
+// cannot satisfy the guard) is a live schema change whose SQL exists nowhere
+// in the repo — the exact failure that reached production three times in 30
+// days. Match by full basename or by slug (basename minus the numeric stamp),
+// since MCP apply names may omit or differ in the stamp. Satisfied entries are
+// pruned so the nag ends once the file is committed; unsatisfied entries
+// persist ACROSS sessions until resolved. The prune holds the same lock as the
+// recorder so a concurrent apply cannot be dropped by the rewrite.
 const appliedLedgerPath = path.join(projectDir, ".claude", "session-state", "applied-source-ledger.json");
 let appliedUncontained = [];
 try {
   if (existsSync(appliedLedgerPath)) {
-    const rawEntries = JSON.parse(readFileSync(appliedLedgerPath, "utf8"));
-    const entries = Array.isArray(rawEntries) ? rawEntries.filter(e => e && String(e.name || "").trim()) : [];
-    if (entries.length > 0) {
-      const trackedNames = new Set();
-      for (const f of runGit(["ls-files", "supabase/migrations"]).split("\n")) {
-        const rel = f.replace(/\\/g, "/").trim();
-        if (!rel.endsWith(".sql")) continue;
-        const base = rel.slice(rel.lastIndexOf("/") + 1, -".sql".length);
-        trackedNames.add(base);
-        trackedNames.add(base.replace(/^\d{8,14}_/, ""));
-      }
-      const isContained = (e) => {
-        const n = String(e.name).trim().replace(/\.sql$/i, "");
-        return trackedNames.has(n) || trackedNames.has(n.replace(/^\d{8,14}_/, ""));
-      };
+    const trackedNames = new Set();
+    for (const f of runGit(["ls-tree", "-r", "HEAD", "--name-only", "--", "supabase/migrations"]).split("\n")) {
+      const rel = f.replace(/\\/g, "/").trim();
+      if (!rel.endsWith(".sql")) continue;
+      const base = rel.slice(rel.lastIndexOf("/") + 1, -".sql".length);
+      trackedNames.add(base);
+      trackedNames.add(base.replace(/^\d{8,14}_/, ""));
+    }
+    const isContained = (e) => {
+      const n = String(e.name).trim().replace(/\.sql$/i, "");
+      return trackedNames.has(n) || trackedNames.has(n.replace(/^\d{8,14}_/, ""));
+    };
+    withFileLock(appliedLedgerPath + ".lock", () => {
+      const rawEntries = JSON.parse(readFileSync(appliedLedgerPath, "utf8"));
+      const entries = Array.isArray(rawEntries) ? rawEntries.filter(e => e && String(e.name || "").trim()) : [];
+      if (entries.length === 0) return;
       appliedUncontained = entries.filter(e => !isContained(e));
       // Prune satisfied entries (best-effort; never block the stop over a write).
       if (appliedUncontained.length < entries.length) {
         try { writeFileSync(appliedLedgerPath, JSON.stringify(appliedUncontained, null, 2) + "\n"); } catch { /* fail-open */ }
       }
-    }
+    });
   }
 } catch { /* fail-open — a corrupt ledger must not brick session end */ }
 

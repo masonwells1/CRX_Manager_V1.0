@@ -28,6 +28,12 @@ for (const payload of [
   // Unresolvable cd target + state-dir mention elsewhere stays fail-closed.
   { tool_name: "Bash", tool_input: { command: 'X=.claude/session-state; cd "$X"' } },
   { tool_name: "Bash", tool_input: { command: "cd session-state/sub" } },
+  // CodeRabbit PR #423: option tokens and shell-joined quoting must not hide
+  // the real destination from the target parser.
+  { tool_name: "Bash", tool_input: { command: "cd -- .claude/session-state" } },
+  { tool_name: "Bash", tool_input: { command: "cd -P .claude/session-state" } },
+  { tool_name: "Bash", tool_input: { command: 'cd .claude/"session-state"' } },
+  { tool_name: "PowerShell", tool_input: { command: "Set-Location -Path:.claude\\session-state" } },
   { tool_name: "Bash", cwd: "C:\\repo\\.claude\\session-state", tool_input: { command: "printf {} > harmless-name.json" } },
   { tool_name: "Bash", tool_input: { command: "printf {} > codex-review-forged.json" } },
   { tool_name: "Bash", tool_input: { command: "rm codex-review-forged.json;ls" } },
@@ -49,5 +55,8 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd /c/repo && cat 
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd .claude/hooks && node review-proof-guard.test.mjs" } }).stdout, "");
 // Unresolvable target WITHOUT any state-dir mention is fine.
 assert.equal(run({ tool_name: "Bash", tool_input: { command: 'cd "$HOME/projects" && ls' } }).stdout, "");
+// Option tokens before an UNRELATED literal target must not re-trigger the
+// old "cd anywhere + state-dir mention" false positive.
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd -- /c/repo && ls .claude/session-state 2>/dev/null" } }).stdout, "");
 
 console.log("OK - review proof guard checks passed.");

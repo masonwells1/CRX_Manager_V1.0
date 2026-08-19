@@ -11,7 +11,7 @@
 // Run: node .claude/hooks/applied-source-containment.test.mjs
 
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -84,6 +84,28 @@ try {
   entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
   assert.equal(entries.length, 1, "corrupt ledger restarted with the new entry");
 
+  // CONCURRENT recorders must not lose entries (CodeRabbit PR #423): the
+  // read-modify-write is serialized by a cross-process lock, so parallel
+  // apply_migration hooks in one message all land in the ledger.
+  rmSync(ledgerPath, { force: true });
+  const CONCURRENT = 12;
+  await Promise.all(Array.from({ length: CONCURRENT }, (_, k) => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [recorderPath], {
+      env: { ...cleanEnv, CLAUDE_PROJECT_DIR: tmp },
+      stdio: ["pipe", "ignore", "ignore"],
+    });
+    child.on("error", reject);
+    child.on("exit", () => resolve());
+    child.stdin.end(JSON.stringify({
+      tool_name: "mcp__supabase__apply_migration",
+      tool_input: { name: `concurrent_apply_${k}` },
+      session_id: "s-parallel",
+    }));
+  })));
+  entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  assert.equal(entries.length, CONCURRENT, `all ${CONCURRENT} concurrent applies recorded, none lost`);
+  assert.equal(new Set(entries.map(e => e.name)).size, CONCURRENT, "every concurrent entry is distinct");
+
   // ── Checker: applied with NO tracked source → stop-wrap BLOCKS ──
   writeFileSync(ledgerPath, JSON.stringify([{ name: "add_widget_flag", ts: "2026-08-18T00:00:00Z", session: "s1" }]) + "\n");
   let out = runHook(stopWrapPath, { session_id: "c3-test-none" }, tmp).stdout;
@@ -118,6 +140,17 @@ try {
   writeFileSync(path.join(tmp, "supabase", "migrations", "20260818999998_orphan_change.sql"), "select 2;\n");
   out = runHook(stopWrapPath, { session_id: "c3-test-untracked" }, tmp).stdout;
   assert.match(out, /APPLIED TO LIVE with no committed source/, "untracked-on-disk is not committed — still blocks");
+
+  // `git add -N` (intent-to-add: the FILENAME is registered but no content is
+  // committed or even staged) is not containment either (CodeRabbit PR #423) —
+  // the checker reads HEAD, so it still blocks and must NOT prune the entry.
+  writeFileSync(ledgerPath, JSON.stringify([{ name: "ita_change", ts: "t", session: "s" }]) + "\n");
+  writeFileSync(path.join(tmp, "supabase", "migrations", "20260818999997_ita_change.sql"), "select 3;\n");
+  git(["add", "-N", "supabase/migrations/20260818999997_ita_change.sql"], tmp);
+  out = runHook(stopWrapPath, { session_id: "c3-test-ita" }, tmp).stdout;
+  assert.match(out, /APPLIED TO LIVE with no committed source/, "intent-to-add is not committed — still blocks");
+  entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  assert.equal(entries.length, 1, "intent-to-add must not prune the ledger entry");
 
   // A corrupt ledger never bricks session end (fail-open).
   writeFileSync(ledgerPath, "{not json");

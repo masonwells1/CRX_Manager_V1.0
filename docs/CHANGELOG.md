@@ -33,6 +33,15 @@ defects; Mason approved fixing all three:
 Docs updated in `docs/reference/agent-guardrails.md` (four rows). `test:correction-guards` green
 (all suites, 1,200+ assertions incl. the new file).
 
+CodeRabbit review round (2026-08-19, PR #423 — all three findings confirmed and fixed): the
+applied-source ledger's read-modify-write is now serialized by a cross-process lock
+(`ledger-lock-lib.mjs`; mutation-proved — with the lock disabled, 4 of 12 concurrent recorder
+processes lost their entries); stop-wrap's containment check reads `git ls-tree HEAD` instead of
+`ls-files`, so an intent-to-add (`git add -N`) or staged-only filename can no longer satisfy or
+prune the guard; and review-proof-guard's cd parser resolves targets past option tokens
+(`cd --`, `-P`, `-Path:`) and shell-joined quoting (`.claude/"session-state"`), which previously
+bypassed the deny.
+
 ## 2026-08-18 — Skills/commands accuracy sweep across the agent workflow surface
 
 Harness only — no app source, migration, or live-state change. A four-agent audit of every

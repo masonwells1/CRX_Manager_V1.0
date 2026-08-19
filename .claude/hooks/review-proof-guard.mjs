@@ -79,10 +79,31 @@ function cdTargetEntersStateDir(target) {
   return /^\.claude$/i.test(parts[parts.length - 1] || "");
 }
 
-const CD_TARGET_RE = /(?:^|[;&|\r\n()]|\s)(?:cd(?:\s+\/d)?|chdir|pushd|set-location(?:\s+-(?:literal)?path)?)\s+("[^"]*"|'[^']*'|[^\s;&|()]+)/gi;
+// Capture the whole argument run of each cd-like invocation, then resolve its
+// target token by token (CodeRabbit PR #423): `cd -- <dir>`, `cd -P <dir>`,
+// `Set-Location -Path <dir>` / `-Path:<dir>`, and shell-joined quoting like
+// `.claude/"session-state"` must all resolve to the real destination instead
+// of an option token. Quotes are stripped EVERYWHERE in a token, not just at
+// its edges, because the shell joins quoted segments into one path.
+const CD_CMD_RE = /(?:^|[;&|\r\n()]|\s)(?:cd|chdir|pushd|set-location)((?:\s+(?:"[^"]*"|'[^']*'|[^\s;&|()]+))*)/gi;
+const CD_ARG_RE = /"[^"]*"|'[^']*'|[^\s;&|()]+/g;
 if (shellTool) {
-  for (const match of command.matchAll(CD_TARGET_RE)) {
-    const target = match[1].replace(/^["']|["']$/g, "");
+  for (const match of command.matchAll(CD_CMD_RE)) {
+    let target = "";
+    for (const raw of match[1].match(CD_ARG_RE) || []) {
+      const token = raw.replace(/["']/g, "");
+      if (token === "--" || /^\/d$/i.test(token)) continue;
+      if (token.startsWith("-")) {
+        // `-Path:<dir>` / `--path=<dir>` carry the value attached; a bare flag
+        // like `-P` or `-LiteralPath` takes it from the next token instead.
+        const attached = /^-[^:=]*[:=](.+)$/.exec(token);
+        if (!attached) continue;
+        target = attached[1];
+        break;
+      }
+      target = token;
+      break;
+    }
     const unresolvable = /[$%`]/.test(target);
     if (cdTargetEntersStateDir(target) || (unresolvable && reviewStateDirectoryMentioned(command))) {
       deny("REVIEW PROOF GUARD: the review state directory is wrapper-owned and cannot become an interactive shell working directory.");
