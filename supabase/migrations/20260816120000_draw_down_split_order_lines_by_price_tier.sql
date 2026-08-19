@@ -89,23 +89,37 @@
 --
 -- HOW UNITS ARE ALLOCATED ACROSS TIERS
 -- ------------------------------------
--- Tiers are consumed in the order they appear on the quote (quote_items
--- sort_order, then price and cost as a deterministic tiebreak) -- the order the
--- customer's own document lists them.  A tier counts as used up to the extent
--- that ORDER LINES WHICH STILL BILL THE CUSTOMER were written at that tier's
--- price and cost.  The split is a running cursor over what is left, never a
--- division, so the allocated quantities sum to the requested quantity EXACTLY.
--- A fail-closed assertion (DRAW_ALLOCATION_MISMATCH) refuses the whole draw if
--- they ever do not.
+-- A TIER IS ONE BOOKED QUOTE LINE, not a (price, cost) bucket.  Two lines at
+-- the same price stay two tiers, in the customer's own document order (section
+-- position, then line position, then the line id as a deterministic tiebreak).
 --
--- Acres are the one prorated figure.  The per-tier acres are rounded, and the
--- LAST line of each product absorbs the rounding residual, so the acres across
--- the split lines land on the figure the single-line version produced to within
--- the rounding of the earlier lines.  Where every earlier line rounded UP the
--- residual would go negative, and the last line is clamped to zero instead --
--- so with N tiers the parts can overshoot the whole by up to (N-1) x 0.005
--- acres.  Acres are an agronomic reference figure, not money; the money lines
--- sum EXACTLY (see the allocation assertion above).
+-- A tier counts as used up to the extent that ORDER LINES WHICH STILL BILL THE
+-- CUSTOMER NAME IT.  Every line this body writes stamps
+-- order_items.quote_item_id, so attribution is an identity lookup rather than a
+-- price-and-cost guess.  The split is a running cursor over what is left, never
+-- a division, so the allocated quantities sum to the requested quantity
+-- EXACTLY.  A fail-closed assertion (DRAW_ALLOCATION_MISMATCH) refuses the
+-- whole draw if they ever do not.
+--
+-- Lines written before this migration carry no stamp, and revising the quote
+-- clears the stamps on its drawn lines: save_quote rebuilds a quote by deleting
+-- and reinserting its sections, and this migration switches
+-- order_items_quote_item_id_fkey to ON DELETE SET NULL so that rebuild succeeds
+-- instead of aborting on a foreign key.  (See the FK block near the end of this
+-- file for why SET NULL rather than a deferred constraint.)  Those unstamped
+-- units walk off the FRONT of the tier list, and
+-- DRAW_MIXED_TIER_UNMATCHED_LINE refuses the draw outright the moment the
+-- product carries more than one distinct (price, cost) -- so the front-walk
+-- only ever runs where it cannot change what the customer is billed.
+--
+-- Acres are per-line, not prorated.  Each emitted line takes the share of ITS
+-- OWN booked line's acreage that the draw takes of ITS OWN units, so a line is
+-- never written at an acres-per-unit rate it was not booked at.  The earlier
+-- form divided one whole-draw figure by units and, on a product booked at two
+-- different rates, invented a third rate on both lines -- a figure that reaches
+-- the customer, since complete_delivery copies acres into invoice_items.
+-- Acres are an agronomic reference figure, not money; the money lines sum
+-- EXACTLY (see the allocation assertion above).
 --
 -- BEHAVIOUR CHANGE WORTH KNOWING
 -- ------------------------------
@@ -255,7 +269,49 @@
 SET LOCAL lock_timeout = '15s';
 
 SELECT pg_advisory_xact_lock(20260816, 1);
+
+-- QUOTE LINES ARE PINNED FROM HERE, NOT FROM THE ADD CONSTRAINT NEAR THE END
+-- (Codex review 2026-08-16, P2 3792960744).
+--
+-- Two things in this file read quote_items and then act on what they read: the
+-- premigration mixed-tier scan just below, which decides whether the whole
+-- apply is safe at all, and the CHECK constraint at the end, whose ACCESS
+-- EXCLUSIVE lock used to be the FIRST time this table was pinned -- roughly
+-- 1,100 lines later.
+--
+-- The advisory-key handshake does not close that window. It shields
+-- draw_down_quote, which takes the same key (20260816110000:240) and refuses
+-- with DRAW_DOWN_CUTOVER_IN_PROGRESS while this transaction holds it. It does
+-- NOT shield save_quote, which takes that key nowhere -- verified by reading
+-- 20260816110000 end to end: the barrier migration alters draw_down_quote and
+-- nothing else. So a quote could be revised mid-apply, and the scan's verdict
+-- would already be stale by the time the constraint went on: a booking that
+-- read single-tier when it was scanned could commit a second price tier
+-- moments later, and the apply would proceed on the strength of a fact that
+-- had stopped being true.
+--
+-- SHARE ROW EXCLUSIVE, not ACCESS EXCLUSIVE, and the difference is deliberate:
+-- it blocks WRITERS (save_quote included) while leaving every reader alone, so
+-- quote pages keep loading for the seconds this apply takes. It is also
+-- self-conflicting, so exactly one session can hold it, which is what makes the
+-- later upgrade to ACCESS EXCLUSIVE for the constraint deadlock-free rather
+-- than merely lucky.
+--
+-- Taken BEFORE quote_product_draws on purpose. save_quote reaches the quote's
+-- own lines first and its draw rows second; acquiring in that same order means
+-- the two contend head-on instead of crossing, which is the shape that
+-- deadlocks. If it does contend, lock_timeout aborts this apply at 15s having
+-- changed nothing, and it is safe to re-run.
+LOCK TABLE public.quote_items IN SHARE ROW EXCLUSIVE MODE;
 LOCK TABLE public.quote_product_draws IN SHARE ROW EXCLUSIVE MODE;
+-- order_items is locked here for the same reason, and LAST on purpose: both
+-- writers that touch it (the draw path and save_quote) reach the quote's own
+-- rows before they reach order rows, so acquiring in that order contends
+-- head-on rather than crossing. The FK swap further down needs ACCESS
+-- EXCLUSIVE on this table; holding the self-conflicting SHARE ROW EXCLUSIVE
+-- from here means that upgrade waits only on readers, never on another writer
+-- that could itself be waiting on us.
+LOCK TABLE public.order_items IN SHARE ROW EXCLUSIVE MODE;
 
 -- --- Preflight: refuse to run against an unexpected body ----------------------
 DO $preflight$
@@ -656,8 +712,6 @@ DECLARE
   v_skip numeric;
   v_take numeric;
   v_alloc_left numeric;
-  v_draw_acres numeric;
-  v_acres_assigned numeric;
   -- >>>TIERSPLIT
 BEGIN
   v_actor := auth.uid();
@@ -858,12 +912,11 @@ BEGIN
     -- the message's last arg was v_drawn — text is unchanged, only the value.)
 
     -- TIERSPLIT<<< emit one order line per booked price tier.
-    -- The whole-draw acres figure is computed once, exactly as the single-line
-    -- version computed it, and then handed out across the split lines with the
-    -- residual going to the last line, so the parts sum back to this figure.
-    v_draw_acres := CASE WHEN v_total_acres > 0
-      THEN ROUND(v_total_acres * v_qty / v_booked, 2) ELSE NULL END;
-    v_acres_assigned := 0;
+    -- Acres are NOT prorated from a whole-draw figure any more. Each emitted
+    -- line takes the share of its OWN booked line's acreage that the draw takes
+    -- of that line's OWN units -- see the long note at the write site (Codex
+    -- review 2026-08-16, P2 3793063419). v_total_acres is still read above for
+    -- the booking-level checks; it no longer feeds the per-line figure.
 
     -- WHICH TIERS ARE ALREADY USED UP.
     --
@@ -883,14 +936,23 @@ BEGIN
     --   quoted at 100 x $1.00 + 100 x $2.00 bill $400 instead of $300.
     --
     -- So attribution is derived instead from the order lines that ACTUALLY
-    -- still bill the customer. Each surviving draw line already carries the
-    -- tier key it was billed at (price_per_unit + cost_at_time_cents), so a
-    -- tier is consumed exactly to the extent that live lines were billed at
-    -- it.
+    -- still bill the customer, keyed on WHICH QUOTE LINE each was drawn from.
+    -- Every line this body writes stamps order_items.quote_item_id, so a tier
+    -- is consumed exactly to the extent that live lines name it.
     --
-    -- KNOWN LIMIT of that key (drift review 2026-08-16, H2 and M1). The cost
-    -- half of the key is not immutable. There are three distinct ways it moves,
-    -- and the earlier version of this comment named only the first:
+    -- WHY AN IDENTITY AND NOT THE TIER KEY (Codex review 2026-08-16, P1
+    -- 3792521137 / 3792687211). The previous version keyed attribution on the
+    -- pair (price_per_unit, cost_at_time_cents) carried by each order line.
+    -- That key is neither unique nor immutable, and both failures cost money.
+    --
+    -- NOT UNIQUE: two quote lines at the same price and cost collapsed into one
+    -- tier, so a booking reading 100 @ A, 100 @ B, 100 @ A billed the two A
+    -- lines as a single 200-unit block sitting at the FRONT of the list. The
+    -- customer's own document order was not what got drawn.
+    --
+    -- NOT IMMUTABLE (drift review 2026-08-16, H2 and M1). The cost half of the
+    -- key moves in three distinct ways, and the earlier version of this comment
+    -- named only the first:
     --
     --   1. _enforce_below_cost_line fires BEFORE INSERT OR UPDATE OF
     --      product_id, price_per_unit, total_units_needed on order_items
@@ -927,19 +989,30 @@ BEGIN
     --      trigger in vector 2 watches product_id, and the INSERT-time snapshot
     --      trigger is INSERT-only. Repair migrations do exactly this.
     --
-    -- After any of these the LEFT JOIN below no longer matches the line to its
-    -- tier, and v_skip counts it as a legacy line consumed from the FRONT of
-    -- the list.
+    -- Under the OLD key any of these orphaned a billed line from its tier. That
+    -- failure was fail-CLOSED -- the tiers stopped summing to the drawn
+    -- quantity, so the conservation assert refused the whole draw with
+    -- DRAW_ALLOCATION_MISMATCH rather than mis-pricing or double-selling --
+    -- but it refused LEGITIMATE draws until an admin intervened.
     --
-    -- Consequence, and why this ships anyway: the failure is fail-CLOSED. The
-    -- tiers stop summing to the drawn quantity, so the conservation assert
-    -- refuses the whole draw with DRAW_ALLOCATION_MISMATCH rather than
-    -- mis-pricing or double-selling a tier. Nothing is billed wrong; a
-    -- legitimate later draw is refused until an admin looks. The durable fix
-    -- is to key on the immutable oi.quote_item_id (the column exists but this
-    -- path leaves it NULL today) and is tracked as follow-up work, not
-    -- attempted here -- populating it changes what every downstream consumer
-    -- of order_items sees and deserves its own reviewed change.
+    -- Keying on quote_items.id retires all three. It is a primary key: no
+    -- trigger writes it, no repair migration re-snapshots it, and it does not
+    -- collapse two lines into one. The vectors above are recorded because they
+    -- are still true of the COLUMNS -- an admin edit still moves a line's cost
+    -- snapshot, and anything else that reasons off that pair inherits the
+    -- problem -- but they no longer reach tier attribution.
+    --
+    -- THE ONE THING THE STAMP DOES NOT SURVIVE, and what covers that:
+    -- save_quote DELETEs quote_sections on every revision, cascading to
+    -- quote_items, and re-mints them. It re-uses ids positionally per product
+    -- on a best-effort basis but does not guarantee it, so a revision can
+    -- orphan a stamp. Those lines -- together with lines written before this
+    -- migration, which carry no stamp at all -- fall into v_unmatched below,
+    -- walk off the FRONT of the list, and are REFUSED outright by
+    -- DRAW_MIXED_TIER_UNMATCHED_LINE the moment the product carries more than
+    -- one distinct (price, cost). So the front-walk only ever runs where every
+    -- tier row shares one price and one cost, and at a single price which
+    -- identically-priced line a unit came off cannot change the bill.
     --
     -- Cancelled/voided are the two reversal states in orders_status_check
     -- ('confirmed','partially_fulfilled','fulfilled','cancelled','voided'),
@@ -1013,60 +1086,98 @@ BEGIN
       AND o.booking_draw IS TRUE
       AND o.status <> 'voided'
       AND oi.product_id = v_product_id
+      -- "This billed line names no tier row that still exists." The mirror
+      -- half of the LEFT JOIN further down, which is now keyed on the same
+      -- identity (Codex review 2026-08-16, P1 3792521137 / 3792687211).
+      --
+      -- Three populations fall in here, and all three want the same treatment:
+      --
+      --   1. quote_item_id IS NULL -- written by the pre-cutover body, which
+      --      stamped nothing. `qi.id = NULL` is never true, so these are caught
+      --      with no special case.
+      --   2. quote_item_id names a quote line that no longer exists. save_quote
+      --      DELETEs quote_sections and re-mints quote_items on every revision
+      --      (it re-uses ids positionally per product on a best-effort basis,
+      --      but does not guarantee it), so a revision can orphan a stamp.
+      --   3. quote_item_id names a line that survives but is no longer a tier
+      --      (its total_units_needed was edited to 0 or below).
+      --
+      -- All three are counted into v_unmatched, walked off the FRONT of the
+      -- document-ordered tier list by v_skip, and -- crucially -- refused
+      -- outright by DRAW_MIXED_TIER_UNMATCHED_LINE below whenever the product
+      -- carries more than one distinct (price, cost). That refusal is what
+      -- makes the front-walk sound rather than a guess: it only ever runs on a
+      -- product whose every tier row carries ONE price and ONE cost, and at a
+      -- single price it cannot matter which identically-priced line a unit came
+      -- off. Where the stamp is missing the fallback is therefore "match on
+      -- today's price and cost", and where even that is ambiguous the draw
+      -- stops instead of guessing.
+      --
+      -- The old form of this test compared (price_per_unit, cost_at_time_cents)
+      -- with IS NOT DISTINCT FROM on both halves, mirroring the old join. That
+      -- discipline is retired with the key it protected: quote_items.id is a
+      -- NOT NULL primary key, so `=` is total here and the NULL-vs-NULL hazard
+      -- is gone. What must still be mirrored is the PARTITION -- a billed line
+      -- has to be counted by exactly one of this test and that join, or the
+      -- same units are billed twice or freed while still billed. If either side
+      -- is edited, edit both.
+      --
+      -- One asymmetry with the tiers CTE is deliberate and worth naming (drift
+      -- review 2026-08-16, L6): tiers additionally INNER JOINs quote_sections
+      -- for its ordering columns, and this NOT EXISTS does not. That cannot
+      -- drop a row, because quote_items.section_id is NOT NULL and REFERENCES
+      -- quote_sections(id) ON DELETE CASCADE (20260206172436:176), so the join
+      -- is total. The partition is exact -- but it leans on that foreign key,
+      -- so if it is ever dropped this test must join quote_sections too.
       AND NOT EXISTS (
         SELECT 1
         FROM quote_items qi
-        WHERE qi.quote_id = p_quote_id
+        WHERE qi.id = oi.quote_item_id
+          AND qi.quote_id = p_quote_id
           AND qi.product_id = v_product_id
           AND COALESCE(qi.total_units_needed, 0) > 0
-          -- IS NOT DISTINCT FROM on BOTH halves, matching the LEFT JOIN below
-          -- token for token. These two queries are mirror halves of one rule --
-          -- a billed line must be counted by exactly one of them -- so any
-          -- difference in how they compare the tier key double-counts the same
-          -- units. (Drift review 2026-08-16, H1: the price half was `=` here
-          -- while the join used IS NOT DISTINCT FROM.)
-          --
-          -- One asymmetry between the two is deliberate and worth naming
-          -- (drift review 2026-08-16, L6): the tiers CTE additionally
-          -- INNER JOINs quote_sections for its ordering columns, and this
-          -- NOT EXISTS does not. That cannot drop a row, because
-          -- quote_items.section_id is NOT NULL and REFERENCES
-          -- quote_sections(id) ON DELETE CASCADE (20260206172436:176), so the
-          -- join is total. The partition is exact -- but it leans on that
-          -- foreign key, so if it is ever dropped this join must go too.
-          AND qi.price_per_unit IS NOT DISTINCT FROM oi.price_per_unit
-          AND qi.cost_at_quote_cents IS NOT DISTINCT FROM oi.cost_at_time_cents
       );
 
     -- Fail closed on a mixed-tier booking whose billed lines no longer name a
-    -- tier. Consuming those units off the FRONT of the list, as the block above
-    -- does, is only sound when they really did come off the front -- true of
-    -- the legacy averaged body, which had a single price for the whole product.
-    -- It is NOT true when a tier key was rewritten after the line was billed:
-    -- order_items UPDATE is open to any admin (live policy oitems_update,
-    -- USING/WITH CHECK is_admin(), verified read-only 2026-08-16) and no
-    -- trigger pins price_per_unit or cost_at_time_cents, so an edit can orphan
-    -- a billed line while the tier it was actually drawn from stays in the
-    -- pool. Both then get sold.
+    -- tier that exists. Consuming those units off the FRONT of the list, as the
+    -- block above does, is only sound when they really did come off the front.
+    -- That holds for the legacy averaged body, which priced a whole product at
+    -- one figure, and it holds for any product whose tier rows all share one
+    -- price and one cost. It does NOT hold on a genuinely mixed booking.
     --
-    -- Worked example (Codex review 2026-08-16, CRX-MONEY-TIER-001): book 100
-    -- units at $1.00 and 100 at $2.00; draw the $1.00 tier in full and 50 of
-    -- the $2.00 tier; void the $1.00 order, which returns that tier to the
-    -- pool; edit the surviving line's cost snapshot so it matches no tier; draw
-    -- the remaining 150. The orphaned 50 units come off the front, and the
-    -- booking bills $350.00 against a $300.00 order. DRAW_ALLOCATION_MISMATCH
-    -- below cannot see it: that assertion fires only when the pool is too
-    -- SMALL to absorb the draw, never when it is too large.
+    -- The stamp makes this rarer than it was but does not remove it, and the
+    -- guard is deliberately kept exactly as fail-closed as before (this is the
+    -- "keep every existing refusal" half of the 2026-08-16 provenance rework).
+    -- Two live routes still land here:
+    --
+    --   1. Lines drawn before this migration, which carry no stamp at all.
+    --   2. save_quote re-minting quote_items on a revision and not landing on
+    --      the same id, which orphans a stamp that used to resolve.
+    --
+    -- Worked example (Codex review 2026-08-16, CRX-MONEY-TIER-001, restated for
+    -- the stamp): book 100 units at $1.00 and 100 at $2.00; draw the $1.00 tier
+    -- in full and 50 of the $2.00 tier; void the $1.00 order, which returns
+    -- that tier to the pool; revise the quote so the surviving line's stamp
+    -- names a quote line that no longer exists; draw the remaining 150. Without
+    -- this refusal the orphaned 50 units come off the front and the booking
+    -- bills $350.00 against a $300.00 order. DRAW_ALLOCATION_MISMATCH below
+    -- cannot see it: that assertion fires only when the pool is too SMALL to
+    -- absorb the draw, never when it is too large.
     --
     -- This same refusal is the net under the cutover race described at the top
     -- of this file. A legacy averaged draw that commits just after the preflight
-    -- scan leaves precisely this trace -- billed units at a price that matches
-    -- no tier -- so the next draw on that booking stops loudly instead of
-    -- quietly misbilling the remainder.
+    -- scan leaves precisely this trace -- billed units naming no live tier --
+    -- so the next draw on that booking stops loudly instead of quietly
+    -- misbilling the remainder.
     --
-    -- Single-tier bookings keep the front-walk unchanged: with one tier there
-    -- is nowhere else the units could have come from, so the attribution is
-    -- exact and there is nothing to refuse.
+    -- Still counted on (price, cost), NOT on the number of tier ROWS, and that
+    -- is the point rather than a leftover: two quote lines at the SAME price
+    -- and cost are now two separate tier rows, but which of them an unstamped
+    -- unit came off cannot change what the customer is billed. Counting rows
+    -- here would refuse a perfectly determinate draw -- e.g. the same product
+    -- booked into two fields at one price, drawn once before this migration.
+    -- Distinct (price, cost) is exactly the condition under which the
+    -- front-walk stops being money-exact.
     SELECT count(DISTINCT (qi.price_per_unit, qi.cost_at_quote_cents))
     INTO v_tier_count
     FROM quote_items qi
@@ -1076,7 +1187,7 @@ BEGIN
 
     IF COALESCE(v_tier_count, 0) > 1 AND COALESCE(v_unmatched, 0) > 0 THEN
       RAISE EXCEPTION
-        'DRAW_MIXED_TIER_UNMATCHED_LINE: % unit(s) already billed against this booking for % match none of its % booked price tiers, so which tiers those units consumed is not known. Drawing more could bill the same units twice. Restore that order line''s original price and cost snapshot, or void and re-book the order, then re-try.',
+        'DRAW_MIXED_TIER_UNMATCHED_LINE: % unit(s) already billed against this booking for % do not name any of its % booked price tiers, so which tiers those units consumed is not known. Drawing more could bill the same units twice. Void and re-book the order(s) holding those units, or undo the quote revision that changed those lines, then re-try.',
         v_unmatched, COALESCE(v_product_name, v_product_id::text), v_tier_count;
     END IF;
 
@@ -1089,39 +1200,61 @@ BEGIN
     FOR v_tier IN
       WITH tiers AS (
         SELECT
+          -- IMMUTABLE TIER PROVENANCE (Codex review 2026-08-16, P1 x2 --
+          -- 3792521137 and 3792687211). A "tier" is now ONE QUOTE LINE, not a
+          -- (price, cost) bucket aggregated across lines.
+          --
+          -- The old GROUP BY (price, cost) merged every quote line sharing a
+          -- key into a single tier, and that merge caused two distinct money
+          -- defects that no amount of downstream patching could reach:
+          --
+          --   1. INTERLEAVING. A booking reading 100 @ A, 100 @ B, 100 @ A
+          --      collapsed to A=200, B=100, and the merged A sorted to A's
+          --      FIRST document position. A 150-unit draw then billed all 150
+          --      at A, where consuming the document top-down owes 100 A and
+          --      50 B. The customer was billed the wrong tier's price.
+          --   2. ROUNDING BOUNDARY. Merging two lines moved the cumulative
+          --      rounding basis off the boundary save_quote booked them at.
+          --      Two 0.5-unit lines at $1.01 book 0.51 + 0.51 = $1.02; merged
+          --      into one 1.0-unit tier they extend to $1.01, underbilling a
+          --      cent per merged pair.
+          --
+          -- Keying on qi.id fixes both at the source: lines never merge, each
+          -- keeps its own document position, and each rounds against its own
+          -- booked extension. It also gives every line written below a real
+          -- quote_item_id to stamp, which is what lets the next draw match
+          -- billed lines back EXACTLY instead of guessing by (price, cost).
+          qi.id                  AS quote_item_id,
           qi.price_per_unit      AS price,
           qi.cost_at_quote_cents AS cost_cents,
-          SUM(COALESCE(qi.total_units_needed, 0)) AS units,
-          -- Disclosed behaviour change (RLS review 2026-08-16, M1): this is a
-          -- PER-TIER MIN(unit_size), where the baseline wrote one product-level
-          -- MIN(unit_size) onto the single line. The write site below takes
-          -- COALESCE(v_tier.unit_size, v_unit_size), so it falls back to the
-          -- old product-level value when a tier somehow has none. On a
-          -- single-tier draw the two are identical; on a multi-tier draw each
-          -- line now reports the pack size of the quote lines it was actually
-          -- built from, which is the more accurate figure. order_items.unit_size
-          -- is nullable and carries no CHECK, so nothing downstream constrains
-          -- it -- it is a display/reference field, not money.
-          MIN(qi.unit_size)      AS unit_size,
+          COALESCE(qi.total_units_needed, 0) AS units,
+          -- Per-LINE now, not per-(price,cost)-bucket. The write site below
+          -- still takes COALESCE(v_tier.unit_size, v_unit_size), so a line
+          -- with no pack size falls back to the product-level value exactly as
+          -- before (RLS review 2026-08-16, M1).
+          qi.unit_size           AS unit_size,
+          -- Per-LINE booked acreage, replacing the by-quantity proration the
+          -- write site used to do (Codex review 2026-08-16, P2 3793063419).
+          -- Splitting one draw's acres in proportion to units is wrong the
+          -- moment two lines carry different rates: 100u/100ac + 100u/10ac
+          -- drew two 55-acre lines, a figure neither line was booked at, and
+          -- complete_delivery copies acres into invoice_items. With the line's
+          -- own identity in hand its own booked acreage is simply available.
+          qi.acres               AS line_acres,
+          COALESCE(qi.total_units_needed, 0) AS line_units,
           -- Document order is (section position, then line position within the
           -- section). quote_items.sort_order restarts per section, so ordering
           -- on it alone ties two lines that sit in different sections and falls
           -- through to price -- which is not the order the customer sees.
           -- Both columns are NOT NULL live, so no COALESCE is needed.
           --
-          -- The pair must come from ONE row, not from two independent minima
-          -- (Codex review 2026-08-16, P1). The same (price, cost) tier can
-          -- appear in more than one section: a tier sitting at (section 1,
-          -- line 10) and (section 2, line 1) would report (1, 1) -- a document
-          -- position no quote line occupies -- and would sort ahead of a tier
-          -- that genuinely sits at (1, 5). The ORDER BY below consumes tiers in
-          -- exactly this order, so an invented position bills the wrong price
-          -- first on a partial draw. PostgreSQL has no min() over ROW(...), so
-          -- take element 1 of an array_agg ordered by the SAME lexicographic
-          -- key on both columns; that yields the tier's genuine first document
-          -- position as an atomic pair.
-          (array_agg(qs.sort_order ORDER BY qs.sort_order, qi.sort_order))[1] AS section_ord,
-          (array_agg(qi.sort_order ORDER BY qs.sort_order, qi.sort_order))[1] AS ord
+          -- No longer an aggregate at all. The earlier version had to take
+          -- element 1 of an array_agg to keep (section, line) an atomic pair
+          -- while collapsing many lines into one tier; one row per line makes
+          -- the genuine document position directly available, so the class of
+          -- bug that fix defended against cannot arise here.
+          qs.sort_order          AS section_ord,
+          qi.sort_order          AS ord
         FROM quote_items qi
         JOIN quote_sections qs ON qs.id = qi.section_id
         WHERE qi.quote_id = p_quote_id
@@ -1145,16 +1278,20 @@ BEGIN
           -- (negative-inclusive) booking supports, and every unit billed still
           -- comes from a real positive tier at that tier's own price.
           AND COALESCE(qi.total_units_needed, 0) > 0
-        GROUP BY qi.price_per_unit, qi.cost_at_quote_cents
       ),
-      -- Units still billed to the customer, grouped by the tier key the line
-      -- was written at. Voided orders drop out entirely; cancelled orders keep
-      -- only their delivered units. Same rule as v_skip above -- see the long
-      -- comment there for why the two reversal states differ.
-      billed AS (
+      -- Units still billed to the customer. Voided orders drop out entirely;
+      -- cancelled orders keep only their delivered units. Same rule as v_skip
+      -- above -- see the long comment there for why the two reversal states
+      -- differ.
+      --
+      -- SPLIT IN TWO by provenance (Codex review 2026-08-16, P1 3792521137 /
+      -- 3792687211). Every line this body writes now carries the id of the
+      -- quote line it was drawn from, so it can be matched back EXACTLY. Lines
+      -- written by the OLD body carry NULL there and are handled separately
+      -- below, by the same front-walk v_skip has always used.
+      billed_stamped AS (
         SELECT
-          oi.price_per_unit      AS price,
-          oi.cost_at_time_cents  AS cost_cents,
+          oi.quote_item_id       AS quote_item_id,
           SUM(
             CASE WHEN o.status = 'cancelled'
                  THEN COALESCE(oi.quantity_delivered, 0)
@@ -1190,12 +1327,16 @@ BEGIN
           AND o.booking_draw IS TRUE
           AND o.status <> 'voided'
           AND oi.product_id = v_product_id
-        GROUP BY oi.price_per_unit, oi.cost_at_time_cents
+          AND oi.quote_item_id IS NOT NULL
+        GROUP BY oi.quote_item_id
       )
       SELECT
+        t.quote_item_id,
         t.price,
         t.cost_cents,
         t.unit_size,
+        t.line_acres,
+        t.line_units,
         -- GREATEST(..., 0) clamps PER TIER (drift review 2026-08-16, L7) so a
         -- negative tier cannot silently eat a neighbour's units.
         --
@@ -1231,27 +1372,31 @@ BEGIN
         -- guard aborts the transaction.
         COALESCE(b.money, 0) AS money
       FROM tiers t
-      LEFT JOIN billed b
-        -- Both halves use IS NOT DISTINCT FROM deliberately, and the mirror
-        -- NOT EXISTS above uses it on both halves too. The PRICE columns are
-        -- NOT NULL live, so on that half this is equivalent to = today. The
-        -- COST columns (order_items.cost_at_time_cents,
-        -- quote_items.cost_at_quote_cents) are NULLABLE per the schema registry
-        -- generated 2026-08-13, so there the difference is live, not
-        -- hypothetical. The hazard is ASYMMETRY between these two queries, not
-        -- `=` as such (drift review 2026-08-16, L2 -- the earlier wording had
-        -- this backwards). If this join used `=` while the NOT EXISTS above
-        -- kept IS NOT DISTINCT FROM, a NULL-cost line would drop out of the
-        -- join -- freeing a tier that is still being billed, i.e. re-selling it
-        -- -- while ALSO being excluded from v_skip, so nothing else would
-        -- account for it. If both queries used `=`, quantity would still
-        -- conserve; the line would merely be mis-attributed to the front of the
-        -- list. Match token for token on both halves and the set is partitioned
-        -- exactly. (A booked quote line with a missing cost is separately
-        -- refused up front with COST_BASIS_REQUIRED.)
-        ON b.price IS NOT DISTINCT FROM t.price
-       AND b.cost_cents IS NOT DISTINCT FROM t.cost_cents
-      ORDER BY t.section_ord, t.ord, t.price, t.cost_cents
+      LEFT JOIN billed_stamped b
+        -- EXACT provenance, replacing the (price, cost) key this join used to
+        -- carry (Codex review 2026-08-16, P1 3792521137 / 3792687211).
+        --
+        -- quote_items.id is a NOT NULL primary key and order_items.quote_item_id
+        -- REFERENCES it, so plain `=` is total here and there is no NULL-vs-NULL
+        -- question to get wrong -- billed_stamped already filters
+        -- quote_item_id IS NOT NULL, and the tiers side is a primary key. The
+        -- long-standing IS NOT DISTINCT FROM discipline that used to live in
+        -- this comment existed only because the old key included a NULLABLE
+        -- cost column; keying on an identity retires that hazard rather than
+        -- managing it.
+        --
+        -- What DOES still have to be mirrored token for token is the partition
+        -- rule: a billed line must be counted by EXACTLY ONE of this join and
+        -- the v_unmatched front-walk above, or the same units are counted twice
+        -- (double-charging) or zero times (re-selling a tier that is still
+        -- billed). The mirror above is now the same test in the negative --
+        -- "no tier row carries this line's quote_item_id" -- so the two split
+        -- the set exactly. If either side is edited, edit both.
+        ON b.quote_item_id = t.quote_item_id
+      -- Document order, with the line's own id as a deterministic tiebreak.
+      -- (section_ord, ord) is not unique-by-constraint, and an unstable order
+      -- here would make WHICH tier a partial draw lands in vary between calls.
+      ORDER BY t.section_ord, t.ord, t.quote_item_id
     LOOP
       -- Over-consumption is accumulated across EVERY tier, so this loop no
       -- longer EXITs at the allocation boundary -- it CONTINUEs, leaving the
@@ -1368,23 +1513,42 @@ BEGIN
       -- is a wider, separate change and is deliberately not made here.
       v_line_cost  := ROUND(v_tier_cost_unit * v_take, 2);
 
-      IF v_alloc_left = 0 THEN
-        -- Last line for this product absorbs the acres rounding residual.
-        -- GREATEST(...,0): each earlier line was rounded UP to two places at
-        -- worst, so with enough tiers the parts can overshoot the whole-draw
-        -- figure by a few hundredths. When that happens the residual is
-        -- negative and the clamp writes 0 on this line, which means the SPLIT
-        -- LINES TOTAL slightly MORE than the single-line figure -- see the
-        -- bound stated in the header. Acres are an agronomic reference figure,
-        -- not money; that overshoot is acceptable, a NEGATIVE acreage on a
-        -- customer's order line is not.
-        v_tier_acres := CASE WHEN v_draw_acres IS NULL THEN NULL
-                             ELSE GREATEST(v_draw_acres - v_acres_assigned, 0) END;
-      ELSE
-        v_tier_acres := CASE WHEN v_draw_acres IS NULL THEN NULL
-                             ELSE ROUND(v_draw_acres * v_take / v_qty, 2) END;
-      END IF;
-      v_acres_assigned := v_acres_assigned + COALESCE(v_tier_acres, 0);
+      -- ACRES COME FROM THE LINE'S OWN BOOKED RATE (Codex review 2026-08-16,
+      -- P2 3793063419), not from prorating one whole-draw figure by units.
+      --
+      -- The previous form computed a single v_draw_acres for the product --
+      -- ROUND(total_acres * qty / booked, 2) -- and handed it out in proportion
+      -- to each tier's units. That is only right when every booked line for the
+      -- product carries the same acres-per-unit. The moment two lines differ it
+      -- invents a rate neither line was booked at: 100 units over 100 acres
+      -- plus 100 units over 10 acres, drawn in full, wrote 55 acres on each of
+      -- the two lines. Nothing on the booking says 55, and the figure does not
+      -- stay internal -- complete_delivery copies order_items.acres straight
+      -- into invoice_items, so it reaches the customer's paperwork.
+      --
+      -- With the quote line's own identity in hand its own booked acreage and
+      -- its own booked quantity are directly available, so the line simply gets
+      -- the share of ITS OWN acres that this draw takes of ITS OWN units. The
+      -- two lines above now correctly read 100 and 10.
+      --
+      -- line_units is guaranteed > 0 by the tiers CTE filter, so the division
+      -- is safe; the guard is written anyway because the filter and this
+      -- division live 300 lines apart. A line booked with no acreage stays
+      -- NULL rather than becoming a zero -- 0 acres and "not recorded" are
+      -- different statements on a customer's order line.
+      --
+      -- No residual-absorbing last line any more, because there is no longer a
+      -- whole-draw total the parts have to add back up to: each line's acreage
+      -- is now an independent statement about its own booked line, and the only
+      -- rounding is the single ROUND on that line's own figure. On a one-tier
+      -- draw this is arithmetically identical to what the single-line version
+      -- wrote (v_booked and v_total_acres collapse to that line's own values,
+      -- and v_take = v_qty), so nothing changes for the ordinary case.
+      v_tier_acres := CASE
+        WHEN v_tier.line_acres IS NULL OR COALESCE(v_tier.line_units, 0) <= 0
+          THEN NULL
+        ELSE ROUND(v_tier.line_acres * v_take / v_tier.line_units, 2)
+      END;
 
       -- Disclosed behaviour change (drift review 2026-08-16, NIT2): this is a
       -- single counter across the WHOLE draw, so the sort_order written below
@@ -1401,7 +1565,8 @@ BEGIN
         price_per_unit, cost_per_unit, acres,
         total_units_needed, unit_size, total_price, profit, net_margin,
         quantity_delivered, quantity_remaining, sort_order, notes,
-        cost_at_time_cents -- SNAPSHOT
+        cost_at_time_cents, -- SNAPSHOT
+        quote_item_id       -- PROVENANCE
         )
       VALUES (v_order_id, v_product_id, COALESCE(v_product_name, ''),
         v_tier.price, v_tier_cost_unit, v_tier_acres,
@@ -1420,7 +1585,26 @@ BEGIN
         -- catalog cost, splitting the reports from the order totals. Unknown
         -- historical cost is rejected above; it must never be converted into a
         -- real zero-cost order line.
-        v_tier.cost_cents);
+        v_tier.cost_cents,
+        -- PROVENANCE: which booked quote line this order line was drawn from
+        -- (Codex review 2026-08-16, P1 3792521137 / 3792687211). This is the
+        -- root fix the rest of this body is built on -- the tier attribution
+        -- above reads exactly this column back on the NEXT draw, so a line that
+        -- fails to stamp here would be re-attributed by the front-walk and
+        -- could re-sell its tier.
+        --
+        -- The column already existed on order_items and is already written by
+        -- the FULL-conversion path (convert_quote_to_order); only this partial
+        -- path left it NULL. Nothing downstream has to change to accept it:
+        -- src/types/index.ts already declares quote_item_id as string | null,
+        -- and every existing consumer already handles the NULL that legacy rows
+        -- carry. Filling it strictly ADDS information.
+        --
+        -- The postflight assertion at the end of this migration re-reads the
+        -- installed source and refuses the whole apply if this stamp is not
+        -- present, so the body cannot ship with the attribution reading a
+        -- column the writes never populate.
+        v_tier.quote_item_id);
 
       v_total_price := v_total_price + v_line_total;
       v_total_cost := v_total_cost + v_line_cost;
@@ -1450,10 +1634,20 @@ BEGIN
     -- -line guard, but it is attributed wholly to that one tier while it
     -- actually consumed several, so it over-bills that tier and stops here.
     --
-    -- The proper fix for both is immutable tier provenance -- a quote_item_id
-    -- on the order line, or a per-tier draw ledger. That is a schema change
-    -- beyond this migration; this refusal is the fail-closed stand-in, and it
-    -- is deliberately stricter than necessary rather than looser.
+    -- This migration now carries the provenance an earlier draft of this
+    -- comment described as out of scope: every line written below stamps
+    -- order_items.quote_item_id, so both scenarios are normally caught EARLIER
+    -- and more precisely than here. In the revision case the stamps are cleared
+    -- by the FK ON DELETE SET NULL installed further down, and the unmatched
+    -- -line guard refuses the next draw on any multi-tier product before the
+    -- arithmetic above ever runs; in the cutover-race case a late legacy line
+    -- carries no stamp and is caught the same way.
+    --
+    -- This refusal stays as the net beneath both, for the residue the stamp
+    -- cannot reach: a product whose tiers all share ONE (price, cost) -- which
+    -- the unmatched-line guard deliberately lets through as unbillable-either
+    -- -way -- can still be resized below what it has already billed. It is
+    -- deliberately stricter than strictly necessary rather than looser.
     IF v_over > 0 THEN
       RAISE EXCEPTION
         'DRAW_TIER_OVERCONSUMED: % unit(s) already billed against this booking for % exceed what its price tiers now hold, so which tiers the earlier draws consumed can no longer be determined. This usually follows a booking revision that repriced or resized a tier after part of it was drawn. Restore the tier quantities that were in place when those units were drawn, or void and re-book the affected orders, then re-try.',
@@ -1674,6 +1868,108 @@ BEGIN
 END;
 $qty_check$;
 
+-- --- Make the stamp survivable: order_items.quote_item_id ON DELETE SET NULL --
+-- Without this the stamp introduced above BREAKS QUOTE EDITING outright.
+--
+-- The chain, each link read from live on 2026-08-19:
+--   * save_quote (_save_quote_below_cost_impl_20260810) begins every edit with
+--     DELETE FROM quote_sections WHERE quote_id = v_quote_id, then reinserts.
+--   * quote_items_section_id_fkey is ON DELETE CASCADE, so that one statement
+--     removes every quote_items row for the quote.
+--   * order_items_quote_item_id_fkey is today plain NO ACTION and not
+--     deferrable (confdeltype a, condeferrable false), so it is checked at the
+--     END OF THAT DELETE STATEMENT -- before any reinsert has happened.
+-- So the moment a partial draw stamps an order line, the next save of that
+-- quote aborts with a raw foreign-key violation. Before this migration that is
+-- nearly unreachable (one stamped line in the whole table, written by the
+-- convert path); after it, EVERY partially drawn booking would become
+-- un-editable. save_quote has no guard that would catch this first: its body
+-- contains no reference to orders, to booking_draw, or to a QUOTE_LOCKED
+-- refusal.
+--
+-- ON DELETE SET NULL is the fix, and it is chosen over the two alternatives
+-- deliberately:
+--   * DEFERRABLE INITIALLY DEFERRED would let provenance survive a revision,
+--     because save_quote reuses a quote line uuid when the client echoes it.
+--     But that reuse is CONDITIONAL on the client echoing ids, so editing would
+--     work or hard-fail depending on which page saved the quote -- a raw
+--     PostgreSQL error at COMMIT, at unpredictable moments, in front of a
+--     non-technical owner.
+--   * Not stamping at all abandons the provenance this migration exists for.
+-- Under SET NULL a revision clears the stamps on that quote drawn lines and
+-- nothing errors. Those lines then fall into the already-documented front-walk,
+-- and DRAW_MIXED_TIER_UNMATCHED_LINE refuses the next draw the moment the
+-- product carries more than one distinct (price, cost) -- i.e. exactly when the
+-- lost stamp could change what the customer is billed, and never otherwise. A
+-- single-tier booking loses nothing at all. Fail-closed in both directions:
+-- editing never breaks, and money is never guessed.
+--
+-- This also fixes a pre-existing latent bug on the full-conversion path, whose
+-- one stamped line today would have blocked a revision of its own quote.
+--
+-- Same drift discipline as the CHECK above: adopt nothing unread. If the FK is
+-- already SET NULL this is a no-op; if it is anything other than the exact rule
+-- captured from live, the apply stops.
+DO $fk_setnull$
+DECLARE
+  -- Compared STRUCTURALLY, on catalog columns, not on pg_get_constraintdef
+  -- text. That rendering schema-qualifies the referenced table only when it is
+  -- outside the CURRENT search_path, so a text match would silently turn into
+  -- a false FK_RULE_DRIFT abort under an apply session with a different
+  -- search_path. This file pins search_path only inside the function body, not
+  -- for the session, so the difference is real. Catalog columns do not move.
+  --   confdeltype  'a' = NO ACTION, 'n' = SET NULL
+  --   confupdtype  'a' = NO ACTION on update
+  --   confmatchtype 's' = MATCH SIMPLE
+  -- Every value below was read from live on 2026-08-19.
+  v_deltype "char";
+  v_shape_ok boolean;
+  v_def text;
+BEGIN
+  SELECT c.confdeltype,
+         (c.confupdtype = 'a'
+          AND c.confmatchtype = 's'
+          AND c.condeferrable IS FALSE
+          AND c.convalidated IS TRUE
+          AND c.confrelid = 'public.quote_items'::regclass
+          AND array_length(c.conkey, 1) = 1
+          AND array_length(c.confkey, 1) = 1
+          AND (SELECT a.attname FROM pg_attribute a
+               WHERE a.attrelid = c.conrelid AND a.attnum = c.conkey[1]) = 'quote_item_id'
+          AND (SELECT a.attname FROM pg_attribute a
+               WHERE a.attrelid = c.confrelid AND a.attnum = c.confkey[1]) = 'id'),
+         pg_get_constraintdef(c.oid)
+  INTO v_deltype, v_shape_ok, v_def
+  FROM pg_constraint c
+  WHERE c.conrelid = 'public.order_items'::regclass
+    AND c.conname = 'order_items_quote_item_id_fkey'
+    AND c.contype = 'f';
+
+  IF v_deltype IS NULL THEN
+    RAISE EXCEPTION
+      'FK_MISSING: order_items_quote_item_id_fkey does not exist as a foreign key, so the provenance stamp this migration writes would reference quote lines with nothing enforcing that they exist. Refusing to install a stamp with no referential integrity behind it.';
+  ELSIF NOT v_shape_ok THEN
+    RAISE EXCEPTION
+      'FK_RULE_DRIFT: order_items_quote_item_id_fkey is (%), which is not the single-column, non-deferrable, validated quote_item_id -> quote_items(id) reference this migration was written against; refusing to replace an unverified constraint', v_def;
+  ELSIF v_deltype = 'n' THEN
+    NULL;
+  ELSIF v_deltype = 'a' THEN
+    ALTER TABLE public.order_items
+      DROP CONSTRAINT order_items_quote_item_id_fkey;
+    -- Re-added VALIDATED, not NOT VALID: idx_order_items_quote_item already
+    -- exists, the table is small, and a NOT VALID constraint would leave the
+    -- very orphans this exists to prevent unchecked.
+    ALTER TABLE public.order_items
+      ADD CONSTRAINT order_items_quote_item_id_fkey
+      FOREIGN KEY (quote_item_id) REFERENCES public.quote_items(id)
+      ON DELETE SET NULL;
+  ELSE
+    RAISE EXCEPTION
+      'FK_RULE_DRIFT: order_items_quote_item_id_fkey is (%), which is neither the rule this migration was written against nor the rule it installs; refusing to replace an unverified constraint', v_def;
+  END IF;
+END;
+$fk_setnull$;
+
 -- --- Postflight: prove the shape and the security posture --------------------
 DO $postflight$
 DECLARE
@@ -1736,6 +2032,43 @@ BEGIN
 
   IF position('DRAW_TIER_OVERCONSUMED' IN v_src) = 0 THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: the over-consumed-tier refusal is missing';
+  END IF;
+
+  -- PROVENANCE TRIPWIRES (Codex review 2026-08-16, P1 3792521137 / 3792687211).
+  --
+  -- These two are a PAIR and neither is sufficient alone. Tier attribution
+  -- reads order_items.quote_item_id back on the next draw; the writes stamp it.
+  -- Ship the read without the write and every line looks unattributed, so the
+  -- front-walk consumes tiers that are still billed -- selling the same units
+  -- twice. Ship the write without the read and the body is silently back to
+  -- matching on the mutable, non-unique (price, cost) pair this rework exists
+  -- to retire. So both halves are asserted against the source actually
+  -- installed, not against what this file intended to install.
+  --
+  -- Both are NAME tripwires, with the same honest limit as the wavg_price check
+  -- above: they prove the identifiers are present, not that the logic around
+  -- them is right. What proves the logic is DRAW_ALLOCATION_MISMATCH, which
+  -- fails the draw closed whenever the per-tier quantities stop summing to the
+  -- requested quantity.
+  IF position('billed_stamped' IN v_src) = 0 THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: tier attribution no longer reads order_items.quote_item_id -- it would be back to matching billed lines on the mutable (price, cost) pair';
+  END IF;
+
+  IF position('v_tier.quote_item_id' IN v_src) = 0 THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: the draw no longer stamps order_items.quote_item_id -- tier attribution would be reading a column the writes never populate, and every new line would fall through to the front-walk';
+  END IF;
+
+  -- The stamp and the FK rule are one mechanism, not two. If the constraint is
+  -- left at NO ACTION while the draw stamps, save_quote raises a raw
+  -- foreign-key violation on the next edit of any partially drawn quote, so
+  -- this asserts the rule that makes the stamp survivable actually landed.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.order_items'::regclass
+      AND conname = 'order_items_quote_item_id_fkey'
+      AND confdeltype = 'n'
+  ) THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: order_items_quote_item_id_fkey is not ON DELETE SET NULL -- with the draw now stamping quote_item_id, revising any partially drawn quote would abort with a foreign-key violation';
   END IF;
 
   -- The implementation must stay unreachable from the app roles; only the

@@ -28,6 +28,74 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-08-19 — PR #404 stamps quote-line provenance; the FK had to change or quote editing would break
+
+**Status: reworked on branch `claude/draw-down-price-tier-lines`, NOT applied, NOT merged. Awaiting
+Mason's explicit approval for both.**
+
+PR #404's tier split originally identified a price tier by the `(price_per_unit,
+cost_at_quote_cents)` pair. That key is neither unique (two booked lines at the same price collapse
+into one tier) nor immutable (three separate paths rewrite the cost snapshot), so attributing
+already-billed units to tiers was a guess. The rework makes a tier **one booked quote line** and
+stamps `order_items.quote_item_id` on every line the partial-draw path writes, so the next draw
+resolves attribution by identity.
+
+**The blocker that discovery surfaced, verified link by link against live on 2026-08-19.**
+`_save_quote_below_cost_impl_20260810` begins every quote edit with `DELETE FROM quote_sections
+WHERE quote_id = v_quote_id`, and `quote_items_section_id_fkey` is `ON DELETE CASCADE`, so that one
+statement removes every `quote_items` row for the quote. `order_items_quote_item_id_fkey` was plain
+`NO ACTION` and not deferrable (`confdeltype 'a'`, `condeferrable false`), so it is checked at the
+end of that DELETE — before any reinsert. **Any stamped order line therefore made its quote
+un-editable, with a raw foreign-key violation surfacing to the user.** `save_quote` carries no
+guard that would catch this first: its body contains no reference to `orders`, `booking_draw`, or a
+`QUOTE_LOCKED` refusal. Live blast radius before this migration was 1 stamped line of 288 (written
+by the full-conversion path); after it, every partially drawn booking would be affected.
+
+**Resolution taken in the same migration:** `order_items_quote_item_id_fkey` becomes `ON DELETE SET
+NULL`. A revision clears the stamps on that quote's drawn lines and nothing errors; those units
+then fall into the documented front-walk, and `DRAW_MIXED_TIER_UNMATCHED_LINE` still refuses any
+draw where the lost stamp could change what the customer is billed. `DEFERRABLE INITIALLY DEFERRED`
+was considered and rejected: it would preserve provenance across a revision, but only when the
+client echoes the existing line ids, so editing would work or hard-fail depending on which page
+saved the quote. The constraint is matched **structurally on catalog columns**, not on
+`pg_get_constraintdef` text, because that rendering depends on the applying session's `search_path`
+and a text match could raise a false drift abort. A postflight asserts the rule landed.
+
+**Proof standing behind the rework (all read-only; the migration has never been applied or
+parsed by a server).** `npm run typecheck` clean and 4581 tests pass. The constraint-shape
+predicate was run against live and returns `confdeltype 'a'`, shape OK — so the apply takes the
+DROP/ADD branch. The allocator arithmetic was proved with synthetic `VALUES` math on live: the
+telescoped money basis bills a 1-unit tier at $1.01 drawn as four 0.25-unit draws exactly $1.01
+where the old per-draw rounding billed $1.00; document-order allocation on an interleaved A/B/A
+booking bills $1,600.00 where collapsing the two A blocks into one bucket billed $1,500.00; and
+per-line acres return each line's own booked rate where the old whole-draw proration invented a
+third rate. **Not verified: the file has never been parsed by PostgreSQL.** That happens only at
+apply, which needs Mason's OK.
+
+---
+
+## OPEN 2026-08-19 — blend-ticket linkage picks ONE order line per product, which multi-tier orders break
+
+Confirmed against live `pg_proc` on 2026-08-19. Not caused by PR #404 and not fixed by it; PR #404
+makes the first one reachable more often by emitting several order lines per product.
+
+1. **`link_blend_ticket_to_order`** attaches a blend ticket product to a single order line via
+   `ORDER BY oi.sort_order NULLS LAST, oi.id LIMIT 1` and records the ticket's whole quantity as
+   `quantity_applied` against it. On a tier-split order the product now has several lines, so the
+   link lands entirely on the first tier. **Money impact is currently nil**: `quantity_applied` is
+   written by this function and by `create_order_from_blend_ticket` and is read by nothing —
+   no other function, and no frontend code outside type declarations and a test fixture. It is an
+   audit/linkage record, so this is a correctness and traceability defect, not a billing one.
+2. **`create_invoice_from_blend_ticket`** prices a ticket product from the quote with `SELECT
+   qi.price_per_unit ... WHERE qi.section_id = ... AND qi.product_id = ... ORDER BY qi.id LIMIT 1`.
+   `qi.id` is a random uuid, so on a booking with two lines for one product at different prices the
+   invoice picks an **arbitrary** tier's price for the whole ticket quantity. This is a live money
+   defect today, independent of PR #404 — multi-line bookings already exist as quote data whether or
+   not the draw splits order lines. Deliberately not fixed in PR #404: it needs its own design
+   decision about how a ticket quantity is split across tiers.
+
+---
+
 ## OPEN 2026-08-14 — `draw_down_quote` never rounds the weighted average PRICE, and the whole-cent guard rejects it
 
 **Severity: HIGH, live in production, currently latent (0 reachable rows).** Found by the
