@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizeEol } from "./lib/normalize-eol.mjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const TARGET_ROOT = path.join(ROOT, ".agents");
@@ -99,7 +100,9 @@ function writeExpected(expected) {
 // false failure that bricked commits in fresh worktrees (2026-07-16 scaffolding
 // review). Line endings are not content drift; the committed form is LF-pinned
 // regardless, so normalizing here tests what the check is FOR (real drift).
-const normalizeEol = (text) => String(text).replace(/\r\n/g, "\n");
+// `normalizeEol` is shared with scripts/agent-health-check.mjs: the two used to
+// define "in sync" differently, so the same commit could FAIL one and PASS the
+// other. Keep the single definition in scripts/lib/normalize-eol.mjs.
 
 function checkExpected(expected) {
   const mismatches = [];

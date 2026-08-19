@@ -2,6 +2,30 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-19 — `agent-health` and the sync generator now agree on line endings
+
+Harness only — no app source, migration, or live-state change. `compareSyncedFiles()` in
+`scripts/agent-health-check.mjs` compared the `.claude/skills/**` sources with their `.agents/**`
+mirrors **byte-for-byte**, while `scripts/sync-agent-workflows.mjs` had always compared them
+**EOL-normalized**. Two definitions of "in sync" meant one commit could produce opposite verdicts:
+during the PR #414 review, two reviewers on the *same* commit got `npm run agent-health` FAIL and
+PASS respectively, because a non-git writer had left CRLF in one long-lived worktree's skill files
+while its `.agents/**` tree was LF.
+
+The state is invisible to git and self-perpetuating: `.gitattributes` pins these paths `text eol=lf`,
+so git hashes them EOL-normalized — the smudged file never shows as modified and a checkout never
+repairs it. `agent-health` reported a sync failure the generator considered already in sync.
+
+- Both callers now import a single `normalizeEol` from **`scripts/lib/normalize-eol.mjs`**, so the
+  two definitions cannot drift apart again.
+- `scripts/agent-health-check.test.mjs` pins both halves of the contract: CRLF-vs-LF is PASS, a real
+  content difference is still FAIL. Mutation-tested — reverting the fix turns the test red.
+- Corrected the `.gitattributes` header comment, which still described the check as comparing
+  byte-for-byte. The pinning itself is unchanged and still governs the committed form.
+- Verified by reproducing the FAIL with a real CRLF/LF mismatch on disk, confirming PASS after the
+  fix with that same mismatch still in place, then `npm run agent-health` and
+  `npm run test:agent-workflows` clean.
+
 ## 2026-08-18 — Skills/commands accuracy sweep across the agent workflow surface
 
 Harness only — no app source, migration, or live-state change. A four-agent audit of every

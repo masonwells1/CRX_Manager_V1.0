@@ -42,6 +42,22 @@ try {
   ]);
   assert.equal(synced[0].status, "PASS");
 
+  // A CRLF-vs-LF difference is NOT drift. scripts/sync-agent-workflows.mjs has always
+  // normalized line endings before comparing; this check used to compare raw bytes, so
+  // one commit could FAIL here while the generator reported everything in sync (two
+  // reviewers of PR 414 hit exactly that). Both now share scripts/lib/normalize-eol.mjs.
+  const syncedPair = [".claude/skills/claude-review/SKILL.md", ".agents/skills/claude-review/SKILL.md"];
+  writeFileSync(path.join(root, syncedPair[0]), "line one\r\nline two\r\n");
+  writeFileSync(path.join(root, syncedPair[1]), "line one\nline two\n");
+  assert.equal(compareSyncedFiles(root, [syncedPair])[0].status, "PASS");
+
+  // ...but a real content difference must still FAIL, EOL style notwithstanding.
+  writeFileSync(path.join(root, syncedPair[1]), "line one\nline two CHANGED\n");
+  assert.equal(compareSyncedFiles(root, [syncedPair])[0].status, "FAIL");
+
+  writeFileSync(path.join(root, syncedPair[0]), "same");
+  writeFileSync(path.join(root, syncedPair[1]), "same");
+
   const staleHooks = {
     hooks: {
       SessionStart: [

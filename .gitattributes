@@ -1,7 +1,11 @@
 # Line-ending policy for the agent-workflow surface (Mason, 2026-07-13).
 #
 # `scripts/check-agent-workflows.mjs` regenerates the Codex adapter files under
-# `.agents/` from the `.claude/` sources and compares them byte-for-byte. The
+# `.agents/` from the `.claude/` sources and compares them. Since 2026-08-19 both
+# that comparison and `scripts/agent-health-check.mjs` compare EOL-normalized text
+# via `scripts/lib/normalize-eol.mjs`, so a CRLF smudge is not reported as drift.
+# Pinning here is still what keeps the committed form canonical, and a mismatch in
+# any OTHER byte is still a real failure. The
 # generator emits Unix (LF) line endings. On Windows checkouts, `core.autocrlf=true`
 # was rewriting these files to CRLF, so the check reported them "stale" (identical
 # text, different line endings) and blocked every commit. Pinning both the sources
