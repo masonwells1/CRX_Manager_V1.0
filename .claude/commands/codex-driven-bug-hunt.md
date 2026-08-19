@@ -1,4 +1,4 @@
-Run ONE cycle of the **CRX Codex-Driven Bug Hunt** — the mirror of the Claude-driven `overnight-bug-hunt`: **Codex is the hunter/driver**, **Claude is the decider + fixer**, and **Codex takes a final glance** at each fix. Codex finds candidates in the code; Claude grounds each against the LIVE DB (which Codex's sandbox can't reach), decides what's real, and lands the fix through the project guardrails. Fixes go to the isolated debug branch only. **Never touches production.**
+Run ONE cycle of the **CRX Codex-Driven Bug Hunt** — the mirror of the Claude-driven `overnight-bug-hunt`: **Codex is the hunter/driver**, **Claude is the decider + fixer**, and **Codex takes a final glance** at each fix. Codex finds candidates in the code; Claude grounds each against the LIVE DB (this loop deliberately launches the hunter with no DB connector — see below; that is a workflow choice, not a Codex limit), decides what's real, and lands the fix through the project guardrails. Fixes go to the isolated debug branch only. **Never touches production.**
 
 Mason does not type this command name. Treat plain-English requests like these as a request to run / continue this loop:
 
@@ -14,7 +14,11 @@ Mason does not type this command name. Treat plain-English requests like these a
 | **Writes** the fix | Claude | **Claude** — through the project's seatbelt hooks |
 | **Reviews** the finished fix | Codex (fix-gate) | **Codex** — `scripts/overnight-codex-gate.mjs` fix-glance (Sol/high) |
 
-**Independence is preserved on BOTH ends:** the model that *finds* (Codex) is not the model that *verifies* (Claude); the model that *writes* the fix (Claude) is not the model that *reviews* it (Codex). Codex's read-only sandbox cannot reach the live database, so Codex hunts against repo + migration files and **Claude does the live-DB grounding** — the two halves are complementary, not redundant.
+**Independence is preserved on BOTH ends:** the model that *finds* (Codex) is not the model that *verifies* (Claude); the model that *writes* the fix (Claude) is not the model that *reviews* it (Codex). That two-model split is the load-bearing independence argument — different model, different failure modes on both the find→verify and the write→review hop.
+
+On top of it, **this loop deliberately launches the hunter with no database connector**: `scripts/codex-hunt.mjs` passes `--ignore-user-config`, which drops the Supabase/Vercel/GitHub/Sentry plugins for that run, so Codex hunts against repo + migration files and **Claude does the live-DB grounding**. That is a workflow choice for this loop, **not** a limit on Codex.
+
+> **Do not restate this as "Codex cannot reach the live database."** Codex's Supabase access is write-enabled by Mason's 2026-08-14 decision (`docs/manual/DECISION_LOG.md`) — `.codex/config.toml` declares `read_only=false` with database features. Two caveats on the *current* state (verified 2026-08-19): that tracked entry's OAuth grant is still dead — real `invalid_grant` / `failed to refresh OAuth tokens for server supabase` runtime errors in the Codex session logs as recently as 2026-08-17 — so it carries essentially no traffic; and the channel that actually served Codex's Supabase calls when last observed is the built-in `codex_apps/supabase` App connector, whose scope is an **owner-only toggle in the Codex app's own settings, not represented in or verified by any file in this repo**. Capability here is unproven in both directions; never write a workflow doc that asserts Codex has, or lacks, live-DB reach as a fact. A stale version of this sentence propagated into `docs/plans/2026-08-18-product-data-model-PRD.md` (that file lives on branch `claude/product-data-storage-58ba26`, not on `main`) and misled an executor.
 
 ## Branch, scope, state
 
@@ -66,8 +70,9 @@ Write the hunt prompt for this slice to a file, then run Codex read-only as the 
 mkdir -p .claude/session-state
 cat > .claude/session-state/codex-hunt-prompt.txt <<'EOF'
 You are the HUNTER for the CRX Codex-driven bug hunt. READ-ONLY repo + migration
-access (your sandbox CANNOT reach the live DB — ground every claim in repo /
-migration files with file:line). Hunt ONLY these subsystems: <keys + the concrete
+access. This run is launched with `--ignore-user-config`, so you have NO database
+connector loaded — do not attempt live-DB access; ground every claim in repo /
+migration files with file:line. Hunt ONLY these subsystems: <keys + the concrete
 files / RPCs>. Look for the 8 recurring CRX bug classes: money-as-float / wrong
 cents; idempotency-key column or operation-scope errors; missing strict-actor or
 role gate; status-enum CHECK drift; writes to a GENERATED column; updated_at on a
@@ -92,7 +97,7 @@ cat .claude/session-state/codex-hunt-latest.txt   # ← read THIS (the findings)
 ### Step 2 — CLAUDE DECIDES (independent verification — Claude is the skeptic now)
 For each candidate Codex reported:
 - **Dedupe** against `LEDGER.json` — drop anything already seen / fixed / accepted.
-- **Verify against the LIVE DB** (Supabase MCP, read-only — the live CHECK constraints, real column names, function source, `get_advisors`, the `scripts/db-invariant-sweeps` predicates) AND the real code. Codex could not see the live DB; this is where a code-only "bug" is confirmed or refuted.
+- **Verify against the LIVE DB** (Supabase MCP, read-only — the live CHECK constraints, real column names, function source, `get_advisors`, the `scripts/db-invariant-sweeps` predicates) AND the real code. The hunter ran without a live-DB connector, so this is where a code-only "bug" is confirmed or refuted.
 - **Decide:** keep only findings you can independently confirm are REAL. **Default to REFUTE without live/code evidence.** Record refutations (with the reason) in the ledger so Codex isn't re-asked next cycle.
 
 ### Step 3 — CLAUDE FIXES (through the seatbelts)
