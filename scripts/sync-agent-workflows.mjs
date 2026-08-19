@@ -144,7 +144,22 @@ function checkExpected(expected) {
 // effect of running the test suite. Compare resolved paths rather than basenames:
 // .husky and CI invoke this as `node scripts/sync-agent-workflows.mjs --write`,
 // check-agent-workflows.mjs spawns it by absolute path, and both must still run.
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+//
+// Case-fold on Windows. `path.resolve` builds the entry path from process.cwd(),
+// whose drive letter casing comes from whatever launched the shell, while
+// fileURLToPath returns the casing in the module URL. A `C:` vs `c:` mismatch
+// would silently skip the CLI, and the caller in check-agent-workflows.mjs keyed
+// off the exit code alone - so a skipped --check would exit 0 and be reported as
+// "synced" while checking nothing. That caller now also requires the PASS line;
+// this comparison is the other half of closing that fail-silent path.
+export function isEntryPoint(argvPath, moduleUrl) {
+  if (!argvPath) return false;
+  const normalize = (value) =>
+    process.platform === "win32" ? path.resolve(value).toLowerCase() : path.resolve(value);
+  return normalize(argvPath) === normalize(fileURLToPath(moduleUrl));
+}
+
+if (isEntryPoint(process.argv[1], import.meta.url)) {
   const mode = process.argv[2] || "--check";
   const expected = buildExpected();
   if (mode === "--write") writeExpected(expected);

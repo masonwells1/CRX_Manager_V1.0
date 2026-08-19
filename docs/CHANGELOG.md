@@ -61,6 +61,17 @@ established.
 - Verified by reproducing the FAIL against the live CRLF/LF split in this worktree, confirming PASS
   after the fix with that split still in place, then `npm run agent-health` and
   `npm run test:agent-workflows` clean.
+- **A second fail-silent path, found while reviewing the fix itself.** `check-agent-workflows.mjs`
+  spawned `--check` and passed on `sync.status === 0` alone. A subprocess that does nothing also
+  exits 0, so any silent no-op in the generator would have been reported as a green "synced" that
+  checked nothing — and the new `isEntryPoint` guard is exactly the kind of thing that could
+  mis-detect (Windows carries drive-letter casing from whatever launched the shell, so a `C:` vs `c:`
+  mismatch would skip the CLI). Both halves are closed: the check now requires the `PASS - N Codex
+  workflow file(s) match` line, and `isEntryPoint` case-folds on win32. Mutation-tested by forcing the
+  CLI guard to `false` — `--check` produced no output and exit 0, and the check reported
+  `FAIL … --check exited 0 without its PASS line (produced no output) — the generator may not have
+  run at all`. `sync-agent-workflows.test.mjs` pins entry-point detection for absolute, relative,
+  wrong-file, absent-argv, and flipped-drive-letter inputs.
 - **Lesson, and the reason the `--write` correction is written out in full above:** a proof that
   exercises one half of a two-sided repair reads exactly like a proof that covers both. The source
   side and the mirror side fail differently, and "I watched it work" was true and still insufficient.

@@ -16,7 +16,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import os from "node:os";
 import path from "node:path";
 
-import { writeExpected } from "./sync-agent-workflows.mjs";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+import { isEntryPoint, writeExpected } from "./sync-agent-workflows.mjs";
 
 const targetRoot = mkdtempSync(path.join(os.tmpdir(), "crx-sync-write-"));
 
@@ -73,6 +75,41 @@ try {
   ]);
   writeExpected(changed, targetRoot);
   assert.equal(readFileSync(smudged, "utf8"), "alpha\nCHANGED\n");
+  // ── entry-point detection ────────────────────────────────────────────────
+  // The CLI is guarded by isEntryPoint() so importing this module (which the
+  // assertions above do) cannot regenerate the real .agents/** tree. A false
+  // negative here is the dangerous direction: the CLI would silently not run,
+  // `--check` would exit 0 with no output, and check-agent-workflows.mjs would
+  // report "synced" having checked nothing.
+  const selfUrl = new URL("./sync-agent-workflows.mjs", import.meta.url).href;
+  const selfPath = fileURLToPath(selfUrl);
+
+  assert.equal(isEntryPoint(selfPath, selfUrl), true, "absolute path must be recognized (CI spawn)");
+  assert.equal(
+    isEntryPoint(path.relative(process.cwd(), selfPath), selfUrl),
+    true,
+    "relative path must be recognized (husky / npm script invocation)",
+  );
+  assert.equal(isEntryPoint(undefined, selfUrl), false, "no argv[1] is not an entry point");
+  assert.equal(
+    isEntryPoint(path.join(path.dirname(selfPath), "normalize-eol.mjs"), selfUrl),
+    false,
+    "a different file must not be treated as the entry point",
+  );
+
+  // Windows drive-letter casing: process.cwd() carries whatever casing launched
+  // the shell, import.meta.url carries the module URL's. A plain === would skip
+  // the CLI on a `c:` vs `C:` mismatch.
+  if (process.platform === "win32" && /^[A-Za-z]:/.test(selfPath)) {
+    const flipped = selfPath[0] === selfPath[0].toUpperCase()
+      ? selfPath[0].toLowerCase() + selfPath.slice(1)
+      : selfPath[0].toUpperCase() + selfPath.slice(1);
+    assert.equal(
+      isEntryPoint(flipped, pathToFileURL(selfPath).href),
+      true,
+      "drive-letter casing must not decide whether the CLI runs",
+    );
+  }
 } finally {
   rmSync(targetRoot, { recursive: true, force: true });
 }
