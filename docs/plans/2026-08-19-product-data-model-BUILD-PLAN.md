@@ -57,6 +57,29 @@ per-product cutover** (pilot set first, then widen) before it is detailed — se
 | **D-J** *(Mason, 2026-08-19)* | Who may edit chemistry, concentrations and density? | **Admins only.** Everyone reads; only admin accounts write. Density drives scale weights and ingredients drive comparisons — a wrong value reaches a real mixer. Every change is audited regardless. Sol implements this as the RLS policy on all three new tables and on the density columns; it does **not** invent a policy | Fable F-24 |
 | **D-K** *(Mason, 2026-08-19)* | A load arrives with a brand not on the product's list — what can the crew do? | **Type it in free-hand and finish receiving.** The typed name is captured on the receipt immediately and lands in the D-I review queue as a **proposed** brand. It is **never** written to the permanent brand list unreviewed, and receiving is **never** blocked. This replaces revision 1's hard requirement, which could strand a truck at the dock | Fable F-7 |
 
+### Eleven more owner decisions, taken 2026-08-19 so Sol never has to ask
+
+| # | Question | Decision |
+|---|---|---|
+| **D-L** | Typed ingredient data vs a later EPA lookup that disagrees | **Mason's typed value wins and stays live.** The EPA version is stored beside it and **flagged as a difference** for review. A lookup never silently overwrites hand-entered data |
+| **D-M** | Density differs between label, SDS and supplier | **Trust order: safety data sheet → label → supplier.** The SDS is the regulated document where density is a required precise figure; labels round it and suppliers quote nominal specs. A `measured` value Mason recorded himself still outranks all three (it is the most specific evidence for his actual drums) |
+| **D-N** | How is the ingredient/density entry screen built, given 33–56 hours of owner typing | **Built for speed.** Keyboard-driven: tab between fields, **save-and-advance to the next product without the mouse**, recent values suggested. This is a scope addition to WP-1 and is deliberate — it buys back hours of Mason's own time |
+| **D-O** | What actually differs between `Gen Liberty` and `Gen Liberty: Higher Quality` | **Mason's words:** *"same chemistry better manufacturer and usually higher surfactant loads, AI ingredient same but everything else is higher quality, it also costs more."* **Consequence: the tiers are NOT clean substitutes.** The active ingredients match, but the inerts genuinely differ — the premium version carries more built-in surfactant. Any grouping, family match or comparison must show the tier and must never present them as interchangeable on the strength of matching actives alone |
+| **D-P** | How the comparison tool handles adjuvant, given D-O | **Show it as a note; do not price it.** Mason's earlier exclusion of adjuvant cost stands, but wherever a total appears the tool states when one product carries built-in surfactant and the other would need it added. **The stated bias runs against the premium product** — this must be visible, not buried |
+| **D-Q** | When WP-3's receiving change goes live | **As soon as it is proven** — no staged rollout, no waiting for a quiet day. The D-K escape hatch is what makes this safe: the crew is never blocked, so an unfamiliar step cannot stop a truck |
+| **D-R** | The 13 blank SKUs | **Mason assigns them.** WP-0 presents the 13 with names and vendors; he types the real part numbers. **No auto-generated placeholders** — a generated SKU is a number no supplier can look up |
+| **D-S** | Who approves a crew-proposed brand into the permanent list | **Admins only**, matching D-J. A brand carries an EPA number that reaches customer paperwork |
+| **D-T** | A product's EPA registration is reported **cancelled** | **Warn loudly, keep selling.** A clear banner on the product and a warning when it is added to a quote — but nothing is blocked. Cancelled registrations commonly allow existing stock to be sold through, and blocking would strand inventory Mason can legally move |
+| **D-U** | A package is proven and waiting on Mason's apply approval while he is unreachable | **Prepare the next package; apply nothing.** The build keeps writing and reviewing ahead so progress does not stall on his availability, but **every live database change still waits for his yes.** This is not hands-free mode and autopilot is not armed |
+| **D-V** | Is the comparison tool's ~2026-09-18 target real | **Yes.** Phases sequence to hit it. **If it comes under pressure, protect the quality of the Phase 2 rate review — 573 owner-reviewed values, no bulk auto-rewrite — and raise the slip with Mason.** Never rush the one phase that can put wrong quantities on customer paperwork |
+
+**Proof accounts (Mason, 2026-08-19).** Acceptance proofs run under **Mason's own account**. He
+declined to create a separate non-admin test user. Because an admin session **cannot** reveal a
+missing column grant (C-25), every migration package additionally runs a **direct privilege
+check** — `has_column_privilege('authenticated', 'public.products', '<col>', 'INSERT'/'UPDATE')`
+for each new column, and the equivalent on new tables — recorded in the PR alongside the
+behavioral proof. R-2's intent is met by the pair; neither half alone is sufficient.
+
 ---
 
 ## 1. Readiness verdict
@@ -159,6 +182,11 @@ inside a no-migration package.
 pickers; herbicide MOA numeric global code only), and a **coverage banner** on the ingredient
 search surface — "N of 604 products have ingredient data" — so that during the fill window a
 partial result never reads as a complete one *(Fable F-25)*.
+
+**Fast-entry mode (D-N).** The editor is keyboard-driven: tab between fields, **save-and-advance
+to the next product without touching the mouse**, and suggest recently-used ingredients and
+units. This is deliberate added scope — Mason personally faces 33–56 hours of entry, and the
+screen is the lever on that number.
 
 **Seed as the proof case:** glyphosate parent acid plus three salt forms. Fractions
 **IPA 0.741, potassium 0.816, DMA 0.789** (revision 1 said 0.78 — wrong). Each seeded row
@@ -266,6 +294,14 @@ keeps a truck from stranding at the dock.
 to canonical acids, label URL, accepted date, `productStatus`, `isCancelled` — **into the
 columns WP-1 created**. Everything lands as **proposed** in the D-I shape; nothing writes to
 live ingredient tables until Mason approves.
+
+**Conflict rule (D-L):** where a lookup disagrees with a value Mason typed, **his value stays
+live** and the EPA version is stored beside it, flagged as a difference. A lookup never
+overwrites hand-entered data.
+
+**Cancelled registrations (D-T):** a cancelled registration produces a **loud banner on the
+product and a warning when it is added to a quote** — but nothing is blocked. Existing stock is
+commonly still legal to sell through.
 
 **Scope, honestly:** fills roughly **287** products. **317 have no usable EPA number, and ~123
 of those are real pesticides** that cannot auto-seed until someone types the number in first.

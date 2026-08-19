@@ -9,6 +9,52 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-19 — Product data model: eleven owner decisions taken up front so the executor never blocks
+
+**Source:** Mason answered eleven questions in one sitting, 2026-08-19, explicitly so that
+*"when codex starts to work it doesn't have to ask me anything."* Full text as **D-L … D-V** in
+`docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md` §0.
+
+**The three with consequences beyond their own question:**
+
+**D-O — the quality tiers are not clean substitutes.** Asked what actually differs between
+`Gen Liberty` and `Gen Liberty: Higher Quality`, Mason answered: *"same chemistry better
+manufacturer and usually higher surfactant loads, AI ingredient same but everything else is
+higher quality, it also costs more."* The active ingredients match; **the inerts do not.** This
+settles C-43 and constrains every later phase: family grouping, product matching, and the
+comparison tool must surface the tier and may never present the pair as interchangeable on the
+strength of matching actives alone.
+
+**D-P — the adjuvant exclusion is a biased exclusion, and the bias has a direction.** Mason
+previously excluded adjuvant cost from the comparison. D-O means the premium product carries
+built-in surfactant the generic would need added, so the exclusion systematically flatters the
+cheaper product. Decision: keep the exclusion, but **state on-screen wherever a total appears**
+when one product carries built-in surfactant and the other does not. An unstated bias in a
+comparison tool is the failure; a stated one is a caveat.
+
+**D-U — "prepare ahead, apply nothing" is not hands-free mode.** While Mason is unreachable the
+build may continue writing and reviewing the next package, but **every live database change
+still waits for his in-chat yes.** Autopilot is not armed by this decision and the 2026-07-13
+hands-free exception is not invoked. Do not read D-U as pre-authorization.
+
+**The other eight, briefly.** D-L typed data beats a later EPA lookup (difference flagged, never
+overwritten) · D-M density trust order is SDS → label → supplier, with a self-measured value
+outranking all three · D-N the entry screen is keyboard-driven save-and-advance, deliberate added
+scope against 33–56 hours of owner typing · D-Q the receiving change ships as soon as it is
+proven, made safe by the D-K escape hatch rather than by a staged rollout · D-R Mason assigns the
+13 blank SKUs personally, no generated placeholders · D-S only admins approve a crew-proposed
+brand into the permanent list · D-T a cancelled EPA registration warns loudly but never blocks
+selling, because existing stock is commonly still legal to move · D-V the ~2026-09-18 comparison
+target is real, and if it slips the thing protected is the quality of the Phase 2 rate review,
+never the date.
+
+**Proof accounts.** Mason directed that acceptance proofs run under his own account rather than
+create a separate non-admin user. Because an admin session cannot reveal a missing column grant
+(C-25), every migration package additionally records a direct `has_column_privilege` check per
+new column. Neither half alone satisfies the verification standard.
+
+---
+
 ## 2026-08-19 — Product data model: chemistry edits are admin-only; an unlisted brand never blocks receiving
 
 **Source:** Mason's answers to two direct questions, 2026-08-19, during the product-data-model
