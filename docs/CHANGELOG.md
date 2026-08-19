@@ -44,6 +44,69 @@ with no identified cause** — see `docs/manual/KNOWN_ISSUES.md`. `2026081308000
 reads `-- STATUS: NOT APPLIED`; that header is stale and is deliberately left alone, because CRX Manager
 never edits an applied migration.
 
+## 2026-08-18 — pre-push private-artifact scan no longer ENOBUFS on nested worktrees
+
+Harness only — no app source, migration, or live-state change. Every `git push` from
+`C:\CRX_Manager` was failing at the pre-push hook with `spawnSync git ENOBUFS`. Unlike pre-commit
+mode, pre-push mode enumerates ignored files repo-wide, and with 16+ session worktrees nested
+under `.claude/worktrees/`, a stale/orphaned sibling directory Git no longer registers (removed
+by hand instead of `git worktree remove`) gets fully recursed into instead of collapsed to one
+line like a live registered worktree — its dependency tree alone was 88MB of ignored-file output,
+overflowing the 64MB Git output buffer.
+
+`check-supplier-pricing-phase3-private-artifacts.mjs` now excludes only the specific tool-owned
+bulk directory names (`node_modules`, `dist`, etc.) nested under a verified worktree's own parent
+directory, scoped narrowly via a real Git pathspec built from `git worktree list`. Non-bulk
+content sitting in an orphaned worktree directory, and any same-named decoy directory outside a
+worktree container, remains fully scanned — the existing anti-decoy containment design (only
+top-level-named generated roots are tool-owned) is unchanged. `GIT_OUTPUT_MAX_BUFFER` was not
+raised — moving the cliff wasn't the fix.
+
+Added a regression test reproducing a stale sibling worktree with a large ignored dependency
+tree. Reproduced the original ENOBUFS crash and confirmed the fix against the real
+`C:\CRX_Manager` checkout (53,850 paths, ~1GB scanned, no crash) via direct invocation of the
+same `--pre-push` code path the hook calls.
+
+CodeRabbit's review of the PR caught a follow-on bug in the fix itself: the worktree container
+path is filesystem-derived, not a literal this file wrote, and was spliced unescaped into the
+new `:(exclude,glob)` pathspec. A container name containing `*`, `?`, `[`, or `\` would have let
+Git treat it as a glob instead of a literal path — e.g. a bracketed name could accidentally
+exclude an unrelated top-level directory sharing only a coincidental single-character match,
+hiding a private artifact planted there from the ignored-file scan. Now escaped before
+interpolation. Added a regression fixture with a bracketed worktree container plus an outside
+decoy directory; confirmed the new test fails without the escaping fix and passes with it.
+
+## 2026-08-18 — Mission loops get a standing model/context budget
+
+Agent-surface docs only — no source, migration, or live-state change.
+
+Mason's 30-day usage analysis attributed the bulk of the month's token spend (estimated at
+roughly 40%) to a handful of marathon loop sessions — almost entirely premium-model context
+re-reads, because every message re-reads the whole conversation. `/run-loop` now carries two
+standing rules, recorded as Mason's 2026-08-18 decision in `docs/manual/DECISION_LOG.md`:
+mechanical cycle steps (status checks, doc syncs, read sweeps, evidence gathering) may be
+delegated to cheaper-model subagents *within the loop's existing structure* — ledger PROOF
+lines, money/RLS/migration judgment, and pinned reviewer models/effort are explicitly
+excluded, and no agents are added on top of a workflow's defined fan-out; and every loop
+obeys the session-size sentinel's marathon cap (advisory at 12MB of transcript; at 25MB:
+finish only the atomic step already in flight, checkpoint the ledger, write a handoff,
+continue in a fresh session, wind down). The sentinel is a global user-scope hook outside
+this repo (`~/.claude/hooks/session-size-sentinel.mjs`), and after adversarial review of
+PR #416 it fires both on prompt submission and mid-turn after tool calls, so unattended
+loops — which may run for hours off one prompt — actually see it; where the hook is absent
+(Codex sandbox, remote runners) the written cap in `run-loop.md` binds on its own. Hard
+gates transfer unchanged across a handoff; a handoff never launders an approval, and a
+lapsed autopilot flag stays lapsed in the successor session.
+
+## 2026-08-18 — Fixed stale moddatetime references in…
+
+Fixed stale moddatetime references in docs/workflows/DATABASE_CHANGE_CHECKLIST.md to the house public.update_updated_at trigger convention; PR 419 green and parked at the Sol merge gate until Codex credits return Aug 19.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `a8b03228 docs(workflows): use house update_updated_at() trigger in database change checklist`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
 ## 2026-08-18 — session-staleness backup check now consults the real off-site workflow
 
 Harness only — no app source, migration, or live-state change. The SessionStart backup-staleness
