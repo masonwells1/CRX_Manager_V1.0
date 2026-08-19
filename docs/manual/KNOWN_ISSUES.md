@@ -310,9 +310,14 @@ The residual risk is real: `transfer_job_to_invoice` bills a line as
 `safe_cents_qty(price_per_unit_cents, quantity)` with **no** unit conversion, and
 `complete_job` deducts stock the same way without refusing (its hard
 `JOB_INV_UNIT_UNCONVERTIBLE` raise was removed under U11). So a user who ignores the warning
-still ships a wrong invoice. For `oz/cwt` on a $28.00/GAL product that is $5,600 against a
-$44 per-ounce reading — and neither number is right, because the input itself is
-uninterpretable.
+still ships a wrong invoice.
+
+For a non-acre denominator the money deliberately follows `main` — `oz/cwt` on a $28.00/GAL
+product prices off the numerator and bills **$44**, not the $5,600 that copying the SQL
+produced in the reverted `bd080626`. Neither figure is *right*, because `quantity =
+rate × acres` assumes the denominator is acres and the input says otherwise; $44 is simply
+the wrong answer that does not over-charge a customer by 128×. Only a human fixing the unit
+resolves it, which is why the warning exists and why the block decision matters.
 
 **Owner decision owed:** should an unreconcilable unit block the save (like the guardrail's
 `block` mode), or keep warning? Blocking adds friction for the office; warning leaves the
@@ -326,13 +331,37 @@ hole open. Not started — needs Mason's call before code.
   realistic way a `fl oz/cwt` (seed treatment), `lb/ton` (feed additive) or `oz/1000 sq ft`
   (turf) value enters the table. The in-app dropdowns are constrained to `unit_conversions`,
   so free typing is not the vector — the import is.
-- **Per-unit price rounding amplifies by quantity.** `reconcileChemAutofillUnits` rounds the
-  converted per-unit price to whole cents at the *smallest* unit, then the invoice multiplies
-  by the whole quantity. $28.00/GAL → 21.875¢/oz → 22¢ is a systematic **+0.57%** on every
-  such line, and cost rounds the same way ($22.50/GAL → 17.578 → 18¢, **+2.4%**), understating
-  margin and therefore commission. This affects the **463 live products** on an `oz` rate
-  against `Gal` stock. Pre-existing and untouched — fixing it means changing how money is
-  rounded, which is its own scoped decision.
+### OPEN — per-unit price rounding, and the part of it this change CREATED
+
+**Owner decision owed.** `reconcileChemAutofillUnits` rounds the converted per-unit price to
+whole cents at the *smallest* unit, then the invoice multiplies by the whole quantity, so the
+rounding error is amplified by every unit sold.
+
+**Pre-existing half:** the **463 live products** on an `oz` rate against `Gal` stock —
+$28.00/GAL → 21.875¢/oz → 22¢, a systematic **+0.57%**; cost rounds the same way
+($22.50/GAL → 17.578 → 18¢, **+2.4%**), understating margin and therefore commission.
+
+**The half this change created, and an earlier revision of this entry wrongly called
+"pre-existing and untouched":** the 61 `Dry oz` products now convert instead of falling
+through, so they are newly subject to this rounding. Measured against their real
+`tier1_price`/`current_cost`: **18 of 61** exceed 1% cost error and **7 of 61** exceed 3%
+price error. Worst case $0.39/lb → 2.4375¢/oz stored as **2¢**: 32 Dry oz/ac over 100 acres
+bills **$64** where the correct charge is **$78** — a **17.95% under-bill**, silently, every
+time. Nothing rounds to zero (checked: 0 of 61).
+
+That is still a large improvement on what it replaced — the same line billed **$1,248**
+before, a 16× over-bill — and an under-bill costs margin rather than over-charging a
+customer. But it is a real, permanent, silent error and it is **not** pre-existing for these
+61 products.
+
+**The proper fix is known:** convert the **quantity** into the stock unit and keep the exact
+per-stock price, which is precisely what the server's `field_app_priced_quantity` does. It
+removes the rounding error entirely rather than shrinking it. It was not done here because it
+changes what `quantity` means on every chem row, which reaches `applyChemEdit`,
+`recomputeChemRowForAcres` and the driver logic — a bigger change to a daily-use screen than
+this fix, and one that deserves its own build-and-review cycle rather than being folded into
+a money fix already twice-corrected. Mason's call: accept the disclosed rounding for now, or
+schedule the quantity-side rewrite first.
 - **`unit_conversions` vocabulary drift.** `src/lib/units.ts` describes those keys as FROZEN,
   and `save_quote` joins on `LOWER(rate_unit) = LOWER(unit)`. Nothing stops a spelling outside
   that set reaching the column.

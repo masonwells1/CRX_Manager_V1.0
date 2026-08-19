@@ -256,24 +256,53 @@ export function fieldAppPricedQuantity(
 // per-base-unit with the SAME server-parity factor tables above.
 
 /**
+ * TRUE when the rate unit carries a denominator the app does not understand — anything
+ * other than acres ('oz/cwt', 'lb/ton', 'oz/1000 sq ft'). The per-acre forms ('pt/ac',
+ * 'gal per acre') are understood and return FALSE.
+ *
+ * Worth its own predicate because such a rate is not merely awkward to convert, it is
+ * uninterpretable: `quantity = rate x acres` assumes the denominator IS acres, so for
+ * 'oz per hundredweight' the quantity is meaningless before any unit question arises.
+ * No arithmetic can rescue it; only a human fixing the unit can.
+ */
+export function rateDenominatorIsUnrecognized(rateUnit: string | null | undefined): boolean {
+  const raw = (rateUnit || '').trim().toLowerCase();
+  if (raw === '') return false;
+  if (/\s*\/\s*(ac|acre|acres|a)\s*$/.test(raw)) return false;
+  return raw.includes('/');
+}
+
+/**
  * Strip a per-acre suffix from a rate_unit and return the bare base measure unit
  * ('pt/ac' → 'pt', 'GAL' → 'gal', 'gallons/ac' → 'gal'). Empty in → empty out.
  *
- * This DELEGATES to `labelGuardrails.normalizeRateUnit`, which is the single mirror of
- * the live SQL `normalize_rate_unit` — same acre-denominator rule, same synonym folding.
- * It used to keep its own partial copy that split on the first '/' and folded nothing,
- * which diverged from the server in two ways that both reached money:
+ * Folding is delegated to `labelGuardrails.normalizeRateUnit`, the single mirror of the
+ * live SQL `normalize_rate_unit`. This file used to keep a partial copy that folded
+ * nothing, so 'ounces/ac' missed the size tables the server reaches after folding to
+ * 'oz' — dropping the row into the unreconciled branch and over-billing. That half is
+ * now shared.
  *
- *  • A non-acre denominator collapsed to its numerator ('oz/cwt' → 'oz'), where the
- *    server keeps the whole string precisely so it cannot match a bare unit.
- *  • No synonym folding, so 'ounces/ac' missed the size tables the server hits after
- *    folding to 'oz' — dropping the row into the unreconciled fallback.
+ * THE ONE DELIBERATE DIVERGENCE — a non-acre denominator. `normalize_rate_unit` returns
+ * the whole string so it cannot match a bare unit and the conversion refuses. Copying
+ * that here was tried (`bd080626`) and REVERTED (`0890a2eb`): it only refuses safely if
+ * the consumer also refuses, and the consumer here does not. `field_app_priced_quantity`
+ * returns NULL and the field-app path errors, but `transfer_job_to_invoice` — the actual
+ * consumer of this function — bills `safe_cents_qty(price_per_unit_cents, quantity)` with
+ * no conversion and no refusal. So keeping the string whole turned a $44 line into a
+ * $5,600 line: a 128x OVER-bill, the dangerous direction.
  *
- * The server pipeline is normalize-then-size: `field_app_priced_quantity(qty,
- * normalize_rate_unit(unit), ...)`. Matching it means folding here and sizing below.
+ * Until Mason decides whether an unrecognized denominator should BLOCK the save (see the
+ * 2026-08-19 entry in KNOWN_ISSUES), the numerator is used for the money — matching the
+ * behaviour on `main` — and `rateDenominatorIsUnrecognized` above raises the flag that
+ * makes it visible instead of silent. Do not "fix" this to match the SQL without changing
+ * what the consumer does with the result.
  */
 export function baseUnitOfRate(rateUnit: string | null | undefined): string {
-  return normalizeRateUnit(rateUnit) ?? '';
+  const folded = normalizeRateUnit(rateUnit) ?? '';
+  if (!folded.includes('/')) return folded;
+  // Unrecognized denominator: price off the numerator, as `main` does. Fold it too, so
+  // 'ounces/cwt' and 'oz/cwt' agree.
+  return normalizeRateUnit(folded.split('/')[0]) ?? '';
 }
 
 /**
@@ -383,22 +412,48 @@ export function chemLineUnitMismatch(
   rateUnit: string | null | undefined,
   productForm?: 'liquid' | 'dry' | null,
 ): string | null {
-  const rowKey = (rowUnit || '').trim().toLowerCase();
+  // An unrecognized denominator is its own problem and outranks any unit comparison:
+  // `quantity = rate x acres` assumes the denominator IS acres, so the quantity itself is
+  // wrong before units are considered. Reported even when the units line up.
+  if (rateDenominatorIsUnrecognized(rateUnit)) {
+    return `The rate unit "${rateUnit}" isn't per acre, but the quantity is worked out as rate x acres — so the amount on this line is not what the rate describes. Fix the unit before invoicing.`;
+  }
+
+  // BOTH sides folded before comparing. Comparing a folded rate unit against a merely
+  // lowercased row unit made every equivalent spelling look like a mismatch — 'fl oz' vs
+  // 'oz', 'lbs' vs 'lb' — and since those have a size ratio of exactly 1 the message read
+  // "under-bills by about 1x", which is both false and self-contradictory. Both are real
+  // options in the live unit vocabulary, so this fired on correct lines.
+  const rowKey = normalizeRateUnit(rowUnit) ?? '';
   const baseKey = baseUnitOfRate(rateUnit);
-  if (rowKey === '' || baseKey === '') return null;
+
+  // No rate unit → a flat / quantity-only line. Nothing to reconcile against, and warning
+  // here would fire on ordinary lines.
+  if (baseKey === '') return null;
+
+  // A rate unit but NO unit on the line is a real gap, not a quiet one: the quantity is
+  // counted in the rate's unit while the per-unit price is per nothing in particular, and
+  // the server cannot convert it either (normalize_rate_unit('') is NULL, so complete_job
+  // falls back to the raw quantity). 8 live products carry a blank unit_size and autofill
+  // straight into this state.
+  if (rowKey === '') {
+    return `This line has no unit, but the quantity is counted in "${baseKey}" and the price is per unit — so what is billed and what is taken out of stock are both unreliable. Set the unit before invoicing.`;
+  }
+
   if (rowKey === baseKey) return null;
 
-  let form: 'liquid' | 'dry' | null = productForm ?? null;
-  if (form == null) {
-    if (hasOwn(LIQUID_UNIT_SIZE, rowKey)) form = 'liquid';
-    else if (hasOwn(DRY_UNIT_SIZE, rowKey)) form = 'dry';
-  }
-  const rowSize = form == null ? null : unitSizeInForm(rowKey, form);
-  const baseSize = form == null ? null : unitSizeInForm(baseKey, form);
-
-  // Both known in the same form → we can say exactly how far off the line is.
-  if (rowSize != null && baseSize != null && rowSize !== 0) {
+  // Try the stated form first; with none stated (every manual line) try BOTH before
+  // declaring the units unconvertible. Inferring the form from the row unit alone and
+  // testing liquid first told the user that 'oz' against a 'lb/ac' rate "can't be
+  // converted" when it converts fine as dry.
+  const forms: Array<'liquid' | 'dry'> = productForm ? [productForm] : ['liquid', 'dry'];
+  for (const form of forms) {
+    const rowSize = unitSizeInForm(rowKey, form);
+    const baseSize = unitSizeInForm(baseKey, form);
+    if (rowSize == null || baseSize == null || rowSize === 0) continue;
     const ratio = baseSize / rowSize;
+    // Equivalent spellings of the same measure ('fl oz' and 'oz') — the money is right.
+    if (ratio === 1) return null;
     const factor = ratio > 1 ? ratio : 1 / ratio;
     const rounded = Math.round(factor * 100) / 100;
     const direction = ratio < 1 ? 'over-bills' : 'under-bills';
@@ -435,7 +490,16 @@ export function reconcileChemAutofillUnits(
   };
 
   // No rate unit, or identical units → nothing to reconcile (common case).
-  if (baseKey === '' || baseKey === stockKey || stockKey === '') return alreadyAligned;
+  if (baseKey === '' || baseKey === normalizeRateUnit(stockKey)) return alreadyAligned;
+
+  // A BLANK stock unit is a failure, not an alignment. 8 live products carry
+  // unit_size = '' against a real inventory_unit, and lumping them in with the aligned
+  // cases above reported reconciled:true while writing an empty unit and the per-GALLON
+  // price against a quantity counted in ounces — the same 128x shape this function
+  // exists to prevent, invisible to every guard.
+  if (stockKey === '') {
+    return unreconciled(`This product has no stock unit recorded, so a rate in "${rateUnit}" can't be priced against it. Set the product's unit size, or fix the unit on this line, before invoicing.`);
+  }
 
   // Determine the form: trust product_form when given, else infer from the stock unit.
   // Inferred from the PRICING tables, the same ones the sizes below come from.

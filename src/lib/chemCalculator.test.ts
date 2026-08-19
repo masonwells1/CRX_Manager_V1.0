@@ -8,6 +8,7 @@ import {
   fieldAppPricedQuantity,
   baseUnitOfRate,
   chemLineUnitMismatch,
+  rateDenominatorIsUnrecognized,
   reconcileChemAutofillUnits,
   type ChemCalcRow,
 } from './chemCalculator';
@@ -375,11 +376,38 @@ describe('chemCalculator — reconcileChemAutofillUnits (P1 money fix)', () => {
     expect(g.pricePerUnitCents).toBe(2800);
   });
 
-  it('a non-acre denominator is NOT convertible and says so', () => {
+  // Attempt one (bd080626) kept the whole string here to match normalize_rate_unit, which
+  // turned a $44 line into $5,600 because transfer_job_to_invoice does not refuse the way
+  // field_app_priced_quantity does. Reverted. The numerator is used for the money, as on
+  // main, and the denominator is surfaced by rateDenominatorIsUnrecognized instead.
+  it('a non-acre denominator prices off the NUMERATOR, not the whole string (no 128x over-bill)', () => {
     const r = reconcileChemAutofillUnits('GAL', 'oz/cwt', 2250, 2800, 'liquid');
-    expect(r.unit).toBe('GAL');
+    expect(r.unit).toBe('oz');
+    expect(r.pricePerUnitCents).toBe(22);   // 2800 / 128 — NOT 2800
+    // 2 x 100 ac = 200 -> $44.00, the magnitude main produces. Not $5,600.
+    expect((200 * r.pricePerUnitCents) / 100).toBeCloseTo(44, 2);
+  });
+
+  it('an unrecognized denominator is flagged even though the money follows main', () => {
+    expect(rateDenominatorIsUnrecognized('oz/cwt')).toBe(true);
+    expect(rateDenominatorIsUnrecognized('lb/ton')).toBe(true);
+    expect(rateDenominatorIsUnrecognized('oz/1000 sq ft')).toBe(true);
+    expect(rateDenominatorIsUnrecognized('pt/ac')).toBe(false);
+    expect(rateDenominatorIsUnrecognized('gal per acre')).toBe(false);
+    expect(rateDenominatorIsUnrecognized('oz')).toBe(false);
+    expect(rateDenominatorIsUnrecognized('')).toBe(false);
+    expect(rateDenominatorIsUnrecognized(null)).toBe(false);
+    // and the line warning reports it regardless of how the units line up
+    expect(chemLineUnitMismatch('oz', 'oz/cwt', 'liquid')).toMatch(/isn't per acre/);
+  });
+
+  // 8 live products carry unit_size = '' against a real inventory_unit. Treating that as
+  // "aligned" reported green while writing an empty unit and the per-GALLON price against
+  // a quantity counted in ounces.
+  it('a BLANK stock unit is a failure, not an alignment', () => {
+    const r = reconcileChemAutofillUnits('', 'oz', 2250, 2800, 'liquid');
     expect(r.reconciled).toBe(false);
-    expect(r.reason).toMatch(/oz\/cwt/);
+    expect(r.reason).toMatch(/no stock unit/i);
   });
 
   it('a unit named like an Object prototype key cannot produce NaN money', () => {
@@ -398,10 +426,43 @@ describe('chemCalculator — chemLineUnitMismatch', () => {
     expect(chemLineUnitMismatch('pt', 'pt/ac', 'liquid')).toBeNull();
     expect(chemLineUnitMismatch('gal', 'gallons/ac', 'liquid')).toBeNull(); // folds to the same
   });
-  it('is silent when either unit is blank (a separate concern)', () => {
-    expect(chemLineUnitMismatch('', 'pt/ac', 'liquid')).toBeNull();
+
+  // ── Equivalent spellings are NOT a mismatch. Comparing a folded rate unit against a
+  // merely-lowercased row unit made these look different, and because their size ratio is
+  // exactly 1 the message read "under-bills by about 1x" — false and self-contradictory,
+  // on correct lines, using options that are really in the live unit vocabulary. ──
+  it('is silent for equivalent spellings of the same measure (no phantom "1x")', () => {
+    expect(chemLineUnitMismatch('fl oz', 'oz', 'liquid')).toBeNull();
+    expect(chemLineUnitMismatch('floz', 'oz', 'liquid')).toBeNull();
+    expect(chemLineUnitMismatch('Dry oz', 'oz', 'dry')).toBeNull();
+    expect(chemLineUnitMismatch('oz', 'Dry oz', 'dry')).toBeNull();
+    expect(chemLineUnitMismatch('lbs', 'lb/ac', 'dry')).toBeNull();
+    expect(chemLineUnitMismatch('gallons', 'Gallons/ac', 'liquid')).toBeNull();
+    expect(chemLineUnitMismatch('gl', 'gal/ac', 'liquid')).toBeNull();
+    // 'ounces' is in the server's fold map but NOT in the liquid size table, so without
+    // folding the ROW unit too this one reaches the "can't be converted" message rather
+    // than the ratio branch — the ratio===1 guard cannot save it.
+    expect(chemLineUnitMismatch('ounces', 'oz', 'liquid')).toBeNull();
+    expect(chemLineUnitMismatch('fluid ounce', 'oz', 'liquid')).toBeNull();
+  });
+
+  // With no product_form (every manual line) the form was inferred from the row unit and
+  // liquid was tried first, so a dry pairing was declared unconvertible when it converts.
+  it('tries BOTH forms when the product form is unknown', () => {
+    expect(chemLineUnitMismatch('oz', 'lb/ac', null)).toMatch(/16x/);
+    expect(chemLineUnitMismatch('oz', 'lb/ac', null)).not.toMatch(/can't be converted/);
+  });
+  it('is silent with no rate unit (a flat / quantity-only line)', () => {
     expect(chemLineUnitMismatch('gal', '', 'liquid')).toBeNull();
     expect(chemLineUnitMismatch(null, null, null)).toBeNull();
+  });
+
+  // The 8 live products with a blank unit_size autofill straight into this state, and it
+  // is the same 128x shape: quantity in the rate's unit, price per nothing in particular.
+  // Reconcile flags it; the on-screen check has to as well, or nobody sees it.
+  it('warns when the line has a rate unit but NO unit of its own', () => {
+    expect(chemLineUnitMismatch('', 'oz', 'liquid')).toMatch(/no unit/);
+    expect(chemLineUnitMismatch(null, 'pt/ac', 'liquid')).toMatch(/no unit/);
   });
   it('names the ratio when both units are known — the 8x GAL/pt case', () => {
     const w = chemLineUnitMismatch('GAL', 'pt/ac', 'liquid');
@@ -409,7 +470,7 @@ describe('chemCalculator — chemLineUnitMismatch', () => {
     expect(w).toMatch(/over-bills/);
   });
   it('warns without a ratio when the units cannot be converted at all', () => {
-    const w = chemLineUnitMismatch('Gal', 'oz/cwt', 'liquid');
+    const w = chemLineUnitMismatch('Gal', 'widgets', 'liquid');
     expect(w).toMatch(/can't be converted/);
   });
   it('catches the live junk-unit row (rate_unit typed as a number)', () => {
@@ -480,15 +541,53 @@ describe('chemCalculator — mechanical parity with the live SQL', () => {
     '32', 'widgets', '', '/ac',
   ];
 
-  it('baseUnitOfRate equals normalize_rate_unit for every probe unit', () => {
+  it('baseUnitOfRate equals normalize_rate_unit for every unit WITHOUT a foreign denominator', () => {
     for (const u of UNITS) {
+      if (rateDenominatorIsUnrecognized(u)) continue; // the one deliberate divergence, below
       expect(`${u} → ${baseUnitOfRate(u)}`).toBe(`${u} → ${sqlNormalizeRateUnit(u) ?? ''}`);
+    }
+  });
+
+  // The divergence is deliberate and load-bearing, so it is pinned rather than skipped:
+  // the SQL keeps the whole string (safe only because ITS caller refuses on NULL), while
+  // this file prices off the numerator because transfer_job_to_invoice does not refuse.
+  // See baseUnitOfRate's comment and the 0890a2eb revert.
+  it('DELIBERATELY diverges from the SQL on a foreign denominator, and only there', () => {
+    for (const u of UNITS) {
+      if (!rateDenominatorIsUnrecognized(u)) continue;
+      expect(sqlNormalizeRateUnit(u)).toBe(u.trim().toLowerCase()); // server keeps it whole
+      expect(baseUnitOfRate(u)).not.toContain('/');                 // we take the numerator
+      expect(baseUnitOfRate(u)).toBe(sqlNormalizeRateUnit(u.split('/')[0]) ?? '');
+    }
+  });
+
+  // Not just "does it convert" — the ACTUAL per-unit price. A drift in a size VALUE (the
+  // number that sets the money) would sail past a convertibility-only fixture.
+  it('the converted per-unit price equals the server ratio for every convertible unit', () => {
+    for (const form of ['liquid', 'dry'] as const) {
+      const stock = form === 'dry' ? 'lb' : 'gal';
+      const stockSize = sqlUnitSize(stock, form)!;
+      for (const u of UNITS) {
+        const normalized = sqlNormalizeRateUnit(rateDenominatorIsUnrecognized(u) ? u.split('/')[0] : u);
+        if (normalized === null || normalized === stock) continue;
+        const rateSize = sqlUnitSize(normalized, form);
+        if (rateSize == null) continue; // unconvertible on the server; covered above
+        const r = reconcileChemAutofillUnits(stock, u, 1600, 3200, form);
+        expect(`${form}:${u} unit`).toBe(`${form}:${u} unit`);
+        expect(r.unit).toBe(normalized);
+        expect(`${form}:${u} → ${r.pricePerUnitCents}`)
+          .toBe(`${form}:${u} → ${Math.round(3200 * (rateSize / stockSize))}`);
+      }
     }
   });
 
   it('convertibility agrees with the server for every probe unit, both forms', () => {
     for (const form of ['liquid', 'dry'] as const) {
       for (const u of UNITS) {
+        // Foreign denominators are the deliberate divergence pinned above; the server
+        // refuses them and this file prices off the numerator, so they are not comparable
+        // on this axis.
+        if (rateDenominatorIsUnrecognized(u)) continue;
         const clientConverts = reconcileChemAutofillUnits(
           form === 'dry' ? 'lb' : 'gal', u, 1600, 3200, form,
         ).reconciled;

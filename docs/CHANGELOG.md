@@ -41,20 +41,46 @@ identical ratios for every other unit, so nothing else moved.
   now returns `reconciled` + `reason`, and the job chem grid shows a per-line warning naming
   the ratio and direction. **Warn, never block**, per the house convention in
   `labelGuardrails`; a hard block is Mason's call and is tracked as open.
+- **A blank stock unit is now a failure, not an alignment.** **8 live products** carry
+  `unit_size = ''` against a real `inventory_unit`. They were lumped in with the
+  nothing-to-do cases, so autofill wrote an empty unit and the per-gallon price against a
+  quantity counted in ounces — the same 128× shape, invisible to every guard. Both the
+  reconciliation and the on-screen check now report it.
+- **A non-acre denominator keeps `main`'s money and gains a warning.** Attempt one copied
+  the SQL, which keeps `oz/cwt` whole so the conversion refuses. That is only safe if the
+  *consumer* refuses, and `transfer_job_to_invoice` does not — it turned a $44 line into
+  **$5,600**, a 128× over-bill in the dangerous direction. So the numerator still sets the
+  money, exactly as on `main`, and a new `rateDenominatorIsUnrecognized` raises the flag
+  instead. Whether it should block the save is Mason's decision, tracked in KNOWN_ISSUES.
 - Own-property lookup instead of `in` on the size tables, so a unit spelled `constructor`
   cannot inherit off `Object.prototype` and write `NaN` cents.
 - **Prevention:** a mechanical parity fixture — literal restatements of
   `normalize_rate_unit` and `field_app_priced_quantity` read from live `pg_proc`, run over
-  50 probe units in both forms. This parity used to be asserted in prose, and prose is
-  exactly what drifted.
+  50 probe units in both forms, asserting the converted **per-unit price** and not merely
+  whether a unit converts. The one deliberate divergence is pinned by its own test rather
+  than skipped. This parity used to be asserted in prose, and prose is exactly what drifted.
 
-Proof: typecheck, lint, 4584 passed / 331 files, production build. Both guards
-mutation-tested. The shipped module was executed in the running dev server — `Dry oz` on Lb
-now bills $288 not $4,800, `ounces/ac` converts, `oz/cwt` still bills high but now carries
-the warning, `pt/ac` and bare-`oz` controls unchanged — and checked against the real live
-rows: the two Acuron lines stay silent, the row whose `rate_unit` is the string `32` is
-caught, a blank unit stays silent by design. **Not verified:** the warning's appearance on
-screen — this worktree has no Supabase credentials and there is no `JobDetail` test file.
+**What else moved, stated precisely.** The table swap alone is inert: `LIQUID_TO_GALLONS`
+and `LIQUID_UNIT_SIZE` hold the same 14 keys, `DRY_UNIT_SIZE` is `DRY_TO_POUNDS` plus
+`dry oz`, and both pairs are exactly proportional (×128, ×16), so every ratio is preserved
+and no unit that converted stopped converting. But synonym folding in the same function does
+change things beyond `Dry oz`: units the server folds and the old code missed now convert
+(a price change), and units that converted under a long spelling are now stored under the
+canonical one (`'gallons'` → `'gal'` — a label change to a string persisted in
+`job_chemicals.unit`). Neither is a regression, but "nothing else moved" — as an earlier
+revision of this entry put it — was false.
+
+Proof: typecheck, lint, 4607 passed / 335 files, production build. Every guard
+mutation-tested individually, including one round that caught a test which only *appeared*
+to pin its guard. The shipped module was executed in the running dev server — `Dry oz` on Lb
+bills $288 not $4,800; `oz/cwt` bills $44 as on `main`, with the denominator warning;
+`ounces/ac` converts; `pt/ac` and bare-`oz` controls unchanged; and the four
+equivalent-spelling pairs (`fl oz`/`oz`, `Dry oz`/`oz`, `lbs`/`lb`, `ounces`/`oz`) are
+silent where an earlier revision wrongly told the user they "under-bill by about 1×".
+Checked against the real live rows: the two Acuron lines stay silent, the row whose
+`rate_unit` is the string `32` is caught, and the row with no unit at all is now caught too.
+**Not verified:** the warning's appearance on screen — this worktree has no Supabase
+credentials and there is no `JobDetail` test file.
 
 ## 2026-08-19 — Product data model: build plan revision 2 after independent Fable…
 

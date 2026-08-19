@@ -45,6 +45,7 @@ import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import { applyChemEdit, chemLineUnitMismatch, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent } from '../lib/chemCalculator';
 import { compareToMaxRate, phiHarvestWarning } from '../lib/labelGuardrails';
+import type { RateComparison, PhiHarvestResult } from '../lib/labelGuardrails';
 import { unitOptionsForForm, isKnownUnit } from '../lib/units';
 import {
   LABEL_RATE_GUARDRAIL_MODE_KEY,
@@ -3561,7 +3562,10 @@ export default function JobDetail() {
                 // (oz = 1/16 lb) instead of FLUID ounces (1/128 gal) — the preview then
                 // disagrees with the saved/invoiced value.
                 const previewForm = allProducts.find((p) => p.id === c.product_id)?.product_form ?? null;
-                const conv = toGallonOrLbEquivalent(totalApplied, c.unit, previewForm === 'liquid' || previewForm === 'dry' ? previewForm : null);
+                // Narrowed once and reused by the gl/lb preview and the unit-mismatch
+                // money warning below, rather than scanning ~600 products twice per row.
+                const chemProductForm = previewForm === 'liquid' || previewForm === 'dry' ? previewForm : null;
+                const conv = toGallonOrLbEquivalent(totalApplied, c.unit, chemProductForm);
                 return (
                   <div key={i} className="border border-gray-200 rounded-lg p-3 space-y-2">
                     <div className="grid grid-cols-12 gap-2 items-end">
@@ -3695,18 +3699,28 @@ export default function JobDetail() {
                       // OUTSIDE the product gate below: a manual line has no product_id but
                       // still bills, so it needs this warning too. Warn, never block (house
                       // convention — see labelGuardrails).
-                      const unitMismatch = chemLineUnitMismatch(
-                        c.unit,
-                        c.rate_unit,
-                        allProducts.find((p) => p.id === c.product_id)?.product_form ?? null,
-                      );
+                      //
+                      // SKIPPED for a customer-supplied line: transfer_job_to_invoice forces
+                      // price, extended and cost to 0 for those, and complete_job filters
+                      // them out of the deduction entirely. Nothing bills, so a unit warning
+                      // there is pure noise on a strip whose value is that it means something.
+                      const unitMismatch = c.customer_supplied
+                        ? null
+                        : chemLineUnitMismatch(c.unit, c.rate_unit, chemProductForm);
+                      // A manual line (no product_id) has no label max and no PHI, so those
+                      // two checks are skipped for it exactly as before — only the unit
+                      // warning above is new for manual lines. Both fallbacks are annotated
+                      // to the real return types rather than left as inferred object
+                      // literals: an un-annotated stub can drift out of its union (an
+                      // earlier revision used a `phi.status` value that does not exist) and
+                      // still compile, because each `===` guard narrows the stub away.
                       const lbl = c.product_id ? labelMaxFor(c.product_id) : { max_label_rate: null, max_label_rate_unit: null };
-                      const cmp = c.product_id
+                      const cmp: RateComparison = c.product_id
                         ? compareToMaxRate(parseFloat(c.rate_per_acre) || null, c.rate_unit, lbl.max_label_rate, lbl.max_label_rate_unit)
-                        : { status: 'no_rate' as const, rate: null, maxRate: null };
-                      const phi = c.product_id
+                        : { status: 'no_rate', rate: null, maxRate: null, comparedUnit: null };
+                      const phi: PhiHarvestResult = c.product_id
                         ? phiHarvestWarning(parseFloat(c.phi_days) || null, jobEarliestHarvestDate, jobDate)
-                        : { status: 'ok' as const };
+                        : { status: 'unknown', phiDays: null, earliestHarvest: null, harvestDate: null };
                       if (cmp.status === 'no_rate' && phi.status !== 'inside_window' && !unitMismatch) return null;
                       return (
                         <div className="flex flex-wrap items-center gap-2 text-xs pt-1">
