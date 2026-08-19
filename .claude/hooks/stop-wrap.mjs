@@ -14,7 +14,7 @@
 // before declaring the session done.
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import os from "node:os";
@@ -52,6 +52,43 @@ const meaningful = lines.filter(l => {
     && !p.startsWith("node_modules/");
 });
 
+// ─── Live-applied migrations must have committed source (C3) ──────────────
+// applied-snapshot-invalidate.mjs records every apply_migration into
+// .claude/session-state/applied-source-ledger.json. Any recorded apply with NO
+// matching migration file tracked by git (committed or staged) is a live
+// schema change whose SQL exists nowhere in the repo — the exact failure that
+// reached production three times in 30 days. Match by full basename or by slug
+// (basename minus the numeric stamp), since MCP apply names may omit or differ
+// in the stamp. Satisfied entries are pruned so the nag ends once the file is
+// tracked; unsatisfied entries persist ACROSS sessions until resolved.
+const appliedLedgerPath = path.join(projectDir, ".claude", "session-state", "applied-source-ledger.json");
+let appliedUncontained = [];
+try {
+  if (existsSync(appliedLedgerPath)) {
+    const rawEntries = JSON.parse(readFileSync(appliedLedgerPath, "utf8"));
+    const entries = Array.isArray(rawEntries) ? rawEntries.filter(e => e && String(e.name || "").trim()) : [];
+    if (entries.length > 0) {
+      const trackedNames = new Set();
+      for (const f of runGit(["ls-files", "supabase/migrations"]).split("\n")) {
+        const rel = f.replace(/\\/g, "/").trim();
+        if (!rel.endsWith(".sql")) continue;
+        const base = rel.slice(rel.lastIndexOf("/") + 1, -".sql".length);
+        trackedNames.add(base);
+        trackedNames.add(base.replace(/^\d{8,14}_/, ""));
+      }
+      const isContained = (e) => {
+        const n = String(e.name).trim().replace(/\.sql$/i, "");
+        return trackedNames.has(n) || trackedNames.has(n.replace(/^\d{8,14}_/, ""));
+      };
+      appliedUncontained = entries.filter(e => !isContained(e));
+      // Prune satisfied entries (best-effort; never block the stop over a write).
+      if (appliedUncontained.length < entries.length) {
+        try { writeFileSync(appliedLedgerPath, JSON.stringify(appliedUncontained, null, 2) + "\n"); } catch { /* fail-open */ }
+      }
+    }
+  }
+} catch { /* fail-open — a corrupt ledger must not brick session end */ }
+
 // ─── Acknowledgment escape valve ──────────────────────────────────────────
 // Implements the hook's own promise ("If Mason confirms each item is
 // intentional or already done, you can stop"). When
@@ -84,8 +121,13 @@ function fileContentHash(statusLine) {
     return "na";
   }
 }
-const ackSignature = meaningful
-  .map(l => l.trim() + "\t" + fileContentHash(l))
+// Unresolved live-applies fold into the signature too: Mason may acknowledge
+// one deliberately, but a NEW apply (or a clean tree with an old empty-set ack
+// lying around) re-arms the hook rather than slipping through silently.
+const ackSignature = [
+  ...meaningful.map(l => l.trim() + "\t" + fileContentHash(l)),
+  ...appliedUncontained.map(e => "APPLIED-NO-SOURCE\t" + String(e.name).trim()),
+]
   .sort()
   .join("\n");
 try {
@@ -96,6 +138,14 @@ try {
     process.exit(0);
   }
 } catch { /* no/unreadable ack file — fall through and block as usual */ }
+
+if (appliedUncontained.length > 0) {
+  issues.push(
+    `🚨 ${appliedUncontained.length} migration(s) APPLIED TO LIVE with no committed source file — the SQL is running in production but exists nowhere in the repo. Commit the migration file (supabase/migrations/<stamp>_<name>.sql) before ending the session:\n` +
+    appliedUncontained.slice(0, 8).map(e => `     ${e.name}  (applied ${e.ts || "this session"})`).join("\n") +
+    (appliedUncontained.length > 8 ? `\n     ... and ${appliedUncontained.length - 8} more` : "")
+  );
+}
 
 if (meaningful.length > 0) {
   issues.push(

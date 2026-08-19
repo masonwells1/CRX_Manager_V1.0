@@ -18,11 +18,11 @@
 //   --report          DRY RUN: print the plan in plain text, delete nothing
 //   --write           perform cleanup and print a plain-text report (manual use)
 
-import { readFileSync, existsSync, statSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, statSync, readdirSync, rmSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import path from "node:path";
 import { parseWorktreePorcelain } from "./worktree-awareness-lib.mjs";
-import { planCleanup, HARNESS_MARKER } from "./worktree-cleanup-lib.mjs";
+import { planCleanup, meaningfulDirt, IGNORABLE_DIRT_PATH, HARNESS_MARKER } from "./worktree-cleanup-lib.mjs";
 
 const argv = process.argv.slice(2);
 const REPORT_ONLY = argv.includes("--report");
@@ -104,10 +104,18 @@ try {
     if (r.status !== 0 || r.error) return false; // unknown → treat as NOT merged (safe)
     return !r.stdout.split("\n").some((l) => l.startsWith("+"));
   }
+  function porcelain(wtPath) {
+    const r = gitTry(["status", "--porcelain"], wtPath);
+    return r.ok ? r.out : null; // null = unreadable
+  }
+  // "Dirty" = has MEANINGFUL uncommitted work. A harness-touched
+  // .claude/settings.local.json as the sole dirt does not count (see
+  // IGNORABLE_DIRT_PATH in worktree-cleanup-lib.mjs) — that one file kept 11
+  // fully-merged worktrees alive forever.
   function dirty(wtPath) {
     if (!existsSync(wtPath)) return false; // absent dir → let `git worktree remove` handle/prune it
-    const r = gitTry(["status", "--porcelain"], wtPath);
-    return r.ok ? r.out.split("\n").some((l) => l.trim()) : true; // unreadable → assume dirty (keep)
+    const out = porcelain(wtPath);
+    return out === null ? true : meaningfulDirt(out).length > 0; // unreadable → assume dirty (keep)
   }
 
   // Newest mtime (ms) among a worktree's live-activity markers: its git index,
@@ -165,7 +173,21 @@ try {
     for (const w of plan.removeWorktrees) {
       // Plain `remove` (no --force): git itself refuses if the tree became dirty
       // or locked in a race — a second safety net under the classifier.
-      const rm = gitTry(["worktree", "remove", w.path]);
+      let rm = gitTry(["worktree", "remove", w.path]);
+      if (!rm.ok) {
+        // git refuses when the ONLY dirt is the ignorable harness file too. In
+        // exactly that case (re-checked NOW, not at classification time — the
+        // race safety net stays intact), restore/drop that one file and retry
+        // plain remove once. Never --force: any other dirt still blocks.
+        const out = existsSync(w.path) ? porcelain(w.path) : null;
+        const lines = out === null ? [] : out.split("\n").filter((l) => l.trim());
+        const onlyIgnorableDirt = lines.length > 0 && meaningfulDirt(out).length === 0;
+        if (onlyIgnorableDirt) {
+          const co = gitTry(["checkout", "HEAD", "--", IGNORABLE_DIRT_PATH], w.path); // tracked → restore index+worktree
+          if (!co.ok) { try { rmSync(path.join(w.path, IGNORABLE_DIRT_PATH)); } catch { /* untracked/missing */ } }
+          rm = gitTry(["worktree", "remove", w.path]);
+        }
+      }
       if (!rm.ok) { failed.push({ ...w, kind: "worktree" }); continue; }
       gitTry(["branch", "-D", w.branch]); // free branch now that its worktree is gone
       removed.push({ kind: "worktree", ...w });

@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import {
   classifyWorktree, classifyBranch, planCleanup, normPath,
+  meaningfulDirt, isIgnorableDirtLine, IGNORABLE_DIRT_PATH,
   PROTECTED_BRANCHES, HARNESS_MARKER, ACTIVE_WINDOW_MS,
 } from "./worktree-cleanup-lib.mjs";
 
@@ -111,6 +112,23 @@ ok(plan.keep.every((k) => typeof k.reason === "string" && k.reason), "every kept
 // invariant: nothing unmerged is EVER in a remove list
 const allRemoved = [...plan.removeWorktrees, ...plan.removeBranches];
 ok(allRemoved.every((x) => x.merged === true), "SAFETY: no unmerged item is ever removed");
+
+// ── Ignorable-dirt filter (2026-08-18: settings.local.json noise) ──
+ok(IGNORABLE_DIRT_PATH === ".claude/settings.local.json", "ignorable path stable");
+ok(isIgnorableDirtLine(" M .claude/settings.local.json"), "unstaged modify of the harness file is ignorable");
+ok(isIgnorableDirtLine("M  .claude/settings.local.json"), "staged modify is ignorable");
+ok(isIgnorableDirtLine("?? .claude/settings.local.json"), "untracked copy is ignorable");
+ok(isIgnorableDirtLine(" M .claude\\settings.local.json\r"), "backslashes + CR normalize");
+ok(!isIgnorableDirtLine(" M .claude/settings.json"), "the SHARED settings.json is real dirt");
+ok(!isIgnorableDirtLine(" M src/settings.local.json"), "same basename elsewhere is real dirt");
+ok(!isIgnorableDirtLine("R  .claude/settings.local.json -> src/x.ts"), "renames stay real dirt");
+ok(!isIgnorableDirtLine(" M .claude/settings.local.json.bak"), "suffixed lookalike is real dirt");
+eq(meaningfulDirt(" M .claude/settings.local.json\n"), [], "sole harness-file dirt → clean for cleanup");
+eq(meaningfulDirt(" M .claude/settings.local.json\n M src/app.ts\n"), [" M src/app.ts"],
+  "harness file + real work → only the real work counts");
+eq(meaningfulDirt(""), [], "empty porcelain → clean");
+eq(meaningfulDirt("?? supabase/migrations/x.sql"), ["?? supabase/migrations/x.sql"],
+  "an untracked migration is ALWAYS real dirt");
 
 // normPath sanity
 eq(normPath("C:\\A\\B\\"), "c:/a/b", "normPath lowercases + forward-slashes + strips trailing");

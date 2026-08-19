@@ -31,6 +31,32 @@ export const ACTIVE_WINDOW_MS = 3 * 60 * 60 * 1000; // 3 hours
 // (C:\CRX_Manager, C:\CRX_Layer2, …) live elsewhere and are never auto-removed.
 export const HARNESS_MARKER = "/.claude/worktrees/";
 
+// Machine-local file the Claude harness rewrites in every worktree (permission
+// grants). It is harness noise, not work: a worktree whose ONLY dirt is this
+// file is still "clean" for cleanup purposes. 2026-08-18 hook audit: 11 fully
+// merged agent worktrees were unsweepable because each carried exactly one
+// ` M .claude/settings.local.json` line.
+export const IGNORABLE_DIRT_PATH = ".claude/settings.local.json";
+
+// True iff one `git status --porcelain` line refers to the ignorable file.
+// Rename lines (`R  old -> new`) never match: the arrow keeps the captured
+// path from equaling IGNORABLE_DIRT_PATH exactly, so renames stay real dirt.
+export function isIgnorableDirtLine(line) {
+  const m = /^.{2} "?(.+?)"?$/.exec(String(line || "").replace(/\r$/, ""));
+  if (!m) return false;
+  return m[1].replace(/\\/g, "/") === IGNORABLE_DIRT_PATH;
+}
+
+// Filter `git status --porcelain` output down to the lines that represent REAL
+// uncommitted work. Empty result = clean-for-cleanup.
+export function meaningfulDirt(porcelainText) {
+  return String(porcelainText || "")
+    .split("\n")
+    .map((l) => l.replace(/\r$/, ""))
+    .filter((l) => l.trim())
+    .filter((l) => !isIgnorableDirtLine(l));
+}
+
 // Normalize a filesystem path for comparison: forward slashes, no trailing
 // slash, lowercased (Windows paths are case-insensitive).
 export function normPath(p) {

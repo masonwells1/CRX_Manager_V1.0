@@ -27,7 +27,7 @@
 // this hook cannot break a session. It only ever DELETES a regenerable cache
 // file — it never touches migrations, data, or source.
 
-import { readFileSync, existsSync, rmSync } from "node:fs";
+import { readFileSync, existsSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 
 function emit(text) {
@@ -50,6 +50,32 @@ try {
   if (!/apply_migration/i.test(toolName)) process.exit(0);
 
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+
+  // ── Source-containment ledger (2026-08-18, mistake class C3) ──────────────
+  // Record WHAT was just applied so stop-wrap.mjs can refuse to end the session
+  // while a live-applied migration has no committed source file. Three times in
+  // 30 days a migration ran on production with no file on main; the only
+  // defence was that someone noticed. Entries are pruned by stop-wrap once a
+  // matching tracked file exists. Recording is fail-open: it must never break
+  // an apply, and it happens BEFORE the snapshot early-exit below so an apply
+  // is recorded even when no snapshot file exists.
+  const appliedName = String((payload?.tool_input || payload?.toolInput || {})?.name || "").trim();
+  if (appliedName) {
+    try {
+      const ledgerPath = path.join(projectDir, ".claude", "session-state", "applied-source-ledger.json");
+      let entries = [];
+      try { entries = JSON.parse(readFileSync(ledgerPath, "utf8")); } catch { /* new or corrupt → start fresh */ }
+      if (!Array.isArray(entries)) entries = [];
+      entries.push({
+        name: appliedName,
+        ts: new Date().toISOString(),
+        session: String(payload?.session_id || ""),
+      });
+      mkdirSync(path.dirname(ledgerPath), { recursive: true });
+      writeFileSync(ledgerPath, JSON.stringify(entries, null, 2) + "\n");
+    } catch { /* fail-open */ }
+  }
+
   const snapPath = path.join(projectDir, ".claude", "session-state", "applied-migrations.json");
 
   if (!existsSync(snapPath)) process.exit(0);

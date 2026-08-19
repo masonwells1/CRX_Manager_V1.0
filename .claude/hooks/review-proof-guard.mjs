@@ -60,10 +60,34 @@ if (reviewProofPathMentioned(command)) {
 // Claude's Bash cwd persists across calls. Deny entering the wrapper-owned
 // state directory, and fail closed on shell activity already running there, so
 // a two-call `cd` + bare-filename write cannot evade the path matcher.
+//
+// 2026-08-18: check the ACTUAL cd/pushd/Set-Location target, not "a cd token
+// exists anywhere AND the state dir is mentioned anywhere". The old conjunction
+// denied legitimate commands like `cd <worktree-root> && ls .claude/session-state`
+// (read-only listing after a cd to somewhere unrelated). Targets that cannot be
+// resolved statically (contain $VAR/%VAR%/backtick) stay fail-closed whenever
+// the command also mentions the state directory.
 const shellTool = /(?:bash|powershell|shell|terminal)/i.test(toolName);
-const changesDirectory = /(?:^|[;&|\r\n()]|\s)(?:cd(?:\s+\/d)?|chdir|pushd|set-location)\s+/i.test(command);
-if (shellTool && changesDirectory && reviewStateDirectoryMentioned(command)) {
-  deny("REVIEW PROOF GUARD: the review state directory is wrapper-owned and cannot become an interactive shell working directory.");
+
+// Deny targets that enter the state dir, either directly or as a component
+// step (`cd .claude` then `cd session-state` must not assemble the cwd).
+function cdTargetEntersStateDir(target) {
+  const t = String(target || "").replace(/\\/g, "/").replace(/\/+$/, "");
+  if (/\.claude\/session-state/i.test(t)) return true;
+  const parts = t.split("/").filter(Boolean);
+  if (parts.some((p) => /^session-state$/i.test(p))) return true;
+  return /^\.claude$/i.test(parts[parts.length - 1] || "");
+}
+
+const CD_TARGET_RE = /(?:^|[;&|\r\n()]|\s)(?:cd(?:\s+\/d)?|chdir|pushd|set-location(?:\s+-(?:literal)?path)?)\s+("[^"]*"|'[^']*'|[^\s;&|()]+)/gi;
+if (shellTool) {
+  for (const match of command.matchAll(CD_TARGET_RE)) {
+    const target = match[1].replace(/^["']|["']$/g, "");
+    const unresolvable = /[$%`]/.test(target);
+    if (cdTargetEntersStateDir(target) || (unresolvable && reviewStateDirectoryMentioned(command))) {
+      deny("REVIEW PROOF GUARD: the review state directory is wrapper-owned and cannot become an interactive shell working directory.");
+    }
+  }
 }
 if (shellTool && reviewStateDirectoryMentioned(hookCwd)) {
   deny("REVIEW PROOF GUARD: shell commands from the wrapper-owned review state directory are blocked. Return to the repository root and run the real review wrapper.");

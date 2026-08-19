@@ -2,6 +2,37 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-18 — Hook audit fixes: C3 source-containment guard, worktree-sweep unblock, cd-target fix
+
+Harness only — no app source, migration, or live-state change. The 30-day hook-vs-reality audit
+found one unguarded mistake class that reached production three times and two false-positive/noise
+defects; Mason approved fixing all three:
+
+- **NEW guard — applied-migration source containment (C3):** `applied-snapshot-invalidate.mjs`
+  now records every Supabase MCP `apply_migration` into
+  `.claude/session-state/applied-source-ledger.json`, and `stop-wrap.mjs` blocks session end while
+  any recorded apply has no git-tracked `supabase/migrations/*.sql` match (basename or
+  stamp-stripped slug). Entries persist across sessions until the file is tracked, then prune;
+  unresolved applies fold into the stop-wrap ack signature so a stale acknowledgment can't mask a
+  new one. Previously the only defence was "someone notices" (2026-08-09, PR #371, and the
+  six-file 2026-08-12 incident). Tests: `.claude/hooks/applied-source-containment.test.mjs`,
+  added to `test:correction-guards`.
+- **worktree-cleanup ignores harness noise:** a machine-local `.claude/settings.local.json`
+  modification as the SOLE dirt no longer classifies a worktree as dirty
+  (`meaningfulDirt()`/`IGNORABLE_DIRT_PATH` in `worktree-cleanup-lib.mjs`) — that one file kept 11
+  fully-merged agent worktrees unsweepable. Removal re-checks porcelain at delete time and, only
+  when the ignorable file is still the only dirt, restores it from HEAD (or deletes it if
+  untracked) before one plain-`remove` retry — never `--force`. Dry run against the real fleet:
+  10 zombie worktrees + 1 dead branch now classified removable.
+- **review-proof-guard cd fix:** the shell-cd rule now checks the ACTUAL
+  `cd`/`pushd`/`Set-Location` target instead of denying any command containing both a cd token and
+  a state-dir mention (which blocked legitimate work like
+  `cd <worktree-root> && ls .claude/session-state`). Component steps (`cd .claude` +
+  `cd session-state`) and unresolvable `$VAR` targets alongside a state-dir mention still deny.
+
+Docs updated in `docs/reference/agent-guardrails.md` (four rows). `test:correction-guards` green
+(all suites, 1,200+ assertions incl. the new file).
+
 ## 2026-08-18 — Skills/commands accuracy sweep across the agent workflow surface
 
 Harness only — no app source, migration, or live-state change. A four-agent audit of every

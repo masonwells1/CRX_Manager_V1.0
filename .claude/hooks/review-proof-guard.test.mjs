@@ -22,6 +22,12 @@ for (const payload of [
   { tool_name: "PowerShell", tool_input: { command: "Remove-Item .claude/session-state/codex-review-abc.json" } },
   { tool_name: "Bash", tool_input: { command: "cd .claude/session-state" } },
   { tool_name: "Bash", tool_input: { command: "cd .claude && cd session-state && printf '{}' >claude-review-push.json" } },
+  { tool_name: "Bash", tool_input: { command: 'pushd ".claude/session-state" && ls' } },
+  { tool_name: "PowerShell", tool_input: { command: "Set-Location -Path .claude\\session-state" } },
+  { tool_name: "PowerShell", tool_input: { command: "Set-Location -LiteralPath 'C:\\repo\\.claude\\session-state'" } },
+  // Unresolvable cd target + state-dir mention elsewhere stays fail-closed.
+  { tool_name: "Bash", tool_input: { command: 'X=.claude/session-state; cd "$X"' } },
+  { tool_name: "Bash", tool_input: { command: "cd session-state/sub" } },
   { tool_name: "Bash", cwd: "C:\\repo\\.claude\\session-state", tool_input: { command: "printf {} > harmless-name.json" } },
   { tool_name: "Bash", tool_input: { command: "printf {} > codex-review-forged.json" } },
   { tool_name: "Bash", tool_input: { command: "rm codex-review-forged.json;ls" } },
@@ -36,5 +42,12 @@ for (const payload of [
 
 assert.equal(run({ tool_name: "Write", tool_input: { file_path: "docs/review.md", content: "ok" } }).stdout, "");
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "node scripts/run-claude-review.mjs --scope base-main" } }).stdout, "");
+// 2026-08-18 false-positive class: a cd to an UNRELATED literal directory plus a
+// read-only mention of the state dir must be allowed — only the cd TARGET matters.
+assert.equal(run({ tool_name: "Bash", tool_input: { command: 'cd "C:\\CRX_Manager\\.claude\\worktrees\\skills-audit-x" && wc -l src/app.ts; ls .claude/session-state 2>/dev/null' } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd /c/repo && cat .claude/session-state/README.md" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd .claude/hooks && node review-proof-guard.test.mjs" } }).stdout, "");
+// Unresolvable target WITHOUT any state-dir mention is fine.
+assert.equal(run({ tool_name: "Bash", tool_input: { command: 'cd "$HOME/projects" && ls' } }).stdout, "");
 
 console.log("OK - review proof guard checks passed.");
