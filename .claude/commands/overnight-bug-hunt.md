@@ -77,7 +77,7 @@ candidate digest to a file first, then:
 # Build the prompt file: per finding — title, file, one-line evidence, impact, severity.
 # Keep it to <=3-4 findings per call (more times out at high reasoning).
 cat > .claude/session-state/finding-gate-prompt.txt <<'EOF'
-Independent Sol/high gate for the CRX overnight bug hunt. READ-ONLY repo + migration access (the sandbox CANNOT reach the live DB, so ground against repo/migration files). For EACH finding output: "#N: REAL | NOT-REAL | NEEDS-EVIDENCE — <=2 lines evidence (file:line) — corrected severity". Be skeptical; default NOT-REAL without proof.
+Independent Sol/high gate for the CRX overnight bug hunt. READ-ONLY repo + migration access. This gate runs with `--ignore-user-config`, so NO database connector is loaded for it — ground against repo/migration files. For EACH finding output: "#N: REAL | NOT-REAL | NEEDS-EVIDENCE — <=2 lines evidence (file:line) — corrected severity". Be skeptical; default NOT-REAL without proof.
 <paste the 3-4 candidate findings here>
 EOF
 # Split streams — a `2>&1 | tee` merge pulls the multi-hundred-KB reasoning trace
@@ -89,7 +89,7 @@ cat .claude/session-state/codex-finding-gate-latest.txt   # ← read THIS (the v
 # launch error / usage limit) — read the trace file for the reason and re-run.
 # "gate produced nothing" is never "gate found nothing".
 ```
-Keep only findings Codex marks **REAL**. Where Codex and Claude disagree on a BLOCKER/HIGH (e.g. a severity split), **keep both positions** in `REPORT.md` for Mason — never silently resolve. (For a DB-touching candidate, Claude runs the live evidence gate first on its side — `npm run db-sweeps` predicates executed read-only via Supabase MCP + the RPC's smoke chain — since Codex's sandbox can't.)
+Keep only findings Codex marks **REAL**. Where Codex and Claude disagree on a BLOCKER/HIGH (e.g. a severity split), **keep both positions** in `REPORT.md` for Mason — never silently resolve. (For a DB-touching candidate, Claude runs the live evidence gate first on its side — `npm run db-sweeps` predicates executed read-only via Supabase MCP + the RPC's smoke chain — because this gate's Codex run is launched with `--ignore-user-config` and has no DB connector loaded, not because Codex lacks live-DB reach.)
 
 ### Step 3 — Draft fixes (green tier only this cycle)
 For each Codex-confirmed **green** finding (`fixKind` frontend-only / docs-or-test): make the minimal, surgical edit that matches surrounding style. For each **yellow** finding: write the migration/edge-fn draft + rolled-back-validate it against live (multi-statement `execute_sql` in a transaction that ends in ROLLBACK / `plpgsql_check`) — but **do not apply**; it parks.

@@ -2,6 +2,49 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-19 — Corrected the false "Codex cannot reach the live DB" premise in the bug-hunt commands
+
+Harness only — no app source, migration, or live-state change. `codex-driven-bug-hunt.md:17`
+justified the Claude/Codex division of labor with "Codex's read-only sandbox cannot reach the live
+database." That is false as a capability statement, and it is the same sentence that propagated into
+`docs/plans/2026-08-18-product-data-model-PRD.md` on 2026-08-18 and told an executor Codex "cannot
+re-derive" live facts (Mason caught it; the PRD was fixed, the source was not).
+
+- **What is actually true.** Codex's Supabase access is **write-enabled** by Mason's 2026-08-14
+  decision (`docs/manual/DECISION_LOG.md`); `.codex/config.toml` declares `read_only=false` with
+  `features=database,...`. The bug-hunt runs genuinely have no database connector, but because
+  `scripts/codex-hunt.mjs` and `scripts/overnight-codex-gate.mjs` both pass **`--ignore-user-config`**,
+  which drops the Supabase/Vercel/GitHub plugins for that invocation — a deliberate launch flag for
+  those runs, not a limit on Codex.
+- **Current-state caveats, verified 2026-08-19 and now recorded inline.** The tracked
+  `.codex/config.toml` entry's OAuth grant is **still dead** — real
+  `failed to refresh OAuth tokens for server supabase` / `invalid_grant` runtime errors in
+  `~/.codex/sessions` as recently as 2026-08-17 — so it carries essentially no traffic. The channel
+  last observed serving real Supabase calls is the built-in `codex_apps/supabase` App connector,
+  whose scope is an **owner-only toggle in the Codex app's settings, not represented in or verified
+  by any repo file**. Capability is therefore unproven in both directions, and the command now carries
+  an explicit "do not restate this as 'Codex cannot reach the live database'" warning.
+- **The design rationale survives on its original footing.** The load-bearing independence argument
+  was always the two-model split — the model that *finds* is not the model that *verifies*, and the
+  model that *writes* the fix is not the model that *reviews* it. That never depended on DB reach.
+  Keeping the hunter connector-free stays the deliberate choice: it keeps a write-capable connector
+  out of an unattended loop and forces the Claude-side live grounding to actually happen.
+- Same wrong reason fixed in two downstream copies (the hunter prompt at `:73`, Claude's verify step
+  at `:100`) and in `overnight-bug-hunt.md`'s mirrored Codex finding-gate prompt. **The first sweep
+  missed two more copies** because it searched the long phrasing ("cannot reach") and not the
+  contraction: `codex-driven-bug-hunt.md:1` — the description line, the first sentence any agent
+  reads — still said "which Codex's sandbox can't reach", contradicting the new warning 20 lines
+  below it, and `overnight-bug-hunt.md:92` said "since Codex's sandbox can't". Both are now fixed;
+  an adversarial `claude-fable-5` review of the branch caught them. Sweep the *concept*
+  (`can't reach`, `cannot reach`, `sandbox can't`, `Codex can't`), not one phrasing. The remaining
+  `CHANGELOG`/`KNOWN_ISSUES` mentions are correct historical records of the old state and are
+  deliberately left alone. Adapters regenerated (`sync-agent-workflows --write`, 37 files — the two
+  bug-hunt adapters are pointer stubs, so their content is unchanged) and
+  `npm run test:agent-workflows` green.
+- **Still open (owner-only):** nobody can verify from this repo whether the `codex_apps/supabase`
+  App connector is currently read-only or write-enabled. Mason's 2026-08-14 approval may or may not
+  have been applied to that toggle; recording its actual state would close the blind spot.
+
 ## 2026-08-18 — Hook audit fixes: C3 source-containment guard, worktree-sweep unblock, cd-target fix
 
 Harness only — no app source, migration, or live-state change. The 30-day hook-vs-reality audit
