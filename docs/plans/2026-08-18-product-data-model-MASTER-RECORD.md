@@ -1229,7 +1229,7 @@ which you have since deferred entirely.
 | 13 blank SKUs | Resolved so every SKU is unique |
 | 3 duplicate name groups | Resolved |
 | `1A TEST PRODUCT - FAKE PRODUCT` | Removed from the working set — **deactivated, never hard-deleted** |
-| 13 whitespace-only EPA registrations | Trimmed to empty, so a bulk EPA lookup does not fail on them |
+| 13 whitespace-only EPA registrations | Trimmed to **NULL**, so a bulk EPA lookup does not fail on them. Not empty string — an empty string still counts as non-NULL and would recreate B-22's miscount |
 | 11 blank `product_form` rows | Classified liquid or dry — **units checked first**, because the live trigger can reject the classification (C-26) |
 
 **Done when:** every SKU identifies exactly one sellable, no row was hard-deleted, and all
