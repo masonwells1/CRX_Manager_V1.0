@@ -3,6 +3,9 @@
 **Last verified: 2026-08-19 UTC, read-only live re-read.** **Live ledger high-water is `20260816174353` at 971 rows**, carrying submitted name `20260813080000_lock_quote_versions_writes_to_rpc` — which is also the highest *timestamp-prefixed* `name`, so both orderings agree on the same row. (Stated that way deliberately: only **345** of the 971 ledger names carry a 14-digit timestamp prefix — 346 if the single 8-digit `20260207_gap_analysis_fixes.sql` is counted (the `.sql` suffix is part
 of the stored ledger name), and `docs/reference/migration-history.md` uses the 14-digit definition, so this file now matches it. A plain `max(name)` returns the slug `year_end_summary`. The ordering claim holds over the prefixed subset, not over the raw column.) Two things this pass corrected in this file: (1) the header below claimed `20260812003315` / 962 rows, **nine applies** and six days of ledger staleness out of date — the six 2026-08-12 recoveries listed below, then `20260812212323`, `20260813011751` and `20260816174353`, which is 962 + 9 = 971; (2) CRX-SEC-1 **applied live on 2026-08-16** — see the new CLOSED entry immediately below — while `docs/reference/migration-history.md` row 886 still called it an unapplied local candidate. `.claude/schema-registry.json` was regenerated from live introspection on 2026-08-16 and records `migrations_high_water` `20260816174353`, matching this ledger; it was **not** re-derived in this pass. **The 2026-08-10 money figures quoted further down this file are stale** — a read-only re-measure on 2026-08-18 finds `order_items.total_price`, `order_items.profit`, `commissions.commission_amount` and `commissions.order_profit` all at **0** sub-cent rows, with only `quotes.total_cost` still holding **2**; the "43 dirty rows" and "49 rows" figures below are superseded by that measurement (recorded in full in `docs/manual/CURRENT_STATE.md` section 2). Everything else below was left as separately dated historical evidence and was not re-verified in this pass.
 
+**Superseded 2026-08-17 header, kept for provenance — ledger high-water only.** Live ledger high-water is **`20260816174353` at 971 rows**, carrying submitted name `20260813080000_lock_quote_versions_writes_to_rpc`. This pass re-read the live ledger and nothing else: it corrects a high-water this document was stating wrongly, and it does **not** re-certify the issue narrative below, which keeps its own older dates. **The schema registry is NOT refreshed to this high-water** — it is still stamped to the 962-row mark and is now nine migrations behind. Beyond the six migrations named in the next paragraph, three more have landed since: ledger versions `20260812212323`, `20260813011751`, `20260816174353`, carrying submitted names `20260812130145_bind_return_receipts_to_intent_and_restore_overdue`, `20260813070000_pin_return_idempotency_helper_contract`, `20260813080000_lock_quote_versions_writes_to_rpc`. Ledger versions are UTC and Supabase applies may assign a version different from the submitted filename, so match the recorded **name** when reconciling an apply.
+
+
 **Superseded 2026-08-12 header, kept for provenance:** live ledger high-water was `20260812003315` at 962 rows, carrying submitted name `20260811230423_log_customer_sales_rep_assignment`. The Customer 360 assignment RPC is live with atomic customer timestamp/activity logging, one overload, the reviewed security/search-path/grant shape, and no table, column, enum, generated-column, signature, or public-function-name-count change. The schema registry was genuinely refreshed through the same high-water. Ledger versions are UTC and Supabase applies may assign a version different from the submitted filename, so match the recorded name when reconciling an apply. The historical Team Board, money, and commission-payout details below remain separately dated evidence rather than claims that their older high-waters are current.
 
 **Repository/production gap reopened and re-closed on 2026-08-12 — six migrations, and the prevention gap is still OPEN.** The high-water quoted in the paragraph above (`20260812003315`, 962 rows) was overtaken the same day. Six further migrations applied live on 2026-08-12 — ledger versions `20260812034831`, `20260812034951`, `20260812145628`, `20260812151606`, `20260812154028`, `20260812154757`, carrying submitted names `20260812010000_blend_ticket_order_header_runtime_assert`, `20260812011000_restore_quote_version_whole_cent_money`, `20260812115235_snapshot_cost_reporting`, `20260812115236_quote_items_cost_at_quote_snapshot`, `20260812115237_enforce_below_cost_admin_approval`, `20260812115238_repair_historical_order_line_cents` — **applied by concurrent sessions that never landed their files.** For part of that day none of the six existed on `main`, on any pushed branch, or in any local worktree, so SQL touching order money, quote cost, report math and a new approval table was running against production with no one able to review it, and a clean rebuild from `main` would have produced a schema without it. The **files** side is now closed: all six were recovered verbatim from the applying sessions' transcripts (not reconstructed from live `prosrc`, which loses the header, preconditions and review history), md5-verified against live `pg_proc.prosrc`, and landed as history rows 880-885. **The prevention side is not closed.** Nothing yet stops the next session from applying a migration and not landing its file; this is the third occurrence of a migration applying live with **no file landed anywhere** (2026-08-09, 2026-08-11 via PR #371, 2026-08-12) and the only current defence is that someone notices. A durable fix — a hard guard that reconciles the live ledger against tracked files and fails a check when they disagree — is not written.
@@ -30,6 +33,111 @@ The remaining fractional historical rows described below are still tracked data 
 This file consolidates (does not replace) the source documents it points to. If this file and a source disagree, trust the source and fix this file.
 
 ---
+
+## OPEN 2026-08-19 — PR #404 stamps quote-line provenance, defers the FK, and settles superseded prices
+
+**Status: reworked on branch `claude/draw-down-price-tier-lines`, NOT applied, NOT merged. Awaiting
+Mason's explicit approval for both.**
+
+PR #404's tier split originally identified a price tier by the `(price_per_unit,
+cost_at_quote_cents)` pair. That key is neither unique (two booked lines at the same price collapse
+into one tier) nor immutable (three separate paths rewrite the cost snapshot), so attributing
+already-billed units to tiers was a guess. The rework makes a tier **one booked quote line** and
+stamps `order_items.quote_item_id` on every line the partial-draw path writes, so the next draw
+resolves attribution by identity.
+
+**The blocker that discovery surfaced, verified link by link against live on 2026-08-19.**
+`_save_quote_below_cost_impl_20260810` begins every quote edit with `DELETE FROM quote_sections
+WHERE quote_id = v_quote_id`, and `quote_items_section_id_fkey` is `ON DELETE CASCADE`, so that one
+statement removes every `quote_items` row for the quote. `order_items_quote_item_id_fkey` was plain
+`NO ACTION` and not deferrable (`confdeltype 'a'`, `condeferrable false`), so it is checked at the
+end of that DELETE — before any reinsert. **Any stamped order line therefore made its quote
+un-editable, with a raw foreign-key violation surfacing to the user.** `save_quote` carries no
+guard that would catch this first: its body contains no reference to `orders`, `booking_draw`, or a
+`QUOTE_LOCKED` refusal. Live blast radius before this migration was 1 stamped line of 288 (written
+by the full-conversion path); after it, every partially drawn booking would be affected.
+
+**Resolution: `ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED`** — the check moves to COMMIT, by
+which time `save_quote` has reinserted the same `quote_items` ids, so an ordinary revision leaves
+every stamp intact. **This replaces the `ON DELETE SET NULL` rule an earlier draft of this entry
+described, which was reviewed and found wrong.** SET NULL fires on *every* save of an existing
+quote, including a save that changes nothing, so it wiped every stamp every time: that resets the
+telescoping rounding basis (re-opening the fractional overbill the migration exists to close) and
+strands a partly-drawn two-price booking behind `DRAW_MIXED_TIER_UNMATCHED_LINE`, whose message
+tells the operator to undo a revision SET NULL has already made impossible to undo. The old draft
+rejected DEFERRABLE on the belief that id reuse required the client to echo ids; live `prosrc` read
+on 2026-08-19 shows that is wrong in both halves — no current page echoes ids, and `save_quote`'s
+id-less fallback reuses prior ids without them. The constraint is matched **structurally on catalog
+columns**, not on `pg_get_constraintdef` text, because that rendering depends on the applying
+session's `search_path` and a text match could raise a false drift abort. A postflight asserts both
+halves of the rule (still NO ACTION, now deferred), and the block refuses to adopt a SET NULL rule
+if it finds one.
+
+**Pricing rule (Mason, 2026-08-19): a price change never rebills delivered product.** Each tier's
+billed history is partitioned by whether the order line was billed at the price the quote line
+carries *today*. Units billed at the current price stay in the telescoping rounding basis. Units
+billed at any other price are **settled**: they still consume the tier's capacity, so the product
+cannot be re-sold, but they are never re-based and their money never enters the basis. New units
+bill at the new price from a fresh basis. Genuine early-price errors are corrected with a credit
+memo. A postflight name tripwire (`units_current` / `units_settled`) refuses the apply if that
+split is ever dropped, because the failure is silent — the allocation still sums, so
+`DRAW_ALLOCATION_MISMATCH` would not catch it.
+
+**Residual, deliberately NOT fixed here.** `save_quote`'s id-less fallback reuses the *lowest*
+unconsumed prior id for a product, not the operator's line. On a quote carrying two lines of one
+product this is normally unreachable — re-saving such a quote already fails closed on
+`QUOTE_ITEM_AMBIGUOUS_COST`. The one crack is deleting one of the two lines (which sends a single
+id-less row, so the ambiguity test passes) while the two lines share a cost: one prior id never
+returns, and if an order line was stamped with it the save aborts at COMMIT on a raw foreign-key
+error. That is **fail-closed** — the whole save rolls back, no money moves, no stamp is silently
+lost. Closing it properly means giving `save_quote` real line identity, which is the same defect
+`QUOTE_ITEM_AMBIGUOUS_COST` already is, with its own blast radius and its own PR.
+
+**Proof standing behind the rework (2026-08-19; live was never written to).** Ran on a throwaway
+PostgreSQL 17.6 in Docker, the same version live runs:
+
+- The reworked tier query — lifted **verbatim** out of the migration, not retyped — parses and runs.
+- Seven money scenarios all pass against expected values: a price raised mid-booking bills
+  `40 × $1.00 + 60 × $1.50 = $130.00`; four 0.25-unit draws on a `$1.01` unit still telescope to
+  exactly `$1.01`; a price changed and changed back bills `80 × $1.00 + 20 × $1.50`; a two-tier
+  booking with a price change between draws bills `100 × $1 + 50 × $2 + 50 × $3 = $350.00`; and a
+  fully drawn line whose price is then changed is **refused** (`DRAW_ALLOCATION_MISMATCH`) rather
+  than re-sold.
+- **Mutation-tested:** restoring the pre-rework projection makes that first scenario bill
+  `$150.00` instead of `$130.00` — a silent $20 rebill of 40 already-delivered units — so the
+  scenario genuinely detects the regression rather than passing vacuously.
+- The migration's **real FK `DO` block** was executed: it installs `confdeltype 'a'`,
+  `condeferrable true`, `condeferred true`; it is idempotent on a second run; and it refuses a
+  drifted `ON DELETE SET NULL` rule instead of adopting it.
+- A `save_quote`-shaped delete-and-reinsert **preserves the stamp** under the new rule; the same
+  shape **aborts** under the old non-deferrable rule and **silently wipes the stamp** under the
+  retired SET NULL rule; and the residual case above **fails closed** with no orphan committed.
+
+**Not verified: the file has never been applied end to end by a server** — the preflight requires
+the cutover barrier (`20260816110000`) committed in a prior transaction. That happens only at
+apply, which needs Mason's OK.
+
+---
+
+## OPEN 2026-08-19 — blend-ticket linkage picks ONE order line per product, which multi-tier orders break
+
+Confirmed against live `pg_proc` on 2026-08-19. Not caused by PR #404 and not fixed by it; PR #404
+makes the first one reachable more often by emitting several order lines per product.
+
+1. **`link_blend_ticket_to_order`** attaches a blend ticket product to a single order line via
+   `ORDER BY oi.sort_order NULLS LAST, oi.id LIMIT 1` and records the ticket's whole quantity as
+   `quantity_applied` against it. On a tier-split order the product now has several lines, so the
+   link lands entirely on the first tier. **Money impact is currently nil**: `quantity_applied` is
+   written by this function and by `create_order_from_blend_ticket` and is read by nothing —
+   no other function, and no frontend code outside type declarations and a test fixture. It is an
+   audit/linkage record, so this is a correctness and traceability defect, not a billing one.
+2. **`create_invoice_from_blend_ticket`** prices a ticket product from the quote with `SELECT
+   qi.price_per_unit ... WHERE qi.section_id = ... AND qi.product_id = ... ORDER BY qi.id LIMIT 1`.
+   `qi.id` is a random uuid, so on a booking with two lines for one product at different prices the
+   invoice picks an **arbitrary** tier's price for the whole ticket quantity. This is a live money
+   defect today, independent of PR #404 — multi-line bookings already exist as quote data whether or
+   not the draw splits order lines. Deliberately not fixed in PR #404: it needs its own design
+   decision about how a ticket quantity is split across tiers.
 
 ## CLOSED 2026-08-16 — CRX-SEC-1: a sales rep could forge a quote-version cost basis and inflate their own commission
 
@@ -253,6 +361,7 @@ So: 12 gaps → 11 closed by the reconcile → 1 `cancelled` left by design → 
 
 **Decision owed by Mason.** Whether to add whole-cent CHECK constraints to `commissions.commission_amount` and `commissions.order_profit` now that both columns measure clean — which would make the current state enforced instead of merely observed — and whether to re-derive the one $0.01 `pending` snapshot. Both stay read-only until Mason approves a migration.
 
+
 ---
 
 ## OPEN 2026-08-14 — `draw_down_quote` never rounds the weighted average PRICE, and the whole-cent guard rejects it
@@ -385,6 +494,25 @@ Mason's decision 2026-08-14 was to log this bug and fix it separately rather tha
 the recovery PR. **No migration here is approved for apply** — PR #404 landing on `main` does not
 apply anything; the live apply is a separate, explicit decision. Do not re-diagnose this from
 scratch; the live evidence is above.
+
+**Status of the tier-split candidate: LOCAL CANDIDATE — NOT APPLIED.** Both required gate reviewers
+returned zero blockers and a further adversarial pass found one HIGH, since fixed in-file (a draw
+against a soft-deleted booking — see the CRX-RLS-001 note on row 887). Every scenario was re-proven
+end-to-end on throwaway PostgreSQL 17 databases and the full typecheck/lint/test/build pipeline is
+green. **Nothing has touched the live database.** The live apply still needs Mason's explicit
+approval and the standard apply-guard proof. Row 887 of `docs/reference/migration-history.md`
+carries the file's pinned SQL hash and the apply obligations.
+
+The first rounding attempt's branch, `claude/draw-down-price-rounding`, was deleted on 2026-08-16;
+its tip is preserved as tag `abandoned/draw-down-price-rounding` so the abandoned work stays
+recoverable without a live branch inviting a third attempt.
+
+**Ignore the contrary record on `claude/known-issues-drawdown-defect`.** That local-only, unpushed
+branch records the opposite choice ("keep the exact line total, round only the stored unit price")
+and attributes it to Mason, who did not make it. It has no pull request and cannot reach `main`. One
+finding on it is genuine and worth keeping: the live ledger's ordering high-water must be read from
+the `name` stamp, not `max(version)` — on 2026-08-16 those read `20260813070000` and
+`20260813011751` respectively, a three-day understatement.
 
 ---
 
