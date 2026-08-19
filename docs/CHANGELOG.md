@@ -19,7 +19,7 @@ marker; that was accurate when written and is now superseded by this entry. The 
 timestamp column, so the commonly quoted 2026-08-16 17:43:53 UTC is read off the version stamp — the
 apply is observed, the clock time is inferred.
 
-**Five docs were stale about it, not three — and only four of them called it unapplied.** (Seven
+**Five docs were stale about it, not three — and only two of them called it unapplied.** (Seven
 docs are corrected overall; the other two are covered under "Also corrected" below.) A doc pass on
 2026-08-18 found three. `docs/manual/CURRENT_STATE.md` and `docs/reference/migration-history.md`
 row 886 both still called the fix an unapplied local candidate. `docs/manual/KNOWN_ISSUES.md` was
@@ -87,7 +87,7 @@ repair by `20260812115238_repair_historical_order_line_cents` on 2026-08-12 with
 approval. The enforced/deferred counts are now **8 and 4**, not 7 and 5. The same paragraph also named
 `purchase_orders.total_cost` as neither converted nor constrained; that column has carried a `bigint`
 `total_cost_cents` companion and a validated CHECK pinning the numeric to `cents / 100.0` since
-`20260716183501_purchase_order_integer_cents` — three weeks *before* the 2026-08-10 evaluation that
+`20260716183501_purchase_order_integer_cents` — 25 days *before* the 2026-08-10 evaluation that
 declined conversion — as has `purchase_order_items.unit_cost`. Both errors pointed the same way:
 they told a future agent that settled, enforced money work was still open, which is how a closed
 decision gets re-opened. The 2026-08-10 **decision** itself is unchanged; what moved is which columns

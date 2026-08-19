@@ -43,9 +43,10 @@ below, `20260813070000` was applied the evening of 08-12 and its `version` (`202
 **behind** its `name`. **The ordering guard compares `name` stamps** — that is the rule that matters,
 and it does not depend on which way `version` fell. The 2026-08-16 `migration-drift-reviewer` run
 read the recorded high-water as stale because the value it compared was a `version`
-(`20260813011751`), not a `name` stamp. Row 879 below already records both, so the comparison can be made
-on the right one. What this correction changed is the pointer: the sentence used to cite row 49,
-which records only the `version`.
+(`20260813011751`), not a `name` stamp. Row 879 below records both the `version` (`20260813011751`) and the
+`name` (`20260813070000`), so the comparison can be made on the right one. What this correction
+changed is the pointer: the sentence used to cite **row 49**, which is an unrelated 2026-02-17
+commission-payments entry (`20260217210000`) and records neither of those two values.
 
 **Pre-apply read, 2026-08-16 (historical — not current state).** CHECK 6 cleared for
 `20260813080000_lock_quote_versions_writes_to_rpc`: `20260813080000` sorted strictly above the live

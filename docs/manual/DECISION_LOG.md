@@ -250,15 +250,33 @@ only ones whose gate status is established. Other legacy dollar columns exist ac
 none are constrained — under the rule above they are unapproved tracked debt, not grandfathered.
 Extending the programme to them is unstarted work.
 
-> **`purchase_orders.total_cost` was listed in that sentence as unconverted and unconstrained until
-> 2026-08-18; it was wrong when written.** Read-only live check, 2026-08-19 UTC (the evening of
-> 2026-08-18 local): `purchase_orders.total_cost_cents` and `purchase_order_items.unit_cost_cents`
-> are `bigint` and have been since `20260716183501_purchase_order_integer_cents`, three weeks
-> before the 2026-08-10 evaluation, and the validated CHECKs `purchase_orders_total_cost_whole_cents`
-> and `purchase_order_items_unit_cost_whole_cents` pin each numeric column to `cents / 100.0`.
-> That is the *converted* shape this decision declined for orders and quotes — the numeric column is
-> a derived mirror of an authoritative bigint. Those two columns are not tracked debt, and an agent
-> should not open a conversion task for them.
+> **`purchase_orders.total_cost` was listed in that sentence as unconverted *and* unconstrained
+> until 2026-08-18. The "unconstrained" half was wrong; the "unconverted" half was right, and a
+> correction written on 2026-08-18 overshot by claiming the column was converted. Both halves are
+> restated here from live.** Read-only live check, 2026-08-19 UTC (the evening of 2026-08-18 local).
+>
+> **Constrained: yes.** `purchase_orders_total_cost_whole_cents` and
+> `purchase_order_items_unit_cost_whole_cents` are present and validated, and each pins its numeric
+> dollar column to `cents / 100.0`. Note the names end `_whole_cents`, not `_whole_cents_chk`.
+> That is why they are **not** part of the count of 8 below: that count is the eight
+> `*_whole_cents_chk` constraints on the twelve columns the 2026-08-10 evaluation measured, and
+> these two columns were never in that set of twelve.
+>
+> **Converted: no.** `purchase_orders.total_cost_cents` and `purchase_order_items.unit_cost_cents`
+> are `bigint`, and have been since `20260716183501_purchase_order_integer_cents` — 25 days before
+> the 2026-08-10 evaluation. But `information_schema.columns` reports `is_generated = ALWAYS` for
+> both: they are `GENERATED ALWAYS AS (round(<numeric dollars> * 100))` mirrors. The **numeric
+> dollar column is the authoritative store and the bigint is derived from it**, which is the
+> opposite of a conversion. `data_type = bigint` alone cannot tell the two apart; only
+> `is_generated`/`generation_expression` can. (One useful side effect: the generation expression
+> rejects non-finite input on its own — `round('NaN'::numeric * 100)::bigint` raises
+> `cannot convert NaN to bigint` — so a NaN or Infinity can never reach the mirror column.)
+>
+> **So these two columns are the same approved compatibility exception as `orders.total_cost`** —
+> numeric-dollar authoritative storage, exact `numeric` math, clean whole-cent values, validated
+> whole-cent CHECK — **not** completed conversions, and not tracked debt either. Converting them to
+> authoritative bigint remains open work under the standing rule, exactly as it does for orders and
+> quotes; nothing here closes that, and nothing here re-opens the 2026-08-10 decision.
 
 **Gate satisfied — CHECK enforced (8):** `orders.total_cost`, `orders.total_profit`,
 `order_items.total_price`, `order_items.profit`, `quotes.total_price`, `quotes.total_profit`,
@@ -274,8 +292,12 @@ Extending the programme to them is unstarted work.
 | `commissions.order_profit` | holds 3 of 35 legacy fractional-cent rows | awaiting data repair |
 | `orders.total_price` | data is clean; `_update_order_items_impl` overwrites it with the raw un-rounded line sum, so constraining it would reject ordinary edits | blocked on fixing that writer |
 
-Repairing the dirty values across the first three rows rewrites stored money and needs Mason's
-separate approval on its own migration — it is **not** covered by the 2026-08-10 decision.
+Repairing the dirty values in the first three rows above — `quotes.total_cost`,
+`commissions.commission_amount` and `commissions.order_profit` — rewrites stored money and needs
+Mason's separate approval on its own migration; it is **not** covered by the 2026-08-10 decision.
+(`orders.total_price`, the fourth row, has clean data and is blocked on a writer fix, not a
+repair.) See the note directly below: two of those three now measure **0** dirty rows live, so the
+repair scope is smaller than this table's 2026-08-10 counts suggest.
 
 > **The counts in the table above are the 2026-08-10 measurement and are stale as live state
 > (read-only re-measure, 2026-08-18).** Live now returns `commissions.commission_amount` **0**,

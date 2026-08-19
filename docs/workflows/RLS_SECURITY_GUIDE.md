@@ -178,10 +178,21 @@ Used on: `financial_audit_log`
 > cell can still be imprecise even though its `-` vs non-`-` shape is
 > verified. The `quotes` correction above is exactly that failure mode, found
 > by a later review rather than by the sweep.
+>
+> Because `quotes` was clearly not going to be the only one, a later
+> mechanical pass re-derived every cell's role set from the live
+> `USING`/`WITH CHECK` expressions across **both** matrices and corrected
+> every cell claiming **"All authenticated"** where live is role-gated —
+> `profiles`, `blend_recipes` and `financial_audit_log` in this table.
+> Of the **89** cells that pass flagged, that class accounted for 28; it now
+> reports **61 remaining candidate mismatches** at the level of *which named
+> role*, not yet triaged and tracked as an OPEN entry in
+> `docs/manual/KNOWN_ISSUES.md`. See the fuller note in the matching banner
+> in `docs/reference/database-schema.md`.
 
 | Table | SELECT | INSERT | UPDATE | DELETE |
 |-------|--------|--------|--------|--------|
-| profiles | All authenticated | Own/Admin | Own/Admin | - |
+| profiles | Own/Admin | Own/Admin | Own/Admin | - |
 | products | All authenticated | Admin | Admin | Admin |
 | cost_history | Admin | - (no INSERT policy) | - | - |
 | customers | Admin / Sales Rep (assigned) / Driver (has delivery) | Admin / Sales Rep | Admin / Sales Rep (assigned) | Admin |
@@ -210,8 +221,8 @@ Used on: `financial_audit_log`
 | notifications | Own user_id | Admin / Sales Rep / own user_id | Own user_id | Admin |
 | invoices | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | invoice_items | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
-| financial_audit_log | Admin | All authenticated | - | - |
-| blend_recipes | All authenticated | Admin / Sales Rep | Admin / Sales Rep | Admin |
+| financial_audit_log | Admin | Admin / own actor_user_id | - | - |
+| blend_recipes | Admin / Sales Rep / Applicator | Admin / own created_by | Admin / own created_by | Admin |
 | warehouses | All authenticated | Admin | Admin | Admin |
 | cycle_counts | Admin | Admin | Admin | Admin |
 | returns | Admin / Sales Rep / requester | - (RPC only, since `20260715203911`) | Admin / requester | Admin |

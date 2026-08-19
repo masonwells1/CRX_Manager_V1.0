@@ -219,15 +219,39 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 > tables are the deny-all kind — one `ALL` policy is present, and it grants
 > nothing — so a mechanical presence-diff would have "corrected" them into
 > appearing to grant access. They were excluded from the mechanical pass and
-> checked by reading their policy bodies against live instead. And policy
-> *presence* per command is what was compared mechanically; the role wording
-> inside each cell was transcribed by hand from the policy's `USING`/`WITH
-> CHECK` expression, so a cell can still be imprecise even though its "grants
-> something" vs "grants nothing" shape is verified.
+> checked by reading their policy bodies against live instead.
+>
+> **The same trap has a second form, and the presence-diff fell into it.** A
+> policy row in `pg_policies` carries a `permissive` column, and a
+> **RESTRICTIVE** policy never grants anything — it only subtracts from what
+> permissive policies already allow. `rate_limit_log` carries exactly one
+> permissive policy (`SELECT`, admin) plus one restrictive `FOR ALL`
+> (`rate_limit_log_restrictive_admin_only`). A diff keyed on `cmd` alone
+> read that restrictive row as four granted commands and "corrected" the row
+> to `Admin` across all four; in fact no browser role can insert, update or
+> delete. That is fixed above, and it is the only row affected: a live read on
+> 2026-08-19 UTC confirms this is the **only** restrictive policy in the whole
+> `public` schema.
+>
+> **Role wording — partially verified, and not finished.** Policy *presence*
+> per command is what the original sweep compared. The role wording inside
+> each cell was transcribed by hand. A later mechanical pass re-derived each
+> cell's role set from live `USING`/`WITH CHECK` expressions and corrected
+> every cell in both matrices that claimed **"All authenticated"** where live
+> is role-gated, plus the `rate_limit_log` row above. Of the **89** cells that
+> pass flagged, those two classes accounted for 28; re-running it now reports
+> **61 remaining candidate mismatches** at the level of *which named role*, many
+> of which are expected to be artifacts of matching helper functions by name
+> (a policy that inlines a `profiles.role = 'admin'` subquery instead of
+> calling `is_admin()` reads as "no role" to the classifier). **Those are
+> not yet triaged**, and are tracked as an OPEN entry in
+> `docs/manual/KNOWN_ISSUES.md`. Until that is done, treat a cell's *named
+> role* as indicative and its "grants something / grants nothing" shape as
+> verified.
 
 | Table | SELECT | INSERT | UPDATE | DELETE |
 |-------|--------|--------|--------|--------|
-| profiles | All authenticated | Own/Admin | Own/Admin | - |
+| profiles | Own/Admin | Own/Admin | Own/Admin | - |
 | products | All authenticated | Admin | Admin | Admin |
 | cost_history | Admin | - (no INSERT policy) | - | - |
 | product_cost_basis *(Phase 2 live)* | RPC only | RPC only | RPC only (close active row) | RPC only |
@@ -239,7 +263,7 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | quote_sections | All authenticated | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) |
 | quote_product_draws | Admin / Sales Rep | - (SECDEF RPCs only) | - (SECDEF RPCs only) | - (SECDEF RPCs only) |
 | quote_items | Admin / Sales Rep | - (RPC only, since `20260812115236` dropped `qitems_insert`/`qitems_update`/`qitems_delete`) | - (RPC only) | - (RPC only) |
-| quote_versions | Admin / Sales Rep | - (`create_quote_version` RPC only) | - | - |
+| quote_versions | Admin / Sales Rep | - (`create_quote_version` RPC only, since `20260813080000`, ledger version `20260816174353`) | - | - |
 | orders | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | order_items | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | inventory | Admin / Sales Rep / Driver | Admin | Admin | Admin |
@@ -261,7 +285,7 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | activity_feed | All authenticated | Own performed_by | - | - |
 | notifications | Own user_id | Admin / Sales Rep / own user_id | Own user_id | Admin |
 | app_settings | All authenticated | Admin | Admin | - |
-| blend_tickets | All authenticated | - (no INSERT policy) | Own uploaded_by / Admin | - |
+| blend_tickets | Admin / Sales Rep | - (no INSERT policy) | Admin / Sales Rep | - |
 | ingredient_map | All authenticated | Admin | Admin | Admin |
 | unit_conversions | All authenticated | Admin | Admin | - |
 | invoices | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
@@ -271,11 +295,11 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | invoice_line_allocations | Admin / Sales Rep | Admin / Sales Rep | - | - (no DELETE policy) |
 | prepay_credits | Admin / Sales Rep | Admin | Admin | Admin |
 | prepay_applications | Admin / Sales Rep | Admin / Sales Rep | - | - (no DELETE policy) |
-| financial_audit_log | Admin | All authenticated | - | - |
-| blend_recipes | All authenticated | Admin / Sales Rep | Admin / Sales Rep | Admin |
+| financial_audit_log | Admin | Admin / own actor_user_id | - | - |
+| blend_recipes | Admin / Sales Rep / Applicator | Admin / own created_by | Admin / own created_by | Admin |
 | blend_recipe_items | All authenticated | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
-| blend_ticket_to_order_items | All authenticated | - (no INSERT policy) | - | - (no DELETE policy) |
-| blend_ticket_fields | All authenticated | All authenticated | All authenticated | All authenticated |
+| blend_ticket_to_order_items | Admin / Sales Rep | - (no INSERT policy) | - | - (no DELETE policy) |
+| blend_ticket_fields | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
 | warehouses | All authenticated | Admin | Admin | Admin |
 | cycle_counts | Admin | Admin | Admin | Admin |
 | cycle_count_items | Admin | Admin | Admin | Admin |
@@ -288,7 +312,7 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | applicator_licenses | Admin / Sales Rep | Admin | Admin | Admin |
 | rebate_programs | Admin | Admin | Admin | Admin |
 | rebate_claims | Admin | Admin | Admin | Admin |
-| vendors | All authenticated | - (no write policy) | - (no write policy) | - (no write policy) |
+| vendors | Admin / Sales Rep | - (no write policy) | - (no write policy) | - (no write policy) |
 | vendor_bills | Admin | Admin | Admin | Admin |
 | vendor_payments | Admin | Admin | - | Admin |
 | rup_sales_records | Admin | Admin | - | - |
@@ -299,13 +323,13 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | order_shares | Admin / order salesman | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
 | idempotency_keys | - (policy exists but is `USING (false)`; SECURITY DEFINER only) | - (same) | - (same) | - (same) |
 | offline_action_receipts | Owner / Admin / Sales via sanitized RPC only | - (SECURITY DEFINER RPC only) | - (SECURITY DEFINER RPC only) | - |
-| rate_limit_log | Admin | Admin | Admin | Admin |
+| rate_limit_log | Admin | - (restrictive only) | - (restrictive only) | - (restrictive only) |
 | note_tags | All authenticated | All authenticated | Admin / Own | Admin |
-| team_note_tags | All authenticated | All authenticated | - | All authenticated |
+| team_note_tags | All authenticated | Note creator / Admin | - | Note creator / Admin |
 | note_activity_log | All authenticated | All authenticated | - | - |
 | field_crop_history | Admin / Sales Rep / Applicator | Admin / Sales Rep | Admin / Sales Rep | Admin |
-| field_app_locations | All authenticated | All authenticated | All authenticated | All authenticated |
-| field_app_location_shares | All authenticated | All authenticated | All authenticated | All authenticated |
+| field_app_locations | Admin / Sales Rep / Applicator | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
+| field_app_location_shares | Admin / Sales Rep / Applicator | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
 
 ## Field Application Workflow V2 / Phase 1 (2026-04-29)
 - `field_app_locations` - Links fields to invoices or jobs (id uuid PK, invoice_id, job_id, **invoice_group_id**, field_id, map_number, total_acres, planted_acres, applied_acres, crop_type, wind_direction, sort_order). **Phase 1:** added `invoice_group_id` and updated CHECK to allow `invoice_id IS NOT NULL OR job_id IS NOT NULL OR invoice_group_id IS NOT NULL`. For multi-customer grouped invoices, locations live at the group level; single-customer invoices keep `invoice_id`. RLS: all ops for authenticated.

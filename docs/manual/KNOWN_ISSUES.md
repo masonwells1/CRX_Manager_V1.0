@@ -44,6 +44,51 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-08-19 — the RLS matrices' *named roles* are only partially verified against live
+
+**Severity: LOW-MED (documentation accuracy in a security reference; no live access defect
+implied).** Two documents carry an RLS permission matrix: `docs/reference/database-schema.md` (79
+rows) and `docs/workflows/RLS_SECURITY_GUIDE.md` (37 rows). PR #420 machine-compared both against
+live `pg_policies` and fixed every **presence** disagreement — which commands have a policy at all
+— so each cell's "grants something" vs "grants nothing" shape is verified as of 2026-08-19 UTC.
+
+**The role wording inside each cell is a weaker claim, and it is not finished.** A second mechanical
+pass re-derived each cell's role set from the live `USING`/`WITH CHECK` expressions and corrected
+the unambiguous class — every cell claiming **"All authenticated"** where live is in fact role-gated
+(`profiles`, `blend_tickets`, `blend_recipes`, `blend_ticket_to_order_items`,
+`blend_ticket_fields`, `vendors`, `financial_audit_log`, `team_note_tags`,
+`field_app_locations`, `field_app_location_shares`), plus `rate_limit_log`, whose three write
+cells had been "corrected" *into* existence by a presence-diff that mistook a RESTRICTIVE policy for
+a granting one.
+
+That same pass flagged **89 cells across 113 rows / 452 cells checked**. The two classes corrected
+above account for 28 of them; re-running the pass against the corrected matrices now reports **61
+remaining flags**, all at the level of *which named role* rather than whether access exists. **Those
+61 are not triaged, and they are not all real.** The classifier detects roles by matching helper-function names (`is_admin()`,
+`is_sales_rep()`, `is_applicator()`, `is_driver()`) in the policy expression, so it produces two
+known families of false positive:
+
+1. A policy that inlines `profiles.role = 'admin'` as a subquery instead of calling `is_admin()`
+   reads as "no role named" — e.g. `vendors_select` — and the doc cell saying `Admin` is right
+   while the classifier flags it.
+2. A cell that names a role by how the row is reached rather than by a role check — e.g. the
+   `Driver (assigned)` cells on `deliveries`, where access is `driver_id = auth.uid()` — is
+   correct English and reads as an unmatched role name to the classifier.
+
+The genuine-signal direction is the reverse one: cells where **live grants a role the doc omits**
+(candidates include `customers` SELECT / applicator, `cycle_counts` and `rebate_*` SELECT /
+sales_rep, `fields` SELECT / applicator) and cells where the doc names a role live does **not**
+grant (candidates include `delivery_items` UPDATE and `prepay_applications` INSERT, which name
+Sales Rep where live appears admin-only).
+
+**To close this**, each of the 61 flagged `(table, command)` pairs needs its live `USING`/`WITH CHECK`
+expression read by hand and the cell rewritten or confirmed. Do not bulk-apply the classifier's
+output — that is exactly the mistake that produced the `rate_limit_log` row. Until then, both
+matrix banners say so explicitly, and a cell's *named role* should be treated as indicative while
+its grants-something/grants-nothing shape is verified.
+
+---
+
 ## OPEN 2026-08-18 — the session-staleness hook measures disk filename stamps against a server-assigned ledger version
 
 **Severity: LOW (latent silent skip; no incident observed).** `.claude/schema-registry.json` stores
