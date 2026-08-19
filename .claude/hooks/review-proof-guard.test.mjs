@@ -180,6 +180,14 @@ for (const payload of [
   // session-state basename must STILL deny (only stop-wrap-ack.json is opened).
   { tool_name: "Write", tool_input: { file_path: ".claude/session-state/stop-wrap-ack.json.bak", content: "{}" } },
   { tool_name: "Write", tool_input: { file_path: ".claude/session-state/harmless.json", content: "{}" } },
+  // The exemption is WRITE-destination-only and case-sensitive (CodeRabbit PR
+  // #430): a move/delete that merely names the ack file (source OR destination),
+  // and a case-variant name, must STILL deny — only a genuine Write/Edit to the
+  // canonical lowercase path opens.
+  { tool_name: "mcp__filesystem__move_file", tool_input: { source: ".claude/session-state/stop-wrap-ack.json", destination: "/tmp/x" } },
+  { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x.json", destination: ".claude/session-state/stop-wrap-ack.json" } },
+  { tool_name: "mcp__filesystem__delete_file", tool_input: { path: ".claude/session-state/stop-wrap-ack.json" } },
+  { tool_name: "Write", tool_input: { file_path: ".claude/session-state/STOP-WRAP-ACK.JSON", content: "{}" } },
 ]) {
   const result = run(payload);
   assert.equal(result.status, 0);
