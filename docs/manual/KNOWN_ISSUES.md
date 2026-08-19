@@ -1,6 +1,6 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-08-18 UTC, read-only live re-read.** **Live ledger high-water is `20260816174353` at 971 rows**, carrying submitted name `20260813080000_lock_quote_versions_writes_to_rpc` — which is also the highest `name` stamp, so both orderings agree on the same row. Two things this pass corrected in this file: (1) the header below claimed `20260812003315` / 962 rows, **nine applies** and six days out of date — the six 2026-08-12 recoveries listed below, then `20260812212323`, `20260813011751` and `20260816174353`, which is 962 + 9 = 971; (2) CRX-SEC-1 **applied live on 2026-08-16** — see the new CLOSED entry immediately below — while `docs/reference/migration-history.md` row 886 still called it an unapplied local candidate. `.claude/schema-registry.json` was regenerated from live introspection on 2026-08-16 and records `migrations_high_water` `20260816174353`, matching this ledger; it was **not** re-derived in this pass. **The 2026-08-10 money figures quoted further down this file are stale** — a read-only re-measure on 2026-08-18 finds `order_items.total_price`, `order_items.profit`, `commissions.commission_amount` and `commissions.order_profit` all at **0** sub-cent rows, with only `quotes.total_cost` still holding **2**; the "43 dirty rows" and "49 rows" figures below are superseded by that measurement (recorded in full in `docs/manual/CURRENT_STATE.md` section 2). Everything else below was left as separately dated historical evidence and was not re-verified in this pass.
+**Last verified: 2026-08-19 UTC, read-only live re-read.** **Live ledger high-water is `20260816174353` at 971 rows**, carrying submitted name `20260813080000_lock_quote_versions_writes_to_rpc` — which is also the highest `name` stamp, so both orderings agree on the same row. Two things this pass corrected in this file: (1) the header below claimed `20260812003315` / 962 rows, **nine applies** and six days out of date — the six 2026-08-12 recoveries listed below, then `20260812212323`, `20260813011751` and `20260816174353`, which is 962 + 9 = 971; (2) CRX-SEC-1 **applied live on 2026-08-16** — see the new CLOSED entry immediately below — while `docs/reference/migration-history.md` row 886 still called it an unapplied local candidate. `.claude/schema-registry.json` was regenerated from live introspection on 2026-08-16 and records `migrations_high_water` `20260816174353`, matching this ledger; it was **not** re-derived in this pass. **The 2026-08-10 money figures quoted further down this file are stale** — a read-only re-measure on 2026-08-18 finds `order_items.total_price`, `order_items.profit`, `commissions.commission_amount` and `commissions.order_profit` all at **0** sub-cent rows, with only `quotes.total_cost` still holding **2**; the "43 dirty rows" and "49 rows" figures below are superseded by that measurement (recorded in full in `docs/manual/CURRENT_STATE.md` section 2). Everything else below was left as separately dated historical evidence and was not re-verified in this pass.
 
 **Superseded 2026-08-12 header, kept for provenance:** live ledger high-water was `20260812003315` at 962 rows, carrying submitted name `20260811230423_log_customer_sales_rep_assignment`. The Customer 360 assignment RPC is live with atomic customer timestamp/activity logging, one overload, the reviewed security/search-path/grant shape, and no table, column, enum, generated-column, signature, or public-function-name-count change. The schema registry was genuinely refreshed through the same high-water. Ledger versions are UTC and Supabase applies may assign a version different from the submitted filename, so match the recorded name when reconciling an apply. The historical Team Board, money, and commission-payout details below remain separately dated evidence rather than claims that their older high-waters are current.
 
@@ -44,7 +44,7 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## OPEN 2026-08-19 — the RLS matrices' *named roles* are only partially verified against live
+## CLOSED 2026-08-19 — the RLS matrices' *named roles*, verified cell by cell against live
 
 **Severity: LOW-MED (documentation accuracy in a security reference; no live access defect
 implied).** Two documents carry an RLS permission matrix: `docs/reference/database-schema.md` (79
@@ -52,46 +52,88 @@ rows) and `docs/workflows/RLS_SECURITY_GUIDE.md` (37 rows). PR #420 machine-comp
 live `pg_policies` and fixed every **presence** disagreement — which commands have a policy at all
 — so each cell's "grants something" vs "grants nothing" shape is verified as of 2026-08-19 UTC.
 
-**The role wording inside each cell is a weaker claim, and it is not finished.** A second mechanical
-pass re-derived each cell's role set from the live `USING`/`WITH CHECK` expressions and corrected
-the unambiguous class — every cell claiming **"All authenticated"** where live is in fact role-gated
-(`profiles`, `blend_tickets`, `blend_recipes`, `blend_ticket_to_order_items`,
-`blend_ticket_fields`, `vendors`, `financial_audit_log`, `team_note_tags`,
-`field_app_locations`, `field_app_location_shares`), plus `rate_limit_log`, whose three write
-cells had been "corrected" *into* existence by a presence-diff that mistook a RESTRICTIVE policy for
-a granting one.
+**The role wording inside each cell was a weaker claim; it has since been closed.** A second
+mechanical pass re-derived each cell's role set from the live `USING`/`WITH CHECK` expressions and
+corrected the unambiguous class — every cell claiming **"All authenticated"** where live is in fact
+role-gated (`profiles`, `blend_tickets`, `blend_recipes`, `blend_ticket_to_order_items`,
+`blend_ticket_fields`, `vendors`, `financial_audit_log`, `team_note_tags`, `field_app_locations`,
+`field_app_location_shares`, plus `field_crop_history` and `notifications`, which the earlier
+presence pass had already corrected), and `rate_limit_log`, whose three write cells had been
+"corrected" *into* existence by a presence-diff that mistook a RESTRICTIVE policy for a granting
+one.
 
-That same pass flagged **89 cells across 113 rows / 452 cells checked**. (113 = the 79 rows of the
-`database-schema.md` matrix plus the 37 of the `RLS_SECURITY_GUIDE.md` matrix, minus the 3 whose
-table-name cell carries an inline annotation — `product_cost_basis`,
-`product_cost_basis_change_rows` and `product_cost_basis_rollout` — which the classifier's bare
-identifier match skips. 113 rows x 4 commands = 452 cells.) The two classes corrected
-above account for 28 of them; re-running the pass against the corrected matrices now reports **61
-remaining flags**, all at the level of *which named role* rather than whether access exists. **Those
-61 are not triaged, and they are not all real.** The classifier detects roles by matching helper-function names (`is_admin()`,
-`is_sales_rep()`, `is_applicator()`, `is_driver()`) in the policy expression, so it produces two
-known families of false positive:
+**Flag counts, and why the number is a proxy rather than a defect count.** The classifier scans
+**113 rows / 452 cells**. (113 = the 79 rows of the `database-schema.md` matrix plus the 37 of the
+`RLS_SECURITY_GUIDE.md` matrix, minus the 3 whose table-name cell carries an inline annotation —
+`product_cost_basis`, `product_cost_basis_change_rows` and `product_cost_basis_rollout` — which the
+classifier's bare identifier match skips. 113 rows x 4 commands = 452 cells.) Measured at each
+revision of PR #420:
 
-1. A policy that inlines `profiles.role = 'admin'` as a subquery instead of calling `is_admin()`
-   reads as "no role named", so the doc cell saying `Admin` is right while the classifier flags it.
-   Worked example: `email_log` INSERT is governed by the single policy `email_log_admin_insert`,
-   whose `WITH CHECK` is `EXISTS (SELECT 1 FROM profiles WHERE profiles.id = auth.uid() AND
-   profiles.role = 'admin' AND profiles.is_active)`. The matrix cell reads `Admin` and is correct.
-2. A cell that names a role by how the row is reached rather than by a role check — e.g. the
-   `Driver (assigned)` cells on `deliveries`, where access is `driver_id = auth.uid()` — is
-   correct English and reads as an unmatched role name to the classifier.
+| Revision | Flags | What changed |
+|---|---|---|
+| `origin/main` | 162 | pre-PR baseline |
+| `7d5d5d80` | 89 | presence pass (which incidentally closed 73) |
+| `21f29c4a` | 61 | role-wording pass — the "All authenticated" class, 28 cells |
+| this commit | 33 | hand-triage of every remaining flag against live |
 
-The genuine-signal direction is the reverse one: cells where **live grants a role the doc omits**
-(candidates include `customers` SELECT / applicator, `cycle_counts` and `rebate_*` SELECT /
-sales_rep, `fields` SELECT / applicator) and cells where the doc names a role live does **not**
-grant (candidates include `delivery_items` UPDATE and `prepay_applications` INSERT, which name
-Sales Rep where live appears admin-only).
+Earlier drafts of this entry quoted **89** and **61** with no baseline attached, which is why the 89
+could not be reproduced against `origin/main`. Quote the revision with the count. And the count
+tracks accuracy only loosely: correcting `rup_sales_records` SELECT from `Admin` to
+`Admin / Sales Rep` — live is `role = ANY (ARRAY['admin','sales_rep'])`, so the fix is real —
+*raised* the count by one, because the classifier detects roles by matching helper-function names
+(`is_admin()`, `is_sales_rep()`, `is_applicator()`, `is_driver()`) and that policy inlines its
+role test as a scalar subquery.
 
-**To close this**, each of the 61 flagged `(table, command)` pairs needs its live `USING`/`WITH CHECK`
-expression read by hand and the cell rewritten or confirmed. Do not bulk-apply the classifier's
-output — that is exactly the mistake that produced the `rate_limit_log` row. Until then, both
-matrix banners say so explicitly, and a cell's *named role* should be treated as indicative while
-its grants-something/grants-nothing shape is verified.
+**All 33 remaining flags were read individually against live `pg_policies` on 2026-08-19 UTC and
+are false positives**, in three families:
+
+1. **Inlined role test.** A policy that spells out `profiles.role = 'admin'` as a subquery instead
+   of calling `is_admin()` reads as "no role named", so a cell saying `Admin` is right while the
+   classifier flags it. Worked example: `email_log` INSERT is governed by the single policy
+   `email_log_admin_insert`, whose `WITH CHECK` is `EXISTS (SELECT 1 FROM profiles WHERE
+   profiles.id = auth.uid() AND profiles.role = 'admin' AND profiles.is_active)`. The matrix cell
+   reads `Admin` and is correct. Same family: `ar_reminder_tracking`, `failed_notifications` (one
+   `FOR ALL` policy covering all four commands), `rup_sales_records`, `team_note_attachments`
+   DELETE, `vendor_bills`, `vendor_payments`, and `vendors` SELECT (two policies — live rows for
+   admin and sales_rep, soft-deleted rows for admin only).
+2. **Role named by how the row is reached.** The `Driver` cells on `deliveries`, `delivery_items`,
+   `delivery_photos` and `delivery_remainders`, where live is `assigned_driver = auth.uid()` — for
+   `delivery_remainders`, the *original* delivery's assigned driver. Correct English, unmatched
+   role name. (An earlier draft of this entry gave the column as `driver_id`; live is
+   `assigned_driver`.)
+3. **Deferred to another table's RLS.** `invoice_items` SELECT is an `EXISTS` over the parent
+   invoice carrying exactly the `invoices_select` predicate and no auth test of its own;
+   `offline_action_receipts` SELECT is owner-or-(admin/sales_rep) with the role test inlined.
+
+**What the hand-triage corrected**, each verified against live `pg_policies` before the cell was
+rewritten:
+
+- `customers`, `delivery_items`, `delivery_photos`, `cycle_counts`, `rebate_programs`,
+  `rebate_claims`, `prepay_applications`, `fields`, `email_log`, `note_tags`, `team_note_tags`,
+  `note_activity_log` — cells naming a role live does not grant, or omitting one it does.
+- `invoices` / `invoice_items` SELECT: live is `is_admin() OR created_by = auth.uid() OR
+  salesman_id = auth.uid()`. There is no `is_sales_rep()` branch, so a sales rep who is neither
+  the creator nor the assigned salesman cannot read the invoice; `Admin / Sales Rep` overstated it.
+- `blend_recipe_items` writes: `is_admin() OR parent recipe.created_by = auth.uid()` — the same
+  shape as the `blend_recipes` parent row this PR had already corrected. The child row was missed
+  in that sweep.
+- `applicator_licenses`: SELECT is `is_active_profile()` with no role test, and INSERT/UPDATE are
+  `is_admin() OR is_sales_rep()`. The row was wrong in both directions at once.
+- `field_billing_defaults` SELECT, `cycle_count_items` SELECT, `rup_sales_records` SELECT — live
+  grants a role the doc omitted.
+- `deliveries` UPDATE, `delivery_remainders` SELECT, `job_loader_worksheets` INSERT,
+  `cycle_count_items` writes — the cell named the right roles but dropped a condition live
+  enforces (delivery status `in_progress`/`completed`, the original delivery's driver,
+  `created_by = auth.uid()`, parent count `in_progress`).
+
+**"All authenticated"** in both matrices means live `is_active_profile()`: signed in *and*
+`profiles.is_active`. A deactivated profile is authenticated but denied. All 14 cells using the
+phrase were re-read on 2026-08-19 UTC and each is governed by exactly one policy whose `USING` is
+`( SELECT is_active_profile() )`. Both matrix banners now say so.
+
+**If this is ever re-run, do not bulk-apply the classifier's output** — that is exactly the mistake
+that produced the `rate_limit_log` row. The classifier locates candidates; live `pg_policies` is
+the proof.
 
 ---
 

@@ -185,19 +185,23 @@ Used on: `financial_audit_log`
 > every cell claiming **"All authenticated"** where live is role-gated —
 > `profiles`, `blend_recipes` and `financial_audit_log` in this table.
 > Of the **89** cells that pass flagged, that class — together with the
-> `rate_limit_log` row and the `blend_recipes` write cells, which sit in the
-> `database-schema.md` matrix rather than this one — accounted for 28; it now
-> reports **61 remaining candidate mismatches** at the level of *which named
-> role*, not yet triaged and tracked as an OPEN entry in
-> `docs/manual/KNOWN_ISSUES.md`. See the fuller note in the matching banner
-> in `docs/reference/database-schema.md`.
+> `rate_limit_log` row, which sits only in the `database-schema.md` matrix,
+> and the `blend_recipes` write cells, which appear in **both** matrices —
+> accounted for 28, taking the count to 61. A later hand-triage of every
+> remaining flag against live `pg_policies` took it to **33**, each of which
+> was read individually and confirmed correct on 2026-08-19 UTC. The full
+> trajectory (162 on `origin/main` → 89 → 61 → 33), the three false-positive
+> families that make up the 33, and the definition of **"All authenticated"**
+> as live `is_active_profile()` are in the matching banner in
+> `docs/reference/database-schema.md`; the per-cell working is in the CLOSED
+> entry in `docs/manual/KNOWN_ISSUES.md`.
 
 | Table | SELECT | INSERT | UPDATE | DELETE |
 |-------|--------|--------|--------|--------|
 | profiles | Own/Admin | Own/Admin | Own/Admin | - |
 | products | All authenticated | Admin | Admin | Admin |
 | cost_history | Admin | - (no INSERT policy) | - | - |
-| customers | Admin / Sales Rep (assigned) / Driver (has delivery) | Admin / Sales Rep | Admin / Sales Rep (assigned) | Admin |
+| customers | Admin / Sales Rep (assigned) / Driver (recent delivery) / Applicator (recent job) / dispatched to a job location | Admin / Sales Rep (assigned) | Admin / Sales Rep (assigned) | Admin |
 | customer_addresses | All authenticated | Admin / Sales Rep (own customer) | Admin / Sales Rep (own customer) | Admin |
 | quotes | Admin / Sales Rep | Admin / Sales Rep (own) | Admin / Sales Rep (own) | Admin |
 | quote_sections | All authenticated | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) |
@@ -211,26 +215,26 @@ Used on: `financial_audit_log`
 | purchase_orders | Admin / Sales Rep | Admin | Admin | Admin |
 | purchase_order_items | Admin / Sales Rep | Admin | Admin | Admin |
 | receiving_records | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
-| deliveries | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep | Admin / Sales Rep / Driver (assigned) | Admin |
-| delivery_items | Admin / Sales Rep / Driver (via delivery) | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
-| delivery_photos | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep / active Driver | Admin | Admin |
-| delivery_remainders | Admin / Sales Rep / Driver | Admin / Sales Rep | Admin / Sales Rep | Admin |
+| deliveries | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep | Admin / Sales Rep / Driver (assigned, while in_progress or completed) | Admin |
+| delivery_items | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep | Admin | Admin / Sales Rep |
+| delivery_photos | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep / active Driver (assigned) | Admin | Admin |
+| delivery_remainders | Admin / Sales Rep / Driver (assigned to the original delivery) | Admin / Sales Rep | Admin / Sales Rep | Admin |
 | commissions | Admin / Sales Rep (own recipient) | Admin | Admin | Admin |
 | payments | Admin / Sales Rep | - (RPC only, since `20260714223000`) | - (RPC only) | - (RPC only) |
 | team_notes | All authenticated | Own created_by | Own created_by / Admin | Admin |
 | team_note_comments | Any active profile | Own created_by | Own created_by / Admin | Own created_by / Admin |
 | activity_feed | All authenticated | Own performed_by | - | - |
 | notifications | Own user_id | Admin / Sales Rep / own user_id | Own user_id | Admin |
-| invoices | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
-| invoice_items | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
+| invoices | Admin / Own created_by / Assigned salesman | Admin / Sales Rep | Admin | Admin |
+| invoice_items | Any visible invoice (inherits `invoices` RLS) | Admin / Sales Rep | Admin | Admin |
 | financial_audit_log | Admin | Admin / own actor_user_id | - | - |
 | blend_recipes | Admin / Sales Rep / Applicator | Admin / own created_by | Admin / own created_by | Admin |
 | warehouses | All authenticated | Admin | Admin | Admin |
-| cycle_counts | Admin | Admin | Admin | Admin |
+| cycle_counts | Admin / Sales Rep | Admin | Admin | Admin |
 | returns | Admin / Sales Rep / requester | - (RPC only, since `20260715203911`) | Admin / requester | Admin |
 | return_items | Admin / Sales Rep / return requester | - (RPC only, since `20260715203911`) | - (RPC only) | - (RPC only) |
-| rebate_programs | Admin | Admin | Admin | Admin |
-| rebate_claims | Admin | Admin | Admin | Admin |
+| rebate_programs | Admin / Sales Rep | Admin | Admin | Admin |
+| rebate_claims | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 
 ---
 

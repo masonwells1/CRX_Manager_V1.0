@@ -235,23 +235,45 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 > 2026-08-19 UTC confirms this is the **only** restrictive policy in the whole
 > `public` schema.
 >
-> **Role wording — partially verified, and not finished.** Policy *presence*
-> per command is what the original sweep compared. The role wording inside
-> each cell was transcribed by hand. A later mechanical pass re-derived each
-> cell's role set from live `USING`/`WITH CHECK` expressions and corrected
+> **Role wording — mechanically re-derived, then hand-verified.** Policy
+> *presence* per command is what the original sweep compared. The role wording
+> inside each cell was transcribed by hand. A later mechanical pass re-derived
+> each cell's role set from live `USING`/`WITH CHECK` expressions and corrected
 > every cell in both matrices that claimed **"All authenticated"** where live
 > is role-gated, plus the `rate_limit_log` row above and the `blend_recipes`
 > INSERT/UPDATE cells, where live is `is_admin() OR created_by = auth.uid()` —
-> narrower than the `Admin / Sales Rep` those two cells had claimed. Of the
-> **89** cells that pass flagged, those corrections accounted for 28; re-running it now reports
-> **61 remaining candidate mismatches** at the level of *which named role*, many
-> of which are expected to be artifacts of matching helper functions by name
-> (a policy that inlines a `profiles.role = 'admin'` subquery instead of
-> calling `is_admin()` reads as "no role" to the classifier). **Those are
-> not yet triaged**, and are tracked as an OPEN entry in
-> `docs/manual/KNOWN_ISSUES.md`. Until that is done, treat a cell's *named
-> role* as indicative and its "grants something / grants nothing" shape as
-> verified.
+> narrower than the `Admin / Sales Rep` those two cells had claimed. Every flag
+> that pass left standing has since been read against live `pg_policies` by
+> hand and either corrected or confirmed, so as of **2026-08-19 UTC** both the
+> presence shape *and* the named roles are verified.
+>
+> The classifier's flag count across both matrices, measured at each revision:
+> **162** on `origin/main`, **89** after the presence pass (`7d5d5d80`), **61**
+> after the role-wording pass (`21f29c4a`), **33** now. Read that as a *proxy*,
+> not a defect count: correcting `rup_sales_records` SELECT from `Admin` to
+> `Admin / Sales Rep` — live is `role = ANY (ARRAY['admin','sales_rep'])`, so
+> the fix is real — *raised* it by one, because the classifier matches
+> helper-function names (`is_admin()`, `is_sales_rep()`, `is_applicator()`,
+> `is_driver()`) and that policy inlines its role test as a scalar subquery.
+>
+> All **33** surviving flags are false positives of three kinds: (1) a policy
+> that inlines `profiles.role = 'admin'` rather than calling `is_admin()` reads
+> as "no role named" — `ar_reminder_tracking`, `email_log`,
+> `failed_notifications`, `rup_sales_records`, `team_note_attachments`,
+> `vendor_bills`, `vendor_payments`, `vendors`; (2) a cell that names a role by
+> *how the row is reached* rather than by a role check — the `Driver` cells on
+> `deliveries`, `delivery_items`, `delivery_photos` and `delivery_remainders`,
+> where live is `assigned_driver = auth.uid()`; (3) a cell that defers to
+> another table's RLS — `invoice_items`, `offline_action_receipts`. The
+> per-cell working is in the now-CLOSED entry in
+> `docs/manual/KNOWN_ISSUES.md`.
+>
+> **"All authenticated"** in these matrices is shorthand for live
+> `is_active_profile()`: any signed-in user whose `profiles.is_active` is true.
+> A deactivated profile is authenticated but denied, so "all authenticated" is
+> the looser of the two readings. All 14 cells that use the phrase were re-read
+> on 2026-08-19 UTC and each is governed by exactly one policy whose `USING` is
+> `( SELECT is_active_profile() )`.
 
 | Table | SELECT | INSERT | UPDATE | DELETE |
 |-------|--------|--------|--------|--------|
@@ -261,7 +283,7 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | product_cost_basis *(Phase 2 live)* | RPC only | RPC only | RPC only (close active row) | RPC only |
 | product_cost_basis_change_rows *(Phase 2 live)* | RPC only | RPC only | RPC only | RPC only |
 | product_cost_basis_rollout *(live Wells canary)* | RPC only | RPC only | RPC only | RPC only |
-| customers | Admin / Sales Rep (assigned) / Driver (has delivery) | Admin / Sales Rep | Admin / Sales Rep (assigned) | Admin |
+| customers | Admin / Sales Rep (assigned) / Driver (recent delivery) / Applicator (recent job) / dispatched to a job location | Admin / Sales Rep (assigned) | Admin / Sales Rep (assigned) | Admin |
 | customer_addresses | All authenticated | Admin / Sales Rep (own customer) | Admin / Sales Rep (own customer) | Admin |
 | quotes | Admin / Sales Rep | Admin / Sales Rep (own) | Admin / Sales Rep (own) | Admin |
 | quote_sections | All authenticated | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) |
@@ -277,10 +299,10 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | purchase_order_items | Admin / Sales Rep | Admin | Admin | Admin |
 | receiving_records | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | receiving_photos | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
-| deliveries | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep | Admin / Sales Rep / Driver (assigned) | Admin |
-| delivery_items | Admin / Sales Rep / Driver (via delivery) | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
-| delivery_photos | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep / active Driver | Admin | Admin |
-| delivery_remainders | Admin / Sales Rep / Driver | Admin / Sales Rep | Admin / Sales Rep | Admin |
+| deliveries | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep | Admin / Sales Rep / Driver (assigned, while in_progress or completed) | Admin |
+| delivery_items | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep | Admin | Admin / Sales Rep |
+| delivery_photos | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep / active Driver (assigned) | Admin | Admin |
+| delivery_remainders | Admin / Sales Rep / Driver (assigned to the original delivery) | Admin / Sales Rep | Admin / Sales Rep | Admin |
 | commissions | Admin / Sales Rep (own recipient) | Admin | Admin | Admin |
 | payments | Admin / Sales Rep | - (RPC only, since `20260714223000`) | - (RPC only) | - (RPC only) |
 | team_notes | All authenticated | Own created_by | Own created_by / Admin | Admin |
@@ -292,35 +314,35 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | blend_tickets | Admin / Sales Rep | - (no INSERT policy) | Admin / Sales Rep | - |
 | ingredient_map | All authenticated | Admin | Admin | Admin |
 | unit_conversions | All authenticated | Admin | Admin | - |
-| invoices | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
-| invoice_items | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
+| invoices | Admin / Own created_by / Assigned salesman | Admin / Sales Rep | Admin | Admin |
+| invoice_items | Any visible invoice (inherits `invoices` RLS) | Admin / Sales Rep | Admin | Admin |
 | allocation_sets | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | order_line_allocations | Admin / Sales Rep | Admin / Sales Rep | - | - (no DELETE policy) |
 | invoice_line_allocations | Admin / Sales Rep | Admin / Sales Rep | - | - (no DELETE policy) |
 | prepay_credits | Admin / Sales Rep | Admin | Admin | Admin |
-| prepay_applications | Admin / Sales Rep | Admin / Sales Rep | - | - (no DELETE policy) |
+| prepay_applications | Admin / Sales Rep | Admin | - | - (no DELETE policy) |
 | financial_audit_log | Admin | Admin / own actor_user_id | - | - |
 | blend_recipes | Admin / Sales Rep / Applicator | Admin / own created_by | Admin / own created_by | Admin |
-| blend_recipe_items | All authenticated | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
+| blend_recipe_items | All authenticated | Admin / Recipe creator | Admin / Recipe creator | Admin / Recipe creator |
 | blend_ticket_to_order_items | Admin / Sales Rep | - (no INSERT policy) | - | - (no DELETE policy) |
 | blend_ticket_fields | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
 | warehouses | All authenticated | Admin | Admin | Admin |
-| cycle_counts | Admin | Admin | Admin | Admin |
-| cycle_count_items | Admin | Admin | Admin | Admin |
-| fields | Admin / Sales Rep (assigned customer) | Admin / Sales Rep | Admin / Sales Rep | Admin |
+| cycle_counts | Admin / Sales Rep | Admin | Admin | Admin |
+| cycle_count_items | Admin / Sales Rep | Admin (count in progress) | Admin (count in progress) | Admin (count in progress) |
+| fields | Admin / Sales Rep / Applicator | Admin / Sales Rep | Admin / Sales Rep | Admin |
 | field_obstacles | Admin / Sales Rep / Applicator | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
-| job_loader_worksheets | Job-visible (Admin / Sales / assigned Applicator / dispatched) | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
-| field_billing_defaults | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
+| job_loader_worksheets | Job-visible (Admin / Sales Rep / assigned Applicator / dispatched) | Admin / Sales Rep (own created_by) | Admin / Sales Rep | Admin / Sales Rep |
+| field_billing_defaults | All authenticated | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
 | returns | Admin / Sales Rep / requester | - (RPC only, since `20260715203911`) | Admin / requester | Admin |
 | return_items | Admin / Sales Rep / return requester | - (RPC only, since `20260715203911`) | - (RPC only) | - (RPC only) |
-| applicator_licenses | Admin / Sales Rep | Admin | Admin | Admin |
-| rebate_programs | Admin | Admin | Admin | Admin |
-| rebate_claims | Admin | Admin | Admin | Admin |
+| applicator_licenses | All authenticated | Admin / Sales Rep | Admin / Sales Rep | Admin |
+| rebate_programs | Admin / Sales Rep | Admin | Admin | Admin |
+| rebate_claims | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | vendors | Admin / Sales Rep | - (no write policy) | - (no write policy) | - (no write policy) |
 | vendor_bills | Admin | Admin | Admin | Admin |
 | vendor_payments | Admin | Admin | - | Admin |
-| rup_sales_records | Admin | Admin | - | - |
-| email_log | Admin | Admin | - | - |
+| rup_sales_records | Admin / Sales Rep | Admin | - | - |
+| email_log | Admin / Own created_by | Admin | - | - |
 | ar_reminder_tracking | Admin | Admin | - | - |
 | failed_notifications | Admin | Admin | Admin | Admin |
 | invoice_shares | Admin / invoice creator / salesman | Admin / Sales Rep | Admin | Admin |
@@ -328,9 +350,9 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 | idempotency_keys | - (policy exists but is `USING (false)`; SECURITY DEFINER only) | - (same) | - (same) | - (same) |
 | offline_action_receipts | Owner / Admin / Sales via sanitized RPC only | - (SECURITY DEFINER RPC only) | - (SECURITY DEFINER RPC only) | - |
 | rate_limit_log | Admin | - (restrictive only) | - (restrictive only) | - (restrictive only) |
-| note_tags | All authenticated | All authenticated | Admin / Own | Admin |
-| team_note_tags | All authenticated | Note creator / Admin | - | Note creator / Admin |
-| note_activity_log | All authenticated | All authenticated | - | - |
+| note_tags | All authenticated | Own created_by | Own created_by | Own created_by |
+| team_note_tags | Any visible team note (inherits `team_notes` RLS) | Note creator / Admin | - | Note creator / Admin |
+| note_activity_log | All authenticated | Own user_id | - | - |
 | field_crop_history | Admin / Sales Rep / Applicator | Admin / Sales Rep | Admin / Sales Rep | Admin |
 | field_app_locations | Admin / Sales Rep / Applicator | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
 | field_app_location_shares | Admin / Sales Rep / Applicator | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |

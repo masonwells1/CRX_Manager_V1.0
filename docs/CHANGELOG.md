@@ -74,11 +74,30 @@ live `quotes_select` is `is_admin() OR is_sales_rep()` with no ownership test. T
 role-wording error, which is exactly what the second trap below says the mechanical pass cannot
 catch. Wrong in both directions: `vendors`, `quote_items`, `payments` and others documented
 write access that live grants to nobody, while `rate_limit_log` documented no access where live
-grants admin full access. Two traps worth recording — a `-` cell is correct both when no policy
+grants admin `SELECT` — one permissive admin SELECT policy, plus a RESTRICTIVE `FOR ALL` that
+narrows rather than grants, so no browser role writes it directly. Two traps worth recording — a `-` cell is correct both when no policy
 exists *and* when a deny-all `USING (false)` policy exists (`idempotency_keys` and the three
 `product_cost_basis*` tables are the second kind, so a naive presence-diff would have *introduced*
 errors there), and what was verified mechanically is policy presence per command, not the role
 wording inside each cell.
+
+**And then the role wording too.** That second trap stood for four more passes. A classifier
+re-derived every cell's role set from the live `USING`/`WITH CHECK` expressions, and every flag it
+raised was then read against live `pg_policies` by hand — the classifier locates candidates, it does
+not prove anything. Flags fell 162 (`origin/main`) → 89 (after the presence pass) → 61 (after the
+"All authenticated" class) → 33, and all 33 survivors were confirmed correct: policies that inline
+`profiles.role = 'admin'` instead of calling `is_admin()`, cells that name a role by how the row is
+reached (`assigned_driver = auth.uid()`), and cells that defer to a parent table's RLS. The count is
+a proxy, not a defect count — correcting `rup_sales_records` SELECT from `Admin` to
+`Admin / Sales Rep` *raised* it by one. Newly corrected in that triage: `invoices`/`invoice_items`
+SELECT (there is no `is_sales_rep()` branch — live is admin, creator, or assigned salesman),
+`blend_recipe_items` writes (recipe-creator-gated, the same shape as the `blend_recipes` parent row
+this PR had already fixed while missing the child), `applicator_licenses` (wrong in both directions
+at once), `cycle_count_items` and `field_billing_defaults` and `rup_sales_records` SELECT (live
+grants a role the doc omitted), and four cells that named the right roles but dropped a condition
+live enforces. `docs/manual/KNOWN_ISSUES.md` now records that entry as CLOSED, and both matrix
+banners define **"All authenticated"** as live `is_active_profile()` — signed in *and*
+`profiles.is_active`, re-read across all 14 cells that use the phrase.
 
 **Also corrected:** the `migration-history.md` header claim 885 → 886 (a high-water row number, not a
 file count — the two `check:docs` rows measure different things), both manual freshness stamps, live
