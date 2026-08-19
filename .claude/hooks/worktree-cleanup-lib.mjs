@@ -31,6 +31,63 @@ export const ACTIVE_WINDOW_MS = 3 * 60 * 60 * 1000; // 3 hours
 // (C:\CRX_Manager, C:\CRX_Layer2, …) live elsewhere and are never auto-removed.
 export const HARNESS_MARKER = "/.claude/worktrees/";
 
+// Machine-local file the Claude harness rewrites in every worktree (permission
+// grants). It is harness noise, not work: a worktree whose ONLY dirt is this
+// file is still "clean" for cleanup purposes. 2026-08-18 hook audit: 11 fully
+// merged agent worktrees were unsweepable because each carried exactly one
+// ` M .claude/settings.local.json` line.
+export const IGNORABLE_DIRT_PATH = ".claude/settings.local.json";
+
+// True iff one `git status --porcelain` line refers to the ignorable file.
+// Rename lines (`R  old -> new`) never match: the arrow keeps the captured
+// path from equaling IGNORABLE_DIRT_PATH exactly, so renames stay real dirt.
+export function isIgnorableDirtLine(line) {
+  const m = /^.{2} "?(.+?)"?$/.exec(String(line || "").replace(/\r$/, ""));
+  if (!m) return false;
+  return m[1].replace(/\\/g, "/") === IGNORABLE_DIRT_PATH;
+}
+
+// Filter `git status --porcelain` output down to the lines that represent REAL
+// uncommitted work. Empty result = clean-for-cleanup.
+export function meaningfulDirt(porcelainText) {
+  return String(porcelainText || "")
+    .split("\n")
+    .map((l) => l.replace(/\r$/, ""))
+    .filter((l) => l.trim())
+    .filter((l) => !isIgnorableDirtLine(l));
+}
+
+// Does raw applied-source-ledger JSON text contain at least one REAL entry
+// (an object with a non-empty string name — the only shape the recorder
+// writes)? Pure so the parse/shape rules are unit-testable; the runner wraps
+// the file read. Throws on unparseable text — ledgerKeepsWorktree below decides
+// what an unreadable/malformed ledger means.
+export function ledgerHasEntries(rawText) {
+  const ledger = JSON.parse(String(rawText));
+  return Array.isArray(ledger) && ledger.some((e) => e && typeof e.name === "string" && e.name.trim());
+}
+
+// Given the result of trying to read a worktree's applied-source ledger, decide
+// whether that ledger's state should KEEP the worktree (block auto-cleanup).
+//   arg: { readError?: Error|null, rawText?: string }
+// Rules (fail toward KEEP on any doubt — CodeRabbit 2026-08-19):
+//   - readError with code "ENOENT"  → ledger truly absent → nothing recorded → DON'T keep (false)
+//   - any other readError (EACCES/EISDIR/I/O) → present but unreadable → KEEP (true)
+//   - rawText that parses            → keep iff it has a real entry (ledgerHasEntries)
+//   - rawText that fails to parse     → malformed, contents unknown → KEEP (true)
+// The earlier "corrupt/unreadable reads as no entries → sweepable" stance was
+// wrong: a read/parse failure is exactly when we can LEAST prove the worktree is
+// safe to destroy, and sweeping it can erase the sole record of an un-committed
+// live apply. Keeping costs only a manual cleanup.
+export function ledgerKeepsWorktree({ readError = null, rawText } = {}) {
+  if (readError) return Boolean(readError.code !== "ENOENT");
+  try {
+    return ledgerHasEntries(rawText);
+  } catch {
+    return true;
+  }
+}
+
 // Normalize a filesystem path for comparison: forward slashes, no trailing
 // slash, lowercased (Windows paths are case-insensitive).
 export function normPath(p) {
@@ -41,7 +98,8 @@ export function normPath(p) {
 }
 
 // Decide the fate of ONE worktree.
-//   fact: { path, branch, detached, locked, dirty, merged, lastActivityMs? }
+//   fact: { path, branch, detached, locked, dirty, merged, lastActivityMs?,
+//           hasAppliedLedgerEntries? }
 //     - merged: true iff the branch has ZERO commits whose patch is not already
 //       in origin/main (computed by the runner via `git cherry`, so squash/rebase
 //       merges count as merged — a plain ancestor check would miss those).
@@ -73,6 +131,13 @@ export function classifyWorktree(fact, ctx = {}) {
   if (fact.locked) return { action: "keep", reason: "locked" };
   // 5. Uncommitted changes = unfinished work; never discard.
   if (fact.dirty) return { action: "keep", reason: "dirty" };
+  // 5b. An unresolved applied-source ledger = a live apply recorded in this
+  //     worktree whose committed source was never proven (stop-wrap C3 guard).
+  //     The ledger lives in gitignored session-state, so "merged + clean"
+  //     cannot see it — sweeping the worktree would destroy the only record of
+  //     the un-contained apply (Opus review 2026-08-19). stop-wrap prunes the
+  //     ledger once the source is committed, which releases this keep.
+  if (fact.hasAppliedLedgerEntries) return { action: "keep", reason: "applied-ledger" };
   // 6. Unmerged commits = real un-shipped work; leave for human triage.
   if (!fact.merged) return { action: "keep", reason: "unmerged" };
   // 7. Only auto-remove harness-managed worktrees, never manual long-lived ones.
