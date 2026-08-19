@@ -103,6 +103,8 @@ this has to get right that a naive version would get wrong:
   forms point back to a parent chemistry.
 - **Mode of action codes** (the resistance-management groups) belong to the ingredient, and
   a product can carry several. They go in their own list, not squeezed into a single field.
+  You flagged that *"some products have 4 or even 5 FRAC numbers"* — the list has no ceiling,
+  and a product carrying five renders all five.
 
 **Fertilizer gets the complete guaranteed analysis** — nitrogen, phosphate, potash, the
 secondary macros (calcium, magnesium, sulfur) and the full micronutrient list. You settled
@@ -146,9 +148,53 @@ which a single field cannot represent.
 Rates move to their own list, where a product can hold more than one — label rate and house
 standard, per-acre and per-100-gallon — with exactly one marked as the quoting default.
 
+**Each rate carries a low, a high and a recommended figure**, which is what you asked for:
+*"maybe we set a low, high, and recommended rate? sometimes the recommended might match the
+high or the low."* The recommended value is allowed to equal either end — that's normal, not
+an error. Today the range lives in a free-text box, which is why the same label text stores
+three different numbers across three products.
+
+**Adjuvants are the awkward case and are handled the way you already handle them.** Many are
+labeled as a concentration — a percent of the spray solution — not as a rate per acre. Your
+practice is to record the normal per-acre rate you actually use, and that stays: the per-acre
+rate is what quotes, and the per-100-gallon basis is there for the products that need it.
+
 **A product with no true per-acre rate autofills blank, not a guess.** You chose this. Today
 there's a hardcoded fallback that quietly turns an unknown unit into ounces; that gets
 removed.
+
+### On top of the five layers — the things you asked for by name
+
+These aren't structural, they're the features that sit on the foundation. They land in
+Phase 4 unless noted.
+
+**Stop retyping your agronomy.** The one you described at most length: a stored suggestion
+per product, in your own words, so you don't retype it every quote. Your example was *"Old
+chemistry, generally a lot cheaper to build than buy. Has gotten weak on waterhemp, recommend
+spiking an extra ounce of Explorer with it and add Stigmata (generic Stinger) to help with
+knockdown."* Two rules you set: it's **selected at quote time**, not forced onto every quote,
+and the wording stays **editable grower to grower** after it's pulled in. The machinery for
+this already exists in the Quote Builder — auto-fill, per-quote edit, reset-to-default — and
+is filled on zero products. This is mostly a matter of giving it something to say.
+
+Separately from that, the description you have today (what the product is made of — "Halex GT
+= Roundup + Dual + Callisto") stays as is. The suggestion note is a second, different thing.
+
+**A link to the actual product label**, so it's one click from the product instead of a
+search.
+
+**Required adjuvants.** Your words: *"some chemistry HAS to have a certain adjuvant."* Stored
+per product with the type, and surfaced when quoting.
+
+**Crop and timing.** Not just which crops a product is labeled for, but the timing within
+them — *"some products can be used pre-emerge only on certain crops but also post on 1
+crop."* Kept deliberately simple at your direction (*"dont want to get to complicated"*):
+rates that vary by crop are **not** in scope.
+
+**Product images — Phase 8, last.** You already have these on the website you built (product
+logos and so on). Your call was to **copy them into CRX's own storage** rather than point at
+the website, so the app doesn't break if that site changes. They follow the same storage
+pattern the delivery and receiving photos already use, and end up on quote PDFs.
 
 ---
 
@@ -203,6 +249,25 @@ Done means **the changed behavior was run and observed** — not that a test pas
 written by whoever built the thing can rubber-stamp the same misunderstanding that caused
 the bug.
 
+### The order came from your ranking
+
+Seven problems were put in front of you and you ranked them. That ranking is what the phases
+below are built from, so it's worth seeing next to them:
+
+| Your call | The problem | Where it went |
+|---|---|---|
+| **Top priority** | Active ingredients aren't stored — *"brainstorm how to store them… lead into our product comparison tool"* | Phase 1, and it's why Phase 1 comes before everything |
+| "asap" | Families, packaging variants and return policy all empty | Split: families → Phase 5; return policy → **since deferred by you** |
+| "lets fix this" | Two fields hold the same package size | Phase 7 |
+| "consolidate and standardize" | Unit spellings inconsistent | Phase 2 |
+| "yes we need to fix this" | Duplicates, blanks and a test row in the catalog | Phase 0 — pulled to the front, because it makes every later phase quieter |
+| "we will do this later" | Label rate, re-entry and pre-harvest intervals empty | Out of scope for now |
+| "not concerned right now" | No required fields when creating a product | Out of scope for now |
+
+The two changes I made to your order: **data hygiene moved up to first** (it's cheap and it
+de-noises everything after it), and the return-policy screen was split out on its own — which
+you have since deferred entirely.
+
 | Phase | What it is | Done when | Depends on |
 |---|---|---|---|
 | **0** | Data hygiene — 13 blank SKUs, 1 duplicate SKU, 3 duplicate names, 1 test product | Every SKU unique, no row hard-deleted, all history still resolves | Nothing |
@@ -214,7 +279,7 @@ the bug.
 | **4** | Label links, required adjuvants, crop and timing, quote notes | Each visible on a real product | Phase 1 |
 | **5** | Product families and packaging variants | Families derived and populated | Phase 1 |
 | **7** | Retire the redundant size field | No behavior change | Phase 2 |
-| **8** | Product images — last, at your direction | Images on quote PDFs | Everything |
+| **8** | Product images — last, at your direction. Copied from your website into CRX's own storage, not linked to it | Images on quote PDFs | Everything |
 
 **The comparison tool has a real target of roughly 2026-09-18.** You settled that it comes
 after the rate cleanup: *"After rate cleanup it's not important until a month from now."* If
@@ -448,7 +513,10 @@ the three copies drift apart. This applies to brands as much as to ingredients.
 | Ingredient foundation gets built before anything else | *"i agree i want to do the ingredient foundation 1st"* | 2026-08-18 |
 | A bulk-edit workbook is needed — one-by-one editing doesn't scale | *"very hard to navigate all these products going one by one"* | 2026-08-18 |
 | Restricted-use flag is known wrong, and **parked for now** | *"there are alot more but not important today"* | 2026-08-18 |
-| Product images come last | *"save this for the end or last, not a high priority at the moment"* | 2026-08-18 |
+| Product images come last, and get **copied into CRX storage**, not linked from your website | *"save this for the end or last"* / *"i think we copy them into crx own storage"* | 2026-08-18 |
+| Rates carry a low, a high **and** a recommended value; recommended may equal either end | *"maybe we set a low, high, and recommended rate? sometimes the recommended might match the high or the low"* | 2026-08-18 |
+| Quote suggestion notes are **picked at quote time and editable per grower** — not forced onto every quote | *"it is an option at quote time to select what we want and then be able to edit wording from grower to grower"* | 2026-08-18 |
+| Mode-of-action storage must hold **at least five codes** per product | *"some products have 4 or even 5 FRAC numbers"* | 2026-08-18 |
 | Required-adjuvant tracking is in scope | *"some chemistry HAS to have a certain adjuvant"* | 2026-08-18 |
 | Crop-and-timing restrictions are in scope, kept simple | *"some products can be used pre emerge only on certain crops but also post on 1 crop"* / *"dont want to get to complicated"* | 2026-08-18 |
 | Mode-of-action codes are worth storing | "great idea" | 2026-08-18 |
