@@ -360,12 +360,24 @@ Repairing the dirty values in the first three rows above — `quotes.total_cost`
 `commissions.commission_amount` and `commissions.order_profit` — rewrites stored money and needs
 Mason's separate approval on its own migration; it is **not** covered by the 2026-08-10 decision.
 (`orders.total_price`, the fourth row, has clean data and is blocked on a writer fix, not a
-repair.) See the note directly below: two of those three now measure **0** dirty rows live, so the
-repair scope is smaller than this table's 2026-08-10 counts suggest.
+repair.) See the note directly below: two of those three now measure **0** dirty rows live, so
+**the only column still carrying unrepaired dirty money is `quotes.total_cost`, at 2 rows** —
+that, and not the three columns this paragraph names, is the whole of the open approval debt under
+this entry.
 
 > **The counts in the table above are the 2026-08-10 measurement and are stale as live state
 > (read-only re-measure, 2026-08-18).** Live now returns `commissions.commission_amount` **0**,
-> `commissions.order_profit` **0**, and only `quotes.total_cost` still **2**.
+> `commissions.order_profit` **0**, and only `quotes.total_cost` still **2**. The likely cause
+> of the two commission columns reaching 0 is the migration carried on disk as
+> `20260810235207_reconcile_pending_commission_snapshots`, which **is applied live** — though note
+> the ledger holds it at *version* `20260810235207` under the *name*
+> `20260810183629_reconcile_pending_commission_snapshots`, so the file was re-issued forward and
+> the two stamps disagree; searching the ledger by the disk filename finds nothing. It rewrites
+> `order_profit` and `commission_amount` on **pending** commissions to `ROUND(…, 2)`, which is
+> exactly the repair shape. Recorded as the likely cause and not a proven one: it skips any
+> commission already sitting in a payout batch, so it explains the observed 0 only if all three
+> rows measured on 2026-08-10 were still pending, which is not re-derivable now. The **0 is
+> measured; the attribution is inference** — do not restate it as settled provenance.
 > `order_items.total_price`, which this table listed as a deferred column until 2026-08-18, also
 > returns **0** — and it is no longer deferred at all:
 > `20260812115238_repair_historical_order_line_cents` repaired those 35 lines with Mason's in-chat
