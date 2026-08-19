@@ -58,6 +58,9 @@ const required = [
   "scripts/sync-agent-workflows.mjs",
   "scripts/check-agent-guidance.mjs",
   "scripts/agent-health-check.mjs",
+  // Shared by the two mirror comparisons above. Listed so deleting it reports a
+  // clean "missing required file" instead of an ESM resolution crash.
+  "scripts/normalize-eol.mjs",
 ];
 const contents = new Map(required.map((relative) => [relative, requireFile(relative)]));
 

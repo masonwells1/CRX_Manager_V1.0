@@ -1,17 +1,23 @@
 # Line-ending policy for the agent-workflow surface (Mason, 2026-07-13).
 #
-# `scripts/check-agent-workflows.mjs` regenerates the Codex adapter files under
-# `.agents/` from the `.claude/` sources and compares them. Since 2026-08-19 both
-# that comparison and `scripts/agent-health-check.mjs` compare EOL-normalized text
-# via `scripts/lib/normalize-eol.mjs`, so a CRLF smudge is not reported as drift.
-# Pinning here is still what keeps the committed form canonical, and a mismatch in
-# any OTHER byte is still a real failure. The
-# generator emits Unix (LF) line endings. On Windows checkouts, `core.autocrlf=true`
-# was rewriting these files to CRLF, so the check reported them "stale" (identical
-# text, different line endings) and blocked every commit. Pinning both the sources
-# it reads and the targets it writes to LF makes the check deterministic on every
-# platform. Keep the sources and targets on the SAME ending or the mirror check
-# fails the other direction.
+# `scripts/sync-agent-workflows.mjs` regenerates the Codex adapter files under
+# `.agents/` from the `.claude/` sources and compares them; its `--write` path
+# emits Unix (LF) line endings for every file it writes.
+# `scripts/check-agent-workflows.mjs` and `scripts/agent-health-check.mjs` both
+# reach that same comparison rather than implementing their own.
+#
+# Why the pin exists: on Windows checkouts `core.autocrlf=true` was rewriting
+# these files to CRLF, so the check reported them "stale" (identical text,
+# different line endings) and blocked every commit. Pinning both the sources the
+# generator reads and the targets it writes to LF keeps the committed form
+# canonical on every platform.
+#
+# The pin is not the only defense, because it governs what Git stores, not what
+# sits on disk. A file can be CRLF in the working tree and still hash identically
+# to its LF blob, which makes it invisible to `git diff`. Both mirror comparisons
+# therefore ignore line endings — the generator since 2026-07-16 (#147),
+# `agent-health` since 2026-08-19 — via `scripts/normalize-eol.mjs`. A mismatch in
+# any OTHER byte is still a real failure.
 .agents/**          text eol=lf
 .claude/skills/**   text eol=lf
 .claude/commands/** text eol=lf
