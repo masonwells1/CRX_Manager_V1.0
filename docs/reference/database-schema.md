@@ -213,10 +213,15 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 > corrections plus 3 notation fixes. The role-wording pass described below
 > then changed 12 rows, 7 of them *further* rows (the other 5 were already
 > among the 32), and the hand-triage after it changed 31 rows, 22 of them new
-> again. So this file's matrix carries **61 changed rows against `main`
-> overall** — 32 + 7 + 22, out of 79. An earlier revision of this banner said
-> **39**, which counted the presence and role-wording passes and silently
-> stopped before the hand-triage. No row was *added or removed* by any pass:
+> again. Re-measured by keying both matrices on table name and comparing all
+> four command cells, this file's matrix carries **62 changed rows against
+> `main` overall**, out of 79. Two earlier revisions of this banner were
+> wrong: **39** counted only the presence and role-wording passes and stopped
+> before the hand-triage, and **61** came from summing the per-pass figures
+> 32 + 7 + 22 rather than re-running the comparison. That sum is one short of
+> the measured total, so one changed row is not attributable to a named pass.
+> **The 62 is the measurement and is what to trust**; the per-pass split is
+> approximate bookkeeping. No row was *added or removed* by any pass:
 > `main` and this revision carry the same 79 table rows, every one of them
 > rewritten in place or left alone. One caveat, because an earlier revision of
 > this banner rejected a review finding too broadly: on `main` a **blank line**
@@ -309,9 +314,21 @@ Live postflight: catalog 604 Products → `no_return`=21, `returnable`=2, `unkno
 > `is_active_profile()`: any signed-in user whose `profiles.is_active` is true.
 > A deactivated profile is authenticated but denied, so "all authenticated" is
 > the looser of the two readings. Three cells here — `inventory_holds`,
-> `team_note_attachments` and `team_note_comments` SELECT — used to render
-> that identical live expression as "Any active profile"; they now use the one
-> defined term. That makes **17** cells in this file's matrix, of which 8 also
+> `team_note_attachments` and `team_note_comments` SELECT — now use that one
+> defined term.
+>
+> An earlier revision of this banner said they "used to render that identical
+> live expression as *Any active profile*". **That is not this file's history
+> and the claim is withdrawn.** `git log -S"Any active profile" origin/main`
+> returns nothing: the phrase never appeared in any committed version of either
+> matrix. It existed only in banner prose on an intermediate commit of this
+> branch (`76e755d2`), never in a matrix cell. On `origin/main` those three
+> cells read `Admin / Sales Rep`, `All authenticated` and `All
+> authenticated`. In a banner whose whole purpose is auditable provenance,
+> presenting an intra-branch scratch state as file history was the wrong error
+> to make.
+>
+> Counting the defined term itself: **17** cells in this file's matrix use it, of which 8 also
 > appear in the `RLS_SECURITY_GUIDE.md` matrix — 25 cell instances across the
 > two matrices, covering the same 17 table/command pairs. Every one was
 > re-read on 2026-08-19 UTC and is governed by exactly one policy whose

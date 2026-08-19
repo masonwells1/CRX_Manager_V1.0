@@ -10,9 +10,18 @@ Row Level Security (RLS) controls which rows each user can see and modify in the
 
 ---
 
-## The 4 Roles
+## The 5 Stored Roles
 
-CRX Manager has 4 roles stored in `profiles.role`:
+Live `profiles_role_check` is
+`CHECK (role = ANY (ARRAY['admin','sales_rep','driver','applicator','entity_recipient']))` — **5**
+permitted values, read from live `pg_constraint` on 2026-08-19 UTC.
+
+An earlier revision of this file said "The 3 Roles" and listed four; this PR corrected it to four
+and *still* did not read the constraint. Four is what RLS uses: no policy in `public` references
+`entity_recipient` (`pg_policies` matching it: **0**), but 2 live profiles carry that value, so a
+reader filtering on "the four roles" would silently drop them.
+
+All five, with the four **app roles** — the ones every policy below branches on — first:
 
 | Role | Who | Access level |
 |------|-----|-------------|
@@ -20,6 +29,7 @@ CRX Manager has 4 roles stored in `profiles.role`:
 | `sales_rep` | Sales representatives | Access to own customers, quotes, orders. No access to month-end, commissions, settings. |
 | `driver` | Delivery drivers | Access to own assigned deliveries. Can confirm, complete, upload photos, report issues. |
 | `applicator` | Chemical applicators | Access to own assigned jobs. Can record applied info. |
+| `entity_recipient` | 2 live rows | **Permitted by the CHECK constraint but referenced by no policy.** Such a profile is treated as none of the four above: it fails `is_admin()`, `is_sales_rep()`, `is_driver()` and `is_applicator()`, so it sees only what a plain active profile sees. |
 
 (The `applicator` row used to sit outside this table, after a prose line, so it
 rendered as loose text rather than a fourth row — and the heading said three.
@@ -76,8 +86,14 @@ CREATE POLICY "table_select" ON public.table_name
 ```
 Used on: `cost_history`. Re-read against live on 2026-08-19 UTC: that is the only admin-only
 *read* among the tables this line used to name. `cycle_counts`, `cycle_count_items`,
-`rebate_programs` and `rebate_claims` all read as `is_admin() OR is_sales_rep()`, which is
-what the matrix below has always said — so this section contradicted its own file. Their *writes*
+`rebate_programs` and `rebate_claims` all read as `is_admin() OR is_sales_rep()`.
+
+Stated carefully, because an earlier revision of this paragraph claimed the matrix below "has
+always said" so and that the section therefore "contradicted its own file". It did not. On
+`origin/main` those matrix rows read `| cycle_counts | Admin | Admin | Admin | Admin |` and the
+same for `rebate_programs` and `rebate_claims` — the matrix **agreed** with the stale prose, and
+both were wrong together. This PR corrects both. `cycle_count_items` is not carried in this file's
+matrix at all; its row lives in `docs/reference/database-schema.md`. Their *writes*
 are mostly admin-only but not uniformly: `rebate_claims` INSERT is `is_admin() OR
 is_sales_rep()`, and the three `cycle_count_items` write policies are `is_admin() AND EXISTS
 (… cycle_counts.status = 'in_progress')`, so even an admin cannot edit a closed count.
@@ -105,6 +121,10 @@ CREATE POLICY "quotes_update" ON public.quotes
   USING (
     is_admin()
     OR (is_sales_rep() AND created_by = (select auth.uid()))
+  )
+  WITH CHECK (
+    is_admin()
+    OR (is_sales_rep() AND created_by = (select auth.uid()))
   );
 ```
 Used on the **write** side of `quotes` (INSERT and UPDATE), and on `quote_sections`
@@ -114,13 +134,18 @@ INSERT/UPDATE/DELETE through an `EXISTS` on the parent quote's `created_by`.
 `is_admin() OR is_sales_rep()` with **no** ownership test; `qitems_select` is the same; and
 `qsections_select` is `is_active_profile()`. The old example named `quotes_select` and added
 the ownership half, so anyone copying it would have written a policy narrower than the one actually
-deployed — and it contradicted the `quotes` row in this file's own matrix below, which reads
-`Admin / Sales Rep` for SELECT and marks only UPDATE and INSERT `(own)`.
+deployed.
+
+The matrix row below now reads `Admin / Sales Rep` for SELECT, marking only INSERT and UPDATE
+`(own)`. An earlier revision of this paragraph said the pattern "contradicted" that row — it did
+not. On `origin/main` the row read `| quotes | Admin / Sales Rep (own) | … |` with `(own)` on
+the SELECT cell too, agreeing with the stale example. The disagreement is something this PR
+created by fixing the row; both halves are corrected here.
 
 ### Pattern 4: Admin + Sales Rep + Driver (for deliveries)
 ```sql
 -- Drivers see only their assigned deliveries
-CREATE POLICY "deliveries_select" ON public.deliveries
+CREATE POLICY "del_select" ON public.deliveries
   FOR SELECT TO authenticated
   USING (
     is_admin()
@@ -212,7 +237,10 @@ to show was stale: live also pins the actor.
 > mechanical pass re-derived every cell's role set from the live
 > `USING`/`WITH CHECK` expressions across **both** matrices and corrected
 > every cell claiming **"All authenticated"** where live is role-gated —
-> `profiles`, `blend_recipes` and `financial_audit_log` in this table.
+> `profiles`, `notifications`, `blend_recipes` and `financial_audit_log` in this table.
+> (`notifications` INSERT read `All authenticated` on `origin/main`; live `notif_insert` is
+> `is_admin() OR is_sales_rep() OR user_id = (select auth.uid())`. An earlier revision of this
+> sentence enumerated only three of the four.)
 > Of the **89** cells that pass flagged, that class — together with the
 > `rate_limit_log` row, which sits only in the `database-schema.md` matrix,
 > and the `blend_recipes` write cells, which appear in **both** matrices —
@@ -225,9 +253,19 @@ to show was stale: live also pins the actor.
 > `docs/reference/database-schema.md`; the per-cell working is in the CLOSED
 > entry in `docs/manual/KNOWN_ISSUES.md`.
 >
+> **The 162 -> 89 -> 61 -> 33 trajectory came from an in-session script that was never
+> committed, so no reader can reproduce those four numbers from this repo.** They are narrative
+> context, not evidence. What *is* evidence: the 33 survivors are enumerated by name in the
+> banner and KNOWN_ISSUES entry just referenced, and each was read individually against live
+> `pg_policies`, which anyone can re-check. Treat the trajectory as a description of how the work
+> proceeded and the enumeration as the auditable part.
+>
 > Two cells in this table (`inventory_holds` and `team_note_comments` SELECT)
-> used to render that same live `is_active_profile()` expression as "Any
-> active profile"; they now use the one defined term, so this matrix carries 8
+> now use that one defined term. (An earlier revision of this banner said they "used to render
+> that expression as *Any active profile*". They did not: on `origin/main` those cells read
+> `Admin / Sales Rep` and `All authenticated`, and the "Any active profile" wording never
+> appeared in a committed matrix cell in this repo. The claim is withdrawn.) So this matrix
+> carries 8
 > cells reading **"All authenticated"** and all 8 also appear in the
 > `database-schema.md` matrix.
 

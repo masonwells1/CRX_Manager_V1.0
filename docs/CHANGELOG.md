@@ -97,12 +97,16 @@ at once), `cycle_count_items` and `field_billing_defaults` and `rup_sales_record
 grants a role the doc omitted), and four cells that named the right roles but dropped a condition
 live enforces. `docs/manual/KNOWN_ISSUES.md` now records that entry as CLOSED, and both matrix
 banners define **"All authenticated"** as live `is_active_profile()` — signed in *and*
-`profiles.is_active`, re-read across all 17 cells that use the phrase (three of which used to
-render the identical live expression as "Any active profile"). A final sweep then covered the one
+`profiles.is_active`, re-read across all 17 cells that use the phrase. (An earlier revision of this entry said three of
+them "used to render the identical live expression as *Any active profile*"; that phrase never
+appeared in any committed matrix on `origin/main` and the claim is withdrawn.) A final sweep then
+covered the one
 shape the classifier structurally cannot flag — a cell that names the right roles but omits a
 condition live also enforces — and corrected six more: `field_obstacles` INSERT, `vendors` and
 `vendor_bills` SELECT, `invoice_shares` and `order_shares` SELECT, and `team_notes` INSERT.
-Against `origin/main` the `database-schema.md` matrix now carries 61 changed rows out of 79.
+Against `origin/main` the `database-schema.md` matrix now carries **62** changed rows out of
+79, re-measured by comparing all four command cells of all 79 rows (an earlier figure of 61 summed
+the per-pass counts instead of re-running the comparison).
 Also re-read the guide's "Common RLS Policy Patterns" section against live, which the earlier
 passes had left alone while rewriting the matrix above it: Patterns 1, 2, 3, 4 and 7 each described
 a policy shape live does not have, and Pattern 3 taught `quotes_select` **with** an ownership
