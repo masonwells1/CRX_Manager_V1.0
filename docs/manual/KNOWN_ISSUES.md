@@ -26,6 +26,31 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-08-19 — the per-product rate check in `blendMathValidator.ts` is still unit-blind
+
+**Severity: LOW, warning text only, currently unreachable (0 rows in `blend_tickets` and
+`blend_ticket_products` on live, verified read-only 2026-08-19).** The sibling total-volume defect
+in the same file was fixed and committed on 2026-08-19 (`051e60d1`); this one was left deliberately
+out of scope and is recorded here so it is not re-discovered as new.
+
+`validateBlendMath` compares each product's `quantity` against `rate_per_acre × total_acres`
+without ever comparing `unit` to `rate_per_acre_unit`. Both fields exist on `ProductData` and both
+are populated by the callers, but the rate arm reads neither. A product entered as 25 **Gal** at a
+rate of 32 **oz**/acre over 100 acres is arithmetically correct — 32 × 100 = 3200 fl oz = 25 gal —
+yet the check compares the bare numbers 25 vs 3200 and flags it. The mirror case hides a real
+error: quantities that happen to be numerically close across different units pass silently.
+
+`unit_conversions` **can** legitimately serve this arm where the total-volume arm it cannot: a rate
+and a quantity for the *same product* are usually in the same family, so `factor_oz` would convert
+correctly — but the fix must handle the liquid↔dry crossing (no density column) and must not join
+`LOWER(unit)` naively, because the table carries case-alias rows (`Lb`/`LB`, `oz`/`Oz`, `qt`/`Qt`)
+that duplicate on that join. The total-volume fix sidestepped the table entirely for this reason.
+
+**Not started.** No migration, no live state, no money path. Fix alongside the next blend-ticket
+change rather than on its own.
+
+---
+
 ## OPEN 2026-08-14 — `draw_down_quote` never rounds the weighted average PRICE, and the whole-cent guard rejects it
 
 **Severity: HIGH, live in production, currently latent (0 reachable rows).** Found by the

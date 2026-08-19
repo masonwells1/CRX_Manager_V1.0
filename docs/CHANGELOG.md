@@ -2,6 +2,41 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-19 — Blend-ticket total-volume check no longer adds quantities across…
+
+`validateBlendMath` summed every product quantity regardless of unit, so a ticket holding
+10 Gal + 32 oz + 5 Lb summed to 47 and was compared against a total volume expressed in
+gallons — a spurious warning, or a masked real mismatch when the errors cancelled.
+`ProductData.unit` was declared but never read. The check now compares only when every
+contributing row shares the ticket's unit, and otherwise says the check was skipped and why.
+
+- **`unit_conversions` deliberately NOT joined.** It cannot bridge a mixed-unit ticket:
+  `factor_oz` is within-family only (Lb = 16 **dry** oz, Gal = 128 **fluid** oz, Ea/Unit = a
+  dimensionless count), and crossing liquid↔dry needs a per-product density the table does not
+  carry. Not joining it also sidesteps the known duplicate-row join risk on its case aliases
+  (`Lb`/`LB`, `oz`/`Oz`, `qt`/`Qt`) — the same frozen-key surface `save_quote` joins on.
+- **Unit equality rules.** Case and surrounding whitespace ignored; the two synonym pairs the
+  live rows themselves declare (`oz`/`fl oz`, `Ea`/`Unit` — identical `factor_oz` *and*
+  `unit_type`) treated as one unit. `oz` vs `Dry oz` stays correctly separate. The alias map
+  holds no factors: it decides only *whether* to compare, never rescales a quantity.
+- **Zero-quantity rows ignored** when deciding whether units are mixed — a half-entered row
+  (unit picked, quantity still blank) no longer suppresses the check for the whole ticket.
+- **Scope: warning text only.** No change to stored quantities, pricing, or inventory; the
+  callers (`ManualTicketCreate.tsx:333`, `BlendTicketDetail.tsx:433`) only render the result,
+  and it never gates a save. Severity **low** — `blend_tickets` and `blend_ticket_products` are
+  both empty on live.
+- **Verified in a browser**, not by tests alone: drove the real validator module through the
+  mixed-unit, alias, and half-entered-row cases and read the rendered banner back. 15 new tests
+  (26 total in the file); mutation-tested by reverting each fix and confirming exactly the
+  expected tests went red.
+- **Known gap, deliberately out of scope:** the per-product `rate_per_acre × total_acres` check
+  in the same file is still unit-blind (`rate_per_acre_unit` is never compared to `unit`).
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `051e60d1 fix(blend): stop adding gallons to pounds in the total-volume check`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
 ## 2026-08-18 — Skills/commands accuracy sweep across the agent workflow surface
 
 Harness only — no app source, migration, or live-state change. A four-agent audit of every
