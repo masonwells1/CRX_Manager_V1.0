@@ -2,6 +2,45 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-19 — The blend-ticket total-volume check was the wrong equation; replaced with three true ones
+
+Mason confirmed on 2026-08-19 that a blend ticket's total volume is **"everything in the sprayer,
+so water + product"**. The products are therefore meant to come to *far less* than the total — a
+1,000 gal tank might carry 50 gal of actual product. `sum(product quantities) ≈ total_volume` was
+never a true statement about a spray ticket, so unit-converting it would only have made a false
+alarm more precise. **The equality check is deleted, not fixed.** Three statements that are
+actually true replace it:
+
+- **The tank equation.** The header's own `application_rate` × `total_acres` is the finished tank,
+  with water on both sides cancelling. Runs only when the free-text rate parses unambiguously.
+  **`parseApplicationRate` deliberately declines** a range, a sum of two terms, a bare number or
+  prose rather than taking the first number it sees — a confident guess about operator intent is
+  the exact bug class this rebuild exists to remove. In practice this means the tank check often
+  will not run at all; that is a bonus check, not the primary one.
+- **A dry blend's parts must equal its whole.** A total in a weight unit means no water (Mason,
+  2026-08-19), so products are converted into the ticket's unit and compared for equality. If any
+  product is not in a comparable weight unit the check says it was abandoned, rather than quietly
+  comparing a subset — dropping a row would break the claim rather than soften it.
+- **A spray tank can never hold more product than its total.** One-sided, so it cannot false-alarm
+  whatever the water volume happens to be, and it still works on a ticket mixing liquid and dry.
+
+**Net effect, stated plainly: most spray tickets now carry no total-volume check at all.** Before,
+they carried a noisy wrong one. This is the deliberate trade — a check that lies is worse than no
+check — and it was raised with Mason rather than presented as an upgrade.
+
+- **Banner fatigue was designed against.** A dry product sitting in a liquid tank is the ordinary
+  case, not an anomaly, and is silently excluded from the bound rather than warned about. Only a
+  quantity with **no unit at all** — a real data gap, and the hole three separate reviews found —
+  still produces a message.
+- `application_rate` was added to `TicketData` and to **both callers' effect dependency arrays**;
+  omitting it would have frozen the warning at whatever it was before the operator typed.
+- The obsolete tests that encoded the deleted equation were removed rather than adjusted to pass.
+  35 tests; the tank equation, the dry equality and the spray bound were each mutation-tested by
+  disabling them and confirming exactly the expected test went red. Verified by driving the real
+  module in a browser across all ten cases, including both dry-blend shapes and a scanned-ticket
+  shape.
+
+
 ## 2026-08-19 — Blend-ticket rate check is unit-aware, and it guards a billing path
 
 **Correction to the entry below: this file is not display-only.** `create_invoice_from_blend_ticket`

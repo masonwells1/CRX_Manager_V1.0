@@ -10,6 +10,49 @@ interface TicketData {
   total_acres: number | null;
   total_volume: number | null;
   total_volume_unit: string | null;
+  /**
+   * The header's per-acre carrier rate, as free text ("10 gal/acre"). Mason
+   * confirmed 2026-08-19 that this is always the TOTAL spray solution per acre,
+   * not one product's rate, which is what makes rate × acres ≈ total_volume a
+   * true statement about the tank.
+   */
+  application_rate: string | null;
+}
+
+/**
+ * Units that only ever mean a WEIGHT, and units that only ever mean a VOLUME.
+ *
+ * Used to decide what a ticket's total is measuring, which decides which total
+ * check is even meaningful. `oz` appears in NEITHER list on purpose: it is the one
+ * genuinely ambiguous spelling (a fluid ounce for a liquid, a weight ounce for a
+ * dry product), so a total recorded as plain `oz` is treated as a volume, matching
+ * the server's "unknown form is liquid" default.
+ */
+const WEIGHT_ONLY_UNITS = new Set(['lb', 'lbs', 'pound', 'pounds', 'ton', 'tons', 'dry oz']);
+const VOLUME_ONLY_UNITS = new Set(['gal', 'gallon', 'gallons', 'gl', 'qt', 'quart', 'quarts', 'pt', 'pint', 'pints', 'fl oz', 'floz', 'fluid ounce']);
+
+/**
+ * Pull a number and a unit out of the free-text application-rate box.
+ *
+ * The field is unconstrained, so this parses only the unambiguous shape — a single
+ * leading number followed by a unit ("10 gal/acre", "10gal/A", "10 gal per acre").
+ * Anything else (a range, two terms added together, a bare number, prose, blank)
+ * returns null and the tank check simply does not run. That is deliberate: a
+ * confident guess about what an operator meant is exactly the class of bug this
+ * whole file is being rebuilt to remove.
+ */
+function parseApplicationRate(raw: string | null | undefined): { value: number; unit: string } | null {
+  const text = (raw ?? '').replace(INVISIBLE_RUN, ' ').trim();
+  if (text === '') return null;
+  const match = /^(\d+(?:\.\d+)?)\s*(.+)$/.exec(text);
+  if (match === null) return null;
+  const value = Number(match[1]);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  // A second number anywhere means a range or a sum; refuse rather than take the first.
+  if (/\d/.test(match[2].replace(/\/\s*a(c|cre|cres)?\b/gi, ''))) return null;
+  const unit = rateBaseUnit(match[2]);
+  if (unit === '') return null;
+  return { value, unit };
 }
 
 interface ProductData {
@@ -198,17 +241,106 @@ export function validateBlendMath(
     }
   }
 
-  // Total volume: sum of product quantities should ≈ total_volume.
+  // ── Total volume ───────────────────────────────────────────────────────────
   //
-  // Quantities are only additive when every product is measured in the SAME unit
-  // as the ticket total. `unit_conversions` cannot rescue a mixed-unit ticket:
-  // `factor_oz` is within-family only (Lb = 16 DRY ounces, Gal = 128 FLUID ounces,
-  // Ea/Unit = a dimensionless count), and crossing liquid <-> dry requires a
-  // per-product density the table does not carry. So compare only when every
-  // contributing quantity is known to be in one unit, and tell the operator when
-  // the check had to be skipped rather than emitting a number that silently adds
-  // gallons to pounds. "Not recorded" is treated as unknown, never as agreement.
-  if (totalVolume && totalVolume > 0 && products.length > 0) {
+  // The old check here summed every product quantity and compared it to
+  // total_volume. Mason confirmed on 2026-08-19 that a blend ticket's total volume
+  // is "everything in the sprayer, so water + product". The products are therefore
+  // meant to come to FAR LESS than the total — a 1,000 gal tank might hold 50 gal
+  // of actual product — so that equation was not merely unit-blind, it was the
+  // wrong equation, and unit-converting it would only have made a false alarm more
+  // precise. It is gone rather than fixed.
+  //
+  // Three statements that ARE true replace it, below.
+
+  // (1) The tank equation: the header's own per-acre rate times the acres is the
+  // finished tank. Water sits on both sides and cancels. This runs only when the
+  // free-text rate parses unambiguously, which is why it is a bonus check and not
+  // the primary one — see parseApplicationRate.
+  const parsedRate = parseApplicationRate(ticketData.application_rate);
+  const headerUnit = rateBaseUnit(ticketData.total_volume_unit);
+  if (parsedRate !== null && totalAcres && totalAcres > 0 && totalVolume && totalVolume > 0 && headerUnit !== '') {
+    const expectedTank = fieldAppPricedQuantity(parsedRate.value * totalAcres, parsedRate.unit, headerUnit, 'liquid');
+    if (expectedTank !== null && expectedTank > 0) {
+      const pctDiff = Math.abs(totalVolume - expectedTank) / expectedTank;
+      if (pctDiff > TOLERANCE) {
+        warnings.push(
+          `Total volume (${totalVolume} ${headerUnit}) doesn't match the application rate (${parsedRate.value} ${parsedRate.unit}/acre) × acres (${totalAcres}) = ${expectedTank.toFixed(2)} ${headerUnit}`
+        );
+      }
+    }
+  }
+
+  // (2) and (3) both need each product measured in the ticket's own unit.
+  if (totalVolume && totalVolume > 0 && products.length > 0 && headerUnit !== '') {
+    // A total recorded in a weight unit is a DRY BLEND: no water, so the parts
+    // must equal the whole (Mason, 2026-08-19). A total in a volume unit is a
+    // spray tank, where water is the unentered remainder and only a one-sided
+    // bound is safe. `oz` is ambiguous and falls to the volume reading.
+    const totalIsWeight = WEIGHT_ONLY_UNITS.has(headerUnit);
+    const totalIsVolume = VOLUME_ONLY_UNITS.has(headerUnit) || headerUnit === 'oz';
+
+    let convertedSum = 0;
+    let anyContributing = false;
+    let anyUnconvertible = false;
+    // Two different reasons a row can sit out, which must NOT be conflated:
+    //   • no unit recorded at all — a data gap worth telling the operator about,
+    //     and the hole three separate reviews found in the previous design;
+    //   • a perfectly good unit from the other family (pounds of dry product in a
+    //     gallon tank) — entirely normal on a real ticket, and warning about it
+    //     every time is how a banner gets trained into wallpaper.
+    let anyMissingUnit = false;
+    for (const p of products) {
+      const qty = p.quantity || 0;
+      if (qty === 0) continue;
+      anyContributing = true;
+      if (normalizeUnit(p.unit) === null) anyMissingUnit = true;
+      const form = p.product_form?.trim().toLowerCase() === 'dry' ? 'dry' : 'liquid';
+      const converted = fieldAppPricedQuantity(qty, rateBaseUnit(p.unit), headerUnit, form);
+      if (converted === null) {
+        anyUnconvertible = true;
+      } else {
+        convertedSum += converted;
+      }
+    }
+
+    if (anyMissingUnit) {
+      warnings.push(
+        `Not checked — a product has a quantity but no unit, so it can't be counted towards the total. Please verify the total by hand.`
+      );
+    }
+
+    if (anyContributing && totalIsWeight && anyUnconvertible) {
+      // A dry blend's parts are supposed to equal its whole, so unlike the spray
+      // bound below, dropping a row here would break the claim rather than soften
+      // it. Say the check was abandoned instead of quietly comparing a subset.
+      warnings.push(
+        `Total weight not checked: not every product is recorded in a weight unit that can be compared to ${headerUnit}. Please verify the total by hand.`
+      );
+    } else if (anyContributing && totalIsWeight && !anyUnconvertible) {
+      // Dry blend: the products ARE the total.
+      const pctDiff = Math.abs(convertedSum - totalVolume) / totalVolume;
+      if (pctDiff > TOLERANCE) {
+        warnings.push(
+          `Total weight (${totalVolume} ${headerUnit}) doesn't match the products, which add up to ${convertedSum.toFixed(2)} ${headerUnit}`
+        );
+      }
+    } else if (anyContributing && totalIsVolume && convertedSum > totalVolume * (1 + TOLERANCE)) {
+      // Spray tank: products may be far under the total (the rest is water), but
+      // they can never be OVER it. One-sided, so it cannot false-alarm whatever the
+      // water volume happens to be. Rows that could not be converted are simply
+      // absent from the sum, which only makes the bound more forgiving, never
+      // wrong.
+      warnings.push(
+        `The products add up to ${convertedSum.toFixed(2)} ${headerUnit}, which is more than the total volume of ${totalVolume} ${headerUnit}. A tank can't hold more product than its total.`
+      );
+    }
+  }
+
+  // Legacy comparison, retained ONLY for the shape it was always right for: a
+  // ticket carrying no unit information at all, where there is nothing to convert
+  // and nothing to contradict. Everything above supersedes it when units exist.
+  if (totalVolume && totalVolume > 0 && products.length > 0 && headerUnit === '') {
     const sumQuantities = products.reduce((sum, p) => sum + (p.quantity || 0), 0);
     if (sumQuantities > 0) {
       // Only rows that actually move the sum can make it non-additive. A

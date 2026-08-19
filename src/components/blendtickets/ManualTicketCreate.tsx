@@ -322,6 +322,7 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
       total_acres: formData.total_acres ? parseFloat(formData.total_acres) : null,
       total_volume: formData.total_volume ? parseFloat(formData.total_volume) : null,
       total_volume_unit: formData.total_volume_unit || null,
+      application_rate: formData.application_rate || null,
     };
     const productData = products.map(p => {
       // The rate check guards a billing path: create_invoice_from_blend_ticket
@@ -341,7 +342,9 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
       };
     });
     setWarnings(validateBlendMath(ticketData, productData));
-  }, [products, allProducts, formData.total_acres, formData.total_volume, formData.total_volume_unit]);
+    // application_rate belongs in these deps: the tank check reads it, so leaving
+    // it out would freeze the warning at whatever it was before the operator typed.
+  }, [products, allProducts, formData.total_acres, formData.total_volume, formData.total_volume_unit, formData.application_rate]);
 
   function addProduct() {
     setProducts([

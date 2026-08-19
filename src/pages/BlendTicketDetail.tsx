@@ -422,6 +422,7 @@ export function BlendTicketDetail() {
       total_acres: formData.total_acres ? parseFloat(formData.total_acres) : null,
       total_volume: formData.total_volume ? parseFloat(formData.total_volume) : null,
       total_volume_unit: formData.total_volume_unit || null,
+      application_rate: formData.application_rate || null,
     };
     // The rate check guards a billing path: create_invoice_from_blend_ticket prices
     // each line from rate_per_acre and its unit, falling back to the product's own
@@ -439,7 +440,7 @@ export function BlendTicketDetail() {
       product_inventory_unit: p.product?.inventory_unit || p.product?.unit_size || null,
     }));
     setWarnings(validateBlendMath(ticketData, productData));
-  }, [products, formData.total_acres, formData.total_volume, formData.total_volume_unit]);
+  }, [products, formData.total_acres, formData.total_volume, formData.total_volume_unit, formData.application_rate]);
 
   // Track dirty state from form changes
   useEffect(() => {
