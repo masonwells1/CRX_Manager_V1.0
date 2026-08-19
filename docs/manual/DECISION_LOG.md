@@ -230,10 +230,36 @@ constraint is named `<table>_<column>_whole_cents_chk`.
 CHECK (col IS NULL OR (col = ROUND(col, 2) AND col > '-Infinity' AND col < 'Infinity'))
 ```
 
-On a `NOT NULL` column the `IS NULL` branch is redundant and may be omitted — one of the eight
-enforced constraints, `order_items_total_price_whole_cents_chk`, is live as
-`CHECK (total_price = round(total_price, 2) AND total_price > '-Infinity' AND total_price <
-'Infinity')` and clears the gate. What may **not** be omitted is either finiteness bound.
+That is the **rounding form**, and it is what eight of the ten live `whole_cents` constraints
+use. Two details, both read from live on 2026-08-19 UTC:
+
+- On a `NOT NULL` column the `IS NULL` branch is redundant and may be omitted.
+  `order_items_total_price_whole_cents_chk` is live as
+  `CHECK (total_price = round(total_price, 2) AND total_price > '-Infinity' AND total_price <
+  'Infinity')` and clears the gate.
+- Within the rounding form, neither finiteness bound may be dropped. `round()` alone does not
+  exclude `Infinity` or `NaN` in `numeric`, which is the whole reason both bounds are written.
+
+**A second form also satisfies the gate, and an earlier draft of this paragraph wrongly implied it
+could not.** The two constraints on the converted purchase-order pair are live as:
+
+```sql
+-- purchase_orders_total_cost_whole_cents
+CHECK (total_cost >= 0 AND total_cost = (total_cost_cents::numeric / 100.0))
+-- purchase_order_items_unit_cost_whole_cents
+CHECK (unit_cost >= 0 AND unit_cost = (unit_cost_cents::numeric / 100.0))
+```
+
+These carry **no** `round()` and **no** finiteness bounds, yet they are *stronger* than the
+rounding form: pinning the numeric dollar column to a `bigint` cents column divided by 100 makes
+whole cents and finiteness structural rather than asserted, and `>= 0` additionally forbids
+negatives, which the rounding form permits. Call this the **mirror form**. It is available only
+where an authoritative `*_cents` bigint column exists — which is exactly the converted state the
+whole programme is aiming at, so the mirror form is the preferred shape wherever conversion has
+happened, and the rounding form is the compatibility shape for columns still stored as dollars
+only.
+
+Both forms clear the gate. What is **not** acceptable is a column with neither.
 
 **Both halves are load-bearing — a `ROUND`-only constraint does NOT clear the gate.** PostgreSQL
 `numeric` deliberately does not use IEEE-754 NaN semantics: so values stay sortable and indexable,
