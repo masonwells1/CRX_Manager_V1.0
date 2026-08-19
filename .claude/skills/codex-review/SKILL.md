@@ -27,7 +27,7 @@ newest one — never hard-code the hash:
 ```bash
 CODEX=$(ls -t /c/Users/mason/AppData/Local/OpenAI/Codex/bin/*/codex.exe 2>/dev/null | head -1)
 [ -x "$CODEX" ] || { echo "Codex CLI not found — fall back to /codex-cross-review"; exit 1; }
-"$CODEX" --version    # expect codex-cli 0.14x
+"$CODEX" --version    # confirm it prints a codex-cli version (any recent release)
 ```
 
 If not found, stop and use `/codex-cross-review` instead.

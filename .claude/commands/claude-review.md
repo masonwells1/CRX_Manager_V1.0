@@ -21,7 +21,7 @@ Use `codex-to-claude-handoff` instead when Mason wants a continuation packet for
 
 ## Review Scope
 
-- Flag only correctness bugs, security / red-line violations, and gaps against the stated requirement. Do NOT pad with defensive-coding suggestions, style/formatting preferences, or speculative hardening — note any of those at most as a single NIT line.
+- Ask the reviewer for EVERY finding — correctness bugs, security / red-line violations, gaps against the stated requirement, and anything else it notices. Do not instruct the reviewer to hold back or be conservative. Filtering happens afterwards, in the Step 3 reconciliation pass: classify defensive-coding suggestions, style/formatting preferences, and speculative hardening as NIT there rather than asking the reviewer to omit them.
 
 ## Step 0 - State Check
 
@@ -70,7 +70,7 @@ The wrapper captures Claude's output at:
 
 The wrapper supplies the exact scoped diff in the prompt and restricts the headless reviewer to `Read`, `Grep`, and `Glob`. Bash and write-capable tools are denied, so a normal read-only review does not depend on plan-mode handoffs or shell permission prompts.
 
-It also writes a unique per-run capture under `.claude/session-state/history/` and records the requested/resolved model, effort, CLI version, repo HEAD, scope fingerprint, prompt hash, terminal reason, and permission denials.
+It also writes a unique per-run capture under `.claude/session-state/history/` and records the requested/resolved model, effort, CLI version, repo HEAD, scope fingerprint, prompt hash, terminal reason, and permission denials. A clean base-main run additionally mints (or clears) the HEAD-bound Claude push proof at `.claude/session-state/claude-review-push.json`.
 
 The wrapper emits one execution state:
 

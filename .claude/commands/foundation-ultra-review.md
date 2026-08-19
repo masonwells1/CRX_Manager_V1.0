@@ -22,4 +22,4 @@ In summary, that prompt runs **5 phases**:
 
 ## After the report
 
-Give Mason a 5-line summary — verdict, counts by severity, the single most dangerous finding (or "solid"), whether anything blocks feature work, and the next step — and remind him nothing was changed (read-only). Actionable findings get remediated via `/ship` one at a time, with a `/codex-cross-review` packet for the batch.
+Give Mason a 5-line summary — verdict, counts by severity, the single most dangerous finding (or "solid"), whether anything blocks feature work, and the next step — and remind him nothing was changed (read-only). Actionable findings get remediated via `/ship` one at a time, with a `/codex-review` run for the batch (`/codex-cross-review` is the paste-doc fallback only when the Codex CLI is broken).

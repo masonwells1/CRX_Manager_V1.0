@@ -12,7 +12,7 @@ In summary, that prompt makes you:
 - **Passes 0–6** — run the seven reconciliation passes against the live DB (project `rhyzpcqhnizqbxphqdkr`) + `src/`:
   0. harvest the map's own auto-checks · 1. asserted-flow verification · 2. RPC reality (missing / overloaded / `search_path`) · 3. lifecycle vs live CHECK constraints · 4. role / RLS coherence · 5. missing connections · 6. **map defects** (where the generator itself is stale).
 - **Adversarial gate** — try to *refute* every BLOCKER/HIGH against live before it enters the report. A finding with no live-confirmed `file:line` / migration / constraint / RPC citation does not count.
-- **Report** — write ONE dated file: `docs/audits/<YYYY-MM-DD>-map-drift-audit.md` (use a real clock for the date — `(Get-Date).ToString("yyyy-MM-dd")` — never fabricate it).
+- **Report** — write ONE dated file: `docs/audits/<YYYY-MM-DD>-map-drift-audit.md` (use a real clock for the date — `TZ='America/Chicago' date +%F` — never fabricate it).
 
 ## Hard rules (from the prompt)
 
