@@ -47,8 +47,10 @@ if (!isTs || isTest || !inSrc || excluded) emit();
 
 // Run eslint --fix on the single file. Invoke the project's own eslint through
 // the current node binary — `npx` via a shell re-resolves the package on every
-// edit and was the single slowest hook in the 2026-08-18 audit (p90 ~15s).
-// --cache skips files eslint has already seen unchanged.
+// edit and was the single slowest hook in the 2026-08-18 audit (p90 ~15.5s).
+// --cache is passed but can't actually hit: this hook only ever runs right after
+// the file it checks was just edited, and --cache-strategy defaults to "metadata"
+// (size + mtime), so the just-written file never matches its cache entry.
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const eslintBin = path.join(projectDir, "node_modules", "eslint", "bin", "eslint.js");
 
@@ -57,7 +59,9 @@ const eslintBin = path.join(projectDir, "node_modules", "eslint", "bin", "eslint
 // path into a shell string is a command-injection surface (CodeRabbit, PR #413).
 if (!existsSync(eslintBin)) emit();
 
-// ESLint does not create the cache file's parent directory itself.
+// Redundant: flat-cache (4.0.1) creates this directory itself in writeJSON, with
+// { recursive: true }, so the first run is covered too. Kept as a cheap defensive
+// call; nothing downstream depends on it.
 const cacheLocation = path.join(projectDir, "node_modules", ".cache", "eslint-autofix");
 try { mkdirSync(path.dirname(cacheLocation), { recursive: true }); } catch { /* best effort */ }
 

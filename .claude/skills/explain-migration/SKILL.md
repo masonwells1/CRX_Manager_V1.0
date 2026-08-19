@@ -56,7 +56,7 @@ called "Hard Red Lines" in `CLAUDE.md`; the policy now lives in `AGENTS.md`) and
 - ⚠️ **Actor forgery** — a mutating SECDEF function that trusts a caller-supplied `p_performed_by` with no `ACTOR_MISMATCH` gate against `auth.uid()`
 - ⚠️ **Missing role/active-profile enforcement** — the function binds `auth.uid()` but never checks the caller's role or that the profile is active, so a deactivated or wrong-role user still succeeds
 - ⚠️ **A read-only SECDEF function that bypasses RLS** — a plain reader normally should NOT be SECURITY DEFINER; invoker rights preserve RLS
-- ⚠️ **New table without an `updated_at` `moddatetime` trigger** — `updated_at` silently never changes (`DATABASE_CHANGE_CHECKLIST.md`, known-mistakes table)
+- ⚠️ **New table without an `updated_at` trigger (house function `public.update_updated_at()`)** — `updated_at` silently never changes (`docs/workflows/DATABASE_CHANGE_CHECKLIST.md`, known-mistakes table)
 - ⚠️ **CHECK constraint that drops existing enum values** — will break existing rows (March 2026 incident class)
 - ⚠️ **New mutating RPC without `p_idempotency_key`** — double-submit risk
 - ⚠️ **New table without RLS enabled + at least one policy** — anyone can read everything
