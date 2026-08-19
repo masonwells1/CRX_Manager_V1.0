@@ -30,9 +30,15 @@ re-derive" live facts (Mason caught it; the PRD was fixed, the source was not).
   Keeping the hunter connector-free stays the deliberate choice: it keeps a write-capable connector
   out of an unattended loop and forces the Claude-side live grounding to actually happen.
 - Same wrong reason fixed in two downstream copies (the hunter prompt at `:73`, Claude's verify step
-  at `:100`) and in `overnight-bug-hunt.md`'s mirrored Codex finding-gate prompt. A repo-wide sweep
-  found no other copies; the remaining `CHANGELOG`/`KNOWN_ISSUES` mentions are correct historical
-  records of the old state. Adapters regenerated (`sync-agent-workflows --write`, 37 files — the two
+  at `:100`) and in `overnight-bug-hunt.md`'s mirrored Codex finding-gate prompt. **The first sweep
+  missed two more copies** because it searched the long phrasing ("cannot reach") and not the
+  contraction: `codex-driven-bug-hunt.md:1` — the description line, the first sentence any agent
+  reads — still said "which Codex's sandbox can't reach", contradicting the new warning 20 lines
+  below it, and `overnight-bug-hunt.md:92` said "since Codex's sandbox can't". Both are now fixed;
+  an adversarial `claude-fable-5` review of the branch caught them. Sweep the *concept*
+  (`can't reach`, `cannot reach`, `sandbox can't`, `Codex can't`), not one phrasing. The remaining
+  `CHANGELOG`/`KNOWN_ISSUES` mentions are correct historical records of the old state and are
+  deliberately left alone. Adapters regenerated (`sync-agent-workflows --write`, 37 files — the two
   bug-hunt adapters are pointer stubs, so their content is unchanged) and
   `npm run test:agent-workflows` green.
 - **Still open (owner-only):** nobody can verify from this repo whether the `codex_apps/supabase`
