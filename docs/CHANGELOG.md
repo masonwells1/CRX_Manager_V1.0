@@ -2,6 +2,60 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-19 — chem-unit reconciliation reads the pricing tables, and says when it fails
+
+Frontend only — `src/lib/chemCalculator.ts`, its tests, and one warning strip in
+`src/pages/JobDetail.tsx`. No migration, no live state, no stored money rewritten.
+
+Started as a narrow `oz/cwt` parity fix. That first attempt (`bd080626`) was **reverted** —
+adversarial review proved it made the money worse, and the review is what surfaced the
+defect that was actually live. Full reasoning is in the revert commit `0890a2eb`.
+
+**The live defect: `unitSizeInForm` read the wrong table pair — a 16× over-bill.**
+Reconciliation exists to make a row's stored money agree with what the server bills, and
+the server bills through `field_app_priced_quantity`. `unitSizeInForm` instead sized units
+off `LIQUID_TO_GALLONS`/`DRY_TO_POUNDS`, which mirror `convert_to_gl_lb` — a **display**
+function whose dry branch has no `dry oz`. `field_app_priced_quantity`'s does. So `Dry oz`
+was treated as unconvertible and dropped into the unreconciled branch: quantity counted in
+ounces, priced per pound.
+
+**61 live products** carry `rate_unit = 'Dry oz'` against pound stock with
+`product_form = 'dry'`. 32 Dry oz/ac over 100 acres at $1.50/lb billed **$4,800** where the
+correct charge is **$300**, and `complete_job` deducted 3,200 lb instead of 200. No wrong
+invoice exists yet — the four live `job_chemicals` rows are all liquid test products — but
+the next real job on any of those 61 would have hit it. The two table pairs produce
+identical ratios for every other unit, so nothing else moved.
+
+- **One normalizer, not four.** `baseUnitOfRate` kept a partial copy of
+  `normalize_rate_unit` that split on the first `/` and folded no synonyms — so `oz/cwt`
+  collapsed to `oz` (the server keeps the whole string precisely so it cannot match a bare
+  unit) and `ounces/ac` missed tables the server reaches after folding to `oz`. It now
+  delegates to `labelGuardrails.normalizeRateUnit`, which was **already** a complete mirror.
+  The duplicate is deleted rather than corrected.
+- **The unreconciled branch is no longer called a "safe fallback", because it is not.**
+  `quantity` is rate × acres in the *rate's* unit while the fallback keeps a price per the
+  *stock* unit, and `transfer_job_to_invoice` bills the line as a raw
+  `safe_cents_qty(price_per_unit_cents, quantity)` with no unit conversion. `complete_job`
+  does not refuse either — its hard `JOB_INV_UNIT_UNCONVERTIBLE` raise was removed under
+  U11 in favour of a raw fallback plus an office-review flag. `reconcileChemAutofillUnits`
+  now returns `reconciled` + `reason`, and the job chem grid shows a per-line warning naming
+  the ratio and direction. **Warn, never block**, per the house convention in
+  `labelGuardrails`; a hard block is Mason's call and is tracked as open.
+- Own-property lookup instead of `in` on the size tables, so a unit spelled `constructor`
+  cannot inherit off `Object.prototype` and write `NaN` cents.
+- **Prevention:** a mechanical parity fixture — literal restatements of
+  `normalize_rate_unit` and `field_app_priced_quantity` read from live `pg_proc`, run over
+  50 probe units in both forms. This parity used to be asserted in prose, and prose is
+  exactly what drifted.
+
+Proof: typecheck, lint, 4584 passed / 331 files, production build. Both guards
+mutation-tested. The shipped module was executed in the running dev server — `Dry oz` on Lb
+now bills $288 not $4,800, `ounces/ac` converts, `oz/cwt` still bills high but now carries
+the warning, `pt/ac` and bare-`oz` controls unchanged — and checked against the real live
+rows: the two Acuron lines stay silent, the row whose `rate_unit` is the string `32` is
+caught, a blank unit stays silent by design. **Not verified:** the warning's appearance on
+screen — this worktree has no Supabase credentials and there is no `JobDetail` test file.
+
 ## 2026-08-19 — `agent-health` and the sync generator now agree on line endings
 
 Harness only — no app source, migration, or live-state change.

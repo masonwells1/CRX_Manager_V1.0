@@ -185,6 +185,52 @@ every one can be re-checked with a direct read of `pg_policies` for that table.
 
 ---
 
+## OPEN 2026-08-19 — an unconvertible chem unit warns but still saves, and still bills wrong
+
+**Severity: MED, money path, no live occurrence.** Fixed alongside this: the `Dry oz` 16×
+over-bill and the duplicate normalizer (see the 2026-08-19 entry in `docs/CHANGELOG.md`).
+What remains open is the **policy**, not a code defect.
+
+When a chem line's rate unit cannot be reconciled with the stock unit — a non-acre
+denominator (`oz/cwt`), a junk value, an unknown spelling — the job chem grid now shows a
+per-line warning naming the ratio and direction. It does **not** block the save. That
+follows the house convention set out in `src/lib/labelGuardrails.ts` ("Mason has NOT
+authorized a hard block"), and it is deliberately consistent with the label-rate guardrail,
+which defaults to warn and has an opt-in `block` mode in `app_settings`.
+
+The residual risk is real: `transfer_job_to_invoice` bills a line as
+`safe_cents_qty(price_per_unit_cents, quantity)` with **no** unit conversion, and
+`complete_job` deducts stock the same way without refusing (its hard
+`JOB_INV_UNIT_UNCONVERTIBLE` raise was removed under U11). So a user who ignores the warning
+still ships a wrong invoice. For `oz/cwt` on a $28.00/GAL product that is $5,600 against a
+$44 per-ounce reading — and neither number is right, because the input itself is
+uninterpretable.
+
+**Owner decision owed:** should an unreconcilable unit block the save (like the guardrail's
+`block` mode), or keep warning? Blocking adds friction for the office; warning leaves the
+hole open. Not started — needs Mason's call before code.
+
+### Related, unaddressed, and separately dated
+
+- **CSV product import performs no unit validation.**
+  `src/components/products/BulkProductImport.tsx` maps `rate_unit | unit | rate_uom`
+  straight into `products.rate_unit`; only pricing columns are rejected. That is the
+  realistic way a `fl oz/cwt` (seed treatment), `lb/ton` (feed additive) or `oz/1000 sq ft`
+  (turf) value enters the table. The in-app dropdowns are constrained to `unit_conversions`,
+  so free typing is not the vector — the import is.
+- **Per-unit price rounding amplifies by quantity.** `reconcileChemAutofillUnits` rounds the
+  converted per-unit price to whole cents at the *smallest* unit, then the invoice multiplies
+  by the whole quantity. $28.00/GAL → 21.875¢/oz → 22¢ is a systematic **+0.57%** on every
+  such line, and cost rounds the same way ($22.50/GAL → 17.578 → 18¢, **+2.4%**), understating
+  margin and therefore commission. This affects the **463 live products** on an `oz` rate
+  against `Gal` stock. Pre-existing and untouched — fixing it means changing how money is
+  rounded, which is its own scoped decision.
+- **`unit_conversions` vocabulary drift.** `src/lib/units.ts` describes those keys as FROZEN,
+  and `save_quote` joins on `LOWER(rate_unit) = LOWER(unit)`. Nothing stops a spelling outside
+  that set reaching the column.
+
+---
+
 ## OPEN 2026-08-18 — the session-staleness hook measures disk filename stamps against a server-assigned ledger version
 
 **Severity: LOW (latent silent skip; no incident observed).** `.claude/schema-registry.json` stores
