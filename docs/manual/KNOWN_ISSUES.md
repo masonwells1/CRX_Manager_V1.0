@@ -39,6 +39,48 @@ This file consolidates (does not replace) the source documents it points to. If 
 **Status: reworked on branch `claude/draw-down-price-tier-lines`, NOT applied, NOT merged. Awaiting
 Mason's explicit approval for both.**
 
+**BLOCKING, found by the RLS gate on 2026-08-19 and confirmed against live `prosrc` the same
+day: `restore_quote_version` would break.** `save_quote` is not the only path that deletes and
+reinserts a quote's lines. `_restore_quote_version_owner_impl` does the same, and its reinsert
+**omits the `id` column entirely** — every restored line takes a fresh `gen_random_uuid()`, so no
+id is ever reused. Under the deferred FK, restoring an earlier version of a **partially drawn**
+booking finds every stamp dangling at COMMIT and aborts the whole restore with a raw foreign-key
+error. That path is reachable from the UI today and works today; the existing drawn-version guard
+only asserts restored booked ≥ drawn per product and does not require id preservation. It is
+fail-closed (the restore rolls back whole, no money moves), so it is a functional regression rather
+than a correctness hazard — but the retired `ON DELETE SET NULL` design did **not** have it, so it
+is a real cost of deferring, not an inherited defect. The migration's own text previously claimed
+the delete-and-reinsert chain had been read link by link; it had not.
+
+Two candidate fixes, both touching a **second** function and therefore widening the PR — Mason's
+call, not this document's:
+
+- **(a)** have restore **clear** the stamps deliberately before rebuilding. A version restore
+  genuinely discards the old lines, so losing provenance there is honest — unlike an ordinary save,
+  which is exactly why SET NULL was wrong. The front-walk plus `DRAW_MIXED_TIER_UNMATCHED_LINE`
+  then covers the next draw as before, and restore keeps working. **Recommended.**
+- **(b)** have restore **refuse** with a plain-English message on a partly drawn booking. Smaller,
+  but it removes a capability that exists today.
+
+**Until one is chosen and written, this migration is not ready to apply.**
+
+**Also fixed in the same pass (both gate reviewers, 2026-08-19):** the migration locked
+`quote_product_draws` before `order_items` while the draw path writes `order_items` first — a real
+deadlock cycle against any in-flight pre-barrier draw, which neither the advisory key nor the
+quiet-gate prevents (the quiet gate runs *below* those locks). The order is now
+`quote_items` → `order_items` → `quote_product_draws`, matching the draw path, and the header's
+false "no deadlock is possible" claim is corrected along with its lock count (six acquisitions,
+~90s worst case, not three and ~45s). The FK postflight now also asserts `convalidated` and the
+full key shape — proven by mutation: a `NOT VALID` constraint passed the old predicate and is
+rejected by the new one. The price-partition tripwire now matches the `IS NOT DISTINCT FROM
+ti.price` predicate rather than two identifiers that also appear in the file's own comments.
+
+**Live facts confirmed read-only on 2026-08-19**, because the price partition depends on them:
+`quote_items_price_per_unit_cent_scale_chk` and `order_items_price_per_unit_cent_scale_chk` are
+both `convalidated` (so the price comparison is exact whole cents); `order_items.price_per_unit` is
+NOT NULL with zero NULL rows; and there are zero cancelled orders carrying delivered units, so the
+cancelled-branch money case stays dormant.
+
 PR #404's tier split originally identified a price tier by the `(price_per_unit,
 cost_at_quote_cents)` pair. That key is neither unique (two booked lines at the same price collapse
 into one tier) nor immutable (three separate paths rewrite the cost snapshot), so attributing

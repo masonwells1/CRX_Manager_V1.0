@@ -244,16 +244,28 @@
 -- quote carries more than one price tier for the same product today. Re-verify
 -- that read-only immediately before applying.
 -- Fail fast rather than freeze the app (RLS/security review 2026-08-16, MED).
--- This transaction takes three blocking locks: the cutover advisory key below,
--- SHARE ROW EXCLUSIVE on quote_product_draws (which queues every other writer
--- of that table, including void/cancel reversals), and -- much later, at the
--- CHECK constraint -- ACCESS EXCLUSIVE on quote_items, which blocks all READS
--- of the quote builder's main table until commit. With no lock_timeout a
--- blocked apply waits forever and takes the quote pages down with it.
+-- This transaction takes SIX blocking acquisitions, not three (both gate
+-- reviewers, 2026-08-19 -- the earlier count predated the order_items lock and
+-- the FK swap):
+--   1. the cutover advisory key below;
+--   2. SHARE ROW EXCLUSIVE on quote_items;
+--   3. SHARE ROW EXCLUSIVE on order_items;
+--   4. SHARE ROW EXCLUSIVE on quote_product_draws (which queues every other
+--      writer of that table, including void/cancel reversals);
+--   5. much later, at the CHECK constraint, an upgrade to ACCESS EXCLUSIVE on
+--      quote_items, which blocks all READS of the quote builder's main table
+--      until commit;
+--   6. at the FK swap, an upgrade to ACCESS EXCLUSIVE on order_items.
+-- Note what 3 costs: order_items is held at SHARE ROW EXCLUSIVE from that point
+-- THROUGH COMMIT, including both validation scans, so every order write in the
+-- system queues -- order creation, delivery, invoicing, bulk import -- not just
+-- draw-down. Readers are untouched throughout, so the quote pages keep loading.
+-- With no lock_timeout a blocked apply waits forever and takes those writers
+-- down with it.
 --
--- 15s bounds EACH lock acquisition, not the apply as a whole: worst case is
--- three separate 15s waits, so roughly 45s before the apply gives up, and even
--- a FAILING apply queues quote_items readers behind its pending ACCESS
+-- 15s bounds EACH lock acquisition, not the apply as a whole: worst case is six
+-- separate 15s waits, so roughly 90s before the apply gives up, and even a
+-- FAILING apply queues quote_items readers behind its pending ACCESS
 -- EXCLUSIVE request for up to that last 15s. The number is also unmeasured --
 -- chosen as comfortably longer than a real draw so the intended hand-off below
 -- still works, not derived from a timing run. Wrong either way it fails closed:
@@ -300,21 +312,36 @@ SELECT pg_advisory_xact_lock(20260816, 1);
 -- later upgrade to ACCESS EXCLUSIVE for the constraint deadlock-free rather
 -- than merely lucky.
 --
--- Taken BEFORE quote_product_draws on purpose. save_quote reaches the quote's
--- own lines first and its draw rows second; acquiring in that same order means
--- the two contend head-on instead of crossing, which is the shape that
--- deadlocks. If it does contend, lock_timeout aborts this apply at 15s having
--- changed nothing, and it is safe to re-run.
+-- ORDER MATTERS, and an earlier version of this file got it wrong. The rule is
+-- to acquire in the same relative order every writer reaches these tables, so
+-- contention is head-on rather than crossing -- crossing is the shape that
+-- deadlocks.
+--
+--   * save_quote reaches the quote's own lines and never touches order rows.
+--   * the draw path reaches order_items FIRST (its INSERT) and
+--     quote_product_draws SECOND (its ledger write).
+--
+-- So the correct order is quote_items -> order_items -> quote_product_draws.
+--
+-- The earlier order took quote_product_draws second and order_items last, which
+-- crosses the draw path: a pre-barrier draw already holding ROW EXCLUSIVE on
+-- order_items and about to write quote_product_draws would deadlock against
+-- this apply holding quote_product_draws and waiting for order_items. Neither
+-- the advisory key nor DRAW_DOWN_CUTOVER_NOT_QUIET prevents that -- the key is
+-- not taken by a pre-barrier draw, and the quiet gate lives in the preflight
+-- DO block BELOW these locks, so it has not run yet. Both gate reviewers found
+-- this independently on 2026-08-19; the header's old "no cycle and no deadlock
+-- is possible" claim was false. If it does contend, lock_timeout aborts this
+-- apply at 15s having changed nothing, and it is safe to re-run.
 LOCK TABLE public.quote_items IN SHARE ROW EXCLUSIVE MODE;
-LOCK TABLE public.quote_product_draws IN SHARE ROW EXCLUSIVE MODE;
--- order_items is locked here for the same reason, and LAST on purpose: both
--- writers that touch it (the draw path and save_quote) reach the quote's own
--- rows before they reach order rows, so acquiring in that order contends
--- head-on rather than crossing. The FK swap further down needs ACCESS
--- EXCLUSIVE on this table; holding the self-conflicting SHARE ROW EXCLUSIVE
--- from here means that upgrade waits only on readers, never on another writer
--- that could itself be waiting on us.
+-- order_items before quote_product_draws, per the rule above. The FK swap
+-- further down needs ACCESS EXCLUSIVE on this table; holding the
+-- self-conflicting SHARE ROW EXCLUSIVE from here means that upgrade waits only
+-- on readers, never on another writer that could itself be waiting on us.
+-- Taking it earlier only lengthens that hold, which does not weaken the
+-- property.
 LOCK TABLE public.order_items IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.quote_product_draws IN SHARE ROW EXCLUSIVE MODE;
 
 -- --- Preflight: refuse to run against an unexpected body ----------------------
 DO $preflight$
@@ -2013,6 +2040,15 @@ $qty_check$;
 -- depending on which page saved the quote". That premise was wrong in both
 -- halves: no current page echoes ids, and the fallback reuses without them.
 --
+-- STATED PRECISELY, because an earlier draft of this comment claimed more than
+-- it had (drift review 2026-08-19, H2). What deferring restores is editing for
+-- a partly-drawn booking with ONE line per product -- the large majority. It
+-- does NOT restore editing for a booking carrying TWO lines of one product:
+-- save_quote refuses that save on QUOTE_ITEM_AMBIGUOUS_COST before the FK is
+-- ever reached, because QuoteBuilder sends both lines without ids. That
+-- limitation is pre-existing, is not caused or removed by this file, and is the
+-- separate PR named in the residual below.
+--
 -- ON DELETE SET NULL was that earlier choice and is now REJECTED, because
 -- save_quote runs its DELETE on EVERY save of an existing quote -- including a
 -- save that changes nothing. SET NULL would therefore wipe every stamp on
@@ -2035,6 +2071,36 @@ $qty_check$;
 -- Closing it properly means giving save_quote real line identity, which is the
 -- same defect QUOTE_ITEM_AMBIGUOUS_COST already is, with its own blast radius
 -- and its own PR.
+--
+-- OPEN, AND THIS FILE MUST NOT APPLY UNTIL IT IS DECIDED (RLS gate 2026-08-19,
+-- H1; confirmed against live prosrc the same day). save_quote is NOT the only
+-- path that deletes and reinserts a quote's lines. _restore_quote_version_owner_impl
+-- does the same thing -- and its reinsert omits the id column entirely, so
+-- every restored line takes a fresh gen_random_uuid(). No id is ever reused.
+--
+-- Under the deferred FK that means: restoring an earlier version of a
+-- PARTIALLY DRAWN booking finds every stamp dangling at COMMIT and aborts the
+-- whole restore with a raw foreign-key error. That path is reachable from the
+-- UI today (QuoteBuilder -> restore version) and works today, and the existing
+-- drawn-version guard only asserts restored booked >= drawn per product; it
+-- does not require id preservation. So this migration would turn a working
+-- button into an opaque failure.
+--
+-- It is fail-closed -- the restore rolls back whole, no money moves -- which is
+-- why it is not a correctness hazard. It is a functional regression, and the
+-- earlier ON DELETE SET NULL design did not have it, so it is a genuine cost of
+-- deferring rather than an inherited defect.
+--
+-- The two candidate fixes both touch a SECOND function and therefore widen this
+-- PR, which is Mason's call, not this file's:
+--   (a) have restore CLEAR the stamps deliberately before it rebuilds. A
+--       version restore genuinely discards the old lines, so losing provenance
+--       there is honest -- unlike an ordinary save, which is why SET NULL was
+--       wrong. The front-walk plus DRAW_MIXED_TIER_UNMATCHED_LINE then covers
+--       the next draw exactly as before, and restore keeps working.
+--   (b) have restore REFUSE with a plain-English message on a partly drawn
+--       booking. Smaller, but it removes a capability that exists today.
+-- Until one is chosen and written, this migration is NOT ready to apply.
 --
 -- Same drift discipline as the CHECK above: adopt nothing unread. If the FK is
 -- already the deferred rule this is a no-op; anything else stops the apply. ON
@@ -2208,8 +2274,13 @@ BEGIN
   --
   -- Same honest limit as the tripwires above: this proves the identifiers are
   -- present, not that the arithmetic around them is right.
+  -- Matched on the PREDICATE, not on the two column names alone: those names
+  -- also occur in this body's own comments, so a name-only test would pass on a
+  -- body that kept the prose and deleted the SQL (drift review 2026-08-19, L1).
   IF position('units_settled' IN v_src) = 0
-     OR position('units_current' IN v_src) = 0 THEN
+     OR position('units_current' IN v_src) = 0
+     OR position('IS NOT DISTINCT FROM ti.price' IN v_src) = 0
+     OR position('IS DISTINCT FROM ti.price' IN v_src) = 0 THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: the draw no longer partitions a tier''s billed history by price -- units billed at a superseded price would re-enter the telescoping basis, so changing a price on a partly-drawn booking would silently rebill units the customer has already paid for';
   END IF;
 
@@ -2221,12 +2292,27 @@ BEGIN
   --     raises a raw foreign-key violation on the next edit of any partially
   --     drawn quote.
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conrelid = 'public.order_items'::regclass
-      AND conname = 'order_items_quote_item_id_fkey'
-      AND confdeltype = 'a'
-      AND condeferrable IS TRUE
-      AND condeferred IS TRUE
+    SELECT 1 FROM pg_constraint c
+    WHERE c.conrelid = 'public.order_items'::regclass
+      AND c.conname = 'order_items_quote_item_id_fkey'
+      AND c.contype = 'f'
+      AND c.confdeltype = 'a'
+      AND c.condeferrable IS TRUE
+      AND c.condeferred IS TRUE
+      -- Asserted as well as the deferral, so a future edit that added NOT VALID
+      -- or changed the key could not pass this gate (drift review 2026-08-19,
+      -- M4; RLS review L4). The preflight checks these before replacing the
+      -- constraint; the postflight was the asymmetric half.
+      AND c.convalidated IS TRUE
+      AND c.confupdtype = 'a'
+      AND c.confmatchtype = 's'
+      AND c.confrelid = 'public.quote_items'::regclass
+      AND array_length(c.conkey, 1) = 1
+      AND array_length(c.confkey, 1) = 1
+      AND (SELECT a.attname FROM pg_attribute a
+           WHERE a.attrelid = c.conrelid AND a.attnum = c.conkey[1]) = 'quote_item_id'
+      AND (SELECT a.attname FROM pg_attribute a
+           WHERE a.attrelid = c.confrelid AND a.attnum = c.confkey[1]) = 'id'
   ) THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: order_items_quote_item_id_fkey is not ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED -- with the draw now stamping quote_item_id, revising a partially drawn quote would either abort with a foreign-key violation (if left non-deferrable) or silently lose the stamp (if left ON DELETE SET NULL)';
   END IF;
