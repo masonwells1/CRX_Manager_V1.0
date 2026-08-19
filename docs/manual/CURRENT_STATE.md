@@ -129,13 +129,16 @@ Read-only counts against the live database (project `rhyzpcqhnizqbxphqdkr`),
 > and `quotes` has whole-cent CHECKs on `total_price`/`total_profit` but **none
 > on `total_cost`**. So the commission zeros are today's measurement, not an
 > invariant, and nothing stops a future write from reintroducing sub-cent values
-> there. The repair migration `20260812115238_repair_historical_order_line_cents`
-> (history row 885, applied live 2026-08-12 with Mason's in-chat approval) is the
-> only migration in that window documented as moving live money. **What is not
-> established here:** this pass measured the current state only — it did not
-> re-derive which statement cleared each row, so do not cite it as proof that
-> `20260812115238` alone repaired the commission rows. That unexplained change is
-> tracked as an OPEN item in `docs/manual/KNOWN_ISSUES.md`.
+> there. **What cleared the commission rows is established:**
+> `reconcile_pending_commission_snapshots` (ledger version `20260810235207`,
+> applied live 2026-08-10 with Mason's approval) rounded `order_profit` to whole
+> cents and recomputed `commission_amount` across exactly 11 pending rows. A first
+> draft of this paragraph named `20260812115238_repair_historical_order_line_cents`
+> as the only money-moving migration in the window and called the commission change
+> unexplained; both were wrong, and the retraction with the full attribution is in
+> `docs/manual/KNOWN_ISSUES.md`. `20260812115238` did move money — it rewrote order
+> lines, and the canonical `trg_recalc_order_totals` trigger refreshed the order
+> headers with them — but it never touches `commissions` directly.
 
 > **Correction:** the 2026-07-13 snapshot reported jobs = 104 and deliveries = 0;
 > the 2026-07-16 live read shows jobs = 4 and deliveries = 106. The two columns

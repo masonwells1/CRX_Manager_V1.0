@@ -145,13 +145,18 @@ Used on: `financial_audit_log`
 > direct writes were removed (`20260714223000`), and as of 2026-08-16 the
 > browser roles' direct INSERT on `quote_versions` was REVOKED along with the
 > `qversions_insert` policy (**CRX-SEC-1**, migration `20260813080000`, ledger
-> version `20260816174353`; writes are now `create_quote_version` RPC only).
+> version `20260816174353`; writes are now `create_quote_version` RPC only), and
+> `quote_items` now carries **only** `qitems_select` (admin or sales rep) with no
+> INSERT/UPDATE/DELETE policy at all — its writes are RPC-only too.
 > **Before trusting any row,
 > query the live policies** — `select * from pg_policies where schemaname='public'
 > and tablename='<table>'` (read-only) — and if you're debugging a silent RLS
 > denial, believe `pg_policies`, not this table. Do NOT "fix" reality to match
 > this matrix (re-adding a revoked permissive policy re-opens a closed hole).
-> Last hand-reconciled: pre-2026-07-14 — treat anything touched since as stale.
+> Last full hand-reconcile: pre-2026-07-14 — treat anything touched since as stale.
+> On 2026-08-18 the `quote_versions` and `quote_items` rows only were re-verified
+> against live `pg_policies` (read-only); every other row still dates from that
+> pre-2026-07-14 reconcile.
 
 | Table | SELECT | INSERT | UPDATE | DELETE |
 |-------|--------|--------|--------|--------|
@@ -162,7 +167,7 @@ Used on: `financial_audit_log`
 | customer_addresses | All authenticated | Admin / Sales Rep (own customer) | Admin / Sales Rep (own customer) | Admin |
 | quotes | Admin / Sales Rep (own) | Admin / Sales Rep (own) | Admin / Sales Rep (own) | Admin |
 | quote_sections | All authenticated | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) |
-| quote_items | All authenticated | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) |
+| quote_items | Admin / Sales Rep | - (RPC only) | - (RPC only) | - (RPC only) |
 | quote_versions | Admin / Sales Rep | - (`create_quote_version` RPC only, since `20260813080000` applied live 2026-08-16) | - | - |
 | orders | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | order_items | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |

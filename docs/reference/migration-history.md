@@ -11,8 +11,13 @@ version can have a newer timestamp without changing its documentation sequence.
 **Read the number in the title as a high-water sequence, not a row count.**
 `scripts/check-doc-drift.mjs` validates it against `max(sequence)` in the table below
 and accepts only the phrasings "migrations" or "migration-history entries", which is
-why the title reads the way it does. The table actually holds **729** parsed rows —
-the gap is ~157 skipped and duplicate sequence numbers (286–298, 302, 623, 872, 873).
+why the title reads the way it does. The table actually holds **729** parsed rows,
+157 fewer than the high-water 886. That gap is the net of two opposing effects,
+counted with the checker's own row regex: **706 distinct** sequence numbers are in
+use, so **180 numbers between 1 and 886 were never used at all**, while **17 numbers
+are duplicated** (286–298, 302, 623, 872, 873) across **23 extra rows**. 180 − 23 =
+157, and 729 + 157 = 886. Note the directions differ — skipped numbers raise the
+high-water above the row count, duplicates push it back down.
 This is also why `check:docs` reports two different totals that both pass: the
 `all migrations indexed` row counts `.sql` files in `supabase/migrations/` (885),
 while `migration-history sequence` reads the highest row number here (886).
@@ -29,12 +34,16 @@ applied live on 2026-08-16 at 17:43:53 UTC and is the 971st row — see row 886 
 | `max(version)` | `20260816174353` |
 | Row holding both | `20260813080000_lock_quote_versions_writes_to_rpc` |
 
-**These two figures are not interchangeable, and using the wrong one understates the high-water by
-three days.** Supabase assigns a fresh `version` at apply time while `name` preserves the authored
-filename stamp, so a migration authored on 08-13 and applied on 08-12 lands with a `version` below
-its `name`. The ordering guard compares `name` stamps. Row 49 below records only the `version`
-(`20260813011751`), which is why the 2026-08-16 `migration-drift-reviewer` run read the recorded
-high-water as three days stale — the recorded value was a `version`, not a `name` stamp.
+**These two figures are not interchangeable, and `version` can land on either side of `name`.**
+Supabase assigns a fresh `version` at apply time while `name` preserves the authored filename stamp,
+so the two drift apart in whichever direction the delay between authoring and applying pushes them.
+Both directions are present in this table: in the row above, `20260813080000` was authored 08-13 and
+applied 08-16, so its `version` (`20260816174353`) runs **three days ahead** of its `name`; at row 879
+below, `20260813070000` was applied the evening of 08-12 and its `version` (`20260813011751`) runs
+**behind** its `name`. **The ordering guard compares `name` stamps** — that is the rule that matters,
+and it does not depend on which way `version` fell. Row 879 records only the `version`, which is why
+the 2026-08-16 `migration-drift-reviewer` run read the recorded high-water as stale: the recorded
+value was a `version`, not a `name` stamp.
 
 CHECK 6 cleared for `20260813080000_lock_quote_versions_writes_to_rpc`: `20260813080000` sorts
 strictly above the live `name` high-water `20260813070000`. Also confirmed unapplied in the same

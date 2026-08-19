@@ -2,23 +2,25 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-18 — CRX-SEC-1 is LIVE (applied 2026-08-16); four docs corrected, and a grant claim retracted
+## 2026-08-18 — CRX-SEC-1 is LIVE (applied 2026-08-16); five docs corrected, and two claims retracted
 
 Documentation only — no app source, migration, or live-state change; every live read in this entry
 was read-only.
 
 **The apply.** `20260813080000_lock_quote_versions_writes_to_rpc` (**CRX-SEC-1**) is **APPLIED LIVE**
-as ledger version `20260816174353`. The 2026-08-14 entry below still ends `**STATUS: NOT APPLIED**`;
-that was accurate when written and is now superseded by this entry. The ledger has no timestamp
-column, so the commonly quoted 2026-08-16 17:43:53 UTC is read off the version stamp — the apply is
-observed, the clock time is inferred.
+as ledger version `20260816174353`. The 2026-08-14 entry below carries a `**STATUS: NOT APPLIED**`
+marker; that was accurate when written and is now superseded by this entry. The ledger has no
+timestamp column, so the commonly quoted 2026-08-16 17:43:53 UTC is read off the version stamp — the
+apply is observed, the clock time is inferred.
 
-**Four docs, not three.** A doc pass on 2026-08-18 found `docs/manual/CURRENT_STATE.md`,
+**Five docs, not three.** A doc pass on 2026-08-18 found `docs/manual/CURRENT_STATE.md`,
 `docs/manual/KNOWN_ISSUES.md` and `docs/reference/migration-history.md` row 886 all still calling the
 fix an unapplied local candidate. Adversarial review then found a fourth: the RLS Policy Matrix in
 `docs/reference/database-schema.md` still listed `quote_versions` INSERT as `Admin / Sales Rep` with a
 `LOCAL ONLY pending apply` marker — the canonical "who can write what" reference asserting the exact
-inverse of live. `npm run check:docs` does not cover that row, so nothing caught it.
+inverse of live. `npm run check:docs` does not cover that row, so nothing caught it. CodeRabbit then
+found a fifth, the same claim in the RLS Policy Matrix in `docs/workflows/RLS_SECURITY_GUIDE.md`,
+corrected in line with that matrix's own banner convention of naming superseding migrations inline.
 
 **A grant claim retracted.** Those same docs stated as post-apply proof that `authenticated` holds
 "SELECT only" on `quote_versions` and `anon` "holds nothing". **Both are wrong.** `pg_class.relacl` is
@@ -39,8 +41,20 @@ writer. A sales rep cannot forge a cost basis.
 **Also corrected:** the `migration-history.md` header claim 885 → 886 (a high-water row number, not a
 file count — the two `check:docs` rows measure different things), both manual freshness stamps, live
 counts in `CURRENT_STATE.md` section 2, and a whole-cent money re-measure showing 2 dirty rows where
-43 were recorded. That re-measure opened a new tracked item: **stored commission money changed on live
-with no identified cause** — see `docs/manual/KNOWN_ISSUES.md`. `20260813080000`'s own first line still
+43 were recorded.
+
+**A second claim retracted.** That money re-measure was first written up as a new OPEN incident —
+"stored commission money changed on live with no identified cause". It was wrong, and adversarial
+review caught it. Both writers are tracked, approved, applied migrations:
+`reconcile_pending_commission_snapshots` (ledger `20260810235207`, 2026-08-10) rounded `order_profit`
+to whole cents and recomputed `commission_amount` across exactly 11 pending rows, deliberately
+skipping cancelled ones; and `20260812115238_repair_historical_order_line_cents` (ledger
+`20260812154757`, 2026-08-12) rewrote order lines, whose trigger-refreshed order header re-opened a
+single $0.01 gap on one pending snapshot. The first draft asserted an absence without searching for
+the writer, which the retracted entry in `docs/manual/KNOWN_ISSUES.md` was already describing further
+down the same file. No production money moved outside a recorded decision.
+
+`20260813080000`'s own first line still
 reads `-- STATUS: NOT APPLIED`; that header is stale and is deliberately left alone, because CRX Manager
 never edits an applied migration.
 
