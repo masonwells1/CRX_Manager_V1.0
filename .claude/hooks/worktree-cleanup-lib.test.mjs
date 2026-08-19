@@ -7,6 +7,7 @@ import {
   classifyWorktree, classifyBranch, planCleanup, normPath,
   meaningfulDirt, isIgnorableDirtLine, IGNORABLE_DIRT_PATH,
   PROTECTED_BRANCHES, HARNESS_MARKER, ACTIVE_WINDOW_MS,
+  ledgerHasEntries,
 } from "./worktree-cleanup-lib.mjs";
 
 let pass = 0;
@@ -137,6 +138,20 @@ eq(meaningfulDirt(" M .claude/settings.local.json\n M src/app.ts\n"), [" M src/a
 eq(meaningfulDirt(""), [], "empty porcelain → clean");
 eq(meaningfulDirt("?? supabase/migrations/x.sql"), ["?? supabase/migrations/x.sql"],
   "an untracked migration is ALWAYS real dirt");
+
+// ── ledgerHasEntries — the applied-ledger gate's shape rules (round 4) ──
+// Only an object row with a non-empty string name (the recorder's one shape)
+// counts as a real entry; junk rows alone must not pin a worktree forever.
+ok(ledgerHasEntries(JSON.stringify([{ name: "add_widget_flag", ts: "2026-08-18T00:00:00Z" }])),
+  "a real recorder entry counts");
+ok(ledgerHasEntries(JSON.stringify([{ bogus: true }, { name: "real_one" }])),
+  "one real entry among junk still counts");
+ok(!ledgerHasEntries(JSON.stringify([])), "an empty ledger has no entries");
+ok(!ledgerHasEntries(JSON.stringify([{ bogus: true }, { name: 123 }, { name: "  " }, null])),
+  "junk-only rows (no name / non-string / blank) do not count");
+ok(!ledgerHasEntries(JSON.stringify({ name: "not-an-array" })), "a non-array ledger has no entries");
+assert.throws(() => ledgerHasEntries("{not json"), "unparseable text throws — the caller decides");
+pass++;
 
 // normPath sanity
 eq(normPath("C:\\A\\B\\"), "c:/a/b", "normPath lowercases + forward-slashes + strips trailing");

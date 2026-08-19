@@ -67,7 +67,7 @@ if (reviewProofPathMentioned(command)) {
 // (read-only listing after a cd to somewhere unrelated). Targets that cannot be
 // resolved statically (contain $VAR/%VAR%/backtick) stay fail-closed whenever
 // the command also mentions the state directory.
-const shellTool = /(?:bash|powershell|shell|terminal)/i.test(toolName);
+const shellTool = /(?:bash|powershell|pwsh|cmd|shell|terminal|exec|run_command)/i.test(toolName);
 
 // Deny targets that enter the state dir, either directly or as a component
 // step (`cd .claude` then `cd session-state` must not assemble the cwd).
@@ -90,15 +90,34 @@ function cdTargetEntersStateDir(target) {
 // Each token is a RUN of adjacent quoted/unquoted segments, because the shell
 // joins `".claude/session"-state` into one path; quotes are stripped from the
 // whole run.
-const CD_TOKEN_RE = /(?:cd|chdir|pushd|set-location|push-location)/;
+// `sl` is PowerShell's default Set-Location alias; the trailing lookahead
+// keeps `sleep`/`slice`/`cdx` from matching (Opus review 2026-08-19, round 2).
+const CD_TOKEN_RE = /(?:cd|chdir|pushd|set-location|push-location|sl)(?![\w.-])/;
 const CD_SEG_RE = /(?:"[^"]*"|'[^']*'|[^\s;&|()"']+)+/;
+// The prefix class admits quotes and backslash so `eval "cd dir"`, `'cd' dir`,
+// and `\cd dir` (backslash suppresses only alias lookup — the builtin still
+// runs) are scanned (Opus review 2026-08-19, round 2 — all proven bypasses).
 const CD_CMD_RE = new RegExp(
-  `(?:^|[;&|\\r\\n()]|\\s)${CD_TOKEN_RE.source}((?:[^\\S\\r\\n]+${CD_SEG_RE.source})*)`,
+  `(?:^|[;&|\\r\\n()"'\\\\]|\\s)${CD_TOKEN_RE.source}((?:[^\\S\\r\\n]+${CD_SEG_RE.source})*)`,
   "gi"
 );
 const CD_ARG_RE = new RegExp(CD_SEG_RE.source, "g");
-if (shellTool) {
-  for (const match of command.matchAll(CD_CMD_RE)) {
+
+// Statically decode ANSI-C `$'...'` quoting: `cd $'\x2eclaude/...'` executes
+// with the escapes resolved, so the scan must see the resolved bytes too
+// (Opus review 2026-08-19, round 2 — a proven bypass).
+function decodeAnsiCQuotes(text) {
+  return text.replace(/\$'((?:\\.|[^'\\])*)'/g, (_, body) =>
+    body.replace(/\\(x[0-9a-fA-F]{1,2}|[0-7]{1,3}|.)/g, (_esc, code) => {
+      if (/^x/i.test(code)) return String.fromCharCode(parseInt(code.slice(1), 16));
+      if (/^[0-7]/.test(code)) return String.fromCharCode(parseInt(code, 8));
+      const map = { n: "\n", t: "\t", r: "\r", a: "\x07", b: "\b", e: "\x1b", f: "\f", v: "\v" };
+      return map[code] ?? code;
+    }));
+}
+
+function scanCdInvocations(scan) {
+  for (const match of scan.matchAll(CD_CMD_RE)) {
     let target = "";
     for (const raw of match[1].match(CD_ARG_RE) || []) {
       const token = raw.replace(/["']/g, "");
@@ -119,15 +138,46 @@ if (shellTool) {
     // 2). Check the decoded form too; the RAW form still covers Windows
     // `\`-separated paths, where the backslash is a real separator.
     const decoded = target.replace(/\\(.)/g, "$1");
-    // Statically unresolvable: variable expansion ($VAR/%VAR%/backtick) and
+    // Statically unresolvable: variable expansion ($VAR/%VAR%/backtick),
     // shell glob/brace expansion (Opus review 2026-08-19 — `cd .clau[d]e/...`
-    // resolves at runtime to a path the literal matcher never sees). This is a
-    // self-certification gate, so fail closed whenever such a target appears
-    // in a command that also mentions the state directory.
-    const unresolvable = /[$%`*?[\]{}]/.test(target);
+    // resolves at runtime to a path the literal matcher never sees), and an
+    // expansion glued directly to the verb — `cd$IFS.claude/...` leaves the
+    // argument run empty, so inspect the character right after the token
+    // (round 2 — a proven bypass). This is a self-certification gate, so fail
+    // closed whenever such a target appears in a command that also mentions
+    // the state directory.
+    const afterToken = scan.charAt(match.index + match[0].length - match[1].length);
+    const unresolvable = /[$%`*?[\]{}]/.test(target) || (!target && /[$%`]/.test(afterToken));
     if (cdTargetEntersStateDir(target) || cdTargetEntersStateDir(decoded) || (unresolvable && reviewStateDirectoryMentioned(command))) {
       deny("REVIEW PROOF GUARD: the review state directory is wrapper-owned and cannot become an interactive shell working directory.");
     }
+  }
+}
+
+if (shellTool) {
+  // Two scan passes over preprocessed views of the command:
+  //   1. line continuations spliced (`cd \<newline>dir` is ONE invocation) and
+  //      ANSI-C quoting decoded — otherwise both split the verb from a target
+  //      the raw regex would have caught;
+  //   2. the same text with quote characters removed, so composed verbs like
+  //      `c"d"` / `"cd"` — which the shell joins back into `cd` — are seen as
+  //      the verb they execute as. (Opus review 2026-08-19, round 2.)
+  // Windows `\`-separated paths survive both views: only quotes are stripped.
+  const spliced = decodeAnsiCQuotes(command).replace(/[\\`]\r?\n/g, "");
+  scanCdInvocations(spliced);
+  scanCdInvocations(spliced.replace(/["']/g, ""));
+
+  // A destructive verb in a command that also mentions the state directory is
+  // denied outright: `rm -rf .claude/session-state` (or moving it aside)
+  // destroys the applied-source ledger and every wrapper-owned proof — the
+  // only record that a live apply lacks committed source (Opus review
+  // 2026-08-19, round 2 — both reviewers proved deletion was unguarded).
+  // Fail-closed by design: even a read-only command that merely MENTIONS the
+  // state dir is denied when a destructive verb appears anywhere in it; run
+  // reads and deletions of other files as separate commands.
+  const DESTRUCTIVE_VERB_RE = /(?:^|[;&|\r\n()"'\\]|\s)(?:rm|rmdir|del|erase|rd|ri|remove-item|unlink|shred|mv|move|mi|move-item|ren|rni|rename-item|trash)(?![\w.-])/i;
+  if (DESTRUCTIVE_VERB_RE.test(spliced) && reviewStateDirectoryMentioned(spliced)) {
+    deny("REVIEW PROOF GUARD: destructive shell commands touching the review state directory are blocked — it holds wrapper-owned proofs and the applied-source ledger. Stale ledger entries are removed with node scripts/remove-applied-ledger-entry.mjs after verifying the live migration ledger.");
   }
 }
 if (shellTool && reviewStateDirectoryMentioned(hookCwd)) {

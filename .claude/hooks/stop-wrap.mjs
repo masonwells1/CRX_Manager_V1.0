@@ -19,7 +19,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import os from "node:os";
 
-import { withFileLock } from "./ledger-lock-lib.mjs";
+import { withFileLock, normalizedSqlHash } from "./ledger-lock-lib.mjs";
 
 let payload = {};
 try {
@@ -27,7 +27,11 @@ try {
 } catch { /* fine */ }
 
 const sessionId = payload?.session_id || "unknown";
-const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+// Payload cwd first, mirroring applied-snapshot-invalidate.mjs: the ledger
+// this hook checks must be the one the recorder wrote, even under a harness
+// that pins CLAUDE_PROJECT_DIR to the primary checkout while the session runs
+// in a worktree (Opus review 2026-08-19).
+const projectDir = String(payload?.cwd || "").trim() || process.env.CLAUDE_PROJECT_DIR || process.cwd();
 
 function runGit(args) {
   try {
@@ -61,11 +65,20 @@ const meaningful = lines.filter(l => {
 // not `ls-files`, so an intent-to-add `git add -N` filename with no content
 // cannot satisfy the guard) is a live schema change whose SQL exists nowhere
 // in the repo — the exact failure that reached production three times in 30
-// days. Match by full basename, or by slug (basename minus the numeric stamp,
-// since MCP apply names may omit or differ in the stamp) — but a slug match
-// only counts when some committed file with that slug is stamped near or after
-// the recorded apply time: the repo already holds duplicate slugs years apart,
-// so an unrelated old file must not satisfy (and then prune) a fresh apply
+// days.
+//
+// Containment is CONTENT-BOUND when the recorder captured a SQL hash (every
+// entry written after 2026-08-19): some committed file matching the entry's
+// basename or slug must hash to the SQL that actually ran. A right-named file
+// with wrong or empty content no longer satisfies — and a parked file
+// committed long BEFORE the apply does satisfy, as long as its content is the
+// applied SQL (Opus review 2026-08-19, round 2: both directions of the
+// name-only check were wrong).
+//
+// Legacy entries without a hash keep the name rules: exact stamped basename,
+// or slug where some committed file with that slug is stamped near or after
+// the recorded apply time — the repo holds duplicate slugs years apart, so an
+// unrelated old file must not satisfy (and then prune) a fresh apply
 // (Opus review 2026-08-19). Satisfied entries are pruned so the nag ends once
 // the file is committed; unsatisfied entries persist across sessions (in this
 // checkout's .claude/session-state) until resolved. The prune holds the same
@@ -122,39 +135,61 @@ try {
       }
       lsTree = ""; // unborn HEAD: nothing is committed, so containment must block
     }
-    // Exact stamped basenames pin identity outright. Slug matches are gated by
-    // stamp time: the committed file must be stamped no earlier than ~7 days
-    // before the recorded apply (the legitimate flow stamps the file around
-    // apply time). A stampless committed file can't be windowed and matches
-    // any time; an entry whose ts won't parse can't be windowed either, and
-    // fails toward blocking — the exact-name match still clears it.
+    // Legacy (no-hash) rules: exact stamped basenames pin identity outright;
+    // slug matches are gated by stamp time — the committed file must be
+    // stamped no earlier than ~7 days before the recorded apply (the
+    // legitimate flow stamps the file around apply time). A stampless
+    // committed file can't be windowed and matches any time; an entry whose
+    // ts won't parse can't be windowed either, and fails toward blocking —
+    // the exact-name match still clears it.
     const SLUG_STAMP_SLACK_MS = 7 * 24 * 60 * 60 * 1000;
     const stampToMs = (stamp) => {
       const m = /^(\d{4})(\d{2})(\d{2})(?:(\d{2})(\d{2})(\d{2}))?/.exec(String(stamp || ""));
-      if (!m) return null;
-      const ms = Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0));
-      return Number.isFinite(ms) ? ms : null;
+      if (!m) return null; // no digits to window — stampless
+      const [y, mo, d, h, mi, s] = [+m[1], +m[2], +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0)];
+      // An implausible stamp (month 93, year 9999) is NOT treated as
+      // stampless — stampless matches unconditionally, so a garbage or
+      // far-future stamp would satisfy every window (Opus review 2026-08-19).
+      // NaN satisfies no comparison: the file simply cannot window-clear.
+      if (y < 2000 || y > 2100 || mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59 || s > 59) return NaN;
+      const ms = Date.UTC(y, mo - 1, d, h, mi, s);
+      return Number.isFinite(ms) ? ms : NaN;
     };
-    const exactNames = new Set();
-    const slugStampsMs = new Map(); // slug -> stamp ms per committed file (null = stampless)
+    const committedFiles = []; // { rel, base, slug, stampMs } per committed migration
     for (const f of lsTree.split("\0")) {
       const rel = f.replace(/\\/g, "/").trim();
       if (!rel.endsWith(".sql")) continue;
       const base = rel.slice(rel.lastIndexOf("/") + 1, -".sql".length);
-      exactNames.add(base);
       const m = /^(\d{8,14})_(.+)$/.exec(base);
-      const slug = m ? m[2] : base;
-      if (!slugStampsMs.has(slug)) slugStampsMs.set(slug, []);
-      slugStampsMs.get(slug).push(m ? stampToMs(m[1]) : null);
+      committedFiles.push({ rel, base, slug: m ? m[2] : base, stampMs: m ? stampToMs(m[1]) : null });
     }
+    // Read one committed blob. Unwrapped: a git failure here is transient
+    // infrastructure, and folding it into "content differs" would phantom-
+    // block a correctly committed file — throw to the outer fail-open catch
+    // instead, same policy as the ls-tree call above.
+    const gitShowBlob = (rel) => {
+      try {
+        return execFileSync("git", ["show", `HEAD:${rel}`], {
+          encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "pipe"], cwd: projectDir,
+        });
+      } catch {
+        throw new Error("git show failed — containment check skipped");
+      }
+    };
     const isContained = (e) => {
       const n = String(e.name).trim().replace(/\.sql$/i, "");
-      if (exactNames.has(n)) return true;
-      const stamps = slugStampsMs.get(n.replace(/^\d{8,14}_/, ""));
-      if (!stamps) return false;
+      const slug = n.replace(/^\d{8,14}_/, "");
+      const candidates = committedFiles.filter((f) => f.base === n || f.slug === slug);
+      if (typeof e.sqlHash === "string" && /^[0-9a-f]{64}$/.test(e.sqlHash)) {
+        // Content-bound entry: some name/slug candidate must hash to the SQL
+        // that ran. The stamp window is irrelevant here — content identity is
+        // strictly stronger evidence than stamp proximity.
+        return candidates.some((f) => normalizedSqlHash(gitShowBlob(f.rel)) === e.sqlHash);
+      }
+      if (candidates.some((f) => f.base === n)) return true;
       const entryMs = Date.parse(String(e.ts || ""));
       if (!Number.isFinite(entryMs)) return false; // undatable entry: a slug alone can't prove it
-      return stamps.some((s) => s === null || s >= entryMs - SLUG_STAMP_SLACK_MS);
+      return candidates.some((f) => f.stampMs === null || f.stampMs >= entryMs - SLUG_STAMP_SLACK_MS);
     };
     withFileLock(appliedLedgerPath + ".lock", (locked) => {
       const rawEntries = JSON.parse(readFileSync(appliedLedgerPath, "utf8"));
@@ -220,9 +255,12 @@ function fileContentHash(statusLine) {
 // C3 alarm in every later session once the tree was clean). Resolution is
 // committing the file or clearing a stale ledger entry, both spelled out in
 // the block message below.
-// Entry names are tool input: strip non-printables and cap length before they
-// reach any output (the signature is echoed verbatim in the block message).
+// Entry names and timestamps are ledger content (tool input / file bytes):
+// strip non-printables and cap length before they reach any output — the
+// signature is echoed verbatim in the block message, and a crafted ts could
+// otherwise inject fake report lines (Opus review 2026-08-19, round 2).
 const sanitizedAppliedName = (e) => String(e.name).replace(/[^\x20-\x7E]/g, "?").slice(0, 80);
+const sanitizedAppliedTs = (e) => String(e.ts || "this session").replace(/[^\x20-\x7E]/g, "?").slice(0, 40);
 const ackSignature = [
   ...meaningful.map(l => l.trim() + "\t" + fileContentHash(l)),
   ...appliedUncontained.map(e => "APPLIED-NO-SOURCE\t" + sanitizedAppliedName(e).trim()),
@@ -241,10 +279,10 @@ try {
 if (appliedUncontained.length > 0) {
   issues.push(
     `🚨 ${appliedUncontained.length} migration(s) recorded as APPLIED TO LIVE with no committed source file:\n` +
-    appliedUncontained.slice(0, 8).map(e => `     ${sanitizedAppliedName(e)}  (recorded ${e.ts || "this session"})`).join("\n") +
+    appliedUncontained.slice(0, 8).map(e => `     ${sanitizedAppliedName(e)}${e.failed ? "  [the apply REPORTED an error — it may still have partially landed]" : ""}  (recorded ${sanitizedAppliedTs(e)})`).join("\n") +
     (appliedUncontained.length > 8 ? `\n     ... and ${appliedUncontained.length - 8} more` : "") +
-    `\n     If the apply really ran: commit the migration file (supabase/migrations/<stamp>_<name>.sql) — a slug-only match needs a stamp near the recorded apply time.` +
-    `\n     If the apply FAILED or the entry is stale: verify against the live ledger (select version, name from supabase_migrations.schema_migrations) and remove the entry from .claude/session-state/applied-source-ledger.json.`
+    `\n     If the apply really ran: commit the migration file (supabase/migrations/<stamp>_<name>.sql) whose CONTENT is the SQL that was applied — a right-named file with different content does not count.` +
+    `\n     If the entry is stale (verify FIRST against the live ledger: select version, name from supabase_migrations.schema_migrations): remove it with node scripts/remove-applied-ledger-entry.mjs --name <name>. Direct edits to the ledger file are guard-blocked.`
   );
 }
 

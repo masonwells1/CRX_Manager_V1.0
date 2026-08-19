@@ -97,6 +97,53 @@ Documented follow-ups deliberately not fixed in this PR: ledger-lock holder-toke
 the stale-eviction/timeout window mismatch (single-machine harness, bounded impact), and the
 empty-`tool_input.name` recorder skip (no observed producer).
 
+Blind adversarial Opus round 2 (2026-08-19, same PR — two fresh independent blind Opus
+reviewers, both returned BLOCKERS; every confirmed finding fixed and each new protection
+mutation-proved red-without/green-with, 7 mutations total):
+
+- **cd-guard, seven more proven bypasses closed:** quoted/escaped/eval-wrapped/composed verbs
+  (`"cd"`, `'cd'`, `\cd`, `c"d"`, `eval "cd …"`) via a widened prefix class plus a second
+  quote-stripped scan pass; PowerShell's default `sl` alias (lookahead keeps `sleep` from
+  matching); `$IFS` glued to the verb (empty argument run + expansion char → unresolvable, fail
+  closed); backslash line continuations spliced into one invocation; and ANSI-C `$'…'` quoting
+  statically decoded before scanning.
+- **Ledger deletability closed (both reviewers proved deletion was unguarded):** a destructive
+  verb (`rm`, `Remove-Item`, `mv`, `del`, …) in any shell command that also mentions the state
+  directory is denied outright, and the applied-source ledger's basename joined the proof-file
+  name guard on every channel. The sanctioned stale-entry path is the new
+  `scripts/remove-applied-ledger-entry.mjs` (`--list` / `--name <exact>`, lock-held atomic
+  rewrite, sanitized output, exit 1 on no match) — used only after verifying the live migration
+  ledger.
+- **Content binding:** the recorder now fingerprints the applied SQL (EOL-normalized hash), and
+  containment requires a committed file whose content hash MATCHES — a same-named empty or
+  unrelated file no longer satisfies or prunes the guard. Legacy hashless entries keep the
+  name/slug rules.
+- **isError decision reversed:** a failed apply IS recorded, flagged `failed: true` — an error
+  response cannot prove nothing landed (non-transactional/multi-statement SQL can change live
+  state before erroring). Round-1 had skipped these; the reviewers showed that skip was itself
+  a bypass. Dedup still prevents retry stacking; stale failed rows go through the removal
+  script.
+- **Injection/robustness:** ledger `ts` values are sanitized before reaching the block message
+  or ack signature (names already were); implausible candidate stamps (month 99, hour 99)
+  satisfy NO slug window instead of parsing as garbage; recorder and stop-wrap both prefer the
+  hook payload's `cwd` over `CLAUDE_PROJECT_DIR` so a worktree session's ledger can't land in a
+  directory the checks never read; the guard's shell-tool matcher widened to
+  cmd/shell/terminal/exec/run_command.
+- **worktree-cleanup:** the applied-ledger gate moved to a tested pure helper
+  (`ledgerHasEntries`) — junk-only rows no longer pin a worktree forever — and the docs now
+  state honestly that it is a presence check, not a containment check.
+
+Documented follow-ups deliberately not fixed in this round (in addition to the round-1 list,
+which still stands): raw `execute_sql` DDL is not recorded in the ledger (only `apply_migration`
+is; the interactive rules and live-data guard cover that channel); a worktree with any real
+ledger entry stays kept until stop-wrap prunes it or the removal script clears it, even when the
+source is already committed (presence-not-containment, accepted); the theoretical prune/append
+race when a prune proceeds after a lock timeout (the prune skips its rewrite, so the failure
+mode is a kept-too-long entry, never a lost one); the worktree-cleanup settings-restore branch
+remains untested (exercising it needs a throwaway git worktree fixture); and a stale
+`CLAUDE_PROJECT_DIR`-first comment in `migration-apply-guard.mjs` (behavior there is unchanged
+and correct for the current harness).
+
 ## 2026-08-18 — Skills/commands accuracy sweep across the agent workflow surface
 
 Harness only — no app source, migration, or live-state change. A four-agent audit of every

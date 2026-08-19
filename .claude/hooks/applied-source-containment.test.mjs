@@ -5,9 +5,9 @@
 //   recorder: applied-snapshot-invalidate.mjs appends every apply_migration to
 //             .claude/session-state/applied-source-ledger.json
 //   checker:  stop-wrap.mjs blocks session end while a recorded apply has no
-//             committed supabase/migrations/*.sql match (exact basename, or a
-//             slug whose committed stamp is near the recorded apply time), and
-//             prunes entries once the file is committed.
+//             committed supabase/migrations/*.sql match — a content-hash match
+//             when the entry carries sqlHash, exact basename or time-gated
+//             slug for legacy entries — and prunes entries once satisfied.
 //
 // Run: node .claude/hooks/applied-source-containment.test.mjs
 
@@ -17,6 +17,8 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { normalizedSqlHash } from "./ledger-lock-lib.mjs";
 
 const hooksDir = path.dirname(fileURLToPath(import.meta.url));
 const recorderPath = path.join(hooksDir, "applied-snapshot-invalidate.mjs");
@@ -92,25 +94,43 @@ try {
   assert.equal(entries.length, 1, "same-name retry dedups to one entry");
   assert.equal(entries[0].session, "s2", "the retry refreshed the entry in place");
 
-  // An EXPLICITLY failed apply (tool_response.isError) must not mint an entry:
-  // the block message asserts the SQL is live, and a syntax-error retry loop
-  // would stack phantom blocks that committing a file can never clear.
+  // A failed apply (tool_response.isError) IS recorded, flagged failed: an
+  // error response cannot prove nothing landed (CREATE INDEX CONCURRENTLY and
+  // multi-statement SQL can partially commit before erroring — Opus review
+  // 2026-08-19 round 2). Dedup keeps retry loops at one row, and a genuinely
+  // stale row is cleared via scripts/remove-applied-ledger-entry.mjs.
   runHook(recorderPath, {
     tool_name: "mcp__supabase__apply_migration",
     tool_input: { name: "failed_apply_probe" },
     tool_response: { isError: true, content: [{ type: "text", text: "syntax error at or near" }] },
   }, tmp);
   entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
-  assert.ok(!entries.some(e => e.name === "failed_apply_probe"), "an isError apply is not recorded");
-  // ...but error-ish TEXT without the explicit marker still records — only the
-  // unambiguous flag skips; everything else fails toward the alarm.
+  const failedEntry = entries.find(e => e.name === "failed_apply_probe");
+  assert.ok(failedEntry, "an isError apply is still recorded — an error response cannot prove nothing landed");
+  assert.equal(failedEntry.failed, true, "the isError apply is flagged failed");
+  // A clean response records WITHOUT the failed flag.
   runHook(recorderPath, {
     tool_name: "mcp__supabase__apply_migration",
     tool_input: { name: "texty_error_probe" },
     tool_response: { content: [{ type: "text", text: "ERROR: relation does not exist" }] },
   }, tmp);
   entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
-  assert.ok(entries.some(e => e.name === "texty_error_probe"), "error text alone still records — only the explicit isError marker skips");
+  const textyEntry = entries.find(e => e.name === "texty_error_probe");
+  assert.ok(textyEntry, "a response without the explicit isError marker records normally");
+  assert.ok(!("failed" in textyEntry), "no failed flag without the explicit isError marker");
+
+  // The recorder fingerprints the applied SQL so containment can demand a
+  // committed file whose CONTENT matches, not merely a matching filename.
+  runHook(recorderPath, {
+    tool_name: "mcp__supabase__apply_migration",
+    tool_input: { name: "hash_probe", query: "select 42;\r\n" },
+    session_id: "s-hash",
+  }, tmp);
+  entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  const hashEntry = entries.find(e => e.name === "hash_probe");
+  assert.ok(hashEntry, "apply with SQL text recorded");
+  assert.equal(hashEntry.sqlHash, normalizedSqlHash("select 42;\r\n"), "sqlHash is the normalized fingerprint of the applied SQL");
+  assert.equal(hashEntry.sqlHash, normalizedSqlHash("select 42;\n"), "CRLF vs LF does not change the fingerprint");
 
   // CONCURRENT recorders must not lose entries (CodeRabbit PR #423): the
   // read-modify-write is serialized by a cross-process lock, so parallel
@@ -150,8 +170,8 @@ try {
   rmSync(path.join(tmp, ".claude", "session-state", "stop-wrap-ack.json"));
 
   // ── Checker: tracked source satisfies by SLUG (stamp may differ) and prunes ──
-  writeFileSync(path.join(tmp, "supabase", "migrations", "20260818999999_add_widget_flag.sql"), "select 1;\n");
-  git(["add", "supabase/migrations/20260818999999_add_widget_flag.sql"], tmp);
+  writeFileSync(path.join(tmp, "supabase", "migrations", "20260818235959_add_widget_flag.sql"), "select 1;\n");
+  git(["add", "supabase/migrations/20260818235959_add_widget_flag.sql"], tmp);
   git(["commit", "-qm", "migration"], tmp);
   out = runHook(stopWrapPath, { session_id: "c3-test-ok" }, tmp).stdout;
   assert.ok(!/APPLIED TO LIVE/.test(out), "tracked source file resolves the issue");
@@ -187,7 +207,7 @@ try {
 
   // A full-stamped recorded name matches the committed file EXACTLY — no
   // timestamp needed, because the stamp itself pins identity.
-  writeFileSync(ledgerPath, JSON.stringify([{ name: "20260818999999_add_widget_flag.sql", ts: "t", session: "s" }]) + "\n");
+  writeFileSync(ledgerPath, JSON.stringify([{ name: "20260818235959_add_widget_flag.sql", ts: "t", session: "s" }]) + "\n");
   out = runHook(stopWrapPath, { session_id: "c3-test-stamp" }, tmp).stdout;
   assert.ok(!/APPLIED TO LIVE/.test(out), "stamped name + .sql suffix matches the tracked file");
 
@@ -326,6 +346,128 @@ try {
   runHook(stopWrapPath, { session_id: "c3-test-lockfree" }, tmp);
   entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
   assert.equal(entries.length, 0, "prune resumes once the lock is released");
+
+  // ── Content binding (Opus review 2026-08-19, round 4) ──
+  // (a) An entry carrying sqlHash is contained by a committed candidate whose
+  //     CONTENT matches, even when the file is stamped far OUTSIDE the slug
+  //     window — a parked file committed weeks before the apply is fine as
+  //     long as it holds the SQL that ran. CRLF in the recorded SQL vs LF in
+  //     the committed file must not break the match.
+  writeFileSync(path.join(tmp, "supabase", "migrations", "20250101000000_hash_bound.sql"),
+    "create table hash_bound_probe (id int);\n");
+  git(["add", "supabase/migrations/20250101000000_hash_bound.sql"], tmp);
+  git(["commit", "-qm", "parked long before the apply"], tmp);
+  writeFileSync(ledgerPath, JSON.stringify([{
+    name: "hash_bound", ts: "2026-08-18T00:00:00Z", session: "s",
+    sqlHash: normalizedSqlHash("create table hash_bound_probe (id int);\r\n"),
+  }]) + "\n");
+  out = runHook(stopWrapPath, { session_id: "c3-test-hash-parked" }, tmp).stdout;
+  assert.ok(!/APPLIED TO LIVE/.test(out), "a content-matching committed file contains the apply even stamped outside the slug window");
+  entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  assert.equal(entries.length, 0, "the content match prunes");
+
+  // (b) A right-named committed file with the WRONG content must NOT satisfy
+  //     a hashed entry — committing an empty/foreign file under the recorded
+  //     name was round 4's bypass (and the guard even pruned the record).
+  writeFileSync(path.join(tmp, "supabase", "migrations", "20260818110000_hash_mismatch.sql"),
+    "-- placeholder, not the applied SQL\n");
+  git(["add", "supabase/migrations/20260818110000_hash_mismatch.sql"], tmp);
+  git(["commit", "-qm", "right name wrong content"], tmp);
+  writeFileSync(ledgerPath, JSON.stringify([{
+    name: "20260818110000_hash_mismatch", ts: "2026-08-18T00:00:00Z", session: "s",
+    sqlHash: normalizedSqlHash("select 'the sql that actually ran';\n"),
+  }]) + "\n");
+  out = runHook(stopWrapPath, { session_id: "c3-test-hash-mismatch" }, tmp).stdout;
+  assert.match(out, /APPLIED TO LIVE with no committed source/, "an exact-named wrong-content file cannot contain a hashed entry");
+  entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  assert.equal(entries.length, 1, "the content mismatch must not prune");
+
+  // Legacy (no-hash) slug window stays NARROW: a committed file stamped ~17
+  // days before the recorded apply is outside the 7-day slack and must block
+  // (kills any window-widening regression).
+  writeFileSync(path.join(tmp, "supabase", "migrations", "20260801000000_window_probe.sql"), "select 6;\n");
+  git(["add", "supabase/migrations/20260801000000_window_probe.sql"], tmp);
+  git(["commit", "-qm", "17 days early"], tmp);
+  writeFileSync(ledgerPath, JSON.stringify([{ name: "window_probe", ts: "2026-08-18T00:00:00Z", session: "s" }]) + "\n");
+  out = runHook(stopWrapPath, { session_id: "c3-test-window-17d" }, tmp).stdout;
+  assert.match(out, /APPLIED TO LIVE with no committed source/, "a 17-day-early stamp is outside the slug window");
+
+  // An IMPLAUSIBLE stamp (month 99) satisfies no window — it must not be
+  // treated as stampless, because stampless matches unconditionally.
+  writeFileSync(path.join(tmp, "supabase", "migrations", "20269999000000_bogus_stamp.sql"), "select 7;\n");
+  git(["add", "supabase/migrations/20269999000000_bogus_stamp.sql"], tmp);
+  git(["commit", "-qm", "implausible stamp"], tmp);
+  writeFileSync(ledgerPath, JSON.stringify([{ name: "bogus_stamp", ts: "2026-08-18T00:00:00Z", session: "s" }]) + "\n");
+  out = runHook(stopWrapPath, { session_id: "c3-test-bogus-stamp" }, tmp).stdout;
+  assert.match(out, /APPLIED TO LIVE with no committed source/, "an implausible stamp (month 99) cannot window-clear a slug match");
+
+  // The recorded ts is attacker-influenced tool input too — control
+  // characters must be stripped from the "(recorded ...)" clause of the
+  // block message (Opus review 2026-08-19, round 4).
+  writeFileSync(ledgerPath, JSON.stringify([{
+    name: "ts_inject_probe",
+    ts: "2026-08-18T00:00:00Z" + String.fromCharCode(7) + "INJECTED",
+    session: "s",
+  }]) + "\n");
+  out = runHook(stopWrapPath, { session_id: "c3-test-ts-inject" }, tmp).stdout;
+  assert.match(out, /APPLIED TO LIVE/, "the ts-injected entry still blocks");
+  assert.ok(!out.includes("\\u0007"), "control characters are stripped from the recorded ts");
+  assert.match(out, /\?INJECTED/, "the sanitized ts keeps its printable tail");
+
+  // projectDir precedence (Opus review 2026-08-19, round 4): the hook
+  // payload's cwd wins over CLAUDE_PROJECT_DIR for BOTH checker and recorder —
+  // a harness that pins the env var to the primary checkout while the session
+  // runs in a worktree must not aim the guard at the wrong tree.
+  const envDecoy = mkdtempSync(path.join(os.tmpdir(), "crx-c3-envdecoy-"));
+  try {
+    writeFileSync(ledgerPath, JSON.stringify([{ name: "cwd_precedence_probe", ts: "2026-08-18T00:00:00Z", session: "s" }]) + "\n");
+    const viaCwd = spawnSync(process.execPath, [stopWrapPath], {
+      encoding: "utf8",
+      input: JSON.stringify({ session_id: "c3-test-cwd", cwd: tmp }),
+      env: { ...cleanEnv, CLAUDE_PROJECT_DIR: envDecoy },
+    });
+    assert.match(viaCwd.stdout, /cwd_precedence_probe/, "checker honors payload.cwd over CLAUDE_PROJECT_DIR");
+    const recViaCwd = spawnSync(process.execPath, [recorderPath], {
+      encoding: "utf8",
+      input: JSON.stringify({
+        tool_name: "mcp__supabase__apply_migration",
+        tool_input: { name: "cwd_recorder_probe" },
+        cwd: envDecoy,
+      }),
+      env: { ...cleanEnv, CLAUDE_PROJECT_DIR: tmp },
+    });
+    assert.equal(recViaCwd.status, 0, "recorder exits cleanly with a payload cwd");
+    const decoyLedger = path.join(envDecoy, ".claude", "session-state", "applied-source-ledger.json");
+    assert.ok(existsSync(decoyLedger), "recorder honors payload.cwd over CLAUDE_PROJECT_DIR");
+    const decoyEntries = JSON.parse(readFileSync(decoyLedger, "utf8"));
+    assert.equal(decoyEntries.length, 1, "one entry in the payload-cwd ledger");
+    assert.equal(decoyEntries[0].name, "cwd_recorder_probe");
+    entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
+    assert.equal(entries.length, 1, "the decoy-aimed recorder must not touch this tree's ledger");
+    assert.equal(entries[0].name, "cwd_precedence_probe");
+  } finally {
+    try { rmSync(envDecoy, { recursive: true, force: true }); } catch { /* best-effort */ }
+  }
+
+  // ── Sanctioned removal script — the ONE allowed ledger mutation path ──
+  // (direct tool edits naming the ledger are denied by review-proof-guard).
+  const removeScript = path.join(hooksDir, "..", "..", "scripts", "remove-applied-ledger-entry.mjs");
+  writeFileSync(ledgerPath, JSON.stringify([
+    { name: "stale_one", ts: "2026-08-18T00:00:00Z", session: "s" },
+    { name: "keep_two", ts: "2026-08-18T00:00:00Z", session: "s" },
+  ]) + "\n");
+  const rmRun = spawnSync(process.execPath, [removeScript, "--name", "stale_one"], { encoding: "utf8", cwd: tmp, env: cleanEnv });
+  assert.equal(rmRun.status, 0, `script removes an exact-named entry: ${rmRun.stderr}`);
+  entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  assert.equal(entries.length, 1, "exactly one entry removed");
+  assert.equal(entries[0].name, "keep_two", "the other entry survives");
+  const rmMiss = spawnSync(process.execPath, [removeScript, "--name", "no_such_entry"], { encoding: "utf8", cwd: tmp, env: cleanEnv });
+  assert.equal(rmMiss.status, 1, "a no-match removal exits 1");
+  entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  assert.equal(entries.length, 1, "a no-match removal changes nothing");
+  const rmList = spawnSync(process.execPath, [removeScript, "--list"], { encoding: "utf8", cwd: tmp, env: cleanEnv });
+  assert.equal(rmList.status, 0, "--list exits 0");
+  assert.match(rmList.stdout, /keep_two/, "--list names the remaining entry");
 
   // ── Ack valve NEVER masks an uncontained apply (Opus review 2026-08-19) ──
   // The earlier stale-ack test ran in a tree with untracked files, so the ack

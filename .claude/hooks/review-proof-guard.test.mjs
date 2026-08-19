@@ -59,6 +59,33 @@ for (const payload of [
   // Codex round-4: patch-style payloads carry the destination in free-form text.
   { tool_name: "apply_patch", tool_input: { patch: "*** Add File: .claude/session-state/claude-review-push.json\n+{}" } },
   { tool_name: "mcp__codex__apply_patch", tool_input: { input: "*** Update File: .claude/session-state/codex-review-abc.json" } },
+  // Opus review 2026-08-19 round 4 — proven cd bypasses. A quoted, escaped,
+  // eval-wrapped, or composed verb still executes as `cd` in the shell, so the
+  // scan must see through each disguise.
+  { tool_name: "Bash", tool_input: { command: 'eval "cd .claude/session-state"' } },
+  { tool_name: "Bash", tool_input: { command: '"cd" .claude/session-state' } },
+  { tool_name: "Bash", tool_input: { command: "'cd' .claude/session-state" } },
+  { tool_name: "Bash", tool_input: { command: "\\cd .claude/session-state" } },
+  { tool_name: "Bash", tool_input: { command: 'c"d" .claude/session-state' } },
+  // $IFS glued to the verb leaves an empty argument run — statically
+  // unresolvable, so it fails closed with the state dir mentioned.
+  { tool_name: "Bash", tool_input: { command: "cd$IFS.claude/session-state" } },
+  // A backslash line continuation splices into ONE invocation.
+  { tool_name: "Bash", tool_input: { command: "cd \\\n.claude/session-state" } },
+  // PowerShell's default Set-Location alias.
+  { tool_name: "PowerShell", tool_input: { command: "sl .claude\\session-state" } },
+  // ANSI-C quoting resolves escapes before the shell runs the command.
+  { tool_name: "Bash", tool_input: { command: "cd $'\\x2eclaude/session\\x2dstate'" } },
+  // Round 4: destroying/moving the state dir (it holds the applied-source
+  // ledger) is denied outright when a destructive verb appears with it.
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/session-state" } },
+  { tool_name: "PowerShell", tool_input: { command: "Remove-Item -Recurse -Force C:\\repo\\.claude\\session-state" } },
+  { tool_name: "Bash", tool_input: { command: "mv .claude/session-state /tmp/aside" } },
+  // Round 4: the applied-source ledger itself is proof-protected — direct
+  // writes/edits/deletes naming it are denied on every channel.
+  { tool_name: "Write", tool_input: { file_path: "C:\\repo\\.claude\\session-state\\applied-source-ledger.json", content: "[]" } },
+  { tool_name: "Bash", tool_input: { command: "printf [] > applied-source-ledger.json" } },
+  { tool_name: "Bash", tool_input: { command: "node -e \"require('fs').unlinkSync('.claude/session-state/applied-source-ledger.json')\"" } },
 ]) {
   const result = run(payload);
   assert.equal(result.status, 0);
@@ -83,5 +110,12 @@ assert.equal(optionAllow.stdout, "");
 // the newline fix must not turn every multi-line script into a false positive.
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd /c/repo\nnpm run test\nls .claude/session-state" } }).stdout, "");
 assert.equal(run({ tool_name: "PowerShell", tool_input: { command: "Push-Location C:\\repo\nGet-ChildItem" } }).stdout, "");
+// Round 4 non-regressions: `sl` must not swallow `sleep`; the sanctioned
+// removal script is the allowed path and never names the ledger file; a
+// destructive verb WITHOUT any state-dir mention stays allowed.
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "sleep 5 && ls .claude/session-state" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "node scripts/remove-applied-ledger-entry.mjs --name stale_probe" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "node scripts/remove-applied-ledger-entry.mjs --list" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -rf node_modules && npm install" } }).stdout, "");
 
 console.log("OK - review proof guard checks passed.");

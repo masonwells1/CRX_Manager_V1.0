@@ -30,7 +30,7 @@
 import { readFileSync, existsSync, rmSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
 import path from "node:path";
 
-import { withFileLock } from "./ledger-lock-lib.mjs";
+import { withFileLock, normalizedSqlHash } from "./ledger-lock-lib.mjs";
 
 function emit(text) {
   if (!text) process.exit(0);
@@ -51,7 +51,13 @@ try {
   const toolName = (payload?.tool_name || "").toString();
   if (!/apply_migration/i.test(toolName)) process.exit(0);
 
-  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  // Prefer the hook payload's cwd (the session's checkout) over
+  // CLAUDE_PROJECT_DIR: if a future harness pins the env var to the PRIMARY
+  // checkout while the session runs in a worktree, the ledger would otherwise
+  // land in a directory stop-wrap (same precedence) and worktree-cleanup
+  // (reads per-worktree) never look at (Opus review 2026-08-19). In the
+  // current harness both resolve to the same directory.
+  const projectDir = String(payload?.cwd || "").trim() || process.env.CLAUDE_PROJECT_DIR || process.cwd();
 
   // ── Source-containment ledger (2026-08-18, mistake class C3) ──────────────
   // Record WHAT was just applied so stop-wrap.mjs can refuse to end the session
@@ -61,17 +67,26 @@ try {
   // matching tracked file exists. Recording is fail-open: it must never break
   // an apply, and it happens BEFORE the snapshot early-exit below so an apply
   // is recorded even when no snapshot file exists.
-  const appliedName = String((payload?.tool_input || payload?.toolInput || {})?.name || "").trim();
-  // A CLEARLY failed apply must not mint a ledger entry: the stop-wrap block
-  // message asserts "this SQL is running in production", and a syntax-error
-  // retry loop would otherwise stack phantom entries that committing a file can
-  // never clear (Opus review 2026-08-19). Only the EXPLICIT isError marker
-  // skips — error text buried in content still records, failing toward the
-  // alarm; stop-wrap's message documents how to clear a stale entry.
+  const toolInput = payload?.tool_input || payload?.toolInput || {};
+  const appliedName = String(toolInput?.name || "").trim();
+  // A failed apply IS recorded, flagged `failed: true`. An earlier revision
+  // skipped isError results entirely, but an error response cannot prove
+  // nothing landed: CREATE INDEX CONCURRENTLY and other non-transactional or
+  // multi-statement SQL can change live state before the call errors (Opus
+  // review 2026-08-19, round 2). Retry-loop pollution is already handled by
+  // the dedup below — a retried name REPLACES its row, it never stacks — and
+  // a genuinely stale failed entry is cleared through the sanctioned path
+  // (scripts/remove-applied-ledger-entry.mjs) after verifying the live ledger.
   const toolResponse = payload?.tool_response ?? payload?.toolResponse;
   const applyFailed = !!toolResponse && typeof toolResponse === "object" &&
     (toolResponse.isError === true || toolResponse.is_error === true);
-  if (appliedName && !applyFailed) {
+  // Fingerprint the applied SQL so stop-wrap can demand a committed file whose
+  // CONTENT matches, not merely one with a matching filename (Opus review
+  // 2026-08-19, round 2: an empty or unrelated committed file with the right
+  // name both satisfied AND pruned the guard).
+  const appliedSql = String(toolInput?.query ?? toolInput?.sql ?? "");
+  const sqlHash = appliedSql.trim() ? normalizedSqlHash(appliedSql) : "";
+  if (appliedName) {
     try {
       const ledgerPath = path.join(projectDir, ".claude", "session-state", "applied-source-ledger.json");
       mkdirSync(path.dirname(ledgerPath), { recursive: true });
@@ -88,6 +103,8 @@ try {
           name: appliedName,
           ts: new Date().toISOString(),
           session: String(payload?.session_id || ""),
+          ...(sqlHash ? { sqlHash } : {}),
+          ...(applyFailed ? { failed: true } : {}),
         });
         // Write-then-rename so a reader (or a crash mid-write) never sees a
         // truncated JSON file, which stop-wrap's corrupt-ledger path would

@@ -22,7 +22,7 @@ import { readFileSync, existsSync, statSync, readdirSync, rmSync, writeFileSync 
 import { execFileSync, spawnSync } from "node:child_process";
 import path from "node:path";
 import { parseWorktreePorcelain } from "./worktree-awareness-lib.mjs";
-import { planCleanup, meaningfulDirt, IGNORABLE_DIRT_PATH, HARNESS_MARKER } from "./worktree-cleanup-lib.mjs";
+import { planCleanup, meaningfulDirt, ledgerHasEntries, IGNORABLE_DIRT_PATH, HARNESS_MARKER } from "./worktree-cleanup-lib.mjs";
 
 const argv = process.argv.slice(2);
 const REPORT_ONLY = argv.includes("--report");
@@ -143,13 +143,15 @@ try {
   // Unresolved applied-source ledger = a recorded live apply whose committed
   // source stop-wrap never proved. Gitignored, so merged+clean can't see it;
   // sweeping the worktree would destroy the only record (Opus review
-  // 2026-08-19). Fail toward KEEP: unreadable/corrupt reads as no entries only
-  // because a corrupt ledger also fail-opens in stop-wrap — the classifier's
-  // other gates still apply.
+  // 2026-08-19). NOTE this is NOT fail-toward-keep: a missing, unreadable, or
+  // corrupt ledger reads as "no entries" and the worktree stays sweepable —
+  // a corrupt ledger has no recoverable record to preserve, stop-wrap
+  // fail-opens on the same corruption, and failing toward keep would pin
+  // every worktree forever on any read error. Entry-shape rules live in
+  // ledgerHasEntries (worktree-cleanup-lib.mjs) so they are unit-tested.
   function hasAppliedLedgerEntries(wtPath) {
     try {
-      const ledger = JSON.parse(readFileSync(path.join(wtPath, ".claude", "session-state", "applied-source-ledger.json"), "utf8"));
-      return Array.isArray(ledger) && ledger.some((e) => e && typeof e.name === "string" && e.name.trim());
+      return ledgerHasEntries(readFileSync(path.join(wtPath, ".claude", "session-state", "applied-source-ledger.json"), "utf8"));
     } catch { return false; }
   }
 

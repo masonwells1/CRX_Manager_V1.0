@@ -57,6 +57,19 @@ export function meaningfulDirt(porcelainText) {
     .filter((l) => !isIgnorableDirtLine(l));
 }
 
+// Does raw applied-source-ledger JSON text contain at least one REAL entry
+// (an object with a non-empty string name — the only shape the recorder
+// writes)? Pure so the parse/shape rules are unit-testable; the runner wraps
+// the file read. Throws on unparseable text — the caller decides what an
+// unreadable ledger means (worktree-cleanup.mjs treats it as "no entries":
+// a corrupt ledger has no recoverable record to preserve, and stop-wrap
+// fail-opens on the same corruption, so keeping the worktree would pin it
+// forever for a record nothing can read).
+export function ledgerHasEntries(rawText) {
+  const ledger = JSON.parse(String(rawText));
+  return Array.isArray(ledger) && ledger.some((e) => e && typeof e.name === "string" && e.name.trim());
+}
+
 // Normalize a filesystem path for comparison: forward slashes, no trailing
 // slash, lowercased (Windows paths are case-insensitive).
 export function normPath(p) {

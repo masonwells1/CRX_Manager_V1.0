@@ -15,8 +15,24 @@
 // Every caller is already fail-open by contract.
 
 import { mkdirSync, rmdirSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
 
 const STALE_LOCK_MS = 10_000;
+
+// Content fingerprint shared by the recorder (applied-snapshot-invalidate.mjs)
+// and the containment check (stop-wrap.mjs). Living here — the one module both
+// already import — keeps the two normalizations from drifting apart, which
+// would make every hash comparison silently fail toward blocking.
+//
+// Normalization: CRLF/CR → LF and outer whitespace trimmed, so a committed
+// file that differs from the applied SQL only by line endings or a trailing
+// newline still counts as the same source (Windows checkouts rewrite EOLs;
+// editors add final newlines). Any REAL text difference still changes the hash.
+export function normalizedSqlHash(sql) {
+  return createHash("sha256")
+    .update(String(sql ?? "").replace(/\r\n?/g, "\n").trim())
+    .digest("hex");
+}
 
 function sleepMs(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
