@@ -2,6 +2,29 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-19 — Product data model: build plan revision 2 after independent Fable…
+
+Product data model: build plan revision 2 after independent Fable review (26 findings) and orchestration design; recorded owner decisions D-J (chemistry edits admin-only) and D-K (unlisted brand never blocks receiving) in DECISION_LOG. Planning only — nothing built, pushed, migrated, or applied.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `7c9be949 docs(plans): revision 2 — fold in the Fable adversarial review and two owner decisions`
+  - `e2da4754 docs(plans): add product data model build plan and coverage scoresheet`
+  - `4c7f3184 docs(products): generalize the design past glyphosate`
+  - `921b727e docs(products): compile the product data master record for owner approval`
+  - `c166b3de docs(products): sweep the full session transcript for missed owner decisions`
+  - `7a81f0c9 docs(products): defer the return-policy screen at Mason's direction`
+  - `4959b5f2 docs(products): fold missing owner decisions into the game plan`
+  - `e37693fd chore(claude): pin CRX autoCompactWindow to 500k`
+  - `678b9d0a docs(products): add consolidated plain-English game plan`
+  - `24bd4c68 docs(products): retract lot-number-based brand tracking; Mason's correction + live evidence`
+  - `97317375 docs(products): fold third review round + Mason's four decisions into plan, PRD and gotchas`
+  - `fbbec46b docs(products): fold second review round + Mason's decisions into plan and PRD`
+  - `6f90e60d docs(products): settle phase 3 sequencing - comparison tool after rate cleanup`
+  - `cfbbc3e1 docs(changelog): log 2026-08-18 product data model plan + PRD session`
+  - `09573605 docs(products): product data model plan + PRD, amended after adversarial review`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
 ## 2026-08-18 — Product data model: design plan + PRD written and amended after…
 
 Product data model: design plan + PRD written and amended after adversarial review (canonical ingredient/ae_fraction, product_rates child table, density warn band, phases re-ordered). Docs only - no code, schema, or data changed.

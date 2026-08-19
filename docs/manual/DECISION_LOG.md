@@ -9,6 +9,45 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-19 — Product data model: chemistry edits are admin-only; an unlisted brand never blocks receiving
+
+**Source:** Mason's answers to two direct questions, 2026-08-19, during the product-data-model
+build-planning session, after an independent Fable review flagged both as unresolved
+(findings F-24 and F-7). Recorded as **D-J** and **D-K** in
+`docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md` §0.
+
+**Decision D-J — who may edit chemistry.** Active ingredients, concentrations, and density are
+**admin-write, all-read**. Sales reps and drivers can see the data and cannot change it. This is
+the RLS policy on `active_ingredients`, `product_active_ingredients`, `ingredient_moa_codes`, and
+the density columns; a builder does not get to infer the policy.
+
+**Why.** Density drives scale weights and ingredients drive rebuild/comparison math, so a wrong
+value here reaches a real mixer, not just a quote. The audit trail records who changed what
+either way, but auditing is detection, not prevention. Mason accepted the slower data-entry path
+(he enters the data personally — see the 33–56 hour estimate) in exchange for the narrower write
+surface.
+
+**Decision D-K — unlisted brand at receiving.** When a load arrives carrying a brand that is not
+among the product's brand rows, the crew **types the brand name free-hand and completes
+receiving immediately**. The typed name is captured on the receipt and lands in the
+`product_label_drafts`-shaped review queue as a **proposed** brand. It is never written to the
+permanent brand list unreviewed, and **receiving is never blocked**.
+
+**Why.** The plan's first revision made brand selection strictly required once a spec had brand
+rows, with the only relief being an admin-only global `app_settings` switch. That is a
+dock-blocking failure: a truck arrives with a newly sourced brand, the crew cannot complete the
+receipt, cannot add the brand, and cannot flip a global switch. Product would sit unreceived
+until Mason or an admin was reachable. Mason chose the capture-and-review path over both the
+blocking option and the looser option of letting crew create permanent brand rows outright — a
+mistyped EPA number on a permanent row reaches customer paperwork.
+
+**Operative rule.** Any later phase that touches receiving keeps the escape hatch: a required
+field at the dock must always have a capture-and-review path, never a hard stop. Any later
+surface that writes chemistry enforces admin-only, and machine-sourced data (EPA seeding, brand
+name parsing, crew-typed brands) always lands as a proposal, never as a direct write.
+
+---
+
 ## 2026-08-18 — CRX pins `autoCompactWindow` to 500,000; other repos keep the 200,000 global
 
 **Source:** Mason's in-chat question and approval, 2026-08-18, during the product-data-model
