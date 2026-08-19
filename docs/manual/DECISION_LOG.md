@@ -9,6 +9,35 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-18 — CRX pins `autoCompactWindow` to 500,000; other repos keep the 200,000 global
+
+**Source:** Mason's in-chat question and approval, 2026-08-18, during the product-data-model
+planning session — *"Should we change our context limit for these long winded large planning
+sessions?"*, then *"Yes add to crx manager."*
+
+**Decision.** `.claude/settings.json` sets `"autoCompactWindow": 500000`. Mason's user-scope
+`~/.claude/settings.json` keeps `200000`, so FarmRx and every other repo are unaffected. Settings
+precedence is managed → CLI args → `.claude/settings.local.json` → `.claude/settings.json` →
+`~/.claude/settings.json`, so the project value wins inside CRX without the global changing.
+
+**Why.** CRX's long-horizon work — design planning, `whole-codebase-audit`, overnight hunts,
+migration reviews — is exactly the work whose value comes from holding many details at once, and
+compaction flattens them. The product-data-model session compacted mid-plan and lost detail that
+had to be re-read from disk. Raising the threshold is **not** a general cost increase: the setting
+does nothing until a session actually passes it, so short routine sessions are unchanged.
+
+**Also set:** the same key in Mason's untracked `.claude/settings.local.json` in the main checkout,
+so the change is live before this branch merges. Once merged, that local copy is redundant but
+harmless (same value, higher precedence).
+
+**Operative rule.** Do not "toggle" the compaction window per session, and do not reach for
+`/autocompact` — it writes to **user** settings and would silently change every other project.
+Change the CRX value in `.claude/settings.json`. A genuine one-off needs the
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` environment variable or the `--autocompact` CLI flag, both of
+which are session-scoped. Valid range is 100,000–1,000,000.
+
+---
+
 ## 2026-08-17 — The per-session CHANGELOG entry becomes a per-session *ledger* entry
 
 **Source:** Mason's in-chat agreement, 2026-08-17, after he asked whether the changelog entry was
