@@ -147,7 +147,15 @@ function scanCdInvocations(scan) {
     // closed whenever such a target appears in a command that also mentions
     // the state directory.
     const afterToken = scan.charAt(match.index + match[0].length - match[1].length);
-    const unresolvable = /[$%`*?[\]{}]/.test(target) || (!target && /[$%`]/.test(afterToken));
+    // Statically unreadable: an expansion/glob IN the target, an expansion glued
+    // to the verb (`cd$IFS.claude/...` leaves the run empty), OR NO readable
+    // positional target at all — the verb matched but every token was an option,
+    // or the destination arrives via a pipeline/subexpression the tokenizer
+    // cannot see (`… | sl`, `sl (Get-Dir)`). None can be proven to stay OUT of
+    // the state dir, so all fail closed when the command also names that
+    // directory (Opus review 2026-08-19, round 3 — an empty-target `sl` was a
+    // proven gap).
+    const unresolvable = /[$%`*?[\]{}]/.test(target) || !target || /[$%`]/.test(afterToken);
     if (cdTargetEntersStateDir(target) || cdTargetEntersStateDir(decoded) || (unresolvable && reviewStateDirectoryMentioned(command))) {
       deny("REVIEW PROOF GUARD: the review state directory is wrapper-owned and cannot become an interactive shell working directory.");
     }
@@ -164,8 +172,17 @@ if (shellTool) {
   //      the verb they execute as. (Opus review 2026-08-19, round 2.)
   // Windows `\`-separated paths survive both views: only quotes are stripped.
   const spliced = decodeAnsiCQuotes(command).replace(/[\\`]\r?\n/g, "");
-  scanCdInvocations(spliced);
-  scanCdInvocations(spliced.replace(/["']/g, ""));
+  // cmd.exe accepts cd/chdir GLUED to a switch or path — `cd/d X`, `cd\dir`,
+  // `cd.claude\session-state`, `chdir/d X`. Without a separating space the
+  // cd-verb regex (whose lookahead rejects a following `.`/`-`) never fires, so
+  // the glued form slipped past (Opus review 2026-08-19, round 3 — a proven
+  // cmd.exe bypass). Insert a space between the verb and the glued `/ . \` so
+  // the scan sees the verb and its target apart. Applied to BOTH views (raw and
+  // quote-stripped) so a composed verb like `c"d".claude\...` — which becomes
+  // `cd.claude\...` only after quotes are removed — is degluated there too.
+  const deglue = (t) => t.replace(/(^|[;&|\r\n()"'\\\s])(cd|chdir)([/.\\])/gi, "$1$2 $3");
+  scanCdInvocations(deglue(spliced));
+  scanCdInvocations(deglue(spliced.replace(/["']/g, "")));
 
   // A destructive verb in a command that also mentions the state directory is
   // denied outright: `rm -rf .claude/session-state` (or moving it aside)
@@ -176,8 +193,15 @@ if (shellTool) {
   // state dir is denied when a destructive verb appears anywhere in it; run
   // reads and deletions of other files as separate commands.
   const DESTRUCTIVE_VERB_RE = /(?:^|[;&|\r\n()"'\\]|\s)(?:rm|rmdir|del|erase|rd|ri|remove-item|unlink|shred|mv|move|mi|move-item|ren|rni|rename-item|trash)(?![\w.-])/i;
-  if (DESTRUCTIVE_VERB_RE.test(spliced) && reviewStateDirectoryMentioned(spliced)) {
-    deny("REVIEW PROOF GUARD: destructive shell commands touching the review state directory are blocked — it holds wrapper-owned proofs and the applied-source ledger. Stale ledger entries are removed with node scripts/remove-applied-ledger-entry.mjs after verifying the live migration ledger.");
+  // Also deny when the destructive verb reaches the `.claude` ANCESTOR, not only
+  // the full `.claude/session-state` path: `rm -rf .claude` and `mv .claude
+  // /tmp` wipe the state dir (and the applied-source ledger) as collateral, yet
+  // reviewStateDirectoryMentioned only matches the contiguous state path (Opus
+  // review 2026-08-19, round 3 — deleting the parent was unguarded). `.claude`
+  // must be a whole path component: `.claude-cache` / `foo.claude` do not match.
+  const STATE_DIR_ANCESTOR_RE = /(?:^|[\s"'=:/\\(])\.claude(?![\w-])/i;
+  if (DESTRUCTIVE_VERB_RE.test(spliced) && (reviewStateDirectoryMentioned(spliced) || STATE_DIR_ANCESTOR_RE.test(spliced))) {
+    deny("REVIEW PROOF GUARD: destructive shell commands touching the .claude review state directory (or its parent) are blocked — it holds wrapper-owned proofs and the applied-source ledger. Stale ledger entries are removed with node scripts/remove-applied-ledger-entry.mjs after verifying the live migration ledger.");
   }
 }
 if (shellTool && reviewStateDirectoryMentioned(hookCwd)) {

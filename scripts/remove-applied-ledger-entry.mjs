@@ -43,11 +43,14 @@ const ledgerPath = path.join(root, ".claude", "session-state", "applied-source-l
 
 const args = process.argv.slice(2);
 const listMode = args.includes("--list");
+const verifiedFlag = args.includes("--i-verified-against-live");
 const nameIdx = args.indexOf("--name");
 const name = nameIdx !== -1 ? String(args[nameIdx + 1] || "") : "";
 
+const VERIFY_SQL = "select version, name from supabase_migrations.schema_migrations order by version;";
+
 if (!listMode && !name) {
-  fail("Usage: node scripts/remove-applied-ledger-entry.mjs --list | --name <exact-recorded-name>");
+  fail("Usage: node scripts/remove-applied-ledger-entry.mjs --list | --name <exact-recorded-name> --i-verified-against-live");
 }
 
 if (!existsSync(ledgerPath)) {
@@ -79,31 +82,76 @@ if (listMode) {
   process.exit(0);
 }
 
+// Removal requires an explicit human assertion that the LIVE ledger was
+// checked. The C3 alarm fires precisely because a live apply had no committed
+// source; clearing it without confirming against schema_migrations would let a
+// genuinely uncommitted apply slip through silently. The flag does not verify
+// anything itself — it records that a human consciously did, and gates the
+// removal behind a step an agent will not take by reflex (Opus review
+// 2026-08-19, round 3: the earlier "verified … not assumed" line CLAIMED a
+// check the script never performed).
+if (!verifiedFlag) {
+  fail(
+    `Refusing to remove "${printable(name)}" without --i-verified-against-live.\n` +
+    `FIRST confirm the entry is genuinely stale by reading the live ledger:\n` +
+    `  ${VERIFY_SQL}\n` +
+    `Clear it ONLY if the applied migration is absent live (it never landed) OR its source is\n` +
+    `already committed. Then re-run with the flag:\n` +
+    `  node scripts/remove-applied-ledger-entry.mjs --name "${printable(name)}" --i-verified-against-live`
+  );
+}
+
 const remaining = entries.filter((e) => !(e && e.name === name));
 if (remaining.length === entries.length) {
   fail(`No ledger entry named exactly "${printable(name)}". Run with --list to see recorded names.`);
 }
 
+// Lock-leak fix (Opus review 2026-08-19, round 3): NEVER process.exit() inside
+// the withFileLock callback — process.exit bypasses the lock's finally-cleanup,
+// leaving the mkdir lock dir behind and wedging every later writer until the
+// 10s stale-lock window elapses. The callback only RECORDS an outcome; we act
+// on it (print + exit) AFTER the lock has been released.
+let outcome = { code: 1, out: "", err: "Lock callback did not run." };
 withFileLock(ledgerPath + ".lock", (locked) => {
-  if (!locked) fail("Could not acquire the ledger lock — retry in a few seconds.");
+  if (!locked) {
+    outcome = { code: 1, out: "", err: "Could not acquire the ledger lock — retry in a few seconds." };
+    return;
+  }
   // Re-read under the lock so a concurrent recorder append is never dropped.
   let current;
   try {
     current = JSON.parse(readFileSync(ledgerPath, "utf8"));
   } catch {
-    fail("Ledger changed and became unreadable while locking — refusing to touch it.");
+    outcome = { code: 1, out: "", err: "Ledger changed and became unreadable while locking — refusing to touch it." };
+    return;
   }
-  if (!Array.isArray(current)) fail("Ledger is not an array — refusing to touch it.");
+  if (!Array.isArray(current)) {
+    outcome = { code: 1, out: "", err: "Ledger is not an array — refusing to touch it." };
+    return;
+  }
   const kept = current.filter((e) => !(e && e.name === name));
   if (kept.length === current.length) {
-    fail(`Entry "${printable(name)}" disappeared before removal (another process pruned it?). Nothing changed.`);
+    outcome = { code: 1, out: "", err: `Entry "${printable(name)}" disappeared before removal (another process pruned it?). Nothing changed.` };
+    return;
   }
-  const tmpPath = ledgerPath + "." + process.pid + ".tmp";
-  writeFileSync(tmpPath, JSON.stringify(kept, null, 2) + "\n");
-  renameSync(tmpPath, ledgerPath);
-  process.stdout.write(
-    `Removed ${current.length - kept.length} entry(ies) named "${printable(name)}". ${kept.length} remain.\n` +
-    `Reminder: this asserts the apply never landed (or its source is committed) — verified against\n` +
-    `supabase_migrations.schema_migrations, not assumed.\n`
-  );
+  try {
+    const tmpPath = ledgerPath + "." + process.pid + ".tmp";
+    writeFileSync(tmpPath, JSON.stringify(kept, null, 2) + "\n");
+    renameSync(tmpPath, ledgerPath);
+  } catch (e) {
+    outcome = { code: 1, out: "", err: `Write failed while removing "${printable(name)}" (${e?.message || e}). Nothing changed.` };
+    return;
+  }
+  outcome = {
+    code: 0,
+    err: "",
+    out:
+      `Removed ${current.length - kept.length} entry(ies) named "${printable(name)}". ${kept.length} remain.\n` +
+      `You asserted (via --i-verified-against-live) this apply never landed, or its source is now\n` +
+      `committed — confirmed against supabase_migrations.schema_migrations.\n`,
+  };
 });
+
+if (outcome.out) process.stdout.write(outcome.out);
+if (outcome.err) process.stderr.write(outcome.err + "\n");
+process.exit(outcome.code);

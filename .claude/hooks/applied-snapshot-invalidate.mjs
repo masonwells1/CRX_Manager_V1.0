@@ -28,9 +28,30 @@
 // file — it never touches migrations, data, or source.
 
 import { readFileSync, existsSync, rmSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 
 import { withFileLock, normalizedSqlHash } from "./ledger-lock-lib.mjs";
+
+// Resolve a candidate directory to its git worktree root. The recorder
+// (PostToolUse) and stop-wrap (Stop) must agree on WHERE the ledger lives; if a
+// future harness fires the two hooks from different subdirectories of the same
+// worktree, name-based precedence alone would split them — the recorder writes
+// under one subdir and the checker reads under another, silently disarming the
+// guard (Opus review 2026-08-19, round 3). Normalizing both to the worktree
+// root makes them agree regardless of which subdir each fired from. Fail-safe:
+// if the candidate is not inside a git repo (or git is unavailable), keep the
+// candidate verbatim — so a non-git path is still honored exactly as given.
+function gitToplevelOr(candidate) {
+  try {
+    const top = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: candidate, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return top ? top : candidate;
+  } catch {
+    return candidate;
+  }
+}
 
 function emit(text) {
   if (!text) process.exit(0);
@@ -57,7 +78,8 @@ try {
   // land in a directory stop-wrap (same precedence) and worktree-cleanup
   // (reads per-worktree) never look at (Opus review 2026-08-19). In the
   // current harness both resolve to the same directory.
-  const projectDir = String(payload?.cwd || "").trim() || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const candidateDir = String(payload?.cwd || "").trim() || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const projectDir = gitToplevelOr(candidateDir);
 
   // ── Source-containment ledger (2026-08-18, mistake class C3) ──────────────
   // Record WHAT was just applied so stop-wrap.mjs can refuse to end the session
@@ -96,9 +118,15 @@ try {
         let entries = [];
         try { entries = JSON.parse(readFileSync(ledgerPath, "utf8")); } catch { /* new or corrupt → start fresh */ }
         if (!Array.isArray(entries)) entries = [];
-        // One row per migration name: a retried apply refreshes its timestamp
-        // instead of accumulating duplicates that each need separate clearing.
-        entries = entries.filter((e) => !(e && e.name === appliedName));
+        // Dedup by (name, sqlHash), NOT by name alone. A genuine retry of the
+        // SAME content refreshes its one row. But a re-apply of the same name
+        // with DIFFERENT content (or hashless SQL) must NOT overwrite the
+        // earlier content-bound row: dedup-by-name-only let an attacker apply
+        // real SQL, then re-"apply" the same name with empty/unrelated SQL to
+        // erase the hash binding stop-wrap enforces (Opus review 2026-08-19,
+        // round 3 — "hash downgrade" / v1→v2 erase). Keeping both rows means
+        // stop-wrap demands committed source for each distinct content.
+        entries = entries.filter((e) => !(e && e.name === appliedName && String(e.sqlHash || "") === sqlHash));
         entries.push({
           name: appliedName,
           ts: new Date().toISOString(),

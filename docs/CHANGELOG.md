@@ -144,6 +144,49 @@ remains untested (exercising it needs a throwaway git worktree fixture); and a s
 `CLAUDE_PROJECT_DIR`-first comment in `migration-apply-guard.mjs` (behavior there is unchanged
 and correct for the current harness).
 
+Blind adversarial Opus round 3 (2026-08-19, same PR — two fresh independent blind Opus
+reviewers; every confirmed finding fixed and each new protection mutation-proved
+red-without/green-with):
+
+- **cd-guard, three more proven bypasses closed:** the scan now de-glues a cmd.exe verb fused to
+  its target (`cd/d …`, `cd.claude\session-state`, composed `c"d".claude\…`) before resolving; a
+  location verb (`sl`, `cd`) left with an EMPTY target run by a move/pipe (`… | sl`) is treated as
+  statically unresolvable and fails closed when the state dir is named elsewhere; and the
+  destructive-verb deny now also fires on the `.claude` PARENT directory itself (`rm -rf .claude`,
+  `mv .claude /tmp`), not just the `session-state` subpath — while a `.claude`-PREFIXED but
+  distinct path (`.claude-cache`, `.clauderc`) stays allowed.
+- **Removal script hard-gated behind an explicit verify flag:** `remove-applied-ledger-entry.mjs`
+  now REFUSES to remove anything without `--i-verified-against-live`, printing the live
+  `supabase_migrations.schema_migrations` query to confirm against first — so the C3 alarm can't
+  be cleared by reflex, only after a human checks the live ledger. Its lock callback no longer
+  calls `process.exit()` inside `withFileLock` (that bypassed the `finally` and leaked the lock
+  dir); output and exit now happen after the lock releases. The script joined `RISKY_PATH_RES` in
+  `codex-push-lib.mjs`, so a Codex push touching it needs an exact-head proof; the
+  maintenance-producer blob pins were re-pinned to match (verified against the real builder).
+- **Recorder dedup keys on name AND content-hash:** an identical-SQL retry still collapses to one
+  row, but a same-name apply with DIFFERENT SQL — a distinct change that hit live — is retained,
+  not evicted, and a later hashless re-record can't erase a fingerprinted entry (the v2→v1
+  downgrade-erase bypass).
+- **Per-entry fail-closed containment:** a git-show/hash failure for ONE ledger entry now marks
+  only THAT entry uncontained (blocks, naming it) instead of throwing out of the whole check;
+  a genuinely git-unavailable environment still skips loudly (a non-blocking stderr notice that
+  live applies were NOT verified this session) rather than silently disarming. Classification runs
+  on a snapshot outside the lock; the prune re-reads and rewrites under the lock keyed on
+  name+hash.
+- **cwd normalization:** recorder and stop-wrap both resolve the project dir to its git top-level
+  (`git rev-parse --show-toplevel`), so a hook invoked from a subdirectory of the worktree still
+  reads/writes the one canonical ledger.
+- **Docs honesty:** `agent-guardrails.md` now states the guard's honest scope plainly — it stops
+  NAMED destruction and accidental self-certification, not a determined interpreter that hides the
+  target from the command text; the durable boundary is GitHub `protect-main` branch protection
+  plus the C3 tamper-EVIDENCE (an uncontained apply blocks session end and pins the worktree), not
+  command-string prevention.
+
+Documented follow-up deliberately not chased (all rounds): interpreter-indirection where the
+ledger path never appears literally in the command (`node -e`, write-script-then-run, base64) is
+outside any command-text guard — accepted, with the honest-scope note above and branch protection
+as the real boundary.
+
 ## 2026-08-18 — Skills/commands accuracy sweep across the agent workflow surface
 
 Harness only — no app source, migration, or live-state change. A four-agent audit of every

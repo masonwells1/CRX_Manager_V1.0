@@ -94,6 +94,33 @@ try {
   assert.equal(entries.length, 1, "same-name retry dedups to one entry");
   assert.equal(entries[0].session, "s2", "the retry refreshed the entry in place");
 
+  // Dedup keys on name AND sqlHash, not name alone (Opus review 2026-08-19
+  // round 5): a RETRY re-runs identical SQL (same hash) and collapses to one
+  // row, but a second apply of the same name with DIFFERENT SQL is a distinct
+  // change that hit live and needs its own committed-source proof — it must be
+  // retained, not silently evicted. Name-only dedup would let a later hashless
+  // (or foreign-SQL) re-record erase a legitimately-fingerprinted pending entry
+  // and downgrade it to a looser "any same-name file satisfies" check.
+  rmSync(ledgerPath, { force: true });
+  runHook(recorderPath, { tool_name: "mcp__supabase__apply_migration", tool_input: { name: "dual_sql_probe", query: "select 100;" }, session_id: "s-d1" }, tmp);
+  runHook(recorderPath, { tool_name: "mcp__supabase__apply_migration", tool_input: { name: "dual_sql_probe", query: "select 100;" }, session_id: "s-d2" }, tmp);
+  entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  assert.equal(entries.length, 1, "an identical-SQL retry (same hash) still collapses to one row");
+  assert.equal(entries[0].session, "s-d2", "the identical retry refreshed the entry in place");
+  runHook(recorderPath, { tool_name: "mcp__supabase__apply_migration", tool_input: { name: "dual_sql_probe", query: "select 200;" }, session_id: "s-d3" }, tmp);
+  entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  assert.equal(entries.length, 2, "a same-name apply with DIFFERENT SQL is retained, not evicted by name-only dedup");
+  assert.equal(new Set(entries.map(e => e.sqlHash)).size, 2, "both distinct-SQL applies keep their own fingerprint");
+  // A later HASHLESS re-record of the same name must not evict either hashed
+  // entry (the v2→v1 downgrade-erase bypass).
+  runHook(recorderPath, { tool_name: "mcp__supabase__apply_migration", tool_input: { name: "dual_sql_probe" }, session_id: "s-d4" }, tmp);
+  entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  assert.equal(entries.filter(e => e.name === "dual_sql_probe" && e.sqlHash).length, 2, "a hashless re-record cannot erase the fingerprinted entries");
+  rmSync(ledgerPath, { force: true });
+  // Re-establish the two baseline entries the checker section below relies on.
+  runHook(recorderPath, { tool_name: "mcp__supabase__apply_migration", tool_input: { name: "add_widget_flag" }, session_id: "s1" }, tmp);
+  runHook(recorderPath, { tool_name: "mcp__supabase__apply_migration", tool_input: { name: "20260818120000_fix_totals" }, session_id: "s1" }, tmp);
+
   // A failed apply (tool_response.isError) IS recorded, flagged failed: an
   // error response cannot prove nothing landed (CREATE INDEX CONCURRENTLY and
   // multi-statement SQL can partially commit before erroring — Opus review
@@ -456,12 +483,20 @@ try {
     { name: "stale_one", ts: "2026-08-18T00:00:00Z", session: "s" },
     { name: "keep_two", ts: "2026-08-18T00:00:00Z", session: "s" },
   ]) + "\n");
-  const rmRun = spawnSync(process.execPath, [removeScript, "--name", "stale_one"], { encoding: "utf8", cwd: tmp, env: cleanEnv });
-  assert.equal(rmRun.status, 0, `script removes an exact-named entry: ${rmRun.stderr}`);
+  // Removal is REFUSED without the explicit --i-verified-against-live flag: the
+  // C3 alarm must not be clearable by reflex, only after a human confirms the
+  // live ledger (Opus review 2026-08-19, round 3).
+  const rmNoFlag = spawnSync(process.execPath, [removeScript, "--name", "stale_one"], { encoding: "utf8", cwd: tmp, env: cleanEnv });
+  assert.equal(rmNoFlag.status, 1, "removal without --i-verified-against-live is refused");
+  assert.match(rmNoFlag.stderr, /--i-verified-against-live/, "the refusal explains the required flag");
+  entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  assert.equal(entries.length, 2, "a flagless removal changes nothing");
+  const rmRun = spawnSync(process.execPath, [removeScript, "--name", "stale_one", "--i-verified-against-live"], { encoding: "utf8", cwd: tmp, env: cleanEnv });
+  assert.equal(rmRun.status, 0, `script removes an exact-named entry with the flag: ${rmRun.stderr}`);
   entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
   assert.equal(entries.length, 1, "exactly one entry removed");
   assert.equal(entries[0].name, "keep_two", "the other entry survives");
-  const rmMiss = spawnSync(process.execPath, [removeScript, "--name", "no_such_entry"], { encoding: "utf8", cwd: tmp, env: cleanEnv });
+  const rmMiss = spawnSync(process.execPath, [removeScript, "--name", "no_such_entry", "--i-verified-against-live"], { encoding: "utf8", cwd: tmp, env: cleanEnv });
   assert.equal(rmMiss.status, 1, "a no-match removal exits 1");
   entries = JSON.parse(readFileSync(ledgerPath, "utf8"));
   assert.equal(entries.length, 1, "a no-match removal changes nothing");

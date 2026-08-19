@@ -47,12 +47,17 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // applied-source ledger's basename joined reviewProofPathMentioned so the
   // C3 containment record can't be forged or deleted directly. The risky
   // producer-path anchor this transform verifies is unchanged.
+  // pushLib re-pinned again 2026-08-19 (PR #423, blind Opus round 5): the
+  // sanctioned ledger-removal script scripts/remove-applied-ledger-entry.mjs
+  // joined RISKY_PATH_RES so a Codex push touching it needs an exact-head
+  // proof. The apply-live-testdata risky-path anchor this transform verifies is
+  // still present exactly once; the transform is identity, so input == output.
   codexGuard: "05499cfe34a3246b2400a22c343562fbd8fd0c33",
-  pushLib: "120cbec70d0311ab412a46935877818544a7ce4f",
+  pushLib: "47ff790caa55c27d4f7ee29d43493d2b3389e62c",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "0f3a62cfc6cdacf5e43465d37c2ca67eaf914597",
-  pushLib: "120cbec70d0311ab412a46935877818544a7ce4f",
+  pushLib: "47ff790caa55c27d4f7ee29d43493d2b3389e62c",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

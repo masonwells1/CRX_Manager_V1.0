@@ -86,6 +86,23 @@ for (const payload of [
   { tool_name: "Write", tool_input: { file_path: "C:\\repo\\.claude\\session-state\\applied-source-ledger.json", content: "[]" } },
   { tool_name: "Bash", tool_input: { command: "printf [] > applied-source-ledger.json" } },
   { tool_name: "Bash", tool_input: { command: "node -e \"require('fs').unlinkSync('.claude/session-state/applied-source-ledger.json')\"" } },
+  // Opus review 2026-08-19 round 5 (F4): cmd.exe glues the verb to its target
+  // (`cd/d`, `cd.claude`), and a composed/quoted verb hides the glue. The
+  // deglue pass must separate verb from path so the target is resolved.
+  { tool_name: "Bash", tool_input: { command: "cd.claude/session-state" } },
+  { tool_name: "cmd", tool_input: { command: "cd/d C:\\repo\\.claude\\session-state" } },
+  { tool_name: "Bash", tool_input: { command: 'c"d".claude/session-state' } },
+  { tool_name: "PowerShell", tool_input: { command: "chdir.claude\\session-state" } },
+  // (F5): a state-dir move/pipe leaves the location verb with an EMPTY target
+  // run — statically unresolvable, so it fails closed when the state dir is
+  // named elsewhere in the same command.
+  { tool_name: "PowerShell", tool_input: { command: "Get-Content .claude/session-state/x.json | sl" } },
+  // (F6): destroying/moving the .claude PARENT directory takes the state dir
+  // (and the applied-source ledger) with it — denied when a destructive verb
+  // names .claude itself, not just the session-state subpath.
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude" } },
+  { tool_name: "Bash", tool_input: { command: "mv .claude /tmp/aside" } },
+  { tool_name: "PowerShell", tool_input: { command: "Remove-Item -Recurse -Force .claude" } },
 ]) {
   const result = run(payload);
   assert.equal(result.status, 0);
@@ -117,5 +134,13 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: "sleep 5 && ls .cla
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "node scripts/remove-applied-ledger-entry.mjs --name stale_probe" } }).stdout, "");
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "node scripts/remove-applied-ledger-entry.mjs --list" } }).stdout, "");
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -rf node_modules && npm install" } }).stdout, "");
+// Round 5 non-regressions (F4/F5/F6): the deglue pass must not split a verb out
+// of an unrelated word; an empty location target WITHOUT a state-dir mention is
+// fine; and a destructive verb on a `.claude`-PREFIXED but distinct path
+// (`.claude-cache`, `.clauderc`) must stay allowed — only bare `.claude` counts.
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "scandir.parse('.claude/session-state')" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd && ls /tmp" } }).stdout, "");
+assert.equal(run({ tool_name: "PowerShell", tool_input: { command: "Get-Content foo.json | sl" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -rf .claude-cache && rm -rf build/.clauderc" } }).stdout, "");
 
 console.log("OK - review proof guard checks passed.");

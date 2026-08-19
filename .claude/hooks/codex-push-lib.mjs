@@ -381,6 +381,11 @@ const RISKY_PATH_RES = [
   /(^|\/)scripts\/write-codex-push-proof\.mjs$/i,
   /(^|\/)scripts\/overnight-codex-gate\.mjs$/i,
   /(^|\/)scripts\/apply-live-testdata-maintenance-20260812\.mjs$/i,
+  // The ONE sanctioned path that mutates the C3 source-containment ledger. A PR
+  // that weakened its --i-verified-against-live gate or its exact-name match
+  // would let a live-apply alarm be cleared without review, so its diff gets the
+  // same independent verdict (Opus review 2026-08-19, round 3).
+  /(^|\/)scripts\/remove-applied-ledger-entry\.mjs$/i,
   /(^|\/)package\.json$/i,
   // Reviewer charters are executable review instructions for the migration
   // proof gate (write-apply-proofs runs each .claude/agents/<reviewer>.md as a

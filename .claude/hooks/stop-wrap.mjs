@@ -31,7 +31,22 @@ const sessionId = payload?.session_id || "unknown";
 // this hook checks must be the one the recorder wrote, even under a harness
 // that pins CLAUDE_PROJECT_DIR to the primary checkout while the session runs
 // in a worktree (Opus review 2026-08-19).
-const projectDir = String(payload?.cwd || "").trim() || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+const candidateDir = String(payload?.cwd || "").trim() || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+// Normalize both hooks to the git worktree ROOT so the recorder and this
+// checker agree on the ledger location even if the two hooks fire from
+// different subdirectories of the same worktree (Opus review 2026-08-19,
+// round 3). Fail-safe: a non-git path (or git unavailable) is kept verbatim.
+function gitToplevelOr(candidate) {
+  try {
+    const top = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: candidate, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return top ? top : candidate;
+  } catch {
+    return candidate;
+  }
+}
+const projectDir = gitToplevelOr(candidateDir);
 
 function runGit(args) {
   try {
@@ -191,30 +206,79 @@ try {
       if (!Number.isFinite(entryMs)) return false; // undatable entry: a slug alone can't prove it
       return candidates.some((f) => f.stampMs === null || f.stampMs >= entryMs - SLUG_STAMP_SLACK_MS);
     };
-    withFileLock(appliedLedgerPath + ".lock", (locked) => {
+    // Composite identity: F1 (recorder) now keeps MULTIPLE rows for one name
+    // when their content differs (a distinct-content re-apply must not erase an
+    // earlier content-bound row). So prune by (name, sqlHash), never by name
+    // alone — else pruning one contained row would drop its still-uncontained
+    // same-name sibling (Opus review 2026-08-19, round 3).
+    const idOf = (e) => String(e.name).trim() + " " + String(e.sqlHash || "");
+    // Per-entry FAIL-CLOSED. isContained runs `git show` per candidate and can
+    // throw on a transient blob-read failure. Letting that reach the OUTER
+    // fail-open catch would skip the WHOLE sweep and silently disarm the guard
+    // for EVERY recorded apply (Opus review 2026-08-19, round 3). Instead a
+    // throw marks only THAT entry uncontained: at worst one entry phantom-
+    // blocks (loud, and cleared by committing or by re-running once git
+    // recovers), while every other apply is still verified. For a security
+    // guard that is the correct trade — a silent skip can pass an uncommitted
+    // live apply; a per-entry block never can.
+    const classifyUncontained = (e) => {
+      try { return !isContained(e); }
+      catch { return true; }
+    };
+    // Classify OUTSIDE the lock. isContained does a git-show per candidate;
+    // holding the recorder's lock across all of that risks the 2s lock timeout
+    // firing and letting a concurrent recorder append UNLOCKED (lost entry =
+    // silent disarm). Read a snapshot here; re-read under the lock only to
+    // prune. A corrupt/absent ledger yields an empty classification (fail-open,
+    // no block) — matching the corrupt-ledger test.
+    let classifyEntries = [];
+    try {
       const rawEntries = JSON.parse(readFileSync(appliedLedgerPath, "utf8"));
-      const arr = Array.isArray(rawEntries) ? rawEntries : [];
-      // Per-entry hygiene: one malformed row (non-string name, junk object)
-      // must not throw here and disable the WHOLE check via the outer
-      // fail-open catch (Opus review 2026-08-19). Junk rows carry nothing the
-      // recorder could have written, so the prune rewrite drops them too.
-      const entries = arr.filter(e => e && typeof e.name === "string" && e.name.trim());
-      appliedUncontained = entries.filter(e => !isContained(e));
-      // Prune satisfied/junk entries (best-effort; never block the stop over
-      // a write) — but ONLY while actually holding the lock: an unlocked
-      // rewrite could erase a concurrent recorder's append (CodeRabbit
-      // PR #423 round 4). Skipping costs nothing; the next stop re-prunes.
-      // Write-then-rename so a crash mid-write can't corrupt the ledger.
-      if (locked && appliedUncontained.length < arr.length) {
-        try {
+      classifyEntries = (Array.isArray(rawEntries) ? rawEntries : [])
+        .filter(e => e && typeof e.name === "string" && e.name.trim());
+    } catch { classifyEntries = []; }
+    const classified = classifyEntries.map(e => ({ e, uncontained: classifyUncontained(e) }));
+    appliedUncontained = classified.filter(c => c.uncontained).map(c => c.e);
+    const containedIds = new Set(classified.filter(c => !c.uncontained).map(c => idOf(c.e)));
+    // Prune ONLY rows classified contained, and ONLY while holding the lock (an
+    // unlocked rewrite could erase a concurrent recorder's append — CodeRabbit
+    // PR #423 round 4). Re-read INSIDE the lock so a row appended AFTER
+    // classification is preserved (not in containedIds → kept, evaluated next
+    // stop). Junk rows carry nothing the recorder wrote, so drop them too.
+    // Write-then-rename so a crash mid-write can't corrupt the ledger.
+    try {
+      withFileLock(appliedLedgerPath + ".lock", (locked) => {
+        if (!locked) return; // skip the prune; the next stop re-prunes
+        let current;
+        try { current = JSON.parse(readFileSync(appliedLedgerPath, "utf8")); } catch { return; }
+        if (!Array.isArray(current)) return;
+        const kept = current.filter(e =>
+          e && typeof e.name === "string" && e.name.trim() && !containedIds.has(idOf(e))
+        );
+        if (kept.length !== current.length) {
           const tmpPath = appliedLedgerPath + "." + process.pid + ".tmp";
-          writeFileSync(tmpPath, JSON.stringify(appliedUncontained, null, 2) + "\n");
+          writeFileSync(tmpPath, JSON.stringify(kept, null, 2) + "\n");
           renameSync(tmpPath, appliedLedgerPath);
-        } catch { /* fail-open */ }
-      }
-    });
+        }
+      });
+    } catch { /* fail-open on the PRUNE only — classification already stands */ }
   }
-} catch { /* fail-open — a corrupt ledger must not brick session end */ }
+} catch (err) {
+  // The whole containment check could not run — almost always git being
+  // unavailable here (binary missing, not a work tree, transient ls-tree
+  // failure). We deliberately do NOT convert this into a block: that was the
+  // settled CodeRabbit decision — a down-git session must still be able to end,
+  // and committing could never clear a git-outage phantom block. But it must
+  // not be SILENT either: a skipped guard the agent can't see is
+  // indistinguishable from one that passed (Opus review 2026-08-19, round 3).
+  // Surface it on stderr — transcript-visible, non-blocking.
+  try {
+    process.stderr.write(
+      "[stop-wrap] C3 source-containment check SKIPPED (" + String((err && err.message) || err) + "). " +
+      "Live-applied migrations were NOT verified against committed source this session.\n"
+    );
+  } catch { /* stderr unavailable — nothing more we can do */ }
+}
 
 // ─── Acknowledgment escape valve ──────────────────────────────────────────
 // Implements the hook's own promise ("If Mason confirms each item is
@@ -282,7 +346,7 @@ if (appliedUncontained.length > 0) {
     appliedUncontained.slice(0, 8).map(e => `     ${sanitizedAppliedName(e)}${e.failed ? "  [the apply REPORTED an error — it may still have partially landed]" : ""}  (recorded ${sanitizedAppliedTs(e)})`).join("\n") +
     (appliedUncontained.length > 8 ? `\n     ... and ${appliedUncontained.length - 8} more` : "") +
     `\n     If the apply really ran: commit the migration file (supabase/migrations/<stamp>_<name>.sql) whose CONTENT is the SQL that was applied — a right-named file with different content does not count.` +
-    `\n     If the entry is stale (verify FIRST against the live ledger: select version, name from supabase_migrations.schema_migrations): remove it with node scripts/remove-applied-ledger-entry.mjs --name <name>. Direct edits to the ledger file are guard-blocked.`
+    `\n     If the entry is stale (verify FIRST against the live ledger: select version, name from supabase_migrations.schema_migrations): remove it with node scripts/remove-applied-ledger-entry.mjs --name <name> --i-verified-against-live (the script refuses without that flag and prints the verify steps). Direct edits to the ledger file are guard-blocked.`
   );
 }
 
