@@ -97,7 +97,11 @@ What landed: the workaround in `docs/reference/gotchas.md`; the full analysis an
 options (lead option: move worktrees out from under `.claude`) in `docs/manual/KNOWN_ISSUES.md`; and
 all eight holes pinned as denials in `review-proof-guard.test.mjs` — in every spelling, so the two
 cmd.exe expansion forms of the one finding are pinned separately — meaning a future carve-out attempt
-trips on them immediately.
+trips on them immediately. The cmd.exe exploits (`%VAR:~0%`, `!VAR!`, caret escapes) are pinned
+through the `cmd` tool name and a `cmd /c` form as well as Bash: those strings only carry their
+exploit semantics in cmd.exe, so a Bash-only tripwire would have stayed green while a future
+shell-specific carve-out opened the real route. Pinning both routes is deliberate — the guard must
+not decide by tool name, and the tests should fail if a change makes it do so.
 
 - **Files changed**: `.claude/hooks/review-proof-guard.test.mjs` (tests only), `docs/reference/gotchas.md`, `docs/manual/KNOWN_ISSUES.md`, `docs/CHANGELOG.md`
 - **Guard logic changed**: none

@@ -309,6 +309,15 @@ for (const payload of [
   // Round 5 — an OPERAND that happens to be named `cd`; cmd.exe substring and
   // delayed expansion; and cmd.exe caret escapes decoding to traversal.
   { tool_name: "Bash", tool_input: { command: "mv cd .claude/worktrees/wt-a /tmp/" } },
+  //       The cmd.exe forms are pinned through the `cmd` tool name as well as
+  //       Bash: `%VAR:~0%`, `!VAR!` and `^` only carry their exploit semantics in
+  //       cmd.exe, so a future shell-specific carve-out could open the real route
+  //       while Bash-labelled cases stayed green (Codex connector, PR #434 round
+  //       3). Both routes are pinned — the guard must not decide by tool name.
+  { tool_name: "cmd", tool_input: { command: "mv .claude\\worktrees\\wt-a\\%TARGET:~0% C:\\tmp\\x" } },
+  { tool_name: "cmd", tool_input: { command: "mv .claude\\worktrees\\wt-a\\!TARGET! C:\\tmp\\x" } },
+  { tool_name: "cmd", tool_input: { command: "mv .claude\\worktrees\\wt-a\\.^.\\.^.\\session^-state C:\\tmp\\x" } },
+  { tool_name: "Bash", tool_input: { command: "cmd /c mv .claude\\worktrees\\wt-a\\%TARGET:~0% C:\\tmp\\x" } },
   { tool_name: "Bash", tool_input: { command: "mv .claude\\worktrees\\wt-a\\%TARGET:~0% C:\\tmp\\x" } },
   { tool_name: "Bash", tool_input: { command: "mv .claude\\worktrees\\wt-a\\!TARGET! C:\\tmp\\x" } },
   { tool_name: "Bash", tool_input: { command: "mv .claude\\worktrees\\wt-a\\.^.\\.^.\\session^-state C:\\tmp\\x" } },
