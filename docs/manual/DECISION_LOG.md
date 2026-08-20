@@ -9,6 +9,117 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-19 — Product data model: eleven owner decisions taken up front so the executor never blocks
+
+**Source:** Mason answered eleven questions in one sitting, 2026-08-19, explicitly so that
+*"when codex starts to work it doesn't have to ask me anything."* Full text as **D-L … D-V** in
+`docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md` §0.
+
+**The three with consequences beyond their own question:**
+
+**D-O — the quality tiers are not clean substitutes.** Asked what actually differs between
+`Gen Liberty` and `Gen Liberty: Higher Quality`, Mason answered: *"same chemistry better
+manufacturer and usually higher surfactant loads, AI ingredient same but everything else is
+higher quality, it also costs more."* The active ingredients match; **the inerts do not.** This
+settles C-43 and constrains every later phase: family grouping, product matching, and the
+comparison tool must surface the tier and may never present the pair as interchangeable on the
+strength of matching actives alone.
+
+**D-P — the adjuvant exclusion is a biased exclusion, and the bias has a direction.** Mason
+previously excluded adjuvant cost from the comparison. D-O means the premium product carries
+built-in surfactant the generic would need added, so the exclusion systematically flatters the
+cheaper product. Decision: keep the exclusion, but **state on-screen wherever a total appears**
+when one product carries built-in surfactant and the other does not. An unstated bias in a
+comparison tool is the failure; a stated one is a caveat.
+
+**D-U — "prepare ahead, apply nothing" is not hands-free mode.** While Mason is unreachable the
+build may continue writing and reviewing the next package, but **every live database change
+still waits for his in-chat yes.** Autopilot is not armed by this decision and the 2026-07-13
+hands-free exception is not invoked. Do not read D-U as pre-authorization.
+
+**The other eight, briefly.** D-L typed data beats a later EPA lookup (difference flagged, never
+overwritten) · D-M density trust order is SDS → label → supplier, with a self-measured value
+outranking all three · D-N the entry screen is keyboard-driven save-and-advance, deliberate added
+scope against 33–56 hours of owner typing · D-Q the receiving change ships as soon as it is
+proven, made safe by the D-K escape hatch rather than by a staged rollout · D-R Mason assigns the
+13 blank SKUs personally, no generated placeholders · D-S only admins approve a crew-proposed
+brand into the permanent list · D-T a cancelled EPA registration warns loudly but never blocks
+selling, because existing stock is commonly still legal to move · D-V the ~2026-09-18 comparison
+target is real, and if it slips the thing protected is the quality of the Phase 2 rate review,
+never the date.
+
+**Proof accounts.** Mason directed that acceptance proofs run under his own account rather than
+create a separate non-admin user. Because an admin session cannot reveal a missing column grant
+(C-25), every migration package additionally records a direct `has_column_privilege` check per
+new column. Neither half alone satisfies the verification standard.
+
+---
+
+## 2026-08-19 — Product data model: chemistry edits are admin-only; an unlisted brand never blocks receiving
+
+**Source:** Mason's answers to two direct questions, 2026-08-19, during the product-data-model
+build-planning session, after an independent Fable review flagged both as unresolved
+(findings F-24 and F-7). Recorded as **D-J** and **D-K** in
+`docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md` §0.
+
+**Decision D-J — who may edit chemistry.** Active ingredients, concentrations, and density are
+**admin-write, all-read**. Sales reps and drivers can see the data and cannot change it. This is
+the RLS policy on `active_ingredients`, `product_active_ingredients`, `ingredient_moa_codes`, and
+the density columns; a builder does not get to infer the policy.
+
+**Why.** Density drives scale weights and ingredients drive rebuild/comparison math, so a wrong
+value here reaches a real mixer, not just a quote. The audit trail records who changed what
+either way, but auditing is detection, not prevention. Mason accepted the slower data-entry path
+(he enters the data personally — see the 33–56 hour estimate) in exchange for the narrower write
+surface.
+
+**Decision D-K — unlisted brand at receiving.** When a load arrives carrying a brand that is not
+among the product's brand rows, the crew **types the brand name free-hand and completes
+receiving immediately**. The typed name is captured on the receipt and lands in the
+`product_label_drafts`-shaped review queue as a **proposed** brand. It is never written to the
+permanent brand list unreviewed, and **receiving is never blocked**.
+
+**Why.** The plan's first revision made brand selection strictly required once a spec had brand
+rows, with the only relief being an admin-only global `app_settings` switch. That is a
+dock-blocking failure: a truck arrives with a newly sourced brand, the crew cannot complete the
+receipt, cannot add the brand, and cannot flip a global switch. Product would sit unreceived
+until Mason or an admin was reachable. Mason chose the capture-and-review path over both the
+blocking option and the looser option of letting crew create permanent brand rows outright — a
+mistyped EPA number on a permanent row reaches customer paperwork.
+
+**Operative rule.** Any later phase that touches receiving keeps the escape hatch: a required
+field at the dock must always have a capture-and-review path, never a hard stop. Any later
+surface that writes chemistry enforces admin-only, and machine-sourced data (EPA seeding, brand
+name parsing, crew-typed brands) always lands as a proposal, never as a direct write.
+
+---
+
+## 2026-08-18 — CRX pins `autoCompactWindow` to 500,000; other repos keep the 200,000 global
+
+**Source:** Mason's in-chat question and approval, 2026-08-18, during the product-data-model
+planning session — *"Should we change our context limit for these long winded large planning
+sessions?"*, then *"Yes add to crx manager."*
+
+**Decision.** `.claude/settings.json` sets `"autoCompactWindow": 500000`. Mason's user-scope
+`~/.claude/settings.json` keeps `200000`, so FarmRx and every other repo are unaffected. Settings
+precedence is managed → CLI args → `.claude/settings.local.json` → `.claude/settings.json` →
+`~/.claude/settings.json`, so the project value wins inside CRX without the global changing.
+
+**Why.** CRX's long-horizon work — design planning, `whole-codebase-audit`, overnight hunts,
+migration reviews — is exactly the work whose value comes from holding many details at once, and
+compaction flattens them. The product-data-model session compacted mid-plan and lost detail that
+had to be re-read from disk. Raising the threshold is **not** a general cost increase: the setting
+does nothing until a session actually passes it, so short routine sessions are unchanged.
+
+**Also set:** the same key in Mason's untracked `.claude/settings.local.json` in the main checkout,
+so the change is live before this branch merges. Once merged, that local copy is redundant but
+harmless (same value, higher precedence).
+
+**Operative rule.** Do not "toggle" the compaction window per session, and do not reach for
+`/autocompact` — it writes to **user** settings and would silently change every other project.
+Change the CRX value in `.claude/settings.json`. A genuine one-off needs the
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` environment variable or the `--autocompact` CLI flag, both of
+which are session-scoped. Valid range is 100,000–1,000,000.
 ## 2026-08-18 — Mission loops: cheaper-model delegation + hand off at the 25MB marathon cap
 
 **Source:** Mason's in-chat approvals, 2026-08-18 — "ok lets do this, cap the marathon and make it
@@ -143,6 +254,20 @@ mispriced in either direction. The existing rounding of a line total *after* ext
 stays exactly as it is — rounding a *unit* price before multiplying is what this fix eliminates, and
 re-introducing it would move a line total by up to half a cent **per unit**. Background and the
 measured worked example are in `docs/manual/KNOWN_ISSUES.md`.
+
+**Implementation and structural guards.** Implemented by
+`supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`. Two guards stop
+the average returning under another variable name: the migration's postflight refuses a body
+containing the old averaging identifier, and `DRAW_ALLOCATION_MISMATCH` fails the draw closed if the
+per-tier quantities stop summing to the requested quantity. `DRAW_ALLOCATION_MISMATCH` proves
+*quantity* only — it is not a money assertion and must not be cited as one.
+
+**Supersedes.** The opposite conclusion recorded on the local-only branch
+`claude/known-issues-drawdown-defect` ("keep the exact line total, round only the stored unit
+price"). That entry was written by a concurrent session, was never pushed and has no pull request;
+it attributes a choice to Mason that he did not make. This log is authoritative. Its one genuinely
+useful finding is preserved separately: the live ledger's ordering high-water must be read from the
+`name` stamp, not `max(version)`.
 
 ---
 

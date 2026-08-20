@@ -2,6 +2,76 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-19 — Product data model: build plan revision 2 after independent Fable…
+
+Product data model: build plan revision 2 after independent Fable review (26 findings) and orchestration design; recorded owner decisions D-J (chemistry edits admin-only) and D-K (unlisted brand never blocks receiving) in DECISION_LOG. Planning only — nothing built, pushed, migrated, or applied.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `7c9be949 docs(plans): revision 2 — fold in the Fable adversarial review and two owner decisions`
+  - `e2da4754 docs(plans): add product data model build plan and coverage scoresheet`
+  - `4c7f3184 docs(products): generalize the design past glyphosate`
+  - `921b727e docs(products): compile the product data master record for owner approval`
+  - `c166b3de docs(products): sweep the full session transcript for missed owner decisions`
+  - `7a81f0c9 docs(products): defer the return-policy screen at Mason's direction`
+  - `4959b5f2 docs(products): fold missing owner decisions into the game plan`
+  - `e37693fd chore(claude): pin CRX autoCompactWindow to 500k`
+  - `678b9d0a docs(products): add consolidated plain-English game plan`
+  - `24bd4c68 docs(products): retract lot-number-based brand tracking; Mason's correction + live evidence`
+  - `97317375 docs(products): fold third review round + Mason's four decisions into plan, PRD and gotchas`
+  - `fbbec46b docs(products): fold second review round + Mason's decisions into plan and PRD`
+  - `6f90e60d docs(products): settle phase 3 sequencing - comparison tool after rate cleanup`
+  - `cfbbc3e1 docs(changelog): log 2026-08-18 product data model plan + PRD session`
+  - `09573605 docs(products): product data model plan + PRD, amended after adversarial review`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
+## 2026-08-18 — Product data model: design plan + PRD written and amended after…
+
+Product data model: design plan + PRD written and amended after adversarial review (canonical ingredient/ae_fraction, product_rates child table, density warn band, phases re-ordered). Docs only - no code, schema, or data changed.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `09573605 docs(products): product data model plan + PRD, amended after adversarial review`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+## 2026-08-19 — draw-down: the provenance stamp now SURVIVES a quote revision, and a price change never rebills delivered product
+
+Reworked PR #404. Two committed decisions were reviewed and found wrong; both are replaced here.
+
+**1. The foreign key is deferred, not nulled.** `order_items_quote_item_id_fkey` becomes
+`ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED` instead of `ON DELETE SET NULL`. `save_quote`
+deletes and reinserts a quote's lines on *every* save, so SET NULL wiped every provenance stamp
+every time — even on a save that changed nothing. Deferring the check to COMMIT lets the link be
+broken transiently inside that one transaction; by COMMIT the same `quote_items` ids are back, so
+the stamp survives. The earlier draft rejected DEFERRABLE on the belief that id reuse required the
+client to echo ids. Live `prosrc` read this session shows that is wrong twice over: no current page
+echoes ids, and `save_quote`'s id-less fallback reuses prior ids without them.
+
+**2. A superseded price is settled, not re-based.** Each tier's billed history is now partitioned by
+whether the order line was billed at the price the quote line carries today. Units billed at the
+current price stay in the telescoping rounding basis; units billed at any other price are settled —
+they still consume the tier's capacity, so nothing can be re-sold, but they are never re-based.
+New units bill at the new price from a fresh basis. Without this split, raising a price on a
+partly-drawn booking silently rebilled the units already delivered.
+
+**Proof (throwaway PostgreSQL 17.6 in Docker; live was never written to).** The tier query was
+lifted verbatim from the migration and exercised directly. Seven money scenarios pass against
+expected values, including `40 × $1.00 + 60 × $1.50 = $130.00` after a mid-booking price rise, the
+`$1.01`-unit telescoping case, and a two-tier booking billing `$350.00`. Mutation-tested: the
+pre-rework projection bills `$150.00` on that first scenario — a silent $20 rebill — so the test
+detects the regression rather than passing vacuously. The migration's real FK `DO` block was
+executed: it installs the deferred rule, is idempotent, and refuses a drifted SET NULL rule. A
+`save_quote`-shaped revision preserves the stamp under the new rule, aborts under the old
+non-deferrable rule, and silently wipes the stamp under the retired SET NULL rule.
+
+A postflight tripwire (`units_current` / `units_settled`) refuses the apply if the price split is
+ever dropped, because that failure is silent — the allocation still sums, so
+`DRAW_ALLOCATION_MISMATCH` would not catch it.
+
+Not applied and not merged; both still need Mason's explicit approval. One residual is recorded
+rather than fixed: `save_quote`'s id-less fallback can reassign line ids on a quote carrying two
+lines of one product, which in one narrow shape aborts the save at COMMIT. It fails closed, and
+fixing it properly is the same defect as `QUOTE_ITEM_AMBIGUOUS_COST`, with its own PR.
+
 ## 2026-08-19 — `agent-health` and the sync generator now agree on line endings
 
 Harness only — no app source, migration, or live-state change.
@@ -922,6 +992,144 @@ red — 82 entries against a floor of 70 tolerate up to 12 removals by design (s
   - `172e09e1 fix(tests): find the fixture literal boundary before stripping comments`
 - **Migrations touched** (git diff --name-only origin/main...HEAD):
   - none
+
+## 2026-08-17 — carry the allocated line cents through the whole invoice lifecycle
+
+Closed CRX-MONEY-LIFECYCLE-001, a High the adversarial reviewer raised against the tier-split work. Once a booking is split across price tiers, an order line's stored total is a deliberate allocation that no longer equals unit price × quantity. Four downstream sites re-derived the money by multiplying again, so each fractional delivery rounded on its own and the customer was billed a cent more than the order said. The fix adds two read-only helpers that carry a cumulative integer-cent allocation and telescope on cents *actually billed* — path-independent through a void or reversal, which recomputing from units is not — and rewires delivery invoicing, the invoice backfill path, and Cancel Remaining onto them. A fifth site inside the below-cost trigger is deliberately left alone: that path is an explicit admin repricing decision, not a lifecycle draw.
+
+The reviewer asked for execution tests, not algebra. There are now six, in the repo's own smoke idiom, driving the real production function bodies (md5-pinned to live, including the one live copy stored with CRLF line endings) inside a throwaway PostgreSQL 17.10 container: repeated fractional draws, one line delivered in two parts, a three-way split, both invoicing paths, partial cancellation, and deliver → void → deliver. Observed **7 failed assertions across all six scenarios before the fix and 12 of 12 passing after**. The prover has a built-in negative control — if the chain passes against the pre-fix bodies it aborts rather than certify, so it cannot rubber-stamp a test that could never fail. Reproduce with `node scripts/smoke/prove-allocated-line-cents.mjs`.
+
+Fixed a second consequence of the same tier split, this one in the app rather than the database. Because a split booking puts one product on several order lines, every inventory-shortage warning in the app was comparing each line on its own against the product's whole free stock, so two half-sized lines both looked covered while together they exceeded what was on hand. The warning went quiet on exactly the orders the split creates. All five affected screens are fixed: New Delivery, Delivery Detail, the bulk pick list on Orders, the single-order pick list on Order Detail, and the shortage badge on the Deliveries list. The per-product summing now lives in one shared function, `src/lib/inventoryShortage.ts`, and every screen calls it, so they cannot drift apart again. Each pick list and the badge are proven by driving the real page — render it, click the button, read the shortage flags the page hands the PDF writer, or count the warning triangles the operator sees — rather than by a mirrored copy of the logic that could pass while the page stayed broken. Mutation-checked: reverting the summing turns all three shortage cases red while both "genuinely covered" controls stay green. One deliberate non-change: the Deliveries badge compares against warehouse stock without subtracting prebooked units, a separate pre-existing choice left alone here.
+
+Also corrected the two live-state manual docs, which were stale by nine applied migrations (they claimed a high-water that concurrent sessions had overtaken). Both stamps now say plainly that this pass re-read the ledger only and that the schema registry is still behind. Migration remains a **LOCAL CANDIDATE — NOT APPLIED**; live apply not approved.
+
+- **Migrations touched:**
+  - `supabase/migrations/20260817120000_carry_allocated_line_cents_through_lifecycle.sql`
+
+## 2026-08-16 — draw-down tier split: closed two adversarial money findings
+
+draw-down tier split: closed two adversarial money findings — bill each line against the cents already standing on surviving lines rather than a recomputed figure (makes the total independent of which draw was reversed), and compute line cost with the canonical profit trigger own per-line expression so header, lines, and commission basis agree. Drove the real draw_down_quote end to end for the first time on an extended fixture, which caught an unprojected CTE column that every model-level proof had missed. Both migrations remain local candidates; live apply not approved.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `b82e1338 fix(draw-down): bill on cents already standing, and keep line cost per-line`
+  - `f16d205e fix(draw-down): bill each tier off its running total, not per draw`
+  - `3c41dfac fix(draw-down): split order lines by booked price tier, with a proven cutover barrier`
+  - `3d194aab Refuse a draw when a price tier is billed past what it holds`
+  - `24a3bf67 Refuse a tier draw when a billed line names no tier`
+  - `22c10c7f Guard the mixed-tier cutover on a stable predicate, and serialize it`
+  - `c54946f0 Prove the quantity constraint by definition, not by substring`
+  - `7c205ee6 Merge remote-tracking branch 'origin/main' into claude/draw-down-price-tier-lines`
+  - `20c66927 Refuse a draw against a negative or non-finite booked quantity`
+  - `1c075f76 Widen the pre-migration draw refusal past the price-match test`
+  - `f719d165 Merge origin/main; refuse to apply over a legacy averaged draw line`
+  - `c73ea5d2 docs(changelog): log the soft-deleted-booking draw-down fix`
+  - `93cfe0f0 fix(draw-down): refuse a draw against a soft-deleted booking`
+  - `134a7d06 fix(draw-down): take each tier's document position from one quote line`
+  - `357f4f4a docs(changelog): log the 2026-08-16 draw-down tier-split session`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260816110000_draw_down_cutover_barrier.sql`
+  - `supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`
+
+## 2026-08-16 — draw-down tier split: eighth adversarial pass closed
+
+draw-down tier split: eighth adversarial pass closed. Added DRAW_TIER_OVERCONSUMED, a second runtime refusal that catches a tier billed for more units than it now holds. This covers two confirmed HIGHs: a legacy weighted average that coincidentally equals a real tier key (which slipped past the seventh pass's unmatched-line guard), and a supported quote revision that reattributes already-drawn units between tiers (save_quote's drawn-product guard is aggregate-only and preserves no per-tier attribution). The per-tier GREATEST clamp used to discard the overhang silently; it is now carried out of the tier query and refused. Postflight asserts both new guard identifiers, mutation-checked. Also corrected a documentation defect: five earlier ledger claims described the throwaway proof server as PostgreSQL 17 when it was 16.14; the two version-sensitive claims were re-proven on a real 17.10 throwaway and the CHECK normalisation is byte-identical on both. Migration remains a LOCAL CANDIDATE, not applied.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `24a3bf67 Refuse a tier draw when a billed line names no tier`
+  - `22c10c7f Guard the mixed-tier cutover on a stable predicate, and serialize it`
+  - `c54946f0 Prove the quantity constraint by definition, not by substring`
+  - `7c205ee6 Merge remote-tracking branch 'origin/main' into claude/draw-down-price-tier-lines`
+  - `20c66927 Refuse a draw against a negative or non-finite booked quantity`
+  - `1c075f76 Widen the pre-migration draw refusal past the price-match test`
+  - `f719d165 Merge origin/main; refuse to apply over a legacy averaged draw line`
+  - `c73ea5d2 docs(changelog): log the soft-deleted-booking draw-down fix`
+  - `93cfe0f0 fix(draw-down): refuse a draw against a soft-deleted booking`
+  - `134a7d06 fix(draw-down): take each tier's document position from one quote line`
+  - `357f4f4a docs(changelog): log the 2026-08-16 draw-down tier-split session`
+  - `d6e90afc docs: record the draw-down tier-split and rep-access owner decisions`
+  - `f7e48f5a fix(draw-down): split a drawn booking into one order line per booked price tier`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`
+
+## 2026-08-16 — Draw-down tier split, seventh adversarial pass: refuse a draw when a…
+
+Draw-down tier split, seventh adversarial pass: refuse a draw when a mixed-tier booking carries a billed line matching no tier (an edited price/cost snapshot could otherwise re-sell its own units), extend the apply-time scan to soft-deleted bookings, and correct the cutover-lock comment, which claimed a guarantee the lock does not provide. Migration remains a LOCAL CANDIDATE; nothing applied to the live database.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `22c10c7f Guard the mixed-tier cutover on a stable predicate, and serialize it`
+  - `c54946f0 Prove the quantity constraint by definition, not by substring`
+  - `7c205ee6 Merge remote-tracking branch 'origin/main' into claude/draw-down-price-tier-lines`
+  - `20c66927 Refuse a draw against a negative or non-finite booked quantity`
+  - `1c075f76 Widen the pre-migration draw refusal past the price-match test`
+  - `f719d165 Merge origin/main; refuse to apply over a legacy averaged draw line`
+  - `c73ea5d2 docs(changelog): log the soft-deleted-booking draw-down fix`
+  - `93cfe0f0 fix(draw-down): refuse a draw against a soft-deleted booking`
+  - `134a7d06 fix(draw-down): take each tier's document position from one quote line`
+  - `357f4f4a docs(changelog): log the 2026-08-16 draw-down tier-split session`
+  - `d6e90afc docs: record the draw-down tier-split and rep-access owner decisions`
+  - `f7e48f5a fix(draw-down): split a drawn booking into one order line per booked price tier`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`
+
+## 2026-08-16 — Draw-down tier split: closed a sixth-pass money finding
+
+Draw-down tier split: closed a sixth-pass money finding — the pre-migration mixed-tier guard only scanned drawable bookings, but a fully-drawn 'accepted' booking reopens via every void/cancel path, so it could pass the guard and misbill its remainder later. Status filter removed; cutover now takes SHARE ROW EXCLUSIVE on the draw ledger so a concurrent legacy draw cannot slip past the scan. Both proven on throwaway PostgreSQL 17. Still a LOCAL CANDIDATE — not applied.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `c54946f0 Prove the quantity constraint by definition, not by substring`
+  - `7c205ee6 Merge remote-tracking branch 'origin/main' into claude/draw-down-price-tier-lines`
+  - `20c66927 Refuse a draw against a negative or non-finite booked quantity`
+  - `1c075f76 Widen the pre-migration draw refusal past the price-match test`
+  - `f719d165 Merge origin/main; refuse to apply over a legacy averaged draw line`
+  - `c73ea5d2 docs(changelog): log the soft-deleted-booking draw-down fix`
+  - `93cfe0f0 fix(draw-down): refuse a draw against a soft-deleted booking`
+  - `134a7d06 fix(draw-down): take each tier's document position from one quote line`
+  - `357f4f4a docs(changelog): log the 2026-08-16 draw-down tier-split session`
+  - `d6e90afc docs: record the draw-down tier-split and rep-access owner decisions`
+  - `f7e48f5a fix(draw-down): split a drawn booking into one order line per booked price tier`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`
+
+## 2026-08-16 — Draw-down tier split: closed two adversarial-review money findings on…
+
+Draw-down tier split: closed two adversarial-review money findings on the unapplied candidate migration. CRX-MONEY-001 guard widened past its price-match test after review showed a weighted average can coincidentally equal a real tier; it now refuses to apply over any still-drawable mixed-tier booking already drawn under the averaging code, proven across seven scenarios. CRX-MONEY-002 added: a negative or non-finite booked quantity let the split bill a booking worth nothing, closed by a fail-closed refusal in the draw body plus a validated CHECK on quote_items.total_units_needed, mutation-checked against the pre-fix body. Migration remains a LOCAL CANDIDATE; no live apply, no merge.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `20c66927 Refuse a draw against a negative or non-finite booked quantity`
+  - `1c075f76 Widen the pre-migration draw refusal past the price-match test`
+  - `f719d165 Merge origin/main; refuse to apply over a legacy averaged draw line`
+  - `c73ea5d2 docs(changelog): log the soft-deleted-booking draw-down fix`
+  - `93cfe0f0 fix(draw-down): refuse a draw against a soft-deleted booking`
+  - `134a7d06 fix(draw-down): take each tier's document position from one quote line`
+  - `357f4f4a docs(changelog): log the 2026-08-16 draw-down tier-split session`
+  - `d6e90afc docs: record the draw-down tier-split and rep-access owner decisions`
+  - `f7e48f5a fix(draw-down): split a drawn booking into one order line per booked price tier`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`
+
+## 2026-08-16 — Draw-down tier split: fixed two adversarial-review findings on PR #404
+
+Draw-down tier split: fixed two adversarial-review findings on PR #404. A tier appearing in two quote sections could report a document position no line occupies, billing the wrong price tier on a partial draw; both halves of the position now come from one row under a shared ordering. The quote lock also selected on id alone, so a soft-deleted booking still read as sent and stayed drawable by anyone holding its id -- a pre-existing hole carried from 20260702172000, now closed with deleted_at IS NULL. Cross-representative access deliberately unchanged per owner decision. Added a focused idempotency-forwarding test and a soft-delete guard test, both mutation-checked. Proven in both directions on throwaway PostgreSQL 17 databases. Migration remains a LOCAL CANDIDATE; not applied, no apply approved.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `93cfe0f0 fix(draw-down): refuse a draw against a soft-deleted booking`
+  - `134a7d06 fix(draw-down): take each tier's document position from one quote line`
+  - `357f4f4a docs(changelog): log the 2026-08-16 draw-down tier-split session`
+  - `d6e90afc docs: record the draw-down tier-split and rep-access owner decisions`
+  - `f7e48f5a fix(draw-down): split a drawn booking into one order line per booked price tier`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`
+
+## 2026-08-16 — Draw-down now splits a booking into one order line per booked price…
+
+Draw-down now splits a booking into one order line per booked price tier instead of averaging them, fixing a live defect where any booking holding one product at two prices could not be converted to an order at all. The stored weighted-average unit price landed off a whole cent and the below-cost guard refused the whole transaction; splitting the lines removes the average, so there is nothing to round and every unit bills at a price the customer actually booked. Rounding the average was rejected as a repair because a unit price is multiplied by quantity, so rounding it overcharges in proportion to the order size. The migration is a LOCAL CANDIDATE and is NOT applied - the live apply is held for Mason's separate approval. Also records two owner decisions from 2026-08-16: the tier-split choice, and that any sales rep may draw down any rep's booking.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `d6e90afc docs: record the draw-down tier-split and rep-access owner decisions`
+  - `f7e48f5a fix(draw-down): split a drawn booking into one order line per booked price tier`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - `supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql`
+
 
 ## 2026-08-14 — CRX-SEC-1: quote versions become RPC-owned (folded into the recovery PR)
 
