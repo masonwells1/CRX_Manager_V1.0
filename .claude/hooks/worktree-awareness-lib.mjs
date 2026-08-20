@@ -333,6 +333,11 @@ export function isParkedFallbackFile(
 //
 // Returns a Map of normalized path → the path as git spelled it, so the count dedupes
 // case-insensitively while /fleet still shows Mason the real filename.
+// `reconcileExemptPaths` is an optional Set of normalized candidate paths the
+// own-draft reconciliation below must NOT demand this branch account for, because the
+// branch's diff structurally cannot contain them (see the reconciliation comment).
+// It narrows only WHICH rows are reconciled; every other rule here is untouched, and
+// omitting it reproduces the pre-2026-08-20 behaviour exactly.
 export function parkedDraftPathsFrom(
   changedPaths,
   existsOnDisk = () => true,
@@ -340,6 +345,7 @@ export function parkedDraftPathsFrom(
   historyText = null,
   sha256Text = null,
   parsedHistory = null,
+  reconcileExemptPaths = null,
 ) {
   const out = new Map();
   const history = parsedHistory ?? localCandidateMigrationPathsFromHistory(historyText);
@@ -404,12 +410,27 @@ export function parkedDraftPathsFrom(
   // is the branch's own claim that pending SQL exists; if the diff cannot account for
   // every row of it, the honest answer is UNKNOWN, which sends the caller to a full
   // scan. Under-reporting hides real pending work; an extra scan only costs time.
+  //
+  // 2026-08-20: that reconciliation was UNSATISFIABLE for a whole class of row, so every
+  // one of Mason's 19 worktrees reported UNKNOWN forever and the parked count could never
+  // be read at all. `migration-history.md` is a SHARED file on origin/main, but the diff
+  // it was being reconciled against is `base..HEAD` — what this branch alone changed. A
+  // candidate row that arrived with the shared file, naming SQL that also arrived with
+  // origin/main, can never appear in that diff no matter what the branch does. The check
+  // was demanding the impossible, and a guard that always says UNKNOWN says nothing.
+  // `reconcileExemptPaths` fixes the check's DOMAIN rather than adding a bypass: it is
+  // exactly the rows outside the diff's reach, so what remains reconciled is the branch's
+  // own claim — which is what the paragraph above always meant. The two exempt classes,
+  // both supplied by `createOwnDraftPathsReader`, are documented at that call site. This
+  // is deliberately NOT a relaxation on branch-owned rows: a candidate this branch added,
+  // naming SQL origin/main has never carried, still yields UNKNOWN (proven by test).
   if (historyText !== null) {
     if (history?.state !== "known") {
       unknownReason ||= history?.reason || "worktree migration history is unreadable";
     } else {
       for (const candidate of history.paths) {
         if (visited.has(candidate)) continue;
+        if (reconcileExemptPaths?.has(candidate)) continue;
         unknownReason ||= "branch-owned LOCAL CANDIDATE SQL named by migration history is absent from this branch's own-draft diff";
         break;
       }
@@ -713,8 +734,77 @@ export function createOwnDraftPathsReader({
 
   const cleanCache = new Map(); // head sha → changed paths | null
 
-  function resultFrom(changed, onDisk, textOnDisk, historyText) {
-    const parked = parkedDraftPathsFrom(changed, onDisk, textOnDisk, historyText, sha256Text);
+  // ── Which LOCAL CANDIDATE rows is a branch actually answerable for? ──
+  //
+  // The own-draft reconciliation inside parkedDraftPathsFrom compares the branch's
+  // migration-history rows against `base..HEAD`. Two classes of row can never show up in
+  // that diff however the branch behaves, so demanding they do is not a strict guard —
+  // it is a permanent UNKNOWN that hides the real count behind noise:
+  //
+  //   1. Rows the branch INHERITED. `migration-history.md` is shared, so a branch's copy
+  //      carries every candidate that was already registered at its branch point. Those
+  //      belong to origin/main, not to this branch. Subtracting the merge base's own rows
+  //      leaves precisely the rows this branch ADDED — the "branch's own claim" the
+  //      reconciliation was always described as testing.
+  //   2. Rows naming SQL that ALREADY EXISTS in origin/main's tree. A file the branch did
+  //      not touch is absent from `base..HEAD` by construction; if the branch DID touch
+  //      it, it is in the diff and gets reconciled normally. Either way the demand is
+  //      unsatisfiable, and fleet-status/SessionStart already run a separate mainline
+  //      discovery pass (parkedMainlineDiscoveryFrom) whose entire job is these files —
+  //      it reads origin/main's history AND its parked status headers, so exempting them
+  //      here hands them to a scanner that can actually see them rather than dropping
+  //      them. Observed on 2026-08-20: a branch registered 20260813080000 as a candidate
+  //      while origin/main did not, and the live database confirmed it was already
+  //      applied — origin/main was right and the branch's row was stale.
+  //
+  // Both lookups are cached and cost one git spawn each per distinct base / per process,
+  // because this runs inside the SessionStart hook's budget across every worktree.
+  const baseCandidateCache = new Map(); // base sha → Set<normalized path>
+  function inheritedCandidatePaths(base) {
+    if (baseCandidateCache.has(base)) return baseCandidateCache.get(base);
+    const lines = run(["show", `${base}:docs/reference/migration-history.md`], repoRoot);
+    // Unreadable base history exempts nothing: falling back to UNKNOWN is the safe
+    // direction, and it is what this reader did before the exemption existed.
+    const parsed = lines === null ? null : localCandidateMigrationPathsFromHistory(lines.join("\n"));
+    const paths = parsed?.state === "known" ? parsed.paths : new Set();
+    baseCandidateCache.set(base, paths);
+    return paths;
+  }
+
+  let originMainMigrationFiles; // undefined = not read yet, null = unreadable
+  function originMainMigrationPaths() {
+    if (originMainMigrationFiles !== undefined) return originMainMigrationFiles;
+    // Every candidate row resolves to `supabase/migrations/<basename>` (see
+    // localCandidateMigrationPathsFromHistory), so one tree listing covers all of them.
+    const lines = hasOriginMain
+      ? run(["ls-tree", "-r", "--name-only", "origin/main", "--", "supabase/migrations"], repoRoot)
+      : null;
+    originMainMigrationFiles = lines === null ? null : new Set(lines.map(normRepoPath).filter(Boolean));
+    return originMainMigrationFiles;
+  }
+
+  function reconcileExemptPathsFor(base, historyText) {
+    const parsed = localCandidateMigrationPathsFromHistory(historyText);
+    if (parsed.state !== "known" || parsed.paths.size === 0) return null;
+    const inherited = inheritedCandidatePaths(base);
+    const mainline = originMainMigrationPaths();
+    const exempt = new Set();
+    for (const candidate of parsed.paths) {
+      if (inherited.has(candidate) || mainline?.has(candidate)) exempt.add(candidate);
+    }
+    return exempt.size ? exempt : null;
+  }
+
+  function resultFrom(changed, onDisk, textOnDisk, historyText, base) {
+    const parked = parkedDraftPathsFrom(
+      changed,
+      onDisk,
+      textOnDisk,
+      historyText,
+      sha256Text,
+      null,
+      historyText === null ? null : reconcileExemptPathsFor(base, historyText),
+    );
     Object.defineProperty(parked, "supersededPaths", {
       value: supersededDraftPathsFrom(changed, onDisk),
       enumerable: false,
@@ -738,13 +828,13 @@ export function createOwnDraftPathsReader({
         cleanCache.set(entry.head, run(["diff", "--name-only", base, entry.head, "--", ...spec], repoRoot));
       }
       const changed = cleanCache.get(entry.head);
-      return changed === null ? null : resultFrom(changed, onDisk, textOnDisk, historyText);
+      return changed === null ? null : resultFrom(changed, onDisk, textOnDisk, historyText, base);
     }
 
     const changed = run(["diff", "--name-only", base, "--", ...spec], entry.path);
     const untracked = run(["ls-files", "--others", "--exclude-standard", "--", ...spec], entry.path);
     if (changed === null || untracked === null) return null;
-    return resultFrom([...changed, ...untracked], onDisk, textOnDisk, historyText);
+    return resultFrom([...changed, ...untracked], onDisk, textOnDisk, historyText, base);
   };
 }
 
