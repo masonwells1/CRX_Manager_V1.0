@@ -190,8 +190,9 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(drawHandler).not.toContain("toast('error', 'IDEMPOTENCY_INTENT_MISMATCH'");
     expect(drawHandler).not.toContain("toast('error', 'IDEMPOTENCY_ACTOR_MISMATCH'");
     expect(quoteBuilder).toContain('const loadGeneration = ++initialLoadGenerationRef.current;');
-    expect(quoteBuilder).toContain('initialLoadGenerationRef.current !== loadGeneration');
-    expect(quoteBuilder).toContain('cancelAnimationFrame(frame);');
+    expect(quoteBuilder).toContain('setInstalledLoadGeneration(loadGeneration);');
+    expect(quoteBuilder).toContain('initialLoadGenerationRef.current !== installedLoadGeneration');
+    expect(quoteBuilder).toContain('suppressDirtyUntilReloadSettlesRef.current = false;');
   });
 
   it('keeps the private chain private and exposes only the reviewed wrapper', () => {

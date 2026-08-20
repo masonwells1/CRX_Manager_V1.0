@@ -58,8 +58,9 @@ cross-representative success, required-key refusal, one $10 sale / $5 cost / $5 
 order, one inventory reservation, one draw-ledger row, and a bound receipt. Keyless calls are now
 refused before the money implementation. The component tests also
 exposed and fixed an initial-load timing defect that could mark a freshly loaded saved quote dirty
-and block its first draw; a generation token and unmount cleanup prevent a superseded load from
-releasing the newer load's suppression. Mismatch recovery now reports a successful balance reload
+and block its first draw; load-generation state now releases suppression from React's post-commit
+effect, so a slow or coverage-instrumented render cannot release it on elapsed time. Mismatch recovery
+now reports a successful balance reload
 only when all three reload reads actually succeed. This migration must follow `20260816110000`,
 `20260816120000` and
 `20260817120000`. **It has not been applied live and this PR does not authorize applying it.**

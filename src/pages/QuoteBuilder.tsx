@@ -443,23 +443,8 @@ export default function QuoteBuilder() {
   const initialLoadDone = useRef(false);
   const suppressDirtyUntilReloadSettlesRef = useRef(false);
   const initialLoadGenerationRef = useRef(0);
-  const initialLoadReleaseHandlesRef = useRef({
-    timeouts: new Set<number>(),
-    frames: new Set<number>(),
-  });
+  const [installedLoadGeneration, setInstalledLoadGeneration] = useState(0);
   const blocker = useUnsavedChanges(isDirty);
-
-  useEffect(() => () => {
-    initialLoadGenerationRef.current += 1;
-    for (const timeout of initialLoadReleaseHandlesRef.current.timeouts) {
-      window.clearTimeout(timeout);
-    }
-    for (const frame of initialLoadReleaseHandlesRef.current.frames) {
-      cancelAnimationFrame(frame);
-    }
-    initialLoadReleaseHandlesRef.current.timeouts.clear();
-    initialLoadReleaseHandlesRef.current.frames.clear();
-  }, []);
 
   // Status-based guards
   const currentStatus = status || 'draft';
@@ -539,6 +524,18 @@ export default function QuoteBuilder() {
     if (suppressDirtyUntilReloadSettlesRef.current) return;
     setIsDirty(true);
   }, [customerId, tier, validDays, headerNotes, footerNotes, sections, commissionSplit]);
+
+  // Release initial-load dirty suppression only after React has committed the
+  // complete installed snapshot. Timer/frame releases can run before that
+  // commit on a busy device and let a late passive update mark a saved quote
+  // dirty, blocking its first draw-down attempt.
+  useEffect(() => {
+    if (installedLoadGeneration === 0) return;
+    if (initialLoadGenerationRef.current !== installedLoadGeneration) return;
+    initialLoadDone.current = true;
+    suppressDirtyUntilReloadSettlesRef.current = false;
+    setIsDirty(false);
+  }, [installedLoadGeneration]);
 
   // Booking settlement (roadmap #6c): for an open booking (saved sent/revised
   // quote), load booked/drawn/remaining + prepay position. Re-runs when the
@@ -948,43 +945,8 @@ export default function QuoteBuilder() {
     }
 
     setLoading(false);
-    // Passive effects from the installed snapshot can run after a zero-delay
-    // timer. Keep dirty tracking suppressed through two paint frames so a
-    // freshly loaded saved quote cannot be mistaken for an operator edit and
-    // block its first draw-down attempt.
     const loadGeneration = ++initialLoadGenerationRef.current;
-    let released = false;
-    let fallback = 0;
-    let firstFrame = 0;
-    let secondFrame = 0;
-    const clearReleaseHandles = () => {
-      window.clearTimeout(fallback);
-      cancelAnimationFrame(firstFrame);
-      cancelAnimationFrame(secondFrame);
-      initialLoadReleaseHandlesRef.current.timeouts.delete(fallback);
-      initialLoadReleaseHandlesRef.current.frames.delete(firstFrame);
-      initialLoadReleaseHandlesRef.current.frames.delete(secondFrame);
-    };
-    const releaseInitialDirtySuppression = () => {
-      if (released) return;
-      released = true;
-      clearReleaseHandles();
-      if (initialLoadGenerationRef.current !== loadGeneration) return;
-      initialLoadDone.current = true;
-      suppressDirtyUntilReloadSettlesRef.current = false;
-      setIsDirty(false);
-    };
-    fallback = window.setTimeout(releaseInitialDirtySuppression, 250);
-    initialLoadReleaseHandlesRef.current.timeouts.add(fallback);
-    firstFrame = requestAnimationFrame(() => {
-      initialLoadReleaseHandlesRef.current.frames.delete(firstFrame);
-      secondFrame = requestAnimationFrame(() => {
-        initialLoadReleaseHandlesRef.current.frames.delete(secondFrame);
-        releaseInitialDirtySuppression();
-      });
-      initialLoadReleaseHandlesRef.current.frames.add(secondFrame);
-    });
-    initialLoadReleaseHandlesRef.current.frames.add(firstFrame);
+    setInstalledLoadGeneration(loadGeneration);
     return true;
   }, [toast, navigate]);
 
