@@ -269,8 +269,10 @@ Dollar-quote delimiters are recognized only at a token boundary; a legal identif
 `repair$x$` stays atomic in both analyzers. The apply-time literal walker may bound its work,
 but reaching that bound makes the migration unresolved rather than dropping later executable
 literals. Routine exemptions are identity-aware at the schema boundary: explicit `public`
-overloads do not inherit builtin trust, while exact `pg_catalog` and fixed Supabase `auth`
-helpers retain their narrow exemptions.
+overloads and unqualified builtin-looking calls do not inherit trust because `search_path` can
+resolve public routines, while exact `pg_catalog` and fixed Supabase `auth` helpers retain their
+narrow exemptions. PostgreSQL-equivalent quoted lowercase and unquoted routine spellings are
+coalesced; genuinely case-sensitive quoted names stay distinct.
 
 **A trigger rewrite is still a rewrite (round 31).** Every rule above proves a repair
 rewrote exactly the rows it hashed — for the table the `UPDATE` names. Triggers were

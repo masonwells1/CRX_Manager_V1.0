@@ -56,9 +56,18 @@ const IDENT_CHAR = /[A-Za-z0-9_$\u0080-\uFFFF]/;
 const QUOTED_IDENT_PREFIX = "_crxq_";
 
 function canonicalQuotedIdentifier(value) {
-  const canonical = String(value || "")
+  const raw = String(value || "");
+  const canonical = raw
     .replace(/\$/g, "_dollar_")
     .replace(/[^A-Za-z0-9_\u0080-\uFFFF]/g, "_");
+  // PostgreSQL folds an unquoted identifier to lowercase. A quoted identifier
+  // that is already a legal lowercase spelling therefore has the SAME
+  // identity: public."round" and public.round can resolve one routine. Keeping
+  // the quote tag on that narrow spelling lets a mutating same-file definition
+  // hide behind an unqualified builtin-looking call. Coalesce those identities;
+  // mixed-case, keyword-shaped, and punctuation-bearing quoted names retain the
+  // tag because they are genuinely distinct or need their syntactic role kept.
+  if (/^[a-z_][a-z0-9_$]*$/.test(raw) && !NON_RELATION_KEYWORDS.has(raw)) return canonical;
   // Keep the token visibly quoted until its syntactic role is known. Without
   // this tag a legal name such as public."on" is flattened to the keyword ON:
   // relation readers then discard the write, and trigger readers can mistake a
@@ -1111,6 +1120,22 @@ const NOT_A_ROUTINE_CALL = new Set([
   // is named here rather than charged as a resident routine of unknown effect.
   "plpgsql_check_function",
 ]);
+// These are grammar or type-constructor spellings, not schema-resolved routine
+// calls. They remain safe unqualified. Ordinary functions in the larger list
+// above are trusted only as explicit pg_catalog identities: an unqualified
+// `round(...)` can resolve a public.round overload through search_path.
+const NON_ROUTINE_PAREN_SYNTAX = new Set([
+  "in", "exists", "and", "or", "not", "any", "all", "some", "from", "as", "on",
+  "select", "where", "using", "join", "filter", "cast", "position", "when", "check",
+  "case", "values", "row", "over", "within", "order", "group", "having",
+  "returning", "set", "distinct", "between", "like", "overlaps", "at", "by",
+  "conflict", "nothing", "each", "lateral", "tablesample", "grouping",
+  "into", "for", "of", "if", "then", "else", "end", "loop", "while", "return",
+  "numeric", "decimal", "char", "varchar", "character", "bit", "timestamp",
+  "timestamptz", "time", "interval", "text", "integer", "bigint", "smallint",
+  "boolean", "real", "float", "double", "money", "uuid", "jsonb", "json",
+  "coalesce", "nullif", "greatest", "least",
+]);
 const TRUSTED_AUTH_ROUTINES = new Set(["uid", "jwt", "role"]);
 
 /**
@@ -1151,7 +1176,7 @@ function unknownCallsIn(codeLower, defined) {
       // Supabase auth helpers may use the builtin exemption. A schema-qualified
       // public overload stays unknown and therefore fails closed.
       const trustedBuiltin =
-        (!schema && NOT_A_ROUTINE_CALL.has(name)) ||
+        (!schema && NON_ROUTINE_PAREN_SYNTAX.has(name)) ||
         (schema === "pg_catalog" && NOT_A_ROUTINE_CALL.has(name)) ||
         (schema === "auth" && TRUSTED_AUTH_ROUTINES.has(name));
       if (trustedBuiltin) continue;

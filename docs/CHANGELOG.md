@@ -34,9 +34,12 @@ migration safety harness; no app source, migration SQL, live database, or produc
   `repair$x$` remains one identifier in both analyzers instead of turning its middle bytes into
   an apparent body delimiter and hiding the invoked money write.
 - The executable-literal analysis limit is now a denial boundary: a 501st distinct literal marks
-  the migration unresolved instead of disappearing. Builtin exemptions are schema-aware as well;
-  `public.round(...)` and `public.is_admin(...)` are unknown resident overloads, while exact
-  `pg_catalog.round(...)` and `auth.uid()` identities remain trusted.
+  the migration unresolved instead of disappearing. Routine trust is schema-aware as well:
+  unqualified builtin-looking calls and explicit `public.round(...)` / `public.is_admin(...)`
+  remain unknown because `search_path` can resolve public overloads, while exact
+  `pg_catalog.round(...)` and `auth.uid()` identities remain trusted. Quoted lowercase routine
+  names now coalesce with PostgreSQL's unquoted identity, so defining `public."round"(...)` and
+  invoking `round(...)` cannot hide a same-file mutator.
 - Linked trigger/FK capture now preserves schema-qualified non-public parents whose referential
   actions write public children. The 2026-08-20 production capture records `auth.users` as an
   opaque source with its transitive public cascades, so infrastructure-schema exemptions can no
@@ -52,7 +55,7 @@ migration safety harness; no app source, migration SQL, live database, or produc
 
 Focused proof: snapshot producer 14 assertions; applied-source containment pass (including forced
 worktree-enumeration failure); trigger fan-out producer 13 assertions; apply-time analyzer
-194 assertions; apply-time guard 263 assertions; approved-set validator 176 mutation cases.
+199 assertions; apply-time guard 267 assertions; approved-set validator 176 mutation cases.
 Each new edge has a removal mutant that
 survives only when the load-bearing protection is deliberately deleted.
 

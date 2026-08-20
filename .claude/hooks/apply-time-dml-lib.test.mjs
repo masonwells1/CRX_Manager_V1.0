@@ -492,12 +492,12 @@ eq(T(null), [], "a null body does not throw");
     ["a column DEFAULT", "CREATE TABLE public.t4 (v int DEFAULT public.wrapper());"],
     ["a plain index", `${SCRATCH}CREATE INDEX ix2 ON public.scratch (v);`],
     ["a plain btree index", `${SCRATCH}CREATE INDEX ix3 ON public.scratch USING btree (v);`],
-    ["an index over a builtin", `${SCRATCH}CREATE INDEX ix4 ON public.scratch (lower(v::text));`],
+    ["an index over an explicit catalog builtin", `${SCRATCH}CREATE INDEX ix4 ON public.scratch (pg_catalog.lower(v::text));`],
     ["ADD CONSTRAINT ... CHECK", `${SCRATCH}ALTER TABLE public.scratch ADD CONSTRAINT c CHECK (v > 0);`],
     ["SET DEFAULT", `${SCRATCH}ALTER TABLE public.scratch ALTER COLUMN v SET DEFAULT 0;`],
     ["a foreign key", `${SCRATCH}ALTER TABLE public.scratch ADD CONSTRAINT fk FOREIGN KEY (v) REFERENCES public.other(id);`],
     ["an INSERT of literals", `${SCRATCH}INSERT INTO public.scratch (v) VALUES (1), (2);`],
-    ["an UPDATE using only builtins", `${SCRATCH}UPDATE public.scratch SET v = round(v, 2) WHERE v IS NOT NULL;`],
+    ["an UPDATE using only explicit catalog builtins", `${SCRATCH}UPDATE public.scratch SET v = pg_catalog.round(v, 2) WHERE v IS NOT NULL;`],
   ]) {
     ok(!refuses(sql), `round-30: ${label} asks for nothing`);
   }
@@ -916,6 +916,34 @@ eq(T(null), [], "a null body does not throw");
   const authHelper = applyTimeWriteTargets('SELECT auth.uid();');
   ok(!authHelper.unknownCalls.includes('uid'),
     'round-41 control: the fixed auth.uid identity stays trusted');
+
+  const bareBuiltin = applyTimeWriteTargets('SELECT round(1.2);');
+  ok(bareBuiltin.unknownCalls.includes('round'),
+    'round-42: an unqualified builtin-looking call fails closed because public can overload it');
+
+  const shortResident = applyTimeWriteTargets('SELECT t();');
+  ok(shortResident.unknownCalls.includes('t'),
+    'round-42: a short routine name is not mistaken for a harmless table alias');
+
+  const quotedLowerDefinition = applyTimeWriteTargets(
+    'CREATE FUNCTION public."round"(jsonb) RETURNS jsonb LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.order_items SET total_price = total_price; RETURN $1; END $$; ' +
+    "SELECT round('{}'::jsonb);",
+  );
+  ok(quotedLowerDefinition.targets.has('order_items.total_price'),
+    'round-42: quoted lowercase definition and unquoted call share one PostgreSQL identity');
+  ok(quotedLowerDefinition.definedRoutines.includes('round') &&
+      quotedLowerDefinition.invokedRoutines.includes('round'),
+  'round-42: the coalesced identity participates in the ordinary transitive call graph');
+
+  const quotedMixedCase = applyTimeWriteTargets(
+    'CREATE FUNCTION public."Round"(jsonb) RETURNS jsonb LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.order_items SET total_price = total_price; RETURN $1; END $$; ' +
+    "SELECT round('{}'::jsonb);",
+  );
+  ok(!quotedMixedCase.targets.has('order_items.total_price') &&
+      quotedMixedCase.unknownCalls.includes('round'),
+  'round-42 control: genuinely distinct quoted mixed-case identity does not coalesce');
 }
 
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

@@ -998,9 +998,9 @@ function armAutopilot(stateDir, hoursFromNow) {
       ["adding a column does not rewrite the existing ones",
        "ALTER TABLE public.orders ADD COLUMN note text;"],
       ["reading the table with built-in functions is not a call to an unknown routine",
-       "SELECT count(*), md5(string_agg(id::text, ',')) FROM public.orders;"],
+       "SELECT pg_catalog.count(*), pg_catalog.md5(pg_catalog.string_agg(id::text, ',')) FROM public.orders;"],
       ["a set-returning function's column alias is not a routine call",
-       "SELECT * FROM unnest(ARRAY[1,2]) AS ta(n);"],
+       "SELECT * FROM pg_catalog.unnest(ARRAY[1,2]) AS ta(n);"],
     ]) {
       r = apply(`20990601${String(90 + (idx2 += 1)).padStart(6, "0")}_r25ok`, sql);
       ok(!isOneShotDeny(r), `round-25: ${label} → not a replay`);
@@ -1045,11 +1045,11 @@ function armAutopilot(stateDir, hoursFromNow) {
       // A plain string literal is still readable — narrowing the rule to
       // `format` must not turn every EXECUTE into a refusal.
       ["a plain literal EXECUTE that only reads is still read, not refused",
-       "DO $$ BEGIN EXECUTE 'SELECT count(*) FROM public.orders'; END $$;"],
+       "DO $$ BEGIN EXECUTE 'SELECT pg_catalog.count(*) FROM public.orders'; END $$;"],
       // Making `format` unreadable must not make it guilty everywhere. Outside
       // an EXECUTE operand it is an ordinary value expression and stays silent.
       ["format used to build an identifier, with no statement in it at all",
-       "SELECT format('%I_%s', 'orders', 'backup') AS proposed_name;"],
+       "SELECT pg_catalog.format('%I_%s', 'orders', 'backup') AS proposed_name;"],
     ]) {
       r = apply(`20990601${String(140 + (idx3 += 1)).padStart(6, "0")}_r26ok`, sql);
       ok(!isOneShotDeny(r), `round-26: ${label} → not a replay`);
@@ -1254,7 +1254,7 @@ function armAutopilot(stateDir, hoursFromNow) {
       // silent, so the common shape costs nothing.
       r = apply("20990601000183_r28_benign",
         "CREATE FUNCTION public.touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN\n" +
-        "  NEW.updated_at = now(); RETURN NEW; END $$;\n" +
+        "  NEW.updated_at = pg_catalog.now(); RETURN NEW; END $$;\n" +
         "CREATE TRIGGER t_touch BEFORE UPDATE ON public.customers FOR EACH ROW\n" +
         "  EXECUTE FUNCTION public.touch();\nUPDATE public.customers SET note = 'x';");
       ok(!isOneShotDeny(r), "round-28: an updated_at trigger on an unrelated table is silent");
@@ -1627,6 +1627,26 @@ function armAutopilot(stateDir, hoursFromNow) {
     r = apply("20990601000028_auth_helper", "SELECT auth.uid();");
     ok(!isOneShotDeny(r),
       "round-41 control: exact auth.uid remains trusted");
+
+    r = apply("20990601000029_bare_builtin", "SELECT round(1.2);");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-42: an unqualified builtin-looking call fails closed against public overloads");
+
+    r = apply("20990601000032_short_resident", "SELECT t();");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-42: a short resident routine is not mistaken for a harmless table alias");
+
+    const quotedLowerBuiltinDefinition =
+      'CREATE FUNCTION public."round"(jsonb) RETURNS jsonb LANGUAGE plpgsql AS $$ BEGIN ' +
+      'UPDATE public.orders SET total_profit = total_profit; RETURN $1; END $$; ';
+    r = apply("20990601000030_quoted_lower_builtin",
+      quotedLowerBuiltinDefinition + "SELECT round('{}'::jsonb);");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-42: quoted lowercase mutator invoked by its unquoted identity cannot bypass replay guard");
+
+    r = apply("20990601000031_quoted_lower_deferred", quotedLowerBuiltinDefinition);
+    ok(!isOneShotDeny(r),
+      "round-42 MUTANT: defining the quoted lowercase mutator without invoking it remains deferred");
 
     // 6. Fail closed. The registry is tracked in git; unreadable or absent means
     //    the checkout is broken or the file was removed — the two states in

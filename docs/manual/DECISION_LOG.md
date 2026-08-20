@@ -479,8 +479,11 @@ the infrastructure-schema exemption to erase them. Because ordinary, E-string, a
 refuse those anonymous-block forms; a dollar-quoted `DO` body is the required readable shape.
 Dollar-quote opening also requires an identifier boundary, so tag-shaped bytes inside
 `repair$x$` remain identifier bytes. Static-analysis resource limits fail closed rather than
-truncating silently, and a builtin exemption applies only to an unqualified call, an exact
-`pg_catalog` call, or the fixed `auth.uid/jwt/role` identities—not to a `public` overload.
+truncating silently. Unqualified builtin-looking calls are not trusted because `search_path` can
+resolve a public overload; trust requires an exact `pg_catalog` call or one of the fixed
+`auth.uid/jwt/role` identities. A quoted lowercase name has the same PostgreSQL identity as its
+unquoted spelling, so `public."round"(...)` and `round(...)` are deliberately coalesced while a
+genuinely case-sensitive quoted name remains distinct.
 
 ---
 
