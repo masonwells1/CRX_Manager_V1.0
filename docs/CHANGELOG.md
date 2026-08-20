@@ -68,7 +68,10 @@ migration safety harness; no app source, migration SQL, live database, or produc
   invoking `round(...)` cannot hide a same-file mutator.
 - The Bash approved-set validator now treats functions and procedures as one routine graph,
   including transitive wrappers, and refuses plain, escape, or Unicode single-quoted routine
-  bodies that its write scanners cannot inspect. Its 195-case mutation suite and the 245-assertion
+  bodies that its write scanners cannot inspect. A `CALL` that receives the captured approval-set
+  array is also treated as a possible `OUT`/`INOUT` write-back, so a procedure cannot replace the
+  hashed ids with an unapproved same-length set before the protected write. Its 197-case mutation
+  suite and the 245-assertion
   apply-time analyzer suite are both wired into a required CI step.
 - Non-ASCII PostgreSQL routine identities now fail closed through one shared analyzer boundary.
   A valid define/call/drop sequence such as `public.修復()` can no longer be truncated out of the
@@ -105,7 +108,7 @@ migration safety harness; no app source, migration SQL, live database, or produc
 
 Focused proof: snapshot producer 16 assertions; applied-source containment pass (including forced
 worktree-enumeration failure); trigger fan-out producer 22 assertions; apply-time analyzer
-245 assertions; apply-time guard 304 assertions; approved-set validator 195 mutation cases.
+245 assertions; apply-time guard 304 assertions; approved-set validator 197 mutation cases.
 Each new edge has a removal mutant that
 survives only when the load-bearing protection is deliberately deleted.
 ## 2026-08-20 — Blend-ticket unit fields are now dropdowns instead of free text,…

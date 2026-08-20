@@ -3274,11 +3274,34 @@ $cascade_row"
                 # comparison had been closed except the narrowest one. A subscript
                 # cannot contain `=`, so it can be skipped over without needing to
                 # parse what is inside it.
+                #
+                # ROUND 53 (Codex High). A procedure call can write an OUT or
+                # INOUT argument back into the caller variable without either
+                # assignment spelling appearing at the call site. For example,
+                # `CALL swap_ids(v_ids)` can replace the approved array after it
+                # was hashed, then let the write and same-length count assertion
+                # operate on an unapproved population. Parameter modes cannot be
+                # proven for every resident or overloaded procedure from this
+                # migration alone, so a CALL that receives the captured variable
+                # is conservatively a second write. A procedure that only needs
+                # to read the ids must receive a derived value instead of the
+                # load-bearing proof variable.
                 m = split(all, at, /;/)
                 for (i = 1; i <= m; i++) {
                   s = at[i]
+                  callarg = 0
+                  if (match(s, /(^|[^a-z0-9_])call([^a-z0-9_]|$)/)) {
+                    # Inspect only text after the procedure identity and its
+                    # opening parenthesis. Otherwise `CALL v_ids(1)` mistakes
+                    # the routine name for an argument that can be written back.
+                    calltail = substr(s, RSTART + RLENGTH)
+                    callopen = index(calltail, "(")
+                    if (callopen > 0 && substr(calltail, callopen + 1) ~ ("(^|[^a-z0-9_])" var "([^a-z0-9_]|$)"))
+                      callarg = 1
+                  }
                   if (s ~ ("into[ \t]+(strict[ \t]+)?" var "([^a-z0-9_]|$)") ||
-                      s ~ (var "[ \t]*(\\[[^=]*\\][ \t]*)*:="))
+                      s ~ (var "[ \t]*(\\[[^=]*\\][ \t]*)*:=") ||
+                      callarg)
                     assigns++
                 }
                 if (assigns > 1) { print "reassigned\t" assigns; exit }
@@ -3301,7 +3324,7 @@ $cascade_row"
             case "$CAPTURE_STATUS" in
               OK) ;;
               reassigned*)
-                SET_BIND_WHY="'$DIGEST_SET_VAR' is assigned $(printf '%s' "$CAPTURE_STATUS" | cut -f2) times in this migration. The digest, the write and the row-count assertion all name that one variable, so a second assignment means the rows hashed and the rows written need not be the same rows — and this validator cannot tell which assignment reaches which statement. Capture the approved ids once and never write to '$DIGEST_SET_VAR' again; if a second population genuinely needs repairing, that is a second migration." ;;
+                SET_BIND_WHY="'$DIGEST_SET_VAR' is assigned or passed to a possibly OUT/INOUT procedure $(printf '%s' "$CAPTURE_STATUS" | cut -f2) times in this migration. The digest, the write and the row-count assertion all name that one variable, so a second write-back means the rows hashed and the rows written need not be the same rows — and this validator cannot prove procedure parameter modes or tell which value reaches which statement. Capture the approved ids once and never write to or pass '$DIGEST_SET_VAR' through CALL again; if a second population genuinely needs repairing, that is a second migration." ;;
               no-lock)
                 SET_BIND_WHY="'$DIGEST_SET_VAR' is captured without FOR UPDATE, so the approved rows are not locked between the digest and the write and a concurrent change lands unnoticed. Capture them as: SELECT array_agg(s.id ORDER BY s.id) INTO $DIGEST_SET_VAR FROM (SELECT t.id FROM <table> t WHERE <approved predicate> ORDER BY t.id FOR UPDATE) s;" ;;
               no-agg)

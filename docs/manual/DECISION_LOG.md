@@ -505,6 +505,10 @@ genuinely case-sensitive quoted name remains distinct.
 The Bash approved-set lane applies the same fail-closed boundary to functions and procedures:
 dollar-quoted bodies participate in one transitive mutating-routine graph, while plain, escape,
 and Unicode single-quoted routine bodies are refused because the validator cannot inspect them.
+Because PostgreSQL `CALL` writes `OUT`/`INOUT` arguments back into the caller, passing the captured
+approval-set array to any procedure is conservatively a second assignment. The validator cannot
+prove every resident or overloaded procedure's parameter mode, so the load-bearing array must not
+cross a `CALL` boundary after capture.
 Both focused analyzer suites run in a required CI step.
 PL/pgSQL cursors are another deferred-execution boundary: a declaration can store a callable query
 that runs later through `OPEN`/`FETCH`. Until the static analyzer models that lifecycle precisely,

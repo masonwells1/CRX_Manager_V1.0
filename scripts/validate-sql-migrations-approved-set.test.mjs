@@ -1299,6 +1299,49 @@ const CASES = [
       `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\nEND $$;\n`,
   },
   {
+    // ROUND 53 (Codex High). CALL writes OUT/INOUT arguments back into the
+    // caller, so the load-bearing array can change without an INTO or := at
+    // the call site. Keeping the replacement array the same length also makes
+    // the ordinary ROW_COUNT assertion pass over the wrong population.
+    name: 'round-53: an INOUT procedure replaces the captured ids after approval',
+    expect: 'violation',
+    mustReport: 'possibly OUT/INOUT procedure',
+    sql:
+      `CREATE PROCEDURE public._swap_approved_ids(INOUT p_ids uuid[]) LANGUAGE plpgsql AS $$\n` +
+      `BEGIN\n` +
+      `  SELECT array_agg(s.id ORDER BY s.id) INTO p_ids\n` +
+      `    FROM (SELECT id FROM public.orders WHERE NOT stale ORDER BY id LIMIT cardinality(p_ids)) s;\n` +
+      `END;\n$$;\n` +
+      `-- APPROVED_SET_DIGEST: ${HEX}\nDO $$\n` +
+      `DECLARE v_ids uuid[]; actual text; n integer;\nBEGIN\n` +
+      `  SELECT array_agg(s.id ORDER BY s.id) INTO v_ids\n` +
+      `    FROM (SELECT id FROM public.orders WHERE stale ORDER BY id FOR UPDATE) s;\n` +
+      `  SELECT ${WHOLE_ROW_HASH_EXPR} INTO actual FROM public.orders o WHERE o.id = ANY(v_ids);\n` +
+      `  IF actual IS DISTINCT FROM '${HEX}' THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n  END IF;\n` +
+      `  CALL public._swap_approved_ids(v_ids);\n` +
+      `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);\n` +
+      `  GET DIAGNOSTICS n = ROW_COUNT;\n` +
+      `  IF n <> array_length(v_ids, 1) THEN\n` +
+      `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n  END IF;\nEND $$;\n`,
+  },
+  {
+    // The captured variable token in a procedure identity is not an argument.
+    // This control keeps the fail-closed rule on the CALL argument list rather
+    // than banning an unrelated, read-only procedure with an unlucky name.
+    name: 'round-53 control: a procedure named like the id variable stays deferred',
+    expect: 'silent',
+    sql:
+      `CREATE PROCEDURE public.v_ids(IN p_value integer) LANGUAGE plpgsql AS $$\n` +
+      `BEGIN NULL; END;\n$$;\n` +
+      `-- APPROVED_SET_DIGEST: ${HEX}\n` +
+      goodSetBlock().replace(
+        `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);`,
+        `  CALL public.v_ids(1);\n  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);`,
+      ) +
+      `\n`,
+  },
+  {
     // Codex round 12, finding 3b. The mismatch branch contains a RAISE
     // EXCEPTION — nested one level deeper, under a condition that is never
     // true. Through round 11 the check asked only whether a raise appeared
