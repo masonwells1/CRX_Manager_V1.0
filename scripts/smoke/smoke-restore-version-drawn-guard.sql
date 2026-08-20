@@ -332,6 +332,51 @@ BEGIN
   END IF;
 
   -- --------------------------------------------------------------------
+  -- (e) ACCEPTED LIMITATION, pinned deliberately: cancelling the draw does
+  --     NOT reopen version restore.
+  --
+  --     The guard in _restore_quote_version_owner_impl joins order_items
+  --     UNFILTERED by order status. cancel_order returns the quantity to
+  --     quote_product_draws and reopens the booking, but keeps the order_items
+  --     rows for audit -- and those rows still carry their quote_item_id
+  --     stamp. So the guard stays true forever once a booking has been drawn.
+  --
+  --     Codex round 3 (2026-08-19) flagged this as over-broad. Mason accepted
+  --     it on 2026-08-20 rather than narrow it, because narrowing means
+  --     RELEASING the stamps on those dead lines, which puts back the
+  --     order_items UPDATE whose after_order_items_change ->
+  --     trg_recalc_order_totals locks the order row under the quote lock --
+  --     the deadlock this rework removed.
+  --
+  --     If this case ever starts FAILING, the guard was narrowed. That may be
+  --     correct, but it is a decision: update docs/manual/KNOWN_ISSUES.md and
+  --     migration-history row 887 in the same change, and prove the lock
+  --     ordering again.
+  -- --------------------------------------------------------------------
+  SELECT COALESCE(SUM(quantity_drawn), 0) INTO v_drawn
+  FROM quote_product_draws WHERE quote_id = v_q;
+  IF v_drawn IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (e) setup -- no draw ledger row for the drawn booking';
+  END IF;
+
+  v_err := NULL;
+  BEGIN
+    v_res := pg_temp.restore_quote_version_smoke(
+      v_q, v_v3, v_admin, NULL,
+      (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q)
+    );
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+  END;
+
+  IF v_err IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (e) restore succeeded on a drawn booking -- the accepted limitation changed; see the comment above before updating this test';
+  END IF;
+  IF v_err NOT LIKE 'QUOTE_RESTORE_BLOCKED_BY_DRAW%' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (e) restore blocked by the WRONG error: %', v_err;
+  END IF;
+
+  -- --------------------------------------------------------------------
   -- All scenarios passed — force rollback of everything above.
   -- --------------------------------------------------------------------
   RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';

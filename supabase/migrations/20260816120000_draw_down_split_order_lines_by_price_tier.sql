@@ -2305,10 +2305,37 @@ BEGIN
   -- row while this function already holds the quote row, crossing the lock
   -- order that cancel/void takes.
   --
-  -- So restore fails CLOSED instead. This is narrow: it blocks a restore only
-  -- when the booking has actually been drawn into an order. Every other
-  -- restore is unaffected, and editing the quote directly still works, because
-  -- save_quote reuses the same line ids and the deferred FK keeps the stamps.
+  -- So restore fails CLOSED instead.
+  --
+  -- SCOPE, STATED ACCURATELY -- an earlier draft of this comment called the
+  -- guard "narrow: only a booking actually drawn into an order is blocked".
+  -- That was wrong, and Codex review 2026-08-19 caught it. The join below is
+  -- UNFILTERED by order status, so the real rule is: once a booking has EVER
+  -- been drawn, it can never restore a version again -- even if every draw
+  -- order was afterwards cancelled or voided, the quantity returned to
+  -- quote_product_draws and the booking reopened. Those reversed order_items
+  -- rows are retained for audit and still carry their stamp, so the join stays
+  -- true forever.
+  --
+  -- That over-breadth is DELIBERATE and Mason accepted it on 2026-08-20 rather
+  -- than narrow it. Narrowing means letting a reversed line past the guard,
+  -- and its stamp would then dangle at COMMIT exactly as before -- so restore
+  -- would have to RELEASE the stamps on those dead lines. Releasing is
+  -- money-neutral for them (a voided line is filtered out of billed_stamped and
+  -- v_unmatched entirely, and a cancelled line contributes only its delivered
+  -- quantity, which is zero here), but it puts back an UPDATE on order_items,
+  -- which fires after_order_items_change -> trg_recalc_order_totals and locks
+  -- the order row under the quote lock. That is the deadlock this rework just
+  -- removed. Trading a rare capability for a reintroduced lock cycle is the
+  -- wrong trade, so the limitation is recorded instead of fixed.
+  --
+  -- Recorded in docs/manual/KNOWN_ISSUES.md and pinned by a regression case in
+  -- scripts/smoke/smoke-restore-version-drawn-guard.sql, so a later narrowing
+  -- has to change the recorded decision consciously rather than by accident.
+  --
+  -- What is unaffected: a booking never drawn restores freely, and editing the
+  -- quote directly still works on ANY booking, because save_quote reuses the
+  -- same line ids and the deferred FK keeps the stamps.
   --
   -- Doing this properly -- carrying the line-level billing basis across a
   -- restore so the money stays exact -- means giving restore a real identity

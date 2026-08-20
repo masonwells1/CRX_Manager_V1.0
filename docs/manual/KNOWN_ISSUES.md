@@ -58,9 +58,29 @@ while restore holds the quote row, crossing the order→quote order that cancel/
 
 **Mason then chose option (B), which is what ships:** restore raises
 `QUOTE_RESTORE_BLOCKED_BY_DRAW` — a plain-English refusal — when the booking already has drawn
-lines, **before** any destructive work. It is deliberately narrow: only a booking actually drawn
-into an order is blocked, and editing the quote directly still works, because `save_quote` reuses
-the same line ids and the deferred FK keeps the stamps. Doing (A) properly means carrying the
+lines, **before** any destructive work. 
+
+**Its real scope, stated accurately (Codex round 3 — an earlier version of this entry called it
+"narrow", and that was wrong):** the check joins `order_items` **unfiltered by order status**, so
+once a booking has **ever** been drawn it can never restore a version again — even if every draw
+order was afterwards cancelled or voided, the quantity returned to `quote_product_draws` and the
+booking reopened. Those reversed rows are retained for audit and still carry their stamp, so the
+check stays true forever.
+
+**Mason accepted that over-breadth on 2026-08-20 rather than narrow it.** Narrowing means letting a
+reversed line past the guard, whose stamp would then dangle at COMMIT exactly as before — so
+restore would have to **release** the stamps on those dead lines. Releasing is money-neutral for
+them (a voided line is filtered out of `billed_stamped` and `v_unmatched` entirely; a cancelled
+line contributes only its delivered quantity, zero here), but it puts back an `order_items` UPDATE,
+which fires `after_order_items_change` → `trg_recalc_order_totals` and locks the order row under
+the quote lock — the deadlock this rework just removed. Trading a rare capability for a
+reintroduced lock cycle is the wrong trade. A regression case in
+`scripts/smoke/smoke-restore-version-drawn-guard.sql` pins the accepted behaviour, so a later
+narrowing must change this decision consciously rather than by accident.
+
+What is unaffected: a booking never drawn restores freely, and editing the quote directly still
+works on **any** booking, because `save_quote` reuses the same line ids and the deferred FK keeps
+the stamps. Doing (A) properly means carrying the
 line-level billing basis across a restore, which needs a real snapshot→live identity mapping — the
 same missing capability `QUOTE_ITEM_AMBIGUOUS_COST` is about, and it gets its own PR.
 
