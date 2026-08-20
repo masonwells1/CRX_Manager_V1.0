@@ -65,7 +65,43 @@ if (pathCandidates.some((candidate) => reviewProofPathMentioned(candidate))) {
 // Also catches a forge-by-move whose destination lands a NON-ledger basename in
 // the state dir. MCP path fields are literal (no shell glob expansion), so the
 // literal component check is sufficient here.
-if (pathCandidates.some((candidate) => candidate != null && cdTargetEntersStateDir(candidate))) {
+//
+// stop-wrap-ack.json is the one designed session-end acknowledgment valve:
+// stop-wrap.mjs instructs the agent to write {"signature": ...} to
+// .claude/session-state/stop-wrap-ack.json to confirm ordinary loose ends are
+// intentional. codex-push-lib.mjs's reviewProofPathMentioned already carves this
+// basename out on purpose; the round-8 whole-dir deny above re-broke it. The
+// carve-out below restores it. Safe: stop-wrap.mjs refuses to honor an ack while
+// any live-applied migration lacks committed source, so the C3 alarm can never
+// be self-acknowledged regardless of this write.
+//
+// The exemption is scoped exactly to its intent — a Write/Edit whose DESTINATION
+// is the ack file (CodeRabbit PR #430). Two guards keep it that narrow:
+//   1. It opens only when EVERY state-dir-entering candidate IS the ack path, so
+//      a move/delete whose OTHER operand is a protected file (the ledger, a
+//      proof) can never ride the exemption — that operand isn't the ack path, so
+//      the deny still fires. This is the load-bearing safety floor.
+//   2. A move/delete SHAPE is never exempt: a tool exposing both source AND
+//      destination (a move/copy), or whose name is move/rename/delete/remove/
+//      unlink/trash/copy, is denied even when it only names the ack file — so an
+//      MCP delete_file/move_file (which reuse the `path` field a legit write_file
+//      also uses) cannot slip through. Only a genuine Write/Edit/write_file opens.
+// The match is CASE-SENSITIVE (the valve path stop-wrap.mjs reads/writes is
+// canonical lowercase), so a case-variant name is denied like any other. The
+// proof JSON, the applied-source ledger, a lookalike (stop-wrap-ack.json.bak),
+// whole-dir moves/deletes, and every OTHER session-state basename all still deny
+// — mutation-proved in review-proof-guard.test.mjs.
+const ACK_VALVE_RE = /(?:^|\/)\.claude\/session-state\/stop-wrap-ack\.json$/;
+const isAckValvePath = (candidate) =>
+  ACK_VALVE_RE.test(String(candidate).replace(/\\/g, "/").replace(/\/+$/, ""));
+const stateDirCandidates = pathCandidates.filter((c) => c != null && cdTargetEntersStateDir(c));
+const isMoveOrDeleteShape =
+  (input.source != null && input.destination != null) ||
+  /(?:^|[-._])(?:move|rename|delete|remove|unlink|trash|copy)(?:[-._]|$)/i.test(toolName);
+const isPureAckWrite = stateDirCandidates.length > 0 &&
+  !isMoveOrDeleteShape &&
+  stateDirCandidates.every((c) => isAckValvePath(c));
+if (stateDirCandidates.length > 0 && !isPureAckWrite) {
   deny("REVIEW PROOF GUARD: the review state directory (.claude/session-state) and its wrapper-owned contents cannot be created, moved, or deleted through a file tool. Stale ledger entries are removed with node scripts/remove-applied-ledger-entry.mjs after verifying the live migration ledger.");
 }
 
