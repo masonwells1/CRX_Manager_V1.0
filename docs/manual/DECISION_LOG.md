@@ -1,11 +1,71 @@
 # Decision Log
 
-Last verified: 2026-08-19
+Last verified: 2026-08-20
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-08-20 — CodeRabbit: the pre-merge gate is the final-commit review, not the auto-review count
+
+**Source:** Mason's in-chat decisions, 2026-08-20. Supersedes nothing; refines the mechanics of the
+2026-07-17 / 2026-07-30 standing CodeRabbit review policy in `AGENTS.md`, which is unchanged.
+
+**The problem.** CodeRabbit was refusing reviews with two *different* limits, and the distinction
+matters because only one of them is fixable with money:
+
+1. **Fair-usage throttle.** 61 included review attempts in 7 days dropped the org from Pro's 5
+   reviews/hour to the floor — 1 review/hour, one at a time. Attempt count drives this, not spend.
+2. **Usage spending cap.** Separately, large reviews were refused with "This review is too large to
+   run within your organization's remaining usage spending cap."
+
+**What was measured.** The org was on **Pro** (CodeRabbit's own run-configuration block on PR #434
+reported `Plan: Pro`). After Mason raised the cap the same block reports **`Plan: Pro Plus`** on
+FarmRx PR #26 — the billing change moved the tier, not just the cap, so the included hourly
+allowance is higher than the numbers measured below. `auto_pause_after_reviewed_commits` was at its default
+of 5, and `auto_incremental_review` re-reviews on every push, so each PR could spend five attempts
+on mid-work commits. Recent PRs are commit-heavy — #429 had 21 commits, #433 had 11, #431 had 8 —
+across 12 PRs in roughly two days: 12 × 5 ≈ 60, the entire weekly allowance. The failure mode is the
+dangerous direction: the budget was consumed by **half-finished intermediate commits**, and the runs
+that got refused were on finished code. **PR #429 (21 commits) and PR #434 both posted "Review limit
+reached."** #429 merged with its later commits never auto-reviewed.
+
+**Decisions.**
+
+- **Mason raised the usage spending cap** (billing tab, org `02fde3a1-…`), then raised it again,
+  stating he would rather spend more than lose review quality.
+- **Report sections stay ON at their defaults** — sequence diagrams, related PRs/issues, linked-issue
+  assessment, suggested labels/reviewers, changed-files summary. Turning them off was proposed as a
+  cost saving and Mason declined: he will not trade any possible review context for a cheaper report.
+  Do not re-propose disabling them to save spend.
+- **`auto_pause_after_reviewed_commits: 2`.** Mason initially objected, on the belief that a higher
+  number meant "it reviews my changes before merge." It does not. That number governs only how many
+  *mid-work drafts* are auto-reviewed; it provides no guarantee about the final commit, and at 5 it
+  was actively starving the runs that mattered. Lowering it costs no pre-merge coverage.
+- **The actual pre-merge gate is a fresh review on the final commit.** Encoded as a hard rule in
+  `.claude/skills/deploy-check/SKILL.md`: before merging, confirm a CodeRabbit review exists with
+  `submitted_at` newer than the final push; if not, comment `@coderabbitai review`, wait, and read
+  it. Never merge on a review that predates the final commit.
+- **`path_filters` skip churn that cannot hold a bug** — `docs/archive/`, `docs/audits/`,
+  `docs/loops/`, `docs/build-loops/`, `docs/handoffs/`, the generated `.agents/` and `.codex/`
+  adapters, and lock files. A PR touching only these is skipped entirely and costs no allowance.
+  Live docs (`docs/manual/`, `docs/reference/`, `docs/workflows/`, `docs/plans/`) stay reviewed.
+- **`path_instructions` extended** with rules settled since the July config: integer-cent parsing
+  before money arithmetic, the `<table>_<column>_whole_cents_chk` naming, explicit UTC →
+  America/Chicago conversion for business-day logic, and a `src/**/*[Bb]lend*` block marking blend
+  tickets as a money path (billing runs off `rate_per_acre`; a blank unit still bills).
+- **`knowledge_base.code_guidelines`** now points CodeRabbit at `AGENTS.md`, `CLAUDE.md`,
+  `docs/reference/gotchas.md`, and `docs/workflows/`, so it reviews against the repo's own contract
+  rather than only the inline path instructions.
+
+**Operative rules.** "Review limit reached" is a *temporary* state that refills, never evidence that
+a head went unreviewed — re-check before writing any such claim (see
+`docs/manual/KNOWN_ISSUES.md`). A review of an earlier commit is not a review of what is being
+merged. Fair-usage throttling is not a billing problem and cannot be paid around; the lever is
+fewer wasted review attempts.
 
 ---
 

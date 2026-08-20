@@ -130,7 +130,22 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    blocking, and its nitpicks may be dismissed with a one-line reason. It is the broad every-PR
    pass; a separate exact-SHA `gpt-5.6-sol` high-effort proof remains the hard gate for risky
    money/RLS/migration diffs — both run, neither replaces the other.
-5. Merge. **The merge is the deploy.**
+5. **Confirm the review actually covered the FINAL commit.** Auto-review pauses after 2 reviewed
+   commits (`.coderabbit.yaml`), and a rate-limited PR can silently skip a review entirely — PR
+   #429 (21 commits) and PR #434 both posted "Review limit reached". A review of an earlier commit
+   is **not** a review of what you are about to merge. Check that a CodeRabbit review exists with
+   `submitted_at` newer than the final push:
+
+   ```bash
+   gh api repos/masonwells1/CRX_Manager_V1.0/pulls/<n>/reviews --jq '.[] | "\(.submitted_at)\t\(.state)"'
+   ```
+
+   If it does not, comment `@coderabbitai review` on the PR, wait for it to complete, and read it
+   before merging. "Review rate limited" is temporary and refills — re-check rather than treating
+   it as a clean pass. A re-review often posts as a summary-only review whose findings live in the
+   review **body** under "Outside diff range comments", so listing `/pulls/<n>/comments` alone can
+   look falsely clean.
+6. Merge. **The merge is the deploy.**
 
 Landing regular reversible code with the full pipeline green is covered by Mason's standing push
 policy (2026-06-16, mechanics updated 2026-07-30); report that explicitly rather than assuming it. A direct `vercel --prod` deploy outside the push path or an Edge Function deploy still needs Mason's explicit yes. A live migration apply follows the settled 2026-07-13 rule: interactive session = Mason's in-chat OK; pre-authorized armed hands-free run = migration-apply-guard's full proof gate (hash-bound dual-reviewer proof + hash-bound Codex proof, both fresh ≤30 min); destructive migrations never apply autonomously.
@@ -144,4 +159,7 @@ If blocked: List every issue that needs fixing first.
 - NEVER merge with unapplied migrations pending without surfacing them (warn — Mason decides the ordering)
 - NEVER attempt to push directly to `main`; the ruleset blocks it and the attempt is a bug in the plan
 - NEVER merge a PR without reading CodeRabbit's review on it first
+- NEVER merge on the strength of a review that predates the final commit — auto-review pauses after
+  2 commits and rate limits can skip a run. Re-trigger with `@coderabbitai review` and read the
+  fresh review, or state plainly that the final commit went unreviewed and why
 - Edge Function deploys and direct Vercel CLI deploys always need Mason's explicit approval; only the regular push-to-`main` path is covered by the standing authorization. Live migration applies need his in-chat OK in an interactive session — the one exception is a pre-authorized armed hands-free run passing migration-apply-guard's full proof + Codex gate (destructive migrations: never autonomous)
