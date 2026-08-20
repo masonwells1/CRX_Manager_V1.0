@@ -471,6 +471,13 @@ indirection, quoted identifiers, rules, foreign-key actions, and evidence weaken
 write disappear, unsafe migration paths are rejected before scanning, and
 missing replay identity blocks rather than silently disabling a one-shot guard.
 
+**2026-08-20 follow-up.** The fixed FK capture includes every public child even when its parent
+is outside `public`, and preserves that parent's schema-qualified identity through both consumers.
+This records the live `auth.users` referential-action paths into public tables instead of allowing
+the infrastructure-schema exemption to erase them. Because ordinary, E-string, and U&-string
+`DO` bodies are removed by the shared lexer before write and routine-call analysis, both guards
+refuse those anonymous-block forms; a dollar-quoted `DO` body is the required readable shape.
+
 ---
 
 ## 2026-08-13 — Literal SQL is read as SQL, and a column type change is a whole-table rewrite

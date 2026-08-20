@@ -231,11 +231,12 @@ const fs = require('fs');
 const m = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
 const registry = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const ok = (n) => typeof n === 'string' && /^[a-z0-9_]+\$/.test(n);
+const sourceOk = (n) => typeof n === 'string' && /^[a-z0-9_]+(?:\.[a-z0-9_]+)?\$/.test(n);
 if (!m._meta || m._meta.format_version !== 3 ||
     m._meta.generator !== 'scripts/generate-trigger-fanout.mjs' ||
     m._meta.capture_method !== 'supabase-cli-db-query-linked' ||
     m._meta.source_project !== 'rhyzpcqhnizqbxphqdkr' ||
-    m._meta.bootstrap_policy !== 'all-scanned-sources-opaque-until-independent-attestation' ||
+    m._meta.bootstrap_policy !== 'all-captured-sources-opaque-until-independent-attestation' ||
     typeof m._meta.captured_at !== 'string' || !Number.isFinite(Date.parse(m._meta.captured_at))) {
   throw new Error('trigger fan-out manifest has no verified linked-production provenance');
 }
@@ -248,9 +249,15 @@ const scannedSorted = [...new Set(scanned)].sort();
 if (JSON.stringify(scannedSorted) !== JSON.stringify(registryTables)) {
   throw new Error('trigger fan-out source universe does not equal the schema registry');
 }
-const opaque = (m.opaque_on_tables || []).filter(ok);
-if (opaque.some((name) => !scanned.includes(name))) {
-  throw new Error('trigger fan-out opacity names a source outside the scanned universe');
+const sourceNames = Object.keys(m.fanout || {});
+if (sourceNames.some((name) => !sourceOk(name))) {
+  throw new Error('trigger fan-out has an invalid source relation');
+}
+const capturedSources = new Set([...scanned, ...sourceNames]);
+const opaque = m.opaque_on_tables || [];
+if (!Array.isArray(opaque) ||
+    opaque.some((name) => !sourceOk(name) || !capturedSources.has(name))) {
+  throw new Error('trigger fan-out opacity names a source outside the captured universe');
 }
 if (!m.reachable_routines || typeof m.reachable_routines !== 'object' ||
     Array.isArray(m.reachable_routines) || !m.routine_hashes ||
@@ -258,7 +265,7 @@ if (!m.reachable_routines || typeof m.reachable_routines !== 'object' ||
   throw new Error('trigger fan-out manifest has no routine dependency binding');
 }
 for (const [src, names] of Object.entries(m.reachable_routines)) {
-  if (!ok(src) || !scanned.includes(src) || !Array.isArray(names) || names.length === 0) {
+  if (!sourceOk(src) || !capturedSources.has(src) || !Array.isArray(names) || names.length === 0) {
     throw new Error('trigger fan-out manifest has an invalid routine dependency source');
   }
   for (const name of names) {
@@ -269,10 +276,10 @@ for (const [src, names] of Object.entries(m.reachable_routines)) {
   }
 }
 const out = [];
-for (const n of scanned) out.push('s:' + n);
+for (const n of capturedSources) out.push('s:' + n);
 for (const n of opaque) out.push('o:' + n);
 for (const [src, rows] of Object.entries(m.fanout || {})) {
-  if (!ok(src)) continue;
+  if (!sourceOk(src)) continue;
   for (const r of rows || []) {
     if (ok(r && r.target) && ok(r && r.via)) out.push('e:' + src + ' ' + r.target + ' ' + r.via);
   }
@@ -283,6 +290,7 @@ process.stdout.write(out.join('\n'));
 TRIGGER_FANOUT_SCANNED=$(printf '%s\n' "$TRIGGER_FANOUT_RAW" | sed -n 's/^s://p')
 TRIGGER_FANOUT_OPAQUE=$(printf '%s\n' "$TRIGGER_FANOUT_RAW" | sed -n 's/^o://p')
 TRIGGER_FANOUT_PAIRS=$(printf '%s\n' "$TRIGGER_FANOUT_RAW" | sed -n 's/^e://p')
+TRIGGER_FANOUT_SOURCES_PADDED="|$(printf '%s\n' "$TRIGGER_FANOUT_SCANNED" | tr '\n' '|')"
 
 # ---- MATERIAL BEFORE-VALUES PER TABLE (Codex High, round 15) ---------------
 # An UPDATE names the columns it assigns, so the approved-set digest can be
@@ -1479,7 +1487,8 @@ $MIG_BASENAME
     SCAN_HITS=$(awk -v tables="$BUSINESS_ROW_TABLES" -v mutfns="$MUTATING_FNS_RE" \
                     -v customops="$CUSTOM_OPERATORS_RE" \
                     -v customcasts="$CUSTOM_CAST_TARGETS_RE" \
-                    -v regtables="$REGISTRY_TABLES" -v knownviews="$KNOWN_VIEWS_RE" '
+                    -v regtables="$REGISTRY_TABLES" -v knownviews="$KNOWN_VIEWS_RE" \
+                    -v fanouts="$TRIGGER_FANOUT_SOURCES_PADDED" '
       # ---- ONE SCANNER, ONE PASS (CodeRabbit Major, PR #364) -----------------
       # Shared with the mutating-function index since round 31 — see ONE LEXER,
       # SHARED above for why this is a variable and not a second copy.
@@ -1668,7 +1677,7 @@ $MIG_BASENAME
       # (Codex High, round 28.) Reported on the `indirect` channel, which is
       # already a refusal for the same reason: a body that writes a protected
       # table has run, and no digest bound the rows it touched.
-      function fires_trigger(t, p,   n, arr, k, original, schema) {
+      function fires_trigger(t, p,   n, arr, k, original, schema, source) {
         if (t == "") return
         original = t
         gsub(/"/, "", t)
@@ -1679,14 +1688,16 @@ $MIG_BASENAME
           sub(/\..*$/, "", schema)
         }
         sub(/^[a-z0-9_]+\./, "", t)
+        source = ((schema == "" || schema == "public") ? t : schema "." t)
         # Preserve the relation as a live-catalog fan-out source even when this
         # migration defines no trigger itself. Plain INSERTs reach this function
         # and then leave the rewrite scanner; without this separate channel the
         # checked-in trigger/FK manifest is never consulted for them.
-        if ((schema == "" || schema == "public") &&
-            t ~ ("^(" tables ")$") && !seenfanout[t]) {
-          seenfanout[t] = 1
-          printf "%d\t%s\t%s\t%s\t%s\t%s\n", tokln[p], t, "fanout-source", "-", "-", raw[tokln[p]]
+        if ((index(fanouts, "|" source "|") > 0 ||
+             ((schema == "" || schema == "public") && t ~ ("^(" tables ")$"))) &&
+            !seenfanout[source]) {
+          seenfanout[source] = 1
+          printf "%d\t%s\t%s\t%s\t%s\t%s\n", tokln[p], source, "fanout-source", "-", "-", raw[tokln[p]]
         }
         if (rulerel[t] && !seenrule[t]) {
           seenrule[t] = 1
@@ -2090,7 +2101,7 @@ $MIG_BASENAME
       }
     ' "$file")
 
-    # ── A function body written as a single-quoted string ───────────────────
+    # ── An executable body written as a single-quoted string ────────────────
     # PostgreSQL accepts `CREATE FUNCTION f() ... AS 'BEGIN UPDATE ...; END;'`.
     # Every scanner in this file strips single-quoted literals before it looks
     # for writes, so a body written that way is invisible three times over: the
@@ -2098,9 +2109,11 @@ $MIG_BASENAME
     # `SELECT f()` is not refused. That is an unbound rewrite of a protected
     # table with nothing standing in its way.
     #
-    # Rather than teach four scanners to parse quoted bodies, refuse the shape.
-    # CRX writes dollar-quoted bodies everywhere, so this costs nothing and
-    # closes the hole fail-closed.
+    # Anonymous DO blocks have the same lexical hole and a worse execution
+    # boundary: unlike a routine definition, their body runs immediately.
+    # PostgreSQL accepts plain, E-string, and U&-string bodies. Rather than teach
+    # four scanners every escape form, refuse those shapes too. CRX writes
+    # dollar-quoted bodies everywhere, so this closes the hole fail-closed.
     QUOTED_BODIES=$(awk '
       # Comments out, literals KEPT — this detector exists to see `AS '"'"'`, so
       # it is the one scanner that must not blank quoted text. It still has to
@@ -2131,6 +2144,23 @@ $MIG_BASENAME
         return out
       }
       { line = strip_comments(tolower($0))
+        # A dollar-quoted DO block is readable by the main scanner. Once a DO
+        # statement starts, its first string delimiter is the body — even when
+        # LANGUAGE, a quoted language name, and the body span several lines.
+        # Carry that head until a dollar quote (safe), single quote (refuse), or
+        # statement terminator (malformed, left to PostgreSQL) appears.
+        if (!indo && match(line, /(^|;)[ \t]*do([ \t]|$)/)) {
+          line = substr(line, RSTART)
+          sub(/^(;[ \t]*)?do([ \t]|$)/, "", line)
+          indo = 1
+        }
+        if (indo) {
+          if (line ~ /\$[a-z0-9_]*\$/) { indo = 0 }
+          else if (line ~ /'"'"'/) {
+            printf "%d\t%s\n", FNR, $0; indo = 0; next
+          } else if (line ~ /;/) { indo = 0 }
+          else next
+        }
         if (line ~ /create[ \t]+(or[ \t]+replace[ \t]+)?(function|procedure)[ \t]/) { pending = 1 }
         if (!pending) next
         # A dollar quote opens the body: this is the shape we want, stand down.
@@ -2149,14 +2179,14 @@ $MIG_BASENAME
 
     if [ -n "$QUOTED_BODIES" ]; then
       echo "VIOLATION: $file"
-      echo "  Function body written as a single-quoted string:"
+      echo "  Executable body written as a non-dollar-quoted single-quoted string:"
       printf '%s\n' "$QUOTED_BODIES" | while IFS=$'\t' read -r q_ln q_raw; do
         echo "    line $q_ln: $q_raw"
       done
       echo "  Every scanner in this validator strips single-quoted literals before"
-      echo "  it looks for writes, so a body written this way is invisible: its"
-      echo "  UPDATE is not seen, the function is not indexed as mutating, and a"
-      echo "  later call to it is not refused. Use a dollar-quoted body"
+      echo "  it looks for writes, so a body written this way is invisible. That"
+      echo "  can hide direct DML in a DO block or a mutating routine call."
+      echo "  Use a dollar-quoted body"
       echo "  (\$\$ ... \$\$) so the statements inside can be read and bound."
       echo ""
       VIOLATIONS=$((VIOLATIONS + 1))

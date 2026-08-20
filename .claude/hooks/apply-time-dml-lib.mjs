@@ -104,8 +104,11 @@ export function applyTimeCode(sql, depth = 0) {
   let code = "";
   const literals = [];
   const routines = [];
+  let unsupportedDoBody = false;
   // Guard against a pathological nest; 8 is far past anything real.
-  if (typeof sql !== "string" || depth > 8) return { code, literals, routines };
+  if (typeof sql !== "string" || depth > 8) {
+    return { code, literals, routines, unsupportedDoBody };
+  }
   const n = sql.length;
   let i = 0;
   let stmtStart = 0; // where the current statement begins inside `code`
@@ -154,13 +157,19 @@ export function applyTimeCode(sql, depth = 0) {
           code += " '' ";
           const named = /\b(?:function|procedure)\s+([A-Za-z0-9_.]+)/.exec(stmt);
           const bare = named ? named[1].split(".").pop() : "";
-          if (bare) routines.push({ name: bare, code: inner.code, literals: inner.literals });
+          if (bare) routines.push({
+            name: bare,
+            code: inner.code,
+            literals: inner.literals,
+            unresolved: inner.unsupportedDoBody,
+          });
           // A routine defined inside this body is still defined by this file.
           routines.push(...inner.routines);
         } else {
           code += ` ${inner.code} `;
           literals.push(...inner.literals);
           routines.push(...inner.routines);
+          if (inner.unsupportedDoBody) unsupportedDoBody = true;
         }
         i = close === -1 ? n : close + tag.length;
         continue;
@@ -198,12 +207,33 @@ export function applyTimeCode(sql, depth = 0) {
       // this point in a statement a quote can also be a COMMENT's text or a
       // SET's value, and neither is a body.
       const head = code.slice(stmtStart).trim().toLowerCase();
+      // ROUND 40. PostgreSQL accepts an anonymous block as an ordinary,
+      // escape, or Unicode string literal too:
+      //
+      //   DO E'BEGIN PERFORM public.existing_repair(); END';
+      //
+      // A single-quoted body is executable now, but this lexer deliberately
+      // removes string contents before the call/write readers run. Treating it
+      // as an ordinary literal therefore loses resident routine calls, while
+      // parsing every PostgreSQL string-escape form would create a new SQL
+      // parser here. CRX uses dollar-quoted anonymous blocks, so refuse every
+      // non-dollar body fail-closed and keep the readable form as the control.
+      if (/^do\b/.test(head)) {
+        unsupportedDoBody = true;
+        code += "''";
+        continue;
+      }
       if (/^create\s+(or\s+replace\s+)?(function|procedure)\b/.test(head)) {
         const named = /\b(?:function|procedure)\s+([A-Za-z0-9_.]+)/.exec(head);
         const bare = named ? named[1].split(".").pop() : "";
         if (bare) {
           const inner = applyTimeCode(lit, depth + 1);
-          routines.push({ name: bare, code: inner.code, literals: inner.literals });
+          routines.push({
+            name: bare,
+            code: inner.code,
+            literals: inner.literals,
+            unresolved: inner.unsupportedDoBody,
+          });
           routines.push(...inner.routines);
           code += "''";
           continue;
@@ -241,7 +271,7 @@ export function applyTimeCode(sql, depth = 0) {
     i += 1;
   }
 
-  return { code, literals, routines };
+  return { code, literals, routines, unsupportedDoBody };
 }
 
 function readIdent(s, pos) {
@@ -258,8 +288,10 @@ function skipSpace(s, pos) {
   return i;
 }
 
-// `public.order_items` and `order_items` are the same relation here. The schema
-// is dropped so a waiver written one way cannot be dodged by writing the other.
+// `public.order_items` and `order_items` are the same relation here. Public is
+// dropped so a waiver written one way cannot be dodged by writing the other.
+// Non-public schemas stay attached: auth.users is a live fan-out source whose
+// DELETE cascades into public rows, and flattening it to users loses that edge.
 function readRelation(s, pos) {
   let i = skipSpace(s, pos);
   const only = /^only\b/.exec(s.slice(i));
@@ -267,11 +299,21 @@ function readRelation(s, pos) {
   const first = readIdent(s, i);
   if (!first) return null;
   i = first.end;
-  let identity = identifierIdentity(first.value);
+  const firstIdentity = identifierIdentity(first.value);
+  let identity = firstIdentity;
   const after = skipSpace(s, i);
   if (s[after] === ".") {
     const second = readIdent(s, skipSpace(s, after + 1));
-    if (second) { identity = identifierIdentity(second.value); i = second.end; }
+    if (second) {
+      const secondIdentity = identifierIdentity(second.value);
+      identity = firstIdentity.value === "public"
+        ? secondIdentity
+        : {
+            value: `${firstIdentity.value}.${secondIdentity.value}`,
+            quoted: firstIdentity.quoted || secondIdentity.quoted,
+          };
+      i = second.end;
+    }
   }
   return { table: identity.value, quoted: identity.quoted, end: i };
 }
@@ -1116,8 +1158,9 @@ export function applyTimeWriteTargets(
   sql,
   { knownOperators = [], knownCasts = [], knownViews = [] } = {},
 ) {
-  const { code, literals, routines } = applyTimeCode(sql || "");
+  const { code, literals, routines, unsupportedDoBody } = applyTimeCode(sql || "");
   const top = targetsFromCode(code, literals);
+  if (unsupportedDoBody) top.unresolved = true;
 
   // ROUND 25. A name maps to a LIST of bodies, not one. PostgreSQL allows any
   // number of routines to share a name and differ only by argument types, and a
@@ -1228,6 +1271,7 @@ export function applyTimeWriteTargets(
       for (const t of inner.tables) top.tables.add(t);
       top.dynamicWrites.push(...inner.dynamicWrites);
       if (inner.unresolved) top.unresolved = true;
+      if (parsed.unsupportedDoBody) top.unresolved = true;
       defineRoutines(parsed.routines);
       defineOperators(operatorDefinitions(parsed.code));
       defineCasts(castDefinitions(parsed.code));
@@ -1340,6 +1384,7 @@ export function applyTimeWriteTargets(
         for (const t of inner.tables) top.tables.add(t);
         top.dynamicWrites.push(...inner.dynamicWrites);
         if (inner.unresolved) top.unresolved = true;
+        if (r.unresolved) top.unresolved = true;
         foldLiterals(inner, r.literals);
         defineOperators(operatorDefinitions(r.code));
         defineCasts(castDefinitions(r.code));

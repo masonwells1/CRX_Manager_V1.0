@@ -15,7 +15,7 @@ const CAPTURED_AT = '2026-08-14T04:00:00.000000Z';
 const tables = [
   'chain_source', 'direct_source', 'dynamic_source', 'helper_source', 'middle_source',
   'fk_child', 'fk_parent', 'orders', 'self_source', 'sink_table', 'unknown_source',
-  'unsupported_source',
+  'unsupported_source', 'profiles',
   ...Array.from({ length: 100 }, (_, index) => `fixture_table_${String(index).padStart(3, '0')}`),
 ].sort();
 const routine = (oid, name, source, extra = {}) => ({
@@ -50,8 +50,18 @@ const payload = {
     { on_table: 'fk_child', routine_oid: '11', routine_name: 'fk_child_writer' },
   ],
   foreign_keys: [
-    { oid: '501', parent_table: 'fk_parent', child_table: 'fk_child', on_update: 'a', on_delete: 'c' },
-    { oid: '502', parent_table: 'orders', child_table: 'direct_source', on_update: 'a', on_delete: 'a' },
+    {
+      oid: '501', parent_schema: 'public', parent_table: 'fk_parent',
+      child_schema: 'public', child_table: 'fk_child', on_update: 'a', on_delete: 'c',
+    },
+    {
+      oid: '502', parent_schema: 'public', parent_table: 'orders',
+      child_schema: 'public', child_table: 'direct_source', on_update: 'a', on_delete: 'a',
+    },
+    {
+      oid: '503', parent_schema: 'auth', parent_table: 'users',
+      child_schema: 'public', child_table: 'profiles', on_update: 'a', on_delete: 'c',
+    },
   ],
 };
 
@@ -79,8 +89,8 @@ check('direct and helper-mediated writes create cascade edges', () => {
 });
 check('dynamic targets and unresolved effectful calls are opaque', () => {
   const manifest = buildTriggerFanoutManifest(payload);
-  assert.deepEqual(manifest.opaque_on_tables, tables,
-    'the first trust root refuses every scanned source until independent attestation exists');
+  assert.deepEqual(manifest.opaque_on_tables, [...tables, 'auth.users'].sort(),
+    'the first trust root refuses every captured source until independent attestation exists');
 });
 check('trigger-to-trigger writes close transitively', () => {
   const manifest = buildTriggerFanoutManifest(payload);
@@ -96,6 +106,14 @@ check('foreign-key referential actions participate in transitive closure', () =>
     { target: 'sink_table', via: 'fk_child_writer' },
   ]);
   assert.equal(manifest.fanout.orders, undefined, 'NO ACTION foreign keys are not writes');
+});
+check('cross-schema parents retain schema identity when they cascade into public rows', () => {
+  const manifest = buildTriggerFanoutManifest(payload);
+  assert.deepEqual(manifest.fanout['auth.users'], [
+    { target: 'profiles', via: 'foreign_key_503' },
+  ]);
+  assert(manifest.opaque_on_tables.includes('auth.users'),
+    'a cross-schema source is fail-closed under the bootstrap policy');
 });
 check('manifest binds source tables to transitive routine body hashes', () => {
   const manifest = buildTriggerFanoutManifest(payload);
@@ -124,7 +142,7 @@ check('manifest records linked capture provenance', () => {
   assert.equal(manifest._meta.source_project, CRX_SUPABASE_PROJECT_ID);
   assert.equal(manifest._meta.capture_method, 'supabase-cli-db-query-linked');
   assert.equal(manifest._meta.bootstrap_policy,
-    'all-scanned-sources-opaque-until-independent-attestation');
+    'all-captured-sources-opaque-until-independent-attestation');
   assert.equal(manifest._meta.captured_at, CAPTURED_AT);
 });
 check('capture invokes one fixed linked query and writes its result', () => {

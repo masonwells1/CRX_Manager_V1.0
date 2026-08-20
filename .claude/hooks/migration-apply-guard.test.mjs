@@ -1168,6 +1168,36 @@ function armAutopilot(stateDir, hoursFromNow) {
       ok(`${r.stdout}\n${r.stderr}`.includes("live trigger/FK fan-out is opaque"),
         `round-27: opaque denial names the unprovable live fan-out: ${r.stdout || r.stderr}`);
 
+      const crossSchemaManifest = structuredClone(FANOUT_FIXTURE);
+      crossSchemaManifest.opaque_on_tables = [];
+      crossSchemaManifest.fanout = {
+        "auth.users": [
+          { target: "activity_feed", via: "foreign_key_auth_activity_fixture" },
+          { target: "order_items", via: "foreign_key_auth_profiles_fixture" },
+        ],
+      };
+      writeFileSync(fanoutPath, `${JSON.stringify(crossSchemaManifest, null, 2)}\n`);
+      r = apply("20990601000176_r27_cross_schema_fanout",
+        "DELETE FROM auth.users WHERE id = '00000000-0000-0000-0000-000000000001';");
+      ok(isDeny(r) && isOneShotDeny(r),
+        "round-27: schema-qualified auth.users fan-out reaches the public registered repair");
+
+      const crossSchemaMutant = structuredClone(crossSchemaManifest);
+      crossSchemaMutant.fanout = {
+        "auth.users": [
+          { target: "activity_feed", via: "foreign_key_auth_activity_fixture" },
+        ],
+      };
+      writeFileSync(fanoutPath, `${JSON.stringify(crossSchemaMutant, null, 2)}\n`);
+      r = apply("20990601000177_r27_cross_schema_mutant",
+        "DELETE FROM auth.users WHERE id = '00000000-0000-0000-0000-000000000001';");
+      ok(!isOneShotDeny(r),
+        `MUTANT round-27: removing auth.users→order_items lets the cross-schema replay survive: ${r.stdout || r.stderr}`);
+
+      // The cases below prove their own analyzers. Do not let this round's
+      // deliberately opaque/fan-out fixtures become an unrelated deny reason.
+      writeFileSync(fanoutPath, `${JSON.stringify(FANOUT_FIXTURE, null, 2)}\n`);
+
       writeOneShotRegistry(tmp, { [STEM]: REASON });
       rmSync(path.join(tmp, "supabase", "migrations", `${REAL_STEM}.sql`), { force: true });
     }
@@ -1521,6 +1551,35 @@ function armAutopilot(stateDir, hoursFromNow) {
       "SELECT * FROM public.resident_money_bridge;");
     ok(!isOneShotDeny(r),
       "round-39 MUTANT: removing the checked-in view definition removes the catalog evidence");
+
+    // ROUND 40. PostgreSQL permits DO bodies as plain/E/U& string literals,
+    // but the apply-time lexer removes those contents before its write/call
+    // readers run. Refuse the unreadable form; dollar-quoted controls prove the
+    // body remains analyzable rather than all DO statements being blanket-denied.
+    r = apply("20990601000017_plain_do_dml",
+      "DO 'BEGIN UPDATE public.orders SET total_profit = total_profit; END';");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-40: a plain-string DO body cannot hide direct registered-table DML");
+
+    r = apply("20990601000018_escape_do_call",
+      "DO E'BEGIN PERFORM public.resident_money_repair(); END';");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-40: an E-string DO body cannot hide a resident mutator call");
+
+    r = apply("20990601000018_language_do_call",
+      "DO LANGUAGE \"plpgsql\"\nU&'BEGIN PERFORM public.resident_money_repair(); END';");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-40: a split quoted LANGUAGE clause cannot hide a Unicode DO body");
+
+    r = apply("20990601000019_dollar_do_dml",
+      "DO $$ BEGIN UPDATE public.orders SET total_profit = total_profit; END $$;");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-40 control: a dollar-quoted DO body still exposes direct DML");
+
+    r = apply("20990601000020_dollar_do_call",
+      "DO $$ BEGIN PERFORM public.resident_money_repair(); END $$;");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-40 control: a dollar-quoted DO body still exposes resident calls");
 
     // 6. Fail closed. The registry is tracked in git; unreadable or absent means
     //    the checkout is broken or the file was removed — the two states in

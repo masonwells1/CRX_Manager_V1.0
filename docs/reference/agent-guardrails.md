@@ -271,12 +271,13 @@ invisible to all of them, so a repair on `order_items` that captured an id set, 
 those rows, compared fail-closed and asserted the row count read as airtight while
 `trg_recalc_order_totals` fired underneath and rewrote money on `orders`: rows never
 captured, never hashed, not counted. A text scanner cannot know the live trigger graph,
-so the graph is checked in as `scripts/trigger-fanout.json` (18 opaque source tables and
-389 transitive trigger/foreign-key cascade edges in the 2026-08-14 linked-production capture), generated from the live
+so the graph is checked in as `scripts/trigger-fanout.json` (158 opaque source relations and
+399 transitive trigger/foreign-key cascade edges in the 2026-08-20 linked-production capture), generated from the live
 catalog by `scripts/generate-trigger-fanout.mjs`. The producer verifies the linked CRX
 project itself; pasted JSON and a caller-supplied project label are not provenance. It
 walks every trigger through public helper routines and trigger-to-trigger cascades, and includes
-foreign-key `CASCADE`, `SET NULL`, and `SET DEFAULT` actions, before folding the transitive rewrite
+foreign-key `CASCADE`, `SET NULL`, and `SET DEFAULT` actions—including schema-qualified
+non-public parents such as `auth.users` when their action writes a public child—before folding the transitive rewrite
 set into the migration proof — so a cascade target picks
 up material-column binding, the per-table captured set, and the one-table-per-repair
 rule with no new machinery. `UPDATE`/`DELETE`/`MERGE` only: an `INSERT` creates rows no

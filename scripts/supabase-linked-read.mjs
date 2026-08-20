@@ -58,7 +58,9 @@ WITH tables AS (
 ), foreign_keys AS (
   SELECT
     con.oid::text AS oid,
+    parent_ns.nspname AS parent_schema,
     parent.relname AS parent_table,
+    child_ns.nspname AS child_schema,
     child.relname AS child_table,
     con.confupdtype AS on_update,
     con.confdeltype AS on_delete
@@ -68,8 +70,10 @@ WITH tables AS (
   JOIN pg_class parent ON parent.oid = con.confrelid
   JOIN pg_namespace parent_ns ON parent_ns.oid = parent.relnamespace
   WHERE con.contype = 'f'
+    -- Referential actions write the CHILD row. Capture every FK whose child is
+    -- public even when its parent lives in auth or another schema; otherwise a
+    -- DELETE auth.users can CASCADE into public.profiles outside the graph.
     AND child_ns.nspname = 'public'
-    AND parent_ns.nspname = 'public'
   ORDER BY con.oid
 )
 SELECT jsonb_build_object(

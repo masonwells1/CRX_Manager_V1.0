@@ -786,14 +786,11 @@ const CASES = [
   },
   {
     // And the other direction, so the fix is an allowlist rather than a blanket
-    // refusal: the fixed set of Supabase/PostgreSQL infrastructure schemas is
-    // still out of scope. Measured across every migration in this repo, the only
-    // schemas a write actually names are public, storage, and auth.
+    // refusal: storage remains out of scope when no checked-in cascade returns
+    // to a public business table.
     name: 'writing a Supabase infrastructure schema is still out of scope',
     expect: 'silent',
-    sql:
-      `UPDATE storage.objects SET updated_at = now();\n` +
-      `UPDATE auth.users SET raw_app_meta_data = '{}'::jsonb;\n`,
+    sql: `UPDATE storage.objects SET updated_at = now();\n`,
   },
   {
     // ROUND 35 (Sol High). Adding a volatile default evaluates it for existing
@@ -1035,11 +1032,17 @@ const CASES = [
       `END $$;\n`,
   },
   {
-    // Another schema is another concern. auth.users and storage.objects are not
-    // public business tables, and refusing them would make the guard noise.
+    // Another schema is another concern when it has no captured path back into
+    // a public business table.
     name: 'a write into a non-public schema is out of scope',
     expect: 'silent',
-    sql: `UPDATE auth.users SET raw_app_meta_data = '{}'::jsonb;\n`,
+    sql: `UPDATE storage.objects SET updated_at = now();\n`,
+  },
+  {
+    name: 'round-40: a cross-schema FK cascade back into public is in scope',
+    expect: 'violation',
+    mustReport: 'profiles',
+    sql: `DELETE FROM auth.users WHERE id = '00000000-0000-0000-0000-000000000001';\n`,
   },
   {
     // A plain INSERT adds rows; it rewrites no approved population. Flagging it
@@ -1658,6 +1661,26 @@ const CASES = [
       `CREATE OR REPLACE FUNCTION public._fix2() RETURNS void\nLANGUAGE plpgsql\nAS\n` +
       `'BEGIN UPDATE public.orders SET total_profit = 0; END;';\n` +
       `SELECT public._fix2();\n`,
+  },
+  {
+    name: 'round-40: a plain-string DO block cannot hide direct protected DML',
+    expect: 'violation',
+    mustReport: 'non-dollar-quoted single-quoted string',
+    sql: `DO 'BEGIN UPDATE public.orders SET total_profit = total_profit; END';\n`,
+  },
+  {
+    name: 'round-40: an escape-string DO block cannot hide a resident mutator call',
+    expect: 'violation',
+    mustReport: 'non-dollar-quoted single-quoted string',
+    sql: `DO E'BEGIN PERFORM public.existing_money_repair(); END';\n`,
+  },
+  {
+    name: 'round-40: a split quoted LANGUAGE clause cannot hide a Unicode DO body',
+    expect: 'violation',
+    mustReport: 'non-dollar-quoted single-quoted string',
+    sql:
+      `DO LANGUAGE "plpgsql"\n` +
+      `U&'BEGIN PERFORM public.existing_money_repair(); END';\n`,
   },
 
   // ── round 18, F1: dynamic SQL hidden one level down ──────────────────────
@@ -2452,7 +2475,12 @@ function runTriggerFanoutFailsClosed() {
       'not json at all\n', orders, 'does not cover orders');
 
     const gutted = structuredClone(live);
-    gutted.fanout = {};
+    // Keep every captured source identity (including auth.users) so the
+    // manifest remains structurally valid; remove only its effects. Otherwise
+    // the fail-closed provenance check, rather than the missing edge, wins.
+    gutted.fanout = Object.fromEntries(
+      Object.keys(live.fanout).map((source) => [source, []]),
+    );
     gutted.opaque_on_tables = [];
     expect('MUTANT: with the fan-out emptied the order_items attack survives',
       json(gutted), fanoutBlock('order_items', 'total_price'), null);
@@ -2670,6 +2698,9 @@ function run() {
   const isolatedManifest = JSON.parse(readFileSync(join(HERE, 'trigger-fanout.json'), 'utf8'));
   isolatedManifest.opaque_on_tables = [];
   isolatedManifest.fanout = {
+    'auth.users': [
+      { target: 'profiles', via: 'foreign_key_auth_users_profiles' },
+    ],
     products: [
       { target: 'cost_history', via: 'write_product_pricing_history' },
       { target: 'product_cost_basis', via: 'guard_product_cost_basis_unit_change' },

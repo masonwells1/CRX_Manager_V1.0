@@ -49,7 +49,11 @@ function out(decision, reason) {
 
 function targetTable(target) {
   const parts = String(target || "").replaceAll('"', "").toLowerCase().split(".");
-  return parts[0] === "public" ? (parts[1] || "") : (parts[0] || "");
+  if (parts[0] === "public") return parts[1] || "";
+  // Public relations stay bare for compatibility with the schema registry.
+  // A non-public relation must retain its schema, though: auth.users is a
+  // captured fan-out source because deleting it cascades into public.profiles.
+  return parts.length >= 3 ? `${parts[0]}.${parts[1]}` : (parts[0] || "");
 }
 
 function loadTrustedFanout(evidenceRoots) {
@@ -81,6 +85,10 @@ function loadTrustedFanout(evidenceRoots) {
     }
     for (const [sourceRaw, edges] of Object.entries(parsed.fanout)) {
       const source = sourceRaw.toLowerCase();
+      // A schema-qualified parent such as auth.users is not part of the public
+      // tables_scanned universe, but a live FK edge makes it a verified source
+      // in its own right.
+      scanned.add(source);
       if (!Array.isArray(edges)) throw new Error(`${manifestPath}: invalid fan-out edge list for ${source}`);
       const union = fanout.get(source) || new Map();
       for (const edge of edges) {

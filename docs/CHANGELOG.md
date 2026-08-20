@@ -26,6 +26,14 @@ migration safety harness; no app source, migration SQL, live database, or produc
 - Selecting an ordinary stored view now executes its cataloged query in the analysis closure. Same-
   file, nested, and older checked-in view definitions can no longer conceal a resident mutating
   routine behind `SELECT * FROM view`; defining a view without executing it remains deferred.
+- Anonymous `DO` blocks written as ordinary, escape, or Unicode string literals now fail closed
+  in both migration guards. Their contents are stripped by the shared lexer, so only a dollar-
+  quoted body is accepted; focused controls prove readable direct DML and resident routine calls
+  still reach the ordinary analysis.
+- Linked trigger/FK capture now preserves schema-qualified non-public parents whose referential
+  actions write public children. The 2026-08-20 production capture records `auth.users` as an
+  opaque source with its transitive public cascades, so infrastructure-schema exemptions can no
+  longer hide deletes that rewrite public business rows.
 - Post-apply invalidation always deletes the already-resolved active worktree snapshot even if Git
   worktree enumeration fails, so a transient Git failure cannot leave evidence that becomes stale-but-
   trusted on the next apply.
@@ -36,8 +44,9 @@ migration safety harness; no app source, migration SQL, live database, or produc
   were removed; nonexistent files no longer remain as apparent audit evidence.
 
 Focused proof: snapshot producer 14 assertions; applied-source containment pass (including forced
-worktree-enumeration failure); apply-time analyzer 181 assertions; apply-time guard
-248 assertions; approved-set validator 171 mutation cases. Each new edge has a removal mutant that
+worktree-enumeration failure); trigger fan-out producer 13 assertions; apply-time analyzer
+187 assertions; apply-time guard 255 assertions; approved-set validator 175 mutation cases.
+Each new edge has a removal mutant that
 survives only when the load-bearing protection is deliberately deleted.
 
 ## 2026-08-19 — Product data model: build plan revision 2 after independent Fable…

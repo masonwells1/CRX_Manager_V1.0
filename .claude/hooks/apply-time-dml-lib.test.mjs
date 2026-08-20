@@ -831,4 +831,44 @@ eq(T(null), [], "a null body does not throw");
     'round-39: selected views are followed transitively through nested views');
 }
 
+// ---------------- ROUND 40: anonymous blocks must have readable bodies
+{
+  const plainDml = applyTimeWriteTargets(
+    "DO 'BEGIN UPDATE public.orders SET total_profit = total_profit; END';",
+  );
+  ok(plainDml.unresolved,
+    'round-40: a plain-string DO body with direct DML fails closed');
+
+  const escapedCall = applyTimeWriteTargets(
+    "DO E'BEGIN PERFORM public.existing_repair(); END';",
+  );
+  ok(escapedCall.unresolved,
+    'round-40: an escape-string DO body with a resident routine call fails closed');
+
+  const unicodeCall = applyTimeWriteTargets(
+    "DO U&'BEGIN PERFORM public.existing_repair(); END';",
+  );
+  ok(unicodeCall.unresolved,
+    'round-40: a Unicode-string DO body fails closed too');
+
+  const splitLanguageCall = applyTimeWriteTargets(
+    'DO LANGUAGE "plpgsql"\n' +
+    "U&'BEGIN PERFORM public.existing_repair(); END';",
+  );
+  ok(splitLanguageCall.unresolved,
+    'round-40: a split, quoted LANGUAGE clause cannot hide a Unicode-string DO body');
+
+  const readableDml = applyTimeWriteTargets(
+    'DO $$ BEGIN UPDATE public.orders SET total_profit = total_profit; END $$;',
+  );
+  ok(readableDml.targets.has('orders.total_profit') && !readableDml.unresolved,
+    'round-40 control: a dollar-quoted DO body remains readable as direct DML');
+
+  const readableCall = applyTimeWriteTargets(
+    'DO $$ BEGIN PERFORM public.existing_repair(); END $$;',
+  );
+  ok(readableCall.unknownCalls.includes('existing_repair') && !readableCall.unresolved,
+    'round-40 control: a dollar-quoted DO body still exposes resident routine calls');
+}
+
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

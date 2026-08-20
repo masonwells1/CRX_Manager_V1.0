@@ -36,6 +36,12 @@ function bareName(value, label) {
   return value;
 }
 
+function relationName(schema, table, label) {
+  const schemaName = bareName(schema, `${label} schema`);
+  const tableName = bareName(table, `${label} table`);
+  return schemaName === 'public' ? tableName : `${schemaName}.${tableName}`;
+}
+
 function uniqueNames(value, label) {
   if (!Array.isArray(value)) fail(`${label} must be an array`);
   return [...new Set(value.map((name) => bareName(name, label)))].sort();
@@ -148,16 +154,25 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
     }
     const keys = Object.keys(foreignKey).sort();
     if (JSON.stringify(keys) !==
-        JSON.stringify(['child_table', 'oid', 'on_delete', 'on_update', 'parent_table'])) {
+        JSON.stringify([
+          'child_schema', 'child_table', 'oid', 'on_delete', 'on_update',
+          'parent_schema', 'parent_table',
+        ])) {
       fail('foreign key has an unexpected shape');
     }
     if (typeof foreignKey.oid !== 'string' || !/^\d+$/.test(foreignKey.oid)) {
       fail('foreign key oid is invalid');
     }
-    const parent = bareName(foreignKey.parent_table, 'foreign key parent table');
+    const parent = relationName(
+      foreignKey.parent_schema,
+      foreignKey.parent_table,
+      'foreign key parent',
+    );
+    const childSchema = bareName(foreignKey.child_schema, 'foreign key child schema');
     const child = bareName(foreignKey.child_table, 'foreign key child table');
-    if (!tableSet.has(parent) || !tableSet.has(child)) {
-      fail(`foreign key ${foreignKey.oid} names a table outside tables_scanned`);
+    if (childSchema !== 'public' || !tableSet.has(child) ||
+        (!parent.includes('.') && !tableSet.has(parent))) {
+      fail(`foreign key ${foreignKey.oid} is outside the captured public-child boundary`);
     }
     if (typeof foreignKey.on_update !== 'string' || !/^[acdnr]$/.test(foreignKey.on_update) ||
         typeof foreignKey.on_delete !== 'string' || !/^[acdnr]$/.test(foreignKey.on_delete)) {
@@ -254,10 +269,15 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
   // This PR introduces the first checked-in live fan-out artifact, so there is
   // no independently trusted base graph against which omissions can be judged.
   // Preserve the captured edges for review, but fail closed operationally by
-  // marking every scanned source opaque. A later change may narrow this only
+  // marking every captured source opaque, including a schema-qualified
+  // non-public FK parent whose referential action writes a public child. A
+  // later change may narrow this only
   // after adding an independently bound live-capture attestation; the staleness
   // checker rejects simply deleting these opacity markers.
-  const bootstrapOpaque = [...tablesScanned].sort();
+  const bootstrapOpaque = [...new Set([
+    ...tablesScanned,
+    ...Object.keys(sorted),
+  ])].sort();
 
   return {
     _meta: {
@@ -268,7 +288,7 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
       source_project: projectId,
       scope:
         'Transitive trigger and FK referential-action writes; unresolved calls or dynamic targets are opaque.',
-      bootstrap_policy: 'all-scanned-sources-opaque-until-independent-attestation',
+      bootstrap_policy: 'all-captured-sources-opaque-until-independent-attestation',
       regenerate: 'node scripts/generate-trigger-fanout.mjs',
     },
     tables_scanned: tablesScanned,
