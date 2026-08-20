@@ -204,6 +204,90 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     expect(args.p_job_payload.total_cost_cents).toBe(15);
   });
 
+  it('a RELOADED rate line follows an acreage change instead of going stale', async () => {
+    // The F06 defect: `driver` is never persisted, so a reloaded row used to be left
+    // untouched when the acreage changed. A 1.5 pt/ac line saved over 100 acres stayed at
+    // 150 pt when the job grew to 200 acres — the bill AND the amount applied to the field
+    // should both double, and neither did, silently. inferChemDriver recovers the
+    // provenance at load time; this proves it through the real page, not just the helper.
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'jobs') {
+        return buildChain({
+          data: makeJob({
+            ...HAZARD_CHEM,
+            quantity: 150, unit: 'pt', rate_per_acre: 1.5, rate_unit: 'pt/ac',
+          }),
+          error: null,
+        });
+      }
+      if (table === 'products') return buildChain({ data: [DRY_PRODUCT], error: null });
+      return buildChain({ data: [], error: null });
+    });
+    render(
+      <MemoryRouter initialEntries={['/jobs/job-1?tab=locations']}>
+        <Routes><Route path="/jobs/:id" element={<JobDetail />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    // Double the acreage on the Locations tab: 100 → 200.
+    const acresInput = await waitFor(() => {
+      const found = screen.getAllByRole('spinbutton')
+        .find((el) => (el as HTMLInputElement).value === '100');
+      if (!found) throw new Error('acres input not found');
+      return found as HTMLInputElement;
+    }, { timeout: 15000 });
+    fireEvent.change(acresInput, { target: { value: '200' } });
+
+    // Move to the Chemicals tab, where the quantity input lives.
+    const chemTab = screen.getAllByRole('button').find((b) => /chemical/i.test(b.textContent || ''));
+    fireEvent.click(chemTab as HTMLElement);
+
+    // The chemical quantity must have followed to 300 pt.
+    await waitFor(() => {
+      const values = screen.getAllByRole('spinbutton').map((el) => (el as HTMLInputElement).value);
+      expect(values).toContain('300');
+    }, { timeout: 15000 });
+  }, 30000);
+
+  it('refuses a rate unit measured per something other than acres', async () => {
+    // 'oz/cwt' is per hundredweight. baseUnitOfRate strips everything after the first '/',
+    // so the app treated it as oz PER ACRE and filled quantity = rate x acres — not a unit
+    // mismatch but the wrong quantity outright, and it saved.
+    mountWith({
+      ...HAZARD_CHEM,
+      quantity: 200, unit: 'oz', rate_per_acre: 2, rate_unit: 'oz/cwt',
+    });
+    expect(await screen.findByText(/cannot be saved/i, {}, { timeout: 15000 })).toBeTruthy();
+    const saveButtons = await screen.findAllByRole('button', { name: /save/i });
+    fireEvent.click(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
+    await waitFor(() => expect(mockToast).toHaveBeenCalled());
+    expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
+  }, 30000);
+
+  it('refuses a CLEARED price instead of silently saving zero', async () => {
+    // buildJobChemicalsPayload coerces with `parseInt(...) || 0`, so a price the user clears
+    // used to save as 0 — a line that bills NOTHING, silently. (A reloaded null comes back
+    // as '0' from the loader, so the reachable path is the user emptying the field.)
+    mountWith({
+      ...HAZARD_CHEM,
+      quantity: 200, unit: 'Lb', rate_per_acre: 2, rate_unit: 'Lb/ac',
+    });
+    const priceInput = await waitFor(() => {
+      const found = screen.getAllByRole('spinbutton')
+        .filter((el) => (el as HTMLInputElement).value === '150');
+      if (found.length === 0) throw new Error('price input not found');
+      return found[found.length - 1] as HTMLInputElement;   // cost then price; take price
+    }, { timeout: 15000 });
+    fireEvent.change(priceInput, { target: { value: '' } });
+
+    const saveButtons = await screen.findAllByRole('button', { name: /save/i });
+    fireEvent.click(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
+    await waitFor(() => expect(mockToast).toHaveBeenCalled());
+    const errors = mockToast.mock.calls.filter((c) => c[0] === 'error').map((c) => String(c[1]));
+    expect(errors.some((m) => /blank or not a number/i.test(m))).toBe(true);
+    expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
+  }, 30000);
+
   it('does NOT warn or block an aligned row (no false positive on ordinary work)', async () => {
     // Same product, correctly expressed: 2 Lb/ac × 100 ac = 200 lb priced per lb.
     mountWith({

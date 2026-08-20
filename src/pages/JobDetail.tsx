@@ -44,7 +44,7 @@ import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import { centsTimesQuantity } from '../lib/money';
-import { applyChemEdit, chemLineBillingHazard, fmt4, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent, type ChemBillingHazard } from '../lib/chemCalculator';
+import { applyChemEdit, chemLineBillingHazard, fmt4, inferChemDriver, rateDenominatorIsUnrecognized, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent, type ChemBillingHazard } from '../lib/chemCalculator';
 import { compareToMaxRate, phiHarvestWarning } from '../lib/labelGuardrails';
 import { unitOptionsForForm, isKnownUnit } from '../lib/units';
 import {
@@ -1413,6 +1413,39 @@ export default function JobDetail() {
     return byIndex;
   }, [chemRows, fieldRows, allProducts]);
 
+  // Rows whose numbers are not fit to save at all, for reasons the billing-hazard guard
+  // does not cover. Both fail closed rather than being silently coerced:
+  //  • a rate unit with a NON-ACRE denominator ('oz/cwt'): baseUnitOfRate strips everything
+  //    after the first '/', so the rate is treated as per-acre and quantity = rate × acres
+  //    is simply the wrong amount. The live SQL normalize_rate_unit keeps such a string whole
+  //    precisely so it can never match; the client did the opposite.
+  //  • a blank / non-numeric / non-finite quantity or per-unit amount: buildJobChemicalsPayload
+  //    coerces these with `parseFloat(...) || 0` and `parseInt(...) || 0`, so a typo silently
+  //    saves a ZERO quantity or a ZERO price — a line that bills nothing and deducts nothing.
+  const chemRowDefects = useMemo(() => {
+    const byIndex = new Map<number, string>();
+    chemRows.forEach((c, i) => {
+      if (!c.product_id) return;
+      if (rateDenominatorIsUnrecognized(c.rate_unit)) {
+        byIndex.set(i, `the rate unit "${c.rate_unit}" is measured per something other than acres, so a per-acre quantity cannot be derived from it`);
+        return;
+      }
+      const badNumber = ([
+        ['quantity', c.quantity],
+        ['cost', c.cost_per_unit_cents],
+        ['price', c.price_per_unit_cents],
+      ] as const).find(([, raw]) => {
+        const text = (raw ?? '').trim();
+        if (text === '') return true;
+        return !Number.isFinite(Number(text));
+      });
+      if (badNumber) {
+        byIndex.set(i, `its ${badNumber[0]} is blank or not a number, and would be saved as zero`);
+      }
+    });
+    return byIndex;
+  }, [chemRows]);
+
   // SAFE-SCOPE U7: a job is "multi-owner" when its fields' billed shares span more
   // than one distinct customer — the same customer set transfer_job_to_invoice
   // bills from (job_fields <-> field_billing_defaults GROUP BY customer_id). On a
@@ -1653,25 +1686,39 @@ export default function JobDetail() {
     }
     setShareRows(savedShares);
 
+    // `driver` is UI-only and never persisted, so a reloaded row would come back with no
+    // driver and recomputeChemRowForAcres would leave it STALE on an acreage change — a
+    // saved 1.5 pt/ac line over 100 acres would still read 150 pt at 200 acres, under-billing
+    // and under-applying in silence. inferChemDriver recovers the provenance from the saved
+    // numbers: quantity == rate x acres means the quantity WAS rate-derived. Anything else
+    // stays driverless, so a hand-entered total is still never rewritten.
+    const loadedAcres = (j.job_fields || []).reduce(
+      (sum, f) => sum + (parseFloat(f.acres_to_treat?.toString() || '') || 0), 0,
+    );
     setChemRows(
-      (j.job_chemicals || []).map((c) => ({
-        id: c.id,
-        product_id: c.product_id,
-        product_name: c.product?.product_name || '',
-        quantity: c.quantity?.toString() || '0',
-        unit: c.unit || '',
-        rate_per_acre: c.rate_per_acre?.toString() || '',
-        rate_unit: c.rate_unit || '',
-        cost_per_unit_cents: c.cost_per_unit_cents?.toString() || '0',
-        price_per_unit_cents: c.price_per_unit_cents?.toString() || '0',
-        diluent_rate: c.diluent_rate?.toString() || '',
-        rei_hours: c.rei_hours?.toString() || '',
-        phi_days: c.phi_days?.toString() || '',
-        warehouse: c.warehouse || '',
-        vendor: c.vendor || '',
-        customer_supplied: c.customer_supplied ?? false,
-        sort_order: c.sort_order,
-      }))
+      (j.job_chemicals || []).map((c) => {
+        const quantity = c.quantity?.toString() || '0';
+        const rate_per_acre = c.rate_per_acre?.toString() || '';
+        return {
+          id: c.id,
+          product_id: c.product_id,
+          product_name: c.product?.product_name || '',
+          quantity,
+          unit: c.unit || '',
+          rate_per_acre,
+          rate_unit: c.rate_unit || '',
+          cost_per_unit_cents: c.cost_per_unit_cents?.toString() || '0',
+          price_per_unit_cents: c.price_per_unit_cents?.toString() || '0',
+          diluent_rate: c.diluent_rate?.toString() || '',
+          rei_hours: c.rei_hours?.toString() || '',
+          phi_days: c.phi_days?.toString() || '',
+          warehouse: c.warehouse || '',
+          vendor: c.vendor || '',
+          customer_supplied: c.customer_supplied ?? false,
+          sort_order: c.sort_order,
+          driver: inferChemDriver({ quantity, rate_per_acre }, loadedAcres),
+        };
+      })
     );
 
     const aiData = Array.isArray(j.applied_info) ? j.applied_info[0] : j.applied_info;
@@ -1950,6 +1997,17 @@ export default function JobDetail() {
       );
       return;
     }
+    if (chemRowDefects.size > 0) {
+      const [firstIndex, reason] = [...chemRowDefects.entries()][0];
+      const name = chemRows[firstIndex]?.product_name
+        || allProducts.find((p) => p.id === chemRows[firstIndex]?.product_id)?.product_name
+        || 'A chemical line';
+      toast('error',
+        `${chemRowDefects.size} chemical line(s) cannot be saved. On the Chemicals tab, ` +
+        `"${name}" cannot be saved because ${reason}. Fix it and save again.`,
+      );
+      return;
+    }
     if (guardrailMode === 'block' && guardrailState.overRateCount > 0) {
       if (role !== 'admin') {
         toast('error',
@@ -2014,6 +2072,10 @@ export default function JobDetail() {
     // lives here too: no future caller can route around it.
     if (chemBillingHazards.size > 0) {
       toast('error', 'A chemical line is counted in one unit but priced per another — fix the highlighted line before saving.');
+      return;
+    }
+    if (chemRowDefects.size > 0) {
+      toast('error', 'A chemical line has a unit or a number that cannot be saved — fix the highlighted line before saving.');
       return;
     }
     if (!customerId) { toast('error', 'Customer is required'); return; }
@@ -3618,8 +3680,15 @@ export default function JobDetail() {
                 const previewForm = allProducts.find((p) => p.id === c.product_id)?.product_form ?? null;
                 const conv = toGallonOrLbEquivalent(totalApplied, c.unit, previewForm === 'liquid' || previewForm === 'dry' ? previewForm : null);
                 const hazard = chemBillingHazards.get(i);
+                const rowDefect = chemRowDefects.get(i);
                 return (
-                  <div key={i} className={`border rounded-lg p-3 space-y-2 ${hazard ? 'border-red-400 bg-red-50' : 'border-gray-200'}`}>
+                  <div key={i} className={`border rounded-lg p-3 space-y-2 ${hazard || rowDefect ? 'border-red-400 bg-red-50' : 'border-gray-200'}`}>
+                    {rowDefect && (
+                      <div className="flex items-start gap-2 text-sm text-red-800 bg-red-100 border border-red-300 rounded-lg px-3 py-2">
+                        <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                        <span><strong>This line cannot be saved</strong> because {rowDefect}.</span>
+                      </div>
+                    )}
                     {hazard && (
                       <div className="flex items-start gap-2 text-sm text-red-800 bg-red-100 border border-red-300 rounded-lg px-3 py-2">
                         <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />

@@ -9,6 +9,8 @@ import {
   baseUnitOfRate,
   reconcileChemAutofillUnits,
   chemLineBillingHazard,
+  inferChemDriver,
+  rateDenominatorIsUnrecognized,
   type ChemCalcRow,
 } from './chemCalculator';
 
@@ -458,5 +460,62 @@ describe('chemCalculator — chemLineBillingHazard (production fail-closed guard
     );
     expect(h.hazard).toBe(true);      // fail closed
     expect(h.billedRatio).toBeNull(); // 'dry oz' is not a liquid unit — ratio unknowable
+  });
+});
+
+describe('chemCalculator — rateDenominatorIsUnrecognized (the original divergence)', () => {
+  it('flags a NON-acre denominator, which baseUnitOfRate silently strips', () => {
+    for (const u of ['oz/cwt', 'fl oz/100 gal', 'L/ha', 'oz/1000 sq ft', 'pt/ton']) {
+      expect(rateDenominatorIsUnrecognized(u)).toBe(true);
+      // The reason it matters: the base unit comes back as if it were a per-acre rate.
+      expect(baseUnitOfRate(u)).not.toContain('/');
+    }
+  });
+
+  it('accepts every per-acre spelling the app actually uses', () => {
+    for (const u of ['pt/ac', 'oz/acre', 'gal/a', 'lb/acres', 'GAL per acre', 'Dry oz/ac']) {
+      expect(rateDenominatorIsUnrecognized(u)).toBe(false);
+    }
+  });
+
+  it('accepts a bare unit and a blank', () => {
+    for (const u of ['oz', 'Dry oz', 'GAL', '', '   ', null, undefined]) {
+      expect(rateDenominatorIsUnrecognized(u)).toBe(false);
+    }
+  });
+});
+
+describe('chemCalculator — inferChemDriver (recovers provenance lost on reload)', () => {
+  it("claims 'rate' when the saved quantity IS rate x acres", () => {
+    expect(inferChemDriver({ quantity: '150', rate_per_acre: '1.5' }, 100)).toBe('rate');
+    expect(inferChemDriver({ quantity: '3200', rate_per_acre: '32' }, 100)).toBe('rate');
+  });
+
+  it('leaves a hand-entered total alone — the behaviour that must NOT regress', () => {
+    // 200 is not 1.5 x 100, so the user typed it. Re-deriving would destroy their number.
+    expect(inferChemDriver({ quantity: '200', rate_per_acre: '1.5' }, 100)).toBeUndefined();
+  });
+
+  it('tolerates the 4-dp rounding fmt4 applied when the row was saved', () => {
+    // 1.7 x 137 = 232.9; a stored 232.9001 is the same line, not a hand-entered one.
+    expect(inferChemDriver({ quantity: '232.9001', rate_per_acre: '1.7' }, 137)).toBe('rate');
+  });
+
+  it('claims nothing without usable acres, rate, or quantity', () => {
+    expect(inferChemDriver({ quantity: '150', rate_per_acre: '1.5' }, 0)).toBeUndefined();
+    expect(inferChemDriver({ quantity: '150', rate_per_acre: '' }, 100)).toBeUndefined();
+    expect(inferChemDriver({ quantity: '', rate_per_acre: '1.5' }, 100)).toBeUndefined();
+    expect(inferChemDriver({ quantity: '0', rate_per_acre: '1.5' }, 100)).toBeUndefined();
+    expect(inferChemDriver({ quantity: 'abc', rate_per_acre: '1.5' }, 100)).toBeUndefined();
+  });
+
+  it('closes the defect end to end: a reloaded rate line now follows the acreage', () => {
+    // Saved: 1.5 pt/ac over 100 acres = 150 pt. The job then grows to 200 acres.
+    const saved = { quantity: '150', rate_per_acre: '1.5' };
+    const stale = recomputeChemRowForAcres({ ...saved }, 200);
+    expect(stale.quantity).toBe('150');            // the bug: unchanged, so under-billed
+
+    const recovered = { ...saved, driver: inferChemDriver(saved, 100) };
+    expect(recomputeChemRowForAcres(recovered, 200).quantity).toBe('300');  // doubles, correctly
   });
 });

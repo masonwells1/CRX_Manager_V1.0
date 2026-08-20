@@ -88,6 +88,40 @@ export function recomputeChemRowForAcres<T extends ChemCalcRow>(row: T, acres: n
   return row;
 }
 
+/**
+ * Reconstruct a RELOADED row's lost `driver` from the saved data itself.
+ *
+ * THE DEFECT this closes. `driver` is UI-only and is never persisted, so every row loaded
+ * from job_chemicals comes back with driver === undefined. recomputeChemRowForAcres then
+ * leaves such a row untouched on an acreage change — deliberately, because it cannot tell a
+ * rate-derived quantity from a hand-entered one and must not silently rewrite the latter.
+ *
+ * The consequence is that reopening a saved job and changing its acres leaves a rate-driven
+ * line STALE: a 1.5 pt/ac line saved over 100 acres still reads 150 pt after the job grows to
+ * 200 acres. The bill and the amount actually applied to the field should both double and
+ * neither does, with nothing on screen to say so. That is under-billing AND under-application.
+ *
+ * The provenance is not really lost — it is recoverable. If the stored quantity equals
+ * rate × acres for the acreage the row was saved against, the quantity WAS rate-derived.
+ * We only claim 'rate' when the saved numbers are self-consistent; anything else keeps
+ * today's leave-it-alone behaviour, so a hand-entered total is still never rewritten.
+ *
+ * A hand-entered total that happens to equal rate × acres is claimed as rate-driven, which
+ * is harmless: re-deriving it reproduces the same number.
+ */
+export function inferChemDriver(
+  row: { quantity: string; rate_per_acre: string },
+  acres: number,
+): ChemDriver | undefined {
+  if (!(acres > 0)) return undefined;
+  const rate = parseFloat(row.rate_per_acre);
+  const qty = parseFloat(row.quantity);
+  if (!Number.isFinite(rate) || !Number.isFinite(qty) || rate <= 0 || qty <= 0) return undefined;
+  const derived = rate * acres;
+  // `quantity` was stored through fmt4, so allow 4-dp slack plus a relative epsilon.
+  return Math.abs(qty - derived) <= Math.max(1e-4, Math.abs(derived) * 1e-6) ? 'rate' : undefined;
+}
+
 // ── Total Applied + gallon/lb-equivalent conversion (ChemMan parity #1) ──────
 //
 // ChemMan's Chemical/Charges tab shows, per product line, the "Total Applied"
@@ -375,6 +409,27 @@ export function reconcileChemAutofillUnits(
 // This guard deliberately changes NO money math — carrying the quantity into the selling
 // unit is the separate, parked redesign. It only detects a row we can PROVE is mislabelled,
 // so the save can be refused and a wrong invoice never created.
+
+/**
+ * True when a rate unit carries a denominator that is NOT acres — 'oz/cwt', 'fl oz/100 gal',
+ * 'L/ha'. baseUnitOfRate strips everything after the first '/', so such a rate is silently
+ * treated as per-ACRE and quantity is filled as rate × acres. For 'oz/cwt' (per hundredweight)
+ * that is not merely a unit mismatch, it is the wrong quantity entirely, and it saves.
+ *
+ * This is the divergence the original investigation was opened for. The live SQL
+ * `normalize_rate_unit` deliberately keeps such a string WHOLE so it can never match a bare
+ * unit; the client's split-on-first-slash does the opposite. Measured across all 33
+ * unit-bearing columns in the live database, NO stored value carries a non-acre denominator
+ * (the only 3 slash values are 'pt/ac'), so this is hardening against a value the CSV product
+ * import could introduce, not a defect with live rows behind it today.
+ */
+export function rateDenominatorIsUnrecognized(rateUnit: string | null | undefined): boolean {
+  const raw = (rateUnit || '').trim().toLowerCase();
+  if (raw === '') return false;
+  if (/\s*\/\s*(?:ac|acre|acres|a)\s*$/.test(raw)) return false;  // a recognised per-acre rate
+  if (/\s+per\s+acre$/.test(raw)) return false;
+  return raw.includes('/');
+}
 
 export interface ChemBillingHazard {
   /** true only when the mislabelling is PROVEN (see below), never on suspicion. */
