@@ -71,6 +71,75 @@ are indistinguishable at scan time. Without it, "a file that vanished mid-scan c
 private packet" is an overclaim, not a guarantee. The alternative — widening the exclude pathspec —
 would stop scanning `dist/` altogether and is a real loss of coverage. Whoever picks this up should
 confirm which the containment charter actually wants before choosing.
+## OPEN (WONTFIX for now) 2026-08-20 — `review-proof-guard` denies destructive shell commands that NAME a worktree path
+
+**Severity: LOW — cosmetic, with a zero-cost workaround. Mason chose "document, don't fix"
+(2026-08-20) after five review rounds found the fix more dangerous than the bug.**
+
+**Scope: Claude-managed worktrees only.** Claude creates them at `<repo>/.claude/worktrees/<name>/`;
+Codex worktrees live outside the repo (`~/.codex/worktrees/…`) and have no such collision — see the
+Claude-only list in `scripts/agent-manifest-parity.mjs`. The guard is wired for both agents, but only
+a Claude worktree path trips it this way, and the `permissions.deny` layer referenced below is
+Claude-side (Codex is governed by `.codex/hooks.json`).
+
+Every file inside a Claude worktree carries a `.claude` path component. `review-proof-guard.mjs`
+protects any `.claude` component and cannot distinguish the repo's review state from an ordinary
+scratch file under a worktree.
+Introduced by `f3e06c52` (PR #423 round-3/5 hardening) — bisected, not guessed; the later ack-valve
+commits `c64ea3d4` and `4b302050` are not implicated.
+
+**Actual impact is much smaller than first reported.** *For this collision*, the guard fires only
+when the command *spells out* the worktree path — the agent's shell already starts inside the
+worktree, so relative commands avoid it: `rm -f scratch.tmp`, `rm probe-dir/x.txt`,
+`mv a.txt b.txt` and `Write` (relative or absolute) all **ran live in a worktree**, while
+`rm -f <full-worktree-path>\file` and `cd <full-worktree-path> && rm file` are denied. That is a
+statement about the worktree collision, **not** the guard's complete matching rule — the guard
+independently blocks commands naming `.claude` or `.claude/session-state` anywhere, and treats
+`rm`/`mv`/`git clean`/`rsync --delete`, and `find` paired with `-delete`/`-exec`, as destructive
+verbs *when the command also names the state directory*; the full rule is the
+`review-proof-guard.mjs` row in `docs/reference/agent-guardrails.md`.
+
+Four lookalikes are **different layers**, so relative paths do not help: `rm -rf`/`rm -fr` never run
+at all (`permissions.deny` in `.claude/settings.json`); `git clean -f/-fd/-fdx` is blocked twice
+over, by `permissions.deny` and by `bash-safety-lib.mjs`; a bare `find … -delete` is blocked by a
+separate safety layer independent of the state-dir rule above (not `bash-safety-lib.mjs` — that
+library allows it); and the blocked `Write` to `stop-wrap-ack.json` in the original report came from
+a different hook (this guard deliberately allows that write — it is the designed acknowledgment
+valve).
+
+**Correction, PR #434 review (twice).** Successive drafts of this entry and of `gotchas.md` listed
+`git clean -fd src`, then `rm -rf node_modules/.cache`, as allowed workarounds. Both were wrong, and
+both were wrong the same way: verified against `review-proof-guard` alone rather than the whole
+stack — `permissions.deny`, then the PreToolUse hooks, then the harness's own safety layer, any of
+which can refuse a command. Every example is now something that was actually executed in a worktree.
+**Run the command; do not reason about it.**
+
+**Workaround (use this):** never name the worktree path in a destructive shell command. Recorded in
+`docs/reference/gotchas.md`.
+
+**Do not attempt a text-stripping carve-out.** Five successive versions were built on 2026-08-19/20
+and each was reviewed by an independent `gpt-5.6-sol` high-effort pass. **Every round found at least
+one real hole — eight in total**, each a different spelling of the same path: a trailing separator
+consuming the whole target; `../..` traversal after the reference was blanked; a `$var` descendant;
+a `/.` dot alias; `."."` quote-joined traversal; an *operand* named `cd`; cmd.exe `%VAR:~0%` and
+`!VAR!`; and cmd.exe caret escapes `.^.`. All eight reached the repo's own review state, the
+applied-source ledger, or a whole worktree's state directory. Each round's test suite was green over
+the next round's hole, and mutation testing reached 14/15 without surfacing round 5. The root lesson:
+**rewriting command text inside a security guard is the wrong mechanism** — the guard reasons over
+shell text, and shell text has unbounded ways to spell one path. All eight spellings are now pinned
+as denials in `review-proof-guard.test.mjs`, so a future attempt trips on them immediately.
+
+**If this is ever worth fixing properly, ranked by risk:**
+1. **Move worktrees out from under `.claude`** (e.g. `<repo>/../crx-worktrees/`). The collision
+   disappears and no carve-out is needed — a configuration change, not security logic. *Unverified
+   prerequisite:* the worktree location may be set by the Claude Code harness rather than repo
+   config; check that first. Also touches `worktree-awareness.mjs`, `worktree-cleanup`, `fleet`, and
+   needs the live worktrees drained.
+2. **Strict allowlist** — apply a carve-out only when the whole command matches a deliberately
+   boring grammar (one verb, literal paths, no quotes/globs/`$`/`%`/`!`/backtick/caret/dot-segments).
+   Fail-closed by construction; a survivor is a false positive, not a hole.
+3. **Resolve real paths** — tokenize, `path.resolve()` against cwd, compare against the protected
+   directories actually on disk. The correct answer and the largest rewrite of a live security guard.
 
 ---
 
