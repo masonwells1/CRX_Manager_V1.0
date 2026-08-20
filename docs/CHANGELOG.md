@@ -42,8 +42,11 @@ temporary-table transaction guard refuses autocommit execution before that lock 
 shared helper's receipt DETAIL is intentionally sales-rep reachable here, following the already-live
 return lifecycle RPC precedent: keys are high-entropy and active reps already share the
 booking/order visibility boundary. The hash-bearing lifecycle migration, this migration, its rollback
-smoke and its prover are all pinned to LF in `.gitattributes`, and the tests/prover hash their exact
-on-disk bytes instead of normalizing line endings and hiding an apply-time mismatch.
+smoke and its prover are all pinned to LF in `.gitattributes`. The already-live migration that
+defines `check_idempotency_intent` is now pinned too: a read-only 2026-08-20 catalog read confirmed
+production stores that helper LF-only (`stores_crlf = false`), matching the reviewed SHA-256. The
+static proof binds each hash to its exact catalog variable instead of merely finding the same value
+somewhere in the candidate.
 
 Operator consequence for the later apply: draw receipts live 24 hours, so the preflight requires a
 deliberate 24-hour window with no successful booking draws before this fourth migration can land.
@@ -55,7 +58,7 @@ the legacy-receipt scan. This PR still does not start or authorize that freeze/a
 
 Added focused migration/RPC contracts, real QuoteBuilder component recovery tests, and a
 container-only rollback smoke covering exact replay, changed quantity, changed actor,
-cross-representative success, required-key refusal, one $10 sale / $5 cost / $5 profit
+cross-representative success, replay after a later soft delete, required-key refusal, one $10 sale / $5 cost / $5 profit
 order, one inventory reservation, one draw-ledger row, and a bound receipt. Keyless calls are now
 refused before the money implementation. The component tests also
 exposed and fixed an initial-load timing defect that could mark a freshly loaded saved quote dirty

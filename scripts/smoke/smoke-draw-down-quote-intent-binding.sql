@@ -206,6 +206,25 @@ BEGIN
     END IF;
   END;
 
+  -- A committed receipt remains authoritative after the booking is hidden.
+  -- This must not enter the money path or create a second business write.
+  UPDATE public.quotes SET deleted_at = now() WHERE id = v_quote;
+  PERFORM set_config(
+    'request.jwt.claims',
+    json_build_object('sub', v_rep_a, 'role', 'authenticated')::text,
+    true
+  );
+  PERFORM set_config('request.jwt.claim.sub', v_rep_a::text, true);
+  v_replay_result := public.draw_down_quote(
+    v_quote,
+    jsonb_build_array(jsonb_build_object('product_id', v_product, 'quantity', 1)),
+    v_rep_a, v_idem_key, NULL
+  );
+  IF v_replay_result IS DISTINCT FROM v_first_result THEN
+    RAISE EXCEPTION
+      'SMOKE_FAIL: soft-deleted booking retry did not return the committed receipt';
+  END IF;
+
   SELECT count(*) INTO v_count FROM public.orders WHERE quote_id = v_quote;
   IF v_count <> 1 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: idempotency probes created % orders instead of 1', v_count;
@@ -280,10 +299,13 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: draw receipt was not actor/intent/result bound';
   END IF;
 
-  -- Deleted bookings remain hidden before any replay or mutation logic.
+  -- A first call against a deleted booking remains hidden after request
+  -- validation and before any money or inventory logic.
   BEGIN
     PERFORM public.draw_down_quote(
-      v_deleted_quote, '[]'::jsonb, v_rep_b, 'smk-deleted-' || v_suffix, NULL
+      v_deleted_quote,
+      jsonb_build_array(jsonb_build_object('product_id', v_product, 'quantity', 1)),
+      v_rep_a, 'smk-deleted-' || v_suffix, NULL
     );
     RAISE EXCEPTION 'SMOKE_FAIL: deleted quote draw was allowed';
   EXCEPTION WHEN OTHERS THEN

@@ -47,6 +47,19 @@ function functionBodySha256(source: string, name: string): string {
   return createHash('sha256').update(match![1], 'utf8').digest('hex');
 }
 
+function expectHashBoundToVariable(
+  variable: string,
+  expectedHash: string,
+  occurrences: number,
+): void {
+  const escapedVariable = variable.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const matches = migrationSql.match(new RegExp(
+    `(?:p\\.oid = ${escapedVariable}\\)|convert_to\\(${escapedVariable}, 'UTF8'\\))[\\s\\S]{0,160}?IS DISTINCT FROM '${expectedHash}'`,
+    'g',
+  ));
+  expect(matches, `${expectedHash} is not bound to ${variable}`).toHaveLength(occurrences);
+}
+
 describe('draw_down_quote actor and intent binding migration', () => {
   it('wraps the governed entry point without copying or replacing money math', () => {
     expect(migrationSql).toContain(
@@ -68,6 +81,7 @@ describe('draw_down_quote actor and intent binding migration', () => {
 
   it('pins every reviewed idempotency, wrapper, pricing, and lifecycle body', () => {
     for (const path of [
+      INTENT_HELPER_PATH,
       ALLOCATED_CENTS_PATH,
       MIGRATION_PATH,
       SMOKE_PATH,
@@ -80,20 +94,39 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(smokeSql).not.toContain('\r');
     expect(proverSource).not.toContain('\r');
 
-    for (const [source, functionName] of [
-      [intentHelperSql, 'check_idempotency_intent'],
-      [cutoverSql, 'draw_down_quote'],
-      [migrationSql, 'draw_down_quote'],
-      [tierSplitSql, '_draw_down_quote_below_cost_impl_20260810'],
-      [allocatedCentsSql, '_allocated_cumulative_cents'],
-      [allocatedCentsSql, '_allocated_delivery_cents'],
-      [allocatedCentsSql, '_complete_delivery_authorized_impl'],
-      [allocatedCentsSql, '_create_invoice_for_unbilled_delivery_impl_20260718'],
-      [allocatedCentsSql, '_close_undelivered_order_remainder_20260718'],
-    ] as const) {
-      const expectedHash = functionBodySha256(source, functionName);
-      expect(migrationSql).toContain(expectedHash);
-    }
+    const helperHash = functionBodySha256(intentHelperSql, 'check_idempotency_intent');
+    const privateWrapperHash = functionBodySha256(cutoverSql, 'draw_down_quote');
+    const outerWrapperHash = functionBodySha256(migrationSql, 'draw_down_quote');
+    const moneyImplHash = functionBodySha256(
+      tierSplitSql,
+      '_draw_down_quote_below_cost_impl_20260810',
+    );
+    const allocCumulativeHash = functionBodySha256(allocatedCentsSql, '_allocated_cumulative_cents');
+    const allocDeliveryHash = functionBodySha256(allocatedCentsSql, '_allocated_delivery_cents');
+    const completeDeliveryHash = functionBodySha256(
+      allocatedCentsSql,
+      '_complete_delivery_authorized_impl',
+    );
+    const backfillInvoiceHash = functionBodySha256(
+      allocatedCentsSql,
+      '_create_invoice_for_unbilled_delivery_impl_20260718',
+    );
+    const closeRemainderHash = functionBodySha256(
+      allocatedCentsSql,
+      '_close_undelivered_order_remainder_20260718',
+    );
+
+    expectHashBoundToVariable('v_intent_helper', helperHash, 1);
+    expectHashBoundToVariable('v_helper_src', helperHash, 1);
+    expectHashBoundToVariable('v_src', privateWrapperHash, 1);
+    expectHashBoundToVariable('v_private_src', privateWrapperHash, 1);
+    expectHashBoundToVariable('v_outer_src', outerWrapperHash, 1);
+    expectHashBoundToVariable('v_money_impl', moneyImplHash, 2);
+    expectHashBoundToVariable('v_alloc_cumulative', allocCumulativeHash, 2);
+    expectHashBoundToVariable('v_alloc_delivery', allocDeliveryHash, 2);
+    expectHashBoundToVariable('v_complete_delivery', completeDeliveryHash, 2);
+    expectHashBoundToVariable('v_backfill_invoice', backfillInvoiceHash, 2);
+    expectHashBoundToVariable('v_close_remainder', closeRemainderHash, 2);
     expect(migrationSql).toContain(
       'DRAW_DOWN_INTENT_PREFLIGHT: reviewed pricing/lifecycle prerequisite body drifted',
     );
@@ -126,8 +159,9 @@ describe('draw_down_quote actor and intent binding migration', () => {
       '-- DRAW_DOWN_INTENT_BARRIER<<<',
       '-- DRAW_DOWN_INTENT_AUTHZ<<<',
       '-- DRAW_DOWN_INTENT_KEY_LOCK<<<',
-      "WHERE id = p_quote_id\n     AND deleted_at IS NULL\n   FOR UPDATE;",
       '-- DRAW_DOWN_INTENT_REPLAY<<<',
+      '-- DRAW_DOWN_INTENT_LIVE_QUOTE<<<',
+      "WHERE id = p_quote_id\n     AND deleted_at IS NULL\n   FOR UPDATE;",
       '-- DRAW_DOWN_INTENT_FIRST_CALL<<<',
       '-- DRAW_DOWN_INTENT_BIND<<<',
     ]);

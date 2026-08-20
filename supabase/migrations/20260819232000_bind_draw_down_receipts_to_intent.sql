@@ -39,10 +39,12 @@
 -- must be revisited.
 -- Reviewed check_idempotency_intent pg_proc.prosrc SHA-256:
 -- 71b8a6a0b53f2234a0808b1270eaa06b3c8bf0e7d2523fc429c88e5c479407c8
+-- Read-only live catalog proof on 2026-08-20 also confirmed this exact body is
+-- stored LF-only (no carriage returns); its defining migration is LF-pinned.
 -- Reviewed cutover/below-cost draw_down_quote pg_proc.prosrc SHA-256:
 -- be2570888281520c9aaba61280a456cdbd9b69b83dfeba106c7a324c3751e4bf
 -- New actor/intent wrapper pg_proc.prosrc SHA-256:
--- 7ab37b5d3a19d03e017dac0ac62560339e9f933ab1b942305b5517efd8de9bf4
+-- c5f6f8902e80870706a0734be167c850903361ccf682bc11287fa8fed6c8e254
 
 -- Drain every draw running through the committed 20260816110000 barrier and
 -- refuse new draws until this transaction commits. Without this exact lock, a
@@ -278,7 +280,6 @@ AS $function$
 DECLARE
   v_actor uuid := auth.uid();
   v_actor_role text;
-  v_quote_exists boolean;
   v_canonical_draws jsonb;
   v_fingerprint text;
   v_replay jsonb;
@@ -328,20 +329,6 @@ BEGIN
     hashtextextended('crx:idempotency:' || p_idempotency_key, 0)
   );
   -- >>>DRAW_DOWN_INTENT_KEY_LOCK
-
-  -- Authorize and lock the live booking before any receipt can be returned.
-  -- There is intentionally no created_by/customer-assignment predicate: active
-  -- reps may cover one another's bookings. The inner money implementation
-  -- takes the same row lock again before any business write.
-  SELECT true
-    INTO v_quote_exists
-    FROM public.quotes
-   WHERE id = p_quote_id
-     AND deleted_at IS NULL
-   FOR UPDATE;
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'Quote not found';
-  END IF;
 
   -- Canonicalize exactly the entries the implementation will execute. Array
   -- order and duplicates remain meaningful because they become separate draw
@@ -432,6 +419,23 @@ BEGIN
     RETURN v_replay -> 'result';
   END IF;
   -- >>>DRAW_DOWN_INTENT_REPLAY
+
+  -- DRAW_DOWN_INTENT_LIVE_QUOTE<<<
+  -- A committed receipt is authoritative even if its quote was soft-deleted
+  -- after the draw. For a first call, authorize and lock the live booking only
+  -- after the exact actor/intent replay check. There is intentionally no
+  -- created_by/customer-assignment predicate: active reps may cover one
+  -- another's bookings. The inner money implementation takes the same row lock
+  -- again before any business write.
+  PERFORM 1
+    FROM public.quotes
+   WHERE id = p_quote_id
+     AND deleted_at IS NULL
+   FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Quote not found';
+  END IF;
+  -- >>>DRAW_DOWN_INTENT_LIVE_QUOTE
 
   -- This preserved wrapper still owns below-cost approval and forwards to the
   -- tier-split money implementation. p_below_cost_reason is approval metadata,
@@ -603,7 +607,7 @@ BEGIN
           IS DISTINCT FROM 'be2570888281520c9aaba61280a456cdbd9b69b83dfeba106c7a324c3751e4bf'
      OR v_outer_src IS NULL
      OR encode(extensions.digest(convert_to(v_outer_src, 'UTF8'), 'sha256'), 'hex')
-          IS DISTINCT FROM '7ab37b5d3a19d03e017dac0ac62560339e9f933ab1b942305b5517efd8de9bf4' THEN
+          IS DISTINCT FROM 'c5f6f8902e80870706a0734be167c850903361ccf682bc11287fa8fed6c8e254' THEN
     RAISE EXCEPTION
       'DRAW_DOWN_INTENT_POSTFLIGHT: reviewed intent helper or wrapper body changed';
   END IF;
@@ -623,6 +627,7 @@ BEGIN
      OR position('DRAW_DOWN_INTENT_AUTHZ<<<' IN v_outer_src) = 0
      OR position('DRAW_DOWN_INTENT_KEY_LOCK<<<' IN v_outer_src) = 0
      OR position('DRAW_DOWN_INTENT_REPLAY<<<' IN v_outer_src) = 0
+     OR position('DRAW_DOWN_INTENT_LIVE_QUOTE<<<' IN v_outer_src) = 0
      OR position('DRAW_DOWN_INTENT_FIRST_CALL<<<' IN v_outer_src) = 0
      OR position('DRAW_DOWN_INTENT_BIND<<<' IN v_outer_src) = 0
      OR position('DRAW_DOWN_INTENT_BARRIER<<<' IN v_outer_src)
@@ -632,6 +637,8 @@ BEGIN
      OR position('DRAW_DOWN_INTENT_KEY_LOCK<<<' IN v_outer_src)
           > position('DRAW_DOWN_INTENT_REPLAY<<<' IN v_outer_src)
      OR position('DRAW_DOWN_INTENT_REPLAY<<<' IN v_outer_src)
+          > position('DRAW_DOWN_INTENT_LIVE_QUOTE<<<' IN v_outer_src)
+     OR position('DRAW_DOWN_INTENT_LIVE_QUOTE<<<' IN v_outer_src)
           > position('DRAW_DOWN_INTENT_FIRST_CALL<<<' IN v_outer_src)
      OR position('DRAW_DOWN_INTENT_FIRST_CALL<<<' IN v_outer_src)
           > position('DRAW_DOWN_INTENT_BIND<<<' IN v_outer_src) THEN
