@@ -1996,16 +1996,24 @@ $MIG_BASENAME
         }
         # A PostgreSQL rule is another standing invocation. Its action can call
         # a database-resident mutator whose body this file cannot inspect, so a
-        # later write to the rule relation is refused as an indirect rewrite.
+        # later matching event on the rule relation is refused as an indirect
+        # rewrite. ON SELECT is tracked separately because reading the relation,
+        # rather than writing it, executes the stored rule action.
         for (i = 1; i <= ntok; i++) {
           if (tok[i] != "rule" || stmt_head(i) != "create") continue
-          rrel = ""
+          rrel = ""; revent = ""
           for (k = i + 1; k <= ntok && tok[k] != ";"; k++) {
+            if (tok[k] == "on" &&
+                (tok[k + 1] == "select" || tok[k + 1] == "insert" ||
+                 tok[k + 1] == "update" || tok[k + 1] == "delete")) {
+              revent = tok[k + 1]
+            }
             if (tok[k] == "to") { rrel = tok[k + 1]; break }
           }
-          if (rrel == "") continue
+          if (rrel == "" || revent == "") continue
           gsub(/"/, "", rrel); sub(/^[a-z0-9_]+\./, "", rrel)
           rulerel[rrel] = 1
+          if (revent == "select") ruleselect[rrel] = 1
         }
         for (i = 1; i <= ntok; i++) {
           # Selecting from an ordinary view executes its stored query. The
@@ -2018,6 +2026,11 @@ $MIG_BASENAME
               cast_expression_runs(i)) {
             vname = tok[i + 1]
             gsub(/"/, "", vname); sub(/^.*\./, "", vname)
+            if (vname != "" && ruleselect[vname] && !seenruleselect[vname]) {
+              seenruleselect[vname] = 1
+              printf "%d\t%s\t%s\t%s\t%s\t%s\n", tokln[i], "rule_on_select_" vname, "indirect", "-", "-", raw[tokln[i]]
+              continue
+            }
             if (vname != "" &&
                 ((knownviews != "" && vname ~ ("^(" knownviews ")$")) || made_view[vname]) &&
                 !seenviewread[vname]) {

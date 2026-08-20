@@ -1219,4 +1219,26 @@ eq(T(null), [], "a null body does not throw");
   }
 }
 
+// ---------------- ROUND 52: ON SELECT rules execute when their relation is read
+{
+  const definition =
+    'CREATE FUNCTION public.rule_money_fix() RETURNS integer LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.order_items SET total_price = total_price; RETURN 1; END $$; ' +
+    'CREATE TABLE public.scratch_probe(id integer); ' +
+    'CREATE RULE "_RETURN" AS ON SELECT TO public.scratch_probe ' +
+    'DO INSTEAD SELECT public.rule_money_fix() AS id;';
+
+  const selected = applyTimeWriteTargets(`${definition} SELECT * FROM public.scratch_probe;`);
+  ok(selected.unresolved,
+    'round-52: selecting a relation with an ON SELECT rule fails closed');
+  eq(selected.firedRules, ['scratch_probe'],
+    'round-52: the fired ON SELECT rule relation is named');
+
+  const definitionOnly = applyTimeWriteTargets(definition);
+  ok(!definitionOnly.unresolved,
+    'round-52 MUTANT: defining an ON SELECT rule without reading it remains deferred');
+  eq(definitionOnly.firedRules, [],
+    'round-52 MUTANT: an unread ON SELECT rule is not reported as fired');
+}
+
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

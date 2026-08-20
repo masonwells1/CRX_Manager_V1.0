@@ -2099,6 +2099,28 @@ const CASES = [
       `INSERT INTO scratch_probe(id) VALUES (1);\n`,
   },
   {
+    name: 'round-52: selecting through an ON SELECT rule is an unbindable indirect rewrite',
+    expect: 'violation',
+    mustReport: 'rule_on_select_scratch_probe',
+    sql:
+      `CREATE FUNCTION public.rule_money_fix() RETURNS integer LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = total_profit; RETURN 1; END $$;\n` +
+      `CREATE TABLE public.scratch_probe(id integer);\n` +
+      `CREATE RULE "_RETURN" AS ON SELECT TO public.scratch_probe ` +
+      `DO INSTEAD SELECT public.rule_money_fix() AS id;\n` +
+      `SELECT * FROM public.scratch_probe;\n`,
+  },
+  {
+    name: 'round-52 MUTANT: defining an ON SELECT rule without reading it remains deferred',
+    expect: 'silent',
+    sql:
+      `CREATE FUNCTION public.deferred_rule_money_fix() RETURNS integer LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = total_profit; RETURN 1; END $$;\n` +
+      `CREATE TABLE public.deferred_scratch_probe(id integer);\n` +
+      `CREATE RULE "_RETURN" AS ON SELECT TO public.deferred_scratch_probe ` +
+      `DO INSTEAD SELECT public.deferred_rule_money_fix() AS id;\n`,
+  },
+  {
     name: 'round-37: a custom operator invocation cannot hide its mutating backing routine',
     expect: 'violation',
     mustReport: 'crxop_eq_eq_eq',

@@ -49,6 +49,9 @@ migration safety harness; no app source, migration SQL, live database, or produc
 - Selecting an ordinary stored view now executes its cataloged query in the analysis closure. Same-
   file, nested, and older checked-in view definitions can no longer conceal a resident mutating
   routine behind `SELECT * FROM view`; defining a view without executing it remains deferred.
+- PostgreSQL rule events are now modeled instead of treating every rule as write-only. Reading a
+  relation with an `ON SELECT` / `_RETURN` rule fails closed in both replay guards because the stored
+  action executes at that point; defining the rule without reading the relation remains deferred.
 - Anonymous `DO` blocks written as ordinary, escape, or Unicode string literals now fail closed
   in both migration guards. Their contents are stripped by the shared lexer, so only a dollar-
   quoted body is accepted; focused controls prove readable direct DML and resident routine calls
@@ -65,7 +68,7 @@ migration safety harness; no app source, migration SQL, live database, or produc
   invoking `round(...)` cannot hide a same-file mutator.
 - The Bash approved-set validator now treats functions and procedures as one routine graph,
   including transitive wrappers, and refuses plain, escape, or Unicode single-quoted routine
-  bodies that its write scanners cannot inspect. Its 190-case mutation suite and the 224-assertion
+  bodies that its write scanners cannot inspect. Its 195-case mutation suite and the 245-assertion
   apply-time analyzer suite are both wired into a required CI step.
 - Non-ASCII PostgreSQL routine identities now fail closed through one shared analyzer boundary.
   A valid define/call/drop sequence such as `public.修復()` can no longer be truncated out of the
@@ -102,7 +105,7 @@ migration safety harness; no app source, migration SQL, live database, or produc
 
 Focused proof: snapshot producer 16 assertions; applied-source containment pass (including forced
 worktree-enumeration failure); trigger fan-out producer 22 assertions; apply-time analyzer
-229 assertions; apply-time guard 288 assertions; approved-set validator 193 mutation cases.
+245 assertions; apply-time guard 304 assertions; approved-set validator 195 mutation cases.
 Each new edge has a removal mutant that
 survives only when the load-bearing protection is deliberately deleted.
 

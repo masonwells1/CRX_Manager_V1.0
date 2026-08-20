@@ -534,6 +534,10 @@ recorded OID and body hash, including routines in `extensions`. Sequence counter
 state too, so executable `nextval(...)` / `setval(...)`, sequence restarts, identity restarts, and
 `TRUNCATE ... RESTART IDENTITY` fail closed while stored defaults and uninvoked definitions remain
 deferred.
+PostgreSQL `ON SELECT` rules are stored execution too. A relation read can run an `_RETURN` rule
+action even though the migration writes neither that relation nor the protected table named inside
+the action. Both replay guards therefore track the rule event and fail closed when executable SQL
+reads the attached relation; creating the rule without reading it remains deferred.
 
 ---
 

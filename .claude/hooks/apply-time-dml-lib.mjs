@@ -854,7 +854,7 @@ function invokedRoutines(codeLower, defined) {
 // writes it does not perform. The three definition statements that DO evaluate
 // an expression while applying are handled separately below.
 const RUNS_FOR_EFFECT =
-  /^(select|call|perform|with|do|values|insert|update|delete|merge|refresh|explain)\b/;
+  /^(select|table|call|perform|with|do|values|insert|update|delete|merge|refresh|explain)\b/;
 
 // `CREATE TABLE ... AS SELECT` and `CREATE MATERIALIZED VIEW ... AS SELECT`
 // evaluate their query as they apply. Plain `CREATE VIEW ... AS SELECT` is
@@ -1122,13 +1122,14 @@ export function ruleAttachments(code) {
   while ((m = RULE_STMT.exec(s)) !== null) {
     const semi = s.indexOf(";", m.index);
     const body = s.slice(m.index, semi === -1 ? s.length : semi);
+    const eventMatch = /\bas\s+on\s+(select|insert|update|delete)\s+to\b/.exec(body);
     const to = scanTo(body, 0, ["to"]);
-    if (to.hit !== "to") continue;
+    if (!eventMatch || to.hit !== "to") continue;
     const rel = readRelation(body, to.end);
     if (!rel || (NON_RELATION_KEYWORDS.has(rel.table) && !rel.quoted)) continue;
-    out.push(rel.table);
+    out.push({ table: rel.table, event: eventMatch[1] });
   }
-  return [...new Set(out)];
+  return [...new Map(out.map((rule) => [`${rule.event}\0${rule.table}`, rule])).values()];
 }
 
 /** Ordinary (non-materialized) view definitions and their stored query text. */
@@ -1161,12 +1162,25 @@ function invokedViews(code, definitions) {
   return definitions.filter((definition) => found.has(definition.name));
 }
 
+/** Relations read by SQL that executes while the migration applies. */
+function invokedRelations(code) {
+  const found = new Set();
+  for (const statement of String(code || "").split(";")) {
+    const region = runForEffectRegion(statement.trim().toLowerCase().replace(/"/g, ""));
+    if (!region) continue;
+    const relation = /\b(?:from|join|table)\s+(?:only\s+)?(?:[a-z_][a-z0-9_$]*\s*\.\s*)?([a-z_][a-z0-9_$]*)\b/g;
+    let match;
+    while ((match = relation.exec(region)) !== null) found.add(match[1]);
+  }
+  return found;
+}
+
 // ROUND 29. The verbs that begin a statement PostgreSQL will run. Used to tell
 // a string literal that is SQL from one that is a comment, an error message or
 // a column default. Deliberately wider than the write verbs: a literal handed to
 // EXECUTE may call a routine, rewrite a column's type, or define a trigger, and
 // none of those spells UPDATE.
-const STATEMENT_HEAD = /^(select|with|call|perform|do|update|insert|delete|merge|truncate|copy|alter|create|drop|grant|revoke|comment|refresh|set|reset|execute|lock|analyze|vacuum|reindex|cluster|values|explain)\b/;
+const STATEMENT_HEAD = /^(select|table|with|call|perform|do|update|insert|delete|merge|truncate|copy|alter|create|drop|grant|revoke|comment|refresh|set|reset|execute|lock|analyze|vacuum|reindex|cluster|values|explain)\b/;
 
 function readsAsStatement(text) {
   let rest = String(text).trim().toLowerCase();
@@ -1427,7 +1441,8 @@ export function applyTimeWriteTargets(
   // body is not in this file it joins the unknown calls instead, because
   // nothing here can say what a database-resident body writes.
   const attachments = triggerAttachments(code);
-  const ruleTables = ruleAttachments(code);
+  const rules = ruleAttachments(code);
+  const readRuleRelations = invokedRelations(code);
 
   // ROUND 29. A string literal handed to EXECUTE is SQL, and the only thing this
   // module did with one was scan it for a bare DML verb. So
@@ -1479,7 +1494,8 @@ export function applyTimeWriteTargets(
       defineCasts(castDefinitions(parsed.code));
       defineViews(viewDefinitions(parsed.code));
       attachments.push(...triggerAttachments(parsed.code));
-      ruleTables.push(...ruleAttachments(parsed.code));
+      rules.push(...ruleAttachments(parsed.code));
+      for (const relation of invokedRelations(parsed.code)) readRuleRelations.add(relation);
       execCodes.push(parsed.code);
       foldLiterals(inner, parsed.literals);
     }
@@ -1487,6 +1503,7 @@ export function applyTimeWriteTargets(
   foldLiterals(top, literals);
   const fired = new Set();
   const firedRules = new Set();
+  const firedRuleKeys = new Set();
   const unknownTriggerFns = new Set();
   const unknownOperatorFns = new Set();
   const unknownCastFns = new Set();
@@ -1529,16 +1546,22 @@ export function applyTimeWriteTargets(
       } else if (!foldedViewQueries.has(key)) {
         foldedViewQueries.add(key);
         execCodes.push(definition.query);
+        for (const relation of invokedRelations(definition.query)) readRuleRelations.add(relation);
       }
     }
   };
   const fireAttached = (into) => {
-    for (const table of ruleTables) {
-      if (firedRules.has(table) || !top.tables.has(table)) continue;
+    for (const rule of rules) {
+      const key = `${rule.event}\0${rule.table}`;
+      const firedByEvent = rule.event === "select"
+        ? readRuleRelations.has(rule.table)
+        : top.tables.has(rule.table);
+      if (firedRuleKeys.has(key) || !firedByEvent) continue;
       // A rule action can call a database-resident mutator or issue arbitrary
       // DML. Until rule actions are parsed as fully as routine bodies, firing
       // one is not provably bounded and must refuse rather than disappear.
-      firedRules.add(table);
+      firedRuleKeys.add(key);
+      firedRules.add(rule.table);
       top.unresolved = true;
     }
     for (const att of attachments) {
@@ -1557,6 +1580,7 @@ export function applyTimeWriteTargets(
   const drainExec = (into) => {
     while (execScanned < execCodes.length) {
       const c = execCodes[execScanned++];
+      for (const relation of invokedRelations(c)) readRuleRelations.add(relation);
       for (const n of invokedRoutines(c.toLowerCase(), new Set(byName.keys()))) {
         if (!seen.has(n)) into.add(n);
       }
@@ -1581,6 +1605,7 @@ export function applyTimeWriteTargets(
       if (seen.has(name)) continue;
       seen.add(name);
       for (const r of byName.get(name) || []) {
+        for (const relation of invokedRelations(r.code)) readRuleRelations.add(relation);
         const inner = targetsFromCode(r.code, r.literals);
         for (const t of inner.targets) top.targets.add(t);
         for (const t of inner.tables) top.tables.add(t);
