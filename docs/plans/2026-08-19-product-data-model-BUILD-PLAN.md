@@ -610,9 +610,25 @@ where the new function is live and the old caller is still deployed. A required
 `epa_label_seed`-only discriminator therefore breaks that caller outright, and defaulting it to
 `epa_label_seed` is worse — it silently relabels hand-entered drafts as EPA proposals and routes
 them through the EPA commit path. **So `purpose` defaults to `manual`**, which is precisely what
-an argument-less legacy call means. The new argument is optional and additive; the old
-five-argument call keeps working unchanged, and **the WP-4 proof exercises it** against the
-applied migration before the code merges.
+an argument-less legacy call means.
+
+**"Optional and additive" is wrong in PostgreSQL, and saying it was my error *(corrected on the
+second pass through PR #435)*.** A function's identity **includes its argument list**, so
+`CREATE OR REPLACE FUNCTION` **cannot** add a parameter to `create_label_draft` — not even one
+with a `DEFAULT`. It either creates a **second overload** or requires dropping the existing
+signature. An overload is precisely what this repository's migration-drift gate exists to catch
+(the accidental dual-overload class), and dropping the live signature mid-window breaks the
+deployed caller — the same trap WP-3 already refuses for `receive_po_items`. **This is finding 3's
+shape repeating in a different package, and it must be resolved the same way.**
+
+**Resolution — the public signature does not change.** WP-4 keeps
+`create_label_draft`'s current five-argument signature exactly as deployed, and puts the new
+`purpose` and payload inputs on a **new internal function** the wrapper delegates to, mirroring
+the `_section9_receive_po_items_serialized` pattern already in this codebase
+(`20260726190515_section9_po_ap_high_remediation.sql`). The legacy call keeps resolving to the one
+public signature and keeps meaning `manual`. **The WP-4 proof exercises the unchanged
+five-argument call against the applied migration before the code merges**, and asserts
+`pg_proc` holds **exactly one** `create_label_draft` overload afterwards.
 
 **A stale proposal is refused at commit, not merged blindly *(caught reviewing PR #435)*.** The
 gap: if an admin edits a product's chemistry after an EPA proposal is created but before Mason

@@ -36,9 +36,11 @@ migrations, which is the defect corrected on 2026-08-20.
 WP-2's density precedence function has a brand slot WP-3 populates, WP-4 writes into columns WP-1
 creates, and WP-5 copies the chemistry WP-1 through WP-3 defined.
 
-**Four packages carry migrations, not three — the board above now matches the build plan *(both
-corrected reviewing PR #435)*.** WP-4 was still listed as `none` here after revision 3 made it a
-migration, and WP-5 was listed as `none` in both documents:
+**Five packages carry migrations — WP-1 through WP-5, each with its own apply gate.** *(This line
+first said "four", counting WP-4 but not WP-5, and was corrected the same day. WP-0 is the only
+package with no migration.)* The board above now matches the build plan *(both corrected reviewing
+PR #435)*. WP-4 was still listed as `none` here after revision 3 made it a migration, and WP-5 was
+listed as `none` in both documents:
 
 - **WP-4** — revision 2 said "no migration"; revision 3 replaced that after Sol's finding 1,
   because the existing `product_label_drafts` queue has nowhere to put ingredient rows,

@@ -191,7 +191,7 @@ another worktree.**
 |---|---|---|---|
 | 1 | **Mission doc** | `docs/loops/product-data-model-loop-2026-08.md` | `scripts/validate-mission-doc.mjs` refuses to launch a loop without five slots — Driver, Granularity, Worktree, Definition of done, Delivery gate. It is also the only place this build's contract binds a future session with no memory of this conversation |
 | 2 | **Ledger** | `docs/loops/product-data-model-ledger.md` | COVERAGE.md tracks *issues*; the ledger tracks *cycles* — per-package status, PR number, migration disk name and live version stamp, and the `PROOF — Ran: … · Saw: …` line. Model on `docs/loops/structure-wave-2-ledger.md`. Both are needed and they reference each other |
-| 3 | **Repair the parked scan** | — | `fleet-status.mjs` is in its fail-closed `PARKED STATE UNKNOWN` state. This build adds three migrations to a queue that cannot be counted |
+| 3 | **Repair the parked scan** | — | `fleet-status.mjs` is in its fail-closed `PARKED STATE UNKNOWN` state. This build adds **five** migrations — WP-1 through WP-5, each with its own apply gate — to a queue that cannot be counted *(count corrected 2026-08-20; WP-4 and WP-5 became migration packages after this line was written)* |
 | 4 | **Fresh backup** | — | `/backup-db`. Last good: 2026-08-09. Free plan, **no PITR** |
 | 5 | **Land the plan docs** | — | They are unpushed local commits; a session starting from `origin/main` cannot read the contract |
 
