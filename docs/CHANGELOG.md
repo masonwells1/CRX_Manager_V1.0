@@ -53,7 +53,11 @@ All significant development milestones, in reverse chronological order.
   recursively inspected, so a quoted AWK program cannot hide its opaque launch.
   Dynamic `NODE_OPTIONS` construction also fails closed before a Node-backed
   executable: POSIX `env` command substitutions, concatenated PowerShell
-  environment paths, and CMD delayed-expansion assignments are covered. Safety
+  environment paths, and CMD delayed-expansion assignments are covered. Shell
+  parameter expansion in an `env` assignment name fails closed as well, so a
+  constructed `${NAME}_OPTIONS` target cannot become `NODE_OPTIONS` at runtime.
+  Escaped `find` action names are normalized before recognizing `-exec`,
+  `-execdir`, `-ok`, or `-okdir`. Safety
   inspection now has a 16,384-character command budget: oversized payloads deny
   before tokenization, bounding adversarial wrapper scans well inside the hook's
   five-second deadline. End-to-end Bash and MCP regressions require the denial

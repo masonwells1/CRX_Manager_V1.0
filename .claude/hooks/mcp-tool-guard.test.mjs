@@ -89,6 +89,7 @@ const watchRunnerGuardCases = [
 const nestedParserGuardCases = [
   ["cmd", "/d", "/c", `\"${awkCommand} -f payload.awk\"`].join(" "),
   ["env", `-S\"${awkCommand} -f payload.awk\"`].join(" "),
+  `${findCommand} . \\${findExecOption} env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs \\;`,
   ["cmd", "/d", "/c", '"NO^DE_OPTIONS=--require=./preload.cjs & node scripts/ordinary-check.mjs"'].join(" "),
   ["cmd", "/d", "/c", '"set NO^DE_OPTIONS=--require=./preload.cjs & node scripts/ordinary-check.mjs"'].join(" "),
   ["env", '--split-string="-i NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"'].join(" "),
@@ -108,6 +109,7 @@ const indirectRunnerGuardCases = [
 ];
 const dynamicNodeOptionsGuardCases = [
   "env $(printf NODE_OPTIONS=--require=./preload.cjs) npm --version",
+  'N=NODE; env "${N}_OPTIONS=--require=./preload.cjs" npm --version',
   'powershell -Command "Set-Item (\'Env:NO\' + \'DE_OPTIONS\') \'--require=./preload.cjs\'; npm --version"',
   'cmd /v:on /c "set N=NODE_OPTIONS & set !N!=--require=./preload.cjs & npm --version"',
 ];
@@ -184,8 +186,8 @@ for (const command of [
   ...watchRunnerGuardCases,
   ...xargsGuardCases,
   ...shellBuiltinNodeOptionsCases,
-  ...nestedParserGuardCases,
   ...dynamicNodeOptionsGuardCases,
+  ...nestedParserGuardCases,
   ...indirectRunnerGuardCases,
 ]) {
   r = runHook({

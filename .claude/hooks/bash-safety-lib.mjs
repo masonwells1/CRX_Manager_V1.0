@@ -646,10 +646,15 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
       return names.includes(basename);
     });
   };
+  const hasDynamicAssignmentName = (token) => shellWordCandidates(token).some((candidate) => {
+    const equalsIndex = candidate.indexOf("=");
+    if (equalsIndex <= 0) return false;
+    return /(?:\$\{|\$[A-Za-z_]|`|![^!\r\n]+!|%[^%\r\n]+%)/.test(candidate.slice(0, equalsIndex));
+  });
   const nodeBackedCommandMentioned = /\b(?:node|nodejs|npm|npx|pnpm|yarn|bun|corepack)(?:\.exe|\.cmd)?\b/i.test(value);
   if (nodeBackedCommandMentioned) {
     const dynamicPosixEnv = tokens.some((token) => tokenNamed(token, ["env"]))
-      && /(?:\$\(|`[^`]*`|<\()/s.test(value);
+      && (/(?:\$\(|`[^`]*`|<\()/s.test(value) || tokens.some(hasDynamicAssignmentName));
     const compactDynamicTarget = value.toLowerCase().replace(/[\s"'`^+()[\]{},]/g, "");
     const powershellMutation = /\b(?:set|new|add|clear|remove)-(?:item|content)\b/i.test(value)
       && compactDynamicTarget.includes("env:node_options")
@@ -813,7 +818,8 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
       }
       if (name === ["fi", "nd"].join("")) {
         for (let scan = cursor + 1; scan < segmentEnd; scan += 1) {
-          if (!/^-(?:exec|execdir|ok|okdir)$/.test(tokens[scan].value)) continue;
+          const actionCandidates = tokens[scan].sawQuoted ? [tokens[scan].value] : shellWordCandidates(tokens[scan]);
+          if (!actionCandidates.some((candidate) => /^-(?:exec|execdir|ok|okdir)$/.test(candidate))) continue;
           const actionStart = scan + 1;
           let actionEnd = actionStart;
           while (actionEnd < segmentEnd && !/^(?:\\;|\+)$/.test(tokens[actionEnd].value)) actionEnd += 1;

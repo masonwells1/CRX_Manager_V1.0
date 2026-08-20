@@ -91,7 +91,9 @@ source operations fail closed; GNU Parallel is parsed as an indirect runner,
 including recursively inspected quoted command bodies. Dynamic environment-name
 construction cannot hide `NODE_OPTIONS` before a Node-backed executable: POSIX
 `env` command substitutions, concatenated PowerShell environment paths, and CMD
-delayed-expansion assignments fail closed. A 16,384-character command budget
+delayed-expansion assignments fail closed. Parameter-expanded `env` assignment
+names fail closed before Node-backed executables, and escaped `find` action names
+are normalized before matching `-exec`/`-execdir`/`-ok`/`-okdir`. A 16,384-character command budget
 denies oversized payloads before tokenization, preventing adversarial wrapper
 chains from exhausting the hook's five-second execution window; real-hook Bash
 and MCP timing regressions require completion in under 1.5 seconds.
