@@ -43,8 +43,8 @@ import { overrideSaveApplicatorId, shouldReassignApplicatorAfterSave, canGenerat
 import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
-import { centsTimesQuantity } from '../lib/money';
-import { applyChemEdit, chemLineBillingHazard, fmt4, inferChemDriver, rateDenominatorIsUnrecognized, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent, type ChemBillingHazard } from '../lib/chemCalculator';
+import { centsTimesQuantity, isExactDecimalText } from '../lib/money';
+import { applyChemEdit, chemLineBillingHazard, fmt4, rateDenominatorIsUnrecognized, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent, type ChemBillingHazard } from '../lib/chemCalculator';
 import { compareToMaxRate, phiHarvestWarning } from '../lib/labelGuardrails';
 import { unitOptionsForForm, isKnownUnit } from '../lib/units';
 import {
@@ -1430,17 +1430,19 @@ export default function JobDetail() {
         byIndex.set(i, `the rate unit "${c.rate_unit}" is measured per something other than acres, so a per-acre quantity cannot be derived from it`);
         return;
       }
+      // Gate on the money helper's OWN grammar, not on Number.isFinite. They are not the
+      // same test: Number('1e3') is a finite 1000, but centsTimesQuantity refuses exponent
+      // notation and returns 0. Gating on the looser test let a save persist quantity 1000
+      // on the line while writing 0 into jobs.total_cost_cents / total_price_cents — a
+      // nonzero line behind a zero total. `<input type="number">` accepts '1e3', so this
+      // is reachable by typing. One grammar, one gate. (Codex P2)
       const badNumber = ([
         ['quantity', c.quantity],
         ['cost', c.cost_per_unit_cents],
         ['price', c.price_per_unit_cents],
-      ] as const).find(([, raw]) => {
-        const text = (raw ?? '').trim();
-        if (text === '') return true;
-        return !Number.isFinite(Number(text));
-      });
+      ] as const).find(([, raw]) => !isExactDecimalText(raw));
       if (badNumber) {
-        byIndex.set(i, `its ${badNumber[0]} is blank or not a number, and would be saved as zero`);
+        byIndex.set(i, `its ${badNumber[0]} is blank, or is not written as a plain number, and would not be billed correctly`);
       }
     });
     return byIndex;
@@ -1686,15 +1688,19 @@ export default function JobDetail() {
     }
     setShareRows(savedShares);
 
-    // `driver` is UI-only and never persisted, so a reloaded row would come back with no
-    // driver and recomputeChemRowForAcres would leave it STALE on an acreage change — a
-    // saved 1.5 pt/ac line over 100 acres would still read 150 pt at 200 acres, under-billing
-    // and under-applying in silence. inferChemDriver recovers the provenance from the saved
-    // numbers: quantity == rate x acres means the quantity WAS rate-derived. Anything else
-    // stays driverless, so a hand-entered total is still never rewritten.
-    const loadedAcres = (j.job_fields || []).reduce(
-      (sum, f) => sum + (parseFloat(f.acres_to_treat?.toString() || '') || 0), 0,
-    );
+    // F06 IS STILL OPEN, DELIBERATELY. `driver` is UI-only and never persisted, so a reloaded
+    // row comes back driverless and recomputeChemRowForAcres leaves it STALE on an acreage
+    // change — a saved 1.5 pt/ac line over 100 acres still reads 150 pt at 200 acres.
+    //
+    // An earlier pass tried to RECOVER the provenance by testing quantity == rate x acres.
+    // That is unsound and was reverted: applyChemEdit back-solves rate_per_acre whenever the
+    // user types a quantity, so a hand-entered total satisfies that same equality BY
+    // CONSTRUCTION. The test cannot separate the two cases, and acting on it would rewrite a
+    // hand-entered total whenever acreage changed — the exact harm the driverless branch
+    // exists to prevent. Under-billing is bad; silently rewriting an operator's typed
+    // chemical amount is worse, so leaving the row as saved is the safe side. (Codex P1)
+    //
+    // The real fix is to PERSIST the driver on job_chemicals, which needs a migration.
     setChemRows(
       (j.job_chemicals || []).map((c) => {
         const quantity = c.quantity?.toString() || '0';
@@ -1716,7 +1722,6 @@ export default function JobDetail() {
           vendor: c.vendor || '',
           customer_supplied: c.customer_supplied ?? false,
           sort_order: c.sort_order,
-          driver: inferChemDriver({ quantity, rate_per_acre }, loadedAcres),
         };
       })
     );

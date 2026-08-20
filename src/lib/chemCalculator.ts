@@ -88,39 +88,13 @@ export function recomputeChemRowForAcres<T extends ChemCalcRow>(row: T, acres: n
   return row;
 }
 
-/**
- * Reconstruct a RELOADED row's lost `driver` from the saved data itself.
- *
- * THE DEFECT this closes. `driver` is UI-only and is never persisted, so every row loaded
- * from job_chemicals comes back with driver === undefined. recomputeChemRowForAcres then
- * leaves such a row untouched on an acreage change — deliberately, because it cannot tell a
- * rate-derived quantity from a hand-entered one and must not silently rewrite the latter.
- *
- * The consequence is that reopening a saved job and changing its acres leaves a rate-driven
- * line STALE: a 1.5 pt/ac line saved over 100 acres still reads 150 pt after the job grows to
- * 200 acres. The bill and the amount actually applied to the field should both double and
- * neither does, with nothing on screen to say so. That is under-billing AND under-application.
- *
- * The provenance is not really lost — it is recoverable. If the stored quantity equals
- * rate × acres for the acreage the row was saved against, the quantity WAS rate-derived.
- * We only claim 'rate' when the saved numbers are self-consistent; anything else keeps
- * today's leave-it-alone behaviour, so a hand-entered total is still never rewritten.
- *
- * A hand-entered total that happens to equal rate × acres is claimed as rate-driven, which
- * is harmless: re-deriving it reproduces the same number.
- */
-export function inferChemDriver(
-  row: { quantity: string; rate_per_acre: string },
-  acres: number,
-): ChemDriver | undefined {
-  if (!(acres > 0)) return undefined;
-  const rate = parseFloat(row.rate_per_acre);
-  const qty = parseFloat(row.quantity);
-  if (!Number.isFinite(rate) || !Number.isFinite(qty) || rate <= 0 || qty <= 0) return undefined;
-  const derived = rate * acres;
-  // `quantity` was stored through fmt4, so allow 4-dp slack plus a relative epsilon.
-  return Math.abs(qty - derived) <= Math.max(1e-4, Math.abs(derived) * 1e-6) ? 'rate' : undefined;
-}
+// `inferChemDriver` USED TO LIVE HERE AND WAS REMOVED AS UNSOUND. It tried to recover a
+// reloaded row's lost `driver` by testing whether quantity == rate × acres. That test cannot
+// work: applyChemEdit back-solves rate_per_acre whenever the user types a quantity, so a
+// HAND-ENTERED total satisfies the same equality by construction. Acting on it would rewrite
+// an operator's typed chemical amount whenever the acreage changed. Do not reintroduce a
+// heuristic here — the driver must be PERSISTED on job_chemicals to be trustworthy.
+// (Codex P1, 2026-08-20)
 
 // ── Total Applied + gallon/lb-equivalent conversion (ChemMan parity #1) ──────
 //

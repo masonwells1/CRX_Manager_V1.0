@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatCents, formatUSD, centsTimesQuantity } from './money';
+import { formatCents, formatUSD, centsTimesQuantity, isExactDecimalText } from './money';
 
 /**
  * money.ts is the canonical formatter for a codebase where money is stored as
@@ -165,6 +165,31 @@ describe('centsTimesQuantity — exact parity with the server safe_cents_qty', (
       // The BigInt path carries the full product before rounding.
       // live: ROUND(999999999::numeric * 1234.5678) = 1234567798765
       expect(centsTimesQuantity(999999999, '1234.5678')).toBe(1234567798765);
+    });
+  });
+
+  describe('isExactDecimalText — the saveability gate (Codex P2)', () => {
+    // The bug this closes: callers gated on Number.isFinite(Number(text)), which is a
+    // LOOSER test than what centsTimesQuantity can actually multiply. Anything the two
+    // disagree about saves a nonzero line against a zero total.
+    it('rejects exactly what centsTimesQuantity cannot multiply', () => {
+      for (const bad of ['1e3', '1E3', '1e-3', 'NaN', 'Infinity', '-Infinity', '0x10', '1,000', 'abc', '', '   ', null, undefined]) {
+        expect(isExactDecimalText(bad)).toBe(false);
+        expect(centsTimesQuantity(150, bad as string)).toBe(0);
+      }
+    });
+
+    it("'1e3' is the reachable case: Number() accepts it and the money path does not", () => {
+      // `<input type="number">` accepts '1e3', so this arrives from the keyboard.
+      expect(Number.isFinite(Number('1e3'))).toBe(true);   // the old, too-loose gate passed it
+      expect(isExactDecimalText('1e3')).toBe(false);       // the real grammar refuses it
+      expect(centsTimesQuantity(150, '1e3')).toBe(0);      // hence: line 1000, total 0
+    });
+
+    it('accepts every plain decimal the grid actually produces', () => {
+      for (const ok of ['0', '150', '1.5', '.5', '5.', '-2.5', '+3', '232.9001', '1234.5678']) {
+        expect(isExactDecimalText(ok)).toBe(true);
+      }
     });
   });
 });

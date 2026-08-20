@@ -204,12 +204,18 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     expect(args.p_job_payload.total_cost_cents).toBe(15);
   }, 30000);
 
-  it('a RELOADED rate line follows an acreage change instead of going stale', async () => {
-    // The F06 defect: `driver` is never persisted, so a reloaded row used to be left
-    // untouched when the acreage changed. A 1.5 pt/ac line saved over 100 acres stayed at
-    // 150 pt when the job grew to 200 acres — the bill AND the amount applied to the field
-    // should both double, and neither did, silently. inferChemDriver recovers the
-    // provenance at load time; this proves it through the real page, not just the helper.
+  it('a RELOADED line keeps the operator\'s saved quantity when the acreage changes', async () => {
+    // F06 IS STILL OPEN and this test pins the SAFE side of it, not a fix. `driver` is never
+    // persisted, so a reloaded row is left untouched when the acreage changes: a 1.5 pt/ac
+    // line saved over 100 acres still reads 150 pt after the job grows to 200. That
+    // under-bills and under-applies.
+    //
+    // An earlier pass "fixed" it by inferring the driver from `quantity == rate x acres`.
+    // Codex refuted it (P1) and the inference was reverted: applyChemEdit back-solves
+    // rate_per_acre whenever the user types a quantity, so a HAND-ENTERED total satisfies
+    // that equality by construction and would have been silently rewritten too. Rewriting an
+    // operator's typed chemical amount is worse than leaving it stale, so until the driver is
+    // persisted on job_chemicals the page must not touch a reloaded quantity at all.
     mockFrom.mockImplementation((table: string) => {
       if (table === 'jobs') {
         return buildChain({
@@ -242,10 +248,52 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     const chemTab = screen.getAllByRole('button').find((b) => /chemical/i.test(b.textContent || ''));
     fireEvent.click(chemTab as HTMLElement);
 
-    // The chemical quantity must have followed to 300 pt.
+    // The saved quantity must be left exactly as the operator saved it — NOT re-derived.
     await waitFor(() => {
       const values = screen.getAllByRole('spinbutton').map((el) => (el as HTMLInputElement).value);
-      expect(values).toContain('300');
+      expect(values).toContain('150');
+    }, { timeout: 15000 });
+    const after = screen.getAllByRole('spinbutton').map((el) => (el as HTMLInputElement).value);
+    expect(after).not.toContain('300');
+  }, 30000);
+
+  it('refuses a quantity typed in exponent notation instead of billing it as zero', async () => {
+    // Codex P2. `<input type="number">` accepts '1e3' as a valid value. The save gate used
+    // Number.isFinite(Number(text)), which passes it, while centsTimesQuantity refuses
+    // exponent notation and returns 0 — so the line saved a quantity of 1000 while
+    // jobs.total_cost_cents / total_price_cents were written as 0. Both now use one grammar.
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'jobs') {
+        return buildChain({
+          data: makeJob({
+            ...HAZARD_CHEM,
+            quantity: 10, unit: 'pt', rate_per_acre: 0.1, rate_unit: 'pt/ac',
+          }),
+          error: null,
+        });
+      }
+      if (table === 'products') return buildChain({ data: [DRY_PRODUCT], error: null });
+      return buildChain({ data: [], error: null });
+    });
+    render(
+      <MemoryRouter initialEntries={['/jobs/job-1?tab=chemicals']}>
+        <Routes><Route path="/jobs/:id" element={<JobDetail />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    const qtyInput = await waitFor(() => {
+      const found = screen.getAllByRole('spinbutton')
+        .find((el) => (el as HTMLInputElement).value === '10');
+      if (!found) throw new Error('quantity input not found');
+      return found as HTMLInputElement;
+    }, { timeout: 15000 });
+    fireEvent.change(qtyInput, { target: { value: '1e3' } });
+
+    expect(await screen.findByText(/cannot be saved/i, {}, { timeout: 15000 })).toBeTruthy();
+    const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
+    fireEvent.click(saveButtons[0]);
+    await waitFor(() => {
+      expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
     }, { timeout: 15000 });
   }, 30000);
 
@@ -284,7 +332,7 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     fireEvent.click(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
     await waitFor(() => expect(mockToast).toHaveBeenCalled());
     const errors = mockToast.mock.calls.filter((c) => c[0] === 'error').map((c) => String(c[1]));
-    expect(errors.some((m) => /blank or not a number/i.test(m))).toBe(true);
+    expect(errors.some((m) => /its price is blank, or is not written as a plain number/i.test(m))).toBe(true);
     expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
   }, 30000);
 

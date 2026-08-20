@@ -62,6 +62,26 @@ export function formatUSD(dollars: number): string {
 // round half away from zero. For the non-negative values this app deals in, that is the
 // same rule Math.round applies — the difference is purely that the product is exact.
 
+// The ONE grammar this module can multiply exactly: a plain decimal. Exponent notation
+// ('1e3'), NaN, Infinity and stray text are all outside it. Every caller that decides
+// whether an amount is saveable MUST gate on `isExactDecimalText` rather than on
+// `Number.isFinite(Number(text))`, or the two disagree and the save persists a nonzero
+// line against a zero total. `<input type="number">` really does accept '1e3' as a valid
+// value, so that divergence is reachable from the keyboard, not just in theory. (Codex P2)
+const PLAIN_DECIMAL = /^([+-]?)(\d*)(?:\.(\d*))?$/;
+
+/**
+ * True when `text` is a plain decimal that `centsTimesQuantity` can multiply EXACTLY.
+ * This is the saveability gate: if it returns false, the value must be refused, never
+ * coerced — coercing is what silently produced a zero total behind a nonzero line.
+ */
+export function isExactDecimalText(text: string | number | null | undefined): boolean {
+  const raw = String(text ?? '').trim();
+  if (raw === '') return false;
+  const m = PLAIN_DECIMAL.exec(raw);
+  return m != null && !(m[2] === '' && (m[3] ?? '') === '');
+}
+
 /**
  * Multiply an integer CENTS amount by a decimal quantity and round to whole cents
  * EXACTLY as the server's `safe_cents_qty` does. Returns 0 for a blank/non-finite
@@ -77,7 +97,7 @@ export function centsTimesQuantity(cents: number, quantityText: string | number)
   const raw = String(quantityText ?? '').trim();
   if (raw === '') return 0;
   // Reject anything that is not a plain decimal (exponents, NaN, Infinity, stray text).
-  const m = /^([+-]?)(\d*)(?:\.(\d*))?$/.exec(raw);
+  const m = PLAIN_DECIMAL.exec(raw);
   if (!m || (m[2] === '' && (m[3] ?? '') === '')) return 0;
 
   const negative = m[1] === '-';

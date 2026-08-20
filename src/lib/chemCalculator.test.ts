@@ -9,7 +9,6 @@ import {
   baseUnitOfRate,
   reconcileChemAutofillUnits,
   chemLineBillingHazard,
-  inferChemDriver,
   rateDenominatorIsUnrecognized,
   type ChemCalcRow,
 } from './chemCalculator';
@@ -485,37 +484,25 @@ describe('chemCalculator — rateDenominatorIsUnrecognized (the original diverge
   });
 });
 
-describe('chemCalculator — inferChemDriver (recovers provenance lost on reload)', () => {
-  it("claims 'rate' when the saved quantity IS rate x acres", () => {
-    expect(inferChemDriver({ quantity: '150', rate_per_acre: '1.5' }, 100)).toBe('rate');
-    expect(inferChemDriver({ quantity: '3200', rate_per_acre: '32' }, 100)).toBe('rate');
+describe('chemCalculator — a RELOADED row is never rewritten (Codex P1 revert)', () => {
+  // An earlier pass inferred driver === 'rate' from `quantity == rate x acres` and let an
+  // acreage change re-derive the quantity. That is unsound: applyChemEdit back-solves
+  // rate_per_acre when the user TYPES a quantity, so a hand-entered total satisfies the
+  // same equality by construction. These pin the safe behaviour so it cannot regress.
+  it('a hand-entered quantity produces the very equality the heuristic relied on', () => {
+    // updateChemRow writes the typed value into the row FIRST, then calls applyChemEdit on
+    // it — applyChemEdit only back-solves the other side. Mirror that here.
+    const typed = applyChemEdit(row({ rate_per_acre: '', quantity: '150' }), 'quantity', '150', 100);
+    expect(typed.driver).toBe('qty');
+    expect(typed.rate_per_acre).toBe('1.5');
+    // 1.5 x 100 === 150 exactly — indistinguishable from a rate-driven row once reloaded.
+    expect(parseFloat(typed.rate_per_acre) * 100).toBe(parseFloat(typed.quantity));
   });
 
-  it('leaves a hand-entered total alone — the behaviour that must NOT regress', () => {
-    // 200 is not 1.5 x 100, so the user typed it. Re-deriving would destroy their number.
-    expect(inferChemDriver({ quantity: '200', rate_per_acre: '1.5' }, 100)).toBeUndefined();
-  });
-
-  it('tolerates the 4-dp rounding fmt4 applied when the row was saved', () => {
-    // 1.7 x 137 = 232.9; a stored 232.9001 is the same line, not a hand-entered one.
-    expect(inferChemDriver({ quantity: '232.9001', rate_per_acre: '1.7' }, 137)).toBe('rate');
-  });
-
-  it('claims nothing without usable acres, rate, or quantity', () => {
-    expect(inferChemDriver({ quantity: '150', rate_per_acre: '1.5' }, 0)).toBeUndefined();
-    expect(inferChemDriver({ quantity: '150', rate_per_acre: '' }, 100)).toBeUndefined();
-    expect(inferChemDriver({ quantity: '', rate_per_acre: '1.5' }, 100)).toBeUndefined();
-    expect(inferChemDriver({ quantity: '0', rate_per_acre: '1.5' }, 100)).toBeUndefined();
-    expect(inferChemDriver({ quantity: 'abc', rate_per_acre: '1.5' }, 100)).toBeUndefined();
-  });
-
-  it('closes the defect end to end: a reloaded rate line now follows the acreage', () => {
-    // Saved: 1.5 pt/ac over 100 acres = 150 pt. The job then grows to 200 acres.
-    const saved = { quantity: '150', rate_per_acre: '1.5' };
-    const stale = recomputeChemRowForAcres({ ...saved }, 200);
-    expect(stale.quantity).toBe('150');            // the bug: unchanged, so under-billed
-
-    const recovered = { ...saved, driver: inferChemDriver(saved, 100) };
-    expect(recomputeChemRowForAcres(recovered, 200).quantity).toBe('300');  // doubles, correctly
+  it('leaves a driverless row exactly as saved when the acreage changes', () => {
+    const reloaded = row({ quantity: '150', rate_per_acre: '1.5' });  // no driver, as loaded
+    expect(recomputeChemRowForAcres(reloaded, 200).quantity).toBe('150');
+    expect(recomputeChemRowForAcres(reloaded, 50).quantity).toBe('150');
   });
 });
+
