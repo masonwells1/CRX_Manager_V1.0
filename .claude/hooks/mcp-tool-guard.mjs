@@ -17,14 +17,17 @@
 //   - write_file / edit_block / move_file / create_directory: deny if the
 //     target path is a .env* file, an EXISTING file under supabase/migrations/,
 //     .claude/settings.json, or any .claude/hooks/*.mjs file.
-//   - kill_process / set_config_value: not gated here (no command/path text to
-//     check against these patterns; set_config_value already requires explicit
-//     "ask" approval in settings.json).
+//   - process-signal tools: denied while the protected maintenance producer is
+//     tracked at HEAD, because a signal trap can execute shell state assembled
+//     across earlier persistent-process interactions.
+//   - set_config_value: not gated here; it already requires explicit "ask"
+//     approval in settings.json.
 //
 // FAIL-OPEN, LOUD: any internal error here → allow, with a stderr warning. A
 // broken guard must never brick a session.
 
 import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import {
   checkCommandDeep,
@@ -55,21 +58,39 @@ const toolName = String(payload?.tool_name || "");
 // blind spot one server over. Match the tool NAME on any mcp__<server>__
 // prefix; the checks below only act on command/path fields, so an unrelated
 // server's same-named tool is still handled correctly (or passes through).
-// kill_process/set_config_value are matched for completeness/future extension
-// but carry no specific check below (see header).
-const DC_TOOL_RE = /^mcp__[\w-]+__(start_process|interact_with_process|write_file|edit_file|edit_block|move_file|create_file|create_directory|delete_file|kill_process|set_config_value)$/;
+const DC_TOOL_RE = /^mcp__[\w-]+__(start_process|interact_with_process|write_file|write_text_file|append_file|edit_file|edit_block|replace_in_file|move_file|copy_file|rename_file|create_file|create_directory|move_directory|copy_directory|delete_file|delete_directory|kill_process|send_signal|signal_process|terminate_process|stop_process|set_config_value)$/;
 const DC_RUN_RE = /^mcp__[\w-]+__(start_process|interact_with_process)$/;
 const DC_INTERACT_RE = /^mcp__[\w-]+__interact_with_process$/;
-const DC_WRITE_RE = /^mcp__[\w-]+__(write_file|edit_file|edit_block|move_file|create_file|create_directory|delete_file)$/;
+const DC_SIGNAL_RE = /^mcp__[\w-]+__(kill_process|send_signal|signal_process|terminate_process|stop_process)$/;
+const DC_WRITE_RE = /^mcp__[\w-]+__(write_file|write_text_file|append_file|edit_file|edit_block|replace_in_file|move_file|copy_file|rename_file|create_file|create_directory|move_directory|copy_directory|delete_file|delete_directory)$/;
 
 if (!DC_TOOL_RE.test(toolName)) nothing();
 
 const input = payload?.tool_input && typeof payload.tool_input === "object" ? payload.tool_input : {};
 const cwd = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const protectedProducerName = ["apply-live-testdata-maintenance-", "20260812.mjs"].join("");
+const protectedProducerRepoPath = `scripts/${protectedProducerName}`;
 const protectedProducerPath = path.join(cwd, "scripts", protectedProducerName);
 
+function producerTrackedAtHead() {
+  const result = spawnSync(
+    "git",
+    ["-C", cwd, "cat-file", "-e", `HEAD:${protectedProducerRepoPath}`],
+    { stdio: "ignore", windowsHide: true, timeout: 1_500 }
+  );
+  return result.status === 0;
+}
+
 try {
+  const producerProtectionActive = producerTrackedAtHead() || existsSync(protectedProducerPath);
+
+  if (DC_SIGNAL_RE.test(toolName) && producerProtectionActive) {
+    out(
+      "block",
+      `MCP TOOL GUARD (${toolName}): process signaling is disabled while the protected maintenance producer is tracked; a signal trap can execute persistent shell state outside single-call inspection.`
+    );
+  }
+
   if (DC_RUN_RE.test(toolName)) {
     // Desktop Commander's fields vary by tool/version — gather every plausible
     // command/text field rather than guessing one exact name.
@@ -77,7 +98,7 @@ try {
       .filter((v) => typeof v === "string" && v.length > 0)
       .join("\n");
 
-    if (DC_INTERACT_RE.test(toolName) && existsSync(protectedProducerPath)) {
+    if (DC_INTERACT_RE.test(toolName) && producerProtectionActive) {
       out(
         "block",
         `MCP TOOL GUARD (${toolName}): interaction with an existing process is disabled while the protected maintenance producer exists; cross-call shell continuations cannot be inspected safely. Launch the complete command in a fresh process instead.`
@@ -121,6 +142,14 @@ try {
       // through an MCP write tool would skip every one of them (Codex P1
       // 2026-07-13 round 5). The native Write path is the only guarded path.
       const isMigrationPath = surfaces.some((s) => /(^|\/)supabase\/migrations\/[\w.-]+\.sql$/i.test(s));
+      const isProtectedProducer = surfaces.some((s) => s.toLowerCase().endsWith(`/${protectedProducerRepoPath.toLowerCase()}`));
+      const isGitExclusionControl = surfaces.some((s) =>
+        /(^|\/)\.gitignore$/i.test(s)
+        || /(^|\/)\.git(?:\/[^/]+)*\/info\/exclude$/i.test(s)
+        || /(^|\/)\.git(?:\/[^/]+)*\/config(?:\.worktree)?$/i.test(s)
+        || /(^|\/)\.gitconfig$/i.test(s)
+        || /(^|\/)\.config\/git\/(?:config|ignore)$/i.test(s)
+      );
 
       // Whole-directory targets (Codex P1 2026-07-13 round 3): moving/renaming
       // `supabase/migrations`, `supabase`, `.claude`, or `.claude/hooks` as a
@@ -130,7 +159,7 @@ try {
         /(^|\/)(supabase(\/migrations)?|\.claude(\/hooks)?)\/?$/i.test(s)
       );
 
-      if (isEnv || isSettings || isHookFile || isMigrationPath || isProtectedDir) {
+      if (isEnv || isSettings || isHookFile || isMigrationPath || isProtectedProducer || isGitExclusionControl || isProtectedDir) {
         out(
           "block",
           `MCP TOOL GUARD (${toolName}): use the native Edit/Write tools so the guard hooks can inspect this change (protected path: ${targetRaw}).`

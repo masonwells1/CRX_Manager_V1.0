@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { SECURITY_COMMAND_CHAR_BUDGET } from "./bash-safety-lib.mjs";
@@ -381,10 +381,13 @@ eq(r.stdout.trim(), "", "DC write_file to an ordinary source file is silent (all
   }
 }
 
-// ── kill_process / set_config_value: matched by the tool-name regex but no
-//    specific check implemented (documented judgment call) — pass through.
+// ── process signals are denied while the producer is tracked at HEAD ───────
 r = runHook({ tool_name: "mcp__Desktop_Commander__kill_process", tool_input: { pid: 123 } });
-eq(r.stdout.trim(), "", "kill_process has no path/command check, passes through silently");
+ok(isDeny(r), "kill_process cannot trigger a persistent-shell signal trap while the producer is tracked");
+for (const signalTool of ["send_signal", "signal_process", "terminate_process", "stop_process"]) {
+  r = runHook({ tool_name: `mcp__Desktop_Commander__${signalTool}`, tool_input: { pid: 123, signal: "SIGINT" } });
+  ok(isDeny(r), `${signalTool} cannot trigger a persistent-shell signal trap while the producer is tracked`);
+}
 
 // ── fail-open on malformed stdin ────────────────────────────────────────────
 r = spawnSync(process.execPath, [path.join(__dirname, "mcp-tool-guard.mjs")], { input: "not json", encoding: "utf8" });
@@ -445,5 +448,68 @@ r = runHook({ tool_name: "mcp__Desktop_Commander__move_file", tool_input: { sour
 ok(isDeny(r), "moving the supabase DIRECTORY (parent of migrations) is denied");
 r = runHook({ tool_name: "mcp__Desktop_Commander__move_file", tool_input: { source: "docs", destination: "docs-old" } });
 eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
+
+// ── exact stateful bypass regression: HEAD tracking survives relocation ────
+{
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "mcpguard-producer-head-"));
+  const producerRelative = ["scripts/apply-live-testdata-maintenance-", "20260812.mjs"].join("");
+  const alternateRelative = "scripts/ignored-maintenance-copy.mjs";
+  try {
+    mkdirSync(path.join(tmp, "scripts"), { recursive: true });
+    writeFileSync(path.join(tmp, producerRelative), "console.log('tracked producer');\n");
+    const isolatedGitEnv = { ...process.env };
+    for (const variableName of [
+      "GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_PREFIX",
+      "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ]) delete isolatedGitEnv[variableName];
+    for (const args of [
+      ["init"],
+      ["config", "user.email", "guard-test@example.invalid"],
+      ["config", "user.name", "Guard Test"],
+      ["config", "commit.gpgsign", "false"],
+      ["add", producerRelative],
+      ["commit", "-m", "track producer"],
+    ]) {
+      const gitResult = spawnSync("git", args, { cwd: tmp, encoding: "utf8", env: isolatedGitEnv, windowsHide: true });
+      eq(gitResult.status, 0, `temporary producer repository setup succeeds: git ${args[0]}`);
+    }
+
+    r = runHook({
+      tool_name: "mcp__Desktop_Commander__move_file",
+      tool_input: { source: producerRelative, destination: alternateRelative },
+    }, tmp);
+    ok(isDeny(r), "MCP cannot relocate the protected producer to an alternate path");
+    for (const fileTool of ["copy_file", "rename_file", "delete_file"]) {
+      r = runHook({
+        tool_name: `mcp__filesystem__${fileTool}`,
+        tool_input: { source: producerRelative, path: producerRelative, destination: alternateRelative },
+      }, tmp);
+      ok(isDeny(r), `${fileTool} cannot affect the protected producer`);
+    }
+    for (const exclusionPath of [".gitignore", ".git/info/exclude", ".git/config", ".git/config.worktree", ".gitconfig", ".config/git/ignore"]) {
+      r = runHook({ tool_name: "mcp__Desktop_Commander__write_file", tool_input: { path: exclusionPath } }, tmp);
+      ok(isDeny(r), `MCP cannot edit Git exclusion control ${exclusionPath}`);
+    }
+
+    renameSync(path.join(tmp, producerRelative), path.join(tmp, alternateRelative));
+    writeFileSync(path.join(tmp, ".git", "info", "exclude"), `${alternateRelative}\n`);
+    r = runHook({
+      tool_name: "mcp__Desktop_Commander__interact_with_process",
+      tool_input: { pid: 321, input: "$COMMAND = 'node'; $TARGET = 'scripts/ignored-maintenance-copy.mjs'" },
+    }, tmp);
+    ok(isDeny(r), "persistent input stays denied while the tracked producer is absent and ignored");
+    r = runHook({ tool_name: "mcp__Desktop_Commander__kill_process", tool_input: { pid: 321 } }, tmp);
+    ok(isDeny(r), "process signaling stays denied while the tracked producer is absent and ignored");
+
+    renameSync(path.join(tmp, alternateRelative), path.join(tmp, producerRelative));
+    r = runHook({
+      tool_name: "mcp__Desktop_Commander__interact_with_process",
+      tool_input: { pid: 321, input: "Write-Output restored" },
+    }, tmp);
+    ok(isDeny(r), "persistent input remains denied after the exact producer blob is restored");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
 
 console.log(`mcp-tool-guard: ${pass} assertions passed`);

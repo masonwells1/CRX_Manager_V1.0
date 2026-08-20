@@ -4,6 +4,10 @@ All significant development milestones, in reverse chronological order.
 
 ## 2026-08-20 — Close the remaining PR #402 maintenance-command guard gaps
 
+- Stateful MCP protection now follows the reviewed executor tracked at `HEAD`
+  instead of mutable worktree existence. File tools cannot relocate that
+  executor or edit repository ignore controls, and process-signal tools cannot
+  trigger a trap assembled across earlier interactive inputs.
 - The shared shell-safety classifier now treats `awk`, `gawk`, `mawk`, and
   `nawk` programs as opaque launchers while the protected maintenance producer
   exists, including execution through WSL and BusyBox/Toybox-style multi-call
