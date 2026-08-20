@@ -134,7 +134,7 @@ If `settled` is false, the report must say the section is **incomplete**, even w
 
 ## Step 4 — Write the report
 
-Write to `docs/audits/gauntlet/<YYYY-MM-DD>-section-<NN>-<slug>-refresh.md` (real date from `(Get-Date).ToString("yyyy-MM-dd")`), following the shape of the existing section reports in that folder: verdict, scope, method, findings by severity with citations, verified-safe, and a recommended next action per finding.
+Write to `docs/audits/gauntlet/<YYYY-MM-DD>-section-<NN>-<slug>-refresh.md` (real date from `TZ='America/Chicago' date +%F`), following the shape of the existing section reports in that folder: verdict, scope, method, findings by severity with citations, verified-safe, and a recommended next action per finding.
 
 ## Step 5 — Update the queue index (required)
 

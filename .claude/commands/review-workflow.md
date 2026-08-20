@@ -6,7 +6,7 @@ The heavy lifting now runs as the deterministic **`review-workflow` Workflow** (
 
 **Verify every finding against the actual source code and the live Supabase database before it goes in the report.** Do not trust:
 - the auto-detected problems in the workflow map (they come from shallow regex grep),
-- the lifecycle claims in `CLAUDE.md`,
+- the lifecycle claims in the docs (`docs/manual/ARCHITECTURE.md`, `docs/reference/`),
 - prior audit docs in `docs/audits/`,
 - or the verification note already inside the HTML.
 
@@ -22,16 +22,16 @@ git status --short
 ```
 
 - `npm run generate-map` rewrites `docs/app-workflow-map.html` from the current code so the graph + auto-detected problems reflect HEAD, not a stale commit. Capture the console output (route count, RPC-call count, problem count).
-- Note: `.agents/`, `.codex/`, and `scripts/generate-workflow-map.mjs` are intentionally untracked — do NOT flag them.
+- Note: `.agents/` and `.codex/` are tracked generated adapters (regenerated via `scripts/sync-agent-workflows.mjs`); `scripts/generate-workflow-map.mjs` is tracked too. Flag hand-edits to generated files, not regeneration diffs.
 
-Then, for grounding (not as truth), make sure the regenerated `docs/app-workflow-map.html`, `.claude/schema-registry.json` (flag if >7 days old; prefer the live DB), and the `CLAUDE.md` Business Logic + Schema Gotchas sections are available — the workflow's layer agents read these themselves.
+Then, for grounding (not as truth), make sure the regenerated `docs/app-workflow-map.html`, `.claude/schema-registry.json` (flag if >7 days old; prefer the live DB), and the lifecycle/business-logic docs (`docs/manual/ARCHITECTURE.md`, `docs/reference/database-schema.md`, `docs/reference/gotchas.md`) are available — the workflow's layer agents read these themselves.
 
 ## Step 1 — Run the review-workflow Workflow
 
 Invoke the `review-workflow` Workflow (no args needed). It runs four layers concurrently, each reading actual code + querying the live DB via Supabase MCP, then verifies BLOCKER/HIGH findings adversarially. The four layers it encodes (full prompts live in the script):
 
 - **Layer A — Graph & connection integrity** (orphan pages, broken navigation, dead RPCs, page→RPC wiring, role gating). Knows the false-positive traps: `/customers/new`→`:id`, TopBar bell panels, FinancialDashboard array-config menu, `INTERNAL_RPCS`, `/payments` is intentionally admin+sales, `get_field_geojson` is live.
-- **Layer B — Lifecycle / state-machine integrity** (4-way reconciliation per entity: live CHECK vs CLAUDE.md vs map SVG vs actual RPC transitions; ghost states, orphan states, status-string drift like `'void'` vs `'voided'`).
+- **Layer B — Lifecycle / state-machine integrity** (4-way reconciliation per entity: live CHECK vs documented lifecycle (`docs/manual/ARCHITECTURE.md`) vs map SVG vs actual RPC transitions; ghost states, orphan states, status-string drift like `'void'` vs `'voided'`).
 - **Layer C — Cross-entity flow integrity** (Quote→Order→Delivery→Invoice→Payment + Commission/PO/Return/Blend; can any entity get permanently stranded?).
 - **Layer D — Business-logic invariant sweep** (money-as-cents, RLS on every table, idempotency, SECURITY DEFINER `search_path`, immutability, no overload collisions, advisors, `updated_at` on the wrong tables).
 
@@ -59,7 +59,7 @@ De-duplicate across layers. The workflow already assigned severity and verified 
 
 ## Step 3 — Write the report
 
-Write to `docs/audits/<YYYY-MM-DD>-workflow-review.md` (get the date from a real clock — `(Get-Date).ToString("yyyy-MM-dd")`) with this structure:
+Write to `docs/audits/<YYYY-MM-DD>-workflow-review.md` (get the date from a real clock — `TZ='America/Chicago' date +%F`) with this structure:
 
 ```markdown
 # Workflow & Business-Logic Review — <YYYY-MM-DD>
@@ -81,7 +81,7 @@ Method: regenerated map + read live source + queried live Supabase + adversarial
 ### ⚪ LOW (<n>)
 
 ## Lifecycle reconciliation table
-| Entity | Live CHECK | CLAUDE.md | Map SVG | RPC transitions | Agree? |
+| Entity | Live CHECK | Documented (ARCHITECTURE.md) | Map SVG | RPC transitions | Agree? |
 |--------|-----------|-----------|---------|-----------------|--------|
 <one row per entity; mark mismatches>
 

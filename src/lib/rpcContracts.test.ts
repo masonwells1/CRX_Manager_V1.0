@@ -1465,6 +1465,11 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'delete_prepay_credit',
   'delete_purchase_order',
   'dismiss_watchdog_flag',
+  // Public below-cost wrapper; the replay pair lives in its private impl. See
+  // its delegated note in IDEMPOTENCY_BODY_EXEMPT below. (No quoted word may
+  // appear in a comment inside this array: rpcFixtureLiveDiff.test.ts extracts
+  // entries by regex over the whole literal and would read it as an RPC name.)
+  'draw_down_quote',
   'duplicate_quote',
   'edit_delivery',
   'edit_prepay_credit',
@@ -1665,6 +1670,18 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // _impl has no `authenticated` EXECUTE, so the wrapper is the only reachable
   // entry point.
   batch_apply_prepayments: 'delegated',
+  // Verified against the live body 2026-08-15: the public wrapper is two
+  // statements — PERFORM _begin_below_cost_money_write('draw_down_quote', ...)
+  // to declare the below-cost operation context and authorize, then RETURN
+  // _draw_down_quote_below_cost_impl_20260810(p_quote_id, p_draws,
+  // p_performed_by, p_idempotency_key). It forwards the key and deliberately
+  // holds no replay logic of its own; the impl owns the canonical
+  // check_idempotency/save_idempotency pair under the one 'draw_down_quote'
+  // namespace, so a replay through the wrapper finds what the impl saved.
+  // Duplicating the check here would record the same key twice. The impl has no
+  // anon/authenticated/service_role EXECUTE — asserted by the postflight in
+  // migration 20260816120000 — so the wrapper is the only reachable entry point.
+  draw_down_quote: 'delegated',
   // Required-key wrappers fail closed before delegating to the preserved,
   // directly non-executable implementations that own replay and mutation.
   create_invoice_for_unbilled_delivery: 'delegated',
@@ -1799,6 +1816,305 @@ function bodyUsesIdempotency(body: string): boolean {
   return /idempotency_keys|check_idempotency|save_idempotency|_claim_bound_lifecycle_idempotency|_bind_completed_lifecycle_idempotency/i.test(body);
 }
 
+/**
+ * `ALTER FUNCTION x(...) RENAME TO y` → y's body is x's latest CREATE *before*
+ * that file. Built once, ascending, so a later rename of the same name wins.
+ *
+ * This exists because 20260812115237 (live 2026-08-12) renames each public
+ * money RPC to a private `_..._below_cost_impl_20260810` and re-CREATEs the
+ * public name as a thin wrapper. The impl therefore has NO `CREATE FUNCTION`
+ * of its own anywhere on disk — searching for one finds nothing, and a body
+ * scan that stops there would conclude the idempotency block had vanished.
+ */
+const RENAME_SOURCES: Map<string, { fromName: string; fileIdx: number }> = (() => {
+  const map = new Map<string, { fromName: string; fileIdx: number }>();
+  const re =
+    /ALTER\s+FUNCTION\s+(?:public\.)?([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*RENAME\s+TO\s+(?:public\.)?([A-Za-z_][A-Za-z0-9_]*)/gi;
+  const files = getMigrationFiles();
+  for (let i = 0; i < files.length; i++) {
+    let m: RegExpExecArray | null;
+    re.lastIndex = 0;
+    while ((m = re.exec(files[i].content)) !== null) {
+      map.set(m[2].toLowerCase(), { fromName: m[1], fileIdx: i });
+    }
+  }
+  return map;
+})();
+
+/** Latest CREATE body of `rpc` among files[0..maxIdx], following renames. */
+function resolveFunctionBody(rpc: string, maxIdx?: number, seen = new Set<string>()): string | null {
+  const files = getMigrationFiles();
+  const upTo = maxIdx === undefined ? files.length - 1 : maxIdx;
+  const sigRe = new RegExp(
+    `CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+(?:public\\.)?${rpc}\\s*\\(`,
+    'i',
+  );
+  for (let i = upTo; i >= 0; i--) {
+    const sigIdx = files[i].content.search(sigRe);
+    if (sigIdx === -1) continue;
+    const after = files[i].content.slice(sigIdx);
+    const bodyMatch = after.match(/AS\s+\$([A-Za-z_]*)\$([\s\S]*?)\$\1\$/);
+    return bodyMatch ? bodyMatch[2] : after;
+  }
+  const key = rpc.toLowerCase();
+  const edge = RENAME_SOURCES.get(key);
+  if (edge && !seen.has(key)) {
+    seen.add(key);
+    // Strictly BEFORE the renaming file: the same file usually re-CREATEs the
+    // old public name as the wrapper, and resolving to that would loop.
+    return resolveFunctionBody(edge.fromName, edge.fileIdx - 1, seen);
+  }
+  return null;
+}
+
+/**
+ * The argument list of a call whose opening paren sits at `open - 1`, matched
+ * with balanced parens so a nested call or a cast does not truncate it.
+ * Single-quoted literals are skipped so a `')'` inside a message cannot close
+ * the list early. Returns null if the call is never closed.
+ */
+function callArgumentList(body: string, open: number): string | null {
+  let depth = 1;
+  let inLiteral = false;
+  for (let i = open; i < body.length; i++) {
+    const ch = body[i];
+    if (inLiteral) {
+      if (ch === "'") inLiteral = false;
+      continue;
+    }
+    if (ch === "'") {
+      inLiteral = true;
+    } else if (ch === '(') {
+      depth++;
+    } else if (ch === ')') {
+      depth--;
+      if (depth === 0) return body.slice(open, i);
+    }
+  }
+  return null;
+}
+
+/**
+ * First top-level argument of an already-unwrapped argument list — commas inside
+ * nested parens or string literals do not split.
+ */
+function firstArgument(args: string): string {
+  let depth = 0;
+  let inLiteral = false;
+  for (let i = 0; i < args.length; i++) {
+    const ch = args[i];
+    if (inLiteral) {
+      if (ch === "'") inLiteral = false;
+      continue;
+    }
+    if (ch === "'") inLiteral = true;
+    else if (ch === '(') depth++;
+    else if (ch === ')') depth--;
+    else if (ch === ',' && depth === 0) return args.slice(0, i);
+  }
+  return args;
+}
+
+/**
+ * True when `rhs` is the idempotency key ITSELF, not merely an expression that
+ * mentions it.
+ *
+ * The distinction is the whole point. `v_key := p_idempotency_key` and
+ * `v_key := coalesce(p_idempotency_key, gen_random_uuid()::text)` both leave
+ * v_key carrying the caller's key, so forwarding v_key to a delegate genuinely
+ * forwards the key. `v_msg := 'idempotency=' || p_idempotency_key` does not —
+ * it builds a log line. Crediting that as an alias let a wrapper forward a
+ * DIFFERENT value to its private impl, hit the impl's own idempotency block,
+ * and have the whole chain scored as covered while every call in it claimed a
+ * fresh key. That is the exact failure `usesIdempotencyThroughDelegates` was
+ * written to catch, so it must not be reachable by naming a variable badly.
+ *
+ * Only identity-preserving wrappers are unwrapped, and only through their FIRST
+ * argument, which is where coalesce/nullif carry the value.
+ *
+ * KNOWN LIMIT, recorded because an automated reviewer raised the narrower half
+ * of it on 2026-08-13 and the narrower half is not where the give actually is.
+ *
+ * The reviewer's point was that `coalesce(p_idempotency_key, gen_random_uuid())`
+ * is not identity-preserving: on a NULL input it mints a fresh key, so a retry
+ * claims a new idempotency record instead of replaying. That is true as stated.
+ * It is also not the failure this guard exists to stop, for two reasons. A NULL
+ * key is the caller declining idempotency — the parameter is
+ * `DEFAULT NULL` — and forwarding NULL unchanged replays exactly as poorly, so
+ * the coalesce costs a junk row, not a lost replay. And `trim`/`nullif` are
+ * deterministic in the caller's key, so both attempts of a retry normalise
+ * identically and still collide as intended.
+ *
+ * The real give is one level up, in `usesIdempotencyThroughDelegates`:
+ * `forwardsKey` is a word-boundary regex over the delegate's raw argument text,
+ * so ANY argument merely CONTAINING the token — `CASE WHEN p_idempotency_key IS
+ * NULL THEN gen_random_uuid()::text ELSE ... END` — satisfies it without ever
+ * reaching this function. Tightening `rhsIsKeyAlias` therefore does not close
+ * what the reviewer described; it only narrows a branch that, measured against
+ * the corpus on 2026-08-13, matches nothing: 52 routines wrap the key inline in
+ * a condition or a call argument, and ZERO assign a wrapped key to a local,
+ * which is the only shape that reaches this function at all.
+ *
+ * Left as is deliberately. Tightening `forwardsKey` into a real expression
+ * analysis is the fix that would matter, and it is a change to a guard covering
+ * 52 live call sites — worth doing on its own evidence, not folded into a
+ * security PR as a drive-by.
+ */
+function rhsIsKeyAlias(rhs: string): boolean {
+  let s = rhs.trim().replace(/;+\s*$/, '').trim();
+  // Bounded: each pass must strip something or the loop exits on its own.
+  for (let guard = 0; guard < 8; guard++) {
+    const cast = s.replace(/::\s*[A-Za-z_][A-Za-z0-9_]*(\s*\(\s*\d+\s*\))?\s*$/, '').trim();
+    if (cast !== s) {
+      s = cast;
+      continue;
+    }
+    if (s.startsWith('(')) {
+      const inner = callArgumentList(s, 1);
+      // Peel only a paren pair that wraps the WHOLE expression: for
+      // `(a) || p_idempotency_key` the matching close is not the last
+      // character, and peeling it would silently discard the `|| ...` tail.
+      if (inner !== null && inner.length + 2 === s.length) {
+        s = inner.trim();
+        continue;
+      }
+    }
+    const wrapper = s.match(/^(coalesce|nullif|btrim|trim|ltrim|rtrim)\s*\(/i);
+    if (wrapper) {
+      const args = callArgumentList(s, wrapper[0].length);
+      if (args === null) break;
+      // A wrapper must span the entire expression; `coalesce(a,b) || 'x'` must
+      // not be accepted by peeling the call and ignoring the tail.
+      if (s.slice(wrapper[0].length + args.length + 1).trim() !== '') break;
+      s = firstArgument(args).trim();
+      continue;
+    }
+    break;
+  }
+  return /^p_idempotency_key$/i.test(s);
+}
+
+/**
+ * Names that carry the caller's idempotency key inside `body`: the parameter
+ * itself, plus any local ASSIGNED FROM it — `v_key := p_idempotency_key;` or
+ * `v_key := coalesce(p_idempotency_key, ...)`. See `rhsIsKeyAlias` for why
+ * "mentions the key" is not good enough.
+ */
+function idempotencyKeyNames(body: string): string[] {
+  const names = ['p_idempotency_key'];
+  const re = /\b([A-Za-z_][A-Za-z0-9_]*)\s*:=\s*([^;]*)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body)) !== null) {
+    if (rhsIsKeyAlias(m[2]) && !names.includes(m[1].toLowerCase())) {
+      names.push(m[1].toLowerCase());
+    }
+  }
+  return names;
+}
+
+/**
+ * True when this body — or any function it delegates to — handles idempotency.
+ *
+ * A thin wrapper that passes p_idempotency_key straight through to a private
+ * impl is still covered; the guard's real target is an RPC that DECLARES the
+ * parameter and then drops it on the floor, which is unchanged by delegation.
+ * Depth-bounded and cycle-guarded.
+ *
+ * A delegate is only credited when the CALL SITE actually forwards the key.
+ * Without that check the guard credits `public._impl(p_order_id, NULL)` — the
+ * wrapper declares p_idempotency_key, drops it on the floor, and the delegate's
+ * own idempotency block makes the whole chain look covered while every call
+ * claims a fresh key. That is exactly the failure this suite exists to catch,
+ * so it must not be reachable through one level of indirection.
+ */
+function usesIdempotencyThroughDelegates(body: string, depth = 0, seen = new Set<string>()): boolean {
+  if (bodyUsesIdempotency(body)) return true;
+  if (depth >= 3) return false;
+  const keyNames = idempotencyKeyNames(body);
+  const callRe = /\bpublic\.([A-Za-z_][A-Za-z0-9_]*)\s*\(/gi;
+  let m: RegExpExecArray | null;
+  while ((m = callRe.exec(body)) !== null) {
+    const callee = m[1].toLowerCase();
+    if (seen.has(callee)) continue;
+    const args = callArgumentList(body, m.index + m[0].length);
+    if (args === null) continue;
+    const forwardsKey = keyNames.some((name) => new RegExp(`\\b${name}\\b`, 'i').test(args));
+    if (!forwardsKey) continue;
+    seen.add(callee);
+    const calleeBody = resolveFunctionBody(callee);
+    if (calleeBody && usesIdempotencyThroughDelegates(calleeBody, depth + 1, seen)) return true;
+  }
+  return false;
+}
+
+describe('Idempotency delegate credit (mutation guard for the guard itself)', () => {
+  // save_job is the anchor: a separate test below proves its own body handles
+  // idempotency, so any wrapper that genuinely forwards the key to it is
+  // covered and any wrapper that does not must NOT be.
+  const wrap = (args: string, prelude = '') =>
+    `DECLARE v_res jsonb; BEGIN ${prelude} v_res := public.save_job(${args}); RETURN v_res; END;`;
+
+  it('credits a wrapper that forwards the key', () => {
+    expect(usesIdempotencyThroughDelegates(wrap('p_payload, p_idempotency_key'))).toBe(true);
+  });
+
+  it('credits a wrapper that forwards a local assigned from the key', () => {
+    expect(
+      usesIdempotencyThroughDelegates(
+        wrap('p_payload, v_key', 'v_key := coalesce(p_idempotency_key, NULL);'),
+      ),
+    ).toBe(true);
+  });
+
+  it('is not fooled by a nested call in an earlier argument', () => {
+    expect(
+      usesIdempotencyThroughDelegates(wrap("coalesce(p_payload, '{}'::jsonb), p_idempotency_key")),
+    ).toBe(true);
+  });
+
+  it('REFUSES a wrapper that declares the key and passes NULL instead', () => {
+    // The whole point. Before 2026-08-13 this returned true: the delegate's own
+    // idempotency block was credited without ever checking the call site, so a
+    // wrapper could drop the key on the floor and still pass this suite.
+    expect(usesIdempotencyThroughDelegates(wrap('p_payload, NULL'))).toBe(false);
+  });
+
+  it('REFUSES a wrapper that omits the key argument entirely', () => {
+    expect(usesIdempotencyThroughDelegates(wrap('p_payload'))).toBe(false);
+  });
+
+  it('REFUSES a local that only MENTIONS the key in a larger expression', () => {
+    // A log line is not an idempotency key. Crediting `v_msg` here would let the
+    // wrapper forward a value that is not the caller's key, reach save_job's own
+    // idempotency block, and score the whole chain as covered — the same hole
+    // the NULL case above closes, reopened by naming a variable badly.
+    expect(
+      usesIdempotencyThroughDelegates(
+        wrap('p_payload, v_msg', "v_msg := 'idempotency=' || p_idempotency_key;"),
+      ),
+    ).toBe(false);
+  });
+
+  it('distinguishes a genuine alias from an expression that merely contains the key', () => {
+    // Identity-preserving: the local still carries the caller's key.
+    expect(rhsIsKeyAlias('p_idempotency_key')).toBe(true);
+    expect(rhsIsKeyAlias(' p_idempotency_key ')).toBe(true);
+    expect(rhsIsKeyAlias('(p_idempotency_key)')).toBe(true);
+    expect(rhsIsKeyAlias('p_idempotency_key::text')).toBe(true);
+    expect(rhsIsKeyAlias("coalesce(p_idempotency_key, gen_random_uuid()::text)")).toBe(true);
+    expect(rhsIsKeyAlias("nullif(btrim(p_idempotency_key), '')")).toBe(true);
+
+    // Not the key: a derived string, a different value, or a wrapper with a tail.
+    expect(rhsIsKeyAlias("'key=' || p_idempotency_key")).toBe(false);
+    expect(rhsIsKeyAlias("p_idempotency_key || ':retry'")).toBe(false);
+    expect(rhsIsKeyAlias("md5(p_idempotency_key)")).toBe(false);
+    expect(rhsIsKeyAlias("coalesce(p_idempotency_key, '') || '-2'")).toBe(false);
+    expect(rhsIsKeyAlias("coalesce(p_other, p_idempotency_key)")).toBe(false);
+    expect(rhsIsKeyAlias("(p_other) || p_idempotency_key")).toBe(false);
+    expect(rhsIsKeyAlias('gen_random_uuid()::text')).toBe(false);
+  });
+});
+
 describe('Idempotency BODY verification (reads migration SQL)', () => {
   it('every covered RPC body actually reads/writes idempotency_keys (not just declares the param)', () => {
     const offenders: string[] = [];
@@ -1806,7 +2122,7 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
       if (rpc in IDEMPOTENCY_BODY_EXEMPT) continue;
       const body = latestFunctionBody(rpc);
       if (body === null) continue; // defined in a consolidated file; existence covered elsewhere
-      if (!bodyUsesIdempotency(body)) offenders.push(rpc);
+      if (!usesIdempotencyThroughDelegates(body)) offenders.push(rpc);
     }
     // If this fails, the listed RPCs declare p_idempotency_key but never use it.
     // Either add the canonical idempotency block to the SQL, or (if genuinely
@@ -1857,6 +2173,65 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
     expect(implementationSource).toContain("v_existing := check_idempotency(p_idempotency_key, 'save_invoice')");
     expect(implementationSource).toContain("PERFORM save_idempotency(p_idempotency_key, 'save_invoice'");
     expect(IDEMPOTENCY_BODY_EXEMPT.save_invoice).toBe('delegated');
+  });
+
+  // The generic body scan skips draw_down_quote because it is marked
+  // 'delegated', so without this the forwarding is asserted only in prose
+  // (adversarial review 2026-08-16, non-blocking follow-up). Assert the chain
+  // for real: the wrapper hands the caller's key straight to the private
+  // implementation, and the implementation owns the replay pair.
+  it('draw_down_quote forwards the caller key to the implementation that owns replay', () => {
+    const files = getMigrationFiles();
+    const wrapper = files.find(
+      ({ name }) => name === '20260812115237_enforce_below_cost_admin_approval.sql'
+    )?.content;
+    const implementationSource = files.find(
+      ({ name }) => name === '20260816120000_draw_down_split_order_lines_by_price_tier.sql'
+    )?.content;
+
+    expect(wrapper).toBeDefined();
+    expect(implementationSource).toBeDefined();
+
+    // The public entry point is the ONLY reachable one: the original body was
+    // renamed to the private implementation and stripped of every direct grant.
+    expect(wrapper).toContain('RENAME TO _draw_down_quote_below_cost_impl_20260810');
+    expect(wrapper).toMatch(
+      /REVOKE ALL ON FUNCTION public\._draw_down_quote_below_cost_impl_20260810\(uuid, jsonb, uuid, text\) FROM PUBLIC, anon, authenticated, service_role/
+    );
+
+    // The wrapper declares the key and forwards it verbatim as the 4th
+    // argument — it must not drop it, rename it, or substitute NULL.
+    expect(wrapper).toMatch(
+      /CREATE FUNCTION public\.draw_down_quote\([\s\S]*p_idempotency_key text DEFAULT NULL/
+    );
+    expect(wrapper).toMatch(
+      /RETURN public\._draw_down_quote_below_cost_impl_20260810\(\s*p_quote_id, p_draws, p_performed_by, p_idempotency_key\s*\)/
+    );
+
+    // The implementation owns the canonical pair, under the SAME operation
+    // name the wrapper is called by, so a replay through the wrapper finds
+    // what the implementation saved.
+    expect(implementationSource).toContain(
+      "v_existing := check_idempotency(p_idempotency_key, 'draw_down_quote')"
+    );
+    expect(implementationSource).toContain(
+      "PERFORM save_idempotency(p_idempotency_key, 'draw_down_quote', v_result)"
+    );
+    expect(IDEMPOTENCY_BODY_EXEMPT.draw_down_quote).toBe('delegated');
+  });
+
+  // CRX-RLS-001 (adversarial review 2026-08-16): quotes are soft-deleted by
+  // stamping deleted_at only, so a deleted booking still reads as 'sent' and
+  // would pass the BOOKING_CLOSED guard. The lock must exclude it.
+  it('draw_down_quote refuses a soft-deleted booking at the quote lock', () => {
+    const implementationSource = getMigrationFiles().find(
+      ({ name }) => name === '20260816120000_draw_down_split_order_lines_by_price_tier.sql'
+    )?.content;
+
+    expect(implementationSource).toBeDefined();
+    expect(implementationSource).toMatch(
+      /SELECT \* INTO v_quote\s*FROM quotes\s*WHERE id = p_quote_id AND deleted_at IS NULL\s*FOR UPDATE;/
+    );
   });
 
   it('split provenance wrappers preserve the idempotent implementations and forward the exact key', () => {
@@ -2262,6 +2637,19 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // supabase/migrations:
   // - correct_job_commission_split (20260813050000)
   // - _create_direct_order_below_cost_impl_20260810 (20260813010000)
+
+  // Private implementation behind the public draw_down_quote RPC, so it is
+  // absent from the generated types by design. It declares p_idempotency_key
+  // text and owns the canonical check_idempotency/save_idempotency pair for the
+  // 'draw_down_quote' operation (the public wrapper holds none of its own and
+  // forwards the key straight through) — the test below re-asserts all three.
+  // Pre-apply-window entry: it enters the inventory because migration
+  // 20260816120000 is the FIRST on-disk CREATE of this function under its
+  // post-rename name. 20260812115237 renamed the original public body with
+  // ALTER FUNCTION ... RENAME TO and defined no body on disk, so the
+  // transitive-mutation walker could not see it until now. Move this to
+  // MUTATING_RPCS_WITH_IDEMPOTENCY only if the function ever becomes public.
+  '_draw_down_quote_below_cost_impl_20260810',
 ]);
 
 /**

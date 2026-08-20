@@ -1,21 +1,27 @@
 # Known Issues — Consolidated
 
-**Last verified: 2026-08-14 UTC, read-only ledger and repository recheck.** The verified linked
-production ledger has 970 rows and its final submitted name is
-`20260813070000_pin_return_idempotency_helper_contract` (ledger version `20260813011751`, as
-recorded in migration-history row 879). The six live migration sources listed in the open gap
-below remain absent from `origin/main` and present on recovery branches, so that issue remains
-open. The historical Customer 360, Team Board, money, and commission-payout details below remain
-their separately dated evidence rather than claims that the older high-waters are current.
+**Last verified: 2026-08-19 UTC, read-only live re-read.** **Live ledger high-water is `20260816174353` at 971 rows**, carrying submitted name `20260813080000_lock_quote_versions_writes_to_rpc` — which is also the highest *timestamp-prefixed* `name`, so both orderings agree on the same row. (Stated that way deliberately: only **345** of the 971 ledger names carry a 14-digit timestamp prefix — 346 if the single 8-digit `20260207_gap_analysis_fixes.sql` is counted (the `.sql` suffix is part
+of the stored ledger name), and `docs/reference/migration-history.md` uses the 14-digit definition, so this file now matches it. A plain `max(name)` returns the slug `year_end_summary`. The ordering claim holds over the prefixed subset, not over the raw column.) Two things this pass corrected in this file: (1) the header below claimed `20260812003315` / 962 rows, **nine applies** and six days of ledger staleness out of date — the six 2026-08-12 recoveries listed below, then `20260812212323`, `20260813011751` and `20260816174353`, which is 962 + 9 = 971; (2) CRX-SEC-1 **applied live on 2026-08-16** — see the new CLOSED entry immediately below — while `docs/reference/migration-history.md` row 886 still called it an unapplied local candidate. `.claude/schema-registry.json` was regenerated from live introspection on 2026-08-16 and records `migrations_high_water` `20260816174353`, matching this ledger; it was **not** re-derived in this pass. **The 2026-08-10 money figures quoted further down this file are stale** — a read-only re-measure on 2026-08-18 finds `order_items.total_price`, `order_items.profit`, `commissions.commission_amount` and `commissions.order_profit` all at **0** sub-cent rows, with only `quotes.total_cost` still holding **2**; the "43 dirty rows" and "49 rows" figures below are superseded by that measurement (recorded in full in `docs/manual/CURRENT_STATE.md` section 2). Everything else below was left as separately dated historical evidence and was not re-verified in this pass.
+
+**Superseded 2026-08-17 header, kept for provenance — ledger high-water only.** Live ledger high-water is **`20260816174353` at 971 rows**, carrying submitted name `20260813080000_lock_quote_versions_writes_to_rpc`. This pass re-read the live ledger and nothing else: it corrects a high-water this document was stating wrongly, and it does **not** re-certify the issue narrative below, which keeps its own older dates. **The schema registry is NOT refreshed to this high-water** — it is still stamped to the 962-row mark and is now nine migrations behind. Beyond the six migrations named in the next paragraph, three more have landed since: ledger versions `20260812212323`, `20260813011751`, `20260816174353`, carrying submitted names `20260812130145_bind_return_receipts_to_intent_and_restore_overdue`, `20260813070000_pin_return_idempotency_helper_contract`, `20260813080000_lock_quote_versions_writes_to_rpc`. Ledger versions are UTC and Supabase applies may assign a version different from the submitted filename, so match the recorded **name** when reconciling an apply.
+
+
+**Superseded 2026-08-12 header, kept for provenance:** live ledger high-water was `20260812003315` at 962 rows, carrying submitted name `20260811230423_log_customer_sales_rep_assignment`. The Customer 360 assignment RPC is live with atomic customer timestamp/activity logging, one overload, the reviewed security/search-path/grant shape, and no table, column, enum, generated-column, signature, or public-function-name-count change. The schema registry was genuinely refreshed through the same high-water. Ledger versions are UTC and Supabase applies may assign a version different from the submitted filename, so match the recorded name when reconciling an apply. The historical Team Board, money, and commission-payout details below remain separately dated evidence rather than claims that their older high-waters are current.
+
+**Repository/production gap reopened and re-closed on 2026-08-12 — six migrations, and the prevention gap is still OPEN.** The high-water quoted in the paragraph above (`20260812003315`, 962 rows) was overtaken the same day. Six further migrations applied live on 2026-08-12 — ledger versions `20260812034831`, `20260812034951`, `20260812145628`, `20260812151606`, `20260812154028`, `20260812154757`, carrying submitted names `20260812010000_blend_ticket_order_header_runtime_assert`, `20260812011000_restore_quote_version_whole_cent_money`, `20260812115235_snapshot_cost_reporting`, `20260812115236_quote_items_cost_at_quote_snapshot`, `20260812115237_enforce_below_cost_admin_approval`, `20260812115238_repair_historical_order_line_cents` — **applied by concurrent sessions that never landed their files.** For part of that day none of the six existed on `main`, on any pushed branch, or in any local worktree, so SQL touching order money, quote cost, report math and a new approval table was running against production with no one able to review it, and a clean rebuild from `main` would have produced a schema without it. The **files** side is now closed: all six were recovered verbatim from the applying sessions' transcripts (not reconstructed from live `prosrc`, which loses the header, preconditions and review history), md5-verified against live `pg_proc.prosrc`, and landed as history rows 880-885. **The prevention side is not closed.** Nothing yet stops the next session from applying a migration and not landing its file; this is the third occurrence of a migration applying live with **no file landed anywhere** (2026-08-09, 2026-08-11 via PR #371, 2026-08-12) and the only current defence is that someone notices. A durable fix — a hard guard that reconciles the live ledger against tracked files and fails a check when they disagree — is not written.
+
+**`quote_items.cost_at_quote_cents` — declaration gap CLOSED.** Added by `20260812115236`; `src/types/index.ts` now declares it as an optional field because partial projections may omit it. The column is trigger-stamped and the browser never writes it. This branch is based on `origin/main`, whose schema registry already carries `cost_at_quote_cents`, so the type layer and registry now agree.
 
 **Wave A — six parked migration drafts.** This branch carries `20260813010000` through `20260813060000` under `scripts/.staging-migrations/`. They are intentionally absent from `supabase/migrations/`, are not armed for apply, and create no live state. Nothing in this document describes state they created.
 
 **Repository/production gap on the whole-cent migrations: CLOSED 2026-08-11.** History rows 868–870 (`20260810150000`, `20260810150500`, `20260810151000`; ledger versions `20260810152935`, `20260810154721`, `20260810155629`) were applied live before they existed on `main`. **PR #371 landed as merge `465458a0`**, bringing those three plus `20260811200000_blend_ticket_order_whole_cent_totals` (applied live as ledger `20260811220045`) onto `main`. Disk and production now agree on all four — independently re-verified against live `pg_proc` on 2026-08-11.
 The remaining fractional historical rows described below are still tracked data debt and were not rewritten by that repository closeout.
 
-**2026-08-10 money re-measure (read-only, live).** Whole-cent conformance by column, which is what history rows 868–870 are scoped against: `orders.total_price` 0 dirty, `orders.total_cost` 0, `orders.total_profit` 0, `order_items.profit` 0, `quotes.total_price` 0, `quotes.total_profit` 0, `quote_items.total_price` 0, `quote_items.profit` 0 — and still dirty: **`order_items.total_price` 35/288, `quotes.total_cost` 2/4, `commissions.commission_amount` 3/35, `commissions.order_profit` 3/35.** The `order_items` figure moved 46 → 35 because `20260810025159` (above) backfilled stale line profit through the canonical trigger; the 3 fractional `commissions` rows are unchanged and still deliberately unrepaired. **43 dirty rows remain and repairing them rewrites stored money — still Mason's separate decision, still not done.** Under the 2026-08-10 fail-closed money policy those columns are tracked debt, not an approved exception.
+**2026-08-10 money re-measure (read-only, live).** Whole-cent conformance by column, which is what history rows 868–870 are scoped against: `orders.total_price` 0 dirty, `orders.total_cost` 0, `orders.total_profit` 0, `order_items.profit` 0, `quotes.total_price` 0, `quotes.total_profit` 0, `quote_items.total_price` 0, `quote_items.profit` 0 — and still dirty: **`order_items.total_price` 35/288, `quotes.total_cost` 2/4, `commissions.commission_amount` 3/35, `commissions.order_profit` 3/35.** The `order_items` figure moved 46 → 35 because `20260810025159` (above) backfilled stale line profit through the canonical trigger; the 3 fractional `commissions` rows are unchanged and still deliberately unrepaired. **43 dirty *column-values* remain** (35 + 2 + 3 + 3, summed across four columns, not four disjoint row sets) — the two `commissions` counts are 3/35 each and may well be the same 3 rows, so the number of distinct dirty **rows** is somewhere in **40–43**. The overlap can no longer be re-derived: live has since moved to 2 dirty, so the 2026-08-10 row identities are gone. **Repairing them rewrites stored money — still Mason's separate decision, still not done.** Under the 2026-08-10 fail-closed money policy those columns are tracked debt, not an approved exception. **SUPERSEDED 2026-08-18:** the live re-measure now returns `order_items.total_price` 0, `order_items.profit` 0, `commissions.commission_amount` 0, `commissions.order_profit` 0, and only `quotes.total_cost` 2 — so **2 dirty column-values remain, against the 43 counted the same way**, and the "3 fractional `commissions` rows unchanged and deliberately unrepaired" claim is no longer true of live. Figures and the enforced-vs-measured distinction are in `CURRENT_STATE.md` section 2. What rewrote the `commissions` rows is **established, not open**: `reconcile_pending_commission_snapshots` (ledger `20260810235207`, applied live 2026-08-10 with Mason's approval) — see the RETRACTED entry below, which corrects a first draft that called this change unexplained.
 
-**2026-08-10 commission-basis measurement, correctly characterized.** **12 of 35** order commissions have `order_profit ≠ orders.total_profit` (exact `IS DISTINCT FROM`; an earlier pass this session compared cent-rounded values and reported 10, hiding three sub-cent rows). Do not read that as a live emergency: **8 are `pending` with a gap of exactly $0.01 and 3 are `pending` with a sub-cent gap** (the disclosed backfill residual from `a0a69a62`, which deliberately did not rewrite commission rows), and the **1 materially larger gap is on a `cancelled` row** (dollar figure deliberately withheld — this repository is public; it is in the access-controlled session record). The underlying mint-time code defect is real and confirmed from live function source — `_convert_quote_to_order_owner_impl` and `create_direct_order` mint from a cached/local profit after the item triggers already rewrote the canonical header — and history row 868 is the fix, **applied live 2026-08-10**. It stops future drift; it does not repair the present rows, and the measurement above is the pre-fix state.
+**2026-08-10 commission-basis measurement, correctly characterized.** **12 of 35** order commissions have `order_profit ≠ orders.total_profit` (exact `IS DISTINCT FROM`; an earlier pass this session compared cent-rounded values and reported 10, hiding **two of the three** sub-cent rows — only a sub-cent gap can vanish under cent-rounding, and a gap of exactly $0.01 always survives it, so 12 exact → 10 rounded means two rows were masked and the third straddled a cent boundary and survived). Do not read that as a live emergency: **8 are `pending` with a gap of exactly $0.01 and 3 are `pending` with a sub-cent gap** (the disclosed backfill residual from `a0a69a62`, which deliberately did not rewrite commission rows), and the **1 materially larger gap is on a `cancelled` row** (dollar figure deliberately withheld — this repository is public; it is in the access-controlled session record). The underlying mint-time code defect is real and confirmed from live function source — `_convert_quote_to_order_owner_impl` and `create_direct_order` mint from a cached/local profit after the item triggers already rewrote the canonical header — and history row 868 is the fix, **applied live 2026-08-10**. It stops future drift; it does not repair the present rows, and the measurement above is the pre-fix state.
+
+**SUPERSEDED — 2026-08-18 live re-measure of the same predicate (read-only).** The 12/35 figure and its 8-penny / 3-sub-cent split above are **no longer current**. Re-running `commissions c JOIN orders o ON o.id = c.order_id WHERE c.order_profit IS DISTINCT FROM o.total_profit` on 2026-08-18 returns **2 of 35** rows: **1 `pending` with a gap of exactly $0.01**, and the same **1 `cancelled` row with the materially larger gap** (figure still withheld — public repository). **Zero rows carry a sub-cent gap**, the arithmetic consequence of both sides of the predicate being whole-cent: `commissions.order_profit` measures 0 sub-cent rows in the `CURRENT_STATE.md` section 2 re-measure, and `orders.total_profit` measures **0 of 65** sub-cent rows on live (read-only, 2026-08-18 — that column is *not* one of the five in the section 2 re-measure, so it is measured here rather than inherited from it). The difference of two whole-cent numbers cannot be sub-cent. Do not read line 18's "3 pending with a sub-cent gap" as live state and do not draft a repair migration against those rows — they are already clean. **What changed and why is established:** two approved applied migrations — see the RETRACTED entry below.
 
 **2026-08-09 historical baseline.** The live re-read then covered the ledger, `CURRENT_STATE.md` counts, and all 27 invariant predicates: 26 CLEAN and the documented `fin-money-whole-cents` historical-data violation. The five foundation-ultra-review migrations applied later that day as ledger versions `20260809203222` through `20260809205423`. The formerly missing Team Board migration file and history row are now reconciled on PR #351.
 
@@ -28,9 +34,491 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
-## OPEN 2026-08-12 — six migrations applied live on 2026-08-12 have no file on `main`
+## OPEN 2026-08-19 — PR #404 stamps quote-line provenance, defers the FK, and settles superseded prices
 
-**Severity: MATERIAL — `main` cannot currently reconstruct production schema.** Six migrations
+**Status: reworked on branch `claude/draw-down-price-tier-lines`, NOT applied, NOT merged. Awaiting
+Mason's explicit approval for both.**
+
+PR #404's tier split originally identified a price tier by the `(price_per_unit,
+cost_at_quote_cents)` pair. That key is neither unique (two booked lines at the same price collapse
+into one tier) nor immutable (three separate paths rewrite the cost snapshot), so attributing
+already-billed units to tiers was a guess. The rework makes a tier **one booked quote line** and
+stamps `order_items.quote_item_id` on every line the partial-draw path writes, so the next draw
+resolves attribution by identity.
+
+**The blocker that discovery surfaced, verified link by link against live on 2026-08-19.**
+`_save_quote_below_cost_impl_20260810` begins every quote edit with `DELETE FROM quote_sections
+WHERE quote_id = v_quote_id`, and `quote_items_section_id_fkey` is `ON DELETE CASCADE`, so that one
+statement removes every `quote_items` row for the quote. `order_items_quote_item_id_fkey` was plain
+`NO ACTION` and not deferrable (`confdeltype 'a'`, `condeferrable false`), so it is checked at the
+end of that DELETE — before any reinsert. **Any stamped order line therefore made its quote
+un-editable, with a raw foreign-key violation surfacing to the user.** `save_quote` carries no
+guard that would catch this first: its body contains no reference to `orders`, `booking_draw`, or a
+`QUOTE_LOCKED` refusal. Live blast radius before this migration was 1 stamped line of 288 (written
+by the full-conversion path); after it, every partially drawn booking would be affected.
+
+**Resolution: `ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED`** — the check moves to COMMIT, by
+which time `save_quote` has reinserted the same `quote_items` ids, so an ordinary revision leaves
+every stamp intact. **This replaces the `ON DELETE SET NULL` rule an earlier draft of this entry
+described, which was reviewed and found wrong.** SET NULL fires on *every* save of an existing
+quote, including a save that changes nothing, so it wiped every stamp every time: that resets the
+telescoping rounding basis (re-opening the fractional overbill the migration exists to close) and
+strands a partly-drawn two-price booking behind `DRAW_MIXED_TIER_UNMATCHED_LINE`, whose message
+tells the operator to undo a revision SET NULL has already made impossible to undo. The old draft
+rejected DEFERRABLE on the belief that id reuse required the client to echo ids; live `prosrc` read
+on 2026-08-19 shows that is wrong in both halves — no current page echoes ids, and `save_quote`'s
+id-less fallback reuses prior ids without them. The constraint is matched **structurally on catalog
+columns**, not on `pg_get_constraintdef` text, because that rendering depends on the applying
+session's `search_path` and a text match could raise a false drift abort. A postflight asserts both
+halves of the rule (still NO ACTION, now deferred), and the block refuses to adopt a SET NULL rule
+if it finds one.
+
+**Pricing rule (Mason, 2026-08-19): a price change never rebills delivered product.** Each tier's
+billed history is partitioned by whether the order line was billed at the price the quote line
+carries *today*. Units billed at the current price stay in the telescoping rounding basis. Units
+billed at any other price are **settled**: they still consume the tier's capacity, so the product
+cannot be re-sold, but they are never re-based and their money never enters the basis. New units
+bill at the new price from a fresh basis. Genuine early-price errors are corrected with a credit
+memo. A postflight name tripwire (`units_current` / `units_settled`) refuses the apply if that
+split is ever dropped, because the failure is silent — the allocation still sums, so
+`DRAW_ALLOCATION_MISMATCH` would not catch it.
+
+**Residual, deliberately NOT fixed here.** `save_quote`'s id-less fallback reuses the *lowest*
+unconsumed prior id for a product, not the operator's line. On a quote carrying two lines of one
+product this is normally unreachable — re-saving such a quote already fails closed on
+`QUOTE_ITEM_AMBIGUOUS_COST`. The one crack is deleting one of the two lines (which sends a single
+id-less row, so the ambiguity test passes) while the two lines share a cost: one prior id never
+returns, and if an order line was stamped with it the save aborts at COMMIT on a raw foreign-key
+error. That is **fail-closed** — the whole save rolls back, no money moves, no stamp is silently
+lost. Closing it properly means giving `save_quote` real line identity, which is the same defect
+`QUOTE_ITEM_AMBIGUOUS_COST` already is, with its own blast radius and its own PR.
+
+**Proof standing behind the rework (2026-08-19; live was never written to).** Ran on a throwaway
+PostgreSQL 17.6 in Docker, the same version live runs:
+
+- The reworked tier query — lifted **verbatim** out of the migration, not retyped — parses and runs.
+- Seven money scenarios all pass against expected values: a price raised mid-booking bills
+  `40 × $1.00 + 60 × $1.50 = $130.00`; four 0.25-unit draws on a `$1.01` unit still telescope to
+  exactly `$1.01`; a price changed and changed back bills `80 × $1.00 + 20 × $1.50`; a two-tier
+  booking with a price change between draws bills `100 × $1 + 50 × $2 + 50 × $3 = $350.00`; and a
+  fully drawn line whose price is then changed is **refused** (`DRAW_ALLOCATION_MISMATCH`) rather
+  than re-sold.
+- **Mutation-tested:** restoring the pre-rework projection makes that first scenario bill
+  `$150.00` instead of `$130.00` — a silent $20 rebill of 40 already-delivered units — so the
+  scenario genuinely detects the regression rather than passing vacuously.
+- The migration's **real FK `DO` block** was executed: it installs `confdeltype 'a'`,
+  `condeferrable true`, `condeferred true`; it is idempotent on a second run; and it refuses a
+  drifted `ON DELETE SET NULL` rule instead of adopting it.
+- A `save_quote`-shaped delete-and-reinsert **preserves the stamp** under the new rule; the same
+  shape **aborts** under the old non-deferrable rule and **silently wipes the stamp** under the
+  retired SET NULL rule; and the residual case above **fails closed** with no orphan committed.
+
+**Not verified: the file has never been applied end to end by a server** — the preflight requires
+the cutover barrier (`20260816110000`) committed in a prior transaction. That happens only at
+apply, which needs Mason's OK.
+
+---
+
+## OPEN 2026-08-19 — blend-ticket linkage picks ONE order line per product, which multi-tier orders break
+
+Confirmed against live `pg_proc` on 2026-08-19. Not caused by PR #404 and not fixed by it; PR #404
+makes the first one reachable more often by emitting several order lines per product.
+
+1. **`link_blend_ticket_to_order`** attaches a blend ticket product to a single order line via
+   `ORDER BY oi.sort_order NULLS LAST, oi.id LIMIT 1` and records the ticket's whole quantity as
+   `quantity_applied` against it. On a tier-split order the product now has several lines, so the
+   link lands entirely on the first tier. **Money impact is currently nil**: `quantity_applied` is
+   written by this function and by `create_order_from_blend_ticket` and is read by nothing —
+   no other function, and no frontend code outside type declarations and a test fixture. It is an
+   audit/linkage record, so this is a correctness and traceability defect, not a billing one.
+2. **`create_invoice_from_blend_ticket`** prices a ticket product from the quote with `SELECT
+   qi.price_per_unit ... WHERE qi.section_id = ... AND qi.product_id = ... ORDER BY qi.id LIMIT 1`.
+   `qi.id` is a random uuid, so on a booking with two lines for one product at different prices the
+   invoice picks an **arbitrary** tier's price for the whole ticket quantity. This is a live money
+   defect today, independent of PR #404 — multi-line bookings already exist as quote data whether or
+   not the draw splits order lines. Deliberately not fixed in PR #404: it needs its own design
+   decision about how a ticket quantity is split across tiers.
+
+## CLOSED 2026-08-16 — CRX-SEC-1: a sales rep could forge a quote-version cost basis and inflate their own commission
+
+**Severity: was HIGH (money + privilege). Closed live by `20260813080000_lock_quote_versions_writes_to_rpc`, ledger version `20260816174353`.** The apply is observed in the ledger; the commonly quoted clock time of 2026-08-16 17:43:53 UTC is **inferred** from that version stamp, because `supabase_migrations.schema_migrations` has no timestamp column. Recorded here on 2026-08-18 because it was never entered in this file while it was open, and `docs/reference/migration-history.md` row 886 still described the migration as an unapplied local candidate **two days** after it went live (2026-08-16 inferred apply → 2026-08-18 correction). The file was authored under the stamp `20260813080000`, five days before that correction; neither of *those two* intervals is six days. (The six-day figure in this file's header measures how stale the recorded ledger high-water was, which is a different quantity.)
+
+**What the hole was.** `public.quote_versions` is an append-only snapshot table. Its RLS INSERT policy `qversions_insert` checked only *who owned the quote* — never what the row contained — and the browser roles still held raw table write grants, so a sales rep could PostgREST-INSERT a version row of their own construction onto their own quote. That became a money problem once `20260812115236` made `snapshot_data` an authoritative cost source: the restore path writes the snapshot's cost straight into the immutable `quote_items.cost_at_quote_cents`, `convert_quote_to_order` copies it onto the order line, and canonical profit and commission derive from there. The below-cost approval trigger added by `20260812115237` does **not** catch it, because that trigger compares the sale price against the *live product* cost — understating the historical cost basis raises apparent margin, so it never fires.
+
+**What the fix does.** Drops the ownership-only INSERT policy, revokes the write-capable table grants from the browser roles, and leaves `qversions_select` and the authenticated SELECT grant untouched — reading versions is unchanged, writing them is reachable only through the reviewed SECURITY DEFINER RPCs.
+
+**Post-apply live proof, read read-only 2026-08-18:** `public.quote_versions` carries exactly one policy, `qversions_select`; `qversions_insert` is gone; and `has_table_privilege('authenticated', 'public.quote_versions', …)` returns INSERT **false**, UPDATE **false**, DELETE **false**, SELECT true, with `anon` SELECT **false**. On grants, state the ACL and not a summary: `pg_class.relacl` is `{postgres=arwdDxtm/postgres,anon=m/postgres,authenticated=rm/postgres,service_role=arwdDxtm/postgres,metabase_ro=r/postgres}`. So `authenticated` holds SELECT **and MAINTAIN**, and `anon` holds **MAINTAIN** — an earlier draft of this line said "SELECT only" and "`anon` holds nothing", and both were wrong, contradicting the migration's own retained-MAINTAIN comment and the `anon=m` reading already recorded further down this file. MAINTAIN permits VACUUM/ANALYZE/CLUSTER/REINDEX/LOCK and can neither read nor write a row, so the write-lock conclusion stands unchanged; the error was one of evidence, not of security — `information_schema.role_table_grants` silently omits MAINTAIN, so reading grants there and calling it a complete proof overstates it. `metabase_ro` holds SELECT, has no policy, and does not bypass RLS, so it reads zero rows. **Write-path probe, independent of the grant read:** the only function in the database that inserts into `quote_versions` is `_create_quote_version_owner_impl(uuid,uuid,text,text)` — SECURITY DEFINER, postgres-owned, `search_path=public, pg_temp`, EXECUTE false for both `anon` and `authenticated`. Its only caller is `create_quote_version(uuid,uuid,text,text,bigint)`, whose parameters carry **no client cost snapshot** — the basis is built server-side — and whose body enforces `auth.uid()`, active-profile role, quote ownership and row version. No triggers on the table, no view over it, no UPDATE or DELETE writer, and `anon`/`authenticated` are members of no other role. No non-admin write path remains. The live ledger row stores this migration as a single statement that is **byte-for-byte identical** to the tracked file — `md5(array_to_string(statements, E'\n'))` on live returns `dd6554fa6f819f9e5b96b8244f73f8ee`, which equals `md5sum` of both the working-tree file and the committed blob, at 88,098 bytes on every side (the file is LF-terminated on disk, so no end-of-line normalization was applied). Matching lengths alone would not have proved this; the hash does. The file is on `origin/main`. A live exploitation check over existing rows came back clean when the fix was written — the migration's own header dates that re-confirmation **2026-08-14 UTC** and notes UTC runs one calendar day ahead of the local evening, so do not read it as 08-13; there are 3 `quote_versions` rows live.
+
+**Not closed by this.** The migration file's own first line still reads `-- STATUS: NOT APPLIED`. That comment is stale. It is deliberately **not** corrected, because CRX Manager never edits an applied migration — trust history row 886 and the live ledger instead. Separately, this is the fourth time a migration's real live status was discoverable only by querying the ledger — a wider count than the "third occurrence" above, which counts only the cases where the file itself never landed; the durable "reconcile live ledger against tracked files" guard named in the prevention-gap entry above is still **not built**, and it is what would have caught this **two days** earlier (2026-08-16 inferred apply → 2026-08-18 correction), the same interval retracted above.
+
+---
+
+## CLOSED 2026-08-19 — the RLS matrices' *named roles*, verified cell by cell against live
+
+**Severity: LOW-MED (documentation accuracy in a security reference; no live access defect
+implied).** Two documents carry an RLS permission matrix: `docs/reference/database-schema.md` (79
+rows) and `docs/workflows/RLS_SECURITY_GUIDE.md` (37 rows). PR #420 machine-compared both against
+live `pg_policies` and fixed every **presence** disagreement — which commands have a policy at all
+— so each cell's "grants something" vs "grants nothing" shape is verified as of 2026-08-19 UTC.
+
+**The role wording inside each cell was a weaker claim; it has since been closed.** A second
+mechanical pass re-derived each cell's role set from the live `USING`/`WITH CHECK` expressions and
+corrected the unambiguous class — every cell claiming **"All authenticated"** where live is in fact
+role-gated (`profiles`, `blend_tickets`, `blend_recipes`, `blend_ticket_to_order_items`,
+`blend_ticket_fields`, `vendors`, `financial_audit_log`, `team_note_tags`, `field_app_locations`,
+`field_app_location_shares`, plus `field_crop_history` and `notifications`, which the earlier
+presence pass had already corrected), and `rate_limit_log`, whose three write cells had been
+"corrected" *into* existence by a presence-diff that mistook a RESTRICTIVE policy for a granting
+one.
+
+**Flag counts, and why the number is a proxy rather than a defect count.** The classifier scans
+**113 rows / 452 cells**. (113 = the 79 rows of the `database-schema.md` matrix plus the 37 of the
+`RLS_SECURITY_GUIDE.md` matrix, minus the 3 whose table-name cell carries an inline annotation —
+`product_cost_basis`, `product_cost_basis_change_rows` and `product_cost_basis_rollout` — which the
+classifier's bare identifier match skips. 113 rows x 4 commands = 452 cells.) Measured at each
+revision of PR #420:
+
+| Revision | Flags | What changed |
+|---|---|---|
+| `origin/main` | 162 | pre-PR baseline |
+| `7d5d5d80` | 89 | after the presence pass (`a4b4e9ce`), which incidentally closed 73 |
+| `21f29c4a` | 61 | role-wording pass — the "All authenticated" class, 28 cells |
+| this commit | 33 | hand-triage of every remaining flag against live |
+
+Earlier drafts of this entry quoted **89** and **61** with no baseline attached, which is why the 89
+could not be reproduced against `origin/main`. Quote the revision with the count. And the count
+tracks accuracy only loosely: correcting `rup_sales_records` SELECT from `Admin` to
+`Admin / Sales Rep` — live is `role = ANY (ARRAY['admin','sales_rep'])`, so the fix is real —
+*raised* the count by one, because the classifier detects roles by matching helper-function names
+(`is_admin()`, `is_sales_rep()`, `is_applicator()`, `is_driver()`) and that policy inlines its
+role test as a scalar subquery.
+
+**All 33 remaining flags were read individually against live `pg_policies` on 2026-08-19 UTC and
+are false positives**, in three families:
+
+1. **Inlined role test.** A policy that spells out a `profiles.role` test as a subquery instead
+   of calling `is_admin()` or `is_sales_rep()` reads as "no role named", so a cell saying `Admin`
+   is right while the classifier flags it. Worked example: `email_log` INSERT is governed by the
+   single policy `email_log_admin_insert`, whose `WITH CHECK` is `EXISTS (SELECT 1 FROM profiles
+   WHERE profiles.id = (SELECT auth.uid()) AND profiles.role = 'admin' AND profiles.is_active =
+   true)` — quoted verbatim, because `docs/workflows/RLS_SECURITY_GUIDE.md` makes wrapping
+   `auth.uid()` in a subselect a rule and an earlier draft of this line transcribed it away. The
+   matrix
+   cell reads `Admin` and is correct. Same family, inlined as `= 'admin'`:
+   `ar_reminder_tracking` SELECT, `failed_notifications` (one `FOR ALL` policy covering all
+   four commands), `team_note_attachments` DELETE, `vendor_bills` SELECT/INSERT/UPDATE,
+   `vendor_payments` SELECT/INSERT, and the
+   soft-deleted-rows policy on `vendors`. Inlined as `= ANY (ARRAY['admin','sales_rep'])`:
+   `rup_sales_records`, `offline_action_receipts` SELECT, and the main `vendors` SELECT policy
+   (`vendors` carries two policies — live rows for admin and sales_rep, soft-deleted rows for
+   admin only). An earlier draft of this entry defined the family as `= 'admin'` only, which did
+   not describe three of its own members, and listed the tables without commands. The commands
+   matter: `ar_reminder_tracking` INSERT, `vendor_bills` DELETE and `vendor_payments` DELETE
+   are governed by a bare `is_admin()`, so those cells name a role the classifier *can* see and
+   are not members of this family.
+2. **Role named by how the row is reached.** The `Driver` cells on `deliveries`, `delivery_items`,
+   `delivery_photos` and `delivery_remainders`, where live is `assigned_driver = auth.uid()` — for
+   `delivery_remainders`, the *original* delivery's assigned driver. Correct English, unmatched
+   role name. (An earlier draft of this entry gave the column as `driver_id`; live is
+   `assigned_driver`.)
+3. **Deferred to another table's RLS.** One member: `invoice_items` SELECT, an `EXISTS` over the
+   parent invoice carrying exactly the `invoices_select` predicate and no auth test of its own.
+   An earlier draft also filed `offline_action_receipts` here. That was wrong — its `EXISTS` is
+   over `profiles`, with `role = ANY (ARRAY['admin','sales_rep'])` inlined and an
+   `actor_id = p.id` owner branch. It defers to nothing, and belongs in family 1. (The matrix
+   cell itself, `Owner / Admin / Sales via sanitized RPC only`, is correct: `authenticated` holds
+   no SELECT grant on the table, so the permissive policy is unreachable from the browser.)
+
+**What the hand-triage corrected**, each verified against live `pg_policies` before the cell was
+rewritten:
+
+- `customers`, `delivery_items`, `delivery_photos`, `cycle_counts`, `rebate_programs`,
+  `rebate_claims`, `prepay_applications`, `fields`, `email_log`, `note_tags`, `team_note_tags`,
+  `note_activity_log` — cells naming a role live does not grant, or omitting one it does.
+- `invoices` / `invoice_items` SELECT: live is `is_admin() OR created_by = auth.uid() OR
+  salesman_id = auth.uid()`. There is no `is_sales_rep()` branch, so a sales rep who is neither
+  the creator nor the assigned salesman cannot read the invoice; `Admin / Sales Rep` overstated it.
+- `blend_recipe_items` writes: `is_admin() OR parent recipe.created_by = auth.uid()` — the same
+  shape as the `blend_recipes` parent row this PR had already corrected. The child row was missed
+  in that sweep.
+- `applicator_licenses`: SELECT is `is_active_profile()` with no role test, and INSERT/UPDATE are
+  `is_admin() OR is_sales_rep()`. The row was wrong in both directions at once.
+- `field_billing_defaults` SELECT, `cycle_count_items` SELECT, `rup_sales_records` SELECT — live
+  grants a role the doc omitted.
+- `deliveries` UPDATE, `delivery_remainders` SELECT, `job_loader_worksheets` INSERT,
+  `cycle_count_items` writes — the cell named the right roles but dropped a condition live
+  enforces (delivery status `in_progress`/`completed`, the original delivery's driver,
+  `created_by = auth.uid()`, parent count `in_progress`).
+- That last shape is the one the classifier structurally cannot flag — the role names match, so
+  nothing is raised — so a final sweep read every matrix cell that is a bare role list against its
+  live expression, looking only for conditions the cell omitted. Six more turned up:
+  `field_obstacles` INSERT (`created_by = auth.uid()`, so an admin cannot insert a row
+  attributed to someone else), `vendors` and `vendor_bills` SELECT (`deleted_at IS NULL`),
+  `invoice_shares` and `order_shares` SELECT (the parent invoice or order must also be
+  un-deleted), and `team_notes` INSERT (an active profile as well as ownership).
+
+**"All authenticated"** in both matrices means live `is_active_profile()`: signed in *and*
+`profiles.is_active`. A deactivated profile is authenticated but denied. **One** cell newly reads
+it: `inventory_holds` SELECT, which read `Admin / Sales Rep` on `origin/main`.
+`team_note_attachments` and `team_note_comments` SELECT already read `All authenticated` there.
+(An earlier draft named all three and said they had "rendered that same live expression as *Any
+active profile*". Both halves are withdrawn: `git log -S` finds that phrase nowhere in
+`origin/main`'s history — it existed only in branch-internal prose — and the other two cells did
+not change.) That makes **17**
+distinct table/command pairs carrying the phrase — 17 cells in the `database-schema.md` matrix and
+8 of them repeated in `RLS_SECURITY_GUIDE.md`, 25 cell instances in all. An earlier draft of this
+entry said "all 14 cells ... in both matrices", which was the count for one matrix described as
+covering two. Every one was re-read on 2026-08-19 UTC and is governed by exactly one policy whose
+`USING` is `( SELECT is_active_profile() )`. Both matrix banners now say so, and the claim can be
+re-checked without the classifier:
+
+```sql
+select tablename, policyname, cmd, qual from pg_policies
+ where schemaname = 'public' and cmd = 'SELECT' and qual like '%is_active_profile%';
+```
+
+That returns **27** rows live (2026-08-19 UTC), not 17 — every SELECT policy in `public` built on
+`is_active_profile()`. The 17 are the subset whose tables the matrices carry; all 17 are in the
+result.
+
+**If this is ever re-run, do not bulk-apply the classifier's output** — that is exactly the mistake
+that produced the `rate_limit_log` row. The classifier locates candidates; live `pg_policies` is
+the proof.
+
+**The classifier is not checked in.** It was an ad-hoc script run against a live `pg_policies`
+snapshot, so the flag counts above cannot be reproduced from this repository alone — treat them as
+a narrative of the sweep, not as evidence. Everything that actually rests on them is enumerated by
+name instead: each false-positive family lists its members above, each corrected cell is named, and
+every one can be re-checked with a direct read of `pg_policies` for that table.
+
+---
+
+## OPEN 2026-08-18 — the session-staleness hook measures disk filename stamps against a server-assigned ledger version
+
+**Severity: LOW (latent silent skip; no incident observed).** `.claude/schema-registry.json` stores
+`"migrations_high_water": "20260816174353"`. That value is a Supabase-assigned ledger **version**, not
+a migration **filename** stamp — the same version/name split described in the CRX-SEC-1 entry above,
+where a file authored `20260813080000` was recorded live as version `20260816174353`.
+`.claude/hooks/session-staleness.mjs` then uses that value as the floor for disk *filename* stamps:
+it walks `supabase/migrations/`, matches `^(\d{14})_`, and does `if (!m || m[1] <= String(highWater))
+continue;`. The two sides are not the same clock.
+
+That `continue` is only the candidate-window filter; files that survive it are then checked for name
+membership against `_meta.applied_migration_names`, with a comment explaining that a pure name check
+over all history was tried and rejected (~100+ historical ledger rows carry prefix-less names). The
+skip still happens **before** the name check ever runs, which is what makes the finding real — but
+quoting the numeric compare on its own makes the hook look simpler than it is.
+
+**Why that can skip a real finding.** Because Supabase assigns the version at apply time, the recorded
+high-water runs ahead of the authored stamp whenever a migration sits on disk before it is applied — by
+three days in the CRX-SEC-1 case. Every migration file stamped at or below `20260816174353` is
+therefore skipped without being checked, including a genuinely unapplied file that would change the
+schema registry. The hook stays silent rather than reporting, which is the failure mode hardest to
+notice.
+
+**Not fixed here.** This was found during a documentation-only pass; changing hook logic belongs in its
+own change with a guard test that fails before the fix and passes after. The fix is to compare against
+the high-water **name** stamp, which `docs/reference/migration-history.md` records alongside the
+version for exactly this reason, or to resolve the version to its name before comparing.
+
+**Correction, 2026-08-19 — the fix is smaller than this entry first claimed.** An earlier revision
+said the fix was "not a one-line hook edit" because `.claude/schema-registry.json` stores
+`"migrations_high_water"` as a version "and nothing else, so the hook has no name to compare
+against", leaving a choice between a registry format change and a live ledger read on an offline
+path. **That premise is false, and it was the entire stated reason this was filed rather than
+fixed.** The registry already stores `_meta.applied_migration_names` — 964 ledger names, 344 of
+them carrying a 14-digit prefix — and it already contains
+`20260813080000_lock_quote_versions_writes_to_rpc`. `session-staleness.mjs` already loads that
+array (line 115) and already uses it for the membership check (lines 139-148). The name high-water is
+therefore derivable in-process as the largest `^\d{14}_` entry of the array, which evaluates to
+exactly the CRX-SEC-1 name the entry says is unavailable. No format change and no live read are
+needed.
+
+So the remaining work is local: compare disk stamps against that derived name high-water instead of
+against the server-assigned version. It is still filed rather than patched here for the reason given
+above — this is a documentation-only pass, and a hook-logic change belongs in its own commit with a
+guard test that fails before the fix and passes after — but it is a bounded hook change, not a
+registry redesign.
+
+---
+
+## CLOSED 2026-08-18 — RETRACTED: the "unexplained commission money change" was two approved, applied migrations
+
+**This entry was first published in PR #420 as an OPEN production-money incident — "stored commission money changed on live and no statement has been identified as the cause". That framing was wrong and is retracted.** The writer was already recorded in this same file (the 2026-08-10 team-board closeout entry below, which names `reconcile_pending_commission_snapshots` and Mason's approval of it) and in `docs/CHANGELOG.md`. The entry asserted an absence without searching for the writer, which is the same overstated-evidence error as the `role_table_grants` grant claim retracted earlier on that PR. It is kept here, corrected, because the wrong version was published and because the attribution is worth having written down.
+
+**What moved, and what moved it** (all verified read-only against live):
+
+- `20260810183629_reconcile_pending_commission_snapshots`, **ledger version `20260810235207`**, applied live 2026-08-10 with Mason's approval. The ordering the rest of this entry depends on — that the reconcile post-dates the 2026-08-10 measurements — rests on that version stamp reading 23:52 UTC, which is an **inferred** clock time (the ledger has no timestamp column), not an observed one. It is an apply-time `DO` block running `UPDATE public.commissions SET order_profit = ROUND(COALESCE(o.total_profit, 0), 2), commission_amount = public.compute_commission_amount(o.total_profit, c.split_percentage)`, and it hard-asserts it wrote **exactly 11 rows** — precisely the two columns and roughly the row count in question. That statement takes both columns from **3 sub-cent rows to 0**, and closes **11 of the 12** basis gaps — but by two different mechanisms, and the quoted `ROUND(…, 2)` is only half of it. It rounds `order_profit`; `commission_amount` is computed from the **un-rounded** `o.total_profit`, and reaches whole cents because `compute_commission_amount` rounds internally — live `pg_proc.prosrc` reads `SELECT GREATEST(ROUND(COALESCE(p_profit, 0) * COALESCE(p_percentage, 0) / 100, 2), 0)` (`supabase/migrations/20260526151856_execute_full_codebase_ultra_review.sql:177`, originally `20260513020000_canonical_commission_math.sql`). Crediting the visible `ROUND` for both columns would be the same overstated-evidence error this entry exists to retract. Its declared scope treats paid, **cancelled**, deleted and payment-batched rows as immutable history, which is why the 12th gap — on a `cancelled` row — was left untouched by design.
+- The single **`pending`** row that still carries a gap of exactly $0.01 re-opened *after* that reconcile. Its order header was last written **2026-08-12 15:47:57 UTC**, which is exactly the ledger version of `20260812115238_repair_historical_order_line_cents` (**`20260812154757`**, applied live 2026-08-12 with Mason's in-chat approval). That migration rewrites `order_items`; the canonical `trg_recalc_order_totals` trigger refreshed `orders.total_profit` in the same statement, and the commission snapshot was not re-derived alongside it.
+
+So: 12 gaps → 11 closed by the reconcile → 1 `cancelled` left by design → 1 re-opened by the 2026-08-12 line repair = the **2 of 35** measured on 2026-08-18. Both writers are tracked, approved, applied migrations. Nothing moved outside a recorded decision.
+
+**Correcting the "two independent measurements" claim.** The retracted entry offered the basis-gap movement (12/35 → 2/35) as independent confirmation that *commission* money was rewritten. It is not independent: that predicate compares `commissions.order_profit` against `orders.total_profit`, and the order side is rewritten by the `trg_recalc_order_totals` trigger, so the count can move with **zero** writes to `commissions`. Only the sub-cent measurement requires a commission write.
+
+**What is genuinely still open, and it is small.** One `pending` commission carries a $0.01 stale basis inherited from the 2026-08-12 line repair, and one `cancelled` commission carries the materially larger historical gap (figure withheld — this repository is public). Neither is a new incident. Both are the already-tracked data debt: repairing them rewrites stored money, which remains Mason's separate decision.
+
+**Note the durability gap.** `order_items` carries validated whole-cent CHECK constraints on `total_price` and `profit`, so those zeros cannot regress. `commissions` carries **no** whole-cent constraint on either money column (only `chk_commission_amount (commission_amount >= 0)`), and `quotes.total_cost` has none either. The commission zeros are a measurement, not an invariant.
+
+**Decision owed by Mason.** Whether to add whole-cent CHECK constraints to `commissions.commission_amount` and `commissions.order_profit` now that both columns measure clean — which would make the current state enforced instead of merely observed — and whether to re-derive the one $0.01 `pending` snapshot. Both stay read-only until Mason approves a migration.
+
+
+---
+
+## OPEN 2026-08-14 — `draw_down_quote` never rounds the weighted average PRICE, and the whole-cent guard rejects it
+
+**Severity: HIGH, live in production, currently latent (0 reachable rows).** Found by the
+independent Codex review of PR #392 and re-verified directly against live `pg_proc` and live data
+on 2026-08-14. **This is a defect in already-applied SQL — it is not caused by the recovery PR, and
+it cannot be fixed by editing the recovered files, which must stay byte-identical to what ran.**
+
+Live `_draw_down_quote_below_cost_impl_20260810` aggregates the quote lines of one product into a
+quantity-weighted average price and a quantity-weighted average cost:
+
+```sql
+118    CASE WHEN SUM(COALESCE(qi.total_units_needed, 0)) > 0
+119      THEN SUM(qi.price_per_unit * COALESCE(qi.total_units_needed, 0)) / SUM(COALESCE(qi.total_units_needed, 0))
+...
+126  INTO v_booked, v_wavg_price, v_wavg_cost, v_total_acres, v_unit_size
+137  v_wavg_cost := ROUND(v_wavg_cost, 2);      -- cost settled to whole cents
+176    v_wavg_price, v_wavg_cost, v_acres,      -- price inserted UNROUNDED
+```
+
+Line 137 settles the weighted **cost** to whole cents, behind a seven-line comment explaining
+precisely why an average of several differently-priced lines lands on fractional cents. There is no
+matching `v_wavg_price := ROUND(v_wavg_price, 2);`. The unrounded price goes straight into
+`order_items.price_per_unit` at line 176.
+
+Live `_enforce_below_cost_line` then rejects exactly that value — twice, at lines 40–41 and 148–149:
+
+```sql
+       OR NEW.price_per_unit <> round(NEW.price_per_unit, 2) THEN
+      RAISE EXCEPTION 'INVALID_UNIT_PRICE_CENTS';
+```
+
+**Effect:** a quote with two lines of the same product at prices whose quantity-weighted average is
+not a whole number of cents — one unit at $1.00 and two at $1.01 average to $1.00666… — cannot be
+converted to an order at all. The booking-to-order transaction raises `INVALID_UNIT_PRICE_CENTS`
+and rolls back. Not a money-corruption bug: the guard does its job and nothing wrong is stored.
+It is an availability bug — a legitimate booking is refused with an opaque error.
+
+**Reachability measured live 2026-08-14: 0.** No quote/product group in the database currently has
+a fractional weighted average, so nothing is broken today. It is a trap waiting for the first quote
+with mixed pricing on one product, which is ordinary business behavior.
+
+**The obvious fix is wrong. Do not round the weighted average unit price.** Adding
+`v_wavg_price := ROUND(v_wavg_price, 2);` alongside line 137 — mirroring what the code already does
+on the cost side — makes the guard pass and silently mis-prices the line. The unit price is a
+*derived average* that is then multiplied by the quantity, so rounding it moves the line total by up
+to half a cent **times the quantity**, not by one cent. The direction follows the rounding: an
+average that rounds **up** overcharges the customer, one that rounds **down** undercharges and eats
+the margin. Both are wrong and both are silent. Measured in PostgreSQL 17 on 2026-08-14 with
+the body's own expressions: a quote holding 1,000 units at $1.00 and 2,000 units at $1.01 has an
+exact value of $3,020.00; rounding the average unit price to $1.01 and extending it produces
+$3,030.00, a **$10.00 overcharge** that flows into order revenue, profit, commissions and audit. The
+cost-side rounding at line 137 is not a precedent for this — a cost snapshot is not re-multiplied
+the same way. **Round after extension, never a per-unit figure.**
+
+Two attempts at this rounding fix were written and both are withdrawn, not applied:
+
+| Migration | Branch | Status |
+|---|---|---|
+| `20260814194500_round_draw_down_weighted_unit_price.sql` | `claude/draw-down-price-rounding` | **BLOCKED** by its own adversarial push-proof gate for this defect; unpushed, no PR |
+| `20260814210000_reconcile_draw_down_owner_and_price_rounding.sql` | `fix/draw-down-weighted-price-rounding` | **WITHDRAWN AND DELETED** 2026-08-14 — it merged the defect with the ownership fix and would have carried the mispricing forward |
+
+**The collision is dissolved, but a second blocker applies to everything here.** These two files
+previously collided with the ownership migration because all three `CREATE OR REPLACE` this function
+and each preflight pins the *current* live `md5(prosrc)`, so the second to apply fails closed. With
+both rounding attempts withdrawn, only one pending migration touches this function —
+`20260813161614_restrict_draw_down_quote_owner.sql` on `claude/restrict-draw-down-owner` — and it no
+longer needs reconciling with anything. It is a separate, sound security fix (quote ownership plus
+soft-delete exclusion), unaffected by the rounding defect.
+
+**CORRECTED 2026-08-16 — the source-control blocker is dissolved.** This section originally said no
+tracked migration defined `_draw_down_quote_below_cost_impl_20260810` or the five-argument
+`draw_down_quote` wrapper, so every candidate's `md5(prosrc)` preflight pinned a body that existed
+only in the live database and could never survive a clean rebuild. That was true when written and is
+false now: PR #392 merged on 2026-08-15 — the recovery tracked in the CLOSED section immediately
+below — and both definitions are on `origin/main`, re-verified there on 2026-08-16:
+
+| Definition | Tracked at |
+|---|---|
+| four-argument body (the one later renamed) | `20260812115236_quote_items_cost_at_quote_snapshot.sql:1516` |
+| `RENAME TO _draw_down_quote_below_cost_impl_20260810` | `20260812115237_enforce_below_cost_admin_approval.sql:779` |
+| five-argument `draw_down_quote` wrapper | `20260812115237_enforce_below_cost_admin_approval.sql:815` |
+
+A clean rebuild now reproduces both bodies, so the `md5` pins are satisfiable from source rather than
+only from live state. `20260813161614_restrict_draw_down_quote_owner.sql` is therefore unblocked on
+this ground. Confirm the pinned hash still matches live at apply time — recovery restores the source,
+it does not by itself prove the live body has not since drifted.
+
+**THE FIX IS THE TIER SPLIT, NOT THE ROUNDING — Mason changed his answer on 2026-08-16, and the
+later answer governs.** Two options were put to him. The first, at 09:51 Central, was mine: keep the
+exact line total and round only the stored unit price. He answered "Option a". Later the same
+morning a concurrent session re-explained both options and he chose the other one — **write one
+order line per booked price tier and stop averaging them at all**. That session's work is
+`supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql` on branch
+`claude/draw-down-price-tier-lines` (PR #404, commits 11:59–13:16 Central). The canonical record is
+the 2026-08-16 entry "Draw-down writes one order line per booked price tier" in
+`docs/manual/DECISION_LOG.md`.
+
+**The rounding fix is therefore withdrawn and must not be built.** Both branches that attempted it
+are already dead (table above). A third attempt would `CREATE OR REPLACE` the same function as the
+tier-split migration, and each preflight pins the *current* live `md5(prosrc)`, so whichever applied
+second would fail closed — the collision this file has been tracking all along.
+
+Why the split is the better answer, in one line: rounding a *unit* price and then multiplying it by
+the quantity moves the line total by up to half a cent **per unit**, so on a large mixed-price
+booking it is a real mispricing in whichever direction the average happens to round — an overcharge
+when it rounds up, a silent margin loss when it rounds down. Splitting the lines removes the average
+entirely, so every unit is billed at a price the customer actually booked and there is no per-unit
+figure left to round; the existing post-extension rounding of the line total stays exactly as it is.
+
+Three facts verified against live `pg_proc` and live catalogs on 2026-08-16 stay recorded, because
+the tier-split migration depends on the second one and a future change to any of them is a
+regression risk on this path:
+
+1. `draw_down_quote` computes `v_line_total := ROUND(v_wavg_price * v_qty, 2)` — the total is rounded
+   **after** extension, never before. That ordering is preserved by the tier-split
+   (`ROUND(v_tier.price * v_take, 2)`) and must not be inverted.
+2. `_enforce_below_cost_line` re-derives `NEW.total_price := round(NEW.price_per_unit *
+   NEW.total_units_needed, 2)` **only** when the operation is one of `create_direct_order`,
+   `bulk_import_order`, `update_order_items`, `price_order`. The five-argument `draw_down_quote`
+   wrapper declares the operation `draw_down_quote`, outside that list, so the per-tier price and
+   cost written by the draw survive the trigger. **If `draw_down_quote` is ever added to that list,
+   the tier split's snapshot costs get overwritten with today's catalog cost.**
+3. `trg_order_items_round_money` → `_round_money_to_whole_cents` rounds `total_price` and derives
+   `profit`, but never touches `price_per_unit`. No CHECK constraint ties `price_per_unit * qty` to
+   `total_price`.
+
+Mason's decision 2026-08-14 was to log this bug and fix it separately rather than entangle it with
+the recovery PR. **No migration here is approved for apply** — PR #404 landing on `main` does not
+apply anything; the live apply is a separate, explicit decision. Do not re-diagnose this from
+scratch; the live evidence is above.
+
+**Status of the tier-split candidate: LOCAL CANDIDATE — NOT APPLIED.** Both required gate reviewers
+returned zero blockers and a further adversarial pass found one HIGH, since fixed in-file (a draw
+against a soft-deleted booking — see the CRX-RLS-001 note on row 887). Every scenario was re-proven
+end-to-end on throwaway PostgreSQL 17 databases and the full typecheck/lint/test/build pipeline is
+green. **Nothing has touched the live database.** The live apply still needs Mason's explicit
+approval and the standard apply-guard proof. Row 887 of `docs/reference/migration-history.md`
+carries the file's pinned SQL hash and the apply obligations.
+
+The first rounding attempt's branch, `claude/draw-down-price-rounding`, was deleted on 2026-08-16;
+its tip is preserved as tag `abandoned/draw-down-price-rounding` so the abandoned work stays
+recoverable without a live branch inviting a third attempt.
+
+**Ignore the contrary record on `claude/known-issues-drawdown-defect`.** That local-only, unpushed
+branch records the opposite choice ("keep the exact line total, round only the stored unit price")
+and attributes it to Mason, who did not make it. It has no pull request and cannot reach `main`. One
+finding on it is genuine and worth keeping: the live ledger's ordering high-water must be read from
+the `name` stamp, not `max(version)` — on 2026-08-16 those read `20260813070000` and
+`20260813011751` respectively, a three-day understatement.
+
+---
+
+## CLOSED 2026-08-13 — six migrations applied live on 2026-08-12 have no file on `main`
+
+**Severity: was MATERIAL — resolved by PR #392 (files landed on `main`).** Six migrations
 were applied live on 2026-08-12 from another session and their files are absent from
 `origin/main` (verified by `git ls-tree` against the live ledger on 2026-08-13):
 
@@ -43,14 +531,14 @@ were applied live on 2026-08-12 from another session and their files are absent 
 | `20260812115237_enforce_below_cost_admin_approval` | `20260812154028` |
 | `20260812115238_repair_historical_order_line_cents` | `20260812154757` |
 
-The files have since been **recovered onto remote branches** (`recovery/live-no-file-six` and
-`claude/recover-applied-migrations-20260812`), so they are no longer file-less — but until a
-recovery PR merges, do not plan against `main`'s `supabase/migrations/` as a complete
-reconstruction source for 2026-08-12. Closeout: land the recovery branch onto `main` through the
-normal PR pipeline (the recovery session owns it), then re-verify with `git ls-tree` against the
-ledger and close this entry. `20260812130145_bind_return_receipts_to_intent_and_restore_overdue`
-and `20260813070000_pin_return_idempotency_helper_contract` from the same window are already on
-`main` and are not part of this gap.
+CLOSED by PR #392 (2026-08-13): the recovery branch `recovery/live-no-file-six` merged into
+`main`, landing all six files under `supabase/migrations/` (history rows 880-885, recovered
+verbatim from the applying sessions' transcripts and md5-verified against live `pg_proc.prosrc`).
+`20260812130145_bind_return_receipts_to_intent_and_restore_overdue` and
+`20260813070000_pin_return_idempotency_helper_contract` from the same window were already on
+`main` and were never part of this gap. **The prevention gap remains OPEN** — see the header
+paragraph above: nothing yet reconciles the live ledger against tracked files automatically, and
+this was the third occurrence.
 
 ---
 

@@ -2,7 +2,7 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,14 +20,17 @@ const SNIPPETS = {
 };
 
 const EXPECTED_INPUT_BLOB = "c8bec70830c643e474831985f5e6c3bd16630386";
-const EXPECTED_OUTPUT_BLOB = "fdc67a2ef72698b1e74a8dee53c2a41da4c55fbd";
+const EXPECTED_OUTPUT_BLOB = "7bca8dce4fe2f58afabdbd09d1b31ecef61ce520";
 const EXPECTED_SNIPPET_SHA256 = {
   constants: "53c658d7eb8aab2a60b4314f533f61b7472f8d686f4b81d483d57b20950022a9",
-  helpers: "b70fefdf0e969bc0e953362b1706753e127f1a7a8a8c8fda7181e94e2a161efd",
-  classify: "4babd221a9374e5df0b5d46db7bd267493c32d9a1a3a5dbb0a1a07fc66f6692a",
+  helpers: "8fa108c52b4423b7d269d94d19b91726fe880b6d2ea403c5c9665c686b532398",
+  classify: "41dea42c28a47e47892dbf1da05144a4dac0dfa30045eba99789090905411d00",
 };
 const APPROVAL = "--approved-by-mason=2026-08-12";
 const PROTECT_PRODUCER = "--protect-producer";
+const RETIRE_PRODUCER = "--retire-producer";
+const PRODUCER = "scripts/apply-live-testdata-maintenance-20260812.mjs";
+const PRODUCER_PATH = path.join(REPO_DIR, PRODUCER);
 const PROTECTED_SOURCES = {
   codexGuard: [".codex", "hooks", "production-action-" + "guard.mjs"].join("/"),
   pushLib: [".claude", "hooks", "codex-push-" + "lib.mjs"].join("/"),
@@ -40,26 +43,380 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // (Codex-review P1 follow-ups). This PR cohort also wrapped matcherAnchor
   // in normalizeLineEndings; the anchor text itself is unchanged, so the
   // transform still applies cleanly.
+  // pushLib re-pinned 2026-08-19 (PR #423, blind Opus round 2): the
+  // applied-source ledger's basename joined reviewProofPathMentioned so the
+  // C3 containment record can't be forged or deleted directly. The risky
+  // producer-path anchor this transform verifies is unchanged.
+  // pushLib re-pinned again 2026-08-19 (PR #423, blind Opus round 5): the
+  // sanctioned ledger-removal script scripts/remove-applied-ledger-entry.mjs
+  // joined RISKY_PATH_RES so a Codex push touching it needs an exact-head
+  // proof. The apply-live-testdata risky-path anchor this transform verifies is
+  // still present exactly once; the transform is identity, so input == output.
   codexGuard: "05499cfe34a3246b2400a22c343562fbd8fd0c33",
-  pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
+  pushLib: "47ff790caa55c27d4f7ee29d43493d2b3389e62c",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "58a037fbf2f563ac3ced27d2b33c09a9979422cc",
-  pushLib: "88e5b9acd9929408d78dee328cb3fa3a2280b346",
+  codexGuard: "0f3a62cfc6cdacf5e43465d37c2ca67eaf914597",
+  pushLib: "47ff790caa55c27d4f7ee29d43493d2b3389e62c",
 };
 
 export function maintenanceProducerCommandMentioned(command) {
-  const compact = String(command || "")
+  const value = String(command || "");
+  const hasDynamicSyntax = (text) => /[*?\[\]{}$`@]|[<>]\(|\([^()\r\n]*\+[^()\r\n]*\)|\s-join(?:\s|$)|![^!\r\n]+!|%[^%\r\n]+%/i.test(text);
+  const dynamicSyntax = hasDynamicSyntax(value);
+  const tokenize = (text) => {
+      const tokens = [];
+      let current = "";
+      let quote = "";
+      let sawQuoted = false;
+      let sawUnquoted = false;
+      const push = () => {
+        if (!current) return;
+        tokens.push({ value: current, sawQuoted, sawUnquoted, control: false });
+        current = "";
+        sawQuoted = false;
+        sawUnquoted = false;
+      };
+      for (let index = 0; index < text.length; index += 1) {
+        const char = text[index];
+        if (quote) {
+          if (char === quote) quote = "";
+          else {
+            current += char;
+            sawQuoted = true;
+          }
+          continue;
+        }
+        if (char === "\"" || char === "'") {
+          quote = char;
+          sawQuoted = true;
+        } else if (char === "\r" || char === "\n") {
+          push();
+          tokens.push({ value: "\n", sawQuoted: false, sawUnquoted: true, control: true });
+          if (char === "\r" && text[index + 1] === "\n") index += 1;
+        } else if (/\s/.test(char)) push();
+        else if (/[;&|(){}<>]/.test(char)) {
+          push();
+          tokens.push({ value: char, sawQuoted: false, sawUnquoted: true, control: true });
+        } else {
+          current += char;
+          sawUnquoted = true;
+        }
+      }
+      push();
+      return tokens;
+  };
+  const tokens = tokenize(value);
+  const normalizeShellToken = (tokenValue) => String(tokenValue || "")
+    .replace(/\\([^\\/])/g, "$1")
+    .replace(/\^([^^])/g, "$1")
+    .replace(/`([^`])/g, "$1")
+    .replace(/^@/, "");
+  const normalizeShellOption = (tokenValue) => normalizeShellToken(tokenValue).replace(/\\\//g, "/");
+  const executableNamed = (token, name, allowQuotedBare = false) => {
+    if (!token || token.control) return false;
+    const normalized = normalizeShellToken(token.value);
+      const candidates = [token.value, normalized, normalized.replace(/^\$/, "")];
+      return candidates.some((candidate) => {
+        const basename = candidate.split(/[\\/]/).pop();
+        const exact = new RegExp(`^${name}(?:\\.exe)?$`, "i").test(basename);
+      return exact && (allowQuotedBare || !token.sawQuoted || token.sawUnquoted || /[\\/]/.test(candidate));
+    });
+  };
+  const invocationPosition = (list, index) => {
+    let segmentStart = index;
+    while (segmentStart > 0 && !list[segmentStart - 1].control) segmentStart -= 1;
+    let cursor = segmentStart;
+    while (cursor < index && /^[A-Za-z_]\w*=/.test(list[cursor].value)) cursor += 1;
+    let wrapperDepth = 0;
+    for (; cursor < index && wrapperDepth < 8; wrapperDepth += 1) {
+      const token = list[cursor];
+      const named = (name) => executableNamed(token, name, true);
+      if (named("command")) {
+        cursor += 1;
+        if (cursor < index && /^-[vV]$/.test(list[cursor].value)) return false;
+        while (cursor < index && /^(?:-p|--)$/.test(list[cursor].value)) cursor += 1;
+      } else if (named("exec")) {
+        cursor += 1;
+        while (cursor < index && list[cursor].value.startsWith("-")) {
+          if (/^-[cla]*a[cla]*$/.test(list[cursor].value)) cursor += 1;
+          cursor += 1;
+        }
+      } else if (named("env")) {
+        cursor += 1;
+        while (cursor < index) {
+          const argument = list[cursor].value;
+          if (/^--(?:help|version)$/.test(argument)) return false;
+          if (argument === "--") { cursor += 1; break; }
+          if (/^-[i0v]*[uCa][i0v]*$/.test(argument)) { cursor += 2; continue; }
+          if (/^(?:-u|--unset|-C|--chdir|-a|--argv0)$/.test(argument)) { cursor += 2; continue; }
+          if (/^[A-Za-z_]\w*=/.test(argument) || argument.startsWith("-")) { cursor += 1; continue; }
+          break;
+        }
+      } else if (["nohup", "nice", "timeout", "setsid", "stdbuf"].some((name) => named(name))) {
+        cursor += 1;
+        if (cursor < index && /^--(?:help|version)$/.test(list[cursor].value)) return false;
+        while (cursor < index && list[cursor].value.startsWith("-")) {
+          if (/^--(?:help|version)$/.test(list[cursor].value)) return false;
+          if (/^(?:-n|--adjustment|-k|--kill-after|-s|--signal|-o|-e|-i)$/.test(list[cursor].value)
+            || (named("timeout") && /^-[a-z]*[ks][a-z]*$/i.test(list[cursor].value))) cursor += 1;
+          cursor += 1;
+        }
+        if (named("timeout") && cursor < index) cursor += 1;
+      } else {
+        return false;
+      }
+      while (cursor < index && /^[A-Za-z_]\w*=/.test(list[cursor].value)) cursor += 1;
+    }
+    return cursor === index || (wrapperDepth >= 8 && cursor < index);
+  };
+  const dynamicArgument = (argument) => /^(?:[$`@*?\[<{(]|![^!\r\n]+!|%[^%\r\n]+%)/.test(argument)
+    || /^(?:--?|\/).*(?:[$`@*?\[<{(]|![^!\r\n]+!|%[^%\r\n]+%)/.test(argument);
+  if (tokens.some((token, index, list) => token.control
+    && token.value === "&"
+    && list[index + 1]?.control
+    && /[({]/.test(list[index + 1].value))) return true;
+  const opaqueExecutablePosition = (token, index, list) => {
+    if (token.control || !dynamicArgument(token.value)) return false;
+    const prior = list[index - 1];
+    if (prior?.control && prior.value === "&") return true;
+    if (prior?.control && /[({]/.test(prior.value)) return false;
+    let segmentStart = index;
+    while (segmentStart > 0 && !list[segmentStart - 1].control) segmentStart -= 1;
+    return list.slice(segmentStart, index).every((entry) => /^[A-Za-z_]\w*=/.test(entry.value));
+  };
+  if (dynamicSyntax && tokens.some(opaqueExecutablePosition)) return true;
+  const opaqueJavaScriptLoaderInvocation = (token, index, list) => {
+    if (!invocationPosition(list, index)) return false;
+    let segmentEnd = index + 1;
+    while (segmentEnd < list.length && !list[segmentEnd].control) segmentEnd += 1;
+    const argumentsInSegment = list.slice(index + 1, segmentEnd).map((entry) => normalizeShellOption(entry.value));
+    const loaderOption = /^(?:-r|--require|--import|--preload|--(?:experimental-)?loader)(?:=|$)/i;
+    return argumentsInSegment.some((argument) => loaderOption.test(argument))
+      && argumentsInSegment.some((argument) => dynamicArgument(argument));
+  };
+  if (dynamicSyntax && tokens.some(opaqueJavaScriptLoaderInvocation)) return true;
+  const opaquePowerShellEvaluationInvocation = (token, index, list) => {
+    if (!invocationPosition(list, index)) return false;
+    return token.value === "."
+      || ["invoke-expression", "iex", "invoke-command", "icm", "start-job", "sajb", "start-threadjob", "start-rsjob"]
+        .some((name) => executableNamed(token, name, true));
+  };
+  if (tokens.some(opaquePowerShellEvaluationInvocation)) return true;
+  const dynamicPowerShellProcessLauncher = (token, index, list) => {
+    if (!invocationPosition(list, index)) return false;
+    return executableNamed(token, "start-process", true)
+      || executableNamed(token, "saps", true)
+      || executableNamed(token, "start", true);
+  };
+  if (dynamicSyntax && tokens.some(dynamicPowerShellProcessLauncher)) return true;
+  const powerShellNodeOptionsMutation = (token, index, list) => {
+    if (!invocationPosition(list, index)) return false;
+    const cmdlet = ["set-item", "new-item", "set-content", "add-content", "clear-item", "remove-item"]
+      .some((name) => executableNamed(token, name, true));
+    if (!cmdlet) return false;
+    for (let cursor = index + 1; cursor < list.length && !list[cursor].control; cursor += 1) {
+      if (/^env:\\?node_options$/i.test(normalizeShellToken(list[cursor].value))) return true;
+    }
+    return false;
+  };
+  if (tokens.some(powerShellNodeOptionsMutation)) return true;
+  const opaqueStdinExecutorInvocation = (token, index, list) => {
+    if (!invocationPosition(list, index)) return false;
+    const executor = executableNamed(token, "xargs", true) || executableNamed(token, "parallel", true);
+    if (!executor) return false;
+    let segmentStart = index;
+    while (segmentStart > 0 && !list[segmentStart - 1].control) segmentStart -= 1;
+    return list[segmentStart - 1]?.value === "|";
+  };
+  if (tokens.some(opaqueStdinExecutorInvocation)) return true;
+  const opaqueInlineInterpreterInvocation = (token, index, list) => {
+    if (!invocationPosition(list, index)) return false;
+    const python = ["python", "python2", "python3", "py"].some((name) => executableNamed(token, name, true));
+    const nodeLike = ["node", "nodejs", "bun"].some((name) => executableNamed(token, name, true));
+    const shortEval = ["perl", "ruby"].some((name) => executableNamed(token, name, true));
+    const php = executableNamed(token, "php", true);
+    const deno = executableNamed(token, "deno", true);
+    const shell = ["bash", "sh", "dash", "zsh", "ksh"].some((name) => executableNamed(token, name, true));
+    if (!(python || nodeLike || shortEval || php || deno || shell)) return false;
+    let segmentStart = index;
+    while (segmentStart > 0 && !list[segmentStart - 1].control) segmentStart -= 1;
+    if (list[segmentStart - 1]?.value === "|") return true;
+    let segmentEnd = index + 1;
+    while (segmentEnd < list.length && !list[segmentEnd].control) segmentEnd += 1;
+    if (shell && list[segmentEnd]?.value === "<") return true;
+    for (let cursor = index + 1; cursor < list.length && !list[cursor].control; cursor += 1) {
+      const argument = normalizeShellToken(list[cursor].value);
+      if (/^(?:--help|--version|-h|-V)$/.test(argument)) return false;
+      if ((nodeLike || deno) && dynamicArgument(argument)) return true;
+      if (python && argument === "-c") return true;
+      if (nodeLike && /^(?:-e|--eval|-p|--print)(?:=|$)/i.test(argument)) return true;
+      if (shortEval && /^-[eE](?:$|.)/.test(argument)) return true;
+      if (php && /^-r(?:$|.)/i.test(argument)) return true;
+      if (deno && /^eval$/i.test(argument)) return true;
+      if (deno && /^(?:run|serve|task)$/i.test(argument)) continue;
+      if (nodeLike && executableNamed(token, "bun", true) && /^run$/i.test(argument)) continue;
+      if (shell && /^-[A-Za-z]*[cs][A-Za-z]*$/.test(argument)) return true;
+      if (argument === "-") return true;
+      if (argument === "--") {
+        const operand = list[cursor + 1];
+        if (shell) return true;
+        return !operand || operand.control || operand.value === "-";
+      }
+      if (python && /^(?:-W|-X)$/.test(argument)) {
+        cursor += 1;
+        continue;
+      }
+      if (!argument.startsWith("-")) return shell;
+    }
+    return true;
+  };
+  if (tokens.some(opaqueInlineInterpreterInvocation)) return true;
+  const powerShellValueOption = (argument) => /^(?:--?|\/)(?:configuration(?:name|file)|config|cus(?:t(?:o(?:m(?:p(?:i(?:p(?:e(?:n(?:a(?:m(?:e)?)?)?)?)?)?)?)?)?)?)?|settings(?:f(?:i(?:l(?:e)?)?)?)?|executionpolicy|ex|ep|inputformat|inp|input|if|outputformat|o|of|out|windowstyle|w|workingdirectory|wd)(?::|=)?/i.test(argument);
+  const commandStringContainsEncodedPowerShell = (text) => {
+    const cmdTokens = tokenize(text);
+    return cmdTokens.some((token, index) => {
+      if (!(executableNamed(token, "pwsh", true) || executableNamed(token, "powershell", true))) return false;
+      for (let cursor = index + 1; cursor < cmdTokens.length; cursor += 1) {
+        if (/^(?:--?|\/)e(?:c|n[a-z]*)?(?:$|(?::|=|[\s,]).*)/i.test(normalizeShellOption(cmdTokens[cursor].value))) return true;
+      }
+      return false;
+    });
+  };
+  const opaqueLauncherContainsEncodedPowerShell = tokens.some((token, index, list) => {
+    const launcher = executableNamed(token, "start-process", true) || executableNamed(token, "xargs", true);
+    if (!launcher || !invocationPosition(list, index)) return false;
+    let commandEnd = index + 1;
+    while (commandEnd < list.length && !list[commandEnd].control) commandEnd += 1;
+    return commandStringContainsEncodedPowerShell(list.slice(index + 1, commandEnd).map((entry) => entry.value).join(" "));
+  });
+  if (opaqueLauncherContainsEncodedPowerShell) return true;
+  const powerShellEncodedCommand = tokens.some((token, index, list) => {
+    if (!(executableNamed(token, "pwsh", true) || executableNamed(token, "powershell", true)) || !invocationPosition(list, index)) return false;
+    for (let cursor = index + 1; cursor < list.length && !list[cursor].control; cursor += 1) {
+      const argument = normalizeShellOption(list[cursor].value);
+      if (/^(?:--?|\/)f(?:i(?:l(?:e)?)?)?(?:(?::|=).*)?$/i.test(argument)) return true;
+      if (/^(?:--?|\/)e(?:c|n[a-z]*)?(?:(?::|=).*)?$/i.test(argument)) return true;
+      if (powerShellValueOption(argument) && !/[:=]/.test(argument)) cursor += 1;
+      else if (!argument.startsWith("-") && !argument.startsWith("/")) break;
+    }
+    return false;
+  });
+  if (powerShellEncodedCommand) return true;
+  {
+    const nodeExecutable = (token, index, list) => {
+      if (!executableNamed(token, "node", true)) return false;
+      const pureQuotedBare = token.sawQuoted && !token.sawUnquoted && !/[\\/]/.test(token.value);
+      if (!pureQuotedBare || String(list[index - 1]?.value || "").toLowerCase() !== "-pattern") return true;
+      let segmentStart = index - 1;
+      while (segmentStart >= 0 && !list[segmentStart].control) segmentStart -= 1;
+      const commandToken = list[segmentStart + 1];
+      return !(executableNamed(commandToken, "select-string", true) || executableNamed(commandToken, "sls", true));
+    };
+    const maxNestedShellDepth = 4;
+    function analyzeText(text, depth) {
+      if (depth > maxNestedShellDepth) return true;
+      return analyzeTokens(tokenize(text), depth);
+    }
+    function analyzeTokens(candidateTokens, depth) {
+      if (dynamicSyntax && candidateTokens.some(nodeExecutable)) return true;
+      for (let index = 0; index < candidateTokens.length; index += 1) {
+        if (executableNamed(candidateTokens[index], "env") && invocationPosition(candidateTokens, index)) {
+          for (let cursor = index + 1; cursor < candidateTokens.length && !candidateTokens[cursor].control; cursor += 1) {
+            const argument = normalizeShellToken(candidateTokens[cursor].value);
+            if (argument === "--") break;
+            const shortSplit = /^-[i0v]*S(.*)$/.exec(argument);
+            const longSplit = /^--split-string(?:=(.*))?$/.exec(argument);
+            if (shortSplit || longSplit) {
+              const attached = shortSplit?.[1] || longSplit?.[1] || "";
+              const commandText = attached || candidateTokens[cursor + 1]?.value || "";
+              if (!commandText || hasDynamicSyntax(commandText) || depth >= maxNestedShellDepth || analyzeText(commandText, depth + 1)) return true;
+              break;
+            }
+            if (/^(?:-u|--unset|-C|--chdir|-a|--argv0)$/.test(argument)) {
+              cursor += 1;
+              continue;
+            }
+            if (/^[A-Za-z_]\w*=/.test(argument) || argument.startsWith("-")) continue;
+            break;
+          }
+        }
+        if (executableNamed(candidateTokens[index], "cmd") && invocationPosition(candidateTokens, index)) {
+          let commandString = false;
+          for (let cursor = index + 1; cursor < candidateTokens.length && !candidateTokens[cursor].control; cursor += 1) {
+            const commandSwitch = /^(?:\/[a-z](?::[a-z]+)?)*\/[ck](.*)$/i.exec(candidateTokens[cursor].value);
+            if (commandSwitch?.[1]) {
+              if (commandStringContainsEncodedPowerShell(commandSwitch[1]) || depth >= maxNestedShellDepth || analyzeText(commandSwitch[1], depth + 1)) return true;
+              break;
+            }
+            if (commandSwitch) {
+              commandString = true;
+              continue;
+            }
+            if (commandString) {
+              let commandEnd = cursor;
+              while (commandEnd < candidateTokens.length && !candidateTokens[commandEnd].control) commandEnd += 1;
+              const commandText = candidateTokens.slice(cursor, commandEnd).map((entry) => entry.value).join(" ");
+              if (commandStringContainsEncodedPowerShell(commandText) || depth >= maxNestedShellDepth || analyzeText(commandText, depth + 1)) return true;
+              break;
+            }
+          }
+        }
+        const posixShell = ["bash", "sh", "dash", "zsh", "ksh"].some((name) => executableNamed(candidateTokens[index], name)) && invocationPosition(candidateTokens, index);
+        const powerShell = ["pwsh", "powershell"].some((name) => executableNamed(candidateTokens[index], name, true)) && invocationPosition(candidateTokens, index);
+        if (posixShell || powerShell) {
+          let commandString = false;
+          for (let cursor = index + 1; cursor < candidateTokens.length && !candidateTokens[cursor].control; cursor += 1) {
+            const rawArgument = candidateTokens[cursor].value;
+            const argument = powerShell ? normalizeShellOption(rawArgument) : normalizeShellToken(rawArgument);
+            if (powerShell && !commandString && dynamicArgument(rawArgument)) return true;
+            if (powerShell && !commandString && /^(?:--?|\/)f(?:i(?:l(?:e)?)?)?(?:(?::|=).*)?$/i.test(argument)) return true;
+            if (powerShell && !commandString && powerShellValueOption(argument)) {
+              if (!/[:=]/.test(argument)) cursor += 1;
+              continue;
+            }
+            if (powerShell && !commandString && !argument.startsWith("-") && !argument.startsWith("/")) break;
+            if (powerShell && /^(?:--?|\/)e(?:c|n[a-z]*)?(?:(?::|=).*)?$/i.test(argument)) return true;
+            const attachedCommand = powerShell ? /^(?:(?:(?:--?|\/)c|(?:--?|\/)co(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?|(?:--?|\/)cwa|(?:--?|\/)commandw[a-z]*):|--command=)(.+)$/i.exec(argument) : null;
+            if (attachedCommand) {
+              if (commandStringContainsEncodedPowerShell(attachedCommand[1]) || depth >= maxNestedShellDepth || analyzeText(attachedCommand[1], depth + 1)) return true;
+              break;
+            }
+            const commandOption = posixShell
+              ? /^-[a-z]*c[a-z]*$/i.test(argument)
+              : /^(?:(?:--?|\/)c|(?:--?|\/)co(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?|(?:--?|\/)cwa|(?:--?|\/)commandw[a-z]*)$/i.test(argument);
+            if (commandOption) {
+              commandString = true;
+              continue;
+            }
+            if (commandString) {
+              if (powerShell && argument === "-") return true;
+              if (commandStringContainsEncodedPowerShell(argument) || depth >= maxNestedShellDepth || analyzeText(argument, depth + 1)) return true;
+              break;
+            }
+          }
+        }
+      }
+      return false;
+    }
+    if (analyzeTokens(tokens, 0)) return true;
+  }
+  const nodeScript = /\bnode(?:\.exe)?\s+(?:"([^"]*)"|'([^']*)'|([^\s;&|]+))/i.exec(value);
+  const scriptPath = nodeScript?.[1] || nodeScript?.[2] || nodeScript?.[3] || "";
+  if (/[*?\[\]]|\$\(|\$\{/.test(scriptPath)) return true;
+  const compact = value
     .toLowerCase()
     .replace(/[\s\\/"'`^]/g, "");
-  return compact.includes("apply-live-testdata-maintenance-20260812.mjs");
+  return compact.includes("apply-live-testdata-maintenance-20260812.mjs")
+    || compact.includes("--approved-by-mason=");
 }
 
 export function maintenanceProducerInvocationAllowed(command) {
   const value = String(command || "").trim();
   return value === "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify"
     || value === "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12"
-    || value === "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --protect-producer";
+    || value === "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --protect-producer"
+    || value === "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --retire-producer";
 }
 
 export function exactHeadProofValid(data, headSha, baseSha, nowMs = Date.now()) {
@@ -190,11 +547,20 @@ export function buildProducerProtectionSources() {
   const constantsReplacement = constantsAnchor;
   const constantsWithMatcher = constantsReplacement;
   codexGuard = replaceExactly(codexGuard, constantsAnchor, constantsWithMatcher, "maintenance producer command constants");
-  const matcherAnchor = exportedFunctionSource(maintenanceProducerCommandMentioned);
+  // Normalize the literal input anchor because Git may materialize this file
+  // with CRLF while the protected guard source is normalized to LF.
+  const matcherAnchor = normalizeLineEndings(`export function maintenanceProducerCommandMentioned(command) {
+  const compact = String(command || "")
+    .toLowerCase()
+    .replace(/[\\s\\\\/"'\`^]/g, "");
+  return compact.includes("apply-live-testdata-maintenance-20260812.mjs");
+}`);
+  const hardenedMatcher = `export ${normalizeLineEndings(maintenanceProducerCommandMentioned.toString())}`;
+  const allowedMatcher = normalizeLineEndings(maintenanceProducerInvocationAllowed.toString());
   codexGuard = replaceExactly(
     codexGuard,
     matcherAnchor,
-    `${matcherAnchor}\n\n${exportedFunctionSource(maintenanceProducerInvocationAllowed)}`,
+    `${hardenedMatcher}\n\nexport ${allowedMatcher}`,
     "strict maintenance producer invocation matcher",
   );
 
@@ -234,10 +600,13 @@ function main() {
     throw new Error("refusing a dirty worktree; commit or restore unrelated changes first");
   }
 
-  const verifyOnly = process.argv.includes("--verify");
-  const protectProducer = process.argv.includes(PROTECT_PRODUCER);
-  if (!verifyOnly && !process.argv.includes(APPROVAL)) {
-    throw new Error(`this one-use producer requires the exact approval token ${APPROVAL}`);
+  const args = process.argv.slice(2);
+  const verifyOnly = args.length === 1 && args[0] === "--verify";
+  const applyMaintenance = args.length === 1 && args[0] === APPROVAL;
+  const protectProducer = args.length === 2 && args[0] === APPROVAL && args[1] === PROTECT_PRODUCER;
+  const retireProducer = args.length === 2 && args[0] === APPROVAL && args[1] === RETIRE_PRODUCER;
+  if (!verifyOnly && !applyMaintenance && !protectProducer && !retireProducer) {
+    throw new Error("unsupported producer invocation; use one exact reviewed command");
   }
 
   const branch = git(["rev-parse", "--abbrev-ref", "HEAD"]);
@@ -245,11 +614,10 @@ function main() {
     throw new Error(`refusing protected or detached branch: ${branch}`);
   }
   if (!verifyOnly) {
-    const producerPath = "scripts/apply-live-testdata-maintenance-20260812.mjs";
     const headSha = git(["rev-parse", "HEAD"]);
     const baseSha = git(["rev-parse", "origin/main"]);
-    const headBlob = git(["rev-parse", `HEAD:${producerPath}`]);
-    const worktreeBlob = git(["hash-object", `--path=${producerPath}`, producerPath]);
+    const headBlob = git(["rev-parse", `HEAD:${PRODUCER}`]);
+    const worktreeBlob = git(["hash-object", `--path=${PRODUCER}`, PRODUCER]);
     if (headBlob !== worktreeBlob) {
       throw new Error("the maintenance producer must match its exact committed HEAD blob");
     }
@@ -265,6 +633,14 @@ function main() {
     if (!exactHeadProofValid(proof, headSha, baseSha)) {
       throw new Error("the maintenance producer requires a fresh exact-head Sol-high proof matching the current HEAD and origin/main");
     }
+  }
+  if (retireProducer) {
+    rmSync(PRODUCER_PATH);
+    if (existsSync(PRODUCER_PATH)) {
+      throw new Error(`failed to remove the maintenance producer: ${PRODUCER}`);
+    }
+    process.stdout.write(`Removed reviewed one-use maintenance producer (${PRODUCER}) from the worktree. Commit this deletion to complete retirement.\n`);
+    return;
   }
   const currentBlob = gitBlob(readNormalized(TARGET));
   if (currentBlob !== EXPECTED_INPUT_BLOB) {

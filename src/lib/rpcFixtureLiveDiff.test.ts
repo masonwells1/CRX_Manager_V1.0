@@ -115,23 +115,241 @@ function productionRpcCalls(): string[] {
   return [...names].sort();
 }
 
+/**
+ * Remove `//` line comments and block comments from a literal body, leaving
+ * string literals (and their contents) untouched.
+ *
+ * WHY: the extractors below regex the RAW body text, so any quoted word in an
+ * explanatory comment INSIDE one of the fixture arrays became a phantom entry
+ * and failed the ghost check with a confusing message (observed 2026-08-16: a
+ * comment reading `the 'delegated' note in IDEMPOTENCY_BODY_EXEMPT below`
+ * produced the ghost entry "delegated"). Rewording the comment worked around
+ * it; stripping comments here fixes it for good.
+ *
+ * Newlines inside a stripped comment are preserved so line-anchored extraction
+ * (extractObjectKeys) cannot silently merge two lines into one.
+ *
+ * Scope note: this is only ever applied to an already-captured object/array
+ * literal body, where a `/` can only begin a comment — never a regex literal.
+ */
+/** Index just past the string literal that starts at `i` (handles escapes). */
+function skipStringLiteral(text: string, i: number): number {
+  const quote = text[i];
+  let j = i + 1;
+  while (j < text.length) {
+    if (text[j] === '\\') {
+      j += 2;
+      continue;
+    }
+    if (text[j] === quote) return j + 1;
+    j += 1;
+  }
+  return j; // unterminated — treat the rest as string rather than re-lexing it
+}
+
+function stripComments(body: string): string {
+  let out = '';
+  let i = 0;
+  while (i < body.length) {
+    const ch = body[i];
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const end = skipStringLiteral(body, i);
+      out += body.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (ch === '/' && body[i + 1] === '/') {
+      while (i < body.length && body[i] !== '\n') i += 1;
+      continue;
+    }
+    if (ch === '/' && body[i + 1] === '*') {
+      const end = body.indexOf('*/', i + 2);
+      const stop = end === -1 ? body.length : end + 2;
+      out += body.slice(i, stop).replace(/[^\n]/g, '');
+      i = stop;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+/**
+ * Body of `const NAME ... = [ … ];` / `= { … };`, found by a quote- and
+ * comment-aware scan for the BALANCED closing bracket.
+ *
+ * WHY not a regex: a lazy `[\s\S]*?\];` ends at the first `];` in the text, so
+ * a `];` written inside a comment inside the literal would cut the body short
+ * and silently drop every entry after it — an under-reported fixture is exactly
+ * the failure the ghost check exists to catch.
+ */
+function literalBody(source: string, constName: string, open: '[' | '{', file: string): string {
+  const decl = new RegExp(`const ${constName}\\b[^=]*=\\s*\\${open}`).exec(source);
+  if (!decl) throw new Error(`Could not find const ${constName} in ${file}`);
+  const close = open === '[' ? ']' : '}';
+  const start = decl.index + decl[0].length;
+  let depth = 1;
+  let i = start;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === "'" || ch === '"' || ch === '`') {
+      i = skipStringLiteral(source, i);
+      continue;
+    }
+    if (ch === '/' && source[i + 1] === '/') {
+      while (i < source.length && source[i] !== '\n') i += 1;
+      continue;
+    }
+    if (ch === '/' && source[i + 1] === '*') {
+      const end = source.indexOf('*/', i + 2);
+      i = end === -1 ? source.length : end + 2;
+      continue;
+    }
+    if (ch === '[' || ch === '{' || ch === '(') depth += 1;
+    else if (ch === ']' || ch === '}' || ch === ')') {
+      depth -= 1;
+      if (depth === 0) {
+        if (ch !== close) {
+          throw new Error(`const ${constName} in ${file} closed with '${ch}', expected '${close}'`);
+        }
+        return source.slice(start, i);
+      }
+    }
+    i += 1;
+  }
+  throw new Error(`Unterminated const ${constName} literal in ${file}`);
+}
+
 /** Extract the string entries of `const NAME ... = [ ... ];` from source. */
 function extractArray(source: string, constName: string, file: string): string[] {
-  const m = source.match(new RegExp(`const ${constName}[^=]*=\\s*\\[([\\s\\S]*?)\\];`));
-  if (!m) throw new Error(`Could not find const ${constName} in ${file}`);
-  return [...m[1].matchAll(/'([A-Za-z0-9_]+)'/g)].map((x) => x[1]);
+  const body = stripComments(literalBody(source, constName, '[', file));
+  return [...body.matchAll(/'([A-Za-z0-9_]+)'/g)].map((x) => x[1]);
 }
 
 /** Extract the keys of `const NAME ... = { key: 'value', ... };` from source. */
 function extractObjectKeys(source: string, constName: string, file: string): string[] {
-  const m = source.match(new RegExp(`const ${constName}[^=]*=\\s*\\{([\\s\\S]*?)\\};`));
-  if (!m) throw new Error(`Could not find const ${constName} in ${file}`);
-  return [...m[1].matchAll(/^\s*([A-Za-z0-9_]+)\s*:/gm)].map((x) => x[1]);
+  const body = stripComments(literalBody(source, constName, '{', file));
+  return [...body.matchAll(/^\s*([A-Za-z0-9_]+)\s*:/gm)].map((x) => x[1]);
 }
 
 // -------------------------------------------------------------------------
 // Tests
 // -------------------------------------------------------------------------
+
+describe('Fixture-array extraction ignores comments', () => {
+  // Regression guard for the phantom-entry bug: a quoted word inside a comment
+  // in one of the extracted arrays used to become a fixture entry and fail the
+  // ghost check below. Rewording the comment was the old workaround; these
+  // cases prove the extractor now ignores comment text entirely.
+  const ARRAY_WITH_COMMENTS = [
+    "const SAMPLE_FIXTURE: string[] = [",
+    "  // the 'delegated' note in IDEMPOTENCY_BODY_EXEMPT below",
+    "  'real_first', // trailing 'ghost_trailing' note",
+    "  /* block 'ghost_block' note",
+    "     spanning 'ghost_second_line' lines */",
+    "  'real_second',",
+    "];",
+  ].join('\n');
+
+  it('does not turn a quoted word in a comment into a fixture entry', () => {
+    expect(extractArray(ARRAY_WITH_COMMENTS, 'SAMPLE_FIXTURE', 'synthetic')).toEqual([
+      'real_first',
+      'real_second',
+    ]);
+  });
+
+  it('still throws when the const is absent (no silent empty fixture)', () => {
+    expect(() => extractArray(ARRAY_WITH_COMMENTS, 'MISSING_FIXTURE', 'synthetic')).toThrow(
+      /Could not find const MISSING_FIXTURE/
+    );
+  });
+
+  it('ignores comment text in object-key extraction without merging lines', () => {
+    const objectWithComments = [
+      "const SAMPLE_ALIAS: Record<string, string> = {",
+      "  // ghost_key: 'not a real entry'",
+      "  real_key: 'value', /* note",
+      "     continued */ second_key: 'value',",
+      "};",
+    ].join('\n');
+    expect(extractObjectKeys(objectWithComments, 'SAMPLE_ALIAS', 'synthetic')).toEqual([
+      'real_key',
+      'second_key',
+    ]);
+  });
+
+  it('does not end the array at a `];` written inside a comment', () => {
+    // The lazy-regex extractor ended the body here and dropped every entry
+    // after the comment — a silently UNDER-reported fixture, which is the
+    // failure the ghost check exists to catch.
+    const source = [
+      "const SAMPLE_FIXTURE: string[] = [",
+      "  'before_comment',",
+      "  // the array used to end at this `];` sequence",
+      "  'after_line_comment',",
+      "  /* and at this one too: `];`",
+      "     still inside the block comment */",
+      "  'after_block_comment',",
+      "];",
+      "const LATER_CONST: string[] = ['unrelated'];",
+    ].join('\n');
+    expect(extractArray(source, 'SAMPLE_FIXTURE', 'synthetic')).toEqual([
+      'before_comment',
+      'after_line_comment',
+      'after_block_comment',
+    ]);
+  });
+
+  it('does not end the object at a `};` written inside a comment', () => {
+    const source = [
+      "const SAMPLE_ALIAS: Record<string, string> = {",
+      "  first_key: 'a',",
+      "  // the object used to end at this `};` sequence",
+      "  second_key: 'b',",
+      "  /* and at this one: `};` */",
+      "  third_key: 'c',",
+      "};",
+    ].join('\n');
+    expect(extractObjectKeys(source, 'SAMPLE_ALIAS', 'synthetic')).toEqual([
+      'first_key',
+      'second_key',
+      'third_key',
+    ]);
+  });
+
+  it('does not end the literal at a bracket inside a string entry', () => {
+    const source = [
+      "const SAMPLE_FIXTURE: string[] = [",
+      "  'first_rpc',",
+      "  'not_an_identifier ]; still a string',",
+      "  'second_rpc',",
+      "];",
+    ].join('\n');
+    expect(extractArray(source, 'SAMPLE_FIXTURE', 'synthetic')).toEqual(['first_rpc', 'second_rpc']);
+  });
+
+  it('matches the whole const name, not a prefix of a longer one', () => {
+    const source = [
+      "const SAMPLE_FIXTURE_EXTENDED: string[] = ['wrong_const'];",
+      "const SAMPLE_FIXTURE: string[] = ['right_const'];",
+    ].join('\n');
+    expect(extractArray(source, 'SAMPLE_FIXTURE', 'synthetic')).toEqual(['right_const']);
+  });
+
+  it('leaves comment-like text inside a string literal alone', () => {
+    const trickySource = [
+      "const TRICKY_FIXTURE: string[] = [",
+      "  'a_real_rpc', // note about // slashes",
+      "  'another_rpc',",
+      "];",
+    ].join('\n');
+    expect(extractArray(trickySource, 'TRICKY_FIXTURE', 'synthetic')).toEqual([
+      'a_real_rpc',
+      'another_rpc',
+    ]);
+  });
+});
 
 describe('Live pg_proc snapshot integrity', () => {
   it('snapshot has the expected count, no duplicates, sorted', () => {

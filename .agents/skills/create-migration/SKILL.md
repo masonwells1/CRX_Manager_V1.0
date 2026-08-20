@@ -40,13 +40,14 @@ date -u +"%Y%m%d%H%M%S"
    - For new tables: include `id uuid DEFAULT gen_random_uuid() PRIMARY KEY`,
      `created_at timestamptz DEFAULT now()`, `updated_at timestamptz DEFAULT now()`
    - For new tables: **always add the `updated_at` trigger in the same migration** —
-     `DATABASE_CHANGE_CHECKLIST.md` lists omitting it as a known repeat mistake, and the column
-     alone never updates itself:
+     `docs/workflows/DATABASE_CHANGE_CHECKLIST.md` lists omitting it as a known repeat mistake,
+     and the column alone never updates itself. Use the house trigger function (not the
+     `moddatetime` extension — it is not the project pattern):
 
      ```sql
      CREATE TRIGGER set_updated_at
        BEFORE UPDATE ON public.my_new_table
-       FOR EACH ROW EXECUTE FUNCTION moddatetime('updated_at');
+       FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
      ```
 
    - For new tables: always add `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` **and** real policies
@@ -57,7 +58,9 @@ date -u +"%Y%m%d%H%M%S"
      `AGENTS.md`:
      - `SECURITY DEFINER` functions set `SET search_path = public, pg_temp` and get **deliberate,
        narrow** grants — `REVOKE EXECUTE FROM PUBLIC, anon`, then `GRANT` only to the roles that
-       genuinely need it.
+       genuinely need it. (An empty search path is allowed only as the narrow 2026-07-30 exception
+       in `docs/manual/DECISION_LOG.md`: a deliberately fully schema-qualified body with
+       migration-review proof.)
      - A plain read-only function should normally stay **`SECURITY INVOKER`** so RLS still applies.
        Use `SECURITY DEFINER` only when owner privileges are actually required, and say why in
        the header comment.
@@ -151,6 +154,8 @@ Docs updated:
     pre-authorized armed hands-free run: full proof + Codex gate, settled
     2026-07-13). NEVER `supabase db push` and NEVER the dashboard SQL
     editor — both bypass the review gate and are blocked.
+    After a live apply that changes tables, columns, constraints, or
+    status values, refresh the schema registry (/regen-schema-registry).
 ```
 
 ## Important Safety Rules
