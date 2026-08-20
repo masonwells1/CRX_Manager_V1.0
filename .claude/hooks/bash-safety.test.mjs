@@ -402,6 +402,7 @@ const dynamicNodeOptionsGuardCases = [
   'N=NODE; env "${N}_OPTIONS=--require=./preload.cjs" npm --version',
   'powershell -Command "Set-Item (\'Env:NO\' + \'DE_OPTIONS\') \'--require=./preload.cjs\'; npm --version"',
   'cmd /v:on /c "set N=NODE_OPTIONS & set !N!=--require=./preload.cjs & npm --version"',
+  'cmd /v:on /c "set A=NODE & set B=_OPTIONS & set !A!!B!=--require=./preload.cjs & npm --version"',
   'cmd /v:on /c "set N=NODE_OPTIONS & set !N!=--require=./preload.cjs & n^pm --version"',
   'N=NODE_OPTIONS; env "${N}=--require=./preload.cjs" n\\pm --version',
   'cmd /v:on /c "set N=NODE_OPTIONS & set !N!=--require=./preload.cjs & ya^rn --version"',

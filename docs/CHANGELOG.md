@@ -90,7 +90,8 @@ All significant development milestones, in reverse chronological order.
   same stateful boundary. Known read-only PowerShell commands may inspect
   `NODE_OPTIONS` without being mistaken for writes; direct assignments,
   provider mutation cmdlets, and unknown aliases remain denied. Standalone
-  CMD `set` and delayed-expansion mutations are denied as well.
+  CMD `set` and delayed-expansion mutations are denied as well, including
+  targets assembled from multiple adjacent expansions such as `!A!!B!`.
   While the protected producer file exists, all MCP `interact_with_process`
   calls are denied so CMD caret continuations cannot assemble a preload or the
   producer command across separately inspected inputs.

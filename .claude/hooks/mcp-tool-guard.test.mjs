@@ -164,6 +164,7 @@ const dynamicNodeOptionsGuardCases = [
   'N=NODE; env "${N}_OPTIONS=--require=./preload.cjs" npm --version',
   'powershell -Command "Set-Item (\'Env:NO\' + \'DE_OPTIONS\') \'--require=./preload.cjs\'; npm --version"',
   'cmd /v:on /c "set N=NODE_OPTIONS & set !N!=--require=./preload.cjs & npm --version"',
+  'cmd /v:on /c "set A=NODE & set B=_OPTIONS & set !A!!B!=--require=./preload.cjs & npm --version"',
   'cmd /v:on /c "set N=NODE_OPTIONS & set !N!=--require=./preload.cjs & n^pm --version"',
   'N=NODE_OPTIONS; env "${N}=--require=./preload.cjs" n\\pm --version',
   'cmd /v:on /c "set N=NODE_OPTIONS & set !N!=--require=./preload.cjs & ya^rn --version"',
@@ -193,6 +194,7 @@ r = runHook(
   { tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: persistentShellPid, input: "Write-Output safe" } },
   producerAbsentCwd
 );
+eq(r.status, 0, "mcp-tool-guard.mjs exits 0 when the protected producer is absent");
 eq(r.stdout.trim(), "", "benign persistent-process input remains allowed when the protected producer is absent");
 for (const fragment of [
   "set NO^",

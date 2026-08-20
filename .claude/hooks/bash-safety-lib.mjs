@@ -779,7 +779,7 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
     && tokens.slice(index + 1).some((entry) => entry?.sawUnquoted && hasNodeOptionsAssignment(entry)));
   const cmdDelayedMutation = tokens.some((token) => tokenNamed(token, ["cmd"]))
     && /\/v(?::on)?(?:\s|$)/i.test(value)
-    && /\bset\s+![^!\r\n]+!\+?=/i.test(value);
+    && /\bset\s+(?:![^!\r\n]+!)+\+?=/i.test(value);
   if (powerShellProviderMutation || powershellMutation || powerShellDynamicEnvMutation || powerShellAliasDefinition
     || dotNetMutation || standalonePowerShellEnvMutation || standaloneCmdSetMutation || cmdDelayedMutation) return true;
   if (nodeBackedCommandMentioned) {
