@@ -321,6 +321,7 @@ ON CONFLICT (id) DO UPDATE
   // is disabled for this seed statement only and must be enabled again before
   // any behavior under test executes.
   psql(`
+BEGIN;
 ALTER TABLE public.products
   DISABLE TRIGGER trigger_y_require_governed_product_pricing;
 INSERT INTO public.products (product_name, unit_size, current_cost, tier1_price)
@@ -339,7 +340,8 @@ BEGIN
     RAISE EXCEPTION 'FULL_SCHEMA_PRICED_CATALOG_SEED_FAIL: governed pricing trigger is not enabled';
   END IF;
 END
-$seed_check$;`);
+$seed_check$;
+COMMIT;`);
   console.log('FULL_SCHEMA_PRICED_CATALOG_SEED_PASS count=2 trigger=enabled');
 
   for (const smokePath of KEYED_DRAW_SMOKE_PATHS) {

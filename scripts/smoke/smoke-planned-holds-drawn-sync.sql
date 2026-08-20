@@ -335,10 +335,12 @@ BEGIN
   ELSIF v_err NOT LIKE 'QUOTE_RESTORE_BLOCKED_BY_DRAW%' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (e) restore refused with the wrong error: %', v_err;
   ELSE
-    SELECT COALESCE(SUM(quantity) FILTER (WHERE product_id = v_pa), 0) INTO v_pa_total
+    SELECT COALESCE(SUM(quantity) FILTER (WHERE product_id = v_pa), 0),
+           COALESCE(SUM(quantity) FILTER (WHERE product_id = v_pb), 0)
+    INTO v_pa_total, v_pb_total
     FROM inventory_holds WHERE source_id = v_q AND is_active = true;
-    IF v_pa_total <> 200 THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: (e) refused restore changed holds pa=% (expected 200)', v_pa_total;
+    IF v_pa_total <> 200 OR v_pb_total <> 100 THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: (e) refused restore changed holds pa=% pb=% (expected 200/100)', v_pa_total, v_pb_total;
     END IF;
   END IF;
 
