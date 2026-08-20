@@ -70,7 +70,7 @@ change rather than on its own.
 
 ---
 
-## OPEN 2026-08-20 — PR #426's zero-width fix does not reach the rate arm in `blendMathValidator.ts`
+## CLOSED 2026-08-20 — PR #426's zero-width fix did not reach the rate arm in `blendMathValidator.ts`
 
 **Severity: LOW-MED, warning text only, currently unreachable (0 rows in `blend_tickets` and
 `blend_ticket_products` on live, verified read-only 2026-08-19).** Found while merging `origin/main`
@@ -98,12 +98,28 @@ Two consequences, pointing in opposite directions:
   `field_app_priced_quantity` strips zero-width has **not** been checked, so whether the invoice
   would genuinely fail is unknown.
 
-The code fix is small — apply `ZERO_WIDTH` inside `rateBaseUnit` before the `trim()`. The test work
-is the larger half: main's five zero-width regression tests were displaced by the same merge (they
-are written against the pre-`BlendMathWarning[]` return shape) and have not been ported, so nothing
-currently guards either door.
+**FIXED the same day in `6d3faabd`** (branch `claude/blend-ticket-rate-unit-check-ccbba2`, not yet
+pushed at time of writing). `rateBaseUnit` now applies `ZERO_WIDTH` and `WHITESPACE_RUN` before the
+`trim()`, matching `normalizeUnit`.
 
-**Not started.** No migration, no live state.
+PR #426's five zero-width regression tests were displaced by the merge — they were written against
+the total-volume arm and the old `string[]` return, both of which this branch replaced — so the
+coverage was **re-aimed rather than ported verbatim**, at the arm that actually bills. Six tests now
+live in `describe('zero-width characters pasted from a PDF')` inside the billing-parity block.
+
+**Mutation-tested, so the tests are known to bite:** reverting `rateBaseUnit` to `.trim().toLowerCase()`
+turns 4 of the 6 red — the rate-unit and quantity-unit conversions each fall out to `unchecked`, a
+genuine 128x error downgrades from `mismatch` to `unchecked` (the check silently stops working), and
+the invoice pre-flight emits **2 warnings where 0 are correct**, reproducing the false alarm exactly
+as predicted. The other 2 pass either way by design: they guard that closing the character up does
+not *over*-merge genuinely different units.
+
+**Verified in a real browser**, not only under vitest: with the dev server running, the shipped
+module imported through Vite prices a pasted `g<ZWSP>al` rate identically to a clean `gal`, still
+catches the 128x error, and raises no pre-flight alarm. No console errors.
+
+No migration, no live state. Still true that this was unreachable in production the whole time —
+`blend_tickets` and `blend_ticket_products` are empty on live.
 
 ---
 
