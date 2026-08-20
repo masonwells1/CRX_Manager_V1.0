@@ -264,6 +264,24 @@ for (const payload of [
   //       the last protected reference before the strip's switch is ever reached.
   { tool_name: "Bash", tool_input: { command: "cd C:\\repo\\.claude\\worktrees\\wt-a && rm -rf $target" } },
   { tool_name: "Bash", tool_input: { command: "cd .claude/worktrees/wt-a && mv ${X} /tmp/x" } },
+  //   (h) a DOT ALIAS descendant targets the worktree ROOT through `/.`, and
+  //       accepting it stripped `find .claude/worktrees/wt-a/. -delete` down to
+  //       `find . -delete` while the shell traverses the real root and deletes its
+  //       hidden session-state (Codex gpt-5.6-sol round 4). Rejected in every
+  //       quoting, since `"`/`'` terminate the alias.
+  { tool_name: "Bash", tool_input: { command: "find .claude/worktrees/wt-a/. -delete" } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a/." } },
+  { tool_name: "Bash", tool_input: { command: 'rm -rf .claude/worktrees/wt-a/"."' } },
+  { tool_name: "Bash", tool_input: { command: 'rm -rf .claude/worktrees/wt-a/."."' } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a/./x" } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf C:\\repo\\.claude\\worktrees\\wt-a\\." } },
+  //   (i) the shell JOINS quote-split tokens, so traversal can be spelled with no
+  //       literal `..` in the raw text. A switch that decides whether text is safe
+  //       to REWRITE must see every form the shell can execute, so both switches
+  //       are evaluated over every normalized view (Codex gpt-5.6-sol round 4).
+  { tool_name: "Bash", tool_input: { command: 'cd .claude/worktrees/wt-a && find ."."/."." -delete' } },
+  { tool_name: "Bash", tool_input: { command: 'cd C:\\repo\\.claude\\worktrees\\wt-a && rm -rf ."."/."."' } },
+  { tool_name: "Bash", tool_input: { command: 'rm -rf .claude/worktrees/wt-a/."."/session-state' } },
   //   (e) a worktree path must not launder a SECOND, protected operand;
   { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a/tmp .claude/session-state" } },
   //   (f) blanking a cd target is scoped to a worktree ROOT only: a cd that stops
@@ -391,6 +409,8 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: 'rm -f .claude/work
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -f .claude/worktrees/wt-a/'guard probe.tmp'" } }).stdout, "");
 assert.equal(run({ tool_name: "Bash", tool_input: { command: 'rm -f "C:\\repo\\.claude\\worktrees\\wt-a\\guard probe.tmp"' } }).stdout, "");
 assert.equal(run({ tool_name: "Bash", tool_input: { command: 'mv .claude/worktrees/wt-a/"a b.txt" .claude/worktrees/wt-a/"c d.txt"' } }).stdout, "");
+// A DOTTED real name is not a dot alias and must stay allowed.
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -f .claude/worktrees/wt-a/.gitignore" } }).stdout, "");
 // Nested worktrees strip to a fixed point.
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -f .claude/worktrees/wt-a/.claude/worktrees/wt-b/tmp.txt" } }).stdout, "");
 // The ack valve still works from inside a worktree.

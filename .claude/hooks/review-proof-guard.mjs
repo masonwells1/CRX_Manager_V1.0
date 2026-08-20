@@ -46,7 +46,15 @@ import {
 // The preceding character is required to be a non-name character and is
 // preserved by the replacement, so `my.claude/worktrees/…` is not a prefix and
 // no verb/token can be spliced away. Nested worktrees strip to a fixed point.
-const WORKTREE_PREFIX_RE = /(^|[^\w.-])\.claude[\\/]worktrees[\\/]([^\\/\s"'*?[\]{}:;&|()<>]+)[\\/](?=["']?[^\\/\s"'*?[\]{};&|()<>])/gi;
+// The descendant must be a REAL name, not a dot alias. `find .claude/worktrees/
+// wt-a/. -delete` targets the worktree ROOT through `/.`, and accepting `.` as a
+// descendant stripped the prefix down to `find . -delete` — no `.claude` left to
+// match, while the shell traverses the real root and deletes its hidden
+// session-state proofs and ledger (Codex gpt-5.6-sol round 4, 2026-08-19). The
+// negative lookahead rejects a bare `.` or `..` descendant in any quoting, since
+// `"` and `'` count as terminators — so `/."."`, `/"."` and `/'.'` are rejected
+// too. A dotted real name (`.gitignore`, `.claude`) is unaffected.
+const WORKTREE_PREFIX_RE = /(^|[^\w.-])\.claude[\\/]worktrees[\\/]([^\\/\s"'*?[\]{}:;&|()<>]+)[\\/](?!["']?\.{1,2}(?:[\\/\s"';&|()<>]|$))(?=["']?[^\\/\s"'*?[\]{};&|()<>])/gi;
 const DOTDOT_SEGMENT_RE = /(?:^|[\\/\s"'=:;&|()<>])\.\.(?:[\\/\s"'=:;&|()<>]|$)/;
 // Shell expansion makes the descendant statically unreadable, and an unreadable
 // descendant can BE the protected path: with `target=.claude/session-state` in
@@ -63,8 +71,25 @@ const DOTDOT_SEGMENT_RE = /(?:^|[\\/\s"'=:;&|()<>])\.\.(?:[\\/\s"'=:;&|()<>]|$)/
 const EXPANSION_RE = /[$`]|%[A-Za-z_][A-Za-z0-9_]*%/;
 // Both switches gate the strip AND the cd-root blanking: either one alone leaves
 // the other path able to erase the last protected reference before it is checked.
+//
+// They are evaluated over EVERY normalized view, not the raw text — this is the
+// general form of the bug rounds 2, 3 and 4 each hit in a different spelling. The
+// shell joins quote-split tokens before running them, so
+// `cd .claude/worktrees/wt-a && find ."."/."." -delete` shows no `..` in the raw
+// text: the raw-only check passed, the cd root was blanked, and by the time the
+// quote-stripped view resolved to `find ../.. -delete` the only `.claude`
+// reference was already gone — deleting the repo's own `.claude` and its review
+// state (Codex gpt-5.6-sol round 4, 2026-08-19). A switch that decides whether
+// text is safe to REWRITE must see every form the shell can execute, so it tests
+// them all and fails closed if ANY view shows traversal or expansion.
+function carveOutViews(text) {
+  const base = decodeAnsiCQuotes(String(text ?? "")).replace(/[\\`]\r?\n/g, "");
+  const quoteStripped = base.replace(/["']/g, "");
+  const dropBackslash = (v) => v.replace(/\\(.)/g, "$1");
+  return [base, quoteStripped, dropBackslash(base), dropBackslash(quoteStripped)];
+}
 function carveOutDisabled(text) {
-  return DOTDOT_SEGMENT_RE.test(text) || EXPANSION_RE.test(text);
+  return carveOutViews(text).some((v) => DOTDOT_SEGMENT_RE.test(v) || EXPANSION_RE.test(v));
 }
 function stripWorktreePrefix(text) {
   let out = String(text ?? "");
