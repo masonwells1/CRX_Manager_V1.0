@@ -46,6 +46,13 @@ const hasCommandWithAll = (cmds, fragments) =>
   cmds.some((c) => fragments.every((f) => c.includes(f)));
 const noCommandWithAll = (cmds, fragments) =>
   !cmds.some((c) => fragments.every((f) => c.includes(f)));
+const noCommandMatching = (cmds, re) => !cmds.some((c) => re.test(c));
+
+// Any shell expansion in a `contents/` path segment, not just the literal
+// <FILE> placeholder the first draft used: a later rewrite to contents/$f,
+// contents/${f}, contents/$(...), contents/`...`, or contents/"$f" would
+// reintroduce the same injection vector while passing a literal-only check.
+const EXPANSION_AFTER_CONTENTS = /contents\/[^\s]*(?:<[A-Za-z_]+>|\$|`|")/;
 
 for (const [name, file] of SKILLS) {
   const cmds = bashCommands(readFileSync(file, "utf8"));
@@ -67,14 +74,18 @@ for (const [name, file] of SKILLS) {
   // ── Review objects: reject unsubmitted and dismissed ──────────────────────
   // The endpoint returns PENDING (submitted_at: null) and DISMISSED reviews
   // whose bodies still carry the range line.
+  // The `and <HEAD>` grep is the part that binds the result to the commit being
+  // merged. Without it in the SAME command, the query proves only that some
+  // submitted review exists — which is true of every PR that was ever reviewed.
   ok(
     hasCommandWithAll(cmds, [
       "pulls/<n>/reviews",
       'select(.user.login=="coderabbitai[bot]"',
       ".submitted_at != null",
       '.state != "DISMISSED"',
+      'grep -oE "and <HEAD>"',
     ]),
-    `${name}: the reviews query filters bot identity, unsubmitted, and dismissed together`,
+    `${name}: the reviews query filters bot identity, unsubmitted, and dismissed AND binds to the head SHA`,
   );
 
   // ── Forged-comment defence (Codex BLOCKED, 2026-08-20) ────────────────────
@@ -87,8 +98,9 @@ for (const [name, file] of SKILLS) {
       'select(.user.login=="coderabbitai[bot]")',
       'contains("<!-- This is an auto-generated comment: summarize by coderabbit.ai -->")',
       'select((.body | contains("auto-generated reply by CodeRabbit")) | not)',
+      'grep -oE "and <HEAD>"',
     ]),
-    `${name}: the comments query keeps only the canonical walkthrough and drops chat replies`,
+    `${name}: the comments query keeps only the canonical walkthrough, drops chat replies, AND binds to the head SHA`,
   );
   ok(
     noCommandWithAll(cmds, [
@@ -125,8 +137,8 @@ for (const [name, file] of SKILLS) {
   // ── No PR-controlled text in a shell command ──────────────────────────────
   // Filenames come from the PR and may contain quotes, semicolons, or $().
   ok(
-    noCommandWithAll(cmds, ["contents/<FILE>"]),
-    `${name}: no PR-controlled filename is interpolated into a shell command`,
+    noCommandMatching(cmds, EXPANSION_AFTER_CONTENTS),
+    `${name}: no PR-controlled filename is interpolated into a shell command, in any expansion form`,
   );
 }
 

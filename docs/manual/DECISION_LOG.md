@@ -203,9 +203,12 @@ completed / success`. So the status never stands alone — it pairs with the can
 a merge-only head the tree-identity proof carries the weight.
 
 **The gate is prose, so it is now pinned by a test.** `scripts/deploy-check-review-gate.test.mjs`
-(21 assertions, wired into `npm run test:agent-workflows`) asserts every one of these query shapes in
+(24 assertions, wired into `npm run test:agent-workflows`) asserts every one of these query shapes in
 both the `.claude` source and the generated `.agents` mirror, and asserts the absence of each
-superseded weak form — the unfiltered comment query, the grep-for-the-word completion check, the
+superseded weak form. It asserts against the **extracted `bash` commands**, not the document text —
+the first revision used whole-file matching, which the explanatory paragraphs satisfied on their own,
+so it would have stayed green while the real command regressed. CodeRabbit caught that: the same
+false-green failure the gate exists to prevent, one level up in the guard — the unfiltered comment query, the grep-for-the-word completion check, the
 `origin/main` ancestry, and the PR-controlled `<FILE>` interpolation. Mutation-tested: breaking the
 chat-reply filter turns it red, restoring it turns it green. Per Mason's standing preference, a rule
 that matters becomes a hard check rather than another sentence.
