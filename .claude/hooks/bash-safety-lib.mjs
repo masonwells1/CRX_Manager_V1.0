@@ -199,13 +199,20 @@ export function maintenanceProducerCommandMentioned(command) {
     const php = executableNamed(token, "php", true);
     const deno = executableNamed(token, "deno", true);
     const shell = ["bash", "sh", "dash", "zsh", "ksh"].some((name) => executableNamed(token, name, true));
-    if (!(python || nodeLike || shortEval || php || deno || shell)) return false;
+    // AWK programs can construct and execute a command through system(), so
+    // their source is as opaque to this static gate as an inline Python eval.
+    const awk = ["awk", "gawk", "mawk", "nawk"].some((name) => executableNamed(token, name, true));
+    if (!(python || nodeLike || shortEval || php || deno || shell || awk)) return false;
     let segmentStart = index;
     while (segmentStart > 0 && !list[segmentStart - 1].control) segmentStart -= 1;
     if (list[segmentStart - 1]?.value === "|") return true;
     let segmentEnd = index + 1;
     while (segmentEnd < list.length && !list[segmentEnd].control) segmentEnd += 1;
     if (shell && list[segmentEnd]?.value === "<") return true;
+    if (awk) {
+      const firstArgument = normalizeShellToken(list[index + 1]?.value || "");
+      return !/^(?:--help|--version|-h|-V)$/.test(firstArgument);
+    }
     for (let cursor = index + 1; cursor < list.length && !list[cursor].control; cursor += 1) {
       const argument = normalizeShellToken(list[cursor].value);
       if (/^(?:--help|--version|-h|-V)$/.test(argument)) return false;
@@ -383,7 +390,9 @@ export function checkMaintenanceProducerInvocation(command) {
 // original bash-safety.mjs inline table (2026-07 extraction), plus one addition
 // marked below.
 export const DANGEROUS_CMD_CHECKS = [
-  [/(?:^|[\r\n;&|])\s*(?:(?:export|set|setx)\s+|env(?:\s+(?:-\S+|[A-Za-z_]\w*=\S+))*\s+)?(?:[A-Za-z_]\w*=\S+\s+)*NODE_OPTIONS\s*=|\bnode(?:\.exe)?\b[^\r\n;&|]*(?:--require(?:=|\s)|(?:^|\s)-r(?:\s|\S)|--import(?:=|\s)|--(?:experimental-)?loader(?:=|\s))/i, "Blocked Node pre-execution loading. NODE_OPTIONS, require/import, and loader hooks can run code before a reviewed script's own safety checks."],
+  // Shell assignments may precede `env`, and the `command` builtin may wrap it;
+  // every such chain still installs NODE_OPTIONS before Node starts.
+  [/(?:^|[\r\n;&|])\s*(?:[A-Za-z_]\w*=\S+\s+)*(?:command(?:\s+-[pP]+)?\s+)?(?:(?:export|set|setx)\s+|env(?:\s+(?:-\S+|[A-Za-z_]\w*=\S+))*\s+)?(?:[A-Za-z_]\w*=\S+\s+)*NODE_OPTIONS\s*=|\bnode(?:\.exe)?\b[^\r\n;&|]*(?:--require(?:=|\s)|(?:^|\s)-r(?:\s|\S)|--import(?:=|\s)|--(?:experimental-)?loader(?:=|\s))/i, "Blocked Node pre-execution loading. NODE_OPTIONS, require/import, and loader hooks can run code before a reviewed script's own safety checks."],
   [/\bgit\b[^\r\n;&|]*\bpush\b[^\r\n;&|]*(?:--force(?:-with-lease)?(?:=\S+)?\b|--force-if-includes\b|(?:^|\s)-[A-Za-z]*f[A-Za-z]*\b|(?:^|\s)\+\S+)/, "Blocked force push. Force pushing any branch requires Mason's explicit approval."],
   // Tolerate intervening git options (`git -C <path> reset --hard`, `git -c x=y clean -fd`)
   // — the adjacent-words-only spellings were bypassable (Codex P1, PR #352).

@@ -90,6 +90,10 @@ for (const command of [
   "node --no-warnings \\\nscripts/$(printf YXBwbHktbGl2ZS10ZXN0ZGF0YS1tYWludGVuYW5jZS0yMDI2MDgxMi5tanM= | base64 -d) --approved-by-$(printf bWFzb24= | base64 -d)=2026-08-12",
   "node --require ./preload.cjs scripts/apply-l{i..i}ve-testdata-maintenance-20260{8..8}12.mjs --approved-by-ma{s..s}on=2026-08-12",
   'python -c "import base64; exec(base64.b64decode(PAYLOAD))"',
+  "awk 'BEGIN { cmd = decode(); system(cmd) }'",
+  "gawk 'BEGIN { cmd = decode(); system(cmd) }'",
+  "mawk 'BEGIN { cmd = decode(); system(cmd) }'",
+  "nawk 'BEGIN { cmd = decode(); system(cmd) }'",
   "printf %s ENCODED | base64 -d | sh",
   "printf %s ENCODED | base64 -d | xargs",
   "sh -- < encoded-command.txt",
@@ -254,6 +258,11 @@ const inlineInterpreterAsData = "rg -n 'python -c' docs";
 ok(!maintenanceProducerCommandMentioned(inlineInterpreterAsData), "inline interpreter spelling used as quoted search data is not classified as an invocation");
 eq(checkMaintenanceProducerInvocation(inlineInterpreterAsData), null, "inline interpreter search data stays outside the producer gate");
 ok(!checkDangerousCommand(inlineInterpreterAsData), "ordinary inline interpreter text search stays allowed");
+const awkProgramAsData = "rg -n \"awk 'BEGIN'\" docs";
+ok(!maintenanceProducerCommandMentioned(awkProgramAsData), "AWK program spelling used as quoted search data is not classified as an invocation");
+eq(checkMaintenanceProducerInvocation(awkProgramAsData), null, "AWK program search data stays outside the producer gate");
+ok(!checkDangerousCommand(awkProgramAsData), "ordinary AWK program text search stays allowed");
+ok(!maintenanceProducerCommandMentioned("awk --help"), "AWK help mode stays outside the producer gate");
 const decoderToShellAsData = "rg -n 'base64 -d | sh' docs";
 ok(!maintenanceProducerCommandMentioned(decoderToShellAsData), "decoder-to-shell spelling used as quoted search data is not classified as an invocation");
 eq(checkMaintenanceProducerInvocation(decoderToShellAsData), null, "decoder-to-shell search data stays outside the producer gate");
@@ -270,10 +279,14 @@ ok(!checkDangerousCommand(terminalWrapperAfterOption), "terminal wrapper mode af
 ok(checkDangerousCommand("node --require ./preload.cjs scripts/ordinary-check.mjs"), "Node require preload is denied");
 ok(checkDangerousCommand("NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "NODE_OPTIONS preload is denied");
 ok(checkDangerousCommand("FOO=1 NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "prefixed NODE_OPTIONS preload is denied");
+ok(checkDangerousCommand("command env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "command-wrapped env NODE_OPTIONS preload is denied");
+ok(checkDangerousCommand("SAFE=1 env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "assignment-prefixed env NODE_OPTIONS preload is denied");
+ok(checkDangerousCommand("SAFE=1 command -p env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "assignment-prefixed command/env NODE_OPTIONS preload is denied");
 ok(checkDangerousCommand("Set-Item Env:NODE_OPTIONS $PRELOAD"), "PowerShell Set-Item NODE_OPTIONS mutation is denied");
 ok(checkDangerousCommand("$env:NODE_OPTIONS = $PRELOAD"), "PowerShell env assignment to NODE_OPTIONS is denied");
 ok(checkDangerousCommand("[Environment]::SetEnvironmentVariable('NODE_OPTIONS', $PRELOAD)"), ".NET NODE_OPTIONS mutation is denied");
 ok(!checkDangerousCommand("rg -n 'NODE_OPTIONS=' docs"), "NODE_OPTIONS spelling used as quoted search data stays allowed");
+ok(!checkDangerousCommand("rg -n 'command env NODE_OPTIONS=' docs"), "wrapped NODE_OPTIONS spelling used as quoted search data stays allowed");
 ok(!checkDangerousCommand("rg -n 'Set-Item Env:NODE_OPTIONS' docs"), "PowerShell NODE_OPTIONS mutation spelling used as quoted search data stays allowed");
 
 // ── net-new: shell-redirect .env write (2026-07-13, shared with mcp-tool-guard) ──

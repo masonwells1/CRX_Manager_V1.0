@@ -53,6 +53,12 @@ Runs on the `Bash|PowerShell` matcher, before a shell command executes. Determin
 
 Two more Bash-matcher PreToolUse guards — `active-area-guard.mjs` and `codex-push-guard.mjs` — are documented in the Correction-mined guards table further down this page.
 
+While the protected 2026-08-12 maintenance producer exists, the shared shell
+classifier also fails closed on opaque inline interpreters and launchers that
+could assemble its command indirectly. Coverage includes AWK-family programs
+and Node preloads introduced through assignment, `env`, or `command env`
+wrapper chains; quoted search text and terminal help/version modes remain data.
+
 ### MCP Tool Guard (`.claude/hooks/`)
 Runs on Claude's `mcp__.*` PreToolUse matcher (narrowed 2026-08-18; still the `*` all-tools matcher in `.codex/hooks.json`). Added 2026-07-13 to close the "Desktop Commander blind spot": `bash-safety.mjs` only gates the `Bash|PowerShell` tool matcher, but Desktop Commander's MCP tools can run the exact same shell commands, or touch the exact same protected paths, without ever going through the Bash or Write/Edit matchers those other hooks are wired to.
 

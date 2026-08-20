@@ -48,6 +48,18 @@ r = runHook({
 });
 ok(isDeny(r), "DC start_process cannot route around the exact producer invocation gate");
 
+r = runHook({
+  tool_name: "mcp__Desktop_Commander__start_process",
+  tool_input: { command: "command env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs" },
+});
+ok(isDeny(r), "DC start_process cannot preload Node through command/env wrappers");
+
+r = runHook({
+  tool_name: "mcp__Desktop_Commander__start_process",
+  tool_input: { command: "awk 'BEGIN { cmd = decode(); system(cmd) }'" },
+});
+ok(isDeny(r), "DC start_process cannot launch an opaque AWK program while the producer exists");
+
 // ── start_process: benign command allowed (silent) ─────────────────────────
 r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: "npm run build" } });
 eq(r.status, 0, "DC start_process benign command exits 0");

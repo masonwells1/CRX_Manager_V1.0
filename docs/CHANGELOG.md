@@ -2,6 +2,20 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-19 — Close the two remaining PR #402 maintenance-command guard gaps
+
+- The shared shell-safety classifier now treats direct `awk`, `gawk`, `mawk`, and
+  `nawk` programs as opaque launchers while the protected maintenance producer
+  exists, closing the reviewed path where an AWK program could assemble and run
+  the protected command indirectly.
+- `NODE_OPTIONS` preloads are now denied when `env` is preceded by shell
+  assignments or the `command` wrapper, including `command env ...`,
+  `SAFE=1 env ...`, and `SAFE=1 command -p env ...`.
+- Regression coverage proves the new deny paths and preserves ordinary quoted
+  searches plus terminal AWK help mode. Codex continues to consume the same
+  `.claude/hooks/bash-safety-lib.mjs` implementation through its tracked hook
+  adapter; no generated hook copy exists.
+
 ## 2026-08-19 — Product data model: build plan revision 2 after independent Fable…
 
 Product data model: build plan revision 2 after independent Fable review (26 findings) and orchestration design; recorded owner decisions D-J (chemistry edits admin-only) and D-K (unlisted brand never blocks receiving) in DECISION_LOG. Planning only — nothing built, pushed, migrated, or applied.
