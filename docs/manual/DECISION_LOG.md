@@ -1,11 +1,43 @@
 # Decision Log
 
-Last verified: 2026-08-19
+Last verified: 2026-08-20
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-08-20 — The project no longer pins `autoCompactWindow`; the user-level value governs
+
+**Source:** Mason's in-chat decision, 2026-08-20, while setting up switchable context profiles.
+
+**The problem.** `.claude/settings.json` carried `"autoCompactWindow": 500000` at the top level.
+Per the settings precedence chain (managed → CLI args → `settings.local.json` → `settings.json` →
+`~/.claude/settings.json`), that project value **beats** the user-level setting. The practical
+effect: running `/autocompact <n>` inside this repo appeared to succeed but changed nothing,
+because `/autocompact` writes to *user* settings, which the project file then overrode. The
+threshold was effectively frozen at 500k for every session in this repository.
+
+A second effect: the pin also capped useful context. With the compaction threshold at 500k, a
+session on a 1M-context model can never grow past ~500k, so the upper half of the window was
+unreachable regardless of which model was selected.
+
+**Decision.** Remove the `autoCompactWindow` key from `.claude/settings.json` entirely. The
+project no longer expresses an opinion on the compaction threshold; the user-level value in
+`~/.claude/settings.json` governs, and `/autocompact` works as documented inside this repo.
+
+**Operative rule.** Do not reintroduce a top-level `autoCompactWindow` into
+`.claude/settings.json` or `.claude/settings.local.json`. A project-level pin silently disables
+per-session threshold control for everyone working in the repo, including every parallel
+worktree. If a future task genuinely needs a fixed threshold, use the session-scoped
+`--autocompact` flag or the `CLAUDE_CODE_AUTO_COMPACT_WINDOW` environment variable, which do not
+persist and do not affect other sessions.
+
+**Not changed by this entry.** Nothing about model selection, effort level, or any guard is
+affected. This is a harness-configuration change only; no money, schema, RLS, or migration
+surface is touched.
 
 ---
 
