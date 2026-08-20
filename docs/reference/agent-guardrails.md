@@ -67,16 +67,33 @@ terminal help/version modes remain data. Escaped grouping/terminator tokens and
 multiple file-search actions retain their runner context. Executable command-string bodies are
 recursively inspected for `cmd /c` or `/k`, PowerShell command modes, and POSIX
 shell `-c` wrappers. Backslash-prefixed separators are evaluated under both
-POSIX and PowerShell semantics. Standard short and long `xargs` options are
-consumed; unknown option shapes fail closed when an opaque target remains.
+POSIX and PowerShell semantics; normalization is bounded at the shared recursion
+limit and fails closed beyond it. Standard short and long `xargs` options are
+consumed; GNU optional-argument long forms preserve the following executable
+unless their value is attached with `=`, and unknown option shapes fail closed
+when an opaque target remains. Bash execution keywords and the `time` prefix
+are also traversed, including conditional and loop-body command positions.
+Bash append assignments (`NAME+=value`) retain assignment context in command
+prefixes, environment wrappers, and export builtins. `sudo`/`doas` environment
+assignments are inspected before the privilege wrapper consumes them, including
+when nested through WSL. CMD caret escapes are normalized before assignment
+matching, and named Bash coprocesses are followed into their launched command.
+The `watch` runner is inspected recursively through WSL and BusyBox/Toybox;
+unknown option shapes fail closed and terminal help/version modes remain data.
 Bash `declare`/`typeset`/`local`/`readonly` variable mutations and the `builtin`
 wrapper are also parsed, so alternate builtin export forms cannot hide a
 `NODE_OPTIONS` preload.
+Recursive command-string bodies reapply opaque-interpreter detection, split
+`env -S` bodies retain their option context, and POSIX-escaped wrapper and
+assignment names are checked alongside their raw spellings.
+Static `eval` bodies are inspected recursively, while dynamic evaluation and
+source operations fail closed; GNU Parallel is parsed as an indirect runner.
 
-Codex's shell/MCP hook adapter imports that shared classifier directly. Codex
-also has a distinct generated maintenance-execution matcher owned by its
-checked-in maintenance generator; changes to one layer do not implicitly
-regenerate the other.
+Codex's hook adapter resolves and launches the requested hook under
+`.claude/hooks/`, through which Codex uses the shared classifier. Codex also has
+a distinct generated maintenance-execution matcher owned by its checked-in
+maintenance generator; changes to one layer do not implicitly regenerate the
+other.
 
 ### MCP Tool Guard (`.claude/hooks/`)
 Runs on Claude's `mcp__.*` PreToolUse matcher (narrowed 2026-08-18; still the `*` all-tools matcher in `.codex/hooks.json`). Added 2026-07-13 to close the "Desktop Commander blind spot": `bash-safety.mjs` only gates the `Bash|PowerShell` tool matcher, but Desktop Commander's MCP tools can run the exact same shell commands, or touch the exact same protected paths, without ever going through the Bash or Write/Edit matchers those other hooks are wired to.

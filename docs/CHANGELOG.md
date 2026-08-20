@@ -20,15 +20,36 @@ All significant development milestones, in reverse chronological order.
   execution operands, `xargs`, and privilege wrappers are traversed as command
   runners too; escaped grouping/terminator tokens and multiple file-search
   actions stay within the same parsed command context. Standard short and long
-  `xargs` option families are consumed, and an unknown option fails closed when
-  an opaque execution target remains. Executable command strings passed through
+  `xargs` option families are consumed, while GNU optional-argument long forms
+  preserve the following executable unless their value is attached with `=`;
+  an unknown option fails closed when an opaque execution target remains.
+  Bash execution keywords and the `time` prefix are traversed as command
+  context, so conditional or timed execution cannot hide opaque interpreters
+  or `NODE_OPTIONS` preloads. Bash append assignments (`NAME+=value`) are
+  recognized in command prefixes, environment wrappers, and export builtins.
+  Privilege wrappers inspect environment assignments before consuming them,
+  including when `sudo` or `doas` is nested through WSL.
+  CMD caret escapes are normalized before assignment matching, and named Bash
+  coprocesses consume their optional name before inspecting the launched command.
+  The `watch` runner is parsed recursively, including through WSL and
+  BusyBox/Toybox; unknown option shapes fail closed while help/version modes
+  remain non-executing.
+  Executable command strings passed through
   `cmd /c`, PowerShell command mode, or POSIX shell `-c` are recursively
   inspected without matching the same spelling when it is quoted search text.
   Backslash-prefixed separators are evaluated under both POSIX and PowerShell
-  semantics, so an escape in one shell cannot hide a real boundary in the other.
+  semantics, so an escape in one shell cannot hide a real boundary in the other;
+  normalization is bounded and fails closed instead of recursing on attacker-sized
+  escape runs.
   Bash variable/export builtins are covered as well: `declare`, `typeset`,
   `local`, and `readonly` cannot assign or export `NODE_OPTIONS`, and `builtin`
   is traversed into a wrapped `export` or declaration command.
+  Nested command-string analysis reapplies the opaque-interpreter policy, keeps
+  `env -S` option context inside split bodies, and evaluates both raw and
+  POSIX-unescaped wrapper/assignment spellings.
+  Static `eval` bodies are recursively parsed; dynamic evaluation and sourced
+  scripts fail closed, and GNU Parallel is treated as an indirect command
+  runner rather than ordinary argument text.
 - Regression coverage proves the new deny paths and preserves ordinary quoted
   searches plus terminal AWK help mode. The Codex shell/MCP hook adapter consumes
   the shared `.claude/hooks/bash-safety-lib.mjs` implementation directly. Codex

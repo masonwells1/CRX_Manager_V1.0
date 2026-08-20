@@ -269,15 +269,34 @@ const findGroupOpen = "\x5c(";
 const findGroupClose = "\x5c)";
 const findTerminator = "\x5c;";
 const pythonCommand = ["py", "thon"].join("");
+const deepPowerShellBoundaryCommand = `Write-Output marker${"\\".repeat(20000)}; ${pythonCommand} -c \"print('opaque')\"`;
 const xargsCommand = ["xar", "gs"].join("");
 const noRunIfEmptyOption = ["--no-run", "-if-empty"].join("");
 const awkCommand = ["aw", "k"].join("");
 const opaqueAwkProgram = `'BEGIN { cmd = decode(); ${["sys", "tem"].join("")}(cmd) }'`;
+const timeCommand = ["ti", "me"].join("");
+const shellGrammarGuardCases = [
+  [timeCommand, awkCommand, opaqueAwkProgram].join(" "),
+  ["SAFE+=1", awkCommand, opaqueAwkProgram].join(" "),
+  ["env", "SAFE+=1", awkCommand, opaqueAwkProgram].join(" "),
+  ["coproc", "worker", "env", "NODE_OPTIONS=--require=./preload.cjs", "node", "scripts/ordinary-check.mjs"].join(" "),
+  ["if", "true", ";", "then", awkCommand, opaqueAwkProgram, ";", "fi"].join(" "),
+  ["if", "true", ";", "then", "env", "NODE_OPTIONS=--require=./preload.cjs", "node", "scripts/ordinary-check.mjs", ";", "fi"].join(" "),
+];
 const xargsGuardCases = [
   [xargsCommand, noRunIfEmptyOption, "-a", ["package", ".json"].join(""), awkCommand, opaqueAwkProgram].join(" "),
   [xargsCommand, noRunIfEmptyOption, "-a", ["package", ".json"].join(""), "env", "NODE_OPTIONS=--require=./preload.cjs", "node", "scripts/ordinary-check.mjs"].join(" "),
+  [xargsCommand, "--replace", "-a", ["package", ".json"].join(""), awkCommand, opaqueAwkProgram].join(" "),
+  [xargsCommand, "--eof", "-a", ["package", ".json"].join(""), awkCommand, opaqueAwkProgram].join(" "),
+  [xargsCommand, "--max-lines", "-a", ["package", ".json"].join(""), awkCommand, opaqueAwkProgram].join(" "),
 ];
 const shellBuiltinNodeOptionsCases = [
+  ["NODE_OPTIONS+=--require=./preload.cjs", "node", "scripts/ordinary-check.mjs"].join(" "),
+  ["export", "NODE_OPTIONS+=--require=./preload.cjs", ";", "node", "scripts/ordinary-check.mjs"].join(" "),
+  [["decl", "are"].join(""), "-x", "NODE_OPTIONS+=--require=./preload.cjs", ";", "node", "scripts/ordinary-check.mjs"].join(" "),
+  [["type", "set"].join(""), "-gx", "NODE_OPTIONS+=--require=./preload.cjs", ";", "node", "scripts/ordinary-check.mjs"].join(" "),
+  [["lo", "cal"].join(""), "-x", "NODE_OPTIONS+=--require=./preload.cjs", ";", "node", "scripts/ordinary-check.mjs"].join(" "),
+  [["read", "only"].join(""), "NODE_OPTIONS+=--require=./preload.cjs", ";", "node", "scripts/ordinary-check.mjs"].join(" "),
   [["decl", "are"].join(""), "-x", "NODE_OPTIONS=--require=./preload.cjs", ";", "node", "scripts/ordinary-check.mjs"].join(" "),
   [["type", "set"].join(""), "-gx", "NODE_OPTIONS=--require=./preload.cjs", ";", "node", "scripts/ordinary-check.mjs"].join(" "),
   [["built", "in"].join(""), "export", "NODE_OPTIONS=--require=./preload.cjs", ";", "node", "scripts/ordinary-check.mjs"].join(" "),
@@ -286,12 +305,54 @@ const shellBuiltinNodeOptionsCases = [
   [["read", "only"].join(""), "NODE_OPTIONS=--require=./preload.cjs", ";", "node", "scripts/ordinary-check.mjs"].join(" "),
   [["decl", "are"].join(""), "NODE_OPTIONS=--require=./preload.cjs", ";", "export", "NODE_OPTIONS", ";", "node", "scripts/ordinary-check.mjs"].join(" "),
 ];
+const privilegeWrapperNodeOptionsCases = [
+  ["sudo", "NODE_OPTIONS=--require=./preload.cjs", "node", "scripts/ordinary-check.mjs"].join(" "),
+  ["sudo", "-u", "root", "NODE_OPTIONS=--require=./preload.cjs", "node", "scripts/ordinary-check.mjs"].join(" "),
+  ["wsl", "sudo", "NODE_OPTIONS=--require=./preload.cjs", "node", "scripts/ordinary-check.mjs"].join(" "),
+  ["doas", "NODE_OPTIONS=--require=./preload.cjs", "node", "scripts/ordinary-check.mjs"].join(" "),
+];
+const watchRunnerGuardCases = [
+  ["watch", "-n", "1", awkCommand, opaqueAwkProgram].join(" "),
+  ["watch", "--unknown-runner-option", awkCommand, opaqueAwkProgram].join(" "),
+  ["wsl", "busybox", "watch", "-n", "1", awkCommand, opaqueAwkProgram].join(" "),
+  ["wsl", "busybox", "watch", "-n", "1", "env", "NODE_OPTIONS=--require=./preload.cjs", "node", "scripts/ordinary-check.mjs"].join(" "),
+  ["busybox", "watch", "-n", "1", `'env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs'`].join(" "),
+];
+const nestedParserGuardCases = [
+  ["cmd", "/d", "/c", `\"${awkCommand} -f payload.awk\"`].join(" "),
+  ["env", `-S\"${awkCommand} -f payload.awk\"`].join(" "),
+  ["cmd", "/d", "/c", '"NO^DE_OPTIONS=--require=./preload.cjs & node scripts/ordinary-check.mjs"'].join(" "),
+  ["cmd", "/d", "/c", '"set NO^DE_OPTIONS=--require=./preload.cjs & node scripts/ordinary-check.mjs"'].join(" "),
+  ["env", '--split-string="-i NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"'].join(" "),
+  [["e", "nv"].join("\\"), "NODE_OPTIONS=--require=./preload.cjs", "node", "scripts/ordinary-check.mjs"].join(" "),
+  [["co", "mmand"].join("\\"), "env", "NODE_OPTIONS=--require=./preload.cjs", "node", "scripts/ordinary-check.mjs"].join(" "),
+];
+const evalCommand = ["ev", "al"].join("");
+const sourceCommand = ["sour", "ce"].join("");
+const parallelCommand = ["para", "llel"].join("");
+const indirectRunnerGuardCases = [
+  `${evalCommand} 'export NODE_OPTIONS=--require=./preload.cjs'; node scripts/ordinary-check.mjs`,
+  `${parallelCommand} -- env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs`,
+  `${evalCommand} \"$loader\"`,
+  `${sourceCommand} ./setup.sh`,
+  `${evalCommand} '${awkCommand} -f payload.awk'`,
+];
 for (const separator of [";", "|", "&"]) {
   ok(checkDangerousCommand(`Write-Output marker\x5c${separator} ${pythonCommand} -c \"print('opaque')\"`), `PowerShell backslash-prefixed ${separator} cannot hide an opaque interpreter`);
   ok(checkDangerousCommand(`Write-Output marker\x5c${separator} NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs`), `PowerShell backslash-prefixed ${separator} cannot hide a NODE_OPTIONS preload`);
 }
+ok(maintenanceProducerCommandMentioned(deepPowerShellBoundaryCommand), "deep PowerShell boundary normalization fails closed without unbounded recursion");
 for (const command of xargsGuardCases) ok(checkDangerousCommand(command), `long no-run option cannot hide an xargs execution target: ${command}`);
+for (const command of shellGrammarGuardCases) ok(checkDangerousCommand(command), `shell grammar cannot hide an opaque execution target: ${command}`);
+ok(!checkDangerousCommand(`${timeCommand} --help ${awkCommand} ${opaqueAwkProgram}`), "terminal time help mode does not execute its trailing operand");
+ok(!checkDangerousCommand(`'then' env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs`), "a quoted keyword remains an ordinary executable name");
 for (const command of shellBuiltinNodeOptionsCases) ok(checkDangerousCommand(command), `shell builtin cannot hide an exported NODE_OPTIONS preload: ${command}`);
+for (const command of privilegeWrapperNodeOptionsCases) ok(checkDangerousCommand(command), `privilege wrapper cannot hide a NODE_OPTIONS preload: ${command}`);
+for (const command of watchRunnerGuardCases) ok(checkDangerousCommand(command), `watch runner cannot hide an opaque command: ${command}`);
+ok(!checkDangerousCommand(["busybox", "watch", "--help", awkCommand, opaqueAwkProgram].join(" ")), "terminal BusyBox watch help mode does not execute a trailing operand");
+for (const command of nestedParserGuardCases) ok(checkDangerousCommand(command), `nested or POSIX-escaped parser route is denied: ${command}`);
+for (const command of nestedParserGuardCases.slice(0, 2)) ok(maintenanceProducerCommandMentioned(command), `nested AWK launcher enters the producer gate: ${command}`);
+for (const command of indirectRunnerGuardCases) ok(checkDangerousCommand(command), `indirect or dynamic command runner fails closed: ${command}`);
 for (const command of [
   "wsl awk 'BEGIN { cmd = decode(); system(cmd) }'",
   "wsl -d docker-desktop -- awk 'BEGIN { cmd = decode(); system(cmd) }'",
@@ -487,6 +548,9 @@ for (const command of [
   "busybox env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
   ...[";", "|", "&"].map((separator) => `Write-Output marker\x5c${separator} ${pythonCommand} -c \"print('opaque')\"`),
   ...[";", "|", "&"].map((separator) => `Write-Output marker\x5c${separator} NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs`),
+  ...shellGrammarGuardCases,
+  ...privilegeWrapperNodeOptionsCases,
+  ...watchRunnerGuardCases,
 ]) {
   r = runHook({ tool_name: command.startsWith("Write-Output") ? "PowerShell" : "Bash", tool_input: { command } });
   eq(r.status, 0, `bash-safety.mjs exits 0 after denying a command-runner route: ${command}`);
@@ -504,6 +568,22 @@ for (const command of shellBuiltinNodeOptionsCases) {
   eq(r.status, 0, `bash-safety.mjs exits 0 after denying a shell-builtin preload: ${command}`);
   ok(r.stdout.includes('"permissionDecision":"deny"'), `bash-safety.mjs denies a shell-builtin preload: ${command}`);
 }
+
+for (const command of nestedParserGuardCases) {
+  r = runHook({ tool_name: "Bash", tool_input: { command } });
+  eq(r.status, 0, `bash-safety.mjs exits 0 after denying a nested parser route: ${command}`);
+  ok(r.stdout.includes('"permissionDecision":"deny"'), `bash-safety.mjs denies a nested parser route: ${command}`);
+}
+
+for (const command of indirectRunnerGuardCases) {
+  r = runHook({ tool_name: "Bash", tool_input: { command } });
+  eq(r.status, 0, `bash-safety.mjs exits 0 after denying an indirect runner: ${command}`);
+  ok(r.stdout.includes('"permissionDecision":"deny"'), `bash-safety.mjs denies an indirect runner: ${command}`);
+}
+
+r = runHook({ tool_name: "PowerShell", tool_input: { command: deepPowerShellBoundaryCommand } });
+eq(r.status, 0, "bash-safety.mjs survives a deeply escaped PowerShell boundary");
+ok(r.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs fails closed on a deeply escaped PowerShell boundary");
 
 r = runHook({
   tool_name: "PowerShell",

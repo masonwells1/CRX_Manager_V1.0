@@ -21,10 +21,11 @@ const MAINTENANCE_PRODUCER_ALLOWED_COMMANDS = new Set([
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --approved-by-mason=2026-08-12 --retire-producer",
 ]);
 
-export function maintenanceProducerCommandMentioned(command) {
+export function maintenanceProducerCommandMentioned(command, depth = 0) {
   const value = String(command || "");
   const powerShellBoundaryVariant = value.replace(/\\([;&|])/g, "$1");
-  if (powerShellBoundaryVariant !== value && maintenanceProducerCommandMentioned(powerShellBoundaryVariant)) return true;
+  if (powerShellBoundaryVariant !== value
+    && (depth >= 4 || maintenanceProducerCommandMentioned(powerShellBoundaryVariant, depth + 1))) return true;
   const hasDynamicSyntax = (text) => /[*?\[\]{}$`@]|[<>]\(|\([^()\r\n]*\+[^()\r\n]*\)|\s-join(?:\s|$)|![^!\r\n]+!|%[^%\r\n]+%/i.test(text);
   const dynamicSyntax = hasDynamicSyntax(value);
   const tokenize = (text) => {
@@ -98,11 +99,37 @@ export function maintenanceProducerCommandMentioned(command) {
       return exact && (allowQuotedBare || !token.sawQuoted || token.sawUnquoted || /[\\/]/.test(candidate));
     });
   };
+  const watchOperandStart = (list, start, end) => {
+    let cursor = start;
+    while (cursor < end) {
+      const argument = normalizeShellOption(list[cursor].value);
+      if (/^(?:--help|--version|-h|-v)$/.test(argument)) return { cursor, terminal: true, opaque: false };
+      if (argument === "--") return { cursor: cursor + 1, terminal: false, opaque: false };
+      if (/^(?:-n|--interval|-q|--equexit)$/.test(argument)) {
+        if (cursor + 1 >= end) return { cursor, terminal: false, opaque: true };
+        cursor += 2;
+        continue;
+      }
+      if (/^(?:-n.+|-q.+|--(?:interval|equexit)=.+|-d(?:=.+)?|--differences(?:=.+)?|-[bcegptx]+|--(?:beep|color|errexit|chgexit|precise|no-title|exec))$/.test(argument)) {
+        cursor += 1;
+        continue;
+      }
+      if (argument.startsWith("-")) return { cursor, terminal: false, opaque: true };
+      break;
+    }
+    return { cursor, terminal: false, opaque: false };
+  };
   const invocationPosition = (list, index) => {
     let segmentStart = index;
     while (segmentStart > 0 && !list[segmentStart - 1].control) segmentStart -= 1;
     let cursor = segmentStart;
-    while (cursor < index && /^[A-Za-z_]\w*=/.test(list[cursor].value)) cursor += 1;
+    const shellExecutionKeywords = new Set(["if", "then", "elif", "else", "while", "until", "do", "!"]);
+    const shellExecutionKeyword = (token) => token
+      && !token.control
+      && !token.sawQuoted
+      && shellExecutionKeywords.has(normalizeShellToken(token.value).toLowerCase());
+    while (cursor < index && shellExecutionKeyword(list[cursor])) cursor += 1;
+    while (cursor < index && /^[A-Za-z_]\w*\+?=/.test(list[cursor].value)) cursor += 1;
     let wrapperDepth = 0;
     for (; cursor < index && wrapperDepth < 8; wrapperDepth += 1) {
       const token = list[cursor];
@@ -111,6 +138,30 @@ export function maintenanceProducerCommandMentioned(command) {
         cursor += 1;
         if (cursor < index && /^-[vV]$/.test(list[cursor].value)) return false;
         while (cursor < index && /^(?:-p|--)$/.test(list[cursor].value)) cursor += 1;
+      } else if (named("coproc")) {
+        cursor += 1;
+        const directCommandNames = [
+          "command", "time", "exec", "env", "find", "xargs", "parallel", "sudo", "doas",
+          "wsl", "busybox", "toybox", "nohup", "nice", "timeout", "setsid", "stdbuf",
+        ];
+        const directCommand = directCommandNames.some((name) => executableNamed(list[cursor], name, true));
+        if (cursor < index && !directCommand && /^[A-Za-z_]\w*$/.test(normalizeShellToken(list[cursor].value))) cursor += 1;
+      } else if (named("time")) {
+        cursor += 1;
+        while (cursor < index) {
+          const argument = normalizeShellOption(list[cursor].value);
+          if (/^--(?:help|version)$/.test(argument)) return false;
+          if (argument === "--") { cursor += 1; break; }
+          if (/^(?:-o|--output|-f|--format)$/.test(argument)) { cursor += 2; continue; }
+          if (/^(?:-o.+|-f.+|--(?:output|format)=.+|-[apvq]+|--(?:append|portability|quiet|verbose))$/.test(argument)) { cursor += 1; continue; }
+          if (argument.startsWith("-")) return true;
+          break;
+        }
+      } else if (named("watch")) {
+        const parsed = watchOperandStart(list, cursor + 1, index);
+        if (parsed.terminal) return false;
+        if (parsed.opaque) return true;
+        cursor = parsed.cursor;
       } else if (named("exec")) {
         cursor += 1;
         while (cursor < index && list[cursor].value.startsWith("-")) {
@@ -125,7 +176,7 @@ export function maintenanceProducerCommandMentioned(command) {
           if (argument === "--") { cursor += 1; break; }
           if (/^-[i0v]*[uCa][i0v]*$/.test(argument)) { cursor += 2; continue; }
           if (/^(?:-u|--unset|-C|--chdir|-a|--argv0)$/.test(argument)) { cursor += 2; continue; }
-          if (/^[A-Za-z_]\w*=/.test(argument) || argument.startsWith("-")) { cursor += 1; continue; }
+          if (/^[A-Za-z_]\w*\+?=/.test(argument) || argument.startsWith("-")) { cursor += 1; continue; }
           break;
         }
       } else if (named(["fi", "nd"].join(""))) {
@@ -142,17 +193,22 @@ export function maintenanceProducerCommandMentioned(command) {
         while (cursor < index) {
           const argument = normalizeShellOption(list[cursor].value);
           if (argument === "--") { cursor += 1; break; }
-          if (/^(?:-a|--arg-file|-d|--delimiter|-E|--eof|-I|--replace|-J|-L|--max-lines|-n|--max-args|-P|--max-procs|-R|-S|-s|--max-chars|--process-slot-var)$/.test(argument)) {
+          if (/^(?:-a|--arg-file|-d|--delimiter|-E|-I|-J|-L|-n|--max-args|-P|--max-procs|-R|-S|-s|--max-chars|--process-slot-var)$/.test(argument)) {
             cursor += 2;
             continue;
           }
-          if (/^(?:-[adEIJLnPRSs].+|--(?:arg-file|delimiter|eof|replace|max-lines|max-args|max-procs|max-chars|process-slot-var)=.+|--(?:null|open-tty|interactive|no-run-if-empty|show-limits|verbose|exit)|-[0oprtx]+|-[eil].*)$/.test(argument)) {
+          if (/^(?:-[adEIJLnPRSs].+|--(?:arg-file|delimiter|eof|replace|max-lines|max-args|max-procs|max-chars|process-slot-var)=.+|--(?:eof|replace|max-lines|null|open-tty|interactive|no-run-if-empty|show-limits|verbose|exit)|-[0oprtx]+|-[eil].*)$/.test(argument)) {
             cursor += 1;
             continue;
           }
           if (argument.startsWith("-")) return true;
           break;
         }
+      } else if (named("parallel")) {
+        for (let scan = cursor + 1; scan < index; scan += 1) {
+          if (/^--(?:help|version)$/.test(normalizeShellOption(list[scan].value))) return false;
+        }
+        return true;
       } else if (["sudo", "doas"].some((name) => named(name))) {
         cursor += 1;
         while (cursor < index) {
@@ -163,7 +219,7 @@ export function maintenanceProducerCommandMentioned(command) {
             cursor += 2;
             continue;
           }
-          if (argument.startsWith("-") || /^[A-Za-z_]\w*=/.test(argument)) { cursor += 1; continue; }
+          if (argument.startsWith("-") || /^[A-Za-z_]\w*\+?=/.test(argument)) { cursor += 1; continue; }
           break;
         }
       } else if (named("wsl")) {
@@ -201,7 +257,7 @@ export function maintenanceProducerCommandMentioned(command) {
       } else {
         return false;
       }
-      while (cursor < index && /^[A-Za-z_]\w*=/.test(list[cursor].value)) cursor += 1;
+      while (cursor < index && /^[A-Za-z_]\w*\+?=/.test(list[cursor].value)) cursor += 1;
     }
     return cursor === index || (wrapperDepth >= 8 && cursor < index);
   };
@@ -218,7 +274,7 @@ export function maintenanceProducerCommandMentioned(command) {
     if (prior?.control && /[({]/.test(prior.value)) return false;
     let segmentStart = index;
     while (segmentStart > 0 && !list[segmentStart - 1].control) segmentStart -= 1;
-    return list.slice(segmentStart, index).every((entry) => /^[A-Za-z_]\w*=/.test(entry.value));
+    return list.slice(segmentStart, index).every((entry) => /^[A-Za-z_]\w*\+?=/.test(entry.value));
   };
   if (dynamicSyntax && tokens.some(opaqueExecutablePosition)) return true;
   const opaqueJavaScriptLoaderInvocation = (token, index, list) => {
@@ -314,6 +370,18 @@ export function maintenanceProducerCommandMentioned(command) {
     return true;
   };
   if (tokens.some(opaqueInlineInterpreterInvocation)) return true;
+  const nestedWatchCommand = (token, index, list) => {
+    if (!executableNamed(token, "watch", true) || !invocationPosition(list, index)) return false;
+    let segmentEnd = index + 1;
+    while (segmentEnd < list.length && !list[segmentEnd].control) segmentEnd += 1;
+    const parsed = watchOperandStart(list, index + 1, segmentEnd);
+    if (parsed.terminal) return false;
+    if (parsed.opaque) return true;
+    const body = list.slice(parsed.cursor, segmentEnd).map((entry) => entry.value).join(" ");
+    if (!body) return false;
+    return depth >= 4 || maintenanceProducerCommandMentioned(body, depth + 1);
+  };
+  if (tokens.some(nestedWatchCommand)) return true;
   const powerShellValueOption = (argument) => /^(?:--?|\/)(?:configuration(?:name|file)|config|cus(?:t(?:o(?:m(?:p(?:i(?:p(?:e(?:n(?:a(?:m(?:e)?)?)?)?)?)?)?)?)?)?)?|settings(?:f(?:i(?:l(?:e)?)?)?)?|executionpolicy|ex|ep|inputformat|inp|input|if|outputformat|o|of|out|windowstyle|w|workingdirectory|wd)(?::|=)?/i.test(argument);
   const commandStringContainsEncodedPowerShell = (text) => {
     const cmdTokens = tokenize(text);
@@ -362,7 +430,16 @@ export function maintenanceProducerCommandMentioned(command) {
     }
     function analyzeTokens(candidateTokens, depth) {
       if (dynamicSyntax && candidateTokens.some(nodeExecutable)) return true;
+      if (candidateTokens.some(opaqueInlineInterpreterInvocation)) return true;
       for (let index = 0; index < candidateTokens.length; index += 1) {
+        if ((candidateTokens[index].value === "." || executableNamed(candidateTokens[index], "source", true))
+          && invocationPosition(candidateTokens, index)) return true;
+        if (executableNamed(candidateTokens[index], "eval", true) && invocationPosition(candidateTokens, index)) {
+          let bodyEnd = index + 1;
+          while (bodyEnd < candidateTokens.length && !candidateTokens[bodyEnd].control) bodyEnd += 1;
+          const body = candidateTokens.slice(index + 1, bodyEnd).map((entry) => entry.value).join(" ");
+          if (!body || hasDynamicSyntax(body) || depth >= maxNestedShellDepth || analyzeText(body, depth + 1)) return true;
+        }
         if (executableNamed(candidateTokens[index], "env") && invocationPosition(candidateTokens, index)) {
           for (let cursor = index + 1; cursor < candidateTokens.length && !candidateTokens[cursor].control; cursor += 1) {
             const argument = normalizeShellToken(candidateTokens[cursor].value);
@@ -372,14 +449,14 @@ export function maintenanceProducerCommandMentioned(command) {
             if (shortSplit || longSplit) {
               const attached = shortSplit?.[1] || longSplit?.[1] || "";
               const commandText = attached || candidateTokens[cursor + 1]?.value || "";
-              if (!commandText || hasDynamicSyntax(commandText) || depth >= maxNestedShellDepth || analyzeText(commandText, depth + 1)) return true;
+              if (!commandText || hasDynamicSyntax(commandText) || depth >= maxNestedShellDepth || analyzeText(`env ${commandText}`, depth + 1)) return true;
               break;
             }
             if (/^(?:-u|--unset|-C|--chdir|-a|--argv0)$/.test(argument)) {
               cursor += 1;
               continue;
             }
-            if (/^[A-Za-z_]\w*=/.test(argument) || argument.startsWith("-")) continue;
+            if (/^[A-Za-z_]\w*\+?=/.test(argument) || argument.startsWith("-")) continue;
             break;
           }
         }
@@ -512,10 +589,33 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
   if (powerShellBoundaryVariant !== value
     && (depth >= 4 || nodeOptionsAssignmentMentioned(powerShellBoundaryVariant, depth + 1))) return true;
   const tokens = tokenizeShellWords(value);
-  const assignmentName = (token) => /^([A-Za-z_]\w*)=/.exec(token?.value || "")?.[1]?.toLowerCase() || "";
-  const executableName = (token) => String(token?.value || "").replace(/^@/, "").split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase();
+  const shellWordCandidates = (token) => {
+    const raw = String(token?.value || "");
+    const normalized = raw
+      .replace(/\\([^\\/])/g, "$1")
+      .replace(/\^([^^])/g, "$1")
+      .replace(/`([^`])/g, "$1");
+    return [raw, normalized];
+  };
+  const recognizedExecutables = new Set([
+    "command", "builtin", "env", "wsl", "busybox", "toybox", "find", "xargs",
+    "parallel", "sudo", "doas", "coproc", "time", "watch", "exec", "nohup", "nice", "timeout", "setsid", "stdbuf",
+    "cmd", "powershell", "pwsh", "bash", "sh", "dash", "zsh", "ksh",
+    "eval", "source", ".", "node", "nodejs", "export", "declare", "typeset",
+    "local", "readonly", "set", "setx",
+  ]);
+  const assignmentName = (token) => shellWordCandidates(token)
+    .map((candidate) => /^([A-Za-z_]\w*)\+?=/.exec(candidate)?.[1]?.toLowerCase() || "")
+    .find(Boolean) || "";
+  const executableName = (token) => shellWordCandidates(token)
+    .map((candidate) => candidate.replace(/^@/, "").split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase())
+    .find((candidate) => recognizedExecutables.has(candidate)) || "";
   const hasNodeOptionsAssignment = (token) => assignmentName(token) === "node_options";
-  const namesNodeOptionsVariable = (token) => /^node_options(?:\[[^\]]*\])?(?:=|$)/i.test(String(token?.value || ""));
+  const namesNodeOptionsVariable = (token) => shellWordCandidates(token)
+    .some((candidate) => /^node_options(?:\[[^\]]*\])?(?:\+?=|$)/i.test(candidate));
+  const shellExecutionKeywords = new Set(["if", "then", "elif", "else", "while", "until", "do", "!"]);
+  const shellExecutionKeyword = (token) => !token?.sawQuoted && shellWordCandidates(token)
+    .some((candidate) => shellExecutionKeywords.has(candidate.toLowerCase()));
 
   for (let segmentStart = 0; segmentStart < tokens.length;) {
     while (segmentStart < tokens.length && tokens[segmentStart].control) segmentStart += 1;
@@ -531,6 +631,7 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
       return false;
     };
 
+    while (cursor < segmentEnd && shellExecutionKeyword(tokens[cursor])) cursor += 1;
     if (skipAssignments()) return true;
     while (cursor < segmentEnd) {
       const name = executableName(tokens[cursor]);
@@ -560,7 +661,7 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
               : argument.includes("=");
             const attachedValue = shortSplitString?.[1] ?? longSplitString?.[1] ?? "";
             const splitCommand = hasAttachedValue ? attachedValue : tokens[cursor + 1]?.value || "";
-            if (inspectNestedCommand(splitCommand)) return true;
+            if (inspectNestedCommand(`env ${splitCommand}`)) return true;
             cursor += hasAttachedValue ? 1 : 2;
             continue;
           }
@@ -573,6 +674,59 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
         if (skipAssignments()) return true;
         continue;
       }
+      if (name === "coproc") {
+        cursor += 1;
+        if (cursor + 1 < segmentEnd
+          && !executableName(tokens[cursor])
+          && !assignmentName(tokens[cursor])
+          && /^[A-Za-z_]\w*$/.test(tokens[cursor].value)) cursor += 1;
+        if (skipAssignments()) return true;
+        continue;
+      }
+      if (name === "time") {
+        cursor += 1;
+        let terminalMode = false;
+        while (cursor < segmentEnd) {
+          const argument = tokens[cursor].value;
+          if (/^--(?:help|version)$/.test(argument)) { terminalMode = true; break; }
+          if (argument === "--") { cursor += 1; break; }
+          if (/^(?:-o|--output|-f|--format)$/.test(argument)) { cursor += 2; continue; }
+          if (/^(?:-o.+|-f.+|--(?:output|format)=.+|-[apvq]+|--(?:append|portability|quiet|verbose))$/.test(argument)) { cursor += 1; continue; }
+          if (argument.startsWith("-")) {
+            if (tokens.slice(cursor + 1, segmentEnd).some(hasNodeOptionsAssignment)) return true;
+            break;
+          }
+          break;
+        }
+        if (terminalMode) break;
+        if (skipAssignments()) return true;
+        continue;
+      }
+      if (name === "watch") {
+        cursor += 1;
+        let terminalMode = false;
+        while (cursor < segmentEnd) {
+          const argument = tokens[cursor].value;
+          if (/^(?:--help|--version|-h|-v)$/.test(argument)) { terminalMode = true; break; }
+          if (argument === "--") { cursor += 1; break; }
+          if (/^(?:-n|--interval|-q|--equexit)$/.test(argument)) {
+            if (cursor + 1 >= segmentEnd) return true;
+            cursor += 2;
+            continue;
+          }
+          if (/^(?:-n.+|-q.+|--(?:interval|equexit)=.+|-d(?:=.+)?|--differences(?:=.+)?|-[bcegptx]+|--(?:beep|color|errexit|chgexit|precise|no-title|exec))$/.test(argument)) { cursor += 1; continue; }
+          if (argument.startsWith("-")) {
+            const remaining = tokens.slice(cursor + 1, segmentEnd).map((token) => token.value).join(" ");
+            if (tokens.slice(cursor + 1, segmentEnd).some(hasNodeOptionsAssignment) || inspectNestedCommand(remaining)) return true;
+            break;
+          }
+          break;
+        }
+        if (terminalMode) break;
+        const body = tokens.slice(cursor, segmentEnd).map((token) => token.value).join(" ");
+        if (inspectNestedCommand(body)) return true;
+        break;
+      }
       if (name === "builtin") {
         cursor += 1;
         if (cursor < segmentEnd && tokens[cursor].value === "--") cursor += 1;
@@ -580,6 +734,13 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
         if (skipAssignments()) return true;
         continue;
       }
+      if (name === "eval") {
+        const body = tokens.slice(cursor + 1, segmentEnd).map((token) => token.value).join(" ");
+        if (!body || /[$`]|!.[^!]*!|%.[^%]*%/.test(body)) return true;
+        if (inspectNestedCommand(body)) return true;
+        break;
+      }
+      if (name === "source" || name === ".") return true;
       if (name === "wsl") {
         cursor += 1;
         let terminalMode = false;
@@ -623,8 +784,8 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
           const argument = tokens[cursor].value;
           if (/^--(?:help|version)$/.test(argument)) { terminalMode = true; break; }
           if (argument === "--") { cursor += 1; break; }
-          if (/^(?:-a|--arg-file|-d|--delimiter|-E|--eof|-I|--replace|-J|-L|--max-lines|-n|--max-args|-P|--max-procs|-R|-S|-s|--max-chars|--process-slot-var)$/.test(argument)) { cursor += 2; continue; }
-          if (/^(?:-[adEIJLnPRSs].+|--(?:arg-file|delimiter|eof|replace|max-lines|max-args|max-procs|max-chars|process-slot-var)=.+|--(?:null|open-tty|interactive|no-run-if-empty|show-limits|verbose|exit)|-[0oprtx]+|-[eil].*)$/.test(argument)) { cursor += 1; continue; }
+          if (/^(?:-a|--arg-file|-d|--delimiter|-E|-I|-J|-L|-n|--max-args|-P|--max-procs|-R|-S|-s|--max-chars|--process-slot-var)$/.test(argument)) { cursor += 2; continue; }
+          if (/^(?:-[adEIJLnPRSs].+|--(?:arg-file|delimiter|eof|replace|max-lines|max-args|max-procs|max-chars|process-slot-var)=.+|--(?:eof|replace|max-lines|null|open-tty|interactive|no-run-if-empty|show-limits|verbose|exit)|-[0oprtx]+|-[eil].*)$/.test(argument)) { cursor += 1; continue; }
           if (argument.startsWith("-")) {
             const remaining = tokens.slice(cursor + 1, segmentEnd).map((token) => token.value).join(" ");
             const remainingAfterValue = tokens.slice(cursor + 2, segmentEnd).map((token) => token.value).join(" ");
@@ -638,6 +799,15 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
         if (skipAssignments()) return true;
         continue;
       }
+      if (name === "parallel") {
+        const remainingTokens = tokens.slice(cursor + 1, segmentEnd);
+        if (remainingTokens.some(hasNodeOptionsAssignment)) return true;
+        const terminator = remainingTokens.findIndex((token) => token.value === "--");
+        const bodyTokens = terminator >= 0 ? remainingTokens.slice(terminator + 1) : remainingTokens;
+        if (bodyTokens.some((token) => /^--(?:help|version)$/.test(token.value))) break;
+        if (inspectNestedCommand(bodyTokens.map((token) => token.value).join(" "))) return true;
+        break;
+      }
       if (["sudo", "doas"].includes(name)) {
         cursor += 1;
         let terminalMode = false;
@@ -646,6 +816,7 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
           if (/^(?:--help|--version|-V|-l|--list)$/.test(argument)) { terminalMode = true; break; }
           if (argument === "--") { cursor += 1; break; }
           if (/^(?:-u|--user|-g|--group|-h|--host|-p|--prompt|-C|--close-from|-r|--role|-t|--type|-D|--chdir)$/.test(argument)) { cursor += 2; continue; }
+          if (hasNodeOptionsAssignment(tokens[cursor])) return true;
           if (argument.startsWith("-") || assignmentName(tokens[cursor])) { cursor += 1; continue; }
           break;
         }
