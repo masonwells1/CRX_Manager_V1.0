@@ -121,6 +121,31 @@ describe('ManualTicketCreate retry-safe atomic creation', () => {
 
   afterEach(() => vi.restoreAllMocks());
 
+  // The banner itself had NO coverage before this: both caller test files mock the
+  // validator away, so nothing verified that a warning ever reached the screen.
+  // These two render the real component and check that the tiers stay visually
+  // distinct — a "couldn't check this" note must not appear in the amber error
+  // block, which is what would retrain operators to ignore it.
+  it('renders a real mismatch in the warning block', async () => {
+    const { validateBlendMath } = await import('../../lib/blendMathValidator');
+    vi.mocked(validateBlendMath).mockReturnValue([
+      { level: 'mismatch', message: 'Total volume (250 gal) is wrong' },
+    ]);
+    render(<ManualTicketCreate {...defaultProps} />);
+    expect(await screen.findByText('Math Validation Warnings')).toBeTruthy();
+    expect(screen.queryByText('Not automatically checked')).toBeNull();
+  });
+
+  it('renders an unchecked note in the quiet block, never as a warning', async () => {
+    const { validateBlendMath } = await import('../../lib/blendMathValidator');
+    vi.mocked(validateBlendMath).mockReturnValue([
+      { level: 'unchecked', message: 'a product has a quantity but no unit' },
+    ]);
+    render(<ManualTicketCreate {...defaultProps} />);
+    expect(await screen.findByText('Not automatically checked')).toBeTruthy();
+    expect(screen.queryByText('Math Validation Warnings')).toBeNull();
+  });
+
   it('submits the header and products through one atomic create_blend_ticket RPC', async () => {
     render(<ManualTicketCreate {...defaultProps} />);
     await chooseSearchOption('Select Customer', 'Smith Farm');
