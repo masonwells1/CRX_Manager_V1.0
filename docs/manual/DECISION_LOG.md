@@ -22,9 +22,12 @@ threshold was effectively frozen at 500k for every session in this repository.
 
 A second effect: the pin shortened the usable stretch before summarization. `autoCompactWindow`
 is a compaction *trigger*, not a ceiling on the model's context window — the window is set by the
-model (200K, or 1M via a `[1m]` suffix) and the pin does not change it. But at 500k the session
-summarized at half the available room on a 1M-context model, so the practical span of unsummarized
-conversation was far shorter than the model could actually hold.
+model and provider, not by this setting, and the pin does not change it. Capacity is 200K by
+default; 1M is available only where the model and route support it (native support, a `[1m]`
+alias, or gateway routing), so treat the suffix as a request that may be a no-op rather than a
+universal switch. On a session that *did* have 1M, the 500k pin still summarized at half the
+available room, so the span of unsummarized conversation was far shorter than the model could
+actually hold.
 
 **Decision.** Remove the `autoCompactWindow` key from `.claude/settings.json` entirely. The
 project no longer expresses an opinion on the compaction threshold; the user-level value in
