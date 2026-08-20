@@ -334,15 +334,35 @@ describe('draw_down_quote actor and intent binding migration', () => {
         expect(source, `${path} is missing ${drawKey}`).toContain(`'${drawKey}`);
       }
     }
+    const restoreSmoke = readFileSync(
+      'scripts/smoke/smoke-restore-version-drawn-guard.sql',
+      'utf8',
+    );
+    const plannedHoldsSmoke = readFileSync(
+      'scripts/smoke/smoke-planned-holds-drawn-sync.sql',
+      'utf8',
+    );
+    expect(restoreSmoke).not.toContain('expected BOOKING_OVERDRAWN');
+    expect(restoreSmoke.match(/expected QUOTE_RESTORE_BLOCKED_BY_DRAW/g)).toHaveLength(2);
+    expect(plannedHoldsSmoke).toContain("v_err NOT LIKE 'QUOTE_RESTORE_BLOCKED_BY_DRAW%'");
+    expect(plannedHoldsSmoke).toContain('refused restore changed holds pa=% (expected 200)');
+    expect(smokeSpecs.specs.restore_quote_version.description).toContain(
+      'every version restore fails closed with QUOTE_RESTORE_BLOCKED_BY_DRAW',
+    );
+    expect(smokeSpecs.specs.create_planned_holds.description).toContain(
+      'leaves synchronized holds unchanged',
+    );
     expect(proverSource).toContain('FULL_SCHEMA_KEYED_DRAW_SMOKES_PASS');
   });
 
-  it('checks the duplicate-product production id-less save through COMMIT', () => {
+  it('refuses ambiguous duplicates and checks the supported id-less save through COMMIT', () => {
     expect(idlessDuplicateCommitProof).toContain('BEGIN;');
     expect(idlessDuplicateCommitProof).toContain('COMMIT;');
     expect(idlessDuplicateCommitProof).toContain('FULL_SCHEMA_IDLESS_DUPLICATE_COMMIT_PASS');
     expect(idlessDuplicateCommitProof).toContain("'section_name', 'Early'");
     expect(idlessDuplicateCommitProof).toContain("'section_name', 'Late'");
+    expect(idlessDuplicateCommitProof).toContain('QUOTE_ITEM_AMBIGUOUS_COST');
+    expect(idlessDuplicateCommitProof).toContain('v_product_two');
     expect(idlessDuplicateCommitProof).not.toMatch(/jsonb_build_object\(\s*'id'/);
     expect(proverSource).toContain('IDLESS_DUPLICATE_COMMIT_PROOF_PATH');
     expect(proverSource).toContain('/FULL_SCHEMA_IDLESS_DUPLICATE_COMMIT_PASS/');

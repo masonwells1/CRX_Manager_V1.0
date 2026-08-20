@@ -1,10 +1,11 @@
 -- ============================================================================
 -- ROLLED-BACK smoke test for 20260611120100_restore_quote_version_drawn_guard
 -- ----------------------------------------------------------------------------
--- Verifies the drawn-version guard in restore_quote_version (Codex round-2
--- MED): restoring a version snapshot must never under-book the drawn ledger
--- (quote_product_draws) — the same invariant save_quote's drawn-product guard
--- enforces (20260610184230), closed for the version-restore bypass.
+-- Verifies the post-tier-split restore guard: once a draw stamps per-line
+-- billing provenance on an order, restore_quote_version must fail closed rather
+-- than mint new quote-item IDs that cannot preserve those stamps. The older
+-- fall-below/removes checks remain defense in depth inside the owner body, but
+-- the provenance refusal intentionally fires first for every drawn booking.
 --
 -- HOW TO RUN: execute this whole file as a SINGLE statement (Supabase MCP
 -- execute_sql, or psql -1) as postgres/service_role AFTER the migration is
@@ -20,14 +21,14 @@
 --
 -- Scenarios:
 --   (a) snapshot V1 @100, raise booking to 500, draw 200; restore V1
---       (100 < 200 drawn) -> BOOKING_OVERDRAWN 'would fall below'; the
---       section DELETE inside restore must roll back too (items intact)
+--       -> QUOTE_RESTORE_BLOCKED_BY_DRAW; quote and ledger stay intact
 --   (b) snapshot V2 books only a DIFFERENT product; restore V2 (removes the
---       drawn product) -> BOOKING_OVERDRAWN 'removes'
---   (c) snapshot V3 @400 (>= 200 drawn): restore SUCCEEDS -> status revised,
---       booked 400, ledger still 200; drawing the remaining 200 then closes
---       the booking (accepted, drawn = 400) — full chain to closure
+--       drawn product) -> QUOTE_RESTORE_BLOCKED_BY_DRAW; state stays intact
+--   (c) snapshot V3 @400 (>= 200 drawn) is also refused because even a
+--       quantity-safe version cannot preserve per-line provenance; drawing the
+--       remaining 300 from the untouched 500-unit booking closes it
 --   (d) control: a quote with NO draws restores a lower-qty version freely
+--   (e) accepted limitation: the guard remains after the draw reaches closure
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION pg_temp.restore_quote_version_smoke(
@@ -247,11 +248,13 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
     IF v_err LIKE 'SMOKE_FAIL%' THEN RAISE; END IF;
-    IF v_err NOT LIKE 'BOOKING_OVERDRAWN: cannot restore this version — % would fall below%' THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: (a) expected BOOKING_OVERDRAWN fall-below, got: %', v_err;
+    IF v_err NOT LIKE 'QUOTE_RESTORE_BLOCKED_BY_DRAW%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: (a) expected QUOTE_RESTORE_BLOCKED_BY_DRAW, got: %', v_err;
     END IF;
   END;
-  -- The restore's section DELETE must have rolled back with the guard
+  -- The refusal leaves the quote intact. Ordering before the section DELETE is
+  -- pinned by the migration postflight; this caught subtransaction proves only
+  -- the externally observable atomic state.
   SELECT count(*), COALESCE(SUM(total_units_needed), 0) INTO v_items, v_booked
   FROM quote_items WHERE quote_id = v_q;
   SELECT quantity_drawn INTO v_drawn FROM quote_product_draws
@@ -273,8 +276,8 @@ BEGIN
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
     IF v_err LIKE 'SMOKE_FAIL%' THEN RAISE; END IF;
-    IF v_err NOT LIKE 'BOOKING_OVERDRAWN: cannot restore this version — it removes%' THEN
-      RAISE EXCEPTION 'SMOKE_FAIL: (b) expected BOOKING_OVERDRAWN removes, got: %', v_err;
+    IF v_err NOT LIKE 'QUOTE_RESTORE_BLOCKED_BY_DRAW%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: (b) expected QUOTE_RESTORE_BLOCKED_BY_DRAW, got: %', v_err;
     END IF;
   END;
   SELECT count(*), COALESCE(SUM(total_units_needed), 0) INTO v_items, v_booked
@@ -388,14 +391,18 @@ BEGIN
   END IF;
 
   -- --------------------------------------------------------------------
-  -- (e) ACCEPTED LIMITATION, pinned deliberately: cancelling the draw does
-  --     NOT reopen version restore.
+  -- (e) ACCEPTED LIMITATION, pinned deliberately for the exercised state: a
+  --     booking that reached full draw/accepted still cannot restore a version.
   --
   --     The guard in _restore_quote_version_owner_impl joins order_items
   --     UNFILTERED by order status. cancel_order returns the quantity to
   --     quote_product_draws and reopens the booking, but keeps the order_items
   --     rows for audit -- and those rows still carry their quote_item_id
-  --     stamp. So the guard stays true forever once a booking has been drawn.
+  --     stamp. So the source-level rule stays true forever once a booking has
+  --     been drawn, including after cancellation/void. This scenario directly
+  --     executes the post-closure case; the unfiltered join and migration
+  --     postflight pin the broader reversed-order scope described in
+  --     docs/manual/KNOWN_ISSUES.md.
   --
   --     Codex round 3 (2026-08-19) flagged this as over-broad. Mason accepted
   --     it on 2026-08-20 rather than narrow it, because narrowing means

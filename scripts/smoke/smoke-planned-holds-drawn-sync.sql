@@ -5,8 +5,10 @@
 -- handoff §3): active holds for an OPEN planned quote always equal
 -- GREATEST(booked − drawn, 0) per product after EVERY quote-saving workflow —
 -- create_planned_holds, save_quote (Draft save / Revise / Mark Presented all
--- flow through it), and restore_quote_version — with each product's drawn
--- total consuming the EARLIEST items first so per-item expires_at
+-- flow through it). A drawn booking's restore_quote_version path now refuses
+-- before mutation because it cannot preserve per-line billing provenance; this
+-- smoke proves that refusal leaves the already-synchronized holds unchanged.
+-- Each product's drawn total consumes the EARLIEST items first so per-item expires_at
 -- (needed_by + 14 days) follows the still-reserved tail.
 --
 -- HOW TO RUN: execute this whole file as a SINGLE statement (Supabase MCP
@@ -31,7 +33,7 @@
 --   (d) save_quote rebooks PA to 400 (Revise/Present path; previously synced
 --       nothing) -> PA holds 150 (= 400 − 250), PB 100
 --   (e) snapshot at the 400 state, rebook to 450 via save (holds 200), then
---       restore_quote_version back -> holds rebuilt to 150
+--       restore_quote_version -> QUOTE_RESTORE_BLOCKED_BY_DRAW and holds stay 200
 --   (f) is_planned switched off + save -> 0 active holds (server-side
 --       release; the frontend's direct release becomes redundant)
 -- ============================================================================
@@ -107,6 +109,7 @@ DECLARE
   v_pa_early_item uuid; v_pa_late_item uuid; v_pb_early_item uuid;
   v_pa_total numeric; v_pb_total numeric; v_cnt int;
   v_e1 date; v_e2 date;
+  v_err text;
   v_payload jsonb; v_sections jsonb;
   sfx text := substr(md5(random()::text), 1, 8);
 BEGIN
@@ -252,7 +255,9 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: (d) after save holds pa=% pb=% (expected 150/100)', v_pa_total, v_pb_total;
   END IF;
 
-  -- (e) restore_quote_version: holds rebuilt to restored booked − drawn
+  -- (e) restore_quote_version on a drawn booking is now refused before any
+  -- child or hold mutation. Ordinary save above remains the supported revision
+  -- path and has already proven the 450 - 250 = 200 invariant.
   PERFORM pg_temp.create_quote_version_smoke(
     v_q,
     v_admin,
@@ -289,33 +294,25 @@ BEGIN
   IF v_pa_total <> 200 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (e-pre) after rebook 450 holds pa=% (expected 200)', v_pa_total;
   END IF;
-  v_res := pg_temp.restore_quote_version_smoke(
-    v_q, v_ver, v_admin, NULL,
-    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q)
-  );
-  IF v_res->>'status' IS DISTINCT FROM 'restored' THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: (e) restore returned %', v_res;
+  v_err := NULL;
+  BEGIN
+    v_res := pg_temp.restore_quote_version_smoke(
+      v_q, v_ver, v_admin, NULL,
+      (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q)
+    );
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+  END;
+  IF v_err IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (e) restore of a drawn booking was allowed: %', v_res;
   END IF;
-  SELECT qi.id INTO STRICT v_pa_early_item FROM quote_items qi
-  JOIN quote_sections qs ON qs.id = qi.section_id
-  WHERE qi.quote_id = v_q AND qs.section_name = 'Early' AND qi.product_id = v_pa;
-  SELECT qi.id INTO STRICT v_pa_late_item FROM quote_items qi
-  JOIN quote_sections qs ON qs.id = qi.section_id
-  WHERE qi.quote_id = v_q AND qs.section_name = 'Late' AND qi.product_id = v_pa;
-  SELECT qi.id INTO STRICT v_pb_early_item FROM quote_items qi
-  JOIN quote_sections qs ON qs.id = qi.section_id
-  WHERE qi.quote_id = v_q AND qs.section_name = 'Early' AND qi.product_id = v_pb;
-  v_sections := jsonb_set(
-    jsonb_set(
-      jsonb_set(v_sections, '{0,items,0,id}', to_jsonb(v_pa_early_item)),
-      '{0,items,1,id}', to_jsonb(v_pb_early_item)
-    ),
-    '{1,items,0,id}', to_jsonb(v_pa_late_item)
-  );
+  IF v_err NOT LIKE 'QUOTE_RESTORE_BLOCKED_BY_DRAW%' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (e) restore refused with the wrong error: %', v_err;
+  END IF;
   SELECT COALESCE(SUM(quantity) FILTER (WHERE product_id = v_pa), 0) INTO v_pa_total
   FROM inventory_holds WHERE source_id = v_q AND is_active = true;
-  IF v_pa_total <> 150 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: (e) after restore holds pa=% (expected 150)', v_pa_total;
+  IF v_pa_total <> 200 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (e) refused restore changed holds pa=% (expected 200)', v_pa_total;
   END IF;
 
   -- (f) plan switched off: save_quote releases everything transactionally.

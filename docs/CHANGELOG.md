@@ -29,9 +29,12 @@ must never be approximated with `CREATE OR REPLACE`.
 All six registered smoke chains that create booking draws now supply unique per-run retry keys.
 Their fixtures also follow the current governed pricing, immutable cost-snapshot and row-version
 contracts. The planned-holds fixture deliberately echoes quote-item IDs so duplicate products in
-different sections stay identifiable across its repeated save/restore steps; the separate
-save-quote-drawn guard retains the production id-less fallback shape. Because these chains end in
-rollback, they do not claim to validate commit-time deferred foreign keys. A separate
+different sections stay identifiable across repeated ordinary saves; after the merged tier-split
+restore guard, its drawn-version restore case now proves `QUOTE_RESTORE_BLOCKED_BY_DRAW` leaves
+holds unchanged. The restore-version chain likewise expects that provenance refusal for every
+drawn snapshot, while its no-draw control still restores. The separate save-quote-drawn guard
+retains the production id-less fallback shape. Because these chains end in rollback, they do not
+claim to validate commit-time deferred foreign keys. A separate
 container-only proof now confirms a duplicate-product id-less revision is still refused by
 `QUOTE_ITEM_AMBIGUOUS_COST`, then draws two separately identifiable products across two sections,
 sends the production id-less `save_quote` payload, and reaches a real `COMMIT` before printing its
