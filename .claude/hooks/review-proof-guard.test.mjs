@@ -176,6 +176,18 @@ for (const payload of [
   { tool_name: "mcp__filesystem__move_file", tool_input: { source: ".claude", destination: "/tmp/aside" } },
   { tool_name: "mcp__filesystem__delete_directory", tool_input: { path: ".claude/session-state" } },
   { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x.json", destination: ".claude/session-state/forged.json" } },
+  // Ack-valve exemption is basename-EXACT: a lookalike suffix or any OTHER
+  // session-state basename must STILL deny (only stop-wrap-ack.json is opened).
+  { tool_name: "Write", tool_input: { file_path: ".claude/session-state/stop-wrap-ack.json.bak", content: "{}" } },
+  { tool_name: "Write", tool_input: { file_path: ".claude/session-state/harmless.json", content: "{}" } },
+  // The exemption is WRITE-destination-only and case-sensitive (CodeRabbit PR
+  // #430): a move/delete that merely names the ack file (source OR destination),
+  // and a case-variant name, must STILL deny — only a genuine Write/Edit to the
+  // canonical lowercase path opens.
+  { tool_name: "mcp__filesystem__move_file", tool_input: { source: ".claude/session-state/stop-wrap-ack.json", destination: "/tmp/x" } },
+  { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x.json", destination: ".claude/session-state/stop-wrap-ack.json" } },
+  { tool_name: "mcp__filesystem__delete_file", tool_input: { path: ".claude/session-state/stop-wrap-ack.json" } },
+  { tool_name: "Write", tool_input: { file_path: ".claude/session-state/STOP-WRAP-ACK.JSON", content: "{}" } },
 ]) {
   const result = run(payload);
   assert.equal(result.status, 0);
@@ -251,5 +263,12 @@ assert.equal(run({ tool_name: "Write", tool_input: { file_path: ".claude/hooks/r
 assert.equal(run({ tool_name: "Write", tool_input: { file_path: ".claude/settings.json", content: "{}" } }).stdout, "");
 assert.equal(run({ tool_name: "Edit", tool_input: { file_path: ".claude/hooks/stop-wrap.mjs" } }).stdout, "");
 assert.equal(run({ tool_name: "mcp__filesystem__move_file", tool_input: { source: ".claude/hooks/a.mjs", destination: ".claude/hooks/b.mjs" } }).stdout, "");
+
+// Ack valve (stop-wrap-ack.json): the ONE session-state basename stop-wrap.mjs
+// tells the agent to write to acknowledge loose ends — must be ALLOWED again
+// (the round-8 whole-dir deny had broken this designed carve-out).
+assert.equal(run({ tool_name: "Write", tool_input: { file_path: ".claude/session-state/stop-wrap-ack.json", content: '{"signature":"x"}' } }).stdout, "");
+assert.equal(run({ tool_name: "Edit", tool_input: { file_path: "C:\\repo\\.claude\\session-state\\stop-wrap-ack.json" } }).stdout, "");
+assert.equal(run({ tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/session-state/stop-wrap-ack.json" } }).stdout, "");
 
 console.log("OK - review proof guard checks passed.");

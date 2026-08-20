@@ -34,6 +34,60 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-08-19 — the per-product rate check in `blendMathValidator.ts` is still unit-blind
+
+**Severity: LOW, warning text only, currently unreachable (0 rows in `blend_tickets` and
+`blend_ticket_products` on live, verified read-only 2026-08-19).** The sibling total-volume defect
+in the same file was fixed on 2026-08-19 via
+[PR #426](https://github.com/masonwells1/CRX_Manager_V1.0/pull/426); this one was left
+deliberately out of scope and is recorded here so it is not re-discovered as new.
+
+`validateBlendMath` compares each product's `quantity` against `rate_per_acre × total_acres`
+without ever comparing `unit` to `rate_per_acre_unit`. Both fields exist on `ProductData`, but the
+rate arm reads neither. A product entered as 25 **Gal** at a rate of 32 **oz**/acre over 100 acres
+is arithmetically correct — 32 × 100 = 3200 fl oz = 25 gal — yet the check compares the bare
+numbers 25 vs 3200 and flags it. The mirror case hides a real error: quantities that happen to be
+numerically close across different units pass silently.
+
+Three things a fix must handle that the total-volume arm did not:
+
+- `rate_per_acre_unit` is a **per-acre** string — the form's placeholder is literally `oz/ac` — so
+  it will never match `unit_conversions.unit` directly. `chemCalculator.ts` already has
+  `baseUnitFromRateUnit` to strip the `/ac` suffix; reuse it rather than writing a second parser.
+- `rate_per_acre_unit` is **not always populated**: the recipe-load path in
+  `ManualTicketCreate.tsx` hardcodes `rate_per_acre_unit: ''`, so recipe-derived rows carry none.
+  A missing unit must skip the check, never be assumed to match.
+- `unit_conversions` **can** legitimately serve this arm, unlike the total-volume arm: a rate and a
+  quantity for the *same product* are usually in the same family, so `factor_oz` converts exactly
+  within liquid or within dry. But the fix must still refuse the liquid↔dry crossing (no density
+  column), must not treat `Ea`/`Unit` (`factor_oz = 1`, `unit_type = 'both'`) as convertible — they
+  are a dimensionless count, and converting a jug count to fluid ounces 1:1 is nonsense — and must
+  not join `LOWER(unit)` naively, because the case-alias rows (`Lb`/`LB`, `oz`/`Oz`, `qt`/`Qt`)
+  duplicate on that join.
+
+**Not started.** No migration, no live state, no money path. Fix alongside the next blend-ticket
+change rather than on its own.
+
+---
+
+## OPEN 2026-08-19 — blend-ticket unit fields are free text, so spellings drift
+
+**Severity: LOW, data-quality.** The `unit` and `rate_per_acre_unit` inputs on
+`ManualTicketCreate.tsx` and `BlendTicketDetail.tsx` are plain `<Input type="text">` boxes with a
+placeholder, and a new product row starts with `unit: ''`. Nothing constrains an operator to the
+vocabulary in `unit_conversions`, so `gallons`, `lbs`, `gal`, and a blank are all equally storable.
+
+The Field App already solves this: `FieldAppChemicalEntry.tsx` renders a picker from
+`unitOptionsForForm(unitConversions, product_form)` and uses `isKnownUnit` to grandfather existing
+odd values. Making the blend-ticket fields use the same helpers is the real fix and would turn a
+prose rule into a hard guard.
+
+Until then the total-volume check fails safe: an unrecognised spelling or a missing unit produces a
+"verify the total by hand" message instead of a comparison. That is deliberate — see the alias-map
+comment in `src/lib/blendMathValidator.ts` — but it means an operator who types `gallons` on one
+row and `Gal` on another loses the check on that ticket.
+
+**Not started.** No migration, no live state, no money path.
 ## OPEN 2026-08-19 — PR #404 stamps quote-line provenance, defers the FK, and settles superseded prices
 
 **Status: reworked on branch `claude/draw-down-price-tier-lines`, NOT applied, NOT merged. Awaiting
@@ -192,7 +246,7 @@ PostgreSQL 17.6 in Docker, the same version live runs:
   shape **aborts** under the old non-deferrable rule and **silently wipes the stamp** under the
   retired SET NULL rule; and the residual case above **fails closed** with no orphan committed.
 
-**Not verified: the file has never been applied end to end by a server** — the preflight requires
+**Not verified: the file has never been applied end-to-end by a server** — the preflight requires
 the cutover barrier (`20260816110000`) committed in a prior transaction. That happens only at
 apply, which needs Mason's OK.
 
@@ -220,7 +274,7 @@ makes the first one reachable more often by emitting several order lines per pro
 
 ## CLOSED 2026-08-16 — CRX-SEC-1: a sales rep could forge a quote-version cost basis and inflate their own commission
 
-**Severity: was HIGH (money + privilege). Closed live by `20260813080000_lock_quote_versions_writes_to_rpc`, ledger version `20260816174353`.** The apply is observed in the ledger; the commonly quoted clock time of 2026-08-16 17:43:53 UTC is **inferred** from that version stamp, because `supabase_migrations.schema_migrations` has no timestamp column. Recorded here on 2026-08-18 because it was never entered in this file while it was open, and `docs/reference/migration-history.md` row 886 still described the migration as an unapplied local candidate **two days** after it went live (2026-08-16 inferred apply → 2026-08-18 correction). The file was authored under the stamp `20260813080000`, five days before that correction; neither of *those two* intervals is six days. (The six-day figure in this file's header measures how stale the recorded ledger high-water was, which is a different quantity.)
+**Severity: was HIGH (money + privilege). Closed live by `20260813080000_lock_quote_versions_writes_to_rpc`, ledger version `20260816174353`.** The apply is observed in the ledger; the commonly quoted clock time of 2026-08-16 17:43:53 UTC is **inferred** from that version stamp, because `supabase_migrations.schema_migrations` has no timestamp column. Recorded here on 2026-08-18 because it was never entered in this file while it was open, and because `docs/reference/migration-history.md` row 886 had gone on describing the migration as an unapplied local candidate for **two days** after it went live (2026-08-16 inferred apply → 2026-08-18 correction). That drift is fixed: row 886 has read **APPLIED LIVE** since the 2026-08-18 correction, and this sentence records what it used to say, not what it says now. The file was authored under the stamp `20260813080000`, five days before that correction; neither of *those two* intervals is six days. (The six-day figure in this file's header measures how stale the recorded ledger high-water was, which is a different quantity.)
 
 **What the hole was.** `public.quote_versions` is an append-only snapshot table. Its RLS INSERT policy `qversions_insert` checked only *who owned the quote* — never what the row contained — and the browser roles still held raw table write grants, so a sales rep could PostgREST-INSERT a version row of their own construction onto their own quote. That became a money problem once `20260812115236` made `snapshot_data` an authoritative cost source: the restore path writes the snapshot's cost straight into the immutable `quote_items.cost_at_quote_cents`, `convert_quote_to_order` copies it onto the order line, and canonical profit and commission derive from there. The below-cost approval trigger added by `20260812115237` does **not** catch it, because that trigger compares the sale price against the *live product* cost — understating the historical cost basis raises apparent margin, so it never fires.
 
