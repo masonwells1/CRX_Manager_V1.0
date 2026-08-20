@@ -4,7 +4,7 @@ All significant development milestones, in reverse chronological order.
 
 ## 2026-08-20 — PR #364 final replay-guard findings repaired
 
-Closed the original three exact-commit findings and the follow-up custom-operator finding in the
+Closed the original three exact-commit findings and the follow-up hidden-dispatch findings in the
 migration safety harness; no app source, migration SQL, live database, or production data changed.
 
 - Applied-ledger captures now belong to the active checkout that ran the read-only command. The
@@ -19,16 +19,22 @@ migration safety harness; no app source, migration SQL, live database, or produc
 - Custom PostgreSQL operators are treated as routine dispatches. Same-file definitions, invoked
   wrappers, database-resident backing routines, and operators defined by older checked-in migrations
   can no longer hide a money rewrite behind punctuation such as `SELECT 1 === 1`.
+- Custom PostgreSQL casts receive the same treatment. Explicit `CAST(... AS type)` and `::type`
+  execution follows the backing routine across same-file, wrapper, and older-catalog definitions;
+  implicit/assignment casts and `WITH INOUT` shapes fail closed when their runtime effect cannot be
+  resolved statically.
 - Post-apply invalidation always deletes the already-resolved active worktree snapshot even if Git
   worktree enumeration fails, so a transient Git failure cannot leave evidence that becomes stale-but-
   trusted on the next apply.
 - Changed-only SQL validation consumes Git's raw NUL-delimited paths and enforces the repository's
   timestamp-plus-ASCII migration basename convention before converting to its historical word list.
   Git C-quoting can no longer turn an unusual changed or deleted migration name into a skipped file.
+- Five hash-exemption rows that named migrations absent from both the exact base and candidate trees
+  were removed; nonexistent files no longer remain as apparent audit evidence.
 
 Focused proof: snapshot producer 14 assertions; applied-source containment pass (including forced
-worktree-enumeration failure); apply-time guard
-240 assertions; approved-set validator 164 mutation cases. Each new edge has a removal mutant that
+worktree-enumeration failure); apply-time analyzer 176 assertions; apply-time guard
+244 assertions; approved-set validator 168 mutation cases. Each new edge has a removal mutant that
 survives only when the load-bearing protection is deliberately deleted.
 
 ## 2026-08-19 — Product data model: build plan revision 2 after independent Fable…

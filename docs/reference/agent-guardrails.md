@@ -50,7 +50,9 @@ invalidator deletes every location the guard could choose. The one-shot comparis
 submitted and registered writes through `scripts/trigger-fanout.json`; an opaque relevant source is a
 deny, not an assumed empty cascade. Custom PostgreSQL operator definitions are cataloged across
 verified migration history; invoking one follows its backing routine through the same transitive
-write analysis, and a database-resident backing routine fails closed. Invalidation always includes the
+write analysis, and a database-resident backing routine fails closed. Custom casts are cataloged and
+followed the same way for `CAST(... AS type)` and `::type`; implicit/assignment casts and unresolved
+`WITH INOUT` dispatches deny because static analysis cannot prove their runtime routine effects. Invalidation always includes the
 already-resolved active checkout independently of `git worktree list`, so an enumeration failure cannot
 leave its snapshot stale-but-trusted. Changed-only SQL validation reads raw NUL-delimited Git paths and
 requires migration basenames to use an 8- or 14-digit timestamp plus ASCII letters, digits, underscores,

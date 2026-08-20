@@ -647,14 +647,71 @@ build_custom_operator_index() {
   return 0
 }
 
+CUSTOM_CAST_TARGETS_RE=""
+CUSTOM_COERCIVE_CASTS=false
+CUSTOM_CASTS_BUILT=false
+build_custom_cast_index() {
+  if [ "$CUSTOM_CASTS_BUILT" = true ]; then return 0; fi
+  CUSTOM_CASTS_BUILT=true
+  local cast_index
+  cast_index=$(find "$MIGRATION_DIR" -name '*.sql' -type f -print0 \
+    | xargs -0 awk '
+        '"$AWK_STRIP_NOISE"'
+        function inspect_cast(s,   flat,n,p,i,target,context) {
+          if (s !~ /create[ \t]+cast[ \t]*\(/) return
+          flat = s
+          gsub(/"/, "", flat)
+          gsub(/[ \t]*\.[ \t]*/, ".", flat)
+          gsub(/[(),]/, " ", flat)
+          n = split(flat, p, /[ \t\r\n]+/)
+          target = ""
+          for (i = 1; i < n; i++) {
+            if (p[i] == "as") { target = p[i + 1]; break }
+          }
+          if (target == "") return
+          sub(/^.*\./, "", target)
+          context = (flat ~ /as[ \t]+(implicit|assignment)([ \t;]|$)/ ? "coercive" : "explicit")
+          print target "\t" context
+        }
+        FNR == 1 {
+          if (NR > 1) inspect_cast(stmt)
+          inblk = 0; instr = 0; estr = 0; inident = 0; stmt = ""
+        }
+        {
+          line = strip_noise(tolower($0))
+          stmt = stmt " " line
+          while (index(stmt, ";") > 0) {
+            semi = index(stmt, ";")
+            inspect_cast(substr(stmt, 1, semi))
+            stmt = substr(stmt, semi + 1)
+          }
+        }
+        END { inspect_cast(stmt) }
+      ' 2>/dev/null | sort -u)
+  CUSTOM_CAST_TARGETS_RE=$(printf '%s\n' "$cast_index" \
+    | awk -F '\t' '$1 != "" { print $1 }' | sort -u | tr '\n' '|' | sed 's/|$//')
+  if printf '%s\n' "$cast_index" | awk -F '\t' '$2 == "coercive" { found=1 } END { exit(found ? 0 : 1) }'; then
+    CUSTOM_COERCIVE_CASTS=true
+  fi
+  return 0
+}
+
 MUTATING_FNS_RE=""
 MUTATING_FNS_BUILT=false
 build_mutating_fn_index() {
   if [ "$MUTATING_FNS_BUILT" = true ]; then return 0; fi
   MUTATING_FNS_BUILT=true
   build_custom_operator_index
+  build_custom_cast_index
+  if [ "$CUSTOM_COERCIVE_CASTS" = true ]; then
+    echo "VIOLATION: custom PostgreSQL cast catalog" >&2
+    echo "  AS IMPLICIT/AS ASSIGNMENT custom casts require live type resolution and are refused fail-closed." >&2
+    echo "" >&2
+    return 1
+  fi
   MUTATING_FNS_RE=$(find "$MIGRATION_DIR" -name '*.sql' -type f -print0 \
-    | xargs -0 awk -v tables="$BUSINESS_ROW_TABLES" -v customops="$CUSTOM_OPERATORS_RE" '
+    | xargs -0 awk -v tables="$BUSINESS_ROW_TABLES" -v customops="$CUSTOM_OPERATORS_RE" \
+        -v customcasts="$CUSTOM_CAST_TARGETS_RE" '
         '"$AWK_STRIP_NOISE"'
         # Per-file reset: an unterminated body — or an unterminated block comment
         # or string literal — must not leak into the next file.
@@ -719,6 +776,29 @@ build_mutating_fn_index() {
               nop = split(ob, optok, / +/)
               for (oi = 1; oi <= nop; oi++) {
                 if (optok[oi] ~ ("^(" customops ")$")) { print "M\t" f; break }
+              }
+            }
+            # A custom cast is also hidden routine dispatch. If a function body
+            # casts to any target this migration corpus defines, classify the
+            # body as mutating/opaque and let the reverse call graph propagate
+            # that result through wrappers.
+            if (customcasts != "") {
+              cb = b
+              gsub(/::[ \t]*/, " crxcast_to ", cb)
+              gsub(/[^a-z0-9_.$]+/, " ", cb)
+              nc = split(cb, ctok, / +/)
+              for (ci = 1; ci <= nc; ci++) {
+                ctarget = ""
+                if (ctok[ci] == "crxcast_to") ctarget = ctok[ci + 1]
+                else if (ctok[ci] == "cast") {
+                  for (cj = ci + 1; cj <= nc && cj <= ci + 40; cj++) {
+                    if (ctok[cj] == "as") { ctarget = ctok[cj + 1]; break }
+                  }
+                }
+                sub(/^.*\./, "", ctarget)
+                if (ctarget != "" && ctarget ~ ("^(" customcasts ")$")) {
+                  print "M\t" f; break
+                }
               }
             }
             # Every `name(` in the body is emitted as a call edge. Which of those
@@ -1398,6 +1478,7 @@ $MIG_BASENAME
     build_known_view_index
     SCAN_HITS=$(awk -v tables="$BUSINESS_ROW_TABLES" -v mutfns="$MUTATING_FNS_RE" \
                     -v customops="$CUSTOM_OPERATORS_RE" \
+                    -v customcasts="$CUSTOM_CAST_TARGETS_RE" \
                     -v regtables="$REGISTRY_TABLES" -v knownviews="$KNOWN_VIEWS_RE" '
       # ---- ONE SCANNER, ONE PASS (CodeRabbit Major, PR #364) -----------------
       # Shared with the mutating-function index since round 31 — see ONE LEXER,
@@ -1469,6 +1550,10 @@ $MIG_BASENAME
           break
         }
         line = protect_operators(top)
+        # Preserve PostgreSQL shorthand-cast syntax before punctuation is
+        # normalized away. The target token remains available for comparison
+        # with the corpus-wide custom-cast catalog.
+        gsub(/::[ \t]*/, " crxcast_to ", line)
         # Normalize every non-identifier character to a space. This also strips
         # quotes, so "public"."orders" collapses to the token public.orders.
         # `;` `,` and `=` survive as tokens of their own: statement boundaries
@@ -1560,6 +1645,23 @@ $MIG_BASENAME
         for (k = p - 1; k >= 1 && tok[k] != ";"; k--) {
           if (tok[k] == "operator") return 1
         }
+        return 0
+      }
+      # Is a cast expression evaluated while this statement applies? Plain
+      # CREATE CAST/VIEW/FUNCTION/TABLE metadata is deferred; ordinary running
+      # statements and CREATE INDEX / CREATE ... AS query expressions execute.
+      function cast_expression_runs(p,   h,k,saw_index,saw_table,saw_materialized,saw_as) {
+        h = stmt_head(p)
+        if (h != "create") return (h != "grant" && h != "revoke" && h != "comment" && h != "drop")
+        saw_index = 0; saw_table = 0; saw_materialized = 0; saw_as = 0
+        for (k = p - 1; k >= 1 && tok[k] != ";"; k--) {
+          if (tok[k] == "index") saw_index = 1
+          if (tok[k] == "table") saw_table = 1
+          if (tok[k] == "materialized") saw_materialized = 1
+          if (tok[k] == "as") saw_as = 1
+        }
+        if (saw_index) return 1
+        if (saw_as && (saw_table || saw_materialized)) return 1
         return 0
       }
       # Does a write to `t` fire a mutating trigger this migration attached?
@@ -1779,6 +1881,27 @@ $MIG_BASENAME
           rulerel[rrel] = 1
         }
         for (i = 1; i <= ntok; i++) {
+          # Explicit custom casts dispatch to their backing routines without a
+          # conventional `name(...)` call. Recognize both `expr::target` and
+          # `CAST(expr AS target)` against every target type defined anywhere
+          # in migration history, then refuse through the existing indirect
+          # rewrite channel. Function-body casts are handled by the mutating
+          # function index and propagate through its reverse call graph.
+          if (customcasts != "" && cast_expression_runs(i)) {
+            ctarget = ""
+            if (tok[i] == "crxcast_to") ctarget = tok[i + 1]
+            else if (tok[i] == "cast") {
+              for (cj = i + 1; cj <= ntok && tok[cj] != ";" && cj <= i + 80; cj++) {
+                if (tok[cj] == "as") { ctarget = tok[cj + 1]; break }
+              }
+            }
+            sub(/^.*\./, "", ctarget)
+            if (ctarget != "" && ctarget ~ ("^(" customcasts ")$") && !seencast[ctarget]) {
+              seencast[ctarget] = 1
+              printf "%d\t%s\t%s\t%s\t%s\t%s\n", tokln[i], ctarget, "indirect", "-", "-", raw[tokln[i]]
+              continue
+            }
+          }
           # A custom operator is a hidden routine call. Its punctuation token is
           # indexed across the migration corpus above, so an invocation in this
           # file cannot disappear merely because it lacks `routine_name(...)`.

@@ -42,54 +42,7 @@
 #
 # ---------------------------------------------------------------------------
 
-# --- Wave A self-test probes (merged in #383, re-stamped in #387) ------------
-#
-# These six migrations carry `DO $precond$` / `DO $postcond$` blocks that prove
-# their own effect against real rows and then roll the whole probe back. They
-# merged before this branch's stricter audit existed, and `main` still runs the
-# short 349-line validator, so main's own CI has never measured them — the nine
-# findings below appear the first time this branch's validator sees them, and
-# round 21's validator reports the identical nine.
-#
-# Every one was read at the cited line before being pinned:
-#   * the flagged UPDATEs write rows the probe itself created, inside a block
-#     that always terminates by rolling back, so nothing they write survives;
-#   * the flagged EXECUTE format(...) statements build `ALTER TABLE ... ADD
-#     CONSTRAINT` and `REVOKE ALL ON FUNCTION`, never DML;
-#   * the flagged function calls are those same probes invoking the routine
-#     they are testing.
-#
-# The real fix is to teach the guard to recognise a probe block that provably
-# always rolls back — deliberately NOT attempted here, because that recognition
-# is itself a bypass surface and every round so far has been a bypass found in
-# exactly that kind of leniency. Until it lands, these are pinned rather than
-# absorbed into the aggregate. Editing any of these files voids its row, and
-# the audit will name any row that stops firing.
-
-65608d0b488a95b8f9d84be8c1899bf8b4a3f51a9e5fbd056420050213bdde39  20260813020000_round_order_header_money.sql  1
-# ^ probe UPDATEs public.orders on its own probe row to prove the UPDATE leg of
-#   the rounding trigger; same savepoint, rolled back with the rest.
-
-8138e6917b4364f4940a9b69899a84b3792653cd4e4918e3b16feba890e0ed11  20260813030000_reject_non_finite_money_and_quantities.sql  1
-# ^ EXECUTE format(...) builds ALTER TABLE ... ADD CONSTRAINT ... CHECK for the
-#   finiteness constraint. DDL, not DML.
-
-7fd9c048b5cc24630901a4afc3173407e8555615f294de49109284768af84680  20260813040000_clamp_negative_commission_remainder.sql  1
-# ^ probe calls _insert_commissions_for_order() to prove the clamp; the call is
-#   the test, and its writes roll back.
-
-08ac5b021bada2f47be271256a5734687c16eb2ae8f964a20d352e92b37e4773  20260813050000_guard_job_commission_split_immutable.sql  3
-# ^ (a) EXECUTE format('SET LOCAL ROLE %I', ...) — a role switch, not a write;
-#   (b) probe calls correct_job_commission_split(); (c) probe UPDATEs
-#   public.jobs on its own probe row. All three inside the rolled-back block.
-
-23f8ac26c6d18a6b1d609bad531dbb593a1679de33aa39ac3821fad1765c0a3a  20260813060000_require_completed_delivery_before_invoice_post.sql  3
-# ^ (a) two EXECUTE format(...) building REVOKE ALL ON FUNCTION for anon,
-#   authenticated, service_role and metabase_ro, plus one setting the probe's
-#   own JWT claims; (b) probe calls _post_invoice_impl_20260714() to prove the
-#   gate refuses, and complete_delivery() to drive it; (c) probe UPDATEs
-#   public.deliveries status and deleted_at on its own probe delivery.
-#   Re-pinned round 30: this file is owned by origin/main, and the merge of
-#   #388 rewrote it after round 24 pinned it. A stale pin is not a loophole —
-#   it fails CLOSED, counting all three findings — but it makes the manifest
-#   claim something untrue, so it is corrected rather than left to rot.
+# PR #364 once carried five Wave A probe exemptions for migrations that never
+# landed in this branch's exact base or candidate tree. They were removed on
+# 2026-08-20: a hash pin for a nonexistent file is not evidence and must not be
+# retained as apparent audit state.

@@ -2027,6 +2027,45 @@ const CASES = [
       `CREATE FUNCTION public.operator_wrapper() RETURNS boolean LANGUAGE sql AS $$ SELECT 1 <=> 1 $$;\n` +
       `SELECT public.operator_wrapper();\n`,
   },
+  {
+    name: 'round-38: a custom cast invocation cannot hide its mutating backing routine',
+    expect: 'violation',
+    mustReport: 'cast_sink',
+    sql:
+      `CREATE TYPE public.cast_sink AS (v integer);\n` +
+      `CREATE FUNCTION public.cast_money_fix(text) RETURNS public.cast_sink LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = total_profit; RETURN ROW(1)::public.cast_sink; END $$;\n` +
+      `CREATE CAST (text AS public.cast_sink) WITH FUNCTION public.cast_money_fix(text);\n` +
+      `SELECT CAST('run'::text AS public.cast_sink);\n`,
+  },
+  {
+    name: 'round-38 MUTANT: an uninvoked explicit custom cast definition remains deferred',
+    expect: 'silent',
+    sql:
+      `CREATE TYPE public.cast_definition_only_sink AS (v integer);\n` +
+      `CREATE FUNCTION public.cast_definition_only(text) RETURNS public.cast_definition_only_sink LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = total_profit; RETURN ROW(1)::public.cast_definition_only_sink; END $$;\n` +
+      `CREATE CAST (text AS public.cast_definition_only_sink) WITH FUNCTION public.cast_definition_only(text);\n`,
+  },
+  {
+    name: 'round-38: a custom cast defined by an older migration is still recognized',
+    expect: 'violation',
+    mustReport: 'cast_sink',
+    sql: `SELECT 'run'::text::public.cast_sink;\n`,
+  },
+  {
+    name: 'round-38: a custom cast inside an invoked wrapper is followed transitively',
+    expect: 'violation',
+    mustReport: 'cast_wrapper',
+    sql:
+      `CREATE TYPE public.cast_sink_2 AS (v integer);\n` +
+      `CREATE FUNCTION public.cast_money_fix_2(text) RETURNS public.cast_sink_2 LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = total_profit; RETURN ROW(1)::public.cast_sink_2; END $$;\n` +
+      `CREATE CAST (text AS public.cast_sink_2) WITH FUNCTION public.cast_money_fix_2(text);\n` +
+      `CREATE FUNCTION public.cast_wrapper() RETURNS public.cast_sink_2 LANGUAGE sql ` +
+      `AS $$ SELECT 'run'::text::public.cast_sink_2 $$;\n` +
+      `SELECT public.cast_wrapper();\n`,
+  },
 ];
 
 // A stamp no real migration uses, so these fixtures are never mistaken for

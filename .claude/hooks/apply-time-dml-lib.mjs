@@ -848,6 +848,70 @@ function invokedOperators(code, definitions) {
   return definitions.filter((definition) => runs.has(definition.operator));
 }
 
+function normalizeCastType(type) {
+  return String(type || "").toLowerCase().replace(/"/g, "").replace(/\s+/g, "");
+}
+
+function bareCastType(type) {
+  const normalized = normalizeCastType(type);
+  const array = normalized.endsWith("[]") ? "[]" : "";
+  const base = array ? normalized.slice(0, -2) : normalized;
+  return `${base.split(".").pop() || ""}${array}`;
+}
+
+/**
+ * Custom PostgreSQL casts defined by this SQL. WITH FUNCTION dispatches to an
+ * ordinary routine without spelling a conventional call; WITH INOUT dispatches
+ * through type I/O routines whose identities are not present in the statement,
+ * so its invocation is represented with an empty backing function and refused.
+ */
+export function castDefinitions(code) {
+  const out = [];
+  for (const statement of String(code || "").toLowerCase().split(";")) {
+    if (!/\bcreate\s+cast\b/.test(statement)) continue;
+    const header = /\bcreate\s+cast\s*\(\s*([a-z_][a-z0-9_$]*(?:\s*\.\s*[a-z_][a-z0-9_$]*)?(?:\s*\[\s*\])?)\s+as\s+([a-z_][a-z0-9_$]*(?:\s*\.\s*[a-z_][a-z0-9_$]*)?(?:\s*\[\s*\])?)\s*\)/.exec(statement.replace(/"/g, ""));
+    const backing = /\bwith\s+function\s+(?:[a-z_][a-z0-9_$]*\s*\.\s*)?([a-z_][a-z0-9_$]*)\s*\(/.exec(statement.replace(/"/g, ""));
+    const inout = /\bwith\s+inout\b/.test(statement);
+    const context = /\bas\s+(implicit|assignment)\b/.exec(statement)?.[1] || "explicit";
+    if (!header || (!backing && !inout)) {
+      // An unparsed custom cast is still evidence. Any apply-time expression in
+      // the same analysis scope can invoke an implicit/assignment cast, so the
+      // unknown record fails closed once executable code is present.
+      out.push({ source: "", target: "", fn: "", context: "unknown" });
+      continue;
+    }
+    out.push({
+      source: normalizeCastType(header[1]),
+      target: normalizeCastType(header[2]),
+      fn: backing?.[1] || "",
+      context,
+    });
+  }
+  return out;
+}
+
+function invokedCasts(code, definitions) {
+  const regions = String(code || "")
+    .split(";")
+    .filter((statement) => !/\bcreate\s+cast\b/i.test(statement))
+    .map((statement) => runForEffectRegion(statement.trim().toLowerCase()))
+    .filter(Boolean);
+  if (!regions.length) return [];
+  return definitions.filter((definition) => {
+    // Type resolution for implicit and assignment casts requires the live
+    // catalog. Any executable expression can select one, so conservatively
+    // follow/refuse its backing routine rather than pretending it did not run.
+    if (definition.context !== "explicit") return true;
+    const target = bareCastType(definition.target);
+    if (!target) return true;
+    const escaped = target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const qualified = `(?:[a-z_][a-z0-9_$]*\\s*\\.\\s*)?${escaped}`;
+    const shorthand = new RegExp(`::\\s*${qualified}(?![a-z0-9_$])`);
+    const standard = new RegExp(`\\bcast\\s*\\([\\s\\S]*?\\bas\\s+${qualified}\\s*\\)`);
+    return regions.some((region) => shorthand.test(region) || standard.test(region));
+  });
+}
+
 /** Relations that receive a standing PostgreSQL rule in this migration. */
 export function ruleAttachments(code) {
   const s = (code || "").toLowerCase();
@@ -1014,7 +1078,7 @@ function unknownCallsIn(codeLower, defined) {
  * `unknownCalls` names routines the migration executes for effect but does not
  * define; their bodies live in the database, not in this file.
  */
-export function applyTimeWriteTargets(sql, { knownOperators = [] } = {}) {
+export function applyTimeWriteTargets(sql, { knownOperators = [], knownCasts = [] } = {}) {
   const { code, literals, routines } = applyTimeCode(sql || "");
   const top = targetsFromCode(code, literals);
 
@@ -1052,6 +1116,23 @@ export function applyTimeWriteTargets(sql, { knownOperators = [] } = {}) {
   };
   defineOperators(knownOperators);
   defineOperators(operatorDefinitions(code));
+
+  const casts = [];
+  const castKeys = new Set();
+  const defineCasts = (list) => {
+    for (const definition of list) {
+      const source = normalizeCastType(definition?.source);
+      const target = normalizeCastType(definition?.target);
+      const fn = String(definition?.fn || "");
+      const context = String(definition?.context || "explicit");
+      const key = `${source}\0${target}\0${fn}\0${context}`;
+      if (castKeys.has(key)) continue;
+      castKeys.add(key);
+      casts.push({ source, target, fn, context });
+    }
+  };
+  defineCasts(knownCasts);
+  defineCasts(castDefinitions(code));
 
   // ROUND 28. Triggers this migration attaches, and the ones a write has
   // already fired. A trigger whose relation is written runs its function, so
@@ -1096,6 +1177,7 @@ export function applyTimeWriteTargets(sql, { knownOperators = [] } = {}) {
       if (inner.unresolved) top.unresolved = true;
       defineRoutines(parsed.routines);
       defineOperators(operatorDefinitions(parsed.code));
+      defineCasts(castDefinitions(parsed.code));
       attachments.push(...triggerAttachments(parsed.code));
       ruleTables.push(...ruleAttachments(parsed.code));
       execCodes.push(parsed.code);
@@ -1107,7 +1189,9 @@ export function applyTimeWriteTargets(sql, { knownOperators = [] } = {}) {
   const firedRules = new Set();
   const unknownTriggerFns = new Set();
   const unknownOperatorFns = new Set();
+  const unknownCastFns = new Set();
   const firedOperators = new Set();
+  const firedCasts = new Set();
   const addOperatorInvocations = (sourceCode, into) => {
     for (const definition of invokedOperators(sourceCode, operators)) {
       const key = `${definition.operator}\0${definition.fn}`;
@@ -1118,6 +1202,19 @@ export function applyTimeWriteTargets(sql, { knownOperators = [] } = {}) {
         if (!seen.has(definition.fn)) into.add(definition.fn);
       } else {
         unknownOperatorFns.add(definition.fn);
+      }
+    }
+  };
+  const addCastInvocations = (sourceCode, into) => {
+    for (const definition of invokedCasts(sourceCode, casts)) {
+      const key = `${definition.source}\0${definition.target}\0${definition.fn}\0${definition.context}`;
+      firedCasts.add(key);
+      if (!definition.fn) {
+        top.unresolved = true;
+      } else if (byName.has(definition.fn)) {
+        if (!seen.has(definition.fn)) into.add(definition.fn);
+      } else {
+        unknownCastFns.add(definition.fn);
       }
     }
   };
@@ -1150,6 +1247,7 @@ export function applyTimeWriteTargets(sql, { knownOperators = [] } = {}) {
         if (!seen.has(n)) into.add(n);
       }
       addOperatorInvocations(c, into);
+      addCastInvocations(c, into);
     }
   };
 
@@ -1158,6 +1256,7 @@ export function applyTimeWriteTargets(sql, { knownOperators = [] } = {}) {
   const seen = new Set();
   let frontier = invokedRoutines(code.toLowerCase(), byName.keys());
   addOperatorInvocations(code, frontier);
+  addCastInvocations(code, frontier);
   drainExec(frontier);
   fireAttached(frontier);
   while (frontier.size) {
@@ -1173,10 +1272,12 @@ export function applyTimeWriteTargets(sql, { knownOperators = [] } = {}) {
         if (inner.unresolved) top.unresolved = true;
         foldLiterals(inner, r.literals);
         defineOperators(operatorDefinitions(r.code));
+        defineCasts(castDefinitions(r.code));
         for (const n of invokedRoutines(r.code.toLowerCase(), byName.keys())) {
           if (!seen.has(n)) next.add(n);
         }
         addOperatorInvocations(r.code, next);
+        addCastInvocations(r.code, next);
       }
     }
     drainExec(next);
@@ -1196,6 +1297,7 @@ export function applyTimeWriteTargets(sql, { knownOperators = [] } = {}) {
     ...unknownCallsIn(scan, new Set(byName.keys())),
     ...unknownTriggerFns,
     ...unknownOperatorFns,
+    ...unknownCastFns,
   ])];
 
   // `dynamicExec` is internal bookkeeping for the literal fold above and is not
@@ -1211,6 +1313,7 @@ export function applyTimeWriteTargets(sql, { knownOperators = [] } = {}) {
     firedTriggers: [...fired],
     firedRules: [...firedRules],
     invokedOperators: [...firedOperators],
+    invokedCasts: [...firedCasts],
   };
 }
 

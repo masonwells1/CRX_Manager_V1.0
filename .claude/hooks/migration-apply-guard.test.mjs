@@ -1457,6 +1457,39 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(!isOneShotDeny(r),
       "round-37 MUTANT: removing the checked-in operator definition removes the catalog evidence");
 
+    // ROUND 38. A custom cast is another hidden routine dispatch: PostgreSQL
+    // invokes the backing function from CAST/:: syntax without spelling its
+    // name as a conventional call.
+    const castDefinition =
+      "CREATE TYPE public.cast_sink AS (v integer); " +
+      "CREATE FUNCTION public.cast_money_fix(text) RETURNS public.cast_sink " +
+      "LANGUAGE plpgsql AS $$ BEGIN UPDATE public.orders SET total_profit = total_profit; " +
+      "RETURN ROW(1)::public.cast_sink; END $$; " +
+      "CREATE CAST (text AS public.cast_sink) WITH FUNCTION public.cast_money_fix(text); ";
+    r = apply("20990601000009_cast_replay",
+      `${castDefinition} SELECT CAST('run'::text AS public.cast_sink);`);
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-38: a custom cast invoking a hidden orders rewrite needs the one-shot override");
+
+    r = apply("20990601000010_cast_definition_only", castDefinition);
+    ok(!isOneShotDeny(r),
+      "round-38 MUTANT: removing the explicit cast invocation leaves its routine body deferred");
+
+    const castCatalogPath = path.join(tmp, "supabase", "migrations", "20900101000001_cast_catalog.sql");
+    writeFileSync(castCatalogPath,
+      "CREATE CAST (text AS public.resident_cast_sink) " +
+      "WITH FUNCTION public.resident_cast_money_fix(text);\n");
+    r = apply("20990601000011_existing_cast_replay",
+      "SELECT 'run'::text::public.resident_cast_sink;");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-38: an older checked-in custom cast is cataloged and its resident routine fails closed");
+
+    rmSync(castCatalogPath, { force: true });
+    r = apply("20990601000012_existing_cast_mutant",
+      "SELECT 'run'::text::public.resident_cast_sink;");
+    ok(!isOneShotDeny(r),
+      "round-38 MUTANT: removing the checked-in cast definition removes the catalog evidence");
+
     // 6. Fail closed. The registry is tracked in git; unreadable or absent means
     //    the checkout is broken or the file was removed — the two states in
     //    which a silent pass is most dangerous.

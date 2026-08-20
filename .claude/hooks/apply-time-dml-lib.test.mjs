@@ -747,4 +747,48 @@ eq(T(null), [], "a null body does not throw");
     'round-37: an invoked operator with a database-resident backing routine fails closed');
 }
 
+// ---------------- ROUND 38: custom casts dispatch to routines too
+{
+  const definition =
+    'CREATE TYPE public.cast_sink AS (v integer); ' +
+    'CREATE FUNCTION public.cast_money_fix(text) RETURNS public.cast_sink ' +
+    'LANGUAGE plpgsql AS $$ BEGIN UPDATE public.order_items SET total_price = total_price; ' +
+    'RETURN ROW(1)::public.cast_sink; END $$; ' +
+    'CREATE CAST (text AS public.cast_sink) WITH FUNCTION public.cast_money_fix(text); ';
+
+  const invoked = applyTimeWriteTargets(
+    `${definition} SELECT CAST('run'::text AS public.cast_sink);`,
+  );
+  ok(invoked.targets.has('order_items.total_price'),
+    'round-38: invoking a custom cast folds in its mutating backing routine');
+  ok(invoked.invokedRoutines.includes('cast_money_fix'),
+    'round-38: the cast-backed routine joins the ordinary transitive call graph');
+
+  const definitionOnly = applyTimeWriteTargets(definition);
+  ok(!definitionOnly.targets.has('order_items.total_price'),
+    'round-38 MUTANT: defining but not invoking an explicit cast remains deferred');
+
+  const wrapped = applyTimeWriteTargets(
+    `${definition} CREATE FUNCTION public.cast_wrapper() RETURNS public.cast_sink ` +
+    `LANGUAGE sql AS $$ SELECT 'run'::text::public.cast_sink $$; ` +
+    'SELECT public.cast_wrapper();',
+  );
+  ok(wrapped.targets.has('order_items.total_price'),
+    'round-38: a custom cast inside an invoked wrapper is followed transitively');
+
+  const resident = applyTimeWriteTargets(
+    `SELECT CAST('run'::text AS public.resident_sink);`,
+    { knownCasts: [{ source: 'text', target: 'public.resident_sink', fn: 'resident_cast_fix', context: 'explicit' }] },
+  );
+  ok(resident.unknownCalls.includes('resident_cast_fix'),
+    'round-38: an invoked catalog-resident cast backing routine fails closed');
+
+  const implicit = applyTimeWriteTargets(
+    'CREATE CAST (text AS public.implicit_sink) WITH FUNCTION public.resident_implicit_fix(text) AS IMPLICIT; ' +
+    `SELECT 'expression whose live types need catalog resolution';`,
+  );
+  ok(implicit.unknownCalls.includes('resident_implicit_fix'),
+    'round-38: implicit custom casts conservatively fail closed on executable expressions');
+}
+
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);
