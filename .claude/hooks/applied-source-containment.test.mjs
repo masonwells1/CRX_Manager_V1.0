@@ -88,6 +88,23 @@ try {
   assert.equal(invalidated.status, 0, "snapshot invalidation hook exits cleanly");
   assert.ok(!existsSync(primarySnapshot), "the primary fallback snapshot is invalidated after a worktree apply");
   assert.ok(!existsSync(worktreeSnapshot), "the active-worktree snapshot is invalidated after its apply");
+
+  // Mutation: if worktree enumeration fails, sessionProofDirs returns only
+  // the configured primary checkout. The recorder has already resolved the
+  // payload cwd to the active git root, so that active snapshot must still be
+  // invalidated independently. Point CLAUDE_PROJECT_DIR at a nonexistent path
+  // to make `git worktree list` fail without breaking active-cwd resolution.
+  writeFileSync(worktreeSnapshot, '{"captured_at":"2026-08-19T02:00:00Z","applied":["stale"]}\n');
+  const enumerationFailed = runHook(recorderPath, {
+    tool_name: "mcp__supabase__apply_migration",
+    cwd: snapshotWorktree,
+    tool_input: { name: "snapshot_invalidation_enumeration_failure", query: "select 1;" },
+  }, path.join(tmp, "missing-primary-checkout"));
+  assert.equal(enumerationFailed.status, 0, "enumeration-failure invalidation exits cleanly");
+  assert.ok(
+    !existsSync(worktreeSnapshot),
+    "the active-worktree snapshot is invalidated even when git worktree enumeration fails",
+  );
   git(["worktree", "remove", "--force", snapshotWorktree], tmp);
 
   // ── Recorder ──

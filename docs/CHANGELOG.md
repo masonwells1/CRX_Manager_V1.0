@@ -2,7 +2,7 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-19 — PR #364 final replay-guard findings repaired
+## 2026-08-20 — PR #364 final replay-guard findings repaired
 
 Closed the original three exact-commit findings and the follow-up custom-operator finding in the
 migration safety harness; no app source, migration SQL, live database, or production data changed.
@@ -19,8 +19,15 @@ migration safety harness; no app source, migration SQL, live database, or produc
 - Custom PostgreSQL operators are treated as routine dispatches. Same-file definitions, invoked
   wrappers, database-resident backing routines, and operators defined by older checked-in migrations
   can no longer hide a money rewrite behind punctuation such as `SELECT 1 === 1`.
+- Post-apply invalidation always deletes the already-resolved active worktree snapshot even if Git
+  worktree enumeration fails, so a transient Git failure cannot leave evidence that becomes stale-but-
+  trusted on the next apply.
+- Changed-only SQL validation consumes Git's raw NUL-delimited paths and enforces the repository's
+  timestamp-plus-ASCII migration basename convention before converting to its historical word list.
+  Git C-quoting can no longer turn an unusual changed or deleted migration name into a skipped file.
 
-Focused proof: snapshot producer 14 assertions; applied-source containment pass; apply-time guard
+Focused proof: snapshot producer 14 assertions; applied-source containment pass (including forced
+worktree-enumeration failure); apply-time guard
 240 assertions; approved-set validator 164 mutation cases. Each new edge has a removal mutant that
 survives only when the load-bearing protection is deliberately deleted.
 

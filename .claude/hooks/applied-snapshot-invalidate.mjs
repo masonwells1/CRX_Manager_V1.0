@@ -151,11 +151,21 @@ try {
   // only the active copy lets an older primary snapshot become authoritative
   // immediately after an apply, which is the exact stale-ledger bypass this
   // hook exists to prevent.
-  const snapshotDirs = sessionProofDirs(primaryDir, candidateDir, () => execFileSync(
-    "git",
-    ["worktree", "list", "--porcelain"],
-    { cwd: primaryDir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-  ));
+  // `projectDir` was already resolved from the apply payload's active cwd.
+  // Include it unconditionally: sessionProofDirs intentionally falls back to
+  // the primary checkout when `git worktree list` fails, but invalidation may
+  // never inherit that fail-closed proof-selection fallback. Otherwise a
+  // transient enumeration failure leaves the active worktree snapshot alive,
+  // and a later successful enumeration can make that stale cache authoritative.
+  const activeStateDir = path.resolve(projectDir, ".claude", "session-state");
+  const snapshotDirs = [...new Set([
+    ...sessionProofDirs(primaryDir, candidateDir, () => execFileSync(
+      "git",
+      ["worktree", "list", "--porcelain"],
+      { cwd: primaryDir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    )),
+    activeStateDir,
+  ])];
   const snapPaths = [...new Set(snapshotDirs.map((dir) => path.join(dir, "applied-migrations.json")))];
   const existingSnapPaths = snapPaths.filter((snapPath) => existsSync(snapPath));
 

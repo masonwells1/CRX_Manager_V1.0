@@ -412,17 +412,27 @@ TABLES_WITHOUT_UPDATED_AT=(
 MIGRATION_DIR="supabase/migrations"
 
 # The scanners below deliberately operate on shell word lists for speed across
-# the historical corpus. A filename containing whitespace would therefore be
-# split into several nonexistent paths and could make a changed migration scan
-# as zero SQL. Migration names are operational identifiers, not prose: reject
-# the unsafe spelling before any list is expanded so no mode can skip it.
+# the historical corpus. Migration names are operational identifiers, not
+# prose: accept only the repository's ASCII basename convention before any list
+# is expanded. This excludes whitespace AND Git C-quote triggers such as quotes,
+# backslashes, control bytes, and non-ASCII characters. Without this rule,
+# `git diff --name-only` can print a quoted display spelling which fails `-f`,
+# silently dropping a changed migration from the zero-tolerance scan.
+migration_name_is_safe() {
+  local base_name=${1##*/}
+  [[ "$base_name" =~ ^[0-9]{8}([0-9]{6})?_[A-Za-z0-9_-]+\.sql$ ]]
+}
+
+report_unsafe_migration_name() {
+  echo "VIOLATION: $1"
+  echo "  Unsafe migration filename: whitespace is not allowed, and names must match <8-or-14-digit timestamp>_<ASCII letters, digits, underscores, or hyphens>.sql."
+  echo ""
+}
+
 UNSAFE_MIGRATION_NAME=false
 while IFS= read -r -d '' candidate; do
-  base_name=${candidate##*/}
-  if [[ "$base_name" =~ [[:space:]] ]]; then
-    echo "VIOLATION: $candidate"
-    echo "  Unsafe migration filename: whitespace is not allowed because it can split validator input."
-    echo ""
+  if ! migration_name_is_safe "$candidate"; then
+    report_unsafe_migration_name "$candidate"
     UNSAFE_MIGRATION_NAME=true
   fi
 done < <(find "$MIGRATION_DIR" -name '*.sql' -type f -print0 2>/dev/null)
@@ -988,11 +998,45 @@ if [ "$CHANGED_ONLY" = true ]; then
     # merge-base..working-tree set is exactly what THIS branch changed (committed +
     # uncommitted) — which is what --changed-only is meant to validate.
     MB=$(git merge-base "$BASE_REF" HEAD 2>/dev/null || echo "$BASE_REF")
-    CHANGED=$( {
-      { git diff -M --name-only --diff-filter=AMR "$MB" -- "$MIGRATION_DIR" 2>/dev/null || true; }
-      { git ls-files --others --exclude-standard -- "$MIGRATION_DIR" 2>/dev/null || true; }
-    } | { grep -E '\.sql$' || true; } | sort -u )
-    DELETED=$( { git diff -M --name-only --diff-filter=D "$MB" -- "$MIGRATION_DIR" 2>/dev/null || true; } | { grep -E '\.sql$' || true; } | sort -u )
+    # Git's ordinary --name-only output is a human display format: unusual
+    # paths are C-quoted, so treating those display strings as filesystem paths
+    # silently skips the file. Consume NUL-delimited raw paths first, validate
+    # each basename, and only then convert the now-safe ASCII paths back to the
+    # historical word-list representation used by the scanners below.
+    CHANGED=""
+    UNSAFE_CHANGED_NAME=false
+    while IFS= read -r -d '' f; do
+      case "$f" in
+        *.sql)
+          if ! migration_name_is_safe "$f"; then
+            report_unsafe_migration_name "$f"
+            UNSAFE_CHANGED_NAME=true
+          else
+            CHANGED="${CHANGED}${f}"$'\n'
+          fi
+          ;;
+      esac
+    done < <(
+      git diff -M --name-only -z --diff-filter=AMR "$MB" -- "$MIGRATION_DIR" 2>/dev/null || true
+      git ls-files -z --others --exclude-standard -- "$MIGRATION_DIR" 2>/dev/null || true
+    )
+
+    DELETED=""
+    while IFS= read -r -d '' f; do
+      case "$f" in
+        *.sql)
+          if ! migration_name_is_safe "$f"; then
+            report_unsafe_migration_name "$f"
+            UNSAFE_CHANGED_NAME=true
+          else
+            DELETED="${DELETED}${f}"$'\n'
+          fi
+          ;;
+      esac
+    done < <(git diff -M --name-only -z --diff-filter=D "$MB" -- "$MIGRATION_DIR" 2>/dev/null || true)
+    if [ "$UNSAFE_CHANGED_NAME" = true ]; then exit 1; fi
+    CHANGED=$(printf '%s' "$CHANGED" | sort -u)
+    DELETED=$(printf '%s' "$DELETED" | sort -u)
     EXISTING=""
     for f in $CHANGED; do
       if [ -f "$f" ]; then EXISTING="${EXISTING}${f} "; fi

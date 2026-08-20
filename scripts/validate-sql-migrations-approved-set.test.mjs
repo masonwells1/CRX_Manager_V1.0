@@ -2569,6 +2569,21 @@ function runTriggerDefinitionRequiresFanoutRefresh() {
       failures.push('  round-34 whitespace migration filename was not rejected before scanning');
     }
     rmSync(unsafePath, { force: true });
+
+    // Git C-quotes non-ASCII paths by default. Before the round-38 fix the
+    // quoted display spelling failed `-f`, so changed-only validation scanned
+    // zero SQL and an unsafe rewrite could consume aggregate-baseline headroom.
+    // The strict ASCII migration convention must reject it before that skip.
+    const cQuotedPath = join(dir, 'supabase', 'migrations', '20200104000000_bad-é.sql');
+    writeFileSync(cQuotedPath, 'UPDATE public.orders SET total_profit = 0;\n', 'utf8');
+    const cQuoted = runBash([SCRIPT, '--changed-only', `--base=${base}`], {
+      cwd: dir, encoding: 'utf8', env: envWithoutGit(),
+    });
+    const cQuotedOut = `${cQuoted.stdout || ''}\n${cQuoted.stderr || ''}`;
+    if (cQuoted.status === 0 || !cQuotedOut.includes('names must match <8-or-14-digit timestamp>')) {
+      failures.push('  round-38 Git-C-quoted migration filename was not rejected before scanning');
+    }
+    rmSync(cQuotedPath, { force: true });
   } finally {
     removeFixtureTree(dir);
   }
