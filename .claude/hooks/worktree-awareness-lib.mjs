@@ -783,27 +783,30 @@ export function createOwnDraftPathsReader({
     return originMainMigrationFiles;
   }
 
-  function reconcileExemptPathsFor(base, historyText) {
-    const parsed = localCandidateMigrationPathsFromHistory(historyText);
-    if (parsed.state !== "known" || parsed.paths.size === 0) return null;
+  function reconcileExemptPathsFor(parsedHistory, base) {
+    if (parsedHistory?.state !== "known" || parsedHistory.paths.size === 0) return null;
     const inherited = inheritedCandidatePaths(base);
     const mainline = originMainMigrationPaths();
     const exempt = new Set();
-    for (const candidate of parsed.paths) {
+    for (const candidate of parsedHistory.paths) {
       if (inherited.has(candidate) || mainline?.has(candidate)) exempt.add(candidate);
     }
     return exempt.size ? exempt : null;
   }
 
   function resultFrom(changed, onDisk, textOnDisk, historyText, base) {
+    // Parse the shared history ONCE and hand the same result to both the classifier and
+    // the exemption computation. It is ~840 KiB and this runs per worktree inside the
+    // SessionStart hook's budget — the same reason createParkedFallbackClassifier exists.
+    const parsedHistory = historyText === null ? null : localCandidateMigrationPathsFromHistory(historyText);
     const parked = parkedDraftPathsFrom(
       changed,
       onDisk,
       textOnDisk,
       historyText,
       sha256Text,
-      null,
-      historyText === null ? null : reconcileExemptPathsFor(base, historyText),
+      parsedHistory,
+      reconcileExemptPathsFor(parsedHistory, base),
     );
     Object.defineProperty(parked, "supersededPaths", {
       value: supersededDraftPathsFrom(changed, onDisk),

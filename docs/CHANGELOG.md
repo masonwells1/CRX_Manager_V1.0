@@ -2,6 +2,50 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-20 — The parked-migration scan reports a real count instead of a permanent UNKNOWN
+
+`node scripts/fleet-status.mjs` reported `PARKED STATE UNKNOWN` for **every** worktree — all 19 —
+so the parked-migration count could not be read at all. That blocks stamping a new migration into
+a queue nobody can count, which is how two branches collide on the same schema.
+
+The check was unsatisfiable by construction. `parkedDraftPathsFrom` reconciled the
+`LOCAL CANDIDATE — NOT APPLIED` rows of `docs/reference/migration-history.md` against the branch's
+own-draft diff (`base..HEAD`) — but that history file is **shared, and arrives from `origin/main`**.
+A candidate row that came with the shared file, naming SQL that also came with `origin/main`, can
+never appear in that diff no matter what the branch does. A guard that always answers UNKNOWN
+answers nothing.
+
+- **Fixed the check's domain, not by adding a bypass.** `createOwnDraftPathsReader` now exempts
+  exactly the rows outside the diff's reach: rows **inherited from the branch point** (they belong
+  to `origin/main`, and subtracting them leaves precisely the rows this branch *added* — "the
+  branch's own claim", which is what the rule was always described as testing), and rows naming
+  **SQL already in `origin/main`'s tree** (a file the branch did not touch cannot be in its diff;
+  one it did touch is in the diff and reconciles normally). The separate mainline discovery pass
+  already owns that second class and reads `origin/main`'s history *and* its parked status headers.
+- **Not a relaxation.** A row *this branch added*, naming SQL `origin/main` has never carried,
+  still yields UNKNOWN; an unreadable branch point or `origin/main` tree exempts nothing and keeps
+  the old conservative answer. Under-reporting — a confident zero over real pending migrations — is
+  the dangerous direction, so both are pinned by tests and were mutation-tested.
+- **One lib, both consumers.** `scripts/fleet-status.mjs` and the SessionStart banner share
+  `.claude/hooks/worktree-awareness-lib.mjs` by design (2026-07-29), so the change is in the lib.
+- **Supporting live evidence.** A branch registered `20260813080000_lock_quote_versions_writes_to_rpc.sql`
+  as a LOCAL CANDIDATE while `origin/main` did not; a read-only `list_migrations` confirms it is
+  already applied. `origin/main` was right and that branch's row is stale.
+- **Cost.** The shared history is ~840 KiB and is now parsed **once** per worktree; the exemption's
+  two git reads are cached (branch-point history once per distinct base sha, `origin/main`'s
+  migration tree once per reader).
+
+**Proof:** `fleet-status.mjs` reports `Parked migrations awaiting apply: 21` with zero `UNKNOWN`
+strings and all three mainline candidates **still listed by name** — attributed, not hidden; the
+SessionStart banner agrees; 203 lib assertions pass, including the original rule's own UNKNOWN test.
+
+Scope: guard/reporting tooling only. No schema change, no migration, no live data, no money path.
+Diagnosis: `docs/reference/parked-migration-scan-unknown-diagnosis.md`. PR #437.
+
+Also filed (diagnosis only, deliberately not bundled): the Phase 3C containment scanner walks the
+repository's own gitignored `dist/` and opens each file with no `ENOENT` tolerance, so a concurrent
+rebuild refuses the push with a misleading "containment failed" — `docs/manual/KNOWN_ISSUES.md`.
+
 ## 2026-08-19 — Blend-ticket total-volume check no longer adds quantities across different units
 
 `validateBlendMath` summed every product quantity regardless of unit, so a ticket holding

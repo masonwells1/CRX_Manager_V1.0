@@ -884,6 +884,30 @@ const BASE_HISTORY_NO_CANDIDATES = "| 842 | 20260102000000 | **APPLIED LIVE.** F
   ok(got.unknownReason.includes("absent from this branch's own-draft diff"), "an unreadable branch point and origin/main tree exempt nothing");
 }
 
+// The exemption's two git reads are cached: the branch-point history once per distinct
+// base sha, and origin/main's migration tree once per reader — not once per worktree.
+// This runs across ~19 checkouts inside the SessionStart hook's budget, the same pressure
+// that createParkedFallbackClassifier exists to relieve.
+{
+  const { reader, calls } = fakeReader(
+    {
+      "merge-base": ["base1"],
+      diff: [],
+      "ls-files": [],
+      show: [BASE_HISTORY_NO_CANDIDATES],
+      "ls-tree": [CANDIDATE_SQL_PATH],
+    },
+    {
+      readHistory: () => BRANCH_CANDIDATE_HISTORY,
+      dirtyCount: (wtPath) => (wtPath === DIRTY_ENTRY.path ? 3 : 0),
+    },
+  );
+  reader(CLEAN_ENTRY);
+  reader(DIRTY_ENTRY);
+  eq(calls.filter((c) => c.cmd === "show").length, 1, "the branch-point history is read once per distinct base, not once per worktree");
+  eq(calls.filter((c) => c.cmd === "ls-tree").length, 1, "origin/main's migration tree is read once per reader, not once per worktree");
+}
+
 // The exemption must narrow the reconciliation only — a draft this branch really did add
 // is still discovered and reported alongside an exempt inherited row.
 {
