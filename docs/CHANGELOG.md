@@ -19,8 +19,9 @@ skipped and why.
   risk was raised in a prior review; it is not otherwise recorded in this repo, and it is a
   pre-existing money-path concern independent of this change (see the open item below).
 - **Unit equality rules.** Only *lossless* differences are folded away — case (the live rows
-  carry deliberate case aliases with identical factors), any run of whitespace including
-  non-breaking and zero-width characters, and periods (`fl. oz` = `fl oz`, `gal.` = `gal`) —
+  carry deliberate case aliases with identical factors), zero-width characters (deleted
+  outright), any run of real whitespace including the non-breaking space (collapsed to one
+  space), and periods (`fl. oz` = `fl oz`, `gal.` = `gal`) —
   plus the two synonym pairs the live rows themselves declare (`oz`/`fl oz`, `Ea`/`Unit`,
   identical `factor_oz` *and* `unit_type`). `oz` vs `Dry oz` stays correctly separate. The
   alias map holds no factors: it decides only *whether* to compare, never rescales a quantity.
@@ -38,24 +39,34 @@ skipped and why.
   callers (`ManualTicketCreate.tsx:333`, `BlendTicketDetail.tsx:433`) only render the result,
   and it never gates a save. Severity **low** — `blend_tickets` and `blend_ticket_products` are
   both empty on live.
+- **Zero-width characters are deleted, not turned into a space.** A unit pasted from a PDF can
+  carry U+200B/200C/200D or a BOM *inside* the abbreviation. Collapsing it to a space split
+  `gal` into `g al`, which matched nothing: the check was skipped and the message listed two
+  units that look identical on screen. Fail-safe (never a wrong sum) but confusing, so the
+  zero-width run is now removed before real whitespace is collapsed.
 - **Verified by running it, not by tests alone.** The real `blendMathValidator` module was
   imported into a page served by the dev server and driven through the mixed-unit, alias,
-  blank-unit and half-entered-row cases, with each returned warning read back in the browser.
+  blank-unit and half-entered-row cases, with each returned warning read back in the browser;
+  the zero-width cases were driven the same way and read back after the fix above.
   The production banner component itself was not exercised (both caller test files mock the
-  validator away), so that rendering path remains unverified. 20 new tests (31 total in the
+  validator away), so that rendering path remains unverified. 27 new tests (38 total in the
   file); mutation-tested by reverting each guard in turn and confirming exactly the expected
   tests went red.
 - **Reviewed** by two independent adversarial Opus passes, which confirmed the display-only
   blast radius by exhaustive caller trace and drove the blank-unit hole, the free-text
-  spelling drift, and several doc inaccuracies above. CodeRabbit was rate-limited on the PR
-  and did not review.
+  spelling drift, and several doc inaccuracies above; then by CodeRabbit, which found the
+  missing-`total_volume_unit` half of the blank-unit hole; then by an independent
+  `gpt-5.6-sol` high-effort review at head `cdee7d9b`, which found the zero-width defect
+  above. CodeRabbit was rate-limited by the time of the final head and did not re-review.
 - **Known gaps, deliberately out of scope:** the per-product `rate_per_acre × total_acres`
   check in the same file is still unit-blind, and the unit fields are free text rather than
   the picker the Field App already uses. Both recorded in `docs/manual/KNOWN_ISSUES.md`.
 
-- **Landed via** [PR #426](https://github.com/masonwells1/CRX_Manager_V1.0/pull/426) from
-  `claude/loving-hofstadter-6b1f5e`. (Commit SHAs are deliberately not cited here — this branch
-  was rebased, and an earlier version of this entry cited a SHA that the rebase orphaned.)
+- **Lands via** [PR #426](https://github.com/masonwells1/CRX_Manager_V1.0/pull/426) from
+  `claude/loving-hofstadter-6b1f5e`, which is still **open** as this entry is written — merging
+  that PR is what actually ships the change. (Commit SHAs are deliberately not cited here —
+  this branch was rebased, and an earlier version of this entry cited a SHA that the rebase
+  orphaned.)
 ## 2026-08-19 — Product data model: build plan revision 2 after independent Fable…
 
 Product data model: build plan revision 2 after independent Fable review (26 findings) and orchestration design; recorded owner decisions D-J (chemistry edits admin-only) and D-K (unlisted brand never blocks receiving) in DECISION_LOG. Planning only — nothing built, pushed, migrated, or applied.

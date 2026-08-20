@@ -42,16 +42,28 @@ const UNIT_ALIASES: Record<string, string> = Object.assign(Object.create(null), 
 });
 
 /**
- * A run of whitespace, including the invisible characters that JS `\s` misses.
- * `\s` already covers the non-breaking space and the BOM, but not the zero-width
- * space / non-joiner / joiner, which ride along on text pasted out of a PDF or a
- * spreadsheet. Built from character codes because eslint's `no-irregular-
- * whitespace` rule (rightly) forbids writing those characters literally.
+ * Zero-width characters, which ride along on text pasted out of a PDF or a
+ * spreadsheet. These are DELETED rather than collapsed to a space: they occupy no
+ * width, so a reader who types 'gal' and a reader who pastes 'g<ZWSP>al' mean the
+ * same unit and must produce the same key. Turning one into a space instead would
+ * split the abbreviation into 'g al', which matches nothing — the check would then
+ * be skipped and the message would list two units that look identical on screen.
+ *
+ * `\s` already matches the BOM (U+FEFF) but not the zero-width space / non-joiner
+ * / joiner, and it is the wrong treatment for all four, so the BOM is handled here
+ * too. Genuinely visible whitespace — including the non-breaking space — is left
+ * to `WHITESPACE_RUN` below, because a space between words IS meaningful.
+ *
+ * Built from character codes because eslint's `no-irregular-whitespace` rule
+ * (rightly) forbids writing those characters literally.
  */
-const INVISIBLE_RUN = new RegExp(
-  `[\\s${[0x200b, 0x200c, 0x200d].map((c) => String.fromCharCode(c)).join('')}]+`,
+const ZERO_WIDTH = new RegExp(
+  `[${[0x200b, 0x200c, 0x200d, 0xfeff].map((c) => String.fromCharCode(c)).join('')}]`,
   'g'
 );
+
+/** A run of real whitespace, collapsed to one space. Applied after ZERO_WIDTH. */
+const WHITESPACE_RUN = /\s+/g;
 
 /**
  * Normalize a unit for comparison, returning the comparison key alongside a
@@ -59,10 +71,11 @@ const INVISIBLE_RUN = new RegExp(
  *
  * Only lossless differences are folded away — ones that cannot change which unit
  * is meant: case (the live rows carry deliberate case aliases with identical
- * factors: Lb/LB, oz/Oz, qt/Qt), any run of whitespace including non-breaking and
- * zero-width characters, and periods ('fl. oz' is 'fl oz'; 'gal.' is 'gal'). This
- * never conflates two genuinely distinct units — 'oz' (liquid) stays separate
- * from 'Dry oz' (dry), and 'g' from 'MG'.
+ * factors: Lb/LB, oz/Oz, qt/Qt), zero-width characters (deleted outright), any run
+ * of real whitespace including the non-breaking space (collapsed to one space),
+ * and periods ('fl. oz' is 'fl oz'; 'gal.' is 'gal'). This never conflates two
+ * genuinely distinct units — 'oz' (liquid) stays separate from 'Dry oz' (dry), and
+ * 'g' from 'MG'.
  *
  * Returns null for a unit that was never recorded. That is NOT the same as a unit
  * that disagrees, and callers must not treat "unknown" as "matches".
@@ -70,10 +83,13 @@ const INVISIBLE_RUN = new RegExp(
 function normalizeUnit(
   unit: string | null | undefined
 ): { key: string; label: string } | null {
-  const label = (unit ?? '').replace(INVISIBLE_RUN, ' ').trim();
+  // Zero-width first, so 'g<ZWSP>al' closes up to 'gal' instead of splitting into
+  // 'g al'; only then is real whitespace collapsed.
+  const label = (unit ?? '').replace(ZERO_WIDTH, '').replace(WHITESPACE_RUN, ' ').trim();
   if (label === '') return null;
   // Periods are decoration on an abbreviation, never part of which unit is meant.
-  const key = label.toLowerCase().replace(/\./g, '').replace(INVISIBLE_RUN, ' ').trim();
+  // Dropping one can leave a double space ('fl . oz'), so collapse again after.
+  const key = label.toLowerCase().replace(/\./g, '').replace(WHITESPACE_RUN, ' ').trim();
   if (key === '') return null;
   return { key: UNIT_ALIASES[key] ?? key, label };
 }

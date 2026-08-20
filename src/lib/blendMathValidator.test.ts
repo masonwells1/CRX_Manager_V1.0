@@ -304,6 +304,73 @@ describe('validateBlendMath', () => {
       expect(warnings).toHaveLength(0);
     });
 
+    // Found by the gpt-5.6-sol review of PR #426. A zero-width character pasted
+    // from a PDF sits INSIDE the abbreviation. Replacing it with a space split
+    // 'gal' into 'g al', which matched nothing: the check was skipped and the
+    // message listed two units that look identical on screen. Zero-width means
+    // zero-width — it must be deleted, not turned into a separator.
+    const ZWSP = String.fromCharCode(0x200b);
+    const ZWNJ = String.fromCharCode(0x200c);
+    const BOM = String.fromCharCode(0xfeff);
+
+    it('deletes a zero-width character inside an abbreviation instead of splitting it', () => {
+      const warnings = validateBlendMath(
+        { total_acres: null, total_volume: 300, total_volume_unit: 'gal' },
+        [
+          { product_name: 'A', quantity: 100, unit: `g${ZWSP}al`, rate_per_acre: null, rate_per_acre_unit: null },
+          { product_name: 'B', quantity: 200, unit: 'gal', rate_per_acre: null, rate_per_acre_unit: null },
+        ]
+      );
+      // Same unit, and 100 + 200 = 300 matches, so there is nothing to say at all.
+      expect(warnings).toHaveLength(0);
+    });
+
+    it('deletes the zero-width non-joiner and the BOM the same way', () => {
+      const warnings = validateBlendMath(
+        { total_acres: null, total_volume: 300, total_volume_unit: `g${BOM}al` },
+        [
+          { product_name: 'A', quantity: 100, unit: `g${ZWNJ}al`, rate_per_acre: null, rate_per_acre_unit: null },
+          { product_name: 'B', quantity: 200, unit: 'gal', rate_per_acre: null, rate_per_acre_unit: null },
+        ]
+      );
+      expect(warnings).toHaveLength(0);
+    });
+
+    it('still reports a real mismatch through a zero-width character', () => {
+      // Deleting the character must not also swallow the comparison it enables.
+      const warnings = validateBlendMath(
+        { total_acres: null, total_volume: 300, total_volume_unit: 'gal' },
+        [{ product_name: 'A', quantity: 100, unit: `g${ZWSP}al`, rate_per_acre: null, rate_per_acre_unit: null }]
+      );
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('100.00');
+      expect(warnings[0]).not.toContain('not checked');
+    });
+
+    it('treats a unit made only of zero-width characters as not recorded', () => {
+      const warnings = validateBlendMath(
+        { total_acres: null, total_volume: 300, total_volume_unit: 'gal' },
+        [
+          { product_name: 'A', quantity: 100, unit: 'gal', rate_per_acre: null, rate_per_acre_unit: null },
+          { product_name: 'B', quantity: 200, unit: `${ZWSP}${BOM}`, rate_per_acre: null, rate_per_acre_unit: null },
+        ]
+      );
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('quantity but no unit');
+    });
+
+    it('still keeps genuinely different units apart across a zero-width character', () => {
+      const warnings = validateBlendMath(
+        { total_acres: null, total_volume: 300, total_volume_unit: 'gal' },
+        [
+          { product_name: 'A', quantity: 100, unit: `g${ZWSP}al`, rate_per_acre: null, rate_per_acre_unit: null },
+          { product_name: 'B', quantity: 200, unit: 'Lb', rate_per_acre: null, rate_per_acre_unit: null },
+        ]
+      );
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('not all the same unit');
+    });
+
     it('does not let a unit named like an Object property inherit a value', () => {
       // 'constructor' must behave like any other unrecognised free-text unit.
       const warnings = validateBlendMath(
