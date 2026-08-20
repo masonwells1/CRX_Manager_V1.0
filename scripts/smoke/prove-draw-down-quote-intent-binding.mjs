@@ -62,12 +62,19 @@ const SMOKE_PATH = path.join(
   'smoke',
   'smoke-draw-down-quote-intent-binding.sql',
 );
+const IDLESS_DUPLICATE_COMMIT_PROOF_PATH = path.join(
+  ROOT,
+  'scripts',
+  'smoke',
+  'prove-draw-idless-duplicate-commit.sql',
+);
 const KEYED_DRAW_SMOKE_PATHS = [
   'smoke-draw-ledger-reversal.sql',
   'smoke-order-draw-lock.sql',
   'smoke-save-quote-drawn-guard.sql',
   'smoke-restore-version-drawn-guard.sql',
   'smoke-planned-holds-drawn-sync.sql',
+  'smoke-auth-probe-template.sql',
 ].map((file) => path.join(ROOT, 'scripts', 'smoke', file));
 
 const ACTOR_A = '11111111-1111-1111-1111-111111111111';
@@ -80,6 +87,7 @@ const QUOTE_B = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2';
 const QUOTE_DELETED = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa3';
 const PRODUCT = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
 const FULL_SCHEMA_SMOKE_ADMIN = '66666666-6666-6666-6666-666666666666';
+const FULL_SCHEMA_SMOKE_DRIVER = '77777777-7777-7777-7777-777777777777';
 
 function docker(args, { input, allowFailure = false } = {}) {
   const result = spawnSync('docker', args, {
@@ -270,21 +278,37 @@ function restoreFullSchemaAndRunSmoke() {
 
   psql(`
 INSERT INTO auth.users (id, email, raw_user_meta_data, created_at, updated_at)
-VALUES (
-  '${FULL_SCHEMA_SMOKE_ADMIN}'::uuid,
-  'draw-intent-registered-smokes@example.invalid',
-  '{"full_name":"[SMOKE] Registered Draw Admin","role":"admin"}'::jsonb,
-  now(),
-  now()
-);
+VALUES
+  (
+    '${FULL_SCHEMA_SMOKE_ADMIN}'::uuid,
+    'draw-intent-registered-smokes@example.invalid',
+    '{"full_name":"[SMOKE] Registered Draw Admin","role":"admin"}'::jsonb,
+    now(),
+    now()
+  ),
+  (
+    '${FULL_SCHEMA_SMOKE_DRIVER}'::uuid,
+    'draw-intent-auth-probe-driver@example.invalid',
+    '{"full_name":"[SMOKE] Auth Probe Driver","role":"driver"}'::jsonb,
+    now(),
+    now()
+  );
 INSERT INTO public.profiles (id, email, full_name, role, is_active)
-VALUES (
-  '${FULL_SCHEMA_SMOKE_ADMIN}'::uuid,
-  'draw-intent-registered-smokes@example.invalid',
-  '[SMOKE] Registered Draw Admin',
-  'admin',
-  true
-)
+VALUES
+  (
+    '${FULL_SCHEMA_SMOKE_ADMIN}'::uuid,
+    'draw-intent-registered-smokes@example.invalid',
+    '[SMOKE] Registered Draw Admin',
+    'admin',
+    true
+  ),
+  (
+    '${FULL_SCHEMA_SMOKE_DRIVER}'::uuid,
+    'draw-intent-auth-probe-driver@example.invalid',
+    '[SMOKE] Auth Probe Driver',
+    'driver',
+    true
+  )
 ON CONFLICT (id) DO UPDATE
   SET email = EXCLUDED.email,
       full_name = EXCLUDED.full_name,
@@ -302,6 +326,23 @@ ON CONFLICT (id) DO UPDATE
     );
   }
   console.log(`FULL_SCHEMA_KEYED_DRAW_SMOKES_PASS count=${KEYED_DRAW_SMOKE_PATHS.length}`);
+
+  const commitProof = psql(
+    readFileSync(IDLESS_DUPLICATE_COMMIT_PROOF_PATH, 'utf8'),
+    { allowFailure: true },
+  );
+  const commitOutput = `${commitProof.stdout}\n${commitProof.stderr}`;
+  assert.equal(
+    commitProof.status,
+    0,
+    `id-less duplicate-product commit proof failed:\n${commitOutput}`,
+  );
+  assert.match(
+    commitOutput,
+    /FULL_SCHEMA_IDLESS_DUPLICATE_COMMIT_PASS/,
+    `id-less duplicate-product commit proof missed its post-COMMIT marker:\n${commitOutput}`,
+  );
+  console.log('FULL_SCHEMA_IDLESS_DUPLICATE_COMMIT_PASS');
 }
 
 function concurrentCall(sql, db = 'postgres') {
@@ -1053,6 +1094,7 @@ async function main() {
     console.log('  read-committed isolation guard and stale-snapshot refusal: PASS');
     console.log('  exclusive cutover drain plus unexpired legacy receipt refusal: PASS');
     console.log('  restored full schema + real money/commission/inventory rollback smokes: PASS');
+    console.log('  duplicate refusal + supported id-less multi-line deferred-FK COMMIT: PASS');
     console.log('  network: none; storage: tmpfs; live Supabase: untouched');
   } finally {
     docker(['rm', '-f', CONTAINER], { allowFailure: true });

@@ -16,6 +16,8 @@ const SMOKE_PATH =
   'scripts/smoke/smoke-draw-down-quote-intent-binding.sql';
 const PROVER_PATH =
   'scripts/smoke/prove-draw-down-quote-intent-binding.mjs';
+const IDLESS_DUPLICATE_COMMIT_PROOF_PATH =
+  'scripts/smoke/prove-draw-idless-duplicate-commit.sql';
 const KEYED_DRAW_SMOKES = [
   ['scripts/smoke/smoke-draw-ledger-reversal.sql', [
     'smk-dlr-s1-first-', 'smk-dlr-s1-redraw-', 'smk-dlr-s2-first-',
@@ -25,6 +27,9 @@ const KEYED_DRAW_SMOKES = [
   ['scripts/smoke/smoke-save-quote-drawn-guard.sql', ['smk-sqdg-first-', 'smk-sqdg-final-']],
   ['scripts/smoke/smoke-restore-version-drawn-guard.sql', ['smk-rvdg-first-', 'smk-rvdg-final-']],
   ['scripts/smoke/smoke-planned-holds-drawn-sync.sql', ['smk-phds-draw-']],
+  // Six textual occurrences = the documented signature plus five real calls;
+  // only the positive control is keyed because auth/role gates precede the key.
+  ['scripts/smoke/smoke-auth-probe-template.sql', ['smk-apt-'], 6],
 ] as const;
 
 const migrationSql = readFileSync(MIGRATION_PATH, 'utf8');
@@ -34,6 +39,7 @@ const tierSplitSql = readFileSync(TIER_SPLIT_PATH, 'utf8');
 const allocatedCentsSql = readFileSync(ALLOCATED_CENTS_PATH, 'utf8');
 const smokeSql = readFileSync(SMOKE_PATH, 'utf8');
 const proverSource = readFileSync(PROVER_PATH, 'utf8');
+const idlessDuplicateCommitProof = readFileSync(IDLESS_DUPLICATE_COMMIT_PROOF_PATH, 'utf8');
 const quoteBuilder = readFileSync('src/pages/QuoteBuilder.tsx', 'utf8').replace(/\r\n/g, '\n');
 const smokeSpecs = JSON.parse(readFileSync('scripts/smoke/smoke-specs.json', 'utf8'));
 const gitAttributes = readFileSync('.gitattributes', 'utf8').replace(/\r\n/g, '\n');
@@ -320,15 +326,26 @@ describe('draw_down_quote actor and intent binding migration', () => {
   });
 
   it('keeps every registered post-cutover draw smoke on unique retry keys', () => {
-    for (const [path, drawKeys] of KEYED_DRAW_SMOKES) {
+    for (const [path, drawKeys, expectedCalls = drawKeys.length] of KEYED_DRAW_SMOKES) {
       const source = readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
       expect(proverSource).toContain(path.slice(path.lastIndexOf('/') + 1));
-      expect(source.match(/\bdraw_down_quote\(/g), path).toHaveLength(drawKeys.length);
+      expect(source.match(/\bdraw_down_quote\(/g), path).toHaveLength(expectedCalls);
       for (const drawKey of drawKeys) {
         expect(source, `${path} is missing ${drawKey}`).toContain(`'${drawKey}`);
       }
     }
     expect(proverSource).toContain('FULL_SCHEMA_KEYED_DRAW_SMOKES_PASS');
+  });
+
+  it('checks the duplicate-product production id-less save through COMMIT', () => {
+    expect(idlessDuplicateCommitProof).toContain('BEGIN;');
+    expect(idlessDuplicateCommitProof).toContain('COMMIT;');
+    expect(idlessDuplicateCommitProof).toContain('FULL_SCHEMA_IDLESS_DUPLICATE_COMMIT_PASS');
+    expect(idlessDuplicateCommitProof).toContain("'section_name', 'Early'");
+    expect(idlessDuplicateCommitProof).toContain("'section_name', 'Late'");
+    expect(idlessDuplicateCommitProof).not.toMatch(/jsonb_build_object\(\s*'id'/);
+    expect(proverSource).toContain('IDLESS_DUPLICATE_COMMIT_PROOF_PATH');
+    expect(proverSource).toContain('/FULL_SCHEMA_IDLESS_DUPLICATE_COMMIT_PASS/');
   });
 
   it('documents the exact rename-based emergency revert without executing it', () => {

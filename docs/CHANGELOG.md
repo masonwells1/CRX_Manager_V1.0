@@ -26,14 +26,19 @@ the cutover lock, drop only the new public wrapper, rename the preserved private
 restore its prior grants. It also warns that this intentionally restores the stale-receipt risk and
 must never be approximated with `CREATE OR REPLACE`.
 
-All five registered smoke chains that create booking draws now supply unique per-run retry keys.
+All six registered smoke chains that create booking draws now supply unique per-run retry keys.
 Their fixtures also follow the current governed pricing, immutable cost-snapshot and row-version
 contracts. The planned-holds fixture deliberately echoes quote-item IDs so duplicate products in
 different sections stay identifiable across its repeated save/restore steps; the separate
 save-quote-drawn guard retains the production id-less fallback shape. Because these chains end in
-rollback, they do not claim to validate commit-time deferred foreign keys. The network-isolated
-restored-schema prover executes all five after the candidate and confirms each reaches
-`SMOKE_PASS_ROLLBACK`.
+rollback, they do not claim to validate commit-time deferred foreign keys. A separate
+container-only proof now confirms a duplicate-product id-less revision is still refused by
+`QUOTE_ITEM_AMBIGUOUS_COST`, then draws two separately identifiable products across two sections,
+sends the production id-less `save_quote` payload, and reaches a real `COMMIT` before printing its
+pass marker. That forces the deferred `order_items.quote_item_id` foreign key to validate both
+stamped lines. The network-isolated restored-schema prover executes all six registered draw chains
+after the candidate and confirms each reaches `SMOKE_PASS_ROLLBACK`, then runs the committing
+supported multi-line id-less proof.
 
 The draw modal now consumes the shared intent-binding recovery contract. A permanently refused key
 is retired instead of trapping the operator until reload; when the mismatch receipt proves an order
@@ -108,6 +113,11 @@ the exclusive cutover lock before its new receipt blocks cutover. The replay sel
 its one-shot quarantine notice instead of silently implying those data-specific files were replayed. The
 container used `--network none` and tmpfs;
 production was untouched.
+
+The protected merged-main verification pipeline passed ESLint, TypeScript type checking, the
+production build, 336 test files with 4,631 tests passed and 123 intentionally skipped, agent
+workflow/guard regressions, documentation drift checks, and private-artifact containment. Focused
+post-review migration/RPC contract checks passed 102/102 before the full pipeline reran.
 
 ## 2026-08-19 — Blend-ticket total-volume check no longer adds quantities across different units
 

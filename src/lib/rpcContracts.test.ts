@@ -1793,7 +1793,7 @@ function latestFunctionBody(rpc: string): string | null {
 }
 
 function bodyUsesIdempotency(body: string): boolean {
-  return /idempotency_keys|check_idempotency|save_idempotency|_claim_bound_lifecycle_idempotency|_bind_completed_lifecycle_idempotency/i.test(body);
+  return /idempotency_keys|check_idempotency_intent|check_idempotency|save_idempotency|_claim_bound_lifecycle_idempotency|_bind_completed_lifecycle_idempotency/i.test(body);
 }
 
 /**
@@ -2623,8 +2623,9 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // Private implementation behind the public draw_down_quote RPC, so it is
   // absent from the generated types by design. It declares p_idempotency_key
   // text and owns the canonical check_idempotency/save_idempotency pair for the
-  // 'draw_down_quote' operation (the public wrapper holds none of its own and
-  // forwards the key straight through) — the test below re-asserts all three.
+  // 'draw_down_quote' operation. The new public wrapper separately owns the
+  // actor/fingerprint replay check and receipt binding, then forwards the same
+  // key through this implementation — the test above re-asserts the full chain.
   // Pre-apply-window entry: it enters the inventory because migration
   // 20260816120000 is the FIRST on-disk CREATE of this function under its
   // post-rename name. 20260812115237 renamed the original public body with
