@@ -39,38 +39,47 @@ This file consolidates (does not replace) the source documents it points to. If 
 **Status: reworked on branch `claude/draw-down-price-tier-lines`, NOT applied, NOT merged. Awaiting
 Mason's explicit approval for both.**
 
-**FIXED in the same migration — `restore_quote_version` releases the stamps it can no longer
-honour.** Found by the RLS gate on 2026-08-19 and confirmed against live `prosrc` the same day:
-`save_quote` was not the only path that deletes and reinserts a quote's lines.
-`_restore_quote_version_owner_impl` does the same, and its reinsert **omits the `id` column
-entirely** — every restored line takes a fresh `gen_random_uuid()`, so no id is ever reused. Under
-the deferred FK that would have left every stamp dangling at COMMIT and aborted the restore with a
-raw foreign-key error, on a UI-reachable path that works today. The retired `ON DELETE SET NULL`
-design did not have this problem, so it was a genuine cost of deferring, not an inherited defect.
+**FIXED in the same migration — `restore_quote_version` REFUSES a drawn booking.** Found by
+`rls-security-reviewer` and confirmed against live `prosrc`: `save_quote` was not the only path that
+deletes and reinserts a quote's lines. `_restore_quote_version_owner_impl` does the same, and its
+reinsert **omits the `id` column entirely** — every restored line takes a fresh
+`gen_random_uuid()`, so no id is ever reused. Under the deferred FK that would leave every stamp
+dangling at COMMIT and abort the restore with a raw foreign-key error, on a UI-reachable path that
+works today.
 
-**Mason chose option (A) on 2026-08-19:** the restore path now clears `order_items.quote_item_id`
-for that quote's lines immediately **before** deleting the sections. This is *not* the retired SET
-NULL rule — SET NULL fired on every save, including a save that changed nothing; this fires only on
-an explicit restore, where the lines the stamps pointed at genuinely cease to exist, so there is no
-longer a true answer to record. The released lines still bill the customer and still count against
-`quote_product_draws`, so `v_remaining` cannot re-sell them; they become `v_unmatched` on the next
-draw and walk off the front of the tier list; and `DRAW_MIXED_TIER_UNMATCHED_LINE` refuses that draw
-outright the moment the product carries more than one distinct `(price, cost)` — exactly when losing
-the stamp could change a bill.
+**Mason chose option (A) — release the stamps — on 2026-08-19, and it was then REFUTED by the
+`gpt-5.6-sol` gate the same day.** Releasing discards the telescoping rounding basis. Reproduced on
+PostgreSQL 17.6: two 0.5-unit lines at `$1.01`, draw 0.5, restore to a single 1-unit version, draw
+the rest → the customer is billed **`$1.02` against a booking whose own arithmetic says `$1.01`**.
+`DRAW_MIXED_TIER_UNMATCHED_LINE` cannot catch it, because that guard fires only when the product
+carries **more than one** distinct `(price, cost)` — and after the restore it carries exactly one.
+The release also fired `after_order_items_change` → `trg_recalc_order_totals`, locking the order row
+while restore holds the quote row, crossing the order→quote order that cancel/void takes.
 
-It ships in the **same transaction** as the FK change, because deferring the constraint is what
-creates the obligation; shipping them apart would leave a window where restore is broken. The body
-is reproduced **byte-exactly** from the live definition (md5 `d8408e3b19b536f1210e51da3970272e`)
-with exactly one statement added, a preflight pins that md5 and refuses to run if live has moved,
-and a postflight asserts the release is present, sits **before** the delete, and did not weaken the
-function's `SECURITY DEFINER` posture, `search_path` pin or grants.
+**Mason then chose option (B), which is what ships:** restore raises
+`QUOTE_RESTORE_BLOCKED_BY_DRAW` — a plain-English refusal — when the booking already has drawn
+lines, **before** any destructive work. It is deliberately narrow: only a booking actually drawn
+into an order is blocked, and editing the quote directly still works, because `save_quote` reuses
+the same line ids and the deferred FK keeps the stamps. Doing (A) properly means carrying the
+line-level billing basis across a restore, which needs a real snapshot→live identity mapping — the
+same missing capability `QUOTE_ITEM_AMBIGUOUS_COST` is about, and it gets its own PR.
 
-**Proven on PostgreSQL 17.6 (2026-08-19; live never written to):** without the release, a restore of
-a partly-drawn booking aborts with a foreign-key violation — so the regression reproduces and the
-test is not vacuous. With it, the restore succeeds, every stamp is released, the billed total is
-unchanged at the same figure, and the released order line still stands against the customer for its
-40 units. The replacement installs the exact intended body and keeps `SECURITY DEFINER` and
-`search_path=public, pg_temp`.
+**A second `gpt-5.6-sol` finding was a guaranteed-rollback blocker.** The postflight denied
+`service_role` EXECUTE on the restore impl, copied from the draw impl. That is wrong for this
+function: live carries `{postgres=X/postgres,service_role=X/postgres}`, a grant `20260813080000`
+deliberately retained, and `CREATE OR REPLACE` preserves ACLs — so the assertion fired and rolled
+the **entire migration** back on every attempt. It went unnoticed because the first rehearsal
+created the function fresh, with no inherited ACL, so the check passed **vacuously**. The deny list
+is now the browser roles only, and `service_role` is asserted **present** so an accidental REVOKE is
+caught too.
+
+**Proven on PostgreSQL 17.6 (2026-08-19; live never written to), with a fixture that reproduces
+live's ACL exactly:** the old assertion trips on `service_role` (so the blocker was real and the
+test is not vacuous) while the corrected one passes; the shipped body installs over that preimage,
+the ACL survives `CREATE OR REPLACE`, and all four restore postflight predicates hold; the restore
+writes `order_items` nowhere, so `after_order_items_change` cannot fire; a drawn booking is refused,
+an undrawn one is not, the guard is scoped per quote, and the `$1.02` overbill is unreachable. All
+15 money assertions still pass, re-lifted verbatim from the edited file.
 
 **Also fixed in the same pass (both gate reviewers, 2026-08-19):** the migration locked
 `quote_product_draws` before `order_items` while the draw path writes `order_items` first — a real

@@ -2282,39 +2282,47 @@ BEGIN
     END LOOP;
   END LOOP;
 
-  -- PROVENANCE: release this quote's draw stamps BEFORE the delete.
+  -- PROVENANCE: refuse the restore outright if this booking has been drawn.
   --
   -- order_items.quote_item_id records which booked quote line each drawn order
-  -- line was billed from. 20260816120000 makes that FK NO ACTION DEFERRABLE
+  -- line was billed from. This migration makes that FK NO ACTION DEFERRABLE
   -- INITIALLY DEFERRED so an ordinary save_quote edit -- which deletes and
-  -- reinserts the same ids -- keeps the stamp. A version RESTORE is different:
+  -- reinserts the SAME ids -- keeps the stamp. A version RESTORE is different:
   -- it rebuilds the quote from a snapshot and mints a brand-new id for every
-  -- line (the INSERT below names no id column), so the old ids never come back.
-  -- Without this statement the deferred check would find every stamp dangling
-  -- at COMMIT and abort the whole restore with a raw foreign-key error, on a
-  -- path that works today.
+  -- line (the INSERT below names no id column), so the old ids never come back
+  -- and every stamp would dangle at COMMIT.
   --
-  -- Clearing is the honest answer here, and is NOT the retired ON DELETE SET
-  -- NULL design. That rule fired on EVERY save, including a save that changed
-  -- nothing, which is why it was wrong. This fires only on a deliberate,
-  -- explicit restore, where the lines the stamps pointed at genuinely cease to
-  -- exist -- so there is no longer a true answer to record.
+  -- An earlier draft RELEASED the stamps here (UPDATE ... SET quote_item_id =
+  -- NULL) instead of refusing. Codex review 2026-08-19 found that silently
+  -- overbills, and it was REPRODUCED on PostgreSQL 17.6: two 0.5-unit lines at
+  -- $1.01, draw 0.5, restore to a single 1-unit version, draw the rest -- the
+  -- customer is billed $1.02 against a booking whose own arithmetic says
+  -- $1.01. Releasing the stamp discards the telescoping rounding basis, and
+  -- DRAW_MIXED_TIER_UNMATCHED_LINE cannot catch it because that guard only
+  -- fires when the product carries MORE THAN ONE distinct (price, cost) -- and
+  -- after the restore it carries exactly one. The release also fired
+  -- after_order_items_change -> trg_recalc_order_totals, which locks the order
+  -- row while this function already holds the quote row, crossing the lock
+  -- order that cancel/void takes.
   --
-  -- Money stays safe by the same guards that already cover legacy unstamped
-  -- lines: the released lines still bill the customer and still count against
-  -- quote_product_draws, so v_remaining cannot re-sell them; they become
-  -- v_unmatched on the next draw and walk off the FRONT of the tier list; and
-  -- DRAW_MIXED_TIER_UNMATCHED_LINE refuses that draw outright the moment the
-  -- product carries more than one distinct (price, cost) -- i.e. exactly when
-  -- losing the stamp could change what the customer is billed.
+  -- So restore fails CLOSED instead. This is narrow: it blocks a restore only
+  -- when the booking has actually been drawn into an order. Every other
+  -- restore is unaffected, and editing the quote directly still works, because
+  -- save_quote reuses the same line ids and the deferred FK keeps the stamps.
   --
-  -- Scoped to this quote's lines only, via the quote_items rows about to be
-  -- cascaded away.
-  UPDATE order_items
-     SET quote_item_id = NULL
-   WHERE quote_item_id IN (
-     SELECT qi.id FROM quote_items qi WHERE qi.quote_id = p_quote_id
-   );
+  -- Doing this properly -- carrying the line-level billing basis across a
+  -- restore so the money stays exact -- means giving restore a real identity
+  -- mapping from snapshot lines to live lines. That is the same missing
+  -- capability QUOTE_ITEM_AMBIGUOUS_COST is about, and it gets its own PR.
+  IF EXISTS (
+    SELECT 1
+    FROM order_items oi
+    JOIN quote_items qi ON qi.id = oi.quote_item_id
+    WHERE qi.quote_id = p_quote_id
+  ) THEN
+    RAISE EXCEPTION 'QUOTE_RESTORE_BLOCKED_BY_DRAW: this booking has already been drawn down into an order, so restoring an earlier version would change what the customer has already been billed. Edit the quote directly instead -- ordinary edits are still allowed and keep the billing history intact.'
+      USING ERRCODE = 'P0001';
+  END IF;
 
   -- Delete existing sections (cascades to items via ON DELETE CASCADE)
   DELETE FROM quote_sections WHERE quote_id = p_quote_id;
@@ -2589,10 +2597,11 @@ BEGIN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: the draw no longer partitions a tier''s billed history by price -- units billed at a superseded price would re-enter the telescoping basis, so changing a price on a partly-drawn booking would silently rebill units the customer has already paid for';
   END IF;
 
-  -- RESTORE RELEASE PROOF (Mason's option A, 2026-08-19). Deferring the FK
+  -- RESTORE REFUSAL PROOF (Mason's option B, 2026-08-19). Deferring the FK
   -- creates the obligation; this asserts the obligation was met in the same
-  -- transaction. Without the release, restoring a version of a partially drawn
-  -- booking aborts at COMMIT on a raw foreign-key error.
+  -- transaction. Without the refusal, restoring a version of a partially drawn
+  -- booking either aborts at COMMIT on a raw foreign-key error (no guard) or
+  -- silently overbills the customer (the released-stamp draft Codex refuted).
   SELECT p.prosrc INTO v_restore_src
   FROM pg_proc p
   JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -2604,16 +2613,22 @@ BEGIN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: public._restore_quote_version_owner_impl(uuid, uuid, uuid, text) is missing after replace';
   END IF;
 
-  IF position('SET quote_item_id = NULL' IN v_restore_src) = 0 THEN
-    RAISE EXCEPTION 'POSTFLIGHT_FAILED: the restore path no longer releases order_items.quote_item_id -- with the FK deferred, restoring a version of any partially drawn booking would abort at COMMIT with a raw foreign-key violation';
+  IF position('QUOTE_RESTORE_BLOCKED_BY_DRAW' IN v_restore_src) = 0 THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: the restore path no longer refuses a drawn booking -- with the FK deferred, restoring a version of any partially drawn booking would abort at COMMIT with a raw foreign-key violation';
   END IF;
 
-  -- Ordering matters as much as presence: releasing AFTER the delete would be
-  -- too late, because the deferred check fires at COMMIT on rows the DELETE
-  -- already orphaned.
-  IF position('SET quote_item_id = NULL' IN v_restore_src)
+  -- Ordering matters as much as presence: refusing AFTER the delete would be
+  -- too late, because the DELETE has already destroyed the quote's lines.
+  IF position('QUOTE_RESTORE_BLOCKED_BY_DRAW' IN v_restore_src)
      > position('DELETE FROM quote_sections' IN v_restore_src) THEN
-    RAISE EXCEPTION 'POSTFLIGHT_FAILED: the restore path releases the provenance stamps AFTER deleting the quote sections; it must release them first or the deferred foreign key still fails at COMMIT';
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: the restore path refuses a drawn booking only AFTER deleting the quote sections; it must refuse first or the destructive work is already done';
+  END IF;
+
+  -- The retired release must not come back: it is what Codex proved could
+  -- overbill a customer by a cent across a restore that changes the line
+  -- partition, and it also fired the order-header trigger under the quote lock.
+  IF position('SET quote_item_id = NULL' IN v_restore_src) > 0 THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: the restore path still RELEASES provenance stamps (SET quote_item_id = NULL). That draft was refuted: it discards the telescoping rounding basis and can bill $1.02 against a $1.01 booking, and its UPDATE fires trg_recalc_order_totals under the quote lock';
   END IF;
 
   -- The replacement must not have weakened the security posture it inherited.
@@ -2633,13 +2648,29 @@ BEGIN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: _restore_quote_version_owner_impl lost its search_path pin';
   END IF;
 
+  -- Grant posture, stated against what live ACTUALLY holds (Codex 2026-08-19,
+  -- P1). An earlier draft of this block denied service_role too, copied from
+  -- the draw impl. That is wrong for THIS function: live carries
+  -- {postgres=X/postgres,service_role=X/postgres}, a grant 20260813080000
+  -- deliberately retained, and CREATE OR REPLACE preserves ACLs -- so the
+  -- assertion fired and rolled the whole migration back on every attempt. It
+  -- was never caught because the rehearsal created the function fresh, with no
+  -- inherited ACL, so the check passed vacuously.
+  --
+  -- The browser roles are what must stay out. service_role is asserted PRESENT,
+  -- so an accidental REVOKE is caught too.
   SELECT string_agg(g, ', ') INTO v_bad_grantee
-  FROM unnest(ARRAY['anon', 'authenticated', 'service_role', 'public']) AS g
+  FROM unnest(ARRAY['anon', 'authenticated', 'public']) AS g
   WHERE has_function_privilege(
     g, 'public._restore_quote_version_owner_impl(uuid, uuid, uuid, text)', 'EXECUTE');
 
   IF v_bad_grantee IS NOT NULL THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: _restore_quote_version_owner_impl is EXECUTE-able by % -- the replacement must not have widened its grants', v_bad_grantee;
+  END IF;
+
+  IF NOT has_function_privilege(
+       'service_role', 'public._restore_quote_version_owner_impl(uuid, uuid, uuid, text)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: _restore_quote_version_owner_impl lost the service_role EXECUTE grant that 20260813080000 deliberately retained -- the replacement must preserve it, not revoke it';
   END IF;
 
   -- The stamp and the FK rule are one mechanism, not two. Both halves of the
