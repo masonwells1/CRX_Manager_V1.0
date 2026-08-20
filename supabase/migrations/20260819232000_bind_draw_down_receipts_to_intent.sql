@@ -24,6 +24,12 @@
 -- or sales_rep may draw any live booking, including a colleague's booking, per
 -- Mason's decision re-confirmed 2026-08-16. Actor binding prevents one user
 -- from replaying another user's receipt; it is not quote ownership.
+--
+-- The shared mismatch helper includes the prior receipt in PostgreSQL DETAIL.
+-- This is the first sales-rep-reachable caller of that helper. The disclosure
+-- remains inside the existing office boundary: the key is high-entropy, and an
+-- active sales rep may already draw and view any live booking/order. If either
+-- of those access decisions changes, the DETAIL contract must be revisited.
 
 DO $preflight$
 DECLARE
@@ -126,6 +132,19 @@ BEGIN
      ) THEN
     RAISE EXCEPTION
       'DRAW_DOWN_INTENT_PREFLIGHT: idempotency receipt binding columns are missing';
+  END IF;
+
+  -- A receipt created before this wrapper has no actor/fingerprint binding.
+  -- Refuse cutover while one can still be retried, so a lost-response retry is
+  -- never converted from a successful replay into a mismatch at deployment.
+  IF EXISTS (
+    SELECT 1
+      FROM public.idempotency_keys
+     WHERE operation = 'draw_down_quote'
+       AND expires_at > now()
+  ) THEN
+    RAISE EXCEPTION
+      'DRAW_DOWN_INTENT_PREFLIGHT: unexpired legacy draw_down_quote receipts exist; wait for expiry and re-run the read-only precheck before applying';
   END IF;
 
   SELECT p.prosrc
@@ -271,6 +290,16 @@ BEGIN
     SELECT 1
       FROM jsonb_array_elements(p_draws) AS d(value)
      WHERE (d.value ->> 'quantity') IS NOT NULL
+       AND NOT pg_input_is_valid(d.value ->> 'quantity', 'numeric')
+  ) THEN
+    RAISE EXCEPTION
+      'BOOKING_QUANTITY_INVALID: draw quantity must be numeric';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+      FROM jsonb_array_elements(p_draws) AS d(value)
+     WHERE (d.value ->> 'quantity') IS NOT NULL
        AND (d.value ->> 'quantity')::numeric IN (
          'NaN'::numeric,
          'Infinity'::numeric,
@@ -312,6 +341,9 @@ BEGIN
     extensions.digest(
       convert_to(
         jsonb_build_object(
+          -- p_performed_by is deliberately absent: the strict ACTOR_MISMATCH
+          -- guard above proves it is either NULL or exactly v_actor. If that
+          -- guard is ever relaxed, p_performed_by MUST become fingerprint input.
           'actor_id', v_actor,
           'quote_id', p_quote_id,
           'draws', v_canonical_draws

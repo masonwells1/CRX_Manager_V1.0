@@ -4,22 +4,28 @@
  * connection is possible: PostgreSQL 17 runs in a unique --network none
  * container with tmpfs storage and is force-removed in finally.
  *
- * The migration is applied verbatim. Its preserved draw implementation is a
- * faithful effect-recording stand-in because this migration renames that body
- * without editing it; the checked-in full-schema rollback smoke owns the
- * tier-price/cost/profit/inventory assertions. This prover owns the new wrapper:
- * SQL parsing, pre/postflight, auth and live-quote order, canonical intent,
- * receipt binding, key-race serialization, ACLs, and exact replay behavior.
+ * The migration is applied verbatim twice. A compact fixture plus a faithful
+ * effect-recording stand-in mutation-tests the new wrapper's parsing, auth,
+ * receipt binding and key-race behavior. A second database restores the
+ * supported full schema, replays every ledger-selected migration through this
+ * candidate, then executes the checked-in rollback smoke against the REAL
+ * pricing, cost, profit, commission, inventory and draw-ledger implementation.
  */
 
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CONTAINER = `crx-draw-intent-proof-${process.pid}-${Date.now().toString(36)}`.toLowerCase();
+const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
+const BASELINE_DIR = path.join(ROOT, 'supabase', 'baselines');
+const BASELINE_MANIFEST = JSON.parse(
+  readFileSync(path.join(BASELINE_DIR, 'manifest.json'), 'utf8'),
+);
 const MIGRATION_PATH = path.join(
   ROOT,
   'supabase',
@@ -44,6 +50,12 @@ const ALLOCATED_CENTS_PATH = path.join(
   'migrations',
   '20260817120000_carry_allocated_line_cents_through_lifecycle.sql',
 );
+const SMOKE_PATH = path.join(
+  ROOT,
+  'scripts',
+  'smoke',
+  'smoke-draw-down-quote-intent-binding.sql',
+);
 
 const ACTOR_A = '11111111-1111-1111-1111-111111111111';
 const ACTOR_B = '22222222-2222-2222-2222-222222222222';
@@ -60,8 +72,8 @@ function docker(args, { input, allowFailure = false } = {}) {
     cwd: ROOT,
     encoding: 'utf8',
     input,
-    maxBuffer: 10 * 1024 * 1024,
-    timeout: 180_000,
+    maxBuffer: 60 * 1024 * 1024,
+    timeout: 300_000,
     killSignal: 'SIGTERM',
   });
   if (result.error) {
@@ -79,9 +91,14 @@ function docker(args, { input, allowFailure = false } = {}) {
   return result;
 }
 
-function psql(sql, { db = 'postgres', allowFailure = false, tuples = false } = {}) {
+function psql(sql, {
+  db = 'postgres',
+  user = 'postgres',
+  allowFailure = false,
+  tuples = false,
+} = {}) {
   const args = [
-    'exec', '-i', CONTAINER, 'psql', '-U', 'postgres', '-d', db,
+    'exec', '-i', CONTAINER, 'psql', '-U', user, '-d', db,
     '-X', '-q', '-v', 'ON_ERROR_STOP=1',
   ];
   if (tuples) args.push('-t', '-A');
@@ -90,6 +107,150 @@ function psql(sql, { db = 'postgres', allowFailure = false, tuples = false } = {
 
 function value(sql, db = 'postgres') {
   return psql(sql, { db, tuples: true }).stdout.trim();
+}
+
+function baselineArtifact(suffix) {
+  const matches = Object.keys(BASELINE_MANIFEST.artifacts ?? {})
+    .filter((name) => name.endsWith(suffix));
+  assert.equal(
+    matches.length,
+    1,
+    `expected exactly one baseline artifact *${suffix}, found ${matches.join(', ') || 'none'}`,
+  );
+  const local = path.join(BASELINE_DIR, matches[0]);
+  assert.ok(existsSync(local), `missing baseline artifact: ${local}`);
+  const actualSha = createHash('sha256').update(readFileSync(local)).digest('hex').toUpperCase();
+  assert.equal(
+    actualSha,
+    BASELINE_MANIFEST.artifacts[matches[0]].sha256,
+    `baseline artifact ${matches[0]} does not match manifest SHA-256`,
+  );
+  return local;
+}
+
+function copyIntoContainer(local, remoteName) {
+  docker(['cp', local, `${CONTAINER}:/tmp/${remoteName}`]);
+}
+
+function selectedMigrationsThroughCandidate() {
+  const enumerator = path.join(ROOT, 'scripts', 'list-post-baseline-migrations.mjs');
+  const listed = spawnSync(process.execPath, [enumerator], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  assert.equal(listed.status, 0, `could not enumerate post-baseline migrations:\n${listed.stderr}`);
+  const migrations = listed.stdout.split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^supabase\/migrations\/\d{14}_[^/]+\.sql$/.test(line))
+    .map((relative) => path.join(ROOT, relative));
+  const candidateIndex = migrations.findIndex(
+    (local) => path.resolve(local) === path.resolve(MIGRATION_PATH),
+  );
+  assert.notEqual(candidateIndex, -1, 'candidate is absent from the ledger-selected replay');
+  return migrations.slice(0, candidateIndex + 1);
+}
+
+function applyMigrationFile(local, index, db = 'postgres') {
+  const source = readFileSync(local, 'utf8');
+  const executable = path.resolve(local) === path.resolve(MIGRATION_PATH)
+    ? source
+    : source.replace(/\r\n/g, '\n');
+  if (path.resolve(local) === path.resolve(MIGRATION_PATH)) {
+    assert.ok(!source.includes('\r'), 'candidate migration is not LF byte-verbatim');
+  }
+  const ownsTransaction = /^[ \t]*BEGIN[ \t]*;/mi.test(source);
+  psql(ownsTransaction ? executable : `BEGIN;\n${executable}\nCOMMIT;`, { db });
+  if ((index + 1) % 10 === 0 || path.resolve(local) === path.resolve(MIGRATION_PATH)) {
+    console.log(`FULL_SCHEMA_REPLAY_PROGRESS ${index + 1} ${path.basename(local)}`);
+  }
+}
+
+function restoreFullSchemaAndRunSmoke() {
+  const extensions = baselineArtifact('_extensions.sql');
+  const acl = baselineArtifact('_acl_lockdown.sql');
+  const platformOverlay = baselineArtifact('_platform_overlay.sql');
+  const cronJobs = baselineArtifact('_cron_jobs.sql');
+  const migrationHistory = baselineArtifact('_migration_history.sql');
+  const baselineHighWater = BASELINE_MANIFEST.migrations_high_water;
+  assert.ok(
+    path.basename(extensions).startsWith(baselineHighWater),
+    'baseline extension artifact does not match manifest high-water',
+  );
+
+  copyIntoContainer(extensions, 'draw-baseline-extensions.sql');
+  copyIntoContainer(acl, 'draw-baseline-acl.sql');
+  copyIntoContainer(platformOverlay, 'draw-baseline-platform.sql');
+  copyIntoContainer(cronJobs, 'draw-baseline-cron.sql');
+  copyIntoContainer(migrationHistory, 'draw-baseline-history.sql');
+
+  psql('\\i /tmp/draw-baseline-extensions.sql');
+  const decompressed = spawnSync(process.execPath, ['scripts/decompress-schema-baseline.mjs'], {
+    cwd: ROOT,
+    maxBuffer: 60 * 1024 * 1024,
+  });
+  assert.equal(
+    decompressed.status,
+    0,
+    `baseline decompression failed: ${decompressed.stderr?.toString() ?? ''}`,
+  );
+  psql(decompressed.stdout.toString());
+  psql(`
+    CREATE SCHEMA IF NOT EXISTS storage;
+    CREATE TABLE IF NOT EXISTS storage.buckets (
+      id text PRIMARY KEY, name text NOT NULL, public boolean NOT NULL DEFAULT false,
+      file_size_limit bigint, allowed_mime_types text[]
+    );
+    CREATE TABLE IF NOT EXISTS storage.objects (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(), bucket_id text NOT NULL,
+      name text NOT NULL, owner_id text
+    );
+    CREATE OR REPLACE FUNCTION storage.foldername(name text)
+    RETURNS text[] LANGUAGE sql IMMUTABLE
+    AS $$ SELECT string_to_array(name, '/') $$;
+    CREATE OR REPLACE FUNCTION storage.filename(name text)
+    RETURNS text LANGUAGE sql IMMUTABLE
+    AS $$ SELECT split_part(name, '/', array_length(string_to_array(name, '/'), 1)) $$;
+  `, { user: 'supabase_admin' });
+  psql('\\i /tmp/draw-baseline-acl.sql');
+  psql('\\i /tmp/draw-baseline-platform.sql', { user: 'supabase_admin' });
+  psql('\\i /tmp/draw-baseline-cron.sql');
+  psql(`
+    CREATE SCHEMA IF NOT EXISTS supabase_migrations;
+    CREATE TABLE IF NOT EXISTS supabase_migrations.schema_migrations (
+      version text PRIMARY KEY,
+      name text NOT NULL,
+      statements text[]
+    );
+    \\i /tmp/draw-baseline-history.sql
+  `);
+
+  const migrations = selectedMigrationsThroughCandidate();
+  migrations.forEach((local, index) => {
+    if (path.resolve(local) === path.resolve(ALLOCATED_CENTS_PATH)) {
+      restoreLiveCrLfCloseRemainder('postgres');
+    }
+    applyMigrationFile(local, index);
+  });
+  assert.equal(
+    path.resolve(migrations.at(-1)),
+    path.resolve(MIGRATION_PATH),
+    'candidate must be the final full-schema replay migration',
+  );
+
+  const smokeSql = readFileSync(SMOKE_PATH, 'utf8');
+  const smoke = psql(smokeSql, { allowFailure: true });
+  const smokeOutput = `${smoke.stdout}\n${smoke.stderr}`;
+  assert.notEqual(smoke.status, 0, 'rollback smoke unexpectedly committed');
+  assert.match(
+    smokeOutput,
+    /SMOKE_PASS_ROLLBACK/,
+    `full-schema rollback smoke did not reach its terminal marker:\n${smokeOutput}`,
+  );
+  console.log(
+    `FULL_SCHEMA_DRAW_SMOKE_PASS baseline=${baselineHighWater} replayed=${migrations.length} `
+      + 'money_inventory=SMOKE_PASS_ROLLBACK',
+  );
 }
 
 function concurrentCall(sql, db = 'postgres') {
@@ -133,6 +294,42 @@ function extractFunctionStatement(source, name) {
   assert.ok(Number.isFinite(start) && start >= 0 && bodyStart > start && end > bodyStart,
     `could not extract ${name}`);
   return source.slice(start, end + endMarker.length);
+}
+
+function restoreLiveCrLfCloseRemainder(db) {
+  const definingPath = path.join(
+    ROOT,
+    'supabase',
+    'migrations',
+    '20260721014858_20260721010000_govern_invoice_order_money_lifecycle.sql',
+  );
+  const source = readFileSync(definingPath, 'utf8').replace(/\r\n/g, '\n');
+  const needle = 'CREATE FUNCTION public._close_undelivered_order_remainder_20260718(';
+  assert.equal(source.split(needle).length - 1, 1, 'close-remainder definition is ambiguous');
+  const start = source.indexOf(needle);
+  const tag = /\$([A-Za-z_]*)\$/.exec(source.slice(start));
+  assert.ok(tag, 'close-remainder body has no dollar quote');
+  const bodyStart = start + tag.index + tag[0].length;
+  const bodyEnd = source.indexOf(tag[0], bodyStart);
+  assert.ok(bodyEnd > bodyStart, 'close-remainder body is unterminated');
+  const body = source.slice(bodyStart, bodyEnd).replace(/\n/g, '\r\n');
+  assert.equal(body.length, 15910, 'close-remainder live CRLF body length drifted');
+  assert.equal(
+    createHash('md5').update(body, 'utf8').digest('hex'),
+    'e2d4b46c47be7561a8829191c30dc0a7',
+    'close-remainder live CRLF body hash drifted',
+  );
+  psql(`
+    CREATE OR REPLACE FUNCTION public._close_undelivered_order_remainder_20260718(
+      p_order_id uuid, p_actor uuid
+    )
+    RETURNS jsonb
+    LANGUAGE plpgsql
+    SECURITY DEFINER
+    SET search_path = public, pg_temp
+    AS $live_crlf_close$${body}$live_crlf_close$;
+  `, { db });
+  console.log('FULL_SCHEMA_LIVE_BODY_RESTORED _close_undelivered_order_remainder_20260718 crlf=true');
 }
 
 function extractReviewedPrerequisites() {
@@ -420,6 +617,18 @@ SELECT public.draw_down_quote(
   assert.notEqual(keylessNonFinite.status, 0, 'non-finite keyless request bypassed the outer guard');
   assert.match(keylessNonFinite.stderr, /BOOKING_QUANTITY_INVALID/);
 
+  const keylessNonNumeric = psql(`
+SELECT set_config('request.jwt.claim.sub', '${ACTOR_A}', false);
+SELECT public.draw_down_quote(
+  '${QUOTE_A}'::uuid,
+  jsonb_build_array(jsonb_build_object('product_id', '${PRODUCT}'::uuid, 'quantity', 'abc')),
+  '${ACTOR_A}'::uuid,
+  NULL,
+  NULL
+);`, { db, allowFailure: true, tuples: true });
+  assert.notEqual(keylessNonNumeric.status, 0, 'non-numeric keyless request bypassed the outer guard');
+  assert.match(keylessNonNumeric.stderr, /BOOKING_QUANTITY_INVALID/);
+
   const first = psql(callSql({ key: 'draw-sequential' }), { db, tuples: true });
   const replay = psql(`
 SELECT set_config('request.jwt.claim.sub', '${ACTOR_A}', false);
@@ -511,7 +720,7 @@ async function proveConcurrency(db) {
 }
 
 function proveMutation(migration) {
-  psql('CREATE DATABASE draw_intent_mutant;');
+  psql('CREATE DATABASE draw_intent_mutant TEMPLATE template0;');
   const broken = migration.replace(
     "'draws', v_canonical_draws",
     "'draws', '[]'::jsonb /* 'draws', v_canonical_draws */",
@@ -535,7 +744,7 @@ function proveMutation(migration) {
 }
 
 function provePrerequisiteBodyGuard(migration) {
-  psql('CREATE DATABASE draw_prerequisite_mutant;');
+  psql('CREATE DATABASE draw_prerequisite_mutant TEMPLATE template0;');
   const db = 'draw_prerequisite_mutant';
   psql(FIXTURE, { db });
   psql(extractSharedHelper(), { db });
@@ -552,8 +761,35 @@ function provePrerequisiteBodyGuard(migration) {
   console.log('MUTATION_DETECTED: drifted tier-split body is refused before wrapping');
 }
 
+function proveLegacyReceiptPreflight(migration) {
+  psql('CREATE DATABASE draw_legacy_receipt TEMPLATE template0;');
+  const db = 'draw_legacy_receipt';
+  psql(FIXTURE, { db });
+  psql(extractSharedHelper(), { db });
+  psql(extractReviewedPrerequisites(), { db });
+  psql(`
+    INSERT INTO public.idempotency_keys(idempotency_key, operation, result, expires_at)
+    VALUES (
+      'legacy-draw-receipt',
+      'draw_down_quote',
+      jsonb_build_object('order_id', gen_random_uuid()),
+      now() + interval '1 hour'
+    );
+  `, { db });
+  const blocked = psql(migration, { db, allowFailure: true });
+  assert.notEqual(blocked.status, 0, 'unexpired legacy receipt did not block cutover');
+  assert.match(blocked.stderr, /unexpired legacy draw_down_quote receipts exist/);
+  console.log('MUTATION_DETECTED: unexpired legacy draw receipt blocks cutover');
+}
+
 async function main() {
-  for (const file of [MIGRATION_PATH, SHARED_HELPER_PATH, TIER_SPLIT_PATH, ALLOCATED_CENTS_PATH]) {
+  for (const file of [
+    MIGRATION_PATH,
+    SHARED_HELPER_PATH,
+    TIER_SPLIT_PATH,
+    ALLOCATED_CENTS_PATH,
+    SMOKE_PATH,
+  ]) {
     assert.ok(existsSync(file), `missing checked-in proof input: ${file}`);
   }
   const migration = readFileSync(MIGRATION_PATH, 'utf8');
@@ -563,36 +799,41 @@ async function main() {
   try {
     docker([
       'run', '--rm', '-d', '--name', CONTAINER, '--network', 'none',
-      '--tmpfs', '/var/lib/postgresql/data:rw',
+      '--tmpfs', '/var/lib/postgresql/data:rw,noexec,nosuid,size=1024m',
       '-e', 'POSTGRES_PASSWORD=proof-only',
-      'postgres:17',
+      IMAGE,
     ]);
     let readyStreak = 0;
-    for (let attempt = 0; attempt < 150; attempt += 1) {
+    for (let attempt = 0; attempt < 180; attempt += 1) {
       const ready = docker(
         ['exec', CONTAINER, 'pg_isready', '-U', 'postgres', '-d', 'postgres'],
         { allowFailure: true },
       );
       readyStreak = ready.status === 0 ? readyStreak + 1 : 0;
       if (readyStreak >= 3) break;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
-      if (attempt === 149) throw new Error('PostgreSQL container did not become ready');
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+      if (attempt === 179) throw new Error('PostgreSQL container did not become ready');
     }
 
-    bootstrap('postgres', migration);
-    proveAuthorization('postgres');
-    proveSequential('postgres');
-    await proveConcurrency('postgres');
+    psql('CREATE DATABASE draw_wrapper TEMPLATE template0;');
+    bootstrap('draw_wrapper', migration);
+    proveAuthorization('draw_wrapper');
+    proveSequential('draw_wrapper');
+    await proveConcurrency('draw_wrapper');
     proveMutation(migration);
     provePrerequisiteBodyGuard(migration);
+    proveLegacyReceiptPreflight(migration);
+    restoreFullSchemaAndRunSmoke();
 
     console.log('DRAW_DOWN_INTENT_BINDING_PROOF_OK');
     console.log('  migration applied verbatim with preflight/postflight');
     console.log('  admin/rep allow, missing/inactive/auth/actor refusals: PASS');
-    console.log('  keyed/keyless input guards plus valid keyless delegation: PASS');
+    console.log('  keyed/keyless numeric, finite and empty guards plus valid keyless delegation: PASS');
     console.log('  exact replay, changed/non-finite quantity, changed receipt actor, deleted quote: PASS');
     console.log('  different-intent and same-intent concurrent key races: PASS');
     console.log('  exact pricing/lifecycle prerequisite hashes and drift mutation: PASS');
+    console.log('  unexpired legacy receipt cutover refusal: PASS');
+    console.log('  restored full schema + real money/inventory rollback smoke: PASS');
     console.log('  network: none; storage: tmpfs; live Supabase: untouched');
   } finally {
     docker(['rm', '-f', CONTAINER], { allowFailure: true });

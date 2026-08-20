@@ -442,7 +442,24 @@ export default function QuoteBuilder() {
   const [isDirty, setIsDirty] = useState(false);
   const initialLoadDone = useRef(false);
   const suppressDirtyUntilReloadSettlesRef = useRef(false);
+  const initialLoadGenerationRef = useRef(0);
+  const initialLoadReleaseHandlesRef = useRef({
+    timeouts: new Set<number>(),
+    frames: new Set<number>(),
+  });
   const blocker = useUnsavedChanges(isDirty);
+
+  useEffect(() => () => {
+    initialLoadGenerationRef.current += 1;
+    for (const timeout of initialLoadReleaseHandlesRef.current.timeouts) {
+      window.clearTimeout(timeout);
+    }
+    for (const frame of initialLoadReleaseHandlesRef.current.frames) {
+      cancelAnimationFrame(frame);
+    }
+    initialLoadReleaseHandlesRef.current.timeouts.clear();
+    initialLoadReleaseHandlesRef.current.frames.clear();
+  }, []);
 
   // Status-based guards
   const currentStatus = status || 'draft';
@@ -935,19 +952,39 @@ export default function QuoteBuilder() {
     // timer. Keep dirty tracking suppressed through two paint frames so a
     // freshly loaded saved quote cannot be mistaken for an operator edit and
     // block its first draw-down attempt.
+    const loadGeneration = ++initialLoadGenerationRef.current;
     let released = false;
+    let fallback = 0;
+    let firstFrame = 0;
+    let secondFrame = 0;
+    const clearReleaseHandles = () => {
+      window.clearTimeout(fallback);
+      cancelAnimationFrame(firstFrame);
+      cancelAnimationFrame(secondFrame);
+      initialLoadReleaseHandlesRef.current.timeouts.delete(fallback);
+      initialLoadReleaseHandlesRef.current.frames.delete(firstFrame);
+      initialLoadReleaseHandlesRef.current.frames.delete(secondFrame);
+    };
     const releaseInitialDirtySuppression = () => {
       if (released) return;
       released = true;
+      clearReleaseHandles();
+      if (initialLoadGenerationRef.current !== loadGeneration) return;
       initialLoadDone.current = true;
       suppressDirtyUntilReloadSettlesRef.current = false;
       setIsDirty(false);
     };
-    const fallback = window.setTimeout(releaseInitialDirtySuppression, 250);
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      window.clearTimeout(fallback);
-      releaseInitialDirtySuppression();
-    }));
+    fallback = window.setTimeout(releaseInitialDirtySuppression, 250);
+    initialLoadReleaseHandlesRef.current.timeouts.add(fallback);
+    firstFrame = requestAnimationFrame(() => {
+      initialLoadReleaseHandlesRef.current.frames.delete(firstFrame);
+      secondFrame = requestAnimationFrame(() => {
+        initialLoadReleaseHandlesRef.current.frames.delete(secondFrame);
+        releaseInitialDirtySuppression();
+      });
+      initialLoadReleaseHandlesRef.current.frames.add(secondFrame);
+    });
+    initialLoadReleaseHandlesRef.current.frames.add(firstFrame);
     return true;
   }, [toast, navigate]);
 

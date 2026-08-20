@@ -12,12 +12,15 @@ const ALLOCATED_CENTS_PATH =
   'supabase/migrations/20260817120000_carry_allocated_line_cents_through_lifecycle.sql';
 const SMOKE_PATH =
   'scripts/smoke/smoke-draw-down-quote-intent-binding.sql';
+const PROVER_PATH =
+  'scripts/smoke/prove-draw-down-quote-intent-binding.mjs';
 
 const migrationSql = readFileSync(MIGRATION_PATH, 'utf8');
 const cutoverSql = readFileSync(CUTOVER_PATH, 'utf8');
 const tierSplitSql = readFileSync(TIER_SPLIT_PATH, 'utf8');
 const allocatedCentsSql = readFileSync(ALLOCATED_CENTS_PATH, 'utf8');
 const smokeSql = readFileSync(SMOKE_PATH, 'utf8');
+const proverSource = readFileSync(PROVER_PATH, 'utf8');
 const quoteBuilder = readFileSync('src/pages/QuoteBuilder.tsx', 'utf8').replace(/\r\n/g, '\n');
 const smokeSpecs = JSON.parse(readFileSync('scripts/smoke/smoke-specs.json', 'utf8'));
 const gitAttributes = readFileSync('.gitattributes', 'utf8').replace(/\r\n/g, '\n');
@@ -67,13 +70,14 @@ describe('draw_down_quote actor and intent binding migration', () => {
       ALLOCATED_CENTS_PATH,
       MIGRATION_PATH,
       SMOKE_PATH,
-      'scripts/smoke/prove-draw-down-quote-intent-binding.mjs',
+      PROVER_PATH,
     ]) {
       expect(gitAttributes).toContain(`${path} text eol=lf`);
     }
     expect(allocatedCentsSql).not.toContain('\r');
     expect(migrationSql).not.toContain('\r');
     expect(smokeSql).not.toContain('\r');
+    expect(proverSource).not.toContain('\r');
 
     for (const [source, functionName] of [
       [tierSplitSql, '_draw_down_quote_below_cost_impl_20260810'],
@@ -115,6 +119,8 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(migrationSql).toContain(
       "hashtextextended('crx:idempotency:' || p_idempotency_key, 0)",
     );
+    expect(migrationSql).toContain("operation = 'draw_down_quote'\n       AND expires_at > now()");
+    expect(migrationSql).toContain('unexpired legacy draw_down_quote receipts exist');
   });
 
   it('binds the key to actor, quote, ordered canonical draws, and the saved result', () => {
@@ -129,6 +135,7 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(fingerprintBlock).toContain("'draws', v_canonical_draws");
     expect(fingerprintBlock).not.toContain('p_below_cost_reason');
     expect(migrationSql).toContain('trim_scale((d.value ->> \'quantity\')::numeric)');
+    expect(migrationSql).toContain("pg_input_is_valid(d.value ->> 'quantity', 'numeric')");
     expect(migrationSql).toContain("'NaN'::numeric");
     expect(migrationSql).toContain("'Infinity'::numeric");
     expect(migrationSql).toContain(
@@ -171,6 +178,9 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(drawHandler).toContain('RpcErrorCodes.BOOKING_QUANTITY_INVALID');
     expect(drawHandler).not.toContain("toast('error', 'IDEMPOTENCY_INTENT_MISMATCH'");
     expect(drawHandler).not.toContain("toast('error', 'IDEMPOTENCY_ACTOR_MISMATCH'");
+    expect(quoteBuilder).toContain('const loadGeneration = ++initialLoadGenerationRef.current;');
+    expect(quoteBuilder).toContain('initialLoadGenerationRef.current !== loadGeneration');
+    expect(quoteBuilder).toContain('cancelAnimationFrame(frame);');
   });
 
   it('keeps the private chain private and exposes only the reviewed wrapper', () => {
@@ -209,5 +219,8 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(smokeSql).toContain('oi.cost_at_time_cents = 500');
     expect(smokeSql).toContain('i.quantity_prebooked = 1');
     expect(smokeSql).toContain("RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';");
+    expect(proverSource).toContain("const smokeSql = readFileSync(SMOKE_PATH, 'utf8');");
+    expect(proverSource).toContain('/SMOKE_PASS_ROLLBACK/');
+    expect(proverSource).toContain('restoreFullSchemaAndRunSmoke();');
   });
 });
