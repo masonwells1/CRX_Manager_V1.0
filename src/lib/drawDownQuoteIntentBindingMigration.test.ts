@@ -29,7 +29,7 @@ const KEYED_DRAW_SMOKES = [
   ['scripts/smoke/smoke-planned-holds-drawn-sync.sql', ['smk-phds-draw-']],
   // Six textual occurrences = the documented signature plus five real calls;
   // only the positive control is keyed because auth/role gates precede the key.
-  ['scripts/smoke/smoke-auth-probe-template.sql', ['smk-apt-'], 6],
+  ['scripts/smoke/smoke-auth-probe-template.sql', ["smk-apt-' || v_suffix)"], 6],
 ] as const;
 
 const migrationSql = readFileSync(MIGRATION_PATH, 'utf8');
@@ -48,7 +48,7 @@ const migrationHistory = readFileSync('docs/reference/migration-history.md', 'ut
 function expectOrdered(source: string, markers: string[]): void {
   let cursor = -1;
   for (const marker of markers) {
-    const next = source.indexOf(marker);
+    const next = source.indexOf(marker, cursor + 1);
     expect(next, `${marker} is missing`).toBeGreaterThan(cursor);
     cursor = next;
   }
