@@ -14,6 +14,7 @@ import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 
 export const SECURITY_COMMAND_CHAR_BUDGET = 16_384;
+export const SECURITY_COMMAND_TOKEN_BUDGET = 512;
 const commandExceedsSecurityBudget = (command) => String(command || "").length > SECURITY_COMMAND_CHAR_BUDGET;
 
 const MAINTENANCE_PRODUCER_NAME = "apply-live-testdata-maintenance-20260812.mjs";
@@ -87,6 +88,7 @@ export function maintenanceProducerCommandMentioned(command, depth = 0) {
       return tokens;
   };
   const tokens = tokenize(value);
+  if (tokens.length > SECURITY_COMMAND_TOKEN_BUDGET) return true;
   const normalizeShellToken = (tokenValue) => String(tokenValue || "")
     .replace(/\\([^\\/])/g, "$1")
     .replace(/\^([^^])/g, "$1")

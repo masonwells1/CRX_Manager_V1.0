@@ -58,10 +58,11 @@ All significant development milestones, in reverse chronological order.
   constructed `${NAME}_OPTIONS` target cannot become `NODE_OPTIONS` at runtime.
   Escaped `find` action names are normalized before recognizing `-exec`,
   `-execdir`, `-ok`, or `-okdir`. Safety
-  inspection now has a 16,384-character command budget: oversized payloads deny
-  before tokenization, bounding adversarial wrapper scans well inside the hook's
-  five-second deadline. End-to-end Bash and MCP regressions require the denial
-  to complete in under 1.5 seconds.
+  inspection now has both a 16,384-character budget and a 512-token budget:
+  oversized or token-dense payloads deny before recursive runner analysis,
+  bounding adversarial wrapper scans well inside the hook's five-second
+  deadline. End-to-end Bash and MCP regressions include a hostile at-limit
+  repeated-runner payload and require denial to complete in under 1.5 seconds.
 - Regression coverage proves the new deny paths and preserves ordinary quoted
   searches plus terminal AWK help mode. The Codex shell/MCP hook adapter consumes
   the shared `.claude/hooks/bash-safety-lib.mjs` implementation directly. Codex

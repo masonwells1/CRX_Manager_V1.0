@@ -550,6 +550,16 @@ eq(oversizedResult.status, 0, "bash-safety.mjs exits 0 after an oversized wrappe
 ok(oversizedResult.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs denies an oversized wrapper payload");
 ok(oversizedElapsedMs < 1_500, `oversized wrapper denial stays well below the 5s hook timeout (actual ${oversizedElapsedMs.toFixed(0)}ms)`);
 
+const hostileRunnerTail = ["git", "push", "--force", "origin", "main"].join(" ");
+const hostileRunnerUnit = `${findCommand} . ${findExecOption} awk --help `;
+const hostileRunnerCommand = `${hostileRunnerUnit.repeat(Math.floor((SECURITY_COMMAND_CHAR_BUDGET - hostileRunnerTail.length) / hostileRunnerUnit.length))}${hostileRunnerTail}`;
+const hostileRunnerStartedAt = process.hrtime.bigint();
+const hostileRunnerResult = runHook({ tool_name: "Bash", tool_input: { command: hostileRunnerCommand } });
+const hostileRunnerElapsedMs = Number(process.hrtime.bigint() - hostileRunnerStartedAt) / 1_000_000;
+eq(hostileRunnerResult.status, 0, "bash-safety.mjs exits 0 after an at-budget hostile runner payload");
+ok(hostileRunnerResult.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs denies an at-budget hostile runner payload");
+ok(hostileRunnerElapsedMs < 1_500, `at-budget hostile runner denial stays well below the 5s hook timeout (actual ${hostileRunnerElapsedMs.toFixed(0)}ms)`);
+
 r = runHook({ tool_name: "Bash", tool_input: { command: "git push --force origin main" } });
 eq(r.status, 0, "bash-safety.mjs exits 0 on dangerous command");
 ok(r.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs denies a force push");

@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { SECURITY_COMMAND_CHAR_BUDGET } from "./bash-safety-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0;
@@ -43,6 +44,14 @@ const noRunIfEmptyOption = ["--no-run", "-if-empty"].join("");
 const awkCommand = ["aw", "k"].join("");
 const opaqueAwkProgram = `'BEGIN { cmd = decode(); ${["sys", "tem"].join("")}(cmd) }'`;
 const timeCommand = ["ti", "me"].join("");
+const hostileRunnerTail = ["git", "push", "--force", "origin", "main"].join(" ");
+const hostileRunnerUnit = `${findCommand} . ${findExecOption} ${awkCommand} --help `;
+const hostileRunnerCommand = `${hostileRunnerUnit.repeat(Math.floor((SECURITY_COMMAND_CHAR_BUDGET - hostileRunnerTail.length) / hostileRunnerUnit.length))}${hostileRunnerTail}`;
+const hostileRunnerStartedAt = process.hrtime.bigint();
+const hostileRunnerResult = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: hostileRunnerCommand } });
+const hostileRunnerElapsedMs = Number(process.hrtime.bigint() - hostileRunnerStartedAt) / 1_000_000;
+ok(isDeny(hostileRunnerResult), "DC start_process denies an at-budget hostile runner payload");
+ok(hostileRunnerElapsedMs < 1_500, `DC at-budget hostile runner denial stays well below the 5s hook timeout (actual ${hostileRunnerElapsedMs.toFixed(0)}ms)`);
 const shellGrammarGuardCases = [
   [timeCommand, awkCommand, opaqueAwkProgram].join(" "),
   ["SAFE+=1", awkCommand, opaqueAwkProgram].join(" "),
