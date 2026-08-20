@@ -46,6 +46,21 @@ AS $helper$
 DECLARE
   v_result jsonb;
 BEGIN
+  -- Signature-newest-first. The below-cost approval work (20260812115237)
+  -- widened this wrapper to (uuid,uuid,text,bigint,text) with
+  -- p_below_cost_reason last, and every argument after the first carries a
+  -- DEFAULT. That matters: the three-argument fallback at the bottom still
+  -- RESOLVES against the widened function, silently defaulting
+  -- p_expected_row_version to NULL, which the row-version guard rejects as
+  -- QUOTE_STALE_WRITE long before the logic this chain exists to prove.
+  -- Probing the widest signature first keeps the row version actually sent.
+  IF to_regprocedure('public.convert_quote_to_order(uuid,uuid,text,bigint,text)') IS NOT NULL THEN
+    EXECUTE
+      'SELECT public.convert_quote_to_order($1, $2, $3, $4, NULL::text)'
+      INTO v_result
+      USING p_quote_id, p_performed_by, p_idempotency_key, p_expected_row_version;
+    RETURN v_result;
+  END IF;
   IF to_regprocedure('public.convert_quote_to_order(uuid,uuid,text,bigint)') IS NOT NULL THEN
     EXECUTE
       'SELECT public.convert_quote_to_order($1, $2, $3, $4)'
@@ -67,6 +82,7 @@ DECLARE
   v_customer uuid;
   v_product uuid;
   v_product_2 uuid;
+  v_cost numeric;
   v_q uuid;
   v_q2 uuid;
   v_sec uuid;
@@ -102,9 +118,18 @@ BEGIN
   VALUES ('[SMOKE] Draw Lock Farm ' || v_suffix)
   RETURNING id INTO v_customer;
 
-  INSERT INTO products (product_name, unit_size)
-  VALUES ('[SMOKE] Draw Lock Product ' || v_suffix, 'gal')
-  RETURNING id INTO v_product;
+  SELECT id, current_cost INTO v_product, v_cost
+  FROM products
+  WHERE is_active IS TRUE
+    AND current_cost IS NOT NULL
+    AND current_cost > 0
+    AND current_cost = round(current_cost, 2)
+    AND current_cost <= 10
+  ORDER BY current_cost, id
+  LIMIT 1;
+  IF v_product IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: need an active product with a positive whole-cent current_cost of 10.00 or less';
+  END IF;
 
   -- --------------------------------------------------------------------
   -- 2. Open booking: 500 booked, draw 200 -> one draw order exists
@@ -116,7 +141,7 @@ BEGIN
   VALUES (v_q, 'Main') RETURNING id INTO v_sec;
   INSERT INTO quote_items (quote_id, section_id, product_id,
     price_per_unit, current_cost, total_units_needed, unit_size)
-  VALUES (v_q, v_sec, v_product, 10, 6, 500, 'gal');
+  VALUES (v_q, v_sec, v_product, 10, v_cost, 500, 'gal');
 
   v_res := draw_down_quote(v_q,
     jsonb_build_array(jsonb_build_object('product_id', v_product, 'quantity', 200)),
@@ -213,7 +238,7 @@ BEGIN
   VALUES (v_q2, 'Main') RETURNING id INTO v_sec;
   INSERT INTO quote_items (quote_id, section_id, product_id,
     price_per_unit, current_cost, total_units_needed, unit_size)
-  VALUES (v_q2, v_sec, v_product, 10, 6, 300, 'gal');
+  VALUES (v_q2, v_sec, v_product, 10, v_cost, 300, 'gal');
 
   SELECT pg_temp.convert_quote_to_order_smoke(
     v_q2,
@@ -266,9 +291,23 @@ BEGIN
 
   -- (f) Adding a product with no inventory snapshot creates that row before
   -- prebooking, so the ledger and physical snapshot cannot diverge.
-  INSERT INTO products (product_name, unit_size)
-  VALUES ('[SMOKE] Draw Lock New Product ' || v_suffix, 'gal')
-  RETURNING id INTO v_product_2;
+  SELECT p.id INTO v_product_2
+  FROM products p
+  WHERE p.is_active IS TRUE
+    AND p.current_cost IS NOT NULL
+    AND p.current_cost > 0
+    AND p.current_cost = round(p.current_cost, 2)
+    AND p.current_cost <= 7
+    AND p.id IS DISTINCT FROM v_product
+    AND NOT EXISTS (
+      SELECT 1 FROM inventory i
+      WHERE i.product_id = p.id AND i.location = 'Main Warehouse'
+    )
+  ORDER BY p.current_cost, p.id
+  LIMIT 1;
+  IF v_product_2 IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: need a second active product costing 7.00 or less with no Main Warehouse inventory row';
+  END IF;
   PERFORM update_order_items(v_o2,
     jsonb_build_array(
       jsonb_build_object(

@@ -597,7 +597,7 @@
     },
     "restore_quote_version": {
       "chain": "smoke-restore-version-drawn-guard.sql",
-      "description": "Drawn-version and row-version restore guard: restoring a snapshot below the drawn ledger raises BOOKING_OVERDRAWN (fall-below AND removes branches; the section DELETE rolls back atomically), while the row-version matrix separately proves owner-only access, stale-writer rejection before child replacement, exact N+1 success, and request-bound replay. A legal restore (>= drawn) succeeds to 'revised' with the ledger intact and then draws to closure; a no-draws control quote restores freely.",
+      "description": "Drawn-version and row-version restore guard, as rewritten by 20260816120000. A booking that has EVER been drawn now refuses restore up front with QUOTE_RESTORE_BLOCKED_BY_DRAW — before any destructive work — so all three drawn scenarios are refused identically whether the snapshot falls BELOW the drawn ledger, REMOVES the drawn product, or sits ABOVE it; the section DELETE inside restore rolls back atomically each time, and the booking still draws its remainder to closure from its un-restored state. The older BOOKING_OVERDRAWN quantity comparison is unreachable through restore as a result. The row-version matrix separately proves owner-only access, stale-writer rejection before child replacement, exact N+1 success, and request-bound replay; a no-draws control quote restores freely. REQUIRES 20260816120000: on a schema without it, scenario (a) reports the old BOOKING_OVERDRAWN fall-below instead and the chain fails rather than skipping. Container proof: node scripts/smoke/prove-draw-down-price-tier-real-schema.mjs",
       "covers": [
         "restore_quote_version",
         "create_quote_version",

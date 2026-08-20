@@ -1,0 +1,223 @@
+#!/usr/bin/env node
+/**
+ * Disposable PostgreSQL 17 proof for the draw-down price-tier split migration
+ * (20260816120000_draw_down_split_order_lines_by_price_tier).
+ *
+ * It restores the supported baseline, replays every ledger-selected migration
+ * up to the one immediately BEFORE this candidate, and first proves the smoke
+ * FAILS there — the guard it asserts does not exist yet, so a passing run would
+ * mean the smoke proves nothing. It then applies the candidate and requires the
+ * same smoke to execute to SMOKE_PASS_ROLLBACK. It never reads a DB URL and
+ * always removes its network-disabled container.
+ */
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const NAME = `crx-draw-tier-schema-${process.pid}-${Date.now().toString(36)}`;
+const IMAGE = 'public.ecr.aws/supabase/postgres:17.6.1.143';
+const BASELINE = path.join(ROOT, 'supabase', 'baselines');
+const candidate = path.join(ROOT, 'supabase', 'migrations', '20260816120000_draw_down_split_order_lines_by_price_tier.sql');
+// The live apply was assigned version 20260816174353; B7 kept the logical
+// filename below on disk after that version was recorded in Supabase.
+const liveHighWater = path.join(ROOT, 'supabase', 'migrations', '20260813080000_lock_quote_versions_writes_to_rpc.sql');
+const smokeFile = path.join(ROOT, 'scripts', 'smoke', 'smoke-restore-version-drawn-guard.sql');
+const pricedProductSmokeFiles = [
+  path.join(ROOT, 'scripts', 'smoke', 'smoke-order-draw-lock.sql'),
+  path.join(ROOT, 'scripts', 'smoke', 'smoke-auth-probe-template.sql'),
+  path.join(ROOT, 'scripts', 'smoke', 'smoke-planned-holds-drawn-sync.sql'),
+  path.join(ROOT, 'scripts', 'smoke', 'smoke-draw-ledger-reversal.sql'),
+  path.join(ROOT, 'scripts', 'smoke', 'smoke-job_from_quote_activity_feed_fix.sql'),
+];
+const expectedSkippedMigrations = ['20260810010308_active_team_note_assignment_actor.sql'];
+
+function docker(args, options = {}) {
+  const result = spawnSync('docker', args, { cwd: ROOT, encoding: 'utf8', maxBuffer: 60 * 1024 * 1024, ...options });
+  if (result.error || (!options.allowFailure && result.status !== 0)) throw new Error(`${result.error?.message ?? ''}\n${result.stderr || result.stdout}`.trim());
+  return result;
+}
+function psql(sql, options = {}) {
+  return docker(['exec', '-i', NAME, 'psql', '-U', options.user ?? 'postgres', '-d', 'postgres', '-X', '-q', '-v', 'ON_ERROR_STOP=1'], { input: sql, allowFailure: options.allowFailure });
+}
+function copy(local, name) { docker(['cp', local, `${NAME}:/tmp/${name}`]); }
+function apply(name, user) { psql(`\\i /tmp/${name}`, { user }); }
+/**
+ * Apply one migration the way the real Supabase apply path does: the whole file
+ * in a SINGLE transaction. Several migrations use SET LOCAL / LOCK TABLE, which
+ * are silently degraded (or hard errors) under psql autocommit, so replaying
+ * them statement-at-a-time would not reproduce production behaviour.
+ * Verified for this replay set: no migration uses CREATE INDEX CONCURRENTLY,
+ * VACUUM, or its own BEGIN/COMMIT, so none of them is transaction-hostile.
+ */
+function applyMigration(name, options = {}) {
+  const result = docker(
+    ['exec', '-i', NAME, 'psql', '-U', 'postgres', '-d', 'postgres', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-1', '-f', `/tmp/${name}`],
+    { allowFailure: options.allowFailure },
+  );
+  return { status: result.status, output: `${result.stdout}\n${result.stderr}`.trim() };
+}
+function wait(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+function waitForDatabase() {
+  for (let attempt = 0; attempt < 90; attempt += 1) {
+    if (docker(['exec', NAME, 'pg_isready', '-U', 'postgres', '-d', 'postgres'], { allowFailure: true }).status === 0
+      && docker(['exec', NAME, 'psql', '-U', 'postgres', '-d', 'postgres', '-Atqc', 'SELECT 1'], { allowFailure: true }).stdout.trim() === '1') return;
+    wait(500);
+  }
+  throw new Error(`disposable PostgreSQL failed readiness: ${docker(['logs', NAME], { allowFailure: true }).stderr}`);
+}
+function selectedMigrations() {
+  const result = spawnSync(process.execPath, ['scripts/list-post-baseline-migrations.mjs'], { cwd: ROOT, encoding: 'utf8' });
+  if (result.status !== 0) throw new Error(result.stderr);
+  const migrations = result.stdout.split(/\r?\n/).filter((l) => l.startsWith('supabase/migrations/')).map((relative) => path.join(ROOT, relative));
+  const candidateIndex = migrations.indexOf(candidate);
+  const liveHighWaterIndex = migrations.indexOf(liveHighWater);
+  assert.notEqual(candidateIndex, -1, 'candidate migration is not in the ledger-selected post-baseline replay');
+  assert.notEqual(liveHighWaterIndex, -1, 'verified live high-water migration is not in the ledger-selected post-baseline replay');
+  assert.ok(liveHighWaterIndex < candidateIndex, 'verified live high-water source must precede the parked candidate in disk replay order');
+  return migrations.slice(0, candidateIndex + 1);
+}
+function runSmoke(file, tag) {
+  copy(file, `${tag}-${path.basename(file)}`);
+  const result = psql(`\\i /tmp/${tag}-${path.basename(file)}`, { allowFailure: true });
+  return { status: result.status, output: `${result.stdout}\n${result.stderr}`.trim() };
+}
+
+try {
+  for (const file of [candidate, liveHighWater, smokeFile, ...pricedProductSmokeFiles]) assert.ok(readFileSync(file, 'utf8').length > 0, `missing required artifact ${file}`);
+  docker(['run', '-d', '--name', NAME, '--network', 'none', '--tmpfs', '/var/lib/postgresql/data:rw,noexec,nosuid,size=1024m', '-e', 'POSTGRES_PASSWORD=postgres', IMAGE]);
+  waitForDatabase();
+
+  const artifacts = ['20260727174805_extensions.sql', '20260727174805_acl_lockdown.sql', '20260727174805_platform_overlay.sql', '20260727174805_cron_jobs.sql', '20260727174805_migration_history.sql'];
+  for (const artifact of artifacts) copy(path.join(BASELINE, artifact), artifact);
+  const schema = spawnSync(process.execPath, ['scripts/decompress-schema-baseline.mjs'], { cwd: ROOT, maxBuffer: 20 * 1024 * 1024 });
+  if (schema.status !== 0) throw new Error(`baseline decompression failed: ${schema.stderr.toString()}`);
+  apply('20260727174805_extensions.sql');
+  psql(schema.stdout.toString());
+  psql(`
+    CREATE SCHEMA IF NOT EXISTS storage;
+    CREATE TABLE IF NOT EXISTS storage.buckets (
+      id text PRIMARY KEY, name text NOT NULL, public boolean NOT NULL DEFAULT false,
+      file_size_limit bigint, allowed_mime_types text[]
+    );
+    CREATE TABLE IF NOT EXISTS storage.objects (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(), bucket_id text NOT NULL,
+      name text NOT NULL, owner_id text
+    );
+    CREATE OR REPLACE FUNCTION storage.foldername(name text) RETURNS text[] LANGUAGE sql IMMUTABLE AS $$ SELECT string_to_array(name, '/') $$;
+    CREATE OR REPLACE FUNCTION storage.filename(name text) RETURNS text LANGUAGE sql IMMUTABLE AS $$ SELECT split_part(name, '/', array_length(string_to_array(name, '/'), 1)) $$;
+  `, { user: 'supabase_admin' });
+  apply('20260727174805_acl_lockdown.sql');
+  apply('20260727174805_platform_overlay.sql', 'supabase_admin');
+  apply('20260727174805_cron_jobs.sql');
+  psql('CREATE SCHEMA IF NOT EXISTS supabase_migrations; CREATE TABLE IF NOT EXISTS supabase_migrations.schema_migrations (version text PRIMARY KEY, name text NOT NULL, statements text[]);');
+  apply('20260727174805_migration_history.sql');
+
+  const migrations = selectedMigrations();
+  const candidateIndex = migrations.indexOf(candidate);
+
+  // Some already-applied historical migrations open with a PREFLIGHT DO block
+  // asserting the exact live base they were authored against (function body
+  // md5, policy text, trigger shape). Those are apply-time gates for the LIVE
+  // database and were satisfied there; a from-scratch container rebuild is a
+  // different base, so such a gate can fail on a divergence that is real but
+  // historical and unrelated to this candidate. The one known drifted file is
+  // SKIPPED (the whole migration is one transaction, so nothing partial lands)
+  // and REPORTED. The exact-name assertion below fails closed if that known
+  // exception disappears or if any additional migration starts failing. Any
+  // other error is fatal. The candidate's own guards are never skipped.
+  const skipped = [];
+  for (const [index, migration] of migrations.slice(0, candidateIndex).entries()) {
+    const name = `migration-${index}.sql`;
+    copy(migration, name);
+    const applied = applyMigration(name, { allowFailure: true });
+    if (applied.status === 0) continue;
+    if (!/PREFLIGHT_FAIL/.test(applied.output)) {
+      throw new Error(`replay failed on ${path.basename(migration)}:\n${applied.output}`);
+    }
+    skipped.push({ file: path.basename(migration), reason: (applied.output.match(/PREFLIGHT_FAIL[^\n]*/) ?? ['PREFLIGHT_FAIL'])[0] });
+  }
+  console.log(`[prover] replayed ${candidateIndex - skipped.length}/${candidateIndex} post-baseline migrations up to (not including) the candidate`);
+  if (skipped.length > 0) {
+    console.log(`[prover] SKIPPED ${skipped.length} migration(s) on historical live-base drift:`);
+    for (const entry of skipped) console.log(`[prover]   - ${entry.file}\n[prover]     ${entry.reason}`);
+  }
+  assert.deepEqual(
+    skipped.map((entry) => entry.file),
+    expectedSkippedMigrations,
+    'historical PREFLIGHT skip set changed; re-review the replay base before trusting this proof',
+  );
+
+  psql(`
+    ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS banned_until timestamptz;
+    CREATE TABLE IF NOT EXISTS auth.sessions (user_id uuid);
+    CREATE TABLE IF NOT EXISTS auth.refresh_tokens (user_id varchar);
+    GRANT DELETE ON auth.sessions, auth.refresh_tokens TO postgres;
+  `, { user: 'supabase_admin' });
+  psql(`
+    INSERT INTO auth.users (id, email, raw_user_meta_data) VALUES
+      ('00000000-0000-4000-8000-000000000001', 'draw-tier-admin@example.invalid', '{"full_name":"Draw Tier Admin","role":"admin"}'),
+      ('00000000-0000-4000-8000-000000000002', 'draw-tier-driver@example.invalid', '{"full_name":"Draw Tier Driver","role":"driver"}'),
+      ('00000000-0000-4000-8000-000000000003', 'draw-tier-backup-admin@example.invalid', '{"full_name":"Draw Tier Backup Admin","role":"admin"}')
+    ON CONFLICT (id) DO NOTHING;
+    INSERT INTO public.profiles (id, email, role, is_active) VALUES
+      ('00000000-0000-4000-8000-000000000001', 'draw-tier-admin@example.invalid', 'admin', true),
+      ('00000000-0000-4000-8000-000000000002', 'draw-tier-driver@example.invalid', 'driver', true),
+      ('00000000-0000-4000-8000-000000000003', 'draw-tier-backup-admin@example.invalid', 'admin', true)
+    ON CONFLICT (id) DO UPDATE SET role = EXCLUDED.role, is_active = true;
+  `);
+
+  // The smoke borrows two already-priced products (a real database always has
+  // them). This container is schema-only, so seed them here. Pricing cannot be
+  // written through the governed trigger without a full previewed change set,
+  // so disable that trigger for the seed alone — safe because this container is
+  // disposable and the trigger is restored immediately. Nothing here runs
+  // against, or resembles a write to, the live database.
+  psql(`
+    ALTER TABLE public.products DISABLE TRIGGER trigger_y_require_governed_product_pricing;
+    INSERT INTO public.products (product_name, unit_size, current_cost, tier1_price)
+    VALUES ('[PROVER] Draw Tier A', 'gal', 3.00, 10.00),
+           ('[PROVER] Draw Tier B', 'gal', 4.00, 8.00);
+    ALTER TABLE public.products ENABLE TRIGGER trigger_y_require_governed_product_pricing;
+  `);
+
+  // ---- Mutation test: the smoke must NOT pass before the candidate applies ----
+  const before = runSmoke(smokeFile, 'before');
+  console.log(`[prover] PRE-CANDIDATE smoke tail:\n${before.output.split('\n').slice(-6).join('\n')}`);
+  assert.doesNotMatch(
+    before.output,
+    /SMOKE_PASS_ROLLBACK/,
+    `smoke reached SMOKE_PASS_ROLLBACK BEFORE the candidate applied — it does not actually prove the new guard:\n${before.output}`,
+  );
+
+  // The five pricing-fixture regressions target the verified LIVE schema.
+  // Run them before the parked candidate: that candidate deliberately blocks
+  // restore-after-draw, which is still an expected scenario in the older
+  // planned-holds smoke and is not part of this fixture repair.
+  for (const file of pricedProductSmokeFiles) {
+    const result = runSmoke(file, 'current-live');
+    assert.notEqual(result.status, 0, `${path.basename(file)} unexpectedly committed instead of rolling back:\n${result.output}`);
+    assert.match(result.output, /SMOKE_PASS_ROLLBACK/, `${path.basename(file)} did not execute to SMOKE_PASS_ROLLBACK on the current live schema:\n${result.output}`);
+    console.log(`[prover] CURRENT-LIVE PASS ${path.basename(file)}`);
+  }
+
+  // ---- Apply the candidate, then require a real pass ----
+  copy(candidate, 'candidate.sql');
+  applyMigration('candidate.sql');
+  console.log('[prover] candidate migration applied');
+
+  const after = runSmoke(smokeFile, 'after');
+  assert.notEqual(after.status, 0, `smoke unexpectedly committed instead of rolling back:\n${after.output}`);
+  assert.match(after.output, /SMOKE_PASS_ROLLBACK/, `smoke did not execute to SMOKE_PASS_ROLLBACK after the candidate applied:\n${after.output}`);
+
+  console.log(`[prover] current-live source replay plus parked candidate reached ${path.basename(migrations.at(-1))}`);
+
+  console.log('DRAW_TIER_REAL_SCHEMA_PASS baseline=20260727174805 live_high_water=20260816174353 priced_product_smokes=5/5 parked_candidate=20260816120000 pre_candidate=FAILED_AS_REQUIRED post_candidate=SMOKE_PASS_ROLLBACK smoke=smoke-restore-version-drawn-guard.sql');
+} catch (error) {
+  console.error(`DRAW_TIER_REAL_SCHEMA_FAIL ${error.stack ?? error.message}`);
+  process.exitCode = 1;
+} finally {
+  docker(['rm', '-f', NAME], { allowFailure: true });
+}

@@ -2,6 +2,26 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-20 — Current-schema smoke fixtures use governed catalog pricing
+
+Five quote-based smoke chains had silently rotted after product pricing became
+governed and quote items began requiring a positive catalog cost. They created
+pricing-free product shells (or tried to create a product with pricing), so the
+current schema rejected the fixture before the behavior under test ran.
+
+- The chains now borrow real positive whole-cent catalog costs without writing
+  to those products, and use the borrowed cost in each quote line.
+- The planned-holds chain also preserves current quote-item IDs and governed
+  tier pricing across saves and refreshes replacement IDs after version restore,
+  matching the current quote editor contract.
+- The disposable current-live-schema prover now directly runs all five chains,
+  including the auth template and job-from-quote chain that previously had no
+  runner. Its schema-only catalog seeds priced products with the pricing trigger
+  disabled only for the seed, then restores the trigger before any smoke runs.
+- Proof observed: all five chains reached `SMOKE_PASS_ROLLBACK`; the parked
+  draw-down candidate still failed its pre-apply mutation control and passed its
+  post-apply restore guard; both row-version provers remained green.
+
 ## 2026-08-19 — Blend-ticket total-volume check no longer adds quantities across different units
 
 `validateBlendMath` summed every product quantity regardless of unit, so a ticket holding

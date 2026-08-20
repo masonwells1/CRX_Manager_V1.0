@@ -27,6 +27,21 @@ AS $helper$
 DECLARE
   v_result jsonb;
 BEGIN
+  -- Signature-newest-first. The below-cost approval work (20260812115237)
+  -- widened this wrapper to (uuid,uuid,text,bigint,text) with
+  -- p_below_cost_reason last, and every argument after the first carries a
+  -- DEFAULT. That matters: the three-argument fallback at the bottom still
+  -- RESOLVES against the widened function, silently defaulting
+  -- p_expected_row_version to NULL, which the row-version guard rejects as
+  -- QUOTE_STALE_WRITE long before the logic this chain exists to prove.
+  -- Probing the widest signature first keeps the row version actually sent.
+  IF to_regprocedure('public.convert_quote_to_order(uuid,uuid,text,bigint,text)') IS NOT NULL THEN
+    EXECUTE
+      'SELECT public.convert_quote_to_order($1, $2, $3, $4, NULL::text)'
+      INTO v_result
+      USING p_quote_id, p_performed_by, p_idempotency_key, p_expected_row_version;
+    RETURN v_result;
+  END IF;
   IF to_regprocedure('public.convert_quote_to_order(uuid,uuid,text,bigint)') IS NOT NULL THEN
     EXECUTE
       'SELECT public.convert_quote_to_order($1, $2, $3, $4)'

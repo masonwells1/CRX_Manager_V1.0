@@ -87,8 +87,14 @@ function assertSmokeRolloutCompatibility() {
     convertHelper: verifyGroup(
       convertQuoteSmokeFiles,
       'convert_quote_to_order_smoke',
-      'public.convert_quote_to_order(uuid,uuid,text,bigint)',
-      "'SELECT public.convert_quote_to_order($1, $2, $3, $4)'",
+      // Pin the WIDEST live signature, not the historical one. Pinning the
+      // narrower (uuid,uuid,text,bigint) form kept asserting a probe that
+      // matches nothing on the current catalog, so every one of these chains
+      // silently fell through to a three-argument call that defaults
+      // p_expected_row_version to NULL. A stale pin here is what let that rot
+      // stay green.
+      'public.convert_quote_to_order(uuid,uuid,text,bigint,text)',
+      "'SELECT public.convert_quote_to_order($1, $2, $3, $4, NULL::text)'",
       /(?:^|[^\w.])(?:public\.)?convert_quote_to_order\(/m,
     ),
   };
@@ -198,6 +204,52 @@ SELECT concat(
 ROLLBACK;
 `);
   assert.equal(newConvert, 'new:23', 'convert_quote_to_order smoke helper must pass the token to the new catalog');
+
+  // The WIDENED catalog — the shape actually deployed since 20260812115237.
+  // Without this case the two above still pass while the helper falls through
+  // to a three-argument call, because p_below_cost_reason's DEFAULT lets a
+  // short call resolve against the wide function with a NULL row version. That
+  // is precisely the rot this proof failed to catch, so it is pinned here: the
+  // stub RAISES rather than returning if the token does not arrive.
+  const widenedConvert = scalar(`
+BEGIN;
+CREATE OR REPLACE FUNCTION public.convert_quote_to_order(
+  p_quote_id uuid,
+  p_performed_by uuid,
+  p_idempotency_key text,
+  p_expected_row_version bigint DEFAULT NULL,
+  p_below_cost_reason text DEFAULT NULL
+)
+RETURNS jsonb LANGUAGE plpgsql
+AS $stub$
+BEGIN
+  IF p_expected_row_version IS NULL THEN
+    RAISE EXCEPTION 'WIDENED_CATALOG_LOST_ROW_VERSION';
+  END IF;
+  RETURN jsonb_build_object('shape', 'widened', 'expected', p_expected_row_version);
+END;
+$stub$;
+CREATE TEMP TABLE new_quotes(id uuid PRIMARY KEY, row_version bigint NOT NULL);
+INSERT INTO new_quotes VALUES ('${quoteId}', 29);
+${convertHelper}
+SELECT concat(
+  pg_temp.convert_quote_to_order_smoke(
+    '${quoteId}',
+    '${actorId}',
+    NULL,
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM new_quotes q WHERE q.id = '${quoteId}')
+  )->>'shape',
+  ':',
+  pg_temp.convert_quote_to_order_smoke(
+    '${quoteId}',
+    '${actorId}',
+    NULL,
+    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM new_quotes q WHERE q.id = '${quoteId}')
+  )->>'expected'
+);
+ROLLBACK;
+`);
+  assert.equal(widenedConvert, 'widened:29', 'convert_quote_to_order smoke helper must pass the token to the WIDENED live catalog');
 }
 function asyncSql(sql, applicationName) {
   return new Promise((resolve, reject) => {
@@ -666,7 +718,12 @@ function assertChildOwnershipContract() {
   assert.match(smoke, /quote-restore replay was not bound to the original versioned request/, 'registered smoke must prove exact restore replay binding');
   assert.match(
     quoteBuilder,
-    /restoreQuoteVersionWithRowVersion\(\{[\s\S]*?p_version_id: versionId,[\s\S]*?p_idempotency_key: restoreAttempt\.key,[\s\S]*?p_expected_row_version: restoreAttempt\.expectedRowVersion/,
+    // The argument object may be wrapped by withBelowCostReason(), which
+    // 20260812115237's approval flow added between the call and its literal.
+    // Only that exact wrapper is tolerated — the four fields it must carry are
+    // still pinned in order, so an argument object that quietly drops the
+    // idempotency key or the loaded row-version token still fails.
+    /restoreQuoteVersionWithRowVersion\(\s*(?:withBelowCostReason\(\s*'restore_quote_version',\s*)?\{[\s\S]*?p_version_id: versionId,[\s\S]*?p_idempotency_key: restoreAttempt\.key,[\s\S]*?p_expected_row_version: restoreAttempt\.expectedRowVersion/,
     'QuoteBuilder restore must preserve one idempotency key and loaded row-version token',
   );
   assert.match(
@@ -805,7 +862,7 @@ INSERT INTO public.quotes VALUES ('one','original',1); INSERT INTO public.custom
     psql("INSERT INTO public.quotes(id,value) VALUES ('new','inserted'); INSERT INTO public.customers(id,value) VALUES ('new','inserted');");
     assert.equal(scalar("SELECT row_version FROM public.quotes WHERE id='new'"), '1');
     assert.equal(scalar("SELECT row_version FROM public.customers WHERE id='new'"), '1');
-    console.log('ROW_VERSION_DISPOSABLE_PROOF_PASS pre_fix_overwrite=confirmed canonical_contract=preserved validation_order=split-stale-lifecycle-unplan-write canonical_mutation_self_tests=status,sent_at,validation_order,quote_ownership,quote_action_lock_order,lifecycle_token quote_ownership=direct,replay,version,convert,restore quote_action_lock_order=advisory-before-row lifecycle_action=writer-between-load-and-action-rejected restore_replay=payload-owner-current-token-bound smoke_signature_compat=create-legacy,new;convert-legacy,new reverse_order_deadlock=detected quote_single_bump_shape=verified quote_lock_orders=both customer_lock_orders=both idempotent_replay=payload-bound,current-token-verified insert_defaults=verified');
+    console.log('ROW_VERSION_DISPOSABLE_PROOF_PASS pre_fix_overwrite=confirmed canonical_contract=preserved validation_order=split-stale-lifecycle-unplan-write canonical_mutation_self_tests=status,sent_at,validation_order,quote_ownership,quote_action_lock_order,lifecycle_token quote_ownership=direct,replay,version,convert,restore quote_action_lock_order=advisory-before-row lifecycle_action=writer-between-load-and-action-rejected restore_replay=payload-owner-current-token-bound smoke_signature_compat=create-legacy,new;convert-legacy,new,widened reverse_order_deadlock=detected quote_single_bump_shape=verified quote_lock_orders=both customer_lock_orders=both idempotent_replay=payload-bound,current-token-verified insert_defaults=verified');
   } finally {
     docker(['rm', '-f', name], undefined, true);
   }

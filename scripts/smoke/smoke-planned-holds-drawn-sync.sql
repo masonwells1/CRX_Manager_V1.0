@@ -49,6 +49,13 @@ AS $helper$
 DECLARE
   v_result jsonb;
 BEGIN
+  IF to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)') IS NOT NULL THEN
+    EXECUTE
+      'SELECT public.restore_quote_version($1, $2, $3, $4, $5, NULL::text)'
+      INTO v_result
+      USING p_quote_id, p_version_id, p_performed_by, p_idempotency_key, p_expected_row_version;
+    RETURN v_result;
+  END IF;
   IF to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint)') IS NOT NULL THEN
     EXECUTE
       'SELECT public.restore_quote_version($1, $2, $3, $4, $5)'
@@ -97,7 +104,9 @@ $helper$;
 DO $smoke$
 DECLARE
   v_admin uuid; v_cust uuid; v_pa uuid; v_pb uuid; v_q uuid;
+  v_cost_a numeric; v_cost_b numeric; v_price_a numeric; v_price_b numeric;
   v_s1 uuid; v_s2 uuid; v_res jsonb; v_ver uuid; v_quote_version bigint;
+  v_item_a_early uuid; v_item_a_late uuid; v_item_b_early uuid;
   v_pa_total numeric; v_pb_total numeric; v_cnt int;
   v_e1 date; v_e2 date;
   v_payload jsonb; v_sections jsonb;
@@ -111,19 +120,51 @@ BEGIN
   PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
   INSERT INTO customers (farm_name) VALUES ('[SMOKE] PHS Farm ' || sfx) RETURNING id INTO v_cust;
-  -- Hold quantities do not need a pricing mutation; use pricing-free shells
-  -- so this focused hold proof respects the governed product-pricing path.
-  INSERT INTO products (product_name, unit_size) VALUES ('[SMOKE] PHS A ' || sfx, 'gal') RETURNING id INTO v_pa;
-  INSERT INTO products (product_name, unit_size) VALUES ('[SMOKE] PHS B ' || sfx, 'gal') RETURNING id INTO v_pb;
+  -- Current quote-item triggers require a real catalog cost, while governed
+  -- pricing forbids creating a throwaway product with that cost. Borrow two
+  -- priced products without changing them. Use each product's governed tier-1
+  -- price as well as its cost because save_quote recalculates from that tier.
+  SELECT id, current_cost, tier1_price INTO v_pa, v_cost_a, v_price_a
+  FROM products
+  WHERE is_active IS TRUE
+    AND current_cost IS NOT NULL
+    AND current_cost > 0
+    AND current_cost = round(current_cost, 2)
+    AND tier1_price IS NOT NULL
+    AND tier1_price >= current_cost
+    AND tier1_price = round(tier1_price, 2)
+  ORDER BY current_cost, id
+  LIMIT 1;
+  SELECT id, current_cost, tier1_price INTO v_pb, v_cost_b, v_price_b
+  FROM products
+  WHERE is_active IS TRUE
+    AND current_cost IS NOT NULL
+    AND current_cost > 0
+    AND current_cost = round(current_cost, 2)
+    AND tier1_price IS NOT NULL
+    AND tier1_price >= current_cost
+    AND tier1_price = round(tier1_price, 2)
+    AND id IS DISTINCT FROM v_pa
+  ORDER BY current_cost, id
+  LIMIT 1;
+  IF v_pa IS NULL OR v_pb IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: need two distinct active products with positive whole-cent cost and a tier-1 price at or above cost';
+  END IF;
 
   INSERT INTO quotes (quote_number, customer_id, created_by, status, is_planned, commission_split)
   VALUES ('[SMOKE] PHS-' || sfx, v_cust, v_admin, 'sent', true, '{"splits": []}'::jsonb) RETURNING id INTO v_q;
   INSERT INTO quote_sections (quote_id, section_name, sort_order, needed_by_date) VALUES (v_q, 'Early', 0, DATE '2026-07-01') RETURNING id INTO v_s1;
   INSERT INTO quote_sections (quote_id, section_name, sort_order, needed_by_date) VALUES (v_q, 'Late', 1, DATE '2026-08-01') RETURNING id INTO v_s2;
   INSERT INTO quote_items (quote_id, section_id, product_id, price_per_unit, current_cost, total_units_needed, unit_size, sort_order, calc_mode)
-  VALUES (v_q, v_s1, v_pa, 10, 6, 300, 'gal', 0, 'units_direct'),
-         (v_q, v_s2, v_pa, 10, 6, 200, 'gal', 0, 'units_direct'),
-         (v_q, v_s1, v_pb, 8, 4, 100, 'gal', 1, 'units_direct');
+  VALUES (v_q, v_s1, v_pa, v_price_a, v_cost_a, 300, 'gal', 0, 'units_direct'),
+         (v_q, v_s2, v_pa, v_price_a, v_cost_a, 200, 'gal', 0, 'units_direct'),
+         (v_q, v_s1, v_pb, v_price_b, v_cost_b, 100, 'gal', 1, 'units_direct');
+  SELECT id INTO v_item_a_early FROM quote_items
+  WHERE quote_id = v_q AND section_id = v_s1 AND product_id = v_pa;
+  SELECT id INTO v_item_a_late FROM quote_items
+  WHERE quote_id = v_q AND section_id = v_s2 AND product_id = v_pa;
+  SELECT id INTO v_item_b_early FROM quote_items
+  WHERE quote_id = v_q AND section_id = v_s1 AND product_id = v_pb;
 
   -- (a) create_planned_holds: full reservation, per-item expiry
   v_res := create_planned_holds(v_q, v_admin, NULL);
@@ -166,10 +207,10 @@ BEGIN
   v_payload := jsonb_build_object('quote_number', '[SMOKE] PHS-' || sfx, 'customer_id', v_cust, 'status', 'sent', 'tier', 1);
   v_sections := jsonb_build_array(
     jsonb_build_object('section_name', 'Early', 'sort_order', 0, 'items', jsonb_build_array(
-      jsonb_build_object('product_id', v_pa, 'calc_mode', 'units_direct', 'total_units_needed', 200, 'price_per_unit', 10, 'current_cost', 6, 'sort_order', 0),
-      jsonb_build_object('product_id', v_pb, 'calc_mode', 'units_direct', 'total_units_needed', 100, 'price_per_unit', 8, 'current_cost', 4, 'sort_order', 1))),
+      jsonb_build_object('id', v_item_a_early, 'product_id', v_pa, 'calc_mode', 'units_direct', 'total_units_needed', 200, 'price_per_unit', v_price_a, 'current_cost', v_cost_a, 'sort_order', 0),
+      jsonb_build_object('id', v_item_b_early, 'product_id', v_pb, 'calc_mode', 'units_direct', 'total_units_needed', 100, 'price_per_unit', v_price_b, 'current_cost', v_cost_b, 'sort_order', 1))),
     jsonb_build_object('section_name', 'Late', 'sort_order', 1, 'items', jsonb_build_array(
-      jsonb_build_object('product_id', v_pa, 'calc_mode', 'units_direct', 'total_units_needed', 200, 'price_per_unit', 10, 'current_cost', 6, 'sort_order', 0))));
+      jsonb_build_object('id', v_item_a_late, 'product_id', v_pa, 'calc_mode', 'units_direct', 'total_units_needed', 200, 'price_per_unit', v_price_a, 'current_cost', v_cost_a, 'sort_order', 0))));
   SELECT (to_jsonb(q)->>'row_version')::bigint
   INTO v_quote_version
   FROM quotes q
@@ -220,6 +261,23 @@ BEGIN
   IF v_pa_total <> 150 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (e) after restore holds pa=% (expected 150)', v_pa_total;
   END IF;
+
+  -- Restoring a version replaces quote-item rows, so the next save must carry
+  -- the replacement IDs. Reusing the pre-restore IDs makes duplicate-product
+  -- cost mapping ambiguous and is correctly rejected by the current guard.
+  SELECT id INTO v_s1 FROM quote_sections
+  WHERE quote_id = v_q AND section_name = 'Early';
+  SELECT id INTO v_s2 FROM quote_sections
+  WHERE quote_id = v_q AND section_name = 'Late';
+  SELECT id INTO v_item_a_early FROM quote_items
+  WHERE quote_id = v_q AND section_id = v_s1 AND product_id = v_pa;
+  SELECT id INTO v_item_a_late FROM quote_items
+  WHERE quote_id = v_q AND section_id = v_s2 AND product_id = v_pa;
+  SELECT id INTO v_item_b_early FROM quote_items
+  WHERE quote_id = v_q AND section_id = v_s1 AND product_id = v_pb;
+  v_sections := jsonb_set(v_sections, '{0,items,0,id}', to_jsonb(v_item_a_early));
+  v_sections := jsonb_set(v_sections, '{0,items,1,id}', to_jsonb(v_item_b_early));
+  v_sections := jsonb_set(v_sections, '{1,items,0,id}', to_jsonb(v_item_a_late));
 
   -- (f) plan switched off: save_quote releases everything transactionally.
   UPDATE quotes SET is_planned = false WHERE id = v_q;
