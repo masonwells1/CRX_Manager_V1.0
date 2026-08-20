@@ -141,9 +141,7 @@ function selectedMigrationsThroughCandidate() {
   });
   assert.equal(listed.status, 0, `could not enumerate post-baseline migrations:\n${listed.stderr}`);
   const selectorNotice = listed.stderr.trim().replace(/\r?\n/g, ' | ');
-  if (selectorNotice) {
-    console.log(`FULL_SCHEMA_REPLAY_SELECTOR_NOTICE ${selectorNotice}`);
-  }
+  console.log(`FULL_SCHEMA_REPLAY_SELECTOR_NOTICE ${selectorNotice || 'none'}`);
   const migrations = listed.stdout.split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => /^supabase\/migrations\/\d{14}_[^/]+\.sql$/.test(line))
@@ -253,7 +251,7 @@ function restoreFullSchemaAndRunSmoke() {
   );
   console.log(
     `FULL_SCHEMA_DRAW_SMOKE_PASS baseline=${baselineHighWater} replayed=${migrations.length} `
-      + 'money_inventory=SMOKE_PASS_ROLLBACK',
+      + 'money_commission_inventory=SMOKE_PASS_ROLLBACK',
   );
 }
 
@@ -881,7 +879,7 @@ async function main() {
     console.log('  exact pricing/lifecycle prerequisite hashes and drift mutation: PASS');
     console.log('  single-transaction apply guard: PASS');
     console.log('  exclusive cutover drain plus unexpired legacy receipt refusal: PASS');
-    console.log('  restored full schema + real money/inventory rollback smoke: PASS');
+    console.log('  restored full schema + real money/commission/inventory rollback smoke: PASS');
     console.log('  network: none; storage: tmpfs; live Supabase: untouched');
   } finally {
     docker(['rm', '-f', CONTAINER], { allowFailure: true });

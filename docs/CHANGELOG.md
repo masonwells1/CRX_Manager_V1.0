@@ -44,6 +44,11 @@ booking/order visibility boundary. The hash-bearing lifecycle migration, this mi
 smoke and its prover are all pinned to LF in `.gitattributes`, and the tests/prover hash their exact
 on-disk bytes instead of normalizing line endings and hiding an apply-time mismatch.
 
+Operator consequence for the later apply: draw receipts live 24 hours, so the preflight requires a
+deliberate 24-hour window with no successful booking draws before this fourth migration can land.
+Plan that freeze for an off-season or weekend window, verify the read-only receipt count is zero,
+and keep draws paused through commit. This PR still does not start or authorize that freeze/apply.
+
 Added focused migration/RPC contracts, real QuoteBuilder component recovery tests, and a
 container-only rollback smoke covering exact replay, changed quantity, changed actor,
 cross-representative success, required-key refusal, one $10 sale / $5 cost / $5 profit
@@ -64,7 +69,8 @@ only for adversarial wrapper schedules. A second database restores the supported
 through this candidate while surfacing the quarantined one-shot set, and
 executes `smoke-draw-down-quote-intent-binding.sql` against the real tier-split money, commission,
 inventory and draw-ledger implementation to `SMOKE_PASS_ROLLBACK`. It proves one $10 sale / $5 cost
-/ $5 profit line and header, one inventory prebooking, one bound receipt and one draw-ledger row.
+/ $5 profit line and header, one exact $5 commission, one inventory prebooking, one bound receipt
+and one draw-ledger row.
 The compact schedules pass admin/rep authorization, inactive,
 missing-profile, unauthenticated and actor-parameter refusals, key-required and keyed input guards,
 exact replay, changed/non-numeric/non-finite quantity, changed receipt actor,

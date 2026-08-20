@@ -128,6 +128,7 @@ describe('draw_down_quote actor and intent binding migration', () => {
     );
     expect(migrationSql).toContain("operation = 'draw_down_quote'\n       AND expires_at > now()");
     expect(migrationSql).toContain('unexpired legacy draw_down_quote receipts exist');
+    expect(migrationSql).toContain("current_setting('transaction_isolation')");
   });
 
   it('binds the key to actor, quote, ordered canonical draws, and the saved result', () => {
@@ -228,6 +229,8 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(smokeSql).toContain('request_fingerprint IS NOT NULL');
     expect(smokeSql).toContain('oi.price_per_unit = 10.00');
     expect(smokeSql).toContain('oi.cost_at_time_cents = 500');
+    expect(smokeSql).toContain('c.commission_amount = 5.00');
+    expect(smokeSql).toContain('c.recipient_user_id = v_rep_a');
     expect(smokeSql).toContain('i.quantity_prebooked = 1');
     expect(smokeSql).toContain("RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';");
     expect(proverSource).toContain("const smokeSql = readFileSync(SMOKE_PATH, 'utf8');");

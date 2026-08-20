@@ -10,6 +10,12 @@
 -- until a separate migration-review/apply session and Mason's explicit in-chat
 -- approval. The repository PR may merge without applying it.
 --
+-- OPERATOR CONSEQUENCE: draw retry receipts live for 24 hours, and this file
+-- refuses while any pre-wrapper draw_down_quote receipt remains retryable.
+-- Before the eventual governed apply, plan a deliberate 24-hour freeze with no
+-- successful booking draws (normally an off-season or weekend window), verify
+-- the read-only receipt count is zero, and keep draws paused through commit.
+--
 -- Why a wrapper instead of rewriting the private money implementation:
 -- 20260816120000 deliberately replaced weighted-average pricing with one line
 -- per immutable quote-item tier. Copying that large body here would create a
@@ -75,6 +81,11 @@ DECLARE
   );
   v_src text;
 BEGIN
+  IF current_setting('transaction_isolation') IS DISTINCT FROM 'read committed' THEN
+    RAISE EXCEPTION
+      'DRAW_DOWN_INTENT_PREFLIGHT: transaction isolation must be read committed so the post-drain receipt scan sees newly committed receipts';
+  END IF;
+
   IF (SELECT count(*)
         FROM pg_proc p
         JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -554,7 +565,11 @@ BEGIN
      OR has_function_privilege('anon', v_private, 'EXECUTE')
      OR has_function_privilege('authenticated', v_private, 'EXECUTE')
      OR has_function_privilege('service_role', v_private, 'EXECUTE')
-     OR NOT has_function_privilege('postgres', v_private, 'EXECUTE') THEN
+     OR NOT has_function_privilege('postgres', v_private, 'EXECUTE')
+     OR has_function_privilege('anon', v_money_impl, 'EXECUTE')
+     OR has_function_privilege('authenticated', v_money_impl, 'EXECUTE')
+     OR has_function_privilege('service_role', v_money_impl, 'EXECUTE')
+     OR NOT has_function_privilege('postgres', v_money_impl, 'EXECUTE') THEN
     RAISE EXCEPTION
       'DRAW_DOWN_INTENT_POSTFLIGHT: wrapper ACL boundary changed';
   END IF;

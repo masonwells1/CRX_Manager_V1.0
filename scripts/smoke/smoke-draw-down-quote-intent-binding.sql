@@ -92,7 +92,18 @@ BEGIN
   INSERT INTO public.quotes (
     quote_number, customer_id, created_by, status, commission_split
   ) VALUES (
-    'SMK-DRAW-IDM-' || v_suffix, v_customer, v_rep_b, 'sent', '{"splits":[]}'::jsonb
+    'SMK-DRAW-IDM-' || v_suffix,
+    v_customer,
+    v_rep_b,
+    'sent',
+    jsonb_build_object(
+      'splits',
+      jsonb_build_array(jsonb_build_object(
+        'recipient', '[SMOKE] Draw Rep A',
+        'recipient_user_id', v_rep_a,
+        'percentage', 100
+      ))
+    )
   ) RETURNING id INTO v_quote;
 
   INSERT INTO public.quote_sections (quote_id, section_name, sort_order)
@@ -232,6 +243,19 @@ BEGIN
       AND o.booking_draw IS TRUE
   ) THEN
     RAISE EXCEPTION 'SMOKE_FAIL: order header money does not match its tier line';
+  END IF;
+
+  SELECT count(*) INTO v_count
+  FROM public.commissions c
+  WHERE c.order_id = v_order_id
+    AND c.customer_id = v_customer
+    AND c.recipient_user_id = v_rep_a
+    AND c.split_percentage = 100
+    AND c.commission_amount = 5.00
+    AND c.order_profit = 5.00
+    AND c.status = 'pending';
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: expected one exact $5 commission row, found %', v_count;
   END IF;
 
   IF NOT EXISTS (
