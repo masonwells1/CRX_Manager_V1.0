@@ -30,6 +30,7 @@ import { applyTimeWriteTargets, overlappingTables } from "./apply-time-dml-lib.m
 
 const REQUIRED_CODEX_MODEL = "gpt-5.6-sol";
 const REQUIRED_CODEX_EFFORT = "high";
+const CRX_PRODUCTION_REF = "rhyzpcqhnizqbxphqdkr";
 
 function out(decision, reason) {
   const payload = decision === "block"
@@ -37,6 +38,83 @@ function out(decision, reason) {
     : { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } };
   process.stdout.write(JSON.stringify(payload));
   process.exit(0);
+}
+
+function targetTable(target) {
+  const parts = String(target || "").replaceAll('"', "").toLowerCase().split(".");
+  return parts[0] === "public" ? (parts[1] || "") : (parts[0] || "");
+}
+
+function loadTrustedFanout(evidenceRoots) {
+  const scanned = new Set();
+  const opaque = new Set();
+  const fanout = new Map();
+  const manifests = [];
+  for (const root of evidenceRoots) {
+    const manifestPath = path.join(root, "scripts", "trigger-fanout.json");
+    if (!existsSync(manifestPath)) continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(readFileSync(manifestPath, "utf8"));
+    } catch (err) {
+      throw new Error(`${manifestPath}: ${err?.message || err}`);
+    }
+    if (parsed?._meta?.source_project !== CRX_PRODUCTION_REF ||
+        !Array.isArray(parsed?.tables_scanned) || !Array.isArray(parsed?.opaque_on_tables) ||
+        !parsed?.fanout || typeof parsed.fanout !== "object" || Array.isArray(parsed.fanout)) {
+      throw new Error(`${manifestPath}: invalid or unbound trigger fan-out manifest`);
+    }
+    for (const table of parsed.tables_scanned) {
+      if (typeof table !== "string" || !table.trim()) throw new Error(`${manifestPath}: invalid scanned table`);
+      scanned.add(table.toLowerCase());
+    }
+    for (const table of parsed.opaque_on_tables) {
+      if (typeof table !== "string" || !table.trim()) throw new Error(`${manifestPath}: invalid opaque table`);
+      opaque.add(table.toLowerCase());
+    }
+    for (const [sourceRaw, edges] of Object.entries(parsed.fanout)) {
+      const source = sourceRaw.toLowerCase();
+      if (!Array.isArray(edges)) throw new Error(`${manifestPath}: invalid fan-out edge list for ${source}`);
+      const union = fanout.get(source) || new Map();
+      for (const edge of edges) {
+        const target = String(edge?.target || "").trim().toLowerCase();
+        const via = String(edge?.via || "").trim();
+        if (!target || !via) throw new Error(`${manifestPath}: invalid fan-out edge for ${source}`);
+        union.set(`${target}\0${via}`, { target, via });
+      }
+      fanout.set(source, union);
+    }
+    manifests.push(manifestPath);
+  }
+  if (manifests.length === 0) throw new Error("no trigger-fanout.json in any verified checkout");
+  return {
+    scanned,
+    opaque,
+    fanout: new Map([...fanout].map(([source, edges]) => [source, [...edges.values()]])),
+    manifests,
+  };
+}
+
+function expandThroughFanout(analysis, evidence) {
+  const targets = new Set(analysis.targets || []);
+  const tables = new Set([...targets].map(targetTable).filter(Boolean));
+  const queue = [...tables];
+  const visited = new Set();
+  const opaqueSources = new Set();
+  while (queue.length) {
+    const source = queue.shift();
+    if (!source || visited.has(source)) continue;
+    visited.add(source);
+    if (!evidence.scanned.has(source) || evidence.opaque.has(source)) opaqueSources.add(source);
+    for (const edge of evidence.fanout.get(source) || []) {
+      targets.add(`${edge.target}.*`);
+      if (!tables.has(edge.target)) {
+        tables.add(edge.target);
+        queue.push(edge.target);
+      }
+    }
+  }
+  return { targets, tables, opaqueSources };
 }
 
 let payload;
@@ -121,14 +199,14 @@ const safeName = migName.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80) || "unkno
 // library's internal "this name has no timestamp" case abstains.
 const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 {
-  const snapPath = path.join(stateDir, "applied-migrations.json");
+  const snapPaths = [...new Set(proofDirs.map((dir) => path.join(dir, "applied-migrations.json")))];
+  let snapPath = snapPaths[0];
   // The recapture target must be the project THIS apply is aimed at. Reading it
   // from the environment printed a literal `<your project ref>` in every normal
   // hook run — neither manifest exports SUPABASE_PROJECT_REF — and a stray env
   // value could have pointed the operator at a different project's ledger, which
   // the snapshot format cannot detect. The apply call itself is authoritative.
   // (Codex P2, PR #354.)
-  const CRX_PRODUCTION_REF = "rhyzpcqhnizqbxphqdkr";
   const targetRef =
     (input.project_id || "").toString().trim() ||
     (process.env.SUPABASE_PROJECT_REF || "").toString().trim() ||
@@ -138,19 +216,54 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
     `  node scripts/refresh-applied-migrations.mjs\n` +
     `That command verifies the linked checkout is project ${CRX_PRODUCTION_REF}, queries its ` +
     `migration ledger directly, and refuses mismatched or malformed output. ` +
-    `The snapshot is gitignored in the primary linked checkout, so a fresh clone or a newer apply elsewhere ` +
+    `The snapshot is gitignored in this session's active checkout, so a fresh clone or a newer apply elsewhere ` +
     `means it must be regenerated. Do NOT hand-write it.`;
 
   let appliedNames = [];
   let snapshotAgeMs = null;
   try {
-    if (!existsSync(snapPath)) {
-      out("block",
-        `MIGRATION ORDERING GUARD: no applied-migration snapshot at ${snapPath}, so there is no ` +
-        `evidence of what the database has already run and an out-of-order replay could not be ` +
-        `detected. Refusing the apply.\n\n${howTo}`);
+    const candidates = [];
+    const readErrors = [];
+    for (const candidatePath of snapPaths) {
+      if (!existsSync(candidatePath)) continue;
+      try {
+        const parsed = JSON.parse(readFileSync(candidatePath, "utf8"));
+        candidates.push({
+          snapPath: candidatePath,
+          parsed,
+          capturedAt: Date.parse(parsed?.captured_at ?? ""),
+        });
+      } catch (err) {
+        readErrors.push(`${candidatePath}: ${err?.message || err}`);
+      }
     }
-    const parsed = JSON.parse(readFileSync(snapPath, "utf8"));
+    if (candidates.length === 0) {
+      out("block",
+        `MIGRATION ORDERING GUARD: no readable applied-migration snapshot in this session's verified ` +
+        `checkout paths (${snapPaths.join(", ")}), so there is no ` +
+        `evidence of what the database has already run and an out-of-order replay could not be ` +
+        `detected. Refusing the apply.` +
+        (readErrors.length ? ` Read error(s): ${readErrors.join("; ")}.` : "") +
+        `\n\n${howTo}`);
+    }
+    // Prefer the newest database capture when both the active worktree and the
+    // primary checkout still hold evidence. The invalidator removes both after
+    // every apply; this ordering handles pre-fix leftovers without choosing a
+    // known-older ledger. Equal-time snapshots must agree byte-for-byte in
+    // meaning or the evidence is ambiguous and the apply is refused.
+    candidates.sort((a, b) =>
+      (Number.isFinite(b.capturedAt) ? b.capturedAt : -Infinity) -
+      (Number.isFinite(a.capturedAt) ? a.capturedAt : -Infinity));
+    const freshest = candidates[0];
+    const tied = candidates.filter((candidate) => candidate.capturedAt === freshest.capturedAt);
+    if (tied.some((candidate) => JSON.stringify(candidate.parsed) !== JSON.stringify(freshest.parsed))) {
+      out("block",
+        `MIGRATION ORDERING GUARD: multiple verified checkout snapshots claim the same capture time ` +
+        `but contain different ledgers (${tied.map((candidate) => candidate.snapPath).join(", ")}). ` +
+        `Refusing ambiguous ordering evidence.\n\n${howTo}`);
+    }
+    snapPath = freshest.snapPath;
+    const parsed = freshest.parsed;
 
     // The snapshot must name the database it was read from, and that database
     // must be the one this apply is aimed at. Time, count and names alone are
@@ -357,6 +470,17 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
         `data repair, so this apply is refused. Restore the file from git (it is tracked) and retry.`);
     }
 
+    let fanoutEvidence;
+    try {
+      fanoutEvidence = loadTrustedFanout(evidenceRoots);
+    } catch (err) {
+      out("block",
+        `ONE-SHOT REPLAY GUARD: trusted trigger/FK fan-out evidence could not be loaded ` +
+        `(${err?.message || err}). A directly named table is not the complete apply-time write ` +
+        `surface when live triggers or referential actions can rewrite another population. ` +
+        `Refusing the apply; restore or regenerate scripts/trigger-fanout.json and retry.`);
+    }
+
     // Normalize for comparison: lowercase, strip comments, collapse whitespace.
     //
     // COMMENTS COME OUT VIA A SCANNER, NOT A REGEX (Codex High, round 20).
@@ -517,6 +641,7 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
       // rather than waving the migration through.
       submitted = { targets: new Set(), dynamicWrites: [], unresolved: true };
     }
+    const submittedFanout = expandThroughFanout(submitted, fanoutEvidence);
 
     const ledgerHas = (stem) => {
       const version = (stem.match(/\d{14}/) || [])[0];
@@ -540,6 +665,7 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
               `apply; restore the tracked SQL file and retry.`);
           }
           const registered = applyTimeWriteTargets(sourceSql);
+          const registeredFanout = expandThroughFanout(registered, fanoutEvidence);
           const resolvedWrite = registered.targets.size > 0;
           const opaqueWrite = registered.unresolved || registered.dynamicWrites.length > 0 ||
             registered.unknownCalls?.length > 0;
@@ -550,7 +676,7 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
               `A nonempty but corrupted/read-only source cannot identify the registered repair. ` +
               `Refusing the apply; restore the tracked SQL file and retry.`);
           }
-          sourceFiles.push({ filePath, sourceSql, registered });
+          sourceFiles.push({ filePath, sourceSql, registered, registeredFanout });
         } catch (err) {
           out("block",
             `ONE-SHOT REPLAY GUARD: ${stem} is registered as a population-bound migration, ` +
@@ -574,7 +700,7 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
         // Same reason the registry is read from every verified checkout: the
         // migration file for a branch-local one-shot exists only in the
         // worktree (Codex High, round 12).
-        for (const { filePath, sourceSql, registered } of sourceFiles) {
+        for (const { filePath, sourceSql, registered, registeredFanout } of sourceFiles) {
           try {
             const normFile = norm(sourceSql);
             if (normFile && (normQuery.includes(normFile) || normFile.includes(normQuery))) {
@@ -601,7 +727,7 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
             // needing the override. Nothing in the registry does this today, so
             // it costs nothing until someone registers dynamic SQL — at which
             // point a prompt is the correct outcome.
-            const submittedHasEffect = submitted.targets.size || submitted.unresolved ||
+            const submittedHasEffect = submittedFanout.targets.size || submitted.unresolved ||
               submitted.dynamicWrites.length || submitted.unknownCalls?.length;
             if ((registered.unresolved || registered.dynamicWrites.length ||
                  registered.unknownCalls?.length) && submittedHasEffect) {
@@ -610,7 +736,7 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
                 `write target is decided at runtime`;
               break;
             }
-            if (registered.targets.size === 0) continue;
+            if (registeredFanout.targets.size === 0) continue;
 
             // Table-level on purpose (Codex High, round 27). A trigger that
             // recomputes money from sibling columns re-runs the registered
@@ -618,11 +744,31 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
             // profit` re-fires the same correction `SET total_price =
             // total_price` did. The column is still reported; it just cannot
             // narrow the match.
-            const hits = overlappingTables(submitted.targets, registered.targets);
+            const regTables = new Set([...registeredFanout.targets].map(targetTable).filter(Boolean));
+            const hits = overlappingTables(submittedFanout.targets, registeredFanout.targets);
             if (hits.length) {
               matched =
                 `what it writes when it applies — ${[...new Set(hits)].sort().join(", ")} — ` +
-                `in a table ${stem}.sql already wrote`;
+                `in a table ${stem}.sql already wrote directly or through live trigger/FK fan-out`;
+              break;
+            }
+
+            // The manifest records every edge it can prove, then marks a source
+            // opaque when live behavior is incomplete or unreadable. Known
+            // edges above still match specifically; opacity below refuses the
+            // remaining unknown surface instead of treating it as empty.
+            if (submittedFanout.opaqueSources.size && regTables.size) {
+              matched =
+                `an apply-time write whose live trigger/FK fan-out is opaque on ` +
+                `${[...submittedFanout.opaqueSources].sort().join(", ")}, so it cannot be ruled out ` +
+                `against ${stem}.sql (${[...regTables].sort().join(", ")})`;
+              break;
+            }
+            if (registeredFanout.opaqueSources.size && submittedHasEffect) {
+              matched =
+                `an apply-time write that cannot be cleared against ${stem}.sql because that registered ` +
+                `repair has opaque live trigger/FK fan-out on ` +
+                `${[...registeredFanout.opaqueSources].sort().join(", ")}`;
               break;
             }
 
@@ -631,7 +777,6 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
             // neither can SQL this module failed to parse. Both fail toward
             // refusing: an override prompt costs one message, a missed replay
             // costs a money population.
-            const regTables = new Set([...registered.targets].map((t) => t.split(".")[0]));
             if (submitted.unresolved && regTables.size) {
               matched =
                 `an apply-time write whose target table is decided at runtime, which cannot be ` +

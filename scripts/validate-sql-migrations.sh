@@ -1435,10 +1435,26 @@ $MIG_BASENAME
       # (Codex High, round 28.) Reported on the `indirect` channel, which is
       # already a refusal for the same reason: a body that writes a protected
       # table has run, and no digest bound the rows it touched.
-      function fires_trigger(t, p,   n, arr, k) {
+      function fires_trigger(t, p,   n, arr, k, original, schema) {
         if (t == "") return
+        original = t
         gsub(/"/, "", t)
+        gsub(/"/, "", original)
+        schema = ""
+        if (original ~ /\./) {
+          schema = original
+          sub(/\..*$/, "", schema)
+        }
         sub(/^[a-z0-9_]+\./, "", t)
+        # Preserve the relation as a live-catalog fan-out source even when this
+        # migration defines no trigger itself. Plain INSERTs reach this function
+        # and then leave the rewrite scanner; without this separate channel the
+        # checked-in trigger/FK manifest is never consulted for them.
+        if ((schema == "" || schema == "public") &&
+            t ~ ("^(" tables ")$") && !seenfanout[t]) {
+          seenfanout[t] = 1
+          printf "%d\t%s\t%s\t%s\t%s\t%s\n", tokln[p], t, "fanout-source", "-", "-", raw[tokln[p]]
+        }
         if (rulerel[t] && !seenrule[t]) {
           seenrule[t] = 1
           printf "%d\t%s\t%s\t%s\t%s\t%s\n", tokln[p], "rule_on_" t, "indirect", "-", "-", raw[tokln[p]]
@@ -1869,7 +1885,8 @@ $MIG_BASENAME
     INDIRECT_HITS=$(printf '%s\n' "$SCAN_HITS" | awk -F'\t' 'NF && $3 == "indirect"')
     VIEWWRITE_HITS=$(printf '%s\n' "$SCAN_HITS" | awk -F'\t' 'NF && $3 == "viewwrite"')
     UNRESOLVED_HITS=$(printf '%s\n' "$SCAN_HITS" | awk -F'\t' 'NF && $3 == "unresolved"')
-    REWRITES=$(printf '%s\n' "$SCAN_HITS" | awk -F'\t' 'NF && $3 != "dynamic" && $3 != "indirect" && $3 != "viewwrite" && $3 != "unresolved"')
+    FANOUT_SOURCES=$(printf '%s\n' "$SCAN_HITS" | awk -F'\t' 'NF && $3 == "fanout-source"')
+    REWRITES=$(printf '%s\n' "$SCAN_HITS" | awk -F'\t' 'NF && $3 != "dynamic" && $3 != "indirect" && $3 != "viewwrite" && $3 != "unresolved" && $3 != "fanout-source"')
 
     if [ -n "$DYNAMIC_HITS" ]; then
       echo "VIOLATION: $file"
@@ -1931,7 +1948,7 @@ $MIG_BASENAME
       VIOLATIONS=$((VIOLATIONS + 1))
     fi
 
-    if [ -n "$REWRITES" ]; then
+    if [ -n "$REWRITES" ] || [ -n "$FANOUT_SOURCES" ]; then
       # ---- FOLD IN WHAT THE TRIGGERS REWRITE (Codex High, round 31) --------
       # See the manifest block near the top of this script. A cascade target is
       # appended as a synthetic rewrite row so that EVERY existing mechanism
@@ -1951,7 +1968,10 @@ $MIG_BASENAME
       # the missing hops.
       CASCADE_UNKNOWN=""
       CASCADE_WHY=""
-      DIRECT_TABLES=$(printf '%s\n' "$REWRITES" | cut -f2 | sort -u)
+      DIRECT_TABLES=$(
+        { printf '%s\n' "$REWRITES"; printf '%s\n' "$FANOUT_SOURCES"; } |
+          awk -F'\t' 'NF >= 2 && $2 != "" { print $2 }' | sort -u
+      )
       while IFS= read -r c_src; do
         if [ -z "$c_src" ]; then
           continue
@@ -1976,14 +1996,30 @@ $MIG_BASENAME
           if ! printf '%s\n' "$BUSINESS_ROW_TABLES" | tr '|' '\n' | grep -qx "$f_tgt"; then
             continue
           fi
-          c_line=$(printf '%s\n' "$REWRITES" | awk -F'\t' -v t="$c_src" '$2 == t { print $1; exit }')
-          REWRITES="$REWRITES
-$c_line	$f_tgt	cascade	-	-	trigger $f_via on $c_src"
+          c_line=$(
+            { printf '%s\n' "$REWRITES"; printf '%s\n' "$FANOUT_SOURCES"; } |
+              awk -F'\t' -v t="$c_src" '$2 == t { print $1; exit }'
+          )
+          cascade_row="$c_line	$f_tgt	cascade	-	-	trigger $f_via on $c_src"
+          if [ -n "$REWRITES" ]; then
+            REWRITES="$REWRITES
+$cascade_row"
+          else
+            REWRITES="$cascade_row"
+          fi
           if [ -z "$CASCADE_WHY" ]; then
             CASCADE_WHY="the write to $c_src at line $c_line fires the trigger function $f_via, which rewrites $f_tgt. Those $f_tgt rows are not in the captured id set, are not in the digest, and are not counted by the ROW_COUNT assertion, so this repair would rewrite them with no approval covering them at all. An approved-set repair binds ONE table; rewrite $f_tgt through its own migration, or waive it with an APPROVED_SET_DIGEST: NOT-REQUIRED marker that names both $c_src and $f_tgt and says why the cascade needs no approval."
           fi
         done <<< "$TRIGGER_FANOUT_PAIRS"
       done <<< "$DIRECT_TABLES"
+
+      # A plain INSERT on a fully covered source with no protected fan-out is
+      # still not a rewrite. Its marker existed only to ask the manifest this
+      # question; once the answer is a trusted empty set, preserve the original
+      # noise-free behavior and move to the next migration.
+      if [ -z "$REWRITES" ] && [ -z "$CASCADE_UNKNOWN" ]; then
+        continue
+      fi
 
       FIRST_REWRITE_LINE=$(printf '%s\n' "$REWRITES" | head -1 | cut -f1)
       REWRITE_TABLES=$(printf '%s\n' "$REWRITES" | cut -f2 | sort -u)

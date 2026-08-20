@@ -1048,6 +1048,16 @@ const CASES = [
     expect: 'silent',
     sql: `INSERT INTO public.orders (id, total_profit) VALUES (1, 0);\n`,
   },
+  {
+    // A plain INSERT can still rewrite an EXISTING population through a trigger
+    // captured in the live fan-out manifest. No trigger is defined in this
+    // migration, so the round-28 migration-local attachment scanner cannot be
+    // what catches it.
+    name: 'a plain INSERT that fires checked-in live fan-out is reported',
+    expect: 'violation',
+    mustReport: 'write_product_pricing_history',
+    sql: `INSERT INTO public.products (id) VALUES ('00000000-0000-0000-0000-000000000001');\n`,
+  },
 
   // ── round 9: TRUNCATE ───────────────────────────────────────────────────
   // The most total rewrite there is, and it spells neither UPDATE nor DELETE,
@@ -2316,6 +2326,18 @@ function runTriggerFanoutFailsClosed() {
     visibleFields.opaque_on_tables = visibleFields.opaque_on_tables.filter((t) => t !== 'fields');
     expect('an UPSERT conflict arm in a fields trigger binds field_crop_history',
       json(visibleFields), fanoutBlock('fields', 'crop_type'), 'field_crop_history');
+
+    const visibleOrderItems = structuredClone(live);
+    visibleOrderItems.opaque_on_tables = visibleOrderItems.opaque_on_tables.filter((t) => t !== 'order_items');
+    const orderItemInsert =
+      `INSERT INTO public.order_items (id) VALUES ('00000000-0000-0000-0000-000000000001');\n`;
+    expect('a plain order_items INSERT follows the checked-in trigger edge into orders',
+      json(visibleOrderItems), orderItemInsert, 'trigger trg_recalc_order_totals on order_items');
+
+    const insertFanoutMutant = structuredClone(visibleOrderItems);
+    insertFanoutMutant.fanout.order_items = [];
+    expect('MUTANT: removing the order_items live edge lets the plain INSERT survive',
+      json(insertFanoutMutant), orderItemInsert, null);
 
     const unscanned = structuredClone(live);
     unscanned.tables_scanned = unscanned.tables_scanned.filter((t) => t !== 'orders');

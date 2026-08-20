@@ -2,6 +2,25 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-19 — PR #364 final replay-guard findings repaired
+
+Closed three exact-commit adversarial findings in the migration safety harness; no app source,
+migration SQL, live database, or production data changed.
+
+- Applied-ledger captures now belong to the active checkout that ran the read-only command. The
+  apply guard accepts only verified active/primary checkout locations, selects the newest capture,
+  rejects ambiguous equal-time evidence, and the post-apply invalidator removes every copy that the
+  guard could select.
+- The approved-set SQL validator now sends plain `INSERT` sources through the checked-in live
+  trigger/FK fan-out graph. Existing public business-table cascades are protected without turning
+  scratch, temporary, infrastructure, non-public, or newly created tables into rewrites.
+- The apply-time one-shot replay guard now compares transitive live trigger/FK effects, not only
+  directly named tables, and fails closed when the relevant live fan-out is opaque.
+
+Focused proof: snapshot producer 14 assertions; applied-source containment pass; apply-time guard
+236 assertions; approved-set validator 160 mutation cases. Each new edge has a removal mutant that
+survives only when the load-bearing protection is deliberately deleted.
+
 ## 2026-08-19 — Product data model: build plan revision 2 after independent Fable…
 
 Product data model: build plan revision 2 after independent Fable review (26 findings) and orchestration design; recorded owner decisions D-J (chemistry edits admin-only) and D-K (unlisted brand never blocks receiving) in DECISION_LOG. Planning only — nothing built, pushed, migrated, or applied.

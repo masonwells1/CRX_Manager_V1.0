@@ -82,7 +82,7 @@ export function writeAppliedSnapshotAtomically(snapshot, outPath, {
 }
 
 export function captureAppliedMigrations({
-  projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd(),
+  projectDir = process.cwd(),
   linkedRoot,
   run,
 } = {}) {
@@ -99,11 +99,12 @@ export function captureAppliedMigrations({
     fail('linked query returned an unexpected row shape');
   }
   const snapshot = buildAppliedSnapshot(row.migration_ledger, capture.projectId);
-  // The Supabase link is owned by the primary checkout. The apply hook and its
-  // invalidator are pinned there by CLAUDE_PROJECT_DIR even when the operator is
-  // working in a linked worktree, so the capture must land beside the verified
-  // link instead of in an ignored worktree-local location the guard never reads.
-  const outPath = path.join(capture.linkedRoot, '.claude', 'session-state', 'applied-migrations.json');
+  // Evidence belongs to the checkout that requested it. process.cwd() is
+  // deliberate: Claude can keep CLAUDE_PROJECT_DIR pinned to the primary while
+  // the command runs in a linked worktree. The guard verifies the hook cwd
+  // through `git worktree list` and reads this same active-checkout path. The
+  // linked primary remains the trusted query cwd; it is not the evidence owner.
+  const outPath = path.join(path.resolve(projectDir), '.claude', 'session-state', 'applied-migrations.json');
   writeAppliedSnapshotAtomically(snapshot, outPath);
   return { outPath, snapshot };
 }

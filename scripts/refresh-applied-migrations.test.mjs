@@ -101,12 +101,15 @@ check('captures rows only through the verified linked project and writes atomica
   }
 });
 
-check('a worktree invocation writes the snapshot beside the verified primary link', () => {
+check('a worktree invocation writes the snapshot in the active checkout consumed by its hook', () => {
   const linkedRoot = linkedFixture();
   const worktreeRoot = mkdtempSync(path.join(tmpdir(), 'refresh-applied-worktree-'));
+  const originalCwd = process.cwd();
+  const originalProjectDir = process.env.CLAUDE_PROJECT_DIR;
   try {
+    process.chdir(worktreeRoot);
+    process.env.CLAUDE_PROJECT_DIR = linkedRoot;
     const result = captureAppliedMigrations({
-      projectDir: worktreeRoot,
       linkedRoot,
       run: () => ({
         status: 0,
@@ -115,12 +118,15 @@ check('a worktree invocation writes the snapshot beside the verified primary lin
       }),
     });
     assert.equal(result.outPath,
-      path.join(linkedRoot, '.claude', 'session-state', 'applied-migrations.json'));
+      path.join(worktreeRoot, '.claude', 'session-state', 'applied-migrations.json'));
     assert.equal(readFileSync(result.outPath, 'utf8').includes(CRX_SUPABASE_PROJECT_ID), true);
     assert.throws(() => readFileSync(
-      path.join(worktreeRoot, '.claude', 'session-state', 'applied-migrations.json'),
+      path.join(linkedRoot, '.claude', 'session-state', 'applied-migrations.json'),
     ));
   } finally {
+    process.chdir(originalCwd);
+    if (originalProjectDir === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = originalProjectDir;
     rmSync(linkedRoot, { recursive: true, force: true });
     rmSync(worktreeRoot, { recursive: true, force: true });
   }

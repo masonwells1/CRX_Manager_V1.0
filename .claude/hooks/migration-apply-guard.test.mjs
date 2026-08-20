@@ -9,12 +9,18 @@ import assert from "node:assert/strict";
 import { spawnSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync, existsSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const FANOUT_FIXTURE = JSON.parse(readFileSync(
+  path.join(__dirname, "..", "..", "scripts", "trigger-fanout.json"),
+  "utf8",
+));
+FANOUT_FIXTURE.opaque_on_tables = [];
+FANOUT_FIXTURE.fanout = {};
 let pass = 0;
 function ok(c, m) { assert.ok(c, m); pass++; }
 function eq(a, b, m) { assert.equal(a, b, m); pass++; }
@@ -141,6 +147,9 @@ function writeOneShotRegistry(projectDir, oneShot = {}) {
   const dir = path.join(projectDir, "supabase", "baselines");
   mkdirSync(dir, { recursive: true });
   writeFileSync(path.join(dir, "one-shot-migrations.json"), JSON.stringify({ one_shot: oneShot }));
+  const manifestDir = path.join(projectDir, "scripts");
+  mkdirSync(manifestDir, { recursive: true });
+  writeFileSync(path.join(manifestDir, "trigger-fanout.json"), JSON.stringify(FANOUT_FIXTURE));
 }
 function armAutopilot(stateDir, hoursFromNow) {
   writeFileSync(path.join(stateDir, "AUTOPILOT.on"), JSON.stringify({
@@ -420,14 +429,11 @@ function armAutopilot(stateDir, hoursFromNow) {
 
     const linkedState = path.join(linked, ".claude", "session-state");
     mkdirSync(linkedState, { recursive: true });
-    // The ordering snapshot is read from CLAUDE_PROJECT_DIR, which the harness
-    // pins to `primary` throughout this fixture even when the session's cwd is
-    // the linked worktree. The no-argument producer resolves and writes beside
-    // that primary Supabase link, while proof files remain session-worktree
-    // scoped. Seed ordering evidence ONLY there so this test cannot hide a
-    // producer/consumer location mismatch.
-    mkdirSync(path.join(primary, ".claude", "session-state"), { recursive: true });
-    writeAppliedSnapshot(path.join(primary, ".claude", "session-state"));
+    // The no-argument producer writes ordering evidence in the active worktree.
+    // CLAUDE_PROJECT_DIR stays pinned to `primary` below, so this is an
+    // end-to-end regression for the producer/consumer mismatch: the guard must
+    // use the verified session cwd just as it already does for review proofs.
+    writeAppliedSnapshot(linkedState);
     writeOneShotRegistry(primary);
     // Proof exists ONLY in the linked worktree; the primary has none.
     writeProof(linkedState, BENIGN_SQL);
@@ -441,7 +447,19 @@ function armAutopilot(stateDir, hoursFromNow) {
       ({ tool_name: "mcp__supabase__apply_migration", cwd, tool_input: { project_id: "x", name, query } });
 
     let r = runHook(callFrom(linked, BENIGN_SQL), primary);
-    ok(!isDeny(r), "a proof minted in the worktree the session is working in satisfies the gate");
+    ok(!isDeny(r), "a worktree-local snapshot and proof satisfy the worktree apply gate");
+
+    // A pre-fix primary snapshot may still be present. It must not override a
+    // newer active-worktree capture merely because the primary path is listed
+    // first. This older ledger would reject MIG as out of order if selected.
+    const primaryState = path.join(primary, ".claude", "session-state");
+    mkdirSync(primaryState, { recursive: true });
+    writeAppliedSnapshot(primaryState, {
+      applied: ["20999901000000_newer_than_candidate"],
+      ageHours: 1,
+    });
+    r = runHook(callFrom(linked, BENIGN_SQL), primary);
+    ok(!isDeny(r), "the newest verified checkout snapshot wins over an older primary leftover");
 
     // Codex's blocker on the first version of this fix. Same proof, same
     // migration, same 30-minute window — only the session's checkout differs.
@@ -464,8 +482,10 @@ function armAutopilot(stateDir, hoursFromNow) {
     const nestedState = path.join(nested, ".claude", "session-state");
     mkdirSync(nestedState, { recursive: true });
     writeProof(nestedState, BENIGN_SQL);
+    writeAppliedSnapshot(nestedState);
     r = runHook(callFrom(nested, BENIGN_SQL), primary);
-    ok(!isDeny(r), "a worktree nested inside the primary checkout resolves to itself, not to its parent");
+    ok(!isDeny(r),
+      `a worktree nested inside the primary checkout resolves to itself, not to its parent: ${r.stdout || r.stderr}`);
     git(["worktree", "remove", "--force", nested], primary);
 
     r = runHook(callFrom(linked, BENIGN_SQL + " -- edited after review"), primary);
@@ -481,9 +501,6 @@ function armAutopilot(stateDir, hoursFromNow) {
     // apply with a LAPSED message. Planted in the worktree it must change
     // nothing; planted in the primary it must block. The second half proves the
     // first is not passing vacuously.
-    const primaryState = path.join(primary, ".claude", "session-state");
-    mkdirSync(primaryState, { recursive: true });
-    writeAppliedSnapshot(primaryState);
     writeFileSync(path.join(linkedState, "AUTOPILOT.on"), "not json at all");
     r = runHook(callFrom(linked, BENIGN_SQL), primary);
     ok(!isDeny(r), "a flag Mason never armed here, sitting in the session's worktree, does not change the rule-set");
@@ -1111,6 +1128,45 @@ function armAutopilot(stateDir, hoursFromNow) {
         "CREATE OR REPLACE FUNCTION public.recalc_line(p_id bigint) RETURNS void LANGUAGE plpgsql AS $$\n" +
         "BEGIN UPDATE public.order_items SET profit = 0 WHERE id = p_id; END;\n$$;");
       ok(!isOneShotDeny(r), "round-27: widening to the table did not widen past apply-time writes");
+
+      // A direct write to orders can still reach the registered order_items
+      // repair through a checked-in live trigger/FK edge. Keep only the real
+      // order_items repair in the registry so the assertion cannot pass from a
+      // direct orders overlap with the ordinary fixture.
+      writeOneShotRegistry(tmp, {
+        [REAL_STEM]: "fixture mirror of the live population-bound line-profit repair",
+      });
+      const fanoutPath = path.join(tmp, "scripts", "trigger-fanout.json");
+      const edgeManifest = structuredClone(FANOUT_FIXTURE);
+      edgeManifest.opaque_on_tables = [];
+      edgeManifest.fanout = {
+        orders: [{ target: "order_items", via: "foreign_key_fixture" }],
+      };
+      writeFileSync(fanoutPath, `${JSON.stringify(edgeManifest, null, 2)}\n`);
+      r = apply("20990601000173_r27_fanout",
+        "UPDATE public.orders SET id = id WHERE id = 7;");
+      ok(isDeny(r) && isOneShotDeny(r),
+        "round-27: checked-in orders→order_items fan-out reaches the registered repair → denied");
+      ok(`${r.stdout}\n${r.stderr}`.includes("live trigger/FK fan-out"),
+        "round-27: fan-out denial explains the transitive live effect");
+
+      const edgeMutant = structuredClone(edgeManifest);
+      edgeMutant.fanout = {};
+      writeFileSync(fanoutPath, `${JSON.stringify(edgeMutant, null, 2)}\n`);
+      r = apply("20990601000174_r27_fanout_mutant",
+        "UPDATE public.orders SET id = id WHERE id = 7;");
+      ok(!isOneShotDeny(r),
+        "MUTANT round-27: removing the orders→order_items edge lets the indirect replay survive");
+
+      const opaqueManifest = structuredClone(edgeMutant);
+      opaqueManifest.opaque_on_tables = ["orders"];
+      writeFileSync(fanoutPath, `${JSON.stringify(opaqueManifest, null, 2)}\n`);
+      r = apply("20990601000175_r27_fanout_opaque",
+        "UPDATE public.orders SET id = id WHERE id = 7;");
+      ok(isDeny(r) && isOneShotDeny(r),
+        "round-27: opaque live orders fan-out fails closed while a registered repair exists");
+      ok(`${r.stdout}\n${r.stderr}`.includes("live trigger/FK fan-out is opaque"),
+        `round-27: opaque denial names the unprovable live fan-out: ${r.stdout || r.stderr}`);
 
       writeOneShotRegistry(tmp, { [STEM]: REASON });
       rmSync(path.join(tmp, "supabase", "migrations", `${REAL_STEM}.sql`), { force: true });

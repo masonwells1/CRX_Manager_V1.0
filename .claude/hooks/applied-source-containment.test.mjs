@@ -67,6 +67,29 @@ try {
 
   const ledgerPath = path.join(tmp, ".claude", "session-state", "applied-source-ledger.json");
 
+  // The ordering snapshot is consumed from the active worktree, with the
+  // primary checkout retained as a verified fallback for pre-fix evidence.
+  // After any apply, BOTH copies must disappear or the older fallback becomes
+  // authoritative and silently omits the migration that just ran.
+  const snapshotWorktree = path.join(tmp, ".worktrees", "snapshot-invalidation");
+  git(["worktree", "add", "-q", "-b", "snapshot-invalidation", snapshotWorktree], tmp);
+  const stateRelativePath = path.relative(tmp, path.dirname(ledgerPath));
+  const primarySnapshot = path.join(path.dirname(ledgerPath), "applied-migrations.json");
+  const worktreeSnapshot = path.join(snapshotWorktree, stateRelativePath, "applied-migrations.json");
+  mkdirSync(path.dirname(primarySnapshot), { recursive: true });
+  mkdirSync(path.dirname(worktreeSnapshot), { recursive: true });
+  writeFileSync(primarySnapshot, '{"captured_at":"2026-08-19T00:00:00Z","applied":["old"]}\n');
+  writeFileSync(worktreeSnapshot, '{"captured_at":"2026-08-19T01:00:00Z","applied":["new"]}\n');
+  const invalidated = runHook(recorderPath, {
+    tool_name: "mcp__supabase__apply_migration",
+    cwd: snapshotWorktree,
+    tool_input: { name: "snapshot_invalidation_probe", query: "select 1;" },
+  }, tmp);
+  assert.equal(invalidated.status, 0, "snapshot invalidation hook exits cleanly");
+  assert.ok(!existsSync(primarySnapshot), "the primary fallback snapshot is invalidated after a worktree apply");
+  assert.ok(!existsSync(worktreeSnapshot), "the active-worktree snapshot is invalidated after its apply");
+  git(["worktree", "remove", "--force", snapshotWorktree], tmp);
+
   // ── Recorder ──
   // A non-apply tool records nothing.
   runHook(recorderPath, { tool_name: "mcp__supabase__execute_sql", tool_input: { query: "select 1" } }, tmp);

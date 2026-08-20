@@ -32,6 +32,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 
 import { withFileLock, normalizedSqlHash } from "./ledger-lock-lib.mjs";
+import { sessionProofDirs } from "./codex-push-lib.mjs";
 
 // Resolve a candidate directory to its git worktree root. The recorder
 // (PostToolUse) and stop-wrap (Stop) must agree on WHERE the ledger lives; if a
@@ -80,6 +81,7 @@ try {
   // current harness both resolve to the same directory.
   const candidateDir = String(payload?.cwd || "").trim() || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const projectDir = gitToplevelOr(candidateDir);
+  const primaryDir = process.env.CLAUDE_PROJECT_DIR || projectDir;
 
   // ── Source-containment ledger (2026-08-18, mistake class C3) ──────────────
   // Record WHAT was just applied so stop-wrap.mjs can refuse to end the session
@@ -144,23 +146,41 @@ try {
     } catch { /* fail-open */ }
   }
 
-  const snapPath = path.join(projectDir, ".claude", "session-state", "applied-migrations.json");
+  // The ordering guard accepts evidence from this verified session worktree
+  // and the primary checkout. Invalidate every path it could select; deleting
+  // only the active copy lets an older primary snapshot become authoritative
+  // immediately after an apply, which is the exact stale-ledger bypass this
+  // hook exists to prevent.
+  const snapshotDirs = sessionProofDirs(primaryDir, candidateDir, () => execFileSync(
+    "git",
+    ["worktree", "list", "--porcelain"],
+    { cwd: primaryDir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+  ));
+  const snapPaths = [...new Set(snapshotDirs.map((dir) => path.join(dir, "applied-migrations.json")))];
+  const existingSnapPaths = snapPaths.filter((snapPath) => existsSync(snapPath));
 
-  if (!existsSync(snapPath)) process.exit(0);
+  if (existingSnapPaths.length === 0) process.exit(0);
 
-  try {
-    rmSync(snapPath, { force: true });
-  } catch (err) {
+  const failures = [];
+  for (const snapPath of existingSnapPaths) {
+    try {
+      rmSync(snapPath, { force: true });
+    } catch (err) {
+      failures.push(`${snapPath} (${err?.message || err})`);
+    }
+  }
+  if (failures.length) {
     emit(
-      `APPLIED-SNAPSHOT INVALIDATION FAILED: could not remove ${snapPath} (${err?.message || err}). ` +
-      `That snapshot is now STALE — it does not include the migration just applied — and the ordering ` +
-      `guard would accept it for up to 24 hours. Delete it by hand before the next apply.`
+      `APPLIED-SNAPSHOT INVALIDATION FAILED: could not remove ${failures.join("; ")}. ` +
+      `Those snapshots are now STALE — they do not include the migration just applied — and the ordering ` +
+      `guard would accept them for up to 24 hours. Delete them by hand before the next apply.`
     );
   }
 
   emit(
     `Applied-migration snapshot invalidated (a migration was just applied, so the previous capture is ` +
-    `now behind the live ledger). Before the next apply, re-capture it:\n` +
+    `now behind the live ledger). Invalidated ${existingSnapPaths.length} verified checkout copy/copies. ` +
+    `Before the next apply, re-capture it:\n` +
     `  node scripts/refresh-applied-migrations.mjs\n` +
     `The producer verifies the linked CRX project and queries its ledger directly.`
   );
