@@ -182,6 +182,34 @@ adversarial proof on risky money/RLS/migration diffs is the hard gate and is **n
 anyone** — clean machine verdict or the change parks. The skill now states both explicitly so the
 two cannot be read as one.
 
+**Bot authorship is not authenticity — the comment stamp was forgeable.** Codex returned BLOCKED on
+the near-final revision: the clean-review path accepted the range line from *any* `coderabbitai[bot]`
+comment. `chat.auto_reply` is enabled and this is a **public** repo, so whoever opens a PR can ask
+the bot to echo `and <head-sha>` and that reply satisfies the gate with no review having occurred —
+while the separately-documented stale-green-check problem covers the other half. Two fixes, both
+live-verified on PR #441, 2026-08-20:
+
+1. The comments query now keeps only the canonical walkthrough comment (marker: `summarize by
+   coderabbit.ai`) and drops conversational replies (marker: `auto-generated reply by CodeRabbit`).
+   Measured: 9 bot comments on the PR, exactly 1 survives the filter.
+2. Completion is now proven from `repos/<o>/<r>/commits/<HEAD>/statuses` rather than `gh pr checks`.
+   Commit statuses are written by CodeRabbit under its own credentials and bound by GitHub to one
+   SHA; a PR author cannot write one. `gh pr checks` reports what is current for the *pull request*,
+   which is not the same question.
+
+Kept honest: a `success` status proves CodeRabbit **processed** that SHA, not that it read anything.
+FarmRx head `3beb6407`, where CodeRabbit answered "No files to review", still carries `Review
+completed / success`. So the status never stands alone — it pairs with the canonical stamp, and for
+a merge-only head the tree-identity proof carries the weight.
+
+**The gate is prose, so it is now pinned by a test.** `scripts/deploy-check-review-gate.test.mjs`
+(21 assertions, wired into `npm run test:agent-workflows`) asserts every one of these query shapes in
+both the `.claude` source and the generated `.agents` mirror, and asserts the absence of each
+superseded weak form — the unfiltered comment query, the grep-for-the-word completion check, the
+`origin/main` ancestry, and the PR-controlled `<FILE>` interpolation. Mutation-tested: breaking the
+chat-reply filter turns it red, restoring it turns it green. Per Mason's standing preference, a rule
+that matters becomes a hard check rather than another sentence.
+
 **Make GitHub enforce the reviewed SHA.** Re-reading `headRefOid` before merging is a soft rule an
 agent can forget; `gh pr merge --match-head-commit <SHA>` is a hard one GitHub enforces, rejecting
 the merge if the head moved. It is now required on every merge — per Mason's standing preference for

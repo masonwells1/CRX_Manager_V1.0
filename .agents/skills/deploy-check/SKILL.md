@@ -221,8 +221,18 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    ```
 
    ```bash
-   gh api --paginate repos/masonwells1/CRX_Manager_V1.0/issues/<n>/comments --jq '.[] | select(.user.login=="coderabbitai[bot]") | .body' | grep -oE "and <HEAD>"
+   gh api --paginate repos/masonwells1/CRX_Manager_V1.0/issues/<n>/comments --jq '.[] | select(.user.login=="coderabbitai[bot]") | select(.body | contains("<!-- This is an auto-generated comment: summarize by coderabbit.ai -->")) | select((.body | contains("auto-generated reply by CodeRabbit")) | not) | .body' | grep -oE "and <HEAD>"
    ```
+
+   **Those two `select` filters on the comments query are a security control, not tidiness.** An
+   earlier revision accepted the range line from *any* `coderabbitai[bot]` comment. `chat.auto_reply`
+   is enabled in `.coderabbit.yaml`, and this is a public repo where anyone may comment on a PR — so
+   a PR author could ask the bot to echo `and <head-sha>` back, and that chat reply would satisfy the
+   gate with no review having happened. Codex returned BLOCKED on exactly this and was right. The
+   filters keep only the canonical walkthrough comment, which carries the `summarize by
+   coderabbit.ai` marker, and drop every conversational reply, which carries `auto-generated reply by
+   CodeRabbit`. Measured live on PR #441, 2026-08-20: 9 bot comments on the PR, exactly 1 survives
+   the filter.
 
    A review **with findings** creates a review object, so the range line is in the first. A **clean**
    review creates no review object at all — its range line exists only in the walkthrough comment,
@@ -238,20 +248,37 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    A match on that endpoint therefore proves **identity only**; pair it with completion:
 
    ```bash
-   gh pr checks <n> --repo masonwells1/CRX_Manager_V1.0 --json name,bucket --jq '.[] | select(.name=="CodeRabbit") | .bucket'
+   test "$(gh api repos/masonwells1/CRX_Manager_V1.0/commits/<HEAD>/statuses --jq '[.[] | select(.context=="CodeRabbit")] | first | .state')" = "success" && echo CODERABBIT_COMPLETED_THIS_HEAD
    ```
 
-   Use that exact form, not `| grep -i coderabbit`: the grep prints the CodeRabbit row whether it
-   says `pass` or `pending`, so a human skimming for the word "coderabbit" reads a running review as
-   a finished one. This prints the bucket alone — `pass`, `fail`, or `pending` — and only `pass`
-   satisfies the gate. (`gh pr checks` exits 8 while any check is pending; that is the pending
-   signal, not an error. Verified live on PR #441, 2026-08-20.)
+   **Query the statuses of the head COMMIT, not the PR's check list.** `gh pr checks` reports
+   whatever is current for the pull request; `commits/<HEAD>/statuses` returns only statuses GitHub
+   has bound to that exact SHA, posted by CodeRabbit under its own credentials. A PR author cannot
+   write one. That makes it the unforgeable half of the pair, and it fails closed — the assertion is
+   silent unless the newest CodeRabbit status on that commit is `success`. Verified live on PR #441,
+   2026-08-20 (statuses are returned newest-first, hence `first`).
 
-   The comments path passes only when the stamp names the head **and** the `CodeRabbit` check has
-   settled (not `pending`). The reviews-endpoint path needs no such pairing — a review object only
-   exists once the review is submitted. Neither signal is sufficient alone: the check without the
-   stamp read green on FarmRx while the head was unreviewed; the stamp without the check passed
-   mid-review here.
+   Do **not** use `gh pr checks <n> | grep -i coderabbit`: the grep prints the CodeRabbit row whether
+   it says `pass` or `pending`, so skimming for the word reads a running review as a finished one.
+   Even `--json name,bucket` for the bucket alone is weaker than the per-commit form, because it is
+   not bound to the SHA you are about to merge.
+
+   One caveat that keeps this honest: a `success` status proves CodeRabbit **processed** that SHA,
+   not that it found anything to read. FarmRx head `3beb6407`, where CodeRabbit answered "No files to
+   review", still carries `Review completed / success`. That is why the status never stands alone —
+   it is paired with the canonical walkthrough stamp above, and for a merge-only head with no stamp
+   the tree-identity proof is what carries the weight.
+
+   The comments path passes only when the canonical walkthrough stamp names the head **and**
+   `CODERABBIT_COMPLETED_THIS_HEAD` prints for that exact SHA. The reviews-endpoint path needs no
+   such pairing — a review object only exists once the review is submitted, and a PR author cannot
+   author one as `coderabbitai[bot]`.
+
+   Neither signal is sufficient alone, and each covers a different attack: the status without the
+   stamp read green on FarmRx while the head was unreviewed, and again on a head with nothing to
+   review; the stamp without the status passed mid-review here at `b0428b2d`; and an *unfiltered*
+   stamp is forgeable outright by asking the bot to echo a SHA in chat. Only the pair — canonical
+   walkthrough plus SHA-bound status — resists all three.
 
    The `submitted_at != null` and `state != "DISMISSED"` filters on the reviews query are
    load-bearing, not decoration: the endpoint returns `PENDING` reviews (with `submitted_at: null`)
@@ -277,11 +304,14 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    and nothing objects; with it, GitHub refuses the merge outright. Always pass it — the reviewed
    SHA is the only SHA that may land.
 
-   **What never counts as proof:** a green `CodeRabbit` status check (it read green on FarmRx PR #26
-   while the head was *not* among the reviewed commits); a `submitted_at` newer than the final push
-   (any reviewer's timestamp satisfies it, and a review of the previous commit can start before the
-   push and finish after it); a "Review finished" reply (it names no SHA); or a review whose state
-   is `DISMISSED`. Timestamps are not identity — only the SHA is.
+   **What never counts as proof:** a green `CodeRabbit` entry in `gh pr checks` (it read green on
+   FarmRx PR #26 while the head was *not* among the reviewed commits); a `submitted_at` newer than
+   the final push (any reviewer's timestamp satisfies it, and a review of the previous commit can
+   start before the push and finish after it); a "Review finished" reply (it names no SHA); a review
+   whose state is `DISMISSED`; or **the range line taken from any bot comment without the canonical
+   walkthrough filters** — chat auto-reply is on, so that text can be solicited by whoever opened the
+   PR. Timestamps are not identity, and bot authorship alone is not authenticity — only the SHA, in
+   an artifact a PR author cannot manufacture, is.
 
    If neither command prints the head SHA, comment `@coderabbitai review` on the PR
    (that runs **one** incremental review of the current commit; `@coderabbitai resume` is a
