@@ -69,6 +69,26 @@ reached."** #429 merged with its later commits never auto-reviewed.
   `docs/reference/gotchas.md`, and `docs/workflows/`, so it reviews against the repo's own contract
   rather than only the inline path instructions.
 
+**A positive `path_filters` pattern switches off review for everything else.** Both CodeRabbit and
+the Codex reviewer recommended adding a positive `**/package-lock.json` filter, to override
+CodeRabbit's built-in ignore of lock files. Applied literally on FarmRx PR #26, the next review
+answered **"No files to review"** — on a PR whose one changed file was `.coderabbit.yaml` itself.
+Once *any* non-`!` pattern exists in `path_filters`, only files matching a positive pattern are
+reviewed. Two well-meant lines silently disabled code review for the whole repo, and the result
+reads as a clean pass rather than an error. A leading `**` restores default-include breadth and is
+load-bearing wherever a positive pattern is used; FarmRx carries that form, **CRX stays
+exclusion-only**. The lockfile-only blind spot on CRX is therefore a documented, accepted gap, not
+something this change closed. Never add a positive pattern to a `.coderabbit.yaml` without testing
+it on FarmRx first and confirming a real source file still appears under "Files selected for
+processing".
+
+**Reviewer advice is a hypothesis, not a patch.** Three of this session's review findings were
+correct and fixed (`.codex/**` wrongly excluded — it holds the hand-maintained
+`production-action-guard.mjs`, not generated mirrors; a blend glob that matched only filenames and
+missed `src/components/blendtickets/`; a merge gate keyed on `submitted_at` that any reviewer's
+timestamp could satisfy). The fourth would have broken the repo. The difference was testing on the
+non-production repo before applying.
+
 **Operative rules.** "Review limit reached" is a *temporary* state that refills, never evidence that
 a head went unreviewed — re-check before writing any such claim (see
 `docs/manual/KNOWN_ISSUES.md`). A review of an earlier commit is not a review of what is being
