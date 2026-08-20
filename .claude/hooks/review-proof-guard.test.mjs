@@ -231,6 +231,20 @@ for (const payload of [
   //       strip entirely (fail closed);
   { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a/../session-state" } },
   { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a/.." } },
+  { tool_name: "Bash", tool_input: { command: 'rm -rf .claude/worktrees/wt-a/"../session-state"' } },
+  //       …and blanking a cd root is disabled by traversal for the same reason
+  //       (Codex gpt-5.6-sol re-review 2026-08-19, P1 — a real hole this carve-out
+  //       opened): from inside a worktree `../..` IS the repo's own `.claude`, and
+  //       blanking the root removed the only `.claude` reference the destructive
+  //       scan had, so the `..` guard never got to fire.
+  { tool_name: "Bash", tool_input: { command: "cd C:\\repo\\.claude\\worktrees\\wt-a && find ../.. -delete" } },
+  { tool_name: "Bash", tool_input: { command: "cd C:\\repo\\.claude\\worktrees\\wt-a && rm -rf ../.." } },
+  { tool_name: "Bash", tool_input: { command: "cd .claude/worktrees/wt-a && rm -rf ../../session-state" } },
+  { tool_name: "Bash", tool_input: { command: "cd .claude/worktrees/wt-a && git clean -fdx .." } },
+  //       A quoted descendant must not launder a protected component either.
+  { tool_name: "Bash", tool_input: { command: 'rm -rf .claude/worktrees/wt-a/".claude"/session-state' } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a/'.claude'/session-state" } },
+  { tool_name: "Bash", tool_input: { command: 'rm -rf .claude/worktrees/wt-a/"*"' } },
   //   (e) a worktree path must not launder a SECOND, protected operand;
   { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a/tmp .claude/session-state" } },
   //   (f) blanking a cd target is scoped to a worktree ROOT only: a cd that stops
@@ -349,6 +363,15 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd C:\\repo\\.clau
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd .claude/worktrees/wt-a/ && rm scratch.tmp" } }).stdout, "");
 // …but degluing must not blank a cd that stops short of a worktree root.
 assert.match(run({ tool_name: "Bash", tool_input: { command: "cd/d C:\\repo\\.claude && del session-state" } }).stdout, /"permissionDecision":"deny"/);
+// Codex gpt-5.6-sol re-review 2026-08-19 (P2): quoting can hide a worktree path
+// from the BASE view and reveal it only after normalization, so the carve-out is
+// applied to every normalized view and the descendant lookahead tolerates a
+// leading quote. Without both, any worktree path containing a SPACE kept the
+// original regression.
+assert.equal(run({ tool_name: "Bash", tool_input: { command: 'rm -f .claude/worktrees/wt-a/"guard probe.tmp"' } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -f .claude/worktrees/wt-a/'guard probe.tmp'" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: 'rm -f "C:\\repo\\.claude\\worktrees\\wt-a\\guard probe.tmp"' } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: 'mv .claude/worktrees/wt-a/"a b.txt" .claude/worktrees/wt-a/"c d.txt"' } }).stdout, "");
 // Nested worktrees strip to a fixed point.
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -f .claude/worktrees/wt-a/.claude/worktrees/wt-b/tmp.txt" } }).stdout, "");
 // The ack valve still works from inside a worktree.

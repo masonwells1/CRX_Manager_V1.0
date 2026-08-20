@@ -46,7 +46,7 @@ import {
 // The preceding character is required to be a non-name character and is
 // preserved by the replacement, so `my.claude/worktrees/…` is not a prefix and
 // no verb/token can be spliced away. Nested worktrees strip to a fixed point.
-const WORKTREE_PREFIX_RE = /(^|[^\w.-])\.claude[\\/]worktrees[\\/]([^\\/\s"'*?[\]{}:;&|()<>]+)[\\/](?=[^\\/\s"'*?[\]{};&|()<>])/gi;
+const WORKTREE_PREFIX_RE = /(^|[^\w.-])\.claude[\\/]worktrees[\\/]([^\\/\s"'*?[\]{}:;&|()<>]+)[\\/](?=["']?[^\\/\s"'*?[\]{};&|()<>])/gi;
 const DOTDOT_SEGMENT_RE = /(?:^|[\\/\s"'=:;&|()<>])\.\.(?:[\\/\s"'=:;&|()<>]|$)/;
 function stripWorktreePrefix(text) {
   let out = String(text ?? "");
@@ -162,10 +162,22 @@ const command = String(input.command ?? input.cmd ?? "");
 // of the raw-only scans; the cd scanner already ran over a quote-stripped view,
 // these matchers did not).
 function shellCommandViews(cmd) {
-  const base = stripWorktreePrefix(decodeAnsiCQuotes(String(cmd || "")).replace(/[\\`]\r?\n/g, ""));
+  const base = decodeAnsiCQuotes(String(cmd || "")).replace(/[\\`]\r?\n/g, "");
   const stripQuotes = (v) => v.replace(/["']/g, "");
   const dropBackslash = (v) => v.replace(/\\(.)/g, "$1");
-  return [base, stripQuotes(base), dropBackslash(base), dropBackslash(stripQuotes(base))];
+  // The worktree carve-out is applied to EVERY normalized view, not just the
+  // base: quoting can hide a worktree path from the base view and only reveal it
+  // after normalization. `rm -f .claude/worktrees/wt-a/"guard probe.tmp"` (a
+  // descendant with a space) fails the base strip's descendant lookahead on the
+  // quote character, and stripping the carve-out only from `base` meant the
+  // quote-stripped view — where the path is plainly worktree-internal — still
+  // carried a bare `.claude` for STATE_DIR_ANCESTOR_RE to deny, so the original
+  // regression survived for any worktree path containing a space (Codex
+  // gpt-5.6-sol re-review 2026-08-19, P2). Applying it per view is safe in the
+  // other direction too: each view is stripped by the same literal, fail-closed
+  // rule, and a `..` in any view still disables that view's strip.
+  return [base, stripQuotes(base), dropBackslash(base), dropBackslash(stripQuotes(base))]
+    .map(stripWorktreePrefix);
 }
 // Applies ONLY to the shell `command` string (shell syntax). The pathCandidates
 // and hookCwd predicates above/below are literal filesystem paths, NOT shell
@@ -308,6 +320,15 @@ function blankCdWorktreeRoots(cmd) {
   // built from — inserting the space cannot hide a verb, a state-dir mention, or
   // a redirect, and offsets stay consistent because blanking happens after.
   const text = deglue(String(cmd || ""));
+  // Parent traversal disables blanking entirely, for the same reason it disables
+  // stripWorktreePrefix: from inside a worktree, `..` climbs straight back into
+  // the protected tree. `cd <repo>/.claude/worktrees/wt-a && find ../.. -delete`
+  // resolves to the repo's own `.claude` — the state dir, the ledger and every
+  // proof — and blanking the cd root removed the ONLY `.claude` reference the
+  // destructive scan had to go on, so the `..` guard never got a chance to fire
+  // (Codex gpt-5.6-sol re-review 2026-08-19, P1 — a real hole this carve-out
+  // opened; the pre-carve-out guard denied it on the cd root's `.claude`).
+  if (DOTDOT_SEGMENT_RE.test(text)) return text;
   let out = text;
   for (const match of text.matchAll(CD_CMD_RE)) {
     const runStart = match.index + match[0].length - match[1].length;
