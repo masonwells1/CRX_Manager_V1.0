@@ -1603,7 +1603,8 @@ function isExecuteSqlReadonlyLiteralPrefix(prefix) {
 }
 
 const NON_CALLABLE_PAREN_KEYWORDS = new Set([
-  "all", "any", "array", "as", "case", "cast", "exists", "in", "query", "row", "select", "values",
+  "all", "any", "array", "as", "assert", "case", "cast", "elsif", "exists", "if", "in", "query",
+  "raise", "return", "row", "select", "values", "when", "while",
 ]);
 
 function unmatchedOpenParens(prefix) {
@@ -1674,6 +1675,28 @@ function hasUnprovenCallableContext(callablePrefix, structuralPrefix, fullText, 
     if (isExecuteFormatBuilderName(name) &&
         inExecuteStatement(structuralPrefix, fullText, literalEnd)) continue;
     return true;
+  }
+  return false;
+}
+
+/** A SECURITY DEFINER wrapper can pass a forged actor through any function
+ * expression, not only CALL/PERFORM. At each actor reference, inspect every
+ * still-open parenthesis and fail closed when one belongs to a callable name.
+ * This covers SELECT helper(p_actor), assignment, RETURN, RETURN QUERY, and
+ * nested/named-argument forms without treating control-flow parentheses as
+ * calls. */
+function hasActorCallableForwarding(structuralBody, actorParams) {
+  for (const actorParam of actorParams) {
+    const reference = new RegExp(identifierReferencePattern(actorParam), "gi");
+    let match;
+    while ((match = reference.exec(structuralBody)) !== null) {
+      const prefix = structuralBody.slice(0, match.index);
+      for (const open of unmatchedOpenParens(prefix)) {
+        const name = callableNameBeforeOpen(prefix, open);
+        if (name === null || isNonCallableSqlParenContext(prefix, open)) continue;
+        return true;
+      }
+    }
   }
   return false;
 }
@@ -2425,11 +2448,14 @@ try {
       `\\b(?:CALL|PERFORM)\\b[^;]*?(?:${actorParamReference})`,
       "i"
     );
+    const actorForwardedCallable = hasActorCallableForwarding(maskedBody, actorParams) ||
+      hasActorCallableForwarding(commentBlankedBody, actorParams);
     const hasMutation = /\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM|MERGE\s+INTO)\b/i.test(maskedBody) ||
       /\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM|MERGE\s+INTO)\b/i.test(commentBlankedBody) ||
       /\bEXECUTE\b/i.test(maskedBody) ||
       actorForwardedInvocation.test(maskedBody) ||
-      actorForwardedInvocation.test(commentBlankedBody);
+      actorForwardedInvocation.test(commentBlankedBody) ||
+      actorForwardedCallable;
     if (!hasMutation) continue;
 
     const hasRecognizedActorRefusal = actorParams.every((actorParam) =>
@@ -2438,7 +2464,7 @@ try {
     if (hasRecognizedActorRefusal) continue;
 
     violations.push(
-      `Routine ${routineName}: SECURITY DEFINER, mutates or executes dynamic SQL, and declares the forgeable actor parameter(s) ` +
+      `Routine ${routineName}: SECURITY DEFINER, mutates, executes dynamic SQL, or forwards an actor to another callable, and declares the forgeable actor parameter(s) ` +
       `[${actorParams.join(", ")}] but the body does not prove an ACTOR_MISMATCH refusal for every parameter — any authenticated caller ` +
       `can attribute the write to another user.`
     );

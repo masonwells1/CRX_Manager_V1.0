@@ -86,6 +86,42 @@ END;
 r = runHook(proc(MERGE_DELETE_MUTATION));
 ok(isDeny(r), "an unbound SECURITY DEFINER procedure cannot hide an actor write in a MERGE delete branch");
 
+const INVOKER_ACTOR_HELPER = `CREATE OR REPLACE FUNCTION public.record_event_internal(p_actor uuid)
+RETURNS uuid LANGUAGE plpgsql SECURITY INVOKER SET search_path TO 'public', 'pg_temp' AS $helper$
+BEGIN
+  INSERT INTO financial_audit_log (actor_user_id) VALUES (p_actor);
+  RETURN p_actor;
+END
+$helper$;`;
+
+function forwardedActorWrapper(statement) {
+  const returnType = statement.startsWith("RETURN QUERY") ? "SETOF uuid" : "uuid";
+  return `${INVOKER_ACTOR_HELPER}
+CREATE OR REPLACE FUNCTION public.forward_actor(p_performed_by uuid)
+RETURNS ${returnType} LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $wrapper$
+DECLARE v_id uuid;
+BEGIN
+  ${statement}
+END
+$wrapper$;
+GRANT EXECUTE ON FUNCTION public.forward_actor(uuid) TO authenticated;`;
+}
+
+r = runHook(forwardedActorWrapper("SELECT public.record_event_internal(p_performed_by) INTO v_id; RETURN v_id;"));
+ok(isDeny(r), "SELECT cannot forward an unbound actor through an invoker helper from a definer wrapper");
+
+r = runHook(forwardedActorWrapper("v_id := public.record_event_internal(p_performed_by); RETURN v_id;"));
+ok(isDeny(r), "assignment cannot forward an unbound actor through a callable expression");
+
+r = runHook(forwardedActorWrapper("RETURN public.record_event_internal(p_performed_by);"));
+ok(isDeny(r), "RETURN cannot forward an unbound actor through a callable expression");
+
+r = runHook(forwardedActorWrapper("RETURN QUERY SELECT public.record_event_internal(p_performed_by);"));
+ok(isDeny(r), "RETURN QUERY cannot forward an unbound actor through a callable expression");
+
+r = runHook(fn(`BEGIN IF (p_performed_by IS NULL) THEN RETURN '{}'::jsonb; END IF; RETURN '{}'::jsonb; END;`));
+ok(!isDeny(r), "control-flow parentheses alone do not turn a non-mutating definer into an actor-forwarding call");
+
 const POST_BODY_UNBOUND = `CREATE OR REPLACE FUNCTION public.post_body_actor(p_performed_by uuid)
 RETURNS void AS $function$
 BEGIN

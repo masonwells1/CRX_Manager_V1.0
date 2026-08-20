@@ -2,7 +2,7 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-19 — Actor-binding guard recognizes equivalent routine grants
+## 2026-08-20 — Actor-binding guard closes grant-alias and callable-forwarding gaps
 
 Exact-head adversarial review found that the internal-helper ACL check parsed
 `GRANT EXECUTE` but missed PostgreSQL's equivalent `GRANT ALL` and
@@ -13,6 +13,17 @@ now treats all three grant forms equivalently and fails closed on the later
 grant. Regressions cover the reported authenticated function grant, the `ALL`
 shorthand, and a schema-wide `ALL PRIVILEGES` grant; the focused hook suite now
 passes 393 assertions.
+
+The next bounded review round found that a `SECURITY DEFINER` wrapper could
+forward its unbound actor through a normal SQL function expression such as
+`SELECT helper(p_performed_by)`, while the guard recognized only `CALL` and
+`PERFORM`. Because a `SECURITY INVOKER` helper inherits the definer wrapper's
+effective privileges, that split path could still forge a financial-audit
+actor. The guard now treats actor arguments to any callable expression as a
+mutation boundary, including assignment, `RETURN`, and `RETURN QUERY`, while
+excluding control-flow parentheses. The post-apply actor-forgery sweep now
+flags the same forwarding shape. Five regressions cover four forwarding forms
+and the non-mutating control; the focused hook suite now passes 398 assertions.
 
 ## 2026-08-13 — Actor-binding guard covers procedures and cron schema identity
 
