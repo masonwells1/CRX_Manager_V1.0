@@ -50,7 +50,13 @@ AS $helper$
 DECLARE
   v_result jsonb;
 BEGIN
-  IF to_regprocedure('public.convert_quote_to_order(uuid,uuid,text,bigint)') IS NOT NULL THEN
+  IF to_regprocedure('public.convert_quote_to_order(uuid,uuid,text,bigint,text)') IS NOT NULL THEN
+    EXECUTE
+      'SELECT public.convert_quote_to_order($1, $2, $3, $4, NULL)'
+      INTO v_result
+      USING p_quote_id, p_performed_by, p_idempotency_key, p_expected_row_version;
+    RETURN v_result;
+  ELSIF to_regprocedure('public.convert_quote_to_order(uuid,uuid,text,bigint)') IS NOT NULL THEN
     EXECUTE
       'SELECT public.convert_quote_to_order($1, $2, $3, $4)'
       INTO v_result
@@ -130,6 +136,27 @@ BEGIN
   INSERT INTO products (product_name)
   VALUES ('[SMOKE] DLR Herbicide') RETURNING id INTO v_product;
 
+  v_res := preview_product_pricing_changes(
+    'product_page', NULL,
+    jsonb_build_array(jsonb_build_object(
+      'product_id', v_product,
+      'row_version', (SELECT pricing_version FROM products WHERE id = v_product),
+      'pricing_mode', 'margin_driven',
+      'new_cost', '6.00',
+      'tier1_margin_percent', '20',
+      'tier2_margin_percent', '25',
+      'tier3_margin_percent', '30',
+      'change_reason', 'Rollback smoke draw-ledger fixture setup'
+    )),
+    v_admin, 'smk-dlr-price-preview-' || v_product::text
+  );
+  PERFORM apply_product_pricing_change_set(
+    (v_res->>'change_set_id')::uuid,
+    v_res->>'request_fingerprint',
+    v_admin,
+    'smk-dlr-price-apply-' || v_product::text
+  );
+
   -- Q1: the season booking — 500 units of one product. is_planned = true so the
   -- real planned holds can be built/rebuilt by create_planned_holds /
   -- _sync_planned_holds (S4 asserts the rebuild on draw cancel).
@@ -150,7 +177,8 @@ BEGIN
 
   -- ══ S1: partial draw 200/500 → VOID the draw order ═══════════════════════
   SELECT draw_down_quote(v_q1,
-    jsonb_build_array(jsonb_build_object('product_id', v_product, 'quantity', 200)))
+    jsonb_build_array(jsonb_build_object('product_id', v_product, 'quantity', 200)),
+    v_admin, 'smk-dlr-s1-first-' || v_q1::text)
   INTO v_res;
   IF COALESCE((v_res->>'success')::boolean, false) IS NOT TRUE THEN
     RAISE EXCEPTION 'S1: draw failed: %', v_res;
@@ -190,7 +218,8 @@ BEGIN
 
   -- balance restored: drawing 200 again must succeed
   SELECT draw_down_quote(v_q1,
-    jsonb_build_array(jsonb_build_object('product_id', v_product, 'quantity', 200)))
+    jsonb_build_array(jsonb_build_object('product_id', v_product, 'quantity', 200)),
+    v_admin, 'smk-dlr-s1-redraw-' || v_q1::text)
   INTO v_res;
   IF COALESCE((v_res->>'success')::boolean, false) IS NOT TRUE THEN
     RAISE EXCEPTION 'S1: re-draw after void failed: %', v_res;
@@ -274,7 +303,8 @@ BEGIN
 
   -- ══ S2: full draw (200 + final 300) → VOID the final draw → reopen ═══════
   SELECT draw_down_quote(v_q1,
-    jsonb_build_array(jsonb_build_object('product_id', v_product, 'quantity', 200)))
+    jsonb_build_array(jsonb_build_object('product_id', v_product, 'quantity', 200)),
+    v_admin, 'smk-dlr-s2-first-' || v_q1::text)
   INTO v_res;
   v_o3a := (v_res->>'order_id')::uuid;
   IF COALESCE((v_res->>'fully_drawn')::boolean, true) THEN
@@ -282,7 +312,8 @@ BEGIN
   END IF;
 
   SELECT draw_down_quote(v_q1,
-    jsonb_build_array(jsonb_build_object('product_id', v_product, 'quantity', 300)))
+    jsonb_build_array(jsonb_build_object('product_id', v_product, 'quantity', 300)),
+    v_admin, 'smk-dlr-s2-final-' || v_q1::text)
   INTO v_res;
   v_o3b := (v_res->>'order_id')::uuid;
   IF COALESCE((v_res->>'fully_drawn')::boolean, false) IS NOT TRUE THEN
@@ -319,7 +350,8 @@ BEGIN
   -- re-draw the restored 300 → booking fully drawn again, quote re-accepts
   -- (passes enforce_quote_accepted_fully_drawn because the ledger is full)
   SELECT draw_down_quote(v_q1,
-    jsonb_build_array(jsonb_build_object('product_id', v_product, 'quantity', 300)))
+    jsonb_build_array(jsonb_build_object('product_id', v_product, 'quantity', 300)),
+    v_admin, 'smk-dlr-s2-redraw-' || v_q1::text)
   INTO v_res;
   IF COALESCE((v_res->>'fully_drawn')::boolean, false) IS NOT TRUE THEN
     RAISE EXCEPTION 'S2: re-draw of restored 300 did not close the booking: %', v_res;

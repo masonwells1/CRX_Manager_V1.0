@@ -8,8 +8,10 @@
 -- still says 200 -> the same 100 could be drawn again).
 --
 -- HOW TO RUN: execute this whole file as a SINGLE statement (Supabase MCP
--- execute_sql, or psql -1) as postgres/service_role AFTER the migration is
--- applied. The block ALWAYS ends with RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK',
+-- execute_sql, or psql -1) as postgres after the migration under test is
+-- applied. Once the pending 20260819232000 cutover is also present, the draw
+-- wrapper is authenticated-only and service_role cannot execute it. The block
+-- ALWAYS ends with RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK',
 -- so every fixture, order, ledger row and audit row created here is rolled
 -- back — nothing persists. Any other exception text = a real failure.
 --
@@ -29,8 +31,8 @@
 --   (d) control: a WHOLE-CONVERSION order (booking_draw = false, via
 --       convert_quote_to_order) edits freely — reduce 300 -> 250 succeeds
 --       (pre-existing behavior for non-draw orders, unchanged)
---   (e) active-actor guard (rls-review L2): a DEACTIVATED admin session
---       (profiles.is_active = false, flipped txn-locally) is rejected with
+--   (e) active-actor guard (rls-review L2): a separate INACTIVE admin session
+--       (profiles.is_active = false in the rollback-only fixture) is rejected with
 --       INSUFFICIENT_ROLE — the verbatim role gate alone would have passed it
 -- ============================================================================
 
@@ -46,7 +48,13 @@ AS $helper$
 DECLARE
   v_result jsonb;
 BEGIN
-  IF to_regprocedure('public.convert_quote_to_order(uuid,uuid,text,bigint)') IS NOT NULL THEN
+  IF to_regprocedure('public.convert_quote_to_order(uuid,uuid,text,bigint,text)') IS NOT NULL THEN
+    EXECUTE
+      'SELECT public.convert_quote_to_order($1, $2, $3, $4, NULL)'
+      INTO v_result
+      USING p_quote_id, p_performed_by, p_idempotency_key, p_expected_row_version;
+    RETURN v_result;
+  ELSIF to_regprocedure('public.convert_quote_to_order(uuid,uuid,text,bigint)') IS NOT NULL THEN
     EXECUTE
       'SELECT public.convert_quote_to_order($1, $2, $3, $4)'
       INTO v_result
@@ -64,6 +72,7 @@ $helper$;
 DO $smoke$
 DECLARE
   v_admin uuid;
+  v_inactive_admin uuid := gen_random_uuid();
   v_customer uuid;
   v_product uuid;
   v_product_2 uuid;
@@ -95,6 +104,26 @@ BEGIN
     json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
   PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
+  INSERT INTO auth.users (id, email, raw_user_meta_data, created_at, updated_at)
+  VALUES (
+    v_inactive_admin,
+    'draw-lock-inactive-' || v_suffix || '@example.invalid',
+    '{"full_name":"[SMOKE] Inactive Draw Admin","role":"admin"}'::jsonb,
+    now(),
+    now()
+  );
+  -- handle_new_user may create an active profile; replace it with the inactive
+  -- fixture without exercising the unrelated auth-ban UPDATE trigger.
+  DELETE FROM profiles WHERE id = v_inactive_admin;
+  INSERT INTO profiles (id, email, full_name, role, is_active)
+  VALUES (
+    v_inactive_admin,
+    'draw-lock-inactive-' || v_suffix || '@example.invalid',
+    '[SMOKE] Inactive Draw Admin',
+    'admin',
+    false
+  );
+
   -- --------------------------------------------------------------------
   -- 1. Fixtures (txn-local; rolled back at the end)
   -- --------------------------------------------------------------------
@@ -105,6 +134,27 @@ BEGIN
   INSERT INTO products (product_name, unit_size)
   VALUES ('[SMOKE] Draw Lock Product ' || v_suffix, 'gal')
   RETURNING id INTO v_product;
+
+  v_res := preview_product_pricing_changes(
+    'product_page', NULL,
+    jsonb_build_array(jsonb_build_object(
+      'product_id', v_product,
+      'row_version', (SELECT pricing_version FROM products WHERE id = v_product),
+      'pricing_mode', 'margin_driven',
+      'new_cost', '6.00',
+      'tier1_margin_percent', '20',
+      'tier2_margin_percent', '25',
+      'tier3_margin_percent', '30',
+      'change_reason', 'Rollback smoke draw-lock fixture setup'
+    )),
+    v_admin, 'smk-odl-price-preview-' || v_suffix
+  );
+  PERFORM apply_product_pricing_change_set(
+    (v_res->>'change_set_id')::uuid,
+    v_res->>'request_fingerprint',
+    v_admin,
+    'smk-odl-price-apply-' || v_suffix
+  );
 
   -- --------------------------------------------------------------------
   -- 2. Open booking: 500 booked, draw 200 -> one draw order exists
@@ -120,7 +170,7 @@ BEGIN
 
   v_res := draw_down_quote(v_q,
     jsonb_build_array(jsonb_build_object('product_id', v_product, 'quantity', 200)),
-    v_admin, NULL);
+    v_admin, 'smk-odl-first-' || v_suffix);
   IF (v_res->>'fully_drawn')::boolean IS DISTINCT FROM false THEN
     RAISE EXCEPTION 'SMOKE_FAIL: draw 200/500 reported fully_drawn: %', v_res;
   END IF;
@@ -190,7 +240,7 @@ BEGIN
   -- --------------------------------------------------------------------
   v_res := draw_down_quote(v_q,
     jsonb_build_array(jsonb_build_object('product_id', v_product, 'quantity', 300)),
-    v_admin, NULL);
+    v_admin, 'smk-odl-final-' || v_suffix);
   IF (v_res->>'fully_drawn')::boolean IS DISTINCT FROM true THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (c) final draw not reported fully drawn: %', v_res;
   END IF;
@@ -266,9 +316,32 @@ BEGIN
 
   -- (f) Adding a product with no inventory snapshot creates that row before
   -- prebooking, so the ledger and physical snapshot cannot diverge.
+  -- update_order_items leaves its transaction-local pricing mode behind; reset
+  -- it before creating the pricing-free product shell used by this fixture.
+  PERFORM set_config('crx.pricing_mode', 'legacy_margin', true);
   INSERT INTO products (product_name, unit_size)
   VALUES ('[SMOKE] Draw Lock New Product ' || v_suffix, 'gal')
   RETURNING id INTO v_product_2;
+  v_res := preview_product_pricing_changes(
+    'product_page', NULL,
+    jsonb_build_array(jsonb_build_object(
+      'product_id', v_product_2,
+      'row_version', (SELECT pricing_version FROM products WHERE id = v_product_2),
+      'pricing_mode', 'margin_driven',
+      'new_cost', '6.00',
+      'tier1_margin_percent', '20',
+      'tier2_margin_percent', '25',
+      'tier3_margin_percent', '30',
+      'change_reason', 'Rollback smoke added-product fixture setup'
+    )),
+    v_admin, 'smk-odl-added-price-preview-' || v_suffix
+  );
+  PERFORM apply_product_pricing_change_set(
+    (v_res->>'change_set_id')::uuid,
+    v_res->>'request_fingerprint',
+    v_admin,
+    'smk-odl-added-price-apply-' || v_suffix
+  );
   PERFORM update_order_items(v_o2,
     jsonb_build_array(
       jsonb_build_object(
@@ -285,16 +358,17 @@ BEGIN
   END IF;
 
   -- --------------------------------------------------------------------
-  -- (g) Deactivated admin: must be rejected by the active-actor guard
-  --     (txn-local flip — rolled back with everything else)
+  -- (g) Inactive admin: must be rejected by the active-actor guard.
   -- --------------------------------------------------------------------
-  UPDATE profiles SET is_active = false WHERE id = v_admin;
+  PERFORM set_config('request.jwt.claims',
+    json_build_object('sub', v_inactive_admin, 'role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', v_inactive_admin::text, true);
   BEGIN
     PERFORM update_order_items(v_o2,
       jsonb_build_array(jsonb_build_object(
         'id', v_item_2, 'product_id', v_product,
         'price_per_unit', 10, 'total_units_needed', 240)),
-      v_admin, NULL);
+      v_inactive_admin, NULL);
     RAISE EXCEPTION 'SMOKE_FAIL: (g) deactivated admin was ALLOWED to edit';
   EXCEPTION WHEN OTHERS THEN
     v_err := SQLERRM;
