@@ -675,7 +675,37 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
     if (equalsIndex <= 0) return false;
     return /(?:\$\{|\$[A-Za-z_]|`|![^!\r\n]+!|%[^%\r\n]+%)/.test(candidate.slice(0, equalsIndex));
   });
-  const nodeBackedCommandMentioned = /\b(?:node|nodejs|npm|npx|pnpm|yarn|bun|corepack)(?:\.exe|\.cmd)?\b/i.test(value);
+  const nodeBackedExecutables = new Set(["node", "nodejs", "npm", "npx", "pnpm", "yarn", "bun", "corepack"]);
+  const tokenListMentionsNodeBackedCommand = (list) => list.some((token) => token?.sawUnquoted
+    && nodeBackedExecutables.has(executableName(token)));
+  const nestedLauncherMentionsNodeBackedCommand = tokens.some((token, index) => {
+    if (!token?.sawUnquoted) return false;
+    const launcher = executableName(token);
+    const argumentsAfterLauncher = tokens.slice(index + 1);
+    let body = "";
+    if (launcher === "cmd") {
+      const switchIndex = argumentsAfterLauncher.findIndex((entry) => /^(?:\/[a-z](?::[a-z]+)?)*\/[ck]/i.test(entry.value));
+      if (switchIndex < 0) return false;
+      const commandSwitch = argumentsAfterLauncher[switchIndex].value;
+      body = [commandSwitch.replace(/^(?:\/[a-z](?::[a-z]+)?)*\/[ck]/i, ""), ...argumentsAfterLauncher.slice(switchIndex + 1).map((entry) => entry.value)]
+        .filter(Boolean)
+        .join(" ");
+    } else if (["powershell", "pwsh"].includes(launcher)) {
+      const powerShellCommandSwitch = /^(?:(?:--?|\/)c|(?:--?|\/)co(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?|(?:--?|\/)cwa|(?:--?|\/)commandw[a-z]*)(?:[:=].*)?$/i;
+      const switchIndex = argumentsAfterLauncher.findIndex((entry) => powerShellCommandSwitch.test(entry.value));
+      if (switchIndex < 0) return false;
+      const commandSwitch = argumentsAfterLauncher[switchIndex].value;
+      const attached = commandSwitch.replace(/^(?:(?:--?|\/)c|(?:--?|\/)co(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?|(?:--?|\/)cwa|(?:--?|\/)commandw[a-z]*)[:=]?/i, "");
+      body = [attached, ...argumentsAfterLauncher.slice(switchIndex + 1).map((entry) => entry.value)].filter(Boolean).join(" ");
+    } else if (["bash", "sh", "dash", "zsh", "ksh"].includes(launcher)) {
+      const switchIndex = argumentsAfterLauncher.findIndex((entry) => /^-[A-Za-z]*c[A-Za-z]*$/.test(entry.value));
+      if (switchIndex < 0) return false;
+      body = argumentsAfterLauncher.slice(switchIndex + 1).map((entry) => entry.value).join(" ");
+    } else return false;
+    return tokenListMentionsNodeBackedCommand(tokenizeShellWords(body));
+  });
+  const nodeBackedCommandMentioned = tokenListMentionsNodeBackedCommand(tokens)
+    || nestedLauncherMentionsNodeBackedCommand;
   if (nodeBackedCommandMentioned) {
     const dynamicAssignmentBuiltin = tokens.some((token) => tokenNamed(token, ["export", "declare", "typeset", "local", "readonly"]))
       && /(?:\$\(|`[^`]*`|<\(|>\(|\$\{|\$[A-Za-z_]|![^!\r\n]+!|%[^%\r\n]+%)/s.test(value);
@@ -698,7 +728,6 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
   }
 
   let allexportEnabled = false;
-  const nodeBackedExecutables = new Set(["node", "nodejs", "npm", "npx", "pnpm", "yarn", "bun", "corepack"]);
   for (let segmentStart = 0; segmentStart < tokens.length;) {
     while (segmentStart < tokens.length && tokens[segmentStart].control) segmentStart += 1;
     let segmentEnd = segmentStart;

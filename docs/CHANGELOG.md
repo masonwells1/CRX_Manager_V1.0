@@ -66,6 +66,9 @@ All significant development milestones, in reverse chronological order.
   Dynamic `NODE_OPTIONS` construction also fails closed before a Node-backed
   executable: POSIX `env` command substitutions, concatenated PowerShell
   environment paths, and CMD delayed-expansion assignments are covered. Native
+  Node-backed runner recognition uses tokenized shell-normalized executable
+  names, so POSIX backslashes or CMD carets cannot disguise `npm`, `yarn`,
+  `bun`, or the other package runners during this check. Native
   PowerShell environment writes are recognized inside recursively inspected
   `powershell`/`pwsh -Command` bodies too, including `$env:NODE_OPTIONS`,
   environment-provider item/content cmdlets, their standard short aliases, and

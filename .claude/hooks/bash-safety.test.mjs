@@ -375,6 +375,11 @@ const dynamicNodeOptionsGuardCases = [
   'N=NODE; env "${N}_OPTIONS=--require=./preload.cjs" npm --version',
   'powershell -Command "Set-Item (\'Env:NO\' + \'DE_OPTIONS\') \'--require=./preload.cjs\'; npm --version"',
   'cmd /v:on /c "set N=NODE_OPTIONS & set !N!=--require=./preload.cjs & npm --version"',
+  'cmd /v:on /c "set N=NODE_OPTIONS & set !N!=--require=./preload.cjs & n^pm --version"',
+  'N=NODE_OPTIONS; env "${N}=--require=./preload.cjs" n\\pm --version',
+  'cmd /v:on /c "set N=NODE_OPTIONS & set !N!=--require=./preload.cjs & ya^rn --version"',
+  'cmd /v:on /c "set N=NODE_OPTIONS & set !N!=--require=./preload.cjs & b^un --version"',
+  'pwsh -NoProfile -co "si Env:NODE_OPTIONS --require=./preload.cjs; n\\pm --version"',
 ];
 for (const separator of [";", "|", "&"]) {
   ok(checkDangerousCommand(`Write-Output marker\x5c${separator} ${pythonCommand} -c \"print('opaque')\"`), `PowerShell backslash-prefixed ${separator} cannot hide an opaque interpreter`);
@@ -396,6 +401,7 @@ for (const command of indirectRunnerGuardCases) ok(checkDangerousCommand(command
 ok(!checkDangerousCommand(`${parallelCommand} -- 'echo safe' ::: x`), "a quoted benign Parallel command body stays allowed");
 ok(!checkDangerousCommand("env $(printf SAFE=1) echo ok"), "dynamic env construction without a Node-backed executable stays allowed");
 ok(!checkDangerousCommand("rg -n 'env $(printf NODE_OPTIONS=x) npm' docs"), "dynamic NODE_OPTIONS spelling used as quoted search data stays allowed");
+ok(!checkDangerousCommand("rg -n 'n^pm n\\pm ya^rn b^un NODE_OPTIONS' docs"), "escaped runner spellings used as quoted search data stay allowed");
 ok(!checkDangerousCommand(`${findCommand} . '\\${findExecOption}' env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs \\;`), "a quoted escaped find action stays literal data");
 for (const command of [
   "wsl awk 'BEGIN { cmd = decode(); system(cmd) }'",

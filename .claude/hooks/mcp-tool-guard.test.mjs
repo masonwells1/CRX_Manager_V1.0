@@ -149,6 +149,11 @@ const dynamicNodeOptionsGuardCases = [
   'N=NODE; env "${N}_OPTIONS=--require=./preload.cjs" npm --version',
   'powershell -Command "Set-Item (\'Env:NO\' + \'DE_OPTIONS\') \'--require=./preload.cjs\'; npm --version"',
   'cmd /v:on /c "set N=NODE_OPTIONS & set !N!=--require=./preload.cjs & npm --version"',
+  'cmd /v:on /c "set N=NODE_OPTIONS & set !N!=--require=./preload.cjs & n^pm --version"',
+  'N=NODE_OPTIONS; env "${N}=--require=./preload.cjs" n\\pm --version',
+  'cmd /v:on /c "set N=NODE_OPTIONS & set !N!=--require=./preload.cjs & ya^rn --version"',
+  'cmd /v:on /c "set N=NODE_OPTIONS & set !N!=--require=./preload.cjs & b^un --version"',
+  'pwsh -NoProfile -co "si Env:NODE_OPTIONS --require=./preload.cjs; n\\pm --version"',
 ];
 
 // ── tools NOT in the Desktop Commander mutating set pass straight through ──
