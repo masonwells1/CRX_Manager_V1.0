@@ -27,9 +27,24 @@ interface TicketData {
  * genuinely ambiguous spelling (a fluid ounce for a liquid, a weight ounce for a
  * dry product), so a total recorded as plain `oz` is treated as a volume, matching
  * the server's "unknown form is liquid" default.
+ *
+ * The spellings are kept deliberately in step with the CASE inside the live
+ * `normalize_rate_unit` (read from `pg_proc.prosrc`, 2026-08-20), which knows
+ * oz/pt/qt/gal/lb/ton/g/kg/l/ml and their long forms. An earlier draft of these
+ * sets listed only the US spellings, so a ticket totalled in `kg` or `liters`
+ * matched NEITHER family, ran no total check at all, and said nothing about it —
+ * a silent hole, and a regression against the old same-unit sum comparison.
+ * Raised as MED #3 by gpt-5.6-sol on PR #439. Anything still unclassifiable now
+ * earns an explicit `unchecked` note rather than silence.
  */
-const WEIGHT_ONLY_UNITS = new Set(['lb', 'lbs', 'pound', 'pounds', 'ton', 'tons', 'dry oz']);
-const VOLUME_ONLY_UNITS = new Set(['gal', 'gallon', 'gallons', 'gl', 'qt', 'quart', 'quarts', 'pt', 'pint', 'pints', 'fl oz', 'floz', 'fluid ounce']);
+const WEIGHT_ONLY_UNITS = new Set([
+  'lb', 'lbs', 'pound', 'pounds', 'ton', 'tons', 'dry oz',
+  'g', 'gram', 'grams', 'kg', 'kilogram', 'kilograms',
+]);
+const VOLUME_ONLY_UNITS = new Set([
+  'gal', 'gallon', 'gallons', 'gl', 'qt', 'quart', 'quarts', 'pt', 'pint', 'pints',
+  'fl oz', 'floz', 'fluid ounce', 'l', 'liter', 'liters', 'litre', 'litres', 'ml',
+]);
 
 /**
  * Pull a number and a unit out of the free-text application-rate box.
@@ -309,6 +324,16 @@ export function validateBlendMath(
     const lineRateUnit = (product.rate_per_acre_unit ?? '').trim();
     const rateUnit = rateBaseUnit(lineRateUnit !== '' ? lineRateUnit : product.product_rate_unit);
     const soldUnit = rateBaseUnit(product.product_inventory_unit);
+    // Deliberately silent when either side is blank, though the SQL would refuse such
+    // a line (gpt-5.6-sol MED #1, PR #439). A blank here does NOT reliably mean the
+    // catalog is missing a unit: it equally means this caller did not resolve the
+    // catalog row — an inactive product is absent from the `allProducts` list the
+    // pages filter to `is_active`. Live measurement on 2026-08-20 says the innocent
+    // reading is the likely one: 0 of 595 active products lack a sold unit. So warning
+    // on blank would mostly produce false "not recorded" notes from load gaps, which
+    // is exactly the wallpaper effect the two-tier design exists to avoid. Closing
+    // this properly means telling the validator whether the catalog row RESOLVED,
+    // rather than inferring it from an empty string; tracked in KNOWN_ISSUES.md.
     if (rateUnit !== '' && soldUnit !== '' && fieldAppPricedQuantity(1, rateUnit, soldUnit, form) === null) {
       mismatch(
         `${name}: the rate unit (${rateUnit}) can't be converted to the unit this product is sold in (${soldUnit}), so this ticket will fail when you invoice it.`
@@ -429,6 +454,14 @@ export function validateBlendMath(
           `Total volume not fully checked: a product's unit can't be compared to ${headerUnit}, so it isn't counted towards the total. Please verify the total by hand.`
         );
       }
+    } else if (anyContributing) {
+      // The total's unit is recorded but belongs to neither family — free text like
+      // 'ea', or a spelling no size table carries. Neither branch above can run, so
+      // without this the whole total check disappears in silence and the ticket looks
+      // verified. Name the unit, since it is the thing the operator can fix.
+      unchecked(
+        `Total not checked: "${ticketData.total_volume_unit}" isn't a unit the products can be added up in, so the total couldn't be compared. Please verify it by hand.`
+      );
     }
   }
 

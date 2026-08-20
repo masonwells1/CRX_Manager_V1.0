@@ -106,12 +106,29 @@ U+200B/200C/200D (and decide the BOM and interior-whitespace cases at the same t
 `rateBaseUnit` **in the same change** so the two never drift. Doing either side alone re-creates this
 bug in one direction or the other.
 
-Two adjacent parity gaps to settle in that same migration rather than piecemeal:
+Three adjacent parity gaps to settle in that same migration rather than piecemeal:
 
 - JS `.trim()` strips the BOM (U+FEFF) and tabs; PostgreSQL `btrim` does not. Pre-existing, predates
-  PR #439.
+  PR #439. (gpt-5.6-sol MED #2.)
 - The live CASE lists `'fl oz'` with a single space; neither side collapses interior whitespace, so
   `'fl  oz'` matches nothing on either side. Consistent today, but by accident rather than design.
+- **The invoice pre-flight stays silent when the rate unit or the sold unit is blank**, although the
+  SQL calls its converter regardless and `normalize_rate_unit` returns NULL for an empty string, so
+  live refuses that line too (gpt-5.6-sol MED #1). Warning on blank was **tried and deliberately
+  reverted** on PR #439: client-side, an empty string does not reliably mean "the catalog has no
+  unit" — it equally means *this caller never resolved the catalog row*, since the pages filter
+  `allProducts` to `is_active` and an inactive product is simply absent. A live read on 2026-08-20
+  says the innocent reading dominates: **0 of 595** active products lack a sold unit (25 lack a rate
+  unit). Warning on blank would therefore mostly emit false "not recorded" notes from load gaps —
+  the wallpaper effect the two-tier design exists to prevent. The real fix is to tell
+  `validateBlendMath` whether the catalog row RESOLVED, instead of inferring it from an empty
+  string; until then the server's fail-closed refusal is the backstop.
+
+**Fixed on PR #439, not deferred:** gpt-5.6-sol MED #3 — the unit-family sets listed only US
+spellings, so a total in `kg`, `g`, `l`, `ml` or their long forms matched neither family, ran no
+total check at all, and said nothing about it. That was a silent hole and a regression against the
+older same-unit sum comparison. The sets now track the live `normalize_rate_unit` CASE, and a total
+unit that still belongs to no family earns an explicit `unchecked` note naming the unit.
 
 **Not started.** No migration written, no live state, and a live apply would need Mason's explicit
 approval plus a migration review.

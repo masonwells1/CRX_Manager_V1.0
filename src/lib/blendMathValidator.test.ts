@@ -261,6 +261,44 @@ describe('validateBlendMath', () => {
       });
     });
 
+    // gpt-5.6-sol MED #3 on PR #439. The family sets originally listed only US
+    // spellings, so a total in `kg` or `liters` matched NEITHER family, ran no check
+    // at all, and said nothing — silence that reads as "verified". The live
+    // `normalize_rate_unit` CASE knows all of these, so the sets now match it.
+    describe('unit families the database knows', () => {
+      it('treats a metric VOLUME total as a spray tank', () => {
+        const warnings = validateBlendMath(
+          { total_acres: null, total_volume: 100, total_volume_unit: 'liters', application_rate: null },
+          [{ product_name: 'A', quantity: 140, unit: 'liters', rate_per_acre: null, rate_per_acre_unit: null, ...liq }]
+        );
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0].level).toBe('mismatch');
+        expect(warnings[0].message).toContain('more than the total volume');
+      });
+
+      it('treats a metric WEIGHT total as a dry blend', () => {
+        const warnings = validateBlendMath(
+          { total_acres: null, total_volume: 100, total_volume_unit: 'kg', application_rate: null },
+          [{ product_name: 'A', quantity: 50, unit: 'kg', rate_per_acre: null, rate_per_acre_unit: null, ...dry }]
+        );
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0].level).toBe('mismatch');
+        expect(warnings[0].message).toContain('Total weight');
+      });
+
+      it('says so when the total unit belongs to no family at all', () => {
+        // The unit fields are free text, so this is reachable. Silence here used to
+        // look identical to a clean ticket.
+        const warnings = validateBlendMath(
+          { total_acres: null, total_volume: 100, total_volume_unit: 'buckets', application_rate: null },
+          [{ product_name: 'A', quantity: 10, unit: 'buckets', rate_per_acre: null, rate_per_acre_unit: null, ...liq }]
+        );
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0].level).toBe('unchecked');
+        expect(warnings[0].message).toContain('buckets');
+      });
+    });
+
     describe('missing units', () => {
       // The hole three separate reviews found, preserved through the redesign.
       it('reports a quantity entered with no unit at all', () => {
