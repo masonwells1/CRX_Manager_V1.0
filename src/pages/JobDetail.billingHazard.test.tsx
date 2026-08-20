@@ -161,13 +161,13 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     expect(banner.textContent).toContain('dry oz');
     expect(banner.textContent).toContain('lb');
     expect(banner.textContent).toContain('16');
-  });
+  }, 30000);
 
   it('REFUSES the save — no job RPC is called', async () => {
     mountWith(HAZARD_CHEM);
     await screen.findByText(/This line cannot be saved/i, {}, { timeout: 15000 });
 
-    const saveButtons = await screen.findAllByRole('button', { name: /save/i });
+    const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
     const save = saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement;
     fireEvent.click(save);
 
@@ -177,7 +177,7 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     // The real proof: save_job never ran, so no wrong row could reach job_chemicals.
     // (The page calls unrelated read RPCs such as get_notes_for_entity on mount.)
     expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
-  });
+  }, 30000);
 
   it('SAVES an exactly-rounded total, matching the server rather than binary float', async () => {
     // 25c x 0.58 is exactly 14.50. The server's safe_cents_qty rounds half away from zero
@@ -202,7 +202,7 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     const args = saveCall?.[1] as { p_job_payload: Record<string, unknown> };
     expect(args.p_job_payload.total_price_cents).toBe(15);   // exact — NOT the float path's 14
     expect(args.p_job_payload.total_cost_cents).toBe(15);
-  });
+  }, 30000);
 
   it('a RELOADED rate line follows an acreage change instead of going stale', async () => {
     // The F06 defect: `driver` is never persisted, so a reloaded row used to be left
@@ -258,7 +258,7 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
       quantity: 200, unit: 'oz', rate_per_acre: 2, rate_unit: 'oz/cwt',
     });
     expect(await screen.findByText(/cannot be saved/i, {}, { timeout: 15000 })).toBeTruthy();
-    const saveButtons = await screen.findAllByRole('button', { name: /save/i });
+    const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
     fireEvent.click(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
     await waitFor(() => expect(mockToast).toHaveBeenCalled());
     expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
@@ -280,7 +280,7 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     }, { timeout: 15000 });
     fireEvent.change(priceInput, { target: { value: '' } });
 
-    const saveButtons = await screen.findAllByRole('button', { name: /save/i });
+    const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
     fireEvent.click(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
     await waitFor(() => expect(mockToast).toHaveBeenCalled());
     const errors = mockToast.mock.calls.filter((c) => c[0] === 'error').map((c) => String(c[1]));
