@@ -276,9 +276,32 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    statuses per run, and a `success` can sit *between* two `pending` ones. Measured on `5a12433f`:
    `queued 22:51:41 → in progress 22:51:43 → success 22:51:50 → in progress 22:51:54 → success
    22:59:14`. A poll that lands on the 22:51:50 entry reads a finished review that is still eight
-   minutes from finishing. So: never treat the first `success` you see as the end, always re-read the
-   newest status **immediately before merging**, and require the stamp — the range line only names
-   the head once CodeRabbit has actually read it.
+   minutes from finishing.
+
+   The stamp does not rescue this on its own: CodeRabbit writes the walkthrough range line when it
+   **starts** on a SHA, so during that window the stamp names the head *and* the newest status reads
+   `success` while findings are still being generated. Codex raised this as High on PR #441 and is
+   right — an intermediate `success` must never authorize a merge.
+
+   **Therefore require the status to be SETTLED, not merely successful.** Poll the newest exact-head
+   status twice, at least **90 seconds apart**, and require `success` **both** times with the same
+   `created_at`. The observed intermediate window was 4 seconds, so 90 gives ~20x margin; if
+   CodeRabbit resumed, a newer `pending` will have displaced the `success` by the second poll.
+
+   ```bash
+   gh api repos/masonwells1/CRX_Manager_V1.0/commits/<HEAD>/statuses --jq '[.[] | select(.context=="CodeRabbit")] | first | "\(.state) \(.created_at)"'
+   ```
+
+   Run it, wait 90s, run it again; identical `success <timestamp>` on both is the settled signal.
+   Then re-read it once more immediately before merging.
+
+   **Known limitation, tracked.** This is a stability heuristic, not a terminal artifact — CodeRabbit
+   publishes no "review finished" marker bound to a SHA, and the walkthrough's HTML markers
+   (`walkthrough_start`, `recent_review_start`, …) are structural and present throughout. Closing it
+   properly means enforcing the whole check inside `.claude/hooks/pr-merge-guard.mjs`, which today
+   verifies neither the CodeRabbit artifacts nor `--match-head-commit`. That is tracked follow-up
+   work. Until it lands, this procedure narrows the race but does not eliminate it, and no one should
+   describe it as airtight.
 
    That is why the status never stands alone. It is paired with the canonical walkthrough stamp
    above; for a merge-only head with no stamp, the tree-identity proof carries the weight; and **the

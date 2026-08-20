@@ -163,4 +163,58 @@ for (const [name, file] of SKILLS) {
   );
 }
 
+// ── Status-settlement logic, exercised against real recorded timelines ───────
+// CodeRabbit's status sequence is not monotonic: a `success` can sit between two
+// `pending` entries, and the walkthrough stamp is written when a review STARTS —
+// so during that window both the stamp and the newest status look final while
+// findings are still being generated. Codex raised this as High on PR #441.
+//
+// `settledSuccess` is the rule the skill documents: poll the newest exact-head
+// CodeRabbit status twice, >= MIN_SETTLE_MS apart, and require `success` with an
+// identical created_at both times. Statuses arrive newest-first from the API.
+export const MIN_SETTLE_MS = 90_000;
+
+export function newestStatus(statuses) {
+  return statuses.filter((s) => s.context === "CodeRabbit")[0] ?? null;
+}
+
+export function settledSuccess(firstPoll, secondPoll, elapsedMs) {
+  if (elapsedMs < MIN_SETTLE_MS) return false;
+  const a = newestStatus(firstPoll);
+  const b = newestStatus(secondPoll);
+  if (!a || !b) return false;
+  return a.state === "success" && b.state === "success" && a.created_at === b.created_at;
+}
+
+const S = (state, created_at) => ({ context: "CodeRabbit", state, created_at });
+
+// The real 5a12433f timeline, newest-first at two moments.
+const atIntermediateSuccess = [S("success", "2026-08-20T22:51:50Z"), S("pending", "2026-08-20T22:51:43Z")];
+const afterResume = [S("pending", "2026-08-20T22:51:54Z"), S("success", "2026-08-20T22:51:50Z")];
+const atFinalSuccess = [S("success", "2026-08-20T22:59:14Z"), S("pending", "2026-08-20T22:51:54Z")];
+
+ok(
+  settledSuccess(atIntermediateSuccess, afterResume, 120_000) === false,
+  "intermediate success -> resumed pending is REJECTED (the PR #441 race)",
+);
+ok(
+  settledSuccess(atIntermediateSuccess, atIntermediateSuccess, 4_000) === false,
+  "two polls inside the 4s intermediate window are REJECTED (settle time not met)",
+);
+ok(
+  settledSuccess(atFinalSuccess, atFinalSuccess, 120_000) === true,
+  "a stable final success across the settle window is ACCEPTED",
+);
+ok(
+  settledSuccess(atIntermediateSuccess, atFinalSuccess, 120_000) === false,
+  "success at a DIFFERENT created_at is REJECTED (a new run finished in between)",
+);
+ok(settledSuccess([], [], 120_000) === false, "no CodeRabbit status at all is REJECTED (fail closed)");
+
+// The skill must actually document the settle requirement, not just the query.
+for (const [name, file] of SKILLS) {
+  const text = readFileSync(file, "utf8");
+  ok(/90\s*seconds apart/i.test(text), `${name}: the skill requires a >=90s settle window between polls`);
+}
+
 console.log(`deploy-check-review-gate: ${pass} assertions passed`);

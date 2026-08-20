@@ -217,6 +217,25 @@ recorded because each would have merged unreviewed code on its own:
 Operative consequence: **the stamp is the stronger signal; where the two disagree, believe the
 stamp.** Re-read the newest status immediately before merging, never the first `success` observed.
 
+**And the stamp does not rescue the race on its own.** Codex raised this as High: CodeRabbit writes
+the walkthrough range line when it *starts* on a SHA, so inside the intermediate-success window the
+stamp names the head *and* the newest status reads `success` while findings are still being
+generated — both documented conditions pass on a review that is not finished. The rule is now that
+the status must be **settled, not merely successful**: poll the newest exact-head status twice at
+least **90 seconds** apart and require `success` with an identical `created_at` both times (observed
+intermediate window: 4 seconds, so ~20x margin). `scripts/deploy-check-review-gate.test.mjs` carries
+that logic as executable regressions over the real recorded `5a12433f` timeline — intermediate
+success followed by a resumed `pending` is rejected, two polls inside the 4-second window are
+rejected, a differing `created_at` is rejected, and only a stable final success is accepted.
+
+**Stated plainly because it matters: this is a stability heuristic, not a terminal artifact.**
+CodeRabbit publishes no SHA-bound "review finished" marker — the walkthrough's HTML markers are
+structural and present throughout, which was checked rather than assumed. Closing the race properly
+requires enforcing the whole check inside `.claude/hooks/pr-merge-guard.mjs`, which today verifies
+neither the CodeRabbit artifacts nor `--match-head-commit`. That is the same tracked follow-up named
+above, and it is now the remedy two consecutive Codex findings have pointed at. Until it lands the
+procedure narrows the race but does not eliminate it, and nobody may describe it as airtight.
+
 **"Advisory" does not mean optional — the review waiver is removed.** An earlier revision of the
 skill let Mason approve a merge with no CodeRabbit review at all, reasoning that AGENTS.md calls
 CodeRabbit advisory. Codex flagged that twice, the second time as High, and was right both times.
