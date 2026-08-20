@@ -2,6 +2,71 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-19 — Blend-ticket total-volume check no longer adds quantities across different units
+
+`validateBlendMath` summed every product quantity regardless of unit, so a ticket holding
+10 Gal + 32 oz + 5 Lb summed to 47 and was compared against a total volume expressed in
+gallons — a spurious warning, or a masked real mismatch when the errors cancelled.
+`ProductData.unit` was declared but never read. The check now runs only when every quantity
+feeding the sum is *known* to be in the ticket's unit, and otherwise says the check was
+skipped and why.
+
+- **`unit_conversions` deliberately NOT joined.** It cannot bridge a mixed-unit ticket:
+  `factor_oz` is within-family only (Lb = 16 **dry** oz, Gal = 128 **fluid** oz, Ea/Unit = a
+  dimensionless count), and crossing liquid↔dry needs a per-product density the table does not
+  carry. Not joining it also sidesteps a duplicate-row join risk on its case aliases
+  (`Lb`/`LB`, `oz`/`Oz`, `qt`/`Qt`) — the same frozen-key surface `save_quote` joins on. That
+  risk was raised in a prior review; it is not otherwise recorded in this repo, and it is a
+  pre-existing money-path concern independent of this change (see the open item below).
+- **Unit equality rules.** Only *lossless* differences are folded away — case (the live rows
+  carry deliberate case aliases with identical factors), zero-width characters (deleted
+  outright), any run of real whitespace including the non-breaking space (collapsed to one
+  space), and periods (`fl. oz` = `fl oz`, `gal.` = `gal`) —
+  plus the two synonym pairs the live rows themselves declare (`oz`/`fl oz`, `Ea`/`Unit`,
+  identical `factor_oz` *and* `unit_type`). `oz` vs `Dry oz` stays correctly separate. The
+  alias map holds no factors: it decides only *whether* to compare, never rescales a quantity.
+  It is deliberately **not** extended to guessed spellings — the fields are free text, and
+  merging `ounces` into liquid `oz` would restore the silent bad arithmetic. An unrecognised
+  spelling costs one "verify by hand" message instead.
+- **A quantity with no unit recorded blocks the comparison** rather than being absorbed into
+  the ticket's unit. The unit fields are free text and a new row starts blank, so "quantity
+  typed, unit left blank" is a likely real state; treating it as agreement would mask exactly
+  the cross-unit mismatch this change exists to catch. A ticket with no units recorded
+  *anywhere* still gets the plain comparison it always had, so unit-less tickets stay quiet.
+- **Zero-quantity rows ignored** when deciding whether units agree — a half-entered row
+  (unit typed, quantity still blank) no longer suppresses the check for the whole ticket.
+- **Scope: warning text only.** No change to stored quantities, pricing, or inventory; the
+  callers (`ManualTicketCreate.tsx:333`, `BlendTicketDetail.tsx:433`) only render the result,
+  and it never gates a save. Severity **low** — `blend_tickets` and `blend_ticket_products` are
+  both empty on live.
+- **Zero-width characters are deleted, not turned into a space.** A unit pasted from a PDF can
+  carry U+200B/200C/200D or a BOM *inside* the abbreviation. Collapsing it to a space split
+  `gal` into `g al`, which matched nothing: the check was skipped and the message listed two
+  units that look identical on screen. Fail-safe (never a wrong sum) but confusing, so the
+  zero-width run is now removed before real whitespace is collapsed.
+- **Verified by running it, not by tests alone.** The real `blendMathValidator` module was
+  imported into a page served by the dev server and driven through the mixed-unit, alias,
+  blank-unit and half-entered-row cases, with each returned warning read back in the browser;
+  the zero-width cases were driven the same way and read back after the fix above.
+  The production banner component itself was not exercised (both caller test files mock the
+  validator away), so that rendering path remains unverified. 27 new tests (38 total in the
+  file); mutation-tested by reverting each guard in turn and confirming exactly the expected
+  tests went red.
+- **Reviewed** by two independent adversarial Opus passes, which confirmed the display-only
+  blast radius by exhaustive caller trace and drove the blank-unit hole, the free-text
+  spelling drift, and several doc inaccuracies above; then by CodeRabbit, which found the
+  missing-`total_volume_unit` half of the blank-unit hole; then by an independent
+  `gpt-5.6-sol` high-effort review at head `cdee7d9b`, which found the zero-width defect
+  above. CodeRabbit was rate-limited by the time of the final head and did not re-review.
+- **Known gaps, deliberately out of scope:** the per-product `rate_per_acre × total_acres`
+  check in the same file is still unit-blind, and the unit fields are free text rather than
+  the picker the Field App already uses. Both recorded in `docs/manual/KNOWN_ISSUES.md`.
+
+- **Lands via** [PR #426](https://github.com/masonwells1/CRX_Manager_V1.0/pull/426) from
+  `claude/loving-hofstadter-6b1f5e`, which is still **open** as this entry is written — merging
+  that PR is what actually ships the change. (Commit SHAs are deliberately not cited here —
+  this branch was rebased, and an earlier version of this entry cited a SHA that the rebase
+  orphaned.)
 ## 2026-08-19 — Product data model: build plan revision 2 after independent Fable…
 
 Product data model: build plan revision 2 after independent Fable review (26 findings) and orchestration design; recorded owner decisions D-J (chemistry edits admin-only) and D-K (unlisted brand never blocks receiving) in DECISION_LOG. Planning only — nothing built, pushed, migrated, or applied.
@@ -99,9 +164,25 @@ established.
 - Both comparisons import one `normalizeEol` from **`scripts/normalize-eol.mjs`**. It is deliberately
   narrow — CRLF to LF, nothing else — so a lone CR, a BOM, or a trailing-newline difference still
   reports as drift. It fails closed: it can raise a false alarm, never grant a false pass.
-- `sync-agent-workflows.mjs --write` now writes the LF form. It previously copied a CRLF-smudged
-  source verbatim into `.agents/**`, so the "run `--write`" remedy the health check prints could not
-  repair a smudged mirror. It can now.
+- `sync-agent-workflows.mjs --write` now writes the LF form and compares the target's **raw** bytes
+  against it, so the "run `--write`" remedy the health check prints actually repairs a smudged mirror.
+  **The first attempt at this bullet was wrong and shipped that way.** It normalized the target before
+  comparing, which is a no-op on the case that matters: a CRLF mirror normalizes equal to the
+  canonical form, the write is skipped, and the file stays CRLF while `--write` prints "Synced". The
+  live proof taken at the time used a CRLF *source* against an LF *mirror* — the half that did work —
+  so it passed. Two independent Opus reviewers also missed it. **CodeRabbit caught it on PR #425.**
+  Proved on the real tree afterwards: `.agents/README.md` smudged to CRLF stayed CRLF through the old
+  `--write` and came back LF through the fixed one, and the same run repaired four `.agents/**`
+  mirrors that had been sitting CRLF on disk — an empty `git diff` throughout, exactly the invisible
+  state this entry describes.
+- `scripts/sync-agent-workflows.test.mjs` is new and pins that repair: a CRLF mirror must come out
+  LF, a CRLF source must land as LF, real content drift must still be written, and a second run must
+  change nothing. Mutation-tested — restoring the normalize-before-compare line turns it red on the
+  CRLF-mirror assertion. `writeExpected` now takes an explicit `targetRoot` so the test runs against a
+  temp directory, and the CLI block is guarded by a resolved-path `isMain` check so importing the
+  module cannot regenerate `.agents/**` as a side effect. Both invocation paths were re-verified:
+  `node scripts/sync-agent-workflows.mjs --check` (husky/CI, relative) and the absolute-path spawn
+  from `check-agent-workflows.mjs`.
 - `scripts/agent-health-check.test.mjs` pins the contract: CRLF-vs-LF is PASS, real content drift is
   still FAIL, the normalizer's narrowness is asserted, and both callers are checked for importing the
   shared module instead of redefining it. Mutation-tested — each assertion goes red when the behavior
@@ -115,6 +196,29 @@ established.
 - Verified by reproducing the FAIL against the live CRLF/LF split in this worktree, confirming PASS
   after the fix with that split still in place, then `npm run agent-health` and
   `npm run test:agent-workflows` clean.
+- **A second fail-silent path, found while reviewing the fix itself.** `check-agent-workflows.mjs`
+  spawned `--check` and passed on `sync.status === 0` alone. A subprocess that does nothing also
+  exits 0, so any silent no-op in the generator would have been reported as a green "synced" that
+  checked nothing — and the new `isEntryPoint` guard is exactly the kind of thing that could
+  mis-detect (Windows carries drive-letter casing from whatever launched the shell, so a `C:` vs `c:`
+  mismatch would skip the CLI). Both halves are closed: the check now requires the `PASS - N Codex
+  workflow file(s) match` line, and `isEntryPoint` case-folds on win32. Mutation-tested by forcing the
+  CLI guard to `false` — `--check` produced no output and exit 0, and the check reported
+  `FAIL … --check exited 0 without its PASS line (produced no output) — the generator may not have
+  run at all`. `sync-agent-workflows.test.mjs` pins entry-point detection for absolute, relative,
+  wrong-file, absent-argv, and flipped-drive-letter inputs.
+- **Two more CodeRabbit findings, both the same shape, both taken.** (1) The raw comparison decoded
+  the target to a string first, and decoding maps any invalid UTF-8 byte to U+FFFD — so a corrupt
+  mirror could compare equal to canonical text containing that character and be skipped. Now
+  compares `Buffer`s. (2) The idempotency assertion checked only the file's *content*, which also
+  passes if `--write` rewrites every file with identical bytes on every run — the exact thing the
+  assertion claimed to disprove. Now pins mtime; mutation-tested by forcing an unconditional write,
+  which turns it red on that assertion. Both are the recurring theme of this entry: **the check was
+  looser than the claim it was making.**
+- **Lesson, and the reason the `--write` correction is written out in full above:** a proof that
+  exercises one half of a two-sided repair reads exactly like a proof that covers both. The source
+  side and the mirror side fail differently, and "I watched it work" was true and still insufficient.
+  Prove each direction separately, or the observation is weaker than it looks.
 
 ## 2026-08-19 — Corrected the false "Codex cannot reach the live DB" premise in the bug-hunt commands
 
