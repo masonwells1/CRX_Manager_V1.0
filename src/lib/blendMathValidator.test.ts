@@ -426,5 +426,89 @@ describe('validateBlendMath', () => {
       expect(warnings).toHaveLength(1);
       expect(warnings[0].message).toContain('200.00');
     });
+
+    // Ported forward from PR #426, which fixed the same class of bug in
+    // `normalizeUnit`. Those tests were written against the total-volume arm and the
+    // old `string[]` return, both of which this branch replaced, so the COVERAGE is
+    // re-aimed here at the arm that bills: every money-path unit lookup goes through
+    // `rateBaseUnit`, and `\s` does not match a zero-width character, so a `trim()`
+    // alone left 'g<ZWSP>al' matching no size table at all.
+    describe('zero-width characters pasted from a PDF', () => {
+      const ZWSP = String.fromCharCode(0x200b);
+      const ZWNJ = String.fromCharCode(0x200c);
+      const BOM = String.fromCharCode(0xfeff);
+
+      it('still converts when the RATE unit carries a zero-width character', () => {
+        // 2 lb/ac × 100 ac = 200 lb = 3200 dry oz — the same sum as the plain-'lb'
+        // case above. Before the fix the rate unit matched nothing and the line fell
+        // out to "couldn't be converted", silently skipping the check that bills.
+        const warnings = validateBlendMath(
+          { total_acres: 100, total_volume: null, total_volume_unit: null, application_rate: null },
+          [{ product_name: 'Dry A', quantity: 3200, unit: 'oz', rate_per_acre: 2, rate_per_acre_unit: `l${ZWSP}b`, ...dry }]
+        );
+        expect(warnings).toHaveLength(0);
+      });
+
+      it('still converts when the QUANTITY unit carries a non-joiner or a BOM', () => {
+        const warnings = validateBlendMath(
+          { total_acres: 100, total_volume: null, total_volume_unit: null, application_rate: null },
+          [{ product_name: 'A', quantity: 25600, unit: `o${ZWNJ}z`, rate_per_acre: 2, rate_per_acre_unit: `${BOM}gal`, ...liquid }]
+        );
+        expect(warnings).toHaveLength(0);
+      });
+
+      it('still reports a real mismatch through a zero-width character', () => {
+        // Deleting the character must not also swallow the comparison it enables.
+        // 2 gal/ac × 100 ac = 25600 oz; 200 oz is the 128x error, still caught.
+        const warnings = validateBlendMath(
+          { total_acres: 100, total_volume: null, total_volume_unit: null, application_rate: null },
+          [{ product_name: 'A', quantity: 200, unit: `o${ZWSP}z`, rate_per_acre: 2, rate_per_acre_unit: 'gal', ...liquid }]
+        );
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0].level).toBe('mismatch');
+        expect(warnings[0].message).toContain('25600.00');
+      });
+
+      // The false-alarm direction, and the reason this is worth a test rather than a
+      // comment: an unmatched rate unit made the pre-flight below claim the invoice
+      // would fail on a ticket that was entirely fine — noise in the amber tier the
+      // whole warning split exists to keep credible.
+      it('does not cry "this will fail when you invoice it" over a zero-width character', () => {
+        const warnings = validateBlendMath(
+          { total_acres: 100, total_volume: null, total_volume_unit: null, application_rate: null },
+          [{
+            product_name: 'Post spray', quantity: 200, unit: 'MG', rate_per_acre: 2, rate_per_acre_unit: `M${ZWSP}G`,
+            product_form: 'dry', product_rate_unit: 'MG', product_inventory_unit: 'MG',
+          }]
+        );
+        expect(warnings).toHaveLength(0);
+      });
+
+      it('still refuses a genuine liquid-to-dry crossing across a zero-width character', () => {
+        // Closing up the character must not merge units that are really different:
+        // 'lb' against a LIQUID product still has no density to convert through.
+        const warnings = validateBlendMath(
+          { total_acres: 100, total_volume: null, total_volume_unit: null, application_rate: null },
+          [{ product_name: 'A', quantity: 25, unit: 'gal', rate_per_acre: 2, rate_per_acre_unit: `l${ZWSP}b`, ...liquid }]
+        );
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0].level).toBe('unchecked');
+        expect(warnings[0].message).toContain('Not checked');
+      });
+
+      // Ported almost unchanged from PR #426 — this one still lands on the arm it was
+      // written for. A unit that is ENTIRELY zero-width is not a unit at all.
+      it('treats a unit made only of zero-width characters as not recorded', () => {
+        const warnings = validateBlendMath(
+          { total_acres: null, total_volume: 300, total_volume_unit: 'gal', application_rate: null },
+          [
+            { product_name: 'A', quantity: 100, unit: 'gal', rate_per_acre: null, rate_per_acre_unit: null, ...liquid },
+            { product_name: 'B', quantity: 200, unit: `${ZWSP}${BOM}`, rate_per_acre: null, rate_per_acre_unit: null, ...liquid },
+          ]
+        );
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0].message).toContain('no unit');
+      });
+    });
   });
 });

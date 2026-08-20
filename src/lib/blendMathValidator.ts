@@ -130,7 +130,19 @@ const UNIT_ALIASES: Record<string, string> = Object.assign(Object.create(null), 
  * lists, so folding twice would be a second place to drift.
  */
 function rateBaseUnit(unit: string | null | undefined): string {
-  const raw = (unit ?? '').trim().toLowerCase();
+  // Same zero-width treatment as `normalizeUnit`, and for the same reason — except
+  // that this function is the one the MONEY path uses. Every billing-related unit
+  // lookup (`rateUnit`, `qtyUnit`, `soldUnit`, `headerUnit`) comes through here, and
+  // `\s` does not match U+200B/200C/200D, so a `trim()` alone leaves a pasted 'g<ZWSP>al'
+  // unmatched by every size table. That fails in two directions at once: the rate
+  // check goes quiet on exactly the OCR/paste-derived tickets it exists for, and the
+  // invoice pre-flight below raises a false "this will fail when you invoice it" on a
+  // ticket that is actually fine. Delete them, never collapse them to a space.
+  const raw = (unit ?? '')
+    .replace(ZERO_WIDTH, '')
+    .replace(WHITESPACE_RUN, ' ')
+    .trim()
+    .toLowerCase();
   if (raw === '') return '';
   const perAcreSlash = /\s*\/\s*(ac|acre|acres|a)\s*$/;
   const perAcreSpelled = /\s+per\s+acre$/;
