@@ -59,6 +59,13 @@ normally.) A guard that always answers UNKNOWN answers nothing.
   which is how it shipped. It has coverage now. **This one is latent in the current repo** — it
   needs a parked migration on `main` with no `LOCAL CANDIDATE` history row, which does not exist
   today — so the fleet run looks identical either way and does not prove it; the tests do.
+- **The exemption compares the row, not just the path.** Codex P2: matching on path alone let a
+  branch rewrite an existing mainline candidate row in place — swapping its SQL sha256 pin for a
+  different 64-hex value — and still report KNOWN, because the SQL file is untouched and the
+  SQL-only `base..HEAD` diff never names it. That branch's own history-to-SQL cross-reference was
+  invalid, and merging it would turn the mainline scan UNKNOWN. A row is exempt only when
+  `origin/main` registers the same path **and** the branch's pin still agrees with mainline's.
+  Absent on both sides counts as agreement; present on one side only, or differing, does not.
 - **The exemption reads nothing of its own** (Codex HIGH, round 4). It consumes the exact
   `origin/main` history text the caller's mainline discovery pass verified against, injected via
   `readOriginMainHistory`. When the reader resolved `origin/main` independently, a concurrent

@@ -846,17 +846,30 @@ export function createOwnDraftPathsReader({
       return originMainCandidates;
     }
     const parsed = localCandidateMigrationPathsFromHistory(text);
-    originMainCandidates = parsed.state === "known" ? parsed.paths : null;
+    originMainCandidates = parsed.state === "known"
+      ? { paths: parsed.paths, sha256ByPath: parsed.sha256ByPath || new Map() }
+      : null;
     return originMainCandidates;
   }
 
+  // Exempt a row ONLY when origin/main registers the same path AND the branch's copy of the
+  // row still agrees with mainline's. Codex P2 on PR #437: a path-only match let a branch
+  // edit an existing mainline candidate row in place — swapping its SQL sha256 pin for a
+  // different 64-hex value — and still be exempted, because the SQL-only `base..HEAD` diff
+  // never names the untouched .sql. That branch reported KNOWN while its own
+  // history-to-SQL cross-reference was invalid, and merging it turned the mainline scan
+  // UNKNOWN. A row the branch rewrote is a row the branch is answerable for.
   function reconcileExemptPathsFor(parsedHistory) {
     if (parsedHistory?.state !== "known" || parsedHistory.paths.size === 0) return null;
     const registered = originMainRegisteredCandidates();
     if (!registered) return null;
+    const branchPins = parsedHistory.sha256ByPath || new Map();
     const exempt = new Set();
     for (const candidate of parsedHistory.paths) {
-      if (registered.has(candidate)) exempt.add(candidate);
+      if (!registered.paths.has(candidate)) continue;
+      // Absent on both sides is agreement; present on one side only, or differing, is not.
+      if (branchPins.get(candidate) !== registered.sha256ByPath.get(candidate)) continue;
+      exempt.add(candidate);
     }
     return exempt.size ? exempt : null;
   }

@@ -880,13 +880,58 @@ const MAINLINE_HISTORY_SETTLES_CANDIDATE = "| 886 | 20260101000000 | **APPLIED L
 // structural rule it is exempt for the RIGHT reason — it is a REGISTERED LOCAL CANDIDATE —
 // and the surrounding prose cannot influence the outcome either way.
 {
-  const prosyPendingRow = "| 887 | 20260101000000 | **LOCAL CANDIDATE — NOT APPLIED.** File: `20260101000000_real.sql`. Sibling 20260102 was applied live; this reuses its superseded price basis. |";
+  // Carries the SAME sha256 pin as the branch row, so this case isolates what it is about:
+  // prose. A pin that DISAGREES is covered separately below (Codex P2) and must not exempt.
+  const prosyPendingRow = `| 887 | 20260101000000 | **LOCAL CANDIDATE — NOT APPLIED.** File: \`20260101000000_real.sql\`. SQL sha256: \`${sha256Text(BRANCH_CANDIDATE_SQL)}\`. Sibling 20260102 was applied live; this reuses its superseded price basis. |`;
   const { reader } = fakeReader(
     { "merge-base": ["base1"], diff: [], show: [prosyPendingRow] },
     { readHistory: () => BRANCH_CANDIDATE_HISTORY },
   );
   const got = reader(CLEAN_ENTRY);
   eq(got.unknownReason, "", "a registered LOCAL CANDIDATE row exempts regardless of settlement words in its prose");
+}
+
+// Codex P2 on PR #437: exempting on PATH alone let a branch rewrite an existing mainline
+// candidate row in place — swapping its SQL sha256 pin — and still report KNOWN. The SQL is
+// untouched, so the SQL-only `base..HEAD` diff never names it; only the row changed. That
+// branch's own history-to-SQL cross-reference is invalid, and merging it turns the mainline
+// scan UNKNOWN. A row the branch rewrote is a row the branch is answerable for.
+{
+  const forgedPin = "b".repeat(64);
+  const branchRewroteThePin = `| Entry | 20260101000000 | **LOCAL CANDIDATE — NOT APPLIED.** File: \`20260101000000_real.sql\`. SQL sha256: \`${forgedPin}\`. |`;
+  const mainlineRow = `| 887 | 20260101000000 | **LOCAL CANDIDATE — NOT APPLIED.** File: \`20260101000000_real.sql\`. SQL sha256: \`${sha256Text(BRANCH_CANDIDATE_SQL)}\`. |`;
+  const { reader } = fakeReader(
+    { "merge-base": ["base1"], diff: [], show: [mainlineRow] },
+    { readHistory: () => branchRewroteThePin },
+  );
+  const got = reader(CLEAN_ENTRY);
+  ok(
+    got.unknownReason.includes("absent from this branch's own-draft diff"),
+    "a branch that rewrote a registered row's sha256 pin is NOT exempted, even with the SQL untouched",
+  );
+
+  // A branch that ADDS a pin mainline does not carry has also edited the row.
+  const mainlineNoPin = "| 887 | 20260101000000 | **LOCAL CANDIDATE — NOT APPLIED.** File: `20260101000000_real.sql`. |";
+  const { reader: addedPin } = fakeReader(
+    { "merge-base": ["base1"], diff: [], show: [mainlineNoPin] },
+    { readHistory: () => BRANCH_CANDIDATE_HISTORY },
+  );
+  ok(
+    addedPin(CLEAN_ENTRY).unknownReason.includes("absent from this branch's own-draft diff"),
+    "a branch that added a sha256 pin mainline lacks is NOT exempted",
+  );
+
+  // Neither side pinning is agreement, not a mismatch — that must still exempt.
+  const branchNoPin = "| Entry | 20260101000000 | **LOCAL CANDIDATE — NOT APPLIED.** File: `20260101000000_real.sql`. |";
+  const { reader: neitherPinned } = fakeReader(
+    { "merge-base": ["base1"], diff: [], show: [mainlineNoPin] },
+    { readHistory: () => branchNoPin },
+  );
+  eq(
+    neitherPinned(CLEAN_ENTRY).unknownReason,
+    "",
+    "an unpinned row identical on both sides still exempts — absent on both sides is agreement",
+  );
 }
 
 // CROSS-PHASE SNAPSHOT RACE (Codex HIGH on PR #437, reproduced).
