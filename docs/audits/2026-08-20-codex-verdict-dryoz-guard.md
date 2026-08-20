@@ -177,6 +177,51 @@ cent. Converting the totals path and the RPC boundary to `bigint` is a real impr
 heavy lift that would roughly double this PR's blast radius on a money path, which is the
 opposite of what a focused fix should do. Recorded as a follow-up instead of half-done.
 
+## Push-proof gate, round 2 — BLOCKED, and it was right
+
+The first proof attempt (`fb17a7a0`) returned BLOCKED with three High findings, but **two of
+them were phantoms from a stale base**: PR #431 (draw-down) had merged to `main` while this
+branch worked, leaving it 9 commits behind. The gate diffed the candidate against the *new*
+main, so #431's own migrations read as though this branch had reverted them. Verified before
+believing it — this PR's diff touches **zero** files under `supabase/` or `scripts/`. Fixed by
+merging `origin/main` (clean, no conflicts), not by arguing with the reviewer. This is the
+[[project_review-regression-may-be-stale-base]] failure mode exactly.
+
+The second attempt (`a62d5e40`, base `15e41d09`, eight manifest-differing paths) is the honest
+one. Still BLOCKED, and the lead finding is a genuine hole in this branch's own guard:
+
+### The guard had two everyday bypasses
+
+1. **The error message taught one.** The banner ended "…or change the rate unit to
+   `{priceUnit}/ac`." Following that advice on the live shape turns `Dry oz/ac` into `Lb/ac`,
+   which makes the two units match, which silences the guard — while `rate` and `quantity` are
+   untouched. The row then saves as 32 lb/ac billing 3,200 lb: **the identical 16× error, now
+   silent instead of blocked.** The guard's own remediation text converted a loud failure into
+   a hidden one.
+
+2. **An acreage change switched it off.** `chemLineBillingHazard` returned NO_HAZARD whenever
+   the quantity matched neither `rate × acres` nor the carried value — "unprovable, do not
+   block". But a reloaded row deliberately keeps its saved quantity when the acreage moves
+   (the P1 revert above), so the quantity stops equalling `rate × acres` and the warning
+   vanished — on precisely the mislabelled row it exists to catch.
+
+Each decision was defensible alone. Together they left the guard defeatable by ordinary work.
+
+**Fixed.** The units disagreeing is now itself the hazard; the only exit is a positive proof of
+safety (the quantity equals `rate × acres` carried into the price's unit). `billedRatio` is
+derived from the **quantity** rather than from `rate × acres`, so it stays truthful on a stale
+row — the acreage-change case now reports 16× correctly. The banner keeps the safe remedy and
+states plainly that relabelling the unit alone does not change the amount.
+
+The deliberate cost: a hand-entered quantity in a third unit is now flagged, and a row missing
+its rate or acreage stays flagged rather than escaping. Both are clearable by making the units
+agree. A guard that switches itself off during normal use is worse than one that occasionally
+asks a question.
+
+**Two existing tests asserted the old permissive behaviour — those assertions *were* the
+bypass, and they are inverted.** Mutation-pinned: restoring the old bail-out turns both
+regressions red.
+
 ## Still open
 
 - **Server-side enforcement of the unit invariant, and server-side job totals** — findings 4

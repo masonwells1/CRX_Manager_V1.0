@@ -415,10 +415,29 @@ describe('chemCalculator — chemLineBillingHazard (production fail-closed guard
     ).hazard).toBe(false);
   });
 
-  it('does NOT flag a quantity matching neither reading (stale or hand-entered)', () => {
+  it('DOES flag a quantity matching neither reading — unprovable is not safe', () => {
+    // This assertion used to be inverted, and that inversion WAS the bypass: any row whose
+    // quantity drifted from rate x acres escaped the guard entirely. Fail closed instead.
+    // The deliberate cost is a false positive on a hand-entered third-unit quantity, which
+    // the operator clears by making the units agree.
     expect(chemLineBillingHazard(
       { quantity: '77', rate_per_acre: '1.5', rate_unit: 'pt/ac', unit: 'Gal' }, 160, 'liquid',
-    ).hazard).toBe(false);
+    ).hazard).toBe(true);
+  });
+
+  it('SURVIVES AN ACREAGE CHANGE — the everyday off switch the guard used to have', () => {
+    // The live shape: 32 Dry oz/ac priced per Lb, saved over 100 acres as 3,200.
+    const row = { quantity: '3200', rate_per_acre: '32', rate_unit: 'Dry oz/ac', unit: 'Lb' };
+    expect(chemLineBillingHazard(row, 100, 'dry').hazard).toBe(true);
+
+    // A reloaded row deliberately KEEPS its saved quantity when the acreage moves (the
+    // driver is not persisted, so it must not be re-derived). The quantity therefore stops
+    // equalling rate x acres — which is exactly when the old guard fell silent, on the very
+    // row that was mislabelled to begin with.
+    const afterAcreageChange = chemLineBillingHazard(row, 200, 'dry');
+    expect(afterAcreageChange.hazard).toBe(true);
+    // And the ratio stays truthful: 3,200 oz is 200 lb, so the bill is still 16x.
+    expect(afterAcreageChange.billedRatio).toBe(16);
   });
 
   it('tolerates the 4-dp rounding fmt4 applies to a stored quantity', () => {
@@ -444,13 +463,24 @@ describe('chemCalculator — chemLineBillingHazard (production fail-closed guard
     }
   });
 
-  it('does not flag when acres are unknown or the rate is absent', () => {
+  it('STILL flags when acres are unknown or the rate is absent — no proof, no pass', () => {
+    // Also previously inverted. A missing rate or acreage means the safety proof cannot be
+    // computed; that is a reason to keep the warning up, not to drop it. Both of these are
+    // the live 16x shape with one input missing.
     expect(chemLineBillingHazard(
       { quantity: '3200', rate_per_acre: '32', rate_unit: 'Dry oz/ac', unit: 'Lb' }, 0, 'dry',
-    ).hazard).toBe(false);
+    ).hazard).toBe(true);
     expect(chemLineBillingHazard(
       { quantity: '3200', rate_per_acre: '', rate_unit: 'Dry oz/ac', unit: 'Lb' }, 100, 'dry',
-    ).hazard).toBe(false);
+    ).hazard).toBe(true);
+  });
+
+  it('stays silent on an empty or zero quantity, so a fresh row is not born warning', () => {
+    for (const q of ['', '0']) {
+      expect(chemLineBillingHazard(
+        { quantity: q, rate_per_acre: '', rate_unit: 'Dry oz/ac', unit: 'Lb' }, 0, 'dry',
+      ).hazard).toBe(false);
+    }
   });
 
   it('still flags when the form is unknown and no ratio can be computed', () => {

@@ -421,13 +421,27 @@ const NO_HAZARD: ChemBillingHazard = { hazard: false, quantityUnit: '', priceUni
 /**
  * Detect a row whose quantity is measured in one unit but priced per another.
  *
- * PROOF STANDARD — we flag only when the quantity is demonstrably the raw rate × acres
- * product while the row is priced per a DIFFERENT unit. That is the machine-generated
- * mislabelling. We deliberately do NOT flag:
- *  • a blank unit (a separate, pre-existing condition),
- *  • a quantity already carried correctly into the price's unit (the fix working),
- *  • a quantity matching neither (stale after an acreage change, or hand-entered) —
- *    unprovable here, and blocking it would reject a legitimate manual conversion.
+ * PROOF STANDARD — FAIL CLOSED. The units disagreeing IS the hazard. We stay silent only
+ * for a row that is provably fine:
+ *  • either unit blank/unrecognized (a separate, pre-existing condition), or
+ *  • the two units are the same, or
+ *  • the quantity is exactly what rate × acres becomes once carried into the price's unit
+ *    — the one thing that actually proves the quantity is expressed in the price's unit.
+ * Everything else is flagged. An unprovable row is not a safe row.
+ *
+ * THE BYPASS THIS CLOSES (Codex, 2026-08-20). The previous version also returned safe when
+ * the quantity matched NEITHER value, reasoning that it was "unprovable, so do not block".
+ * That handed the guard an everyday off switch: a reloaded row deliberately keeps its saved
+ * quantity when the acreage changes, so the quantity stops equalling rate × acres and the
+ * warning vanished — on the very row that was mislabelled to begin with. Open a hazardous
+ * job, edit the acres, and the protection disappeared silently.
+ *
+ * The trade is deliberate. A hand-entered quantity in a third unit is now flagged too. That
+ * is a false positive the operator can clear by making the units agree; the alternative was
+ * a guard that switched itself off during ordinary work.
+ *
+ * `billedRatio` is derived from the QUANTITY, not from rate × acres, so it stays truthful on
+ * a stale row where the acreage has since moved.
  *
  * Driver-independent on purpose: `driver` is UI-only and is NOT persisted, so every
  * reloaded row has driver === undefined and a driver-gated check would miss them all.
@@ -442,25 +456,28 @@ export function chemLineBillingHazard(
   if (quantityUnit == null || priceUnit == null) return NO_HAZARD;
   if (quantityUnit === priceUnit) return NO_HAZARD;
 
-  const rate = parseFloat(row.rate_per_acre);
   const qty = parseFloat(row.quantity);
-  if (!Number.isFinite(rate) || !Number.isFinite(qty) || rate <= 0 || qty <= 0 || !(acres > 0)) {
-    return NO_HAZARD;
-  }
+  if (!Number.isFinite(qty) || qty <= 0) return NO_HAZARD;
 
-  const derivedInRateUnit = rate * acres;
-  // What the quantity would read had it been carried into the unit the price is quoted in.
-  const carried = fieldAppPricedQuantity(derivedInRateUnit, quantityUnit, priceUnit, productForm ?? null);
   // `quantity` is stored through fmt4, so allow 4-dp slack plus a relative epsilon.
   const near = (a: number, b: number): boolean => Math.abs(a - b) <= Math.max(1e-4, Math.abs(b) * 1e-6);
 
-  if (carried != null && near(qty, carried)) return NO_HAZARD;   // already aligned
-  if (!near(qty, derivedInRateUnit)) return NO_HAZARD;           // unprovable — do not block
+  // PROOF OF SAFETY, and the only one: the quantity is what rate × acres reads once carried
+  // into the unit the price is quoted in. Requires a usable rate and acreage — without them
+  // nothing is proven, so the row stays flagged rather than escaping.
+  const rate = parseFloat(row.rate_per_acre);
+  if (Number.isFinite(rate) && rate > 0 && acres > 0) {
+    const carried = fieldAppPricedQuantity(rate * acres, quantityUnit, priceUnit, productForm ?? null);
+    if (carried != null && near(qty, carried)) return NO_HAZARD;
+  }
 
+  // What this quantity SHOULD read if it were carried into the price's unit. Acreage plays
+  // no part, so a stale row reports the same honest ratio as a fresh one.
+  const correctlyPriced = fieldAppPricedQuantity(qty, quantityUnit, priceUnit, productForm ?? null);
   return {
     hazard: true,
     quantityUnit,
     priceUnit,
-    billedRatio: carried != null && carried !== 0 ? derivedInRateUnit / carried : null,
+    billedRatio: correctlyPriced != null && correctlyPriced !== 0 ? qty / correctlyPriced : null,
   };
 }

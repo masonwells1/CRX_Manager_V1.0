@@ -3716,8 +3716,11 @@ export default function JobDetail() {
                           {hazard.billedRatio && hazard.billedRatio > 1
                             ? <> — invoicing it would charge about <strong>{fmt4(hazard.billedRatio)}×</strong> too much</>
                             : null}
-                          . Set <strong>Unit</strong> to {hazard.quantityUnit} (with cost/price per {hazard.quantityUnit}),
-                          or change the rate unit to {hazard.priceUnit}/ac.
+                          . Set <strong>Unit</strong> to {hazard.quantityUnit} and quote cost/price per{' '}
+                          {hazard.quantityUnit} — or, if the rate really is in {hazard.priceUnit},
+                          change the rate unit to {hazard.priceUnit}/ac <strong>and re-enter the rate</strong>{' '}
+                          so the quantity is recalculated. Relabelling the unit on its own does not change
+                          the amount, and would leave this line billing the same wrong total silently.
                         </span>
                       </div>
                     )}
