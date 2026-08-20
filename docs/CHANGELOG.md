@@ -158,6 +158,37 @@ re-derive" live facts (Mason caught it; the PRD was fixed, the source was not).
 - **Still open (owner-only):** nobody can verify from this repo whether the `codex_apps/supabase`
   App connector is currently read-only or write-enabled. Mason's 2026-08-14 approval may or may not
   have been applied to that toggle; recording its actual state would close the blind spot.
+## 2026-08-19 — The purchase-order "mirror" whole-cent CHECK is settled as a closed two-column exception
+
+Documentation only — no app source, no migration, no schema or live-state change; every live read
+was read-only.
+
+PR #420 left one money-policy question open: the AGENTS.md gate requires "an active **finite**
+whole-cent CHECK", and the two purchase-order constraints
+(`purchase_orders_total_cost_whole_cents`, `purchase_order_items_unit_cost_whole_cents`) carry no
+finiteness clause of their own — what rejects `NaN`/`Infinity` there is the generated cents column's
+cast to bigint, not the CHECK. An earlier revision had resolved this by asserting "Both forms clear
+the gate" and was withdrawn, because that widened a gate Mason had not decided.
+
+The cast argument was proven read-only against live on 2026-08-19 — non-finite and overflowing
+values raise in the generation expression before the CHECK is consulted, fractional cents are
+rejected by the CHECK itself, the cents columns are unwritable (`attgenerated = 's'`), and all 228
+live rows are clean — and **Mason accepted the two constraints as a closed exception**. The mirror
+form is explicitly **not** a second approved shape; new or changed money columns use the rounding
+form. Recorded in `docs/manual/DECISION_LOG.md` (2026-08-19 entry), with the 2026-08-10 entry's
+"Open, not settled" paragraph flipped to point at it, a one-sentence pointer added to the always-
+loaded `AGENTS.md` money bullet, and the exception noted in
+`docs/workflows/SAFE_DEVELOPMENT_RULES.md` so its "means exactly this predicate" wording no longer
+contradicts the settlement.
+
+Adversarial review of the entry (Fable, read-only) confirmed every live claim — constraint
+definitions, generated columns, cast SQLSTATEs, the 34/194/0 row counts, the 11-rounding + 2-mirror
+split of 13, and the NaN/NULL semantics — and caught four errors that were fixed before merge: the
+`AGENTS.md` sentence claimed *every other* money column carries the rounding form (false — ~29
+`numeric` money columns carry no scale CHECK at all), the precision-loss ceiling was stated as
+$9.2 × 10¹⁶ when `numeric` division loses the second decimal from about $10¹⁶, one sentence said
+every bad route was closed before the CHECK when fractional cents are closed *by* it, and
+`SAFE_DEVELOPMENT_RULES.md` had not been updated.
 
 ## 2026-08-18 — Hook audit fixes: C3 source-containment guard, worktree-sweep unblock, cd-target fix
 
