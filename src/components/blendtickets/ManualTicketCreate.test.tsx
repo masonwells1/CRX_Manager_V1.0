@@ -444,4 +444,38 @@ describe('ManualTicketCreate retry-safe atomic creation', () => {
       name: 'Rate unit per acre for Roundup PowerMax',
     })).toHaveValue('oz');
   });
+
+  // Switching the unit fields from free text to a picker made a failed unit load
+  // unrecoverable: the list is empty, so the only option is the disabled '--' and
+  // the operator cannot type a unit the way they used to. The failure has to be
+  // visible, and it must not be able to ride through into a saved ticket.
+  it('surfaces a failed unit_conversions load and blocks a save that left a unit blank', async () => {
+    mocks.from.mockImplementation((table: string) => chainable(
+      table === 'products'
+        ? { data: TEST_PRODUCTS, error: null }
+        : table === 'unit_conversions'
+          ? { data: null, error: { message: 'connection lost' } }
+          : { data: [], error: null },
+    ));
+
+    render(<ManualTicketCreate {...defaultProps} />);
+    expect(await screen.findByText('Failed to load Units. Retry before creating this ticket.'))
+      .toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /add product/i }));
+    await chooseSearchOption('Select Product', 'Roundup PowerMax');
+    await chooseSearchOption('Select Customer', 'Smith Farm');
+
+    const quantityUnit = await screen.findByRole('combobox', {
+      name: 'Quantity unit for Roundup PowerMax',
+    }) as HTMLSelectElement;
+    expect(Array.from(quantityUnit.options, (option) => option.value)).toEqual(['']);
+
+    fireEvent.click(screen.getByRole('button', { name: /create ticket/i }));
+    expect(await screen.findByText(
+      'Units could not be loaded, so a unit is still blank. Refresh and retry before saving this ticket.',
+    )).toBeInTheDocument();
+    expect(mocks.rpc).not.toHaveBeenCalled();
+    expect(defaultProps.onComplete).not.toHaveBeenCalled();
+  });
 });

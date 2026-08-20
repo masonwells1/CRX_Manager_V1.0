@@ -421,10 +421,16 @@ export function BlendTicketDetail() {
 
   useEffect(() => {
     supabase.from('unit_conversions').select('*').order('unit').then(({ data, error }) => {
-      if (error) { Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_unit_conversions' } }); return; }
+      if (error) {
+        // The unit fields are pickers, not free text, so an empty list leaves the
+        // operator no way to enter a unit at all. Say so instead of failing quietly.
+        Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_unit_conversions' } });
+        toast('error', 'The Unit list could not be loaded. Refresh before changing any unit on this ticket.');
+        return;
+      }
       setUnitConversions((data || []) as UnitConversion[]);
     });
-  }, []);
+  }, [toast]);
 
   useEffect(() => {
     const ticketData = {
@@ -489,6 +495,13 @@ export function BlendTicketDetail() {
     }
     if (contentLocked) {
       toast('error', 'Ticket details are locked after billing or order linkage.');
+      return;
+    }
+    // Only block when the missing list is actually costing the ticket a unit. A
+    // blank rate unit bills off the product's own rate_unit, but it should be a
+    // choice the operator made, not one a failed fetch made for them.
+    if (unitConversions.length === 0 && products.some((p) => !p.unit || !p.rate_per_acre_unit)) {
+      toast('error', 'Units could not be loaded, so a unit is still blank. Refresh this page before saving.');
       return;
     }
 

@@ -153,6 +153,10 @@ describe('BlendTicketDetail — Phase 1 contract', () => {
       if (table === 'blend_tickets') {
         return buildChain({ data: baseTicket, error: null });
       }
+      // Live `unit_conversions` is never empty, and the save guard now treats an
+      // empty list as "the picker could not offer a unit". Returning [] here made
+      // the default harness look like a failed fetch to every save test.
+      if (table === 'unit_conversions') return buildChain({ data: unitConversions, error: null });
       return buildChain({ data: [], error: null });
     });
   });
@@ -226,6 +230,36 @@ describe('BlendTicketDetail — Phase 1 contract', () => {
 
     fireEvent.change(rateUnit, { target: { value: 'oz' } });
     expect(rateUnit).toHaveValue('oz');
+  });
+
+  // Switching the unit fields from free text to a picker made a failed unit load
+  // unrecoverable: the list is empty, so the only option is the disabled '--' and
+  // the operator cannot type a unit the way they used to. The failure has to be
+  // visible, and it must not be able to ride through into a saved ticket.
+  it('toasts a failed unit_conversions load and blocks a save that left a unit blank', async () => {
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'blend_tickets') return buildChain({ data: baseTicket, error: null });
+      if (table === 'unit_conversions') {
+        return buildChain({ data: null, error: { message: 'connection lost' } });
+      }
+      return buildChain({ data: [], error: null });
+    });
+
+    renderTicket();
+    await waitFor(() => {
+      expect(mockToast).toHaveBeenCalledWith('error', expect.stringMatching(/Unit list could not be loaded/i));
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add Product' }));
+    fireEvent.change(await screen.findByPlaceholderText('Lot #'), {
+      target: { value: 'LOT-NO-UNITS' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => {
+      expect(mockToast).toHaveBeenCalledWith('error', expect.stringMatching(/a unit is still blank/i));
+    });
+    expect(mockRpc.mock.calls.find(([name]) => name === 'save_blend_ticket')).toBeUndefined();
   });
 
   it('does not surface a load error when the ticket payload is well-formed', async () => {
@@ -460,6 +494,7 @@ describe('BlendTicketDetail — Phase 1 contract', () => {
       if (table === 'fields') {
         return buildChain({ data: [{ id: 'field-1', field_name: 'North 50', customer_id: 'cust-1' }], error: null });
       }
+      if (table === 'unit_conversions') return buildChain({ data: unitConversions, error: null });
       return buildChain({ data: [], error: null });
     });
 
