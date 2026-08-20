@@ -26,7 +26,11 @@
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { checkCommandDeep, checkMigrationModify } from "./bash-safety-lib.mjs";
+import {
+  checkCommandDeep,
+  checkMigrationModify,
+  maintenanceProducerCommandMentioned,
+} from "./bash-safety-lib.mjs";
 
 function out(decision, reason) {
   const payload = decision === "block"
@@ -56,6 +60,7 @@ const toolName = String(payload?.tool_name || "");
 // but carry no specific check below (see header).
 const DC_TOOL_RE = /^mcp__[\w-]+__(start_process|interact_with_process|write_file|edit_file|edit_block|move_file|create_file|create_directory|delete_file|kill_process|set_config_value)$/;
 const DC_RUN_RE = /^mcp__[\w-]+__(start_process|interact_with_process)$/;
+const DC_INTERACT_RE = /^mcp__[\w-]+__interact_with_process$/;
 const DC_WRITE_RE = /^mcp__[\w-]+__(write_file|edit_file|edit_block|move_file|create_file|create_directory|delete_file)$/;
 
 if (!DC_TOOL_RE.test(toolName)) nothing();
@@ -72,6 +77,13 @@ try {
       .join("\n");
 
     if (text) {
+      if (DC_INTERACT_RE.test(toolName) && maintenanceProducerCommandMentioned(text)) {
+        out(
+          "block",
+          `MCP TOOL GUARD (${toolName}): the protected maintenance producer must run in a fresh sanitized process; an existing interactive process can retain uninspectable environment or shell state.`
+        );
+      }
+
       const reason = checkCommandDeep(text, cwd);
       if (reason) out("block", `MCP TOOL GUARD (${toolName}): ${reason}`);
 

@@ -723,10 +723,12 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
   });
   const nodeBackedCommandMentioned = tokenListMentionsNodeBackedCommand(tokens)
     || nestedLauncherMentionsNodeBackedCommand;
-  const compactDynamicTarget = value.toLowerCase().replace(/[\s"'`^+()[\]{},]/g, "");
+  const compactDynamicTarget = value.toLowerCase().replace(/[\s"'`^+$()[\]{},]/g, "");
   const powershellMutation = tokens.some((token) => powerShellMutationCommands.has(unquotedExecutableBasename(token)))
     && compactDynamicTarget.includes("env:node_options")
     && /(?:\+|\s-join(?:\s|$)|\$\(|@\()/i.test(value);
+  const powerShellDynamicEnvMutation = tokens.some((token) => powerShellMutationCommands.has(unquotedExecutableBasename(token)))
+    && /(?:env:|env:\\)\s*\$(?:\(|\{?[A-Za-z_])/i.test(value);
   const powerShellAliasDefinition = tokens.some((token) => powerShellAliasDefinitionCommands.has(unquotedExecutableBasename(token)));
   const dotNetMutation = /setenvironmentvariable/i.test(value)
     && compactDynamicTarget.includes("setenvironmentvariablenode_options");
@@ -744,7 +746,7 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
   const cmdDelayedMutation = tokens.some((token) => tokenNamed(token, ["cmd"]))
     && /\/v(?::on)?(?:\s|$)/i.test(value)
     && /\bset\s+![^!\r\n]+!\+?=/i.test(value);
-  if (powershellMutation || powerShellAliasDefinition
+  if (powershellMutation || powerShellDynamicEnvMutation || powerShellAliasDefinition
     || dotNetMutation || standalonePowerShellEnvMutation || standaloneCmdSetMutation || cmdDelayedMutation) return true;
   if (nodeBackedCommandMentioned) {
     const dynamicAssignmentBuiltin = tokens.some((token) => tokenNamed(token, ["export", "declare", "typeset", "local", "readonly"]))

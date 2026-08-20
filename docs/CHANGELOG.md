@@ -83,8 +83,11 @@ All significant development milestones, in reverse chronological order.
   closed when they can target the environment provider before Node execution.
   Environment-provider and .NET `NODE_OPTIONS` mutations are denied even when
   no Node command appears in the same payload, closing staged mutations across
-  persistent MCP shell interactions. Alias definitions and unknown commands
-  targeting the provider fail closed for the same stateful boundary. Standalone
+  persistent MCP shell interactions. Dynamic environment-provider targets fail
+  closed, and the protected producer cannot run through an existing interactive
+  process; its exact approved command must launch in a fresh process. Alias
+  definitions and unknown commands targeting the provider fail closed for the
+  same stateful boundary. Standalone
   CMD `set` and delayed-expansion mutations are denied as well.
   The parser also covers .NET
   `SetEnvironmentVariable` calls before `node` or a Node-backed package runner. Shell

@@ -101,8 +101,10 @@ command bodies also recognize ordinary `$env:NODE_OPTIONS` assignments,
 environment-provider item/content cmdlets, their standard short aliases, aliases
 created inside the same command body, and .NET `SetEnvironmentVariable` calls
 before Node-backed runners. Those mutations are denied independently of whether
-Node execution appears in the same payload, so persistent MCP shell interactions
-cannot stage a preload for a later command. Alias definitions and unknown commands
+Node execution appears in the same payload. Dynamic provider targets such as
+`Env:$target` fail closed, and the protected producer itself is never allowed
+through `interact_with_process`; it must launch in a fresh process with no
+retained shell state. Alias definitions and unknown commands
 targeting `Env:NODE_OPTIONS` fail closed, as do standalone CMD mutations.
 Recursively inspected CMD bodies fail closed
 when `call`/`@call`, an `if` condition, or a `for … do` body precedes an explicit

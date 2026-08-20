@@ -192,12 +192,20 @@ r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_i
 ok(isDeny(r), "a persistent PowerShell interaction cannot stage a mutation alias");
 r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: persistentShellPid, input: "mutate Env:NODE_OPTIONS '--require=./preload.cjs'" } });
 ok(isDeny(r), "a pre-existing PowerShell alias cannot target Env:NODE_OPTIONS");
+r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: persistentShellPid, input: `Set-Item "Env:$('NODE_OPTIONS')" '--require=./preload.cjs'` } });
+ok(isDeny(r), "a persistent PowerShell interaction cannot construct NODE_OPTIONS through a subexpression");
+r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: persistentShellPid, input: "$target = 'NODE_OPTIONS'" } });
+ok(isDeny(r), "a persistent-shell variable cannot stage the NODE_OPTIONS target for a later interaction");
+r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: persistentShellPid, input: `Set-Item "Env:$target" '--require=./preload.cjs'` } });
+ok(isDeny(r), "a later persistent interaction cannot use variable indirection for an environment-provider mutation");
 const approvedProducerCommand = [
   "node", ["scripts/apply-live-testdata-maintenance-", "20260812.mjs"].join(""),
   ["--approved-by-", "mason=2026-08-12"].join(""),
 ].join(" ");
 r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: persistentShellPid, input: approvedProducerCommand } });
-ok(!isDeny(r), "the exact approved producer command stays allowed when no preload mutation preceded it");
+ok(isDeny(r), "the protected producer cannot run inside a persistent interactive process");
+r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: approvedProducerCommand } });
+ok(!isDeny(r), "the exact approved producer command remains allowed in a fresh process");
 
 r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: 123, input: "rm -rf src\n" } });
 ok(isDeny(r), "DC interact_with_process feeding rm -rf src is denied");
