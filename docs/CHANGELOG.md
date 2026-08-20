@@ -79,15 +79,16 @@ All significant development milestones, in reverse chronological order.
   PowerShell environment writes are recognized inside recursively inspected
   `powershell`/`pwsh -Command` bodies too, including `$env:NODE_OPTIONS`,
   environment-provider item/content cmdlets, their standard short aliases, and
-  aliases created inside the same command body. Dynamic alias definitions fail
-  closed when they can target the environment provider before Node execution.
+  aliases created inside the same command body. Alias definitions fail closed
+  when their resolved target is an environment-provider mutation command;
+  ordinary read-only aliases and alias spellings used as text remain allowed.
   Environment-provider and .NET `NODE_OPTIONS` mutations are denied even when
   no Node command appears in the same payload, closing staged mutations across
   persistent MCP shell interactions. Dynamic environment-provider targets fail
   closed, and the protected producer cannot run through an existing interactive
-  process; its exact approved command must launch in a fresh process. Alias
-  definitions and unknown commands targeting the provider fail closed for the
-  same stateful boundary. Known read-only PowerShell commands may inspect
+  process; its exact approved command must launch in a fresh process. Mutation-
+  capable alias definitions and unknown commands targeting the provider fail
+  closed for the same stateful boundary. Known read-only PowerShell commands may inspect
   `NODE_OPTIONS` without being mistaken for writes; direct assignments,
   provider mutation cmdlets, and unknown aliases remain denied. Standalone
   CMD `set` and delayed-expansion mutations are denied as well, including

@@ -107,6 +107,11 @@ const shellBuiltinNodeOptionsCases = [
   `$env:NODE_OPTIONS='--require=./preload.cjs'`,
   `si ('Env:NO' + 'DE_OPTIONS') '--require=./preload.cjs'`,
   `Set-Alias mutate Set-Item`,
+  `Set-Alias -Name mutate -Value Set-Item`,
+  `Set-Alias -Name mutate Set-Item`,
+  `Set-Alias -Name:mutate Set-Item`,
+  `New-Alias mutate Set-Item`,
+  `nal mutate si`,
   `mutate Env:NODE_OPTIONS '--require=./preload.cjs'`,
   `[Environment]::SetEnvironmentVariable('NODE_OPTIONS','--require=./preload.cjs')`,
   `cmd /d /c "set NODE_OPTIONS=--require=./preload.cjs"`,
@@ -183,6 +188,17 @@ eq(r.stdout.trim(), "", "non-mutating DC tool (list_directory) is silent (not ma
 // ── start_process / interact_with_process: dangerous command denied ───────
 r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: "git push --force origin main" } });
 ok(isDeny(r), "DC start_process with a force-push command is denied");
+for (const command of [
+  "Set-Alias ll Get-ChildItem",
+  "echo Set-Alias",
+  "rg -n Set-Alias docs",
+  "Set-Alias -Name ll -Value Get-ChildItem",
+  "New-Alias ll Get-ChildItem",
+]) {
+  r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command } });
+  eq(r.status, 0, `mcp-tool-guard exits 0 for a harmless alias command: ${command}`);
+  eq(r.stdout.trim(), "", `mcp-tool-guard allows a harmless alias command: ${command}`);
+}
 
 const persistentShellPid = 321;
 r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: "pwsh" } });

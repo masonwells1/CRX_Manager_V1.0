@@ -338,6 +338,11 @@ const shellBuiltinNodeOptionsCases = [
   `$env:NODE_OPTIONS='--require=./preload.cjs'`,
   `si ('Env:NO' + 'DE_OPTIONS') '--require=./preload.cjs'`,
   `Set-Alias mutate Set-Item`,
+  `Set-Alias -Name mutate -Value Set-Item`,
+  `Set-Alias -Name mutate Set-Item`,
+  `Set-Alias -Name:mutate Set-Item`,
+  `New-Alias mutate Set-Item`,
+  `nal mutate si`,
   `mutate Env:NODE_OPTIONS '--require=./preload.cjs'`,
   `[Environment]::SetEnvironmentVariable('NODE_OPTIONS','--require=./preload.cjs')`,
   `cmd /d /c "set NODE_OPTIONS=--require=./preload.cjs"`,
@@ -428,6 +433,13 @@ const powerShellProviderReadCases = [
   "Write-Output $env:NODE_OPTIONS",
   "Get-Item Env:NODE_OPTIONS",
   "Test-Path Env:NODE_OPTIONS",
+];
+const harmlessPowerShellAliasCases = [
+  "Set-Alias ll Get-ChildItem",
+  "echo Set-Alias",
+  "rg -n Set-Alias docs",
+  "Set-Alias -Name ll -Value Get-ChildItem",
+  "New-Alias ll Get-ChildItem",
 ];
 for (const separator of [";", "|", "&"]) {
   ok(checkDangerousCommand(`Write-Output marker\x5c${separator} ${pythonCommand} -c \"print('opaque')\"`), `PowerShell backslash-prefixed ${separator} cannot hide an opaque interpreter`);
@@ -523,6 +535,7 @@ ok(checkDangerousCommand("Set-Item Env:NODE_OPTIONS $PRELOAD"), "PowerShell Set-
 ok(checkDangerousCommand("$env:NODE_OPTIONS = $PRELOAD"), "PowerShell env assignment to NODE_OPTIONS is denied");
 ok(checkDangerousCommand("[Environment]::SetEnvironmentVariable('NODE_OPTIONS', $PRELOAD)"), ".NET NODE_OPTIONS mutation is denied");
 for (const command of powerShellProviderReadCases) ok(!checkDangerousCommand(command), `PowerShell environment read remains allowed: ${command}`);
+for (const command of harmlessPowerShellAliasCases) ok(!checkDangerousCommand(command), `PowerShell alias text or read-only alias remains allowed: ${command}`);
 ok(!checkDangerousCommand("rg -n 'NODE_OPTIONS=' docs"), "NODE_OPTIONS spelling used as quoted search data stays allowed");
 ok(!checkDangerousCommand("rg -n 'command env NODE_OPTIONS=' docs"), "wrapped NODE_OPTIONS spelling used as quoted search data stays allowed");
 ok(!checkDangerousCommand("rg -n 'SAFE= command -- env NODE_OPTIONS=' docs"), "complex wrapped NODE_OPTIONS spelling used as quoted search data stays allowed");
@@ -730,6 +743,11 @@ for (const command of powerShellProviderReadCases) {
   r = runHook({ tool_name: "PowerShell", tool_input: { command } });
   eq(r.status, 0, `bash-safety.mjs exits 0 for a provider read: ${command}`);
   ok(r.stdout.includes('"permissionDecision":"allow"'), `bash-safety.mjs explicitly allows a provider read: ${command}`);
+}
+for (const command of harmlessPowerShellAliasCases) {
+  r = runHook({ tool_name: "PowerShell", tool_input: { command } });
+  eq(r.status, 0, `bash-safety.mjs exits 0 for a harmless alias command: ${command}`);
+  ok(r.stdout.includes('"permissionDecision":"allow"'), `bash-safety.mjs explicitly allows a harmless alias command: ${command}`);
 }
 
 for (const command of nestedCompletePolicyGuardCases) {
