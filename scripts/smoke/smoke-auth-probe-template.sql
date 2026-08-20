@@ -53,9 +53,11 @@
 --
 -- ---------------------------------------------------------------------------
 -- WORKED EXAMPLE below: draw_down_quote(p_quote_id uuid, p_draws jsonb,
---   p_performed_by uuid DEFAULT NULL, p_idempotency_key text DEFAULT NULL)
--- Live body (read 2026-06-10): AUTH_REQUIRED -> ACTOR_MISMATCH -> role gate
--- (admin, sales_rep, is_active) -> FOR UPDATE lock -> idempotency -> guards.
+--   p_performed_by uuid DEFAULT NULL, p_idempotency_key text DEFAULT NULL,
+--   p_below_cost_reason text DEFAULT NULL)
+-- Pending post-cutover order: barrier -> AUTH_REQUIRED -> ACTOR_MISMATCH -> role
+-- gate (admin, sales_rep, is_active) -> key required -> payload validation ->
+-- intent replay -> live quote FOR UPDATE -> governed money/inventory call.
 -- Fixtures mirror smoke-draw-ledger-reversal.sql (quote 'sent', one section,
 -- one 500-unit item; no inventory rows needed - draws tolerate shortfalls).
 -- ============================================================================
@@ -129,6 +131,7 @@ BEGIN
   -- --------------------------------------------------------------------
   -- P1: no-auth -> AUTH_REQUIRED
   -- --------------------------------------------------------------------
+  PERFORM set_config('request.jwt.claim.sub', '', true);
   PERFORM set_config('request.jwt.claims', '', true);
   PERFORM set_config('request.jwt.claim.sub', '', true);
   BEGIN
@@ -144,6 +147,7 @@ BEGIN
   -- --------------------------------------------------------------------
   -- P2: anon-key (role claim, no sub) -> AUTH_REQUIRED, nothing written
   -- --------------------------------------------------------------------
+  PERFORM set_config('request.jwt.claim.sub', '', true);
   PERFORM set_config('request.jwt.claims', '{"role":"anon"}', true);
   PERFORM set_config('request.jwt.claim.sub', '', true);
   BEGIN
@@ -159,6 +163,7 @@ BEGIN
   -- --------------------------------------------------------------------
   -- P3: wrong role (honest actor id, insufficient role) -> INSUFFICIENT_ROLE
   -- --------------------------------------------------------------------
+  PERFORM set_config('request.jwt.claim.sub', v_wrong::text, true);
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_wrong, 'role', 'authenticated')::text, true);
   PERFORM set_config('request.jwt.claim.sub', v_wrong::text, true);
@@ -176,6 +181,7 @@ BEGIN
   -- P4: forged actor (authenticated admin passing someone ELSE's id)
   --     -> ACTOR_MISMATCH
   -- --------------------------------------------------------------------
+  PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
   PERFORM set_config('request.jwt.claims',
     json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
   PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);

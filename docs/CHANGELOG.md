@@ -23,6 +23,128 @@ current schema rejected the fixture before the behavior under test ran.
   passed its post-apply restore guard, including cancellation of both draw
   orders; both row-version provers remained green.
 
+
+## 2026-08-19 — draw-down retries are bound to the actor and exact booking intent
+
+Pending migration `20260819232000_bind_draw_down_receipts_to_intent.sql` closes the stale-receipt
+hole in `draw_down_quote`: the same key can replay only for the same authenticated actor, quote and
+ordered canonical draw quantities. A changed quantity fails with `IDEMPOTENCY_INTENT_MISMATCH`; a
+different actor fails with `IDEMPOTENCY_ACTOR_MISMATCH`. Numeric-equivalent quantities such as
+`1`, `1.0` and `1.00` remain exact replay, while draw-array order and duplicates remain meaningful.
+The below-cost reason is approval metadata and is deliberately not part of mutation identity.
+
+The migration does **not** copy or change the large money/inventory implementation introduced by
+the pending price-tier work. It renames the current governed five-argument wrapper to an owner-only
+private function and adds a small public wrapper in front of it. The preserved chain still owns the
+cutover lock, below-cost approval, exact quote-tier price/cost/profit calculation, commissions,
+inventory prebooking and draw ledger. Active admins and sales reps can still cover another rep's
+live booking; actor binding is not an ownership restriction. Soft-deleted quotes remain hidden.
+Preflight and postflight now SHA-256-pin the exact reviewed intent helper, preserved cutover wrapper,
+new outer wrapper, tier-split implementation and all five allocated-cent lifecycle bodies. The helper
+must also remain the only overload, owned by `postgres`, `SECURITY DEFINER`, search-path-pinned and
+owner-only executable, so a signature-compatible drift or partial apply is refused fail-closed.
+The migration header records the separately approved emergency revert sequence: drain draws under
+the cutover lock, drop only the new public wrapper, rename the preserved private wrapper back, and
+restore its prior grants. It also warns that this intentionally restores the stale-receipt risk and
+must never be approximated with `CREATE OR REPLACE`.
+
+All six registered smoke chains that create booking draws now supply unique per-run retry keys.
+Their fixtures also follow the current governed pricing, immutable cost-snapshot and row-version
+contracts. The planned-holds fixture deliberately echoes quote-item IDs so duplicate products in
+different sections stay identifiable across repeated ordinary saves; after the merged tier-split
+restore guard, its drawn-version restore case now proves `QUOTE_RESTORE_BLOCKED_BY_DRAW` leaves
+holds unchanged. The restore-version chain likewise expects that provenance refusal for every
+drawn snapshot, while its no-draw control still restores. The separate save-quote-drawn guard
+retains the production id-less fallback shape. Because these chains end in rollback, they do not
+claim to validate commit-time deferred foreign keys. A separate
+container-only proof now confirms a duplicate-product id-less revision is still refused by
+`QUOTE_ITEM_AMBIGUOUS_COST`, then draws two separately identifiable products across two sections,
+sends the production id-less `save_quote` payload, and reaches a real `COMMIT` before printing its
+pass marker. That forces the deferred `order_items.quote_item_id` foreign key to validate both
+stamped lines. The network-isolated restored-schema prover executes all six registered draw chains
+after the candidate and confirms each reaches `SMOKE_PASS_ROLLBACK`, then runs the committing
+supported multi-line id-less proof.
+
+The draw modal now consumes the shared intent-binding recovery contract. A permanently refused key
+is retired instead of trapping the operator until reload; when the mismatch receipt proves an order
+already committed, the page opens that exact order rather than offering another draw. Ambiguous
+receipt/actor cases reload the booking balance and explain the next step, and auth/role failures are
+shown in plain English. Non-numeric and non-finite quantities fail closed with
+`BOOKING_QUANTITY_INVALID`; malformed product identifiers fail with the governed
+`BOOKING_PRODUCT_INVALID` token instead of a raw PostgreSQL cast error. If a changed-intent receipt
+cannot identify the committed order, the operator is sent to Orders before any retry. The new
+public wrapper is executable only by `authenticated`; the unusable `service_role` grant is removed
+because the wrapper requires an authenticated user id and no service caller exists.
+
+The re-review closed the remaining release-proof gaps. The idempotency-key advisory lock is now
+taken before the quote row lock, aligning draw-down with `save_quote`, `convert_quote_to_order`,
+`create_quote_version` and `restore_quote_version`; draw-down was the only lock-order inversion.
+The shared helper re-takes that lock reentrantly before reading the receipt. The money path now
+requires a 1-200 character printable-ASCII retry key, so
+a direct keyless PostgREST call cannot double-create an order, inventory prebooking or ledger row.
+At apply time the migration takes the existing draw-cutover key exclusively, draining legacy calls
+that reached the shared barrier and refusing new barrier participants before it scans for unexpired
+legacy receipts. A cached-plan backend paused before its first wrapper statement is outside that
+lock guarantee; if it finishes after commit, the shared helper treats its unbound receipt as an
+intent mismatch and the UI opens the committed order instead of drawing twice. A temporary-table
+transaction guard refuses autocommit execution before that lock is taken. The
+shared helper's receipt DETAIL is intentionally sales-rep reachable here, following the already-live
+return lifecycle RPC precedent: keys are high-entropy and active reps already share the
+booking/order visibility boundary. The hash-bearing lifecycle migration, this migration, its rollback
+smoke and its prover are all pinned to LF in `.gitattributes`. The already-live migration that
+defines `check_idempotency_intent` is now pinned too: a read-only 2026-08-20 catalog read confirmed
+production stores that helper LF-only (`stores_crlf = false`), matching the reviewed SHA-256. The
+static proof binds each hash to its exact catalog variable instead of merely finding the same value
+somewhere in the candidate.
+
+Operator consequence for the later apply: draw receipts live 24 hours, so the preflight requires a
+deliberate 24-hour window with no successful booking draws before this fourth migration can land.
+Plan that freeze for an off-season or weekend window, verify the read-only receipt count is zero,
+and keep draws paused through commit. The fail-closed choice is recorded in the decision log, the
+older ownership draft is marked fully superseded in known issues, and the container prover now
+executes the candidate under `REPEATABLE READ` to prove the stale-snapshot guard refuses it before
+the legacy-receipt scan. This PR still does not start or authorize that freeze/apply.
+
+Added focused migration/RPC contracts, real QuoteBuilder component recovery tests, and a
+container-only rollback smoke covering exact replay, changed quantity, changed actor,
+cross-representative success, replay after a later soft delete, required-key refusal, one $10 sale / $5 cost / $5 profit
+order, one inventory reservation, one draw-ledger row, and a bound receipt. Keyless calls are now
+refused before the money implementation. The component tests also
+exposed and fixed an initial-load timing defect that could mark a freshly loaded saved quote dirty
+and block its first draw; existing-quote load-generation state now releases suppression from React's post-commit
+effect, so a slow or coverage-instrumented render cannot release it on elapsed time. Mismatch recovery
+now reports a successful balance reload
+only when all three reload reads actually succeed. This migration must follow `20260816110000`,
+`20260816120000` and
+`20260817120000`. **It has not been applied live and this PR does not authorize applying it.**
+
+`node scripts/smoke/prove-draw-down-quote-intent-binding.mjs` applied the migration verbatim on a
+network-isolated PostgreSQL 17 container. Its compact mutation database installs the exact reviewed
+helper/wrapper/pricing/lifecycle prerequisites, executes every hash gate, and swaps in an effect-recording stand-in
+only for adversarial wrapper schedules. A second database restores the supported
+`20260727174805` full schema, replays every default replay-eligible ledger-selected migration
+through this candidate while surfacing the quarantined one-shot set, and
+executes `smoke-draw-down-quote-intent-binding.sql` against the real tier-split money, commission,
+inventory and draw-ledger implementation to `SMOKE_PASS_ROLLBACK`. It proves one $10 sale / $5 cost
+/ $5 profit line and header, one exact $5 commission, one inventory prebooking, one bound receipt
+and one draw-ledger row.
+The compact schedules pass admin/rep authorization, inactive,
+missing-profile, unauthenticated and actor-parameter refusals, key-required and keyed input guards,
+exact replay, changed/non-numeric/non-finite quantity, changed receipt actor,
+deleted quote, ACL, and both same-key concurrency cases. Mutation proof is non-vacuous: removing
+draw quantities is refused by the exact outer-body postflight; a NULL-returning helper, disabled
+actor/fingerprint comparisons, comment-only wrapper calls, an extra helper overload and a drifted
+tier-split body are all refused; and a simulated in-flight legacy draw is drained by
+the exclusive cutover lock before its new receipt blocks cutover. The replay selector also prints
+its one-shot quarantine notice instead of silently implying those data-specific files were replayed. The
+container used `--network none` and tmpfs;
+production was untouched.
+
+The protected merged-main verification pipeline passed ESLint, TypeScript type checking, the
+production build, 336 test files with 4,634 tests passed and 123 intentionally skipped, agent
+workflow/guard regressions, documentation drift checks, and private-artifact containment. Focused
+post-review migration/RPC contract checks passed 102/102 before the full pipeline reran.
+
 ## 2026-08-20 — Merged main's zero-width unit fix into the blend-ticket rate/unit…
 
 Merged main's zero-width unit fix into the blend-ticket rate/unit check, keeping main's delete-don't-space normalizer and re-applying the unit-aware rate arm on top of it. Found that the fix does not reach the money path: rateBaseUnit, which every billing-related unit lookup routes through, still leaves zero-width characters intact, so a unit pasted from a PDF can silently skip the rate check or fire a false 'this ticket will fail when you invoice it' alarm. Main's 5 zero-width regression tests were displaced by the merge and still need porting to the new warning shape. 77 tests green and typecheck clean; nothing pushed, no migration, no edge function.

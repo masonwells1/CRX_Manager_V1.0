@@ -14,9 +14,12 @@
 -- refusal. Before that migration is present the chain raises SMOKE_PREREQ,
 -- rather than turning an intentionally parked migration into a red live smoke.
 --
--- HOW TO RUN: execute this whole file as a SINGLE statement (Supabase MCP
--- execute_sql, or psql -1) as postgres/service_role AFTER the migration is
--- applied. The block ALWAYS ends with RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK',
+-- HOW TO RUN: CONTAINER ONLY through
+-- prove-draw-down-quote-intent-binding.mjs after the pending cutover sequence.
+-- Do not run this chain against live before that sequence is applied: its
+-- provenance-first restore behavior does not exist there yet. The post-cutover
+-- draw wrapper is authenticated-only and service_role cannot execute it. The
+-- block ALWAYS ends with RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK',
 -- so every fixture, version, ledger row and audit row created here is rolled
 -- back — nothing persists. Any other exception text = a real failure.
 --
@@ -267,7 +270,7 @@ BEGIN
   UPDATE quote_items SET total_units_needed = 500 WHERE quote_id = v_q;
   v_res := draw_down_quote(v_q,
     jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'quantity', 200)),
-    v_admin, NULL);
+    v_admin, 'smk-rvdg-first-' || v_suffix);
   IF (v_res->>'fully_drawn')::boolean IS DISTINCT FROM false THEN
     RAISE EXCEPTION 'SMOKE_FAIL: setup draw 200/500 reported fully_drawn: %', v_res;
   END IF;
@@ -305,7 +308,9 @@ BEGIN
       RAISE EXCEPTION 'SMOKE_FAIL: (a) expected QUOTE_RESTORE_BLOCKED_BY_DRAW, got: %', v_err;
     END IF;
   END;
-  -- The restore's section DELETE must have rolled back with the guard
+  -- The refusal leaves the quote intact. Ordering before the section DELETE is
+  -- pinned by the migration postflight; this caught subtransaction proves only
+  -- the externally observable atomic state.
   SELECT count(*), COALESCE(SUM(total_units_needed), 0) INTO v_items, v_booked
   FROM quote_items WHERE quote_id = v_q;
   SELECT quantity_drawn INTO v_drawn FROM quote_product_draws
@@ -403,7 +408,7 @@ BEGIN
   -- The booking is still fully usable: draw the remaining 300 of 500.
   v_res := draw_down_quote(v_q,
     jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'quantity', 300)),
-    v_admin, NULL);
+    v_admin, 'smk-rvdg-final-' || v_suffix);
   IF (v_res->>'fully_drawn')::boolean IS DISTINCT FROM true THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (c) draw to 500/500 not reported fully drawn: %', v_res;
   END IF;
@@ -451,14 +456,18 @@ BEGIN
   END IF;
 
   -- --------------------------------------------------------------------
-  -- (e) ACCEPTED LIMITATION, pinned deliberately: cancelling the draw does
-  --     NOT reopen version restore.
+  -- (e) ACCEPTED LIMITATION, pinned deliberately for the exercised state: a
+  --     booking that reached full draw/accepted still cannot restore a version.
   --
   --     The guard in _restore_quote_version_owner_impl joins order_items
   --     UNFILTERED by order status. cancel_order returns the quantity to
   --     quote_product_draws and reopens the booking, but keeps the order_items
   --     rows for audit -- and those rows still carry their quote_item_id
-  --     stamp. So the guard stays true forever once a booking has been drawn.
+  --     stamp. So the source-level rule stays true forever once a booking has
+  --     been drawn, including after cancellation/void. This scenario directly
+  --     executes the post-closure case; the unfiltered join and migration
+  --     postflight pin the broader reversed-order scope described in
+  --     docs/manual/KNOWN_ISSUES.md.
   --
   --     Codex round 3 (2026-08-19) flagged this as over-broad. Mason accepted
   --     it on 2026-08-20 rather than narrow it, because narrowing means
