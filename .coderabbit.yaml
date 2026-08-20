@@ -46,12 +46,22 @@ reviews:
   # CodeRabbit's own default ignore list, so version bumps and integrity hashes
   # go uninspected. That predates this config and is NOT closed here. Closing
   # it needs a verified include form, tested on FarmRx first, never on CRX.
+  # Every exclusion below is scoped to documentation/data EXTENSIONS, never a
+  # blanket directory. A blanket `!docs/audits/**` also hid executable code:
+  # docs/audits/ordering-cycle-review-2026-08-09/workflow.mjs and
+  # build-report.mjs are real programs, and a PR changing only those would have
+  # skipped review entirely. Raised by the Codex reviewer on PR #441.
+  # Keep this shape - if a new folder is excluded, exclude its doc extensions,
+  # not the folder, so a script dropped in there stays reviewable by default.
   path_filters:
-    - "!docs/archive/**"
-    - "!docs/audits/**"
-    - "!docs/loops/**"
-    - "!docs/build-loops/**"
-    - "!docs/handoffs/**"
+    - "!docs/archive/**/*.md"
+    - "!docs/archive/**/*.html"
+    - "!docs/archive/**/*.json"
+    - "!docs/audits/**/*.md"
+    - "!docs/audits/**/*.json"
+    - "!docs/loops/**/*.md"
+    - "!docs/build-loops/**/*.md"
+    - "!docs/handoffs/**/*.md"
     - "!.agents/**"
 
   auto_review:

@@ -148,7 +148,7 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    (substitute the real 40-character SHA for `<HEAD>`):
 
    ```bash
-   gh api --paginate repos/masonwells1/CRX_Manager_V1.0/pulls/<n>/reviews --jq '.[] | select(.user.login=="coderabbitai[bot]") | .body' | grep -oE "and <HEAD>"
+   gh api --paginate repos/masonwells1/CRX_Manager_V1.0/pulls/<n>/reviews --jq '.[] | select(.user.login=="coderabbitai[bot]" and .submitted_at != null and .state != "DISMISSED") | .body' | grep -oE "and <HEAD>"
    ```
 
    ```bash
@@ -161,6 +161,28 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    head `4e080bef` matched via `/pulls/.../reviews`, and FarmRx PR #26's clean head `9abaf18`
    matched via `/issues/.../comments`. Checking only one endpoint reports a reviewed head as
    unreviewed.
+
+   **The comment stamp alone does not mean the review finished.** CodeRabbit writes the walkthrough
+   range line when it *starts* on a SHA, so the `/issues/.../comments` match can appear while the
+   review is still running — observed on this very PR at head `b0428b2d`, where the stamp was
+   present, the `CodeRabbit` check still read `pending`, and six inline findings landed afterwards.
+   A match on that endpoint therefore proves **identity only**; pair it with completion:
+
+   ```bash
+   gh pr checks <n> --repo masonwells1/CRX_Manager_V1.0 | grep -i coderabbit
+   ```
+
+   The comments path passes only when the stamp names the head **and** the `CodeRabbit` check has
+   settled (not `pending`). The reviews-endpoint path needs no such pairing — a review object only
+   exists once the review is submitted. Neither signal is sufficient alone: the check without the
+   stamp read green on FarmRx while the head was unreviewed; the stamp without the check passed
+   mid-review here.
+
+   The `submitted_at != null` and `state != "DISMISSED"` filters on the reviews query are
+   load-bearing, not decoration: the endpoint returns `PENDING` reviews (with `submitted_at: null`)
+   and dismissed ones, and both still carry the range line in their body — so without the filters an
+   unsubmitted or withdrawn review would satisfy the gate. Raised on PR #441 by both reviewers after
+   an earlier revision switched the query from `.commit_id` to `.body` and dropped them.
 
    `--paginate` matters: results page at 30, so an unpaginated lookup can miss the relevant entry on
    a long-lived PR. Do **not** add `--slurp` — CodeRabbit recommended exactly that on PR #441 and

@@ -49,13 +49,20 @@ reached."** #429 merged with its later commits never auto-reviewed.
   guarantees nothing about the final one, and at 5 it was actively starving the runs that mattered.
   Lowering it costs no pre-merge coverage. (Wording corrected after CodeRabbit flagged the original
   "mid-work drafts" phrasing as inaccurate on FarmRx PR #26.)
-- **The actual pre-merge gate is a fresh review on the final commit.** Encoded as a hard rule in
-  `.claude/skills/deploy-check/SKILL.md`: before merging, confirm a CodeRabbit review exists with
-  `submitted_at` newer than the final push; if not, comment `@coderabbitai review`, wait, and read
-  it. Never merge on a review that predates the final commit.
+- **The actual pre-merge gate is a fresh review on the final commit, proven by SHA.** Encoded as a
+  hard rule in `.claude/skills/deploy-check/SKILL.md`: before merging, confirm CodeRabbit's own
+  review-range stamp (`between <base> and <head>`) names the current `headRefOid`; if it does not,
+  comment `@coderabbitai review`, wait, and read it. **`submitted_at` is not proof** — it is only a
+  non-null filter. Any reviewer's timestamp satisfies a timestamp check, and a review of the
+  previous commit can start before the final push and finish after it. Never merge on a review that
+  predates the final commit.
 - **`path_filters` skip churn that cannot hold a bug** — `docs/archive/`, `docs/audits/`,
-  `docs/loops/`, `docs/build-loops/`, `docs/handoffs/`, the generated `.agents/` and `.codex/`
-  adapters. A PR touching only these is skipped entirely and costs no allowance. Live docs
+  `docs/loops/`, `docs/build-loops/`, `docs/handoffs/`, and the generated `.agents/` adapters.
+  **`.codex/` is deliberately NOT excluded**: only `.agents/` is generated (it is the sole
+  `TARGET_ROOT` in `scripts/sync-agent-workflows.mjs`), while every tracked file under `.codex/` is
+  hand-maintained — including `production-action-guard.mjs`, which gates live mutations, pushes,
+  and merges. Excluding it would let a PR that only weakens that guard skip review entirely.
+  A PR touching only the excluded paths is skipped entirely and costs no allowance. Live docs
   (`docs/manual/`, `docs/reference/`, `docs/workflows/`, `docs/plans/`) stay reviewed. **Lock files
   are deliberately not excluded**: a lockfile-only PR would drop to zero reviewable files and be
   skipped outright, leaving version bumps and integrity hashes uninspected — a supply-chain blind
@@ -75,12 +82,25 @@ CodeRabbit's built-in ignore of lock files. Applied literally on FarmRx PR #26, 
 answered **"No files to review"** — on a PR whose one changed file was `.coderabbit.yaml` itself.
 Once *any* non-`!` pattern exists in `path_filters`, only files matching a positive pattern are
 reviewed. Two well-meant lines silently disabled code review for the whole repo, and the result
-reads as a clean pass rather than an error. A leading `**` restores default-include breadth and is
-load-bearing wherever a positive pattern is used; FarmRx carries that form, **CRX stays
-exclusion-only**. The lockfile-only blind spot on CRX is therefore a documented, accepted gap, not
-something this change closed. Never add a positive pattern to a `.coderabbit.yaml` without testing
-it on FarmRx first and confirming a real source file still appears under "Files selected for
-processing".
+reads as a clean pass rather than an error. A narrow include like `**/package-lock.json` restores
+nothing on its own — only a leading `**` restores default-include breadth, and it is load-bearing
+wherever a positive pattern is used.
+
+But `**` is not free either: it also opts **out of CodeRabbit's curated default ignore list**, so
+dependencies, build output, generated code, binaries, media, and source maps become reviewable and
+must be re-excluded by hand or every review inflates. That is the whole reason the two repos differ.
+FarmRx carries the `**` + lockfile-include + hand-maintained-ignores form, because a lockfile there
+has shipped as the sole functional change. **CRX stays exclusion-only**, because its problem was
+review budget and hand-maintaining an ignore list CodeRabbit already curates is the worse trade. The
+lockfile-only blind spot on CRX is therefore a documented, accepted gap, not something this change
+closed. Never add a positive pattern to a `.coderabbit.yaml` without testing it on FarmRx first and
+confirming a real source file still appears under "Files selected for processing".
+
+**Exclude documentation extensions, never whole directories.** A blanket `!docs/audits/**` also hid
+`docs/audits/ordering-cycle-review-2026-08-09/workflow.mjs` and `build-report.mjs` — real executable
+programs — so a PR changing only those would have skipped review. Every exclusion is now scoped to
+`*.md`/`*.json`/`*.html`, which keeps a script dropped into a docs folder reviewable by default.
+Raised by the Codex reviewer on PR #441.
 
 **A green CodeRabbit check is not proof the head was reviewed; only the SHA range is.** On FarmRx
 PR #26 the `CodeRabbit` status check read **pass** while the three reviewed commits were `358e3a8`,
@@ -99,6 +119,14 @@ the push". CodeRabbit flagged that as Major on PR #441 and was right: neither si
 so the fallback could accept a stale review — the exact hole the gate exists to close. Timestamps
 are not identity. The gate now accepts nothing but the head SHA, and re-reads `headRefOid`
 immediately before merge in case it moved.
+
+**Identity and completion are two different questions, and each needs its own signal.** The comment
+stamp is written when CodeRabbit *starts* on a SHA, so it can match while the review is still
+running — observed on PR #441 at head `b0428b2d`, where the stamp was present, the `CodeRabbit`
+check still read `pending`, and six findings landed afterwards. So: the SHA stamp proves *which*
+commit was read, the settled `CodeRabbit` check proves the read *finished*, and the comments path
+needs both. The reviews endpoint needs only the stamp, because a review object exists only once
+submitted. Every single-signal version of this gate has failed in one direction or the other.
 
 **Reviewer advice is a hypothesis, not a patch.** Three of this session's review findings were
 correct and fixed (`.codex/**` wrongly excluded — it holds the hand-maintained
