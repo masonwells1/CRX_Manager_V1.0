@@ -2468,6 +2468,24 @@ r = runHook(
 ok(isDeny(r), "ALTER FUNCTION SECURITY DEFINER cannot elevate an unbound actor mutator past the guard");
 
 r = runHook(
+  fn(MUTATION, "p_performed_by uuid", "SECURITY INVOKER").replace("test_fn", "volatile_later_definer") +
+  "\nALTER FUNCTION public.volatile_later_definer(uuid) VOLATILE SECURITY DEFINER;"
+);
+ok(isDeny(r), "a preceding ALTER FUNCTION action cannot hide SECURITY DEFINER elevation");
+
+r = runHook(
+  proc(MUTATION, "p_performed_by uuid", "SECURITY INVOKER").replace("test_proc", "external_later_definer") +
+  "\nALTER PROCEDURE public.external_later_definer(uuid) EXTERNAL SECURITY DEFINER;"
+);
+ok(isDeny(r), "ALTER PROCEDURE EXTERNAL SECURITY DEFINER cannot bypass actor review");
+
+r = runHook(
+  fn(MUTATION, "p_performed_by uuid", "SECURITY INVOKER").replace("test_fn", "final_alter_invoker") +
+  "\nALTER FUNCTION public.final_alter_invoker(uuid) SECURITY DEFINER VOLATILE SECURITY INVOKER;"
+);
+ok(!isDeny(r), "the final security mode in a complete ALTER action list is authoritative");
+
+r = runHook(
   fn(BOUND, "p_performed_by uuid", "SECURITY INVOKER").replace("test_fn", "bound_later_definer") +
   "\nALTER ROUTINE public.bound_later_definer(uuid) SECURITY DEFINER;"
 );

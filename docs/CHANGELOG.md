@@ -45,6 +45,15 @@ manual-review exemption with catalog preconditions and postconditions. The
 former internal-only allow case now denies, while all 404 focused assertions
 remain green.
 
+The next bounded review found that separate `ALTER FUNCTION` and
+`ALTER PROCEDURE` statements recognized `SECURITY DEFINER` only when it was the
+first action after the signature. Legal forms such as `VOLATILE SECURITY
+DEFINER` and `EXTERNAL SECURITY DEFINER` could therefore elevate an existing
+actor mutator without body review. The ALTER reader now scans the complete
+masked action list, accepts the optional `EXTERNAL` keyword, and applies the
+final declared security mode. Function, procedure, and final-mode regressions
+bring the focused suite to 407 assertions.
+
 ## 2026-08-13 — Actor-binding guard covers procedures and cron schema identity
 
 Fresh review of the cross-schema repair found two additional HIGH bypasses. A

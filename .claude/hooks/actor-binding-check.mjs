@@ -2077,10 +2077,12 @@ function alteredRoutineSecurityModes(structuralSql) {
     }
     const terminator = structuralSql.indexOf(";", parsed.end);
     const statementEnd = terminator === -1 ? structuralSql.length : terminator;
-    const mode = /^\s*SECURITY\s+(DEFINER|INVOKER)\b/i.exec(
-      structuralSql.slice(parsed.end, statementEnd)
-    );
-    if (mode) {
+    const actionList = structuralSql.slice(parsed.end, statementEnd);
+    const securityModeRe = /\b(?:EXTERNAL\s+)?SECURITY\s+(DEFINER|INVOKER)\b/gi;
+    let mode = null;
+    let securityMode;
+    while ((securityMode = securityModeRe.exec(actionList)) !== null) mode = securityMode;
+    if (mode !== null) {
       altered.push({
         name: normalizedQualifiedIdentifier(match[1]),
         signature: normalizedRoutineIdentityArgs(parsed.params, false),
