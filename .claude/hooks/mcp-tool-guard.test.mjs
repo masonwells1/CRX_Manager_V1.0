@@ -186,6 +186,18 @@ ok(isDeny(r), "DC start_process with a force-push command is denied");
 const persistentShellPid = 321;
 r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: "pwsh" } });
 eq(r.stdout.trim(), "", "starting an interactive PowerShell shell remains allowed");
+r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: persistentShellPid, input: "" } });
+ok(isDeny(r), "even an empty interaction is denied while the protected producer exists");
+for (const fragment of [
+  "set NO^",
+  "DE_OPTIONS=--require=./preload.cjs",
+  "node scripts/apply-live-testdata-^",
+  "maintenance-20260812.mjs --approved-by-^",
+  "mason=2026-08-12",
+]) {
+  r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: persistentShellPid, input: fragment } });
+  ok(isDeny(r), `a persistent shell cannot receive a cross-call continuation fragment: ${fragment}`);
+}
 r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: persistentShellPid, input: "si Env:NODE_OPTIONS '--require=./preload.cjs'" } });
 ok(isDeny(r), "a persistent PowerShell interaction cannot stage NODE_OPTIONS through si");
 r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: persistentShellPid, input: "Set-Alias mutate Set-Item" } });
@@ -199,12 +211,12 @@ ok(isDeny(r), "a persistent-shell variable cannot stage the NODE_OPTIONS target 
 r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: persistentShellPid, input: `Set-Item "Env:$target" '--require=./preload.cjs'` } });
 ok(isDeny(r), "a later persistent interaction cannot use variable indirection for an environment-provider mutation");
 r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: persistentShellPid, input: "Set-Item Env:SAFE '--require=./preload.cjs'" } });
-ok(!isDeny(r), "a benign environment-provider item can be prepared without naming NODE_OPTIONS");
+ok(isDeny(r), "all non-empty persistent-shell input is denied while the protected producer exists");
 const providerTransferCommand = `${["Co", "py-Item"].join("")} Env:SAFE 'Env:NODE_OPTIONS'`;
 r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: persistentShellPid, input: providerTransferCommand } });
 ok(isDeny(r), "a later persistent interaction cannot transfer a provider item into quoted Env:NODE_OPTIONS");
 r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: persistentShellPid, input: "node --version" } });
-ok(!isDeny(r), "benign Node remains allowed after the staged provider mutation was denied");
+ok(isDeny(r), "even benign commands must use a fresh process while the protected producer exists");
 const approvedProducerCommand = [
   "node", ["scripts/apply-live-testdata-maintenance-", "20260812.mjs"].join(""),
   ["--approved-by-", "mason=2026-08-12"].join(""),

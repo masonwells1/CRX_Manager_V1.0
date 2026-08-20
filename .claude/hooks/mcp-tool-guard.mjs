@@ -24,12 +24,11 @@
 // FAIL-OPEN, LOUD: any internal error here → allow, with a stderr warning. A
 // broken guard must never brick a session.
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import {
   checkCommandDeep,
   checkMigrationModify,
-  maintenanceProducerCommandMentioned,
 } from "./bash-safety-lib.mjs";
 
 function out(decision, reason) {
@@ -67,6 +66,8 @@ if (!DC_TOOL_RE.test(toolName)) nothing();
 
 const input = payload?.tool_input && typeof payload.tool_input === "object" ? payload.tool_input : {};
 const cwd = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+const protectedProducerName = ["apply-live-testdata-maintenance-", "20260812.mjs"].join("");
+const protectedProducerPath = path.join(cwd, "scripts", protectedProducerName);
 
 try {
   if (DC_RUN_RE.test(toolName)) {
@@ -76,14 +77,14 @@ try {
       .filter((v) => typeof v === "string" && v.length > 0)
       .join("\n");
 
-    if (text) {
-      if (DC_INTERACT_RE.test(toolName) && maintenanceProducerCommandMentioned(text)) {
-        out(
-          "block",
-          `MCP TOOL GUARD (${toolName}): the protected maintenance producer must run in a fresh sanitized process; an existing interactive process can retain uninspectable environment or shell state.`
-        );
-      }
+    if (DC_INTERACT_RE.test(toolName) && existsSync(protectedProducerPath)) {
+      out(
+        "block",
+        `MCP TOOL GUARD (${toolName}): interaction with an existing process is disabled while the protected maintenance producer exists; cross-call shell continuations cannot be inspected safely. Launch the complete command in a fresh process instead.`
+      );
+    }
 
+    if (text) {
       const reason = checkCommandDeep(text, cwd);
       if (reason) out("block", `MCP TOOL GUARD (${toolName}): ${reason}`);
 

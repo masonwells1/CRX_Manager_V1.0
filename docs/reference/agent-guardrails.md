@@ -107,7 +107,9 @@ Those mutations are denied independently of whether
 Node execution appears in the same payload. Dynamic provider targets such as
 `Env:$target` fail closed, and the protected producer itself is never allowed
 through `interact_with_process`; it must launch in a fresh process with no
-retained shell state. Alias definitions and unknown commands
+retained shell state. While that producer file exists, every MCP
+`interact_with_process` call is denied because CMD caret continuations and other
+shell state can span calls beyond stateless inspection. Alias definitions and unknown commands
 targeting `Env:NODE_OPTIONS` fail closed, as do standalone CMD mutations.
 Recursively inspected CMD bodies fail closed
 when `call`/`@call`, an `if` condition, or a `for … do` body precedes an explicit
