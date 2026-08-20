@@ -105,11 +105,21 @@ export function hasExplicitParkedMigrationHeader(sqlText) {
 // Git cannot enforce the parser's first-comment-block window, so the SQL blob is
 // still opened and passed through hasExplicitParkedMigrationHeader before it counts.
 // POSIX blank means portable ASCII space/tab, matching the parser exactly.
-export const ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS = [
-  "grep", "-l", "-i", "-E",
-  "-e", "^(\uFEFF)?[[:blank:]]*--[[:blank:]]*(STATUS:[[:blank:]]*)?(PARKED|NOT[[:blank:]]+APPLIED|DO[[:blank:]]+NOT[[:blank:]]+APPLY)",
-  "origin/main", "--", "supabase/migrations",
-];
+// `originMainRev` MUST be the one commit id the caller resolved for this whole scan.
+// Passing the symbolic name is the pre-pin behaviour and is kept only as the default so
+// an omitted argument cannot silently change an existing caller. See the cross-phase
+// snapshot note on `createOwnDraftPathsReader`: every mainline read in one scan \u2014 history,
+// tree, grep, blobs, mtime, merge-base \u2014 must name the SAME object id, or a concurrent
+// fetch can move the ref between two phases and produce a confident zero over pending SQL.
+export function originMainParkedMigrationGrepArgs(originMainRev = "origin/main") {
+  return [
+    "grep", "-l", "-i", "-E",
+    "-e", "^(\uFEFF)?[[:blank:]]*--[[:blank:]]*(STATUS:[[:blank:]]*)?(PARKED|NOT[[:blank:]]+APPLIED|DO[[:blank:]]+NOT[[:blank:]]+APPLY)",
+    String(originMainRev || "origin/main"), "--", "supabase/migrations",
+  ];
+}
+
+export const ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS = originMainParkedMigrationGrepArgs();
 
 // `git grep` uses exit code 1 for the healthy case where no file matched. Both
 // runtime consumers share this wrapper so only a real error/timeout falls back
@@ -160,7 +170,10 @@ function originMainBatchPaths(paths) {
   return unique;
 }
 
-export function originMainSqlBlobMap(paths, runBatch, maxBuffer = ORIGIN_MAIN_CAT_FILE_MAX_BUFFER) {
+export function originMainSqlBlobMap(
+  paths, runBatch, maxBuffer = ORIGIN_MAIN_CAT_FILE_MAX_BUFFER, originMainRev = "origin/main",
+) {
+  const rev = String(originMainRev || "origin/main");
   const uniquePaths = originMainBatchPaths(paths);
   if (uniquePaths === null || !Number.isSafeInteger(maxBuffer) || maxBuffer < 1) return null;
   if (uniquePaths.length === 0) return new Map();
@@ -169,7 +182,7 @@ export function originMainSqlBlobMap(paths, runBatch, maxBuffer = ORIGIN_MAIN_CA
   try {
     // The tab splits the object expression from `%(rest)`; the latter is checked
     // below before a blob can be associated with a requested path.
-    const input = Buffer.from(`${uniquePaths.map((p) => `origin/main:${p}\t${p}`).join("\n")}\n`, "utf8");
+    const input = Buffer.from(`${uniquePaths.map((p) => `${rev}:${p}\t${p}`).join("\n")}\n`, "utf8");
     output = runBatch(input, uniquePaths);
   } catch {
     return null;
@@ -468,8 +481,10 @@ export function draftPathspec() {
 // usable origin/main tree, callers compare each fallback worktree's content to
 // that tree before opening a file or evaluating its parked header. A null return
 // means callers must retain conservative all-disk discovery and say so loudly.
-export function originMainDraftPathSet(run) {
-  const lines = run(["ls-tree", "-r", "--name-only", "origin/main", "--", ...draftPathspec()]);
+export function originMainDraftPathSet(run, originMainRev = "origin/main") {
+  const lines = run([
+    "ls-tree", "-r", "--name-only", String(originMainRev || "origin/main"), "--", ...draftPathspec(),
+  ]);
   if (lines === null) return null;
   return new Set((lines || []).map(normRepoPath).filter(Boolean));
 }
@@ -740,14 +755,19 @@ export function createOwnDraftPathsReader({
   // supply it gets the old, fully conservative reconciliation rather than a silent read
   // of its own, which is what the cross-phase race was.
   readOriginMainHistory = () => null,
+  // The single commit id this scan pinned origin/main to. Defaults to the symbolic name
+  // so an existing caller that does not pin keeps its previous behaviour rather than
+  // silently changing. Callers that DO pin must pass the same id to every mainline read.
+  originMainRev = "origin/main",
 }) {
+  const pinnedOriginMain = String(originMainRev || "origin/main");
   // Where a worktree's branch left origin/main. Cached by HEAD sha — the ~30 frozen
   // snapshots share a handful of shas between them.
   const baseCache = new Map(); // sha → base sha | null
   function branchPoint(sha) {
     if (!hasOriginMain || !sha) return null;
     if (baseCache.has(sha)) return baseCache.get(sha);
-    const out = run(["merge-base", "origin/main", sha], repoRoot);
+    const out = run(["merge-base", pinnedOriginMain, sha], repoRoot);
     const base = out === null ? "" : String(out[0] || "").trim();
     const result = base || null;
     baseCache.set(sha, result);
@@ -785,11 +805,11 @@ export function createOwnDraftPathsReader({
   // discovery reports nothing either, and /fleet would confidently hide a genuinely
   // pending migration. Existing on main is not the same as being ACCOUNTED FOR by main.
   //
-  // One cached git read per process, because this runs inside the SessionStart hook's
-  // budget across every worktree.
   // The exemption reads NOTHING of its own. It reuses the EXACT origin/main history text
   // the caller's mainline discovery pass verified against, supplied by
-  // `readOriginMainHistory` and memoized here so both phases see one immutable snapshot.
+  // `readOriginMainHistory` and memoized here — one parse per process, because this runs
+  // inside the SessionStart hook's budget across every worktree — so both phases see one
+  // immutable snapshot.
   //
   // Codex HIGH on PR #437, reproduced: an earlier version resolved origin/main
   // independently. If a concurrent `git fetch` advanced the ref between the two phases,

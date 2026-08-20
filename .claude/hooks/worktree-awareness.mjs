@@ -20,7 +20,7 @@ import {
   mergedLabelFromStatus, isLedgerDoc, isParkedMigrationFile, isDraftSqlName, createParkedFallbackClassifier, fleetSummaryLine,
   draftPathspec, normRepoPath, createOwnDraftPathsReader, originMainDraftPathSet,
   fallbackPathsAgainstOrigin, parkedMainlineDiscoveryFrom, localCandidateMigrationPathsFromHistory,
-  ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, originMainParkedMigrationPrefilter,
+  originMainParkedMigrationGrepArgs, originMainParkedMigrationPrefilter,
   ORIGIN_MAIN_CAT_FILE_MAX_BUFFER, originMainSqlBlobMap as parseOriginMainSqlBlobMap,
   originMainForwardBlobPaths,
 } from "./worktree-awareness-lib.mjs";
@@ -57,7 +57,8 @@ function originMainSqlBlobMap(paths) {
       stdio: ["pipe", "pipe", "ignore"],
     });
     return result.status === 0 ? result.stdout : null;
-  });
+    // `originMainRev` is read at call time, long after it is resolved below.
+  }, ORIGIN_MAIN_CAT_FILE_MAX_BUFFER, originMainRev);
 }
 
 let porcelain = "";
@@ -78,12 +79,20 @@ const siblings = siblingsOf(entries, projectDir);
 if (siblings.length === 0) emit(); // solo session — nothing to warn about
 
 // Does origin/main exist? If not, we can't compute merged-state; label it "unknown".
+// Pin origin/main to ONE object id for this whole run — see the matching note in
+// scripts/fleet-status.mjs (Codex P1 on PR #437). The ref is shared with every other
+// session; a concurrent fetch between two phases of one scan can otherwise hide a
+// pending migration behind a confident "known" answer.
 let hasOriginMain = false;
-try { git(["rev-parse", "--verify", "--quiet", "origin/main"]); hasOriginMain = true; } catch { hasOriginMain = false; }
+let originMainRev = "origin/main";
+try {
+  originMainRev = String(git(["rev-parse", "--verify", "--quiet", "origin/main"]) || "").trim() || "origin/main";
+  hasOriginMain = true;
+} catch { hasOriginMain = false; }
 
 function mergedLabel(sha) {
   if (!hasOriginMain || !sha) return mergedLabelFromStatus(null, false);
-  const r = spawnSync("git", ["merge-base", "--is-ancestor", sha, "origin/main"], {
+  const r = spawnSync("git", ["merge-base", "--is-ancestor", sha, originMainRev], {
     encoding: "utf8", timeout: 5000, cwd: projectDir,
   });
   return mergedLabelFromStatus(r.status, true);
@@ -160,7 +169,7 @@ function originMainHistory() {
     return originMainHistoryText;
   }
   try {
-    originMainHistoryText = git(["show", "origin/main:docs/reference/migration-history.md"]);
+    originMainHistoryText = git(["show", `${originMainRev}:docs/reference/migration-history.md`]);
   } catch {
     originMainHistoryText = null;
   }
@@ -171,6 +180,7 @@ const ownDraftPaths = createOwnDraftPathsReader({
   repoRoot: projectDir,
   hasOriginMain,
   readOriginMainHistory: originMainHistory,
+  originMainRev,
   dirtyCount,
   exists: (wtPath, rel) => existsSync(path.join(wtPath, ...rel.split("/"))),
   readText: (wtPath, rel) => {
@@ -194,12 +204,12 @@ const ownDraftPaths = createOwnDraftPathsReader({
 // an anchored status prefilter also catches orphans, with its blobs read in one batch.
 function mainlineParkedDiscovery() {
   try {
-    const tree = git(["ls-tree", "-r", "--name-only", "origin/main", "--", ...draftPathspec()]);
+    const tree = git(["ls-tree", "-r", "--name-only", originMainRev, "--", ...draftPathspec()]);
     // The SAME bytes the per-worktree exemption used — see originMainHistory() above.
     const history = originMainHistory();
     if (history === null) throw new Error("origin/main migration history is unreadable");
     const parkedPrefilter = originMainParkedMigrationPrefilter(
-      () => git(ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS),
+      () => git(originMainParkedMigrationGrepArgs(originMainRev)),
     );
     const mainlinePaths = tree.split("\n");
     const historyCandidates = localCandidateMigrationPathsFromHistory(history);
@@ -222,7 +232,7 @@ function mainlineParkedDiscovery() {
 
 const originMainDraftPaths = hasOriginMain ? originMainDraftPathSet((args) => {
   try { return git(args, projectDir).split("\n"); } catch { return null; }
-}) : null;
+}, originMainRev) : null;
 const parkedFallbackNote = !hasOriginMain
   ? "\n\nPARKED-SCAN DEGRADED: origin/main is unavailable, so a fallback uses conservative all-disk discovery and may include inherited historical files."
   : !originMainDraftPaths
@@ -264,7 +274,7 @@ try {
     );
     if (originMainDraftPaths) {
       try {
-        fallbackChangedPaths = git(["diff", "--name-only", "origin/main", "--", ...draftPathspec()], e.path).split("\n");
+        fallbackChangedPaths = git(["diff", "--name-only", originMainRev, "--", ...draftPathspec()], e.path).split("\n");
       } catch {
         fallbackUnknownReasons.add(`${e.path}: origin/main content comparison is unreadable`);
       }

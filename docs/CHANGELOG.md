@@ -38,6 +38,17 @@ normally.) A guard that always answers UNKNOWN answers nothing.
   **confident zero** over pending SQL. The arm cleared exactly one worktree, so it was removed
   rather than iterated a third time; the lib carries a DELIBERATELY-ABSENT note stating that any
   re-add must parse a structurally anchored status field, never prose.
+- **One pinned `origin/main` object id for a whole scan.** Codex raised this same invariant three
+  times on PR #437, and the first two fixes each satisfied it in one component while another still
+  resolved the moving ref on its own — a narrower race is not a fixed one. `origin/main` is shared
+  with every concurrent session, so a `git fetch` landing mid-scan can put two phases on different
+  commits: if the fetch adds a SHA-pinned LOCAL CANDIDATE whose SQL carries no parked header, the
+  older history does not name it, the newer tree holds it, the grep never sees it, and mainline
+  discovery answers `known` while **omitting a pending migration**. Both consumers now resolve
+  `origin/main` to a single object id up front and pass it to every mainline read — history, tree,
+  grep, blobs, mtime, merge-base, and the fallback diff. The lib's readers take that id as an
+  argument defaulting to the symbolic name, so an unpinned caller keeps its previous behaviour.
+  Ten assertions pin it, and reverting any single call site to `origin/main` reddens them.
 - **The exemption reads nothing of its own** (Codex HIGH, round 4). It consumes the exact
   `origin/main` history text the caller's mainline discovery pass verified against, injected via
   `readOriginMainHistory`. When the reader resolved `origin/main` independently, a concurrent

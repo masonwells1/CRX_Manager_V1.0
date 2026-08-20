@@ -18,7 +18,8 @@ import {
   createParkedFallbackClassifier, originMainDraftPathSet,
   fallbackPathsAgainstOrigin, parkedMainlinePathsFrom, parkedMainlineDiscoveryFrom,
   localCandidateMigrationPathsFromHistory, validateParkedMigrationCrossReferences,
-  ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, originMainParkedMigrationPrefilter,
+  ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, originMainParkedMigrationGrepArgs,
+  originMainParkedMigrationPrefilter,
   ORIGIN_MAIN_CAT_FILE_MAX_BUFFER, originMainSqlBlobMap, originMainForwardBlobPaths,
   createOwnDraftPathsReader,
 } from "./worktree-awareness-lib.mjs";
@@ -696,6 +697,8 @@ function fakeReader(responses, opts = {}) {
     readOriginMainHistory: opts.readOriginMainHistory
       || (() => (responses.show === undefined || responses.show === null ? null : responses.show.join("\n"))),
     sha256Text: opts.sha256Text || sha256Text,
+    // Omitted by default so every pre-existing case keeps asserting the unpinned shape.
+    ...(opts.originMainRev === undefined ? {} : { originMainRev: opts.originMainRev }),
     run: (args, cwd) => {
       calls.push({ cmd: args[0], args, cwd });
       const hit = responses[args[0]];
@@ -1107,6 +1110,61 @@ const MAINLINE_HISTORY_SETTLES_CANDIDATE = "| 886 | 20260101000000 | **APPLIED L
   reader({ ...CLEAN_ENTRY, path: "C:/wt-other-same-sha" });
   eq(calls.filter((c) => c.cmd === "merge-base").length, 1, "branch point is resolved once per sha");
   eq(calls.filter((c) => c.cmd === "diff").length, 1, "clean diff is computed once per sha");
+}
+
+// ── One pinned origin/main object id for a whole scan (Codex P1 on PR #437) ──
+// The ref is shared with every other session. If one scan's phases each resolve the
+// symbolic name, a concurrent fetch between them can add a SHA-pinned LOCAL CANDIDATE
+// whose SQL carries no parked header: the old history does not name it, the new tree
+// holds it, the grep misses it, and mainline discovery answers "known" while omitting a
+// pending migration. Every mainline read must therefore name the SAME object id.
+// This was the THIRD report of the same invariant — the first two fixes each satisfied
+// it in one component while another still resolved the ref on its own. Pin all of them.
+{
+  const PINNED = "f".repeat(40);
+
+  // The reader's branch-point read must use the caller's id, not the moving ref.
+  const { reader, calls } = fakeReader(
+    { "merge-base": ["base1"], diff: [DRAFT_A] },
+    { originMainRev: PINNED },
+  );
+  reader(CLEAN_ENTRY);
+  const mergeBase = calls.find((c) => c.cmd === "merge-base");
+  ok(mergeBase && mergeBase.args.includes(PINNED), "branch point is resolved against the pinned origin/main id");
+  ok(mergeBase && !mergeBase.args.includes("origin/main"), "branch point never names the moving origin/main ref");
+
+  // Omitting the pin must not change an existing caller.
+  const { reader: unpinned, calls: unpinnedCalls } = fakeReader({ "merge-base": ["base1"], diff: [DRAFT_A] });
+  unpinned(CLEAN_ENTRY);
+  const legacy = unpinnedCalls.find((c) => c.cmd === "merge-base");
+  ok(legacy && legacy.args.includes("origin/main"), "an unpinned caller keeps its previous origin/main behaviour");
+
+  // The grep prefilter must scan the pinned commit.
+  const pinnedGrep = originMainParkedMigrationGrepArgs(PINNED);
+  ok(pinnedGrep.includes(PINNED), "the parked-migration grep scans the pinned origin/main id");
+  ok(!pinnedGrep.includes("origin/main"), "the parked-migration grep never names the moving ref when pinned");
+  eq(
+    ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS,
+    originMainParkedMigrationGrepArgs(),
+    "the legacy exported grep args stay byte-identical to the unpinned form",
+  );
+
+  // The draft tree read must use the pinned commit.
+  let treeArgs = null;
+  originMainDraftPathSet((args) => { treeArgs = args; return []; }, PINNED);
+  ok(treeArgs && treeArgs.includes(PINNED), "the origin/main draft tree is listed at the pinned id");
+  ok(treeArgs && !treeArgs.includes("origin/main"), "the draft tree listing never names the moving ref when pinned");
+
+  // The blob batch must request objects from the pinned commit.
+  let batchInput = "";
+  originMainSqlBlobMap(
+    ["supabase/migrations/20260101000000_x.sql"],
+    (input) => { batchInput = String(input); return Buffer.alloc(0); },
+    ORIGIN_MAIN_CAT_FILE_MAX_BUFFER,
+    PINNED,
+  );
+  ok(batchInput.startsWith(`${PINNED}:`), "SQL blobs are read from the pinned origin/main id");
+  ok(!batchInput.includes("origin/main:"), "SQL blob reads never name the moving ref when pinned");
 }
 
 console.log(`worktree-awareness-lib: ${pass} assertions passed`);
