@@ -49,9 +49,6 @@ describe('draw_down_quote actor and intent binding migration', () => {
       'ALTER FUNCTION public.draw_down_quote(uuid, jsonb, uuid, text, text)\n  RENAME TO _draw_down_quote_intent_impl_20260819;',
     );
     expect(migrationSql).toContain(
-      'RETURN public._draw_down_quote_intent_impl_20260819(',
-    );
-    expect(migrationSql).toContain(
       'v_result := public._draw_down_quote_intent_impl_20260819(',
     );
     expect(migrationSql).not.toContain(
@@ -100,6 +97,13 @@ describe('draw_down_quote actor and intent binding migration', () => {
 
   it('fails closed before replay and preserves cross-representative coverage', () => {
     expectOrdered(migrationSql, [
+      'CREATE TEMP TABLE crx_draw_intent_transaction_guard',
+      'INSERT INTO crx_draw_intent_transaction_guard(marker) VALUES (true);',
+      "SET LOCAL lock_timeout = '15s';",
+      'SELECT pg_advisory_xact_lock(20260816, 1);',
+      'DO $preflight$',
+    ]);
+    expectOrdered(migrationSql, [
       '-- DRAW_DOWN_INTENT_BARRIER<<<',
       '-- DRAW_DOWN_INTENT_AUTHZ<<<',
       '-- DRAW_DOWN_INTENT_KEY_LOCK<<<',
@@ -118,6 +122,9 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(migrationSql).not.toMatch(/created_by\s+(?:=|IS DISTINCT FROM)\s+v_actor/);
     expect(migrationSql).toContain(
       "hashtextextended('crx:idempotency:' || p_idempotency_key, 0)",
+    );
+    expect(migrationSql).toContain(
+      'IDEMPOTENCY_KEY_REQUIRED: draw_down_quote requires p_idempotency_key',
     );
     expect(migrationSql).toContain("operation = 'draw_down_quote'\n       AND expires_at > now()");
     expect(migrationSql).toContain('unexpired legacy draw_down_quote receipts exist');
@@ -147,10 +154,13 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(migrationSql).toContain('SET request_fingerprint = v_fingerprint,\n         request_actor_id = v_actor');
     expect(migrationSql).toContain("RAISE EXCEPTION 'IDEMPOTENCY_RECEIPT_MISSING';");
     expectOrdered(migrationSql, [
+      'IDEMPOTENCY_KEY_REQUIRED: draw_down_quote requires p_idempotency_key',
       "'BOOKING_QUANTITY_INVALID: draw quantity must be finite'",
-      'IF p_idempotency_key IS NULL THEN',
       'v_fingerprint := encode(',
     ]);
+    expect(migrationSql).not.toContain(
+      'RETURN public._draw_down_quote_intent_impl_20260819(\n      p_quote_id, p_draws, p_performed_by, NULL',
+    );
   });
 
   it('retires rejected draw keys and gives the operator a safe recovery path', () => {
@@ -171,7 +181,7 @@ describe('draw_down_quote actor and intent binding migration', () => {
       "getIdempotencyMismatchResult(error, 'draw_down_quote')",
       'if (committedOrderId) {',
       'navigate(`/orders/${committedOrderId}`);',
-      'await openDrawDownModal();',
+      'const balanceReloaded = await openDrawDownModal();',
     ]);
     expect(drawHandler).toContain('const authError = rpcAuthErrorMessage(error);');
     expect(drawHandler).toContain('Only active administrators and sales representatives can draw down bookings.');
@@ -213,6 +223,7 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(smokeSql).toContain("'quantity', 2");
     expect(smokeSql).toContain('IDEMPOTENCY_INTENT_MISMATCH');
     expect(smokeSql).toContain('IDEMPOTENCY_ACTOR_MISMATCH');
+    expect(smokeSql).toContain('IDEMPOTENCY_KEY_REQUIRED');
     expect(smokeSql).toContain('request_actor_id = v_rep_a');
     expect(smokeSql).toContain('request_fingerprint IS NOT NULL');
     expect(smokeSql).toContain('oi.price_per_unit = 10.00');
@@ -221,6 +232,8 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(smokeSql).toContain("RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';");
     expect(proverSource).toContain("const smokeSql = readFileSync(SMOKE_PATH, 'utf8');");
     expect(proverSource).toContain('/SMOKE_PASS_ROLLBACK/');
+    expect(proverSource).toContain('listed.stderr.trim()');
+    expect(proverSource).toContain('exclusive cutover lock drains and detects');
     expect(proverSource).toContain('restoreFullSchemaAndRunSmoke();');
   });
 });

@@ -140,6 +140,10 @@ function selectedMigrationsThroughCandidate() {
     maxBuffer: 8 * 1024 * 1024,
   });
   assert.equal(listed.status, 0, `could not enumerate post-baseline migrations:\n${listed.stderr}`);
+  const selectorNotice = listed.stderr.trim().replace(/\r?\n/g, ' | ');
+  if (selectorNotice) {
+    console.log(`FULL_SCHEMA_REPLAY_SELECTOR_NOTICE ${selectorNotice}`);
+  }
   const migrations = listed.stdout.split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => /^supabase\/migrations\/\d{14}_[^/]+\.sql$/.test(line))
@@ -536,7 +540,7 @@ function bootstrap(db, migration) {
   psql(FIXTURE, { db });
   psql(extractSharedHelper(), { db });
   psql(extractReviewedPrerequisites(), { db });
-  psql(migration, { db });
+  psql(`BEGIN;\n${migration}\nCOMMIT;`, { db });
   const standIn = extractFunctionStatement(
     FIXTURE,
     '_draw_down_quote_below_cost_impl_20260810',
@@ -587,47 +591,47 @@ SELECT public.draw_down_quote(
 function proveSequential(db) {
   const keyless = psql(`BEGIN;
 SELECT set_config('request.jwt.claim.sub', '${ACTOR_A}', false);
-SELECT 'RESULT=' || public.draw_down_quote(
+SELECT public.draw_down_quote(
   '${QUOTE_A}'::uuid,
   jsonb_build_array(jsonb_build_object('product_id', '${PRODUCT}'::uuid, 'quantity', 1)),
   '${ACTOR_A}'::uuid,
   NULL,
   NULL
-)::text;
-ROLLBACK;`, { db, tuples: true });
-  assert.ok(resultId(keyless), 'valid keyless request did not reach the preserved implementation');
+)::text;`, { db, allowFailure: true, tuples: true });
+  assert.notEqual(keyless.status, 0, 'keyless money request reached the preserved implementation');
+  assert.match(keyless.stderr, /IDEMPOTENCY_KEY_REQUIRED/);
 
-  const keylessEmpty = psql(`
+  const empty = psql(`
 SELECT set_config('request.jwt.claim.sub', '${ACTOR_A}', false);
 SELECT public.draw_down_quote(
-  '${QUOTE_A}'::uuid, '[]'::jsonb, '${ACTOR_A}'::uuid, NULL, NULL
+  '${QUOTE_A}'::uuid, '[]'::jsonb, '${ACTOR_A}'::uuid, 'draw-empty', NULL
 );`, { db, allowFailure: true, tuples: true });
-  assert.notEqual(keylessEmpty.status, 0, 'empty keyless request bypassed the outer guard');
-  assert.match(keylessEmpty.stderr, /EMPTY_DRAW/);
+  assert.notEqual(empty.status, 0, 'empty keyed request bypassed the outer guard');
+  assert.match(empty.stderr, /EMPTY_DRAW/);
 
-  const keylessNonFinite = psql(`
+  const nonFiniteGuard = psql(`
 SELECT set_config('request.jwt.claim.sub', '${ACTOR_A}', false);
 SELECT public.draw_down_quote(
   '${QUOTE_A}'::uuid,
   jsonb_build_array(jsonb_build_object('product_id', '${PRODUCT}'::uuid, 'quantity', 'NaN')),
   '${ACTOR_A}'::uuid,
-  NULL,
+  'draw-nonfinite',
   NULL
 );`, { db, allowFailure: true, tuples: true });
-  assert.notEqual(keylessNonFinite.status, 0, 'non-finite keyless request bypassed the outer guard');
-  assert.match(keylessNonFinite.stderr, /BOOKING_QUANTITY_INVALID/);
+  assert.notEqual(nonFiniteGuard.status, 0, 'non-finite keyed request bypassed the outer guard');
+  assert.match(nonFiniteGuard.stderr, /BOOKING_QUANTITY_INVALID/);
 
-  const keylessNonNumeric = psql(`
+  const nonNumeric = psql(`
 SELECT set_config('request.jwt.claim.sub', '${ACTOR_A}', false);
 SELECT public.draw_down_quote(
   '${QUOTE_A}'::uuid,
   jsonb_build_array(jsonb_build_object('product_id', '${PRODUCT}'::uuid, 'quantity', 'abc')),
   '${ACTOR_A}'::uuid,
-  NULL,
+  'draw-nonnumeric',
   NULL
 );`, { db, allowFailure: true, tuples: true });
-  assert.notEqual(keylessNonNumeric.status, 0, 'non-numeric keyless request bypassed the outer guard');
-  assert.match(keylessNonNumeric.stderr, /BOOKING_QUANTITY_INVALID/);
+  assert.notEqual(nonNumeric.status, 0, 'non-numeric keyed request bypassed the outer guard');
+  assert.match(nonNumeric.stderr, /BOOKING_QUANTITY_INVALID/);
 
   const first = psql(callSql({ key: 'draw-sequential' }), { db, tuples: true });
   const replay = psql(`
@@ -755,19 +759,37 @@ function provePrerequisiteBodyGuard(migration) {
     '_draw_down_quote_below_cost_impl_20260810',
   ).replace('-- TIERSPLIT<<<', '-- MUTATED TIERSPLIT<<<');
   psql(mutated, { db });
-  const blocked = psql(migration, { db, allowFailure: true });
+  const blocked = psql(`BEGIN;\n${migration}\nCOMMIT;`, { db, allowFailure: true });
   assert.notEqual(blocked.status, 0, 'drifted pricing body passed the prerequisite hash gate');
   assert.match(blocked.stderr, /reviewed pricing\/lifecycle prerequisite body drifted/);
   console.log('MUTATION_DETECTED: drifted tier-split body is refused before wrapping');
 }
 
-function proveLegacyReceiptPreflight(migration) {
+function proveTransactionGuard(migration) {
+  psql('CREATE DATABASE draw_transaction_guard TEMPLATE template0;');
+  const db = 'draw_transaction_guard';
+  psql(FIXTURE, { db });
+  psql(extractSharedHelper(), { db });
+  psql(extractReviewedPrerequisites(), { db });
+  const blocked = psql(migration, { db, allowFailure: true });
+  assert.notEqual(blocked.status, 0, 'autocommit execution bypassed the transaction guard');
+  assert.match(blocked.stderr, /crx_draw_intent_transaction_guard/);
+  assert.equal(
+    value("SELECT to_regprocedure('public._draw_down_quote_intent_impl_20260819(uuid,jsonb,uuid,text,text)') IS NULL;", db),
+    't',
+  );
+  console.log('MUTATION_DETECTED: autocommit execution is refused before the cutover lock');
+}
+
+async function proveLegacyReceiptPreflight(migration) {
   psql('CREATE DATABASE draw_legacy_receipt TEMPLATE template0;');
   const db = 'draw_legacy_receipt';
   psql(FIXTURE, { db });
   psql(extractSharedHelper(), { db });
   psql(extractReviewedPrerequisites(), { db });
-  psql(`
+  const inFlightDraw = concurrentCall(`
+    BEGIN;
+    SELECT pg_advisory_xact_lock_shared(20260816, 1);
     INSERT INTO public.idempotency_keys(idempotency_key, operation, result, expires_at)
     VALUES (
       'legacy-draw-receipt',
@@ -775,11 +797,35 @@ function proveLegacyReceiptPreflight(migration) {
       jsonb_build_object('order_id', gen_random_uuid()),
       now() + interval '1 hour'
     );
-  `, { db });
-  const blocked = psql(migration, { db, allowFailure: true });
+    SELECT pg_sleep(0.75);
+    COMMIT;
+  `, db);
+  let barrierHeld = false;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    barrierHeld = value(`
+      SELECT EXISTS (
+        SELECT 1 FROM pg_locks
+         WHERE locktype = 'advisory'
+           AND mode = 'ShareLock'
+           AND granted
+           AND classid::text = '20260816'
+           AND objid::text = '1'
+      );
+    `, db) === 't';
+    if (barrierHeld) break;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+  }
+  assert.ok(barrierHeld, 'could not observe the simulated in-flight draw barrier');
+  const blocked = psql(`BEGIN;\n${migration}\nCOMMIT;`, { db, allowFailure: true });
+  const completedDraw = await inFlightDraw;
+  assert.equal(completedDraw.status, 0, `simulated in-flight draw failed: ${completedDraw.stderr}`);
   assert.notEqual(blocked.status, 0, 'unexpired legacy receipt did not block cutover');
   assert.match(blocked.stderr, /unexpired legacy draw_down_quote receipts exist/);
-  console.log('MUTATION_DETECTED: unexpired legacy draw receipt blocks cutover');
+  assert.equal(
+    value("SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key = 'legacy-draw-receipt';", db),
+    '1',
+  );
+  console.log('MUTATION_DETECTED: exclusive cutover lock drains and detects an in-flight legacy receipt');
 }
 
 async function main() {
@@ -822,17 +868,19 @@ async function main() {
     await proveConcurrency('draw_wrapper');
     proveMutation(migration);
     provePrerequisiteBodyGuard(migration);
-    proveLegacyReceiptPreflight(migration);
+    proveTransactionGuard(migration);
+    await proveLegacyReceiptPreflight(migration);
     restoreFullSchemaAndRunSmoke();
 
     console.log('DRAW_DOWN_INTENT_BINDING_PROOF_OK');
     console.log('  migration applied verbatim with preflight/postflight');
     console.log('  admin/rep allow, missing/inactive/auth/actor refusals: PASS');
-    console.log('  keyed/keyless numeric, finite and empty guards plus valid keyless delegation: PASS');
+    console.log('  key required plus keyed numeric, finite and empty guards: PASS');
     console.log('  exact replay, changed/non-finite quantity, changed receipt actor, deleted quote: PASS');
     console.log('  different-intent and same-intent concurrent key races: PASS');
     console.log('  exact pricing/lifecycle prerequisite hashes and drift mutation: PASS');
-    console.log('  unexpired legacy receipt cutover refusal: PASS');
+    console.log('  single-transaction apply guard: PASS');
+    console.log('  exclusive cutover drain plus unexpired legacy receipt refusal: PASS');
     console.log('  restored full schema + real money/inventory rollback smoke: PASS');
     console.log('  network: none; storage: tmpfs; live Supabase: untouched');
   } finally {

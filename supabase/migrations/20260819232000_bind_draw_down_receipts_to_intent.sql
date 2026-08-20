@@ -26,10 +26,23 @@
 -- from replaying another user's receipt; it is not quote ownership.
 --
 -- The shared mismatch helper includes the prior receipt in PostgreSQL DETAIL.
--- This is the first sales-rep-reachable caller of that helper. The disclosure
--- remains inside the existing office boundary: the key is high-entropy, and an
--- active sales rep may already draw and view any live booking/order. If either
--- of those access decisions changes, the DETAIL contract must be revisited.
+-- The return lifecycle RPCs established this sales-rep-reachable precedent in
+-- 20260812130145. The disclosure remains inside the same office boundary: the
+-- key is high-entropy, and an active sales rep may already draw and view any
+-- live booking/order. If either access decision changes, the DETAIL contract
+-- must be revisited.
+
+-- Drain every draw running through the committed 20260816110000 barrier and
+-- refuse new draws until this transaction commits. Without this exact lock, a
+-- legacy call could commit an unbound receipt after the preflight scan. The
+-- migration runner must keep this file in one transaction; SET LOCAL and the
+-- transaction-scoped advisory lock deliberately fail closed otherwise.
+CREATE TEMP TABLE crx_draw_intent_transaction_guard (
+  marker boolean NOT NULL
+) ON COMMIT DROP;
+INSERT INTO crx_draw_intent_transaction_guard(marker) VALUES (true);
+SET LOCAL lock_timeout = '15s';
+SELECT pg_advisory_xact_lock(20260816, 1);
 
 DO $preflight$
 DECLARE
@@ -134,9 +147,9 @@ BEGIN
       'DRAW_DOWN_INTENT_PREFLIGHT: idempotency receipt binding columns are missing';
   END IF;
 
-  -- A receipt created before this wrapper has no actor/fingerprint binding.
-  -- Refuse cutover while one can still be retried, so a lost-response retry is
-  -- never converted from a successful replay into a mismatch at deployment.
+  -- The exclusive barrier above has drained every in-flight legacy draw and
+  -- refuses new ones. A receipt visible here therefore describes the complete
+  -- retryable legacy set. Refuse cutover while any such receipt remains.
   IF EXISTS (
     SELECT 1
       FROM public.idempotency_keys
@@ -251,14 +264,15 @@ BEGIN
   -- receipt; PostgreSQL advisory locks are re-entrant for the same session.
   -- This keeps lock order consistent with the helper's other money callers and
   -- prevents a same-key/cross-operation request from forming a key/row cycle.
-  IF p_idempotency_key IS NOT NULL THEN
-    IF btrim(p_idempotency_key) = '' THEN
-      RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED';
-    END IF;
-    PERFORM pg_advisory_xact_lock(
-      hashtextextended('crx:idempotency:' || p_idempotency_key, 0)
-    );
+  IF p_idempotency_key IS NULL
+     OR p_idempotency_key !~ '[^[:space:]]'
+     OR p_idempotency_key COLLATE "C" !~ '[!-~]' THEN
+    RAISE EXCEPTION
+      'IDEMPOTENCY_KEY_REQUIRED: draw_down_quote requires p_idempotency_key';
   END IF;
+  PERFORM pg_advisory_xact_lock(
+    hashtextextended('crx:idempotency:' || p_idempotency_key, 0)
+  );
   -- >>>DRAW_DOWN_INTENT_KEY_LOCK
 
   -- Authorize and lock the live booking before any receipt can be returned.
@@ -326,15 +340,6 @@ BEGIN
 
   IF jsonb_array_length(v_canonical_draws) = 0 THEN
     RAISE EXCEPTION 'EMPTY_DRAW: no draw lines supplied';
-  END IF;
-
-  -- Preserve the established optional-key delegation after running the same
-  -- authorization and input guards as keyed calls. The mature private chain
-  -- remains the sole money/inventory implementation for keyless requests.
-  IF p_idempotency_key IS NULL THEN
-    RETURN public._draw_down_quote_intent_impl_20260819(
-      p_quote_id, p_draws, p_performed_by, NULL, p_below_cost_reason
-    );
   END IF;
 
   v_fingerprint := encode(

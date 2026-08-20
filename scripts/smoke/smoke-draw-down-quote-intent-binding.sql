@@ -127,6 +127,20 @@ BEGIN
   );
   PERFORM set_config('request.jwt.claim.sub', v_rep_a::text, true);
 
+  BEGIN
+    PERFORM public.draw_down_quote(
+      v_quote,
+      jsonb_build_array(jsonb_build_object('product_id', v_product, 'quantity', 1)),
+      v_rep_a, NULL, NULL
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: keyless draw reached the money implementation';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'IDEMPOTENCY_KEY_REQUIRED:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: expected IDEMPOTENCY_KEY_REQUIRED, got: %', SQLERRM;
+    END IF;
+  END;
+
   v_first_result := public.draw_down_quote(
     v_quote,
     jsonb_build_array(jsonb_build_object('product_id', v_product, 'quantity', 1)),

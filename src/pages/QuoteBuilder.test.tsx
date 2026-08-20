@@ -248,11 +248,17 @@ function makeQuoteFixture(status: 'draft' | 'sent' | 'accepted' = 'draft', rowVe
   return { quote, product, section, item };
 }
 
-function configureDrawDownFixture(drawError: { message: string; details?: string }) {
+function configureDrawDownFixture(
+  drawError: { message: string; details?: string },
+  { failRecoveryLoad = false }: { failRecoveryLoad?: boolean } = {},
+) {
   const fixture = makeQuoteFixture('sent', 7);
   let quoteItemReads = 0;
   mockFrom.mockImplementation((table: string) => {
     if (table === 'quote_items') quoteItemReads += 1;
+    if (table === 'quote_items' && failRecoveryLoad && quoteItemReads >= 3) {
+      return buildChain({ data: null, error: { message: 'booking balance unavailable' } });
+    }
     const data = table === 'quotes'
       ? fixture.quote
       : table === 'quote_sections'
@@ -349,6 +355,26 @@ describe('QuoteBuilder', () => {
     const dialog = screen.getByRole('dialog', { name: 'Create Order from Booking' });
     expect(within(dialog).getByRole('spinbutton')).toHaveValue(null);
     expect(mockNavigate).not.toHaveBeenCalledWith(expect.stringMatching(/^\/orders\//));
+  });
+
+  it('does not claim the booking balance reloaded when mismatch recovery reads fail', async () => {
+    const fixture = configureDrawDownFixture(
+      { message: 'IDEMPOTENCY_ACTOR_MISMATCH' },
+      { failRecoveryLoad: true },
+    );
+
+    await submitOneUnitDraw(fixture.quote.id);
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'warning',
+      expect.stringContaining('booking balance could not be reloaded'),
+    ));
+    expect(mockToast).not.toHaveBeenCalledWith(
+      'warning',
+      expect.stringContaining('booking balance was reloaded'),
+    );
+    expect(mockResetIdempotencyKey).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog', { name: 'Create Order from Booking' })).not.toBeInTheDocument();
   });
 
   it('shows loading skeleton while fetching data for existing quote', () => {

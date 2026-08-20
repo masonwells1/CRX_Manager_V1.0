@@ -32,23 +32,27 @@ because the wrapper requires an authenticated user id and no service caller exis
 
 The re-review closed the remaining release-proof gaps. The idempotency-key advisory lock is now
 taken before the quote row lock, preventing two cross-quote requests for one key from deadlocking;
-the shared helper re-takes that lock reentrantly before reading the receipt. Keyless compatibility
-still delegates to the preserved implementation, but only after the same empty/non-finite draw
-validation as keyed requests. Preflight refuses cutover while any unexpired legacy
-`draw_down_quote` receipt exists, so a lost-response retry is never converted into a mismatch by the
-deployment. The shared helper's receipt DETAIL is intentionally sales-rep reachable here: keys are
-high-entropy and active reps already share the booking/order visibility boundary. The hash-bearing
-lifecycle migration, this migration, its rollback
+the shared helper re-takes that lock reentrantly before reading the receipt. The money path now
+requires a nonblank printable retry key, matching the already-live commission payout precedent, so
+a direct keyless PostgREST call cannot double-create an order, inventory prebooking or ledger row.
+At apply time the migration takes the existing draw-cutover key exclusively, draining every
+in-flight legacy draw and refusing new draws before it scans for unexpired legacy receipts. A
+temporary-table transaction guard refuses autocommit execution before that lock is taken. The
+shared helper's receipt DETAIL is intentionally sales-rep reachable here, following the already-live
+return lifecycle RPC precedent: keys are high-entropy and active reps already share the
+booking/order visibility boundary. The hash-bearing lifecycle migration, this migration, its rollback
 smoke and its prover are all pinned to LF in `.gitattributes`, and the tests/prover hash their exact
 on-disk bytes instead of normalizing line endings and hiding an apply-time mismatch.
 
 Added focused migration/RPC contracts, real QuoteBuilder component recovery tests, and a
 container-only rollback smoke covering exact replay, changed quantity, changed actor,
-cross-representative success, valid and invalid keyless calls, one $10 sale / $5 cost / $5 profit
-order, one inventory reservation, one draw-ledger row, and a bound receipt. The component tests also
+cross-representative success, required-key refusal, one $10 sale / $5 cost / $5 profit
+order, one inventory reservation, one draw-ledger row, and a bound receipt. Keyless calls are now
+refused before the money implementation. The component tests also
 exposed and fixed an initial-load timing defect that could mark a freshly loaded saved quote dirty
 and block its first draw; a generation token and unmount cleanup prevent a superseded load from
-releasing the newer load's suppression. This migration must follow `20260816110000`,
+releasing the newer load's suppression. Mismatch recovery now reports a successful balance reload
+only when all three reload reads actually succeed. This migration must follow `20260816110000`,
 `20260816120000` and
 `20260817120000`. **It has not been applied live and this PR does not authorize applying it.**
 
@@ -56,16 +60,19 @@ releasing the newer load's suppression. This migration must follow `202608161100
 network-isolated PostgreSQL 17 container. Its compact mutation database installs the exact reviewed
 pricing/lifecycle prerequisites, executes both hash gates, and swaps in an effect-recording stand-in
 only for adversarial wrapper schedules. A second database restores the supported
-`20260727174805` full schema, replays all 60 ledger-selected migrations through this candidate, and
+`20260727174805` full schema, replays all 60 default replay-eligible ledger-selected migrations
+through this candidate while surfacing the quarantined one-shot set, and
 executes `smoke-draw-down-quote-intent-binding.sql` against the real tier-split money, commission,
 inventory and draw-ledger implementation to `SMOKE_PASS_ROLLBACK`. It proves one $10 sale / $5 cost
 / $5 profit line and header, one inventory prebooking, one bound receipt and one draw-ledger row.
 The compact schedules pass admin/rep authorization, inactive,
-missing-profile, unauthenticated and actor-parameter refusals, keyed/keyless input guards, valid
-keyless delegation, exact replay, changed/non-numeric/non-finite quantity, changed receipt actor,
+missing-profile, unauthenticated and actor-parameter refusals, key-required and keyed input guards,
+exact replay, changed/non-numeric/non-finite quantity, changed receipt actor,
 deleted quote, ACL, and both same-key concurrency cases. Mutation
 proof is non-vacuous: removing draw quantities reproduced stale success, while drifting the pinned
-tier-split body was refused before wrapping, and an unexpired legacy receipt blocked cutover. The
+tier-split body was refused before wrapping, and a simulated in-flight legacy draw was drained by
+the exclusive cutover lock before its new receipt blocked cutover. The replay selector also prints
+its one-shot quarantine notice instead of silently implying those data-specific files were replayed. The
 container used `--network none` and tmpfs;
 production was untouched.
 

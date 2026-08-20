@@ -2380,13 +2380,14 @@ export default function QuoteBuilder() {
 
   // Partial booking draw-down: open the modal with the per-product balance
   const openDrawDownModal = async () => {
-    if (!id) return;
+    if (!id) return false;
     // Draw-down bills at this quote's locked prices, so a current-price stale guard
     // would be misleading and block the first click without protecting the customer.
     if (isDirty) {
       toast('warning', 'Save the quote before drawing down the booking');
-      return;
+      return false;
     }
+    let loaded = false;
     setDrawLoading(true);
     setShowDrawModal(true);
     try {
@@ -2428,12 +2429,14 @@ export default function QuoteBuilder() {
         })
         .sort((a, b) => a.product_name.localeCompare(b.product_name));
       setDrawRows(rows);
+      loaded = true;
     } catch (error: unknown) {
       Sentry.captureException(error, { tags: { source: 'critical_action', action: 'draw_down_quote_load' } });
       toast('error', 'Failed to load the booking balance');
       setShowDrawModal(false);
     }
     setDrawLoading(false);
+    return loaded;
   };
 
   const handleDrawDown = async () => {
@@ -2508,12 +2511,15 @@ export default function QuoteBuilder() {
             tags: { source: 'critical_action', action: `draw_down_quote_${bindingRejection}_mismatch` },
           });
         }
-        await openDrawDownModal();
+        const balanceReloaded = await openDrawDownModal();
+        const recoveryStep = balanceReloaded
+          ? 'The booking balance was reloaded; try again.'
+          : 'The booking balance could not be reloaded; refresh the page and check Orders before drawing again.';
         toast('warning', bindingRejection === 'actor'
-          ? 'That retry belongs to another signed-in user, so nothing new was drawn. The booking balance was reloaded; try again.'
+          ? `That retry belongs to another signed-in user, so nothing new was drawn. ${recoveryStep}`
           : bindingRejection === 'receipt'
-            ? 'The database could not confirm this retry outcome, so nothing was drawn now. The booking balance was reloaded; check Orders before drawing again.'
-            : 'That retry was already used, so nothing new was drawn. The booking balance was reloaded; check Orders before drawing again.');
+            ? `The database could not confirm this retry outcome, so nothing was drawn now. ${recoveryStep}`
+            : `That retry was already used, so nothing new was drawn. ${recoveryStep}`);
         setDrawing(false);
         return;
       }
