@@ -130,19 +130,22 @@ const UNIT_ALIASES: Record<string, string> = Object.assign(Object.create(null), 
  * lists, so folding twice would be a second place to drift.
  */
 function rateBaseUnit(unit: string | null | undefined): string {
-  // Same zero-width treatment as `normalizeUnit`, and for the same reason — except
-  // that this function is the one the MONEY path uses. Every billing-related unit
-  // lookup (`rateUnit`, `qtyUnit`, `soldUnit`, `headerUnit`) comes through here, and
-  // `\s` does not match U+200B/200C/200D, so a `trim()` alone leaves a pasted 'g<ZWSP>al'
-  // unmatched by every size table. That fails in two directions at once: the rate
-  // check goes quiet on exactly the OCR/paste-derived tickets it exists for, and the
-  // invoice pre-flight below raises a false "this will fail when you invoice it" on a
-  // ticket that is actually fine. Delete them, never collapse them to a space.
-  const raw = (unit ?? '')
-    .replace(ZERO_WIDTH, '')
-    .replace(WHITESPACE_RUN, ' ')
-    .trim()
-    .toLowerCase();
+  // DELIBERATELY NOT zero-width-stripped, and deliberately NOT whitespace-collapsed —
+  // unlike `normalizeUnit` below. This is the SERVER-PARITY normalizer, and its only
+  // job is to predict what the live `normalize_rate_unit` will do. That function is
+  // `lower(btrim(COALESCE(p_unit,'')))` plus a CASE: `btrim` strips OUTER SPACES ONLY,
+  // so live returns 'm<ZWSP>g' and 'fl  oz' unchanged, matches no size table, and
+  // `field_app_priced_quantity` refuses — which makes
+  // `create_invoice_from_blend_ticket` raise BLEND_TICKET_UNIT_UNCONVERTIBLE.
+  //
+  // Closing the character up here would make this check MORE permissive than the
+  // database it is predicting: the ticket would look invoice-ready and then fail at
+  // billing. Verified against live `pg_proc.prosrc` on 2026-08-20 (gpt-5.6-sol finding
+  // CRX-MONEY-PARITY-001 on PR #439). The operator-friendly fix is to teach the SQL to
+  // close zero-width up, in a reviewed migration, and relax this in the same change —
+  // never one side alone. `normalizeUnit` may and does strip them, because it only
+  // ever compares two client-side strings and no server contract rides on it.
+  const raw = (unit ?? '').trim().toLowerCase();
   if (raw === '') return '';
   const perAcreSlash = /\s*\/\s*(ac|acre|acres|a)\s*$/;
   const perAcreSpelled = /\s+per\s+acre$/;

@@ -6,6 +6,17 @@ All significant development milestones, in reverse chronological order.
 
 Merged main's zero-width unit fix into the blend-ticket rate/unit check, keeping main's delete-don't-space normalizer and re-applying the unit-aware rate arm on top of it. Found that the fix does not reach the money path: rateBaseUnit, which every billing-related unit lookup routes through, still leaves zero-width characters intact, so a unit pasted from a PDF can silently skip the rate check or fire a false 'this ticket will fail when you invoice it' alarm. Main's 5 zero-width regression tests were displaced by the merge and still need porting to the new warning shape. 77 tests green and typecheck clean; nothing pushed, no migration, no edge function.
 
+> **CORRECTION, same day, after the PR #439 review.** Two claims in the paragraph above are wrong and
+> the fix they describe was reverted before merge. (1) The "false alarm" was **true**: live
+> `normalize_rate_unit` is `lower(btrim(...))`, `btrim` strips outer spaces only, so the database
+> really does refuse `m<ZWSP>g` and the invoice really would fail — confirmed by reading live
+> `pg_proc.prosrc`. (2) Stripping zero-width inside `rateBaseUnit` was therefore backwards: that
+> function predicts the server, and making it more permissive turns an accurate early warning into a
+> ticket that fails at invoicing instead. Raised as `CRX-MONEY-PARITY-001` by gpt-5.6-sol. The strip
+> is reverted, the parity contract is now pinned by tests that fail if it is re-added, and the real
+> remaining fix is a migration hardening the SQL with the client relaxed in the same change. See the
+> OPEN entry in `docs/manual/KNOWN_ISSUES.md`.
+
 - **Commits this session** (git log origin/main..HEAD):
   - `25e5f9a3 Merge branch 'claude/blend-unit-rebuild-step1' into claude/blend-ticket-rate-unit-check-ccbba2`
   - `91051d74 feat(blend): tier the math warnings so "couldn't check" reads differently`

@@ -70,56 +70,51 @@ change rather than on its own.
 
 ---
 
-## CLOSED 2026-08-20 — PR #426's zero-width fix did not reach the rate arm in `blendMathValidator.ts`
+## OPEN 2026-08-20 — a zero-width character in a rate unit makes a ticket un-invoiceable, and only the SQL can fix it
 
-**Severity: LOW-MED, warning text only, currently unreachable (0 rows in `blend_tickets` and
-`blend_ticket_products` on live, verified read-only 2026-08-19).** Found while merging `origin/main`
-into the unit-aware rate-arm work on 2026-08-20 (branch `claude/blend-ticket-rate-unit-check-ccbba2`,
-merge `25e5f9a3`); recorded so it is not re-discovered as new.
+**Severity: LOW-MED, currently unreachable (0 rows in `blend_tickets` and `blend_ticket_products` on
+live, verified read-only 2026-08-19).** Raised as `CRX-MONEY-PARITY-001` by gpt-5.6-sol on
+[PR #439](https://github.com/masonwells1/CRX_Manager_V1.0/pull/439) and then confirmed directly
+against live `pg_proc.prosrc`.
 
-[PR #426](https://github.com/masonwells1/CRX_Manager_V1.0/pull/426) taught `normalizeUnit` to
-**delete** zero-width characters instead of collapsing them to a space, so a `gal` pasted out of a
-PDF as `g<ZWSP>al` still reads as `gal`. That fix is correct and is live.
+**The finding, and the wrong turn that produced it.** [PR #426](https://github.com/masonwells1/CRX_Manager_V1.0/pull/426)
+taught `normalizeUnit` to **delete** zero-width characters, so `g<ZWSP>al` reads as `gal`. That is
+correct and stays: `normalizeUnit` only ever compares two client-side strings.
 
-It does not cover the rate arm. Every billing-related unit lookup routes through `rateBaseUnit`,
-which normalizes with `.trim().toLowerCase()` only — and `\s` does not match U+200B/200C/200D, as
-`ZERO_WIDTH`'s own comment in the same file states. The affected call sites are `rateUnit` and
-`qtyUnit` (the per-product rate check), `soldUnit` (the invoice pre-flight), `headerUnit`, and the
-per-product conversion inside the total arm.
+A first pass at PR #439 extended the same strip to `rateBaseUnit` on the theory that the money path
+had been left unprotected. **That was backwards**, and the review caught it. `rateBaseUnit` is not a
+client-side comparator — it is a *prediction of the server*, and the server does not close these up:
 
-Two consequences, pointing in opposite directions:
+```
+normalize_rate_unit := lower(btrim(COALESCE(p_unit,''))) + a CASE over known spellings
+```
 
-- The rate check silently **skips**. `fieldAppPricedQuantity` cannot match `g<ZWSP>al`, returns
-  null, and the line emits the grey "couldn't be converted, verify by hand" note. Fail-closed, but
-  it defeats the check on exactly the OCR- and paste-derived tickets it exists for.
-- The invoice pre-flight **false-alarms**. The same failed lookup at `soldUnit` fires the amber
-  "this ticket will fail when you invoice it" — the tier the design deliberately keeps rare, and
-  whose credibility the whole tiering exists to protect. Whether the live
-  `field_app_priced_quantity` strips zero-width has **not** been checked, so whether the invoice
-  would genuinely fail is unknown.
+`btrim` strips **outer spaces only**. Live therefore returns `m<ZWSP>g` intact, matches no size
+table, and `create_invoice_from_blend_ticket` raises `BLEND_TICKET_UNIT_UNCONVERTIBLE`. Stripping
+zero-width client-side made the preflight **more permissive than the database it predicts**, turning
+an accurate early warning into a silent ticket that fails weeks later at invoicing. The strip was
+reverted before merge; the parity contract is now pinned by tests in
+`describe('zero-width characters must not out-run the database')`, which go red if anyone re-adds it.
 
-**FIXED the same day in `6d3faabd`** (branch `claude/blend-ticket-rate-unit-check-ccbba2`, not yet
-pushed at time of writing). `rateBaseUnit` now applies `ZERO_WIDTH` and `WHITESPACE_RUN` before the
-`trim()`, matching `normalizeUnit`.
+**So the remaining real defect is server-side.** An operator who pastes a rate unit out of a PDF gets
+a correct-looking ticket that the database will refuse, and the warning naming the offending unit
+shows two strings that look identical on screen. Nothing misbills — the RPC fails closed — but the
+ticket cannot be invoiced until the unit is retyped.
 
-PR #426's five zero-width regression tests were displaced by the merge — they were written against
-the total-volume arm and the old `string[]` return, both of which this branch replaced — so the
-coverage was **re-aimed rather than ported verbatim**, at the arm that actually bills. Six tests now
-live in `describe('zero-width characters pasted from a PDF')` inside the billing-parity block.
+**The fix is a migration, not a client change:** harden `normalize_rate_unit` to delete
+U+200B/200C/200D (and decide the BOM and interior-whitespace cases at the same time), then relax
+`rateBaseUnit` **in the same change** so the two never drift. Doing either side alone re-creates this
+bug in one direction or the other.
 
-**Mutation-tested, so the tests are known to bite:** reverting `rateBaseUnit` to `.trim().toLowerCase()`
-turns 4 of the 6 red — the rate-unit and quantity-unit conversions each fall out to `unchecked`, a
-genuine 128x error downgrades from `mismatch` to `unchecked` (the check silently stops working), and
-the invoice pre-flight emits **2 warnings where 0 are correct**, reproducing the false alarm exactly
-as predicted. The other 2 pass either way by design: they guard that closing the character up does
-not *over*-merge genuinely different units.
+Two adjacent parity gaps to settle in that same migration rather than piecemeal:
 
-**Verified in a real browser**, not only under vitest: with the dev server running, the shipped
-module imported through Vite prices a pasted `g<ZWSP>al` rate identically to a clean `gal`, still
-catches the 128x error, and raises no pre-flight alarm. No console errors.
+- JS `.trim()` strips the BOM (U+FEFF) and tabs; PostgreSQL `btrim` does not. Pre-existing, predates
+  PR #439.
+- The live CASE lists `'fl oz'` with a single space; neither side collapses interior whitespace, so
+  `'fl  oz'` matches nothing on either side. Consistent today, but by accident rather than design.
 
-No migration, no live state. Still true that this was unreachable in production the whole time —
-`blend_tickets` and `blend_ticket_products` are empty on live.
+**Not started.** No migration written, no live state, and a live apply would need Mason's explicit
+approval plus a migration review.
 
 ---
 

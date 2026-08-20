@@ -427,53 +427,65 @@ describe('validateBlendMath', () => {
       expect(warnings[0].message).toContain('200.00');
     });
 
-    // Ported forward from PR #426, which fixed the same class of bug in
-    // `normalizeUnit`. Those tests were written against the total-volume arm and the
-    // old `string[]` return, both of which this branch replaced, so the COVERAGE is
-    // re-aimed here at the arm that bills: every money-path unit lookup goes through
-    // `rateBaseUnit`, and `\s` does not match a zero-width character, so a `trim()`
-    // alone left 'g<ZWSP>al' matching no size table at all.
-    describe('zero-width characters pasted from a PDF', () => {
+    // These pin the CLIENT/SERVER PARITY contract, and they are the reason
+    // `rateBaseUnit` deliberately does not reuse `normalizeUnit`'s zero-width strip.
+    //
+    // PR #426 taught `normalizeUnit` to delete zero-width characters, which is right:
+    // that function only ever compares two client-side strings. `rateBaseUnit` is a
+    // different animal — it predicts the live `normalize_rate_unit`, which is
+    // `lower(btrim(...))` plus a CASE. `btrim` strips OUTER SPACES ONLY, so the
+    // database keeps 'm<ZWSP>g' intact, matches no size table, and
+    // `create_invoice_from_blend_ticket` raises BLEND_TICKET_UNIT_UNCONVERTIBLE.
+    //
+    // So the CORRECT behaviour on a pasted unit is to refuse it here too, loudly and
+    // early, rather than to close the character up and let a ticket look invoice-ready
+    // that the database will later reject. A first pass at this branch stripped them
+    // here and was caught by gpt-5.6-sol (CRX-MONEY-PARITY-001, PR #439); the live
+    // `pg_proc.prosrc` was then read directly to confirm it. If the SQL is ever
+    // hardened to close zero-width up, relax this in the SAME change — never one side.
+    describe('zero-width characters must not out-run the database', () => {
       const ZWSP = String.fromCharCode(0x200b);
       const ZWNJ = String.fromCharCode(0x200c);
       const BOM = String.fromCharCode(0xfeff);
 
-      it('still converts when the RATE unit carries a zero-width character', () => {
-        // 2 lb/ac × 100 ac = 200 lb = 3200 dry oz — the same sum as the plain-'lb'
-        // case above. Before the fix the rate unit matched nothing and the line fell
-        // out to "couldn't be converted", silently skipping the check that bills.
+      it('refuses a zero-width RATE unit, exactly as the database will', () => {
+        // Arithmetically this is the correct ticket — 2 lb/ac × 100 ac = 3200 dry oz —
+        // and it still must NOT come back clean, because live cannot price 'l<ZWSP>b'.
         const warnings = validateBlendMath(
           { total_acres: 100, total_volume: null, total_volume_unit: null, application_rate: null },
           [{ product_name: 'Dry A', quantity: 3200, unit: 'oz', rate_per_acre: 2, rate_per_acre_unit: `l${ZWSP}b`, ...dry }]
         );
-        expect(warnings).toHaveLength(0);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0].level).toBe('unchecked');
+        expect(warnings[0].message).toContain('Not checked');
       });
 
-      it('still converts when the QUANTITY unit carries a non-joiner or a BOM', () => {
+      it('refuses a zero-width QUANTITY unit rather than guessing past it', () => {
         const warnings = validateBlendMath(
           { total_acres: 100, total_volume: null, total_volume_unit: null, application_rate: null },
-          [{ product_name: 'A', quantity: 25600, unit: `o${ZWNJ}z`, rate_per_acre: 2, rate_per_acre_unit: `${BOM}gal`, ...liquid }]
+          [{ product_name: 'A', quantity: 25600, unit: `o${ZWNJ}z`, rate_per_acre: 2, rate_per_acre_unit: 'gal', ...liquid }]
         );
-        expect(warnings).toHaveLength(0);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0].level).toBe('unchecked');
       });
 
-      it('still reports a real mismatch through a zero-width character', () => {
-        // Deleting the character must not also swallow the comparison it enables.
-        // 2 gal/ac × 100 ac = 25600 oz; 200 oz is the 128x error, still caught.
+      it('reports the refusal as "unchecked", never as a confident wrong number', () => {
+        // 200 oz against 2 gal/ac × 100 ac IS a 128x error, but with a zero-width in
+        // the quantity unit we cannot know that — the units never converted. Saying
+        // 'mismatch' here would be asserting a comparison that never ran.
         const warnings = validateBlendMath(
           { total_acres: 100, total_volume: null, total_volume_unit: null, application_rate: null },
           [{ product_name: 'A', quantity: 200, unit: `o${ZWSP}z`, rate_per_acre: 2, rate_per_acre_unit: 'gal', ...liquid }]
         );
         expect(warnings).toHaveLength(1);
-        expect(warnings[0].level).toBe('mismatch');
-        expect(warnings[0].message).toContain('25600.00');
+        expect(warnings[0].level).toBe('unchecked');
+        expect(warnings[0].message).not.toContain('25600.00');
       });
 
-      // The false-alarm direction, and the reason this is worth a test rather than a
-      // comment: an unmatched rate unit made the pre-flight below claim the invoice
-      // would fail on a ticket that was entirely fine — noise in the amber tier the
-      // whole warning split exists to keep credible.
-      it('does not cry "this will fail when you invoice it" over a zero-width character', () => {
+      // The load-bearing one. This warning is TRUE: live really will refuse this
+      // ticket at invoicing, so the operator needs to hear it while the ticket is
+      // still open and the unit can be retyped.
+      it('warns that the invoice WILL fail on a zero-width rate unit', () => {
         const warnings = validateBlendMath(
           { total_acres: 100, total_volume: null, total_volume_unit: null, application_rate: null },
           [{
@@ -481,12 +493,26 @@ describe('validateBlendMath', () => {
             product_form: 'dry', product_rate_unit: 'MG', product_inventory_unit: 'MG',
           }]
         );
+        expect(warnings.some((w) => w.message.includes('fail when you invoice it'))).toBe(true);
+      });
+
+      // The other side of the same contract: a CLEAN unit must still sail through, or
+      // the parity rule above would just be "refuse everything". Mason bills a
+      // post-spray product in MG, and the SQL's identity short-circuit prices it.
+      it('still prices a clean MG rate against an MG sold unit', () => {
+        const warnings = validateBlendMath(
+          { total_acres: 100, total_volume: null, total_volume_unit: null, application_rate: null },
+          [{
+            product_name: 'Post spray', quantity: 200, unit: 'MG', rate_per_acre: 2, rate_per_acre_unit: 'MG',
+            product_form: 'dry', product_rate_unit: 'MG', product_inventory_unit: 'MG',
+          }]
+        );
         expect(warnings).toHaveLength(0);
       });
 
       it('still refuses a genuine liquid-to-dry crossing across a zero-width character', () => {
-        // Closing up the character must not merge units that are really different:
-        // 'lb' against a LIQUID product still has no density to convert through.
+        // Belt and braces: even if the zero-width were closed up, 'lb' against a
+        // LIQUID product has no density to convert through and must still refuse.
         const warnings = validateBlendMath(
           { total_acres: 100, total_volume: null, total_volume_unit: null, application_rate: null },
           [{ product_name: 'A', quantity: 25, unit: 'gal', rate_per_acre: 2, rate_per_acre_unit: `l${ZWSP}b`, ...liquid }]
