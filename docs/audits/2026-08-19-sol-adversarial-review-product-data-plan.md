@@ -17,7 +17,9 @@ acid equivalent — `5.4 lb IPA salt/gal` treated as `5.4 lb ae/gal` instead of
 `5.4 × 0.741 = 4.0014`, so every gallon is believed to carry ~35% more acid than it does, and the
 quote invoices too few gallons for the intended treatment.
 
-Findings below are Sol's own text, unedited. Disposition — agree/disagree per finding, and what
+Findings below are Sol's own text, unedited except that its `Location` links were machine-absolute
+(`/C:/CRX_Manager/.claude/worktrees/…`) and have been made repository-relative so they resolve for
+any reader. No finding text was changed. Disposition — agree/disagree per finding, and what
 changes before the build — is Mason's call and is not recorded here yet.
 
 ---
@@ -28,7 +30,7 @@ VERDICT: NOT SAFE AS WRITTEN
 
 ### 1. The proposal queue cannot hold the planned data
 
-**Location:** [BUILD PLAN §0 D-I, WP-3, WP-4](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:56); existing [product_label_drafts migration](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/supabase/migrations/20260629210000_product_label_drafts.sql:16)  
+**Location:** [BUILD PLAN §0 D-I, WP-3, WP-4](docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:56); existing [product_label_drafts migration](supabase/migrations/20260629210000_product_label_drafts.sql:16)  
 **Severity:** BLOCKER — **Confidence: High**
 
 The existing queue has fixed columns and fixed `create_label_draft`/`commit_label_draft` arguments for signal word, REI, PHI, EPA number, and label rate. It has nowhere to store ingredient rows, specific-form IDs, concentration basis/fraction, brand proposals, label URL/date, cancellation state, or a typed-value-versus-EPA conflict. Nevertheless, WP-4 says “no migration.”
@@ -39,7 +41,7 @@ The existing queue has fixed columns and fixed `create_label_draft`/`commit_labe
 
 ### 2. WP-2 depends on a table WP-3 has not created
 
-**Location:** [BUILD PLAN WP-2 density precedence](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:231), [WP-3 product_brands](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:251)  
+**Location:** [BUILD PLAN WP-2 density precedence](docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:231), [WP-3 product_brands](docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:251)  
 **Severity:** BLOCKER — **Confidence: High**
 
 WP-2’s density-precedence function supposedly includes a brand slot, but `product_brands` arrives in WP-3.
@@ -50,10 +52,10 @@ WP-2’s density-precedence function supposedly includes a brand slot, but `prod
 
 ### 3. WP-3 is not additive, so apply-before-merge is unsafe
 
-**Location:** [BUILD PLAN WP-3](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:251), [ORCHESTRATION apply-before-merge rationale](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/docs/plans/2026-08-19-product-data-model-ORCHESTRATION.md:72)  
+**Location:** [BUILD PLAN WP-3](docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:251), [ORCHESTRATION apply-before-merge rationale](docs/plans/2026-08-19-product-data-model-ORCHESTRATION.md:72)  
 **Severity:** BLOCKER — **Confidence: High**
 
-The plan explicitly calls for a `receive_po_items` signature change. Current production callers supply four named arguments in [QuickReceivePanel](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/src/components/receiving/QuickReceivePanel.tsx:325), [PurchaseOrderDetail](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/src/pages/PurchaseOrderDetail.tsx:291), and [offline replay](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/src/lib/offlineSync.ts:414). The current wrapper delegates to an internal serialized function in [the latest receiving migration](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/supabase/migrations/20260726190515_section9_po_ap_high_remediation.sql:157).
+The plan explicitly calls for a `receive_po_items` signature change. Current production callers supply four named arguments in [QuickReceivePanel](src/components/receiving/QuickReceivePanel.tsx:325), [PurchaseOrderDetail](src/pages/PurchaseOrderDetail.tsx:291), and [offline replay](src/lib/offlineSync.ts:414). The current wrapper delegates to an internal serialized function in [the latest receiving migration](supabase/migrations/20260726190515_section9_po_ap_high_remediation.sql:157).
 
 PostgreSQL cannot replace a function’s input signature in place. The migration must either drop the old signature or create an overload.
 
@@ -63,10 +65,10 @@ PostgreSQL cannot replace a function’s input signature in place. The migration
 
 ### 4. The permission proof cannot prove the permission policy
 
-**Location:** [BUILD PLAN permission protocol](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:77), R-2/R-3, WP-1–WP-3  
+**Location:** [BUILD PLAN permission protocol](docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:77), R-2/R-3, WP-1–WP-3  
 **Severity:** BLOCKER — **Confidence: High**
 
-The repository deliberately revokes table-level product writes and grants selected columns in [the pricing migration](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/supabase/migrations/20260718190000_supplier_pricing_phase1a_cutover.sql:354). The plan does not enumerate an expected `INSERT` and `UPDATE` result for every new `products` column.
+The repository deliberately revokes table-level product writes and grants selected columns in [the pricing migration](supabase/migrations/20260718190000_supplier_pricing_phase1a_cutover.sql:354). The plan does not enumerate an expected `INSERT` and `UPDATE` result for every new `products` column.
 
 Merely recording `has_column_privilege('authenticated', …)` is insufficient:
 
@@ -82,7 +84,7 @@ Merely recording `has_column_privilege('authenticated', …)` is insufficient:
 
 ### 5. EPA seeding contradicts the specific-form-only calculation rule
 
-**Location:** [D-A](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:48), [WP-4](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:291)  
+**Location:** [D-A](docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:48), [WP-4](docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:291)  
 **Severity:** BLOCKER — **Confidence: High**
 
 D-A correctly says concentrations attach to the specific chemical-form row. WP-4 instead says EPA ingredients are “mapped to canonical acids,” and its proof asks only whether they appear under the right canonical ingredient. That language directs the builder toward the parent row.
@@ -93,7 +95,7 @@ D-A correctly says concentrations attach to the specific chemical-form row. WP-4
 
 ### 6. NULL fraction refusal is prose, not an enforced state
 
-**Location:** [D-A](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:48), WP-1 proof, Phase 3 comparison  
+**Location:** [D-A](docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:48), WP-1 proof, Phase 3 comparison  
 **Severity:** BLOCKER — **Confidence: High**
 
 The database can store `canonical_fraction = NULL`, but the plan names no central conversion API, RPC, discriminated error result, SQL guard, or UI blocked state. No proof attempts the isomer case and confirms that no number is returned.
@@ -128,7 +130,7 @@ The plan distinguishes plausible versus implausible densities only by warning. I
 
 ### 9. Applying the migration changes the reviewed branch afterward
 
-**Location:** [ORCHESTRATION steps 10–14](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/docs/plans/2026-08-19-product-data-model-ORCHESTRATION.md:65)  
+**Location:** [ORCHESTRATION steps 10–14](docs/plans/2026-08-19-product-data-model-ORCHESTRATION.md:65)  
 **Severity:** HIGH — **Confidence: High**
 
 The PR and checks happen before apply. Applying then renames the migration file and regenerates the schema registry, creating tracked changes after CodeRabbit, Vercel, and commit review.
@@ -139,7 +141,7 @@ The PR and checks happen before apply. Applying then renames the migration file 
 
 ### 10. The advertised exact-SHA proof is not exact-SHA
 
-**Location:** BUILD PLAN §1; ORCHESTRATION step 9; [write-apply-proofs](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/scripts/write-apply-proofs.mjs:150)  
+**Location:** BUILD PLAN §1; ORCHESTRATION step 9; [write-apply-proofs](scripts/write-apply-proofs.mjs:150)  
 **Severity:** HIGH — **Confidence: High**
 
 `write-apply-proofs.mjs` hashes the migration file, not the full Git commit. It does not review UI consumers, generated types, RPC call sites, or other files at the PR head.
@@ -150,7 +152,7 @@ The PR and checks happen before apply. Applying then renames the migration file 
 
 ### 11. The proof expires before the plan reaches apply
 
-**Location:** [ORCHESTRATION proof TTL and steps 9–13](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/docs/plans/2026-08-19-product-data-model-ORCHESTRATION.md:35)  
+**Location:** [ORCHESTRATION proof TTL and steps 9–13](docs/plans/2026-08-19-product-data-model-ORCHESTRATION.md:35)  
 **Severity:** HIGH — **Confidence: High**
 
 Proofs expire in 30 minutes, but the plan mints one before commit, PR creation, Vercel, CodeRabbit, and the human gate.
@@ -161,7 +163,7 @@ Proofs expire in 30 minutes, but the plan mints one before commit, PR creation, 
 
 ### 12. WP-4’s acceptance mutates a real product and lacks a negative case
 
-**Location:** [BUILD PLAN WP-4 proof](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:312)  
+**Location:** [BUILD PLAN WP-4 proof](docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:312)  
 **Severity:** HIGH — **Confidence: High**
 
 The proof says to approve EPA data on a real product. It neither uses an `[E2E]` product nor requires a demonstrated revert. It proves only the happy path.
@@ -172,7 +174,7 @@ The proof says to approve EPA data on a real product. It neither uses an `[E2E]`
 
 ### 13. “Void and clean” does not prove receiving was reversed
 
-**Location:** [R-9](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:121), WP-3 proof  
+**Location:** [R-9](docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:121), WP-3 proof  
 **Severity:** HIGH — **Confidence: High**
 
 Voiding an E2E PO does not inherently reverse inventory movements created by `receive_po_items`.
@@ -227,7 +229,7 @@ Receiving Brand A does not establish that a later pooled-inventory delivery used
 
 ### 18. Copy-from-sibling has no safe eligibility or source-version rule
 
-**Location:** [BUILD PLAN WP-5](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:322)  
+**Location:** [BUILD PLAN WP-5](docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:322)  
 **Severity:** HIGH — **Confidence: Medium-high**
 
 The plan says to copy ingredients, density, and brands from a packaging sibling but does not prevent copying across formulation, safener, quality tier, or manufacturer differences. It also protects only the target conceptually, not a changing source snapshot.
@@ -238,7 +240,7 @@ The plan says to copy ingredients, density, and brands from a packaging sibling 
 
 ### 19. D-O is modeled at the wrong layer
 
-**Location:** [D-O](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:67), WP-3 `product_brands.sourcing_tier`  
+**Location:** [D-O](docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:67), WP-3 `product_brands.sourcing_tier`  
 **Severity:** HIGH — **Confidence: High**
 
 D-O describes genuinely different sellable product specifications: different inert ingredients, surfactant load, performance, and cost. WP-3 puts `sourcing_tier` on a brand record and adds no product-level built-in-adjuvant or formulation-quality field.
@@ -282,7 +284,7 @@ A partial unique index prevents two quoting defaults, but it permits zero. The p
 
 ### 23. The PRD contradicts the build about invoice behavior
 
-**Location:** [PRD §3 Non-goals](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/docs/plans/2026-08-18-product-data-model-PRD.md:66), BUILD PLAN Phase 2  
+**Location:** [PRD §3 Non-goals](docs/plans/2026-08-18-product-data-model-PRD.md:66), BUILD PLAN Phase 2  
 **Severity:** HIGH — **Confidence: High**
 
 The PRD says there is no change to how quotes, orders, invoices, or inventory calculate. Phase 2 explicitly rewires the rate source used by those consumers.
@@ -293,7 +295,7 @@ The PRD says there is no change to how quotes, orders, invoices, or inventory ca
 
 ### 24. The three rate write paths are both “settled” and still parked
 
-**Location:** [PRD 2.9a](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/docs/plans/2026-08-18-product-data-model-PRD.md:331), [ledger parked decisions](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/docs/loops/product-data-model-ledger.md:83)  
+**Location:** [PRD 2.9a](docs/plans/2026-08-18-product-data-model-PRD.md:331), [ledger parked decisions](docs/loops/product-data-model-ledger.md:83)  
 **Severity:** HIGH — **Confidence: High**
 
 The PRD says all three paths must use the RPC and calls it a technical choice. The ledger still lists their fate as an owner decision.
@@ -315,7 +317,7 @@ The plan says dry products use net weight but does not define the normalized val
 
 ### 26. “Cancelled means keep selling” is not a safe universal rule
 
-**Location:** [BUILD PLAN D-T](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:72)  
+**Location:** [BUILD PLAN D-T](docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:72)  
 **Severity:** HIGH — **Confidence: High**
 
 EPA existing-stock permissions depend on the specific cancellation order and may contain sale/distribution cutoffs or immediate prohibitions; cancellation status alone does not establish legal sell-through. [EPA’s cancellation guidance](https://www.epa.gov/pesticide-registration/voluntary-cancellation-pesticide-product-or-use) and individual [existing-stock orders](https://www.epa.gov/pesticides/epa-issues-final-cancellation-and-updates-existing-stocks-provisions-several) make that conditional.
@@ -337,7 +339,7 @@ The stated proof covers generic ingredient entry/search and one invalid basis. I
 
 ### 28. “Full schema surface enumerated” is false
 
-**Location:** [BUILD PLAN WP-3](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:251)  
+**Location:** [BUILD PLAN WP-3](docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:251)  
 **Severity:** HIGH — **Confidence: High**
 
 The list uses “application-record tables” instead of naming exact relations and omits the internal serialized receive function, offline replay, generated RPC types, and current receive call sites.
@@ -348,7 +350,7 @@ The list uses “application-record tables” instead of naming exact relations 
 
 ### 29. The canonical fraction field still has two names
 
-**Location:** D-A versus [PRD 1.1a/3.4](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/docs/plans/2026-08-18-product-data-model-PRD.md:252)  
+**Location:** D-A versus [PRD 1.1a/3.4](docs/plans/2026-08-18-product-data-model-PRD.md:252)  
 **Severity:** HIGH — **Confidence: High**
 
 The settled decision renames/generalizes `ae_fraction` to `canonical_fraction`, but the PRD and later acceptance requirements still instruct builders to use `ae_fraction`.
@@ -372,10 +374,10 @@ The read-only fleet check returned `PARKED STATE UNKNOWN`, including this worktr
 
 ### 31. The owner-admin permission claim is factually wrong for direct writes
 
-**Location:** [BUILD PLAN permission note](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:77)  
+**Location:** [BUILD PLAN permission note](docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md:77)  
 **Severity:** MEDIUM — **Confidence: High**
 
-The plan says an admin session cannot reveal a missing column grant. For direct product writes, both owner-admin and non-admin app users operate through the database `authenticated` role; the current product screen performs direct `.update()` in [ProductDetail](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/src/pages/ProductDetail.tsx:436). A missing grant therefore fails for the owner too.
+The plan says an admin session cannot reveal a missing column grant. For direct product writes, both owner-admin and non-admin app users operate through the database `authenticated` role; the current product screen performs direct `.update()` in [ProductDetail](src/pages/ProductDetail.tsx:436). A missing grant therefore fails for the owner too.
 
 This does not solve D-J testing: a profile admin can still mask application-level authorization mistakes in `SECURITY DEFINER` RPCs.
 
@@ -383,7 +385,7 @@ This does not solve D-J testing: a profile admin can still mask application-leve
 
 ### 32. The builder is not physically isolated from live systems
 
-**Location:** [ORCHESTRATION role topology](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/docs/plans/2026-08-19-product-data-model-ORCHESTRATION.md:40); [codex-build.mjs](/C:/CRX_Manager/.claude/worktrees/clever-burnell-04fdcd/scripts/codex-build.mjs:42)  
+**Location:** [ORCHESTRATION role topology](docs/plans/2026-08-19-product-data-model-ORCHESTRATION.md:40); [codex-build.mjs](scripts/codex-build.mjs:42)  
 **Severity:** MEDIUM — **Confidence: High**
 
 The launcher uses `danger-full-access`. Its own comments acknowledge that shell and built-in tools are not network-sandboxed. The separation is procedural, not physical.

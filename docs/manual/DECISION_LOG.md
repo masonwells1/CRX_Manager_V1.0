@@ -32,10 +32,17 @@ put it**: the tier is always shown, the tiers are never presented as interchange
 actives alone, and the adjuvant bias running against the premium product is stated on screen.
 A builder must not add `sourcing_tier` to `products` or build substitution rules.
 
-**Operative rule:** findings 19 and 26 are closed by owner decision, not by being fixed. The other
-32 findings remain open and the plan is still NOT SAFE AS WRITTEN until they are addressed —
-above all the WP-4 / D-A contradiction that would store salt-form concentrations on the canonical
-acid and silently overstate active per gallon by ~35%.
+**Operative rule:** findings 19 and 26 are closed by owner decision, not by being fixed.
+
+*This paragraph was written before revision 3 landed and originally said 32 findings remained
+open, naming the WP-4 / D-A contradiction as unresolved. That is now stale, and the stale version
+understated the progress rather than the risk. Corrected on 2026-08-20 (CodeRabbit, PR #435).*
+**Current disposition:** all 8 blockers and 14 of the 22 high findings were fixed in revision 3,
+including the WP-4 / D-A contradiction that would have stored salt-form concentrations on the
+canonical acid and silently overstated active per gallon by ~35%. **Still open:** findings 16,
+20, 21, 22 and 24 — all Phase 2/3 comparison and rate-source behavior, which must settle before
+Phase 2, not before WP-0 — plus 30 (parked-migration ownership, blocking WP-1's first migration)
+and the process-honesty items 32, 33, 34. The ledger's cycle log is the authoritative record.
 
 **Source:** `docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md` §0 (D-W, D-X);
 `docs/audits/2026-08-19-sol-adversarial-review-product-data-plan.md`.

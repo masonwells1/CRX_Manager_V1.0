@@ -274,6 +274,17 @@ through as "unusual — warn the user", which turns a 100-gallon load into a neg
 non-numeric scale weight. Hard validation runs first; the plausibility warning only applies to
 values that already passed it.
 
+**NULL is not an impossible value — it is a designed one.** *(Caught by CodeRabbit on PR #435;
+this correction supersedes any stricter reading above.)* "Finite and strictly positive" governs
+the value **when a value is present**. `canonical_fraction` is deliberately nullable per D-A rule
+3, where NULL carries meaning: *search-merge only, refuse the calculation* — the racemic
+vs S-metolachlor case has no valid fraction and must still be storable. A CHECK written as
+`canonical_fraction > 0` rejects exactly the rows the design requires; it must be
+`canonical_fraction IS NULL OR (canonical_fraction > 0 AND ...)`. The refusal that protects the
+math lives in R-4a's conversion function, **not** in a NOT NULL constraint. Any column whose
+NULL state is load-bearing gets the same treatment, and the WP-1 proof stores a NULL-fraction
+isomer row successfully and then shows the conversion function refusing it.
+
 **Each field's hard domain ships in the migration that CREATES that field, not here.** Stating
 the rule in WP-2 while WP-1 creates, seeds, edits and does arithmetic with `concentration_value`
 and `canonical_fraction` leaves a live window in which impossible values can be written — and a
