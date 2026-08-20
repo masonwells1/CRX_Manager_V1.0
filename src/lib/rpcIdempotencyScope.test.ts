@@ -451,7 +451,7 @@ function latestDiskDefinitions(): Map<string, DiskFnDef> {
 function operationLiterals(body: string): string[] {
   const out: string[] = [];
   const patterns = [
-    /check_idempotency\s*\(\s*[^,)]+,\s*'([^']+)'/gi,
+    /check_idempotency(?:_intent)?\s*\(\s*[^,)]+,\s*'([^']+)'/gi,
     /save_idempotency\s*\(\s*[^,)]+,\s*'([^']+)'/gi,
     /VALUES\s*\(\s*p_idempotency_key\s*,\s*'([^']+)'/gi,
   ];
@@ -471,6 +471,13 @@ function operationLiterals(body: string): string[] {
 
 describe('Idempotency operation literals in latest disk migrations', () => {
   const defs = latestDiskDefinitions();
+
+  it('reads operation literals from both canonical check helpers', () => {
+    expect(operationLiterals("PERFORM check_idempotency(p_key, 'save_quote')"))
+      .toContain('save_quote');
+    expect(operationLiterals("PERFORM check_idempotency_intent(p_key, 'draw_down_quote', p_actor, p_fingerprint)"))
+      .toContain('draw_down_quote');
+  });
 
   it('every operation literal equals the defining function name (or documented alias)', () => {
     const offenders: string[] = [];
