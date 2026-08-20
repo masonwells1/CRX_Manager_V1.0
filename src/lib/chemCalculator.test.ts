@@ -8,6 +8,7 @@ import {
   fieldAppPricedQuantity,
   baseUnitOfRate,
   reconcileChemAutofillUnits,
+  chemLineBillingHazard,
   type ChemCalcRow,
 } from './chemCalculator';
 
@@ -363,5 +364,99 @@ describe('chemCalculator — fieldAppPricedQuantity (PARKED-010 field-app billin
     expect(pricedQty).toBe(12.5);               // 1,600 oz = 12.5 gal
     const extendedCents = Math.round((pricedQty as number) * pricePerGalCents);
     expect(extendedCents).toBe(40125);          // $401.25 (was 1600 × 3210 = $51,360)
+  });
+});
+
+describe('chemCalculator — chemLineBillingHazard (production fail-closed guard)', () => {
+  // The live defect: 'Dry oz' is absent from DRY_TO_POUNDS, so reconcile bails to its
+  // safe fallback and leaves the price per POUND while the quantity counts OUNCES.
+  it('catches the live Dry oz/Lb 16x over-bill and reports the exact ratio', () => {
+    const h = chemLineBillingHazard(
+      { quantity: '3200', rate_per_acre: '32', rate_unit: 'Dry oz/ac', unit: 'Lb' },
+      100,
+      'dry',
+    );
+    expect(h.hazard).toBe(true);
+    expect(h.quantityUnit).toBe('dry oz');
+    expect(h.priceUnit).toBe('lb');
+    expect(h.billedRatio).toBe(16);
+    // Proves the money: 3,200 x $1.50 = $4,800 against a true 200 lb x $1.50 = $300.
+    expect(Math.round(3200 * 150)).toBe(480000);
+    expect(Math.round((3200 / (h.billedRatio as number)) * 150)).toBe(30000);
+  });
+
+  it('catches the liquid pt/Gal 8x case too', () => {
+    const h = chemLineBillingHazard(
+      { quantity: '240', rate_per_acre: '1.5', rate_unit: 'pt/ac', unit: 'GAL' },
+      160,
+      'liquid',
+    );
+    expect(h.hazard).toBe(true);
+    expect(h.billedRatio).toBe(8);
+  });
+
+  it('does NOT flag an aligned row (the common, correct case)', () => {
+    expect(chemLineBillingHazard(
+      { quantity: '240', rate_per_acre: '1.5', rate_unit: 'pt/ac', unit: 'pt' }, 160, 'liquid',
+    ).hazard).toBe(false);
+  });
+
+  it('does NOT flag a quantity already carried into the price unit', () => {
+    // 1.5 pt/ac x 100 ac = 150 pt = 18.75 gal — hand-converted correctly.
+    expect(chemLineBillingHazard(
+      { quantity: '18.75', rate_per_acre: '1.5', rate_unit: 'pt/ac', unit: 'Gal' }, 100, 'liquid',
+    ).hazard).toBe(false);
+  });
+
+  it('does NOT flag a blank unit (a separate, pre-existing condition)', () => {
+    expect(chemLineBillingHazard(
+      { quantity: '240', rate_per_acre: '1.5', rate_unit: 'pt/ac', unit: '' }, 160, 'liquid',
+    ).hazard).toBe(false);
+  });
+
+  it('does NOT flag a quantity matching neither reading (stale or hand-entered)', () => {
+    expect(chemLineBillingHazard(
+      { quantity: '77', rate_per_acre: '1.5', rate_unit: 'pt/ac', unit: 'Gal' }, 160, 'liquid',
+    ).hazard).toBe(false);
+  });
+
+  it('tolerates the 4-dp rounding fmt4 applies to a stored quantity', () => {
+    // 1.7 oz/ac x 137 ac = 232.9 exactly; fmt4 can store 232.9001 without hiding the hazard.
+    expect(chemLineBillingHazard(
+      { quantity: '232.9001', rate_per_acre: '1.7', rate_unit: 'oz/ac', unit: 'Gal' }, 137, 'liquid',
+    ).hazard).toBe(true);
+  });
+
+  it('is driver-independent — a reloaded row carries no driver and must still be caught', () => {
+    // Every row loaded from the database has driver === undefined; a driver-gated
+    // check would miss all of them. This row simply has no driver field at all.
+    expect(chemLineBillingHazard(
+      { quantity: '3200', rate_per_acre: '32', rate_unit: 'Dry oz/ac', unit: 'Lb' }, 100, 'dry',
+    ).hazard).toBe(true);
+  });
+
+  it('never throws on an inherited-property rate unit (CSV import writes rate_unit unvalidated)', () => {
+    for (const evil of ['constructor', '__proto__', 'toString', 'valueOf', 'hasOwnProperty']) {
+      expect(() => chemLineBillingHazard(
+        { quantity: '10', rate_per_acre: '1', rate_unit: evil, unit: 'Gal' }, 10, 'liquid',
+      )).not.toThrow();
+    }
+  });
+
+  it('does not flag when acres are unknown or the rate is absent', () => {
+    expect(chemLineBillingHazard(
+      { quantity: '3200', rate_per_acre: '32', rate_unit: 'Dry oz/ac', unit: 'Lb' }, 0, 'dry',
+    ).hazard).toBe(false);
+    expect(chemLineBillingHazard(
+      { quantity: '3200', rate_per_acre: '', rate_unit: 'Dry oz/ac', unit: 'Lb' }, 100, 'dry',
+    ).hazard).toBe(false);
+  });
+
+  it('still flags when the form is unknown and no ratio can be computed', () => {
+    const h = chemLineBillingHazard(
+      { quantity: '3200', rate_per_acre: '32', rate_unit: 'Dry oz/ac', unit: 'Lb' }, 100, null,
+    );
+    expect(h.hazard).toBe(true);      // fail closed
+    expect(h.billedRatio).toBeNull(); // 'dry oz' is not a liquid unit — ratio unknowable
   });
 });

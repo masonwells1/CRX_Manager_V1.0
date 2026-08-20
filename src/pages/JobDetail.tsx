@@ -43,7 +43,7 @@ import { overrideSaveApplicatorId, shouldReassignApplicatorAfterSave, canGenerat
 import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
-import { applyChemEdit, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent } from '../lib/chemCalculator';
+import { applyChemEdit, chemLineBillingHazard, fmt4, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent, type ChemBillingHazard } from '../lib/chemCalculator';
 import { compareToMaxRate, phiHarvestWarning } from '../lib/labelGuardrails';
 import { unitOptionsForForm, isKnownUnit } from '../lib/units';
 import {
@@ -1394,6 +1394,24 @@ export default function JobDetail() {
     return { overRateCount: overRateProducts.length, overRateProducts, phiHarvestWarnCount };
   }, [chemRows, allProducts, labelMaxFor, jobEarliestHarvestDate, jobDate]);
 
+  // BILLING-HAZARD GUARD. A row whose quantity is counted in the RATE's unit but priced per a
+  // DIFFERENT `unit` invoices wrong by exactly their ratio, because transfer_job_to_invoice
+  // multiplies quantity × price_per_unit_cents with NO conversion. The live trigger is a
+  // 'Dry oz' rate on pound stock (75 live products): reconcileChemAutofillUnits cannot size
+  // 'dry oz' in DRY_TO_POUNDS, falls back to keeping the pound price, and the line bills 16×.
+  // Keyed by row index so the grid can mark the exact offending line.
+  const chemBillingHazards = useMemo(() => {
+    const byIndex = new Map<number, ChemBillingHazard>();
+    const acres = sumAcres(fieldRows);
+    chemRows.forEach((c, i) => {
+      if (!c.product_id) return;
+      const form = allProducts.find((p) => p.id === c.product_id)?.product_form ?? null;
+      const h = chemLineBillingHazard(c, acres, form === 'liquid' || form === 'dry' ? form : null);
+      if (h.hazard) byIndex.set(i, h);
+    });
+    return byIndex;
+  }, [chemRows, fieldRows, allProducts]);
+
   // SAFE-SCOPE U7: a job is "multi-owner" when its fields' billed shares span more
   // than one distinct customer — the same customer set transfer_job_to_invoice
   // bills from (job_fields <-> field_billing_defaults GROUP BY customer_id). On a
@@ -1903,6 +1921,28 @@ export default function JobDetail() {
       toast('error', 'Checking the label-rate policy — try Save again in a moment.');
       return;
     }
+    // FAIL CLOSED on a proven unit mismatch. There is NO admin override here: unlike an
+    // over-label rate (a judgement call an admin may own), this line is arithmetically
+    // wrong — its quantity is counted in one unit and priced per another, so saving it
+    // can only produce a wrong invoice and a wrong applied amount. Blocked for customer-
+    // supplied lines too: they bill nothing, but the dose still reaches the applicator's
+    // field sheet, and a 16x dose is an over-application hazard in its own right.
+    if (chemBillingHazards.size > 0) {
+      const [firstIndex, first] = [...chemBillingHazards.entries()][0];
+      const name = chemRows[firstIndex]?.product_name
+        || allProducts.find((p) => p.id === chemRows[firstIndex]?.product_id)?.product_name
+        || 'A chemical line';
+      const overBy = first.billedRatio && first.billedRatio > 1
+        ? ` — it would bill about ${fmt4(first.billedRatio)}x too much`
+        : '';
+      toast('error',
+        `${chemBillingHazards.size} chemical line(s) cannot be saved. On the Chemicals tab, "${name}" ` +
+        `has a quantity counted in ${first.quantityUnit} but a price quoted per ${first.priceUnit}${overBy}. ` +
+        `Set the line's Unit to ${first.quantityUnit} (and its cost/price per ${first.quantityUnit}), ` +
+        `or change the rate unit to ${first.priceUnit}/ac.`,
+      );
+      return;
+    }
     if (guardrailMode === 'block' && guardrailState.overRateCount > 0) {
       if (role !== 'admin') {
         toast('error',
@@ -1961,6 +2001,14 @@ export default function JobDetail() {
 
   const runJobSave = async (overrideReasonForAudit?: string) => {
     saveJobIdem.resetKey();
+    // Second layer of the billing-hazard guard. handleSave already blocks this and is the
+    // only path a user can reach today, but runJobSave is the chokepoint EVERY save funnels
+    // through (including the admin over-label-rate override), so the arithmetic guarantee
+    // lives here too: no future caller can route around it.
+    if (chemBillingHazards.size > 0) {
+      toast('error', 'A chemical line is counted in one unit but priced per another — fix the highlighted line before saving.');
+      return;
+    }
     if (!customerId) { toast('error', 'Customer is required'); return; }
     if (!jobDate) { toast('error', 'Job date is required'); return; }
     if (selectedFieldSharesLoading) {
@@ -3562,8 +3610,24 @@ export default function JobDetail() {
                 // disagrees with the saved/invoiced value.
                 const previewForm = allProducts.find((p) => p.id === c.product_id)?.product_form ?? null;
                 const conv = toGallonOrLbEquivalent(totalApplied, c.unit, previewForm === 'liquid' || previewForm === 'dry' ? previewForm : null);
+                const hazard = chemBillingHazards.get(i);
                 return (
-                  <div key={i} className="border border-gray-200 rounded-lg p-3 space-y-2">
+                  <div key={i} className={`border rounded-lg p-3 space-y-2 ${hazard ? 'border-red-400 bg-red-50' : 'border-gray-200'}`}>
+                    {hazard && (
+                      <div className="flex items-start gap-2 text-sm text-red-800 bg-red-100 border border-red-300 rounded-lg px-3 py-2">
+                        <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                        <span>
+                          <strong>This line cannot be saved.</strong> Its quantity ({totalApplied}) is counted in{' '}
+                          <strong>{hazard.quantityUnit}</strong>, but its cost and price are quoted per{' '}
+                          <strong>{hazard.priceUnit}</strong>
+                          {hazard.billedRatio && hazard.billedRatio > 1
+                            ? <> — invoicing it would charge about <strong>{fmt4(hazard.billedRatio)}×</strong> too much</>
+                            : null}
+                          . Set <strong>Unit</strong> to {hazard.quantityUnit} (with cost/price per {hazard.quantityUnit}),
+                          or change the rate unit to {hazard.priceUnit}/ac.
+                        </span>
+                      </div>
+                    )}
                     <div className="grid grid-cols-12 gap-2 items-end">
                       <div className="col-span-12 md:col-span-3">
                         <label className="block text-xs font-medium text-secondary mb-1">Chemical</label>

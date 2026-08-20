@@ -9,6 +9,8 @@
  *  • change the ACRES         → the row's DRIVER side is held and the other re-derived
  */
 
+import { normalizeRateUnit } from './labelGuardrails';
+
 export type ChemDriver = 'rate' | 'qty';
 
 /** The minimal row shape the calculator reads/writes. JobDetail's ChemRow is a superset. */
@@ -349,5 +351,87 @@ export function reconcileChemAutofillUnits(
     unit: baseKey,
     costPerUnitCents: Math.round(costPerStockCents * perBaseFactor),
     pricePerUnitCents: Math.round(pricePerStockCents * perBaseFactor),
+  };
+}
+
+// ── Billing-hazard guard (production fail-closed) ─────────────────────────────
+//
+// THE LIVE DEFECT this closes. A job chem row carries TWO units:
+//   • rate_unit ('Dry oz/ac') — quantity is filled as rate × acres, so the NUMBER is
+//     expressed in the RATE's base unit ('dry oz').
+//   • unit      ('Lb')        — the unit the row's per-unit cost/price is quoted in.
+// transfer_job_to_invoice bills safe_cents_qty(price_per_unit_cents, quantity) with NO unit
+// conversion, so those two units MUST describe the same measure or the invoice is wrong by
+// exactly their ratio.
+//
+// reconcileChemAutofillUnits normally keeps them aligned, but it sizes units off
+// DRY_TO_POUNDS / LIQUID_TO_GALLONS, which mirror the DISPLAY function convert_to_gl_lb.
+// That dry table has no 'dry oz' entry, so a 'Dry oz' rate against pound stock cannot be
+// reconciled and takes the SAFE-FALLBACK branch: `unit` stays 'Lb' and the price stays per
+// pound while the quantity is counted in ounces. 32 Dry oz/ac × 100 ac then bills
+// 3,200 × $1.50 = $4,800 against a true $300 — 16× — and nothing on screen says so.
+// 75 live products carry a 'Dry oz' rate (61 of them against pound stock).
+//
+// This guard deliberately changes NO money math — carrying the quantity into the selling
+// unit is the separate, parked redesign. It only detects a row we can PROVE is mislabelled,
+// so the save can be refused and a wrong invoice never created.
+
+export interface ChemBillingHazard {
+  /** true only when the mislabelling is PROVEN (see below), never on suspicion. */
+  hazard: boolean;
+  /** The unit the quantity is actually counted in (the rate's base unit). */
+  quantityUnit: string;
+  /** The unit the per-unit cost/price is quoted in (the row's `unit`). */
+  priceUnit: string;
+  /** How many times too high the bill would be, when both units size in a known form. */
+  billedRatio: number | null;
+}
+
+const NO_HAZARD: ChemBillingHazard = { hazard: false, quantityUnit: '', priceUnit: '', billedRatio: null };
+
+/**
+ * Detect a row whose quantity is measured in one unit but priced per another.
+ *
+ * PROOF STANDARD — we flag only when the quantity is demonstrably the raw rate × acres
+ * product while the row is priced per a DIFFERENT unit. That is the machine-generated
+ * mislabelling. We deliberately do NOT flag:
+ *  • a blank unit (a separate, pre-existing condition),
+ *  • a quantity already carried correctly into the price's unit (the fix working),
+ *  • a quantity matching neither (stale after an acreage change, or hand-entered) —
+ *    unprovable here, and blocking it would reject a legitimate manual conversion.
+ *
+ * Driver-independent on purpose: `driver` is UI-only and is NOT persisted, so every
+ * reloaded row has driver === undefined and a driver-gated check would miss them all.
+ */
+export function chemLineBillingHazard(
+  row: { quantity: string; rate_per_acre: string; rate_unit?: string | null; unit?: string | null },
+  acres: number,
+  productForm?: 'liquid' | 'dry' | null,
+): ChemBillingHazard {
+  const quantityUnit = normalizeRateUnit(baseUnitOfRate(row.rate_unit));
+  const priceUnit = normalizeRateUnit(row.unit);
+  if (quantityUnit == null || priceUnit == null) return NO_HAZARD;
+  if (quantityUnit === priceUnit) return NO_HAZARD;
+
+  const rate = parseFloat(row.rate_per_acre);
+  const qty = parseFloat(row.quantity);
+  if (!Number.isFinite(rate) || !Number.isFinite(qty) || rate <= 0 || qty <= 0 || !(acres > 0)) {
+    return NO_HAZARD;
+  }
+
+  const derivedInRateUnit = rate * acres;
+  // What the quantity would read had it been carried into the unit the price is quoted in.
+  const carried = fieldAppPricedQuantity(derivedInRateUnit, quantityUnit, priceUnit, productForm ?? null);
+  // `quantity` is stored through fmt4, so allow 4-dp slack plus a relative epsilon.
+  const near = (a: number, b: number): boolean => Math.abs(a - b) <= Math.max(1e-4, Math.abs(b) * 1e-6);
+
+  if (carried != null && near(qty, carried)) return NO_HAZARD;   // already aligned
+  if (!near(qty, derivedInRateUnit)) return NO_HAZARD;           // unprovable — do not block
+
+  return {
+    hazard: true,
+    quantityUnit,
+    priceUnit,
+    billedRatio: carried != null && carried !== 0 ? derivedInRateUnit / carried : null,
   };
 }

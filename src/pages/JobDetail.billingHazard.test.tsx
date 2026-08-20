@@ -1,0 +1,191 @@
+/**
+ * JobDetail.billingHazard.test.tsx — the FIRST test that mounts JobDetail.
+ *
+ * Why this file exists. Every defect in the chem grid found so far has been emergent from
+ * COMPOSITION, not from a wrong pure function: the calculator helpers are individually
+ * correct and individually tested, while the page that wires them together had no test at
+ * all. chemCalculator.test.ts proves chemLineBillingHazard's arithmetic; only mounting the
+ * real page proves the guard is actually WIRED — that the warning renders and that Save is
+ * genuinely refused.
+ *
+ * The scenario is the live one: a product carrying a 'Dry oz' rate against pound stock.
+ * reconcileChemAutofillUnits cannot size 'dry oz' in DRY_TO_POUNDS, so it keeps the per-POUND
+ * price while quantity counts OUNCES, and transfer_job_to_invoice bills quantity × price with
+ * no conversion — 16× too much, silently. 75 live products carry a 'Dry oz' rate.
+ */
+
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
+
+const { mockFrom, mockRpc, mockToast, mockNavigate } = vi.hoisted(() => ({
+  mockFrom: vi.fn(),
+  mockRpc: vi.fn().mockResolvedValue({ data: null, error: null }),
+  mockToast: vi.fn(),
+  mockNavigate: vi.fn(),
+}));
+
+function buildChain(result: { data: unknown; error: unknown }): Record<string, unknown> {
+  const self: Record<string, unknown> = {};
+  const method = (..._args: unknown[]) => self;
+  const methods = ['select', 'insert', 'update', 'upsert', 'delete', 'eq', 'neq',
+    'gt', 'gte', 'lt', 'lte', 'like', 'ilike', 'is', 'in', 'contains',
+    'containedBy', 'range', 'filter', 'not', 'or', 'and', 'match',
+    'order', 'limit', 'offset', 'single', 'maybeSingle', 'csv',
+    'rollback', 'returns', 'textSearch', 'overlaps', 'abortSignal'];
+  for (const m of methods) self[m] = method;
+  const promise = Promise.resolve(result);
+  self.then = promise.then.bind(promise);
+  self.catch = promise.catch.bind(promise);
+  self.finally = promise.finally.bind(promise);
+  return self;
+}
+
+vi.mock('../lib/db', () => ({
+  supabase: { from: mockFrom, rpc: mockRpc, storage: { from: vi.fn() } },
+  checkMutationResult: vi.fn(),
+  assertRpcResult: vi.fn((d) => d),
+  sanitizeError: vi.fn((e: unknown) => (e as Error)?.message || 'Error'),
+}));
+vi.mock('../contexts/AuthContext', () => ({
+  useAuth: () => ({ profile: { id: 'user-1', role: 'admin', full_name: 'Test Admin' }, role: 'admin' }),
+}));
+vi.mock('../components/ui/Toast', () => ({ useToast: () => ({ toast: mockToast }) }));
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual('react-router-dom');
+  return { ...actual, useNavigate: () => mockNavigate };
+});
+vi.mock('../hooks/useIdempotencyKey', () => ({
+  useIdempotencyKey: () => ({ getKey: () => 'test-idem-key', resetKey: vi.fn() }),
+}));
+vi.mock('../hooks/usePageMeta', () => ({ usePageMeta: () => {} }));
+vi.mock('../hooks/useUnsavedChanges', () => ({
+  useUnsavedChanges: () => ({ state: 'unblocked', reset: vi.fn(), proceed: vi.fn() }),
+}));
+vi.mock('../lib/sentry', () => ({ Sentry: { captureException: vi.fn() } }));
+vi.mock('../lib/activityLogger', () => ({ logActivity: vi.fn() }));
+vi.mock('../lib/criticalAction', () => ({
+  runCriticalAction: async ({ action, setLoading }: {
+    action: () => Promise<void>; setLoading?: (v: boolean) => void;
+  }) => { setLoading?.(true); try { await action(); } finally { setLoading?.(false); } },
+}));
+vi.mock('../lib/dateUtils', async (orig) => {
+  const actual = await (orig() as Promise<Record<string, unknown>>);
+  return { ...actual, localToday: () => '2026-08-19' };
+});
+
+import JobDetail from './JobDetail';
+
+const DRY_PRODUCT = {
+  id: 'prod-dry-1',
+  product_name: 'Dry Ounce Herbicide',
+  product_form: 'dry',
+  unit_size: 'Lb',
+  inventory_unit: 'Lb',
+  rate_unit: 'Dry oz/ac',
+  // $1.50 / lb — the exact live shape that bills 16× when the quantity counts ounces.
+  cost_cents: 150,
+  tier1_price_cents: 150,
+  is_active: true,
+  max_label_rate: null,
+  max_label_rate_unit: null,
+  rei_hours: null,
+  phi_days: null,
+  epa_registration: null,
+  product_family: null,
+};
+
+/** 32 Dry oz/ac × 100 ac = 3,200 (ounces) labelled 'Lb' and priced $1.50/lb → $4,800 vs $300. */
+const HAZARD_CHEM = {
+  id: 'jc-1',
+  product_id: DRY_PRODUCT.id,
+  product: { product_name: DRY_PRODUCT.product_name },
+  quantity: 3200,
+  unit: 'Lb',
+  rate_per_acre: 32,
+  rate_unit: 'Dry oz/ac',
+  cost_per_unit_cents: 150,
+  price_per_unit_cents: 150,
+  diluent_rate: null,
+  rei_hours: null,
+  phi_days: null,
+  warehouse: null,
+  vendor: null,
+  customer_supplied: false,
+  sort_order: 0,
+};
+
+function makeJob(chem: Record<string, unknown>) {
+  return {
+    id: 'job-1',
+    job_number: 'J-1001',
+    job_date: '2026-08-19',
+    customer_id: 'cust-1',
+    status: 'scheduled',
+    customer: { farm_name: 'Farm Alpha' },
+    vehicle: null,
+    quote: null,
+    quote_section: null,
+    job_fields: [{ id: 'jf-1', acres_to_treat: 100, field: { field_name: 'North 100' } }],
+    job_chemicals: [chem],
+    job_field_shares: [],
+    applied_info: null,
+  };
+}
+
+function mountWith(chem: Record<string, unknown>) {
+  mockFrom.mockImplementation((table: string) => {
+    if (table === 'jobs') return buildChain({ data: makeJob(chem), error: null });
+    if (table === 'products') return buildChain({ data: [DRY_PRODUCT], error: null });
+    return buildChain({ data: [], error: null });
+  });
+  return render(
+    <MemoryRouter initialEntries={['/jobs/job-1?tab=chemicals']}>
+      <Routes><Route path="/jobs/:id" element={<JobDetail />} /></Routes>
+    </MemoryRouter>,
+  );
+}
+
+describe('JobDetail — billing-hazard guard is wired, not just implemented', () => {
+  beforeEach(() => {
+    mockToast.mockClear();
+    mockRpc.mockClear();
+    mockRpc.mockResolvedValue({ data: null, error: null });
+  });
+
+  it('shows the on-screen warning for the live Dry oz / Lb row', async () => {
+    mountWith(HAZARD_CHEM);
+    expect(await screen.findByText(/This line cannot be saved/i, {}, { timeout: 15000 })).toBeTruthy();
+    // The message must name BOTH units and the actual over-bill factor, or it is not actionable.
+    const banner = screen.getByText(/This line cannot be saved/i).closest('div') as HTMLElement;
+    expect(banner.textContent).toContain('dry oz');
+    expect(banner.textContent).toContain('lb');
+    expect(banner.textContent).toContain('16');
+  });
+
+  it('REFUSES the save — no job RPC is called', async () => {
+    mountWith(HAZARD_CHEM);
+    await screen.findByText(/This line cannot be saved/i, {}, { timeout: 15000 });
+
+    const saveButtons = await screen.findAllByRole('button', { name: /save/i });
+    const save = saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement;
+    fireEvent.click(save);
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalled());
+    const errors = mockToast.mock.calls.filter((c) => c[0] === 'error').map((c) => String(c[1]));
+    expect(errors.some((m) => /counted in dry oz|cannot be saved/i.test(m))).toBe(true);
+    // The real proof: save_job never ran, so no wrong row could reach job_chemicals.
+    // (The page calls unrelated read RPCs such as get_notes_for_entity on mount.)
+    expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
+  });
+
+  it('does NOT warn or block an aligned row (no false positive on ordinary work)', async () => {
+    // Same product, correctly expressed: 2 Lb/ac × 100 ac = 200 lb priced per lb.
+    mountWith({
+      ...HAZARD_CHEM,
+      quantity: 200, unit: 'Lb', rate_per_acre: 2, rate_unit: 'Lb/ac',
+    });
+    await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
+    expect(screen.queryByText(/This line cannot be saved/i)).toBeNull();
+  });
+});
