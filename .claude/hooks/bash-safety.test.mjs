@@ -389,6 +389,13 @@ const indirectRunnerGuardCases = [
   `${sourceCommand} ./setup.sh`,
   `${evalCommand} '${awkCommand} -f payload.awk'`,
 ];
+const nestedCompletePolicyGuardCases = [
+  `pwsh -NoProfile -Command "Start-Process env -ArgumentList 'NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs' -Wait"`,
+  `${evalCommand} "wsl watch '${awkCommand} -f payload.awk'"`,
+  `cmd /d /c "watch -n 1 ${awkCommand} -f payload.awk"`,
+  `bash -c "watch -n 1 ${awkCommand} -f payload.awk"`,
+  `pwsh -Command "${parallelCommand} -- '${awkCommand} -f payload.awk' ::: x"`,
+];
 const dynamicNodeOptionsGuardCases = [
   "env $(printf NODE_OPTIONS=--require=./preload.cjs) npm --version",
   'N=NODE; env "${N}_OPTIONS=--require=./preload.cjs" npm --version',
@@ -418,6 +425,7 @@ for (const command of dynamicNodeOptionsGuardCases) ok(checkDangerousCommand(com
 for (const command of nestedParserGuardCases) ok(checkDangerousCommand(command), `nested or POSIX-escaped parser route is denied: ${command}`);
 for (const command of nestedParserGuardCases.slice(0, 2)) ok(maintenanceProducerCommandMentioned(command), `nested AWK launcher enters the producer gate: ${command}`);
 for (const command of indirectRunnerGuardCases) ok(checkDangerousCommand(command), `indirect or dynamic command runner fails closed: ${command}`);
+for (const command of nestedCompletePolicyGuardCases) ok(checkDangerousCommand(command), `nested command body receives the complete runner policy: ${command}`);
 ok(!checkDangerousCommand(`${parallelCommand} -- 'echo safe' ::: x`), "a quoted benign Parallel command body stays allowed");
 ok(!checkDangerousCommand("env $(printf SAFE=1) echo ok"), "dynamic env construction without a Node-backed executable stays allowed");
 ok(!checkDangerousCommand("rg -n 'env $(printf NODE_OPTIONS=x) npm' docs"), "dynamic NODE_OPTIONS spelling used as quoted search data stays allowed");
@@ -677,6 +685,12 @@ for (const command of indirectRunnerGuardCases) {
   r = runHook({ tool_name: "Bash", tool_input: { command } });
   eq(r.status, 0, `bash-safety.mjs exits 0 after denying an indirect runner: ${command}`);
   ok(r.stdout.includes('"permissionDecision":"deny"'), `bash-safety.mjs denies an indirect runner: ${command}`);
+}
+
+for (const command of nestedCompletePolicyGuardCases) {
+  r = runHook({ tool_name: "Bash", tool_input: { command } });
+  eq(r.status, 0, `bash-safety.mjs exits 0 after denying a nested complete-policy route: ${command}`);
+  ok(r.stdout.includes('"permissionDecision":"deny"'), `bash-safety.mjs denies a nested complete-policy route: ${command}`);
 }
 
 r = runHook({ tool_name: "PowerShell", tool_input: { command: deepPowerShellBoundaryCommand } });

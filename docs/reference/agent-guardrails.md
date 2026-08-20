@@ -127,6 +127,9 @@ Together they prevent adversarial wrapper chains from exhausting the hook's
 five-second execution window; real-hook Bash and MCP timing regressions include
 a hostile at-limit repeated-runner payload and require completion in under 1.5
 seconds.
+Nested `eval`, `cmd /c`, PowerShell command-mode, and POSIX shell bodies re-enter
+the complete runner policy, including PowerShell process launchers, `watch`, and
+GNU Parallel, instead of receiving a reduced recursive subset.
 
 Codex's hook adapter resolves and launches the requested hook under
 `.claude/hooks/`, through which Codex uses the shared classifier. Codex also has

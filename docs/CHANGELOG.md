@@ -89,6 +89,9 @@ All significant development milestones, in reverse chronological order.
   definitions and unknown commands targeting the provider fail closed for the
   same stateful boundary. Standalone
   CMD `set` and delayed-expansion mutations are denied as well.
+  Nested `eval`, `cmd /c`, PowerShell command-mode, and POSIX shell bodies now
+  re-enter the complete runner policy, closing nested process-launcher, `watch`,
+  and GNU Parallel compositions.
   The parser also covers .NET
   `SetEnvironmentVariable` calls before `node` or a Node-backed package runner. Shell
   parameter expansion in an `env` assignment name fails closed as well, so a

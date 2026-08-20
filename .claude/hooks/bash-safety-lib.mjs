@@ -449,7 +449,10 @@ export function maintenanceProducerCommandMentioned(command, depth = 0) {
     const maxNestedShellDepth = 4;
     function analyzeText(text, depth) {
       if (depth > maxNestedShellDepth) return true;
-      return analyzeTokens(tokenize(text), depth);
+      // Re-enter the complete policy for nested command bodies. Calling only
+      // analyzeTokens here omits top-level runner checks such as PowerShell
+      // process launchers, watch, and GNU Parallel.
+      return maintenanceProducerCommandMentioned(text, depth);
     }
     function analyzeTokens(candidateTokens, depth) {
       if (dynamicSyntax && candidateTokens.some(nodeExecutable)) return true;
