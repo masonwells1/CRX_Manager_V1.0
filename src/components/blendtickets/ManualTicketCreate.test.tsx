@@ -473,7 +473,7 @@ describe('ManualTicketCreate retry-safe atomic creation', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /create ticket/i }));
     expect(await screen.findByText(
-      'Units could not be loaded, so a unit is still blank. Refresh and retry before saving this ticket.',
+      'Units could not be loaded, so a unit is still blank. Refresh and retry before saving.',
     )).toBeInTheDocument();
     expect(mocks.rpc).not.toHaveBeenCalled();
     expect(defaultProps.onComplete).not.toHaveBeenCalled();

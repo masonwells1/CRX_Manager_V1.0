@@ -17,6 +17,15 @@ guards are mutation-tested — reverting either turns its regression test red. T
 harnesses returned `[]` for `unit_conversions`, which read as a failed fetch to the new guard;
 they now return the fixture, matching live, where the table is never empty.
 
+Review round 3 (CodeRabbit Minor, also confirmed): that first guard read an empty array as the
+failure signal, but an empty array means three different things — the request is still in
+flight, it failed, or the table really is empty — and only one of them is "refresh the page". A
+fast operator could be told to refresh for a request that was about to succeed. Both screens now
+carry an explicit `pending | loaded | failed` state and route it through one shared
+`blockedUnitSaveMessage()` in `src/lib/units.ts`, so the message names the state that is actually
+true. Verified by calling the shipped function in a real browser through Vite, not only under
+vitest.
+
 - **Commits this session** (git log origin/main..HEAD):
   - `5beda01a feat(blend): pick units from a list instead of typing them`
   - `fix(blend): surface a failed unit load and block the blank-unit save it causes`

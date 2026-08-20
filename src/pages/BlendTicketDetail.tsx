@@ -4,6 +4,7 @@ import { Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle, Link2, U
 import { supabase, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
+import { blockedUnitSaveMessage, type UnitLoadState } from '../lib/units';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { useAuth } from '../contexts/AuthContext';
@@ -51,6 +52,7 @@ export function BlendTicketDetail() {
   const [products, setProducts] = useState<BlendTicketProduct[]>([]);
   const [allProducts, setAllProducts] = useState<PickerProduct[]>([]);
   const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
+  const [unitLoad, setUnitLoad] = useState<UnitLoadState>('pending');
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -425,10 +427,12 @@ export function BlendTicketDetail() {
         // The unit fields are pickers, not free text, so an empty list leaves the
         // operator no way to enter a unit at all. Say so instead of failing quietly.
         Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_unit_conversions' } });
+        setUnitLoad('failed');
         toast('error', 'The Unit list could not be loaded. Refresh before changing any unit on this ticket.');
         return;
       }
       setUnitConversions((data || []) as UnitConversion[]);
+      setUnitLoad('loaded');
     });
   }, [toast]);
 
@@ -500,8 +504,13 @@ export function BlendTicketDetail() {
     // Only block when the missing list is actually costing the ticket a unit. A
     // blank rate unit bills off the product's own rate_unit, but it should be a
     // choice the operator made, not one a failed fetch made for them.
-    if (unitConversions.length === 0 && products.some((p) => !p.unit || !p.rate_per_acre_unit)) {
-      toast('error', 'Units could not be loaded, so a unit is still blank. Refresh this page before saving.');
+    const unitBlock = blockedUnitSaveMessage(
+      unitLoad,
+      unitConversions,
+      products.some((p) => !p.unit || !p.rate_per_acre_unit),
+    );
+    if (unitBlock) {
+      toast('error', unitBlock);
       return;
     }
 
