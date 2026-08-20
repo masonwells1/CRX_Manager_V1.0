@@ -12,7 +12,7 @@
 // directory and never touches the real .agents/** tree.
 
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -49,8 +49,20 @@ try {
   // ...and it must be idempotent: a second run over an already-LF tree leaves the
   // bytes untouched. (Raw comparison is what keeps this true — the canonical form
   // equals the file byte for byte, so nothing is rewritten.)
+  //
+  // Assert on mtime, not content. Content alone also passes when writeExpected
+  // rewrites every file with identical bytes on every run, which is exactly the
+  // claim this block is here to disprove — the same "proof weaker than the claim"
+  // trap that let the CRLF-mirror bug ship.
+  const untouched = new Date("2000-01-01T00:00:00.000Z");
+  utimesSync(smudged, untouched, untouched);
   writeExpected(expected, targetRoot);
   assert.equal(readFileSync(smudged, "utf8"), "line one\nline two\n");
+  assert.equal(
+    statSync(smudged).mtime.getTime(),
+    untouched.getTime(),
+    "an in-sync mirror must not be rewritten at all, not merely rewritten identically",
+  );
 
   // A source carrying CRLF must still land as LF in the mirror. This is the case
   // the original fix DID cover; keep it pinned so a future edit cannot trade one

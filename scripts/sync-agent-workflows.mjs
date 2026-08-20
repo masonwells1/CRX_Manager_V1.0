@@ -99,8 +99,12 @@ export function writeExpected(expected, targetRoot = TARGET_ROOT) {
     // --write" remedy the health check prints actually repair a smudged mirror.
     // It is still idempotent - an already-LF mirror equals `canonical` byte for
     // byte, so the common case writes nothing.
-    const canonical = normalizeEol(content);
-    if (!existsSync(target) || readFileSync(target, "utf8") !== canonical) {
+    // Compare BYTES, not decoded strings. Decoding maps any invalid UTF-8 byte to
+    // U+FFFD, so a corrupt target could decode equal to canonical text containing
+    // that character and be skipped - the same shape of bug as the CRLF one above,
+    // where the comparison was looser than the write.
+    const canonical = Buffer.from(normalizeEol(content), "utf8");
+    if (!existsSync(target) || !readFileSync(target).equals(canonical)) {
       writeFileSync(target, canonical);
     }
   }

@@ -142,6 +142,14 @@ established.
   `FAIL … --check exited 0 without its PASS line (produced no output) — the generator may not have
   run at all`. `sync-agent-workflows.test.mjs` pins entry-point detection for absolute, relative,
   wrong-file, absent-argv, and flipped-drive-letter inputs.
+- **Two more CodeRabbit findings, both the same shape, both taken.** (1) The raw comparison decoded
+  the target to a string first, and decoding maps any invalid UTF-8 byte to U+FFFD — so a corrupt
+  mirror could compare equal to canonical text containing that character and be skipped. Now
+  compares `Buffer`s. (2) The idempotency assertion checked only the file's *content*, which also
+  passes if `--write` rewrites every file with identical bytes on every run — the exact thing the
+  assertion claimed to disprove. Now pins mtime; mutation-tested by forcing an unconditional write,
+  which turns it red on that assertion. Both are the recurring theme of this entry: **the check was
+  looser than the claim it was making.**
 - **Lesson, and the reason the `--write` correction is written out in full above:** a proof that
   exercises one half of a two-sided repair reads exactly like a proof that covers both. The source
   side and the mirror side fail differently, and "I watched it work" was true and still insufficient.
