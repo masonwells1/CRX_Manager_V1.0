@@ -2240,10 +2240,21 @@ export default function QuoteBuilder() {
     }
     const { data, error } = restoreResponse;
     if (error) {
+      // Restore-after-draw refusal (migration 20260816120000). A version
+      // restore mints brand-new quote_items ids, so it cannot carry the
+      // per-line billing provenance a draw stamps; dropping that provenance was
+      // proven to overbill across a restore that changes the line partition, so
+      // the server refuses instead. The message explains the alternative (edit
+      // the quote directly), so surface it rather than the generic toast.
+      if (hasRpcCode(error, RpcErrorCodes.QUOTE_RESTORE_BLOCKED_BY_DRAW)) {
+        const errMsg = (error instanceof Error ? error.message : null)
+          || (typeof error.message === 'string' ? error.message : null)
+          || 'This booking has already been drawn down into an order, so an earlier version cannot be restored. Edit the quote directly instead.';
+        toast('error', errMsg);
       // Drawn-version guard (Codex r2 MED): the server blocks restoring a
       // snapshot that would drop a drawn product or fall below its drawn
       // quantity. The server message names the product and quantities.
-      if (hasRpcCode(error, RpcErrorCodes.BOOKING_OVERDRAWN)) {
+      } else if (hasRpcCode(error, RpcErrorCodes.BOOKING_OVERDRAWN)) {
         const errMsg = (error instanceof Error ? error.message : null)
           || (typeof error.message === 'string' ? error.message : null)
           || 'This version books less than what has already been drawn down to orders.';

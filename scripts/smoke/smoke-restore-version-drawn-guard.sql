@@ -241,30 +241,69 @@ BEGIN
   END IF;
 
   -- --------------------------------------------------------------------
-  -- (c) Restore V3 (A @ 400 >= 200 drawn): SUCCEEDS, then draws to closure
+  -- (c) Restore V3 on a DRAWN booking: REFUSED, nothing changes, then the
+  --     booking still draws to closure from its un-restored state.
+  --
+  --     Before 20260816120000 this restore succeeded, because a draw left no
+  --     per-line provenance behind. That migration stamps
+  --     order_items.quote_item_id on every drawn line, and a version restore
+  --     mints brand-new quote_items ids, so it cannot carry that stamp
+  --     forward. Dropping the stamp instead of refusing was tried and refuted:
+  --     it discards the telescoping rounding basis and was reproduced billing
+  --     $1.02 against a $1.01 booking. So the restore now fails CLOSED.
   -- --------------------------------------------------------------------
-  v_res := pg_temp.restore_quote_version_smoke(
-    v_q, v_v3, v_admin, NULL,
-    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q)
-  );
-  IF v_res->>'status' IS DISTINCT FROM 'restored' THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: (c) legal restore returned %', v_res;
-  END IF;
   SELECT status INTO v_status FROM quotes WHERE id = v_q;
+  v_err := NULL;
+  BEGIN
+    v_res := pg_temp.restore_quote_version_smoke(
+      v_q, v_v3, v_admin, NULL,
+      (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q)
+    );
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+  END;
+
+  IF v_err IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (c) restore of a DRAWN booking was allowed (returned %) -- it must raise QUOTE_RESTORE_BLOCKED_BY_DRAW', v_res;
+  END IF;
+  IF v_err NOT LIKE 'QUOTE_RESTORE_BLOCKED_BY_DRAW%' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (c) restore refused with the WRONG error: %', v_err;
+  END IF;
+
+  -- The quote is untouched: still 500 booked, still 200 drawn, same status.
+  --
+  -- READ THIS BEFORE CITING IT AS AN ORDERING PROOF. It is not one. The
+  -- BEGIN ... EXCEPTION block above opens an implicit subtransaction, and
+  -- catching the error rolls that subtransaction back -- so a refusal raised
+  -- AFTER 'DELETE FROM quote_sections' would leave 500/200 here too. These
+  -- assertions cannot tell pre-delete from post-delete refusal, and an earlier
+  -- comment here wrongly claimed they could.
+  --
+  -- What they DO prove: the refusal leaves nothing behind outside the rolled-
+  -- back subtransaction, and the booking is still whole afterwards (the draw
+  -- below closes it). The ORDERING is pinned instead by the migration
+  -- postflight, which compares the position of QUOTE_RESTORE_BLOCKED_BY_DRAW
+  -- against 'DELETE FROM quote_sections' in the installed function body and
+  -- fails the apply if the refusal comes second.
   SELECT COALESCE(SUM(total_units_needed), 0) INTO v_booked
   FROM quote_items WHERE quote_id = v_q AND product_id = v_prod_a;
   SELECT quantity_drawn INTO v_drawn FROM quote_product_draws
   WHERE quote_id = v_q AND product_id = v_prod_a;
-  IF v_status <> 'revised' OR v_booked <> 400 OR v_drawn <> 200 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: (c) after restore expected revised/400/200, got %/%/%',
-      v_status, v_booked, v_drawn;
+  IF v_booked <> 500 OR v_drawn <> 200 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (c) refused restore still mutated the quote: booked=%, drawn=% (expected 500/200)',
+      v_booked, v_drawn;
+  END IF;
+  IF (SELECT status FROM quotes WHERE id = v_q) IS DISTINCT FROM v_status THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (c) refused restore changed quote status from % to %',
+      v_status, (SELECT status FROM quotes WHERE id = v_q);
   END IF;
 
+  -- The booking is still fully usable: draw the remaining 300 of 500.
   v_res := draw_down_quote(v_q,
-    jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'quantity', 200)),
+    jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'quantity', 300)),
     v_admin, NULL);
   IF (v_res->>'fully_drawn')::boolean IS DISTINCT FROM true THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: (c) draw to 400/400 not reported fully drawn: %', v_res;
+    RAISE EXCEPTION 'SMOKE_FAIL: (c) draw to 500/500 not reported fully drawn: %', v_res;
   END IF;
   SELECT status INTO v_status FROM quotes WHERE id = v_q;
   IF v_status <> 'accepted' THEN
@@ -303,6 +342,51 @@ BEGIN
   FROM quote_items WHERE quote_id = v_qc;
   IF v_booked <> 300 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (d) control restore blocked or wrong, booked=%', v_booked;
+  END IF;
+
+  -- --------------------------------------------------------------------
+  -- (e) ACCEPTED LIMITATION, pinned deliberately: cancelling the draw does
+  --     NOT reopen version restore.
+  --
+  --     The guard in _restore_quote_version_owner_impl joins order_items
+  --     UNFILTERED by order status. cancel_order returns the quantity to
+  --     quote_product_draws and reopens the booking, but keeps the order_items
+  --     rows for audit -- and those rows still carry their quote_item_id
+  --     stamp. So the guard stays true forever once a booking has been drawn.
+  --
+  --     Codex round 3 (2026-08-19) flagged this as over-broad. Mason accepted
+  --     it on 2026-08-20 rather than narrow it, because narrowing means
+  --     RELEASING the stamps on those dead lines, which puts back the
+  --     order_items UPDATE whose after_order_items_change ->
+  --     trg_recalc_order_totals locks the order row under the quote lock --
+  --     the deadlock this rework removed.
+  --
+  --     If this case ever starts FAILING, the guard was narrowed. That may be
+  --     correct, but it is a decision: update docs/manual/KNOWN_ISSUES.md and
+  --     migration-history row 887 in the same change, and prove the lock
+  --     ordering again.
+  -- --------------------------------------------------------------------
+  SELECT COALESCE(SUM(quantity_drawn), 0) INTO v_drawn
+  FROM quote_product_draws WHERE quote_id = v_q;
+  IF v_drawn <= 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (e) setup -- draw ledger is empty (drawn=%), so this scenario would pass vacuously: the restore guard reads order_items, not quote_product_draws', v_drawn;
+  END IF;
+
+  v_err := NULL;
+  BEGIN
+    v_res := pg_temp.restore_quote_version_smoke(
+      v_q, v_v3, v_admin, NULL,
+      (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q)
+    );
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+  END;
+
+  IF v_err IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (e) restore succeeded on a drawn booking -- the accepted limitation changed; see the comment above before updating this test';
+  END IF;
+  IF v_err NOT LIKE 'QUOTE_RESTORE_BLOCKED_BY_DRAW%' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (e) restore blocked by the WRONG error: %', v_err;
   END IF;
 
   -- --------------------------------------------------------------------

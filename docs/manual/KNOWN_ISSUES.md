@@ -170,6 +170,85 @@ row and `Gal` on another loses the check on that ticket.
 **Status: reworked on branch `claude/draw-down-price-tier-lines`, NOT applied, NOT merged. Awaiting
 Mason's explicit approval for both.**
 
+**FIXED in the same migration — `restore_quote_version` REFUSES a drawn booking.** Found by
+`rls-security-reviewer` and confirmed against live `prosrc`: `save_quote` was not the only path that
+deletes and reinserts a quote's lines. `_restore_quote_version_owner_impl` does the same, and its
+reinsert **omits the `id` column entirely** — every restored line takes a fresh
+`gen_random_uuid()`, so no id is ever reused. Under the deferred FK that would leave every stamp
+dangling at COMMIT and abort the restore with a raw foreign-key error, on a UI-reachable path that
+works today.
+
+**Mason chose option (A) — release the stamps — on 2026-08-19, and it was then REFUTED by the
+`gpt-5.6-sol` gate the same day.** Releasing discards the telescoping rounding basis. Reproduced on
+PostgreSQL 17.6: two 0.5-unit lines at `$1.01`, draw 0.5, restore to a single 1-unit version, draw
+the rest → the customer is billed **`$1.02` against a booking whose own arithmetic says `$1.01`**.
+`DRAW_MIXED_TIER_UNMATCHED_LINE` cannot catch it, because that guard fires only when the product
+carries **more than one** distinct `(price, cost)` — and after the restore it carries exactly one.
+The release also fired `after_order_items_change` → `trg_recalc_order_totals`, locking the order row
+while restore holds the quote row, crossing the order→quote order that cancel/void takes.
+
+**Mason then chose option (B), which is what ships:** restore raises
+`QUOTE_RESTORE_BLOCKED_BY_DRAW` — a plain-English refusal — when the booking already has drawn
+lines, **before** any destructive work. 
+
+**Its real scope, stated accurately (Codex round 3 — an earlier version of this entry called it
+"narrow", and that was wrong):** the check joins `order_items` **unfiltered by order status**, so
+once a booking has **ever** been drawn it can never restore a version again — even if every draw
+order was afterwards cancelled or voided, the quantity returned to `quote_product_draws` and the
+booking reopened. Those reversed rows are retained for audit and still carry their stamp, so the
+check stays true forever.
+
+**Mason accepted that over-breadth on 2026-08-20 rather than narrow it.** Narrowing means letting a
+reversed line past the guard, whose stamp would then dangle at COMMIT exactly as before — so
+restore would have to **release** the stamps on those dead lines. Releasing is money-neutral for
+them (a voided line is filtered out of `billed_stamped` and `v_unmatched` entirely; a cancelled
+line contributes only its delivered quantity, zero here), but it puts back an `order_items` UPDATE,
+which fires `after_order_items_change` → `trg_recalc_order_totals` and locks the order row under
+the quote lock — the deadlock this rework just removed. Trading a rare capability for a
+reintroduced lock cycle is the wrong trade. A regression case in
+`scripts/smoke/smoke-restore-version-drawn-guard.sql` pins the accepted behaviour, so a later
+narrowing must change this decision consciously rather than by accident.
+
+What is unaffected: a booking never drawn restores freely, and editing the quote directly still
+works on **any** booking, because `save_quote` reuses the same line ids and the deferred FK keeps
+the stamps. Doing (A) properly means carrying the
+line-level billing basis across a restore, which needs a real snapshot→live identity mapping — the
+same missing capability `QUOTE_ITEM_AMBIGUOUS_COST` is about, and it gets its own PR.
+
+**A second `gpt-5.6-sol` finding was a guaranteed-rollback blocker.** The postflight denied
+`service_role` EXECUTE on the restore impl, copied from the draw impl. That is wrong for this
+function: live carries `{postgres=X/postgres,service_role=X/postgres}`, a grant `20260813080000`
+deliberately retained, and `CREATE OR REPLACE` preserves ACLs — so the assertion fired and rolled
+the **entire migration** back on every attempt. It went unnoticed because the first rehearsal
+created the function fresh, with no inherited ACL, so the check passed **vacuously**. The deny list
+is now the browser roles only, and `service_role` is asserted **present** so an accidental REVOKE is
+caught too.
+
+**Proven on PostgreSQL 17.6 (2026-08-19; live never written to), with a fixture that reproduces
+live's ACL exactly:** the old assertion trips on `service_role` (so the blocker was real and the
+test is not vacuous) while the corrected one passes; the shipped body installs over that preimage,
+the ACL survives `CREATE OR REPLACE`, and all four restore postflight predicates hold; the restore
+writes `order_items` nowhere, so `after_order_items_change` cannot fire; a drawn booking is refused,
+an undrawn one is not, the guard is scoped per quote, and the `$1.02` overbill is unreachable. All
+15 money assertions still pass, re-lifted verbatim from the edited file.
+
+**Also fixed in the same pass (both gate reviewers, 2026-08-19):** the migration locked
+`quote_product_draws` before `order_items` while the draw path writes `order_items` first — a real
+deadlock cycle against any in-flight pre-barrier draw, which neither the advisory key nor the
+quiet-gate prevents (the quiet gate runs *below* those locks). The order is now
+`quote_items` → `order_items` → `quote_product_draws`, matching the draw path, and the header's
+false "no deadlock is possible" claim is corrected along with its lock count (six acquisitions,
+~90s worst case, not three and ~45s). The FK postflight now also asserts `convalidated` and the
+full key shape — proven by mutation: a `NOT VALID` constraint passed the old predicate and is
+rejected by the new one. The price-partition tripwire now matches the `IS NOT DISTINCT FROM
+ti.price` predicate rather than two identifiers that also appear in the file's own comments.
+
+**Live facts confirmed read-only on 2026-08-19**, because the price partition depends on them:
+`quote_items_price_per_unit_cent_scale_chk` and `order_items_price_per_unit_cent_scale_chk` are
+both `convalidated` (so the price comparison is exact whole cents); `order_items.price_per_unit` is
+NOT NULL with zero NULL rows; and there are zero cancelled orders carrying delivered units, so the
+cancelled-branch money case stays dormant.
+
 PR #404's tier split originally identified a price tier by the `(price_per_unit,
 cost_at_quote_cents)` pair. That key is neither unique (two booked lines at the same price collapse
 into one tier) nor immutable (three separate paths rewrite the cost snapshot), so attributing
