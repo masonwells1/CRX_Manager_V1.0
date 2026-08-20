@@ -40,7 +40,7 @@ export function maintenanceProducerCommandMentioned(command, depth = 0) {
       let sawQuoted = false;
       let sawUnquoted = false;
       const push = () => {
-        if (!current) return;
+        if (!current && !sawQuoted) return;
         tokens.push({ value: current, sawQuoted, sawUnquoted, control: false });
         current = "";
         sawQuoted = false;
@@ -567,7 +567,7 @@ function tokenizeShellWords(text) {
   let sawQuoted = false;
   let sawUnquoted = false;
   const push = () => {
-    if (!current) return;
+    if (!current && !sawQuoted) return;
     tokens.push({ value: current, control: false, sawQuoted, sawUnquoted });
     current = "";
     sawQuoted = false;

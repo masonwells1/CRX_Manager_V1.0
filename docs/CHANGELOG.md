@@ -22,7 +22,9 @@ All significant development milestones, in reverse chronological order.
   actions stay within the same parsed command context. Standard short and long
   `xargs` option families are consumed, while GNU optional-argument long forms
   preserve the following executable unless their value is attached with `=`;
-  an unknown option fails closed when an opaque execution target remains.
+  an unknown option fails closed when an opaque execution target remains. Empty
+  quoted option values remain real tokens, so `xargs -E ''` cannot shift the
+  parser past an AWK or `NODE_OPTIONS` execution target.
   Bash execution keywords and the `time` prefix are traversed as command
   context, so conditional or timed execution cannot hide opaque interpreters
   or `NODE_OPTIONS` preloads. Bash append assignments (`NAME+=value`) are

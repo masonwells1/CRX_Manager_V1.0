@@ -71,7 +71,9 @@ POSIX and PowerShell semantics; normalization is bounded at the shared recursion
 limit and fails closed beyond it. Standard short and long `xargs` options are
 consumed; GNU optional-argument long forms preserve the following executable
 unless their value is attached with `=`, and unknown option shapes fail closed
-when an opaque target remains. Bash execution keywords and the `time` prefix
+when an opaque target remains. Empty quoted option values stay tokenized, so
+`xargs -E ''` cannot shift the parser past an opaque or preload target. Bash
+execution keywords and the `time` prefix
 are also traversed, including conditional and loop-body command positions.
 Bash append assignments (`NAME+=value`) retain assignment context in command
 prefixes, environment wrappers, and export builtins. `sudo`/`doas` environment

@@ -292,6 +292,8 @@ const xargsGuardCases = [
   [xargsCommand, "--replace", "-a", ["package", ".json"].join(""), awkCommand, opaqueAwkProgram].join(" "),
   [xargsCommand, "--eof", "-a", ["package", ".json"].join(""), awkCommand, opaqueAwkProgram].join(" "),
   [xargsCommand, "--max-lines", "-a", ["package", ".json"].join(""), awkCommand, opaqueAwkProgram].join(" "),
+  [xargsCommand, "-E", "''", "-a", ["package", ".json"].join(""), awkCommand, opaqueAwkProgram].join(" "),
+  [xargsCommand, "-E", "''", "-a", ["package", ".json"].join(""), "env", "NODE_OPTIONS=--require=./preload.cjs", "node", "scripts/ordinary-check.mjs"].join(" "),
 ];
 const shellBuiltinNodeOptionsCases = [
   ["NODE_OPTIONS+=--require=./preload.cjs", "node", "scripts/ordinary-check.mjs"].join(" "),
