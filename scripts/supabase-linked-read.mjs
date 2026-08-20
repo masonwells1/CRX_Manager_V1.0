@@ -128,11 +128,15 @@ export function verifyLinkedProjectRoot(root, expectedProjectId = CRX_SUPABASE_P
   return path.resolve(root);
 }
 
-export function resolveLinkedProjectRoot(projectRoot, run = spawnSync) {
+export function resolveLinkedProjectRoot(
+  projectRoot,
+  runGit = spawnSync,
+  expectedProjectId = CRX_SUPABASE_PROJECT_ID,
+) {
   const localRef = path.join(projectRoot, 'supabase', '.temp', 'project-ref');
   if (existsSync(localRef)) return path.resolve(projectRoot);
 
-  const common = run('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
+  const common = runGit('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], {
     cwd: projectRoot,
     encoding: 'utf8',
     shell: false,
@@ -143,7 +147,7 @@ export function resolveLinkedProjectRoot(projectRoot, run = spawnSync) {
   }
   const commonDir = path.resolve(projectRoot, String(common.stdout || '').trim());
   const primaryRoot = path.dirname(commonDir);
-  verifyLinkedProjectRoot(primaryRoot);
+  verifyLinkedProjectRoot(primaryRoot, expectedProjectId);
   return primaryRoot;
 }
 
@@ -191,6 +195,7 @@ export function runLinkedRead(options = {}) {
   linkedRoot,
   queryId,
   run = spawnSync,
+  runGit = spawnSync,
   expectedProjectId = CRX_SUPABASE_PROJECT_ID,
   maxBuffer = 50 * 1024 * 1024,
   } = options;
@@ -200,11 +205,14 @@ export function runLinkedRead(options = {}) {
   const sql = LINKED_READ_QUERIES[queryId];
   if (!sql) fail(`unknown linked read query id: ${JSON.stringify(queryId)}`);
   const root = verifyLinkedProjectRoot(
-    linkedRoot || resolveLinkedProjectRoot(projectRoot, run),
+    linkedRoot || resolveLinkedProjectRoot(projectRoot, runGit, expectedProjectId),
     expectedProjectId,
   );
   const result = run(
     'supabase',
+    // `db query` uses the result-envelope flag, not the unrelated global
+    // `--output` status-variable formatter. The parser below is the response
+    // contract check and refuses any future CLI envelope drift.
     ['db', 'query', '--linked', '--output-format', 'json', '--workdir', root, sql],
     {
       cwd: root,

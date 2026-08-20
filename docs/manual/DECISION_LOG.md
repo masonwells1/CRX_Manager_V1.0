@@ -1000,10 +1000,11 @@ carried on `invoices.balance_cents`, which nothing in this path writes.
 1. **The trigger is the single definition of a line profit.** The backfill re-saves stale rows so the
    trigger re-derives them; it does not recompute profit in the migration. Do not fork the formula
    into a second place.
-2. **The approved set is 37 rows / 17 orders / 11 fractional-price.** The migration hard-codes those
-   counts and aborts with `APPROVED_SET_DRIFTED` if live disagrees. That is deliberate — the counts
-   bind the write to what Mason actually approved, and an abort on a clone, staging copy or restored
-   backup is correct behavior, not a bug.
+2. **The observed set is 37 rows / 17 orders / 11 fractional-price.** The migration hard-codes those
+   counts and aborts with `APPROVED_SET_DRIFTED` if live disagrees. That is fail-closed cardinality
+   validation only: matching counts do not identify or approve the specific rows. Future rewrites
+   must bind the exact sorted row identities and material before-values to an approved-set digest.
+   An abort on a clone, staging copy or restored backup is correct behavior, not a bug.
 3. **Deliberately out of scope, and still open:** the other sub-cent-price rows whose profit is
    already correct; the separately parked pending-payout row; the 11 `pending` commission rows that
    keep a pre-backfill basis (the rescale lives in the `update_order_items` RPC, not a trigger, so a

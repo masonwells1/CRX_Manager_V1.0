@@ -214,6 +214,15 @@ eq(T(null), [], "a null body does not throw");
     ok(has(sql, "order_items.total_price"), `round-24: ${label} is an apply-time write`);
   }
 
+  const twoCalls =
+    `CREATE FUNCTION public.first_fix() RETURNS void LANGUAGE plpgsql AS $$ BEGIN UPDATE public.orders SET total_profit = 1; END; $$;\n` +
+    `CREATE FUNCTION public.second_fix() RETURNS void LANGUAGE plpgsql AS $$ BEGIN UPDATE public.order_items SET total_price = 1; END; $$;\n` +
+    `SELECT public.first_fix();\nSELECT public.second_fix();`;
+  ok(has(twoCalls, "orders.total_profit"),
+    "round-24: the first of two separately invoked helpers is charged");
+  ok(has(twoCalls, "order_items.total_price"),
+    "round-24: a helper invoked by a later statement is charged too");
+
   // A routine that calls itself must not spin the fixpoint forever.
   const recursive =
     `CREATE FUNCTION public.loopy(n int) RETURNS void LANGUAGE plpgsql AS $$ BEGIN\n` +

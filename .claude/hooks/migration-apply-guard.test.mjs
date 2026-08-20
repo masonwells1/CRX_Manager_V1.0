@@ -1809,8 +1809,18 @@ function armAutopilot(stateDir, hoursFromNow) {
     r = apply("20990601000003_anything", BENIGN_SQL);
     ok(isDeny(r) && isOneShotDeny(r), "unparseable one-shot registry → apply denied (fail closed)");
 
+    for (const invalidRegistry of [{ oneShot: {} }, { one_shot: [] }]) {
+      writeFileSync(
+        path.join(tmp, "supabase", "baselines", "one-shot-migrations.json"),
+        JSON.stringify(invalidRegistry),
+      );
+      r = apply("20990601000004_wrong_shape", BENIGN_SQL);
+      ok(isDeny(r) && isOneShotDeny(r),
+        "valid JSON without a plain one_shot map → apply denied (fail closed)");
+    }
+
     rmSync(path.join(tmp, "supabase", "baselines", "one-shot-migrations.json"), { force: true });
-    r = apply("20990601000004_anything", BENIGN_SQL);
+    r = apply("20990601000005_anything", BENIGN_SQL);
     ok(isDeny(r) && isOneShotDeny(r), "missing one-shot registry → apply denied (fail closed)");
   } finally {
     rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
@@ -2033,8 +2043,8 @@ function armAutopilot(stateDir, hoursFromNow) {
        "round-15: every racer that did not win the claim is refused by the one-shot guard itself");
     ok(!existsSync(ovPath),
        "round-15: the shared override is gone after the race — the winner spent it");
-    // The claim is a private rename, so it must not litter the state directory
-    // with files a later reader could mistake for evidence.
+    // The claim uses an exclusive `openSync(..., "wx")` lock file, and every
+    // racer must release that file so later applies are never wedged.
     const leftovers = readdirSync(stateDir).filter((f) => f.startsWith("one-shot-replay-override.json."));
     eq(leftovers.length, 0,
        "round-16: every racer releases its lock, leaving no stray state that would wedge later applies");

@@ -176,8 +176,16 @@ jobs:
           set -uo pipefail
           BASE="${{ github.event.pull_request.base.sha }}"
           if [ -z "$BASE" ]; then
-            BASE="$(git merge-base origin/main HEAD)"
+            BASE="$(git merge-base origin/main HEAD)" || {
+              echo "Could not resolve a merge base for the exemption guard." >&2
+              exit 1
+            }
           fi
+          test -n "$BASE" || { echo "Resolved an empty exemption-guard base." >&2; exit 1; }
+          git cat-file -e "${BASE}^{commit}" || {
+            echo "Exemption-guard base is not an available commit: $BASE" >&2
+            exit 1
+          }
           echo "Comparing against $BASE"
           {
             echo "--- CHANGED ---"

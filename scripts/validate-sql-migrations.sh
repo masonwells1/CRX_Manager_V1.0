@@ -2411,8 +2411,14 @@ $MIG_BASENAME
         # stores parsed rather than as source (BEGIN ATOMIC) cannot be read at
         # all. Either way the answer is unknown, and unknown is refused —
         # without wedging migrations on tables the manifest does cover.
-        if ! printf '%s\n' "$TRIGGER_FANOUT_SCANNED" | grep -qx "$c_src" \
-           || printf '%s\n' "$TRIGGER_FANOUT_OPAQUE" | grep -qx "$c_src"; then
+        # Do not use `printf ... | grep -q` under pipefail here. Once grep finds
+        # an early source it closes the pipe; a large linked manifest then gives
+        # printf SIGPIPE and turns a successful lookup into failure. That exact
+        # Linux-CI shape falsely declared covered order_items/quote_items unknown.
+        # `grep -F -x` deliberately consumes the complete here-string. Do not
+        # add `-q`: its early exit recreates the SIGPIPE/pipefail false negative.
+        if ! grep -F -x "$c_src" <<< "$TRIGGER_FANOUT_SCANNED" >/dev/null \
+           || grep -F -x "$c_src" <<< "$TRIGGER_FANOUT_OPAQUE" >/dev/null; then
           CASCADE_UNKNOWN="$CASCADE_UNKNOWN $c_src"
           continue
         fi

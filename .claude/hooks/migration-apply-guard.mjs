@@ -189,8 +189,10 @@ function expandThroughFanout(analysis, evidence) {
   return { targets, tables, opaqueSources };
 }
 
-function loadKnownOperators(evidenceRoots) {
-  const byKey = new Map();
+function loadKnownDefinitions(evidenceRoots) {
+  const operatorsByKey = new Map();
+  const castsByKey = new Map();
+  const viewsByKey = new Map();
   for (const root of evidenceRoots) {
     const migrationDir = path.join(root, "supabase", "migrations");
     if (!existsSync(migrationDir)) continue;
@@ -208,72 +210,40 @@ function loadKnownOperators(evidenceRoots) {
       } catch (err) {
         throw new Error(`${filePath}: ${err?.message || err}`);
       }
-      if (!/\bcreate\s+operator\b/i.test(sql)) continue;
-      for (const definition of operatorDefinitions(applyTimeCode(sql).code)) {
-        byKey.set(`${definition.operator}\0${definition.fn}`, definition);
-      }
-    }
-  }
-  return [...byKey.values()];
-}
+      const hasOperators = /\bcreate\s+operator\b/i.test(sql);
+      const hasCasts = /\bcreate\s+(?:cast|domain)\b/i.test(sql);
+      const hasViews = /\bcreate\s+(?:or\s+replace\s+)?(?:(?:temp|temporary|recursive)\s+)*view\b/i.test(sql);
+      if (!hasOperators && !hasCasts && !hasViews) continue;
 
-function loadKnownCasts(evidenceRoots) {
-  const byKey = new Map();
-  for (const root of evidenceRoots) {
-    const migrationDir = path.join(root, "supabase", "migrations");
-    if (!existsSync(migrationDir)) continue;
-    let names;
-    try {
-      names = readdirSync(migrationDir).filter((name) => name.endsWith(".sql"));
-    } catch (err) {
-      throw new Error(`${migrationDir}: ${err?.message || err}`);
-    }
-    for (const name of names) {
-      const filePath = path.join(migrationDir, name);
-      let sql;
-      try {
-        sql = readFileSync(filePath, "utf8");
-      } catch (err) {
-        throw new Error(`${filePath}: ${err?.message || err}`);
+      // The lexer is the expensive part. Each migration is read and reduced to
+      // apply-time code once, then every catalog extractor consumes that same
+      // trusted result.
+      const code = applyTimeCode(sql).code;
+      if (hasOperators) {
+        for (const definition of operatorDefinitions(code)) {
+          operatorsByKey.set(`${definition.operator}\0${definition.fn}`, definition);
+        }
       }
-      if (!/\bcreate\s+(?:cast|domain)\b/i.test(sql)) continue;
-      for (const definition of castDefinitions(applyTimeCode(sql).code)) {
-        byKey.set(
-          `${definition.source}\0${definition.target}\0${definition.fn}\0${definition.context}`,
-          definition,
-        );
+      if (hasCasts) {
+        for (const definition of castDefinitions(code)) {
+          castsByKey.set(
+            `${definition.source}\0${definition.target}\0${definition.fn}\0${definition.context}`,
+            definition,
+          );
+        }
+      }
+      if (hasViews) {
+        for (const definition of viewDefinitions(code)) {
+          viewsByKey.set(`${definition.name}\0${definition.query}`, definition);
+        }
       }
     }
   }
-  return [...byKey.values()];
-}
-
-function loadKnownViews(evidenceRoots) {
-  const byKey = new Map();
-  for (const root of evidenceRoots) {
-    const migrationDir = path.join(root, "supabase", "migrations");
-    if (!existsSync(migrationDir)) continue;
-    let names;
-    try {
-      names = readdirSync(migrationDir).filter((name) => name.endsWith(".sql"));
-    } catch (err) {
-      throw new Error(`${migrationDir}: ${err?.message || err}`);
-    }
-    for (const name of names) {
-      const filePath = path.join(migrationDir, name);
-      let sql;
-      try {
-        sql = readFileSync(filePath, "utf8");
-      } catch (err) {
-        throw new Error(`${filePath}: ${err?.message || err}`);
-      }
-      if (!/\bcreate\s+(?:or\s+replace\s+)?(?:(?:temp|temporary|recursive)\s+)*view\b/i.test(sql)) continue;
-      for (const definition of viewDefinitions(applyTimeCode(sql).code)) {
-        byKey.set(`${definition.name}\0${definition.query}`, definition);
-      }
-    }
-  }
-  return [...byKey.values()];
+  return {
+    operators: [...operatorsByKey.values()],
+    casts: [...castsByKey.values()],
+    views: [...viewsByKey.values()],
+  };
 }
 
 let payload;
@@ -598,7 +568,9 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
       try {
         const parsed = JSON.parse(readFileSync(registryPath, "utf8"));
         const map = parsed?.one_shot;
-        if (!map || typeof map !== "object") throw new Error("no `one_shot` map");
+        if (!map || typeof map !== "object" || Array.isArray(map)) {
+          throw new Error("no plain `one_shot` map");
+        }
         // First checkout to register a stem wins the wording; the entry itself
         // is what matters, and both spellings block identically.
         for (const [stem, reason] of Object.entries(map)) {
@@ -635,9 +607,10 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
     let knownViews;
     try {
       fanoutEvidence = loadTrustedFanout(evidenceRoots);
-      knownOperators = loadKnownOperators(evidenceRoots);
-      knownCasts = loadKnownCasts(evidenceRoots);
-      knownViews = loadKnownViews(evidenceRoots);
+      const knownDefinitions = loadKnownDefinitions(evidenceRoots);
+      knownOperators = knownDefinitions.operators;
+      knownCasts = knownDefinitions.casts;
+      knownViews = knownDefinitions.views;
     } catch (err) {
       out("block",
         `ONE-SHOT REPLAY GUARD: trusted trigger/FK, custom-operator, custom-cast/domain, or stored-view evidence could not be loaded ` +

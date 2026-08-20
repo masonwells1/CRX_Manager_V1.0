@@ -86,9 +86,19 @@ function usesUnqualifiedEventMetadataHelper(source) {
     new RegExp(`(?<![a-z0-9_.])${name}\\s*\\(`).test(code));
 }
 
+export function routineDelimiter(source, index) {
+  let suffix = 0;
+  while (true) {
+    const tag = suffix === 0
+      ? `$crx_fanout_${index}$`
+      : `$crx_fanout_${index}_x${suffix}$`;
+    if (!source.includes(tag)) return tag;
+    suffix += 1;
+  }
+}
+
 function routineDefinition(routine, index) {
-  let tag = `$crx_fanout_${index}$`;
-  while (routine.source.includes(tag)) tag = `$crx_fanout_${index}_x$`;
+  const tag = routineDelimiter(routine.source, index);
   return `CREATE FUNCTION public.${routine.name}() RETURNS void LANGUAGE plpgsql AS ${tag}\n${routine.source}\n${tag};`;
 }
 

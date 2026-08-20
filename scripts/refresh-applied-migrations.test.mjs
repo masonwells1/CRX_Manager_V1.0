@@ -24,9 +24,13 @@ const ROWS = [
 let passed = 0;
 
 function check(label, fn) {
-  fn();
-  passed += 1;
-  void label;
+  try {
+    fn();
+    passed += 1;
+  } catch (error) {
+    error.message = `${label}: ${error.message}`;
+    throw error;
+  }
 }
 
 function envelope(rows) {
@@ -98,6 +102,43 @@ check('captures rows only through the verified linked project and writes atomica
     assert.equal(result.snapshot.project_id, CRX_SUPABASE_PROJECT_ID);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+check('git root discovery and Supabase execution use independent runners', () => {
+  const primary = linkedFixture();
+  const worktree = mkdtempSync(path.join(tmpdir(), 'refresh-applied-runner-split-'));
+  try {
+    let gitCalls = 0;
+    let supabaseCalls = 0;
+    const runGit = (command, args) => {
+      gitCalls += 1;
+      assert.equal(command, 'git');
+      assert.deepEqual(args, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+      return { status: 0, stdout: path.join(primary, '.git'), stderr: '' };
+    };
+    const run = (command, args) => {
+      supabaseCalls += 1;
+      assert.equal(command, 'supabase');
+      assert.deepEqual(args.slice(0, 5), ['db', 'query', '--linked', '--output-format', 'json']);
+      return {
+        status: 0,
+        stdout: envelope([{ migration_ledger: { captured_at: CAPTURED_AT, applied: ROWS } }]),
+        stderr: '',
+      };
+    };
+    const result = runLinkedRead({
+      projectRoot: worktree,
+      queryId: 'applied_migrations',
+      run,
+      runGit,
+    });
+    assert.equal(result.linkedRoot, primary);
+    assert.equal(gitCalls, 1);
+    assert.equal(supabaseCalls, 1);
+  } finally {
+    rmSync(primary, { recursive: true, force: true });
+    rmSync(worktree, { recursive: true, force: true });
   }
 });
 

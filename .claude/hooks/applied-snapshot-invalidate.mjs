@@ -162,7 +162,12 @@ try {
     ...sessionProofDirs(primaryDir, candidateDir, () => execFileSync(
       "git",
       ["worktree", "list", "--porcelain"],
-      { cwd: primaryDir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+      {
+        cwd: primaryDir,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 10_000,
+      },
     )),
     activeStateDir,
   ])];

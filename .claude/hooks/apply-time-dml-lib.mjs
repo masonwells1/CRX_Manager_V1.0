@@ -789,11 +789,15 @@ export function triggerAttachments(code) {
 }
 
 function invokedRoutines(codeLower, defined) {
+  // Callers commonly pass Map#keys(), which is a one-shot iterator. Reusing it
+  // for each executable statement would exhaust it after the first statement
+  // and silently miss calls in every later statement.
+  const names = [...defined];
   const found = new Set();
   for (const raw of String(codeLower || "").split(";")) {
     const executable = runForEffectRegion(raw.trim());
     if (!executable) continue;
-    for (const name of defined) {
+    for (const name of names) {
       const re = new RegExp(`(^|[^A-Za-z0-9_.])((?:[a-z0-9_]+\\.)?)${name}\\s*\\(`, "g");
       let mm;
       while ((mm = re.exec(executable)) !== null) {
@@ -1497,7 +1501,7 @@ export function applyTimeWriteTargets(
   const drainExec = (into) => {
     while (execScanned < execCodes.length) {
       const c = execCodes[execScanned++];
-      for (const n of invokedRoutines(c.toLowerCase(), byName.keys())) {
+      for (const n of invokedRoutines(c.toLowerCase(), new Set(byName.keys()))) {
         if (!seen.has(n)) into.add(n);
       }
       addOperatorInvocations(c, into);
@@ -1509,7 +1513,7 @@ export function applyTimeWriteTargets(
   // Fold in every invoked body, then anything those bodies invoke, until the
   // set stops growing. `seen` also stops a recursive routine from looping.
   const seen = new Set();
-  let frontier = invokedRoutines(code.toLowerCase(), byName.keys());
+  let frontier = invokedRoutines(code.toLowerCase(), new Set(byName.keys()));
   addOperatorInvocations(code, frontier);
   addCastInvocations(code, frontier);
   addViewInvocations(code);
@@ -1534,7 +1538,7 @@ export function applyTimeWriteTargets(
         defineOperators(operatorDefinitions(r.code));
         defineCasts(castDefinitions(r.code));
         defineViews(viewDefinitions(r.code));
-        for (const n of invokedRoutines(r.code.toLowerCase(), byName.keys())) {
+        for (const n of invokedRoutines(r.code.toLowerCase(), new Set(byName.keys()))) {
           if (!seen.has(n)) next.add(n);
         }
         addOperatorInvocations(r.code, next);

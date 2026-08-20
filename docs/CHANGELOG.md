@@ -53,7 +53,7 @@ migration safety harness; no app source, migration SQL, live database, or produc
   invoking `round(...)` cannot hide a same-file mutator.
 - The Bash approved-set validator now treats functions and procedures as one routine graph,
   including transitive wrappers, and refuses plain, escape, or Unicode single-quoted routine
-  bodies that its write scanners cannot inspect. Its 184-case mutation suite and the 209-case
+  bodies that its write scanners cannot inspect. Its 188-case mutation suite and the 221-assertion
   apply-time analyzer suite are both wired into a required CI step.
 - Non-ASCII PostgreSQL routine identities now fail closed through one shared analyzer boundary.
   A valid define/call/drop sequence such as `public.修復()` can no longer be truncated out of the

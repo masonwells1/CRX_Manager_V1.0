@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   buildTriggerFanoutManifest,
   captureTriggerFanout,
+  routineDelimiter,
   TRIGGER_FANOUT_FORMAT,
   TRIGGER_FANOUT_SQL,
 } from './generate-trigger-fanout.mjs';
@@ -73,7 +74,15 @@ const payload = {
 };
 
 let passed = 0;
-function check(label, fn) { fn(); passed += 1; void label; }
+function check(label, fn) {
+  try {
+    fn();
+    passed += 1;
+  } catch (error) {
+    error.message = `${label}: ${error.message}`;
+    throw error;
+  }
+}
 function envelope(rows) {
   const boundary = '0123456789abcdef0123456789abcdef';
   return JSON.stringify({
@@ -88,6 +97,11 @@ function linkedFixture(projectRef = CRX_SUPABASE_PROJECT_ID) {
   writeFileSync(path.join(dir, 'supabase', '.temp', 'project-ref'), projectRef);
   return dir;
 }
+
+check('routine delimiter advances on every source collision', () => {
+  const source = '$crx_fanout_7$ and $crx_fanout_7_x1$';
+  assert.equal(routineDelimiter(source, 7), '$crx_fanout_7_x2$');
+});
 
 check('direct and helper-mediated writes create cascade edges', () => {
   const manifest = buildTriggerFanoutManifest(payload);
