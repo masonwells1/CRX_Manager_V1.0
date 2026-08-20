@@ -7,7 +7,7 @@ import SearchableSelect from '../ui/SearchableSelect';
 import { supabase, assertRpcResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
-import { validateBlendMath } from '../../lib/blendMathValidator';
+import { validateBlendMath, type BlendMathWarning } from '../../lib/blendMathValidator';
 import { localToday } from '../../lib/dateUtils';
 import type { Customer, Product, BlendRecipe, BlendRecipeItem } from '../../types';
 import { Sentry } from '../../lib/sentry';
@@ -188,7 +188,7 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
   const [saving, setSaving] = useState(false);
   const [attemptUncertain, setAttemptUncertain] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [warnings, setWarnings] = useState<string[]>([]);
+  const [warnings, setWarnings] = useState<BlendMathWarning[]>([]);
 
   const clearPersistedAttempt = () => {
     persistedAttemptRef.current = null;
@@ -322,16 +322,29 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
       total_acres: formData.total_acres ? parseFloat(formData.total_acres) : null,
       total_volume: formData.total_volume ? parseFloat(formData.total_volume) : null,
       total_volume_unit: formData.total_volume_unit || null,
+      application_rate: formData.application_rate || null,
     };
-    const productData = products.map(p => ({
-      product_name: p.product_name,
-      quantity: p.quantity,
-      unit: p.unit || null,
-      rate_per_acre: p.rate_per_acre,
-      rate_per_acre_unit: p.rate_per_acre_unit || null,
-    }));
+    const productData = products.map(p => {
+      // The rate check guards a billing path: create_invoice_from_blend_ticket
+      // prices each line from rate_per_acre and its unit, falling back to the
+      // product's own rate_unit when the line leaves it blank. Hand the catalog
+      // row's units over so the warning and the invoice agree about the line.
+      const catalog = allProducts.find((candidate) => candidate.id === p.product_id);
+      return {
+        product_name: p.product_name,
+        quantity: p.quantity,
+        unit: p.unit || null,
+        rate_per_acre: p.rate_per_acre,
+        rate_per_acre_unit: p.rate_per_acre_unit || null,
+        product_form: catalog?.product_form ?? null,
+        product_rate_unit: catalog?.rate_unit ?? null,
+        product_inventory_unit: catalog?.inventory_unit || catalog?.unit_size || null,
+      };
+    });
     setWarnings(validateBlendMath(ticketData, productData));
-  }, [products, formData.total_acres, formData.total_volume, formData.total_volume_unit]);
+    // application_rate belongs in these deps: the tank check reads it, so leaving
+    // it out would freeze the warning at whatever it was before the operator typed.
+  }, [products, allProducts, formData.total_acres, formData.total_volume, formData.total_volume_unit, formData.application_rate]);
 
   function addProduct() {
     setProducts([
@@ -789,14 +802,27 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
 
       </fieldset>
 
-      {warnings.length > 0 && (
+      {/* Two tiers, deliberately. A "couldn't check this" note is the COMMON case
+          on a real ticket, and rendering it in the same alarmed amber as a genuine
+          mismatch is how a banner gets trained into wallpaper. Only a comparison
+          that actually ran and disagreed gets the warning styling. */}
+      {warnings.some((w) => w.level === 'mismatch') && (
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 space-y-1">
           <div className="flex items-center gap-2 text-yellow-800 font-medium text-sm">
             <AlertCircle className="h-4 w-4" />
             Math Validation Warnings
           </div>
-          {warnings.map((w, i) => (
-            <p key={i} className="text-sm text-yellow-700 ml-6">- {w}</p>
+          {warnings.filter((w) => w.level === 'mismatch').map((w, i) => (
+            <p key={i} className="text-sm text-yellow-700 ml-6">- {w.message}</p>
+          ))}
+        </div>
+      )}
+
+      {warnings.some((w) => w.level === 'unchecked') && (
+        <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-1">
+          <div className="text-gray-600 font-medium text-sm">Not automatically checked</div>
+          {warnings.filter((w) => w.level === 'unchecked').map((w, i) => (
+            <p key={i} className="text-sm text-gray-500 ml-2">- {w.message}</p>
           ))}
         </div>
       )}
