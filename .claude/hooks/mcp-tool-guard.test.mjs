@@ -25,6 +25,13 @@ function runHook(payload, cwd) {
 }
 function isDeny(r) { return r.stdout.includes('"permissionDecision":"deny"'); }
 
+const oversizedWrapperCommand = `echo ${"watch ".repeat(30_000)}; ${["git", "push", "--force", "origin", "main"].join(" ")}`;
+const oversizedStartedAt = process.hrtime.bigint();
+const oversizedResult = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: oversizedWrapperCommand } });
+const oversizedElapsedMs = Number(process.hrtime.bigint() - oversizedStartedAt) / 1_000_000;
+ok(isDeny(oversizedResult), "DC start_process denies an oversized wrapper payload");
+ok(oversizedElapsedMs < 1_500, `DC oversized wrapper denial stays well below the 5s hook timeout (actual ${oversizedElapsedMs.toFixed(0)}ms)`);
+
 const findCommand = ["fi", "nd"].join("");
 const findExecOption = ["-ex", "ec"].join("");
 const findGroupOpen = "\x5c(";

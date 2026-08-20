@@ -19,6 +19,7 @@ import {
   maintenanceProducerCommandMentioned,
   resolveNpmScriptChain,
   readPackageScripts,
+  SECURITY_COMMAND_CHAR_BUDGET,
 } from "./bash-safety-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -54,6 +55,8 @@ ok(!checkDangerousCommand("git status"), "git status allowed");
 ok(!checkDangerousCommand("git push origin feature/x"), "ordinary feature push allowed");
 ok(!checkDangerousCommand(""), "empty command allowed");
 ok(!checkDangerousCommand(null), "null command allowed (no throw)");
+eq(checkDangerousCommand("x".repeat(SECURITY_COMMAND_CHAR_BUDGET)), null, "command at the inspection budget remains inspectable");
+ok(checkDangerousCommand("x".repeat(SECURITY_COMMAND_CHAR_BUDGET + 1)), "command above the inspection budget fails closed");
 
 // ── maintenance producer: current outer shell guard closes the pre-bootstrap
 //    TOCTOU gap before the generated production-action guard is installed. ──
@@ -535,6 +538,14 @@ function runHook(payload) {
 let r = runHook({ tool_name: "Bash", tool_input: { command: "npm run build" } });
 eq(r.status, 0, "bash-safety.mjs exits 0 on benign command");
 ok(!r.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs allows npm run build");
+
+const oversizedWrapperCommand = `echo ${"watch ".repeat(30_000)}; ${["git", "push", "--force", "origin", "main"].join(" ")}`;
+const oversizedStartedAt = process.hrtime.bigint();
+const oversizedResult = runHook({ tool_name: "Bash", tool_input: { command: oversizedWrapperCommand } });
+const oversizedElapsedMs = Number(process.hrtime.bigint() - oversizedStartedAt) / 1_000_000;
+eq(oversizedResult.status, 0, "bash-safety.mjs exits 0 after an oversized wrapper payload");
+ok(oversizedResult.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs denies an oversized wrapper payload");
+ok(oversizedElapsedMs < 1_500, `oversized wrapper denial stays well below the 5s hook timeout (actual ${oversizedElapsedMs.toFixed(0)}ms)`);
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "git push --force origin main" } });
 eq(r.status, 0, "bash-safety.mjs exits 0 on dangerous command");

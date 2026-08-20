@@ -13,6 +13,9 @@
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 
+export const SECURITY_COMMAND_CHAR_BUDGET = 16_384;
+const commandExceedsSecurityBudget = (command) => String(command || "").length > SECURITY_COMMAND_CHAR_BUDGET;
+
 const MAINTENANCE_PRODUCER_NAME = "apply-live-testdata-maintenance-20260812.mjs";
 const MAINTENANCE_PRODUCER_ALLOWED_COMMANDS = new Set([
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
@@ -23,6 +26,7 @@ const MAINTENANCE_PRODUCER_ALLOWED_COMMANDS = new Set([
 
 export function maintenanceProducerCommandMentioned(command, depth = 0) {
   const value = String(command || "");
+  if (commandExceedsSecurityBudget(value)) return true;
   const powerShellBoundaryVariant = value.replace(/\\([;&|])/g, "$1");
   if (powerShellBoundaryVariant !== value
     && (depth >= 4 || maintenanceProducerCommandMentioned(powerShellBoundaryVariant, depth + 1))) return true;
@@ -602,6 +606,7 @@ function tokenizeShellWords(text) {
 
 function nodeOptionsAssignmentMentioned(command, depth = 0) {
   const value = String(command || "");
+  if (commandExceedsSecurityBudget(value)) return true;
   const powerShellBoundaryVariant = value.replace(/\\([;&|])/g, "$1");
   if (powerShellBoundaryVariant !== value
     && (depth >= 4 || nodeOptionsAssignmentMentioned(powerShellBoundaryVariant, depth + 1))) return true;
@@ -1104,6 +1109,9 @@ export function checkDestructiveSql(cmd) {
 export function checkDangerousCommand(cmd) {
   const text = String(cmd || "");
   if (!text) return null;
+  if (commandExceedsSecurityBudget(text)) {
+    return `Blocked oversized command payload. Safety inspection is limited to ${SECURITY_COMMAND_CHAR_BUDGET} characters so the hook fails closed within its execution deadline.`;
+  }
   const producerReason = checkMaintenanceProducerInvocation(text);
   if (producerReason) return producerReason;
   if (nodeOptionsAssignmentMentioned(text)) {
