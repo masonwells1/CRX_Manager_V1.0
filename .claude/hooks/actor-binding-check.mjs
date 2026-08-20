@@ -97,6 +97,29 @@ function paramName(decl) {
   return (tokens[i] || "").replace(/^"|"$/g, "");
 }
 
+function paramMode(decl) {
+  const first = String(decl).trim().split(/\s+/)[0] || "";
+  return /^(in|out|inout|variadic)$/i.test(first) ? first.toLowerCase() : "in";
+}
+
+/** PostgreSQL lets routine bodies reference input arguments by both their
+ * declared name and their one-based positional alias ($1, $2, ...). OUT-only
+ * parameters do not consume an input position and cannot be caller-forged. */
+function actorParameterDescriptors(maskedParams, rawParams) {
+  const declarations = splitTopLevelArgs(maskedParams, rawParams);
+  const actors = [];
+  let inputPosition = 0;
+  for (const declaration of declarations) {
+    const mode = paramMode(declaration);
+    if (mode === "out") continue;
+    inputPosition++;
+    const name = paramName(declaration);
+    if (!ACTOR_PARAM_RE.test(name)) continue;
+    actors.push({ name, references: [name, `$${inputPosition}`] });
+  }
+  return actors;
+}
+
 function escapedRegexLiteral(text) {
   return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -1237,6 +1260,14 @@ function identifierReferencePattern(name) {
   return `(?:(?<![\\w$])${escapedRegexLiteral(value)}(?![\\w$])|${quotedPattern})`;
 }
 
+function actorReferencePattern(reference) {
+  const value = String(reference || "");
+  if (/^\$\d+$/.test(value)) {
+    return `${escapedRegexLiteral(value)}(?!\\d)`;
+  }
+  return identifierReferencePattern(value);
+}
+
 /** A legacy guard may compare the actor parameter to a local v_actor-style
  * binding, but only when that local is initialized unconditionally from
  * auth.uid() exactly once and is not overwritten through assignment or
@@ -1402,7 +1433,7 @@ function hasRecognizedMutationBefore(structuralBody, beforeIndex) {
 }
 
 function hasExactLegacyMismatchCondition(condition, actorParam, identityBindings) {
-  const actor = identifierReferencePattern(actorParam);
+  const actor = actorReferencePattern(actorParam);
   // A nullable actor may deliberately be omitted by established callers. The
   // plain `<>` form is safe only when the same top-level condition first proves
   // the parameter non-null; without that prefix it remains null-unsafe and is
@@ -1453,7 +1484,7 @@ function hasActorMismatchRaiseException(rawAction, structuralAction, actorParam)
  * one parameter can be guarded while a second parameter is written downstream.
  * The established CRX legacy phrase remains compatible, but only inside the
  * same simple IF mismatch THEN RAISE EXCEPTION shape. */
-function hasEnforcedActorRefusal(body, actorParam) {
+function hasEnforcedActorRefusal(body, actorParam, actorReferences = [actorParam]) {
   const structuralBody = maskSqlForCallNames(body);
   if (structuralBody === null) return false;
   // maskSqlForCallNames deliberately preserves quoted identifiers for relation
@@ -1476,7 +1507,9 @@ function hasEnforcedActorRefusal(body, actorParam) {
     const bindings = stableAuthUidBindings(structuralBody, block.index);
     if (!isTopLevelPlpgsqlStatement(controlBody, block.index)) continue;
     if (hasRecognizedMutationBefore(controlBody, block.index)) continue;
-    if (!hasExactLegacyMismatchCondition(condition, actorParam, bindings)) continue;
+    if (!actorReferences.some((reference) =>
+      hasExactLegacyMismatchCondition(condition, reference, bindings)
+    )) continue;
     if (hasActorMismatchRaiseException(
       body.slice(actionStart, actionEnd),
       structuralBody.slice(actionStart, actionEnd),
@@ -1687,7 +1720,7 @@ function hasUnprovenCallableContext(callablePrefix, structuralPrefix, fullText, 
  * calls. */
 function hasActorCallableForwarding(structuralBody, actorParams) {
   for (const actorParam of actorParams) {
-    const reference = new RegExp(identifierReferencePattern(actorParam), "gi");
+    const reference = new RegExp(actorReferencePattern(actorParam), "gi");
     let match;
     while ((match = reference.exec(structuralBody)) !== null) {
       const prefix = structuralBody.slice(0, match.index);
@@ -1697,6 +1730,24 @@ function hasActorCallableForwarding(structuralBody, actorParams) {
         return true;
       }
     }
+  }
+  return false;
+}
+
+/** Explicit OPERATOR(schema.symbol) syntax invokes a user-defined function but
+ * places an infix operand outside the operator's parentheses. Treat any tainted
+ * actor reference in the same SQL statement as callable forwarding. */
+function hasActorOperatorForwarding(structuralBody, actorParams) {
+  const operator = /\bOPERATOR\s*\(/gi;
+  let match;
+  while ((match = operator.exec(structuralBody)) !== null) {
+    const start = structuralBody.lastIndexOf(";", match.index) + 1;
+    const nextSemicolon = structuralBody.indexOf(";", match.index);
+    const end = nextSemicolon === -1 ? structuralBody.length : nextSemicolon;
+    const statement = structuralBody.slice(start, end);
+    if (actorParams.some((actorParam) =>
+      new RegExp(actorReferencePattern(actorParam), "i").test(statement)
+    )) return true;
   }
   return false;
 }
@@ -1711,7 +1762,7 @@ function actorForwardingReferences(structuralBody, actorParams) {
   while (changed) {
     changed = false;
     for (const source of [...references]) {
-      const sourceRef = identifierReferencePattern(source);
+      const sourceRef = actorReferencePattern(source);
       const patterns = [
         new RegExp(
           `(?:^|[;\\n]|\\bBEGIN\\b|\\bTHEN\\b|\\bELSE\\b)\\s*(${SQL_IDENTIFIER_PATTERN})\\s*` +
@@ -2415,31 +2466,34 @@ try {
     // cron.schedule remain visible. This intentionally accepts false positives:
     // if a definer function with a forgeable actor parameter contains mutation
     // text anywhere outside a comment, it must bind the actor or use exemption.
-    const actorParams = splitTopLevelArgs(maskedParams, blankComments(params))
-      .map(paramName)
-      .filter((n) => ACTOR_PARAM_RE.test(n));
+    const actorDescriptors = actorParameterDescriptors(maskedParams, blankComments(params));
+    const actorParams = actorDescriptors.map(({ name }) => name);
     if (actorParams.length === 0) continue;
 
     const commentBlankedBody = blankComments(body);
-    const actorParamReference = actorParams.map(identifierReferencePattern).join("|");
+    const actorReferences = actorDescriptors.flatMap(({ references }) => references);
+    const actorParamReference = actorReferences.map(actorReferencePattern).join("|");
     const actorForwardedInvocation = new RegExp(
       `\\b(?:CALL|PERFORM)\\b[^;]*?(?:${actorParamReference})`,
       "i"
     );
-    const maskedForwardingReferences = actorForwardingReferences(maskedBody, actorParams);
-    const commentBlankedForwardingReferences = actorForwardingReferences(commentBlankedBody, actorParams);
+    const maskedForwardingReferences = actorForwardingReferences(maskedBody, actorReferences);
+    const commentBlankedForwardingReferences = actorForwardingReferences(commentBlankedBody, actorReferences);
     const actorForwardedCallable = hasActorCallableForwarding(maskedBody, maskedForwardingReferences) ||
       hasActorCallableForwarding(commentBlankedBody, commentBlankedForwardingReferences);
+    const actorForwardedOperator = hasActorOperatorForwarding(maskedBody, maskedForwardingReferences) ||
+      hasActorOperatorForwarding(commentBlankedBody, commentBlankedForwardingReferences);
     const hasMutation = /\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM|MERGE\s+INTO)\b/i.test(maskedBody) ||
       /\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM|MERGE\s+INTO)\b/i.test(commentBlankedBody) ||
       /\bEXECUTE\b/i.test(maskedBody) ||
       actorForwardedInvocation.test(maskedBody) ||
       actorForwardedInvocation.test(commentBlankedBody) ||
-      actorForwardedCallable;
+      actorForwardedCallable ||
+      actorForwardedOperator;
     if (!hasMutation) continue;
 
-    const hasRecognizedActorRefusal = actorParams.every((actorParam) =>
-      hasEnforcedActorRefusal(body, actorParam)
+    const hasRecognizedActorRefusal = actorDescriptors.every(({ name, references }) =>
+      hasEnforcedActorRefusal(body, name, references)
     );
     if (hasRecognizedActorRefusal) continue;
 

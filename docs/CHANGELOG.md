@@ -54,6 +54,17 @@ masked action list, accepts the optional `EXTERNAL` keyword, and applies the
 final declared security mode. Function, procedure, and final-mode regressions
 bring the focused suite to 407 assertions.
 
+The renewed cycle then found two callable-forwarding aliases outside that
+model: PostgreSQL's `$n` positional argument names and explicit infix
+`OPERATOR(schema.symbol)` calls. Actor parameters now carry both their declared
+name and exact input position through direct, local-alias, callable, and
+identity-refusal analysis; OUT-only parameters do not consume a caller input
+position. An explicit user-defined operator receiving the actor in the same SQL
+statement is also a fail-closed mutation boundary. Both live actor-forgery
+predicates recognize positional aliases, and the general predicate recognizes
+operator forwarding. Eight deny/control regressions bring the focused suite to
+415 assertions.
+
 ## 2026-08-13 — Actor-binding guard covers procedures and cron schema identity
 
 Fresh review of the cross-schema repair found two additional HIGH bypasses. A

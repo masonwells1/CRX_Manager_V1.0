@@ -119,6 +119,33 @@ ok(isDeny(r), "RETURN cannot forward an unbound actor through a callable express
 r = runHook(forwardedActorWrapper("RETURN QUERY SELECT public.record_event_internal(p_performed_by);"));
 ok(isDeny(r), "RETURN QUERY cannot forward an unbound actor through a callable expression");
 
+r = runHook(forwardedActorWrapper("RETURN public.record_event_internal($1);"));
+ok(isDeny(r), "a PostgreSQL positional alias cannot forward an unbound actor through a callable expression");
+
+r = runHook(fn(
+  "BEGIN PERFORM public.record_event_internal($2); RETURN '{}'::jsonb; END;",
+  "p_note text, p_performed_by uuid"
+));
+ok(isDeny(r), "a later actor parameter keeps its exact PostgreSQL input position");
+
+r = runHook(fn(
+  "BEGIN RETURN public.record_event_internal($10); END;",
+  "p_performed_by uuid, p_2 uuid, p_3 uuid, p_4 uuid, p_5 uuid, p_6 uuid, p_7 uuid, p_8 uuid, p_9 uuid, p_10 uuid"
+));
+ok(!isDeny(r), "$1 does not partially match PostgreSQL positional alias $10");
+
+r = runHook(`CREATE FUNCTION public.out_gap(OUT p_result uuid, IN p_performed_by uuid)
+LANGUAGE plpgsql SECURITY DEFINER AS $fn$
+BEGIN p_result := public.record_event_internal($1); END
+$fn$;`);
+ok(isDeny(r), "an OUT-only parameter does not consume the actor's PostgreSQL input position");
+
+r = runHook(forwardedActorWrapper("RETURN p_performed_by OPERATOR(public.##) auth.uid();"));
+ok(isDeny(r), "an explicit user-defined operator cannot receive an unbound actor from a definer wrapper");
+
+r = runHook(forwardedActorWrapper("v_id := p_performed_by; RETURN v_id OPERATOR(public.##) auth.uid();"));
+ok(isDeny(r), "a local assignment cannot launder an actor into an explicit user-defined operator");
+
 r = runHook(forwardedActorWrapper("v_id := p_performed_by; RETURN public.record_event_internal(v_id);"));
 ok(isDeny(r), "a local assignment cannot launder an unbound actor before a callable expression");
 
@@ -138,6 +165,19 @@ ok(isDeny(r), "a PL/pgSQL ALIAS cannot launder an unbound actor before a callabl
 
 r = runHook(fn(`BEGIN IF (p_performed_by IS NULL) THEN RETURN '{}'::jsonb; END IF; RETURN '{}'::jsonb; END;`));
 ok(!isDeny(r), "control-flow parentheses alone do not turn a non-mutating definer into an actor-forwarding call");
+
+r = runHook(fn(`BEGIN RETURN auth.uid() OPERATOR(public.##) auth.uid(); END;`));
+ok(!isDeny(r), "an explicit operator with no actor reference does not trigger actor-binding review");
+
+r = runHook(fn(`
+  BEGIN
+  IF $1 IS DISTINCT FROM auth.uid() THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  RETURN public.record_event_internal($1);
+  END;
+`));
+ok(!isDeny(r), "a canonical refusal may bind the actor through its PostgreSQL positional alias");
 
 const POST_BODY_UNBOUND = `CREATE OR REPLACE FUNCTION public.post_body_actor(p_performed_by uuid)
 RETURNS void AS $function$

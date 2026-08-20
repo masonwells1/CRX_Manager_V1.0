@@ -18,24 +18,35 @@ WITH cand AS (
          p.proname,
          pg_get_function_identity_arguments(p.oid) AS args,
          p.prosrc,
-         a.argname
+         a.argname,
+         a.input_position
   FROM pg_proc p
-  CROSS JOIN LATERAL unnest(coalesce(p.proargnames, '{}'::text[])) AS a(argname)
+  CROSS JOIN LATERAL (
+    SELECT named.argname,
+           named.ordinality,
+           count(*) FILTER (
+             WHERE coalesce(p.proargmodes[named.ordinality], 'i'::"char") IN ('i', 'b', 'v')
+           ) OVER (ORDER BY named.ordinality) AS input_position
+    FROM unnest(coalesce(p.proargnames, '{}'::text[])) WITH ORDINALITY AS named(argname, ordinality)
+  ) AS a
   WHERE p.pronamespace = 'public'::regnamespace
     AND p.prosecdef
     AND p.prokind IN ('f', 'p')
     AND p.prorettype <> 'pg_catalog.trigger'::regtype
     AND has_function_privilege('authenticated', p.oid, 'EXECUTE')
+    AND coalesce(p.proargmodes[a.ordinality], 'i'::"char") IN ('i', 'b', 'v')
     AND a.argname ~* '^p_\w*by$|^p_actor|^p_user'
 )
 SELECT DISTINCT proname || '(' || args || ')' AS violation_key,
        argname AS suspect_param
 FROM cand
 WHERE prosrc !~* 'ACTOR_MISMATCH'
-  AND (prosrc ~* ('coalesce\s*\(\s*' || argname)
-       OR prosrc ~* (argname || '\s*,\s*auth\.uid')
-       OR prosrc ~* ('role[^;]{0,120}' || argname)
-       OR prosrc ~* (argname || '[^;]{0,120}role')
-       OR prosrc ~* ('merge\s+into[^;]*\m' || argname || '\M')
-       OR prosrc ~* ('\m([[:alpha:]_][[:alnum:]_$]*\s*\.\s*)*[[:alpha:]_][[:alnum:]_$]*\s*\([^;]*\m' || argname || '\M'))
+  AND (prosrc ~* ('coalesce\s*\(\s*(\m' || argname || '\M|\$' || input_position || '\M)')
+       OR prosrc ~* ('(\m' || argname || '\M|\$' || input_position || '\M)\s*,\s*auth\.uid')
+       OR prosrc ~* ('role[^;]{0,120}(\m' || argname || '\M|\$' || input_position || '\M)')
+       OR prosrc ~* ('(\m' || argname || '\M|\$' || input_position || '\M)[^;]{0,120}role')
+       OR prosrc ~* ('merge\s+into[^;]*(\m' || argname || '\M|\$' || input_position || '\M)')
+       OR prosrc ~* ('\m([[:alpha:]_][[:alnum:]_$]*\s*\.\s*)*[[:alpha:]_][[:alnum:]_$]*\s*\([^;]*(\m' || argname || '\M|\$' || input_position || '\M)')
+       OR prosrc ~* ('(\m' || argname || '\M|\$' || input_position || '\M)[^;]{0,120}\mOPERATOR\s*\(')
+       OR prosrc ~* ('\mOPERATOR\s*\([^;]{0,120}(\m' || argname || '\M|\$' || input_position || '\M)'))
 ORDER BY violation_key;
