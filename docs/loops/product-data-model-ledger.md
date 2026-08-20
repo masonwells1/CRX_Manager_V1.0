@@ -107,7 +107,17 @@ unproven math branches (27); WP-3 schema enumeration incl. the serialized functi
 **Closed by owner decision, not fixed:** finding 26 (cancelled EPA → D-W) and finding 19
 (quality tier → D-X).
 
-**Still open, and deliberately so:** findings 16, 20, 21, 22, 24 all concern **Phase 2/3**
+**Finding 16 is NO LONGER deferred — it was mis-scoped *(corrected 2026-08-20 by the
+exact-snapshot Codex review of PR #435)*.** It reads as Phase 2/3 comparison behavior, but its
+substance — *which concentration is authoritative when a typed value and an EPA value both exist*
+— is decided by **WP-4's live write in Phase 1**. Deferring it left WP-4 free to create two rows
+for the same chemistry with no rule about which counts, so a consumer could sum them. It is now
+answered inside WP-4 as a database invariant: exactly one effective row per
+`(product_id, ingredient_id, basis)`, enforced by a partial unique index, with EPA conflicts held
+as proposed/audit data until an atomic approval retires the prior effective row. **Findings 20,
+21, 22 and 24 remain genuinely Phase 2/3 and stay deferred.**
+
+**Still open, and deliberately so:** findings 20, 21, 22, 24 all concern **Phase 2/3**
 comparison and rate-source behavior, which this loop does not build — they must be settled before
 Phase 2, not before WP-0. Finding 30 (parked-migration ownership) is blocker row 4 above and
 **must clear before WP-1 stamps a migration**. Findings 32, 33, 34 are process-honesty items.

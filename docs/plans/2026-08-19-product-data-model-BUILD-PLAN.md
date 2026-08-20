@@ -216,6 +216,19 @@ field, which is exactly the failure WP-4's 35% concentration bug depends on bein
 `epa_is_cancelled`, `product_data_version`. WP-4 writes into these; it must not add columns
 inside a no-migration package.
 
+**WP-1 also carries the `product_label_drafts` queue extension, because WP-3 needs it and WP-4 is
+too late *(blocker found by the exact-snapshot Codex review of PR #435)*.** WP-3's **D-K escape
+hatch** — the crew types an unlisted brand free-hand, finishes receiving, and the typed name lands
+in the review queue as a *proposed* brand — requires `proposed_brand_name` and a payload the queue
+can actually hold. Those were specified in **WP-4**, which the apply order runs **after** WP-3.
+A builder following the order literally would have had four bad options at WP-3: drop the brand,
+smuggle it through an untyped text field, write an unreviewed permanent brand row, or block
+receiving — and blocking receiving is precisely the truck-at-the-dock failure D-K exists to
+prevent. **So the queue's schema prerequisite moves here:** WP-1's migration adds the typed
+versioned payload column and the `purpose` discriminator to `product_label_drafts`, and
+`proposed_brand_name` within that payload. **WP-3 consumes it; WP-4 adds only the EPA-specific
+RPC on top.** Neither WP-3 nor WP-4 may alter the queue's shape again.
+
 **Constraints:** `concentration_unit` ∈ `lb_per_gal`, `percent_w_w`, `cfu_per_ml`, `cfu_per_g`
 — **`lb_per_lb` rejected**. `basis` ∈ `acid_equivalent`, `active_ingredient`, `oxide`,
 `elemental`. Nullable concentration means *present, amount unknown*.
@@ -409,24 +422,39 @@ work that touches five)*:**
   `density_value` (the WP-2 override), `is_currently_sourced`, `sourcing_tier` (C-43).
 - **`receiving_records`** — `brand_id`, plus snapshot `brand_name_snapshot` /
   `brand_epa_snapshot`, plus `proposed_brand_name` for D-K.
-- **`receiving_record_brand_allocations`** — the new brand-allocation child table. **Its parent is
-  the receipt, not a downstream line** *(corrected reviewing PR #435 — an earlier draft of this
-  list keyed it to `delivery_item_id` / `application_record_lot_id`, neither of which exists yet
-  at receiving time)*. `receive_po_items` creates a `receiving_records` row; deliveries and
-  application lines are created later. So the table keys on **`receiving_record_id`**, holding
-  `product_id`, `brand_id`, `quantity`, `unit`, with its own RLS in the same migration and
-  `p_idempotency_key`-backed writes. The 30/15 split load is persisted here at receipt time, and
-  reversal identifies the rows by this key. **Define how these allocations propagate forward to
-  `delivery_items`** when those lines are later created — the propagation rule is part of WP-3,
-  not an afterthought. **Deliveries are the only forward target**: applications are not in use and
-  the lot chain stays dormant *(Mason, 2026-08-20)*, so there is no second propagation path here.
+- **TWO allocation children, not one — they answer different questions *(corrected again reviewing
+  PR #435; both earlier drafts of this list were wrong, in opposite directions)*.** The first draft
+  keyed allocations to the delivery line only, which cannot work because that line does not exist
+  when the truck is unloaded. The second keyed them to the receipt only, which cannot work either:
+  **what arrived is not what shipped.** Receipt allocations record *provenance*; they cannot
+  establish which brand went out on a later delivery, because stock pools. **PRD 1.9a-ii is
+  explicit** — *"allow more than one brand, each with a quantity, per delivery/application line,
+  keyed to the line itself"* (Mason, 2026-08-18). Both relations are required:
+  - **`receiving_record_brand_allocations`** — keyed to **`receiving_record_id`**, holding
+    `product_id`, `brand_id`, `quantity`, `unit`. `receive_po_items` writes it, and reversal
+    identifies these rows by this key. This is the 30/15 split **as it came off the truck**.
+  - **`delivery_item_brand_allocations`** — keyed to **`delivery_item_id`**, holding `brand_id`,
+    `quantity`, `unit`. This is the 30/15 split **as it shipped**, and it is what regulatory
+    paperwork and brand-specific scale weights read. **The operator selects it** when a line draws
+    on more than one brand — it is not inferred from receipts, because pooled inventory makes that
+    inference wrong. A single scalar `brand_name_snapshot` pair on `delivery_items` cannot hold
+    two brands and must not be relied on for split lines.
+
+  **Both** carry `brand_name_snapshot` / `brand_epa_snapshot` **on the allocation row itself**
+  (PRD 1.9a-iii: snapshot at write time, never dereference `product_brands` later — otherwise
+  correcting one brand's EPA number silently rewrites historical spray records). Both ship RLS in
+  the same migration and take `p_idempotency_key`. Both enforce **quantity conservation**: the
+  allocations on a line sum to that line's quantity, checked in the database, not in React.
 - **The relations carrying snapshot columns, enumerated and verified against the migrations that
   create them *(finding 28, closed reviewing PR #435)*.** "Application-record tables" was not an
   enumeration — but neither is a list that assumes a product reference the table does not have.
   A brand snapshot is only meaningful at **product-line cardinality**:
   - **`delivery_items`** — has `product_id`
     (`20260206172436_create_full_schema_v2.sql:326-334`). Takes `brand_name_snapshot` /
-    `brand_epa_snapshot` directly.
+    `brand_epa_snapshot` directly **for the single-brand case, which is the common one**. When a
+    line draws on more than one brand, the scalar pair **cannot represent it** — the authority is
+    `delivery_item_brand_allocations` above, and readers must prefer the allocation rows whenever
+    any exist for that line. Do not let the scalar pair silently answer for a split.
   - **NOT `application_record_lots` — settled, do not build against it.** Structurally it looks
     ideal: it has `product_id` **and** `source_receiving_record_id`
     (`20260622170000_application_record_lots.sql:36-48`). **But it holds 0 rows on live** (counted
@@ -612,23 +640,35 @@ where the new function is live and the old caller is still deployed. A required
 them through the EPA commit path. **So `purpose` defaults to `manual`**, which is precisely what
 an argument-less legacy call means.
 
-**"Optional and additive" is wrong in PostgreSQL, and saying it was my error *(corrected on the
-second pass through PR #435)*.** A function's identity **includes its argument list**, so
-`CREATE OR REPLACE FUNCTION` **cannot** add a parameter to `create_label_draft` — not even one
-with a `DEFAULT`. It either creates a **second overload** or requires dropping the existing
-signature. An overload is precisely what this repository's migration-drift gate exists to catch
-(the accidental dual-overload class), and dropping the live signature mid-window breaks the
-deployed caller — the same trap WP-3 already refuses for `receive_po_items`. **This is finding 3's
-shape repeating in a different package, and it must be resolved the same way.**
+**Two corrections here, both mine, both caught by review rather than by me.**
 
-**Resolution — the public signature does not change.** WP-4 keeps
-`create_label_draft`'s current five-argument signature exactly as deployed, and puts the new
-`purpose` and payload inputs on a **new internal function** the wrapper delegates to, mirroring
-the `_section9_receive_po_items_serialized` pattern already in this codebase
-(`20260726190515_section9_po_ap_high_remediation.sql`). The legacy call keeps resolving to the one
-public signature and keeps meaning `manual`. **The WP-4 proof exercises the unchanged
-five-argument call against the applied migration before the code merges**, and asserts
-`pg_proc` holds **exactly one** `create_label_draft` overload afterwards.
+*First:* "optional and additive" is **wrong in PostgreSQL.** A function's identity **includes its
+full parameter list**, so `CREATE OR REPLACE FUNCTION` **cannot** add a parameter — not even one
+with a `DEFAULT`. It creates a **second overload**, precisely the accidental-dual-overload class
+this repository's migration-drift gate exists to catch, or it requires dropping the live signature
+mid-window and breaking the deployed caller — the same trap WP-3 already refuses for
+`receive_po_items`.
+
+*Second:* **`create_label_draft` is not a five-argument function.** It is an **eleven-parameter**
+signature — `p_product_id`, `p_signal_word`, `p_rei_hours`, `p_phi_days`, `p_epa_registration`,
+`p_max_label_rate`, `p_max_label_rate_unit`, `p_source_note`, `p_confidence`, `p_status`,
+`p_idempotency_key` (`20260629210000_product_label_drafts.sql:122-132`). `handleCreateSampleDraft`
+merely passes **five of them by name** and lets the other six take their defaults. Reading arity
+off a call site is how that error happened; **named arguments hide arity completely.**
+
+**Resolution — do not touch `create_label_draft` at all.** Its exact eleven-parameter signature
+stays byte-identical, so the deployed caller keeps working through the apply-before-merge window
+and no overload is created. The EPA path gets a **new, distinctly named public RPC** —
+`create_label_draft_proposal` — carrying the typed payload and `purpose`. Per CRX canon it is
+`SECURITY DEFINER` with `SET search_path = public, pg_temp`, enforces the actor and admin check
+rather than trusting a passed-in id, takes `p_idempotency_key text DEFAULT NULL`, and ships narrow
+grants in the same migration. **The internal helper it delegates to is not the public surface:**
+`REVOKE ALL ... FROM PUBLIC, anon` and grant EXECUTE only to the roles that need it, so exposing a
+`SECURITY DEFINER` helper never becomes the privilege boundary.
+
+**Proof:** the unchanged eleven-parameter call succeeds against the applied migration *before* the
+code merges, and `pg_proc` holds **exactly one** `create_label_draft` and **exactly one**
+`create_label_draft_proposal` afterwards — asserted by query, not by reading the migration.
 
 **A stale proposal is refused at commit, not merged blindly *(caught reviewing PR #435)*.** The
 gap: if an admin edits a product's chemistry after an EPA proposal is created but before Mason
@@ -668,6 +708,31 @@ package exists to prevent.
 **Conflict rule (D-L):** where a lookup disagrees with a value Mason typed, **his value stays
 live** and the EPA version is stored beside it, flagged as a difference. A lookup never
 overwrites hand-entered data.
+
+**"Stored beside it" needs a database invariant, not just prose — and this belongs in WP-4, not
+Phase 2 *(blocker found by the exact-snapshot Codex review of PR #435)*.** The gap: WP-4 says
+every `ingredients[]` element is committed into `product_active_ingredients`, **and** that a
+conflicting typed value "stays live" with the EPA value beside it. Those two sentences together
+permit **two rows for the same chemistry with no rule about which one counts.** A consumer can
+then sum both concentrations or pick one nondeterministically — and summing two concentrations for
+one active is the same class of error as the ~35% one this package exists to prevent. The ledger
+deferred this to Phase 2 as review finding 16, but **WP-4 performs the live write in Phase 1**, so
+Phase 2 is too late.
+
+**The invariant:** exactly **one effective row per `(product_id, ingredient_id, basis)`**, enforced
+by a partial unique index on the effective rows — not by convention. Every
+`product_active_ingredients` row therefore carries an explicit **effective / proposed** state;
+there is no implicit "the newest one wins" and no nullable third state. `commit_label_draft`
+**never** creates a second effective row: where an effective row already exists for that key, the
+EPA value is retained as **proposed/audit data only** unless a single atomic commit both retires
+the prior effective row and promotes the new one. Mason's typed value stays effective by default
+(D-L); the EPA figure is visible beside it as a flagged difference and is **not** readable as
+chemistry until he approves the swap.
+
+**Proof:** commit a proposal that conflicts with a typed value, then query
+`product_active_ingredients` for that product and show **exactly one** effective row, still
+carrying Mason's number, with the EPA row present and marked proposed. Then approve the swap and
+show the count is **still exactly one**, now carrying the EPA number.
 
 **Cancelled registrations (D-T, reaffirmed as D-W):** a cancelled registration produces a **loud
 banner on the product and a warning when it is added to a quote** — but nothing is blocked.
