@@ -150,7 +150,11 @@ for (const e of entries) {
 
 function mergedLabel(sha) {
   if (!hasOriginMain || !sha) return mergedLabelFromStatus(null, false);
-  const r = spawnSync("git", ["merge-base", "--is-ancestor", sha, "origin/main"], {
+  // Pinned like every other mainline read: `--is-ancestor <sha> <rev>` tests sha against rev,
+  // so leaving rev symbolic lets a concurrent fetch label one worktree against a newer main
+  // than the rest of the same snapshot — and the merge labels against a newer main than the
+  // parked scan. Codex P2 on PR #437; the SessionStart hook already pinned its copy.
+  const r = spawnSync("git", ["merge-base", "--is-ancestor", sha, originMainRev], {
     encoding: "utf8", timeout: 5000, cwd: repoRoot,
   });
   return mergedLabelFromStatus(r.status, true);

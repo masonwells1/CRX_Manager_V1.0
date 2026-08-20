@@ -3,7 +3,7 @@
 // Run: node .claude/hooks/worktree-awareness-lib.test.mjs
 
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -1249,6 +1249,36 @@ const MAINLINE_HISTORY_SETTLES_CANDIDATE = "| 886 | 20260101000000 | **APPLIED L
 
   const emptyPath = originMainParkedMigrationPrefilter(() => `${PINNED}:\n`, PINNED);
   eq(emptyPath.state, "unknown", "a prefixed hit naming no path is UNKNOWN, never a known zero");
+}
+
+// ── Structural guard: no consumer may read mainline through the SYMBOLIC ref ──
+// Codex raised the "one snapshot per scan" invariant FOUR times on PR #437. Each manual
+// fix satisfied it at the call sites I was looking at and missed a sibling — the last was
+// `mergedLabel()` in fleet-status.mjs, still on `origin/main` after its twin in the
+// SessionStart hook had been pinned, sitting in plain sight in my own grep output.
+// A prose rule cannot enforce this; scanning for it can. Any git subcommand that CONSUMES
+// a revision must name the pinned id. `rev-parse` is the one place the symbolic name is
+// correct — that is where it gets resolved — and bare display strings are not git args.
+{
+  const HERE = path.dirname(fileURLToPath(import.meta.url));
+  const REV_CONSUMING = ["merge-base", "ls-tree", "show", "log", "diff", "grep", "cat-file", "rev-list"];
+  const consumers = [
+    ["scripts/fleet-status.mjs", path.join(HERE, "..", "..", "scripts", "fleet-status.mjs")],
+    [".claude/hooks/worktree-awareness.mjs", path.join(HERE, "worktree-awareness.mjs")],
+  ];
+  for (const [label, file] of consumers) {
+    const offenders = readFileSync(file, "utf8")
+      .split("\n")
+      .map((line, i) => ({ line, n: i + 1 }))
+      .filter(({ line }) => !line.trim().startsWith("//"))
+      .filter(({ line }) => line.includes('"origin/main"'))
+      .filter(({ line }) => REV_CONSUMING.some((cmd) => line.includes(`"${cmd}"`)));
+    eq(
+      offenders.map((o) => o.n),
+      [],
+      `${label}: every revision-consuming git read must use the pinned origin/main id, not the symbolic ref`,
+    );
+  }
 }
 
 console.log(`worktree-awareness-lib: ${pass} assertions passed`);

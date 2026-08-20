@@ -66,6 +66,15 @@ normally.) A guard that always answers UNKNOWN answers nothing.
   invalid, and merging it would turn the mainline scan UNKNOWN. A row is exempt only when
   `origin/main` registers the same path **and** the branch's pin still agrees with mainline's.
   Absent on both sides counts as agreement; present on one side only, or differing, does not.
+- **A structural guard now enforces the pinning, because prose did not.** Codex raised the "one
+  snapshot per scan" invariant **four** times; each manual fix satisfied the call sites in view and
+  missed a sibling. The last was `mergedLabel()` in `fleet-status.mjs`, still on the symbolic ref
+  after its twin in the SessionStart hook was pinned — visible in my own grep output and skipped.
+  A test now scans both consumers and fails on any revision-consuming git subcommand
+  (`merge-base`, `ls-tree`, `show`, `log`, `diff`, `grep`, `cat-file`, `rev-list`) that names
+  `"origin/main"` instead of the pinned id. `rev-parse` is exempt — that is where the symbolic
+  name is correct — and display strings are not git arguments. Mutation-tested: reverting that one
+  call site reddens it by file and rule.
 - **The exemption reads nothing of its own** (Codex HIGH, round 4). It consumes the exact
   `origin/main` history text the caller's mainline discovery pass verified against, injected via
   `readOriginMainHistory`. When the reader resolved `origin/main` independently, a concurrent
