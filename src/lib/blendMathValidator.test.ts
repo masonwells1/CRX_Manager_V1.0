@@ -146,6 +146,23 @@ describe('validateBlendMath', () => {
         expect(warnings[0].message).toContain('not fully checked');
       });
 
+      // Pins the precedence choice: excluded rows only ever LOWER the sum, so if what
+      // was counted already exceeds the tank the mismatch is true regardless and must
+      // stand alone. Emitting the "couldn't count a row" note beside it would soften a
+      // verdict that needs no softening.
+      it('reports only the over-capacity mismatch when a row also could not be counted', () => {
+        const warnings = validateBlendMath(
+          { total_acres: null, total_volume: 100, total_volume_unit: 'gal', application_rate: null },
+          [
+            { product_name: 'A', quantity: 140, unit: 'gal', rate_per_acre: null, rate_per_acre_unit: null, ...liq },
+            { product_name: 'B', quantity: 20, unit: 'furlong', rate_per_acre: null, rate_per_acre_unit: null, ...liq },
+          ]
+        );
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0].level).toBe('mismatch');
+        expect(warnings[0].message).toContain('more than the total volume');
+      });
+
       // The deliberate exclusion this must not undo: pounds of dry product in a
       // gallon tank is an ordinary ticket, and warning every time is how the banner
       // becomes wallpaper.
