@@ -9,6 +9,39 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ---
 
+## 2026-08-19 — Two of Sol's review findings declined by the owner (D-W, D-X)
+
+An independent adversarial review of the product data model plan (Codex `sol`, `gpt-5.6-sol` at
+high effort; full text in `docs/audits/2026-08-19-sol-adversarial-review-product-data-plan.md`)
+returned **NOT SAFE AS WRITTEN** — 8 blockers, 22 high. Two findings asked for changes that are
+business calls rather than technical ones. Both were put to Mason and **both were declined.**
+
+**D-W — cancelled EPA registrations stay sellable.** Sol's finding 26 argued that "warn loudly,
+keep selling" is unsafe as a blanket rule, because sell-through rights depend on the specific
+cancellation order and some carry a hard sale cutoff date; it wanted the system to fail closed
+when authorization cannot be confirmed. Mason: *"Don't worry about it, let it be sold."* **D-T
+stands unchanged — warn, never block.** No sale-blocking gate is to be added, and this is not to
+be re-opened by a later session reading the review and treating finding 26 as outstanding.
+
+**D-X — the quality tier stays a display concern.** Sol's finding 19 argued the tier is a property
+of the sellable product, not of a brand record, and wanted it moved onto `products` with
+database-enforced cross-tier substitution rules. Mason: it only affects glufosinate and
+mesotrione, and that is too narrow an edge case to justify the work. **Accepted — no schema
+change.** The protection that matters survives at the display layer, where **D-O and D-P already
+put it**: the tier is always shown, the tiers are never presented as interchangeable on matching
+actives alone, and the adjuvant bias running against the premium product is stated on screen.
+A builder must not add `sourcing_tier` to `products` or build substitution rules.
+
+**Operative rule:** findings 19 and 26 are closed by owner decision, not by being fixed. The other
+32 findings remain open and the plan is still NOT SAFE AS WRITTEN until they are addressed —
+above all the WP-4 / D-A contradiction that would store salt-form concentrations on the canonical
+acid and silently overstate active per gallon by ~35%.
+
+**Source:** `docs/plans/2026-08-19-product-data-model-BUILD-PLAN.md` §0 (D-W, D-X);
+`docs/audits/2026-08-19-sol-adversarial-review-product-data-plan.md`.
+
+---
+
 ## 2026-08-19 — Product data model: eleven owner decisions taken up front so the executor never blocks
 
 **Source:** Mason answered eleven questions in one sitting, 2026-08-19, explicitly so that
