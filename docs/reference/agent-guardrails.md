@@ -100,7 +100,11 @@ command position, but quoted search arguments remain data. Recursively inspected
 command bodies also recognize ordinary `$env:NODE_OPTIONS` assignments,
 environment-provider item/content cmdlets, their standard short aliases, aliases
 created inside the same command body, and .NET `SetEnvironmentVariable` calls
-before Node-backed runners. Recursively inspected CMD bodies fail closed
+before Node-backed runners. Those mutations are denied independently of whether
+Node execution appears in the same payload, so persistent MCP shell interactions
+cannot stage a preload for a later command. Alias definitions and unknown commands
+targeting `Env:NODE_OPTIONS` fail closed, as do standalone CMD mutations.
+Recursively inspected CMD bodies fail closed
 when `call`/`@call`, an `if` condition, or a `for … do` body precedes an explicit
 `NODE_OPTIONS` assignment and Node-backed execution. Parameter-expanded `env` assignment
 names fail closed before Node-backed executables. Bash `printf -v` and `read`

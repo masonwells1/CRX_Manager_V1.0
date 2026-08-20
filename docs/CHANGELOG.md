@@ -78,6 +78,11 @@ All significant development milestones, in reverse chronological order.
   environment-provider item/content cmdlets, their standard short aliases, and
   aliases created inside the same command body. Dynamic alias definitions fail
   closed when they can target the environment provider before Node execution.
+  Environment-provider and .NET `NODE_OPTIONS` mutations are denied even when
+  no Node command appears in the same payload, closing staged mutations across
+  persistent MCP shell interactions. Alias definitions and unknown commands
+  targeting the provider fail closed for the same stateful boundary. Standalone
+  CMD `set` and delayed-expansion mutations are denied as well.
   The parser also covers .NET
   `SetEnvironmentVariable` calls before `node` or a Node-backed package runner. Shell
   parameter expansion in an `env` assignment name fails closed as well, so a

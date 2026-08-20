@@ -723,25 +723,35 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
   });
   const nodeBackedCommandMentioned = tokenListMentionsNodeBackedCommand(tokens)
     || nestedLauncherMentionsNodeBackedCommand;
+  const compactDynamicTarget = value.toLowerCase().replace(/[\s"'`^+()[\]{},]/g, "");
+  const powershellMutation = tokens.some((token) => powerShellMutationCommands.has(unquotedExecutableBasename(token)))
+    && compactDynamicTarget.includes("env:node_options")
+    && /(?:\+|\s-join(?:\s|$)|\$\(|@\()/i.test(value);
+  const powerShellAliasDefinition = tokens.some((token) => powerShellAliasDefinitionCommands.has(unquotedExecutableBasename(token)));
+  const dotNetMutation = /setenvironmentvariable/i.test(value)
+    && compactDynamicTarget.includes("setenvironmentvariablenode_options");
+  const standalonePowerShellEnvMutation = tokens.some((target, index) => {
+    if (!target?.sawUnquoted || !shellWordCandidates(target)
+      .some((candidate) => /^(?:\$env:node_options(?:\+?=)?|(?:env:|env:\\)node_options)$/i.test(candidate))) return false;
+    let segmentStart = index;
+    while (segmentStart > 0 && !tokens[segmentStart - 1].control) segmentStart -= 1;
+    return /^\+?=/.test(String(tokens[index + 1]?.value || ""))
+      || shellWordCandidates(target).some((candidate) => /\+?=/i.test(candidate))
+      || tokens.slice(segmentStart, index).some((entry) => entry?.sawUnquoted);
+  });
+  const standaloneCmdSetMutation = tokens.some((token, index) => unquotedExecutableBasename(token) === "set"
+    && tokens.slice(index + 1).some((entry) => entry?.sawUnquoted && hasNodeOptionsAssignment(entry)));
+  const cmdDelayedMutation = tokens.some((token) => tokenNamed(token, ["cmd"]))
+    && /\/v(?::on)?(?:\s|$)/i.test(value)
+    && /\bset\s+![^!\r\n]+!\+?=/i.test(value);
+  if (powershellMutation || powerShellAliasDefinition
+    || dotNetMutation || standalonePowerShellEnvMutation || standaloneCmdSetMutation || cmdDelayedMutation) return true;
   if (nodeBackedCommandMentioned) {
     const dynamicAssignmentBuiltin = tokens.some((token) => tokenNamed(token, ["export", "declare", "typeset", "local", "readonly"]))
       && /(?:\$\(|`[^`]*`|<\(|>\(|\$\{|\$[A-Za-z_]|![^!\r\n]+!|%[^%\r\n]+%)/s.test(value);
     const dynamicPosixEnv = tokens.some((token) => tokenNamed(token, ["env"]))
       && (/(?:\$\(|`[^`]*`|<\()/s.test(value) || tokens.some(hasDynamicAssignmentName));
-    const compactDynamicTarget = value.toLowerCase().replace(/[\s"'`^+()[\]{},]/g, "");
-    const powershellMutation = tokens.some((token) => powerShellMutationCommands.has(unquotedExecutableBasename(token)))
-      && compactDynamicTarget.includes("env:node_options")
-      && /(?:\+|\s-join(?:\s|$)|\$\(|@\()/i.test(value);
-    const powerShellAliasDefinition = tokens.some((token) => powerShellAliasDefinitionCommands.has(unquotedExecutableBasename(token)))
-      && (compactDynamicTarget.includes("env:node_options")
-        || (/\benv\s*:/i.test(value) && /(?:\+|\$\(|\$[A-Za-z_]|`|@\()/i.test(value)));
-    const dotNetMutation = /setenvironmentvariable/i.test(value)
-      && compactDynamicTarget.includes("setenvironmentvariablenode_options")
-      && /(?:\+|\s-join(?:\s|$)|\$\(|@\()/i.test(value);
-    const cmdDelayedMutation = tokens.some((token) => tokenNamed(token, ["cmd"]))
-      && /\/v(?::on)?(?:\s|$)/i.test(value)
-      && /\bset\s+![^!\r\n]+!\+?=/i.test(value);
-    if (dynamicAssignmentBuiltin || dynamicPosixEnv || powershellMutation || powerShellAliasDefinition || dotNetMutation || cmdDelayedMutation) return true;
+    if (dynamicAssignmentBuiltin || dynamicPosixEnv) return true;
   }
 
   let allexportEnabled = false;

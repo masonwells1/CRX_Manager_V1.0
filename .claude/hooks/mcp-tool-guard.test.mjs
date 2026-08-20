@@ -102,6 +102,15 @@ const shellBuiltinNodeOptionsCases = [
   `powershell -NoProfile -Command "Set-Alias mutate Set-Item; mutate Env:NODE_OPTIONS '--require=./preload.cjs'; node scripts/ordinary-check.mjs"`,
   `powershell -NoProfile -Command "sal mutate si; mutate Env:NODE_OPTIONS '--require=./preload.cjs'; npm --version"`,
   `pwsh -NoProfile -Command "[Environment]::SetEnvironmentVariable('NODE_OPTIONS','--require=./preload.cjs'); npm --version"`,
+  `si Env:NODE_OPTIONS '--require=./preload.cjs'`,
+  `sc -Path Env:\\NODE_OPTIONS -Value '--require=./preload.cjs'`,
+  `$env:NODE_OPTIONS='--require=./preload.cjs'`,
+  `si ('Env:NO' + 'DE_OPTIONS') '--require=./preload.cjs'`,
+  `Set-Alias mutate Set-Item`,
+  `mutate Env:NODE_OPTIONS '--require=./preload.cjs'`,
+  `[Environment]::SetEnvironmentVariable('NODE_OPTIONS','--require=./preload.cjs')`,
+  `cmd /d /c "set NODE_OPTIONS=--require=./preload.cjs"`,
+  `cmd /v:on /c "set N=NODE_OPTIONS & set !N!=--require=./preload.cjs"`,
   `cmd /d /c "call set NODE_OPTIONS=--require=./preload.cjs & node scripts/ordinary-check.mjs"`,
   `cmd /d /c "@call set NODE_OPTIONS=--require=./preload.cjs & node scripts/ordinary-check.mjs"`,
   `cmd /d /c "if 1==1 set NODE_OPTIONS=--require=./preload.cjs & npm --version"`,
@@ -173,6 +182,22 @@ eq(r.stdout.trim(), "", "non-mutating DC tool (list_directory) is silent (not ma
 // ── start_process / interact_with_process: dangerous command denied ───────
 r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: "git push --force origin main" } });
 ok(isDeny(r), "DC start_process with a force-push command is denied");
+
+const persistentShellPid = 321;
+r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: "pwsh" } });
+eq(r.stdout.trim(), "", "starting an interactive PowerShell shell remains allowed");
+r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: persistentShellPid, input: "si Env:NODE_OPTIONS '--require=./preload.cjs'" } });
+ok(isDeny(r), "a persistent PowerShell interaction cannot stage NODE_OPTIONS through si");
+r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: persistentShellPid, input: "Set-Alias mutate Set-Item" } });
+ok(isDeny(r), "a persistent PowerShell interaction cannot stage a mutation alias");
+r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: persistentShellPid, input: "mutate Env:NODE_OPTIONS '--require=./preload.cjs'" } });
+ok(isDeny(r), "a pre-existing PowerShell alias cannot target Env:NODE_OPTIONS");
+const approvedProducerCommand = [
+  "node", ["scripts/apply-live-testdata-maintenance-", "20260812.mjs"].join(""),
+  ["--approved-by-", "mason=2026-08-12"].join(""),
+].join(" ");
+r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: persistentShellPid, input: approvedProducerCommand } });
+ok(!isDeny(r), "the exact approved producer command stays allowed when no preload mutation preceded it");
 
 r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: 123, input: "rm -rf src\n" } });
 ok(isDeny(r), "DC interact_with_process feeding rm -rf src is denied");
