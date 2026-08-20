@@ -373,27 +373,42 @@ component — that is how it stops an agent deleting or forging the wrapper-owne
 and the applied-source ledger — and it cannot tell "the repo's review state" from "an ordinary
 scratch file that happens to live under a worktree."
 
-The consequence is narrow and has a zero-cost workaround. The guard only fires when the command
-**spells out** the worktree path. Your shell already starts inside the worktree, so use relative
-paths and nothing is blocked:
+The consequence is narrow and has a zero-cost workaround. **For this collision specifically**, the
+guard fires only when the command **spells out** the worktree path — your shell already starts
+inside the worktree, so relative paths avoid it. (That is a statement about the worktree collision,
+not the guard's complete matching rule: `review-proof-guard` independently blocks commands naming
+`.claude` or `.claude/session-state` anywhere, and treats `rm`/`mv`/`git clean`/`rsync --delete`
+and friends as destructive verbs. See the guard row in `agent-guardrails.md` for the full rule.)
+
+Examples, all verified against the live hook stack:
 
 | | |
 |---|---|
-| ❌ `rm -f C:\CRX_Manager\.claude\worktrees\wt-a\scratch.tmp` | denied |
-| ❌ `cd C:\CRX_Manager\.claude\worktrees\wt-a && rm scratch.tmp` | denied |
+| ❌ `rm -f C:\CRX_Manager\.claude\worktrees\wt-a\scratch.tmp` | denied by `review-proof-guard` |
+| ❌ `cd C:\CRX_Manager\.claude\worktrees\wt-a && rm scratch.tmp` | denied by `review-proof-guard` |
 | ✅ `rm -f scratch.tmp` | allowed |
 | ✅ `rm -rf node_modules/.cache` | allowed |
-| ✅ `git clean -fd` / `git clean -fd src` | allowed |
 | ✅ `mv a.txt b.txt` | allowed |
 | ✅ `Write` to a worktree file (relative **or** absolute) | allowed |
 
-Two things that look like this bug but are not:
+Three things that look like this bug but are not — each is a **different guard**, so relative paths
+do not help:
 
-- **`find … -delete` is blocked everywhere**, in worktrees and out, by `bash-safety.mjs`. That is
-  deliberate and unrelated. Run the `find` without `-delete`, review the matches, then delete.
+- **`git clean -f`/`-fd`/`-fdx` is blocked everywhere**, in worktrees and out, by
+  `bash-safety-lib.mjs` (`Blocked \`git clean -f\``). `review-proof-guard` allows it once the path
+  is relative, but the command still does not run. Review with `git clean -n` first, then delete
+  the specific files. *(An earlier draft of this page listed `git clean -fd` as an allowed
+  workaround — that was wrong, caught in review of PR #434: it had been tested against
+  `review-proof-guard` alone rather than the whole hook stack.)*
+- **`find … -delete` is blocked everywhere** by a separate safety layer, with the message
+  "Blocked `find ... -delete`". Not `review-proof-guard`, and not `bash-safety-lib.mjs` either —
+  that library allows it. Run the `find` without `-delete`, review the matches, then delete.
 - **A blocked `Write` to `.claude/session-state/stop-wrap-ack.json` is a different hook.**
   `review-proof-guard` deliberately allows that write — it is the designed session-end
   acknowledgment valve.
+
+**Lesson worth keeping:** verifying a command against ONE hook does not tell you whether the command
+runs. Several guards sit on every Bash call. Test the real command, or say which guard you tested.
 
 **Do not "fix" this by stripping the worktree prefix out of the command text.** That was attempted
 on 2026-08-19/20 and abandoned after five independent `gpt-5.6-sol` review rounds found eight real

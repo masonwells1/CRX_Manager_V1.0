@@ -326,13 +326,28 @@ for (const payload of [
 }
 
 // The documented workaround must keep working: a destructive command that does
-// NOT name the worktree path is allowed, because the agent's shell already runs
-// inside the worktree. This is what makes the limitation above tolerable, so it
-// is pinned rather than left to chance.
-assert.equal(run({ tool_name: "Bash", cwd: "C:\\repo\\.claude\\worktrees\\wt-a", tool_input: { command: "rm -f guard-probe.tmp" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", cwd: "C:\\repo\\.claude\\worktrees\\wt-a", tool_input: { command: "rm -rf node_modules/.cache" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", cwd: "C:\\repo\\.claude\\worktrees\\wt-a", tool_input: { command: "git clean -fd src" } }).stdout, "");
-assert.equal(run({ tool_name: "Bash", cwd: "C:\\repo\\.claude\\worktrees\\wt-a", tool_input: { command: "mv a.txt b.txt" } }).stdout, "");
-assert.equal(run({ tool_name: "Write", cwd: "C:\\repo\\.claude\\worktrees\\wt-a", tool_input: { file_path: "src/foo.ts", content: "x" } }).stdout, "");
+// NOT name the worktree path passes THIS guard, because the agent's shell already
+// runs inside the worktree. That is what makes the limitation above tolerable, so
+// it is pinned rather than left to chance.
+//
+// Scope note (PR #434 review): these assert only that review-proof-guard allows
+// the command — NOT that it runs. Other guards sit on the same Bash call, and
+// `git clean -f/-fd/-fdx` is blocked by bash-safety-lib.mjs no matter how the path
+// is written. It is deliberately absent below: an earlier draft pinned it here and
+// documented it as a workaround, which was wrong. Do not add a case to this block
+// without checking the whole hook stack.
+//
+// status is asserted alongside stdout: a hook that CRASHES also produces empty
+// stdout, so an empty-stdout-only assertion would pass on a broken guard.
+for (const payload of [
+  { tool_name: "Bash", cwd: "C:\\repo\\.claude\\worktrees\\wt-a", tool_input: { command: "rm -f guard-probe.tmp" } },
+  { tool_name: "Bash", cwd: "C:\\repo\\.claude\\worktrees\\wt-a", tool_input: { command: "rm -rf node_modules/.cache" } },
+  { tool_name: "Bash", cwd: "C:\\repo\\.claude\\worktrees\\wt-a", tool_input: { command: "mv a.txt b.txt" } },
+  { tool_name: "Write", cwd: "C:\\repo\\.claude\\worktrees\\wt-a", tool_input: { file_path: "src/foo.ts", content: "x" } },
+]) {
+  const result = run(payload);
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "");
+}
 
 console.log("OK - review proof guard checks passed.");

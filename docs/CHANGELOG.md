@@ -74,12 +74,14 @@ worktree, because worktrees live at `<repo>/.claude/worktrees/<name>/` and the g
 `.claude` path component. Bisected to `f3e06c52` (PR #423 round-3/5 hardening); `c64ea3d4` and
 `4b302050` are not implicated.
 
-**Impact is much smaller than first reported.** The guard only fires when the command *spells out*
-the worktree path. The agent's shell already starts in the worktree, so `rm -f scratch.tmp`,
-`rm -rf node_modules/.cache`, `git clean -fd src`, `mv a.txt b.txt` and `Write` (relative or
-absolute) are all allowed — verified against the live guard. Two claims in the original report were
+**Impact is much smaller than first reported.** *For this collision*, the guard fires only when the
+command *spells out* the worktree path — the agent's shell already starts in the worktree, so
+`rm -f scratch.tmp`, `rm -rf node_modules/.cache`, `mv a.txt b.txt` and `Write` (relative or
+absolute) are allowed. That describes the collision, not the guard's whole matching rule: it also
+blocks commands naming `.claude`/`.claude/session-state` anywhere, with `rm`/`mv`/`git clean`/
+`rsync --delete`/`find … -delete` as destructive verbs. Two claims in the original report were
 wrong: the blocked `Write` to `stop-wrap-ack.json` came from a different hook, and `find … -delete`
-is blocked everywhere by `bash-safety.mjs`.
+is blocked everywhere by a separate safety layer rather than by this guard.
 
 **A fix was built and abandoned.** Five successive versions of a text-stripping carve-out were each
 reviewed by an independent `gpt-5.6-sol` high-effort pass. Every round found at least one real
