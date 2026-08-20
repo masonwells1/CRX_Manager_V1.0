@@ -775,25 +775,28 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
     const positionals = [];
     let explicitValue = null;
     let explicitName = false;
+    let unrecognizedParameter = false;
     for (let operandIndex = 0; operandIndex < operands.length; operandIndex += 1) {
       const operand = operands[operandIndex];
       const candidates = shellWordCandidates(operand);
-      const attachedValue = candidates.map((candidate) => candidate.match(/^-(?:value|v)(?::|=)(.+)$/i)?.[1]).find(Boolean);
+      const attachedValue = candidates
+        .map((candidate) => candidate.match(/^-v(?:a(?:l(?:u(?:e)?)?)?)?(?::|=)(.+)$/i)?.[1])
+        .find(Boolean);
       if (attachedValue) {
         explicitValue = attachedValue;
         continue;
       }
-      if (candidates.some((candidate) => /^-(?:value|v)$/i.test(candidate))) {
+      if (candidates.some((candidate) => /^-v(?:a(?:l(?:u(?:e)?)?)?)?$/i.test(candidate))) {
         explicitValue = shellWordCandidates(operands[operandIndex + 1])[0] || null;
         operandIndex += 1;
         continue;
       }
-      if (candidates.some((candidate) => /^-(?:name|n)$/i.test(candidate))) {
+      if (candidates.some((candidate) => /^-n(?:a(?:m(?:e)?)?)?$/i.test(candidate))) {
         explicitName = true;
         operandIndex += 1;
         continue;
       }
-      if (candidates.some((candidate) => /^-(?:name|n)(?::|=).+/i.test(candidate))) {
+      if (candidates.some((candidate) => /^-n(?:a(?:m(?:e)?)?)?(?::|=).+/i.test(candidate))) {
         explicitName = true;
         continue;
       }
@@ -801,9 +804,14 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
         operandIndex += 1;
         continue;
       }
-      if (candidates.some((candidate) => /^-/i.test(candidate))) continue;
+      if (candidates.some((candidate) => /^-(?:passthru|force|whatif|confirm|verbose|debug)$/i.test(candidate))) continue;
+      if (candidates.some((candidate) => /^-/i.test(candidate))) {
+        unrecognizedParameter = true;
+        continue;
+      }
       positionals.push(candidates[0] || "");
     }
+    if (unrecognizedParameter) return true;
     const aliasTarget = explicitValue || positionals[explicitName ? 0 : 1] || "";
     const targetBasename = aliasTarget.replace(/^[@&]/, "").split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase();
     return powerShellMutationCommands.has(targetBasename);
@@ -1189,9 +1197,16 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
       }
       if (name === "export") {
         cursor += 1;
-        while (cursor < segmentEnd && tokens[cursor].value.startsWith("-")) cursor += 1;
+        let nonAssignmentMode = false;
+        while (cursor < segmentEnd && tokens[cursor].value.startsWith("-")) {
+          const option = tokens[cursor].value;
+          if (option === "--") { cursor += 1; break; }
+          if (/^-[^-]*[np]/.test(option)) nonAssignmentMode = true;
+          cursor += 1;
+        }
         while (cursor < segmentEnd) {
-          if (namesNodeOptionsVariable(tokens[cursor])) return true;
+          if (hasNodeOptionsAssignment(tokens[cursor])) return true;
+          if (!nonAssignmentMode && namesNodeOptionsVariable(tokens[cursor])) return true;
           cursor += 1;
         }
       } else if (["declare", "typeset", "local", "readonly"].includes(name)) {

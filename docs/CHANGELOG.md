@@ -85,7 +85,12 @@ All significant development milestones, in reverse chronological order.
   environment-provider item/content cmdlets, their standard short aliases, and
   aliases created inside the same command body. Alias definitions fail closed
   when their resolved target is an environment-provider mutation command;
-  ordinary read-only aliases and alias spellings used as text remain allowed.
+  unambiguous `-Name`/`-Value` parameter abbreviations and either parameter
+  order are parsed before resolving that target, while unknown alias parameters
+  fail closed. Ordinary read-only aliases and alias spellings used as text
+  remain allowed. Bash `export -p` inspection and `export -n` remediation of a
+  bare `NODE_OPTIONS` name remain allowed, while assignments in either mode are
+  still denied.
   Environment-provider and .NET `NODE_OPTIONS` mutations are denied even when
   no Node command appears in the same payload, closing staged mutations across
   persistent MCP shell interactions. Dynamic environment-provider targets fail
