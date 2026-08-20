@@ -2511,6 +2511,32 @@ REVOKE ALL ON FUNCTION public.test_fn(uuid) FROM PUBLIC, anon, authenticated, se
 GRANT EXECUTE ON FUNCTION public.test_fn(uuid) TO postgres;`
 );
 r = runHook(`${INTERNAL_ONLY_FN}
+DO $do$
+BEGIN
+  EXECUTE 'GRANT EXECUTE ON FUNCTION public.test_fn(uuid) TO authenticated';
+END
+$do$;`);
+ok(isDeny(r), "a dynamic authenticated re-grant cannot reopen an internal actor mutator");
+
+r = runHook(`${INTERNAL_ONLY_FN}
+DO $do$
+DECLARE
+  v_acl text := 'GR' || 'ANT EXECUTE ON FUNCTION public.test_fn(uuid) TO authenticated';
+BEGIN
+  EXECUTE v_acl;
+END
+$do$;`);
+ok(isDeny(r), "an assembled dynamic re-grant cannot reopen an internal actor mutator");
+
+r = runHook(`${INTERNAL_ONLY_FN}
+SELECT cron.schedule(
+  'reopen-internal-actor-mutator',
+  '* * * * *',
+  $job$GRANT EXECUTE ON FUNCTION public.test_fn(uuid) TO authenticated$job$
+);`);
+ok(isDeny(r), "a delayed authenticated re-grant cannot reopen an internal actor mutator");
+
+r = runHook(`${INTERNAL_ONLY_FN}
 GRANT EXECUTE ON FUNCTION public.test_fn(uuid) TO U&"\\0061uthenticated";`);
 ok(isDeny(r), "a Unicode-escaped authenticated function grant cannot bypass actor binding review");
 

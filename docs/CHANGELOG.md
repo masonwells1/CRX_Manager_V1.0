@@ -27,6 +27,18 @@ assignment, `SELECT INTO`, and PL/pgSQL `ALIAS` declarations is fail-closed.
 Eight regressions cover the forwarding forms and the non-mutating control; the
 focused hook suite now passes 401 assertions.
 
+Review finding AB-ACL-001 then proved that the same internal-helper exception
+trusted only statically parsed grants. A migration could revoke every browser
+role, create an unbound actor mutator, and later reopen it through
+`DO ... EXECUTE 'GRANT EXECUTE ... TO authenticated'`; a delayed `pg_cron`
+command had the same effect. Quoted routine-ACL commands after the explicit
+revoke now keep the routine under normal actor-binding review, including plain,
+dollar-quoted, and Unicode-escaped payloads, while direct trusted-principal
+grants remain compatible. Exact direct, assembled, and delayed regressions bring
+the focused hook suite to 404 assertions. Removing the new detector reopens the
+reported exploit and makes the regression fail, proving the clause is
+load-bearing.
+
 ## 2026-08-13 — Actor-binding guard covers procedures and cron schema identity
 
 Fresh review of the cross-schema repair found two additional HIGH bypasses. A

@@ -2154,11 +2154,69 @@ function routineAltersMatch(left, right) {
     left.signature === right.signature;
 }
 
+const ROUTINE_ACL_COMMAND_RE =
+  /\b(?:GRANT|REVOKE)(?:\s+GRANT\s+OPTION\s+FOR)?\s+(?:EXECUTE|ALL(?:\s+PRIVILEGES)?)\s+ON\s+(?:(?:FUNCTION|PROCEDURE|ROUTINE)\b|ALL\s+(?:FUNCTIONS|PROCEDURES|ROUTINES)\s+IN\s+SCHEMA\b)/i;
+
+/** Direct EXECUTE, pg_cron, and other owner-executing callables can carry a
+ * routine ACL command inside a quoted payload. Treat that stored command as an
+ * effective-access ambiguity instead of mistaking the earlier static revoke
+ * for the final ACL. Comments and quoted identifiers are not command data. */
+function hasQuotedRoutineAclCommand(rawSql) {
+  const sql = String(rawSql || "");
+  let i = 0;
+  while (i < sql.length) {
+    if (sql[i] === "-" && sql[i + 1] === "-") {
+      const newline = sql.indexOf("\n", i + 2);
+      i = newline === -1 ? sql.length : newline;
+      continue;
+    }
+    if (sql[i] === "/" && sql[i + 1] === "*") {
+      let depth = 1;
+      let j = i + 2;
+      while (j < sql.length && depth > 0) {
+        if (sql[j] === "/" && sql[j + 1] === "*") { depth++; j += 2; continue; }
+        if (sql[j] === "*" && sql[j + 1] === "/") { depth--; j += 2; continue; }
+        j++;
+      }
+      if (depth > 0) return true;
+      i = j;
+      continue;
+    }
+    if (sql[i] === "'") {
+      const end = scanQuoted(sql, i);
+      if (end === -1) return true;
+      const payload = sql.slice(i + 1, end - 1);
+      const unicode = unicodeStringForHeaderDetection(sql, i, end, payload);
+      if (unicode?.error) return true;
+      if (ROUTINE_ACL_COMMAND_RE.test(payload) ||
+          (unicode !== null && ROUTINE_ACL_COMMAND_RE.test(unicode.payload))) return true;
+      i = end;
+      continue;
+    }
+    if (sql[i] === '"') {
+      const end = scanQuoted(sql, i);
+      if (end === -1) return true;
+      i = end;
+      continue;
+    }
+    const tag = sql[i] === "$" ? dollarTagAt(sql, i) : null;
+    if (tag) {
+      const close = sql.indexOf(tag, i + tag.length);
+      if (close === -1) return true;
+      if (ROUTINE_ACL_COMMAND_RE.test(sql.slice(i + tag.length, close))) return true;
+      i = close + tag.length;
+      continue;
+    }
+    i++;
+  }
+  return false;
+}
+
 /** A SECURITY DEFINER routine can be treated as an internal helper only when
  * its final local ACL explicitly excludes every browser-client role and any later
  * grant is limited to Supabase's non-client execution principals. Unknown,
  * schema-wide, quoted, or role-membership-sensitive grants remain fail-closed. */
-function routineExplicitlyNonAuthenticated(structuralSql, fromIndex, routine) {
+function routineExplicitlyNonAuthenticated(structuralSql, rawSql, fromIndex, routine) {
   if (!routine || !/^[a-z_][\w$]*\.[a-z_][\w$]*$/.test(routine.name) || routine.signature === null) return false;
   // Role membership may make a direct internal-only EXECUTE grant reachable by
   // browser roles. Do not try to model PostgreSQL's recursive membership graph:
@@ -2208,6 +2266,8 @@ function routineExplicitlyNonAuthenticated(structuralSql, fromIndex, routine) {
   }
   if (revocationEnd === -1) return false;
   const later = tail.slice(revocationEnd);
+  const rawLater = String(rawSql || "").slice(fromIndex + revocationEnd);
+  if (hasQuotedRoutineAclCommand(rawLater)) return false;
   // A quoted or Unicode-escaped schema name is deliberately not normalized
   // here. Any later schema-wide EXECUTE grant leaves the helper's effective
   // reachability ambiguous, so retain full actor-binding review instead.
@@ -2486,7 +2546,7 @@ try {
       .filter((n) => ACTOR_PARAM_RE.test(n));
     if (actorParams.length === 0) continue;
 
-    if (routineExplicitlyNonAuthenticated(masked, head.index, createdRoutine)) continue;
+    if (routineExplicitlyNonAuthenticated(masked, content, head.index, createdRoutine)) continue;
 
     const commentBlankedBody = blankComments(body);
     const actorParamReference = actorParams.map(identifierReferencePattern).join("|");
