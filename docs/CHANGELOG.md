@@ -87,7 +87,9 @@ All significant development milestones, in reverse chronological order.
   closed, and the protected producer cannot run through an existing interactive
   process; its exact approved command must launch in a fresh process. Alias
   definitions and unknown commands targeting the provider fail closed for the
-  same stateful boundary. Standalone
+  same stateful boundary. Known read-only PowerShell commands may inspect
+  `NODE_OPTIONS` without being mistaken for writes; direct assignments,
+  provider mutation cmdlets, and unknown aliases remain denied. Standalone
   CMD `set` and delayed-expansion mutations are denied as well.
   While the protected producer file exists, all MCP `interact_with_process`
   calls are denied so CMD caret continuations cannot assemble a preload or the

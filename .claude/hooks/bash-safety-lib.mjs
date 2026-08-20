@@ -668,8 +668,15 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
     ["co", "py-item"], ["c", "pi"], ["c", "p"], ["co", "py"],
     ["mo", "ve-item"], ["m", "i"], ["m", "ove"], ["m", "v"],
     ["re", "name-item"], ["r", "ni"], ["r", "en"],
+    ["re", "mo", "ve-item"], ["r", "i"], ["r", "m"], ["r", "m", "dir"], ["d", "el"], ["e", "rase"], ["r", "d"],
+    ["c", "lear-item"], ["c", "li"],
   ]) powerShellMutationCommands.add(nameParts.join(""));
   const powerShellAliasDefinitionCommands = new Set(["set-alias", "sal", "new-alias", "nal"]);
+  const powerShellReadCommands = new Set([
+    "write-output", "echo", "write-host",
+    "get-item", "gi", "get-childitem", "gci", "dir", "ls",
+    "get-content", "gc", "cat", "type", "test-path", "resolve-path",
+  ]);
 
   const tokenNamed = (token, names) => {
     if (!token || token.control || (token.sawQuoted && !/[\\/]/.test(token.value))) return false;
@@ -762,9 +769,11 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
       .some((candidate) => /^(?:\$env:node_options(?:\+?=)?|(?:env:|env:\\)node_options)$/i.test(candidate))) return false;
     let segmentStart = index;
     while (segmentStart > 0 && !tokens[segmentStart - 1].control) segmentStart -= 1;
+    const segmentCommand = unquotedExecutableBasename(tokens[segmentStart]);
     return /^\+?=/.test(String(tokens[index + 1]?.value || ""))
       || shellWordCandidates(target).some((candidate) => /\+?=/i.test(candidate))
-      || tokens.slice(segmentStart, index).some((entry) => entry?.sawUnquoted);
+      || (tokens.slice(segmentStart, index).some((entry) => entry?.sawUnquoted)
+        && !powerShellReadCommands.has(segmentCommand));
   });
   const standaloneCmdSetMutation = tokens.some((token, index) => unquotedExecutableBasename(token) === "set"
     && tokens.slice(index + 1).some((entry) => entry?.sawUnquoted && hasNodeOptionsAssignment(entry)));

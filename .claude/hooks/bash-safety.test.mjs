@@ -420,6 +420,13 @@ const powerShellProviderGuardCases = [
   `${["Re", "name-Item"].join("")} Env:SAFE 'NODE_OPTIONS'`,
   `${["r", "ni"].join("")} 'Env:SAFE' 'NODE_OPTIONS'`,
   `${["r", "en"].join("")} Env:SAFE 'NODE_OPTIONS'`,
+  `${["Re", "mo", "ve-Item"].join("")} Env:NODE_OPTIONS`,
+  `${["c", "li"].join("")} Env:NODE_OPTIONS`,
+];
+const powerShellProviderReadCases = [
+  "Write-Output $env:NODE_OPTIONS",
+  "Get-Item Env:NODE_OPTIONS",
+  "Test-Path Env:NODE_OPTIONS",
 ];
 for (const separator of [";", "|", "&"]) {
   ok(checkDangerousCommand(`Write-Output marker\x5c${separator} ${pythonCommand} -c \"print('opaque')\"`), `PowerShell backslash-prefixed ${separator} cannot hide an opaque interpreter`);
@@ -514,6 +521,7 @@ ok(checkDangerousCommand('bash -c "NODE_OPTIONS=--require=./preload.cjs node scr
 ok(checkDangerousCommand("Set-Item Env:NODE_OPTIONS $PRELOAD"), "PowerShell Set-Item NODE_OPTIONS mutation is denied");
 ok(checkDangerousCommand("$env:NODE_OPTIONS = $PRELOAD"), "PowerShell env assignment to NODE_OPTIONS is denied");
 ok(checkDangerousCommand("[Environment]::SetEnvironmentVariable('NODE_OPTIONS', $PRELOAD)"), ".NET NODE_OPTIONS mutation is denied");
+for (const command of powerShellProviderReadCases) ok(!checkDangerousCommand(command), `PowerShell environment read remains allowed: ${command}`);
 ok(!checkDangerousCommand("rg -n 'NODE_OPTIONS=' docs"), "NODE_OPTIONS spelling used as quoted search data stays allowed");
 ok(!checkDangerousCommand("rg -n 'command env NODE_OPTIONS=' docs"), "wrapped NODE_OPTIONS spelling used as quoted search data stays allowed");
 ok(!checkDangerousCommand("rg -n 'SAFE= command -- env NODE_OPTIONS=' docs"), "complex wrapped NODE_OPTIONS spelling used as quoted search data stays allowed");
@@ -716,6 +724,11 @@ for (const command of powerShellProviderGuardCases) {
   r = runHook({ tool_name: "PowerShell", tool_input: { command } });
   eq(r.status, 0, `bash-safety.mjs exits 0 after denying a provider mutation: ${command}`);
   ok(r.stdout.includes('"permissionDecision":"deny"'), `bash-safety.mjs denies a provider mutation: ${command}`);
+}
+for (const command of powerShellProviderReadCases) {
+  r = runHook({ tool_name: "PowerShell", tool_input: { command } });
+  eq(r.status, 0, `bash-safety.mjs exits 0 for a provider read: ${command}`);
+  ok(r.stdout.includes('"permissionDecision":"allow"'), `bash-safety.mjs explicitly allows a provider read: ${command}`);
 }
 
 for (const command of nestedCompletePolicyGuardCases) {

@@ -188,6 +188,12 @@ r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { 
 eq(r.stdout.trim(), "", "starting an interactive PowerShell shell remains allowed");
 r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: persistentShellPid, input: "" } });
 ok(isDeny(r), "even an empty interaction is denied while the protected producer exists");
+const producerAbsentCwd = path.join(os.tmpdir(), `mcp-tool-guard-no-producer-${process.pid}`);
+r = runHook(
+  { tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: persistentShellPid, input: "Write-Output safe" } },
+  producerAbsentCwd
+);
+eq(r.stdout.trim(), "", "benign persistent-process input remains allowed when the protected producer is absent");
 for (const fragment of [
   "set NO^",
   "DE_OPTIONS=--require=./preload.cjs",
