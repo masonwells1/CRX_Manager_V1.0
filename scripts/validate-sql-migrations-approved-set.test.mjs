@@ -831,6 +831,15 @@ const CASES = [
       `SELECT public.repair$orders();\n`,
   },
   {
+    name: 'round-41: a tag-shaped dollar run inside an identifier is not a quote',
+    expect: 'violation',
+    mustReport: 'repair_dollar_x_dollar_',
+    sql:
+      `CREATE FUNCTION public.repair$x$() RETURNS void LANGUAGE plpgsql AS $$\n` +
+      `BEGIN\n  UPDATE public.orders SET total_profit = total_profit;\nEND\n$$;\n` +
+      `SELECT public.repair$x$();\n`,
+  },
+  {
     // ROUND 27 (Codex High). The allowlist above was the bypass one more time.
     // `pg_temp` is on it because a temp table is scratch — but a temp VIEW is
     // not scratch, it is a writable alias for permanent rows. A single-table

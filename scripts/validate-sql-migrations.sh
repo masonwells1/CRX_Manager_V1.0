@@ -579,7 +579,8 @@ AWK_STRIP_NOISE=$(cat <<'AWK_SN'
             # identifier. This keeps unquoted foo$bar paired with its call while
             # leaving $body$ ... $body$ parseable.
             tail = substr(s, i)
-            if (match(tail, /^\$[a-z0-9_]*\$/)) {
+            p = substr(out, length(out), 1)
+            if (p !~ /[a-z0-9_]/ && match(tail, /^\$[a-z0-9_]*\$/)) {
               out = out substr(tail, 1, RLENGTH); i += RLENGTH; continue
             }
             out = out "_dollar_"; i++; continue

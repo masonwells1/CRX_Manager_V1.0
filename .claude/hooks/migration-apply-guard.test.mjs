@@ -1581,6 +1581,53 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(isDeny(r) && isOneShotDeny(r),
       "round-40 control: a dollar-quoted DO body still exposes resident calls");
 
+    // ROUND 41. A tag-shaped run inside an identifier is not a dollar quote.
+    const tagIdentifierDefinition =
+      "CREATE FUNCTION public.repair$x$() RETURNS void LANGUAGE plpgsql AS $$ BEGIN " +
+      "UPDATE public.orders SET total_profit = total_profit; END $$; ";
+    r = apply("20990601000021_tag_identifier_replay",
+      tagIdentifierDefinition + "SELECT public.repair$x$();");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-41: repair$x$ pairs as an invoked mutating routine, not a quoted body");
+
+    r = apply("20990601000022_tag_identifier_deferred", tagIdentifierDefinition);
+    ok(!isOneShotDeny(r),
+      "round-41 MUTANT: removing the repair$x$ invocation leaves its body deferred");
+
+    const literalPadding = [
+      "EXECUTE 'SELECT 0'",
+      ...Array.from(
+        { length: 499 },
+        (_, index) => "PERFORM 'SELECT " + String(index + 1) + "'",
+      ),
+    ].join("; ");
+    r = apply("20990601000023_literal_cap",
+      "DO $$ BEGIN " + literalPadding +
+      "; EXECUTE 'SELECT public.resident_money_repair()'; END $$;");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-41: the 501st executable literal fails closed instead of disappearing");
+
+    r = apply("20990601000024_literal_cap_mutant",
+      "DO $$ BEGIN " + literalPadding + "; END $$;");
+    ok(!isOneShotDeny(r),
+      "round-41 MUTANT: exactly 500 harmless executable literals remain clearable");
+
+    r = apply("20990601000025_public_builtin_overload", "SELECT public.round(1);");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-41: public.round overload does not inherit pg_catalog trust");
+
+    r = apply("20990601000026_public_auth_overload", "SELECT public.is_admin(1);");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-41: public.is_admin overload remains an unknown resident call");
+
+    r = apply("20990601000027_catalog_builtin", "SELECT pg_catalog.round(1.2);");
+    ok(!isOneShotDeny(r),
+      "round-41 control: explicit pg_catalog.round remains trusted");
+
+    r = apply("20990601000028_auth_helper", "SELECT auth.uid();");
+    ok(!isOneShotDeny(r),
+      "round-41 control: exact auth.uid remains trusted");
+
     // 6. Fail closed. The registry is tracked in git; unreadable or absent means
     //    the checkout is broken or the file was removed — the two states in
     //    which a silent pass is most dangerous.

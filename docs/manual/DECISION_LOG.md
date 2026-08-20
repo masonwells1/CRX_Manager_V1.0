@@ -477,6 +477,10 @@ This records the live `auth.users` referential-action paths into public tables i
 the infrastructure-schema exemption to erase them. Because ordinary, E-string, and U&-string
 `DO` bodies are removed by the shared lexer before write and routine-call analysis, both guards
 refuse those anonymous-block forms; a dollar-quoted `DO` body is the required readable shape.
+Dollar-quote opening also requires an identifier boundary, so tag-shaped bytes inside
+`repair$x$` remain identifier bytes. Static-analysis resource limits fail closed rather than
+truncating silently, and a builtin exemption applies only to an unqualified call, an exact
+`pg_catalog` call, or the fixed `auth.uid/jwt/role` identities—not to a `public` overload.
 
 ---
 

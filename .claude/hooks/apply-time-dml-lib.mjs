@@ -137,7 +137,13 @@ export function applyTimeCode(sql, depth = 0) {
 
     // $tag$ ... $tag$
     if (ch === "$") {
-      const m = /^\$([A-Za-z_\u0080-\uFFFF][A-Za-z0-9_\u0080-\uFFFF]*)?\$/.exec(sql.slice(i));
+      // PostgreSQL requires a dollar-quoted string to be separated from a
+      // preceding identifier. In repair$x$, the first $x$-looking run is part
+      // of one legal identifier, not a body delimiter.
+      const precededByIdent = i > 0 && IDENT_CHAR.test(sql[i - 1]);
+      const m = precededByIdent
+        ? null
+        : /^\$([A-Za-z_\u0080-\uFFFF][A-Za-z0-9_\u0080-\uFFFF]*)?\$/.exec(sql.slice(i));
       if (m) {
         const tag = m[0];
         const close = sql.indexOf(tag, i + tag.length);
@@ -1096,7 +1102,7 @@ const NOT_A_ROUTINE_CALL = new Set([
   "st_setsrid", "st_unaryunion",
   "lpad", "rpad", "regexp_replace", "regexp_match", "regexp_matches",
   "regexp_split_to_array", "regexp_split_to_table", "starts_with",
-  "is_admin", "auth", "uid", "jwt", "role",
+  "auth", "uid", "jwt", "role",
   // ROUND 31. Reading statements introduced by a control structure reaches four
   // migrations that guard a repair behind the plpgsql_check static analyzer —
   // `IF EXISTS (...) THEN SELECT count(*) ... FROM plpgsql_check_function(...)`.
@@ -1105,6 +1111,7 @@ const NOT_A_ROUTINE_CALL = new Set([
   // is named here rather than charged as a resident routine of unknown effect.
   "plpgsql_check_function",
 ]);
+const TRUSTED_AUTH_ROUTINES = new Set(["uid", "jwt", "role"]);
 
 /**
  * Routines this code runs for effect whose bodies are not in `defined`.
@@ -1136,8 +1143,18 @@ function unknownCallsIn(codeLower, defined) {
       const nameStart = mm.index + mm[1].length;
       const before = stmt.slice(0, nameStart);
       if (NOT_A_CALL.test(before) || NOT_A_CALL_HERE.test(before)) continue;
+      const schema = mm[1].replace(/\.$/, "");
       const name = mm[2];
-      if (defined.has(name) || NOT_A_ROUTINE_CALL.has(name)) continue;
+      if (defined.has(name)) continue;
+      // A bare builtin name is not a grant of trust to public.<same_name>.
+      // Only unqualified calls, explicit pg_catalog calls, and the three fixed
+      // Supabase auth helpers may use the builtin exemption. A schema-qualified
+      // public overload stays unknown and therefore fails closed.
+      const trustedBuiltin =
+        (!schema && NOT_A_ROUTINE_CALL.has(name)) ||
+        (schema === "pg_catalog" && NOT_A_ROUTINE_CALL.has(name)) ||
+        (schema === "auth" && TRUSTED_AUTH_ROUTINES.has(name));
+      if (trustedBuiltin) continue;
       out.add(name);
     }
   }
@@ -1262,7 +1279,14 @@ export function applyTimeWriteTargets(
   const foldLiterals = (result, lits) => {
     if (!result.dynamicExec) return;
     for (const lit of lits) {
-      if (analysed.has(lit) || analysed.size >= 500) continue;
+      if (analysed.has(lit)) continue;
+      if (analysed.size >= 500) {
+        // The cap is a denial boundary, never a silent truncation boundary.
+        // Otherwise an attacker can pad 500 harmless literals ahead of the
+        // executable one that calls a resident money mutator.
+        top.unresolved = true;
+        break;
+      }
       analysed.add(lit);
       if (!readsAsStatement(lit)) continue;
       const parsed = applyTimeCode(lit);

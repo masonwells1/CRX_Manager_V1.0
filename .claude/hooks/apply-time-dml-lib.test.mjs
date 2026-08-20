@@ -682,6 +682,14 @@ eq(T(null), [], "a null body does not throw");
   );
   ok(unquotedDollar.targets.has('orders.total_profit'),
     'round-36: unquoted embedded $ routine identity pairs definition and call');
+
+  const tagShapedDollar = applyTimeWriteTargets(
+    'CREATE FUNCTION public.repair$x$() RETURNS void LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.orders SET total_profit = total_profit; END $$; ' +
+    'SELECT public.repair$x$();',
+  );
+  ok(tagShapedDollar.targets.has('orders.total_profit'),
+    'round-41: a tag-shaped $x$ run inside an identifier is not a dollar quote');
 }
 
 // -------- ROUND 32: PL/pgSQL conditions and assignments are executable too
@@ -869,6 +877,45 @@ eq(T(null), [], "a null body does not throw");
   );
   ok(readableCall.unknownCalls.includes('existing_repair') && !readableCall.unresolved,
     'round-40 control: a dollar-quoted DO body still exposes resident routine calls');
+}
+
+// ---------------- ROUND 41: resource caps and builtin trust fail closed
+{
+  const padding = [
+    "EXECUTE 'SELECT 0'",
+    ...Array.from(
+      { length: 499 },
+      (_, index) => "PERFORM 'SELECT " + String(index + 1) + "'",
+    ),
+  ].join('; ');
+  const capped = applyTimeWriteTargets(
+    "DO $$ BEGIN " + padding +
+    "; EXECUTE 'SELECT public.existing_repair()'; END $$;",
+  );
+  ok(capped.unresolved,
+    'round-41: exceeding the 500-literal analysis cap fails closed');
+
+  const belowCap = applyTimeWriteTargets(
+    "DO $$ BEGIN " + padding + "; END $$;",
+  );
+  ok(!belowCap.unresolved && belowCap.unknownCalls.length === 0,
+    'round-41 MUTANT: exactly 500 harmless executable literals remain analyzable');
+
+  const publicAuthOverload = applyTimeWriteTargets('SELECT public.is_admin(1);');
+  ok(publicAuthOverload.unknownCalls.includes('is_admin'),
+    'round-41: public.is_admin overload does not inherit a bare-name exemption');
+
+  const publicBuiltinOverload = applyTimeWriteTargets('SELECT public.round(1);');
+  ok(publicBuiltinOverload.unknownCalls.includes('round'),
+    'round-41: a public overload of a PostgreSQL builtin fails closed');
+
+  const catalogBuiltin = applyTimeWriteTargets('SELECT pg_catalog.round(1.2);');
+  ok(!catalogBuiltin.unknownCalls.includes('round'),
+    'round-41 control: explicit pg_catalog builtin identity stays trusted');
+
+  const authHelper = applyTimeWriteTargets('SELECT auth.uid();');
+  ok(!authHelper.unknownCalls.includes('uid'),
+    'round-41 control: the fixed auth.uid identity stays trusted');
 }
 
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

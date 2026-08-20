@@ -265,6 +265,13 @@ themselves into. Measured over all 884 migrations, **one** file changes
 classification and it is a genuine apply-time reach; it was already `unresolved`, so
 the cost is zero new prompts.
 
+Dollar-quote delimiters are recognized only at a token boundary; a legal identifier such as
+`repair$x$` stays atomic in both analyzers. The apply-time literal walker may bound its work,
+but reaching that bound makes the migration unresolved rather than dropping later executable
+literals. Routine exemptions are identity-aware at the schema boundary: explicit `public`
+overloads do not inherit builtin trust, while exact `pg_catalog` and fixed Supabase `auth`
+helpers retain their narrow exemptions.
+
 **A trigger rewrite is still a rewrite (round 31).** Every rule above proves a repair
 rewrote exactly the rows it hashed — for the table the `UPDATE` names. Triggers were
 invisible to all of them, so a repair on `order_items` that captured an id set, hashed
