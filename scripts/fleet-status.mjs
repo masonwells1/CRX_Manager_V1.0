@@ -53,7 +53,7 @@ function originMainSqlBlobMap(paths) {
       stdio: ["pipe", "pipe", "ignore"],
     });
     return result.status === 0 ? result.stdout : null;
-    // `originMainRev` is read at call time, long after it is resolved above.
+    // `originMainRev` is read at call time, long after it is resolved below (line ~132).
   }, ORIGIN_MAIN_CAT_FILE_MAX_BUFFER, originMainRev);
 }
 

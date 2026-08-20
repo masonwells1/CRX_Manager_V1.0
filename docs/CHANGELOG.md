@@ -2,7 +2,7 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (19 of 19 → 4 of 21)
+## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (every worktree → 6 of 23)
 
 `node scripts/fleet-status.mjs` reported `PARKED STATE UNKNOWN` for **every** worktree — all 19 —
 so the parked-migration count could not be read at all. That blocks stamping a new migration into
@@ -89,9 +89,16 @@ normally.) A guard that always answers UNKNOWN answers nothing.
 - **Cost.** The ~840 KiB shared history is parsed once per worktree, and `origin/main`'s history is
   read once per reader.
 
-**Proof:** the structural defect is gone — **19 of 19** worktrees UNKNOWN became **4 of 21**, and
-the four that remain are named, specific, and real (see below). All three mainline candidates are
-still listed by name — attributed, not hidden. 211 lib assertions pass, including the original
+**Proof:** the structural defect is gone — every worktree reported UNKNOWN before; **6 of 23** do
+now (measured 2026-08-20; the fleet churns, so treat the denominator as a snapshot). Those six are
+named, specific, and real (see below). Note the honest cost: **3 of the 6 come from this PR's own
+pin comparison** — an A/B at one moment measured 3 UNKNOWN with the comparison disabled and 6 with
+it enabled. Three branches carry a candidate row whose sha256 pin disagrees with `origin/main`'s.
+The scan cannot distinguish "this branch rewrote the pin" (the Codex P2 tampering case) from "this
+branch is stale and mainline changed the row underneath it", so it declines to answer for both.
+That is the fail-closed direction and it is deliberate, but it means this PR buys a smaller
+reduction than the structural fix alone would suggest. All mainline candidates are still listed by
+name — attributed, not hidden. 230 lib assertions pass, including the original
 rule's own UNKNOWN test, the tree-vs-history regression, the cross-phase snapshot regression, and
 an aggregate false-zero regression. A standalone end-to-end probe drives all seven false-zero
 shapes Codex raised across four review rounds (negated, future, qualified, qualified-negation,
@@ -100,7 +107,8 @@ plus a registered-candidate control that still exempts and an assertion that the
 ref-resolving git call of its own. Both real consumers were run: `fleet-status.mjs` and the
 SessionStart hook, which agree.
 
-**Still open, and NOT a code defect.** Four checkouts are **70–104 commits behind `origin/main`**
+**Still open, and NOT a code defect.** Of the six, three are the pin-disagreement cases described
+above. The others are stale checkouts — **70–104 commits behind `origin/main`**
 and still hold its older wording of rows 872–877/886. `main` has since re-worded those same rows —
 PR #393 restaged the Wave A drafts into `scripts/.staging-migrations/` ("PARKED DRAFT (STAGED)")
 and row 886 became "APPLIED LIVE" — so the stale copies still read "LOCAL CANDIDATE" for SQL those
