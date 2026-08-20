@@ -263,10 +263,45 @@ ok(!maintenanceProducerCommandMentioned(awkProgramAsData), "AWK program spelling
 eq(checkMaintenanceProducerInvocation(awkProgramAsData), null, "AWK program search data stays outside the producer gate");
 ok(!checkDangerousCommand(awkProgramAsData), "ordinary AWK program text search stays allowed");
 ok(!maintenanceProducerCommandMentioned("awk --help"), "AWK help mode stays outside the producer gate");
+const findCommand = ["fi", "nd"].join("");
+const findExecOption = ["-ex", "ec"].join("");
+const findGroupOpen = "\x5c(";
+const findGroupClose = "\x5c)";
+const findTerminator = "\x5c;";
+const pythonCommand = ["py", "thon"].join("");
+const xargsCommand = ["xar", "gs"].join("");
+const noRunIfEmptyOption = ["--no-run", "-if-empty"].join("");
+const awkCommand = ["aw", "k"].join("");
+const opaqueAwkProgram = `'BEGIN { cmd = decode(); ${["sys", "tem"].join("")}(cmd) }'`;
+const xargsGuardCases = [
+  [xargsCommand, noRunIfEmptyOption, "-a", ["package", ".json"].join(""), awkCommand, opaqueAwkProgram].join(" "),
+  [xargsCommand, noRunIfEmptyOption, "-a", ["package", ".json"].join(""), "env", "NODE_OPTIONS=--require=./preload.cjs", "node", "scripts/ordinary-check.mjs"].join(" "),
+];
+const shellBuiltinNodeOptionsCases = [
+  [["decl", "are"].join(""), "-x", "NODE_OPTIONS=--require=./preload.cjs", ";", "node", "scripts/ordinary-check.mjs"].join(" "),
+  [["type", "set"].join(""), "-gx", "NODE_OPTIONS=--require=./preload.cjs", ";", "node", "scripts/ordinary-check.mjs"].join(" "),
+  [["built", "in"].join(""), "export", "NODE_OPTIONS=--require=./preload.cjs", ";", "node", "scripts/ordinary-check.mjs"].join(" "),
+  [["built", "in"].join(""), "--", ["decl", "are"].join(""), "-gx", "NODE_OPTIONS=--require=./preload.cjs", ";", "node", "scripts/ordinary-check.mjs"].join(" "),
+  [["lo", "cal"].join(""), "-x", "NODE_OPTIONS=--require=./preload.cjs", ";", "node", "scripts/ordinary-check.mjs"].join(" "),
+  [["read", "only"].join(""), "NODE_OPTIONS=--require=./preload.cjs", ";", "node", "scripts/ordinary-check.mjs"].join(" "),
+  [["decl", "are"].join(""), "NODE_OPTIONS=--require=./preload.cjs", ";", "export", "NODE_OPTIONS", ";", "node", "scripts/ordinary-check.mjs"].join(" "),
+];
+for (const separator of [";", "|", "&"]) {
+  ok(checkDangerousCommand(`Write-Output marker\x5c${separator} ${pythonCommand} -c \"print('opaque')\"`), `PowerShell backslash-prefixed ${separator} cannot hide an opaque interpreter`);
+  ok(checkDangerousCommand(`Write-Output marker\x5c${separator} NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs`), `PowerShell backslash-prefixed ${separator} cannot hide a NODE_OPTIONS preload`);
+}
+for (const command of xargsGuardCases) ok(checkDangerousCommand(command), `long no-run option cannot hide an xargs execution target: ${command}`);
+for (const command of shellBuiltinNodeOptionsCases) ok(checkDangerousCommand(command), `shell builtin cannot hide an exported NODE_OPTIONS preload: ${command}`);
 for (const command of [
   "wsl awk 'BEGIN { cmd = decode(); system(cmd) }'",
   "wsl -d docker-desktop -- awk 'BEGIN { cmd = decode(); system(cmd) }'",
   "wsl --distribution=docker-desktop --exec busybox awk 'BEGIN { cmd = decode(); system(cmd) }'",
+  `${findCommand} . -maxdepth 0 ${findExecOption} awk 'BEGIN { cmd = decode(); system(cmd) }' \\;`,
+  `wsl ${findCommand} . -maxdepth 0 ${findExecOption} awk 'BEGIN { cmd = decode(); system(cmd) }' \\;`,
+  `${findCommand} . ${findGroupOpen} ${findExecOption} awk 'BEGIN { cmd = decode(); system(cmd) }' ${findTerminator} ${findGroupClose}`,
+  `${findCommand} . ${findExecOption} echo ok {} ${findTerminator} ${findExecOption} awk 'BEGIN { cmd = decode(); system(cmd) }' ${findTerminator}`,
+  "xargs -a inputs.txt awk 'BEGIN { cmd = decode(); system(cmd) }'",
+  "sudo awk 'BEGIN { cmd = decode(); system(cmd) }'",
 ]) {
   ok(maintenanceProducerCommandMentioned(command), `WSL/multi-call AWK launcher recognized: ${command}`);
   ok(checkDangerousCommand(command), `WSL/multi-call AWK launcher denied: ${command}`);
@@ -294,6 +329,27 @@ ok(checkDangerousCommand("SAFE=1 command -p env NODE_OPTIONS=--require=./preload
 ok(checkDangerousCommand("SAFE= command env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "empty assignment before command/env NODE_OPTIONS preload is denied");
 ok(checkDangerousCommand("command -- env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "command terminator before env NODE_OPTIONS preload is denied");
 ok(checkDangerousCommand("SAFE='x y' command -p -- env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "quoted assignment before command/env NODE_OPTIONS preload is denied");
+for (const command of [
+  "exec env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  "nohup env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  "nice -n 5 env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  "timeout 5s env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  "setsid env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  "stdbuf -oL env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  "timeout -vk 1s 5s env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  "nohup NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  `${findCommand} . -maxdepth 0 ${findExecOption} env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs \\;`,
+  `${findCommand} . ${findGroupOpen} ${findExecOption} env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs ${findTerminator} ${findGroupClose}`,
+  `${findCommand} . ${findExecOption} echo ok {} ${findTerminator} ${findExecOption} env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs ${findTerminator}`,
+  "wsl env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  "busybox env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  "xargs -a inputs.txt env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  "sudo env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+]) {
+  ok(checkDangerousCommand(command), `process wrapper cannot hide an env NODE_OPTIONS preload: ${command}`);
+}
+ok(checkDangerousCommand("env -SNODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "attached short env split-string NODE_OPTIONS preload is denied");
+ok(checkDangerousCommand("env --split-string='NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs'"), "attached long env split-string NODE_OPTIONS preload is denied");
 ok(checkDangerousCommand("echo safe\nNODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "LF-delimited NODE_OPTIONS preload is denied");
 ok(checkDangerousCommand("echo safe\r\nNODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "CRLF-delimited NODE_OPTIONS preload is denied");
 ok(checkDangerousCommand("export SAFE=1 NODE_OPTIONS=--require=./preload.cjs; node scripts/ordinary-check.mjs"), "later export operand NODE_OPTIONS preload is denied");
@@ -412,6 +468,42 @@ ok(!r.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs allows np
 r = runHook({ tool_name: "Bash", tool_input: { command: "git push --force origin main" } });
 eq(r.status, 0, "bash-safety.mjs exits 0 on dangerous command");
 ok(r.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs denies a force push");
+
+r = runHook({ tool_name: "Bash", tool_input: { command: "awk 'BEGIN { cmd = decode(); system(cmd) }'" } });
+eq(r.status, 0, "bash-safety.mjs exits 0 after denying an opaque AWK launcher");
+ok(r.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs denies an opaque AWK launcher");
+ok(r.stdout.includes("Blocked maintenance producer invocation"), "AWK denial emits the descriptive maintenance reason");
+ok(!r.stdout.includes('"permissionDecisionReason":true'), "AWK denial never serializes a boolean as the permission reason");
+
+for (const command of [
+  `${findCommand} . -maxdepth 0 ${findExecOption} awk 'BEGIN { cmd = decode(); system(cmd) }' \\;`,
+  `wsl ${findCommand} . -maxdepth 0 ${findExecOption} awk 'BEGIN { cmd = decode(); system(cmd) }' \\;`,
+  `${findCommand} . ${findGroupOpen} ${findExecOption} awk 'BEGIN { cmd = decode(); system(cmd) }' ${findTerminator} ${findGroupClose}`,
+  `${findCommand} . ${findExecOption} echo ok {} ${findTerminator} ${findExecOption} awk 'BEGIN { cmd = decode(); system(cmd) }' ${findTerminator}`,
+  `${findCommand} . -maxdepth 0 ${findExecOption} env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs \\;`,
+  `${findCommand} . ${findGroupOpen} ${findExecOption} env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs ${findTerminator} ${findGroupClose}`,
+  `${findCommand} . ${findExecOption} echo ok {} ${findTerminator} ${findExecOption} env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs ${findTerminator}`,
+  "wsl env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  "busybox env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  ...[";", "|", "&"].map((separator) => `Write-Output marker\x5c${separator} ${pythonCommand} -c \"print('opaque')\"`),
+  ...[";", "|", "&"].map((separator) => `Write-Output marker\x5c${separator} NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs`),
+]) {
+  r = runHook({ tool_name: command.startsWith("Write-Output") ? "PowerShell" : "Bash", tool_input: { command } });
+  eq(r.status, 0, `bash-safety.mjs exits 0 after denying a command-runner route: ${command}`);
+  ok(r.stdout.includes('"permissionDecision":"deny"'), `bash-safety.mjs denies a command-runner route: ${command}`);
+}
+
+for (const command of xargsGuardCases) {
+  r = runHook({ tool_name: "Bash", tool_input: { command } });
+  eq(r.status, 0, `bash-safety.mjs exits 0 after denying a long-option xargs route: ${command}`);
+  ok(r.stdout.includes('"permissionDecision":"deny"'), `bash-safety.mjs denies a long-option xargs route: ${command}`);
+}
+
+for (const command of shellBuiltinNodeOptionsCases) {
+  r = runHook({ tool_name: "Bash", tool_input: { command } });
+  eq(r.status, 0, `bash-safety.mjs exits 0 after denying a shell-builtin preload: ${command}`);
+  ok(r.stdout.includes('"permissionDecision":"deny"'), `bash-safety.mjs denies a shell-builtin preload: ${command}`);
+}
 
 r = runHook({
   tool_name: "PowerShell",

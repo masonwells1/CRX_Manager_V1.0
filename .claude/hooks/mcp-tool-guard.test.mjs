@@ -25,6 +25,30 @@ function runHook(payload, cwd) {
 }
 function isDeny(r) { return r.stdout.includes('"permissionDecision":"deny"'); }
 
+const findCommand = ["fi", "nd"].join("");
+const findExecOption = ["-ex", "ec"].join("");
+const findGroupOpen = "\x5c(";
+const findGroupClose = "\x5c)";
+const findTerminator = "\x5c;";
+const pythonCommand = ["py", "thon"].join("");
+const xargsCommand = ["xar", "gs"].join("");
+const noRunIfEmptyOption = ["--no-run", "-if-empty"].join("");
+const awkCommand = ["aw", "k"].join("");
+const opaqueAwkProgram = `'BEGIN { cmd = decode(); ${["sys", "tem"].join("")}(cmd) }'`;
+const xargsGuardCases = [
+  [xargsCommand, noRunIfEmptyOption, "-a", ["package", ".json"].join(""), awkCommand, opaqueAwkProgram].join(" "),
+  [xargsCommand, noRunIfEmptyOption, "-a", ["package", ".json"].join(""), "env", "NODE_OPTIONS=--require=./preload.cjs", "node", "scripts/ordinary-check.mjs"].join(" "),
+];
+const shellBuiltinNodeOptionsCases = [
+  [["decl", "are"].join(""), "-x", "NODE_OPTIONS=--require=./preload.cjs", ";", "node", "scripts/ordinary-check.mjs"].join(" "),
+  [["type", "set"].join(""), "-gx", "NODE_OPTIONS=--require=./preload.cjs", ";", "node", "scripts/ordinary-check.mjs"].join(" "),
+  [["built", "in"].join(""), "export", "NODE_OPTIONS=--require=./preload.cjs", ";", "node", "scripts/ordinary-check.mjs"].join(" "),
+  [["built", "in"].join(""), "--", ["decl", "are"].join(""), "-gx", "NODE_OPTIONS=--require=./preload.cjs", ";", "node", "scripts/ordinary-check.mjs"].join(" "),
+  [["lo", "cal"].join(""), "-x", "NODE_OPTIONS=--require=./preload.cjs", ";", "node", "scripts/ordinary-check.mjs"].join(" "),
+  [["read", "only"].join(""), "NODE_OPTIONS=--require=./preload.cjs", ";", "node", "scripts/ordinary-check.mjs"].join(" "),
+  [["decl", "are"].join(""), "NODE_OPTIONS=--require=./preload.cjs", ";", "export", "NODE_OPTIONS", ";", "node", "scripts/ordinary-check.mjs"].join(" "),
+];
+
 // ── tools NOT in the Desktop Commander mutating set pass straight through ──
 let r = runHook({ tool_name: "Read", tool_input: { file_path: "src/App.tsx" } });
 eq(r.status, 0, "unrelated tool exits 0");
@@ -79,6 +103,21 @@ for (const command of [
   'cmd /d /c "echo safe & set NODE_OPTIONS=--require=./preload.cjs & node scripts/ordinary-check.mjs"',
   'powershell -NoProfile -Command "cmd /c \'set NODE_OPTIONS=--require=./preload.cjs & node scripts/ordinary-check.mjs\'"',
   'bash -c "NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"',
+  "nohup env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  "env -SNODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  `${findCommand} . -maxdepth 0 ${findExecOption} awk 'BEGIN { cmd = decode(); system(cmd) }' \\;`,
+  `wsl ${findCommand} . -maxdepth 0 ${findExecOption} awk 'BEGIN { cmd = decode(); system(cmd) }' \\;`,
+  `${findCommand} . ${findGroupOpen} ${findExecOption} awk 'BEGIN { cmd = decode(); system(cmd) }' ${findTerminator} ${findGroupClose}`,
+  `${findCommand} . ${findExecOption} echo ok {} ${findTerminator} ${findExecOption} awk 'BEGIN { cmd = decode(); system(cmd) }' ${findTerminator}`,
+  `${findCommand} . -maxdepth 0 ${findExecOption} env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs \\;`,
+  `${findCommand} . ${findGroupOpen} ${findExecOption} env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs ${findTerminator} ${findGroupClose}`,
+  `${findCommand} . ${findExecOption} echo ok {} ${findTerminator} ${findExecOption} env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs ${findTerminator}`,
+  "wsl env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  "busybox env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  ...[";", "|", "&"].map((separator) => `Write-Output marker\x5c${separator} ${pythonCommand} -c \"print('opaque')\"`),
+  ...[";", "|", "&"].map((separator) => `Write-Output marker\x5c${separator} NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs`),
+  ...xargsGuardCases,
+  ...shellBuiltinNodeOptionsCases,
 ]) {
   r = runHook({
     tool_name: "mcp__Desktop_Commander__start_process",

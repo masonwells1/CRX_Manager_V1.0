@@ -23,6 +23,8 @@ const MAINTENANCE_PRODUCER_ALLOWED_COMMANDS = new Set([
 
 export function maintenanceProducerCommandMentioned(command) {
   const value = String(command || "");
+  const powerShellBoundaryVariant = value.replace(/\\([;&|])/g, "$1");
+  if (powerShellBoundaryVariant !== value && maintenanceProducerCommandMentioned(powerShellBoundaryVariant)) return true;
   const hasDynamicSyntax = (text) => /[*?\[\]{}$`@]|[<>]\(|\([^()\r\n]*\+[^()\r\n]*\)|\s-join(?:\s|$)|![^!\r\n]+!|%[^%\r\n]+%/i.test(text);
   const dynamicSyntax = hasDynamicSyntax(value);
   const tokenize = (text) => {
@@ -46,6 +48,18 @@ export function maintenanceProducerCommandMentioned(command) {
             current += char;
             sawQuoted = true;
           }
+          continue;
+        }
+        if (char === "\\" && index + 1 < text.length) {
+          current += char + text[index + 1];
+          sawUnquoted = true;
+          index += 1;
+          continue;
+        }
+        if (char === "{" && text[index + 1] === "}") {
+          current += "{}";
+          sawUnquoted = true;
+          index += 1;
           continue;
         }
         if (char === "\"" || char === "'") {
@@ -112,6 +126,44 @@ export function maintenanceProducerCommandMentioned(command) {
           if (/^-[i0v]*[uCa][i0v]*$/.test(argument)) { cursor += 2; continue; }
           if (/^(?:-u|--unset|-C|--chdir|-a|--argv0)$/.test(argument)) { cursor += 2; continue; }
           if (/^[A-Za-z_]\w*=/.test(argument) || argument.startsWith("-")) { cursor += 1; continue; }
+          break;
+        }
+      } else if (named(["fi", "nd"].join(""))) {
+        cursor += 1;
+        let runnerCursor = -1;
+        for (let scan = cursor; scan < index; scan += 1) {
+          if (/^-(?:exec|execdir|ok|okdir)$/.test(normalizeShellOption(list[scan].value))) runnerCursor = scan + 1;
+        }
+        if (runnerCursor < 0) return false;
+        cursor = runnerCursor;
+      } else if (named("xargs")) {
+        cursor += 1;
+        if (cursor < index && /^--(?:help|version)$/.test(list[cursor].value)) return false;
+        while (cursor < index) {
+          const argument = normalizeShellOption(list[cursor].value);
+          if (argument === "--") { cursor += 1; break; }
+          if (/^(?:-a|--arg-file|-d|--delimiter|-E|--eof|-I|--replace|-J|-L|--max-lines|-n|--max-args|-P|--max-procs|-R|-S|-s|--max-chars|--process-slot-var)$/.test(argument)) {
+            cursor += 2;
+            continue;
+          }
+          if (/^(?:-[adEIJLnPRSs].+|--(?:arg-file|delimiter|eof|replace|max-lines|max-args|max-procs|max-chars|process-slot-var)=.+|--(?:null|open-tty|interactive|no-run-if-empty|show-limits|verbose|exit)|-[0oprtx]+|-[eil].*)$/.test(argument)) {
+            cursor += 1;
+            continue;
+          }
+          if (argument.startsWith("-")) return true;
+          break;
+        }
+      } else if (["sudo", "doas"].some((name) => named(name))) {
+        cursor += 1;
+        while (cursor < index) {
+          const argument = normalizeShellOption(list[cursor].value);
+          if (/^(?:--help|--version|-V|-l|--list)$/.test(argument)) return false;
+          if (argument === "--") { cursor += 1; break; }
+          if (/^(?:-u|--user|-g|--group|-h|--host|-p|--prompt|-C|--close-from|-r|--role|-t|--type|-D|--chdir)$/.test(argument)) {
+            cursor += 2;
+            continue;
+          }
+          if (argument.startsWith("-") || /^[A-Za-z_]\w*=/.test(argument)) { cursor += 1; continue; }
           break;
         }
       } else if (named("wsl")) {
@@ -426,6 +478,16 @@ function tokenizeShellWords(text) {
       else current += char;
       continue;
     }
+    if (char === "\\" && index + 1 < text.length) {
+      current += char + text[index + 1];
+      index += 1;
+      continue;
+    }
+    if (char === "{" && text[index + 1] === "}") {
+      current += "{}";
+      index += 1;
+      continue;
+    }
     if (char === "\"" || char === "'") {
       quote = char;
       sawQuoted = true;
@@ -445,10 +507,15 @@ function tokenizeShellWords(text) {
 }
 
 function nodeOptionsAssignmentMentioned(command, depth = 0) {
-  const tokens = tokenizeShellWords(String(command || ""));
+  const value = String(command || "");
+  const powerShellBoundaryVariant = value.replace(/\\([;&|])/g, "$1");
+  if (powerShellBoundaryVariant !== value
+    && (depth >= 4 || nodeOptionsAssignmentMentioned(powerShellBoundaryVariant, depth + 1))) return true;
+  const tokens = tokenizeShellWords(value);
   const assignmentName = (token) => /^([A-Za-z_]\w*)=/.exec(token?.value || "")?.[1]?.toLowerCase() || "";
   const executableName = (token) => String(token?.value || "").replace(/^@/, "").split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase();
   const hasNodeOptionsAssignment = (token) => assignmentName(token) === "node_options";
+  const namesNodeOptionsVariable = (token) => /^node_options(?:\[[^\]]*\])?(?:=|$)/i.test(String(token?.value || ""));
 
   for (let segmentStart = 0; segmentStart < tokens.length;) {
     while (segmentStart < tokens.length && tokens[segmentStart].control) segmentStart += 1;
@@ -485,11 +552,16 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
           const argument = tokens[cursor].value;
           if (/^--(?:help|version)$/.test(argument)) break;
           if (argument === "--") { cursor += 1; break; }
-          const splitString = /^(?:-[i0v]*S|--split-string)(?:=(.*))?$/.exec(argument);
-          if (splitString) {
-            const splitCommand = splitString[1] || tokens[cursor + 1]?.value || "";
-            if (splitCommand && nodeOptionsAssignmentMentioned(splitCommand)) return true;
-            cursor += splitString[1] === undefined ? 2 : 1;
+          const shortSplitString = /^-[i0v]*S(.*)$/.exec(argument);
+          const longSplitString = /^--split-string(?:=(.*))?$/.exec(argument);
+          if (shortSplitString || longSplitString) {
+            const hasAttachedValue = shortSplitString
+              ? shortSplitString[1].length > 0
+              : argument.includes("=");
+            const attachedValue = shortSplitString?.[1] ?? longSplitString?.[1] ?? "";
+            const splitCommand = hasAttachedValue ? attachedValue : tokens[cursor + 1]?.value || "";
+            if (inspectNestedCommand(splitCommand)) return true;
+            cursor += hasAttachedValue ? 1 : 2;
             continue;
           }
           if (/^(?:-u|--unset|-C|--chdir|-a|--argv0)$/.test(argument)) { cursor += 2; continue; }
@@ -498,6 +570,165 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
           if (assignmentName(tokens[cursor])) { cursor += 1; continue; }
           break;
         }
+        if (skipAssignments()) return true;
+        continue;
+      }
+      if (name === "builtin") {
+        cursor += 1;
+        if (cursor < segmentEnd && tokens[cursor].value === "--") cursor += 1;
+        else if (cursor < segmentEnd && tokens[cursor].value.startsWith("-")) break;
+        if (skipAssignments()) return true;
+        continue;
+      }
+      if (name === "wsl") {
+        cursor += 1;
+        let terminalMode = false;
+        while (cursor < segmentEnd) {
+          const argument = tokens[cursor].value.replace(/\\\//g, "/");
+          if (/^(?:--help|--version|--status|--list|-l)$/.test(argument)) { terminalMode = true; break; }
+          if (argument === "--") { cursor += 1; break; }
+          if (/^(?:-e|--exec)$/.test(argument)) { cursor += 1; break; }
+          if (/^(?:-d|--distribution|-u|--user|--cd|--shell-type)$/.test(argument)) { cursor += 2; continue; }
+          if (/^(?:--distribution|--user|--cd|--shell-type)=/.test(argument)) { cursor += 1; continue; }
+          if (argument.startsWith("-")) { cursor += 1; continue; }
+          break;
+        }
+        if (terminalMode) break;
+        if (skipAssignments()) return true;
+        continue;
+      }
+      if (["busybox", "toybox"].includes(name)) {
+        cursor += 1;
+        if (cursor < segmentEnd && /^(?:--help|--version|--list|--list-full|--install)$/.test(tokens[cursor].value)) break;
+        if (cursor < segmentEnd && tokens[cursor].value === "--") cursor += 1;
+        if (skipAssignments()) return true;
+        continue;
+      }
+      if (name === ["fi", "nd"].join("")) {
+        for (let scan = cursor + 1; scan < segmentEnd; scan += 1) {
+          if (!/^-(?:exec|execdir|ok|okdir)$/.test(tokens[scan].value)) continue;
+          const actionStart = scan + 1;
+          let actionEnd = actionStart;
+          while (actionEnd < segmentEnd && !/^(?:\\;|\+)$/.test(tokens[actionEnd].value)) actionEnd += 1;
+          const action = tokens.slice(actionStart, actionEnd).map((token) => token.value).join(" ");
+          if (inspectNestedCommand(action)) return true;
+          scan = actionEnd;
+        }
+        break;
+      }
+      if (name === "xargs") {
+        cursor += 1;
+        let terminalMode = false;
+        while (cursor < segmentEnd) {
+          const argument = tokens[cursor].value;
+          if (/^--(?:help|version)$/.test(argument)) { terminalMode = true; break; }
+          if (argument === "--") { cursor += 1; break; }
+          if (/^(?:-a|--arg-file|-d|--delimiter|-E|--eof|-I|--replace|-J|-L|--max-lines|-n|--max-args|-P|--max-procs|-R|-S|-s|--max-chars|--process-slot-var)$/.test(argument)) { cursor += 2; continue; }
+          if (/^(?:-[adEIJLnPRSs].+|--(?:arg-file|delimiter|eof|replace|max-lines|max-args|max-procs|max-chars|process-slot-var)=.+|--(?:null|open-tty|interactive|no-run-if-empty|show-limits|verbose|exit)|-[0oprtx]+|-[eil].*)$/.test(argument)) { cursor += 1; continue; }
+          if (argument.startsWith("-")) {
+            const remaining = tokens.slice(cursor + 1, segmentEnd).map((token) => token.value).join(" ");
+            const remainingAfterValue = tokens.slice(cursor + 2, segmentEnd).map((token) => token.value).join(" ");
+            if (tokens.slice(cursor + 1, segmentEnd).some(hasNodeOptionsAssignment)
+              || inspectNestedCommand(remaining)
+              || inspectNestedCommand(remainingAfterValue)) return true;
+          }
+          break;
+        }
+        if (terminalMode) break;
+        if (skipAssignments()) return true;
+        continue;
+      }
+      if (["sudo", "doas"].includes(name)) {
+        cursor += 1;
+        let terminalMode = false;
+        while (cursor < segmentEnd) {
+          const argument = tokens[cursor].value;
+          if (/^(?:--help|--version|-V|-l|--list)$/.test(argument)) { terminalMode = true; break; }
+          if (argument === "--") { cursor += 1; break; }
+          if (/^(?:-u|--user|-g|--group|-h|--host|-p|--prompt|-C|--close-from|-r|--role|-t|--type|-D|--chdir)$/.test(argument)) { cursor += 2; continue; }
+          if (argument.startsWith("-") || assignmentName(tokens[cursor])) { cursor += 1; continue; }
+          break;
+        }
+        if (terminalMode) break;
+        if (skipAssignments()) return true;
+        continue;
+      }
+      if (name === "exec") {
+        cursor += 1;
+        while (cursor < segmentEnd) {
+          const argument = tokens[cursor].value;
+          if (argument === "--") { cursor += 1; break; }
+          if (argument === "-a") { cursor += 2; continue; }
+          if (/^-[cl]+$/.test(argument)) { cursor += 1; continue; }
+          break;
+        }
+        if (skipAssignments()) return true;
+        continue;
+      }
+      if (name === "nohup") {
+        cursor += 1;
+        if (cursor < segmentEnd && /^--(?:help|version)$/.test(tokens[cursor].value)) break;
+        if (cursor < segmentEnd && tokens[cursor].value === "--") cursor += 1;
+        if (skipAssignments()) return true;
+        continue;
+      }
+      if (name === "nice") {
+        cursor += 1;
+        let terminalMode = false;
+        while (cursor < segmentEnd) {
+          const argument = tokens[cursor].value;
+          if (/^--(?:help|version)$/.test(argument)) { terminalMode = true; break; }
+          if (argument === "--") { cursor += 1; break; }
+          if (/^(?:-n|--adjustment)$/.test(argument)) { cursor += 2; continue; }
+          if (/^(?:-n.+|--adjustment=.+|-[0-9]+)$/.test(argument)) { cursor += 1; continue; }
+          break;
+        }
+        if (terminalMode) break;
+        if (skipAssignments()) return true;
+        continue;
+      }
+      if (name === "timeout") {
+        cursor += 1;
+        let terminalMode = false;
+        while (cursor < segmentEnd) {
+          const argument = tokens[cursor].value;
+          if (/^--(?:help|version)$/.test(argument)) { terminalMode = true; break; }
+          if (argument === "--") { cursor += 1; break; }
+          if (/^(?:-[vfp]*(?:k|s)|--kill-after|--signal)$/.test(argument)) { cursor += 2; continue; }
+          if (/^(?:-[vfp]*(?:k|s).+|-[vfp]+|--(?:kill-after|signal)=.+|--foreground|--preserve-status|--verbose)$/.test(argument)) { cursor += 1; continue; }
+          break;
+        }
+        if (terminalMode || cursor >= segmentEnd) break;
+        cursor += 1;
+        if (skipAssignments()) return true;
+        continue;
+      }
+      if (name === "setsid") {
+        cursor += 1;
+        let terminalMode = false;
+        while (cursor < segmentEnd) {
+          const argument = tokens[cursor].value;
+          if (/^--(?:help|version)$/.test(argument)) { terminalMode = true; break; }
+          if (argument === "--") { cursor += 1; break; }
+          if (/^(?:-[cfw]+|--(?:ctty|fork|wait))$/.test(argument)) { cursor += 1; continue; }
+          break;
+        }
+        if (terminalMode) break;
+        if (skipAssignments()) return true;
+        continue;
+      }
+      if (name === "stdbuf") {
+        cursor += 1;
+        let terminalMode = false;
+        while (cursor < segmentEnd) {
+          const argument = tokens[cursor].value;
+          if (/^--(?:help|version)$/.test(argument)) { terminalMode = true; break; }
+          if (argument === "--") { cursor += 1; break; }
+          if (/^(?:-[ioe]|--(?:input|output|error))$/.test(argument)) { cursor += 2; continue; }
+          if (/^(?:-[ioe].+|--(?:input|output|error)=.+)$/.test(argument)) { cursor += 1; continue; }
+          break;
+        }
+        if (terminalMode) break;
         if (skipAssignments()) return true;
         continue;
       }
@@ -540,8 +771,15 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
       if (name === "export") {
         cursor += 1;
         while (cursor < segmentEnd && tokens[cursor].value.startsWith("-")) cursor += 1;
-        while (cursor < segmentEnd && assignmentName(tokens[cursor])) {
-          if (hasNodeOptionsAssignment(tokens[cursor])) return true;
+        while (cursor < segmentEnd) {
+          if (namesNodeOptionsVariable(tokens[cursor])) return true;
+          cursor += 1;
+        }
+      } else if (["declare", "typeset", "local", "readonly"].includes(name)) {
+        cursor += 1;
+        while (cursor < segmentEnd && tokens[cursor].value.startsWith("-")) cursor += 1;
+        while (cursor < segmentEnd) {
+          if (namesNodeOptionsVariable(tokens[cursor])) return true;
           cursor += 1;
         }
       } else if (["set", "setx"].includes(name)) {

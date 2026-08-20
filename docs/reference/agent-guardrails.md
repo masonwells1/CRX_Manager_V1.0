@@ -59,10 +59,24 @@ could assemble its command indirectly. Coverage includes AWK-family programs
 launched directly or through WSL and multi-call tools, plus Node preloads
 introduced through token-parsed assignment, `env`, or `command env` wrapper
 chains; empty/quoted assignments, multi-variable exports, LF/CRLF command
-boundaries, and `command --` are included, while quoted search text and
-terminal help/version modes remain data. Executable command-string bodies are
+boundaries, `command --`, process wrappers (`exec`, `nohup`, `nice`, `timeout`,
+`setsid`, and `stdbuf`), and attached `env -S`/`--split-string` bodies are
+included. WSL, BusyBox/Toybox, file-search execution operands, `xargs`, and
+privilege wrappers are followed into their executable operands, while quoted search text and
+terminal help/version modes remain data. Escaped grouping/terminator tokens and
+multiple file-search actions retain their runner context. Executable command-string bodies are
 recursively inspected for `cmd /c` or `/k`, PowerShell command modes, and POSIX
-shell `-c` wrappers.
+shell `-c` wrappers. Backslash-prefixed separators are evaluated under both
+POSIX and PowerShell semantics. Standard short and long `xargs` options are
+consumed; unknown option shapes fail closed when an opaque target remains.
+Bash `declare`/`typeset`/`local`/`readonly` variable mutations and the `builtin`
+wrapper are also parsed, so alternate builtin export forms cannot hide a
+`NODE_OPTIONS` preload.
+
+Codex's shell/MCP hook adapter imports that shared classifier directly. Codex
+also has a distinct generated maintenance-execution matcher owned by its
+checked-in maintenance generator; changes to one layer do not implicitly
+regenerate the other.
 
 ### MCP Tool Guard (`.claude/hooks/`)
 Runs on Claude's `mcp__.*` PreToolUse matcher (narrowed 2026-08-18; still the `*` all-tools matcher in `.codex/hooks.json`). Added 2026-07-13 to close the "Desktop Commander blind spot": `bash-safety.mjs` only gates the `Bash|PowerShell` tool matcher, but Desktop Commander's MCP tools can run the exact same shell commands, or touch the exact same protected paths, without ever going through the Bash or Write/Edit matchers those other hooks are wired to.

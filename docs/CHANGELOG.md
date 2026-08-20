@@ -2,7 +2,7 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-19 — Close the two remaining PR #402 maintenance-command guard gaps
+## 2026-08-20 — Close the remaining PR #402 maintenance-command guard gaps
 
 - The shared shell-safety classifier now treats `awk`, `gawk`, `mawk`, and
   `nawk` programs as opaque launchers while the protected maintenance producer
@@ -13,13 +13,28 @@ All significant development milestones, in reverse chronological order.
   assignments or the `command` wrapper. The token-aware parser covers empty and
   quoted assignment values, `command -p`, the `command --` terminator, `env`
   options, multi-variable `export` commands, LF/CRLF command boundaries, and
-  nested `command env` chains. Executable command strings passed through
+  nested `command env` chains. The same parser now follows `exec`, `nohup`,
+  `nice`, `timeout`, `setsid`, and `stdbuf` into the wrapped command, and it
+  inspects attached short and long `env -S`/`--split-string` bodies without
+  resetting the fail-closed recursion limit. WSL, BusyBox/Toybox, file-search
+  execution operands, `xargs`, and privilege wrappers are traversed as command
+  runners too; escaped grouping/terminator tokens and multiple file-search
+  actions stay within the same parsed command context. Standard short and long
+  `xargs` option families are consumed, and an unknown option fails closed when
+  an opaque execution target remains. Executable command strings passed through
   `cmd /c`, PowerShell command mode, or POSIX shell `-c` are recursively
   inspected without matching the same spelling when it is quoted search text.
+  Backslash-prefixed separators are evaluated under both POSIX and PowerShell
+  semantics, so an escape in one shell cannot hide a real boundary in the other.
+  Bash variable/export builtins are covered as well: `declare`, `typeset`,
+  `local`, and `readonly` cannot assign or export `NODE_OPTIONS`, and `builtin`
+  is traversed into a wrapped `export` or declaration command.
 - Regression coverage proves the new deny paths and preserves ordinary quoted
-  searches plus terminal AWK help mode. Codex continues to consume the same
-  `.claude/hooks/bash-safety-lib.mjs` implementation through its tracked hook
-  adapter; no generated hook copy exists.
+  searches plus terminal AWK help mode. The Codex shell/MCP hook adapter consumes
+  the shared `.claude/hooks/bash-safety-lib.mjs` implementation directly. Codex
+  also has a separate generated maintenance-execution matcher owned by its
+  checked-in generator; this change hardens the shared shell/MCP layer and does
+  not implicitly regenerate that independent matcher.
 
 ## 2026-08-19 — Product data model: build plan revision 2 after independent Fable…
 
