@@ -244,16 +244,28 @@
 -- quote carries more than one price tier for the same product today. Re-verify
 -- that read-only immediately before applying.
 -- Fail fast rather than freeze the app (RLS/security review 2026-08-16, MED).
--- This transaction takes three blocking locks: the cutover advisory key below,
--- SHARE ROW EXCLUSIVE on quote_product_draws (which queues every other writer
--- of that table, including void/cancel reversals), and -- much later, at the
--- CHECK constraint -- ACCESS EXCLUSIVE on quote_items, which blocks all READS
--- of the quote builder's main table until commit. With no lock_timeout a
--- blocked apply waits forever and takes the quote pages down with it.
+-- This transaction takes SIX blocking acquisitions, not three (both gate
+-- reviewers, 2026-08-19 -- the earlier count predated the order_items lock and
+-- the FK swap):
+--   1. the cutover advisory key below;
+--   2. SHARE ROW EXCLUSIVE on quote_items;
+--   3. SHARE ROW EXCLUSIVE on order_items;
+--   4. SHARE ROW EXCLUSIVE on quote_product_draws (which queues every other
+--      writer of that table, including void/cancel reversals);
+--   5. much later, at the CHECK constraint, an upgrade to ACCESS EXCLUSIVE on
+--      quote_items, which blocks all READS of the quote builder's main table
+--      until commit;
+--   6. at the FK swap, an upgrade to ACCESS EXCLUSIVE on order_items.
+-- Note what 3 costs: order_items is held at SHARE ROW EXCLUSIVE from that point
+-- THROUGH COMMIT, including both validation scans, so every order write in the
+-- system queues -- order creation, delivery, invoicing, bulk import -- not just
+-- draw-down. Readers are untouched throughout, so the quote pages keep loading.
+-- With no lock_timeout a blocked apply waits forever and takes those writers
+-- down with it.
 --
--- 15s bounds EACH lock acquisition, not the apply as a whole: worst case is
--- three separate 15s waits, so roughly 45s before the apply gives up, and even
--- a FAILING apply queues quote_items readers behind its pending ACCESS
+-- 15s bounds EACH lock acquisition, not the apply as a whole: worst case is six
+-- separate 15s waits, so roughly 90s before the apply gives up, and even a
+-- FAILING apply queues quote_items readers behind its pending ACCESS
 -- EXCLUSIVE request for up to that last 15s. The number is also unmeasured --
 -- chosen as comfortably longer than a real draw so the intended hand-off below
 -- still works, not derived from a timing run. Wrong either way it fails closed:
@@ -300,21 +312,36 @@ SELECT pg_advisory_xact_lock(20260816, 1);
 -- later upgrade to ACCESS EXCLUSIVE for the constraint deadlock-free rather
 -- than merely lucky.
 --
--- Taken BEFORE quote_product_draws on purpose. save_quote reaches the quote's
--- own lines first and its draw rows second; acquiring in that same order means
--- the two contend head-on instead of crossing, which is the shape that
--- deadlocks. If it does contend, lock_timeout aborts this apply at 15s having
--- changed nothing, and it is safe to re-run.
+-- ORDER MATTERS, and an earlier version of this file got it wrong. The rule is
+-- to acquire in the same relative order every writer reaches these tables, so
+-- contention is head-on rather than crossing -- crossing is the shape that
+-- deadlocks.
+--
+--   * save_quote reaches the quote's own lines and never touches order rows.
+--   * the draw path reaches order_items FIRST (its INSERT) and
+--     quote_product_draws SECOND (its ledger write).
+--
+-- So the correct order is quote_items -> order_items -> quote_product_draws.
+--
+-- The earlier order took quote_product_draws second and order_items last, which
+-- crosses the draw path: a pre-barrier draw already holding ROW EXCLUSIVE on
+-- order_items and about to write quote_product_draws would deadlock against
+-- this apply holding quote_product_draws and waiting for order_items. Neither
+-- the advisory key nor DRAW_DOWN_CUTOVER_NOT_QUIET prevents that -- the key is
+-- not taken by a pre-barrier draw, and the quiet gate lives in the preflight
+-- DO block BELOW these locks, so it has not run yet. Both gate reviewers found
+-- this independently on 2026-08-19; the header's old "no cycle and no deadlock
+-- is possible" claim was false. If it does contend, lock_timeout aborts this
+-- apply at 15s having changed nothing, and it is safe to re-run.
 LOCK TABLE public.quote_items IN SHARE ROW EXCLUSIVE MODE;
-LOCK TABLE public.quote_product_draws IN SHARE ROW EXCLUSIVE MODE;
--- order_items is locked here for the same reason, and LAST on purpose: both
--- writers that touch it (the draw path and save_quote) reach the quote's own
--- rows before they reach order rows, so acquiring in that order contends
--- head-on rather than crossing. The FK swap further down needs ACCESS
--- EXCLUSIVE on this table; holding the self-conflicting SHARE ROW EXCLUSIVE
--- from here means that upgrade waits only on readers, never on another writer
--- that could itself be waiting on us.
+-- order_items before quote_product_draws, per the rule above. The FK swap
+-- further down needs ACCESS EXCLUSIVE on this table; holding the
+-- self-conflicting SHARE ROW EXCLUSIVE from here means that upgrade waits only
+-- on readers, never on another writer that could itself be waiting on us.
+-- Taking it earlier only lengthens that hold, which does not weaken the
+-- property.
 LOCK TABLE public.order_items IN SHARE ROW EXCLUSIVE MODE;
+LOCK TABLE public.quote_product_draws IN SHARE ROW EXCLUSIVE MODE;
 
 -- --- Preflight: refuse to run against an unexpected body ----------------------
 DO $preflight$
@@ -372,6 +399,37 @@ BEGIN
   IF v_md5 <> '87bf7adcdc63d94684676da5ab09bfde' THEN
     RAISE EXCEPTION
       'DRAW_DOWN_IMPL_DRIFTED: expected body md5 87bf7adcdc63d94684676da5ab09bfde, found %; another migration has redefined this function -- reconcile before applying', v_md5;
+  END IF;
+
+  -- The restore path is replaced further down for the same reason the FK is
+  -- deferred, so it gets the same drift discipline: pin the body this file was
+  -- written against and refuse to overwrite anything else.
+  SELECT count(*) INTO v_overloads
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public'
+    AND p.proname = '_restore_quote_version_owner_impl';
+
+  IF v_overloads <> 1 THEN
+    RAISE EXCEPTION
+      'RESTORE_IMPL_OVERLOADED: expected exactly 1 function named public._restore_quote_version_owner_impl, found % -- reconcile before applying', v_overloads;
+  END IF;
+
+  SELECT md5(p.prosrc) INTO v_md5
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public'
+    AND p.proname = '_restore_quote_version_owner_impl'
+    AND p.pronargs = 4;
+
+  IF v_md5 IS NULL THEN
+    RAISE EXCEPTION
+      'RESTORE_IMPL_MISSING: public._restore_quote_version_owner_impl(uuid, uuid, uuid, text) not found; 20260812115236 must be applied first';
+  END IF;
+
+  IF v_md5 <> 'd8408e3b19b536f1210e51da3970272e' THEN
+    RAISE EXCEPTION
+      'RESTORE_IMPL_DRIFTED: expected body md5 d8408e3b19b536f1210e51da3970272e, found %; another migration has redefined the restore path -- reconcile before applying, because this file reproduces that body byte-for-byte with one statement added', v_md5;
   END IF;
 
   -- The cutover barrier must already be live (20260816110000). The advisory
@@ -2013,6 +2071,15 @@ $qty_check$;
 -- depending on which page saved the quote". That premise was wrong in both
 -- halves: no current page echoes ids, and the fallback reuses without them.
 --
+-- STATED PRECISELY, because an earlier draft of this comment claimed more than
+-- it had (drift review 2026-08-19, H2). What deferring restores is editing for
+-- a partly-drawn booking with ONE line per product -- the large majority. It
+-- does NOT restore editing for a booking carrying TWO lines of one product:
+-- save_quote refuses that save on QUOTE_ITEM_AMBIGUOUS_COST before the FK is
+-- ever reached, because QuoteBuilder sends both lines without ids. That
+-- limitation is pre-existing, is not caused or removed by this file, and is the
+-- separate PR named in the residual below.
+--
 -- ON DELETE SET NULL was that earlier choice and is now REJECTED, because
 -- save_quote runs its DELETE on EVERY save of an existing quote -- including a
 -- save that changes nothing. SET NULL would therefore wipe every stamp on
@@ -2035,6 +2102,26 @@ $qty_check$;
 -- Closing it properly means giving save_quote real line identity, which is the
 -- same defect QUOTE_ITEM_AMBIGUOUS_COST already is, with its own blast radius
 -- and its own PR.
+--
+-- SETTLED (RLS gate 2026-08-19, H1; Mason chose option A the same day).
+-- save_quote was not the only path that deletes and reinserts a quote's lines.
+-- _restore_quote_version_owner_impl does the same, and its reinsert omits the
+-- id column entirely, so every restored line takes a fresh gen_random_uuid()
+-- and no id is ever reused. Under a deferred FK that would leave every stamp
+-- dangling at COMMIT and abort the restore with a raw foreign-key error, on a
+-- path that works today.
+--
+-- Fixed in THIS FILE, in the same transaction, further down: restore REFUSES
+-- when it cannot honour the stamps, raising QUOTE_RESTORE_BLOCKED_BY_DRAW
+-- before it touches anything.
+--
+-- Releasing the stamps instead was the FIRST draft (option A) and it was
+-- REFUTED, so do not reintroduce it: releasing discards the telescoping
+-- rounding basis and can bill $1.02 against a $1.01 booking, and its UPDATE on
+-- order_items fires trg_recalc_order_totals under the quote lock -- the
+-- deadlock this same rework just removed. A postflight below fails the apply if
+-- 'SET quote_item_id = NULL' ever comes back. See the restore block for the
+-- full argument.
 --
 -- Same drift discipline as the CHECK above: adopt nothing unread. If the FK is
 -- already the deferred rule this is a no-op; anything else stops the apply. ON
@@ -2108,9 +2195,335 @@ BEGIN
 END;
 $fk_deferred$;
 
+-- --- Restore REFUSES when it cannot honour the stamps ---------------------------
+-- Mason's decision, 2026-08-19, option (B). Option (A) -- releasing the stamps
+-- -- was built first and then refuted on the money and on the lock order; the
+-- note above records why, and a postflight below forbids its return.
+--
+-- Found by the RLS gate against the reworked FK and confirmed against live
+-- prosrc the same day: save_quote is not the only path that deletes and
+-- reinserts a quote's lines. _restore_quote_version_owner_impl does the same,
+-- and its reinsert omits the id column entirely, so every restored line takes a
+-- fresh gen_random_uuid(). Under a deferred FK that leaves every stamp dangling
+-- at COMMIT and aborts the restore with a raw foreign-key error -- turning a
+-- button that works today into an opaque failure.
+--
+-- This lands in the SAME TRANSACTION as the FK change on purpose. The two are
+-- one mechanism: deferring the constraint is what creates this obligation, so
+-- shipping them apart would leave a window where restore is broken.
+--
+-- Same drift discipline as everything else in this file: the body below is
+-- reproduced byte-exactly from the live definition (md5 d8408e3b19b536f1210e51da3970272e,
+-- read 2026-08-19) with exactly ONE statement added. The preflight above pins
+-- that md5 and refuses to run if live has moved, so this can never silently
+-- overwrite a body someone else changed.
+CREATE OR REPLACE FUNCTION public._restore_quote_version_owner_impl(p_quote_id uuid, p_version_id uuid, p_performed_by uuid, p_idempotency_key text DEFAULT NULL::text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_snapshot jsonb;
+  v_section jsonb;
+  v_item jsonb;
+  v_section_id uuid;
+  v_version_number integer;
+  v_actor uuid;
+  v_drawn_guard record; -- drawn-version guard (20260611120100)
+BEGIN
+  -- Strict-actor auth (function previously had NO auth check). Before idempotency.
+  v_actor := auth.uid();
+  IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
+  IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM profiles WHERE id = v_actor AND is_active = true
+      AND role IN ('admin', 'sales_rep')
+  ) THEN
+    RAISE EXCEPTION 'INSUFFICIENT_ROLE';
+  END IF;
+
+  -- Idempotency check — operation-scoped so a key minted for a different operation
+  -- can't short-circuit a legitimate restore (was: matched idempotency_key alone).
+  IF p_idempotency_key IS NOT NULL THEN
+    PERFORM 1 FROM idempotency_keys
+      WHERE idempotency_key = p_idempotency_key
+        AND operation = 'restore_quote_version';
+    IF FOUND THEN
+      RETURN jsonb_build_object('status', 'duplicate', 'message', 'Already processed');
+    END IF;
+  END IF;
+
+  -- Get snapshot data
+  SELECT snapshot_data, version_number INTO v_snapshot, v_version_number
+  FROM quote_versions
+  WHERE id = p_version_id AND quote_id = p_quote_id;
+
+  IF v_snapshot IS NULL THEN
+    RAISE EXCEPTION 'Version not found: %', p_version_id;
+  END IF;
+
+  -- Preserve the newer live restore safeguard from
+  -- 20260812011000_restore_quote_version_whole_cent_money. This pricing
+  -- migration re-emits the same owner implementation to add quote-time cost
+  -- snapshots, so it must reject non-finite constrained money before the first
+  -- destructive restore write rather than silently replacing that live guard.
+  IF (v_snapshot->'quote'->>'total_price')::numeric::text IN ('NaN', 'Infinity', '-Infinity') THEN
+    RAISE EXCEPTION 'QUOTE_SNAPSHOT_MONEY_NOT_FINITE: field quotes.total_price in version % is non-finite', p_version_id;
+  END IF;
+  IF (v_snapshot->'quote'->>'total_profit')::numeric::text IN ('NaN', 'Infinity', '-Infinity') THEN
+    RAISE EXCEPTION 'QUOTE_SNAPSHOT_MONEY_NOT_FINITE: field quotes.total_profit in version % is non-finite', p_version_id;
+  END IF;
+  FOR v_section IN SELECT * FROM jsonb_array_elements(v_snapshot->'sections')
+  LOOP
+    FOR v_item IN SELECT * FROM jsonb_array_elements(v_section->'items')
+    LOOP
+      IF (v_item->>'profit')::numeric::text IN ('NaN', 'Infinity', '-Infinity') THEN
+        RAISE EXCEPTION 'QUOTE_SNAPSHOT_MONEY_NOT_FINITE: field quote_items.profit in version % is non-finite', p_version_id;
+      END IF;
+      IF (v_item->>'total_price')::numeric::text IN ('NaN', 'Infinity', '-Infinity') THEN
+        RAISE EXCEPTION 'QUOTE_SNAPSHOT_MONEY_NOT_FINITE: field quote_items.total_price in version % is non-finite', p_version_id;
+      END IF;
+    END LOOP;
+  END LOOP;
+
+  -- PROVENANCE: refuse the restore outright if this booking has been drawn.
+  --
+  -- order_items.quote_item_id records which booked quote line each drawn order
+  -- line was billed from. This migration makes that FK NO ACTION DEFERRABLE
+  -- INITIALLY DEFERRED so an ordinary save_quote edit -- which deletes and
+  -- reinserts the SAME ids -- keeps the stamp. A version RESTORE is different:
+  -- it rebuilds the quote from a snapshot and mints a brand-new id for every
+  -- line (the INSERT below names no id column), so the old ids never come back
+  -- and every stamp would dangle at COMMIT.
+  --
+  -- An earlier draft RELEASED the stamps here (UPDATE ... SET quote_item_id =
+  -- NULL) instead of refusing. Codex review 2026-08-19 found that silently
+  -- overbills, and it was REPRODUCED on PostgreSQL 17.6: two 0.5-unit lines at
+  -- $1.01, draw 0.5, restore to a single 1-unit version, draw the rest -- the
+  -- customer is billed $1.02 against a booking whose own arithmetic says
+  -- $1.01. Releasing the stamp discards the telescoping rounding basis, and
+  -- DRAW_MIXED_TIER_UNMATCHED_LINE cannot catch it because that guard only
+  -- fires when the product carries MORE THAN ONE distinct (price, cost) -- and
+  -- after the restore it carries exactly one. The release also fired
+  -- after_order_items_change -> trg_recalc_order_totals, which locks the order
+  -- row while this function already holds the quote row, crossing the lock
+  -- order that cancel/void takes.
+  --
+  -- So restore fails CLOSED instead.
+  --
+  -- SCOPE, STATED ACCURATELY -- an earlier draft of this comment called the
+  -- guard "narrow: only a booking actually drawn into an order is blocked".
+  -- That was wrong, and Codex review 2026-08-19 caught it. The join below is
+  -- UNFILTERED by order status, so the real rule is: once a booking has EVER
+  -- been drawn, it can never restore a version again -- even if every draw
+  -- order was afterwards cancelled or voided, the quantity returned to
+  -- quote_product_draws and the booking reopened. Those reversed order_items
+  -- rows are retained for audit and still carry their stamp, so the join stays
+  -- true forever.
+  --
+  -- That over-breadth is DELIBERATE and Mason accepted it on 2026-08-20 rather
+  -- than narrow it. Narrowing means letting a reversed line past the guard,
+  -- and its stamp would then dangle at COMMIT exactly as before -- so restore
+  -- would have to RELEASE the stamps on those dead lines. Releasing is
+  -- money-neutral for them (a voided line is filtered out of billed_stamped and
+  -- v_unmatched entirely, and a cancelled line contributes only its delivered
+  -- quantity, which is zero here), but it puts back an UPDATE on order_items,
+  -- which fires after_order_items_change -> trg_recalc_order_totals and locks
+  -- the order row under the quote lock. That is the deadlock this rework just
+  -- removed. Trading a rare capability for a reintroduced lock cycle is the
+  -- wrong trade, so the limitation is recorded instead of fixed.
+  --
+  -- Recorded in docs/manual/KNOWN_ISSUES.md and pinned by a regression case in
+  -- scripts/smoke/smoke-restore-version-drawn-guard.sql, so a later narrowing
+  -- has to change the recorded decision consciously rather than by accident.
+  --
+  -- What is unaffected: a booking never drawn restores freely, and editing the
+  -- quote directly still works on ANY booking, because save_quote reuses the
+  -- same line ids and the deferred FK keeps the stamps.
+  --
+  -- Doing this properly -- carrying the line-level billing basis across a
+  -- restore so the money stays exact -- means giving restore a real identity
+  -- mapping from snapshot lines to live lines. That is the same missing
+  -- capability QUOTE_ITEM_AMBIGUOUS_COST is about, and it gets its own PR.
+  IF EXISTS (
+    SELECT 1
+    FROM order_items oi
+    JOIN quote_items qi ON qi.id = oi.quote_item_id
+    WHERE qi.quote_id = p_quote_id
+  ) THEN
+    RAISE EXCEPTION 'QUOTE_RESTORE_BLOCKED_BY_DRAW: this booking has already been drawn down into an order, so restoring an earlier version would change what the customer has already been billed. Edit the quote directly instead -- ordinary edits are still allowed and keep the billing history intact.'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  -- Delete existing sections (cascades to items via ON DELETE CASCADE)
+  DELETE FROM quote_sections WHERE quote_id = p_quote_id;
+
+  -- Restore quote-level fields. Bracket the status write with the admin override so
+  -- the enforcer permits restore->revised from any source state (accepted/declined/etc.).
+  PERFORM set_config('app.admin_override', 'true', true);
+  UPDATE quotes SET
+    header_notes = v_snapshot->'quote'->>'header_notes',
+    footer_notes = v_snapshot->'quote'->>'footer_notes',
+    -- Historical snapshots may predate the live whole-cent constraints from
+    -- 20260810151000. Normalize the replay boundary so restoring one cannot
+    -- fail or reintroduce fractional stored money.
+    total_price = ROUND((v_snapshot->'quote'->>'total_price')::numeric, 2),
+    total_cost = ROUND((v_snapshot->'quote'->>'total_cost')::numeric, 2),
+    total_profit = ROUND((v_snapshot->'quote'->>'total_profit')::numeric, 2),
+    total_margin_pct = (v_snapshot->'quote'->>'total_margin_pct')::numeric,
+    status = 'revised',
+    updated_at = now()
+  WHERE id = p_quote_id;
+  PERFORM set_config('app.admin_override', 'false', true);
+
+  -- SNAPSHOT<<< arm the trusted passthrough for this transaction so the rows
+  -- reinserted below carry the version's own quote-time cost. Same mechanism
+  -- save_quote uses: transaction-local, so a PostgREST caller cannot set it.
+  PERFORM set_config('crx.quote_cost_snapshot_passthrough', '1', true);
+  -- >>>SNAPSHOT
+
+  -- Restore sections and items from snapshot
+  FOR v_section IN SELECT * FROM jsonb_array_elements(v_snapshot->'sections')
+  LOOP
+    INSERT INTO quote_sections (quote_id, section_name, sort_order, section_notes, section_header_notes, needed_by_date)
+    VALUES (
+      p_quote_id,
+      v_section->>'section_name',
+      (v_section->>'sort_order')::integer,
+      v_section->>'section_notes',
+      v_section->>'section_header_notes',
+      (v_section->>'needed_by_date')::date
+    )
+    RETURNING id INTO v_section_id;
+
+    FOR v_item IN SELECT * FROM jsonb_array_elements(v_section->'items')
+    LOOP
+      IF NULLIF(v_item->>'current_cost', '') IS NULL
+         OR (v_item->>'current_cost')::numeric <= 0 THEN
+        RAISE EXCEPTION 'COST_BASIS_REQUIRED:%', v_item->>'product_id';
+      END IF;
+      INSERT INTO quote_items (
+        quote_id, section_id, product_id, sort_order, notes,
+        price_per_unit, current_cost, suggested_rate, actual_rate, rate_unit,
+        oz_per_acre, price_per_acre, acres, total_units_needed, unit_size,
+        profit, total_price, net_margin, calc_mode, price_unit,
+        cost_at_quote_cents -- SNAPSHOT
+      )
+      VALUES (
+        p_quote_id, v_section_id,
+        (v_item->>'product_id')::uuid,
+        (v_item->>'sort_order')::integer,
+        v_item->>'notes',
+        (v_item->>'price_per_unit')::numeric,
+        (v_item->>'current_cost')::numeric,
+        v_item->>'suggested_rate',
+        (v_item->>'actual_rate')::numeric,
+        v_item->>'rate_unit',
+        (v_item->>'oz_per_acre')::numeric,
+        (v_item->>'price_per_acre')::numeric,
+        (v_item->>'acres')::numeric,
+        (v_item->>'total_units_needed')::numeric,
+        v_item->>'unit_size',
+        ROUND((v_item->>'profit')::numeric, 2),
+        ROUND((v_item->>'total_price')::numeric, 2),
+        (v_item->>'net_margin')::numeric,
+        v_item->>'calc_mode',
+        v_item->>'price_unit',
+        -- SNAPSHOT: the version stored the cost this quote was priced with.
+        -- Without it the BEFORE INSERT trigger stamps todays catalog cost, and
+        -- the next ordinary save preserves that stamp and recomputes the line
+        -- from it, silently repricing the restored version.
+        --
+        -- A version without a positive historical basis is rejected above.
+        -- Unknown money must not become a real zero-cost quote line.
+        ROUND((v_item->>'current_cost')::numeric * 100)::bigint
+      );
+    END LOOP;
+  END LOOP;
+
+  -- SNAPSHOT<<< disarm immediately once the reinsert loop closes.
+  PERFORM set_config('crx.quote_cost_snapshot_passthrough', '0', true);
+  -- >>>SNAPSHOT
+
+  -- BEGIN drawn-version guard (20260611120100)
+  -- Codex round-2 MED (2026-06-11): a restore must never under-book the drawn
+  -- ledger (quote_product_draws deliberately survives the section delete +
+  -- re-insert above). Validates the FINAL persisted quote_items — the same
+  -- invariant, token, and block shape as save_quote's drawn-product guard
+  -- (20260610184230). A violation rolls back the entire restore atomically,
+  -- including the section DELETE.
+  -- LAYER2<<< drawn guard counts ORDER + JOB draws (§6.5 / Codex round-2 P1).
+  SELECT
+    COALESCE(p.product_name, d.product_id::text) AS product_name,
+    d.quantity_drawn,
+    COALESCE(b.booked, 0) AS new_booked
+  INTO v_drawn_guard
+  FROM (
+    SELECT product_id, SUM(qty) AS quantity_drawn
+    FROM (
+      SELECT product_id, quantity_drawn AS qty FROM quote_product_draws WHERE quote_id = p_quote_id AND quantity_drawn > 0
+      UNION ALL
+      SELECT product_id, quantity_drawn AS qty FROM job_product_draws WHERE quote_id = p_quote_id AND quantity_drawn > 0
+    ) x
+    GROUP BY product_id
+  ) d
+  LEFT JOIN (
+    SELECT product_id, SUM(COALESCE(total_units_needed, 0)) AS booked
+    FROM quote_items
+    WHERE quote_id = p_quote_id
+    GROUP BY product_id
+  ) b ON b.product_id = d.product_id
+  LEFT JOIN products p ON p.id = d.product_id
+  WHERE d.quantity_drawn > 0
+    AND COALESCE(b.booked, 0) < d.quantity_drawn
+  ORDER BY d.quantity_drawn - COALESCE(b.booked, 0) DESC, d.product_id
+  LIMIT 1;
+  -- >>>LAYER2
+  IF FOUND THEN
+    IF v_drawn_guard.new_booked <= 0 THEN
+      RAISE EXCEPTION 'BOOKING_OVERDRAWN: cannot restore this version — it removes %, which already has % drawn',
+        v_drawn_guard.product_name, v_drawn_guard.quantity_drawn;
+    END IF;
+    RAISE EXCEPTION 'BOOKING_OVERDRAWN: cannot restore this version — % would fall below its already-drawn % (restored total would be %)',
+      v_drawn_guard.product_name, v_drawn_guard.quantity_drawn, v_drawn_guard.new_booked;
+  END IF;
+  -- END drawn-version guard (20260611120100)
+
+  -- BEGIN planned-hold + job-reservation sync (20260611132115 + Layer2 A3.12)
+  -- Codex round-2 #3: restores rewrite quote_items wholesale — rebuild the
+  -- planned reservation (booked − drawn) to match the restored state.
+  -- LAYER2-CHAN (push-gate #C): a restore that changes booked quantity must ALSO
+  -- re-sync the quote's ACTIVE jobs (draws + shed holds), exactly as save_quote now
+  -- does — else a restored-larger booking leaves stale job draws and reopens balance
+  -- the job still needs. _sync_quote_job_reservations rebuilds the jobs THEN calls
+  -- _sync_planned_holds itself (strict superset). Was: PERFORM _sync_planned_holds(...).
+  PERFORM _sync_quote_job_reservations(p_quote_id, v_actor);
+  -- END planned-hold + job-reservation sync
+
+  -- Save idempotency key (result stored as a valid jsonb object — was a bare ::text UUID).
+  IF p_idempotency_key IS NOT NULL THEN
+    INSERT INTO idempotency_keys (idempotency_key, operation, result)
+    VALUES (p_idempotency_key, 'restore_quote_version', jsonb_build_object('quote_id', p_quote_id))
+    ON CONFLICT (idempotency_key) DO NOTHING;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'status', 'restored',
+    'restored_from_version', v_version_number,
+    'quote_id', p_quote_id
+  );
+END;
+$function$;
+
 -- --- Postflight: prove the shape and the security posture --------------------
 DO $postflight$
 DECLARE
+  v_restore_src text;
+  v_restore_secdef boolean;
+  v_restore_config text[];
   v_secdef boolean;
   v_config text[];
   v_src text;
@@ -2208,9 +2621,90 @@ BEGIN
   --
   -- Same honest limit as the tripwires above: this proves the identifiers are
   -- present, not that the arithmetic around them is right.
+  -- Matched on the PREDICATE, not on the two column names alone: those names
+  -- also occur in this body's own comments, so a name-only test would pass on a
+  -- body that kept the prose and deleted the SQL (drift review 2026-08-19, L1).
   IF position('units_settled' IN v_src) = 0
-     OR position('units_current' IN v_src) = 0 THEN
+     OR position('units_current' IN v_src) = 0
+     OR position('IS NOT DISTINCT FROM ti.price' IN v_src) = 0
+     OR position('IS DISTINCT FROM ti.price' IN v_src) = 0 THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: the draw no longer partitions a tier''s billed history by price -- units billed at a superseded price would re-enter the telescoping basis, so changing a price on a partly-drawn booking would silently rebill units the customer has already paid for';
+  END IF;
+
+  -- RESTORE REFUSAL PROOF (Mason's option B, 2026-08-19). Deferring the FK
+  -- creates the obligation; this asserts the obligation was met in the same
+  -- transaction. Without the refusal, restoring a version of a partially drawn
+  -- booking either aborts at COMMIT on a raw foreign-key error (no guard) or
+  -- silently overbills the customer (the released-stamp draft Codex refuted).
+  SELECT p.prosrc INTO v_restore_src
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public'
+    AND p.proname = '_restore_quote_version_owner_impl'
+    AND p.pronargs = 4;
+
+  IF v_restore_src IS NULL THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: public._restore_quote_version_owner_impl(uuid, uuid, uuid, text) is missing after replace';
+  END IF;
+
+  IF position('QUOTE_RESTORE_BLOCKED_BY_DRAW' IN v_restore_src) = 0 THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: the restore path no longer refuses a drawn booking -- with the FK deferred, restoring a version of any partially drawn booking would abort at COMMIT with a raw foreign-key violation';
+  END IF;
+
+  -- Ordering matters as much as presence: refusing AFTER the delete would be
+  -- too late, because the DELETE has already destroyed the quote's lines.
+  IF position('QUOTE_RESTORE_BLOCKED_BY_DRAW' IN v_restore_src)
+     > position('DELETE FROM quote_sections' IN v_restore_src) THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: the restore path refuses a drawn booking only AFTER deleting the quote sections; it must refuse first or the destructive work is already done';
+  END IF;
+
+  -- The retired release must not come back: it is what Codex proved could
+  -- overbill a customer by a cent across a restore that changes the line
+  -- partition, and it also fired the order-header trigger under the quote lock.
+  IF position('SET quote_item_id = NULL' IN v_restore_src) > 0 THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: the restore path still RELEASES provenance stamps (SET quote_item_id = NULL). That draft was refuted: it discards the telescoping rounding basis and can bill $1.02 against a $1.01 booking, and its UPDATE fires trg_recalc_order_totals under the quote lock';
+  END IF;
+
+  -- The replacement must not have weakened the security posture it inherited.
+  SELECT p.prosecdef, p.proconfig INTO v_restore_secdef, v_restore_config
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public'
+    AND p.proname = '_restore_quote_version_owner_impl'
+    AND p.pronargs = 4;
+
+  IF v_restore_secdef IS NOT TRUE THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: _restore_quote_version_owner_impl lost SECURITY DEFINER';
+  END IF;
+
+  IF v_restore_config IS NULL
+     OR NOT ('search_path=public, pg_temp' = ANY (v_restore_config)) THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: _restore_quote_version_owner_impl lost its search_path pin';
+  END IF;
+
+  -- Grant posture, stated against what live ACTUALLY holds (Codex 2026-08-19,
+  -- P1). An earlier draft of this block denied service_role too, copied from
+  -- the draw impl. That is wrong for THIS function: live carries
+  -- {postgres=X/postgres,service_role=X/postgres}, a grant 20260813080000
+  -- deliberately retained, and CREATE OR REPLACE preserves ACLs -- so the
+  -- assertion fired and rolled the whole migration back on every attempt. It
+  -- was never caught because the rehearsal created the function fresh, with no
+  -- inherited ACL, so the check passed vacuously.
+  --
+  -- The browser roles are what must stay out. service_role is asserted PRESENT,
+  -- so an accidental REVOKE is caught too.
+  SELECT string_agg(g, ', ') INTO v_bad_grantee
+  FROM unnest(ARRAY['anon', 'authenticated', 'public']) AS g
+  WHERE has_function_privilege(
+    g, 'public._restore_quote_version_owner_impl(uuid, uuid, uuid, text)', 'EXECUTE');
+
+  IF v_bad_grantee IS NOT NULL THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: _restore_quote_version_owner_impl is EXECUTE-able by % -- the replacement must not have widened its grants', v_bad_grantee;
+  END IF;
+
+  IF NOT has_function_privilege(
+       'service_role', 'public._restore_quote_version_owner_impl(uuid, uuid, uuid, text)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'POSTFLIGHT_FAILED: _restore_quote_version_owner_impl lost the service_role EXECUTE grant that 20260813080000 deliberately retained -- the replacement must preserve it, not revoke it';
   END IF;
 
   -- The stamp and the FK rule are one mechanism, not two. Both halves of the
@@ -2221,12 +2715,27 @@ BEGIN
   --     raises a raw foreign-key violation on the next edit of any partially
   --     drawn quote.
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conrelid = 'public.order_items'::regclass
-      AND conname = 'order_items_quote_item_id_fkey'
-      AND confdeltype = 'a'
-      AND condeferrable IS TRUE
-      AND condeferred IS TRUE
+    SELECT 1 FROM pg_constraint c
+    WHERE c.conrelid = 'public.order_items'::regclass
+      AND c.conname = 'order_items_quote_item_id_fkey'
+      AND c.contype = 'f'
+      AND c.confdeltype = 'a'
+      AND c.condeferrable IS TRUE
+      AND c.condeferred IS TRUE
+      -- Asserted as well as the deferral, so a future edit that added NOT VALID
+      -- or changed the key could not pass this gate (drift review 2026-08-19,
+      -- M4; RLS review L4). The preflight checks these before replacing the
+      -- constraint; the postflight was the asymmetric half.
+      AND c.convalidated IS TRUE
+      AND c.confupdtype = 'a'
+      AND c.confmatchtype = 's'
+      AND c.confrelid = 'public.quote_items'::regclass
+      AND array_length(c.conkey, 1) = 1
+      AND array_length(c.confkey, 1) = 1
+      AND (SELECT a.attname FROM pg_attribute a
+           WHERE a.attrelid = c.conrelid AND a.attnum = c.conkey[1]) = 'quote_item_id'
+      AND (SELECT a.attname FROM pg_attribute a
+           WHERE a.attrelid = c.confrelid AND a.attnum = c.confkey[1]) = 'id'
   ) THEN
     RAISE EXCEPTION 'POSTFLIGHT_FAILED: order_items_quote_item_id_fkey is not ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED -- with the draw now stamping quote_item_id, revising a partially drawn quote would either abort with a foreign-key violation (if left non-deferrable) or silently lose the stamp (if left ON DELETE SET NULL)';
   END IF;
