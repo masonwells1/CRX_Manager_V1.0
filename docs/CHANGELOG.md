@@ -2,6 +2,71 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-19 — Blend-ticket total-volume check no longer adds quantities across different units
+
+`validateBlendMath` summed every product quantity regardless of unit, so a ticket holding
+10 Gal + 32 oz + 5 Lb summed to 47 and was compared against a total volume expressed in
+gallons — a spurious warning, or a masked real mismatch when the errors cancelled.
+`ProductData.unit` was declared but never read. The check now runs only when every quantity
+feeding the sum is *known* to be in the ticket's unit, and otherwise says the check was
+skipped and why.
+
+- **`unit_conversions` deliberately NOT joined.** It cannot bridge a mixed-unit ticket:
+  `factor_oz` is within-family only (Lb = 16 **dry** oz, Gal = 128 **fluid** oz, Ea/Unit = a
+  dimensionless count), and crossing liquid↔dry needs a per-product density the table does not
+  carry. Not joining it also sidesteps a duplicate-row join risk on its case aliases
+  (`Lb`/`LB`, `oz`/`Oz`, `qt`/`Qt`) — the same frozen-key surface `save_quote` joins on. That
+  risk was raised in a prior review; it is not otherwise recorded in this repo, and it is a
+  pre-existing money-path concern independent of this change (see the open item below).
+- **Unit equality rules.** Only *lossless* differences are folded away — case (the live rows
+  carry deliberate case aliases with identical factors), zero-width characters (deleted
+  outright), any run of real whitespace including the non-breaking space (collapsed to one
+  space), and periods (`fl. oz` = `fl oz`, `gal.` = `gal`) —
+  plus the two synonym pairs the live rows themselves declare (`oz`/`fl oz`, `Ea`/`Unit`,
+  identical `factor_oz` *and* `unit_type`). `oz` vs `Dry oz` stays correctly separate. The
+  alias map holds no factors: it decides only *whether* to compare, never rescales a quantity.
+  It is deliberately **not** extended to guessed spellings — the fields are free text, and
+  merging `ounces` into liquid `oz` would restore the silent bad arithmetic. An unrecognised
+  spelling costs one "verify by hand" message instead.
+- **A quantity with no unit recorded blocks the comparison** rather than being absorbed into
+  the ticket's unit. The unit fields are free text and a new row starts blank, so "quantity
+  typed, unit left blank" is a likely real state; treating it as agreement would mask exactly
+  the cross-unit mismatch this change exists to catch. A ticket with no units recorded
+  *anywhere* still gets the plain comparison it always had, so unit-less tickets stay quiet.
+- **Zero-quantity rows ignored** when deciding whether units agree — a half-entered row
+  (unit typed, quantity still blank) no longer suppresses the check for the whole ticket.
+- **Scope: warning text only.** No change to stored quantities, pricing, or inventory; the
+  callers (`ManualTicketCreate.tsx:333`, `BlendTicketDetail.tsx:433`) only render the result,
+  and it never gates a save. Severity **low** — `blend_tickets` and `blend_ticket_products` are
+  both empty on live.
+- **Zero-width characters are deleted, not turned into a space.** A unit pasted from a PDF can
+  carry U+200B/200C/200D or a BOM *inside* the abbreviation. Collapsing it to a space split
+  `gal` into `g al`, which matched nothing: the check was skipped and the message listed two
+  units that look identical on screen. Fail-safe (never a wrong sum) but confusing, so the
+  zero-width run is now removed before real whitespace is collapsed.
+- **Verified by running it, not by tests alone.** The real `blendMathValidator` module was
+  imported into a page served by the dev server and driven through the mixed-unit, alias,
+  blank-unit and half-entered-row cases, with each returned warning read back in the browser;
+  the zero-width cases were driven the same way and read back after the fix above.
+  The production banner component itself was not exercised (both caller test files mock the
+  validator away), so that rendering path remains unverified. 27 new tests (38 total in the
+  file); mutation-tested by reverting each guard in turn and confirming exactly the expected
+  tests went red.
+- **Reviewed** by two independent adversarial Opus passes, which confirmed the display-only
+  blast radius by exhaustive caller trace and drove the blank-unit hole, the free-text
+  spelling drift, and several doc inaccuracies above; then by CodeRabbit, which found the
+  missing-`total_volume_unit` half of the blank-unit hole; then by an independent
+  `gpt-5.6-sol` high-effort review at head `cdee7d9b`, which found the zero-width defect
+  above. CodeRabbit was rate-limited by the time of the final head and did not re-review.
+- **Known gaps, deliberately out of scope:** the per-product `rate_per_acre × total_acres`
+  check in the same file is still unit-blind, and the unit fields are free text rather than
+  the picker the Field App already uses. Both recorded in `docs/manual/KNOWN_ISSUES.md`.
+
+- **Lands via** [PR #426](https://github.com/masonwells1/CRX_Manager_V1.0/pull/426) from
+  `claude/loving-hofstadter-6b1f5e`, which is still **open** as this entry is written — merging
+  that PR is what actually ships the change. (Commit SHAs are deliberately not cited here —
+  this branch was rebased, and an earlier version of this entry cited a SHA that the rebase
+  orphaned.)
 ## 2026-08-19 — Product data model: build plan revision 2 after independent Fable…
 
 Product data model: build plan revision 2 after independent Fable review (26 findings) and orchestration design; recorded owner decisions D-J (chemistry edits admin-only) and D-K (unlisted brand never blocks receiving) in DECISION_LOG. Planning only — nothing built, pushed, migrated, or applied.
