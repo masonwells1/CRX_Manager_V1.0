@@ -2111,12 +2111,17 @@ $qty_check$;
 -- dangling at COMMIT and abort the restore with a raw foreign-key error, on a
 -- path that works today.
 --
--- Fixed in THIS FILE, in the same transaction, further down: restore now
--- RELEASES the stamps deliberately before it rebuilds. That is not the retired
--- ON DELETE SET NULL rule -- SET NULL fired on every save, including a save
--- that changed nothing; this fires only on an explicit restore, where the lines
--- the stamps pointed at genuinely cease to exist. See the restore block for the
--- money argument and the postflight that proves it landed.
+-- Fixed in THIS FILE, in the same transaction, further down: restore REFUSES
+-- when it cannot honour the stamps, raising QUOTE_RESTORE_BLOCKED_BY_DRAW
+-- before it touches anything.
+--
+-- Releasing the stamps instead was the FIRST draft (option A) and it was
+-- REFUTED, so do not reintroduce it: releasing discards the telescoping
+-- rounding basis and can bill $1.02 against a $1.01 booking, and its UPDATE on
+-- order_items fires trg_recalc_order_totals under the quote lock -- the
+-- deadlock this same rework just removed. A postflight below fails the apply if
+-- 'SET quote_item_id = NULL' ever comes back. See the restore block for the
+-- full argument.
 --
 -- Same drift discipline as the CHECK above: adopt nothing unread. If the FK is
 -- already the deferred rule this is a no-op; anything else stops the apply. ON
@@ -2190,8 +2195,10 @@ BEGIN
 END;
 $fk_deferred$;
 
--- --- Restore must RELEASE the stamps it can no longer honour --------------------
--- Mason's decision, 2026-08-19, option (A).
+-- --- Restore REFUSES when it cannot honour the stamps ---------------------------
+-- Mason's decision, 2026-08-19, option (B). Option (A) -- releasing the stamps
+-- -- was built first and then refuted on the money and on the lock order; the
+-- note above records why, and a postflight below forbids its return.
 --
 -- Found by the RLS gate against the reworked FK and confirmed against live
 -- prosrc the same day: save_quote is not the only path that deletes and

@@ -270,8 +270,21 @@ BEGIN
     RAISE EXCEPTION 'SMOKE_FAIL: (c) restore refused with the WRONG error: %', v_err;
   END IF;
 
-  -- Fail-closed: the refusal must happen BEFORE any destructive work, so the
-  -- quote is untouched -- still 500 booked, still 200 drawn, same status.
+  -- The quote is untouched: still 500 booked, still 200 drawn, same status.
+  --
+  -- READ THIS BEFORE CITING IT AS AN ORDERING PROOF. It is not one. The
+  -- BEGIN ... EXCEPTION block above opens an implicit subtransaction, and
+  -- catching the error rolls that subtransaction back -- so a refusal raised
+  -- AFTER 'DELETE FROM quote_sections' would leave 500/200 here too. These
+  -- assertions cannot tell pre-delete from post-delete refusal, and an earlier
+  -- comment here wrongly claimed they could.
+  --
+  -- What they DO prove: the refusal leaves nothing behind outside the rolled-
+  -- back subtransaction, and the booking is still whole afterwards (the draw
+  -- below closes it). The ORDERING is pinned instead by the migration
+  -- postflight, which compares the position of QUOTE_RESTORE_BLOCKED_BY_DRAW
+  -- against 'DELETE FROM quote_sections' in the installed function body and
+  -- fails the apply if the refusal comes second.
   SELECT COALESCE(SUM(total_units_needed), 0) INTO v_booked
   FROM quote_items WHERE quote_id = v_q AND product_id = v_prod_a;
   SELECT quantity_drawn INTO v_drawn FROM quote_product_draws
@@ -355,8 +368,8 @@ BEGIN
   -- --------------------------------------------------------------------
   SELECT COALESCE(SUM(quantity_drawn), 0) INTO v_drawn
   FROM quote_product_draws WHERE quote_id = v_q;
-  IF v_drawn IS NULL THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: (e) setup -- no draw ledger row for the drawn booking';
+  IF v_drawn <= 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (e) setup -- draw ledger is empty (drawn=%), so this scenario would pass vacuously: the restore guard reads order_items, not quote_product_draws', v_drawn;
   END IF;
 
   v_err := NULL;
