@@ -550,6 +550,11 @@ export function localCandidateMigrationPathsFromHistory(historyText) {
   return { state: "known", paths, sha256ByPath, reason: "" };
 }
 
+// A migration-history row that SETTLES a migration: it is no longer waiting on anyone.
+// Shared by mainline discovery's stale-header self-clear and the reader's exemption, so
+// the two cannot drift on what "settled" means.
+const SETTLED_MIGRATION_HISTORY_ROW = /\b(?:APPLIED\s+LIVE|RETIRED\s+CODE-ONLY\s+ARTIFACT|SUPERSEDED)\b/i;
+
 function historyRowsByMigrationBasename(historyText) {
   const rowsByBasename = new Map();
   for (const raw of String(historyText).split("\n")) {
@@ -641,7 +646,7 @@ export function parkedMainlineDiscoveryFrom(
     if (!hasExplicitParkedMigrationHeader(sqlText)) continue;
     const basename = matches[0].slice(matches[0].lastIndexOf("/") + 1).toLowerCase();
     const rows = historyRowsByBasename.get(basename) || [];
-    if (!rows.some((row) => /\b(?:APPLIED\s+LIVE|RETIRED\s+CODE-ONLY\s+ARTIFACT|SUPERSEDED)\b/i.test(row))) {
+    if (!rows.some((row) => SETTLED_MIGRATION_HISTORY_ROW.test(row))) {
       return { state: "unknown", paths: new Set(discovered), reason: "parked forward header has no LOCAL CANDIDATE or applied/retired history record" };
     }
   }
@@ -682,7 +687,7 @@ export function validateParkedMigrationCrossReferences(paths, historyText, loadT
     if (!hasExplicitParkedMigrationHeader(sqlText)) continue;
     const basename = p.slice(p.lastIndexOf("/") + 1).toLowerCase();
     const rows = historyRowsByBasename.get(basename) || [];
-    if (!rows.some((row) => /\b(?:APPLIED\s+LIVE|RETIRED\s+CODE-ONLY\s+ARTIFACT|SUPERSEDED)\b/i.test(row))) {
+    if (!rows.some((row) => SETTLED_MIGRATION_HISTORY_ROW.test(row))) {
       return { state: "unknown", paths: new Set(), reason: "parked header has no applied/retired history record for its migration version" };
     }
   }
@@ -737,64 +742,73 @@ export function createOwnDraftPathsReader({
   // ── Which LOCAL CANDIDATE rows is a branch actually answerable for? ──
   //
   // The own-draft reconciliation inside parkedDraftPathsFrom compares the branch's
-  // migration-history rows against `base..HEAD`. Two classes of row can never show up in
-  // that diff however the branch behaves, so demanding they do is not a strict guard —
-  // it is a permanent UNKNOWN that hides the real count behind noise:
+  // migration-history rows against `base..HEAD`. But `migration-history.md` is a SHARED
+  // file that arrives from origin/main, so a row carried in with that file, naming SQL
+  // that also arrived with origin/main, can never appear in that diff however the branch
+  // behaves. Demanding it does is not a strict guard — it is a permanent UNKNOWN, which
+  // is what every worktree reported before 2026-08-20.
   //
-  //   1. Rows the branch INHERITED. `migration-history.md` is shared, so a branch's copy
-  //      carries every candidate that was already registered at its branch point. Those
-  //      belong to origin/main, not to this branch. Subtracting the merge base's own rows
-  //      leaves precisely the rows this branch ADDED — the "branch's own claim" the
-  //      reconciliation was always described as testing.
-  //   2. Rows naming SQL that ALREADY EXISTS in origin/main's tree. A file the branch did
-  //      not touch is absent from `base..HEAD` by construction; if the branch DID touch
-  //      it, it is in the diff and gets reconciled normally. Either way the demand is
-  //      unsatisfiable, and fleet-status/SessionStart already run a separate mainline
-  //      discovery pass (parkedMainlineDiscoveryFrom) whose entire job is these files —
-  //      it reads origin/main's history AND its parked status headers, so exempting them
-  //      here hands them to a scanner that can actually see them rather than dropping
-  //      them. Observed on 2026-08-20: a branch registered 20260813080000 as a candidate
-  //      while origin/main did not, and the live database confirmed it was already
-  //      applied — origin/main was right and the branch's row was stale.
+  // The ONLY safe exemption is a row origin/main's own shared history already accounts
+  // for, because then some other pass is answerable for it:
   //
-  // Both lookups are cached and cost one git spawn each per distinct base / per process,
-  // because this runs inside the SessionStart hook's budget across every worktree.
-  const baseCandidateCache = new Map(); // base sha → Set<normalized path>
-  function inheritedCandidatePaths(base) {
-    if (baseCandidateCache.has(base)) return baseCandidateCache.get(base);
-    const lines = run(["show", `${base}:docs/reference/migration-history.md`], repoRoot);
-    // Unreadable base history exempts nothing: falling back to UNKNOWN is the safe
-    // direction, and it is what this reader did before the exemption existed.
-    const parsed = lines === null ? null : localCandidateMigrationPathsFromHistory(lines.join("\n"));
-    const paths = parsed?.state === "known" ? parsed.paths : new Set();
-    baseCandidateCache.set(base, paths);
-    return paths;
-  }
-
-  let originMainMigrationFiles; // undefined = not read yet, null = unreadable
-  function originMainMigrationPaths() {
-    if (originMainMigrationFiles !== undefined) return originMainMigrationFiles;
-    // Every candidate row resolves to `supabase/migrations/<basename>` (see
-    // localCandidateMigrationPathsFromHistory), so one tree listing covers all of them.
+  //   a. origin/main registers it as a LOCAL CANDIDATE → parkedMainlineDiscoveryFrom owns
+  //      it, verifies its pin/header against the same immutable tree, and reports it.
+  //   b. origin/main records that migration APPLIED LIVE / RETIRED CODE-ONLY ARTIFACT /
+  //      SUPERSEDED → it is provably not pending, on the newest shared authority. Real
+  //      case, 2026-08-20: a branch still carried 20260813080000 as a LOCAL CANDIDATE
+  //      while origin/main row 886 records it APPLIED LIVE (live `list_migrations`
+  //      agrees). That row even notes the file's own `-- STATUS: NOT APPLIED` header is
+  //      stale and deliberately uncorrected, because CRX never edits an applied migration.
+  //
+  // DO NOT widen this to "the SQL exists in origin/main's tree" (Codex P1 on PR #437, and
+  // it was verified reproducible). A branch may newly register an ordinary already-committed
+  // migration as a LOCAL CANDIDATE via the supported SHA-pin form, changing only
+  // migration-history.md. The SQL is then absent from `base..HEAD`, origin/main's older
+  // history does not list it, and its blob carries no parked header — so mainline
+  // discovery reports nothing either, and /fleet would confidently hide a genuinely
+  // pending migration. Existing on main is not the same as being ACCOUNTED FOR by main.
+  //
+  // One cached git read per process, because this runs inside the SessionStart hook's
+  // budget across every worktree.
+  let originMainAccounting; // undefined = not read yet, null = unreadable
+  function originMainHistoryAccounting() {
+    if (originMainAccounting !== undefined) return originMainAccounting;
     const lines = hasOriginMain
-      ? run(["ls-tree", "-r", "--name-only", "origin/main", "--", "supabase/migrations"], repoRoot)
+      ? run(["show", "origin/main:docs/reference/migration-history.md"], repoRoot)
       : null;
-    originMainMigrationFiles = lines === null ? null : new Set(lines.map(normRepoPath).filter(Boolean));
-    return originMainMigrationFiles;
+    if (lines === null) {
+      // Unreadable shared history exempts NOTHING. "I cannot tell" keeps the old
+      // conservative answer; it must never buy a confident zero.
+      originMainAccounting = null;
+      return originMainAccounting;
+    }
+    const text = lines.join("\n");
+    const parsed = localCandidateMigrationPathsFromHistory(text);
+    originMainAccounting = {
+      candidates: parsed.state === "known" ? parsed.paths : new Set(),
+      rowsByBasename: historyRowsByMigrationBasename(text),
+    };
+    return originMainAccounting;
   }
 
-  function reconcileExemptPathsFor(parsedHistory, base) {
+  function reconcileExemptPathsFor(parsedHistory) {
     if (parsedHistory?.state !== "known" || parsedHistory.paths.size === 0) return null;
-    const inherited = inheritedCandidatePaths(base);
-    const mainline = originMainMigrationPaths();
+    const mainline = originMainHistoryAccounting();
+    if (!mainline) return null;
     const exempt = new Set();
     for (const candidate of parsedHistory.paths) {
-      if (inherited.has(candidate) || mainline?.has(candidate)) exempt.add(candidate);
+      if (mainline.candidates.has(candidate)) {
+        exempt.add(candidate);
+        continue;
+      }
+      const basename = candidate.slice(candidate.lastIndexOf("/") + 1).toLowerCase();
+      const rows = mainline.rowsByBasename.get(basename) || [];
+      if (rows.some((row) => SETTLED_MIGRATION_HISTORY_ROW.test(row))) exempt.add(candidate);
     }
     return exempt.size ? exempt : null;
   }
 
-  function resultFrom(changed, onDisk, textOnDisk, historyText, base) {
+  function resultFrom(changed, onDisk, textOnDisk, historyText) {
     // Parse the shared history ONCE and hand the same result to both the classifier and
     // the exemption computation. It is ~840 KiB and this runs per worktree inside the
     // SessionStart hook's budget — the same reason createParkedFallbackClassifier exists.
@@ -806,7 +820,7 @@ export function createOwnDraftPathsReader({
       historyText,
       sha256Text,
       parsedHistory,
-      reconcileExemptPathsFor(parsedHistory, base),
+      reconcileExemptPathsFor(parsedHistory),
     );
     Object.defineProperty(parked, "supersededPaths", {
       value: supersededDraftPathsFrom(changed, onDisk),
@@ -831,13 +845,13 @@ export function createOwnDraftPathsReader({
         cleanCache.set(entry.head, run(["diff", "--name-only", base, entry.head, "--", ...spec], repoRoot));
       }
       const changed = cleanCache.get(entry.head);
-      return changed === null ? null : resultFrom(changed, onDisk, textOnDisk, historyText, base);
+      return changed === null ? null : resultFrom(changed, onDisk, textOnDisk, historyText);
     }
 
     const changed = run(["diff", "--name-only", base, "--", ...spec], entry.path);
     const untracked = run(["ls-files", "--others", "--exclude-standard", "--", ...spec], entry.path);
     if (changed === null || untracked === null) return null;
-    return resultFrom([...changed, ...untracked], onDisk, textOnDisk, historyText, base);
+    return resultFrom([...changed, ...untracked], onDisk, textOnDisk, historyText);
   };
 }
 

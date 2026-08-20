@@ -15,29 +15,43 @@ A candidate row that came with the shared file, naming SQL that also came with `
 never appear in that diff no matter what the branch does. A guard that always answers UNKNOWN
 answers nothing.
 
-- **Fixed the check's domain, not by adding a bypass.** `createOwnDraftPathsReader` now exempts
-  exactly the rows outside the diff's reach: rows **inherited from the branch point** (they belong
-  to `origin/main`, and subtracting them leaves precisely the rows this branch *added* — "the
-  branch's own claim", which is what the rule was always described as testing), and rows naming
-  **SQL already in `origin/main`'s tree** (a file the branch did not touch cannot be in its diff;
-  one it did touch is in the diff and reconciles normally). The separate mainline discovery pass
-  already owns that second class and reads `origin/main`'s history *and* its parked status headers.
-- **Not a relaxation.** A row *this branch added*, naming SQL `origin/main` has never carried,
-  still yields UNKNOWN; an unreadable branch point or `origin/main` tree exempts nothing and keeps
-  the old conservative answer. Under-reporting — a confident zero over real pending migrations — is
-  the dangerous direction, so both are pinned by tests and were mutation-tested.
+- **Fixed the check's domain, not by adding a bypass.** `createOwnDraftPathsReader` now exempts a
+  row **only when `origin/main`'s own shared history already accounts for it** — either as a LOCAL
+  CANDIDATE (mainline discovery owns it and verifies its pin/header against the same immutable
+  tree), or as a settled `APPLIED LIVE` / `RETIRED CODE-ONLY ARTIFACT` / `SUPERSEDED` row (provably
+  not pending on the newest shared authority). Everything else stays reconciled.
+- **"Exists on `origin/main`" is deliberately NOT sufficient**, and this is the sharp edge. A first
+  draft exempted any candidate whose SQL was present in `origin/main`'s tree; the Codex reviewer
+  raised it as a P1 on PR #437 and it reproduced. A branch may newly register an ordinary
+  already-committed migration as a LOCAL CANDIDATE via the supported SHA-pin form, changing only
+  `migration-history.md`. The SQL is then absent from `base..HEAD`, `origin/main`'s older history
+  does not list it, and its blob carries no parked header — so mainline discovery reports nothing
+  either, and `/fleet` would have **confidently hidden a genuinely pending migration**. Existing on
+  main is not the same as being *accounted for* by main. A dedicated test pins this.
+- **Not a relaxation.** An unreadable `origin/main` history exempts nothing and keeps the old
+  conservative answer. Under-reporting — a confident zero over real pending migrations — is the
+  dangerous direction, so every branch of this is pinned by tests and was mutation-tested.
 - **One lib, both consumers.** `scripts/fleet-status.mjs` and the SessionStart banner share
   `.claude/hooks/worktree-awareness-lib.mjs` by design (2026-07-29), so the change is in the lib.
-- **Supporting live evidence.** A branch registered `20260813080000_lock_quote_versions_writes_to_rpc.sql`
-  as a LOCAL CANDIDATE while `origin/main` did not; a read-only `list_migrations` confirms it is
-  already applied. `origin/main` was right and that branch's row is stale.
-- **Cost.** The shared history is ~840 KiB and is now parsed **once** per worktree; the exemption's
-  two git reads are cached (branch-point history once per distinct base sha, `origin/main`'s
-  migration tree once per reader).
+- **Real settled-row case.** `origin/main` row 886 records
+  `20260813080000_lock_quote_versions_writes_to_rpc.sql` `APPLIED LIVE` (live `list_migrations`
+  agrees) while a branch still carried it as a LOCAL CANDIDATE. That row even notes the file's own
+  `-- STATUS: NOT APPLIED` header is stale and deliberately uncorrected, because CRX never edits an
+  applied migration.
+- **Cost.** The ~840 KiB shared history is parsed once per worktree, and `origin/main`'s history is
+  read once per reader.
 
-**Proof:** `fleet-status.mjs` reports `Parked migrations awaiting apply: 21` with zero `UNKNOWN`
-strings and all three mainline candidates **still listed by name** — attributed, not hidden; the
-SessionStart banner agrees; 203 lib assertions pass, including the original rule's own UNKNOWN test.
+**Proof:** the structural defect is gone — **19 of 19** worktrees UNKNOWN became **3 of 21**, and
+the three that remain are named, specific, and real (see below). All three mainline candidates are
+still listed by name — attributed, not hidden. 203 lib assertions pass, including the original
+rule's own UNKNOWN test and the P1 regression test.
+
+**Still open, and NOT a code defect.** Three Codex worktrees carry LOCAL CANDIDATE rows for the
+Wave A migrations `20260813010000`–`20260813060000` naming `supabase/migrations/<file>`, while the
+actual parked drafts live at `scripts/.staging-migrations/<file>`. Those branches genuinely claim
+pending SQL their own diffs cannot account for, so UNKNOWN is the correct answer until their
+history rows are reconciled. Until then `/fleet` still reports `PARKED STATE UNKNOWN` rather than a
+number — by design, because under-reporting is the worse failure.
 
 Scope: guard/reporting tooling only. No schema change, no migration, no live data, no money path.
 Diagnosis: `docs/reference/parked-migration-scan-unknown-diagnosis.md`. PR #437.

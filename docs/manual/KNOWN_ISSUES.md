@@ -50,7 +50,8 @@ every candidate through `scanWorktreeCandidate` (line 1797). The repository's ow
   what `dist/` is, line 72) line 1796 only sets `checkArchives = false` — the file is still
   enumerated and still opened.
 
-`scanWorktreeCandidate` calls `lstatSync` (line 666) with no `ENOENT` tolerance. So if anything
+`scanWorktreeCandidate` runs a whole pre-open sequence — `lstatSync`, `statSync`, `realpathSync`,
+`openSync`, then `fstatSync` (lines 605-686) — and **none** of it tolerates `ENOENT`. So if anything
 rewrites `dist/` between enumeration and the stat — a dev server, a `npm run build`, a parallel
 session in the same checkout — the scanner throws and the push is refused with a **misleading
 "containment failed"**, which reads as "a private packet leaked" when nothing leaked. Phase 3C's
@@ -62,10 +63,14 @@ about this weakens containment: `dist/` files still get the structural-signature
 force-added file becomes tracked and gets the full scan regardless.
 
 **Likely fix, not yet written and deliberately not bundled with the 2026-08-20 fleet-scan repair:**
-tolerate `ENOENT` at the stat/open boundary for `source === 'ignored'` tool-owned paths — a file
-that vanished mid-scan cannot be a staged private packet — rather than widening the exclude
-pathspec, which would stop scanning `dist/` altogether. Whoever picks this up should confirm which
-of the two the containment charter actually wants before choosing.
+tolerate `ENOENT` across the **whole** pre-open sequence above — not just the `stat`/`open`
+boundary — for `source === 'ignored'` tool-owned paths, **and re-check that the path is still
+absent from the index before skipping it**. That re-check is the load-bearing half: the candidate
+list is collected before scanning, so "it vanished" and "it was force-added and is now tracked"
+are indistinguishable at scan time. Without it, "a file that vanished mid-scan cannot be a staged
+private packet" is an overclaim, not a guarantee. The alternative — widening the exclude pathspec —
+would stop scanning `dist/` altogether and is a real loss of coverage. Whoever picks this up should
+confirm which the containment charter actually wants before choosing.
 
 ---
 

@@ -807,96 +807,100 @@ const DIRTY_ENTRY = { path: "C:/wt-dirty", head: "b".repeat(40) };
 // The reconciliation above compares shared `migration-history.md` rows against a diff of
 // what THIS branch changed. Rows that arrived with the shared file, naming SQL that also
 // arrived with origin/main, can never appear in that diff — so before this fix every one
-// of Mason's 19 worktrees reported UNKNOWN permanently and the parked count was unreadable.
-// These tests pin both halves: the two unsatisfiable classes stop forcing UNKNOWN, and a
-// genuinely branch-owned row still does. The second half is the one that matters — a scan
+// of Mason's worktrees reported UNKNOWN permanently and the parked count was unreadable.
+//
+// The exemption is deliberately narrow: ONLY rows origin/main's own shared history already
+// accounts for, either as a LOCAL CANDIDATE (mainline discovery owns it) or as a settled
+// APPLIED LIVE / RETIRED / SUPERSEDED row (provably not pending). Existing in origin/main's
+// TREE is NOT enough — see the Codex P1 test below, which is the one that matters. A scan
 // that confidently says zero while real pending migrations exist is far worse than UNKNOWN.
 const CANDIDATE_SQL_PATH = "supabase/migrations/20260101000000_real.sql";
-// An origin/main tree that carries unrelated migrations but NOT the candidate above.
-const MAINLINE_WITHOUT_CANDIDATE = ["supabase/migrations/20260102000000_other.sql"];
-// A base history that parses cleanly and registers no candidates at all.
-const BASE_HISTORY_NO_CANDIDATES = "| 842 | 20260102000000 | **APPLIED LIVE.** File: `20260102000000_other.sql`. |";
+// origin/main history that says nothing at all about the branch's candidate.
+const MAINLINE_HISTORY_SILENT = "| 842 | 20260102000000 | **APPLIED LIVE.** File: `20260102000000_other.sql`. |";
+// origin/main history that registers the branch's candidate as a LOCAL CANDIDATE too.
+const MAINLINE_HISTORY_REGISTERS_CANDIDATE = BRANCH_CANDIDATE_HISTORY;
+// origin/main history that records the branch's candidate as already applied. Real shape:
+// origin/main row 886 records 20260813080000 APPLIED LIVE while a branch still carried it
+// as a LOCAL CANDIDATE, and live `list_migrations` agreed with origin/main.
+const MAINLINE_HISTORY_SETTLES_CANDIDATE = "| 886 | 20260101000000 | **APPLIED LIVE** as ledger version `20260116174353`. File: `20260101000000_real.sql`. |";
 
-// Baseline: with neither exemption available the branch is still UNKNOWN. Without this,
-// the three tests below could pass because the exemption plumbing silently did nothing.
+// Baseline: origin/main's history says nothing about the candidate, so nothing is exempt
+// and the branch is UNKNOWN. Without this, the tests below could pass because the
+// exemption plumbing silently did nothing at all.
 {
   const { reader } = fakeReader(
-    { "merge-base": ["base1"], diff: [], show: null, "ls-tree": [] },
+    { "merge-base": ["base1"], diff: [], show: [MAINLINE_HISTORY_SILENT] },
     { readHistory: () => BRANCH_CANDIDATE_HISTORY },
   );
   const got = reader(CLEAN_ENTRY);
-  ok(got.unknownReason.includes("absent from this branch's own-draft diff"), "an unexplained LOCAL CANDIDATE row still makes the branch UNKNOWN");
+  ok(got.unknownReason.includes("absent from this branch's own-draft diff"), "a candidate origin/main's history says nothing about still makes the branch UNKNOWN");
 }
 
-// Class 1 — a row INHERITED from the branch point belongs to origin/main, not to this
-// branch, and no diff of this branch can ever produce it.
+// Exemption (a) — origin/main registers the same LOCAL CANDIDATE, so mainline discovery
+// owns it and verifies it against the same immutable tree.
 {
   const { reader } = fakeReader(
-    { "merge-base": ["base1"], diff: [], show: [BRANCH_CANDIDATE_HISTORY], "ls-tree": [] },
+    { "merge-base": ["base1"], diff: [], show: [MAINLINE_HISTORY_REGISTERS_CANDIDATE] },
     { readHistory: () => BRANCH_CANDIDATE_HISTORY },
   );
   const got = reader(CLEAN_ENTRY);
-  eq(got.unknownReason, "", "a LOCAL CANDIDATE row inherited from the branch point does not make the branch UNKNOWN");
+  eq(got.unknownReason, "", "a candidate origin/main also registers does not make the branch UNKNOWN");
 }
 
-// Class 2 — a candidate whose SQL already exists in origin/main's tree. The mainline
-// discovery pass owns those files; this branch's diff structurally cannot contain them.
+// Exemption (b) — origin/main records the migration APPLIED LIVE. The branch's row is
+// stale against the newest shared authority, so it is provably not pending.
+{
+  const { reader } = fakeReader(
+    { "merge-base": ["base1"], diff: [], show: [MAINLINE_HISTORY_SETTLES_CANDIDATE] },
+    { readHistory: () => BRANCH_CANDIDATE_HISTORY },
+  );
+  const got = reader(CLEAN_ENTRY);
+  eq(got.unknownReason, "", "a candidate origin/main records APPLIED LIVE does not make the branch UNKNOWN");
+}
+
+// THE MUTATION GUARD — Codex P1 on PR #437, reproduced and pinned.
+//
+// A branch may newly register an ordinary already-committed migration as a LOCAL CANDIDATE
+// using the supported SHA-pin form, changing only `migration-history.md`. The SQL is then
+// absent from `base..HEAD`; origin/main's older history does not list it; and its blob
+// carries no parked header, so mainline discovery reports nothing either. An exemption
+// keyed on "the SQL exists in origin/main's tree" hides a genuinely pending migration and
+// /fleet reports a confident zero over it.
+//
+// EXISTING ON MAIN IS NOT THE SAME AS BEING ACCOUNTED FOR BY MAIN. If this ever goes green
+// with an empty unknownReason, the exemption has been widened back into that hole.
 {
   const { reader } = fakeReader(
     {
       "merge-base": ["base1"],
       diff: [],
-      show: [BASE_HISTORY_NO_CANDIDATES],
-      "ls-tree": [CANDIDATE_SQL_PATH, ...MAINLINE_WITHOUT_CANDIDATE],
+      show: [MAINLINE_HISTORY_SILENT],
+      // The candidate's SQL IS present in origin/main's tree — and must not matter.
+      "ls-tree": [CANDIDATE_SQL_PATH, "supabase/migrations/20260102000000_other.sql"],
     },
     { readHistory: () => BRANCH_CANDIDATE_HISTORY },
   );
   const got = reader(CLEAN_ENTRY);
-  eq(got.unknownReason, "", "a candidate already present on origin/main does not make the branch UNKNOWN");
+  ok(got.unknownReason.includes("absent from this branch's own-draft diff"), "a candidate present in origin/main's TREE but absent from its HISTORY still makes the branch UNKNOWN");
 }
 
-// THE MUTATION GUARD. A row this branch added, naming SQL origin/main has never carried,
-// is a real branch-owned claim of pending SQL that the diff cannot account for. If this
-// ever goes green-with-zero, the fix has started hiding pending migrations instead of
-// attributing them, and /fleet will report a confident zero over real parked work.
+// Fail-safe direction: an unreadable origin/main history exempts NOTHING. "I cannot tell"
+// must keep the old conservative answer, never buy a confident zero.
 {
   const { reader } = fakeReader(
-    {
-      "merge-base": ["base1"],
-      diff: [],
-      show: [BASE_HISTORY_NO_CANDIDATES],
-      "ls-tree": MAINLINE_WITHOUT_CANDIDATE,
-    },
+    { "merge-base": ["base1"], diff: [], show: null },
     { readHistory: () => BRANCH_CANDIDATE_HISTORY },
   );
   const got = reader(CLEAN_ENTRY);
-  ok(got.unknownReason.includes("absent from this branch's own-draft diff"), "a branch-added candidate absent from origin/main still makes the branch UNKNOWN");
+  ok(got.unknownReason.includes("absent from this branch's own-draft diff"), "an unreadable origin/main history exempts nothing");
 }
 
-// Fail-safe direction: an unreadable branch point or origin/main tree exempts NOTHING.
-// "I cannot tell" must keep the old conservative answer, never buy a confident zero.
-{
-  const { reader } = fakeReader(
-    { "merge-base": ["base1"], diff: [], show: null, "ls-tree": null },
-    { readHistory: () => BRANCH_CANDIDATE_HISTORY },
-  );
-  const got = reader(CLEAN_ENTRY);
-  ok(got.unknownReason.includes("absent from this branch's own-draft diff"), "an unreadable branch point and origin/main tree exempt nothing");
-}
-
-// The exemption's two git reads are cached: the branch-point history once per distinct
-// base sha, and origin/main's migration tree once per reader — not once per worktree.
-// This runs across ~19 checkouts inside the SessionStart hook's budget, the same pressure
-// that createParkedFallbackClassifier exists to relieve.
+// The exemption's git read is cached: origin/main's shared history is read once per
+// reader, not once per worktree. This runs across every checkout inside the SessionStart
+// hook's budget, the same pressure createParkedFallbackClassifier exists to relieve.
 {
   const { reader, calls } = fakeReader(
-    {
-      "merge-base": ["base1"],
-      diff: [],
-      "ls-files": [],
-      show: [BASE_HISTORY_NO_CANDIDATES],
-      "ls-tree": [CANDIDATE_SQL_PATH],
-    },
+    { "merge-base": ["base1"], diff: [], "ls-files": [], show: [MAINLINE_HISTORY_REGISTERS_CANDIDATE] },
     {
       readHistory: () => BRANCH_CANDIDATE_HISTORY,
       dirtyCount: (wtPath) => (wtPath === DIRTY_ENTRY.path ? 3 : 0),
@@ -904,20 +908,30 @@ const BASE_HISTORY_NO_CANDIDATES = "| 842 | 20260102000000 | **APPLIED LIVE.** F
   );
   reader(CLEAN_ENTRY);
   reader(DIRTY_ENTRY);
-  eq(calls.filter((c) => c.cmd === "show").length, 1, "the branch-point history is read once per distinct base, not once per worktree");
-  eq(calls.filter((c) => c.cmd === "ls-tree").length, 1, "origin/main's migration tree is read once per reader, not once per worktree");
+  eq(calls.filter((c) => c.cmd === "show").length, 1, "origin/main's shared history is read once per reader, not once per worktree");
+}
+
+// A dirty worktree combines `diff` and `ls-files` before reconciliation; the exemption
+// must behave identically on that path (CodeRabbit on PR #437).
+{
+  const { reader } = fakeReader(
+    { "merge-base": ["base1"], diff: [], "ls-files": [], show: [MAINLINE_HISTORY_REGISTERS_CANDIDATE] },
+    { dirtyCount: () => 1, readHistory: () => BRANCH_CANDIDATE_HISTORY },
+  );
+  const got = reader(CLEAN_ENTRY);
+  eq(got.unknownReason, "", "an exempt candidate stays known in a dirty worktree too");
 }
 
 // The exemption must narrow the reconciliation only — a draft this branch really did add
-// is still discovered and reported alongside an exempt inherited row.
+// is still discovered and reported alongside an exempt row.
 {
   const { reader } = fakeReader(
-    { "merge-base": ["base1"], diff: [DRAFT_A], show: [BRANCH_CANDIDATE_HISTORY], "ls-tree": [] },
+    { "merge-base": ["base1"], diff: [DRAFT_A], show: [MAINLINE_HISTORY_REGISTERS_CANDIDATE] },
     { readHistory: () => BRANCH_CANDIDATE_HISTORY },
   );
   const got = reader(CLEAN_ENTRY);
-  eq([...got.values()], [DRAFT_A], "an exempt inherited row does not suppress a draft this branch actually added");
-  eq(got.unknownReason, "", "a discovered branch-owned draft plus an exempt inherited row is a confident answer");
+  eq([...got.values()], [DRAFT_A], "an exempt row does not suppress a draft this branch actually added");
+  eq(got.unknownReason, "", "a discovered branch-owned draft plus an exempt row is a confident answer");
 }
 
 // Windows may materialize a normal text migration with CRLF even though Git stores and
