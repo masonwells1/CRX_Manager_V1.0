@@ -1792,8 +1792,76 @@ function latestFunctionBody(rpc: string): string | null {
   return null;
 }
 
+function stripSqlCommentsAndStrings(sql: string): string {
+  let executable = '';
+
+  for (let i = 0; i < sql.length;) {
+    if (sql.startsWith('--', i)) {
+      const newline = sql.indexOf('\n', i + 2);
+      if (newline === -1) break;
+      executable += '\n';
+      i = newline + 1;
+      continue;
+    }
+
+    if (sql.startsWith('/*', i)) {
+      let depth = 1;
+      i += 2;
+      while (i < sql.length && depth > 0) {
+        if (sql.startsWith('/*', i)) {
+          depth += 1;
+          i += 2;
+        } else if (sql.startsWith('*/', i)) {
+          depth -= 1;
+          i += 2;
+        } else {
+          i += 1;
+        }
+      }
+      executable += ' ';
+      continue;
+    }
+
+    if (sql[i] === "'") {
+      i += 1;
+      while (i < sql.length) {
+        if (sql[i] === "'" && sql[i + 1] === "'") {
+          i += 2;
+        } else if (sql[i] === '\\' && i + 1 < sql.length) {
+          i += 2;
+        } else if (sql[i] === "'") {
+          i += 1;
+          break;
+        } else {
+          i += 1;
+        }
+      }
+      executable += ' ';
+      continue;
+    }
+
+    if (sql[i] === '$') {
+      const delimiter = sql.slice(i).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/)?.[0];
+      if (delimiter) {
+        const closing = sql.indexOf(delimiter, i + delimiter.length);
+        if (closing === -1) break;
+        executable += ' ';
+        i = closing + delimiter.length;
+        continue;
+      }
+    }
+
+    executable += sql[i];
+    i += 1;
+  }
+
+  return executable;
+}
+
 function bodyUsesIdempotency(body: string): boolean {
-  return /idempotency_keys|check_idempotency_intent|check_idempotency|save_idempotency|_claim_bound_lifecycle_idempotency|_bind_completed_lifecycle_idempotency/i.test(body);
+  const executableBody = stripSqlCommentsAndStrings(body);
+  return /\b(?:public\.)?(?:check_idempotency_intent|check_idempotency|save_idempotency|_claim_bound_lifecycle_idempotency|_bind_completed_lifecycle_idempotency)\s*\(/i.test(executableBody)
+    || /\b(?:from|join|into|update|delete\s+from|merge\s+into)\s+(?:public\.)?idempotency_keys\b/i.test(executableBody);
 }
 
 /**
@@ -2718,6 +2786,24 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
 
 
 describe('Idempotency coverage drift (generated-types driven, fail-closed)', () => {
+  it('requires executable idempotency usage rather than comments or string literals', () => {
+    expect(bodyUsesIdempotency(`
+      BEGIN
+        PERFORM public.check_idempotency_intent(p_idempotency_key);
+      END
+    `)).toBe(true);
+    expect(bodyUsesIdempotency('SELECT result FROM public.idempotency_keys')).toBe(true);
+
+    expect(bodyUsesIdempotency(`
+      BEGIN
+        -- PERFORM public.check_idempotency_intent(p_idempotency_key);
+        /* INSERT INTO public.idempotency_keys; */
+        RAISE NOTICE 'save_idempotency(p_idempotency_key)';
+        PERFORM audit_log($message$check_idempotency(p_idempotency_key)$message$);
+      END
+    `)).toBe(false);
+  });
+
   it('classifies wrappers that mutate only by calling another function', () => {
     const syntheticBodies = new Map([
       ['internal_writer', 'BEGIN INSERT INTO public.example(id) VALUES (1); END'],
