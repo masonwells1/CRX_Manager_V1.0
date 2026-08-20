@@ -186,7 +186,7 @@ function renderQuoteBuilder(id?: string) {
   );
 }
 
-function makeQuoteFixture(status: 'draft' | 'accepted' = 'draft', rowVersion?: number) {
+function makeQuoteFixture(status: 'draft' | 'sent' | 'accepted' = 'draft', rowVersion?: number) {
   const quote = {
     id: `quote-${status}-${rowVersion ?? 'legacy'}`,
     quote_number: 'Q-version-test',
@@ -248,6 +248,46 @@ function makeQuoteFixture(status: 'draft' | 'accepted' = 'draft', rowVersion?: n
   return { quote, product, section, item };
 }
 
+function configureDrawDownFixture(drawError: { message: string; details?: string }) {
+  const fixture = makeQuoteFixture('sent', 7);
+  let quoteItemReads = 0;
+  mockFrom.mockImplementation((table: string) => {
+    if (table === 'quote_items') quoteItemReads += 1;
+    const data = table === 'quotes'
+      ? fixture.quote
+      : table === 'quote_sections'
+        ? [fixture.section]
+        : table === 'quote_items'
+          ? [fixture.item]
+          : table === 'customers'
+            ? [{ id: 'customer-1', farm_name: 'Farm', assigned_tier: 1, is_active: true }]
+            : table === 'products'
+              ? [fixture.product]
+              : [];
+    return buildChain({ data, error: null });
+  });
+  mockRpc.mockImplementation((name: string) => Promise.resolve(
+    name === 'draw_down_quote'
+      ? { data: null, error: drawError }
+      : { data: null, error: null },
+  ));
+  return { ...fixture, quoteItemReads: () => quoteItemReads };
+}
+
+async function submitOneUnitDraw(quoteId: string) {
+  renderQuoteBuilder(quoteId);
+  const createOrderButton = await screen.findByRole('button', { name: /Create Order/ });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await waitFor(() => expect(dirtyStates[dirtyStates.length - 1]).toBe(false));
+  fireEvent.click(createOrderButton);
+  fireEvent.click(await screen.findByRole('menuitem', { name: /Draw part of booking/ }));
+  expect(mockToast).not.toHaveBeenCalledWith('warning', 'Save the quote before drawing down the booking');
+  const dialog = await screen.findByRole('dialog', { name: 'Create Order from Booking' });
+  const quantity = await within(dialog).findByRole('spinbutton');
+  fireEvent.change(quantity, { target: { value: '1' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Create Order' }));
+}
+
 describe('QuoteBuilder', () => {
   it('prefers customer-facing quoting guidance and falls back to the grower description', () => {
     expect(preferredQuoteNotes({ quoting_notes: 'Customer quote guidance', notes: 'Grower copy' }))
@@ -272,6 +312,43 @@ describe('QuoteBuilder', () => {
     await waitFor(() => {
       expect(screen.getByText('Builder')).toBeInTheDocument();
     });
+  });
+
+  it('opens the exact receipt-proven order after a changed draw intent', async () => {
+    const priorOrderId = '99999999-9999-9999-9999-999999999999';
+    const { quote } = configureDrawDownFixture({
+      message: 'IDEMPOTENCY_INTENT_MISMATCH',
+      details: JSON.stringify({
+        operation: 'draw_down_quote',
+        result: { order_id: priorOrderId, order_number: 'O-EXISTING' },
+      }),
+    });
+
+    await submitOneUnitDraw(quote.id);
+
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith(`/orders/${priorOrderId}`));
+    expect(mockResetIdempotencyKey).toHaveBeenCalledTimes(1);
+    expect(mockToast).toHaveBeenCalledWith(
+      'warning',
+      expect.stringContaining('already created an order'),
+    );
+    expect(screen.queryByRole('dialog', { name: 'Create Order from Booking' })).not.toBeInTheDocument();
+  });
+
+  it('retires another actor retry and reloads the booking balance in the open modal', async () => {
+    const fixture = configureDrawDownFixture({ message: 'IDEMPOTENCY_ACTOR_MISMATCH' });
+
+    await submitOneUnitDraw(fixture.quote.id);
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'warning',
+      expect.stringContaining('belongs to another signed-in user'),
+    ));
+    expect(mockResetIdempotencyKey).toHaveBeenCalledTimes(1);
+    expect(fixture.quoteItemReads()).toBeGreaterThanOrEqual(3);
+    const dialog = screen.getByRole('dialog', { name: 'Create Order from Booking' });
+    expect(within(dialog).getByRole('spinbutton')).toHaveValue(null);
+    expect(mockNavigate).not.toHaveBeenCalledWith(expect.stringMatching(/^\/orders\//));
   });
 
   it('shows loading skeleton while fetching data for existing quote', () => {

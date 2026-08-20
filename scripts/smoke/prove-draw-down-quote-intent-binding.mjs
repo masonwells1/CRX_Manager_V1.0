@@ -136,8 +136,8 @@ function extractFunctionStatement(source, name) {
 }
 
 function extractReviewedPrerequisites() {
-  const tierSplit = readFileSync(TIER_SPLIT_PATH, 'utf8').replace(/\r\n/g, '\n');
-  const allocatedCents = readFileSync(ALLOCATED_CENTS_PATH, 'utf8').replace(/\r\n/g, '\n');
+  const tierSplit = readFileSync(TIER_SPLIT_PATH, 'utf8');
+  const allocatedCents = readFileSync(ALLOCATED_CENTS_PATH, 'utf8');
   return [
     extractFunctionStatement(tierSplit, '_draw_down_quote_below_cost_impl_20260810'),
     extractFunctionStatement(allocatedCents, '_allocated_cumulative_cents'),
@@ -388,6 +388,38 @@ SELECT public.draw_down_quote(
 }
 
 function proveSequential(db) {
+  const keyless = psql(`BEGIN;
+SELECT set_config('request.jwt.claim.sub', '${ACTOR_A}', false);
+SELECT 'RESULT=' || public.draw_down_quote(
+  '${QUOTE_A}'::uuid,
+  jsonb_build_array(jsonb_build_object('product_id', '${PRODUCT}'::uuid, 'quantity', 1)),
+  '${ACTOR_A}'::uuid,
+  NULL,
+  NULL
+)::text;
+ROLLBACK;`, { db, tuples: true });
+  assert.ok(resultId(keyless), 'valid keyless request did not reach the preserved implementation');
+
+  const keylessEmpty = psql(`
+SELECT set_config('request.jwt.claim.sub', '${ACTOR_A}', false);
+SELECT public.draw_down_quote(
+  '${QUOTE_A}'::uuid, '[]'::jsonb, '${ACTOR_A}'::uuid, NULL, NULL
+);`, { db, allowFailure: true, tuples: true });
+  assert.notEqual(keylessEmpty.status, 0, 'empty keyless request bypassed the outer guard');
+  assert.match(keylessEmpty.stderr, /EMPTY_DRAW/);
+
+  const keylessNonFinite = psql(`
+SELECT set_config('request.jwt.claim.sub', '${ACTOR_A}', false);
+SELECT public.draw_down_quote(
+  '${QUOTE_A}'::uuid,
+  jsonb_build_array(jsonb_build_object('product_id', '${PRODUCT}'::uuid, 'quantity', 'NaN')),
+  '${ACTOR_A}'::uuid,
+  NULL,
+  NULL
+);`, { db, allowFailure: true, tuples: true });
+  assert.notEqual(keylessNonFinite.status, 0, 'non-finite keyless request bypassed the outer guard');
+  assert.match(keylessNonFinite.stderr, /BOOKING_QUANTITY_INVALID/);
+
   const first = psql(callSql({ key: 'draw-sequential' }), { db, tuples: true });
   const replay = psql(`
 SELECT set_config('request.jwt.claim.sub', '${ACTOR_A}', false);
@@ -510,7 +542,7 @@ function provePrerequisiteBodyGuard(migration) {
   const reviewed = extractReviewedPrerequisites();
   psql(reviewed, { db });
   const mutated = extractFunctionStatement(
-    readFileSync(TIER_SPLIT_PATH, 'utf8').replace(/\r\n/g, '\n'),
+    readFileSync(TIER_SPLIT_PATH, 'utf8'),
     '_draw_down_quote_below_cost_impl_20260810',
   ).replace('-- TIERSPLIT<<<', '-- MUTATED TIERSPLIT<<<');
   psql(mutated, { db });
@@ -557,6 +589,7 @@ async function main() {
     console.log('DRAW_DOWN_INTENT_BINDING_PROOF_OK');
     console.log('  migration applied verbatim with preflight/postflight');
     console.log('  admin/rep allow, missing/inactive/auth/actor refusals: PASS');
+    console.log('  keyed/keyless input guards plus valid keyless delegation: PASS');
     console.log('  exact replay, changed/non-finite quantity, changed receipt actor, deleted quote: PASS');
     console.log('  different-intent and same-intent concurrent key races: PASS');
     console.log('  exact pricing/lifecycle prerequisite hashes and drift mutation: PASS');

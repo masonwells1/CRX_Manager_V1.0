@@ -29,19 +29,30 @@ shown in plain English. Non-finite quantities fail closed with `BOOKING_QUANTITY
 public wrapper is executable only by `authenticated`; the unusable `service_role` grant is removed
 because the wrapper requires an authenticated user id and no service caller exists.
 
-Added a focused Vitest contract and container-only rollback smoke covering exact replay, changed
-quantity, changed actor, cross-representative success, one $10 sale / $5 cost / $5 profit order,
-one inventory reservation, one draw-ledger row, and a bound receipt. This migration must follow
-`20260816110000`, `20260816120000` and `20260817120000`. **It has not been applied live and this PR
-does not authorize applying it.**
+The re-review closed the remaining release-proof gaps. The idempotency-key advisory lock is now
+taken before the quote row lock, preventing two cross-quote requests for one key from deadlocking;
+the shared helper re-takes that lock reentrantly before reading the receipt. Keyless compatibility
+still delegates to the preserved implementation, but only after the same empty/non-finite draw
+validation as keyed requests. The hash-bearing lifecycle migration, this migration, its rollback
+smoke and its prover are all pinned to LF in `.gitattributes`, and the tests/prover hash their exact
+on-disk bytes instead of normalizing line endings and hiding an apply-time mismatch.
+
+Added focused migration/RPC contracts, real QuoteBuilder component recovery tests, and a
+container-only rollback smoke covering exact replay, changed quantity, changed actor,
+cross-representative success, valid and invalid keyless calls, one $10 sale / $5 cost / $5 profit
+order, one inventory reservation, one draw-ledger row, and a bound receipt. The component tests also
+exposed and fixed an initial-load timing defect that could mark a freshly loaded saved quote dirty
+and block its first draw. This migration must follow `20260816110000`, `20260816120000` and
+`20260817120000`. **It has not been applied live and this PR does not authorize applying it.**
 
 `node scripts/smoke/prove-draw-down-quote-intent-binding.mjs` applied the migration verbatim on a
 network-isolated PostgreSQL 17 container. It first installs the exact reviewed pricing and lifecycle
 prerequisite bodies so both hash gates execute, applies this migration verbatim, then swaps in an
 effect-recording stand-in only for exercising the new wrapper; the full-schema rollback chain owns
 the exact line/header money and inventory assertions. It passes admin/rep authorization, inactive,
-missing-profile, unauthenticated and actor-parameter refusals, exact replay, changed/non-finite
-quantity, changed receipt actor, deleted quote, ACL, and both same-key concurrency cases. Mutation
+missing-profile, unauthenticated and actor-parameter refusals, keyed/keyless input guards, valid
+keyless delegation, exact replay, changed/non-finite quantity, changed receipt actor, deleted quote,
+ACL, and both same-key concurrency cases. Mutation
 proof is non-vacuous: removing draw quantities reproduced stale success, while drifting the pinned
 tier-split body was refused before wrapping. The container used `--network none` and tmpfs;
 production was untouched.

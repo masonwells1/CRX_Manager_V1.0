@@ -878,6 +878,7 @@ export default function QuoteBuilder() {
 
     // The complete snapshot is now known-good. Install its related form state
     // together so React never observes an error-path partial reload.
+    suppressDirtyUntilReloadSettlesRef.current = true;
     quoteRowVersionRef.current = finalRowVersion;
     quoteNumericVersionRequiredRef.current = finalRowVersion !== null;
     quoteVersionRecoveryRequiredRef.current = false;
@@ -930,8 +931,23 @@ export default function QuoteBuilder() {
     }
 
     setLoading(false);
-    // Allow a tick for state to settle before tracking changes
-    setTimeout(() => { initialLoadDone.current = true; }, 0);
+    // Passive effects from the installed snapshot can run after a zero-delay
+    // timer. Keep dirty tracking suppressed through two paint frames so a
+    // freshly loaded saved quote cannot be mistaken for an operator edit and
+    // block its first draw-down attempt.
+    let released = false;
+    const releaseInitialDirtySuppression = () => {
+      if (released) return;
+      released = true;
+      initialLoadDone.current = true;
+      suppressDirtyUntilReloadSettlesRef.current = false;
+      setIsDirty(false);
+    };
+    const fallback = window.setTimeout(releaseInitialDirtySuppression, 250);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      window.clearTimeout(fallback);
+      releaseInitialDirtySuppression();
+    }));
     return true;
   }, [toast, navigate]);
 

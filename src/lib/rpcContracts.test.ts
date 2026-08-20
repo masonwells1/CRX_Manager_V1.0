@@ -1457,10 +1457,10 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'delete_prepay_credit',
   'delete_purchase_order',
   'dismiss_watchdog_flag',
-  // Public below-cost wrapper; the replay pair lives in its private impl. See
-  // its delegated note in IDEMPOTENCY_BODY_EXEMPT below. (No quoted word may
-  // appear in a comment inside this array: rpcFixtureLiveDiff.test.ts extracts
-  // entries by regex over the whole literal and would read it as an RPC name.)
+  // Public intent wrapper owns the actor/fingerprint replay claim and forwards
+  // the same key through the private pricing chain. (No quoted word may appear
+  // in a comment inside this array: rpcFixtureLiveDiff.test.ts extracts entries
+  // by regex over the whole literal and would read it as an RPC name.)
   'draw_down_quote',
   'duplicate_quote',
   'edit_delivery',
@@ -1662,18 +1662,6 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // _impl has no `authenticated` EXECUTE, so the wrapper is the only reachable
   // entry point.
   batch_apply_prepayments: 'delegated',
-  // Verified against the live body 2026-08-15: the public wrapper is two
-  // statements — PERFORM _begin_below_cost_money_write('draw_down_quote', ...)
-  // to declare the below-cost operation context and authorize, then RETURN
-  // _draw_down_quote_below_cost_impl_20260810(p_quote_id, p_draws,
-  // p_performed_by, p_idempotency_key). It forwards the key and deliberately
-  // holds no replay logic of its own; the impl owns the canonical
-  // check_idempotency/save_idempotency pair under the one 'draw_down_quote'
-  // namespace, so a replay through the wrapper finds what the impl saved.
-  // Duplicating the check here would record the same key twice. The impl has no
-  // anon/authenticated/service_role EXECUTE — asserted by the postflight in
-  // migration 20260816120000 — so the wrapper is the only reachable entry point.
-  draw_down_quote: 'delegated',
   // Required-key wrappers fail closed before delegating to the preserved,
   // directly non-executable implementations that own replay and mutation.
   create_invoice_for_unbilled_delivery: 'delegated',
@@ -2167,36 +2155,37 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
     expect(IDEMPOTENCY_BODY_EXEMPT.save_invoice).toBe('delegated');
   });
 
-  // The generic body scan skips draw_down_quote because it is marked
-  // 'delegated', so without this the forwarding is asserted only in prose
-  // (adversarial review 2026-08-16, non-blocking follow-up). Assert the chain
-  // for real: the wrapper hands the caller's key straight to the private
-  // implementation, and the implementation owns the replay pair.
-  it('draw_down_quote forwards the caller key to the implementation that owns replay', () => {
+  // The 20260819232000 public wrapper now owns actor+intent replay and receipt
+  // binding, then forwards the same key through the preserved cutover/below-
+  // cost wrapper to the tier-split implementation that saves the receipt.
+  it('draw_down_quote binds replay intent and forwards one key through the private pricing chain', () => {
     const files = getMigrationFiles();
-    const wrapper = files.find(
-      ({ name }) => name === '20260812115237_enforce_below_cost_admin_approval.sql'
+    const intentWrapper = files.find(
+      ({ name }) => name === '20260819232000_bind_draw_down_receipts_to_intent.sql'
+    )?.content;
+    const cutoverWrapper = files.find(
+      ({ name }) => name === '20260816110000_draw_down_cutover_barrier.sql'
     )?.content;
     const implementationSource = files.find(
       ({ name }) => name === '20260816120000_draw_down_split_order_lines_by_price_tier.sql'
     )?.content;
 
-    expect(wrapper).toBeDefined();
+    expect(intentWrapper).toBeDefined();
+    expect(cutoverWrapper).toBeDefined();
     expect(implementationSource).toBeDefined();
 
-    // The public entry point is the ONLY reachable one: the original body was
-    // renamed to the private implementation and stripped of every direct grant.
-    expect(wrapper).toContain('RENAME TO _draw_down_quote_below_cost_impl_20260810');
-    expect(wrapper).toMatch(
-      /REVOKE ALL ON FUNCTION public\._draw_down_quote_below_cost_impl_20260810\(uuid, jsonb, uuid, text\) FROM PUBLIC, anon, authenticated, service_role/
+    expect(intentWrapper).toContain('RENAME TO _draw_down_quote_intent_impl_20260819');
+    expect(intentWrapper).toContain('public.check_idempotency_intent(');
+    expect(intentWrapper).toContain('SET request_fingerprint = v_fingerprint');
+    expect(intentWrapper).toContain('request_actor_id = v_actor');
+    expect(intentWrapper).toMatch(
+      /REVOKE ALL ON FUNCTION public\._draw_down_quote_intent_impl_20260819[\s\S]*FROM PUBLIC, anon, authenticated, service_role/
     );
 
-    // The wrapper declares the key and forwards it verbatim as the 4th
-    // argument — it must not drop it, rename it, or substitute NULL.
-    expect(wrapper).toMatch(
-      /CREATE FUNCTION public\.draw_down_quote\([\s\S]*p_idempotency_key text DEFAULT NULL/
+    expect(intentWrapper).toMatch(
+      /v_result := public\._draw_down_quote_intent_impl_20260819\([\s\S]*p_idempotency_key[\s\S]*p_below_cost_reason/
     );
-    expect(wrapper).toMatch(
+    expect(cutoverWrapper).toMatch(
       /RETURN public\._draw_down_quote_below_cost_impl_20260810\(\s*p_quote_id, p_draws, p_performed_by, p_idempotency_key\s*\)/
     );
 
@@ -2209,7 +2198,8 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
     expect(implementationSource).toContain(
       "PERFORM save_idempotency(p_idempotency_key, 'draw_down_quote', v_result)"
     );
-    expect(IDEMPOTENCY_BODY_EXEMPT.draw_down_quote).toBe('delegated');
+    expect(IDEMPOTENCY_BODY_EXEMPT).not.toHaveProperty('draw_down_quote');
+    expect(bodyUsesIdempotency(latestFunctionBody('draw_down_quote') as string)).toBe(true);
   });
 
   // CRX-RLS-001 (adversarial review 2026-08-16): quotes are soft-deleted by

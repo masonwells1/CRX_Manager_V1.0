@@ -13,13 +13,14 @@ const ALLOCATED_CENTS_PATH =
 const SMOKE_PATH =
   'scripts/smoke/smoke-draw-down-quote-intent-binding.sql';
 
-const migrationSql = readFileSync(MIGRATION_PATH, 'utf8').replace(/\r\n/g, '\n');
-const cutoverSql = readFileSync(CUTOVER_PATH, 'utf8').replace(/\r\n/g, '\n');
-const tierSplitSql = readFileSync(TIER_SPLIT_PATH, 'utf8').replace(/\r\n/g, '\n');
-const allocatedCentsSql = readFileSync(ALLOCATED_CENTS_PATH, 'utf8').replace(/\r\n/g, '\n');
-const smokeSql = readFileSync(SMOKE_PATH, 'utf8').replace(/\r\n/g, '\n');
+const migrationSql = readFileSync(MIGRATION_PATH, 'utf8');
+const cutoverSql = readFileSync(CUTOVER_PATH, 'utf8');
+const tierSplitSql = readFileSync(TIER_SPLIT_PATH, 'utf8');
+const allocatedCentsSql = readFileSync(ALLOCATED_CENTS_PATH, 'utf8');
+const smokeSql = readFileSync(SMOKE_PATH, 'utf8');
 const quoteBuilder = readFileSync('src/pages/QuoteBuilder.tsx', 'utf8').replace(/\r\n/g, '\n');
 const smokeSpecs = JSON.parse(readFileSync('scripts/smoke/smoke-specs.json', 'utf8'));
+const gitAttributes = readFileSync('.gitattributes', 'utf8').replace(/\r\n/g, '\n');
 
 function expectOrdered(source: string, markers: string[]): void {
   let cursor = -1;
@@ -62,6 +63,18 @@ describe('draw_down_quote actor and intent binding migration', () => {
   });
 
   it('pins the exact reviewed tier-split and allocated-cent lifecycle bodies', () => {
+    for (const path of [
+      ALLOCATED_CENTS_PATH,
+      MIGRATION_PATH,
+      SMOKE_PATH,
+      'scripts/smoke/prove-draw-down-quote-intent-binding.mjs',
+    ]) {
+      expect(gitAttributes).toContain(`${path} text eol=lf`);
+    }
+    expect(allocatedCentsSql).not.toContain('\r');
+    expect(migrationSql).not.toContain('\r');
+    expect(smokeSql).not.toContain('\r');
+
     for (const [source, functionName] of [
       [tierSplitSql, '_draw_down_quote_below_cost_impl_20260810'],
       [allocatedCentsSql, '_allocated_cumulative_cents'],
@@ -85,6 +98,7 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expectOrdered(migrationSql, [
       '-- DRAW_DOWN_INTENT_BARRIER<<<',
       '-- DRAW_DOWN_INTENT_AUTHZ<<<',
+      '-- DRAW_DOWN_INTENT_KEY_LOCK<<<',
       "WHERE id = p_quote_id\n     AND deleted_at IS NULL\n   FOR UPDATE;",
       '-- DRAW_DOWN_INTENT_REPLAY<<<',
       '-- DRAW_DOWN_INTENT_FIRST_CALL<<<',
@@ -98,6 +112,9 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(migrationSql).toContain("RAISE EXCEPTION 'Quote not found';");
     expect(migrationSql).not.toContain('NOT_QUOTE_OWNER');
     expect(migrationSql).not.toMatch(/created_by\s+(?:=|IS DISTINCT FROM)\s+v_actor/);
+    expect(migrationSql).toContain(
+      "hashtextextended('crx:idempotency:' || p_idempotency_key, 0)",
+    );
   });
 
   it('binds the key to actor, quote, ordered canonical draws, and the saved result', () => {
@@ -122,6 +139,11 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(migrationSql).toContain("NULLIF(v_replay -> 'result' ->> 'order_id', '') IS NULL");
     expect(migrationSql).toContain('SET request_fingerprint = v_fingerprint,\n         request_actor_id = v_actor');
     expect(migrationSql).toContain("RAISE EXCEPTION 'IDEMPOTENCY_RECEIPT_MISSING';");
+    expectOrdered(migrationSql, [
+      "'BOOKING_QUANTITY_INVALID: draw quantity must be finite'",
+      'IF p_idempotency_key IS NULL THEN',
+      'v_fingerprint := encode(',
+    ]);
   });
 
   it('retires rejected draw keys and gives the operator a safe recovery path', () => {

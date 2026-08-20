@@ -226,6 +226,22 @@ BEGIN
   END IF;
   -- >>>DRAW_DOWN_INTENT_AUTHZ
 
+  -- DRAW_DOWN_INTENT_KEY_LOCK<<<
+  -- Take the shared idempotency-key lock before the quote row lock. The helper
+  -- below takes the same transaction-scoped lock again before reading the
+  -- receipt; PostgreSQL advisory locks are re-entrant for the same session.
+  -- This keeps lock order consistent with the helper's other money callers and
+  -- prevents a same-key/cross-operation request from forming a key/row cycle.
+  IF p_idempotency_key IS NOT NULL THEN
+    IF btrim(p_idempotency_key) = '' THEN
+      RAISE EXCEPTION 'IDEMPOTENCY_KEY_REQUIRED';
+    END IF;
+    PERFORM pg_advisory_xact_lock(
+      hashtextextended('crx:idempotency:' || p_idempotency_key, 0)
+    );
+  END IF;
+  -- >>>DRAW_DOWN_INTENT_KEY_LOCK
+
   -- Authorize and lock the live booking before any receipt can be returned.
   -- There is intentionally no created_by/customer-assignment predicate: active
   -- reps may cover one another's bookings. The inner money implementation
@@ -238,14 +254,6 @@ BEGIN
    FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Quote not found';
-  END IF;
-
-  -- Preserve the established optional-key behavior. With no key, the exact
-  -- existing wrapper/body chain remains the sole implementation.
-  IF p_idempotency_key IS NULL THEN
-    RETURN public._draw_down_quote_intent_impl_20260819(
-      p_quote_id, p_draws, p_performed_by, NULL, p_below_cost_reason
-    );
   END IF;
 
   -- Canonicalize exactly the entries the implementation will execute. Array
@@ -289,6 +297,15 @@ BEGIN
 
   IF jsonb_array_length(v_canonical_draws) = 0 THEN
     RAISE EXCEPTION 'EMPTY_DRAW: no draw lines supplied';
+  END IF;
+
+  -- Preserve the established optional-key delegation after running the same
+  -- authorization and input guards as keyed calls. The mature private chain
+  -- remains the sole money/inventory implementation for keyless requests.
+  IF p_idempotency_key IS NULL THEN
+    RETURN public._draw_down_quote_intent_impl_20260819(
+      p_quote_id, p_draws, p_performed_by, NULL, p_below_cost_reason
+    );
   END IF;
 
   v_fingerprint := encode(
@@ -464,12 +481,15 @@ BEGIN
      OR position('_draw_down_quote_intent_impl_20260819' IN v_outer_src) = 0
      OR position('DRAW_DOWN_INTENT_BARRIER<<<' IN v_outer_src) = 0
      OR position('DRAW_DOWN_INTENT_AUTHZ<<<' IN v_outer_src) = 0
+     OR position('DRAW_DOWN_INTENT_KEY_LOCK<<<' IN v_outer_src) = 0
      OR position('DRAW_DOWN_INTENT_REPLAY<<<' IN v_outer_src) = 0
      OR position('DRAW_DOWN_INTENT_FIRST_CALL<<<' IN v_outer_src) = 0
      OR position('DRAW_DOWN_INTENT_BIND<<<' IN v_outer_src) = 0
      OR position('DRAW_DOWN_INTENT_BARRIER<<<' IN v_outer_src)
           > position('DRAW_DOWN_INTENT_AUTHZ<<<' IN v_outer_src)
      OR position('DRAW_DOWN_INTENT_AUTHZ<<<' IN v_outer_src)
+          > position('DRAW_DOWN_INTENT_KEY_LOCK<<<' IN v_outer_src)
+     OR position('DRAW_DOWN_INTENT_KEY_LOCK<<<' IN v_outer_src)
           > position('DRAW_DOWN_INTENT_REPLAY<<<' IN v_outer_src)
      OR position('DRAW_DOWN_INTENT_REPLAY<<<' IN v_outer_src)
           > position('DRAW_DOWN_INTENT_FIRST_CALL<<<' IN v_outer_src)
