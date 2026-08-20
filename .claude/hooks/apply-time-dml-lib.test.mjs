@@ -154,6 +154,25 @@ eq(applyTimeCode("SELECT 'a''b';").literals, ["a'b"],
   "a doubled quote inside a literal is one escaped quote, not a terminator");
 eq(T("/* outer /* inner */ UPDATE order_items SET total_price = 1; */ SELECT 1;"), [],
   "nested block comments close at the right place");
+{
+  // ROUND 48. COMMENT names a FUNCTION but does not define it. The broad
+  // dollar-body test used to register the harmless comment as money_fix's
+  // implementation, so the following resident call looked fully resolved and
+  // effect-free instead of failing closed.
+  const commentedCall = applyTimeWriteTargets(
+    "COMMENT ON FUNCTION public.money_fix() IS $note$harmless$note$; " +
+    "SELECT public.money_fix();",
+  );
+  ok(!commentedCall.definedRoutines.includes("money_fix"),
+    "round-48: a dollar-quoted COMMENT does not define the named routine");
+  ok(commentedCall.unknownCalls.includes("money_fix"),
+    "round-48: the later resident routine call remains visible and unknown");
+  const commentOnly = applyTimeWriteTargets(
+    "COMMENT ON FUNCTION public.money_fix() IS $note$harmless$note$;",
+  );
+  ok(commentOnly.targets.size === 0 && !commentOnly.unresolved,
+    "round-48 control: harmless routine metadata alone remains effect-free");
+}
 
 // -------------------------------------------------------- overlap semantics
 // Round 27 moved this from column-level to table-level. The reason is a trigger:

@@ -46,6 +46,12 @@
 
 const IDENT_START = /[A-Za-z_\u0080-\uFFFF]/;
 const IDENT_CHAR = /[A-Za-z0-9_$\u0080-\uFFFF]/;
+// Only this exact statement head introduces a deferred routine body. Keywords
+// such as COMMENT/GRANT/ALTER ... FUNCTION can also be followed by a dollar-
+// quoted string, but that string is metadata or an argument — never a new body.
+// Keeping one shared predicate for dollar- and single-quoted forms prevents the
+// two legal body syntaxes from drifting apart.
+const ROUTINE_CREATE_HEAD = /^create\s+(?:or\s+replace\s+)?(?:function|procedure)\b/;
 
 // PostgreSQL quoted identifiers can legally contain comment markers, spaces,
 // punctuation, and doubled quotes. Feeding their raw contents back into the
@@ -162,7 +168,7 @@ export function applyTimeCode(sql, depth = 0) {
         // body does not. Anything else unrecognized is treated as running now,
         // which is the over-reporting direction.
         const stmt = code.slice(stmtStart).trim().toLowerCase();
-        const deferred = /\b(function|procedure)\b/.test(stmt);
+        const deferred = ROUTINE_CREATE_HEAD.test(stmt);
         const inner = applyTimeCode(body, depth + 1);
         if (deferred) {
           // Keep a placeholder so the statement still parses, and contribute no
@@ -238,7 +244,7 @@ export function applyTimeCode(sql, depth = 0) {
         code += "''";
         continue;
       }
-      if (/^create\s+(or\s+replace\s+)?(function|procedure)\b/.test(head)) {
+      if (ROUTINE_CREATE_HEAD.test(head)) {
         const named = /\b(?:function|procedure)\s+([A-Za-z0-9_.]+)/.exec(head);
         const bare = named ? named[1].split(".").pop() : "";
         if (bare) {

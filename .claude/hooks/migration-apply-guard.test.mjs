@@ -1802,6 +1802,20 @@ function armAutopilot(stateDir, hoursFromNow) {
       "round-47: session-dependent event helper plus search_path mutation is refused");
     writeFileSync(path.join(tmp, "scripts", "trigger-fanout.json"), JSON.stringify(FANOUT_FIXTURE));
 
+    // ROUND 48. Dollar-quoted metadata after COMMENT ON FUNCTION used to be
+    // mistaken for a replacement body. That false definition shadowed the
+    // database-resident routine, making its later invocation look harmless.
+    r = apply("20990601000047_dollar_comment_resident_call",
+      "COMMENT ON FUNCTION public.resident_money_repair() IS $note$harmless$note$; " +
+      "SELECT public.resident_money_repair();");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-48: dollar-quoted routine metadata cannot hide a resident mutator call");
+
+    r = apply("20990601000048_dollar_comment_only",
+      "COMMENT ON FUNCTION public.resident_money_repair() IS $note$harmless$note$;");
+    ok(!isOneShotDeny(r),
+      "round-48 control: routine metadata without an invocation remains effect-free");
+
     // 6. Fail closed. The registry is tracked in git; unreadable or absent means
     //    the checkout is broken or the file was removed — the two states in
     //    which a silent pass is most dangerous.
