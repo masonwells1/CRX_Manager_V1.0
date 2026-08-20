@@ -113,7 +113,7 @@ columns no package created) and two corrections to earlier claims.
 | # | What | Owner | Detail |
 |---|---|---|---|
 | 1 | ~~Codex credits at zero~~ — **CLEARED 2026-08-19** | — | Sol ran a full adversarial review of the plan that evening. Credits work; the gate is available |
-| 2 | **Codex-app Supabase connector** | Mason | OAuth grant recorded dead (`invalid_grant`) 2026-08-14. Sol reached the live DB read-only through its own path during the 2026-08-19 review, so confirm the current state rather than assuming either way |
+| 2 | ~~Codex-app Supabase connector~~ — **CLEARED, verified 2026-08-20** | — | The 2026-08-14 `invalid_grant` record is stale. During Sol's 2026-08-19 review `codex_apps/supabase.list_migrations` **completed** twice against the live project. The only refusals in that run came from **our own** LIVE-DATA GUARD hook rejecting non-read-only SQL — which is the guard working, not a broken connector |
 | 3 | **Fresh backup** | Loop, cycle 1 | Last good 2026-08-09. Free plan — **no point-in-time recovery.** Required before WP-0's first live write (R-12) |
 | 4 | **Parked-migration scan is fail-closed** | Loop, cycle 1 | `fleet-status.mjs` reports `PARKED STATE UNKNOWN`. This build adds migrations to a queue that cannot currently be counted. **Sol finding 30: resolve parked-migration ownership and establish the live high-water mark before WP-1 stamps its first migration** |
 | 5 | ~~PR #429 must merge~~ — **MERGED 2026-08-19 16:32 CDT** by Mason (`a9fdd48c`) | — | The plan documents are on `main`. Cut the loop's worktree from current `origin/main` |
