@@ -24,8 +24,9 @@ import { validateBlendMath, type BlendMathWarning } from '../lib/blendMathValida
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday } from '../lib/dateUtils';
 import { useOCRThresholds } from '../hooks/useOCRThresholds';
-import type { BlendTicket, BlendTicketProduct, BlendTicketImage, BlendTicketToOrderItem, Customer, Product, Order, OrderItem, Field, Job } from '../types';
+import type { BlendTicket, BlendTicketProduct, BlendTicketImage, BlendTicketToOrderItem, Customer, Product, Order, OrderItem, Field, Job, UnitConversion } from '../types';
 import { ProductOptionDetails, productOptionLabel, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
+import UnitSelect from '../components/blendtickets/UnitSelect';
 
 type PickerProduct = Product & ProductOptionPresentationModel;
 
@@ -49,6 +50,7 @@ export function BlendTicketDetail() {
   const [images, setImages] = useState<BlendTicketImage[]>([]);
   const [products, setProducts] = useState<BlendTicketProduct[]>([]);
   const [allProducts, setAllProducts] = useState<PickerProduct[]>([]);
+  const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -416,6 +418,13 @@ export function BlendTicketDetail() {
       loadTicketData();
     }
   }, [id, loadTicketData]);
+
+  useEffect(() => {
+    supabase.from('unit_conversions').select('*').order('unit').then(({ data, error }) => {
+      if (error) { Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_unit_conversions' } }); return; }
+      setUnitConversions((data || []) as UnitConversion[]);
+    });
+  }, []);
 
   useEffect(() => {
     const ticketData = {
@@ -1416,7 +1425,12 @@ export function BlendTicketDetail() {
         </div>
 
         <div className="space-y-4">
-          {products.map((product, index) => (
+          {products.map((product, index) => {
+            const catalog = allProducts.find((candidate) => candidate.id === product.product_id);
+            const productForm = catalog
+              ? (catalog.product_form ?? null)
+              : (product.product?.product_form ?? null);
+            return (
             <div key={product.id} className={`grid grid-cols-12 gap-3 items-start p-4 rounded-lg ${
               !product.manually_corrected && product.confidence_score > 0 && product.confidence_score < 70
                 ? 'bg-yellow-50 border border-yellow-200'
@@ -1459,11 +1473,13 @@ export function BlendTicketDetail() {
                 <label className="block text-xs font-medium text-gray-700 mb-1">
                   Unit
                 </label>
-                <Input
-                  type="text"
+                <UnitSelect
+                  unitConversions={unitConversions}
+                  form={productForm}
                   value={product.unit || ''}
-                  onChange={(e) => updateProduct(index, 'unit', e.target.value)}
-                  placeholder="gal"
+                  onChange={(value) => updateProduct(index, 'unit', value)}
+                  disabled={contentLocked}
+                  ariaLabel={`Quantity unit for ${product.product_name || 'product'}`}
                 />
               </div>
 
@@ -1481,13 +1497,15 @@ export function BlendTicketDetail() {
 
               <div className="col-span-4 md:col-span-1">
                 <label className="block text-xs font-medium text-gray-700 mb-1">
-                  Rate Unit
+                  Rate unit (per acre)
                 </label>
-                <Input
-                  type="text"
+                <UnitSelect
+                  unitConversions={unitConversions}
+                  form={productForm}
                   value={product.rate_per_acre_unit || ''}
-                  onChange={(e) => updateProduct(index, 'rate_per_acre_unit', e.target.value)}
-                  placeholder="oz/ac"
+                  onChange={(value) => updateProduct(index, 'rate_per_acre_unit', value)}
+                  disabled={contentLocked}
+                  ariaLabel={`Rate unit per acre for ${product.product_name || 'product'}`}
                 />
               </div>
 
@@ -1549,7 +1567,8 @@ export function BlendTicketDetail() {
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
 
           {products.length === 0 && (
             <p className="text-center text-gray-500 py-8">

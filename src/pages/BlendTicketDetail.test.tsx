@@ -136,6 +136,13 @@ const baseProduct = {
   created_at: '2026-04-29T12:00:00.000Z',
 };
 
+const unitConversions = [
+  { id: 'u-oz', unit: 'oz', factor_oz: 1, unit_type: 'liquid', notes: null },
+  { id: 'u-gal', unit: 'Gal', factor_oz: 128, unit_type: 'liquid', notes: null },
+  { id: 'u-lb', unit: 'Lb', factor_oz: 16, unit_type: 'dry', notes: null },
+  { id: 'u-ea', unit: 'Ea', factor_oz: 1, unit_type: 'both', notes: null },
+];
+
 describe('BlendTicketDetail — Phase 1 contract', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -172,6 +179,53 @@ describe('BlendTicketDetail — Phase 1 contract', () => {
       const tablesQueried = mockFrom.mock.calls.map((c) => c[0] as string);
       expect(tablesQueried).toContain('application_services');
     });
+  });
+
+  it('uses the current catalog form, grandfathers saved odd units, and updates the row', async () => {
+    const savedProduct = {
+      ...baseProduct,
+      product_id: 'p1',
+      product_name: 'Roundup PowerMax',
+      unit: 'Legacy jug',
+      rate_per_acre_unit: 'Legacy dose/ac',
+      product: { id: 'p1', product_form: 'dry', is_active: true },
+    };
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'blend_tickets') return buildChain({ data: baseTicket, error: null });
+      if (table === 'blend_ticket_products') return buildChain({ data: [savedProduct], error: null });
+      if (table === 'products') {
+        return buildChain({
+          data: [{
+            id: 'p1',
+            product_name: 'Roundup PowerMax',
+            product_form: 'liquid',
+            rate_unit: 'oz',
+            is_active: true,
+          }],
+          error: null,
+        });
+      }
+      if (table === 'unit_conversions') return buildChain({ data: unitConversions, error: null });
+      return buildChain({ data: [], error: null });
+    });
+
+    renderTicket();
+    const quantityUnit = await screen.findByRole('combobox', {
+      name: 'Quantity unit for Roundup PowerMax',
+    }) as HTMLSelectElement;
+    const rateUnit = screen.getByRole('combobox', {
+      name: 'Rate unit per acre for Roundup PowerMax',
+    }) as HTMLSelectElement;
+
+    expect(quantityUnit).toHaveValue('Legacy jug');
+    expect(rateUnit).toHaveValue('Legacy dose/ac');
+    expect(Array.from(quantityUnit.options, (option) => option.value)).toEqual([
+      '', 'Legacy jug', 'oz', 'Gal', 'Ea',
+    ]);
+    expect(Array.from(quantityUnit.options, (option) => option.value)).not.toContain('Lb');
+
+    fireEvent.change(rateUnit, { target: { value: 'oz' } });
+    expect(rateUnit).toHaveValue('oz');
   });
 
   it('does not surface a load error when the ticket payload is well-formed', async () => {
