@@ -2,6 +2,20 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-20 — Merged main's zero-width unit fix into the blend-ticket rate/unit…
+
+Merged main's zero-width unit fix into the blend-ticket rate/unit check, keeping main's delete-don't-space normalizer and re-applying the unit-aware rate arm on top of it. Found that the fix does not reach the money path: rateBaseUnit, which every billing-related unit lookup routes through, still leaves zero-width characters intact, so a unit pasted from a PDF can silently skip the rate check or fire a false 'this ticket will fail when you invoice it' alarm. Main's 5 zero-width regression tests were displaced by the merge and still need porting to the new warning shape. 77 tests green and typecheck clean; nothing pushed, no migration, no edge function.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `25e5f9a3 Merge branch 'claude/blend-unit-rebuild-step1' into claude/blend-ticket-rate-unit-check-ccbba2`
+  - `91051d74 feat(blend): tier the math warnings so "couldn't check" reads differently`
+  - `c4f24e06 Merge branch 'claude/loving-hofstadter-6b1f5e' into claude/blend-unit-rebuild-step1`
+  - `4a3ebe40 fix(blend): delete the wrong total-volume equation, add three true ones`
+  - `7b4cf67c Merge branch 'claude/loving-hofstadter-6b1f5e' into claude/blend-unit-rebuild-step1`
+  - `b22d14e1 fix(blend): make the per-acre rate check unit-aware on a billing path`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
 ## 2026-08-19 — Blend-ticket warnings are tiered, so "couldn't check" stops looking like "you're wrong"
 
 `validateBlendMath` returned `string[]`, and both callers rendered every entry in the same amber

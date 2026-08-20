@@ -70,6 +70,43 @@ change rather than on its own.
 
 ---
 
+## OPEN 2026-08-20 — PR #426's zero-width fix does not reach the rate arm in `blendMathValidator.ts`
+
+**Severity: LOW-MED, warning text only, currently unreachable (0 rows in `blend_tickets` and
+`blend_ticket_products` on live, verified read-only 2026-08-19).** Found while merging `origin/main`
+into the unit-aware rate-arm work on 2026-08-20 (branch `claude/blend-ticket-rate-unit-check-ccbba2`,
+merge `25e5f9a3`); recorded so it is not re-discovered as new.
+
+[PR #426](https://github.com/masonwells1/CRX_Manager_V1.0/pull/426) taught `normalizeUnit` to
+**delete** zero-width characters instead of collapsing them to a space, so a `gal` pasted out of a
+PDF as `g<ZWSP>al` still reads as `gal`. That fix is correct and is live.
+
+It does not cover the rate arm. Every billing-related unit lookup routes through `rateBaseUnit`,
+which normalizes with `.trim().toLowerCase()` only — and `\s` does not match U+200B/200C/200D, as
+`ZERO_WIDTH`'s own comment in the same file states. The affected call sites are `rateUnit` and
+`qtyUnit` (the per-product rate check), `soldUnit` (the invoice pre-flight), `headerUnit`, and the
+per-product conversion inside the total arm.
+
+Two consequences, pointing in opposite directions:
+
+- The rate check silently **skips**. `fieldAppPricedQuantity` cannot match `g<ZWSP>al`, returns
+  null, and the line emits the grey "couldn't be converted, verify by hand" note. Fail-closed, but
+  it defeats the check on exactly the OCR- and paste-derived tickets it exists for.
+- The invoice pre-flight **false-alarms**. The same failed lookup at `soldUnit` fires the amber
+  "this ticket will fail when you invoice it" — the tier the design deliberately keeps rare, and
+  whose credibility the whole tiering exists to protect. Whether the live
+  `field_app_priced_quantity` strips zero-width has **not** been checked, so whether the invoice
+  would genuinely fail is unknown.
+
+The code fix is small — apply `ZERO_WIDTH` inside `rateBaseUnit` before the `trim()`. The test work
+is the larger half: main's five zero-width regression tests were displaced by the same merge (they
+are written against the pre-`BlendMathWarning[]` return shape) and have not been ported, so nothing
+currently guards either door.
+
+**Not started.** No migration, no live state.
+
+---
+
 ## OPEN 2026-08-19 — `baseUnitOfRate` reads `oz/cwt` as `oz`; the database refuses it
 
 **Severity: MED, money path, not yet reproduced on live data.** `baseUnitOfRate`
