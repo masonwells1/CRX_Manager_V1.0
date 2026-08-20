@@ -13,7 +13,8 @@
 -- EMERGENCY REVERT PLAN (documentation only; do not run from this PR): create
 -- a separately reviewed rollback migration and obtain live-apply approval.
 -- Pause booking draws, then execute this sequence in one transaction so the
--- existing cutover key drains in-flight draws before either public body moves:
+-- existing cutover key drains every draw that has reached its shared barrier
+-- before either public body moves:
 --
 --   BEGIN;
 --   SELECT pg_catalog.pg_advisory_xact_lock(20260816, 1);
@@ -38,6 +39,11 @@
 -- Before the eventual governed apply, plan a deliberate 24-hour freeze with no
 -- successful booking draws (normally an off-season or weekend window), verify
 -- the read-only receipt count is zero, and keep draws paused through commit.
+-- A backend already inside a cached function plan but not yet at the first
+-- shared-lock statement is outside the lock's drain guarantee. If that narrow
+-- pre-lock case finishes after commit, check_idempotency_intent treats its
+-- unbound receipt as an intent mismatch and returns the committed receipt in
+-- DETAIL so the client opens the existing order instead of drawing twice.
 --
 -- Why a wrapper instead of rewriting the private money implementation:
 -- 20260816120000 deliberately replaced weighted-average pricing with one line
@@ -68,12 +74,21 @@
 -- be2570888281520c9aaba61280a456cdbd9b69b83dfeba106c7a324c3751e4bf
 -- New actor/intent wrapper pg_proc.prosrc SHA-256:
 -- 5dc7e737e1e65fae6fd1ebb7cfb728827e546e156e1e8b5e3b08bf0eee1742bb
+-- The printable-key test deliberately uses COLLATE "C": the accepted alphabet
+-- is stable ASCII [!-~], independent of the database or operating-system
+-- locale. Do not simplify it to a locale-sensitive range.
+-- Lock ordering also assumes save_quote and convert_quote_to_order keep using
+-- plain check_idempotency. Moving either onto check_idempotency_intent would
+-- require a fresh cross-operation same-key deadlock review.
 
--- Drain every draw running through the committed 20260816110000 barrier and
--- refuse new draws until this transaction commits. Without this exact lock, a
--- legacy call could commit an unbound receipt after the preflight scan. The
--- migration runner must keep this file in one transaction; SET LOCAL and the
--- transaction-scoped advisory lock deliberately fail closed otherwise.
+-- Drain every draw that has reached the committed 20260816110000 shared
+-- barrier and refuse new barrier participants until this transaction commits.
+-- A cached-plan backend paused before its first wrapper statement can still
+-- arrive after commit; the 24-hour operator freeze minimizes that residual
+-- window and the shared intent helper fails closed on any resulting unbound
+-- receipt. The migration runner must keep this file in one transaction; SET
+-- LOCAL and the transaction-scoped advisory lock deliberately fail closed
+-- otherwise.
 CREATE TEMP TABLE crx_draw_intent_transaction_guard (
   marker boolean NOT NULL
 ) ON COMMIT DROP;
@@ -219,9 +234,13 @@ BEGIN
       'DRAW_DOWN_INTENT_PREFLIGHT: idempotency receipt binding columns are missing';
   END IF;
 
-  -- The exclusive barrier above has drained every in-flight legacy draw and
-  -- refuses new ones. A receipt visible here therefore describes the complete
-  -- retryable legacy set. Refuse cutover while any such receipt remains.
+  -- The exclusive barrier above drains legacy draws that reached the shared
+  -- lock and refuses new lock participants. This scan covers every retryable
+  -- legacy receipt visible now; it is not a proof that a cached-plan backend
+  -- paused before its first lock statement cannot finish after commit. Such a
+  -- late unbound receipt is handled fail-closed by check_idempotency_intent and
+  -- the operator-facing recovery opens its committed order rather than retrying.
+  -- Refuse cutover while any currently visible legacy receipt remains.
   IF EXISTS (
     SELECT 1
       FROM public.idempotency_keys

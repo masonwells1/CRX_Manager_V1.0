@@ -37,6 +37,7 @@ const proverSource = readFileSync(PROVER_PATH, 'utf8');
 const quoteBuilder = readFileSync('src/pages/QuoteBuilder.tsx', 'utf8').replace(/\r\n/g, '\n');
 const smokeSpecs = JSON.parse(readFileSync('scripts/smoke/smoke-specs.json', 'utf8'));
 const gitAttributes = readFileSync('.gitattributes', 'utf8').replace(/\r\n/g, '\n');
+const migrationHistory = readFileSync('docs/reference/migration-history.md', 'utf8');
 
 function expectOrdered(source: string, markers: string[]): void {
   let cursor = -1;
@@ -100,9 +101,14 @@ describe('draw_down_quote actor and intent binding migration', () => {
       expect(gitAttributes).toContain(`${path} text eol=lf`);
     }
     expect(allocatedCentsSql).not.toContain('\r');
+    // The intent-helper migration is already applied and must never be edited
+    // merely to normalize this existing Windows checkout. Its live pg_proc body
+    // was separately read and proven LF-only before its exact hash was pinned.
     expect(migrationSql).not.toContain('\r');
     expect(smokeSql).not.toContain('\r');
     expect(proverSource).not.toContain('\r');
+    const migrationFileHash = createHash('sha256').update(migrationSql, 'utf8').digest('hex');
+    expect(migrationHistory).toContain(`SQL sha256: \`${migrationFileHash}\``);
 
     const helperHash = functionBodySha256(intentHelperSql, 'check_idempotency_intent');
     const privateWrapperHash = functionBodySha256(cutoverSql, 'draw_down_quote');

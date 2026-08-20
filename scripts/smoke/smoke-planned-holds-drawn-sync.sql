@@ -163,11 +163,11 @@ BEGIN
   VALUES (v_q, v_s1, v_pa, 10, 6, 300, 'gal', 0, 'units_direct'),
          (v_q, v_s2, v_pa, 10, 6, 200, 'gal', 0, 'units_direct'),
          (v_q, v_s1, v_pb, 8, 4, 100, 'gal', 1, 'units_direct');
-  SELECT id INTO v_pa_early_item FROM quote_items
+  SELECT id INTO STRICT v_pa_early_item FROM quote_items
   WHERE quote_id = v_q AND section_id = v_s1 AND product_id = v_pa;
-  SELECT id INTO v_pa_late_item FROM quote_items
+  SELECT id INTO STRICT v_pa_late_item FROM quote_items
   WHERE quote_id = v_q AND section_id = v_s2 AND product_id = v_pa;
-  SELECT id INTO v_pb_early_item FROM quote_items
+  SELECT id INTO STRICT v_pb_early_item FROM quote_items
   WHERE quote_id = v_q AND section_id = v_s1 AND product_id = v_pb;
 
   -- (a) create_planned_holds: full reservation, per-item expiry
@@ -208,6 +208,10 @@ BEGIN
   END IF;
 
   -- (d) save_quote (Revise/Present path): rebooks PA to 400 -> holds 150
+  -- This fixture has the same product in two sections, so it echoes item IDs to
+  -- keep those duplicate-product rows identifiable across repeated saves. The
+  -- save-quote-drawn-guard smoke separately preserves the production id-less
+  -- fallback shape; this lane is about planned-hold synchronization.
   v_payload := jsonb_build_object('quote_number', '[SMOKE] PHS-' || sfx, 'customer_id', v_cust, 'status', 'sent', 'tier', 1);
   v_sections := jsonb_build_array(
     jsonb_build_object('section_name', 'Early', 'sort_order', 0, 'items', jsonb_build_array(
@@ -224,13 +228,13 @@ BEGIN
   IF v_res->>'status' IS DISTINCT FROM 'saved' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (d) save_quote returned %', v_res;
   END IF;
-  SELECT qi.id INTO v_pa_early_item FROM quote_items qi
+  SELECT qi.id INTO STRICT v_pa_early_item FROM quote_items qi
   JOIN quote_sections qs ON qs.id = qi.section_id
   WHERE qi.quote_id = v_q AND qs.section_name = 'Early' AND qi.product_id = v_pa;
-  SELECT qi.id INTO v_pa_late_item FROM quote_items qi
+  SELECT qi.id INTO STRICT v_pa_late_item FROM quote_items qi
   JOIN quote_sections qs ON qs.id = qi.section_id
   WHERE qi.quote_id = v_q AND qs.section_name = 'Late' AND qi.product_id = v_pa;
-  SELECT qi.id INTO v_pb_early_item FROM quote_items qi
+  SELECT qi.id INTO STRICT v_pb_early_item FROM quote_items qi
   JOIN quote_sections qs ON qs.id = qi.section_id
   WHERE qi.quote_id = v_q AND qs.section_name = 'Early' AND qi.product_id = v_pb;
   v_sections := jsonb_set(
@@ -264,13 +268,13 @@ BEGIN
   WHERE q.id = v_q;
   v_payload := v_payload || jsonb_build_object('row_version_expected', v_quote_version);
   v_res := save_quote(v_q, v_payload, v_sections, v_admin, NULL);
-  SELECT qi.id INTO v_pa_early_item FROM quote_items qi
+  SELECT qi.id INTO STRICT v_pa_early_item FROM quote_items qi
   JOIN quote_sections qs ON qs.id = qi.section_id
   WHERE qi.quote_id = v_q AND qs.section_name = 'Early' AND qi.product_id = v_pa;
-  SELECT qi.id INTO v_pa_late_item FROM quote_items qi
+  SELECT qi.id INTO STRICT v_pa_late_item FROM quote_items qi
   JOIN quote_sections qs ON qs.id = qi.section_id
   WHERE qi.quote_id = v_q AND qs.section_name = 'Late' AND qi.product_id = v_pa;
-  SELECT qi.id INTO v_pb_early_item FROM quote_items qi
+  SELECT qi.id INTO STRICT v_pb_early_item FROM quote_items qi
   JOIN quote_sections qs ON qs.id = qi.section_id
   WHERE qi.quote_id = v_q AND qs.section_name = 'Early' AND qi.product_id = v_pb;
   v_sections := jsonb_set(
@@ -292,13 +296,13 @@ BEGIN
   IF v_res->>'status' IS DISTINCT FROM 'restored' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (e) restore returned %', v_res;
   END IF;
-  SELECT qi.id INTO v_pa_early_item FROM quote_items qi
+  SELECT qi.id INTO STRICT v_pa_early_item FROM quote_items qi
   JOIN quote_sections qs ON qs.id = qi.section_id
   WHERE qi.quote_id = v_q AND qs.section_name = 'Early' AND qi.product_id = v_pa;
-  SELECT qi.id INTO v_pa_late_item FROM quote_items qi
+  SELECT qi.id INTO STRICT v_pa_late_item FROM quote_items qi
   JOIN quote_sections qs ON qs.id = qi.section_id
   WHERE qi.quote_id = v_q AND qs.section_name = 'Late' AND qi.product_id = v_pa;
-  SELECT qi.id INTO v_pb_early_item FROM quote_items qi
+  SELECT qi.id INTO STRICT v_pb_early_item FROM quote_items qi
   JOIN quote_sections qs ON qs.id = qi.section_id
   WHERE qi.quote_id = v_q AND qs.section_name = 'Early' AND qi.product_id = v_pb;
   v_sections := jsonb_set(

@@ -27,9 +27,13 @@ restore its prior grants. It also warns that this intentionally restores the sta
 must never be approximated with `CREATE OR REPLACE`.
 
 All five registered smoke chains that create booking draws now supply unique per-run retry keys.
-Their fixtures also follow the current governed pricing, immutable cost-snapshot, row-version, and
-quote-line identity contracts. The network-isolated restored-schema prover executes all five after
-the candidate and confirms each reaches `SMOKE_PASS_ROLLBACK`.
+Their fixtures also follow the current governed pricing, immutable cost-snapshot and row-version
+contracts. The planned-holds fixture deliberately echoes quote-item IDs so duplicate products in
+different sections stay identifiable across its repeated save/restore steps; the separate
+save-quote-drawn guard retains the production id-less fallback shape. Because these chains end in
+rollback, they do not claim to validate commit-time deferred foreign keys. The network-isolated
+restored-schema prover executes all five after the candidate and confirms each reaches
+`SMOKE_PASS_ROLLBACK`.
 
 The draw modal now consumes the shared intent-binding recovery contract. A permanently refused key
 is retired instead of trapping the operator until reload; when the mismatch receipt proves an order
@@ -47,9 +51,12 @@ taken before the quote row lock, preventing two cross-quote requests for one key
 the shared helper re-takes that lock reentrantly before reading the receipt. The money path now
 requires a nonblank printable retry key, matching the already-live commission payout precedent, so
 a direct keyless PostgREST call cannot double-create an order, inventory prebooking or ledger row.
-At apply time the migration takes the existing draw-cutover key exclusively, draining every
-in-flight legacy draw and refusing new draws before it scans for unexpired legacy receipts. A
-temporary-table transaction guard refuses autocommit execution before that lock is taken. The
+At apply time the migration takes the existing draw-cutover key exclusively, draining legacy calls
+that reached the shared barrier and refusing new barrier participants before it scans for unexpired
+legacy receipts. A cached-plan backend paused before its first wrapper statement is outside that
+lock guarantee; if it finishes after commit, the shared helper treats its unbound receipt as an
+intent mismatch and the UI opens the committed order instead of drawing twice. A temporary-table
+transaction guard refuses autocommit execution before that lock is taken. The
 shared helper's receipt DETAIL is intentionally sales-rep reachable here, following the already-live
 return lifecycle RPC precedent: keys are high-entropy and active reps already share the
 booking/order visibility boundary. The hash-bearing lifecycle migration, this migration, its rollback

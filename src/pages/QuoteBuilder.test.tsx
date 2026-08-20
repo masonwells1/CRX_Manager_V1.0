@@ -110,18 +110,36 @@ function buildUpdateChain(
   return self;
 }
 
-vi.mock('../lib/db', () => ({
-  supabase: { from: mockFrom, rpc: mockRpc },
-  supabaseUntyped: { from: mockFrom, rpc: mockRpc },
-  checkMutationResult: vi.fn(),
-  assertRpcResult: vi.fn((d) => d),
-  hasRpcCode: (error: { message?: string }, code: string) => error.message?.includes(code) ?? false,
-  RpcErrorCodes: { AUTH_REQUIRED: 'AUTH_REQUIRED', ACTOR_MISMATCH: 'ACTOR_MISMATCH', INSUFFICIENT_ROLE: 'INSUFFICIENT_ROLE', BOOKING_QUANTITY_INVALID: 'BOOKING_QUANTITY_INVALID', BOOKING_PRODUCT_INVALID: 'BOOKING_PRODUCT_INVALID', QUOTE_STALE_WRITE: 'QUOTE_STALE_WRITE', CUSTOMER_STALE_WRITE: 'CUSTOMER_STALE_WRITE', COMMISSION_SPLIT_CONFLICT: 'COMMISSION_SPLIT_CONFLICT', IDEMPOTENCY_PAYLOAD_CONFLICT: 'IDEMPOTENCY_PAYLOAD_CONFLICT' },
-  rpcAuthErrorMessage: (error: { message?: string }) => error.message === 'AUTH_REQUIRED' || error.message === 'ACTOR_MISMATCH'
-    ? 'Your sign-in could not be verified. Refresh the page and try again.'
-    : null,
-  sanitizeError: vi.fn((e: unknown) => (e as Error)?.message || 'Error'),
-}));
+vi.mock('../lib/db', () => {
+  const hasRpcCode = (error: { message?: string }, code: string) => (
+    error.message === code
+    || error.message?.startsWith(`${code}:`) === true
+    || error.message?.startsWith(`${code} `) === true
+  );
+  return {
+    supabase: { from: mockFrom, rpc: mockRpc },
+    supabaseUntyped: { from: mockFrom, rpc: mockRpc },
+    checkMutationResult: vi.fn(),
+    assertRpcResult: vi.fn((d) => d),
+    hasRpcCode,
+    RpcErrorCodes: {
+      AUTH_REQUIRED: 'AUTH_REQUIRED', ACTOR_MISMATCH: 'ACTOR_MISMATCH',
+      INSUFFICIENT_ROLE: 'INSUFFICIENT_ROLE', BOOKING_QUANTITY_INVALID: 'BOOKING_QUANTITY_INVALID',
+      BOOKING_PRODUCT_INVALID: 'BOOKING_PRODUCT_INVALID', BOOKING_OVERDRAWN: 'BOOKING_OVERDRAWN',
+      BOOKING_CLOSED: 'BOOKING_CLOSED', EMPTY_DRAW: 'EMPTY_DRAW',
+      BOOKED_PRICE_REQUIRED: 'BOOKED_PRICE_REQUIRED', COST_BASIS_REQUIRED: 'COST_BASIS_REQUIRED',
+      DRAW_ALLOCATION_MISMATCH: 'DRAW_ALLOCATION_MISMATCH', QUOTE_STALE_WRITE: 'QUOTE_STALE_WRITE',
+      CUSTOMER_STALE_WRITE: 'CUSTOMER_STALE_WRITE', COMMISSION_SPLIT_CONFLICT: 'COMMISSION_SPLIT_CONFLICT',
+      IDEMPOTENCY_PAYLOAD_CONFLICT: 'IDEMPOTENCY_PAYLOAD_CONFLICT',
+    },
+    rpcAuthErrorMessage: (error: { message?: string }) => (
+      hasRpcCode(error, 'AUTH_REQUIRED') || hasRpcCode(error, 'ACTOR_MISMATCH')
+        ? 'Your sign-in could not be verified. Refresh the page and try again.'
+        : null
+    ),
+    sanitizeError: vi.fn((e: unknown) => (e as Error)?.message || 'Error'),
+  };
+});
 
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({ profile: { id: 'user-1', role: 'admin', full_name: 'Test Admin' }, role: 'admin' }),
