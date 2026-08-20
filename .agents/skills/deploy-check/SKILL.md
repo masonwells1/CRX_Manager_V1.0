@@ -263,11 +263,26 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    Even `--json name,bucket` for the bucket alone is weaker than the per-commit form, because it is
    not bound to the SHA you are about to merge.
 
-   One caveat that keeps this honest: a `success` status proves CodeRabbit **processed** that SHA,
-   not that it found anything to read. FarmRx head `3beb6407`, where CodeRabbit answered "No files to
-   review", still carries `Review completed / success`. That is why the status never stands alone —
-   it is paired with the canonical walkthrough stamp above, and for a merge-only head with no stamp
-   the tree-identity proof is what carries the weight.
+   Two caveats keep this honest, and both were observed on PR #441 itself.
+
+   **A `success` status proves CodeRabbit *processed* that SHA, not that it read anything.** FarmRx
+   head `3beb6407`, where CodeRabbit answered "No files to review", still carries `Review completed /
+   success`. Worse, an **auto-paused** branch stamps `success` on heads it never reviewed: at head
+   `5a12433f` the status read `success` while the canonical walkthrough said **"Reviews paused"** and
+   its newest range still ended at the previous head, `a649c484`. Trusting the status alone would
+   have merged code CodeRabbit never opened.
+
+   **`success` is not terminal — the status sequence is not monotonic.** CodeRabbit posts several
+   statuses per run, and a `success` can sit *between* two `pending` ones. Measured on `5a12433f`:
+   `queued 22:51:41 → in progress 22:51:43 → success 22:51:50 → in progress 22:51:54 → success
+   22:59:14`. A poll that lands on the 22:51:50 entry reads a finished review that is still eight
+   minutes from finishing. So: never treat the first `success` you see as the end, always re-read the
+   newest status **immediately before merging**, and require the stamp — the range line only names
+   the head once CodeRabbit has actually read it.
+
+   That is why the status never stands alone. It is paired with the canonical walkthrough stamp
+   above; for a merge-only head with no stamp, the tree-identity proof carries the weight; and **the
+   stamp is the stronger of the two signals** — where they disagree, believe the stamp.
 
    The comments path passes only when the canonical walkthrough stamp names the head **and**
    `CODERABBIT_COMPLETED_THIS_HEAD` prints for that exact SHA. The reviews-endpoint path needs no

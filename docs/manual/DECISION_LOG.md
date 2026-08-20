@@ -202,6 +202,21 @@ FarmRx head `3beb6407`, where CodeRabbit answered "No files to review", still ca
 completed / success`. So the status never stands alone — it pairs with the canonical stamp, and for
 a merge-only head the tree-identity proof carries the weight.
 
+**Two further status failures, both caught by the gate on this PR while landing it.** They are
+recorded because each would have merged unreviewed code on its own:
+
+1. *An auto-paused branch stamps `success` on heads it never reviewed.* At head `5a12433f` the status
+   read `Review completed / success` while the canonical walkthrough said **"Reviews paused"** and
+   its newest range still ended at the previous head `a649c484`. The stamp check refused the merge;
+   the status check would have allowed it. (Independently hit on PR #437 the same day.)
+2. *`success` is not terminal.* CodeRabbit emits several statuses per run and a `success` can sit
+   between two `pending` ones — measured on `5a12433f`: `queued 22:51:41 → in progress 22:51:43 →
+   success 22:51:50 → in progress 22:51:54 → success 22:59:14`. A poll landing on the 22:51:50 entry
+   reads a finished review eight minutes before it finished.
+
+Operative consequence: **the stamp is the stronger signal; where the two disagree, believe the
+stamp.** Re-read the newest status immediately before merging, never the first `success` observed.
+
 **"Advisory" does not mean optional — the review waiver is removed.** An earlier revision of the
 skill let Mason approve a merge with no CodeRabbit review at all, reasoning that AGENTS.md calls
 CodeRabbit advisory. Codex flagged that twice, the second time as High, and was right both times.
