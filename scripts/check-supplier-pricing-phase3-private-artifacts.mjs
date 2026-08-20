@@ -237,6 +237,13 @@ function isToolOwnedIgnoredPath(repoPath) {
   // archive inspection; broad segment matching would let it hide a packet.
   return [...TOOL_OWNED_IGNORED_PREFIXES].some(prefix => normalized.startsWith(prefix));
 }
+function isTransientToolOwnedIgnoredEntryError(source, repoPath, error) {
+  // Git can list an ignored build artifact just before its producing tool
+  // replaces the directory. The direct path check has already run, and a
+  // stable artifact remains subject to the normal content scan; only this
+  // vanished tool-owned generated path can be ignored.
+  return source === 'ignored' && isToolOwnedIgnoredPath(repoPath) && error?.code === 'ENOENT';
+}
 function isOperatorOwnedIgnoredPath(repoPath) {
   const normalized = repoPath.replaceAll('\\', '/');
   return [...OPERATOR_OWNED_IGNORED_PREFIXES].some(prefix => normalized.startsWith(prefix));
@@ -1776,7 +1783,13 @@ function worktreeContentViolations(root, execute, budget, { includeIgnored = tru
     // directory candidate. Detect their `.git` marker without walking nested
     // content; a benign ignored symlink remains non-regular and is skipped.
     if (source === 'ignored' || source === 'untracked') {
-      const entryKind = worktreeEntryKind(root, repoPath, ownWorktrees);
+      let entryKind;
+      try {
+        entryKind = worktreeEntryKind(root, repoPath, ownWorktrees);
+      } catch (error) {
+        if (isTransientToolOwnedIgnoredEntryError(source, repoPath, error)) continue;
+        throw error;
+      }
       if (entryKind === 'embedded-repository') { violations.push({ repoPath, reason: 'embedded Git repository' }); continue; }
       if (entryKind === 'bare-repository') { violations.push({ repoPath, reason: 'bare Git repository' }); continue; }
       // A verified linked worktree of this repository is skipped rather than
@@ -1794,7 +1807,13 @@ function worktreeContentViolations(root, execute, budget, { includeIgnored = tru
     // staged/tracked instead and it receives the full structural/archive scan.
     if (source === 'ignored' && isOperatorOwnedIgnoredPath(repoPath)) continue;
     const checkArchives = source !== 'ignored' || !isToolOwnedIgnoredPath(repoPath);
-    const result = scanWorktreeCandidate(root, repoPath, { cache, budget, checkArchives });
+    let result;
+    try {
+      result = scanWorktreeCandidate(root, repoPath, { cache, budget, checkArchives });
+    } catch (error) {
+      if (isTransientToolOwnedIgnoredEntryError(source, repoPath, error)) continue;
+      throw error;
+    }
     const acceptedReason = acceptedStructuralReason(repoPath, result?.reason);
     if (acceptedReason) violations.push({ repoPath, reason: acceptedReason });
   }

@@ -2,6 +2,13 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-20 — Phase 3C containment tolerates rebuilt ignored `dist/` entries
+
+The private-artifact containment guard now handles the narrow race where Git lists an ignored,
+tool-owned generated file and the build removes it before the guard can inspect it. Only that
+`ENOENT` case is skipped; stable generated files still receive the normal private-content scan,
+and direct forbidden filenames still fail before any filesystem access.
+
 ## 2026-08-19 — Blend-ticket total-volume check no longer adds quantities across different units
 
 `validateBlendMath` summed every product quantity regardless of unit, so a ticket holding
