@@ -17,9 +17,10 @@ private function and adds a small public wrapper in front of it. The preserved c
 cutover lock, below-cost approval, exact quote-tier price/cost/profit calculation, commissions,
 inventory prebooking and draw ledger. Active admins and sales reps can still cover another rep's
 live booking; actor binding is not an ownership restriction. Soft-deleted quotes remain hidden.
-Preflight and postflight now SHA-256-pin the exact reviewed tier-split implementation and all five
-allocated-cent lifecycle bodies from the two preceding migrations, so a signature-compatible old
-pricing body or partial three-file apply is refused before the wrapper can land.
+Preflight and postflight now SHA-256-pin the exact reviewed intent helper, preserved cutover wrapper,
+new outer wrapper, tier-split implementation and all five allocated-cent lifecycle bodies. The helper
+must also remain the only overload, owned by `postgres`, `SECURITY DEFINER`, search-path-pinned and
+owner-only executable, so a signature-compatible drift or partial apply is refused fail-closed.
 
 The draw modal now consumes the shared intent-binding recovery contract. A permanently refused key
 is retired instead of trapping the operator until reload; when the mismatch receipt proves an order
@@ -58,7 +59,7 @@ cross-representative success, required-key refusal, one $10 sale / $5 cost / $5 
 order, one inventory reservation, one draw-ledger row, and a bound receipt. Keyless calls are now
 refused before the money implementation. The component tests also
 exposed and fixed an initial-load timing defect that could mark a freshly loaded saved quote dirty
-and block its first draw; load-generation state now releases suppression from React's post-commit
+and block its first draw; existing-quote load-generation state now releases suppression from React's post-commit
 effect, so a slow or coverage-instrumented render cannot release it on elapsed time. Mismatch recovery
 now reports a successful balance reload
 only when all three reload reads actually succeed. This migration must follow `20260816110000`,
@@ -67,9 +68,9 @@ only when all three reload reads actually succeed. This migration must follow `2
 
 `node scripts/smoke/prove-draw-down-quote-intent-binding.mjs` applied the migration verbatim on a
 network-isolated PostgreSQL 17 container. Its compact mutation database installs the exact reviewed
-pricing/lifecycle prerequisites, executes both hash gates, and swaps in an effect-recording stand-in
+helper/wrapper/pricing/lifecycle prerequisites, executes every hash gate, and swaps in an effect-recording stand-in
 only for adversarial wrapper schedules. A second database restores the supported
-`20260727174805` full schema, replays all 60 default replay-eligible ledger-selected migrations
+`20260727174805` full schema, replays every default replay-eligible ledger-selected migration
 through this candidate while surfacing the quarantined one-shot set, and
 executes `smoke-draw-down-quote-intent-binding.sql` against the real tier-split money, commission,
 inventory and draw-ledger implementation to `SMOKE_PASS_ROLLBACK`. It proves one $10 sale / $5 cost
@@ -78,10 +79,11 @@ and one draw-ledger row.
 The compact schedules pass admin/rep authorization, inactive,
 missing-profile, unauthenticated and actor-parameter refusals, key-required and keyed input guards,
 exact replay, changed/non-numeric/non-finite quantity, changed receipt actor,
-deleted quote, ACL, and both same-key concurrency cases. Mutation
-proof is non-vacuous: removing draw quantities reproduced stale success, while drifting the pinned
-tier-split body was refused before wrapping, and a simulated in-flight legacy draw was drained by
-the exclusive cutover lock before its new receipt blocked cutover. The replay selector also prints
+deleted quote, ACL, and both same-key concurrency cases. Mutation proof is non-vacuous: removing
+draw quantities is refused by the exact outer-body postflight; a NULL-returning helper, disabled
+actor/fingerprint comparisons, comment-only wrapper calls, an extra helper overload and a drifted
+tier-split body are all refused; and a simulated in-flight legacy draw is drained by
+the exclusive cutover lock before its new receipt blocks cutover. The replay selector also prints
 its one-shot quarantine notice instead of silently implying those data-specific files were replayed. The
 container used `--network none` and tmpfs;
 production was untouched.

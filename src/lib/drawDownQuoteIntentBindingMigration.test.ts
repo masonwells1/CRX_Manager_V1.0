@@ -6,6 +6,8 @@ const MIGRATION_PATH =
   'supabase/migrations/20260819232000_bind_draw_down_receipts_to_intent.sql';
 const CUTOVER_PATH =
   'supabase/migrations/20260816110000_draw_down_cutover_barrier.sql';
+const INTENT_HELPER_PATH =
+  'supabase/migrations/20260811130000_bind_commission_payout_idempotency_to_intent.sql';
 const TIER_SPLIT_PATH =
   'supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql';
 const ALLOCATED_CENTS_PATH =
@@ -17,6 +19,7 @@ const PROVER_PATH =
 
 const migrationSql = readFileSync(MIGRATION_PATH, 'utf8');
 const cutoverSql = readFileSync(CUTOVER_PATH, 'utf8');
+const intentHelperSql = readFileSync(INTENT_HELPER_PATH, 'utf8');
 const tierSplitSql = readFileSync(TIER_SPLIT_PATH, 'utf8');
 const allocatedCentsSql = readFileSync(ALLOCATED_CENTS_PATH, 'utf8');
 const smokeSql = readFileSync(SMOKE_PATH, 'utf8');
@@ -35,9 +38,10 @@ function expectOrdered(source: string, markers: string[]): void {
 }
 
 function functionBodySha256(source: string, name: string): string {
+  const normalizedSource = source.replace(/\r\n/g, '\n');
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = source.match(new RegExp(
-    `CREATE OR REPLACE FUNCTION public\\.${escaped}\\([\\s\\S]*?AS \\$function\\$(\\n[\\s\\S]*?\\n)\\$function\\$;`,
+  const match = normalizedSource.match(new RegExp(
+    `CREATE(?: OR REPLACE)? FUNCTION public\\.${escaped}\\([\\s\\S]*?AS \\$function\\$(\\n[\\s\\S]*?\\n)\\$function\\$;`,
   ));
   expect(match, `${name} body is missing`).not.toBeNull();
   return createHash('sha256').update(match![1], 'utf8').digest('hex');
@@ -62,7 +66,7 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(tierSplitSql).toContain('quote_item_id       -- PROVENANCE');
   });
 
-  it('pins the exact reviewed tier-split and allocated-cent lifecycle bodies', () => {
+  it('pins every reviewed idempotency, wrapper, pricing, and lifecycle body', () => {
     for (const path of [
       ALLOCATED_CENTS_PATH,
       MIGRATION_PATH,
@@ -77,6 +81,9 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(proverSource).not.toContain('\r');
 
     for (const [source, functionName] of [
+      [intentHelperSql, 'check_idempotency_intent'],
+      [cutoverSql, 'draw_down_quote'],
+      [migrationSql, 'draw_down_quote'],
       [tierSplitSql, '_draw_down_quote_below_cost_impl_20260810'],
       [allocatedCentsSql, '_allocated_cumulative_cents'],
       [allocatedCentsSql, '_allocated_delivery_cents'],
@@ -93,6 +100,18 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(migrationSql).toContain(
       'DRAW_DOWN_INTENT_POSTFLIGHT: reviewed pricing/lifecycle prerequisite body changed',
     );
+    expect(migrationSql).toContain(
+      'DRAW_DOWN_INTENT_PREFLIGHT: reviewed intent helper or governed wrapper body drifted',
+    );
+    expect(migrationSql).toContain(
+      'DRAW_DOWN_INTENT_POSTFLIGHT: reviewed intent helper or wrapper body changed',
+    );
+    expect(migrationSql.match(/p\.proname = 'check_idempotency_intent'\) <> 1/g)).toHaveLength(2);
+    expect(migrationSql.match(/p\.proacl = ARRAY\['postgres=X\/postgres'\]::aclitem\[\]/g)).toHaveLength(2);
+    expect(proverSource).toContain('NULL-returning intent helper passed the exact-body gate');
+    expect(proverSource).toContain('disabled actor/fingerprint comparisons passed the exact-body gate');
+    expect(proverSource).toContain('comment-only governed wrapper calls passed the exact-body gate');
+    expect(proverSource).toContain('extra intent-helper overload passed the overload gate');
   });
 
   it('fails closed before replay and preserves cross-representative coverage', () => {

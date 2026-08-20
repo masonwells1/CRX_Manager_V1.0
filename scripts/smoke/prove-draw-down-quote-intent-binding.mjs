@@ -38,6 +38,12 @@ const SHARED_HELPER_PATH = path.join(
   'migrations',
   '20260811130000_bind_commission_payout_idempotency_to_intent.sql',
 );
+const CUTOVER_PATH = path.join(
+  ROOT,
+  'supabase',
+  'migrations',
+  '20260816110000_draw_down_cutover_barrier.sql',
+);
 const TIER_SPLIT_PATH = path.join(
   ROOT,
   'supabase',
@@ -335,9 +341,11 @@ function restoreLiveCrLfCloseRemainder(db) {
 }
 
 function extractReviewedPrerequisites() {
+  const cutover = readFileSync(CUTOVER_PATH, 'utf8').replace(/\r\n/g, '\n');
   const tierSplit = readFileSync(TIER_SPLIT_PATH, 'utf8');
   const allocatedCents = readFileSync(ALLOCATED_CENTS_PATH, 'utf8');
   return [
+    extractFunctionStatement(cutover, 'draw_down_quote'),
     extractFunctionStatement(tierSplit, '_draw_down_quote_below_cost_impl_20260810'),
     extractFunctionStatement(allocatedCents, '_allocated_cumulative_cents'),
     extractFunctionStatement(allocatedCents, '_allocated_delivery_cents'),
@@ -433,7 +441,11 @@ BEGIN
 END;
 $function$;
 
-CREATE FUNCTION public._begin_below_cost_money_write(p_operation text)
+CREATE FUNCTION public._begin_below_cost_money_write(
+  p_operation text,
+  p_actor uuid DEFAULT NULL,
+  p_metadata jsonb DEFAULT NULL
+)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
 AS $function$ BEGIN RETURN; END; $function$;
 
@@ -723,26 +735,19 @@ async function proveConcurrency(db) {
 
 function proveMutation(migration) {
   psql('CREATE DATABASE draw_intent_mutant TEMPLATE template0;');
+  const db = 'draw_intent_mutant';
   const broken = migration.replace(
     "'draws', v_canonical_draws",
     "'draws', '[]'::jsonb /* 'draws', v_canonical_draws */",
   );
   assert.notEqual(broken, migration, 'fingerprint mutation was not planted');
-  bootstrap('draw_intent_mutant', broken);
-  const first = psql(callSql({ key: 'draw-mutant' }), {
-    db: 'draw_intent_mutant',
-    tuples: true,
-  });
-  const stale = psql(callSql({ quantity: '2', key: 'draw-mutant' }), {
-    db: 'draw_intent_mutant',
-    tuples: true,
-  });
-  assert.equal(
-    resultId(stale),
-    resultId(first),
-    'broken fingerprint did not reproduce stale-success replay',
-  );
-  console.log('MUTATION_DETECTED: removing draw quantities from identity replays stale success');
+  psql(FIXTURE, { db });
+  psql(extractSharedHelper(), { db });
+  psql(extractReviewedPrerequisites(), { db });
+  const blocked = psql(`BEGIN;\n${broken}\nCOMMIT;`, { db, allowFailure: true });
+  assert.notEqual(blocked.status, 0, 'broken fingerprint passed the exact outer-body gate');
+  assert.match(blocked.stderr, /reviewed intent helper or wrapper body changed/);
+  console.log('MUTATION_DETECTED: removing draw quantities from identity is refused postflight');
 }
 
 function provePrerequisiteBodyGuard(migration) {
@@ -761,6 +766,95 @@ function provePrerequisiteBodyGuard(migration) {
   assert.notEqual(blocked.status, 0, 'drifted pricing body passed the prerequisite hash gate');
   assert.match(blocked.stderr, /reviewed pricing\/lifecycle prerequisite body drifted/);
   console.log('MUTATION_DETECTED: drifted tier-split body is refused before wrapping');
+}
+
+function proveIntentBoundaryGuards(migration) {
+  const helper = extractSharedHelper();
+  const setup = (db) => {
+    psql(`CREATE DATABASE ${db} TEMPLATE template0;`);
+    psql(FIXTURE, { db });
+    psql(helper, { db });
+    psql(extractReviewedPrerequisites(), { db });
+  };
+  const expectBlocked = (db, message, pattern) => {
+    const blocked = psql(`BEGIN;\n${migration}\nCOMMIT;`, { db, allowFailure: true });
+    assert.notEqual(blocked.status, 0, message);
+    assert.match(blocked.stderr, pattern);
+  };
+
+  setup('draw_helper_null_mutant');
+  const nullHelper = helper.replace(
+    "  RETURN jsonb_build_object('found', true, 'result', v_existing.result);",
+    "  RETURN NULL; -- RETURN jsonb_build_object('found', true, 'result', v_existing.result);",
+  );
+  assert.notEqual(nullHelper, helper, 'NULL-returning helper mutation was not planted');
+  psql(nullHelper, { db: 'draw_helper_null_mutant' });
+  expectBlocked(
+    'draw_helper_null_mutant',
+    'NULL-returning intent helper passed the exact-body gate',
+    /reviewed intent helper or governed wrapper body drifted/,
+  );
+
+  setup('draw_helper_compare_mutant');
+  const comparisonHelper = helper
+    .replace(
+      'IF v_existing.request_actor_id IS DISTINCT FROM p_actor THEN',
+      'IF false /* v_existing.request_actor_id IS DISTINCT FROM p_actor */ THEN',
+    )
+    .replace(
+      'IF v_existing.request_fingerprint IS DISTINCT FROM p_fingerprint THEN',
+      'IF false /* v_existing.request_fingerprint IS DISTINCT FROM p_fingerprint */ THEN',
+    );
+  assert.notEqual(comparisonHelper, helper, 'actor/fingerprint comparison mutation was not planted');
+  psql(comparisonHelper, { db: 'draw_helper_compare_mutant' });
+  expectBlocked(
+    'draw_helper_compare_mutant',
+    'disabled actor/fingerprint comparisons passed the exact-body gate',
+    /reviewed intent helper or governed wrapper body drifted/,
+  );
+
+  setup('draw_wrapper_comment_mutant');
+  const reviewedWrapper = extractFunctionStatement(
+    readFileSync(CUTOVER_PATH, 'utf8').replace(/\r\n/g, '\n'),
+    'draw_down_quote',
+  );
+  const wrapperCalls = `  PERFORM public._begin_below_cost_money_write(
+    'draw_down_quote', p_performed_by,
+    jsonb_build_object('below_cost_reason', p_below_cost_reason)
+  );
+  RETURN public._draw_down_quote_below_cost_impl_20260810(
+    p_quote_id, p_draws, p_performed_by, p_idempotency_key
+  );`;
+  const commentWrapper = reviewedWrapper.replace(
+    wrapperCalls,
+    `  -- MUTATION: _begin_below_cost_money_write and
+  -- _draw_down_quote_below_cost_impl_20260810 were moved into comments.
+  RETURN jsonb_build_object('mutated', true);`,
+  );
+  assert.notEqual(commentWrapper, reviewedWrapper, 'comment-only wrapper mutation was not planted');
+  psql(commentWrapper, { db: 'draw_wrapper_comment_mutant' });
+  expectBlocked(
+    'draw_wrapper_comment_mutant',
+    'comment-only governed wrapper calls passed the exact-body gate',
+    /reviewed intent helper or governed wrapper body drifted/,
+  );
+
+  setup('draw_helper_overload_mutant');
+  psql(`
+CREATE FUNCTION public.check_idempotency_intent(p_key text)
+RETURNS jsonb LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp
+AS $function$ SELECT NULL::jsonb $function$;
+REVOKE ALL ON FUNCTION public.check_idempotency_intent(text)
+  FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.check_idempotency_intent(text) TO postgres;
+`, { db: 'draw_helper_overload_mutant' });
+  expectBlocked(
+    'draw_helper_overload_mutant',
+    'extra intent-helper overload passed the overload gate',
+    /reviewed intent helper overload, owner, security, search_path, or grants drifted/,
+  );
+
+  console.log('MUTATION_DETECTED: intent helper body, comparisons, wrapper calls, and overload drift are refused');
 }
 
 function proveTransactionGuard(migration) {
@@ -849,6 +943,7 @@ async function main() {
   for (const file of [
     MIGRATION_PATH,
     SHARED_HELPER_PATH,
+    CUTOVER_PATH,
     TIER_SPLIT_PATH,
     ALLOCATED_CENTS_PATH,
     SMOKE_PATH,
@@ -884,6 +979,7 @@ async function main() {
     proveSequential('draw_wrapper');
     await proveConcurrency('draw_wrapper');
     proveMutation(migration);
+    proveIntentBoundaryGuards(migration);
     provePrerequisiteBodyGuard(migration);
     proveTransactionGuard(migration);
     proveIsolationGuard(migration);
@@ -896,7 +992,7 @@ async function main() {
     console.log('  key required plus keyed numeric, finite and empty guards: PASS');
     console.log('  exact replay, changed/non-finite quantity, changed receipt actor, deleted quote: PASS');
     console.log('  different-intent and same-intent concurrent key races: PASS');
-    console.log('  exact pricing/lifecycle prerequisite hashes and drift mutation: PASS');
+    console.log('  exact helper/wrapper/pricing/lifecycle hashes and drift mutations: PASS');
     console.log('  single-transaction apply guard: PASS');
     console.log('  read-committed isolation guard and stale-snapshot refusal: PASS');
     console.log('  exclusive cutover drain plus unexpired legacy receipt refusal: PASS');

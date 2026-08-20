@@ -37,6 +37,12 @@
 -- key is high-entropy, and an active sales rep may already draw and view any
 -- live booking/order. If either access decision changes, the DETAIL contract
 -- must be revisited.
+-- Reviewed check_idempotency_intent pg_proc.prosrc SHA-256:
+-- 71b8a6a0b53f2234a0808b1270eaa06b3c8bf0e7d2523fc429c88e5c479407c8
+-- Reviewed cutover/below-cost draw_down_quote pg_proc.prosrc SHA-256:
+-- be2570888281520c9aaba61280a456cdbd9b69b83dfeba106c7a324c3751e4bf
+-- New actor/intent wrapper pg_proc.prosrc SHA-256:
+-- 7ab37b5d3a19d03e017dac0ac62560339e9f933ab1b942305b5517efd8de9bf4
 
 -- Drain every draw running through the committed 20260816110000 barrier and
 -- refuse new draws until this transaction commits. Without this exact lock, a
@@ -96,7 +102,12 @@ BEGIN
       'DRAW_DOWN_INTENT_PREFLIGHT: expected exactly one public draw_down_quote(uuid,jsonb,uuid,text,text) wrapper';
   END IF;
 
-  IF v_private IS NOT NULL THEN
+  IF (SELECT count(*)
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'public'
+         AND p.proname = '_draw_down_quote_intent_impl_20260819') <> 0
+     OR v_private IS NOT NULL THEN
     RAISE EXCEPTION
       'DRAW_DOWN_INTENT_PREFLIGHT: private wrapper name already exists; refusing a second wrapping layer';
   END IF;
@@ -111,6 +122,31 @@ BEGIN
      OR to_regprocedure('extensions.digest(bytea,text)') IS NULL THEN
     RAISE EXCEPTION
       'DRAW_DOWN_INTENT_PREFLIGHT: intent helper, digest, reviewed tier-split money implementation, or allocated-cent lifecycle prerequisite is missing';
+  END IF;
+
+  IF (SELECT count(*)
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'public'
+         AND p.proname = 'check_idempotency_intent') <> 1
+     OR NOT EXISTS (
+       SELECT 1
+         FROM pg_proc p
+        WHERE p.oid = v_intent_helper
+          AND p.prosecdef
+          AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+          AND pg_get_userbyid(p.proowner) = 'postgres'
+          AND p.proacl = ARRAY['postgres=X/postgres']::aclitem[]
+     ) THEN
+    RAISE EXCEPTION
+      'DRAW_DOWN_INTENT_PREFLIGHT: reviewed intent helper overload, owner, security, search_path, or grants drifted';
+  END IF;
+
+  IF (SELECT encode(extensions.digest(convert_to(p.prosrc, 'UTF8'), 'sha256'), 'hex')
+        FROM pg_proc p WHERE p.oid = v_intent_helper)
+       IS DISTINCT FROM '71b8a6a0b53f2234a0808b1270eaa06b3c8bf0e7d2523fc429c88e5c479407c8' THEN
+    RAISE EXCEPTION
+      'DRAW_DOWN_INTENT_PREFLIGHT: reviewed intent helper or governed wrapper body drifted';
   END IF;
 
   -- These exact pg_proc.prosrc hashes bind the wrapper to the reviewed bodies
@@ -178,6 +214,13 @@ BEGIN
      AND p.prosecdef
      AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
      AND pg_get_userbyid(p.proowner) = 'postgres';
+
+  IF v_src IS NULL
+     OR encode(extensions.digest(convert_to(v_src, 'UTF8'), 'sha256'), 'hex')
+          IS DISTINCT FROM 'be2570888281520c9aaba61280a456cdbd9b69b83dfeba106c7a324c3751e4bf' THEN
+    RAISE EXCEPTION
+      'DRAW_DOWN_INTENT_PREFLIGHT: reviewed intent helper or governed wrapper body drifted';
+  END IF;
 
   IF v_src IS NULL
      OR position('pg_try_advisory_xact_lock_shared' IN v_src) = 0
@@ -440,6 +483,9 @@ DECLARE
   v_private regprocedure := to_regprocedure(
     'public._draw_down_quote_intent_impl_20260819(uuid,jsonb,uuid,text,text)'
   );
+  v_intent_helper regprocedure := to_regprocedure(
+    'public.check_idempotency_intent(text,text,uuid,text)'
+  );
   v_money_impl regprocedure := to_regprocedure(
     'public._draw_down_quote_below_cost_impl_20260810(uuid,jsonb,uuid,text)'
   );
@@ -460,14 +506,21 @@ DECLARE
   );
   v_outer_src text;
   v_private_src text;
+  v_helper_src text;
 BEGIN
   IF (SELECT count(*)
         FROM pg_proc p
         JOIN pg_namespace n ON n.oid = p.pronamespace
        WHERE n.nspname = 'public'
          AND p.proname = 'draw_down_quote') <> 1
+     OR (SELECT count(*)
+           FROM pg_proc p
+           JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname = 'public'
+            AND p.proname = '_draw_down_quote_intent_impl_20260819') <> 1
      OR v_wrapper IS NULL
      OR v_private IS NULL
+     OR v_intent_helper IS NULL
      OR v_money_impl IS NULL
      OR v_alloc_cumulative IS NULL
      OR v_alloc_delivery IS NULL
@@ -476,6 +529,24 @@ BEGIN
      OR v_close_remainder IS NULL THEN
     RAISE EXCEPTION
       'DRAW_DOWN_INTENT_POSTFLIGHT: wrapper chain or reviewed pricing/lifecycle prerequisite is missing';
+  END IF;
+
+  IF (SELECT count(*)
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'public'
+         AND p.proname = 'check_idempotency_intent') <> 1
+     OR NOT EXISTS (
+       SELECT 1
+         FROM pg_proc p
+        WHERE p.oid = v_intent_helper
+          AND p.prosecdef
+          AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+          AND pg_get_userbyid(p.proowner) = 'postgres'
+          AND p.proacl = ARRAY['postgres=X/postgres']::aclitem[]
+     ) THEN
+    RAISE EXCEPTION
+      'DRAW_DOWN_INTENT_POSTFLIGHT: reviewed intent helper overload, owner, security, search_path, or grants changed';
   END IF;
 
   IF (SELECT encode(extensions.digest(convert_to(p.prosrc, 'UTF8'), 'sha256'), 'hex')
@@ -509,12 +580,33 @@ BEGIN
      AND pg_get_userbyid(p.proowner) = 'postgres';
 
   SELECT p.prosrc
+    INTO v_helper_src
+    FROM pg_proc p
+   WHERE p.oid = v_intent_helper
+     AND p.prosecdef
+     AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
+     AND pg_get_userbyid(p.proowner) = 'postgres';
+
+  SELECT p.prosrc
     INTO v_private_src
     FROM pg_proc p
    WHERE p.oid = v_private
      AND p.prosecdef
      AND p.proconfig = ARRAY['search_path=public, pg_temp']::text[]
      AND pg_get_userbyid(p.proowner) = 'postgres';
+
+  IF v_helper_src IS NULL
+     OR encode(extensions.digest(convert_to(v_helper_src, 'UTF8'), 'sha256'), 'hex')
+          IS DISTINCT FROM '71b8a6a0b53f2234a0808b1270eaa06b3c8bf0e7d2523fc429c88e5c479407c8'
+     OR v_private_src IS NULL
+     OR encode(extensions.digest(convert_to(v_private_src, 'UTF8'), 'sha256'), 'hex')
+          IS DISTINCT FROM 'be2570888281520c9aaba61280a456cdbd9b69b83dfeba106c7a324c3751e4bf'
+     OR v_outer_src IS NULL
+     OR encode(extensions.digest(convert_to(v_outer_src, 'UTF8'), 'sha256'), 'hex')
+          IS DISTINCT FROM '7ab37b5d3a19d03e017dac0ac62560339e9f933ab1b942305b5517efd8de9bf4' THEN
+    RAISE EXCEPTION
+      'DRAW_DOWN_INTENT_POSTFLIGHT: reviewed intent helper or wrapper body changed';
+  END IF;
 
   IF v_outer_src IS NULL
      OR position('pg_try_advisory_xact_lock_shared' IN v_outer_src) = 0
@@ -566,6 +658,10 @@ BEGIN
      OR has_function_privilege('authenticated', v_private, 'EXECUTE')
      OR has_function_privilege('service_role', v_private, 'EXECUTE')
      OR NOT has_function_privilege('postgres', v_private, 'EXECUTE')
+     OR has_function_privilege('anon', v_intent_helper, 'EXECUTE')
+     OR has_function_privilege('authenticated', v_intent_helper, 'EXECUTE')
+     OR has_function_privilege('service_role', v_intent_helper, 'EXECUTE')
+     OR NOT has_function_privilege('postgres', v_intent_helper, 'EXECUTE')
      OR has_function_privilege('anon', v_money_impl, 'EXECUTE')
      OR has_function_privilege('authenticated', v_money_impl, 'EXECUTE')
      OR has_function_privilege('service_role', v_money_impl, 'EXECUTE')
