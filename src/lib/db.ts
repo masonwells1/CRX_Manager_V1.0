@@ -109,6 +109,12 @@ export const RpcErrorCodes = {
   BOOKING_FULLY_DRAWN: 'BOOKING_FULLY_DRAWN',
   BOOKING_DRAW_ORDER_LOCKED: 'BOOKING_DRAW_ORDER_LOCKED',
   EMPTY_DRAW: 'EMPTY_DRAW',
+  // restore_quote_version, once 20260816120000 is applied. A version restore
+  // mints brand-new quote_items ids, so it cannot carry the per-line billing
+  // provenance a draw stamps. Rather than drop that provenance (which was
+  // proven to overbill across a restore that changes the line partition), the
+  // server refuses the restore outright once the booking has been drawn.
+  QUOTE_RESTORE_BLOCKED_BY_DRAW: 'QUOTE_RESTORE_BLOCKED_BY_DRAW',
   // draw_down_quote per-tier order lines (migration 20260816120000). A booked
   // line with no unit price cannot be billed, and the split lines must add back
   // up to the quantity requested.
