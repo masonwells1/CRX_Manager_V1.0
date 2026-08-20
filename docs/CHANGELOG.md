@@ -94,6 +94,9 @@ All significant development milestones, in reverse chronological order.
   and backslash-CRLF continuations are removed before every shared shell-safety
   parse, so a continued variable,
   executable, migration path, or production command cannot bypass the guard.
+  Mutation-capable PowerShell commands also fail closed when computed operands
+  precede a Node-backed executable, covering grouped values and arbitrary
+  method-call expressions in direct, nested shell, and MCP process routes.
   Environment-provider and .NET `NODE_OPTIONS` mutations are denied even when
   no Node command appears in the same payload, closing staged mutations across
   persistent MCP shell interactions. Dynamic environment-provider targets fail

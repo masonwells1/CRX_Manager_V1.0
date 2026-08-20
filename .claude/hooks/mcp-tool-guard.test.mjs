@@ -180,6 +180,11 @@ const posixLineContinuationGuardCases = [
   ["NODE_\\", "OPTIONS=--require=./preload.cjs npm --version"].join("\n"),
   ["NODE_\\", "OPTIONS=--require=./preload.cjs npm --version"].join("\r\n"),
 ];
+const powerShellComputedMutationGuardCases = [
+  `Set-Item ("Env:NODE-XOPTIONS".Replace("-X","_")) ("--requXire=./preload.cjs".Replace("X","")); npm --version`,
+  `Set-Content ("Env:NODE_OPTIONS".ToLower()) ("--require=./preload.cjs"); npm --version`,
+  `pwsh -NoProfile -Command "Set-Item ('Env:NODE-XOPTIONS'.Replace('-X','_')) ('--requXire=./preload.cjs'.Replace('X','')); npm --version"`,
+];
 
 // ── tools NOT in the Desktop Commander mutating set pass straight through ──
 let r = runHook({ tool_name: "Read", tool_input: { file_path: "src/App.tsx" } });
@@ -326,6 +331,7 @@ for (const command of [
   ...shellBuiltinNodeOptionsCases,
   ...dynamicNodeOptionsGuardCases,
   ...posixLineContinuationGuardCases,
+  ...powerShellComputedMutationGuardCases,
   ...nestedParserGuardCases,
   ...indirectRunnerGuardCases,
 ]) {
