@@ -291,7 +291,48 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
 
     expect(await screen.findByText(/cannot be saved/i, {}, { timeout: 15000 })).toBeTruthy();
     const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
-    fireEvent.click(saveButtons[0]);
+    // Pick the JOB Save explicitly. Clicking "Save as Recipe" would also leave save_job
+    // uncalled, so an index-based click could pass without proving anything.
+    fireEvent.click(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
+    await waitFor(() => {
+      expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
+    }, { timeout: 15000 });
+  }, 30000);
+
+  it('refuses a fractional cent instead of silently truncating it', async () => {
+    // Cents are whole. isExactDecimalText('150.7') is true, but parseInt truncates it to 150
+    // in both the saved total and buildJobChemicalsPayload — the operator's number would
+    // change under them, visible only after a reload.
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'jobs') {
+        return buildChain({
+          data: makeJob({
+            ...HAZARD_CHEM,
+            quantity: 10, unit: 'pt', rate_per_acre: 0.1, rate_unit: 'pt/ac',
+          }),
+          error: null,
+        });
+      }
+      if (table === 'products') return buildChain({ data: [DRY_PRODUCT], error: null });
+      return buildChain({ data: [], error: null });
+    });
+    render(
+      <MemoryRouter initialEntries={['/jobs/job-1?tab=chemicals']}>
+        <Routes><Route path="/jobs/:id" element={<JobDetail />} /></Routes>
+      </MemoryRouter>,
+    );
+
+    const priceInput = await waitFor(() => {
+      const found = screen.getAllByRole('spinbutton')
+        .find((el) => (el as HTMLInputElement).value === '150');
+      if (!found) throw new Error('price input not found');
+      return found as HTMLInputElement;
+    }, { timeout: 15000 });
+    fireEvent.change(priceInput, { target: { value: '150.7' } });
+
+    expect(await screen.findByText(/whole number of cents/i, {}, { timeout: 15000 })).toBeTruthy();
+    const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
+    fireEvent.click(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
     await waitFor(() => {
       expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
     }, { timeout: 15000 });
@@ -332,7 +373,7 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     fireEvent.click(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
     await waitFor(() => expect(mockToast).toHaveBeenCalled());
     const errors = mockToast.mock.calls.filter((c) => c[0] === 'error').map((c) => String(c[1]));
-    expect(errors.some((m) => /its price is blank, or is not written as a plain number/i.test(m))).toBe(true);
+    expect(errors.some((m) => /its price is blank, or is not a whole number of cents/i.test(m))).toBe(true);
     expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
   }, 30000);
 

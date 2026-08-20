@@ -1436,13 +1436,20 @@ export default function JobDetail() {
       // on the line while writing 0 into jobs.total_cost_cents / total_price_cents — a
       // nonzero line behind a zero total. `<input type="number">` accepts '1e3', so this
       // is reachable by typing. One grammar, one gate. (Codex P2)
-      const badNumber = ([
-        ['quantity', c.quantity],
+      if (!isExactDecimalText(c.quantity)) {
+        byIndex.set(i, 'its quantity is blank, or is not written as a plain number, and would not be billed correctly');
+        return;
+      }
+      // Cents are WHOLE, so the gate has to be stricter for them than for a quantity.
+      // isExactDecimalText('150.7') is true, but the saved total (parseInt, below) and
+      // buildJobChemicalsPayload both TRUNCATE it to 150 — the operator's number would
+      // change under them silently, visible only after a reload. Refuse it instead.
+      const badCents = ([
         ['cost', c.cost_per_unit_cents],
         ['price', c.price_per_unit_cents],
-      ] as const).find(([, raw]) => !isExactDecimalText(raw));
-      if (badNumber) {
-        byIndex.set(i, `its ${badNumber[0]} is blank, or is not written as a plain number, and would not be billed correctly`);
+      ] as const).find(([, raw]) => !isExactDecimalText(raw) || !Number.isInteger(Number(raw)));
+      if (badCents) {
+        byIndex.set(i, `its ${badCents[0]} is blank, or is not a whole number of cents, and would not be billed correctly`);
       }
     });
     return byIndex;

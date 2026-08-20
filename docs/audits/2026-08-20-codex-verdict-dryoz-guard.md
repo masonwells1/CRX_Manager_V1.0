@@ -9,7 +9,7 @@ money, and driver-provenance work.
 Yes, at the pinned model and effort. From the session header of
 `.claude/session-state/codex-review-latest.txt` (in this worktree, not the main checkout):
 
-```
+```text
 OpenAI Codex v0.148.0-alpha.15
 workdir: C:\CRX_Manager\.claude\worktrees\dryoz-failclosed-guard
 model: gpt-5.6-sol
@@ -114,8 +114,54 @@ Landing this still requires, in order: a HEAD-bound push proof from
 guard), push the branch, open a PR, Vercel check green, read and resolve CodeRabbit, merge.
 The merge deploys production, so it needs Mason's explicit approval.
 
+## PR #436 review round (CodeRabbit + Codex connector)
+
+Both bots reviewed `b55ad40d`. CodeRabbit's review is genuine — bound to that SHA, Pro Plus
+plan, not rate-limited. Five findings; all five confirmed against source.
+
+Fixed in the follow-up commit:
+
+1. **Fractional cents were accepted and silently truncated.** `isExactDecimalText('150.7')` is
+   true, but both the saved total and `buildJobChemicalsPayload` use `parseInt`, so `150.7`
+   became `150` with no warning — the operator's number changing under them, visible only
+   after a reload. Cents are whole, so the gate now requires an integer for `cost` and `price`
+   while still allowing a decimal quantity.
+2. **A test could have passed for the wrong reason.** The exponent test clicked
+   `saveButtons[0]`; "Save as Recipe" also leaves `save_job` uncalled, so an index-based click
+   proved nothing if the match order shifted. Now selects the job Save explicitly, matching
+   the sibling tests. (Not a false pass today — the mutation test shows the click does reach
+   the real save — but fragile.)
+3. **MD040** — the session-header fence had no language. Cosmetic; fixed.
+
+**Two P1s accepted as real, and NOT fixed here — both need a migration:**
+
+4. **The unit-mismatch guard is client-side only.** It lives in `JobDetail`, so an already-open
+   tab on the previous bundle, or any other authenticated `save_job` caller, can still submit a
+   `Dry oz` quantity priced per pound. `save_job` inserts `p_chemicals` without comparing `unit`
+   against `rate_unit` (`20260706080000_customer_supplied_chemicals.sql:264-293`), and
+   `transfer_job_to_invoice` then multiplies the stored quantity by the per-unit price directly
+   — so the 16× error remains reachable around the UI. This is squarely the AGENTS.md rule that
+   inventory and financial invariants belong in RPCs/triggers, not only in React.
+
+   **The PR description originally called this guard "fail-closed" without qualification. That
+   overstates it** — it is fail-closed *in the UI*. Corrected on the PR.
+
+5. **`save_job` accepts caller-supplied job totals verbatim**
+   (`20260706080000_customer_supplied_chemicals.sql:138-140,187-189`). Making the React
+   calculation exact does not make it authoritative: a stale client can still store 14¢ where
+   `transfer_job_to_invoice` computes 15¢ via `safe_cents_qty`
+   (`20260713060000_harden_field_split_sum100.sql:544-552`), leaving an invoice header
+   inconsistent with its own items. The totals should be recomputed or validated server-side.
+
+Both are the same shape as F06: the durable fix is in the database, needs a migration plus the
+Codex SQL gate, and is not in this PR. This PR still strictly improves on `main` — it closes
+the UI path that produces the bad data — but it is not a complete fix, and the record should
+not pretend otherwise.
+
 ## Still open
 
+- **Server-side enforcement of the unit invariant, and server-side job totals** — findings 4
+  and 5 above. Migration work.
 - **F06** — a reloaded rate line goes stale on an acreage change. Needs the driver persisted
   on `job_chemicals` (migration + `save_job`).
 - **F07 / F08** — stale rate on a quantity-driven `rate_unit` edit; a cross-product
