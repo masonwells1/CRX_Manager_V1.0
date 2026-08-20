@@ -418,11 +418,11 @@ in review of PR #434, which is why every ✅ above is now something that was act
 
 **Do not "fix" this by stripping the worktree prefix out of the command text.** That was attempted
 on 2026-08-19/20 and abandoned after five independent `gpt-5.6-sol` review rounds found eight real
-security holes in five successive versions — each a different way to spell the same path (trailing
-separator, `../..`, `$var`, `/.`, `."."` quote-joining, an operand named `cd`, `%VAR:~0%`, `!VAR!`,
-caret escapes). Each round's test suite was green over the next round's hole. The eight spellings
-are pinned as denials in `review-proof-guard.test.mjs` so a future attempt trips on them
-immediately. See `docs/manual/KNOWN_ISSUES.md` for the options if this is ever worth fixing
+security holes in five successive versions — each a different way to spell the same path: a trailing
+separator; `../..`; a `$var` descendant; a `/.` dot alias; `."."` quote-joining; an operand named
+`cd`; cmd.exe expansion (`%VAR:~0%` and `!VAR!` — one finding, two spellings); and cmd.exe caret
+escapes. Each round's test suite was green over the next round's hole. All eight are pinned as
+denials in `review-proof-guard.test.mjs` so a future attempt trips on them immediately. See `docs/manual/KNOWN_ISSUES.md` for the options if this is ever worth fixing
 properly — the leading one is moving worktrees out from under `.claude` entirely, which removes
 the collision instead of papering over it.
 

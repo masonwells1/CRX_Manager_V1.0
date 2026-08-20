@@ -95,8 +95,9 @@ without surfacing round 5. Mason's call (2026-08-20): document, don't fix. **The
 
 What landed: the workaround in `docs/reference/gotchas.md`; the full analysis and three ranked
 options (lead option: move worktrees out from under `.claude`) in `docs/manual/KNOWN_ISSUES.md`; and
-all eight exploit spellings pinned as denials in `review-proof-guard.test.mjs` so a future carve-out
-attempt trips on them immediately.
+all eight holes pinned as denials in `review-proof-guard.test.mjs` — in every spelling, so the two
+cmd.exe expansion forms of the one finding are pinned separately — meaning a future carve-out attempt
+trips on them immediately.
 
 - **Files changed**: `.claude/hooks/review-proof-guard.test.mjs` (tests only), `docs/reference/gotchas.md`, `docs/manual/KNOWN_ISSUES.md`, `docs/CHANGELOG.md`
 - **Guard logic changed**: none
