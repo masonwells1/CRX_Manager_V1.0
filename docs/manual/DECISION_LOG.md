@@ -82,13 +82,23 @@ something this change closed. Never add a positive pattern to a `.coderabbit.yam
 it on FarmRx first and confirming a real source file still appears under "Files selected for
 processing".
 
-**A green CodeRabbit check is not proof the head was reviewed.** On FarmRx PR #26 the `CodeRabbit`
-status check read **pass** while the three reviewed commits were `358e3a8`, `cc28976`, and
-`ae0e6b1` — not the head, `9abaf18`. Worse, a *clean* incremental review creates **no review object
-at all**: CodeRabbit replies "Review finished" and records nothing, so the head SHA never appears in
-`/pulls/<n>/reviews`. The deploy-check gate therefore treats the SHA lookup as a fast path, and
-falls back to "green check **plus** a 'Review finished' reply newer than the final push" before
-concluding a head went unreviewed. The gate errs toward blocking, which is the safe direction.
+**A green CodeRabbit check is not proof the head was reviewed; only the SHA range is.** On FarmRx
+PR #26 the `CodeRabbit` status check read **pass** while the three reviewed commits were `358e3a8`,
+`cc28976`, and `ae0e6b1` — not the head, `9abaf18`. A *clean* incremental review also creates **no
+review object at all**, so the head SHA never appears in `/pulls/<n>/reviews`.
+
+The proof that does bind is CodeRabbit's own range stamp, `between <base> and <head>`, and it lands
+in one of two places: a review **with findings** puts it in the review body
+(`/pulls/<n>/reviews`), a **clean** review puts it only in the walkthrough comment
+(`/issues/<n>/comments`). Both were verified live on 2026-08-20 — CRX #441 head `4e080bef` matched
+via reviews, FarmRx #26's clean head `9abaf18` matched via comments. Checking one endpoint alone
+reports a reviewed head as unreviewed.
+
+An earlier version of this gate fell back to "green check plus a 'Review finished' reply newer than
+the push". CodeRabbit flagged that as Major on PR #441 and was right: neither signal binds to a SHA,
+so the fallback could accept a stale review — the exact hole the gate exists to close. Timestamps
+are not identity. The gate now accepts nothing but the head SHA, and re-reads `headRefOid`
+immediately before merge in case it moved.
 
 **Reviewer advice is a hypothesis, not a patch.** Three of this session's review findings were
 correct and fixed (`.codex/**` wrongly excluded — it holds the hand-maintained

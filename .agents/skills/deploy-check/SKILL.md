@@ -133,48 +133,52 @@ If ready, state the remaining landing steps explicitly — this skill does **not
 5. **Confirm the review actually covered the FINAL commit.** Auto-review pauses after 2 reviewed
    commits (`.coderabbit.yaml`), and a rate-limited PR can silently skip a review entirely — PR
    #429 (21 commits) and PR #434 both posted "Review limit reached". A review of an earlier commit
-   is **not** a review of what you are about to merge. Match on the **head SHA**, not on a
-   timestamp: a review of the previous commit can start before the final push and finish after it,
-   so a newer `submitted_at` proves nothing. Filter to the CodeRabbit account — any other
-   reviewer's timestamp would otherwise satisfy the check — and compare `commit_id` to the PR head:
+   is **not** a review of what you are about to merge. Bind the proof to the **head SHA**. Nothing
+   else counts — see "What never counts" below.
+
+   First capture the head, and capture it *before* requesting any review:
 
    ```bash
    gh pr view <n> --repo masonwells1/CRX_Manager_V1.0 --json headRefOid --jq .headRefOid
    ```
 
-   ```bash
-   gh api --paginate repos/masonwells1/CRX_Manager_V1.0/pulls/<n>/reviews --jq '.[] | select(.user.login=="coderabbitai[bot]" and .submitted_at != null and .state != "DISMISSED") | .commit_id'
-   ```
-
-   `--paginate` matters: reviews come back 30 per page, and on a long-lived PR the relevant one can
-   sit past page 1, so an unpaginated lookup can report "never reviewed" for a PR that was. The
-   filter emits **one SHA per line and aggregates nothing**, which is deliberate: `--paginate` runs
-   the `--jq` expression once per page, so any `[...]`/`unique` wrapper would return page-local
-   results. Streaming one SHA per line makes page boundaries irrelevant.
-
-   Do **not** "fix" this with `--slurp` — CodeRabbit recommended exactly that on PR #441 and the
-   command does not run: `gh` rejects `--slurp` together with `--jq` ("the `--slurp` option is not
-   supported with `--jq` or `--template`"), and piping to a standalone `jq` is not an option either
-   because `jq` is not installed on this machine. Both were tested before this note was written.
-   The `submitted_at`/`DISMISSED` filters keep a pending or withdrawn review from counting as
-   coverage.
-
-   **A clean review leaves no record here.** When CodeRabbit finishes an incremental review with
-   zero findings it does not create a review object, so the head SHA never appears in that list —
-   observed on FarmRx PR #26 at commit `9abaf18`, where it replied "Review finished" and the
-   `CodeRabbit` check went green with no matching review. Treat the SHA lookup as the *fast path*:
-   if the head SHA is present, the gate passes. If it is absent, the gate is not yet failed —
-   confirm with **both** of these before concluding it went unreviewed:
+   CodeRabbit stamps every review with the exact range it examined — `between <base> and <head>` —
+   and that line is the only SHA-bound proof it emits. It lands in **one of two places** depending
+   on whether the review found anything, so check both and accept the head if either prints it
+   (substitute the real 40-character SHA for `<HEAD>`):
 
    ```bash
-   gh pr checks <n> --repo masonwells1/CRX_Manager_V1.0 | grep -i coderabbit
+   gh api --paginate repos/masonwells1/CRX_Manager_V1.0/pulls/<n>/reviews --jq '.[] | select(.user.login=="coderabbitai[bot]") | .body' | grep -oE "and <HEAD>"
    ```
 
-   a green `CodeRabbit` check **plus** a CodeRabbit "Review finished" reply timestamped after the
-   final push means the head was reviewed and had nothing to report. A green check *alone* does not
-   — on FarmRx it read green while three earlier commits, not the head, were the reviewed ones.
+   ```bash
+   gh api --paginate repos/masonwells1/CRX_Manager_V1.0/issues/<n>/comments --jq '.[] | select(.user.login=="coderabbitai[bot]") | .body' | grep -oE "and <HEAD>"
+   ```
 
-   If neither holds, comment `@coderabbitai review` on the PR
+   A review **with findings** creates a review object, so the range line is in the first. A **clean**
+   review creates no review object at all — its range line exists only in the walkthrough comment,
+   so the second is the one that matches. Both forms were verified live on 2026-08-20: CRX PR #441
+   head `4e080bef` matched via `/pulls/.../reviews`, and FarmRx PR #26's clean head `9abaf18`
+   matched via `/issues/.../comments`. Checking only one endpoint reports a reviewed head as
+   unreviewed.
+
+   `--paginate` matters: results page at 30, so an unpaginated lookup can miss the relevant entry on
+   a long-lived PR. Do **not** add `--slurp` — CodeRabbit recommended exactly that on PR #441 and
+   the command does not run: `gh` rejects `--slurp` together with `--jq` ("the `--slurp` option is
+   not supported with `--jq` or `--template`"), and piping to a standalone `jq` fails too because
+   `jq` is not installed on this machine. Both were tested before this note was written.
+
+   **Re-read `headRefOid` immediately before merging.** If it moved after the review — a fix pushed
+   while you were reading — the proof no longer binds and the whole check repeats against the new
+   head.
+
+   **What never counts as proof:** a green `CodeRabbit` status check (it read green on FarmRx PR #26
+   while the head was *not* among the reviewed commits); a `submitted_at` newer than the final push
+   (any reviewer's timestamp satisfies it, and a review of the previous commit can start before the
+   push and finish after it); a "Review finished" reply (it names no SHA); or a review whose state
+   is `DISMISSED`. Timestamps are not identity — only the SHA is.
+
+   If neither command prints the head SHA, comment `@coderabbitai review` on the PR
    (that runs **one** incremental review of the current commit; `@coderabbitai resume` is a
    different command that restarts automatic review), wait for it to complete, and read it
    before merging. "Review rate limited" is temporary and refills — re-check rather than treating
