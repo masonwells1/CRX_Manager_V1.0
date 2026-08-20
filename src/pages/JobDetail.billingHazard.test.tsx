@@ -179,6 +179,31 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
   });
 
+  it('SAVES an exactly-rounded total, matching the server rather than binary float', async () => {
+    // 25c x 0.58 is exactly 14.50. The server's safe_cents_qty rounds half away from zero
+    // to 15c (verified live: ROUND(25::numeric * 0.58) = 15), but Math.round(0.58 * 25)
+    // gives 14 because the binary product falls just below the half-cent boundary.
+    // jobs.total_price_cents is SAVED from this figure, so the old float path persisted a
+    // number the database's own arithmetic disagreed with.
+    mountWith({
+      ...HAZARD_CHEM,
+      quantity: 0.58, unit: 'Lb', rate_per_acre: 0.0058, rate_unit: 'Lb/ac',
+      cost_per_unit_cents: 25, price_per_unit_cents: 25,
+    });
+    const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
+    const save = saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement;
+    fireEvent.click(save);
+
+    await waitFor(
+      () => expect(mockRpc.mock.calls.some((c) => c[0] === 'save_job')).toBe(true),
+      { timeout: 15000 },
+    );
+    const saveCall = mockRpc.mock.calls.find((c) => c[0] === 'save_job');
+    const args = saveCall?.[1] as { p_job_payload: Record<string, unknown> };
+    expect(args.p_job_payload.total_price_cents).toBe(15);   // exact — NOT the float path's 14
+    expect(args.p_job_payload.total_cost_cents).toBe(15);
+  });
+
   it('does NOT warn or block an aligned row (no false positive on ordinary work)', async () => {
     // Same product, correctly expressed: 2 Lb/ac × 100 ac = 200 lb priced per lb.
     mountWith({

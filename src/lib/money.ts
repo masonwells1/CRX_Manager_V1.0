@@ -33,3 +33,66 @@ export function formatCents(cents: number): string {
 export function formatUSD(dollars: number): string {
   return usdFormatter.format(dollars);
 }
+
+// ── Exact cents × quantity ────────────────────────────────────────────────────
+//
+// THE SERVER IS AUTHORITATIVE. Every extended amount is computed by the SQL helper
+// `safe_cents_qty(p_cents bigint, p_qty numeric)` (migration 20260513030000):
+//
+//     SELECT ROUND(COALESCE(p_cents,0)::numeric * COALESCE(p_qty,0))::bigint;
+//
+// The multiply happens in PostgreSQL `numeric`, which is EXACT decimal, and ROUND on a
+// numeric rounds half AWAY FROM ZERO. (The migration's own comment calls this "banker's
+// rounding" — that is wrong; round(numeric) is half-away-from-zero in PostgreSQL, while
+// only round(double precision) is half-to-even. The code is right, the comment is not.)
+//
+// Doing the same multiply in JavaScript with `qty * cents` computes in BINARY floating
+// point, where most decimal fractions have no exact representation, so a product whose
+// exact value lands on a half-cent can fall to the wrong side of the rounding boundary:
+//
+//     5c x 0.3  → exact 1.5  → server ROUND(1.5) = 2c
+//                 float 0.3 * 5 = 1.4999999999999998  → Math.round = 1c   ← off by a cent
+//
+// JobDetail SAVES its client-side totals into jobs.total_cost_cents / total_price_cents,
+// so that divergence is not cosmetic — it persists a figure the database's own arithmetic
+// disagrees with. AGENTS.md forbids binary floating-point rounding on a money path.
+//
+// This helper reproduces safe_cents_qty exactly: parse the quantity as a decimal string
+// into an integer numerator and a power-of-ten scale, multiply in BigInt (exact), then
+// round half away from zero. For the non-negative values this app deals in, that is the
+// same rule Math.round applies — the difference is purely that the product is exact.
+
+/**
+ * Multiply an integer CENTS amount by a decimal quantity and round to whole cents
+ * EXACTLY as the server's `safe_cents_qty` does. Returns 0 for a blank/non-finite
+ * quantity, matching the server's COALESCE(...,0).
+ *
+ * @param cents        integer cents (a non-integer is rejected as 0 — cents are whole)
+ * @param quantityText the quantity as the UI holds it: a decimal STRING, so no precision
+ *                     is lost before we get here. A number is accepted for convenience but
+ *                     has already been through binary float, so prefer the string form.
+ */
+export function centsTimesQuantity(cents: number, quantityText: string | number): number {
+  if (!Number.isFinite(cents) || !Number.isInteger(cents)) return 0;
+  const raw = String(quantityText ?? '').trim();
+  if (raw === '') return 0;
+  // Reject anything that is not a plain decimal (exponents, NaN, Infinity, stray text).
+  const m = /^([+-]?)(\d*)(?:\.(\d*))?$/.exec(raw);
+  if (!m || (m[2] === '' && (m[3] ?? '') === '')) return 0;
+
+  const negative = m[1] === '-';
+  const whole = m[2] || '0';
+  const frac = m[3] || '';
+  const numerator = BigInt(whole + frac);           // qty × 10^scale, exactly
+  const denominator = 10n ** BigInt(frac.length);   // 10^scale
+
+  // `numerator` is built from digits only, so the quantity's sign is carried separately.
+  const product = BigInt(cents) * numerator * (negative ? -1n : 1n);  // exact — no float anywhere
+  const absProduct = product < 0n ? -product : product;
+  const quotient = absProduct / denominator;
+  const remainder = absProduct % denominator;
+  // Half AWAY FROM ZERO, matching PostgreSQL's ROUND(numeric).
+  const roundedAbs = remainder * 2n >= denominator ? quotient + 1n : quotient;
+
+  return Number(product < 0n ? -roundedAbs : roundedAbs);
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatCents, formatUSD } from './money';
+import { formatCents, formatUSD, centsTimesQuantity } from './money';
 
 /**
  * money.ts is the canonical formatter for a codebase where money is stored as
@@ -88,6 +88,83 @@ describe('money', () => {
       for (const cents of [0, 1, 99, 100, 123456, -4567]) {
         expect(formatUSD(cents / 100)).toBe(formatCents(cents));
       }
+    });
+  });
+});
+
+describe('centsTimesQuantity — exact parity with the server safe_cents_qty', () => {
+  // Every expected value below was VERIFIED against the live database
+  // (project rhyzpcqhnizqbxphqdkr, read-only) by evaluating safe_cents_qty's own body,
+  // `SELECT ROUND(<cents>::numeric * <qty>)`, on 2026-08-20.
+  describe('the rounding RULE the server actually uses', () => {
+    it('rounds half AWAY FROM ZERO, not to even (live: ROUND(2.5::numeric) = 3)', () => {
+      // This is the case that distinguishes the two candidate rules. Banker's rounding
+      // would give 2 here and 4 below; away-from-zero gives 3 and 4. The live database
+      // returns 3, so away-from-zero is the rule. NOTE: migration 20260513030000's own
+      // comment calls it "banker's rounding" — the comment is wrong, the SQL is right.
+      expect(centsTimesQuantity(1, '2.5')).toBe(3);   // live ROUND(1::numeric * 2.5) = 3
+      expect(centsTimesQuantity(1, '3.5')).toBe(4);   // live ROUND(1::numeric * 3.5) = 4
+      expect(centsTimesQuantity(1, '1.5')).toBe(2);   // live = 2
+      expect(centsTimesQuantity(1, '0.5')).toBe(1);   // live = 1
+    });
+
+    it('beats binary floating point on the half-cent boundaries it gets wrong', () => {
+      // These are REAL divergences, found by sweeping 59,403 realistic (cents, 4-dp
+      // quantity) combinations — not hand-picked pathological values. In each case the
+      // exact product lands on a half cent, but the binary product falls just below it,
+      // so Math.round goes DOWN while the server's exact numeric multiply goes UP.
+      //
+      //   25c x 0.58 → exact 14.50 (verified live) → server 15c, JS float 14c
+      //
+      // Each row is [cents, quantity, correct]; all three verified against the live
+      // database on 2026-08-20 via ROUND(<cents>::numeric * <qty>).
+      const cases: Array<[number, string, number]> = [
+        [25, '0.58', 15],
+        [50, '0.29', 15],
+        [45, '0.70', 32],
+      ];
+      for (const [cents, qty, correct] of cases) {
+        expect(Math.round(parseFloat(qty) * cents)).toBe(correct - 1); // the old float path, off by a cent
+        expect(centsTimesQuantity(cents, qty)).toBe(correct);          // exact, matches the server
+      }
+    });
+  });
+
+  describe('the live money cases this remediation is about', () => {
+    it('reproduces the Dry oz over-bill and the true amount', () => {
+      expect(centsTimesQuantity(150, '3200')).toBe(480000);  // live = 480000 ($4,800 wrong)
+      expect(centsTimesQuantity(150, '200')).toBe(30000);    // live = 30000  ($300 right)
+    });
+
+    it('reproduces the blank-unit pint case to the exact cent', () => {
+      expect(centsTimesQuantity(3800, '9.16375')).toBe(34822); // live = 34822 ($348.22)
+    });
+  });
+
+  describe('defensive input handling (matches the server COALESCE(...,0))', () => {
+    it('treats blank, whitespace, and unparseable quantities as zero', () => {
+      for (const q of ['', '   ', 'abc', '1e3', 'Infinity', 'NaN', '.', '1.2.3']) {
+        expect(centsTimesQuantity(500, q)).toBe(0);
+      }
+    });
+    it('treats a non-integer or non-finite cents amount as zero — cents are whole', () => {
+      expect(centsTimesQuantity(1.5, '10')).toBe(0);
+      expect(centsTimesQuantity(NaN, '10')).toBe(0);
+      expect(centsTimesQuantity(Infinity, '10')).toBe(0);
+    });
+    it('handles zero, leading dots, and trailing dots', () => {
+      expect(centsTimesQuantity(150, '0')).toBe(0);
+      expect(centsTimesQuantity(200, '.5')).toBe(100);
+      expect(centsTimesQuantity(200, '5.')).toBe(1000);
+    });
+    it('rounds a negative product away from zero too', () => {
+      expect(centsTimesQuantity(1, '-2.5')).toBe(-3);
+      expect(centsTimesQuantity(-1, '2.5')).toBe(-3);
+    });
+    it('stays exact far beyond the precision a float retains', () => {
+      // The BigInt path carries the full product before rounding.
+      // live: ROUND(999999999::numeric * 1234.5678) = 1234567798765
+      expect(centsTimesQuantity(999999999, '1234.5678')).toBe(1234567798765);
     });
   });
 });

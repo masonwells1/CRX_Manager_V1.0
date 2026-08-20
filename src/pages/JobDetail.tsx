@@ -43,6 +43,7 @@ import { overrideSaveApplicatorId, shouldReassignApplicatorAfterSave, canGenerat
 import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
+import { centsTimesQuantity } from '../lib/money';
 import { applyChemEdit, chemLineBillingHazard, fmt4, recomputeChemRowForAcres, reconcileChemAutofillUnits, sumAcres, toGallonOrLbEquivalent, type ChemBillingHazard } from '../lib/chemCalculator';
 import { compareToMaxRate, phiHarvestWarning } from '../lib/labelGuardrails';
 import { unitOptionsForForm, isKnownUnit } from '../lib/units';
@@ -1766,8 +1767,14 @@ export default function JobDetail() {
   const totalAcres = fieldRows.reduce((sum, f) => sum + (parseFloat(f.acres_to_treat) || 0), 0);
   // #53/#54: a customer-supplied product is applied but not billed and cost us
   // nothing — it contributes 0 to both job totals (mirrors the server's $0 line).
-  const totalCostCents = chemRows.reduce((sum, c) => sum + (c.customer_supplied ? 0 : Math.round((parseFloat(c.quantity) || 0) * (parseInt(c.cost_per_unit_cents) || 0))), 0);
-  const totalPriceCents = chemRows.reduce((sum, c) => sum + (c.customer_supplied ? 0 : Math.round((parseFloat(c.quantity) || 0) * (parseInt(c.price_per_unit_cents) || 0))), 0);
+  // EXACT MONEY. These two totals are SAVED (jobs.total_cost_cents / total_price_cents at
+  // the save_job call below), so they are authoritative, not display. They previously
+  // multiplied in binary floating point, which disagrees with the server's exact numeric
+  // `safe_cents_qty` whenever the true product lands on a half cent — e.g. 25c x 0.58 is
+  // exactly 14.50, which the server rounds to 15c while Math.round(0.58 * 25) gives 14c.
+  // centsTimesQuantity reproduces safe_cents_qty exactly (see money.ts).
+  const totalCostCents = chemRows.reduce((sum, c) => sum + (c.customer_supplied ? 0 : centsTimesQuantity(parseInt(c.cost_per_unit_cents) || 0, c.quantity)), 0);
+  const totalPriceCents = chemRows.reduce((sum, c) => sum + (c.customer_supplied ? 0 : centsTimesQuantity(parseInt(c.price_per_unit_cents) || 0, c.quantity)), 0);
 
   // Loader worksheet (#10) — the spray tank is sized by SPRAY VOLUME, not by the
   // sum of chemical gallons. Spray volume = total acres × the carrier rate (gal/
