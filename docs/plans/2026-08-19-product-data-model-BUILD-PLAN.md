@@ -177,9 +177,16 @@ edits live rows on day one, so it is not the one to leave unreviewed *(Fable F-1
 ### WP-1 · Ingredient core + editor — **migration**
 
 **Tables:** `active_ingredients` (name, CAS, EPA code, `canonical_ingredient_id` self-FK,
-`canonical_fraction` **nullable**, `fraction_basis`); `product_active_ingredients` (product,
-ingredient, nullable `concentration_value`, `concentration_unit`, `basis`, `source`,
-`verified_by`, `verified_at`); `ingredient_moa_codes` (ingredient, `scheme` required, `code`).
+`canonical_fraction` **nullable**, `fraction_basis`); `product_active_ingredients`
+(`product_id`, **`ingredient_id`**, nullable `concentration_value`, `concentration_unit`,
+`basis`, `source`, `verified_by`, `verified_at`); `ingredient_moa_codes` (`ingredient_id`,
+`scheme` required, `code`).
+
+**These column names are exact, not prose *(caught reviewing PR #435)*.** The foreign key is
+**`ingredient_id`** — the same name WP-4's acceptance query reads back. Use it identically in the
+migration, the payload, the generated types in `src/types/index.ts`, and every proof query. A
+proof that queries a differently-named column either errors out or silently proves the wrong
+field, which is exactly the failure WP-4's 35% concentration bug depends on being caught.
 
 **Columns added to `products` — including WP-4's storage, which revision 1 omitted entirely
 *(Fable F-1)*:** `label_url`, `label_accepted_date`, `epa_product_status`,
@@ -278,9 +285,17 @@ values that already passed it.
 this correction supersedes any stricter reading above.)* "Finite and strictly positive" governs
 the value **when a value is present**. `canonical_fraction` is deliberately nullable per D-A rule
 3, where NULL carries meaning: *search-merge only, refuse the calculation* — the racemic
-vs S-metolachlor case has no valid fraction and must still be storable. A CHECK written as
-`canonical_fraction > 0` rejects exactly the rows the design requires; it must be
-`canonical_fraction IS NULL OR (canonical_fraction > 0 AND ...)`. The refusal that protects the
+vs S-metolachlor case has no valid fraction and must still be storable. Write the predicate
+**explicitly** as `canonical_fraction IS NULL OR (canonical_fraction > 0 AND ...)`.
+
+*Be precise about why, because the obvious reasoning is wrong in a way that matters.* A bare
+`CHECK (canonical_fraction > 0)` does **not** reject NULL rows: in PostgreSQL the comparison
+evaluates to `NULL` (unknown), and a CHECK constraint is violated only by an explicit `FALSE`, so
+unknown **passes** and the isomer row stores fine. The reason to spell out `IS NULL OR (...)` is
+therefore **not** that the bare form breaks — it is that the bare form makes nullability an
+accident of three-valued logic instead of a stated design decision, and the next person to add
+`NOT NULL` "for safety" silently destroys the D-A rule-3 case with nothing in the constraint to
+warn them. State the intent in the predicate. The refusal that protects the
 math lives in R-4a's conversion function, **not** in a NOT NULL constraint. Any column whose
 NULL state is load-bearing gets the same treatment, and the WP-1 proof stores a NULL-fraction
 isomer row successfully and then shows the conversion function refusing it.
@@ -337,11 +352,21 @@ work that touches five)*:**
   `density_value` (the WP-2 override), `is_currently_sourced`, `sourcing_tier` (C-43).
 - **`receiving_records`** — `brand_id`, plus snapshot `brand_name_snapshot` /
   `brand_epa_snapshot`, plus `proposed_brand_name` for D-K.
-- **A new brand-allocation child table** — keyed to the delivery/application **line**, holding
-  brand, quantity and unit, with its own RLS. This is what split loads need and revision 1 did
-  not name.
-- **`delivery_items` / application-record tables** — snapshot columns. **Name the exact relations
-  before handoff**; "application-record tables" is not an enumeration *(finding 28)*.
+- **`receiving_record_brand_allocations`** — the new brand-allocation child table, keyed to the
+  delivery/application **line** (`delivery_item_id` / `application_record_lot_id`), holding
+  `brand_id`, `quantity`, `unit`, and `p_idempotency_key`-backed writes, with its own RLS in the
+  same migration. This is what split loads need; revision 1 did not name it and revision 3 left it
+  unnamed. **The builder confirms this exact name against the live schema before creating it** —
+  if a relation by another name already serves this role, use that one and correct this line.
+- **The relations carrying snapshot columns, enumerated — "application-record tables" was not an
+  enumeration *(finding 28, closed reviewing PR #435)*.** Verified against
+  `.claude/schema-registry.json`: **`delivery_items`**, **`application_records`**,
+  **`application_record_fields`**, **`application_record_lots`**, and **`application_services`**.
+  Each takes `brand_name_snapshot` / `brand_epa_snapshot` alongside its existing product
+  reference. `application_record_lots` is the line-level relation the allocation table keys to,
+  so it takes the snapshot **and** the allocation FK. **The builder re-derives this list from the
+  live schema before starting WP-3** rather than trusting it — a relation missed here is a brand
+  that reads correctly today and blank on next season's reprint.
 - **`receive_po_items`** — **the public signature does NOT change.** See below.
 - **`_section9_receive_po_items_serialized`** — the internal function the public wrapper
   delegates to (`supabase/migrations/20260726190515_section9_po_ap_high_remediation.sql`).
@@ -410,10 +435,20 @@ spec density.
 against the migrated database, and a **queued offline receive replays successfully** — both run
 against the applied migration *before* the code merges, because that is the window the
 apply-before-merge order creates *(finding 3)*. **Inventory is genuinely reversed, not merely
-hidden** *(finding 13)*: after voiding the `[E2E]` PO, show the inventory balance, the inventory
-transaction count, the receipt state and the brand allocations all back to their starting values
-— voiding a PO does not by itself reverse the movements `receive_po_items` created, so a proof
-that only checks the PO disappeared from the screen leaves real stock inflated.
+hidden** *(finding 13)*: after voiding the `[E2E]` PO, show the inventory **balance**, the
+**summed net movement**, the receipt state and the brand allocations all back to their starting
+values — voiding a PO does not by itself reverse the movements `receive_po_items` created, so a
+proof that only checks the PO disappeared from the screen leaves real stock inflated.
+
+**Verify reversal by net movement, never by transaction count *(caught reviewing PR #435)*.**
+`inventory_transactions` is an **immutable append-only ledger**, and the canonical
+`reverse_receiving_record` reverses by *inserting a compensating negative row* — literally
+`-1 * v_rec.quantity_received`
+(`supabase/migrations/20260611211058_idempotency_operation_scope_sweep.sql:1776-1782`). A
+successful receive-and-reverse therefore **necessarily increases** the row count. An acceptance
+demanding the count return to its starting value can only be satisfied by deleting audit history,
+which is forbidden. Expect **both** the original and the reversal row to remain, and assert that
+their quantities sum to zero.
 
 **Negative:** a non-admin cannot create a permanent brand row. Allocations that sum to **less
 than** the line quantity are rejected; allocations that sum to **more** are rejected; a
@@ -460,6 +495,35 @@ and writes straight to live chemistry. **This package extends the queue and its 
 a typed, versioned payload plus a purpose discriminator**, and proves every planned field
 survives propose → review → commit intact.
 
+**The payload contract, stated exactly — "typed, versioned payload" is not a contract *(closed
+reviewing PR #435)*.** Prose a builder cannot fail is prose that lets data vanish between propose
+and commit while the implementation still "matches the plan". The queue extension carries:
+
+| Field | Type | Null? | Notes |
+|---|---|---|---|
+| `payload_version` | `int` | no | Starts at `1`. `create_label_draft` **rejects** an unknown version rather than coercing it |
+| `purpose` | `text` | no | Discriminator, CHECK-constrained to `epa_label_seed` for this package. A new purpose is a new CHECK member in a later migration, never free text |
+| `ingredients[]` | `jsonb` array | no (may be empty) | Each element: `ingredient_id` **(the specific chemical-form row, never the canonical parent)**, `concentration_value` `numeric`, `concentration_unit`, `basis`, `source` |
+| `label_url` | `text` | yes | |
+| `label_accepted_date` | `date` | yes | |
+| `epa_product_status` | `text` | yes | |
+| `epa_is_cancelled` | `boolean` | no | Defaults `false`, never NULL — a NULL here reads as "not cancelled" on screen |
+| `proposed_brand_name` | `text` | yes | D-K |
+| `conflicts[]` | `jsonb` array | no (may be empty) | Each element names the field, Mason's live value and the EPA value. **Populating this never overwrites the live value** (D-L) |
+
+Nullable means *the label genuinely may not state it*. It never means "the importer may drop it."
+
+**`commit_label_draft` reads every field above by name and writes each to its mapped column** —
+`ingredients[]` into `product_active_ingredients` keyed on `ingredient_id`, the label and status
+fields into the `products` columns WP-1 created. **A field present in the payload with no mapped
+destination is a hard error, not a silent skip.**
+
+**Round-trip assertion, required (R-9):** propose a draft populating **every** field above
+including both array fields, read it back after review, commit it, and assert field-by-field
+equality across all three reads. Assert arrays **by element, not by length** — a length check
+passes while `ingredient_id` points at the canonical parent, which is the exact 35% failure this
+package exists to prevent.
+
 **Conflict rule (D-L):** where a lookup disagrees with a value Mason typed, **his value stays
 live** and the EPA version is stored beside it, flagged as a difference. A lookup never
 overwrites hand-entered data.
@@ -491,12 +555,21 @@ into the canonical parent**; a malformed or non-finite concentration is refused;
 is written to live chemistry before approval.
 
 **Closes:** B-8 (seeding half), B-22 (surfaced), D-23, T-18, PRD 1.4, 1.13, 4.1.
-**Gates:** schema change → full migration review (RLS + drift). **Bulk commit of proposals is a
-bulk live write → Mason's approval + R-12.**
+**Gates:** schema change → full migration review (RLS + drift) · **Mason's in-chat OK to apply
+live** · R-12.
+
+**Both bulk steps are live writes and each needs its own approval *(caught reviewing PR #435)*.**
+Revision 3 gated only the commit. But **creating** roughly 287 proposal rows in
+`product_label_drafts` is itself a bulk mutation of the production database — the rows are
+`proposed` rather than authoritative, which governs how they are *read*, not whether writing them
+touched live data. `AGENTS.md` requires explicit in-conversation approval before changing live
+data, with no exemption for rows marked pending. So: **Mason approves the bulk proposal creation
+before it runs, and approves the bulk commit separately before proposals become authoritative
+chemistry.** Two gates, not one. R-12 (fresh backup) applies to both.
 
 ---
 
-### WP-5 · Copy-from-sibling and searchable nickname — **no migration**
+### WP-5 · Copy-from-sibling and searchable nickname — **migration**
 
 **Builds:** copy ingredients / density / brands from a packaging sibling in one action; nickname
 searchable on Products and in the QuoteBuilder picker.
@@ -509,13 +582,26 @@ surfactant load, which D-O says must never be presented as equivalent. The copy 
 transaction with an expected version for both source and target**, so a source edited mid-copy
 aborts instead of blending two states.
 
+**That transaction is why this package carries a migration *(caught reviewing PR #435 — revision 3
+said "no migration" and was wrong)*.** Copying ingredients, density and brands atomically while
+comparing expected versions for **both** products cannot be built as a sequence of
+browser/PostgREST writes: each write is its own transaction, so a failed child write leaves the
+target holding partial chemistry, and a concurrent source edit blends two states — exactly what
+the expected-version guard exists to prevent. A repository-wide search finds **no existing
+sibling-copy RPC**, so one must be created. Per CRX canon it is a mutating RPC and therefore
+accepts and actually enforces `p_idempotency_key text DEFAULT NULL`, ships its RLS and grants in
+the same migration, and sets `SET search_path = public, pg_temp`. Under a literal "no migration"
+gate the builder's only options were to abandon the atomicity guarantee or to bypass the gate;
+neither is acceptable.
+
 **Proof (R-2, R-11):** type "Generic Callisto" → found. Copy from a sibling → the Bulk row
 carries the same chemistry, and editing one afterwards does not change the other.
 **Negative:** a cross-tier copy is **refused**; a cross-formulation copy is **refused**; a copy
 against a stale source version is **refused**.
 
 **Closes:** B-18 (entry half), PRD 1.8, 1.9c, 1.15.
-**Gates:** no migration. Standard review + R-10.
+**Gates:** schema change → RLS review + migration-drift review · exact-SHA `gpt-5.6-sol` proof ·
+**Mason's in-chat OK to apply live** · R-10 · R-12.
 
 ---
 

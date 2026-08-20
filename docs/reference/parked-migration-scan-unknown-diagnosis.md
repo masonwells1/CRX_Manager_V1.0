@@ -5,7 +5,7 @@
 `node scripts/fleet-status.mjs` reports `PARKED STATE UNKNOWN` for **every** worktree — all 19 —
 with the same note each time:
 
-```
+```text
 PARKED STATE UNKNOWN: <label>: branch-owned LOCAL CANDIDATE SQL named by migration history
 is absent from this branch's own-draft diff.
 ```
@@ -48,7 +48,7 @@ rows are correct — and it is not caused by any one branch.
 (`parkedMainlineDiscoveryFrom`, called at `scripts/fleet-status.mjs:342`) whose whole job is
 finding parked candidates on `origin/main`. It works. Its output in the same run:
 
-```
+```text
 • supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql — in confident-mclean-7f73d6, origin/main
 • supabase/migrations/20260816110000_draw_down_cutover_barrier.sql — in origin/main
 • supabase/migrations/20260817120000_carry_allocated_line_cents_through_lifecycle.sql — in origin/main

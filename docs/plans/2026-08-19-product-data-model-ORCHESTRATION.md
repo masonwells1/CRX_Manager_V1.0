@@ -61,10 +61,12 @@ A checklist a person could follow. Every step names what runs and what must be t
 | 6 | **Reviewer fan-out**, all four in one message | Findings reports | BLOCKER/HIGH fixed; max 3 rounds |
 | 7 | **Behavioral proof (R-2, R-9, R-11)** — orchestrator drives the running app **as a normal user** on `[E2E]` rows, positive *and* negative cases | Screenshots + console + read-back `SELECT`s | A passing test is **not** acceptable |
 | 8 | **Opus checkpoint 1** (§4) | `docs/audits/<date>-opus-checkpoint-WP-1.md` + COVERAGE verdicts | `BLOCK` → back to step 4 |
-| 9 | **Codex adversarial gate** — `node scripts/write-apply-proofs.mjs <migration>` | Hash-bound proof pair | BLOCKER/HIGH → step 4 |
+| 9 | **Codex adversarial verdict** — a separate ephemeral `gpt-5.6-sol` high-effort review of the diff | Clean verdict | BLOCKER/HIGH → step 4 |
 | 10 | **Docs + commit** — `migration-history.md`, `gotchas.md` if touched, `CHANGELOG.md`, `check-doc-drift.mjs` | Commit on the branch | Husky re-runs the pipeline. **Never `--no-verify`** |
+| 10a | **Exact-HEAD push proof** on the final commit — the repository policy proof for a risky migration/RLS diff | Exact-SHA proof | Required *before* the first push, or the push guard blocks it |
 | 11 | **PR** — push branch, `gh pr create`, wait for the required **Vercel** check, read and resolve **CodeRabbit** | Open PR, checks green | `main` is push-protected |
 | 12 | **THE HUMAN GATE** — Mason's explicit in-chat OK to apply live | — | Shown: `/explain-migration` plain English, the Opus verdict, the Codex verdict, the proof, the rollback story |
+| 12a | **Mint the apply proof** — `node scripts/write-apply-proofs.mjs <migration>` | Hash-bound proof pair | **Runs here, not at step 9** — proofs live 30 minutes *(finding 11)* |
 | 13 | **Apply** via MCP (`migration-apply-guard.mjs` verifies the fresh proof pair or blocks) → smoke each new RPC → **B7 rename** the disk file to the assigned version stamp → `/regen-schema-registry` → `npm run db-sweeps` | Applied migration, refreshed registry | R-12: fresh backup first |
 | 14 | **Merge** the PR → deploys production → **re-run the step-7 proof against production** | Ledger row 🚀 with the live stamp | — |
 | 15 | **Next cycle** — the loop advances to WP-2 without asking | — | — |
@@ -100,13 +102,18 @@ hashes the **migration file**, not the commit; it never sees UI consumers, gener
 RPC call sites. SQL can stay byte-identical while a later TypeScript edit introduces exactly the
 `?? 1` that R-4a forbids, and the proof still validates. **Fix:** keep the migration-content
 proof for the apply gate, and separately require the repository's exact-HEAD push proof after
-the final commit. They answer different questions; neither substitutes for the other.
+the final commit **and before the first push** — step 10a in the table above. They answer
+different questions; neither substitutes for the other, and the branch must not reach its first
+push carrying only the migration-content hash.
 
-**The proof expires before it is used *(finding 11).*** Proofs live 30 minutes, but step 9 mints
-one before commit, PR, Vercel, CodeRabbit and the human gate — a sequence that routinely exceeds
+**The proof expires before it is used *(finding 11).*** Proofs live 30 minutes. Minting one
+before commit, PR, Vercel, CodeRabbit and the human gate spans a sequence that routinely exceeds
 that. The apply guard then rejects a stale proof, and whoever is mid-cycle feels pressure to
 weaken the gate. **Fix:** run the adversarial review early if useful, but **mint the apply proof
-immediately after Mason's approval and immediately before the live apply.**
+immediately after Mason's approval and immediately before the live apply.** **The gate-chain
+table above is the authoritative sequence and already encodes this** — the adversarial verdict is
+step 9, the exact-HEAD push proof is step 10a, and `write-apply-proofs.mjs` runs at step 12a,
+after the human gate. Do not mint the apply proof at step 9.
 
 ---
 

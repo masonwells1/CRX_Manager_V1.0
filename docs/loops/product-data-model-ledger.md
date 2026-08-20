@@ -24,11 +24,28 @@ apply/merge · 🚀 shipped and verified live · ⏸ parked
 | WP-1 Ingredient core + fast-entry editor | ⬜ | — | — | — | — |
 | WP-2 Density, net weight, scale-weight surface | ⬜ | — | — | — | — |
 | WP-3 Brand layer, receiving, split loads | ⬜ | — | — | — | — |
-| WP-4 EPA auto-seed | ⬜ | none | — | — | *(bulk commit of proposals)* |
-| WP-5 Copy-from-sibling, nickname search | ⬜ | none | — | — | n/a |
+| WP-4 EPA auto-seed | ⬜ | **required** — extends the `product_label_drafts` queue and the `create_label_draft` / `commit_label_draft` contract | — | — | **migration apply OK** *(plus bulk proposal creation and bulk commit — both are live writes)* |
+| WP-5 Copy-from-sibling, nickname search | ⬜ | **required** — atomic sibling-copy RPC with compare-and-set on both products | — | — | **migration apply OK** |
 
-**Apply order is the package order.** WP-1 → WP-2 → WP-3, no reordering: WP-2's density
-precedence function has a brand slot WP-3 populates, and WP-4 writes into columns WP-1 creates.
+**Apply order is the package order.** WP-1 → WP-2 → WP-3 → **WP-4** → **WP-5**, no reordering:
+WP-2's density precedence function has a brand slot WP-3 populates, WP-4 writes into columns WP-1
+creates, and WP-5 copies the chemistry WP-1 through WP-3 defined.
+
+**Four packages carry migrations, not three — the board above now matches the build plan *(both
+corrected reviewing PR #435)*.** WP-4 was still listed as `none` here after revision 3 made it a
+migration, and WP-5 was listed as `none` in both documents:
+
+- **WP-4** — revision 2 said "no migration"; revision 3 replaced that after Sol's finding 1,
+  because the existing `product_label_drafts` queue has nowhere to put ingredient rows,
+  specific-form ids, concentration basis, brand proposals, label URL/date or cancellation state.
+- **WP-5** — the sibling copy must move ingredients, density and brands atomically while
+  comparing expected versions on **both** products. That is not expressible as a sequence of
+  browser/PostgREST writes, and no sibling-copy RPC exists yet.
+
+An executor reading the stale `none` would skip the migration and its apply gate entirely —
+silently dropping fields, or leaving a half-copied product behind. **Both packages take the full
+migration gate**: RLS + drift review, exact-SHA proof, Opus checkpoint, and Mason's in-chat apply
+OK, exactly like WP-1 through WP-3.
 
 ---
 
