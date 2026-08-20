@@ -129,8 +129,21 @@ const sync = spawnSync(process.execPath, [path.join(ROOT, "scripts", "sync-agent
   cwd: ROOT,
   encoding: "utf8",
 });
-if (sync.status === 0) pass("Codex workflow adapters are synced", sync.stdout.trim().split(/\r?\n/)[0]);
-else fail("Codex workflow adapters are synced", (sync.stderr || sync.stdout).trim().split(/\r?\n/)[0]);
+// Require the PASS line, not just exit 0. A subprocess that does NOTHING also
+// exits 0, so keying off the status alone turns any future silent no-op in the
+// generator into a green "synced" that checked nothing. That is not theoretical:
+// sync-agent-workflows.mjs guards its CLI behind an entry-point comparison, and a
+// mis-detect there would produce exactly this - no output, exit 0, reported PASS.
+if (sync.status === 0 && /^PASS - \d+ Codex workflow file\(s\) match/m.test(sync.stdout)) {
+  pass("Codex workflow adapters are synced", sync.stdout.trim().split(/\r?\n/)[0]);
+} else if (sync.status === 0) {
+  fail(
+    "Codex workflow adapters are synced",
+    `--check exited 0 without its PASS line (produced ${sync.stdout.trim() ? "unexpected output" : "no output"}) — the generator may not have run at all`,
+  );
+} else {
+  fail("Codex workflow adapters are synced", (sync.stderr || sync.stdout).trim().split(/\r?\n/)[0]);
+}
 
 // Hook-manifest parity: the two manifests wire the SAME shared .claude/hooks/
 // implementations, and a NEW Claude-side guard that isn't also wired for Codex
