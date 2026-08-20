@@ -2499,6 +2499,18 @@ r = runHook(`${INTERNAL_ONLY_FN}
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA U&"\\0070ublic" TO authenticated;`);
 ok(isDeny(r), "a Unicode-escaped schema-wide authenticated grant cannot hide an unbound actor mutator");
 
+r = runHook(`${INTERNAL_ONLY_FN}
+GRANT ALL PRIVILEGES ON FUNCTION public.test_fn(uuid) TO authenticated;`);
+ok(isDeny(r), "GRANT ALL PRIVILEGES cannot reopen an internal actor mutator to authenticated callers");
+
+r = runHook(`${INTERNAL_ONLY_FN}
+GRANT ALL ON FUNCTION public.test_fn(uuid) TO authenticated;`);
+ok(isDeny(r), "the GRANT ALL shorthand cannot reopen an internal actor mutator to authenticated callers");
+
+r = runHook(`${INTERNAL_ONLY_FN}
+GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO authenticated;`);
+ok(isDeny(r), "schema-wide GRANT ALL PRIVILEGES cannot hide an unbound actor mutator");
+
 r = runHook(proc(`
   BEGIN
   IF p_created_by IS DISTINCT FROM auth.uid() THEN

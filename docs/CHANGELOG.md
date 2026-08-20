@@ -2,6 +2,18 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-19 — Actor-binding guard recognizes equivalent routine grants
+
+Exact-head adversarial review found that the internal-helper ACL check parsed
+`GRANT EXECUTE` but missed PostgreSQL's equivalent `GRANT ALL` and
+`GRANT ALL PRIVILEGES` forms. An unbound `SECURITY DEFINER` actor mutator could
+therefore be reopened to `authenticated` callers after its client-role revoke
+and escape actor-binding review. Routine-specific and schema-wide ACL parsing
+now treats all three grant forms equivalently and fails closed on the later
+grant. Regressions cover the reported authenticated function grant, the `ALL`
+shorthand, and a schema-wide `ALL PRIVILEGES` grant; the focused hook suite now
+passes 393 assertions.
+
 ## 2026-08-13 — Actor-binding guard covers procedures and cron schema identity
 
 Fresh review of the cross-schema repair found two additional HIGH bypasses. A
