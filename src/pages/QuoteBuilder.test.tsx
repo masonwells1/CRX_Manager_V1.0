@@ -369,8 +369,12 @@ describe('QuoteBuilder', () => {
 
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
       'warning',
-      expect.stringContaining('Check Orders for this booking before drawing again'),
+      expect.stringContaining('prior outcome could not be opened'),
     ));
+    expect(mockToast).toHaveBeenCalledWith(
+      'warning',
+      expect.stringContaining('Check Orders for this booking before drawing again'),
+    );
     expect(mockToast).not.toHaveBeenCalledWith(
       'warning',
       expect.stringContaining('booking balance was reloaded; try again'),

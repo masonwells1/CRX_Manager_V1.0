@@ -1823,11 +1823,14 @@ function stripSqlCommentsAndStrings(sql: string): string {
     }
 
     if (sql[i] === "'") {
+      const escapeBackslashes = i > 0
+        && /[Ee]/.test(sql[i - 1])
+        && (i === 1 || !/[A-Za-z0-9_$]/.test(sql[i - 2]));
       i += 1;
       while (i < sql.length) {
         if (sql[i] === "'" && sql[i + 1] === "'") {
           i += 2;
-        } else if (sql[i] === '\\' && i + 1 < sql.length) {
+        } else if (escapeBackslashes && sql[i] === '\\' && i + 1 < sql.length) {
           i += 2;
         } else if (sql[i] === "'") {
           i += 1;
@@ -1860,6 +1863,8 @@ function stripSqlCommentsAndStrings(sql: string): string {
 
 function bodyUsesIdempotency(body: string): boolean {
   const executableBody = stripSqlCommentsAndStrings(body);
+  // Dynamic SQL containing an idempotency operation is deliberately not
+  // credited: this gate requires a statically reviewable helper/table use.
   return /\b(?:public\.)?(?:check_idempotency_intent|check_idempotency|save_idempotency|_claim_bound_lifecycle_idempotency|_bind_completed_lifecycle_idempotency)\s*\(/i.test(executableBody)
     || /\b(?:from|join|into|update|delete\s+from|merge\s+into)\s+(?:public\.)?idempotency_keys\b/i.test(executableBody);
 }
@@ -2552,9 +2557,78 @@ function latestMigrationFunctionBodies(): Map<string, string> {
 }
 
 function stripSqlComments(body: string): string {
-  return body
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/--[^\r\n]*/g, ' ');
+  let sql = '';
+
+  for (let i = 0; i < body.length;) {
+    if (body.startsWith('--', i)) {
+      const newline = body.indexOf('\n', i + 2);
+      if (newline === -1) break;
+      sql += '\n';
+      i = newline + 1;
+      continue;
+    }
+
+    if (body.startsWith('/*', i)) {
+      let depth = 1;
+      i += 2;
+      while (i < body.length && depth > 0) {
+        if (body.startsWith('/*', i)) {
+          depth += 1;
+          i += 2;
+        } else if (body.startsWith('*/', i)) {
+          depth -= 1;
+          i += 2;
+        } else {
+          i += 1;
+        }
+      }
+      sql += ' ';
+      continue;
+    }
+
+    if (body[i] === "'") {
+      const escapeBackslashes = i > 0
+        && /[Ee]/.test(body[i - 1])
+        && (i === 1 || !/[A-Za-z0-9_$]/.test(body[i - 2]));
+      sql += body[i];
+      i += 1;
+      while (i < body.length) {
+        sql += body[i];
+        if (body[i] === "'" && body[i + 1] === "'") {
+          sql += body[i + 1];
+          i += 2;
+        } else if (escapeBackslashes && body[i] === '\\' && i + 1 < body.length) {
+          sql += body[i + 1];
+          i += 2;
+        } else if (body[i] === "'") {
+          i += 1;
+          break;
+        } else {
+          i += 1;
+        }
+      }
+      continue;
+    }
+
+    if (body[i] === '$') {
+      const delimiter = body.slice(i).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/)?.[0];
+      if (delimiter) {
+        const closing = body.indexOf(delimiter, i + delimiter.length);
+        if (closing === -1) {
+          sql += body.slice(i);
+          break;
+        }
+        sql += body.slice(i, closing + delimiter.length);
+        i = closing + delimiter.length;
+        continue;
+      }
+    }
+
+    sql += body[i];
+    i += 1;
+  }
+
+  return sql;
 }
 
 /** Direct data-changing statements. Transaction/control keywords are excluded. */
@@ -2793,11 +2867,13 @@ describe('Idempotency coverage drift (generated-types driven, fail-closed)', () 
       END
     `)).toBe(true);
     expect(bodyUsesIdempotency('SELECT result FROM public.idempotency_keys')).toBe(true);
+    expect(bodyUsesIdempotency('INSERT INTO public.idempotency_keys (key) VALUES (p_idempotency_key)')).toBe(true);
+    expect(bodyUsesIdempotency(`RAISE NOTICE 'C:\\'; PERFORM check_idempotency(p_idempotency_key, 'example');`)).toBe(true);
 
     expect(bodyUsesIdempotency(`
       BEGIN
         -- PERFORM public.check_idempotency_intent(p_idempotency_key);
-        /* INSERT INTO public.idempotency_keys; */
+        /* outer comment /* INSERT INTO public.idempotency_keys; */ still a comment */
         RAISE NOTICE 'save_idempotency(p_idempotency_key)';
         PERFORM audit_log($message$check_idempotency(p_idempotency_key)$message$);
       END
@@ -2814,6 +2890,12 @@ describe('Idempotency coverage drift (generated-types driven, fail-closed)', () 
       'client_wrapper',
       'internal_writer',
     ]);
+  });
+
+  it('does not let comment markers inside SQL strings hide later mutations', () => {
+    expect(functionBodyMutates(`RAISE NOTICE 'a--b'; INSERT INTO public.example(id) VALUES (1);`)).toBe(true);
+    expect(functionBodyMutates(`RAISE NOTICE $message$a--b$message$; UPDATE public.example SET id = 2;`)).toBe(true);
+    expect(functionBodyMutates('-- INSERT INTO public.example(id) VALUES (1);')).toBe(false);
   });
 
   it('every generated direct or indirect mutating RPC is classified even when it omits p_idempotency_key', () => {

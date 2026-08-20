@@ -2486,7 +2486,7 @@ export default function QuoteBuilder() {
         }
         if (bindingRejection === 'intent') {
           setShowDrawModal(false);
-          toast('warning', 'That retry already created an order that could not be opened, so nothing new was drawn. Check Orders for this booking before drawing again.');
+          toast('warning', 'That retry key was already used, but its prior outcome could not be opened. Nothing new was drawn. Check Orders for this booking before drawing again.');
           setDrawing(false);
           return;
         }

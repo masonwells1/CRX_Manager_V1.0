@@ -342,13 +342,20 @@ describe('draw_down_quote actor and intent binding migration', () => {
     for (const path of [
       'scripts/smoke/smoke-order-draw-lock.sql',
       'scripts/smoke/smoke-save-quote-drawn-guard.sql',
+    ]) {
+      const source = readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
+      expect(source).toContain('as postgres after the migration under test is\n-- applied. Once the pending 20260819232000 cutover is also present');
+      expect(source).toContain('service_role cannot execute it');
+      expect(source).not.toContain('postgres/service_role');
+    }
+    for (const path of [
       'scripts/smoke/smoke-restore-version-drawn-guard.sql',
       'scripts/smoke/smoke-planned-holds-drawn-sync.sql',
     ]) {
       const source = readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
-      expect(source).toContain('as postgres AFTER the migration is applied');
-      expect(source).toContain('service_role cannot\n-- execute it');
-      expect(source).not.toContain('postgres/service_role');
+      expect(source).toContain('HOW TO RUN: CONTAINER ONLY through');
+      expect(source).toContain('Do not run this chain against live before that sequence is applied');
+      expect(source).toContain('service_role cannot execute it');
     }
     const restoreSmoke = readFileSync(
       'scripts/smoke/smoke-restore-version-drawn-guard.sql',
@@ -365,9 +372,15 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(smokeSpecs.specs.restore_quote_version.description).toContain(
       'every version restore fails closed with QUOTE_RESTORE_BLOCKED_BY_DRAW',
     );
+    expect(smokeSpecs.specs.restore_quote_version.container_only).toBe(true);
+    expect(smokeSpecs.specs.restore_quote_version.container_prover)
+      .toBe('prove-draw-down-quote-intent-binding.mjs');
     expect(smokeSpecs.specs.create_planned_holds.description).toContain(
       'leaves synchronized holds unchanged',
     );
+    expect(smokeSpecs.specs.create_planned_holds.container_only).toBe(true);
+    expect(smokeSpecs.specs.create_planned_holds.container_prover)
+      .toBe('prove-draw-down-quote-intent-binding.mjs');
     expect(proverSource).toContain('FULL_SCHEMA_KEYED_DRAW_SMOKES_PASS');
   });
 

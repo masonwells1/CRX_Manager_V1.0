@@ -1,5 +1,6 @@
 -- ============================================================================
--- ROLLED-BACK smoke test for 20260611120100_restore_quote_version_drawn_guard
+-- ROLLED-BACK post-cutover smoke test for
+-- 20260816120000_draw_down_split_order_lines_by_price_tier
 -- ----------------------------------------------------------------------------
 -- Verifies the post-tier-split restore guard: once a draw stamps per-line
 -- billing provenance on an order, restore_quote_version must fail closed rather
@@ -7,10 +8,12 @@
 -- fall-below/removes checks remain defense in depth inside the owner body, but
 -- the provenance refusal intentionally fires first for every drawn booking.
 --
--- HOW TO RUN: execute this whole file as a SINGLE statement (Supabase MCP
--- execute_sql, or psql -1) as postgres AFTER the migration is applied. The
--- post-cutover draw wrapper is authenticated-only and service_role cannot
--- execute it. The block ALWAYS ends with RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK',
+-- HOW TO RUN: CONTAINER ONLY through
+-- prove-draw-down-quote-intent-binding.mjs after the pending cutover sequence.
+-- Do not run this chain against live before that sequence is applied: its
+-- provenance-first restore behavior does not exist there yet. The post-cutover
+-- draw wrapper is authenticated-only and service_role cannot execute it. The
+-- block ALWAYS ends with RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK',
 -- so every fixture, version, ledger row and audit row created here is rolled
 -- back — nothing persists. Any other exception text = a real failure.
 --

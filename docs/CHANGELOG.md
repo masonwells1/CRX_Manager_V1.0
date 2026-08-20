@@ -119,7 +119,7 @@ container used `--network none` and tmpfs;
 production was untouched.
 
 The protected merged-main verification pipeline passed ESLint, TypeScript type checking, the
-production build, 336 test files with 4,631 tests passed and 123 intentionally skipped, agent
+production build, 336 test files with 4,632 tests passed and 123 intentionally skipped, agent
 workflow/guard regressions, documentation drift checks, and private-artifact containment. Focused
 post-review migration/RPC contract checks passed 102/102 before the full pipeline reran.
 

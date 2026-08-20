@@ -86,9 +86,10 @@
 -- A cached-plan backend paused before its first wrapper statement can still
 -- arrive after commit; the 24-hour operator freeze minimizes that residual
 -- window and the shared intent helper fails closed on any resulting unbound
--- receipt. The migration runner must keep this file in one transaction; SET
--- LOCAL and the transaction-scoped advisory lock deliberately fail closed
--- otherwise.
+-- receipt. The migration runner must keep this file in one transaction. The
+-- ON COMMIT DROP temp-table insert below is the deliberate autocommit guard;
+-- SET LOCAL bounds lock waiting and the transaction-scoped advisory lock
+-- drains/barriers draws only after that guard proves transaction scope.
 CREATE TEMP TABLE crx_draw_intent_transaction_guard (
   marker boolean NOT NULL
 ) ON COMMIT DROP;
