@@ -17,10 +17,9 @@ then reverted is likewise absent, while one genuinely changed **is** present and
 normally.) A guard that always answers UNKNOWN answers nothing.
 
 - **Fixed the check's domain, not by adding a bypass.** `createOwnDraftPathsReader` now exempts a
-  row **only when `origin/main`'s own shared history already accounts for it** — either as a LOCAL
-  CANDIDATE (mainline discovery owns it and verifies its pin/header against the same immutable
-  tree), or as a settled `APPLIED LIVE` / `RETIRED CODE-ONLY ARTIFACT` / `SUPERSEDED` row (provably
-  not pending on the newest shared authority). Everything else stays reconciled.
+  row **only when `origin/main`'s own shared history REGISTERS it as a LOCAL CANDIDATE** — because
+  then mainline discovery owns it and verifies its pin/header against the same immutable tree. One
+  rule, reading a structured registry. Everything else stays reconciled.
 - **"Exists on `origin/main`" is deliberately NOT sufficient**, and this is the sharp edge. A first
   draft exempted any candidate whose SQL was present in `origin/main`'s tree; the Codex reviewer
   raised it as a P1 on PR #437 and it reproduced. A branch may newly register an ordinary
@@ -29,16 +28,19 @@ normally.) A guard that always answers UNKNOWN answers nothing.
   does not list it, and its blob carries no parked header — so mainline discovery reports nothing
   either, and `/fleet` would have **confidently hidden a genuinely pending migration**. Existing on
   main is not the same as being *accounted for* by main. A dedicated test pins this.
-- **"Settled" is now parsed as an AFFIRMATIVE status, not a substring.** The shared settlement
-  matcher accepted `APPLIED LIVE` anywhere in a row — so `NOT YET APPLIED LIVE` read as settled.
-  That is not hypothetical: `migration-history.md` carries six such rows (`NOT YET APPLIED LIVE`,
-  `NOT APPLIED LIVE`, `Not applied live`). Codex raised it as a BLOCKER on PR #437 and reproduced
-  the consequence end to end — a pending candidate exempted against an `origin/main` row reading
-  "BUILT — NOT YET APPLIED LIVE", flipping a conservative UNKNOWN into a **confident zero**.
-  `isSettledMigrationHistoryRow()` now rejects an adjacent `NOT` / `NOT YET` / `NEVER` /
-  `NO LONGER` / `has not been`, while an unrelated negation later in the row still settles. The
-  stricter matcher also applies to mainline discovery's stale-header self-clear, which moves that
-  path in the conservative direction too.
+- **A second exemption arm — "`origin/main` records this migration as settled" — was tried twice
+  and CUT.** Codex blocked both attempts on PR #437, correctly. A bare substring test read
+  `NOT YET APPLIED LIVE` as settled (and `migration-history.md` really carries six such rows).
+  Rejecting an *adjacent* negator still read `will be applied live`, `not successfully applied
+  live` and `not considered superseded` as settled — and worse, row 887, which is genuinely
+  pending (`**LOCAL CANDIDATE — NOT APPLIED.**`), matched purely on later prose mentioning
+  "applied live" and a "superseded price". Every version could flip a conservative UNKNOWN into a
+  **confident zero** over pending SQL. The arm cleared exactly one worktree, so it was removed
+  rather than iterated a third time; the lib carries a DELIBERATELY-ABSENT note stating that any
+  re-add must parse a structurally anchored status field, never prose.
+- **`origin/main` is resolved once to an immutable sha** and every accounting read uses it
+  (Codex MEDIUM). Resolving the symbolic ref per read let a concurrent `git fetch` move the tree
+  mid-scan, so one phase could exempt against a different tree than another inspected.
 - **Not a relaxation.** An unreadable `origin/main` history exempts nothing and keeps the old
   conservative answer. Under-reporting — a confident zero over real pending migrations — is the
   dangerous direction, so every branch of this is pinned by tests and was mutation-tested,
@@ -53,17 +55,22 @@ normally.) A guard that always answers UNKNOWN answers nothing.
 - **Cost.** The ~840 KiB shared history is parsed once per worktree, and `origin/main`'s history is
   read once per reader.
 
-**Proof:** the structural defect is gone — **19 of 19** worktrees UNKNOWN became **3 of 21**, and
-the three that remain are named, specific, and real (see below). All three mainline candidates are
-still listed by name — attributed, not hidden. 203 lib assertions pass, including the original
-rule's own UNKNOWN test and the P1 regression test.
+**Proof:** the structural defect is gone — **19 of 19** worktrees UNKNOWN became **4 of 21**, and
+the four that remain are named, specific, and real (see below). All three mainline candidates are
+still listed by name — attributed, not hidden. 209 lib assertions pass, including the original
+rule's own UNKNOWN test, the tree-vs-history regression, the sha-pinning assertions, and an
+aggregate false-zero regression. A standalone end-to-end probe drives every phrasing Codex named
+(negated, future, qualified, qualified-negation, prose-only) through the real reader and gets
+UNKNOWN for all five, with a registered-candidate control that still exempts.
 
-**Still open, and NOT a code defect.** Three Codex worktrees carry LOCAL CANDIDATE rows for the
-Wave A migrations `20260813010000`–`20260813060000` naming `supabase/migrations/<file>`, while the
-actual parked drafts live at `scripts/.staging-migrations/<file>`. Those branches genuinely claim
-pending SQL their own diffs cannot account for, so UNKNOWN is the correct answer until their
-history rows are reconciled. Until then `/fleet` still reports `PARKED STATE UNKNOWN` rather than a
-number — by design, because under-reporting is the worse failure.
+**Still open, and NOT a code defect.** Four checkouts are **70–104 commits behind `origin/main`**
+and still hold its older wording of rows 872–877/886. `main` has since re-worded those same rows —
+PR #393 restaged the Wave A drafts into `scripts/.staging-migrations/` ("PARKED DRAFT (STAGED)")
+and row 886 became "APPLIED LIVE" — so the stale copies still read "LOCAL CANDIDATE" for SQL those
+branches never touched. Nothing on those branches needs editing; they are simply stale, and the
+work they name is already counted via the staging-draft path. Until they are refreshed or retired,
+`/fleet` reports `PARKED STATE UNKNOWN` rather than a number — by design, because a confident zero
+over pending SQL is the worse failure.
 
 Scope: guard/reporting tooling only. No schema change, no migration, no live data, no money path.
 Diagnosis: `docs/reference/parked-migration-scan-unknown-diagnosis.md`. PR #437.

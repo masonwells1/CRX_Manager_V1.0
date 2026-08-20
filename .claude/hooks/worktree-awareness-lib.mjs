@@ -550,32 +550,22 @@ export function localCandidateMigrationPathsFromHistory(historyText) {
   return { state: "known", paths, sha256ByPath, reason: "" };
 }
 
-// A migration-history row that SETTLES a migration: it is no longer waiting on anyone.
-// Shared by mainline discovery's stale-header self-clear and the reader's exemption, so
-// the two cannot drift on what "settled" means.
+// DELIBERATELY ABSENT: a "this row settles the migration" helper.
 //
-// Containing the words is NOT enough — the status must be AFFIRMATIVE. `migration-history.md`
-// really does carry rows reading "NOT YET APPLIED LIVE", "NOT APPLIED LIVE" and "Not applied
-// live" (six of them on 2026-08-20), and a bare substring test reads every one of those as
-// settled. Codex proved the consequence on PR #437: a branch's pending candidate got exempted
-// against an origin/main row saying "BUILT — NOT YET APPLIED LIVE", turning a conservative
-// UNKNOWN into a confident zero over a genuinely pending migration.
+// PR #437 tried twice to derive settlement (APPLIED LIVE / RETIRED / SUPERSEDED) from a
+// history row so a stale branch's candidate could be exempted, and Codex blocked both:
+//   1. A bare substring test read "NOT YET APPLIED LIVE" as settled — and the real
+//      migration-history.md carries six such rows.
+//   2. Rejecting an ADJACENT negator still read "will be applied live", "not successfully
+//      applied live" and "not considered superseded" as settled. Worse, row 887 —
+//      `**LOCAL CANDIDATE — NOT APPLIED.**`, genuinely pending — matched purely on later
+//      prose mentioning "applied live" and a "superseded price".
+// Every version could turn a conservative UNKNOWN into a confident zero over pending SQL.
 //
-// A negator is rejected only when it immediately precedes the phrase, so an ordinary
-// "**APPLIED LIVE** ... this is not a rollback" row still settles correctly.
-const SETTLEMENT_PHRASE = /\b(?:APPLIED\s+LIVE|RETIRED\s+CODE-ONLY\s+ARTIFACT|SUPERSEDED)\b/gi;
-const SETTLEMENT_NEGATOR = /\b(?:NOT|NEVER|NO\s+LONGER)\s+(?:YET\s+)?(?:BE(?:EN)?\s+)?$/i;
-
-export function isSettledMigrationHistoryRow(row) {
-  const text = String(row || "");
-  for (const match of text.matchAll(SETTLEMENT_PHRASE)) {
-    // A short window is enough: the negator has to be adjacent to mean this phrase.
-    const preceding = text.slice(Math.max(0, match.index - 32), match.index);
-    if (SETTLEMENT_NEGATOR.test(preceding)) continue;
-    return true;
-  }
-  return false;
-}
+// The arm bought exactly ONE worktree, so it was cut rather than iterated a third time.
+// Anyone re-adding it must parse a STRUCTURALLY ANCHORED status field — the leading
+// status token of the detail cell — never arbitrary prose, and must add aggregate
+// false-zero regressions for future, conditional, and qualified-negation phrasings.
 
 function historyRowsByMigrationBasename(historyText) {
   const rowsByBasename = new Map();
@@ -668,7 +658,7 @@ export function parkedMainlineDiscoveryFrom(
     if (!hasExplicitParkedMigrationHeader(sqlText)) continue;
     const basename = matches[0].slice(matches[0].lastIndexOf("/") + 1).toLowerCase();
     const rows = historyRowsByBasename.get(basename) || [];
-    if (!rows.some((row) => isSettledMigrationHistoryRow(row))) {
+    if (!rows.some((row) => /\b(?:APPLIED\s+LIVE|RETIRED\s+CODE-ONLY\s+ARTIFACT|SUPERSEDED)\b/i.test(row))) {
       return { state: "unknown", paths: new Set(discovered), reason: "parked forward header has no LOCAL CANDIDATE or applied/retired history record" };
     }
   }
@@ -709,7 +699,7 @@ export function validateParkedMigrationCrossReferences(paths, historyText, loadT
     if (!hasExplicitParkedMigrationHeader(sqlText)) continue;
     const basename = p.slice(p.lastIndexOf("/") + 1).toLowerCase();
     const rows = historyRowsByBasename.get(basename) || [];
-    if (!rows.some((row) => isSettledMigrationHistoryRow(row))) {
+    if (!rows.some((row) => /\b(?:APPLIED\s+LIVE|RETIRED\s+CODE-ONLY\s+ARTIFACT|SUPERSEDED)\b/i.test(row))) {
       return { state: "unknown", paths: new Set(), reason: "parked header has no applied/retired history record for its migration version" };
     }
   }
@@ -772,17 +762,15 @@ export function createOwnDraftPathsReader({
   // Demanding such a row appear is not a strict guard — it is a permanent UNKNOWN, which
   // is what every worktree reported before 2026-08-20.
   //
-  // The ONLY safe exemption is a row origin/main's own shared history already accounts
-  // for, because then some other pass is answerable for it:
+  // The ONLY safe exemption is a candidate origin/main's own shared history REGISTERS as
+  // a LOCAL CANDIDATE, because then parkedMainlineDiscoveryFrom owns it, verifies its
+  // pin/header against the same immutable tree, and reports it. One rule, and it reads a
+  // structured registry rather than interpreting prose.
   //
-  //   a. origin/main registers it as a LOCAL CANDIDATE → parkedMainlineDiscoveryFrom owns
-  //      it, verifies its pin/header against the same immutable tree, and reports it.
-  //   b. origin/main records that migration APPLIED LIVE / RETIRED CODE-ONLY ARTIFACT /
-  //      SUPERSEDED → it is provably not pending, on the newest shared authority. Real
-  //      case, 2026-08-20: a branch still carried 20260813080000 as a LOCAL CANDIDATE
-  //      while origin/main row 886 records it APPLIED LIVE (live `list_migrations`
-  //      agrees). That row even notes the file's own `-- STATUS: NOT APPLIED` header is
-  //      stale and deliberately uncorrected, because CRX never edits an applied migration.
+  // A second arm — "origin/main records this migration as settled" — was tried and CUT.
+  // See the DELIBERATELY ABSENT note above `historyRowsByMigrationBasename`: every
+  // prose-derived version of it could turn a conservative UNKNOWN into a confident zero,
+  // and it cleared exactly one worktree.
   //
   // DO NOT widen this to "the SQL exists in origin/main's tree" (Codex P1 on PR #437, and
   // it was verified reproducible). A branch may newly register an ordinary already-committed
@@ -794,40 +782,47 @@ export function createOwnDraftPathsReader({
   //
   // One cached git read per process, because this runs inside the SessionStart hook's
   // budget across every worktree.
-  let originMainAccounting; // undefined = not read yet, null = unreadable
-  function originMainHistoryAccounting() {
-    if (originMainAccounting !== undefined) return originMainAccounting;
-    const lines = hasOriginMain
-      ? run(["show", "origin/main:docs/reference/migration-history.md"], repoRoot)
-      : null;
-    if (lines === null) {
-      // Unreadable shared history exempts NOTHING. "I cannot tell" keeps the old
-      // conservative answer; it must never buy a confident zero.
-      originMainAccounting = null;
-      return originMainAccounting;
+  // Resolved ONCE to an immutable commit sha, then used for every accounting read.
+  // Codex MEDIUM on PR #437: resolving the symbolic `origin/main` per read lets a
+  // concurrent `git fetch` move it mid-scan, so one phase could exempt against a
+  // different tree than another phase inspects — a transient false-clean. Pinning the
+  // sha makes every read in this reader's lifetime describe the same tree.
+  let originMainShaResolved; // undefined = not resolved yet, null = unavailable
+  function originMainSha() {
+    if (originMainShaResolved !== undefined) return originMainShaResolved;
+    if (!hasOriginMain) {
+      originMainShaResolved = null;
+      return originMainShaResolved;
     }
-    const text = lines.join("\n");
-    const parsed = localCandidateMigrationPathsFromHistory(text);
-    originMainAccounting = {
-      candidates: parsed.state === "known" ? parsed.paths : new Set(),
-      rowsByBasename: historyRowsByMigrationBasename(text),
-    };
-    return originMainAccounting;
+    const out = run(["rev-parse", "origin/main^{commit}"], repoRoot);
+    const sha = out === null ? "" : String(out[0] || "").trim();
+    originMainShaResolved = /^[0-9a-f]{40}$/i.test(sha) ? sha : null;
+    return originMainShaResolved;
+  }
+
+  let originMainCandidates; // undefined = not read yet, null = unreadable
+  function originMainRegisteredCandidates() {
+    if (originMainCandidates !== undefined) return originMainCandidates;
+    const sha = originMainSha();
+    const lines = sha === null ? null : run(["show", `${sha}:docs/reference/migration-history.md`], repoRoot);
+    if (lines === null) {
+      // An unresolvable origin/main or unreadable shared history exempts NOTHING.
+      // "I cannot tell" keeps the old conservative answer; it must never buy a zero.
+      originMainCandidates = null;
+      return originMainCandidates;
+    }
+    const parsed = localCandidateMigrationPathsFromHistory(lines.join("\n"));
+    originMainCandidates = parsed.state === "known" ? parsed.paths : null;
+    return originMainCandidates;
   }
 
   function reconcileExemptPathsFor(parsedHistory) {
     if (parsedHistory?.state !== "known" || parsedHistory.paths.size === 0) return null;
-    const mainline = originMainHistoryAccounting();
-    if (!mainline) return null;
+    const registered = originMainRegisteredCandidates();
+    if (!registered) return null;
     const exempt = new Set();
     for (const candidate of parsedHistory.paths) {
-      if (mainline.candidates.has(candidate)) {
-        exempt.add(candidate);
-        continue;
-      }
-      const basename = candidate.slice(candidate.lastIndexOf("/") + 1).toLowerCase();
-      const rows = mainline.rowsByBasename.get(basename) || [];
-      if (rows.some((row) => isSettledMigrationHistoryRow(row))) exempt.add(candidate);
+      if (registered.has(candidate)) exempt.add(candidate);
     }
     return exempt.size ? exempt : null;
   }

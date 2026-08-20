@@ -20,7 +20,7 @@ import {
   localCandidateMigrationPathsFromHistory, validateParkedMigrationCrossReferences,
   ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, originMainParkedMigrationPrefilter,
   ORIGIN_MAIN_CAT_FILE_MAX_BUFFER, originMainSqlBlobMap, originMainForwardBlobPaths,
-  createOwnDraftPathsReader, isSettledMigrationHistoryRow,
+  createOwnDraftPathsReader,
 } from "./worktree-awareness-lib.mjs";
 
 let pass = 0;
@@ -678,6 +678,8 @@ eq(timeoutScaleHistoryParses, 1, "degraded fallback parses migration history onc
 eq(timeoutScaleDiscovery?.parked, true, "timeout-scale fallback retains SHA-pinned discovery across 867 classifications");
 ok(performance.now() - timeoutScaleStarted < 10_000, "867 fallback classifications complete within the SessionStart hook budget");
 
+const FAKE_ORIGIN_MAIN_SHA = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
+
 // Builds a reader over a fake git. `responses` maps a git subcommand to its output lines;
 // a value of null means that git call failed. Records every call for assertions.
 function fakeReader(responses, opts = {}) {
@@ -693,7 +695,12 @@ function fakeReader(responses, opts = {}) {
     run: (args, cwd) => {
       calls.push({ cmd: args[0], args, cwd });
       const hit = responses[args[0]];
-      return hit === undefined ? [] : hit;
+      if (hit !== undefined) return hit;
+      // The reader resolves origin/main to an immutable sha before any accounting read.
+      // Default it so every pre-existing case keeps exercising what it was written for;
+      // a case that cares (resolution failure, sha pinning) overrides it explicitly.
+      if (args[0] === "rev-parse") return [FAKE_ORIGIN_MAIN_SHA];
+      return [];
     },
   });
   return { reader, calls };
@@ -802,34 +809,6 @@ const DIRTY_ENTRY = { path: "C:/wt-dirty", head: "b".repeat(40) };
   eq(noCandidates.unknownReason, "", "a history with no LOCAL CANDIDATE rows keeps an unrelated diff confidently zero");
 }
 
-// ── "Settled" must be AFFIRMATIVE, not a substring (Codex BLOCKER on PR #437) ──
-//
-// `migration-history.md` really carries rows reading "NOT YET APPLIED LIVE", "NOT APPLIED
-// LIVE" and "Not applied live" — six of them on 2026-08-20. A bare substring test reads
-// every one as settled, and Codex reproduced the consequence: a pending candidate exempted
-// against an origin/main row saying "BUILT — NOT YET APPLIED LIVE", turning a conservative
-// UNKNOWN into a CONFIDENT ZERO over a genuinely pending migration.
-{
-  ok(isSettledMigrationHistoryRow("| 886 | 20260813080000 | **APPLIED LIVE** as ledger version `20260816174353`. |"), "an affirmative APPLIED LIVE row settles the migration");
-  ok(isSettledMigrationHistoryRow("| 1 | 20260101000000 | **SUPERSEDED** by a later draft. |"), "an affirmative SUPERSEDED row settles the migration");
-  ok(isSettledMigrationHistoryRow("| 2 | 20260101000000 | **RETIRED CODE-ONLY ARTIFACT.** |"), "an affirmative RETIRED CODE-ONLY ARTIFACT row settles the migration");
-
-  // Every negated form Codex named, plus the real spellings in the live history file.
-  ok(!isSettledMigrationHistoryRow("| 3 | 20260101000000 | BUILT — NOT YET APPLIED LIVE. |"), "NOT YET APPLIED LIVE does not settle the migration");
-  ok(!isSettledMigrationHistoryRow("| 4 | 20260101000000 | NOT APPLIED LIVE. |"), "NOT APPLIED LIVE does not settle the migration");
-  ok(!isSettledMigrationHistoryRow("| 5 | 20260101000000 | Not applied live. |"), "lower-case 'Not applied live' does not settle the migration");
-  ok(!isSettledMigrationHistoryRow("| 6 | 20260101000000 | NEVER APPLIED LIVE. |"), "NEVER APPLIED LIVE does not settle the migration");
-  ok(!isSettledMigrationHistoryRow("| 7 | 20260101000000 | This draft is not superseded. |"), "a negated SUPERSEDED does not settle the migration");
-  ok(!isSettledMigrationHistoryRow("| 8 | 20260101000000 | has not been superseded. |"), "'has not been superseded' does not settle the migration");
-  ok(!isSettledMigrationHistoryRow("| 9 | 20260101000000 | no longer superseded by anything. |"), "'no longer superseded' does not settle the migration");
-  ok(!isSettledMigrationHistoryRow("| 10 | 20260101000000 | **PARKED DRAFT (STAGED) — NOT APPLIED.** |"), "a parked staged draft row does not settle the migration");
-
-  // A negator elsewhere in a long row must not veto a genuinely affirmative status.
-  ok(isSettledMigrationHistoryRow("| 11 | 20260101000000 | **APPLIED LIVE** — note this was not a rollback and is not superseded by 20260102. |"), "an affirmative status still settles when unrelated negations appear later");
-  // ...and a row that carries BOTH a negated and an affirmative mention still settles.
-  ok(isSettledMigrationHistoryRow("| 12 | 20260101000000 | Was NOT YET APPLIED LIVE at review time; **APPLIED LIVE** on 2026-08-16. |"), "a row whose negated mention is followed by an affirmative one settles");
-}
-
 // ── The reconciliation's DOMAIN (2026-08-20) ──
 //
 // The reconciliation above compares shared `migration-history.md` rows against a diff of
@@ -875,15 +854,60 @@ const MAINLINE_HISTORY_SETTLES_CANDIDATE = "| 886 | 20260101000000 | **APPLIED L
   eq(got.unknownReason, "", "a candidate origin/main also registers does not make the branch UNKNOWN");
 }
 
-// Exemption (b) — origin/main records the migration APPLIED LIVE. The branch's row is
-// stale against the newest shared authority, so it is provably not pending.
+// The CUT arm, pinned as ABSENT. An origin/main row that merely READS as settled must not
+// exempt anything: prose is not a status field, and every attempt to treat it as one
+// produced a false clean (Codex blocked two of them on PR #437). A stale branch reporting
+// UNKNOWN is the accepted cost of never reporting a confident zero over pending SQL.
 {
   const { reader } = fakeReader(
     { "merge-base": ["base1"], diff: [], show: [MAINLINE_HISTORY_SETTLES_CANDIDATE] },
     { readHistory: () => BRANCH_CANDIDATE_HISTORY },
   );
   const got = reader(CLEAN_ENTRY);
-  eq(got.unknownReason, "", "a candidate origin/main records APPLIED LIVE does not make the branch UNKNOWN");
+  ok(got.unknownReason.includes("absent from this branch's own-draft diff"), "an APPLIED LIVE row on origin/main does NOT exempt a branch candidate");
+}
+
+// The prose trap that forced the cut. origin/main row 887 is genuinely PENDING
+// (`**LOCAL CANDIDATE — NOT APPLIED.**`) yet its later prose mentions "applied live" and a
+// "superseded price", so any settlement-by-prose rule reads it as settled. Under the single
+// structural rule it is exempt for the RIGHT reason — it is a REGISTERED LOCAL CANDIDATE —
+// and the surrounding prose cannot influence the outcome either way.
+{
+  const prosyPendingRow = "| 887 | 20260101000000 | **LOCAL CANDIDATE — NOT APPLIED.** File: `20260101000000_real.sql`. Sibling 20260102 was applied live; this reuses its superseded price basis. |";
+  const { reader } = fakeReader(
+    { "merge-base": ["base1"], diff: [], show: [prosyPendingRow] },
+    { readHistory: () => BRANCH_CANDIDATE_HISTORY },
+  );
+  const got = reader(CLEAN_ENTRY);
+  eq(got.unknownReason, "", "a registered LOCAL CANDIDATE row exempts regardless of settlement words in its prose");
+}
+
+// origin/main is resolved ONCE to an immutable sha and every accounting read uses it, so a
+// concurrent fetch cannot move the tree mid-scan (Codex MEDIUM on PR #437).
+{
+  const { reader, calls } = fakeReader(
+    { "merge-base": ["base1"], diff: [], "ls-files": [], "rev-parse": ["c".repeat(40)], show: [MAINLINE_HISTORY_REGISTERS_CANDIDATE] },
+    {
+      readHistory: () => BRANCH_CANDIDATE_HISTORY,
+      dirtyCount: (wtPath) => (wtPath === DIRTY_ENTRY.path ? 3 : 0),
+    },
+  );
+  reader(CLEAN_ENTRY);
+  reader(DIRTY_ENTRY);
+  const revParse = calls.filter((c) => c.cmd === "rev-parse");
+  eq(revParse.length, 1, "origin/main is resolved to a sha once per reader");
+  const showCall = calls.find((c) => c.cmd === "show");
+  ok(showCall.args[1].startsWith("c".repeat(40) + ":"), "the accounting read is pinned to the resolved sha, not symbolic origin/main");
+}
+
+// An unresolvable origin/main exempts NOTHING — it must never buy a confident zero.
+{
+  const { reader } = fakeReader(
+    { "merge-base": ["base1"], diff: [], "rev-parse": null, show: [MAINLINE_HISTORY_REGISTERS_CANDIDATE] },
+    { readHistory: () => BRANCH_CANDIDATE_HISTORY },
+  );
+  const got = reader(CLEAN_ENTRY);
+  ok(got.unknownReason.includes("absent from this branch's own-draft diff"), "an unresolvable origin/main sha exempts nothing");
 }
 
 // THE MUTATION GUARD — Codex P1 on PR #437, reproduced and pinned.
