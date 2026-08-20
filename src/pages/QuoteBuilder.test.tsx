@@ -116,7 +116,7 @@ vi.mock('../lib/db', () => ({
   checkMutationResult: vi.fn(),
   assertRpcResult: vi.fn((d) => d),
   hasRpcCode: (error: { message?: string }, code: string) => error.message?.includes(code) ?? false,
-  RpcErrorCodes: { AUTH_REQUIRED: 'AUTH_REQUIRED', ACTOR_MISMATCH: 'ACTOR_MISMATCH', INSUFFICIENT_ROLE: 'INSUFFICIENT_ROLE', BOOKING_QUANTITY_INVALID: 'BOOKING_QUANTITY_INVALID', QUOTE_STALE_WRITE: 'QUOTE_STALE_WRITE', CUSTOMER_STALE_WRITE: 'CUSTOMER_STALE_WRITE', COMMISSION_SPLIT_CONFLICT: 'COMMISSION_SPLIT_CONFLICT', IDEMPOTENCY_PAYLOAD_CONFLICT: 'IDEMPOTENCY_PAYLOAD_CONFLICT' },
+  RpcErrorCodes: { AUTH_REQUIRED: 'AUTH_REQUIRED', ACTOR_MISMATCH: 'ACTOR_MISMATCH', INSUFFICIENT_ROLE: 'INSUFFICIENT_ROLE', BOOKING_QUANTITY_INVALID: 'BOOKING_QUANTITY_INVALID', BOOKING_PRODUCT_INVALID: 'BOOKING_PRODUCT_INVALID', QUOTE_STALE_WRITE: 'QUOTE_STALE_WRITE', CUSTOMER_STALE_WRITE: 'CUSTOMER_STALE_WRITE', COMMISSION_SPLIT_CONFLICT: 'COMMISSION_SPLIT_CONFLICT', IDEMPOTENCY_PAYLOAD_CONFLICT: 'IDEMPOTENCY_PAYLOAD_CONFLICT' },
   rpcAuthErrorMessage: (error: { message?: string }) => error.message === 'AUTH_REQUIRED' || error.message === 'ACTOR_MISMATCH'
     ? 'Your sign-in could not be verified. Refresh the page and try again.'
     : null,
@@ -339,6 +339,37 @@ describe('QuoteBuilder', () => {
       expect.stringContaining('already created an order'),
     );
     expect(screen.queryByRole('dialog', { name: 'Create Order from Booking' })).not.toBeInTheDocument();
+  });
+
+  it('sends the operator to Orders when a changed-intent receipt cannot be opened', async () => {
+    const fixture = configureDrawDownFixture({
+      message: 'IDEMPOTENCY_INTENT_MISMATCH',
+      details: JSON.stringify({ operation: 'draw_down_quote', result: null }),
+    });
+
+    await submitOneUnitDraw(fixture.quote.id);
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'warning',
+      expect.stringContaining('Check Orders for this booking before drawing again'),
+    ));
+    expect(mockToast).not.toHaveBeenCalledWith(
+      'warning',
+      expect.stringContaining('booking balance was reloaded; try again'),
+    );
+    expect(mockResetIdempotencyKey).toHaveBeenCalledTimes(1);
+    expect(mockNavigate).not.toHaveBeenCalledWith(expect.stringMatching(/^\/orders\//));
+  });
+
+  it('maps a malformed draw product to a governed operator error', async () => {
+    const fixture = configureDrawDownFixture({ message: 'BOOKING_PRODUCT_INVALID: draw product id must be a UUID' });
+
+    await submitOneUnitDraw(fixture.quote.id);
+
+    await waitFor(() => expect(mockToast).toHaveBeenCalledWith(
+      'error',
+      'A draw line has an invalid product reference. Refresh the booking and try again.',
+    ));
   });
 
   it('retires another actor retry and reloads the booking balance in the open modal', async () => {

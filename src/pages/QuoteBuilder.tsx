@@ -2481,7 +2481,9 @@ export default function QuoteBuilder() {
           ? `That retry belongs to another signed-in user, so nothing new was drawn. ${recoveryStep}`
           : bindingRejection === 'receipt'
             ? `The database could not confirm this retry outcome, so nothing was drawn now. ${recoveryStep}`
-            : `That retry was already used, so nothing new was drawn. ${recoveryStep}`);
+            : `That retry already created an order that could not be opened, so nothing new was drawn. Check Orders for this booking before drawing again. ${balanceReloaded
+              ? 'The booking balance was reloaded.'
+              : 'The booking balance could not be reloaded; refresh the page before checking Orders.'}`);
         setDrawing(false);
         return;
       }
@@ -2510,6 +2512,8 @@ export default function QuoteBuilder() {
         toast('warning', 'Enter a quantity for at least one product');
       } else if (hasRpcCode(error, RpcErrorCodes.BOOKING_QUANTITY_INVALID)) {
         toast('error', errMsg);
+      } else if (hasRpcCode(error, RpcErrorCodes.BOOKING_PRODUCT_INVALID)) {
+        toast('error', 'A draw line has an invalid product reference. Refresh the booking and try again.');
       } else if (hasRpcCode(error, RpcErrorCodes.BOOKED_PRICE_REQUIRED)) {
         // Server message names the product and says what to fix — surface as-is.
         toast('error', errMsg);

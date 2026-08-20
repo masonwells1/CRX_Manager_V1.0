@@ -619,6 +619,18 @@ SELECT public.draw_down_quote(
   assert.notEqual(empty.status, 0, 'empty keyed request bypassed the outer guard');
   assert.match(empty.stderr, /EMPTY_DRAW/);
 
+  const malformedProduct = psql(`
+SELECT set_config('request.jwt.claim.sub', '${ACTOR_A}', false);
+SELECT public.draw_down_quote(
+  '${QUOTE_A}'::uuid,
+  jsonb_build_array(jsonb_build_object('product_id', 'not-a-uuid', 'quantity', 1)),
+  '${ACTOR_A}'::uuid,
+  'draw-malformed-product',
+  NULL
+);`, { db, allowFailure: true, tuples: true });
+  assert.notEqual(malformedProduct.status, 0, 'malformed product id reached the UUID cast');
+  assert.match(malformedProduct.stderr, /BOOKING_PRODUCT_INVALID/);
+
   const nonFiniteGuard = psql(`
 SELECT set_config('request.jwt.claim.sub', '${ACTOR_A}', false);
 SELECT public.draw_down_quote(

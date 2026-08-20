@@ -44,7 +44,7 @@
 -- Reviewed cutover/below-cost draw_down_quote pg_proc.prosrc SHA-256:
 -- be2570888281520c9aaba61280a456cdbd9b69b83dfeba106c7a324c3751e4bf
 -- New actor/intent wrapper pg_proc.prosrc SHA-256:
--- c5f6f8902e80870706a0734be167c850903361ccf682bc11287fa8fed6c8e254
+-- 5dc7e737e1e65fae6fd1ebb7cfb728827e546e156e1e8b5e3b08bf0eee1742bb
 
 -- Drain every draw running through the committed 20260816110000 barrier and
 -- refuse new draws until this transaction commits. Without this exact lock, a
@@ -344,6 +344,16 @@ BEGIN
   IF EXISTS (
     SELECT 1
       FROM jsonb_array_elements(p_draws) AS d(value)
+     WHERE (d.value ->> 'product_id') IS NOT NULL
+       AND NOT pg_input_is_valid(d.value ->> 'product_id', 'uuid')
+  ) THEN
+    RAISE EXCEPTION
+      'BOOKING_PRODUCT_INVALID: draw product id must be a UUID';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+      FROM jsonb_array_elements(p_draws) AS d(value)
      WHERE (d.value ->> 'quantity') IS NOT NULL
        AND NOT pg_input_is_valid(d.value ->> 'quantity', 'numeric')
   ) THEN
@@ -607,7 +617,7 @@ BEGIN
           IS DISTINCT FROM 'be2570888281520c9aaba61280a456cdbd9b69b83dfeba106c7a324c3751e4bf'
      OR v_outer_src IS NULL
      OR encode(extensions.digest(convert_to(v_outer_src, 'UTF8'), 'sha256'), 'hex')
-          IS DISTINCT FROM 'c5f6f8902e80870706a0734be167c850903361ccf682bc11287fa8fed6c8e254' THEN
+          IS DISTINCT FROM '5dc7e737e1e65fae6fd1ebb7cfb728827e546e156e1e8b5e3b08bf0eee1742bb' THEN
     RAISE EXCEPTION
       'DRAW_DOWN_INTENT_POSTFLIGHT: reviewed intent helper or wrapper body changed';
   END IF;

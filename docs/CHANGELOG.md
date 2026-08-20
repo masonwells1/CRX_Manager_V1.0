@@ -27,7 +27,9 @@ is retired instead of trapping the operator until reload; when the mismatch rece
 already committed, the page opens that exact order rather than offering another draw. Ambiguous
 receipt/actor cases reload the booking balance and explain the next step, and auth/role failures are
 shown in plain English. Non-numeric and non-finite quantities fail closed with
-`BOOKING_QUANTITY_INVALID`. The new
+`BOOKING_QUANTITY_INVALID`; malformed product identifiers fail with the governed
+`BOOKING_PRODUCT_INVALID` token instead of a raw PostgreSQL cast error. If a changed-intent receipt
+cannot identify the committed order, the operator is sent to Orders before any retry. The new
 public wrapper is executable only by `authenticated`; the unusable `service_role` grant is removed
 because the wrapper requires an authenticated user id and no service caller exists.
 

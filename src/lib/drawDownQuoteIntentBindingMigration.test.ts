@@ -196,6 +196,10 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(fingerprintBlock).toContain("'draws', v_canonical_draws");
     expect(fingerprintBlock).not.toContain('p_below_cost_reason');
     expect(migrationSql).toContain('trim_scale((d.value ->> \'quantity\')::numeric)');
+    expect(migrationSql).toContain("pg_input_is_valid(d.value ->> 'product_id', 'uuid')");
+    expect(migrationSql).toContain(
+      "RAISE EXCEPTION\n      'BOOKING_PRODUCT_INVALID: draw product id must be a UUID';",
+    );
     expect(migrationSql).toContain("pg_input_is_valid(d.value ->> 'quantity', 'numeric')");
     expect(migrationSql).toContain("'NaN'::numeric");
     expect(migrationSql).toContain("'Infinity'::numeric");
@@ -209,6 +213,7 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(migrationSql).toContain("RAISE EXCEPTION 'IDEMPOTENCY_RECEIPT_MISSING';");
     expectOrdered(migrationSql, [
       'IDEMPOTENCY_KEY_REQUIRED: draw_down_quote requires p_idempotency_key',
+      "'BOOKING_PRODUCT_INVALID: draw product id must be a UUID'",
       "'BOOKING_QUANTITY_INVALID: draw quantity must be finite'",
       'v_fingerprint := encode(',
     ]);
@@ -240,6 +245,8 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(drawHandler).toContain('const authError = rpcAuthErrorMessage(error);');
     expect(drawHandler).toContain('Only active administrators and sales representatives can draw down bookings.');
     expect(drawHandler).toContain('RpcErrorCodes.BOOKING_QUANTITY_INVALID');
+    expect(drawHandler).toContain('RpcErrorCodes.BOOKING_PRODUCT_INVALID');
+    expect(drawHandler).toContain('Check Orders for this booking before drawing again.');
     expect(drawHandler).not.toContain("toast('error', 'IDEMPOTENCY_INTENT_MISMATCH'");
     expect(drawHandler).not.toContain("toast('error', 'IDEMPOTENCY_ACTOR_MISMATCH'");
     expect(quoteBuilder).toContain('const loadGeneration = ++initialLoadGenerationRef.current;');
