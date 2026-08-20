@@ -682,16 +682,17 @@ ok(performance.now() - timeoutScaleStarted < 10_000, "867 fallback classificatio
 // a value of null means that git call failed. Records every call for assertions.
 function fakeReader(responses, opts = {}) {
   const calls = [];
+  const historyDiff = opts.historyDiff || [];
   const reader = createOwnDraftPathsReader({
     repoRoot: "C:/main",
     hasOriginMain: opts.hasOriginMain !== false,
     dirtyCount: opts.dirtyCount || (() => 0),
     exists: opts.exists || (() => true),
     readText: opts.readText || (() => ""),
-    readHistory: opts.readHistory || (() => null),
     sha256Text: opts.sha256Text || sha256Text,
     run: (args, cwd) => {
       calls.push({ cmd: args[0], args, cwd });
+      if (args[0] === "diff" && args.includes("docs/reference/migration-history.md")) return historyDiff;
       const hit = responses[args[0]];
       return hit === undefined ? [] : hit;
     },
@@ -732,7 +733,7 @@ const DIRTY_ENTRY = { path: "C:/wt-dirty", head: "b".repeat(40) };
     { "merge-base": ["base1"], diff: [branchCandidate] },
     {
       readText: () => BRANCH_CANDIDATE_SQL,
-      readHistory: () => BRANCH_CANDIDATE_HISTORY,
+      historyDiff: [`+${BRANCH_CANDIDATE_HISTORY}`],
     },
   );
   eq([...reader(CLEAN_ENTRY).values()], [branchCandidate], "clean branch surfaces a hash-pinned forward migration");
@@ -744,7 +745,7 @@ const DIRTY_ENTRY = { path: "C:/wt-dirty", head: "b".repeat(40) };
     { "merge-base": ["base1"], diff: [branchCandidate] },
     {
       readText: () => `${BRANCH_CANDIDATE_SQL}-- drift\n`,
-      readHistory: () => BRANCH_CANDIDATE_HISTORY,
+      historyDiff: [`+${BRANCH_CANDIDATE_HISTORY}`],
     },
   );
   const result = reader(CLEAN_ENTRY);
@@ -758,7 +759,7 @@ const DIRTY_ENTRY = { path: "C:/wt-dirty", head: "b".repeat(40) };
     { "merge-base": ["base1"], diff: [branchCandidate] },
     {
       readText: () => `${PARKED_FORWARD_HEADER}-- changed after pin\n`,
-      readHistory: () => BRANCH_CANDIDATE_HISTORY,
+      historyDiff: [`+${BRANCH_CANDIDATE_HISTORY}`],
     },
   );
   const result = reader(CLEAN_ENTRY);
@@ -782,6 +783,19 @@ const DIRTY_ENTRY = { path: "C:/wt-dirty", head: "b".repeat(40) };
   );
   eq(orphan.size, 0, "a registered candidate the diff never named is not invented as a pending path");
   ok(orphan.unknownReason.includes("absent from this branch's own-draft diff"), "a LOCAL CANDIDATE row the diff never mentions makes the branch UNKNOWN, not zero");
+}
+{
+  // The shared history document is inherited by every worktree. A candidate
+  // that is already on origin/main is accounted for by mainline discovery, so
+  // it must not demand an impossible branch-owned diff from every checkout.
+  const branchCandidate = "supabase/migrations/20260101000000_real.sql";
+  const { reader } = fakeReader(
+    { "merge-base": ["base1"], diff: ["src/pages/Invoices.tsx"], "ls-tree": [branchCandidate] },
+    { historyDiff: [`+${BRANCH_CANDIDATE_HISTORY}`] },
+  );
+  const result = reader(CLEAN_ENTRY);
+  eq(result.size, 0, "a mainline-owned candidate is not invented as branch-pending work");
+  eq(result.unknownReason, "", "a candidate already on origin/main does not make the branch UNKNOWN");
 }
 {
   const emptyDiff = parkedDraftPathsFrom(
@@ -810,7 +824,7 @@ const DIRTY_ENTRY = { path: "C:/wt-dirty", head: "b".repeat(40) };
     { "merge-base": ["base1"], diff: [branchCandidate] },
     {
       readText: () => BRANCH_CANDIDATE_SQL.replace(/\n/g, "\r\n"),
-      readHistory: () => BRANCH_CANDIDATE_HISTORY,
+      historyDiff: [`+${BRANCH_CANDIDATE_HISTORY}`],
       sha256Text: (text) => sha256Text(text.replace(/\r\n/g, "\n")),
     },
   );
@@ -881,7 +895,7 @@ const DIRTY_ENTRY = { path: "C:/wt-dirty", head: "b".repeat(40) };
   reader(CLEAN_ENTRY);
   reader({ ...CLEAN_ENTRY, path: "C:/wt-other-same-sha" });
   eq(calls.filter((c) => c.cmd === "merge-base").length, 1, "branch point is resolved once per sha");
-  eq(calls.filter((c) => c.cmd === "diff").length, 1, "clean diff is computed once per sha");
+  eq(calls.filter((c) => c.cmd === "diff").length, 2, "clean draft and history diffs are each computed once per sha");
 }
 
 console.log(`worktree-awareness-lib: ${pass} assertions passed`);

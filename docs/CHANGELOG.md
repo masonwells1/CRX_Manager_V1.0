@@ -9,6 +9,20 @@ tool-owned generated file and the build removes it before the guard can inspect 
 `ENOENT` case is skipped; stable generated files still receive the normal private-content scan,
 and direct forbidden filenames still fail before any filesystem access.
 
+## 2026-08-20 — Fleet scan now distinguishes shared mainline candidates from branch-owned work
+
+`fleet-status` and the SessionStart banner shared a fail-closed reconciliation rule that
+treated every `LOCAL CANDIDATE — NOT APPLIED` row inherited from `origin/main` as a claim
+made by each descendant worktree. Since a mainline file cannot appear in a branch's own
+diff, the fleet reported `PARKED STATE UNKNOWN` forever. The shared reader now reconciles
+only rows the branch added since its merge base, while retaining `UNKNOWN` for any
+unaccounted branch-owned candidate. It also confirms exact candidate paths already on
+`origin/main` through the shared mainline-discovery path.
+
+- Verified with the full test suite, 196 focused shared-guard assertions, and a live local
+  fleet run reporting 21 parked migrations while retaining the three mainline candidates
+  `20260816110000`, `20260816120000`, and `20260817120000`.
+
 ## 2026-08-19 — Blend-ticket total-volume check no longer adds quantities across different units
 
 `validateBlendMath` summed every product quantity regardless of unit, so a ticket holding

@@ -340,6 +340,7 @@ export function parkedDraftPathsFrom(
   historyText = null,
   sha256Text = null,
   parsedHistory = null,
+  originMainCandidatePaths = null,
 ) {
   const out = new Map();
   const history = parsedHistory ?? localCandidateMigrationPathsFromHistory(historyText);
@@ -397,19 +398,25 @@ export function parkedDraftPathsFrom(
     if (!out.has(key)) out.set(key, p);
   }
 
-  // Reconcile the registry against the diff OUTSIDE the loop. Both checks above only
-  // fire for a path the diff already handed us, so a caller whose changed-path list is
-  // empty — or whose list simply never mentions a registered candidate — got a
-  // confident zero over a registry this code never read (Codex on #369). The registry
-  // is the branch's own claim that pending SQL exists; if the diff cannot account for
-  // every row of it, the honest answer is UNKNOWN, which sends the caller to a full
-  // scan. Under-reporting hides real pending work; an extra scan only costs time.
+  // Reconcile the branch's own history additions against the diff OUTSIDE the loop.
+  // Both checks above only fire for a path the diff already handed us, so a caller
+  // whose changed-path list is empty — or whose list simply never mentions a
+  // registered candidate — got a confident zero over a claim this code never read
+  // (Codex on #369). If the diff cannot account for every branch-owned row, the
+  // honest answer is UNKNOWN, which sends the caller to a full scan. Under-reporting
+  // hides real pending work; an extra scan only costs time.
   if (historyText !== null) {
     if (history?.state !== "known") {
       unknownReason ||= history?.reason || "worktree migration history is unreadable";
     } else {
       for (const candidate of history.paths) {
-        if (visited.has(candidate)) continue;
+        // A candidate already present on origin/main is reconciled by the
+        // mainline discovery path shared by /fleet and SessionStart. Requiring
+        // every branch to repeat that mainline path in its own diff is
+        // unsatisfiable, because a path inherited from origin/main cannot be
+        // branch-owned. Only exact, successfully-read origin/main paths are
+        // exempt; an absent or unreadable mainline path remains fail-closed.
+        if (visited.has(candidate) || originMainCandidatePaths?.has(candidate)) continue;
         unknownReason ||= "branch-owned LOCAL CANDIDATE SQL named by migration history is absent from this branch's own-draft diff";
         break;
       }
@@ -694,7 +701,6 @@ export function createOwnDraftPathsReader({
   dirtyCount,
   exists,
   readText = () => "",
-  readHistory = () => null,
   sha256Text = null,
   hasOriginMain = true,
 }) {
@@ -712,9 +718,68 @@ export function createOwnDraftPathsReader({
   }
 
   const cleanCache = new Map(); // head sha → changed paths | null
+  const cleanHistoryCache = new Map(); // head sha → added migration-history rows | null
+  // The same LOCAL CANDIDATE rows appear in every inherited copy of the shared
+  // history document. Resolve each exact origin/main path once, then reuse that
+  // attribution across the whole fleet instead of spawning one Git process per
+  // worktree. `null` is deliberately retained as non-exempt: an unreadable
+  // origin/main must still leave the per-worktree reconciliation UNKNOWN.
+  const originMainCandidateCache = new Map(); // normalized candidate → true | false | null
+
+  function originMainCandidatePaths(history) {
+    const accounted = new Set();
+    if (history?.state !== "known") return accounted;
+    for (const candidate of history.paths) {
+      let known = originMainCandidateCache.get(candidate);
+      if (known === undefined) {
+        const listed = run(["ls-tree", "-r", "--name-only", "origin/main", "--", candidate], repoRoot);
+        known = listed === null
+          ? null
+          : listed.some((path) => normRepoPath(path) === candidate);
+        originMainCandidateCache.set(candidate, known);
+      }
+      if (known === true) accounted.add(candidate);
+    }
+    return accounted;
+  }
+
+  // `migration-history.md` is shared mainline state, not a branch-owned claim.
+  // Reconcile only rows this branch added since its merge base. This keeps an
+  // inherited mainline candidate from demanding an impossible appearance in
+  // every descendant branch's own-draft diff, while leaving a branch's actual
+  // unaccounted candidate fail-closed below.
+  function ownHistoryText(entry, base) {
+    const args = dirtyCount(entry.path) === 0
+      ? ["diff", "--unified=0", base, entry.head, "--", "docs/reference/migration-history.md"]
+      : ["diff", "--unified=0", base, "--", "docs/reference/migration-history.md"];
+    let patch;
+    if (dirtyCount(entry.path) === 0) {
+      if (!cleanHistoryCache.has(entry.head)) cleanHistoryCache.set(entry.head, run(args, repoRoot));
+      patch = cleanHistoryCache.get(entry.head);
+    } else {
+      patch = run(args, entry.path);
+    }
+    if (patch === null) return null;
+    return patch
+      .filter((line) => String(line).startsWith("+|"))
+      .map((line) => String(line).slice(1))
+      .join("\n");
+  }
 
   function resultFrom(changed, onDisk, textOnDisk, historyText) {
-    const parked = parkedDraftPathsFrom(changed, onDisk, textOnDisk, historyText, sha256Text);
+    // An empty patch is a known empty set, not an unreadable history file.
+    const history = historyText === ""
+      ? { state: "known", paths: new Set(), sha256ByPath: new Map(), reason: "" }
+      : localCandidateMigrationPathsFromHistory(historyText);
+    const parked = parkedDraftPathsFrom(
+      changed,
+      onDisk,
+      textOnDisk,
+      historyText,
+      sha256Text,
+      history,
+      originMainCandidatePaths(history),
+    );
     Object.defineProperty(parked, "supersededPaths", {
       value: supersededDraftPathsFrom(changed, onDisk),
       enumerable: false,
@@ -728,7 +793,8 @@ export function createOwnDraftPathsReader({
     const spec = draftPathspec();
     const onDisk = (p) => exists(entry.path, p);
     const textOnDisk = (p) => readText(entry.path, p);
-    const historyText = readHistory(entry.path);
+    const historyText = ownHistoryText(entry, base);
+    if (historyText === null) return null;
 
     // A CLEAN checkout holds nothing but its commits, so its pending set is fully
     // determined by base..HEAD — computable once per sha in the MAIN repo instead of
