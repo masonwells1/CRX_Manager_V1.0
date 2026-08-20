@@ -57,7 +57,7 @@ because the wrapper requires an authenticated user id and no service caller exis
 The re-review closed the remaining release-proof gaps. The idempotency-key advisory lock is now
 taken before the quote row lock, preventing two cross-quote requests for one key from deadlocking;
 the shared helper re-takes that lock reentrantly before reading the receipt. The money path now
-requires a nonblank printable retry key, matching the already-live commission payout precedent, so
+requires a 1-200 character printable-ASCII retry key, so
 a direct keyless PostgREST call cannot double-create an order, inventory prebooking or ledger row.
 At apply time the migration takes the existing draw-cutover key exclusively, draining legacy calls
 that reached the shared barrier and refusing new barrier participants before it scans for unexpired

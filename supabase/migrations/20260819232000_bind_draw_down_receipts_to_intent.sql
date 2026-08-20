@@ -73,10 +73,10 @@
 -- Reviewed cutover/below-cost draw_down_quote pg_proc.prosrc SHA-256:
 -- be2570888281520c9aaba61280a456cdbd9b69b83dfeba106c7a324c3751e4bf
 -- New actor/intent wrapper pg_proc.prosrc SHA-256:
--- 5dc7e737e1e65fae6fd1ebb7cfb728827e546e156e1e8b5e3b08bf0eee1742bb
+-- ffdb9dce46503dceec0575a70096c4ee928a2595b572044309e359f0128faef7
 -- The printable-key test deliberately uses COLLATE "C": the accepted alphabet
--- is stable ASCII [!-~], independent of the database or operating-system
--- locale. Do not simplify it to a locale-sensitive range.
+-- is exactly 1-200 stable ASCII [!-~] characters, independent of the database
+-- or operating-system locale. Do not simplify it to a locale-sensitive range.
 -- Lock ordering also assumes save_quote and convert_quote_to_order keep using
 -- plain check_idempotency. Moving either onto check_idempotency_intent would
 -- require a fresh cross-operation same-key deadlock review.
@@ -362,8 +362,7 @@ BEGIN
   -- This keeps lock order consistent with the helper's other money callers and
   -- prevents a same-key/cross-operation request from forming a key/row cycle.
   IF p_idempotency_key IS NULL
-     OR p_idempotency_key !~ '[^[:space:]]'
-     OR p_idempotency_key COLLATE "C" !~ '[!-~]' THEN
+     OR p_idempotency_key COLLATE "C" !~ '^[!-~]{1,200}$' THEN
     RAISE EXCEPTION
       'IDEMPOTENCY_KEY_REQUIRED: draw_down_quote requires p_idempotency_key';
   END IF;
@@ -659,7 +658,7 @@ BEGIN
           IS DISTINCT FROM 'be2570888281520c9aaba61280a456cdbd9b69b83dfeba106c7a324c3751e4bf'
      OR v_outer_src IS NULL
      OR encode(extensions.digest(convert_to(v_outer_src, 'UTF8'), 'sha256'), 'hex')
-          IS DISTINCT FROM '5dc7e737e1e65fae6fd1ebb7cfb728827e546e156e1e8b5e3b08bf0eee1742bb' THEN
+          IS DISTINCT FROM 'ffdb9dce46503dceec0575a70096c4ee928a2595b572044309e359f0128faef7' THEN
     RAISE EXCEPTION
       'DRAW_DOWN_INTENT_POSTFLIGHT: reviewed intent helper or wrapper body changed';
   END IF;

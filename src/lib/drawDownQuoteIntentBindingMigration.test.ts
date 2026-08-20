@@ -201,6 +201,8 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(migrationSql).toContain(
       'IDEMPOTENCY_KEY_REQUIRED: draw_down_quote requires p_idempotency_key',
     );
+    expect(migrationSql).toContain('p_idempotency_key COLLATE "C" !~ \'^[!-~]{1,200}$\'');
+    expect(migrationSql).not.toContain("p_idempotency_key COLLATE \"C\" !~ '[!-~]'");
     expect(migrationSql).toContain("operation = 'draw_down_quote'\n       AND expires_at > now()");
     expect(migrationSql).toContain('unexpired legacy draw_down_quote receipts exist');
     expect(migrationSql).toContain("current_setting('transaction_isolation')");
@@ -308,6 +310,9 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(smokeSql).toContain('IDEMPOTENCY_INTENT_MISMATCH');
     expect(smokeSql).toContain('IDEMPOTENCY_ACTOR_MISMATCH');
     expect(smokeSql).toContain('IDEMPOTENCY_KEY_REQUIRED');
+    expect(smokeSql).toContain("E'smk-control\\ncharacter'");
+    expect(smokeSql).toContain("U&'smk-\\2603'");
+    expect(smokeSql).toContain("repeat('a', 201)");
     expect(smokeSql).toContain('request_actor_id = v_rep_a');
     expect(smokeSql).toContain('request_fingerprint IS NOT NULL');
     expect(smokeSql).toContain('oi.price_per_unit = 10.00');

@@ -152,6 +152,48 @@ BEGIN
     END IF;
   END;
 
+  BEGIN
+    PERFORM public.draw_down_quote(
+      v_quote,
+      jsonb_build_array(jsonb_build_object('product_id', v_product, 'quantity', 1)),
+      v_rep_a, E'smk-control\ncharacter', NULL
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: control-character key reached the money implementation';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'IDEMPOTENCY_KEY_REQUIRED:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: expected control-character key refusal, got: %', SQLERRM;
+    END IF;
+  END;
+
+  BEGIN
+    PERFORM public.draw_down_quote(
+      v_quote,
+      jsonb_build_array(jsonb_build_object('product_id', v_product, 'quantity', 1)),
+      v_rep_a, U&'smk-\2603', NULL
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: Unicode key reached the money implementation';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'IDEMPOTENCY_KEY_REQUIRED:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: expected Unicode key refusal, got: %', SQLERRM;
+    END IF;
+  END;
+
+  BEGIN
+    PERFORM public.draw_down_quote(
+      v_quote,
+      jsonb_build_array(jsonb_build_object('product_id', v_product, 'quantity', 1)),
+      v_rep_a, repeat('a', 201), NULL
+    );
+    RAISE EXCEPTION 'SMOKE_FAIL: overlength key reached the money implementation';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL:%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'IDEMPOTENCY_KEY_REQUIRED:%' THEN
+      RAISE EXCEPTION 'SMOKE_FAIL: expected overlength key refusal, got: %', SQLERRM;
+    END IF;
+  END;
+
   v_first_result := public.draw_down_quote(
     v_quote,
     jsonb_build_array(jsonb_build_object('product_id', v_product, 'quantity', 1)),
