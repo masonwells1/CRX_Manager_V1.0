@@ -34,10 +34,143 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-08-19 — the per-product rate check in `blendMathValidator.ts` is still unit-blind
+
+**Severity: LOW, warning text only, currently unreachable (0 rows in `blend_tickets` and
+`blend_ticket_products` on live, verified read-only 2026-08-19).** The sibling total-volume defect
+in the same file was fixed on 2026-08-19 via
+[PR #426](https://github.com/masonwells1/CRX_Manager_V1.0/pull/426); this one was left
+deliberately out of scope and is recorded here so it is not re-discovered as new.
+
+`validateBlendMath` compares each product's `quantity` against `rate_per_acre × total_acres`
+without ever comparing `unit` to `rate_per_acre_unit`. Both fields exist on `ProductData`, but the
+rate arm reads neither. A product entered as 25 **Gal** at a rate of 32 **oz**/acre over 100 acres
+is arithmetically correct — 32 × 100 = 3200 fl oz = 25 gal — yet the check compares the bare
+numbers 25 vs 3200 and flags it. The mirror case hides a real error: quantities that happen to be
+numerically close across different units pass silently.
+
+Three things a fix must handle that the total-volume arm did not:
+
+- `rate_per_acre_unit` is a **per-acre** string — the form's placeholder is literally `oz/ac` — so
+  it will never match `unit_conversions.unit` directly. `chemCalculator.ts` already has
+  `baseUnitFromRateUnit` to strip the `/ac` suffix; reuse it rather than writing a second parser.
+- `rate_per_acre_unit` is **not always populated**: the recipe-load path in
+  `ManualTicketCreate.tsx` hardcodes `rate_per_acre_unit: ''`, so recipe-derived rows carry none.
+  A missing unit must skip the check, never be assumed to match.
+- `unit_conversions` **can** legitimately serve this arm, unlike the total-volume arm: a rate and a
+  quantity for the *same product* are usually in the same family, so `factor_oz` converts exactly
+  within liquid or within dry. But the fix must still refuse the liquid↔dry crossing (no density
+  column), must not treat `Ea`/`Unit` (`factor_oz = 1`, `unit_type = 'both'`) as convertible — they
+  are a dimensionless count, and converting a jug count to fluid ounces 1:1 is nonsense — and must
+  not join `LOWER(unit)` naively, because the case-alias rows (`Lb`/`LB`, `oz`/`Oz`, `qt`/`Qt`)
+  duplicate on that join.
+
+**Not started.** No migration, no live state, no money path. Fix alongside the next blend-ticket
+change rather than on its own.
+
+---
+
+## OPEN 2026-08-19 — blend-ticket unit fields are free text, so spellings drift
+
+**Severity: LOW, data-quality.** The `unit` and `rate_per_acre_unit` inputs on
+`ManualTicketCreate.tsx` and `BlendTicketDetail.tsx` are plain `<Input type="text">` boxes with a
+placeholder, and a new product row starts with `unit: ''`. Nothing constrains an operator to the
+vocabulary in `unit_conversions`, so `gallons`, `lbs`, `gal`, and a blank are all equally storable.
+
+The Field App already solves this: `FieldAppChemicalEntry.tsx` renders a picker from
+`unitOptionsForForm(unitConversions, product_form)` and uses `isKnownUnit` to grandfather existing
+odd values. Making the blend-ticket fields use the same helpers is the real fix and would turn a
+prose rule into a hard guard.
+
+Until then the total-volume check fails safe: an unrecognised spelling or a missing unit produces a
+"verify the total by hand" message instead of a comparison. That is deliberate — see the alias-map
+comment in `src/lib/blendMathValidator.ts` — but it means an operator who types `gallons` on one
+row and `Gal` on another loses the check on that ticket.
+
+**Not started.** No migration, no live state, no money path.
 ## OPEN 2026-08-19 — PR #404 stamps quote-line provenance, defers the FK, and settles superseded prices
 
 **Status: reworked on branch `claude/draw-down-price-tier-lines`, NOT applied, NOT merged. Awaiting
 Mason's explicit approval for both.**
+
+**FIXED in the same migration — `restore_quote_version` REFUSES a drawn booking.** Found by
+`rls-security-reviewer` and confirmed against live `prosrc`: `save_quote` was not the only path that
+deletes and reinserts a quote's lines. `_restore_quote_version_owner_impl` does the same, and its
+reinsert **omits the `id` column entirely** — every restored line takes a fresh
+`gen_random_uuid()`, so no id is ever reused. Under the deferred FK that would leave every stamp
+dangling at COMMIT and abort the restore with a raw foreign-key error, on a UI-reachable path that
+works today.
+
+**Mason chose option (A) — release the stamps — on 2026-08-19, and it was then REFUTED by the
+`gpt-5.6-sol` gate the same day.** Releasing discards the telescoping rounding basis. Reproduced on
+PostgreSQL 17.6: two 0.5-unit lines at `$1.01`, draw 0.5, restore to a single 1-unit version, draw
+the rest → the customer is billed **`$1.02` against a booking whose own arithmetic says `$1.01`**.
+`DRAW_MIXED_TIER_UNMATCHED_LINE` cannot catch it, because that guard fires only when the product
+carries **more than one** distinct `(price, cost)` — and after the restore it carries exactly one.
+The release also fired `after_order_items_change` → `trg_recalc_order_totals`, locking the order row
+while restore holds the quote row, crossing the order→quote order that cancel/void takes.
+
+**Mason then chose option (B), which is what ships:** restore raises
+`QUOTE_RESTORE_BLOCKED_BY_DRAW` — a plain-English refusal — when the booking already has drawn
+lines, **before** any destructive work. 
+
+**Its real scope, stated accurately (Codex round 3 — an earlier version of this entry called it
+"narrow", and that was wrong):** the check joins `order_items` **unfiltered by order status**, so
+once a booking has **ever** been drawn it can never restore a version again — even if every draw
+order was afterwards cancelled or voided, the quantity returned to `quote_product_draws` and the
+booking reopened. Those reversed rows are retained for audit and still carry their stamp, so the
+check stays true forever.
+
+**Mason accepted that over-breadth on 2026-08-20 rather than narrow it.** Narrowing means letting a
+reversed line past the guard, whose stamp would then dangle at COMMIT exactly as before — so
+restore would have to **release** the stamps on those dead lines. Releasing is money-neutral for
+them (a voided line is filtered out of `billed_stamped` and `v_unmatched` entirely; a cancelled
+line contributes only its delivered quantity, zero here), but it puts back an `order_items` UPDATE,
+which fires `after_order_items_change` → `trg_recalc_order_totals` and locks the order row under
+the quote lock — the deadlock this rework just removed. Trading a rare capability for a
+reintroduced lock cycle is the wrong trade. A regression case in
+`scripts/smoke/smoke-restore-version-drawn-guard.sql` pins the accepted behaviour, so a later
+narrowing must change this decision consciously rather than by accident.
+
+What is unaffected: a booking never drawn restores freely, and editing the quote directly still
+works on **any** booking, because `save_quote` reuses the same line ids and the deferred FK keeps
+the stamps. Doing (A) properly means carrying the
+line-level billing basis across a restore, which needs a real snapshot→live identity mapping — the
+same missing capability `QUOTE_ITEM_AMBIGUOUS_COST` is about, and it gets its own PR.
+
+**A second `gpt-5.6-sol` finding was a guaranteed-rollback blocker.** The postflight denied
+`service_role` EXECUTE on the restore impl, copied from the draw impl. That is wrong for this
+function: live carries `{postgres=X/postgres,service_role=X/postgres}`, a grant `20260813080000`
+deliberately retained, and `CREATE OR REPLACE` preserves ACLs — so the assertion fired and rolled
+the **entire migration** back on every attempt. It went unnoticed because the first rehearsal
+created the function fresh, with no inherited ACL, so the check passed **vacuously**. The deny list
+is now the browser roles only, and `service_role` is asserted **present** so an accidental REVOKE is
+caught too.
+
+**Proven on PostgreSQL 17.6 (2026-08-19; live never written to), with a fixture that reproduces
+live's ACL exactly:** the old assertion trips on `service_role` (so the blocker was real and the
+test is not vacuous) while the corrected one passes; the shipped body installs over that preimage,
+the ACL survives `CREATE OR REPLACE`, and all four restore postflight predicates hold; the restore
+writes `order_items` nowhere, so `after_order_items_change` cannot fire; a drawn booking is refused,
+an undrawn one is not, the guard is scoped per quote, and the `$1.02` overbill is unreachable. All
+15 money assertions still pass, re-lifted verbatim from the edited file.
+
+**Also fixed in the same pass (both gate reviewers, 2026-08-19):** the migration locked
+`quote_product_draws` before `order_items` while the draw path writes `order_items` first — a real
+deadlock cycle against any in-flight pre-barrier draw, which neither the advisory key nor the
+quiet-gate prevents (the quiet gate runs *below* those locks). The order is now
+`quote_items` → `order_items` → `quote_product_draws`, matching the draw path, and the header's
+false "no deadlock is possible" claim is corrected along with its lock count (six acquisitions,
+~90s worst case, not three and ~45s). The FK postflight now also asserts `convalidated` and the
+full key shape — proven by mutation: a `NOT VALID` constraint passed the old predicate and is
+rejected by the new one. The price-partition tripwire now matches the `IS NOT DISTINCT FROM
+ti.price` predicate rather than two identifiers that also appear in the file's own comments.
+
+**Live facts confirmed read-only on 2026-08-19**, because the price partition depends on them:
+`quote_items_price_per_unit_cent_scale_chk` and `order_items_price_per_unit_cent_scale_chk` are
+both `convalidated` (so the price comparison is exact whole cents); `order_items.price_per_unit` is
+NOT NULL with zero NULL rows; and there are zero cancelled orders carrying delivered units, so the
+cancelled-branch money case stays dormant.
 
 PR #404's tier split originally identified a price tier by the `(price_per_unit,
 cost_at_quote_cents)` pair. That key is neither unique (two booked lines at the same price collapse
@@ -113,7 +246,7 @@ PostgreSQL 17.6 in Docker, the same version live runs:
   shape **aborts** under the old non-deferrable rule and **silently wipes the stamp** under the
   retired SET NULL rule; and the residual case above **fails closed** with no orphan committed.
 
-**Not verified: the file has never been applied end to end by a server** — the preflight requires
+**Not verified: the file has never been applied end-to-end by a server** — the preflight requires
 the cutover barrier (`20260816110000`) committed in a prior transaction. That happens only at
 apply, which needs Mason's OK.
 
@@ -141,7 +274,7 @@ makes the first one reachable more often by emitting several order lines per pro
 
 ## CLOSED 2026-08-16 — CRX-SEC-1: a sales rep could forge a quote-version cost basis and inflate their own commission
 
-**Severity: was HIGH (money + privilege). Closed live by `20260813080000_lock_quote_versions_writes_to_rpc`, ledger version `20260816174353`.** The apply is observed in the ledger; the commonly quoted clock time of 2026-08-16 17:43:53 UTC is **inferred** from that version stamp, because `supabase_migrations.schema_migrations` has no timestamp column. Recorded here on 2026-08-18 because it was never entered in this file while it was open, and `docs/reference/migration-history.md` row 886 still described the migration as an unapplied local candidate **two days** after it went live (2026-08-16 inferred apply → 2026-08-18 correction). The file was authored under the stamp `20260813080000`, five days before that correction; neither of *those two* intervals is six days. (The six-day figure in this file's header measures how stale the recorded ledger high-water was, which is a different quantity.)
+**Severity: was HIGH (money + privilege). Closed live by `20260813080000_lock_quote_versions_writes_to_rpc`, ledger version `20260816174353`.** The apply is observed in the ledger; the commonly quoted clock time of 2026-08-16 17:43:53 UTC is **inferred** from that version stamp, because `supabase_migrations.schema_migrations` has no timestamp column. Recorded here on 2026-08-18 because it was never entered in this file while it was open, and because `docs/reference/migration-history.md` row 886 had gone on describing the migration as an unapplied local candidate for **two days** after it went live (2026-08-16 inferred apply → 2026-08-18 correction). That drift is fixed: row 886 has read **APPLIED LIVE** since the 2026-08-18 correction, and this sentence records what it used to say, not what it says now. The file was authored under the stamp `20260813080000`, five days before that correction; neither of *those two* intervals is six days. (The six-day figure in this file's header measures how stale the recorded ledger high-water was, which is a different quantity.)
 
 **What the hole was.** `public.quote_versions` is an append-only snapshot table. Its RLS INSERT policy `qversions_insert` checked only *who owned the quote* — never what the row contained — and the browser roles still held raw table write grants, so a sales rep could PostgREST-INSERT a version row of their own construction onto their own quote. That became a money problem once `20260812115236` made `snapshot_data` an authoritative cost source: the restore path writes the snapshot's cost straight into the immutable `quote_items.cost_at_quote_cents`, `convert_quote_to_order` copies it onto the order line, and canonical profit and commission derive from there. The below-cost approval trigger added by `20260812115237` does **not** catch it, because that trigger compares the sale price against the *live product* cost — understating the historical cost basis raises apparent margin, so it never fires.
 
