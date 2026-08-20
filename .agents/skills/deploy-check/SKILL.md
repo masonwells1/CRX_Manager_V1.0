@@ -341,22 +341,25 @@ If blocked: List every issue that needs fixing first.
   Re-trigger with `@coderabbitai review` and read the fresh review
 - ALWAYS merge with `--match-head-commit <HEAD>` naming the reviewed SHA, so GitHub — not your own
   diligence — rejects the merge if the head moved after you checked
-- If no fresh review can be obtained (CodeRabbit down, rate limited past the window), the gate is
-  **BLOCKED**, not satisfied by disclosure. Report it as blocked and get Mason's explicit OK to
-  merge without it. Writing "the final commit went unreviewed" in a summary is a description of the
-  gate failing, never a substitute for passing it — an escape hatch an agent can self-certify is
-  not a gate. The **one** exception is the merge-only head documented in step 5, where CodeRabbit
-  itself reports "No files to review" and the three tree-identity checks pass; that is deterministic
-  proof, not disclosure, and it does not extend to a head carrying any real new commit
-- **Two different gates, only one of them waivable.** Mason may approve a merge without a CodeRabbit
-  review because AGENTS.md makes CodeRabbit *advisory* — "it comments and does not block". That
-  approval is the owner exercising his own policy, not an agent waiving a gate, and only he can give
-  it. The exact-SHA adversarial proof on risky money/RLS/migration diffs is a different thing
-  entirely and is **not waivable by anyone, including Mason's in-chat say-so** — it is satisfied by
-  a clean machine verdict or the change parks. Never let approval of the first be read as approval
-  of the second. (Codex read these as one gate on PR #441 and called the Mason-approval path a
-  blocker; that specific point is declined — the two gates are distinct in AGENTS.md — but the
-  wording is now explicit so the misreading cannot recur.)
+- If no fresh review can be obtained (CodeRabbit down, rate limited past the window), the merge stays
+  **BLOCKED** until one can be. There is no waiver — not by an agent, and not by Mason's in-chat OK.
+  Writing "the final commit went unreviewed" in a summary is a description of the gate failing, never
+  a substitute for passing it. The **one** exception is the merge-only head documented in step 5,
+  where CodeRabbit itself reports "No files to review" and the three tree-identity checks pass; that
+  is deterministic proof, not disclosure, and it does not extend to a head carrying any real new
+  commit.
+
+  **"Advisory" does not mean optional.** AGENTS.md says whoever lands the work *reads CodeRabbit's
+  review and fixes any real issue it raises*, and that reading is mandatory; "advisory" describes only
+  what happens to the **findings** — they may be weighed, and nitpicks dismissed with a one-line
+  reason — never whether the review happens at all. An earlier revision of this file carried a clause
+  letting Mason approve a merge with no review, on the strength of that word. Codex flagged it twice,
+  the second time as High, and was right both times: it contradicted "NEVER merge a PR without reading
+  CodeRabbit's review on it first" three lines above, and it opened a path for an unreviewed final
+  commit — possibly touching auth, permissions, or deploy guards, none of which trip the money/RLS
+  proof — to reach production during any outage. The clause is gone. If Mason ever wants that
+  trade-off, it is a policy change he records in `AGENTS.md` and the decision log, not a standing
+  escape hatch pre-authorized inside the procedure it would bypass.
 - If a local guard blocks the merge and its required proof harness does not exist in that repo (as
   on FarmRx, which has no `scripts/write-codex-push-proof.mjs`), PARK and ask Mason. Never satisfy a
   guard by borrowing another repo's proof script — CRX's reviews against CRX's rules and would mint

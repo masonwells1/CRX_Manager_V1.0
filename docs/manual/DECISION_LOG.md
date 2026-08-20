@@ -202,7 +202,31 @@ FarmRx head `3beb6407`, where CodeRabbit answered "No files to review", still ca
 completed / success`. So the status never stands alone — it pairs with the canonical stamp, and for
 a merge-only head the tree-identity proof carries the weight.
 
-**The gate is prose, so it is now pinned by a test.** `scripts/deploy-check-review-gate.test.mjs`
+**"Advisory" does not mean optional — the review waiver is removed.** An earlier revision of the
+skill let Mason approve a merge with no CodeRabbit review at all, reasoning that AGENTS.md calls
+CodeRabbit advisory. Codex flagged that twice, the second time as High, and was right both times.
+AGENTS.md requires that whoever lands the work *reads CodeRabbit's review*; "advisory" describes what
+happens to the **findings** — weighed, nitpicks dismissible with a one-line reason — not whether the
+review occurs. The clause also contradicted the rule three lines above it ("NEVER merge a PR without
+reading CodeRabbit's review on it first") and opened a path for an unreviewed final commit touching
+auth, permissions, or deploy guards — none of which trip the money/RLS proof — to reach production
+during any outage. The merge now stays BLOCKED until a review can be obtained, with the single
+deterministic merge-only-head exception above. Changing that trade-off is a policy decision Mason
+records here, never a standing escape hatch inside the procedure it bypasses. Recorded because the
+first decline was mine and it was wrong: a reviewer that returns the same finding at higher severity
+is usually reading the contract more carefully than I am.
+
+**The gate is prose, and the test does NOT make it executable.** Codex's CRX-SEC-002 (Medium) is
+accepted as stated: the suite below is documentation-regression coverage. It proves the documented
+procedure still says the right thing; it does not run the verification and cannot stop a merge that
+skips it. `.claude/hooks/pr-merge-guard.mjs` today enforces the Codex proof and `mergeStateStatus:
+CLEAN`, but **neither the CodeRabbit artifacts nor `--match-head-commit`**. Converting those two into
+the merge guard is open follow-up work, deliberately not bolted onto this PR: it is a new enforcement
+feature on a security guard shared by Claude and Codex, and it deserves its own change and its own
+review rather than a thirteenth round here. Until it lands, nobody may cite this suite as the hard
+gate.
+
+`scripts/deploy-check-review-gate.test.mjs`
 (24 assertions, wired into `npm run test:agent-workflows`) asserts every one of these query shapes in
 both the `.claude` source and the generated `.agents` mirror, and asserts the absence of each
 superseded weak form. It asserts against the **extracted `bash` commands**, not the document text —

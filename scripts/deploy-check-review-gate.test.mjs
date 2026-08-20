@@ -1,6 +1,16 @@
 #!/usr/bin/env node
 // Regression tests for the deploy-check pre-merge review gate.
 //
+// SCOPE — read this before trusting a green run. This is DOCUMENTATION-REGRESSION
+// coverage, not runtime enforcement. It proves the documented procedure still says
+// the right thing; it does NOT execute the review verification, and it cannot stop
+// a merge that skips those steps. `.claude/hooks/pr-merge-guard.mjs` currently
+// enforces neither the CodeRabbit artifacts nor `--match-head-commit`, so a green
+// run here plus a careless merge is still a bad merge. Codex raised exactly this
+// (CRX-SEC-002, Medium, PR #441) and the honest label is its own mitigation:
+// converting these checks into the merge guard is tracked follow-up work, and
+// until that lands nobody should cite this suite as the hard gate.
+//
 // The gate lives in prose (.claude/skills/deploy-check/SKILL.md) rather than in
 // executable code, so these tests pin the exact query shapes that make it sound.
 // Each assertion here corresponds to a hole that was live at some point on
