@@ -97,6 +97,9 @@ const shellBuiltinNodeOptionsCases = [
   `cmd /d /c "if 1==1 set NODE_OPTIONS=--require=./preload.cjs & npm --version"`,
   `cmd /d /c "if defined PATH call set NODE_OPTIONS=--require=./preload.cjs & npm --version"`,
   `cmd /d /c "for %A in (1) do set NODE_OPTIONS=--require=./preload.cjs & node scripts/ordinary-check.mjs"`,
+  `export $(printf NODE_OPTIONS=--require=./preload.cjs); npm --version`,
+  `declare -x "$(printf NODE_OPTIONS=--require=./preload.cjs)"; node scripts/ordinary-check.mjs`,
+  `readonly "\${TARGET}=--require=./preload.cjs"; npm --version`,
 ];
 const privilegeWrapperNodeOptionsCases = [
   ["sudo", "NODE_OPTIONS=--require=./preload.cjs", "node", "scripts/ordinary-check.mjs"].join(" "),

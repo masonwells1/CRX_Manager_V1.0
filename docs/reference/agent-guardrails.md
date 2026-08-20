@@ -100,7 +100,10 @@ when `call`/`@call`, an `if` condition, or a `for … do` body precedes an expli
 names fail closed before Node-backed executables. Bash `printf -v` and `read`
 variable targets are inspected too, including dynamic target names, and
 `set -a`/`set -o allexport` state is tracked across segments so a Node-backed
-command fails closed until `set +a`/`set +o allexport` disables it. Escaped `find` action names
+command fails closed until `set +a`/`set +o allexport` disables it. Dynamic
+operands and command/process substitutions passed to `export`, `declare`,
+`typeset`, `local`, or `readonly` fail closed before Node-backed execution.
+Escaped `find` action names
 are normalized before matching `-exec`/`-execdir`/`-ok`/`-okdir`. A
 16,384-character budget denies oversized payloads before tokenization, and a
 512-token budget denies token-dense payloads before recursive runner analysis.

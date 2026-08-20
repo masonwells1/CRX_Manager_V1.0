@@ -673,6 +673,8 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
   });
   const nodeBackedCommandMentioned = /\b(?:node|nodejs|npm|npx|pnpm|yarn|bun|corepack)(?:\.exe|\.cmd)?\b/i.test(value);
   if (nodeBackedCommandMentioned) {
+    const dynamicAssignmentBuiltin = tokens.some((token) => tokenNamed(token, ["export", "declare", "typeset", "local", "readonly"]))
+      && /(?:\$\(|`[^`]*`|<\(|>\(|\$\{|\$[A-Za-z_]|![^!\r\n]+!|%[^%\r\n]+%)/s.test(value);
     const dynamicPosixEnv = tokens.some((token) => tokenNamed(token, ["env"]))
       && (/(?:\$\(|`[^`]*`|<\()/s.test(value) || tokens.some(hasDynamicAssignmentName));
     const compactDynamicTarget = value.toLowerCase().replace(/[\s"'`^+()[\]{},]/g, "");
@@ -685,7 +687,7 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
     const cmdDelayedMutation = tokens.some((token) => tokenNamed(token, ["cmd"]))
       && /\/v(?::on)?(?:\s|$)/i.test(value)
       && /\bset\s+![^!\r\n]+!\+?=/i.test(value);
-    if (dynamicPosixEnv || powershellMutation || dotNetMutation || cmdDelayedMutation) return true;
+    if (dynamicAssignmentBuiltin || dynamicPosixEnv || powershellMutation || dotNetMutation || cmdDelayedMutation) return true;
   }
 
   let allexportEnabled = false;

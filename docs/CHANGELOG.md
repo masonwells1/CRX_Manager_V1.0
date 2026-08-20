@@ -50,6 +50,9 @@ All significant development milestones, in reverse chronological order.
   name before a Node-backed command). The parser also tracks `set -a` and
   `set -o allexport` across command segments and fails closed if a Node-backed
   command is reached before `set +a` or `set +o allexport` disables the mode.
+  Assignment-producing command/process substitutions and dynamic variable
+  operands passed to `export`, `declare`, `typeset`, `local`, or `readonly`
+  also fail closed before a Node-backed command.
   Nested command-string analysis reapplies the opaque-interpreter policy, keeps
   `env -S` option context inside split bodies, and evaluates both raw and
   POSIX-unescaped wrapper/assignment spellings.
