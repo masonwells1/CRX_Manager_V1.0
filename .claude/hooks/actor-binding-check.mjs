@@ -1701,6 +1701,52 @@ function hasActorCallableForwarding(structuralBody, actorParams) {
   return false;
 }
 
+/** Carry direct actor taint through the ordinary PL/pgSQL local-binding forms
+ * that wrappers use before invoking helpers. The analysis is deliberately
+ * monotonic: once a local receives an unbound actor in the routine, a later
+ * overwrite does not make it trusted for this static guard. */
+function actorForwardingReferences(structuralBody, actorParams) {
+  const references = new Set(actorParams);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const source of [...references]) {
+      const sourceRef = identifierReferencePattern(source);
+      const patterns = [
+        new RegExp(
+          `(?:^|[;\\n]|\\bBEGIN\\b|\\bTHEN\\b|\\bELSE\\b)\\s*(${SQL_IDENTIFIER_PATTERN})\\s*` +
+            `(?::=|=(?!=))\\s*[^;\\n]*(?:${sourceRef})`,
+          "gi"
+        ),
+        new RegExp(
+          `(?:^|[;\\n])\\s*(${SQL_IDENTIFIER_PATTERN})\\s+(?:CONSTANT\\s+)?[^;\\n:=]+?` +
+            `(?::=|DEFAULT)\\s*[^;\\n]*(?:${sourceRef})`,
+          "gi"
+        ),
+        new RegExp(
+          `\\bSELECT\\b[^;]*(?:${sourceRef})[^;]*\\bINTO\\s+(${SQL_IDENTIFIER_PATTERN})`,
+          "gi"
+        ),
+        new RegExp(
+          `(?:^|[;\\n])\\s*(${SQL_IDENTIFIER_PATTERN})\\s+ALIAS\\s+FOR\\s+(?:${sourceRef})`,
+          "gi"
+        ),
+      ];
+      for (const pattern of patterns) {
+        let match;
+        while ((match = pattern.exec(structuralBody)) !== null) {
+          const target = normalizedIdentifier(match[1]);
+          if (target !== null && !references.has(target)) {
+            references.add(target);
+            changed = true;
+          }
+        }
+      }
+    }
+  }
+  return [...references];
+}
+
 /** A callable not proven data-only may execute or store any string argument.
  * If that argument is an expression rather than one inspectable literal, the
  * reader cannot prove that chr()/concat()/format() did not obscure SQL tokens. */
@@ -2448,8 +2494,10 @@ try {
       `\\b(?:CALL|PERFORM)\\b[^;]*?(?:${actorParamReference})`,
       "i"
     );
-    const actorForwardedCallable = hasActorCallableForwarding(maskedBody, actorParams) ||
-      hasActorCallableForwarding(commentBlankedBody, actorParams);
+    const maskedForwardingReferences = actorForwardingReferences(maskedBody, actorParams);
+    const commentBlankedForwardingReferences = actorForwardingReferences(commentBlankedBody, actorParams);
+    const actorForwardedCallable = hasActorCallableForwarding(maskedBody, maskedForwardingReferences) ||
+      hasActorCallableForwarding(commentBlankedBody, commentBlankedForwardingReferences);
     const hasMutation = /\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM|MERGE\s+INTO)\b/i.test(maskedBody) ||
       /\b(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM|MERGE\s+INTO)\b/i.test(commentBlankedBody) ||
       /\bEXECUTE\b/i.test(maskedBody) ||

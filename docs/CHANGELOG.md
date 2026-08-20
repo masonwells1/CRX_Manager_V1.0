@@ -22,8 +22,10 @@ effective privileges, that split path could still forge a financial-audit
 actor. The guard now treats actor arguments to any callable expression as a
 mutation boundary, including assignment, `RETURN`, and `RETURN QUERY`, while
 excluding control-flow parentheses. The post-apply actor-forgery sweep now
-flags the same forwarding shape. Five regressions cover four forwarding forms
-and the non-mutating control; the focused hook suite now passes 398 assertions.
+flags the same forwarding shape. Direct and local-aliased forwarding through
+assignment, `SELECT INTO`, and PL/pgSQL `ALIAS` declarations is fail-closed.
+Eight regressions cover the forwarding forms and the non-mutating control; the
+focused hook suite now passes 401 assertions.
 
 ## 2026-08-13 — Actor-binding guard covers procedures and cron schema identity
 

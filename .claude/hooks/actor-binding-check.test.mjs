@@ -119,6 +119,23 @@ ok(isDeny(r), "RETURN cannot forward an unbound actor through a callable express
 r = runHook(forwardedActorWrapper("RETURN QUERY SELECT public.record_event_internal(p_performed_by);"));
 ok(isDeny(r), "RETURN QUERY cannot forward an unbound actor through a callable expression");
 
+r = runHook(forwardedActorWrapper("v_id := p_performed_by; RETURN public.record_event_internal(v_id);"));
+ok(isDeny(r), "a local assignment cannot launder an unbound actor before a callable expression");
+
+r = runHook(forwardedActorWrapper("SELECT p_performed_by INTO v_id; RETURN public.record_event_internal(v_id);"));
+ok(isDeny(r), "SELECT INTO cannot launder an unbound actor before a callable expression");
+
+r = runHook(`${INVOKER_ACTOR_HELPER}
+CREATE OR REPLACE FUNCTION public.forward_actor_alias(p_performed_by uuid)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $wrapper$
+DECLARE
+  v_actor ALIAS FOR p_performed_by;
+BEGIN
+  RETURN public.record_event_internal(v_actor);
+END
+$wrapper$;`);
+ok(isDeny(r), "a PL/pgSQL ALIAS cannot launder an unbound actor before a callable expression");
+
 r = runHook(fn(`BEGIN IF (p_performed_by IS NULL) THEN RETURN '{}'::jsonb; END IF; RETURN '{}'::jsonb; END;`));
 ok(!isDeny(r), "control-flow parentheses alone do not turn a non-mutating definer into an actor-forwarding call");
 
