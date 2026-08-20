@@ -20,9 +20,11 @@ effect: running `/autocompact <n>` inside this repo appeared to succeed but chan
 because `/autocompact` writes to *user* settings, which the project file then overrode. The
 threshold was effectively frozen at 500k for every session in this repository.
 
-A second effect: the pin also capped useful context. With the compaction threshold at 500k, a
-session on a 1M-context model can never grow past ~500k, so the upper half of the window was
-unreachable regardless of which model was selected.
+A second effect: the pin shortened the usable stretch before summarization. `autoCompactWindow`
+is a compaction *trigger*, not a ceiling on the model's context window — the window is set by the
+model (200K, or 1M via a `[1m]` suffix) and the pin does not change it. But at 500k the session
+summarized at half the available room on a 1M-context model, so the practical span of unsummarized
+conversation was far shorter than the model could actually hold.
 
 **Decision.** Remove the `autoCompactWindow` key from `.claude/settings.json` entirely. The
 project no longer expresses an opinion on the compaction threshold; the user-level value in
@@ -31,9 +33,13 @@ project no longer expresses an opinion on the compaction threshold; the user-lev
 **Operative rule.** Do not reintroduce a top-level `autoCompactWindow` into
 `.claude/settings.json` or `.claude/settings.local.json`. A project-level pin silently disables
 per-session threshold control for everyone working in the repo, including every parallel
-worktree. If a future task genuinely needs a fixed threshold, use the session-scoped
-`--autocompact` flag or the `CLAUDE_CODE_AUTO_COMPACT_WINDOW` environment variable, which do not
-persist and do not affect other sessions.
+worktree. If a future task genuinely needs a fixed threshold, use the `--autocompact` flag, which
+applies only to the session it launches, or `CLAUDE_CODE_AUTO_COMPACT_WINDOW`. Mind the scope
+difference on the environment variable: set inline for one invocation it affects only that run,
+but **exported** into a shell profile or a CI environment it applies to every Claude Code session
+launched from there. It also sits at the top of the precedence chain — it overrides
+`/autocompact`, `--autocompact`, and any `autoCompactWindow` in a settings file — so an
+accidentally exported value is harder to notice than a project pin, not easier.
 
 **Not changed by this entry.** Nothing about model selection, effort level, or any guard is
 affected. This is a harness-configuration change only; no money, schema, RLS, or migration
