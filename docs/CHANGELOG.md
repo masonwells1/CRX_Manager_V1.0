@@ -99,9 +99,25 @@ established.
 - Both comparisons import one `normalizeEol` from **`scripts/normalize-eol.mjs`**. It is deliberately
   narrow — CRLF to LF, nothing else — so a lone CR, a BOM, or a trailing-newline difference still
   reports as drift. It fails closed: it can raise a false alarm, never grant a false pass.
-- `sync-agent-workflows.mjs --write` now writes the LF form. It previously copied a CRLF-smudged
-  source verbatim into `.agents/**`, so the "run `--write`" remedy the health check prints could not
-  repair a smudged mirror. It can now.
+- `sync-agent-workflows.mjs --write` now writes the LF form and compares the target's **raw** bytes
+  against it, so the "run `--write`" remedy the health check prints actually repairs a smudged mirror.
+  **The first attempt at this bullet was wrong and shipped that way.** It normalized the target before
+  comparing, which is a no-op on the case that matters: a CRLF mirror normalizes equal to the
+  canonical form, the write is skipped, and the file stays CRLF while `--write` prints "Synced". The
+  live proof taken at the time used a CRLF *source* against an LF *mirror* — the half that did work —
+  so it passed. Two independent Opus reviewers also missed it. **CodeRabbit caught it on PR #425.**
+  Proved on the real tree afterwards: `.agents/README.md` smudged to CRLF stayed CRLF through the old
+  `--write` and came back LF through the fixed one, and the same run repaired four `.agents/**`
+  mirrors that had been sitting CRLF on disk — an empty `git diff` throughout, exactly the invisible
+  state this entry describes.
+- `scripts/sync-agent-workflows.test.mjs` is new and pins that repair: a CRLF mirror must come out
+  LF, a CRLF source must land as LF, real content drift must still be written, and a second run must
+  change nothing. Mutation-tested — restoring the normalize-before-compare line turns it red on the
+  CRLF-mirror assertion. `writeExpected` now takes an explicit `targetRoot` so the test runs against a
+  temp directory, and the CLI block is guarded by a resolved-path `isMain` check so importing the
+  module cannot regenerate `.agents/**` as a side effect. Both invocation paths were re-verified:
+  `node scripts/sync-agent-workflows.mjs --check` (husky/CI, relative) and the absolute-path spawn
+  from `check-agent-workflows.mjs`.
 - `scripts/agent-health-check.test.mjs` pins the contract: CRLF-vs-LF is PASS, real content drift is
   still FAIL, the normalizer's narrowness is asserted, and both callers are checked for importing the
   shared module instead of redefining it. Mutation-tested — each assertion goes red when the behavior
@@ -115,6 +131,29 @@ established.
 - Verified by reproducing the FAIL against the live CRLF/LF split in this worktree, confirming PASS
   after the fix with that split still in place, then `npm run agent-health` and
   `npm run test:agent-workflows` clean.
+- **A second fail-silent path, found while reviewing the fix itself.** `check-agent-workflows.mjs`
+  spawned `--check` and passed on `sync.status === 0` alone. A subprocess that does nothing also
+  exits 0, so any silent no-op in the generator would have been reported as a green "synced" that
+  checked nothing — and the new `isEntryPoint` guard is exactly the kind of thing that could
+  mis-detect (Windows carries drive-letter casing from whatever launched the shell, so a `C:` vs `c:`
+  mismatch would skip the CLI). Both halves are closed: the check now requires the `PASS - N Codex
+  workflow file(s) match` line, and `isEntryPoint` case-folds on win32. Mutation-tested by forcing the
+  CLI guard to `false` — `--check` produced no output and exit 0, and the check reported
+  `FAIL … --check exited 0 without its PASS line (produced no output) — the generator may not have
+  run at all`. `sync-agent-workflows.test.mjs` pins entry-point detection for absolute, relative,
+  wrong-file, absent-argv, and flipped-drive-letter inputs.
+- **Two more CodeRabbit findings, both the same shape, both taken.** (1) The raw comparison decoded
+  the target to a string first, and decoding maps any invalid UTF-8 byte to U+FFFD — so a corrupt
+  mirror could compare equal to canonical text containing that character and be skipped. Now
+  compares `Buffer`s. (2) The idempotency assertion checked only the file's *content*, which also
+  passes if `--write` rewrites every file with identical bytes on every run — the exact thing the
+  assertion claimed to disprove. Now pins mtime; mutation-tested by forcing an unconditional write,
+  which turns it red on that assertion. Both are the recurring theme of this entry: **the check was
+  looser than the claim it was making.**
+- **Lesson, and the reason the `--write` correction is written out in full above:** a proof that
+  exercises one half of a two-sided repair reads exactly like a proof that covers both. The source
+  side and the mirror side fail differently, and "I watched it work" was true and still insufficient.
+  Prove each direction separately, or the observation is weaker than it looks.
 
 ## 2026-08-19 — Corrected the false "Codex cannot reach the live DB" premise in the bug-hunt commands
 
