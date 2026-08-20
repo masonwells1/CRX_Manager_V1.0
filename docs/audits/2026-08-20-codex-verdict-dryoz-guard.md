@@ -222,6 +222,27 @@ asks a question.
 bypass, and they are inverted.** Mutation-pinned: restoring the old bail-out turns both
 regressions red.
 
+## Push-proof gate, round 3 — BLOCKED, and it caught a half-done fix
+
+`752a8124`. Two findings. One was mine to fix and I had already half-fixed it.
+
+**The relabel-only remedy lived in TWO places, and round 2 corrected only one.** The on-row
+banner was fixed; the **save-time toast** still ended "…or change the rate unit to
+`{priceUnit}/ac`." So the operator got the safe wording on the row and the dangerous wording at
+the exact moment they were blocked from saving. Fixing one phrasing of an instruction is not
+fixing the instruction — the sweep should have been for the *concept*, across every string that
+carries it. `grep` for the advice now returns exactly two sites and both are correct.
+
+Fixed, and pinned by a mounted regression that asserts **both** surfaces carry the "re-enter the
+rate" instruction and neither ends with a bare relabel remedy. Mutation-pinned: stripping the
+warning from the toast turns it red.
+
+**The second finding is the database one, unchanged** — `save_job` still accepts caller-supplied
+quantity, units and prices without validating their relationship. Nothing in this branch touches
+it, so the gate will keep returning BLOCKED until a migration does. A fourth proof was **not**
+minted: the outcome is known, and spending ~20 minutes and a review quota to be told something
+already understood is waste, not diligence.
+
 ## Still open
 
 - **Server-side enforcement of the unit invariant, and server-side job totals** — findings 4

@@ -2009,8 +2009,15 @@ export default function JobDetail() {
       toast('error',
         `${chemBillingHazards.size} chemical line(s) cannot be saved. On the Chemicals tab, "${name}" ` +
         `has a quantity counted in ${first.quantityUnit} but a price quoted per ${first.priceUnit}${overBy}. ` +
-        `Set the line's Unit to ${first.quantityUnit} (and its cost/price per ${first.quantityUnit}), ` +
-        `or change the rate unit to ${first.priceUnit}/ac.`,
+        // Must match the on-row banner EXACTLY in substance. An earlier version of this toast
+        // still carried the relabel-only remedy after the banner had been corrected, which
+        // handed the operator a working bypass at the very moment they were blocked: changing
+        // rate_unit alone makes the units match and silences the guard while the quantity and
+        // price stay put, saving the identical over-charge in silence. (Codex, 2026-08-20)
+        `Set the line's Unit to ${first.quantityUnit} (and its cost/price per ${first.quantityUnit}). ` +
+        `If the rate really is in ${first.priceUnit}, change the rate unit to ${first.priceUnit}/ac ` +
+        `AND re-enter the rate so the quantity is recalculated — relabelling the unit on its own ` +
+        `does not change the amount, and would bill the same wrong total silently.`,
       );
       return;
     }

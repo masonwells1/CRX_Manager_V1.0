@@ -179,6 +179,35 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('save_job');
   }, 30000);
 
+  it('never offers the relabel-only remedy — in the banner OR the save toast', async () => {
+    // THE BYPASS THIS PINS. Changing `rate_unit` only changes a LABEL: it does not recalculate
+    // the quantity or the price. Turning 'Dry oz/ac' into 'Lb/ac' therefore makes the two units
+    // match, which silences the guard, while quantity 3200 and price 150c/Lb stay exactly as
+    // they were — saving the identical $4,800-instead-of-$300 charge in silence.
+    //
+    // An operator who follows the remedy VERBATIM must not end up there. This asserts both
+    // places that carry the advice, because the first fix corrected the banner and left the
+    // save-time toast still teaching the bypass. (Codex, 2026-08-20)
+    mountWith(HAZARD_CHEM);
+    const banner = await screen.findByText(/This line cannot be saved/i, {}, { timeout: 15000 });
+    const bannerText = banner.closest('div')?.textContent || '';
+    expect(bannerText).toMatch(/re-enter the rate/i);
+    expect(bannerText).toMatch(/does not change the amount/i);
+
+    const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
+    fireEvent.click(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
+    await waitFor(() => expect(mockToast).toHaveBeenCalled());
+
+    const errors = mockToast.mock.calls.filter((c) => c[0] === 'error').map((c) => String(c[1]));
+    const hazardToast = errors.find((m) => /quantity counted in/i.test(m)) || '';
+    expect(hazardToast).not.toBe('');
+    expect(hazardToast).toMatch(/re-enter the rate/i);
+    expect(hazardToast).toMatch(/does not change the amount/i);
+    // The specific dangerous shape: a bare "or change the rate unit to X/ac." that ENDS the
+    // sentence, with no instruction to re-enter the rate alongside it.
+    expect(hazardToast).not.toMatch(/or change the rate unit to \S+\/ac\.\s*$/i);
+  }, 30000);
+
   it('SAVES an exactly-rounded total, matching the server rather than binary float', async () => {
     // 25c x 0.58 is exactly 14.50. The server's safe_cents_qty rounds half away from zero
     // to 15c (verified live: ROUND(25::numeric * 0.58) = 15), but Math.round(0.58 * 25)
