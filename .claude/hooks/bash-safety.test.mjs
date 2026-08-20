@@ -263,6 +263,15 @@ ok(!maintenanceProducerCommandMentioned(awkProgramAsData), "AWK program spelling
 eq(checkMaintenanceProducerInvocation(awkProgramAsData), null, "AWK program search data stays outside the producer gate");
 ok(!checkDangerousCommand(awkProgramAsData), "ordinary AWK program text search stays allowed");
 ok(!maintenanceProducerCommandMentioned("awk --help"), "AWK help mode stays outside the producer gate");
+for (const command of [
+  "wsl awk 'BEGIN { cmd = decode(); system(cmd) }'",
+  "wsl -d docker-desktop -- awk 'BEGIN { cmd = decode(); system(cmd) }'",
+  "wsl --distribution=docker-desktop --exec busybox awk 'BEGIN { cmd = decode(); system(cmd) }'",
+]) {
+  ok(maintenanceProducerCommandMentioned(command), `WSL/multi-call AWK launcher recognized: ${command}`);
+  ok(checkDangerousCommand(command), `WSL/multi-call AWK launcher denied: ${command}`);
+}
+ok(!maintenanceProducerCommandMentioned("wsl --help awk 'BEGIN { print 1 }'"), "WSL help mode stays outside the producer gate");
 const decoderToShellAsData = "rg -n 'base64 -d | sh' docs";
 ok(!maintenanceProducerCommandMentioned(decoderToShellAsData), "decoder-to-shell spelling used as quoted search data is not classified as an invocation");
 eq(checkMaintenanceProducerInvocation(decoderToShellAsData), null, "decoder-to-shell search data stays outside the producer gate");
@@ -282,11 +291,15 @@ ok(checkDangerousCommand("FOO=1 NODE_OPTIONS=--require=./preload.cjs node script
 ok(checkDangerousCommand("command env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "command-wrapped env NODE_OPTIONS preload is denied");
 ok(checkDangerousCommand("SAFE=1 env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "assignment-prefixed env NODE_OPTIONS preload is denied");
 ok(checkDangerousCommand("SAFE=1 command -p env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "assignment-prefixed command/env NODE_OPTIONS preload is denied");
+ok(checkDangerousCommand("SAFE= command env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "empty assignment before command/env NODE_OPTIONS preload is denied");
+ok(checkDangerousCommand("command -- env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "command terminator before env NODE_OPTIONS preload is denied");
+ok(checkDangerousCommand("SAFE='x y' command -p -- env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "quoted assignment before command/env NODE_OPTIONS preload is denied");
 ok(checkDangerousCommand("Set-Item Env:NODE_OPTIONS $PRELOAD"), "PowerShell Set-Item NODE_OPTIONS mutation is denied");
 ok(checkDangerousCommand("$env:NODE_OPTIONS = $PRELOAD"), "PowerShell env assignment to NODE_OPTIONS is denied");
 ok(checkDangerousCommand("[Environment]::SetEnvironmentVariable('NODE_OPTIONS', $PRELOAD)"), ".NET NODE_OPTIONS mutation is denied");
 ok(!checkDangerousCommand("rg -n 'NODE_OPTIONS=' docs"), "NODE_OPTIONS spelling used as quoted search data stays allowed");
 ok(!checkDangerousCommand("rg -n 'command env NODE_OPTIONS=' docs"), "wrapped NODE_OPTIONS spelling used as quoted search data stays allowed");
+ok(!checkDangerousCommand("rg -n 'SAFE= command -- env NODE_OPTIONS=' docs"), "complex wrapped NODE_OPTIONS spelling used as quoted search data stays allowed");
 ok(!checkDangerousCommand("rg -n 'Set-Item Env:NODE_OPTIONS' docs"), "PowerShell NODE_OPTIONS mutation spelling used as quoted search data stays allowed");
 
 // ── net-new: shell-redirect .env write (2026-07-13, shared with mcp-tool-guard) ──

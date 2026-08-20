@@ -4,13 +4,15 @@ All significant development milestones, in reverse chronological order.
 
 ## 2026-08-19 — Close the two remaining PR #402 maintenance-command guard gaps
 
-- The shared shell-safety classifier now treats direct `awk`, `gawk`, `mawk`, and
+- The shared shell-safety classifier now treats `awk`, `gawk`, `mawk`, and
   `nawk` programs as opaque launchers while the protected maintenance producer
-  exists, closing the reviewed path where an AWK program could assemble and run
-  the protected command indirectly.
+  exists, including execution through WSL and BusyBox/Toybox-style multi-call
+  launchers. This closes the reviewed path where AWK could assemble and run the
+  protected command indirectly.
 - `NODE_OPTIONS` preloads are now denied when `env` is preceded by shell
-  assignments or the `command` wrapper, including `command env ...`,
-  `SAFE=1 env ...`, and `SAFE=1 command -p env ...`.
+  assignments or the `command` wrapper. The token-aware parser covers empty and
+  quoted assignment values, `command -p`, the `command --` terminator, `env`
+  options, and nested `command env` chains without matching quoted search text.
 - Regression coverage proves the new deny paths and preserves ordinary quoted
   searches plus terminal AWK help mode. Codex continues to consume the same
   `.claude/hooks/bash-safety-lib.mjs` implementation through its tracked hook

@@ -114,6 +114,28 @@ export function maintenanceProducerCommandMentioned(command) {
           if (/^[A-Za-z_]\w*=/.test(argument) || argument.startsWith("-")) { cursor += 1; continue; }
           break;
         }
+      } else if (named("wsl")) {
+        cursor += 1;
+        while (cursor < index) {
+          const argument = normalizeShellOption(list[cursor].value);
+          if (/^(?:--help|--version|--status|--list|-l)$/.test(argument)) return false;
+          if (argument === "--") { cursor += 1; break; }
+          if (/^(?:-e|--exec)$/.test(argument)) { cursor += 1; break; }
+          if (/^(?:-d|--distribution|-u|--user|--cd|--shell-type)$/.test(argument)) {
+            cursor += 2;
+            continue;
+          }
+          if (/^(?:--distribution|--user|--cd|--shell-type)=/.test(argument)) {
+            cursor += 1;
+            continue;
+          }
+          if (argument.startsWith("-")) { cursor += 1; continue; }
+          break;
+        }
+      } else if (["busybox", "toybox"].some((name) => named(name))) {
+        cursor += 1;
+        if (cursor < index && /^(?:--help|--version|--list|--list-full|--install)$/.test(normalizeShellOption(list[cursor].value))) return false;
+        if (cursor < index && list[cursor].value === "--") cursor += 1;
       } else if (["nohup", "nice", "timeout", "setsid", "stdbuf"].some((name) => named(name))) {
         cursor += 1;
         if (cursor < index && /^--(?:help|version)$/.test(list[cursor].value)) return false;
@@ -386,13 +408,103 @@ export function checkMaintenanceProducerInvocation(command) {
   return "Blocked maintenance producer invocation. Use one exact repository-relative node command only; chaining, wrappers, substitutions, alternate spellings, reordered or unknown arguments, and indirect writers are denied.";
 }
 
+function tokenizeShellWords(text) {
+  const tokens = [];
+  let current = "";
+  let quote = "";
+  const push = () => {
+    if (!current) return;
+    tokens.push({ value: current, control: false });
+    current = "";
+  };
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (quote) {
+      if (char === quote) quote = "";
+      else current += char;
+      continue;
+    }
+    if (char === "\"" || char === "'") quote = char;
+    else if (/\s/.test(char)) push();
+    else if (/[;&|(){}<>]/.test(char)) {
+      push();
+      tokens.push({ value: char, control: true });
+    } else current += char;
+  }
+  push();
+  return tokens;
+}
+
+function nodeOptionsAssignmentMentioned(command) {
+  const tokens = tokenizeShellWords(String(command || ""));
+  const assignmentName = (token) => /^([A-Za-z_]\w*)=/.exec(token?.value || "")?.[1]?.toLowerCase() || "";
+  const executableName = (token) => String(token?.value || "").replace(/^@/, "").split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase();
+  const hasNodeOptionsAssignment = (token) => assignmentName(token) === "node_options";
+
+  for (let segmentStart = 0; segmentStart < tokens.length;) {
+    while (segmentStart < tokens.length && tokens[segmentStart].control) segmentStart += 1;
+    let segmentEnd = segmentStart;
+    while (segmentEnd < tokens.length && !tokens[segmentEnd].control) segmentEnd += 1;
+    let cursor = segmentStart;
+
+    const skipAssignments = () => {
+      while (cursor < segmentEnd && assignmentName(tokens[cursor])) {
+        if (hasNodeOptionsAssignment(tokens[cursor])) return true;
+        cursor += 1;
+      }
+      return false;
+    };
+
+    if (skipAssignments()) return true;
+    while (cursor < segmentEnd) {
+      const name = executableName(tokens[cursor]);
+      if (name === "command") {
+        cursor += 1;
+        if (cursor < segmentEnd && /^-[vV]$/.test(tokens[cursor].value)) break;
+        while (cursor < segmentEnd && /^(?:-p|--)$/.test(tokens[cursor].value)) cursor += 1;
+        if (skipAssignments()) return true;
+        continue;
+      }
+      if (name === "env") {
+        cursor += 1;
+        while (cursor < segmentEnd) {
+          const argument = tokens[cursor].value;
+          if (/^--(?:help|version)$/.test(argument)) break;
+          if (argument === "--") { cursor += 1; break; }
+          const splitString = /^(?:-[i0v]*S|--split-string)(?:=(.*))?$/.exec(argument);
+          if (splitString) {
+            const splitCommand = splitString[1] || tokens[cursor + 1]?.value || "";
+            if (splitCommand && nodeOptionsAssignmentMentioned(splitCommand)) return true;
+            cursor += splitString[1] === undefined ? 2 : 1;
+            continue;
+          }
+          if (/^(?:-u|--unset|-C|--chdir|-a|--argv0)$/.test(argument)) { cursor += 2; continue; }
+          if (argument.startsWith("-") && !assignmentName(tokens[cursor])) { cursor += 1; continue; }
+          if (hasNodeOptionsAssignment(tokens[cursor])) return true;
+          if (assignmentName(tokens[cursor])) { cursor += 1; continue; }
+          break;
+        }
+        if (skipAssignments()) return true;
+        continue;
+      }
+      if (["export", "set", "setx"].includes(name)) {
+        cursor += 1;
+        while (cursor < segmentEnd && tokens[cursor].value.startsWith("-")) cursor += 1;
+        if (hasNodeOptionsAssignment(tokens[cursor])) return true;
+        if (String(tokens[cursor]?.value || "").toLowerCase() === "node_options") return true;
+      }
+      break;
+    }
+    segmentStart = segmentEnd + 1;
+  }
+  return false;
+}
+
 // Ordered [pattern, reason] checks. First match wins. Verbatim from the
 // original bash-safety.mjs inline table (2026-07 extraction), plus one addition
 // marked below.
 export const DANGEROUS_CMD_CHECKS = [
-  // Shell assignments may precede `env`, and the `command` builtin may wrap it;
-  // every such chain still installs NODE_OPTIONS before Node starts.
-  [/(?:^|[\r\n;&|])\s*(?:[A-Za-z_]\w*=\S+\s+)*(?:command(?:\s+-[pP]+)?\s+)?(?:(?:export|set|setx)\s+|env(?:\s+(?:-\S+|[A-Za-z_]\w*=\S+))*\s+)?(?:[A-Za-z_]\w*=\S+\s+)*NODE_OPTIONS\s*=|\bnode(?:\.exe)?\b[^\r\n;&|]*(?:--require(?:=|\s)|(?:^|\s)-r(?:\s|\S)|--import(?:=|\s)|--(?:experimental-)?loader(?:=|\s))/i, "Blocked Node pre-execution loading. NODE_OPTIONS, require/import, and loader hooks can run code before a reviewed script's own safety checks."],
+  [/\bnode(?:\.exe)?\b[^\r\n;&|]*(?:--require(?:=|\s)|(?:^|\s)-r(?:\s|\S)|--import(?:=|\s)|--(?:experimental-)?loader(?:=|\s))/i, "Blocked Node pre-execution loading. NODE_OPTIONS, require/import, and loader hooks can run code before a reviewed script's own safety checks."],
   [/\bgit\b[^\r\n;&|]*\bpush\b[^\r\n;&|]*(?:--force(?:-with-lease)?(?:=\S+)?\b|--force-if-includes\b|(?:^|\s)-[A-Za-z]*f[A-Za-z]*\b|(?:^|\s)\+\S+)/, "Blocked force push. Force pushing any branch requires Mason's explicit approval."],
   // Tolerate intervening git options (`git -C <path> reset --hard`, `git -c x=y clean -fd`)
   // — the adjacent-words-only spellings were bypassable (Codex P1, PR #352).
@@ -487,6 +599,9 @@ export function checkDangerousCommand(cmd) {
   if (!text) return null;
   const producerReason = checkMaintenanceProducerInvocation(text);
   if (producerReason) return producerReason;
+  if (nodeOptionsAssignmentMentioned(text)) {
+    return "Blocked Node pre-execution loading. NODE_OPTIONS, require/import, and loader hooks can run code before a reviewed script's own safety checks.";
+  }
   for (const [re, reason] of DANGEROUS_CMD_CHECKS) {
     if (re.test(text)) return reason;
   }
