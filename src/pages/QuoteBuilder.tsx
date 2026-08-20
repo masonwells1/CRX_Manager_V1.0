@@ -2473,17 +2473,19 @@ export default function QuoteBuilder() {
             tags: { source: 'critical_action', action: `draw_down_quote_${bindingRejection}_mismatch` },
           });
         }
+        if (bindingRejection === 'intent') {
+          setShowDrawModal(false);
+          toast('warning', 'That retry already created an order that could not be opened, so nothing new was drawn. Check Orders for this booking before drawing again.');
+          setDrawing(false);
+          return;
+        }
         const balanceReloaded = await openDrawDownModal();
         const recoveryStep = balanceReloaded
           ? 'The booking balance was reloaded; try again.'
           : 'The booking balance could not be reloaded; refresh the page and check Orders before drawing again.';
         toast('warning', bindingRejection === 'actor'
           ? `That retry belongs to another signed-in user, so nothing new was drawn. ${recoveryStep}`
-          : bindingRejection === 'receipt'
-            ? `The database could not confirm this retry outcome, so nothing was drawn now. ${recoveryStep}`
-            : `That retry already created an order that could not be opened, so nothing new was drawn. Check Orders for this booking before drawing again. ${balanceReloaded
-              ? 'The booking balance was reloaded.'
-              : 'The booking balance could not be reloaded; refresh the page before checking Orders.'}`);
+          : `The database could not confirm this retry outcome, so nothing was drawn now. ${recoveryStep}`);
         setDrawing(false);
         return;
       }

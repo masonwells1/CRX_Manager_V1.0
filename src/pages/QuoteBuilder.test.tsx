@@ -359,6 +359,7 @@ describe('QuoteBuilder', () => {
     );
     expect(mockResetIdempotencyKey).toHaveBeenCalledTimes(1);
     expect(mockNavigate).not.toHaveBeenCalledWith(expect.stringMatching(/^\/orders\//));
+    expect(screen.queryByRole('dialog', { name: 'Create Order from Booking' })).not.toBeInTheDocument();
   });
 
   it('maps a malformed draw product to a governed operator error', async () => {

@@ -11,6 +11,8 @@ rule it implies. This is a log of outcomes, not a design doc — see the cited s
 
 ## 2026-08-20 — Draw-down intent cutover keeps the 24-hour zero-receipt freeze
 
+**Source:** Engineering fail-closed design choice, 2026-08-20. The 24-hour freeze window still
+requires Mason's scheduling approval before any separately authorized live apply.
 **Decision:** Keep the pending draw-down intent migration's fail-closed requirement that no
 unexpired legacy draw receipt exists before cutover; because receipts live for 24 hours, schedule a
 deliberate 24-hour no-successful-draw window before any separately authorized apply.
