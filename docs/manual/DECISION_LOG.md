@@ -42,17 +42,25 @@ reached."** #429 merged with its later commits never auto-reviewed.
   cost saving and Mason declined: he will not trade any possible review context for a cheaper report.
   Do not re-propose disabling them to save spend.
 - **`auto_pause_after_reviewed_commits: 2`.** Mason initially objected, on the belief that a higher
-  number meant "it reviews my changes before merge." It does not. That number governs only how many
-  *mid-work drafts* are auto-reviewed; it provides no guarantee about the final commit, and at 5 it
-  was actively starving the runs that mattered. Lowering it costs no pre-merge coverage.
+  number meant "it reviews my changes before merge." It does not. The setting pauses *automatic*
+  review after N reviewed commits on a PR — ordinary non-draft PRs included, not only GitHub drafts
+  — after which later pushes are not auto-reviewed until someone comments `@coderabbitai review`,
+  which resumes it. So the number caps how many **intermediate** commits get reviewed for free; it
+  guarantees nothing about the final one, and at 5 it was actively starving the runs that mattered.
+  Lowering it costs no pre-merge coverage. (Wording corrected after CodeRabbit flagged the original
+  "mid-work drafts" phrasing as inaccurate on FarmRx PR #26.)
 - **The actual pre-merge gate is a fresh review on the final commit.** Encoded as a hard rule in
   `.claude/skills/deploy-check/SKILL.md`: before merging, confirm a CodeRabbit review exists with
   `submitted_at` newer than the final push; if not, comment `@coderabbitai review`, wait, and read
   it. Never merge on a review that predates the final commit.
 - **`path_filters` skip churn that cannot hold a bug** — `docs/archive/`, `docs/audits/`,
   `docs/loops/`, `docs/build-loops/`, `docs/handoffs/`, the generated `.agents/` and `.codex/`
-  adapters, and lock files. A PR touching only these is skipped entirely and costs no allowance.
-  Live docs (`docs/manual/`, `docs/reference/`, `docs/workflows/`, `docs/plans/`) stay reviewed.
+  adapters. A PR touching only these is skipped entirely and costs no allowance. Live docs
+  (`docs/manual/`, `docs/reference/`, `docs/workflows/`, `docs/plans/`) stay reviewed. **Lock files
+  are deliberately not excluded**: a lockfile-only PR would drop to zero reviewable files and be
+  skipped outright, leaving version bumps and integrity hashes uninspected — a supply-chain blind
+  spot the Codex reviewer raised on FarmRx PR #26. An exclusion that can empty a PR's review scope
+  is a silent skip, not a saving.
 - **`path_instructions` extended** with rules settled since the July config: integer-cent parsing
   before money arithmetic, the `<table>_<column>_whole_cents_chk` naming, explicit UTC →
   America/Chicago conversion for business-day logic, and a `src/**/*[Bb]lend*` block marking blend

@@ -26,6 +26,12 @@ reviews:
   # scripts/agent-manifest-parity.mjs), and lock files. A PR touching only
   # these is skipped entirely and costs no review allowance. Live docs
   # (docs/manual, docs/reference, docs/workflows, docs/plans) stay reviewed.
+  #
+  # Lock files are deliberately NOT excluded. Excluding them means a PR that
+  # changes only package-lock.json drops to zero reviewable files and is
+  # skipped outright, so nothing inspects the version bumps or integrity
+  # hashes - a dependency-supply-chain blind spot. Raised by the Codex
+  # reviewer on FarmRx PR #26, 2026-08-20.
   path_filters:
     - "!docs/archive/**"
     - "!docs/audits/**"
@@ -34,20 +40,22 @@ reviews:
     - "!docs/handoffs/**"
     - "!.agents/**"
     - "!.codex/**"
-    - "!**/package-lock.json"
-    - "!**/*.lock"
 
   auto_review:
     enabled: true
     drafts: false
     base_branches:
       - main
-    # Review on PR open and once after the first round of fixes, then pause.
-    # The default of 5 spent the weekly allowance on half-finished commits and
-    # left nothing for the finished code: PR #429 (21 commits) and PR #434 hit
-    # "Review limit reached". The pre-merge gate is NOT this number - it is the
-    # required fresh `@coderabbitai review` on the final commit, documented in
-    # .claude/skills/deploy-check/SKILL.md.
+    # Pause AUTOMATIC review after 2 reviewed commits on a PR (this applies to
+    # ordinary non-draft PRs, not just drafts). Later pushes are then not
+    # auto-reviewed until someone comments `@coderabbitai review`, which
+    # resumes it. The default of 5 spent the weekly allowance on half-finished
+    # commits and left nothing for the finished code: PR #429 (21 commits) and
+    # PR #434 both hit "Review limit reached".
+    #
+    # This number is NOT the pre-merge gate and must never be treated as one.
+    # The gate is the required fresh `@coderabbitai review` on the FINAL
+    # commit, enforced by .claude/skills/deploy-check/SKILL.md.
     auto_pause_after_reviewed_commits: 2
 
   # Project-specific review guidance. These mirror the "CRX Hard Rules" in
