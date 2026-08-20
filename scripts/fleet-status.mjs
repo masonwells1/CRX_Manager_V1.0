@@ -365,6 +365,7 @@ if (hasOriginMain) {
     if (history === null) throw new Error("origin/main migration history is unreadable");
     const parkedPrefilter = originMainParkedMigrationPrefilter(
       () => git(originMainParkedMigrationGrepArgs(originMainRev), repoRoot, 5000),
+      originMainRev,
     );
     const mainlinePaths = tree.split("\n");
     for (const rel of supersededDraftPathsFrom(mainlinePaths, () => true).values()) {

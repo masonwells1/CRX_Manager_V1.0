@@ -210,6 +210,7 @@ function mainlineParkedDiscovery() {
     if (history === null) throw new Error("origin/main migration history is unreadable");
     const parkedPrefilter = originMainParkedMigrationPrefilter(
       () => git(originMainParkedMigrationGrepArgs(originMainRev)),
+      originMainRev,
     );
     const mainlinePaths = tree.split("\n");
     const historyCandidates = localCandidateMigrationPathsFromHistory(history);

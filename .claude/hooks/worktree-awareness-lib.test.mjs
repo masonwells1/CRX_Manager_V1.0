@@ -1165,6 +1165,45 @@ const MAINLINE_HISTORY_SETTLES_CANDIDATE = "| 886 | 20260101000000 | **APPLIED L
   );
   ok(batchInput.startsWith(`${PINNED}:`), "SQL blobs are read from the pinned origin/main id");
   ok(!batchInput.includes("origin/main:"), "SQL blob reads never name the moving ref when pinned");
+
+  // `git grep <rev>` prefixes every hit with `<rev>:`, so the prefilter must strip the
+  // revision it actually searched. Codex P1 on PR #437: pinning the scan made the prefix
+  // `<sha>:` while the strip still matched only `origin/main:`, so every hit came back
+  // malformed, was rejected downstream, no SQL was opened, and discovery answered "known"
+  // with no paths. Nothing covered this success path before — only the two error paths —
+  // which is exactly how a confident zero shipped inside the fix for confident zeroes.
+  const pinnedHit = originMainParkedMigrationPrefilter(
+    () => `${PINNED}:supabase/migrations/20260101000000_parked.sql\n`,
+    PINNED,
+  );
+  eq(pinnedHit.state, "known", "a pinned prefilter hit is a known result");
+  eq(
+    pinnedHit.paths,
+    ["supabase/migrations/20260101000000_parked.sql"],
+    "the pinned revision prefix is stripped, leaving a usable repo-relative path",
+  );
+
+  const legacyHit = originMainParkedMigrationPrefilter(
+    () => "origin/main:supabase/migrations/20260101000000_parked.sql\n",
+  );
+  eq(
+    legacyHit.paths,
+    ["supabase/migrations/20260101000000_parked.sql"],
+    "an unpinned caller still strips the symbolic origin/main prefix",
+  );
+
+  // A hit that does not carry the expected prefix means the scan is not reading what it
+  // thinks it is. Fail closed: downstream, a dropped path is indistinguishable from
+  // "nothing is parked", which is the dangerous direction.
+  const unprefixed = originMainParkedMigrationPrefilter(
+    () => "supabase/migrations/20260101000000_parked.sql\n",
+    PINNED,
+  );
+  eq(unprefixed.state, "unknown", "a grep hit missing the pinned revision prefix is UNKNOWN, never a known zero");
+  eq(unprefixed.paths, null, "an unrecognized prefilter shape keeps the conservative full-forward fallback");
+
+  const emptyPath = originMainParkedMigrationPrefilter(() => `${PINNED}:\n`, PINNED);
+  eq(emptyPath.state, "unknown", "a prefixed hit naming no path is UNKNOWN, never a known zero");
 }
 
 console.log(`worktree-awareness-lib: ${pass} assertions passed`);

@@ -49,6 +49,16 @@ normally.) A guard that always answers UNKNOWN answers nothing.
   grep, blobs, mtime, merge-base, and the fallback diff. The lib's readers take that id as an
   argument defaulting to the symbolic name, so an unpinned caller keeps its previous behaviour.
   Ten assertions pin it, and reverting any single call site to `origin/main` reddens them.
+- **The pin then broke the grep prefilter, and Codex caught that too.** `git grep <rev>` prefixes
+  every hit with `<rev>:`. The prefilter stripped the literal `origin/main:`, so pinning made the
+  prefix `<sha>:`, every hit came back malformed, `originMainForwardBlobPaths` rejected it, no SQL
+  was opened, and discovery answered `known` with **no paths** — a confident zero over a parked
+  migration, reintroduced inside the fix for confident zeroes. It now strips whatever revision was
+  actually searched and treats a hit missing that prefix as UNKNOWN rather than dropping it. Only
+  the function's two error paths had ever been tested; the success path had no coverage at all,
+  which is how it shipped. It has coverage now. **This one is latent in the current repo** — it
+  needs a parked migration on `main` with no `LOCAL CANDIDATE` history row, which does not exist
+  today — so the fleet run looks identical either way and does not prove it; the tests do.
 - **The exemption reads nothing of its own** (Codex HIGH, round 4). It consumes the exact
   `origin/main` history text the caller's mainline discovery pass verified against, injected via
   `readOriginMainHistory`. When the reader resolved `origin/main` independently, a concurrent

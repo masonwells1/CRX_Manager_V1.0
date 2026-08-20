@@ -124,13 +124,30 @@ export const ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS = originMainParkedMigrationG
 // `git grep` uses exit code 1 for the healthy case where no file matched. Both
 // runtime consumers share this wrapper so only a real error/timeout falls back
 // to a complete forward scan.
-export function originMainParkedMigrationPrefilter(runGrep) {
+// `git grep <rev>` prefixes EVERY result line with `<rev>:`, so the prefix to strip is
+// whatever revision the caller actually searched — not the literal string "origin/main".
+// Codex P1 on PR #437: pinning the scan to an object id made the prefix `<sha>:` while
+// this stripped only `origin/main:`, so every hit came back malformed,
+// `originMainForwardBlobPaths` rejected it, no SQL was ever opened, and discovery
+// answered `known` with no paths — a confident zero over a parked migration, reintroduced
+// by the very fix for confident zeroes. A line WITHOUT the expected prefix means we are
+// not reading what we think we are, so it fails closed instead of being passed downstream
+// where a dropped path is indistinguishable from "nothing is parked".
+export function originMainParkedMigrationPrefilter(runGrep, originMainRev = "origin/main") {
+  const prefix = `${String(originMainRev || "origin/main")}:`;
+  const prefixLower = prefix.toLowerCase();
   try {
     const output = String(runGrep() || "");
-    return {
-      state: "known",
-      paths: output.split("\n").filter(Boolean).map((p) => p.replace(/^origin\/main:/i, "")),
-    };
+    const paths = [];
+    for (const line of output.split("\n").filter(Boolean)) {
+      if (line.slice(0, prefix.length).toLowerCase() !== prefixLower) {
+        return { state: "unknown", paths: null };
+      }
+      const p = line.slice(prefix.length);
+      if (!p) return { state: "unknown", paths: null };
+      paths.push(p);
+    }
+    return { state: "known", paths };
   } catch (error) {
     if (Number(error?.status) === 1) return { state: "known", paths: [] };
     return { state: "unknown", paths: null };
