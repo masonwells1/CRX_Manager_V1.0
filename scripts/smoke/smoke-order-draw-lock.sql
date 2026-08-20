@@ -8,8 +8,9 @@
 -- still says 200 -> the same 100 could be drawn again).
 --
 -- HOW TO RUN: execute this whole file as a SINGLE statement (Supabase MCP
--- execute_sql, or psql -1) as postgres/service_role AFTER the migration is
--- applied. The block ALWAYS ends with RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK',
+-- execute_sql, or psql -1) as postgres AFTER the migration is applied. The
+-- post-cutover draw wrapper is authenticated-only and service_role cannot
+-- execute it. The block ALWAYS ends with RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK',
 -- so every fixture, order, ledger row and audit row created here is rolled
 -- back — nothing persists. Any other exception text = a real failure.
 --

@@ -339,6 +339,17 @@ describe('draw_down_quote actor and intent binding migration', () => {
         expect(source, `${path} is missing ${drawKey}`).toContain(`'${drawKey}`);
       }
     }
+    for (const path of [
+      'scripts/smoke/smoke-order-draw-lock.sql',
+      'scripts/smoke/smoke-save-quote-drawn-guard.sql',
+      'scripts/smoke/smoke-restore-version-drawn-guard.sql',
+      'scripts/smoke/smoke-planned-holds-drawn-sync.sql',
+    ]) {
+      const source = readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
+      expect(source).toContain('as postgres AFTER the migration is applied');
+      expect(source).toContain('service_role cannot\n-- execute it');
+      expect(source).not.toContain('postgres/service_role');
+    }
     const restoreSmoke = readFileSync(
       'scripts/smoke/smoke-restore-version-drawn-guard.sql',
       'utf8',
