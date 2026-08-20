@@ -42,8 +42,12 @@ migration safety harness; no app source, migration SQL, live database, or produc
   invoking `round(...)` cannot hide a same-file mutator.
 - The Bash approved-set validator now treats functions and procedures as one routine graph,
   including transitive wrappers, and refuses plain, escape, or Unicode single-quoted routine
-  bodies that its write scanners cannot inspect. Its 180-case mutation suite and the 203-case
+  bodies that its write scanners cannot inspect. Its 181-case mutation suite and the 206-case
   apply-time analyzer suite are both wired into a required CI step.
+- Non-ASCII PostgreSQL routine identities now fail closed through one shared analyzer boundary.
+  A valid define/call/drop sequence such as `public.修復()` can no longer be truncated out of the
+  JavaScript apply-time graph or the Bash mutating-routine index; non-ASCII string data remains
+  unaffected.
 - PL/pgSQL cursor declarations and lifecycle operations now fail closed in executable regions.
   `CURSOR FOR SELECT money_fix()` can no longer hide a same-file or database-resident mutator
   behind `OPEN`/`FETCH`; defining a cursor-using routine without invoking it remains deferred.
@@ -62,7 +66,7 @@ migration safety harness; no app source, migration SQL, live database, or produc
 
 Focused proof: snapshot producer 14 assertions; applied-source containment pass (including forced
 worktree-enumeration failure); trigger fan-out producer 13 assertions; apply-time analyzer
-203 assertions; apply-time guard 270 assertions; approved-set validator 180 mutation cases.
+206 assertions; apply-time guard 272 assertions; approved-set validator 181 mutation cases.
 Each new edge has a removal mutant that
 survives only when the load-bearing protection is deliberately deleted.
 

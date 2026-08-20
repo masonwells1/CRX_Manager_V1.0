@@ -1671,6 +1671,17 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(!isOneShotDeny(r),
       "round-43 MUTANT: defining but not invoking a cursor-using routine remains deferred");
 
+    r = apply("20990601000036_unicode_procedure",
+      "CREATE PROCEDURE public.修復() LANGUAGE plpgsql AS $$ BEGIN " +
+      "UPDATE public.orders SET total_profit = total_profit; END $$; " +
+      "CALL public.修復(); DROP PROCEDURE public.修復();");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-44: define/call/drop of a Unicode procedure cannot bypass the replay guard");
+
+    r = apply("20990601000037_unicode_resident", "SELECT public.修復();");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-44: a database-resident Unicode routine call fails the replay guard closed");
+
     // 6. Fail closed. The registry is tracked in git; unreadable or absent means
     //    the checkout is broken or the file was removed — the two states in
     //    which a silent pass is most dangerous.

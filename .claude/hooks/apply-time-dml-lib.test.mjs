@@ -981,4 +981,23 @@ eq(T(null), [], "a null body does not throw");
     'round-43 MUTANT: defining but not invoking a cursor-using routine remains deferred');
 }
 
+// ---------------- ROUND 44: non-ASCII routine identities fail closed
+{
+  const unicodeProcedure = applyTimeWriteTargets(
+    'CREATE PROCEDURE public.修復() LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.order_items SET profit = profit; END $$; ' +
+    'CALL public.修復(); DROP PROCEDURE public.修復();',
+  );
+  ok(unicodeProcedure.unresolved && unicodeProcedure.unsupportedRoutineIdentity,
+    'round-44: define/call/drop of a Unicode procedure cannot disappear from analysis');
+
+  const resident = applyTimeWriteTargets('SELECT public.修復();');
+  ok(resident.unresolved && resident.unsupportedRoutineIdentity,
+    'round-44: a database-resident Unicode routine call fails closed');
+
+  const unicodeData = applyTimeWriteTargets("SELECT '修復 is prose';");
+  ok(!unicodeData.unresolved,
+    'round-44 MUTANT: non-ASCII data inside a string is not a routine identity');
+}
+
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

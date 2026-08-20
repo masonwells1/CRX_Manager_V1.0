@@ -493,6 +493,11 @@ that runs later through `OPEN`/`FETCH`. Until the static analyzer models that li
 cursor declarations and operations in executable code make the analysis unresolved. Routine bodies
 remain stripped until invoked, so merely defining a cursor-using routine does not trigger a replay
 refusal.
+PostgreSQL also permits high-bit characters in unquoted routine names, while the transitive routine
+indexes intentionally use an ASCII canonical token language. A non-ASCII routine definition or
+apply-time call therefore fails closed rather than being truncated. The Bash validator consumes the
+same shared analyzer result, so the two guards cannot drift into different Unicode identity rules;
+ordinary non-ASCII string data remains outside this refusal.
 
 ---
 

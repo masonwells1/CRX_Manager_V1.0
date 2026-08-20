@@ -279,6 +279,9 @@ and both focused analyzer suites run in a required CI step.
 PL/pgSQL cursor queries do not disappear between their declaration and later `OPEN`/`FETCH`.
 Cursor constructs in executable code are conservatively unresolved until their lifecycle is
 modeled precisely; cursor code inside an uninvoked routine definition remains deferred.
+Non-ASCII routine definitions and apply-time calls are unsupported and fail closed. Both guards use
+the shared apply-time analyzer for that decision, preventing an unquoted Unicode identity from being
+truncated out of one routine graph while ordinary non-ASCII literal data remains allowed.
 
 **A trigger rewrite is still a rewrite (round 31).** Every rule above proves a repair
 rewrote exactly the rows it hashed — for the table the `UPDATE` names. Triggers were

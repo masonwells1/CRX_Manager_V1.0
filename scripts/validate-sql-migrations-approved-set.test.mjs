@@ -1710,6 +1710,15 @@ const CASES = [
       `CALL public._procedure_wrapper();\n`,
   },
   {
+    name: 'a Unicode-named procedure cannot hide a protected rewrite',
+    expect: 'violation',
+    mustReport: 'Unsupported non-ASCII routine identity',
+    sql:
+      `CREATE PROCEDURE public.修復() LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.order_items SET profit = profit; END;\n$$;\n` +
+      `CALL public.修復();\nDROP PROCEDURE public.修復();\n`,
+  },
+  {
     name: 'round-40: a plain-string DO block cannot hide direct protected DML',
     expect: 'violation',
     mustReport: 'non-dollar-quoted single-quoted string',
@@ -2430,12 +2439,17 @@ function runTriggerFanoutFailsClosed() {
   try {
     const mirror = join(root, 'scripts');
     mkdirSync(mirror, { recursive: true });
-    mkdirSync(join(root, '.claude'), { recursive: true });
+    mkdirSync(join(root, '.claude', 'hooks'), { recursive: true });
     for (const f of ['validate-sql-migrations.sh', 'check-trigger-fanout-staleness.mjs',
+                     'find-unsupported-routine-identities.mjs',
                      'approved-set-grandfathered.txt',
                      'sql-audit-hash-exemptions.txt', 'trigger-fanout.json']) {
       copyFileSync(join(HERE, f), join(mirror, f));
     }
+    copyFileSync(
+      join(HERE, '..', '.claude', 'hooks', 'apply-time-dml-lib.mjs'),
+      join(root, '.claude', 'hooks', 'apply-time-dml-lib.mjs'),
+    );
     copyFileSync(
       join(HERE, '..', '.claude', 'schema-registry.json'),
       join(root, '.claude', 'schema-registry.json'),
@@ -2728,12 +2742,17 @@ function run() {
   const migrations = join(dir, 'supabase', 'migrations');
   mkdirSync(migrations, { recursive: true });
   mkdirSync(join(dir, 'scripts'), { recursive: true });
-  mkdirSync(join(dir, '.claude'), { recursive: true });
+  mkdirSync(join(dir, '.claude', 'hooks'), { recursive: true });
   for (const file of ['validate-sql-migrations.sh', 'check-trigger-fanout-staleness.mjs',
+                      'find-unsupported-routine-identities.mjs',
                       'approved-set-grandfathered.txt',
                       'sql-audit-hash-exemptions.txt']) {
     copyFileSync(join(HERE, file), join(dir, 'scripts', file));
   }
+  copyFileSync(
+    join(HERE, '..', '.claude', 'hooks', 'apply-time-dml-lib.mjs'),
+    join(dir, '.claude', 'hooks', 'apply-time-dml-lib.mjs'),
+  );
   copyFileSync(
     join(HERE, '..', '.claude', 'schema-registry.json'),
     join(dir, '.claude', 'schema-registry.json'),

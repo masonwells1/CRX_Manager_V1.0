@@ -408,6 +408,34 @@ function inGrantOrRevoke(s, idx) {
   return /\b(grant|revoke)\b/.test(s.slice(start, idx));
 }
 
+// ROUND 44. PostgreSQL accepts high-bit characters in unquoted identifiers,
+// but the routine-definition/call graph below canonicalizes into an ASCII token
+// language. Silently truncating `public.修復()` drops both its deferred body and
+// its invocation. Until that whole graph uses a Unicode-safe identity, detect
+// the callable shape here and classify it fail-closed.
+const CALLABLE_IDENTITY =
+  /(?:^|[^A-Za-z0-9_$.\u0080-\uFFFF])((?:(?:[A-Za-z_\u0080-\uFFFF][A-Za-z0-9_$\u0080-\uFFFF]*)\s*\.\s*)*[A-Za-z_\u0080-\uFFFF][A-Za-z0-9_$\u0080-\uFFFF]*)\s*\(/g;
+
+function hasUnsupportedRoutineIdentity(code) {
+  for (const raw of String(code || "").split(";")) {
+    const statement = raw.trim().toLowerCase();
+    if (!statement) continue;
+    // Definitions/drops do not execute, but a non-ASCII definition is still
+    // unsupported evidence and must not disappear. Other syntax is inspected
+    // only when PostgreSQL evaluates it at apply time.
+    const region = /\b(?:function|procedure)\s+/.test(statement)
+      ? statement
+      : runForEffectRegion(statement);
+    if (!region) continue;
+    CALLABLE_IDENTITY.lastIndex = 0;
+    let match;
+    while ((match = CALLABLE_IDENTITY.exec(region)) !== null) {
+      if (/[^\x00-\x7F]/.test(match[1])) return true;
+    }
+  }
+  return false;
+}
+
 // A write verb with no relation after it is usually a write this reader failed
 // to understand — but not always. These are the positions where the word is
 // part of some other construct and the missing relation is expected:
@@ -463,7 +491,8 @@ function targetsFromCode(code, literals) {
   // cursor lifecycle analysis can prove the query's effects precisely.
   const cursorConstruct =
     /\bcursor(?:\s*\([^;]*\))?\s+for\b|\bopen\s+(?:"(?:[^"]|"")+"|[a-z_][a-z0-9_$]*)(?=\s|;|$)|\bfetch\b[^;]*\binto\b|\bmove\b[^;]*(?:\bfrom\b|\bin\b)\s*(?:"(?:[^"]|"")+"|[a-z_][a-z0-9_$]*)(?=\s|;|$)|\bclose\s+(?:"(?:[^"]|"")+"|[a-z_][a-z0-9_$]*)(?=\s|;|$)/.test(s);
-  let unresolved = cursorConstruct;
+  const unsupportedRoutineIdentity = hasUnsupportedRoutineIdentity(s);
+  let unresolved = cursorConstruct || unsupportedRoutineIdentity;
 
   WRITE_VERB.lastIndex = 0;
   let m;
@@ -656,7 +685,14 @@ function targetsFromCode(code, literals) {
     if (FORMAT_PLACEHOLDER.test(rest.trim())) unresolved = true;
   }
 
-  return { targets, tables, dynamicWrites, unresolved: unresolved || unparsedUpsert, dynamicExec };
+  return {
+    targets,
+    tables,
+    dynamicWrites,
+    unresolved: unresolved || unparsedUpsert,
+    dynamicExec,
+    unsupportedRoutineIdentity,
+  };
 }
 
 // Which of `defined` does this code actually invoke? A name followed by `(` is
@@ -1329,6 +1365,7 @@ export function applyTimeWriteTargets(
       for (const t of inner.tables) top.tables.add(t);
       top.dynamicWrites.push(...inner.dynamicWrites);
       if (inner.unresolved) top.unresolved = true;
+      if (inner.unsupportedRoutineIdentity) top.unsupportedRoutineIdentity = true;
       if (parsed.unsupportedDoBody) top.unresolved = true;
       defineRoutines(parsed.routines);
       defineOperators(operatorDefinitions(parsed.code));
@@ -1442,6 +1479,7 @@ export function applyTimeWriteTargets(
         for (const t of inner.tables) top.tables.add(t);
         top.dynamicWrites.push(...inner.dynamicWrites);
         if (inner.unresolved) top.unresolved = true;
+        if (inner.unsupportedRoutineIdentity) top.unsupportedRoutineIdentity = true;
         if (r.unresolved) top.unresolved = true;
         foldLiterals(inner, r.literals);
         defineOperators(operatorDefinitions(r.code));
@@ -1482,6 +1520,7 @@ export function applyTimeWriteTargets(
     tables: top.tables,
     dynamicWrites: top.dynamicWrites,
     unresolved: top.unresolved,
+    unsupportedRoutineIdentity: top.unsupportedRoutineIdentity,
     unknownCalls,
     definedRoutines: [...byName.keys()],
     invokedRoutines: [...seen],

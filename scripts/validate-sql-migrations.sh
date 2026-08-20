@@ -156,6 +156,7 @@ APPROVED_SET_EXEMPT_TABLES=(
 # tree of synthetic migrations). Resolving it from cwd would have made the
 # guard collapse to "cannot derive" the moment it was aimed anywhere else.
 APPROVED_SET_REGISTRY="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.claude/schema-registry.json"
+UNSUPPORTED_ROUTINE_SCANNER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/find-unsupported-routine-identities.mjs"
 
 BUSINESS_ROW_TABLES=$(node -e "
 const fs = require('fs');
@@ -1301,6 +1302,17 @@ fi
 EXEMPTED_TOTAL=0
 EXEMPT_STALE=""
 
+# ROUND 44. The Bash/AWK routine index intentionally uses an ASCII token
+# language. PostgreSQL identifiers do not: `public.修復()` is valid, and used to
+# be truncated out of both the deferred definition and the top-level call. Ask
+# the shared apply-time analyzer once for the complete scan set and refuse any
+# file whose routine identity it cannot represent. One parser owns the boundary;
+# the Bash lane must not grow another almost-equivalent Unicode lexer.
+if ! UNSUPPORTED_ROUTINE_FILES=$(printf '%s\n' $ALL_SQL | node "$UNSUPPORTED_ROUTINE_SCANNER"); then
+  echo "ERROR: non-ASCII routine identity scan failed; refusing SQL validation."
+  exit 1
+fi
+
 for file in $ALL_SQL; do
   # Strip SQL comments for pattern matching
   CODE_ONLY=$(grep -v '^\s*--' "$file" 2>/dev/null || true)
@@ -1312,6 +1324,15 @@ for file in $ALL_SQL; do
   # Violations this file contributes, so a hash-pinned allowance can be applied
   # to THIS file at the end of the iteration rather than to a global pool.
   FILE_VIOL_BEFORE=$VIOLATIONS
+
+  if [ -n "$UNSUPPORTED_ROUTINE_FILES" ] &&
+     printf '%s\n' "$UNSUPPORTED_ROUTINE_FILES" | grep -Fqx -- "$file"; then
+    echo "VIOLATION: $file"
+    echo "  Unsupported non-ASCII routine identity: static routine binding is fail-closed."
+    echo "  Use an ASCII routine name, or extend the shared analyzer before applying this migration."
+    echo ""
+    VIOLATIONS=$((VIOLATIONS + 1))
+  fi
 
   # pg_get_functiondef exemption — scoped by name to specific already-applied
   # migrations that reference the catalog fn ONLY inside a read-only post-apply
