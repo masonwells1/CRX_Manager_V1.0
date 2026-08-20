@@ -15,7 +15,7 @@ multiplied that rounded figure by the whole quantity.
 
 - **The rounding is gone.** Worst live `Dry oz` price ($0.39/lb): billed **$64.00** against a
   true **$78.00** — a 17.95% under-bill — and now bills **$78.00** exactly. The separate,
-  genuinely pre-existing error on the **463** `oz`-rate / `Gal`-stock products is fixed by the
+  genuinely pre-existing error on the **466** `oz`-rate / `Gal`-stock products is fixed by the
   same change, and it was **far worse than an earlier revision of this entry claimed**: that
   said "+0.57%", which is one $28.00/gal product. Cheap bulk products round much harder —
   worst live case **+10.66%** ("Liquid AMS 34% - Bulk", $3.47/gal → 2.7109¢/oz stored as 3¢),

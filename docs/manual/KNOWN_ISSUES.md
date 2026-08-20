@@ -343,7 +343,7 @@ so the error is gone rather than reduced:
 
 - The **61 `Dry oz`** products: worst live price $0.39/lb billed **$64.00** against a true
   **$78.00** (a 17.95% under-bill) while the price was being converted. Now **$78.00** exactly.
-- The **463** `oz`-rate / `Gal`-stock products carried a systematic **+0.57%** on price and
+- The **466** `oz`-rate / `Gal`-stock products carried a systematic **+0.57%** on price and
   **+2.4%** on cost. That was genuinely pre-existing, and it is **also** fixed — 96 oz/ac over
   39.09 acres at $28.00/gal billed $825.58 and now bills **$820.89**, the exact figure.
 
@@ -357,11 +357,37 @@ One visible consequence for the office: on a product sold by the gallon with a p
 the Quantity box now reads **30 GAL** where it used to read **240 pt**. The rate, the invoice
 total and the loader's gallon figure are unchanged.
 
-**Correction to an earlier revision of this entry:** the pre-existing error on the 463
+**Correction to an earlier revision of this entry:** the pre-existing error on the 466
 `oz`-rate / `Gal`-stock products was described as "+0.57%". That is one $28.00/gal product.
 Measured across all of them, the worst live case is **+10.66%** ("Liquid AMS 34% - Bulk",
 $3.47/gal → 2.7109¢/oz stored as 3¢) and −10.18% in the other direction — cheap bulk products
 round hardest. The fix is correspondingly more valuable than first claimed.
+
+**Further corrections (2026-08-20), after the Codex `gpt-5.6-sol` verdict and an independent
+live re-measurement.** Each was re-run read-only against project `rhyzpcqhnizqbxphqdkr`:
+
+- **The `Dry oz` population is 75 products, not 61.** 61 is only the subset whose
+  `inventory_unit` is a pound unit — the predicate this entry happened to choose. The other
+  **14** carry a `Dry oz` rate against non-pound stock and were never counted or
+  characterised. They are not known-safe; they were simply outside the filter. Any guard must
+  be scoped to all 75.
+- **The "9 products where `unit_size` ≠ `inventory_unit`" figure is misleading.** **8 of
+  those 9 ARE the 8 blank-`unit_size` rows** — blank counts as a disagreement. Exactly
+  **one** live product has both values populated and genuinely different. The finding is
+  real; its non-blank footprint is 1 product, not 9.
+- **The `$44` figure for the `oz/cwt` line is the OLD rounded-price result**, not the exact
+  amount. Exactly, 200 oz of a $28.00/gal product is 200/128 × $28 = **$43.75**. `$44` was
+  carried forward as whole-dollar shorthand and should not be read as the exact figure.
+- **"Prototype pollution" is the wrong name** for the `normalizeRateUnit` crash. Nothing
+  mutates a prototype. It is an unsafe *inherited-property lookup* — `SYNONYMS['constructor']`
+  returns the `Object` constructor, which is non-nullish, so `?? base` does not fire and the
+  function silently breaks its string return contract. The correct term is type confusion.
+  It is also broader than described: `toString`, `valueOf`, `hasOwnProperty` and every other
+  inherited name reach it, not just `constructor` and `__proto__`.
+- **"No data migration needed" was overstated as a categorical claim.** Deployment alone does
+  not mutate existing rows, but several of these defects bite the moment a legacy row is
+  opened and edited. The factor-of-1 argument shows a legacy row is inert *at rest*, not that
+  it is safe *in use*.
 
 ### OPEN — three residuals from the quantity-side rewrite
 
