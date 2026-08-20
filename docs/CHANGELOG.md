@@ -2,6 +2,37 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-19 — draw-down retries are bound to the actor and exact booking intent
+
+Pending migration `20260819232000_bind_draw_down_receipts_to_intent.sql` closes the stale-receipt
+hole in `draw_down_quote`: the same key can replay only for the same authenticated actor, quote and
+ordered canonical draw quantities. A changed quantity fails with `IDEMPOTENCY_INTENT_MISMATCH`; a
+different actor fails with `IDEMPOTENCY_ACTOR_MISMATCH`. Numeric-equivalent quantities such as
+`1`, `1.0` and `1.00` remain exact replay, while draw-array order and duplicates remain meaningful.
+The below-cost reason is approval metadata and is deliberately not part of mutation identity.
+
+The migration does **not** copy or change the large money/inventory implementation introduced by
+the pending price-tier work. It renames the current governed five-argument wrapper to an owner-only
+private function and adds a small public wrapper in front of it. The preserved chain still owns the
+cutover lock, below-cost approval, exact quote-tier price/cost/profit calculation, commissions,
+inventory prebooking and draw ledger. Active admins and sales reps can still cover another rep's
+live booking; actor binding is not an ownership restriction. Soft-deleted quotes remain hidden.
+
+Added a focused Vitest contract and container-only rollback smoke covering exact replay, changed
+quantity, changed actor, cross-representative success, one $10 sale / $5 cost / $5 profit order,
+one inventory reservation, one draw-ledger row, and a bound receipt. This migration must follow
+`20260816110000`, `20260816120000` and `20260817120000`. **It has not been applied live and this PR
+does not authorize applying it.**
+
+`node scripts/smoke/prove-draw-down-quote-intent-binding.mjs` applied the migration verbatim on a
+network-isolated PostgreSQL 17 container and passed its own preflight/postflight, exact replay,
+changed-quantity, changed-actor, deleted-quote, ACL, same-key same-intent concurrency and same-key
+different-intent concurrency checks. Its preserved implementation is an effect-recording stand-in,
+because this migration renames that body without changing it; the full-schema rollback chain owns
+the exact line/header money and inventory assertions. Mutation proof is non-vacuous: removing draw
+quantities from the fingerprint reproduced stale success and emitted `MUTATION_DETECTED`. The
+container used `--network none` and tmpfs; production was untouched.
+
 ## 2026-08-19 — Product data model: build plan revision 2 after independent Fable…
 
 Product data model: build plan revision 2 after independent Fable review (26 findings) and orchestration design; recorded owner decisions D-J (chemistry edits admin-only) and D-K (unlisted brand never blocks receiving) in DECISION_LOG. Planning only — nothing built, pushed, migrated, or applied.

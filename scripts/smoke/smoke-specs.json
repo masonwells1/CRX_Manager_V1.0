@@ -671,6 +671,23 @@
         "inventory"
       ]
     },
+    "draw_down_quote_intent_binding": {
+      "chain": "smoke-draw-down-quote-intent-binding.sql",
+      "container_only": true,
+      "container_prover": "prove-draw-down-quote-intent-binding.mjs",
+      "description": "CONTAINER ONLY pending-apply rollback proof for 20260819232000 after 20260816110000, 20260816120000 and 20260817120000: an active sales rep successfully covers a colleague's live booking through the real tier-split money/inventory path; numeric-equivalent exact replay returns one saved order; changed quantity and changed actor fail closed; the receipt is bound to actor plus fingerprint; line/header price, cost and profit remain exact; inventory is prebooked once; and a deleted quote is hidden before replay. The network-isolated PostgreSQL 17 prover applies 20260819232000 verbatim around a faithful effect-recording stand-in for the preserved implementation, then proves wrapper parsing/preflight/postflight, ACLs, same-key concurrency and a deliberately broken draw-fingerprint mutation; the full-schema chain owns the exact money/inventory assertions. No PASS is a live-apply claim.",
+      "covers": [
+        "draw_down_quote"
+      ],
+      "area": [
+        "pricing",
+        "inventory",
+        "lifecycle",
+        "security",
+        "idempotency",
+        "regression"
+      ]
+    },
     "draw_down_quote": {
       "chain": "smoke-auth-probe-template.sql",
       "description": "Standard 4-probe auth set, worked example against draw_down_quote: no-auth -> AUTH_REQUIRED; anon-key -> AUTH_REQUIRED with zero rows written; wrong-role (driver/applicator) -> INSUFFICIENT_ROLE; forged p_performed_by -> ACTOR_MISMATCH; plus a positive admin control draw proving the probes failed for the right reason. File header documents the placeholders for adapting it to any new RPC.",
