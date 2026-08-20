@@ -11,7 +11,8 @@
 -- refusal: a booking that has EVER been drawn cannot be restored at all,
 -- because a restore mints new quote_items ids and cannot carry the
 -- order_items.quote_item_id provenance stamp forward. This chain now proves the
--- refusal, and requires that migration — there is no prerequisite skip.
+-- refusal. Before that migration is present the chain raises SMOKE_PREREQ,
+-- rather than turning an intentionally parked migration into a red live smoke.
 --
 -- HOW TO RUN: execute this whole file as a SINGLE statement (Supabase MCP
 -- execute_sql, or psql -1) as postgres/service_role AFTER the migration is
@@ -41,9 +42,12 @@
 --       drawn product) -> refused
 --   (c) snapshot V3 @400 (ABOVE the 200 drawn, and legal under the old
 --       quantity rule) -> still refused, nothing changes; the booking then
---       draws its remaining 200 to closure from its un-restored state
+--       draws its remaining 300 to closure from its un-restored state
 --   (d) control: a quote with NO draws restores a lower-qty version freely,
 --       proving the refusal is scoped to drawn bookings and nothing else
+--   (e) both draw orders are cancelled, returning the ledger to zero and
+--       reopening the quote; restore remains refused because their stamped
+--       order-item audit rows deliberately survive cancellation
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION pg_temp.restore_quote_version_smoke(
@@ -124,6 +128,8 @@ DECLARE
   v_customer uuid;
   v_prod_a uuid;
   v_prod_b uuid;
+  v_draw_order_a uuid;
+  v_draw_order_b uuid;
   v_cost numeric;
   v_cost_b numeric;
   v_q uuid;
@@ -139,8 +145,20 @@ DECLARE
   v_drawn numeric;
   v_status text;
   v_items int;
+  v_restore_src text;
   v_suffix text := substr(md5(random()::text), 1, 8);
 BEGIN
+  SELECT p.prosrc INTO v_restore_src
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public'
+    AND p.proname = '_restore_quote_version_owner_impl'
+    AND p.pronargs = 4;
+  IF v_restore_src IS NULL
+     OR position('QUOTE_RESTORE_BLOCKED_BY_DRAW' IN v_restore_src) = 0 THEN
+    RAISE EXCEPTION 'SMOKE_PREREQ: 20260816120000 is not installed; drawn-version restore guard is still parked';
+  END IF;
+
   -- --------------------------------------------------------------------
   -- 0. Auth as a real active admin
   -- --------------------------------------------------------------------
@@ -173,6 +191,7 @@ BEGIN
   SELECT id, current_cost INTO v_prod_a, v_cost
   FROM products
   WHERE current_cost IS NOT NULL
+    AND is_active IS TRUE
     AND current_cost > 0
     AND current_cost = round(current_cost, 2)
     AND current_cost <= 10
@@ -181,6 +200,7 @@ BEGIN
   SELECT id, current_cost INTO v_prod_b, v_cost_b
   FROM products
   WHERE current_cost IS NOT NULL
+    AND is_active IS TRUE
     AND current_cost > 0
     AND current_cost = round(current_cost, 2)
     AND current_cost <= 10
@@ -250,6 +270,10 @@ BEGIN
     v_admin, NULL);
   IF (v_res->>'fully_drawn')::boolean IS DISTINCT FROM false THEN
     RAISE EXCEPTION 'SMOKE_FAIL: setup draw 200/500 reported fully_drawn: %', v_res;
+  END IF;
+  v_draw_order_a := (v_res->>'order_id')::uuid;
+  IF v_draw_order_a IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: setup draw 200/500 returned no order_id: %', v_res;
   END IF;
   SELECT quantity_drawn INTO v_drawn FROM quote_product_draws
   WHERE quote_id = v_q AND product_id = v_prod_a;
@@ -383,6 +407,10 @@ BEGIN
   IF (v_res->>'fully_drawn')::boolean IS DISTINCT FROM true THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (c) draw to 500/500 not reported fully drawn: %', v_res;
   END IF;
+  v_draw_order_b := (v_res->>'order_id')::uuid;
+  IF v_draw_order_b IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (c) final draw returned no order_id: %', v_res;
+  END IF;
   SELECT status INTO v_status FROM quotes WHERE id = v_q;
   IF v_status <> 'accepted' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (c) booking did not close after final draw, status=%', v_status;
@@ -444,10 +472,44 @@ BEGIN
   --     migration-history row 887 in the same change, and prove the lock
   --     ordering again.
   -- --------------------------------------------------------------------
+  SELECT public.cancel_order(
+    v_draw_order_b, v_admin, 'smoke-restore-cancel-final-' || v_suffix
+  ) INTO v_res;
+  IF COALESCE((v_res->>'success')::boolean, false) IS NOT TRUE
+     OR v_res->>'status' IS DISTINCT FROM 'cancelled' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (e) final draw cancellation returned %', v_res;
+  END IF;
+  PERFORM set_config('app.admin_override', 'false', true);
+
+  SELECT public.cancel_order(
+    v_draw_order_a, v_admin, 'smoke-restore-cancel-first-' || v_suffix
+  ) INTO v_res;
+  IF COALESCE((v_res->>'success')::boolean, false) IS NOT TRUE
+     OR v_res->>'status' IS DISTINCT FROM 'cancelled' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (e) first draw cancellation returned %', v_res;
+  END IF;
+  PERFORM set_config('app.admin_override', 'false', true);
+
   SELECT COALESCE(SUM(quantity_drawn), 0) INTO v_drawn
   FROM quote_product_draws WHERE quote_id = v_q;
-  IF v_drawn <= 0 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: (e) setup -- draw ledger is empty (drawn=%), so this scenario would pass vacuously: the restore guard reads order_items, not quote_product_draws', v_drawn;
+  IF v_drawn IS DISTINCT FROM 0 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (e) cancelled draws left ledger quantity % (expected 0)', v_drawn;
+  END IF;
+  SELECT status INTO v_status FROM quotes WHERE id = v_q;
+  IF v_status IS DISTINCT FROM 'sent' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (e) cancelled draws did not reopen quote (status=%)', v_status;
+  END IF;
+  IF (SELECT count(*) FROM orders WHERE id IN (v_draw_order_a, v_draw_order_b) AND status = 'cancelled') <> 2 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (e) both draw orders were not cancelled';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM order_items oi
+    JOIN quote_items qi ON qi.id = oi.quote_item_id
+    WHERE qi.quote_id = v_q
+      AND oi.order_id IN (v_draw_order_a, v_draw_order_b)
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (e) cancelled draw orders retained no stamped order_items, so the restore refusal would be vacuous';
   END IF;
 
   v_err := NULL;

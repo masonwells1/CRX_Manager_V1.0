@@ -19,8 +19,9 @@ current schema rejected the fixture before the behavior under test ran.
   runner. Its schema-only catalog seeds priced products with the pricing trigger
   disabled only for the seed, then restores the trigger before any smoke runs.
 - Proof observed: all five chains reached `SMOKE_PASS_ROLLBACK`; the parked
-  draw-down candidate still failed its pre-apply mutation control and passed its
-  post-apply restore guard; both row-version provers remained green.
+  draw-down candidate emitted its required pre-apply prerequisite signal and
+  passed its post-apply restore guard, including cancellation of both draw
+  orders; both row-version provers remained green.
 
 ## 2026-08-19 — Blend-ticket total-volume check no longer adds quantities across different units
 

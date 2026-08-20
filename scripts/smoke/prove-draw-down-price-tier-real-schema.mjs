@@ -11,6 +11,7 @@
  * always removes its network-disabled container.
  */
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
@@ -32,7 +33,11 @@ const pricedProductSmokeFiles = [
   path.join(ROOT, 'scripts', 'smoke', 'smoke-draw-ledger-reversal.sql'),
   path.join(ROOT, 'scripts', 'smoke', 'smoke-job_from_quote_activity_feed_fix.sql'),
 ];
-const expectedSkippedMigrations = ['20260810010308_active_team_note_assignment_actor.sql'];
+const expectedSkippedMigrations = [{
+  file: '20260810010308_active_team_note_assignment_actor.sql',
+  sha256: 'dd4fc4f464edbc35c879e2771affcd0dbdac715aa78cd50f55e187ddd813e78f',
+  reason: 'PREFLIGHT_FAIL: notify_team_note_assignment live base drift (owner=postgres, secdef=t, config={"search_path=public, pg_temp"}, body_md5=ad8be4ed1d2bdd2a87ace255b38ab641)',
+}];
 
 function docker(args, options = {}) {
   const result = spawnSync('docker', args, { cwd: ROOT, encoding: 'utf8', maxBuffer: 60 * 1024 * 1024, ...options });
@@ -137,7 +142,17 @@ try {
     if (!/PREFLIGHT_FAIL/.test(applied.output)) {
       throw new Error(`replay failed on ${path.basename(migration)}:\n${applied.output}`);
     }
-    skipped.push({ file: path.basename(migration), reason: (applied.output.match(/PREFLIGHT_FAIL[^\n]*/) ?? ['PREFLIGHT_FAIL'])[0] });
+    const file = path.basename(migration);
+    const reason = (applied.output.match(/PREFLIGHT_FAIL[^\n]*/) ?? ['PREFLIGHT_FAIL'])[0];
+    const expected = expectedSkippedMigrations.find((entry) => entry.file === file);
+    assert.ok(expected, `unapproved historical PREFLIGHT skip: ${file}\n${reason}`);
+    assert.equal(
+      createHash('sha256').update(readFileSync(migration)).digest('hex'),
+      expected.sha256,
+      `approved historical PREFLIGHT migration content changed: ${file}`,
+    );
+    assert.equal(reason, expected.reason, `approved historical PREFLIGHT reason changed: ${file}`);
+    skipped.push({ file, reason });
   }
   console.log(`[prover] replayed ${candidateIndex - skipped.length}/${candidateIndex} post-baseline migrations up to (not including) the candidate`);
   if (skipped.length > 0) {
@@ -146,7 +161,7 @@ try {
   }
   assert.deepEqual(
     skipped.map((entry) => entry.file),
-    expectedSkippedMigrations,
+    expectedSkippedMigrations.map((entry) => entry.file),
     'historical PREFLIGHT skip set changed; re-review the replay base before trusting this proof',
   );
 
@@ -191,6 +206,11 @@ try {
     /SMOKE_PASS_ROLLBACK/,
     `smoke reached SMOKE_PASS_ROLLBACK BEFORE the candidate applied — it does not actually prove the new guard:\n${before.output}`,
   );
+  assert.match(
+    before.output,
+    /SMOKE_PREREQ: 20260816120000/,
+    `pre-candidate smoke did not identify the parked migration as its missing prerequisite:\n${before.output}`,
+  );
 
   // The five pricing-fixture regressions target the verified LIVE schema.
   // Run them before the parked candidate: that candidate deliberately blocks
@@ -214,7 +234,7 @@ try {
 
   console.log(`[prover] current-live source replay plus parked candidate reached ${path.basename(migrations.at(-1))}`);
 
-  console.log('DRAW_TIER_REAL_SCHEMA_PASS baseline=20260727174805 live_high_water=20260816174353 priced_product_smokes=5/5 parked_candidate=20260816120000 pre_candidate=FAILED_AS_REQUIRED post_candidate=SMOKE_PASS_ROLLBACK smoke=smoke-restore-version-drawn-guard.sql');
+  console.log('DRAW_TIER_REAL_SCHEMA_PASS baseline=20260727174805 live_high_water=20260816174353 priced_product_smokes=5/5 parked_candidate=20260816120000 pre_candidate=SMOKE_PREREQ_AS_REQUIRED post_candidate=SMOKE_PASS_ROLLBACK smoke=smoke-restore-version-drawn-guard.sql');
 } catch (error) {
   console.error(`DRAW_TIER_REAL_SCHEMA_FAIL ${error.stack ?? error.message}`);
   process.exitCode = 1;
