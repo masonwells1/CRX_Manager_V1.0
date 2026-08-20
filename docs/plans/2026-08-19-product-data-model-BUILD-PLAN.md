@@ -367,6 +367,37 @@ PRD 1.3, 1.3a, 1.11, 1.18, 1.19, 1.20.
 
 ---
 
+## Open owner decisions — WP-3, WP-4 and WP-5 cannot be handed to a builder until these settle
+
+*Raised reviewing PR #435, 2026-08-20. Each is a genuine conflict between two things the plan
+corpus already says, not a wording problem. A builder handed either instruction can satisfy one
+document only by violating the other, so these are Mason's to settle, not a reviewer's to patch.*
+
+1. **Where do application brand snapshots go — and is the application workflow live at all?**
+   The only structurally correct product-line relation, `application_record_lots`, holds **0 rows**
+   and is ruled dormant by PRD 1.9a-iv. `application_records` holds **1 row**; its products sit in
+   a `product_data` jsonb array. `delivery_items` holds **400** and is unambiguous. **Options:**
+   (a) snapshot only into the `product_data` array elements and leave the lot chain alone;
+   (b) adopt the lot chain — a separate decision PRD 1.9a-iv says is Mason's and outside this plan;
+   (c) scope WP-3 to deliveries now and defer applications. **Recommend (a)** — it captures brand
+   on the path that actually runs, without reviving dormant infrastructure.
+
+2. **May WP-5's copy RPC refuse a cross-tier copy?** WP-5 requires the database to enforce
+   same-tier eligibility. **D-X — Mason's settled 2026-08-19 decision — says tier protection stays
+   at the display layer and "a builder must not add `sourcing_tier` to `products` or build
+   cross-tier substitution rules."** These cannot both hold. **Options:** drop the RPC's cross-tier
+   refusal and keep D-X as-is, or revise D-X with a new decision. **Recommend dropping the RPC
+   restriction** — D-X is recent, deliberate, and reasoned; a copy tool is a weak reason to reopen it.
+
+3. **WP-4's `purpose` discriminator breaks a live caller.** `handleCreateSampleDraft`
+   (`src/pages/LabelReview.tsx:370-382`) calls `create_label_draft` today with **no purpose
+   argument**. Constraining `purpose` to `epa_label_seed` either breaks that call during the
+   apply-before-merge window or silently misclassifies manual drafts into the EPA commit path.
+   **Needs a `manual` purpose value and a backward-compatible default before WP-4 applies** —
+   a technical fix, but it changes WP-4's contract, so it is recorded here rather than patched in.
+
+---
+
 ### WP-3 · Brand layer, receiving capture, split loads — **migration**
 
 **Full schema surface, enumerated before handoff *(Fable F-14 — revision 1 named one table for
@@ -392,9 +423,16 @@ work that touches five)*:**
   - **`delivery_items`** — has `product_id`
     (`20260206172436_create_full_schema_v2.sql:326-334`). Takes `brand_name_snapshot` /
     `brand_epa_snapshot` directly.
-  - **`application_record_lots`** — has `product_id` **and** `source_receiving_record_id`
-    (`20260622170000_application_record_lots.sql:36-48`). This is the product-line relation for
-    applications; it takes the snapshot **and** is where receipt-time allocations propagate to.
+  - **`application_record_lots` — UNRESOLVED, do not build against this until Mason settles it.**
+    Structurally it looks ideal: it has `product_id` **and** `source_receiving_record_id`
+    (`20260622170000_application_record_lots.sql:36-48`). **But it holds 0 rows on live**
+    (counted read-only 2026-08-20), and PRD 1.9a-iv explicitly rules the lot/tote chain
+    *existing but dormant — leave it alone, do not build on or extend it*. Routing application
+    brand snapshots here would attach them to a table nothing writes, so application paperwork
+    would carry no brand at all. An earlier revision of this list did exactly that and was wrong.
+    **The open question is not a naming detail — it is whether the application workflow is in use
+    at all** (`application_records` holds 1 row; `delivery_items` holds 400). See §"Open owner
+    decisions" — this blocks the application half of WP-3, not the delivery half.
   - **`application_records`** — has **no singular product reference.** Products live in a
     `product_data` **jsonb array** (`20260214220000_application_records_table.sql:28-30`), each
     element already carrying `product_id`, `product_name` and `epa_registration`. The brand
