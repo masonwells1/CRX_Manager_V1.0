@@ -7,7 +7,7 @@ import SearchableSelect from '../ui/SearchableSelect';
 import { supabase, assertRpcResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
-import { validateBlendMath } from '../../lib/blendMathValidator';
+import { validateBlendMath, type BlendMathWarning } from '../../lib/blendMathValidator';
 import { localToday } from '../../lib/dateUtils';
 import type { Customer, Product, BlendRecipe, BlendRecipeItem } from '../../types';
 import { Sentry } from '../../lib/sentry';
@@ -188,7 +188,7 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
   const [saving, setSaving] = useState(false);
   const [attemptUncertain, setAttemptUncertain] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [warnings, setWarnings] = useState<string[]>([]);
+  const [warnings, setWarnings] = useState<BlendMathWarning[]>([]);
 
   const clearPersistedAttempt = () => {
     persistedAttemptRef.current = null;
@@ -802,14 +802,27 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
 
       </fieldset>
 
-      {warnings.length > 0 && (
+      {/* Two tiers, deliberately. A "couldn't check this" note is the COMMON case
+          on a real ticket, and rendering it in the same alarmed amber as a genuine
+          mismatch is how a banner gets trained into wallpaper. Only a comparison
+          that actually ran and disagreed gets the warning styling. */}
+      {warnings.some((w) => w.level === 'mismatch') && (
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 space-y-1">
           <div className="flex items-center gap-2 text-yellow-800 font-medium text-sm">
             <AlertCircle className="h-4 w-4" />
             Math Validation Warnings
           </div>
-          {warnings.map((w, i) => (
-            <p key={i} className="text-sm text-yellow-700 ml-6">- {w}</p>
+          {warnings.filter((w) => w.level === 'mismatch').map((w, i) => (
+            <p key={i} className="text-sm text-yellow-700 ml-6">- {w.message}</p>
+          ))}
+        </div>
+      )}
+
+      {warnings.some((w) => w.level === 'unchecked') && (
+        <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-1">
+          <div className="text-gray-600 font-medium text-sm">Not automatically checked</div>
+          {warnings.filter((w) => w.level === 'unchecked').map((w, i) => (
+            <p key={i} className="text-sm text-gray-500 ml-2">- {w.message}</p>
           ))}
         </div>
       )}

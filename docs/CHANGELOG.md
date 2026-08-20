@@ -2,6 +2,33 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-19 — Blend-ticket warnings are tiered, so "couldn't check" stops looking like "you're wrong"
+
+`validateBlendMath` returned `string[]`, and both callers rendered every entry in the same amber
+"Math Validation Warnings" block. After the total-volume rebuild the **common** entry on a real
+ticket is a "could not be checked" note, so rendering it identically to a genuine error is exactly
+how a banner gets trained into wallpaper — the main risk an adversarial review raised against the
+whole redesign.
+
+- The return type is now `BlendMathWarning[]`, each carrying `level: 'mismatch' | 'unchecked'`.
+  `mismatch` means a comparison **ran and disagreed**; `unchecked` means one **could not run** and
+  nothing is known to be wrong.
+- Both callers render two blocks: amber and alerted for `mismatch`, quiet grey headed "Not
+  automatically checked" for `unchecked`.
+- The predicted **invoice failure** is classified `mismatch`, not `unchecked`, even though no
+  comparison disagreed — `create_invoice_from_blend_ticket` will hard-raise on that line, so it is
+  a real problem rather than an unverified one.
+- Each of the 12 warning sites was classified individually rather than by pattern-matching its
+  message text, and the tier of each is now pinned by its own test: promoting an `unchecked` to a
+  `mismatch` relights the permanent banner and must fail loudly.
+- **Closed a real coverage gap:** both caller test files mock the validator away, so *nothing* had
+  ever verified a warning reaching the screen. Two tests now render the real component and assert
+  the tiers stay visually distinct; mutation-tested by collapsing the two blocks back into one and
+  confirming the quiet-note test goes red.
+
+41 validator tests, 77 across the three affected suites.
+
+
 ## 2026-08-19 — The blend-ticket total-volume check was the wrong equation; replaced with three true ones
 
 Mason confirmed on 2026-08-19 that a blend ticket's total volume is **"everything in the sprayer,

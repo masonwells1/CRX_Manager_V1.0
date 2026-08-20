@@ -174,11 +174,38 @@ function normalizeUnit(
   return { key: UNIT_ALIASES[key] ?? key, label };
 }
 
+/**
+ * A warning, tiered by what it actually claims.
+ *
+ * `mismatch` — a comparison RAN and disagreed. Something on this ticket is wrong
+ * and is worth stopping for. These should be rare.
+ * `unchecked` — a comparison could NOT run: a unit is missing, or the units are
+ * from families that cannot be converted without a density the database does not
+ * carry. Nothing is known to be wrong; the operator is simply being told what was
+ * not verified for them.
+ *
+ * The split exists because the two used to render identically. On a realistic
+ * ticket the "unchecked" kind is the common one, so showing it in the same alarmed
+ * amber as a real error teaches operators that the banner means nothing — the
+ * failure mode an adversarial review flagged as the main risk of this whole
+ * redesign.
+ */
+export type BlendMathWarningLevel = 'mismatch' | 'unchecked';
+
+export interface BlendMathWarning {
+  level: BlendMathWarningLevel;
+  message: string;
+}
+
 export function validateBlendMath(
   ticketData: TicketData,
   products: ProductData[]
-): string[] {
-  const warnings: string[] = [];
+): BlendMathWarning[] {
+  const warnings: BlendMathWarning[] = [];
+  /** A comparison ran and disagreed — something here is actually wrong. */
+  const mismatch = (message: string) => warnings.push({ level: 'mismatch', message });
+  /** A comparison could not run. Nothing is known to be wrong. */
+  const unchecked = (message: string) => warnings.push({ level: 'unchecked', message });
   const totalAcres = ticketData.total_acres;
   const totalVolume = ticketData.total_volume;
 
@@ -215,14 +242,14 @@ export function validateBlendMath(
       }
 
       if (expected === null) {
-        warnings.push(
+        unchecked(
           `Not checked — ${name}: the rate is in ${rateUnit} but the quantity is in ${qtyUnit}, which can't be converted${form === 'dry' ? ' for a dry product' : ''}. Please verify this line by hand.`
         );
       } else if (expected > 0) {
         const pctDiff = Math.abs(product.quantity - expected) / expected;
         if (pctDiff > TOLERANCE) {
           const inUnit = qtyUnit !== '' && qtyUnit !== rateUnit ? ` ${qtyUnit}` : '';
-          warnings.push(
+          mismatch(
             `${name}: quantity (${product.quantity}) doesn't match rate/acre (${product.rate_per_acre}${rateUnit ? ' ' + rateUnit : ''}) × acres (${totalAcres}) = ${expected.toFixed(2)}${inUnit}`
           );
         }
@@ -234,7 +261,7 @@ export function validateBlendMath(
       // discovered weeks later at invoicing into a note while the ticket is open.
       const soldUnit = rateBaseUnit(product.product_inventory_unit);
       if (rateUnit !== '' && soldUnit !== '' && fieldAppPricedQuantity(1, rateUnit, soldUnit, form) === null) {
-        warnings.push(
+        mismatch(
           `${name}: the rate unit (${rateUnit}) can't be converted to the unit this product is sold in (${soldUnit}), so this ticket will fail when you invoice it.`
         );
       }
@@ -264,7 +291,7 @@ export function validateBlendMath(
     if (expectedTank !== null && expectedTank > 0) {
       const pctDiff = Math.abs(totalVolume - expectedTank) / expectedTank;
       if (pctDiff > TOLERANCE) {
-        warnings.push(
+        mismatch(
           `Total volume (${totalVolume} ${headerUnit}) doesn't match the application rate (${parsedRate.value} ${parsedRate.unit}/acre) × acres (${totalAcres}) = ${expectedTank.toFixed(2)} ${headerUnit}`
         );
       }
@@ -305,7 +332,7 @@ export function validateBlendMath(
     }
 
     if (anyMissingUnit) {
-      warnings.push(
+      unchecked(
         `Not checked — a product has a quantity but no unit, so it can't be counted towards the total. Please verify the total by hand.`
       );
     }
@@ -314,14 +341,14 @@ export function validateBlendMath(
       // A dry blend's parts are supposed to equal its whole, so unlike the spray
       // bound below, dropping a row here would break the claim rather than soften
       // it. Say the check was abandoned instead of quietly comparing a subset.
-      warnings.push(
+      unchecked(
         `Total weight not checked: not every product is recorded in a weight unit that can be compared to ${headerUnit}. Please verify the total by hand.`
       );
     } else if (anyContributing && totalIsWeight && !anyUnconvertible) {
       // Dry blend: the products ARE the total.
       const pctDiff = Math.abs(convertedSum - totalVolume) / totalVolume;
       if (pctDiff > TOLERANCE) {
-        warnings.push(
+        mismatch(
           `Total weight (${totalVolume} ${headerUnit}) doesn't match the products, which add up to ${convertedSum.toFixed(2)} ${headerUnit}`
         );
       }
@@ -331,7 +358,7 @@ export function validateBlendMath(
       // water volume happens to be. Rows that could not be converted are simply
       // absent from the sum, which only makes the bound more forgiving, never
       // wrong.
-      warnings.push(
+      mismatch(
         `The products add up to ${convertedSum.toFixed(2)} ${headerUnit}, which is more than the total volume of ${totalVolume} ${headerUnit}. A tank can't hold more product than its total.`
       );
     }
@@ -388,23 +415,23 @@ export function validateBlendMath(
       const someUnitRecorded = unitLabels.size > 0;
 
       if (someUnitRecorded && hasUnrecordedUnit) {
-        warnings.push(
+        unchecked(
           `Total volume not checked: a product has a quantity but no unit, so it can't be told whether it adds to the rest. Please verify the total by hand.`
         );
       } else if (someUnitRecorded && ticketUnitMissing) {
-        warnings.push(
+        unchecked(
           `Total volume not checked: the products have units but the total volume doesn't, so there's nothing to compare them against. Please verify the total by hand.`
         );
       } else if (unitLabels.size > 1) {
         const labels = Array.from(unitLabels.values()).join(', ');
-        warnings.push(
+        unchecked(
           `Total volume not checked: these are not all the same unit (${labels}). Quantities in different units can't be added together, so please verify the total by hand.`
         );
       } else {
         const diff = Math.abs(sumQuantities - totalVolume);
         const pctDiff = diff / totalVolume;
         if (pctDiff > TOLERANCE) {
-          warnings.push(
+          mismatch(
             `Total product quantities (${sumQuantities.toFixed(2)}) doesn't match total volume (${totalVolume}${ticketData.total_volume_unit ? ' ' + ticketData.total_volume_unit : ''})`
           );
         }

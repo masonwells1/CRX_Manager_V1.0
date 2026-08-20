@@ -21,9 +21,9 @@ describe('validateBlendMath', () => {
         ]
       );
       expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toContain('Atrazine');
-      expect(warnings[0]).toContain('250');
-      expect(warnings[0]).toContain('200');
+      expect(warnings[0].message).toContain('Atrazine');
+      expect(warnings[0].message).toContain('250');
+      expect(warnings[0].message).toContain('200');
     });
 
     it('passes within 5% tolerance', () => {
@@ -91,7 +91,7 @@ describe('validateBlendMath', () => {
           []
         );
         expect(warnings).toHaveLength(1);
-        expect(warnings[0]).toContain('1000.00');
+        expect(warnings[0].message).toContain('1000.00');
       });
 
       it('converts between liquid units on the way', () => {
@@ -139,7 +139,7 @@ describe('validateBlendMath', () => {
           ]
         );
         expect(warnings).toHaveLength(1);
-        expect(warnings[0]).toContain("can't hold more product than its total");
+        expect(warnings[0].message).toContain("can't hold more product than its total");
       });
 
       // Reviewer A's banner-fatigue objection: a dry product in a liquid tank is
@@ -175,7 +175,7 @@ describe('validateBlendMath', () => {
           [{ product_name: 'A', quantity: 1200, unit: 'lb', rate_per_acre: null, rate_per_acre_unit: null, ...dry }]
         );
         expect(warnings).toHaveLength(1);
-        expect(warnings[0]).toContain('1200.00');
+        expect(warnings[0].message).toContain('1200.00');
       });
 
       it('converts tons and dry ounces into the ticket weight', () => {
@@ -198,7 +198,7 @@ describe('validateBlendMath', () => {
           ]
         );
         expect(warnings).toHaveLength(1);
-        expect(warnings[0]).toContain('Total weight not checked');
+        expect(warnings[0].message).toContain('Total weight not checked');
       });
     });
 
@@ -210,7 +210,7 @@ describe('validateBlendMath', () => {
           [{ product_name: 'A', quantity: 50, unit: '', rate_per_acre: null, rate_per_acre_unit: null, ...liq }]
         );
         expect(warnings).toHaveLength(1);
-        expect(warnings[0]).toContain('quantity but no unit');
+        expect(warnings[0].message).toContain('quantity but no unit');
       });
 
       it('ignores a blank unit on a row contributing nothing', () => {
@@ -230,7 +230,7 @@ describe('validateBlendMath', () => {
           ]
         );
         expect(warnings).toHaveLength(1);
-        expect(warnings[0]).toContain('300.00');
+        expect(warnings[0].message).toContain('300.00');
       });
 
       // Every OCR-imported ticket arrives in this shape.
@@ -240,8 +240,77 @@ describe('validateBlendMath', () => {
           [{ product_name: 'A', quantity: 300, unit: 'Gal', rate_per_acre: null, rate_per_acre_unit: null, ...liq }]
         );
         expect(warnings).toHaveLength(1);
-        expect(warnings[0]).toContain("total volume doesn't");
+        expect(warnings[0].message).toContain("total volume doesn't");
       });
+    });
+  });
+
+  // The tier decides how loudly the UI speaks. 'mismatch' means a comparison ran
+  // and disagreed and is rendered in alarmed amber; 'unchecked' means nothing could
+  // be compared and is rendered as a quiet grey note. Promoting an 'unchecked' to a
+  // 'mismatch' would relight the permanent banner an adversarial review warned
+  // about, so each one is pinned here rather than left to the message text.
+  describe('warning tiers', () => {
+    const liq = { product_form: 'liquid', product_rate_unit: null, product_inventory_unit: null };
+
+    it('marks a real disagreement as a mismatch', () => {
+      const warnings = validateBlendMath(
+        { total_acres: 100, total_volume: 250, total_volume_unit: 'gal', application_rate: '10 gal/acre' },
+        []
+      );
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0].level).toBe('mismatch');
+    });
+
+    it('marks an over-full tank as a mismatch', () => {
+      const warnings = validateBlendMath(
+        { total_acres: null, total_volume: 100, total_volume_unit: 'gal', application_rate: null },
+        [{ product_name: 'A', quantity: 140, unit: 'gal', rate_per_acre: null, rate_per_acre_unit: null, ...liq }]
+      );
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0].level).toBe('mismatch');
+    });
+
+    it('marks a missing product unit as unchecked, not as an error', () => {
+      const warnings = validateBlendMath(
+        { total_acres: null, total_volume: 1000, total_volume_unit: 'gal', application_rate: null },
+        [{ product_name: 'A', quantity: 50, unit: '', rate_per_acre: null, rate_per_acre_unit: null, ...liq }]
+      );
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0].level).toBe('unchecked');
+    });
+
+    it('marks a missing ticket total unit as unchecked, not as an error', () => {
+      const warnings = validateBlendMath(
+        { total_acres: null, total_volume: 300, total_volume_unit: '', application_rate: null },
+        [{ product_name: 'A', quantity: 300, unit: 'Gal', rate_per_acre: null, rate_per_acre_unit: null, ...liq }]
+      );
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0].level).toBe('unchecked');
+    });
+
+    it('marks an unconvertible rate/quantity pairing as unchecked', () => {
+      const warnings = validateBlendMath(
+        { total_acres: 100, total_volume: null, total_volume_unit: null, application_rate: null },
+        [{ product_name: 'A', quantity: 3200, unit: 'oz', rate_per_acre: 2, rate_per_acre_unit: 'lb', ...liq }]
+      );
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0].level).toBe('unchecked');
+    });
+
+    // This one predicts a hard invoice-time failure, so it is a real problem even
+    // though no comparison "disagreed" — it must not be filed under quiet notes.
+    it('marks a predicted invoice failure as a mismatch', () => {
+      const warnings = validateBlendMath(
+        { total_acres: 100, total_volume: null, total_volume_unit: null, application_rate: null },
+        [{
+          product_name: 'Post spray', quantity: 200, unit: 'MG', rate_per_acre: 2, rate_per_acre_unit: 'MG',
+          product_form: 'dry', product_rate_unit: 'MG', product_inventory_unit: 'lb',
+        }]
+      );
+      const invoiceWarning = warnings.find((w) => w.message.includes('fail when you invoice it'));
+      expect(invoiceWarning).toBeDefined();
+      expect(invoiceWarning?.level).toBe('mismatch');
     });
   });
 
@@ -268,7 +337,7 @@ describe('validateBlendMath', () => {
         [{ product_name: 'A', quantity: 200, unit: 'oz', rate_per_acre: 2, rate_per_acre_unit: 'gal', ...liquid }]
       );
       expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toContain('25600.00');
+      expect(warnings[0].message).toContain('25600.00');
     });
 
     // Mason, 2026-08-19: "oz" against a DRY product means a weight ounce.
@@ -287,7 +356,7 @@ describe('validateBlendMath', () => {
         [{ product_name: 'A', quantity: 3200, unit: 'oz', rate_per_acre: 2, rate_per_acre_unit: 'lb', ...liquid }]
       );
       expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toContain('Not checked');
+      expect(warnings[0].message).toContain('Not checked');
     });
 
     // Billing does COALESCE(NULLIF(btrim(rate_per_acre_unit),''), p.rate_unit) and
@@ -302,7 +371,7 @@ describe('validateBlendMath', () => {
         }]
       );
       expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toContain('25600.00');
+      expect(warnings[0].message).toContain('25600.00');
     });
 
     it('strips a per-acre suffix so pt/ac matches a pt quantity', () => {
@@ -322,7 +391,7 @@ describe('validateBlendMath', () => {
         [{ product_name: 'A', quantity: 200, unit: 'oz', rate_per_acre: 2, rate_per_acre_unit: 'oz/cwt', ...liquid }]
       );
       expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toContain('Not checked');
+      expect(warnings[0].message).toContain('Not checked');
     });
 
     it('stays quiet on an MG-rated, MG-sold product (the identity path billing uses)', () => {
@@ -346,7 +415,7 @@ describe('validateBlendMath', () => {
           product_form: 'dry', product_rate_unit: 'MG', product_inventory_unit: 'lb',
         }]
       );
-      expect(warnings.some((w) => w.includes('fail when you invoice it'))).toBe(true);
+      expect(warnings.some((w) => w.message.includes('fail when you invoice it'))).toBe(true);
     });
 
     it('keeps the plain numeric comparison when no unit is recorded on either side', () => {
@@ -355,7 +424,7 @@ describe('validateBlendMath', () => {
         [{ product_name: 'A', quantity: 250, unit: null, rate_per_acre: 2, rate_per_acre_unit: null, product_form: null, product_rate_unit: null, product_inventory_unit: null }]
       );
       expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toContain('200.00');
+      expect(warnings[0].message).toContain('200.00');
     });
   });
 });
