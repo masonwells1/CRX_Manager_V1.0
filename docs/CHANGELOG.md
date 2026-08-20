@@ -11,9 +11,10 @@ a queue nobody can count, which is how two branches collide on the same schema.
 The check was unsatisfiable by construction. `parkedDraftPathsFrom` reconciled the
 `LOCAL CANDIDATE — NOT APPLIED` rows of `docs/reference/migration-history.md` against the branch's
 own-draft diff (`base..HEAD`) — but that history file is **shared, and arrives from `origin/main`**.
-A candidate row that came with the shared file, naming SQL that also came with `origin/main`, can
-never appear in that diff no matter what the branch does. A guard that always answers UNKNOWN
-answers nothing.
+An inherited candidate row naming SQL that also came with `origin/main`, with no net change since
+the branch point, does not appear in that diff. (`base..HEAD` is a *net* diff: a file touched and
+then reverted is likewise absent, while one genuinely changed **is** present and reconciles
+normally.) A guard that always answers UNKNOWN answers nothing.
 
 - **Fixed the check's domain, not by adding a bypass.** `createOwnDraftPathsReader` now exempts a
   row **only when `origin/main`'s own shared history already accounts for it** — either as a LOCAL
@@ -28,9 +29,20 @@ answers nothing.
   does not list it, and its blob carries no parked header — so mainline discovery reports nothing
   either, and `/fleet` would have **confidently hidden a genuinely pending migration**. Existing on
   main is not the same as being *accounted for* by main. A dedicated test pins this.
+- **"Settled" is now parsed as an AFFIRMATIVE status, not a substring.** The shared settlement
+  matcher accepted `APPLIED LIVE` anywhere in a row — so `NOT YET APPLIED LIVE` read as settled.
+  That is not hypothetical: `migration-history.md` carries six such rows (`NOT YET APPLIED LIVE`,
+  `NOT APPLIED LIVE`, `Not applied live`). Codex raised it as a BLOCKER on PR #437 and reproduced
+  the consequence end to end — a pending candidate exempted against an `origin/main` row reading
+  "BUILT — NOT YET APPLIED LIVE", flipping a conservative UNKNOWN into a **confident zero**.
+  `isSettledMigrationHistoryRow()` now rejects an adjacent `NOT` / `NOT YET` / `NEVER` /
+  `NO LONGER` / `has not been`, while an unrelated negation later in the row still settles. The
+  stricter matcher also applies to mainline discovery's stale-header self-clear, which moves that
+  path in the conservative direction too.
 - **Not a relaxation.** An unreadable `origin/main` history exempts nothing and keeps the old
   conservative answer. Under-reporting — a confident zero over real pending migrations — is the
-  dangerous direction, so every branch of this is pinned by tests and was mutation-tested.
+  dangerous direction, so every branch of this is pinned by tests and was mutation-tested,
+  including an aggregate false-zero regression test reproducing Codex's exact scenario.
 - **One lib, both consumers.** `scripts/fleet-status.mjs` and the SessionStart banner share
   `.claude/hooks/worktree-awareness-lib.mjs` by design (2026-07-29), so the change is in the lib.
 - **Real settled-row case.** `origin/main` row 886 records

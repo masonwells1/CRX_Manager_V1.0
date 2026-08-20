@@ -553,7 +553,29 @@ export function localCandidateMigrationPathsFromHistory(historyText) {
 // A migration-history row that SETTLES a migration: it is no longer waiting on anyone.
 // Shared by mainline discovery's stale-header self-clear and the reader's exemption, so
 // the two cannot drift on what "settled" means.
-const SETTLED_MIGRATION_HISTORY_ROW = /\b(?:APPLIED\s+LIVE|RETIRED\s+CODE-ONLY\s+ARTIFACT|SUPERSEDED)\b/i;
+//
+// Containing the words is NOT enough — the status must be AFFIRMATIVE. `migration-history.md`
+// really does carry rows reading "NOT YET APPLIED LIVE", "NOT APPLIED LIVE" and "Not applied
+// live" (six of them on 2026-08-20), and a bare substring test reads every one of those as
+// settled. Codex proved the consequence on PR #437: a branch's pending candidate got exempted
+// against an origin/main row saying "BUILT — NOT YET APPLIED LIVE", turning a conservative
+// UNKNOWN into a confident zero over a genuinely pending migration.
+//
+// A negator is rejected only when it immediately precedes the phrase, so an ordinary
+// "**APPLIED LIVE** ... this is not a rollback" row still settles correctly.
+const SETTLEMENT_PHRASE = /\b(?:APPLIED\s+LIVE|RETIRED\s+CODE-ONLY\s+ARTIFACT|SUPERSEDED)\b/gi;
+const SETTLEMENT_NEGATOR = /\b(?:NOT|NEVER|NO\s+LONGER)\s+(?:YET\s+)?(?:BE(?:EN)?\s+)?$/i;
+
+export function isSettledMigrationHistoryRow(row) {
+  const text = String(row || "");
+  for (const match of text.matchAll(SETTLEMENT_PHRASE)) {
+    // A short window is enough: the negator has to be adjacent to mean this phrase.
+    const preceding = text.slice(Math.max(0, match.index - 32), match.index);
+    if (SETTLEMENT_NEGATOR.test(preceding)) continue;
+    return true;
+  }
+  return false;
+}
 
 function historyRowsByMigrationBasename(historyText) {
   const rowsByBasename = new Map();
@@ -646,7 +668,7 @@ export function parkedMainlineDiscoveryFrom(
     if (!hasExplicitParkedMigrationHeader(sqlText)) continue;
     const basename = matches[0].slice(matches[0].lastIndexOf("/") + 1).toLowerCase();
     const rows = historyRowsByBasename.get(basename) || [];
-    if (!rows.some((row) => SETTLED_MIGRATION_HISTORY_ROW.test(row))) {
+    if (!rows.some((row) => isSettledMigrationHistoryRow(row))) {
       return { state: "unknown", paths: new Set(discovered), reason: "parked forward header has no LOCAL CANDIDATE or applied/retired history record" };
     }
   }
@@ -687,7 +709,7 @@ export function validateParkedMigrationCrossReferences(paths, historyText, loadT
     if (!hasExplicitParkedMigrationHeader(sqlText)) continue;
     const basename = p.slice(p.lastIndexOf("/") + 1).toLowerCase();
     const rows = historyRowsByBasename.get(basename) || [];
-    if (!rows.some((row) => SETTLED_MIGRATION_HISTORY_ROW.test(row))) {
+    if (!rows.some((row) => isSettledMigrationHistoryRow(row))) {
       return { state: "unknown", paths: new Set(), reason: "parked header has no applied/retired history record for its migration version" };
     }
   }
@@ -743,9 +765,11 @@ export function createOwnDraftPathsReader({
   //
   // The own-draft reconciliation inside parkedDraftPathsFrom compares the branch's
   // migration-history rows against `base..HEAD`. But `migration-history.md` is a SHARED
-  // file that arrives from origin/main, so a row carried in with that file, naming SQL
-  // that also arrived with origin/main, can never appear in that diff however the branch
-  // behaves. Demanding it does is not a strict guard — it is a permanent UNKNOWN, which
+  // file that arrives from origin/main, so an inherited row naming SQL that also arrived
+  // with origin/main and carries no NET change since the branch point does not appear in
+  // that diff — `base..HEAD` is a net diff, so a file the branch touched and then reverted
+  // is absent too, while one it genuinely changed IS present and reconciles normally.
+  // Demanding such a row appear is not a strict guard — it is a permanent UNKNOWN, which
   // is what every worktree reported before 2026-08-20.
   //
   // The ONLY safe exemption is a row origin/main's own shared history already accounts
@@ -803,7 +827,7 @@ export function createOwnDraftPathsReader({
       }
       const basename = candidate.slice(candidate.lastIndexOf("/") + 1).toLowerCase();
       const rows = mainline.rowsByBasename.get(basename) || [];
-      if (rows.some((row) => SETTLED_MIGRATION_HISTORY_ROW.test(row))) exempt.add(candidate);
+      if (rows.some((row) => isSettledMigrationHistoryRow(row))) exempt.add(candidate);
     }
     return exempt.size ? exempt : null;
   }

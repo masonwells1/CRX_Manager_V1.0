@@ -20,7 +20,7 @@ import {
   localCandidateMigrationPathsFromHistory, validateParkedMigrationCrossReferences,
   ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, originMainParkedMigrationPrefilter,
   ORIGIN_MAIN_CAT_FILE_MAX_BUFFER, originMainSqlBlobMap, originMainForwardBlobPaths,
-  createOwnDraftPathsReader,
+  createOwnDraftPathsReader, isSettledMigrationHistoryRow,
 } from "./worktree-awareness-lib.mjs";
 
 let pass = 0;
@@ -802,6 +802,34 @@ const DIRTY_ENTRY = { path: "C:/wt-dirty", head: "b".repeat(40) };
   eq(noCandidates.unknownReason, "", "a history with no LOCAL CANDIDATE rows keeps an unrelated diff confidently zero");
 }
 
+// ── "Settled" must be AFFIRMATIVE, not a substring (Codex BLOCKER on PR #437) ──
+//
+// `migration-history.md` really carries rows reading "NOT YET APPLIED LIVE", "NOT APPLIED
+// LIVE" and "Not applied live" — six of them on 2026-08-20. A bare substring test reads
+// every one as settled, and Codex reproduced the consequence: a pending candidate exempted
+// against an origin/main row saying "BUILT — NOT YET APPLIED LIVE", turning a conservative
+// UNKNOWN into a CONFIDENT ZERO over a genuinely pending migration.
+{
+  ok(isSettledMigrationHistoryRow("| 886 | 20260813080000 | **APPLIED LIVE** as ledger version `20260816174353`. |"), "an affirmative APPLIED LIVE row settles the migration");
+  ok(isSettledMigrationHistoryRow("| 1 | 20260101000000 | **SUPERSEDED** by a later draft. |"), "an affirmative SUPERSEDED row settles the migration");
+  ok(isSettledMigrationHistoryRow("| 2 | 20260101000000 | **RETIRED CODE-ONLY ARTIFACT.** |"), "an affirmative RETIRED CODE-ONLY ARTIFACT row settles the migration");
+
+  // Every negated form Codex named, plus the real spellings in the live history file.
+  ok(!isSettledMigrationHistoryRow("| 3 | 20260101000000 | BUILT — NOT YET APPLIED LIVE. |"), "NOT YET APPLIED LIVE does not settle the migration");
+  ok(!isSettledMigrationHistoryRow("| 4 | 20260101000000 | NOT APPLIED LIVE. |"), "NOT APPLIED LIVE does not settle the migration");
+  ok(!isSettledMigrationHistoryRow("| 5 | 20260101000000 | Not applied live. |"), "lower-case 'Not applied live' does not settle the migration");
+  ok(!isSettledMigrationHistoryRow("| 6 | 20260101000000 | NEVER APPLIED LIVE. |"), "NEVER APPLIED LIVE does not settle the migration");
+  ok(!isSettledMigrationHistoryRow("| 7 | 20260101000000 | This draft is not superseded. |"), "a negated SUPERSEDED does not settle the migration");
+  ok(!isSettledMigrationHistoryRow("| 8 | 20260101000000 | has not been superseded. |"), "'has not been superseded' does not settle the migration");
+  ok(!isSettledMigrationHistoryRow("| 9 | 20260101000000 | no longer superseded by anything. |"), "'no longer superseded' does not settle the migration");
+  ok(!isSettledMigrationHistoryRow("| 10 | 20260101000000 | **PARKED DRAFT (STAGED) — NOT APPLIED.** |"), "a parked staged draft row does not settle the migration");
+
+  // A negator elsewhere in a long row must not veto a genuinely affirmative status.
+  ok(isSettledMigrationHistoryRow("| 11 | 20260101000000 | **APPLIED LIVE** — note this was not a rollback and is not superseded by 20260102. |"), "an affirmative status still settles when unrelated negations appear later");
+  // ...and a row that carries BOTH a negated and an affirmative mention still settles.
+  ok(isSettledMigrationHistoryRow("| 12 | 20260101000000 | Was NOT YET APPLIED LIVE at review time; **APPLIED LIVE** on 2026-08-16. |"), "a row whose negated mention is followed by an affirmative one settles");
+}
+
 // ── The reconciliation's DOMAIN (2026-08-20) ──
 //
 // The reconciliation above compares shared `migration-history.md` rows against a diff of
@@ -920,6 +948,32 @@ const MAINLINE_HISTORY_SETTLES_CANDIDATE = "| 886 | 20260101000000 | **APPLIED L
   );
   const got = reader(CLEAN_ENTRY);
   eq(got.unknownReason, "", "an exempt candidate stays known in a dirty worktree too");
+}
+
+// AGGREGATE FALSE-ZERO REGRESSION (Codex CRX-SEC-001 on PR #437, reproduced end to end).
+//
+// Matcher-level tests above are not sufficient on their own — Codex's finding was that the
+// COMBINED result flipped from a conservative UNKNOWN to a confident zero. This asserts the
+// aggregate: origin/main says "BUILT — NOT YET APPLIED LIVE", the branch registers a valid
+// SHA-pinned LOCAL CANDIDATE, the diff is empty, and the SQL carries no parked header.
+// The only acceptable answer is UNKNOWN. A zero here hides a genuinely pending migration.
+{
+  const pendingSql = "-- ordinary migration, no parked header\nSELECT 1;\n";
+  const branchHistory = `| 900 | 20260101000000 | **LOCAL CANDIDATE — NOT APPLIED.** File: \`20260101000000_real.sql\`. SQL sha256: \`${sha256Text(pendingSql)}\`. |`;
+  const mainNotYetApplied = "| 900 | 20260101000000 | BUILT — NOT YET APPLIED LIVE. File: `20260101000000_real.sql`. |";
+  const { reader } = fakeReader(
+    {
+      "merge-base": ["base1"],
+      diff: [],
+      "ls-files": [],
+      show: [mainNotYetApplied],
+      "ls-tree": [CANDIDATE_SQL_PATH],
+    },
+    { readHistory: () => branchHistory, readText: () => pendingSql },
+  );
+  const got = reader(CLEAN_ENTRY);
+  eq(got.size, 0, "the pending candidate is not invented as a discovered path");
+  ok(got.unknownReason.length > 0, "a candidate whose origin/main row says NOT YET APPLIED LIVE yields UNKNOWN, never a confident zero");
 }
 
 // The exemption must narrow the reconciliation only — a draft this branch really did add
