@@ -47,7 +47,10 @@ on-disk bytes instead of normalizing line endings and hiding an apply-time misma
 Operator consequence for the later apply: draw receipts live 24 hours, so the preflight requires a
 deliberate 24-hour window with no successful booking draws before this fourth migration can land.
 Plan that freeze for an off-season or weekend window, verify the read-only receipt count is zero,
-and keep draws paused through commit. This PR still does not start or authorize that freeze/apply.
+and keep draws paused through commit. The fail-closed choice is recorded in the decision log, the
+older ownership draft is marked fully superseded in known issues, and the container prover now
+executes the candidate under `REPEATABLE READ` to prove the stale-snapshot guard refuses it before
+the legacy-receipt scan. This PR still does not start or authorize that freeze/apply.
 
 Added focused migration/RPC contracts, real QuoteBuilder component recovery tests, and a
 container-only rollback smoke covering exact replay, changed quantity, changed actor,

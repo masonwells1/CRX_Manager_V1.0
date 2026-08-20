@@ -779,6 +779,25 @@ function proveTransactionGuard(migration) {
   console.log('MUTATION_DETECTED: autocommit execution is refused before the cutover lock');
 }
 
+function proveIsolationGuard(migration) {
+  psql('CREATE DATABASE draw_isolation_guard TEMPLATE template0;');
+  const db = 'draw_isolation_guard';
+  psql(FIXTURE, { db });
+  psql(extractSharedHelper(), { db });
+  psql(extractReviewedPrerequisites(), { db });
+  const blocked = psql(
+    `BEGIN ISOLATION LEVEL REPEATABLE READ;\n${migration}\nCOMMIT;`,
+    { db, allowFailure: true },
+  );
+  assert.notEqual(blocked.status, 0, 'repeatable-read execution bypassed the stale-snapshot guard');
+  assert.match(blocked.stderr, /transaction isolation must be read committed/);
+  assert.equal(
+    value("SELECT to_regprocedure('public._draw_down_quote_intent_impl_20260819(uuid,jsonb,uuid,text,text)') IS NULL;", db),
+    't',
+  );
+  console.log('MUTATION_DETECTED: repeatable-read execution is refused before the legacy-receipt scan');
+}
+
 async function proveLegacyReceiptPreflight(migration) {
   psql('CREATE DATABASE draw_legacy_receipt TEMPLATE template0;');
   const db = 'draw_legacy_receipt';
@@ -867,6 +886,7 @@ async function main() {
     proveMutation(migration);
     provePrerequisiteBodyGuard(migration);
     proveTransactionGuard(migration);
+    proveIsolationGuard(migration);
     await proveLegacyReceiptPreflight(migration);
     restoreFullSchemaAndRunSmoke();
 
@@ -878,6 +898,7 @@ async function main() {
     console.log('  different-intent and same-intent concurrent key races: PASS');
     console.log('  exact pricing/lifecycle prerequisite hashes and drift mutation: PASS');
     console.log('  single-transaction apply guard: PASS');
+    console.log('  read-committed isolation guard and stale-snapshot refusal: PASS');
     console.log('  exclusive cutover drain plus unexpired legacy receipt refusal: PASS');
     console.log('  restored full schema + real money/commission/inventory rollback smoke: PASS');
     console.log('  network: none; storage: tmpfs; live Supabase: untouched');

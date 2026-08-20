@@ -451,6 +451,17 @@ only from live state. `20260813161614_restrict_draw_down_quote_owner.sql` is the
 this ground. Confirm the pinned hash still matches live at apply time — recovery restores the source,
 it does not by itself prove the live body has not since drifted.
 
+**SUPERSEDED 2026-08-20 — do not apply or rebuild `20260813161614`.** The pending
+`20260819232000_bind_draw_down_receipts_to_intent.sql` successor preserves the owner-approved
+authorization boundary (active admins and sales reps may cover any live booking), keeps the
+soft-delete exclusion, and replaces the public five-argument wrapper while moving the reviewed money
+implementation behind an owner-only private function. The old ownership draft's owner gate was
+rejected, its remaining soft-delete change is already delivered by both the tier-split migration and
+the successor wrapper, and its live-body `md5(prosrc)` pin cannot match after that wrapper cutover.
+It is fully superseded: never "repair" it into a later `CREATE OR REPLACE public.draw_down_quote`,
+because that would overwrite the actor binding, required-key guard and receipt binding. All four
+successor migrations remain pending; this correction authorizes no live apply.
+
 **THE FIX IS THE TIER SPLIT, NOT THE ROUNDING — Mason changed his answer on 2026-08-16, and the
 later answer governs.** Two options were put to him. The first, at 09:51 Central, was mine: keep the
 exact line total and round only the stored unit price. He answered "Option a". Later the same

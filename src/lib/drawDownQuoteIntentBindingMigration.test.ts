@@ -236,6 +236,8 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(proverSource).toContain("const smokeSql = readFileSync(SMOKE_PATH, 'utf8');");
     expect(proverSource).toContain('/SMOKE_PASS_ROLLBACK/');
     expect(proverSource).toContain('listed.stderr.trim()');
+    expect(proverSource).toContain('BEGIN ISOLATION LEVEL REPEATABLE READ;');
+    expect(proverSource).toContain('repeatable-read execution is refused before the legacy-receipt scan');
     expect(proverSource).toContain('exclusive cutover lock drains and detects');
     expect(proverSource).toContain('restoreFullSchemaAndRunSmoke();');
   });
