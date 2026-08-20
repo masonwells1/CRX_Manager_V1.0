@@ -365,6 +365,48 @@ Cross-check the SHA against Vercel's own `list_deployments` for project
 
 ---
 
+## Never name the worktree path in a destructive shell command (2026-08-20)
+
+Agent worktrees are created at `<repo>/.claude/worktrees/<name>/`, so **every file inside a
+worktree carries a `.claude` path component**. `review-proof-guard.mjs` protects any `.claude`
+component — that is how it stops an agent deleting or forging the wrapper-owned review proofs
+and the applied-source ledger — and it cannot tell "the repo's review state" from "an ordinary
+scratch file that happens to live under a worktree."
+
+The consequence is narrow and has a zero-cost workaround. The guard only fires when the command
+**spells out** the worktree path. Your shell already starts inside the worktree, so use relative
+paths and nothing is blocked:
+
+| | |
+|---|---|
+| ❌ `rm -f C:\CRX_Manager\.claude\worktrees\wt-a\scratch.tmp` | denied |
+| ❌ `cd C:\CRX_Manager\.claude\worktrees\wt-a && rm scratch.tmp` | denied |
+| ✅ `rm -f scratch.tmp` | allowed |
+| ✅ `rm -rf node_modules/.cache` | allowed |
+| ✅ `git clean -fd` / `git clean -fd src` | allowed |
+| ✅ `mv a.txt b.txt` | allowed |
+| ✅ `Write` to a worktree file (relative **or** absolute) | allowed |
+
+Two things that look like this bug but are not:
+
+- **`find … -delete` is blocked everywhere**, in worktrees and out, by `bash-safety.mjs`. That is
+  deliberate and unrelated. Run the `find` without `-delete`, review the matches, then delete.
+- **A blocked `Write` to `.claude/session-state/stop-wrap-ack.json` is a different hook.**
+  `review-proof-guard` deliberately allows that write — it is the designed session-end
+  acknowledgment valve.
+
+**Do not "fix" this by stripping the worktree prefix out of the command text.** That was attempted
+on 2026-08-19/20 and abandoned after five independent `gpt-5.6-sol` review rounds found eight real
+security holes in five successive versions — each a different way to spell the same path (trailing
+separator, `../..`, `$var`, `/.`, `."."` quote-joining, an operand named `cd`, `%VAR:~0%`, `!VAR!`,
+caret escapes). Each round's test suite was green over the next round's hole. The eight spellings
+are pinned as denials in `review-proof-guard.test.mjs` so a future attempt trips on them
+immediately. See `docs/manual/KNOWN_ISSUES.md` for the options if this is ever worth fixing
+properly — the leading one is moving worktrees out from under `.claude` entirely, which removes
+the collision instead of papering over it.
+
+---
+
 ## Source
 
 This file consolidates lessons from `~/.claude/projects/.../memory/feedback.md` and historical debugging sessions. Add new entries here whenever a non-obvious quirk causes a bug.

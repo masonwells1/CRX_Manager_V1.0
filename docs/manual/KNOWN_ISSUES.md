@@ -34,6 +34,55 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN (WONTFIX for now) 2026-08-20 — `review-proof-guard` denies destructive shell commands that NAME a worktree path
+
+**Severity: LOW — cosmetic, with a zero-cost workaround. Mason chose "document, don't fix"
+(2026-08-20) after five review rounds found the fix more dangerous than the bug.**
+
+Agent worktrees are created at `<repo>/.claude/worktrees/<name>/`, so every file inside one
+carries a `.claude` path component. `review-proof-guard.mjs` protects any `.claude` component and
+cannot distinguish the repo's review state from an ordinary scratch file under a worktree.
+Introduced by `f3e06c52` (PR #423 round-3/5 hardening) — bisected, not guessed; the later ack-valve
+commits `c64ea3d4` and `4b302050` are not implicated.
+
+**Actual impact is much smaller than first reported.** The guard only fires when the command
+*spells out* the worktree path. The agent's shell already starts inside the worktree, so relative
+commands work: `rm -f scratch.tmp`, `rm -rf node_modules/.cache`, `git clean -fd src`,
+`mv a.txt b.txt` and `Write` (relative or absolute) are all **allowed** — verified against the live
+guard. Only `rm -f <full-worktree-path>\file` and `cd <full-worktree-path> && rm file` are denied.
+Two claims in the original report were wrong: the blocked `Write` to `stop-wrap-ack.json` came from
+a *different* hook (this guard deliberately allows it), and `find … -delete` is blocked everywhere
+by `bash-safety.mjs`, not by this guard.
+
+**Workaround (use this):** never name the worktree path in a destructive shell command. Recorded in
+`docs/reference/gotchas.md`.
+
+**Do not attempt a text-stripping carve-out.** Five successive versions were built on 2026-08-19/20
+and each was reviewed by an independent `gpt-5.6-sol` high-effort pass. **Every round found at least
+one real hole — eight in total**, each a different spelling of the same path: a trailing separator
+consuming the whole target; `../..` traversal after the reference was blanked; a `$var` descendant;
+a `/.` dot alias; `."."` quote-joined traversal; an *operand* named `cd`; cmd.exe `%VAR:~0%` and
+`!VAR!`; and cmd.exe caret escapes `.^.`. All eight reached the repo's own review state, the
+applied-source ledger, or a whole worktree's state directory. Each round's test suite was green over
+the next round's hole, and mutation testing reached 14/15 without surfacing round 5. The root lesson:
+**rewriting command text inside a security guard is the wrong mechanism** — the guard reasons over
+shell text, and shell text has unbounded ways to spell one path. All eight spellings are now pinned
+as denials in `review-proof-guard.test.mjs`, so a future attempt trips on them immediately.
+
+**If this is ever worth fixing properly, ranked by risk:**
+1. **Move worktrees out from under `.claude`** (e.g. `<repo>/../crx-worktrees/`). The collision
+   disappears and no carve-out is needed — a configuration change, not security logic. *Unverified
+   prerequisite:* the worktree location may be set by the Claude Code harness rather than repo
+   config; check that first. Also touches `worktree-awareness.mjs`, `worktree-cleanup`, `fleet`, and
+   needs the live worktrees drained.
+2. **Strict allowlist** — apply a carve-out only when the whole command matches a deliberately
+   boring grammar (one verb, literal paths, no quotes/globs/`$`/`%`/`!`/backtick/caret/dot-segments).
+   Fail-closed by construction; a survivor is a false positive, not a hole.
+3. **Resolve real paths** — tokenize, `path.resolve()` against cwd, compare against the protected
+   directories actually on disk. The correct answer and the largest rewrite of a live security guard.
+
+---
+
 ## OPEN 2026-08-19 — the per-product rate check in `blendMathValidator.ts` is still unit-blind
 
 **Severity: LOW, warning text only, currently unreachable (0 rows in `blend_tickets` and

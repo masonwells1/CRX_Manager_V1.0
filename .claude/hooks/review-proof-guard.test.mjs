@@ -271,4 +271,68 @@ assert.equal(run({ tool_name: "Write", tool_input: { file_path: ".claude/session
 assert.equal(run({ tool_name: "Edit", tool_input: { file_path: "C:\\repo\\.claude\\session-state\\stop-wrap-ack.json" } }).stdout, "");
 assert.equal(run({ tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/session-state/stop-wrap-ack.json" } }).stdout, "");
 
+// ── Worktree-path denials: a tripwire for any future carve-out ──────────────
+// Agent worktrees live at <repo>/.claude/worktrees/<name>/, so every file in one
+// carries a `.claude` component and the guard denies destructive shell commands
+// that NAME a worktree path. That is a known, documented limitation with a
+// zero-risk workaround (use relative paths — the agent's shell already starts in
+// the worktree); see docs/reference/gotchas.md and docs/manual/KNOWN_ISSUES.md.
+//
+// A "carve-out" that strips the worktree prefix out of the command text before
+// the protection checks run was attempted on 2026-08-19/20 and ABANDONED: five
+// independent gpt-5.6-sol review rounds found EIGHT real holes in five successive
+// versions, each a different way to spell the same path, and each round's suite
+// was green over the next round's hole. The cases below are exactly those eight
+// spellings. They pass against today's guard trivially — the point is that they
+// must STILL deny if anyone attempts a carve-out again. Every one of them was an
+// exploit that reached the repo's own review state, the applied-source ledger, or
+// a whole worktree's state directory.
+for (const payload of [
+  // Round 1 — a trailing separator (or `/*`) let the prefix consume the ENTIRE
+  // target, leaving a bare `rm -rf` naming nothing protected.
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a/" } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a/*" } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf C:\\repo\\.claude\\worktrees\\wt-a\\" } },
+  // Round 2 — parent traversal after the worktree reference was erased. From
+  // inside a worktree, `../..` IS the repo's own `.claude`.
+  { tool_name: "Bash", tool_input: { command: "cd C:\\repo\\.claude\\worktrees\\wt-a && find ../.. -delete" } },
+  { tool_name: "Bash", tool_input: { command: "cd .claude/worktrees/wt-a && rm -rf ../../session-state" } },
+  // Round 3 — a shell-expanded descendant is unreadable and can BE the protected
+  // path (`target=.claude/session-state`).
+  { tool_name: "Bash", tool_input: { command: "mv .claude/worktrees/wt-a/$target /tmp/x" } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a/${X}" } },
+  // Round 4 — a dot alias names the worktree ROOT; and traversal spelled with
+  // quote-joining shows no literal `..` in the raw command text.
+  { tool_name: "Bash", tool_input: { command: "find .claude/worktrees/wt-a/. -delete" } },
+  { tool_name: "Bash", tool_input: { command: 'rm -rf .claude/worktrees/wt-a/"."' } },
+  { tool_name: "Bash", tool_input: { command: 'cd .claude/worktrees/wt-a && find ."."/."." -delete' } },
+  // Round 5 — an OPERAND that happens to be named `cd`; cmd.exe substring and
+  // delayed expansion; and cmd.exe caret escapes decoding to traversal.
+  { tool_name: "Bash", tool_input: { command: "mv cd .claude/worktrees/wt-a /tmp/" } },
+  { tool_name: "Bash", tool_input: { command: "mv .claude\\worktrees\\wt-a\\%TARGET:~0% C:\\tmp\\x" } },
+  { tool_name: "Bash", tool_input: { command: "mv .claude\\worktrees\\wt-a\\!TARGET! C:\\tmp\\x" } },
+  { tool_name: "Bash", tool_input: { command: "mv .claude\\worktrees\\wt-a\\.^.\\.^.\\session^-state C:\\tmp\\x" } },
+  // The worktrees container and a whole worktree root are protected in their own
+  // right — each holds worktree state directories.
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees" } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a" } },
+  // A worktree's OWN review state, protected exactly like the repo's.
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a/.claude/session-state" } },
+  { tool_name: "Write", tool_input: { file_path: "C:\\repo\\.claude\\worktrees\\wt-a\\.claude\\session-state\\applied-source-ledger.json", content: "[]" } },
+]) {
+  const result = run(payload);
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /"permissionDecision":"deny"/);
+}
+
+// The documented workaround must keep working: a destructive command that does
+// NOT name the worktree path is allowed, because the agent's shell already runs
+// inside the worktree. This is what makes the limitation above tolerable, so it
+// is pinned rather than left to chance.
+assert.equal(run({ tool_name: "Bash", cwd: "C:\\repo\\.claude\\worktrees\\wt-a", tool_input: { command: "rm -f guard-probe.tmp" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", cwd: "C:\\repo\\.claude\\worktrees\\wt-a", tool_input: { command: "rm -rf node_modules/.cache" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", cwd: "C:\\repo\\.claude\\worktrees\\wt-a", tool_input: { command: "git clean -fd src" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", cwd: "C:\\repo\\.claude\\worktrees\\wt-a", tool_input: { command: "mv a.txt b.txt" } }).stdout, "");
+assert.equal(run({ tool_name: "Write", cwd: "C:\\repo\\.claude\\worktrees\\wt-a", tool_input: { file_path: "src/foo.ts", content: "x" } }).stdout, "");
+
 console.log("OK - review proof guard checks passed.");

@@ -67,6 +67,37 @@ skipped and why.
   that PR is what actually ships the change. (Commit SHAs are deliberately not cited here —
   this branch was rebased, and an earlier version of this entry cited a SHA that the rebase
   orphaned.)
+## 2026-08-20 — Worktree/review-proof-guard collision: documented, not fixed (5 review rounds, 8 holes)
+
+`review-proof-guard.mjs` denies destructive shell commands that NAME a path inside an agent
+worktree, because worktrees live at `<repo>/.claude/worktrees/<name>/` and the guard protects any
+`.claude` path component. Bisected to `f3e06c52` (PR #423 round-3/5 hardening); `c64ea3d4` and
+`4b302050` are not implicated.
+
+**Impact is much smaller than first reported.** The guard only fires when the command *spells out*
+the worktree path. The agent's shell already starts in the worktree, so `rm -f scratch.tmp`,
+`rm -rf node_modules/.cache`, `git clean -fd src`, `mv a.txt b.txt` and `Write` (relative or
+absolute) are all allowed — verified against the live guard. Two claims in the original report were
+wrong: the blocked `Write` to `stop-wrap-ack.json` came from a different hook, and `find … -delete`
+is blocked everywhere by `bash-safety.mjs`.
+
+**A fix was built and abandoned.** Five successive versions of a text-stripping carve-out were each
+reviewed by an independent `gpt-5.6-sol` high-effort pass. Every round found at least one real
+security hole — eight in total, each a different spelling of the same path (trailing separator,
+`../..`, `$var`, `/.`, `."."` quote-joining, an operand named `cd`, `%VAR:~0%`/`!VAR!`, caret
+escapes). Each round's suite was green over the next round's hole; mutation testing reached 14/15
+without surfacing round 5. Mason's call (2026-08-20): document, don't fix. **The guard is unchanged
+— zero behaviour change ships in this entry.**
+
+What landed: the workaround in `docs/reference/gotchas.md`; the full analysis and three ranked
+options (lead option: move worktrees out from under `.claude`) in `docs/manual/KNOWN_ISSUES.md`; and
+all eight exploit spellings pinned as denials in `review-proof-guard.test.mjs` so a future carve-out
+attempt trips on them immediately.
+
+- **Files changed**: `.claude/hooks/review-proof-guard.test.mjs` (tests only), `docs/reference/gotchas.md`, `docs/manual/KNOWN_ISSUES.md`, `docs/CHANGELOG.md`
+- **Guard logic changed**: none
+- **Migrations touched**: none
+
 ## 2026-08-19 — Product data model: build plan revision 2 after independent Fable…
 
 Product data model: build plan revision 2 after independent Fable review (26 findings) and orchestration design; recorded owner decisions D-J (chemistry edits admin-only) and D-K (unlisted brand never blocks receiving) in DECISION_LOG. Planning only — nothing built, pushed, migrated, or applied.
