@@ -119,7 +119,8 @@ The runner restores the supported baseline and replays the verified live
 source history, with one explicit historical exception:
 `20260810010308_active_team_note_assignment_actor.sql` is skipped because its
 live-base preflight is incompatible with a from-scratch replay. The prover pins
-both that migration's SHA-256 and its exact observed `PREFLIGHT_FAIL` reason;
+both that migration's line-ending-normalized SHA-256 and its exact observed
+`PREFLIGHT_FAIL` reason;
 any content, reason, or skip-set change fails closed. Before applying the parked
 draw-down migration, it requires
 five pricing-sensitive chains to reach `SMOKE_PASS_ROLLBACK`: the auth probe,

@@ -35,7 +35,7 @@ const pricedProductSmokeFiles = [
 ];
 const expectedSkippedMigrations = [{
   file: '20260810010308_active_team_note_assignment_actor.sql',
-  sha256: 'dd4fc4f464edbc35c879e2771affcd0dbdac715aa78cd50f55e187ddd813e78f',
+  sha256: '5ffee511a06f822bfe3b96ad6cdb64cda5e33280aa5351076a037895c1856f68',
   reason: 'PREFLIGHT_FAIL: notify_team_note_assignment live base drift (owner=postgres, secdef=t, config={"search_path=public, pg_temp"}, body_md5=ad8be4ed1d2bdd2a87ace255b38ab641)',
 }];
 
@@ -146,8 +146,12 @@ try {
     const reason = (applied.output.match(/PREFLIGHT_FAIL[^\n]*/) ?? ['PREFLIGHT_FAIL'])[0];
     const expected = expectedSkippedMigrations.find((entry) => entry.file === file);
     assert.ok(expected, `unapproved historical PREFLIGHT skip: ${file}\n${reason}`);
+    // Git checks out this tracked SQL as CRLF on Windows and LF on Linux.
+    // Hash the canonical LF text so the same reviewed migration has one pin
+    // across local proof, CI, and the exact-SHA review snapshot.
+    const canonicalText = readFileSync(migration, 'utf8').replaceAll('\r\n', '\n');
     assert.equal(
-      createHash('sha256').update(readFileSync(migration)).digest('hex'),
+      createHash('sha256').update(canonicalText, 'utf8').digest('hex'),
       expected.sha256,
       `approved historical PREFLIGHT migration content changed: ${file}`,
     );
