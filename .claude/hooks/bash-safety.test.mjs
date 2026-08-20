@@ -294,6 +294,10 @@ ok(checkDangerousCommand("SAFE=1 command -p env NODE_OPTIONS=--require=./preload
 ok(checkDangerousCommand("SAFE= command env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "empty assignment before command/env NODE_OPTIONS preload is denied");
 ok(checkDangerousCommand("command -- env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "command terminator before env NODE_OPTIONS preload is denied");
 ok(checkDangerousCommand("SAFE='x y' command -p -- env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "quoted assignment before command/env NODE_OPTIONS preload is denied");
+ok(checkDangerousCommand("echo safe\nNODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "LF-delimited NODE_OPTIONS preload is denied");
+ok(checkDangerousCommand("echo safe\r\nNODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "CRLF-delimited NODE_OPTIONS preload is denied");
+ok(checkDangerousCommand("export SAFE=1 NODE_OPTIONS=--require=./preload.cjs; node scripts/ordinary-check.mjs"), "later export operand NODE_OPTIONS preload is denied");
+ok(checkDangerousCommand("SAFE=1 export MODE=test NODE_OPTIONS=--require=./preload.cjs; node scripts/ordinary-check.mjs"), "assignment-prefixed later export operand NODE_OPTIONS preload is denied");
 ok(checkDangerousCommand("Set-Item Env:NODE_OPTIONS $PRELOAD"), "PowerShell Set-Item NODE_OPTIONS mutation is denied");
 ok(checkDangerousCommand("$env:NODE_OPTIONS = $PRELOAD"), "PowerShell env assignment to NODE_OPTIONS is denied");
 ok(checkDangerousCommand("[Environment]::SetEnvironmentVariable('NODE_OPTIONS', $PRELOAD)"), ".NET NODE_OPTIONS mutation is denied");

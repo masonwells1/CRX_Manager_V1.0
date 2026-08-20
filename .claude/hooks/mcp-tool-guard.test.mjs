@@ -72,6 +72,18 @@ r = runHook({
 });
 ok(isDeny(r), "DC start_process cannot preload Node through empty assignments and command terminators");
 
+for (const command of [
+  "echo safe\nNODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  "echo safe\r\nNODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  "export SAFE=1 NODE_OPTIONS=--require=./preload.cjs; node scripts/ordinary-check.mjs",
+]) {
+  r = runHook({
+    tool_name: "mcp__Desktop_Commander__start_process",
+    tool_input: { command },
+  });
+  ok(isDeny(r), `DC start_process denies boundary-safe NODE_OPTIONS preload: ${JSON.stringify(command)}`);
+}
+
 // ── start_process: benign command allowed (silent) ─────────────────────────
 r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: "npm run build" } });
 eq(r.status, 0, "DC start_process benign command exits 0");

@@ -425,7 +425,11 @@ function tokenizeShellWords(text) {
       continue;
     }
     if (char === "\"" || char === "'") quote = char;
-    else if (/\s/.test(char)) push();
+    else if (char === "\r" || char === "\n") {
+      push();
+      tokens.push({ value: "\n", control: true });
+      if (char === "\r" && text[index + 1] === "\n") index += 1;
+    } else if (/\s/.test(char)) push();
     else if (/[;&|(){}<>]/.test(char)) {
       push();
       tokens.push({ value: char, control: true });
@@ -487,7 +491,14 @@ function nodeOptionsAssignmentMentioned(command) {
         if (skipAssignments()) return true;
         continue;
       }
-      if (["export", "set", "setx"].includes(name)) {
+      if (name === "export") {
+        cursor += 1;
+        while (cursor < segmentEnd && tokens[cursor].value.startsWith("-")) cursor += 1;
+        while (cursor < segmentEnd && assignmentName(tokens[cursor])) {
+          if (hasNodeOptionsAssignment(tokens[cursor])) return true;
+          cursor += 1;
+        }
+      } else if (["set", "setx"].includes(name)) {
         cursor += 1;
         while (cursor < segmentEnd && tokens[cursor].value.startsWith("-")) cursor += 1;
         if (hasNodeOptionsAssignment(tokens[cursor])) return true;

@@ -12,7 +12,8 @@ All significant development milestones, in reverse chronological order.
 - `NODE_OPTIONS` preloads are now denied when `env` is preceded by shell
   assignments or the `command` wrapper. The token-aware parser covers empty and
   quoted assignment values, `command -p`, the `command --` terminator, `env`
-  options, and nested `command env` chains without matching quoted search text.
+  options, multi-variable `export` commands, LF/CRLF command boundaries, and
+  nested `command env` chains without matching quoted search text.
 - Regression coverage proves the new deny paths and preserves ordinary quoted
   searches plus terminal AWK help mode. Codex continues to consume the same
   `.claude/hooks/bash-safety-lib.mjs` implementation through its tracked hook
