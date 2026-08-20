@@ -241,30 +241,56 @@ BEGIN
   END IF;
 
   -- --------------------------------------------------------------------
-  -- (c) Restore V3 (A @ 400 >= 200 drawn): SUCCEEDS, then draws to closure
+  -- (c) Restore V3 on a DRAWN booking: REFUSED, nothing changes, then the
+  --     booking still draws to closure from its un-restored state.
+  --
+  --     Before 20260816120000 this restore succeeded, because a draw left no
+  --     per-line provenance behind. That migration stamps
+  --     order_items.quote_item_id on every drawn line, and a version restore
+  --     mints brand-new quote_items ids, so it cannot carry that stamp
+  --     forward. Dropping the stamp instead of refusing was tried and refuted:
+  --     it discards the telescoping rounding basis and was reproduced billing
+  --     $1.02 against a $1.01 booking. So the restore now fails CLOSED.
   -- --------------------------------------------------------------------
-  v_res := pg_temp.restore_quote_version_smoke(
-    v_q, v_v3, v_admin, NULL,
-    (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q)
-  );
-  IF v_res->>'status' IS DISTINCT FROM 'restored' THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: (c) legal restore returned %', v_res;
-  END IF;
   SELECT status INTO v_status FROM quotes WHERE id = v_q;
+  v_err := NULL;
+  BEGIN
+    v_res := pg_temp.restore_quote_version_smoke(
+      v_q, v_v3, v_admin, NULL,
+      (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q)
+    );
+  EXCEPTION WHEN OTHERS THEN
+    v_err := SQLERRM;
+  END;
+
+  IF v_err IS NULL THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (c) restore of a DRAWN booking was allowed (returned %) -- it must raise QUOTE_RESTORE_BLOCKED_BY_DRAW', v_res;
+  END IF;
+  IF v_err NOT LIKE 'QUOTE_RESTORE_BLOCKED_BY_DRAW%' THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (c) restore refused with the WRONG error: %', v_err;
+  END IF;
+
+  -- Fail-closed: the refusal must happen BEFORE any destructive work, so the
+  -- quote is untouched -- still 500 booked, still 200 drawn, same status.
   SELECT COALESCE(SUM(total_units_needed), 0) INTO v_booked
   FROM quote_items WHERE quote_id = v_q AND product_id = v_prod_a;
   SELECT quantity_drawn INTO v_drawn FROM quote_product_draws
   WHERE quote_id = v_q AND product_id = v_prod_a;
-  IF v_status <> 'revised' OR v_booked <> 400 OR v_drawn <> 200 THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: (c) after restore expected revised/400/200, got %/%/%',
-      v_status, v_booked, v_drawn;
+  IF v_booked <> 500 OR v_drawn <> 200 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (c) refused restore still mutated the quote: booked=%, drawn=% (expected 500/200)',
+      v_booked, v_drawn;
+  END IF;
+  IF (SELECT status FROM quotes WHERE id = v_q) IS DISTINCT FROM v_status THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (c) refused restore changed quote status from % to %',
+      v_status, (SELECT status FROM quotes WHERE id = v_q);
   END IF;
 
+  -- The booking is still fully usable: draw the remaining 300 of 500.
   v_res := draw_down_quote(v_q,
-    jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'quantity', 200)),
+    jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'quantity', 300)),
     v_admin, NULL);
   IF (v_res->>'fully_drawn')::boolean IS DISTINCT FROM true THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: (c) draw to 400/400 not reported fully drawn: %', v_res;
+    RAISE EXCEPTION 'SMOKE_FAIL: (c) draw to 500/500 not reported fully drawn: %', v_res;
   END IF;
   SELECT status INTO v_status FROM quotes WHERE id = v_q;
   IF v_status <> 'accepted' THEN
