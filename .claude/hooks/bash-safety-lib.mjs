@@ -652,7 +652,7 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
   const unquotedExecutableBasename = (token) => {
     if (!token?.sawUnquoted) return "";
     return shellWordCandidates(token)
-      .map((candidate) => candidate.replace(/^&/, "").split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase())
+      .map((candidate) => candidate.replace(/^[@&]/, "").split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase())
       .find(Boolean) || "";
   };
   const shellExecutionKeywords = new Set(["if", "then", "elif", "else", "while", "until", "do", "!"]);
@@ -696,6 +696,10 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
     while (segmentEnd < tokens.length && !tokens[segmentEnd].control) segmentEnd += 1;
     const segmentTokens = tokens.slice(segmentStart, segmentEnd);
     if (nodeBackedCommandMentioned) {
+      const hasExplicitUnquotedAssignment = segmentTokens
+        .some((token) => token?.sawUnquoted && hasNodeOptionsAssignment(token));
+      const commandPrefix = unquotedExecutableBasename(segmentTokens[0]);
+      if (hasExplicitUnquotedAssignment && ["call", "if"].includes(commandPrefix)) return true;
       for (let scan = 0; scan < segmentTokens.length; scan += 1) {
         const token = segmentTokens[scan];
         if (powerShellEnvNodeOptionsTarget(token)) {

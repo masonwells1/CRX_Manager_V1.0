@@ -318,6 +318,11 @@ const shellBuiltinNodeOptionsCases = [
   `powershell -NoProfile -Command "Set-Item Env:NODE_OPTIONS '--require=./preload.cjs'; npm --version"`,
   `powershell -NoProfile -Command "Set-Content -Path Env:\\NODE_OPTIONS -Value '--require=./preload.cjs'; npm --version"`,
   `pwsh -NoProfile -Command "[Environment]::SetEnvironmentVariable('NODE_OPTIONS','--require=./preload.cjs'); npm --version"`,
+  `cmd /d /c "call set NODE_OPTIONS=--require=./preload.cjs & node scripts/ordinary-check.mjs"`,
+  `cmd /d /c "@call set NODE_OPTIONS=--require=./preload.cjs & node scripts/ordinary-check.mjs"`,
+  `cmd /d /c "if 1==1 set NODE_OPTIONS=--require=./preload.cjs & npm --version"`,
+  `cmd /d /c "if defined PATH call set NODE_OPTIONS=--require=./preload.cjs & npm --version"`,
+  `cmd /d /c "for %A in (1) do set NODE_OPTIONS=--require=./preload.cjs & node scripts/ordinary-check.mjs"`,
 ];
 const privilegeWrapperNodeOptionsCases = [
   ["sudo", "NODE_OPTIONS=--require=./preload.cjs", "node", "scripts/ordinary-check.mjs"].join(" "),
@@ -457,6 +462,7 @@ ok(!checkDangerousCommand("printf -v SAFE %s ok; node scripts/ordinary-check.mjs
 ok(!checkDangerousCommand("read -p NODE_OPTIONS SAFE < input.txt; node scripts/ordinary-check.mjs"), "read prompt text is not mistaken for a variable target");
 ok(!checkDangerousCommand("set -a; set +a; node scripts/ordinary-check.mjs"), "disabling allexport before a Node-backed command remains allowed");
 ok(!checkDangerousCommand(`rg -n 'pwsh -Command "$env:NODE_OPTIONS=x; npm --version"' docs`), "nested PowerShell mutation spelling used as quoted search data stays allowed");
+ok(!checkDangerousCommand(`rg -n 'call set NODE_OPTIONS=x & npm --version' docs`), "nested CMD mutation spelling used as quoted search data stays allowed");
 
 // ── net-new: shell-redirect .env write (2026-07-13, shared with mcp-tool-guard) ──
 ok(checkDangerousCommand("echo SECRET=x > .env"), "shell-redirect write to .env blocked");

@@ -37,6 +37,8 @@ All significant development milestones, in reverse chronological order.
   Executable command strings passed through
   `cmd /c`, PowerShell command mode, or POSIX shell `-c` are recursively
   inspected without matching the same spelling when it is quoted search text.
+  CMD `call`/`@call`, `if` conditions, and `for … do` bodies cannot hide an
+  explicit `NODE_OPTIONS` assignment before `node` or a package runner.
   Backslash-prefixed separators are evaluated under both POSIX and PowerShell
   semantics, so an escape in one shell cannot hide a real boundary in the other;
   normalization is bounded and fails closed instead of recursing on attacker-sized
