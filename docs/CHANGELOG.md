@@ -69,10 +69,10 @@ skipped and why.
   orphaned.)
 ## 2026-08-20 — Worktree/review-proof-guard collision: documented, not fixed (5 review rounds, 8 holes)
 
-`review-proof-guard.mjs` denies destructive shell commands that NAME a path inside an agent
-worktree, because worktrees live at `<repo>/.claude/worktrees/<name>/` and the guard protects any
-`.claude` path component. Bisected to `f3e06c52` (PR #423 round-3/5 hardening); `c64ea3d4` and
-`4b302050` are not implicated.
+`review-proof-guard.mjs` denies destructive shell commands that NAME a path inside a **Claude-managed**
+worktree, because Claude creates them at `<repo>/.claude/worktrees/<name>/` and the guard protects any
+`.claude` path component. Codex worktrees live outside the repo and have no such collision. Bisected
+to `f3e06c52` (PR #423 round-3/5 hardening); `c64ea3d4` and `4b302050` are not implicated.
 
 **Impact is much smaller than first reported.** *For this collision*, the guard fires only when the
 command *spells out* the worktree path — the agent's shell already starts in the worktree, so

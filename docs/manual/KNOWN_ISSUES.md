@@ -39,9 +39,15 @@ This file consolidates (does not replace) the source documents it points to. If 
 **Severity: LOW — cosmetic, with a zero-cost workaround. Mason chose "document, don't fix"
 (2026-08-20) after five review rounds found the fix more dangerous than the bug.**
 
-Agent worktrees are created at `<repo>/.claude/worktrees/<name>/`, so every file inside one
-carries a `.claude` path component. `review-proof-guard.mjs` protects any `.claude` component and
-cannot distinguish the repo's review state from an ordinary scratch file under a worktree.
+**Scope: Claude-managed worktrees only.** Claude creates them at `<repo>/.claude/worktrees/<name>/`;
+Codex worktrees live outside the repo (`~/.codex/worktrees/…`) and have no such collision — see the
+Claude-only list in `scripts/agent-manifest-parity.mjs`. The guard is wired for both agents, but only
+a Claude worktree path trips it this way, and the `permissions.deny` layer referenced below is
+Claude-side (Codex is governed by `.codex/hooks.json`).
+
+Every file inside a Claude worktree carries a `.claude` path component. `review-proof-guard.mjs`
+protects any `.claude` component and cannot distinguish the repo's review state from an ordinary
+scratch file under a worktree.
 Introduced by `f3e06c52` (PR #423 round-3/5 hardening) — bisected, not guessed; the later ack-valve
 commits `c64ea3d4` and `4b302050` are not implicated.
 
