@@ -33,7 +33,14 @@ migration safety harness; no app source, migration SQL, live database, or produc
   unreadable effect blocks every apply. Supabase's six enabled catalog-watch triggers use only
   PostgreSQL's read-only event metadata helpers; because their routines do not pin `search_path`, the
   manifest records that session dependency and both guards refuse path-changing or unresolved
-  migrations. Local `CREATE`/`ALTER`/`DROP EVENT TRIGGER` statements fail closed.
+  migrations. Local `CREATE`/`ALTER`/`DROP EVENT TRIGGER` statements fail closed. Creating,
+  replacing, altering, or dropping the enabled routine behind a captured event trigger also fails
+  closed against its exact schema/name/OID/body-hash identity, including routines under
+  `extensions`.
+- Persistent sequence changes are no longer classified as read-only. Executable `nextval(...)` and
+  `setval(...)` calls plus `ALTER SEQUENCE ... RESTART`, identity-column restarts, and
+  `TRUNCATE ... RESTART IDENTITY` fail closed; stored defaults, views, and uninvoked routine bodies
+  remain deferred.
 - Selecting an ordinary stored view now executes its cataloged query in the analysis closure. Same-
   file, nested, and older checked-in view definitions can no longer conceal a resident mutating
   routine behind `SELECT * FROM view`; defining a view without executing it remains deferred.

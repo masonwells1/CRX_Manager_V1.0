@@ -2807,6 +2807,46 @@ function runTriggerDefinitionRequiresFanoutRefresh() {
       failures.push('  round-46 event-trigger DDL was not treated as a global stale graph input');
     }
 
+    // Replacing the routine behind an existing enabled event trigger changes
+    // database-wide behavior without spelling CREATE/ALTER EVENT TRIGGER. Bind
+    // the changed schema/name against the captured OID/hash identity instead of
+    // trusting the old body evidence.
+    const extensionEvent = (baseManifest.event_triggers || []).find((trigger) =>
+      trigger.enabled && trigger.routine_schema === 'extensions');
+    if (!extensionEvent) {
+      failures.push('  round-50 fixture has no enabled extensions event-trigger routine');
+    } else {
+      writeFileSync(
+        join(dir, 'supabase', 'migrations', '20200102000000_trigger.sql'),
+        `CREATE OR REPLACE FUNCTION "${extensionEvent.routine_schema}".` +
+          `"${extensionEvent.routine_name}"() RETURNS event_trigger LANGUAGE plpgsql AS $$ ` +
+          `BEGIN UPDATE public.orders SET total_profit = total_profit; END $$;\n`,
+        'utf8',
+      );
+      const routineStale = runBash([SCRIPT, '--changed-only', `--base=${base}`], {
+        cwd: dir, encoding: 'utf8', env: envWithoutGit(),
+      });
+      const routineOut = `${routineStale.stdout || ''}\n${routineStale.stderr || ''}`;
+      if (!routineOut.includes(
+        'Trigger fan-out evidence is stale for affected source(s): __event_trigger_routine_changed__')) {
+        failures.push('  round-50 enabled extensions event-trigger routine replacement did not stale the bound capture');
+      }
+
+      writeFileSync(
+        join(dir, 'supabase', 'migrations', '20200102000000_trigger.sql'),
+        'CREATE OR REPLACE FUNCTION extensions.unrelated_helper() RETURNS void ' +
+          'LANGUAGE plpgsql AS $$ BEGIN NULL; END $$;\n',
+        'utf8',
+      );
+      const unrelatedEvent = runBash([SCRIPT, '--changed-only', `--base=${base}`], {
+        cwd: dir, encoding: 'utf8', env: envWithoutGit(),
+      });
+      if (`${unrelatedEvent.stdout || ''}\n${unrelatedEvent.stderr || ''}`.includes(
+        '__event_trigger_routine_changed__')) {
+        failures.push('  round-50 unrelated extensions routine was confused with the captured event routine');
+      }
+    }
+
     // Candidate-authored evidence may add detail, but it may not silently erase
     // an edge captured in the base manifest. This must run even with no SQL graph
     // input in the changed migration.

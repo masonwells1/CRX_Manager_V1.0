@@ -32,6 +32,7 @@ import {
   castDefinitions,
   operatorDefinitions,
   overlappingTables,
+  routineIdentityChanges,
   viewDefinitions,
 } from "./apply-time-dml-lib.mjs";
 
@@ -62,6 +63,7 @@ function loadTrustedFanout(evidenceRoots) {
   const fanout = new Map();
   const enabledEventTriggers = new Map();
   const sessionDependentEventTriggers = new Map();
+  const allEnabledEventTriggers = new Map();
   const manifests = [];
   for (const root of evidenceRoots) {
     const manifestPath = path.join(root, "scripts", "trigger-fanout.json");
@@ -117,6 +119,10 @@ function loadTrustedFanout(evidenceRoots) {
           typeof trigger.routine_hash !== "string" || !/^[0-9a-f]{64}$/.test(trigger.routine_hash)) {
         throw new Error(`${manifestPath}: invalid event-trigger evidence`);
       }
+      if (trigger.enabled) {
+        const identityKey = `${trigger.routine_schema}\0${trigger.routine_name}\0${trigger.routine_oid}\0${trigger.routine_hash}`;
+        allEnabledEventTriggers.set(identityKey, trigger);
+      }
       if (trigger.enabled && !trigger.effect.safe) {
         const key = `${trigger.name}\0${trigger.routine_oid}\0${trigger.routine_hash}`;
         const hasNoWriteProof = !trigger.effect.unresolved &&
@@ -163,6 +169,7 @@ function loadTrustedFanout(evidenceRoots) {
     fanout: new Map([...fanout].map(([source, edges]) => [source, [...edges.values()]])),
     enabledEventTriggers: [...enabledEventTriggers.values()],
     sessionDependentEventTriggers: [...sessionDependentEventTriggers.values()],
+    allEnabledEventTriggers: [...allEnabledEventTriggers.values()],
     manifests,
   };
 }
@@ -787,6 +794,30 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
       // nothing". Treat it as unresolvable so the semantic check below refuses
       // rather than waving the migration through.
       submitted = { targets: new Set(), dynamicWrites: [], unresolved: true, searchPathChange: true };
+    }
+    const routineCatalog = routineIdentityChanges(migQuery);
+    const changedEventRoutines = fanoutEvidence.allEnabledEventTriggers.filter((trigger) =>
+      routineCatalog.changes.some((change) =>
+        change.name === trigger.routine_name &&
+        (!change.schema || change.schema === trigger.routine_schema),
+      ),
+    );
+    if (routineCatalog.unparsed && fanoutEvidence.allEnabledEventTriggers.length) {
+      out("block",
+        `ONE-SHOT REPLAY GUARD: this migration contains a routine catalog change whose identity ` +
+        `cannot be parsed while linked production has enabled PostgreSQL event triggers. Refusing ` +
+        `the apply because the changed routine cannot be cleared against the captured trigger OIDs ` +
+        `and body hashes.`);
+    }
+    if (changedEventRoutines.length) {
+      out("block",
+        `ONE-SHOT REPLAY GUARD: this migration creates, replaces, alters, or drops enabled ` +
+        `PostgreSQL event-trigger routine(s) ` +
+        `${changedEventRoutines.map((trigger) =>
+          `${trigger.routine_schema}.${trigger.routine_name} ` +
+          `(OID ${trigger.routine_oid}, body ${trigger.routine_hash.slice(0, 12)}…)`).join(", ")}. ` +
+        `The checked-in live capture proves only the exact recorded routine bodies. Refusing the ` +
+        `apply; review the event-trigger change independently and recapture linked fan-out evidence.`);
     }
     if (fanoutEvidence.sessionDependentEventTriggers.length &&
         (submitted.searchPathChange || submitted.eventTriggerChange || submitted.unresolved)) {

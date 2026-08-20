@@ -1836,6 +1836,81 @@ function armAutopilot(stateDir, hoursFromNow) {
         `round-49: database-qualified ${verb.toUpperCase()} cannot hide a one-shot rewrite`);
     }
 
+    // ROUND 50. A safe captured event trigger becomes arbitrary stored
+    // execution if its exact routine body is replaced. Its schema/name/OID/hash
+    // are part of the trust root, so every direct catalog change to that
+    // enabled routine must block even before later DDL can fire it.
+    const protectedEventManifest = structuredClone(FANOUT_FIXTURE);
+    protectedEventManifest.event_triggers = [{
+      effect: {
+        dynamic_write_count: 0,
+        safe: true,
+        session_catalog_required: false,
+        tables: [],
+        targets: [],
+        unknown_calls: [],
+        unresolved: false,
+        unsupported_routine_identity: false,
+      },
+      enabled: true,
+      enabled_mode: "O",
+      event: "ddl_command_end",
+      has_sql_body: false,
+      language: "plpgsql",
+      name: "issue_pg_cron_access",
+      routine_config: [],
+      routine_hash: "d".repeat(64),
+      routine_name: "grant_pg_cron_access",
+      routine_oid: "16547",
+      routine_schema: "extensions",
+    }];
+    writeFileSync(path.join(tmp, "scripts", "trigger-fanout.json"), JSON.stringify(protectedEventManifest));
+    const eventRoutineChanges = [
+      ["create", "CREATE FUNCTION extensions.grant_pg_cron_access() RETURNS event_trigger " +
+        "LANGUAGE plpgsql AS $$ BEGIN UPDATE public.orders SET total_profit = total_profit; END $$;"],
+      ["replace", "CREATE OR REPLACE FUNCTION \"extensions\".\"grant_pg_cron_access\"() " +
+        "RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN UPDATE public.orders " +
+        "SET total_profit = total_profit; END $$;"],
+      ["alter", "ALTER FUNCTION extensions.grant_pg_cron_access() SET search_path = pg_catalog;"],
+      ["drop", "DROP FUNCTION IF EXISTS extensions.grant_pg_cron_access();"],
+    ];
+    for (const [verb, sql] of eventRoutineChanges) {
+      r = apply(`20990601000050_event_routine_${verb}`, sql);
+      ok(isDeny(r) && r.stdout.includes("enabled PostgreSQL event-trigger routine") &&
+        r.stdout.includes("extensions.grant_pg_cron_access") && r.stdout.includes("OID 16547"),
+      `round-50: ${verb.toUpperCase()} of a captured enabled event-trigger routine is identity-bound and refused`);
+    }
+    r = apply("20990601000050_unrelated_extension_routine",
+      "CREATE OR REPLACE FUNCTION extensions.unrelated_metadata_helper() RETURNS void " +
+      "LANGUAGE plpgsql AS $$ BEGIN NULL; END $$;");
+    ok(!r.stdout.includes("enabled PostgreSQL event-trigger routine"),
+      "round-50 MUTANT: an unrelated extension routine is not confused with the captured event routine");
+
+    // ROUND 51. Sequence counters are persistent data even when changed through
+    // SELECT/PERFORM or restart DDL. Use a no-event-trigger fixture so the
+    // one-shot semantic refusal itself, rather than the catalog watcher, proves
+    // the analyzer surfaced the effect.
+    const noEventManifest = structuredClone(FANOUT_FIXTURE);
+    noEventManifest.event_triggers = [];
+    writeFileSync(path.join(tmp, "scripts", "trigger-fanout.json"), JSON.stringify(noEventManifest));
+    const sequenceMutations = [
+      "SELECT pg_catalog.nextval('public.invoice_number_seq');",
+      "SELECT setval('public.invoice_number_seq', 1, false);",
+      "ALTER SEQUENCE public.invoice_number_seq RESTART WITH 1;",
+      "ALTER TABLE public.sequence_scratch ALTER COLUMN id RESTART WITH 1;",
+    ];
+    for (const [index, sql] of sequenceMutations.entries()) {
+      r = apply(`20990601000051_sequence_mutation_${index}`, sql);
+      ok(isDeny(r) && isOneShotDeny(r),
+        `round-51: persistent sequence mutation ${index + 1} reaches the one-shot fail-closed path`);
+    }
+    r = apply("20990601000051_sequence_default_control",
+      "ALTER TABLE public.sequence_scratch ALTER COLUMN id " +
+      "SET DEFAULT nextval('public.invoice_number_seq');");
+    ok(!isOneShotDeny(r),
+      "round-51 MUTANT: a deferred sequence default does not claim the counter changed at apply time");
+    writeFileSync(path.join(tmp, "scripts", "trigger-fanout.json"), JSON.stringify(FANOUT_FIXTURE));
+
     // 6. Fail closed. The registry is tracked in git; unreadable or absent means
     //    the checkout is broken or the file was removed — the two states in
     //    which a silent pass is most dangerous.

@@ -11,7 +11,12 @@
 // are the ones that must never be relaxed to quiet a false positive.
 
 import assert from "node:assert";
-import { applyTimeWriteTargets, applyTimeCode, overlappingTables } from "./apply-time-dml-lib.mjs";
+import {
+  applyTimeWriteTargets,
+  applyTimeCode,
+  overlappingTables,
+  routineIdentityChanges,
+} from "./apply-time-dml-lib.mjs";
 
 let pass = 0;
 function ok(c, m) { assert.ok(c, m); pass += 1; }
@@ -1162,6 +1167,56 @@ eq(T(null), [], "a null body does not throw");
     'DROP FUNCTION postgres.public.dbq_metadata_only();';
   ok(!has(definitionOnly, 'order_items.total_price'),
     'round-49 MUTANT: database-qualified routine metadata remains deferred');
+}
+
+// ---------------- ROUND 50: bound event-trigger routine catalog changes
+{
+  const parsed = routineIdentityChanges(
+    'CREATE OR REPLACE FUNCTION extensions.grant_pg_cron_access() RETURNS event_trigger ' +
+      'LANGUAGE plpgsql AS $$ BEGIN NULL; END $$; ' +
+      'ALTER FUNCTION "extensions"."grant_pg_cron_access"() SET search_path = pg_catalog; ' +
+      'DROP PROCEDURE postgres.extensions.other_event_proc();',
+  );
+  eq(parsed.changes, [
+    { schema: 'extensions', name: 'grant_pg_cron_access' },
+    { schema: 'extensions', name: 'grant_pg_cron_access' },
+    { schema: 'extensions', name: 'other_event_proc' },
+  ], 'round-50: routine catalog changes retain the final schema/name across quoted and database-qualified forms');
+
+  const metadata = routineIdentityChanges(
+    "COMMENT ON FUNCTION extensions.grant_pg_cron_access() IS 'DROP FUNCTION extensions.grant_pg_cron_access()';",
+  );
+  eq(metadata.changes, [],
+    'round-50 MUTANT: routine names in metadata strings are not catalog changes');
+}
+
+// ---------------- ROUND 51: persistent sequence mutations
+{
+  const cases = [
+    "SELECT pg_catalog.nextval('public.invoice_number_seq');",
+    "DO $$ BEGIN PERFORM setval('public.invoice_number_seq', 1, false); END $$;",
+    'ALTER SEQUENCE public.invoice_number_seq RESTART WITH 1;',
+    'TRUNCATE public.sequence_scratch RESTART IDENTITY;',
+    'ALTER TABLE public.sequence_scratch ALTER COLUMN id RESTART WITH 1;',
+  ];
+  for (const sql of cases) {
+    const result = applyTimeWriteTargets(sql);
+    ok(result.unresolved && result.sequenceMutation,
+      `round-51: persistent sequence mutation fails closed: ${sql.split(' ')[0]}`);
+  }
+
+  const deferred = [
+    "CREATE TABLE public.later_seq (id bigint DEFAULT nextval('public.invoice_number_seq'));",
+    "ALTER TABLE public.later_seq ALTER COLUMN id SET DEFAULT nextval('public.invoice_number_seq');",
+    "CREATE VIEW public.later_seq_view AS SELECT nextval('public.invoice_number_seq');",
+    "CREATE FUNCTION public.later_seq_fn() RETURNS bigint LANGUAGE sql AS $$ SELECT nextval('public.invoice_number_seq') $$;",
+    "SELECT currval('public.invoice_number_seq');",
+  ];
+  for (const sql of deferred) {
+    const result = applyTimeWriteTargets(sql);
+    ok(!result.sequenceMutation,
+      `round-51 MUTANT: deferred/read-only sequence expression stays non-mutating: ${sql.split(' ')[0]}`);
+  }
 }
 
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

@@ -528,7 +528,12 @@ a global apply refusal. The fixed PostgreSQL event metadata helpers are accepted
 under catalog-first resolution. A routine with no pinned `search_path` remains explicitly conditional
 on the applying session, so a migration that changes that path or has unresolved apply-time
 behavior is refused. Creating, altering, or dropping an event trigger in ordinary migration SQL also
-fails closed and invalidates the live manifest.
+fails closed and invalidates the live manifest. The same rule binds the enabled trigger routine
+itself: creating, replacing, altering, or dropping a captured schema/name is refused against the
+recorded OID and body hash, including routines in `extensions`. Sequence counters are persistent
+state too, so executable `nextval(...)` / `setval(...)`, sequence restarts, identity restarts, and
+`TRUNCATE ... RESTART IDENTITY` fail closed while stored defaults and uninvoked definitions remain
+deferred.
 
 ---
 

@@ -519,7 +519,18 @@ function targetsFromCode(code, literals) {
     return !/^\s*create\s+(?:or\s+replace\s+)?(?:function|procedure)\b/.test(statement);
   });
   const unsupportedRoutineIdentity = hasUnsupportedRoutineIdentity(s);
-  let unresolved = cursorConstruct || eventTriggerChange || unsupportedRoutineIdentity;
+  // `nextval` and `setval` persistently change a sequence even when they are
+  // written inside SELECT/PERFORM rather than a DML verb. Restrict call
+  // detection to the executable region of each statement so stored defaults,
+  // views, policies, and uninvoked routine bodies remain deferred. Explicit
+  // restart DDL mutates the counter directly and therefore also fails closed.
+  const sequenceMutation = s.split(";").some((raw) => {
+    const executable = runForEffectRegion(raw.trim());
+    return /\b(?:(?:pg_catalog)\s*\.\s*)?(?:nextval|setval)\s*\(/.test(executable);
+  }) || /\balter\s+sequence\b[^;]*\brestart\b/.test(s) ||
+    /\btruncate\b[^;]*\brestart\s+identity\b/.test(s) ||
+    /\balter\s+table\b[^;]*\balter\s+(?:column\s+)?[a-z0-9_]+\s+restart\b/.test(s);
+  let unresolved = cursorConstruct || eventTriggerChange || unsupportedRoutineIdentity || sequenceMutation;
 
   WRITE_VERB.lastIndex = 0;
   let m;
@@ -719,6 +730,7 @@ function targetsFromCode(code, literals) {
     unresolved: unresolved || unparsedUpsert,
     dynamicExec,
     eventTriggerChange,
+    sequenceMutation,
     searchPathChange,
     unsupportedRoutineIdentity,
   };
@@ -955,6 +967,43 @@ function runForEffectRegion(stmt) {
   }
   if (PLPGSQL_EVALUATED_EXPRESSION.test(rest)) return rest;
   return "";
+}
+
+/**
+ * Routine identities whose catalog entry this SQL creates, replaces, alters,
+ * or drops. Comments, metadata strings, and routine bodies are removed first,
+ * so prose and deferred code cannot invent a catalog mutation. A
+ * current-database qualifier is reduced to its final schema/name pair; an
+ * unqualified identity keeps an empty schema so callers can bind it
+ * conservatively through search_path.
+ */
+export function routineIdentityChanges(sql) {
+  const code = applyTimeCode(sql).code.toLowerCase();
+  const changes = [];
+  let unparsed = false;
+  const head = /\b(?:create\s+(?:or\s+replace\s+)?|alter\s+|drop\s+)(?:function|procedure|routine)\s+(?:if\s+(?:not\s+)?exists\s+)?/g;
+  let match;
+  while ((match = head.exec(code)) !== null) {
+    let i = skipSpace(code, match.index + match[0].length);
+    const parts = [];
+    while (i < code.length) {
+      const ident = readIdent(code, i);
+      if (!ident) break;
+      parts.push(identifierIdentity(ident.value).value);
+      i = skipSpace(code, ident.end);
+      if (code[i] !== ".") break;
+      i = skipSpace(code, i + 1);
+    }
+    if (!parts.length) {
+      unparsed = true;
+      continue;
+    }
+    changes.push({
+      schema: parts.length > 1 ? parts.at(-2) : "",
+      name: parts.at(-1),
+    });
+  }
+  return { changes, unparsed };
 }
 
 /**
@@ -1421,6 +1470,7 @@ export function applyTimeWriteTargets(
       top.dynamicWrites.push(...inner.dynamicWrites);
       if (inner.unresolved) top.unresolved = true;
       if (inner.eventTriggerChange) top.eventTriggerChange = true;
+      if (inner.sequenceMutation) top.sequenceMutation = true;
       if (inner.searchPathChange) top.searchPathChange = true;
       if (inner.unsupportedRoutineIdentity) top.unsupportedRoutineIdentity = true;
       if (parsed.unsupportedDoBody) top.unresolved = true;
@@ -1537,6 +1587,7 @@ export function applyTimeWriteTargets(
         top.dynamicWrites.push(...inner.dynamicWrites);
         if (inner.unresolved) top.unresolved = true;
         if (inner.eventTriggerChange) top.eventTriggerChange = true;
+        if (inner.sequenceMutation) top.sequenceMutation = true;
         if (inner.searchPathChange) top.searchPathChange = true;
         if (inner.unsupportedRoutineIdentity) top.unsupportedRoutineIdentity = true;
         if (r.unresolved) top.unresolved = true;
@@ -1584,6 +1635,7 @@ export function applyTimeWriteTargets(
     dynamicWrites: top.dynamicWrites,
     unresolved: top.unresolved,
     eventTriggerChange: top.eventTriggerChange,
+    sequenceMutation: top.sequenceMutation,
     searchPathChange: top.searchPathChange,
     unsupportedRoutineIdentity: top.unsupportedRoutineIdentity,
     unknownCalls,

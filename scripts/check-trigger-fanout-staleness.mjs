@@ -6,9 +6,20 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { routineIdentityChanges } from '../.claude/hooks/apply-time-dml-lib.mjs';
+
+function canonicalManifestIdentity(raw) {
+  const text = String(raw || '').trim();
+  const name = text.startsWith('"') && text.endsWith('"')
+    ? text.slice(1, -1).replaceAll('""', '"')
+    : text.toLowerCase();
+  const normalized = name.replaceAll('$', '_dollar_');
+  return /^[a-z0-9_]+$/.test(normalized) ? normalized : null;
+}
 
 export function changedTriggerInputs(sqlFiles) {
   const changedRoutines = new Set();
+  const changedRoutineIdentities = new Set();
   const changedTriggerRoutines = new Set();
   const triggerTables = new Set();
   const foreignKeyParents = new Set();
@@ -18,27 +29,24 @@ export function changedTriggerInputs(sqlFiles) {
   let unparsedForeignKeyDefinition = false;
   const ident = '(?:"(?:[^"]|"")*"|[a-z_][a-z0-9_$]*)';
   const publicPrefix = '(?:(?:public|"public")\\s*\\.\\s*)?';
-  const canonical = (raw) => {
-    const text = String(raw || '').trim();
-    const name = text.startsWith('"') && text.endsWith('"')
-      ? text.slice(1, -1).replaceAll('""', '"')
-      : text.toLowerCase();
-    const normalized = name.replaceAll('$', '_dollar_');
-    return /^[a-z0-9_]+$/.test(normalized) ? normalized : null;
-  };
+  const canonical = canonicalManifestIdentity;
   for (const file of sqlFiles) {
     const sql = readFileSync(file, 'utf8');
     if (/\b(?:create|alter|drop)\s+event\s+trigger\b/i.test(sql)) eventTriggerChange = true;
-    const routinePattern = new RegExp(
-      `\\bcreate\\s+(?:or\\s+replace\\s+)?(?:function|procedure)\\s+${publicPrefix}(${ident})\\s*\\(`,
-      'gi',
-    );
-    for (const match of sql.matchAll(routinePattern)) {
-      const name = canonical(match[1]);
-      if (name) changedRoutines.add(name); else unparsedRoutineDefinition = true;
+    const routineCatalog = routineIdentityChanges(sql);
+    if (routineCatalog.unparsed) unparsedRoutineDefinition = true;
+    for (const change of routineCatalog.changes) {
+      const name = canonical(change.name);
+      const schema = change.schema ? canonical(change.schema) : '';
+      if (!name || (change.schema && !schema)) {
+        unparsedRoutineDefinition = true;
+        continue;
+      }
+      changedRoutines.add(name);
+      changedRoutineIdentities.add(`${schema || '*'}\0${name}`);
     }
     const triggerRoutinePattern = new RegExp(
-      `\\bcreate\\s+(?:or\\s+replace\\s+)?function\\s+${publicPrefix}(${ident})\\s*\\([\\s\\S]*?\\breturns\\s+(?:event_)?trigger\\b`,
+      `\\bcreate\\s+(?:or\\s+replace\\s+)?function\\s+(?:(?:${ident})\\s*\\.\\s*)*(${ident})\\s*\\([\\s\\S]*?\\breturns\\s+(?:event_)?trigger\\b`,
       'gi',
     );
     for (const match of sql.matchAll(triggerRoutinePattern)) {
@@ -75,6 +83,7 @@ export function changedTriggerInputs(sqlFiles) {
   }
   return {
     changedRoutines,
+    changedRoutineIdentities,
     changedTriggerRoutines,
     triggerTables,
     foreignKeyParents,
@@ -155,6 +164,20 @@ export function staleTriggerSources(before, after, changed) {
     const owners = Object.entries(before.reachable_routines || {})
       .filter(([, names]) => (names || []).includes(name));
     if (!owners.length && !changed.triggerTables.size) add('__unmapped_trigger_routine__', name);
+  }
+  for (const trigger of before.event_triggers || []) {
+    if (!trigger?.enabled) continue;
+    const schema = canonicalManifestIdentity(trigger.routine_schema);
+    const name = canonicalManifestIdentity(trigger.routine_name);
+    if (!schema || !name) {
+      add('__event_trigger_routine_identity_unreadable__', 'unknown');
+      continue;
+    }
+    if (changed.changedRoutineIdentities?.has(`${schema}\0${name}`) ||
+        changed.changedRoutineIdentities?.has(`*\0${name}`)) {
+      add('__event_trigger_routine_changed__',
+        `${schema}.${name}:${trigger.routine_oid || 'unknown'}:${trigger.routine_hash || 'unknown'}`);
+    }
   }
   if (changed.unparsedTriggerDefinition) add('__unparsed_trigger_definition__', 'unknown');
   if (changed.eventTriggerChange) add('__event_trigger_change__', 'database-wide');
