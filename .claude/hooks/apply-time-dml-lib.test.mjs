@@ -1026,4 +1026,78 @@ eq(T(null), [], "a null body does not throw");
     'round-45: coercion through a checked-in resident domain fails closed');
 }
 
+// ---------------- ROUND 46: database-wide event triggers fail closed
+{
+  const eventTriggerAttack = applyTimeWriteTargets(
+    'CREATE FUNCTION public.ddl_money_fix() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.order_items SET total_price = total_price; END $$; ' +
+    'CREATE EVENT TRIGGER ddl_money_replay ON ddl_command_end EXECUTE FUNCTION public.ddl_money_fix(); ' +
+    "COMMENT ON TABLE public.orders IS 'fires';",
+  );
+  ok(eventTriggerAttack.unresolved && eventTriggerAttack.eventTriggerChange,
+    'round-46: an event-trigger money rewrite activated by later DDL fails closed');
+
+  const routineOnly = applyTimeWriteTargets(
+    'CREATE FUNCTION public.deferred_event_trigger_fn() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.order_items SET total_price = total_price; END $$;',
+  );
+  ok(!routineOnly.unresolved && !routineOnly.eventTriggerChange,
+    'round-46 MUTANT: an unattached event-trigger routine definition remains deferred');
+}
+
+// ---------------- ROUND 47: catalog-first event metadata helpers
+{
+  const unproven = applyTimeWriteTargets(
+    'SELECT * FROM pg_event_trigger_ddl_commands();',
+  );
+  ok(unproven.unknownCalls.includes('pg_event_trigger_ddl_commands'),
+    'round-47: an unqualified event helper remains unknown without search-path proof');
+
+  const catalogFirst = applyTimeWriteTargets(
+    'SELECT * FROM pg_event_trigger_ddl_commands();',
+    { trustedUnqualifiedRoutines: ['pg_event_trigger_ddl_commands'] },
+  );
+  ok(!catalogFirst.unresolved && catalogFirst.unknownCalls.length === 0,
+    'round-47: an exact event metadata helper is trusted after catalog-first proof');
+
+  const publicOverload = applyTimeWriteTargets(
+    'SELECT * FROM public.pg_event_trigger_ddl_commands();',
+    { trustedUnqualifiedRoutines: ['pg_event_trigger_ddl_commands'] },
+  );
+  ok(publicOverload.unknownCalls.includes('pg_event_trigger_ddl_commands'),
+    'round-47 MUTANT: explicit public overloads never inherit catalog-helper trust');
+
+  const directPath = applyTimeWriteTargets(
+    "SET LOCAL search_path = public, pg_catalog; COMMENT ON TABLE public.orders IS 'fires';",
+  );
+  ok(directPath.searchPathChange,
+    'round-47: a direct search_path mutation is exposed to event-trigger consumers');
+
+  const configuredPath = applyTimeWriteTargets(
+    "DO $$ BEGIN PERFORM set_config('search_path', 'public, pg_catalog', true); END $$;",
+  );
+  ok(configuredPath.searchPathChange,
+    'round-47: set_config inside executable code is exposed conservatively');
+
+  const deferredPath = applyTimeWriteTargets(
+    "CREATE FUNCTION public.later_path() RETURNS void LANGUAGE plpgsql AS $$ BEGIN " +
+    "PERFORM set_config('search_path', 'public, pg_catalog', true); END $$;",
+  );
+  ok(!deferredPath.searchPathChange,
+    'round-47 MUTANT: an uninvoked routine search_path change remains deferred');
+
+  const deferredConfig = applyTimeWriteTargets(
+    'CREATE FUNCTION public.catalog_bound() RETURNS void LANGUAGE plpgsql ' +
+    'SET search_path = pg_catalog, public AS $$ BEGIN NULL; END $$;',
+  );
+  ok(!deferredConfig.searchPathChange,
+    'round-47 MUTANT: CREATE FUNCTION search_path config does not change the applying session');
+
+  const noticeOnly = applyTimeWriteTargets(
+    "DO $$ BEGIN RAISE NOTICE 'about to update orders and delete from invoices'; END $$;",
+  );
+  ok(!noticeOnly.searchPathChange && !noticeOnly.unresolved,
+    'round-47 MUTANT: write words inside NOTICE data are not an event catalog risk');
+}
+
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

@@ -491,8 +491,29 @@ function targetsFromCode(code, literals) {
   // cursor lifecycle analysis can prove the query's effects precisely.
   const cursorConstruct =
     /\bcursor(?:\s*\([^;]*\))?\s+for\b|\bopen\s+(?:"(?:[^"]|"")+"|[a-z_][a-z0-9_$]*)(?=\s|;|$)|\bfetch\b[^;]*\binto\b|\bmove\b[^;]*(?:\bfrom\b|\bin\b)\s*(?:"(?:[^"]|"")+"|[a-z_][a-z0-9_$]*)(?=\s|;|$)|\bclose\s+(?:"(?:[^"]|"")+"|[a-z_][a-z0-9_$]*)(?=\s|;|$)/.test(s);
+  // Event triggers fire on database-wide DDL rather than a named relation.
+  // Their live enabled set and bodies belong to the linked catalog evidence,
+  // not to this fragment, and CREATE/ALTER/DROP can change that set mid-batch.
+  // Refuse every event-trigger definition/change until a full DDL-event
+  // lifecycle model exists; a routine that merely RETURNS event_trigger stays
+  // deferred unless an EVENT TRIGGER statement attaches it.
+  const eventTriggerChange = /\b(?:create|alter|drop)\s+event\s+trigger\b/.test(s);
+  // An unpinned event-trigger routine resolves unqualified pg_catalog helpers
+  // through the applying session's search_path. Any executable search-path
+  // mutation (including set_config, whose string operands were lexed out) is a
+  // catalog-binding boundary and must be visible to manifest consumers.
+  const searchPathChange = s.split(';').some((statement) => {
+    if (/\b(?:pg_catalog\.)?set_config\s*\(/.test(statement)) return true;
+    if (!/\b(?:set|reset)\s+(?:(?:local|session)\s+)?search_path\b/.test(statement)) {
+      return false;
+    }
+    // CREATE FUNCTION ... SET search_path records deferred routine config; it
+    // does not mutate the applying session. An attached event routine is still
+    // caught by eventTriggerChange, and ALTER FUNCTION remains conservative.
+    return !/^\s*create\s+(?:or\s+replace\s+)?(?:function|procedure)\b/.test(statement);
+  });
   const unsupportedRoutineIdentity = hasUnsupportedRoutineIdentity(s);
-  let unresolved = cursorConstruct || unsupportedRoutineIdentity;
+  let unresolved = cursorConstruct || eventTriggerChange || unsupportedRoutineIdentity;
 
   WRITE_VERB.lastIndex = 0;
   let m;
@@ -691,6 +712,8 @@ function targetsFromCode(code, literals) {
     dynamicWrites,
     unresolved: unresolved || unparsedUpsert,
     dynamicExec,
+    eventTriggerChange,
+    searchPathChange,
     unsupportedRoutineIdentity,
   };
 }
@@ -1209,7 +1232,7 @@ const TRUSTED_AUTH_ROUTINES = new Set(["uid", "jwt", "role"]);
 // `FROM` is deliberately absent: `SELECT * FROM do_the_repair()` IS a call.
 const NOT_A_CALL_HERE = /\b(insert\s+into|update|delete\s+from|merge\s+into|truncate(\s+table)?|copy|into|as|references|table)\s+(only\s+)?(if\s+(not\s+)?exists\s+)?(?:[a-z0-9_]+\.)?$/;
 
-function unknownCallsIn(codeLower, defined) {
+function unknownCallsIn(codeLower, defined, trustedUnqualifiedRoutines = new Set()) {
   const out = new Set();
   for (const raw of codeLower.split(";")) {
     const stmt = runForEffectRegion(raw.trim());
@@ -1237,7 +1260,11 @@ function unknownCallsIn(codeLower, defined) {
         (!schema && NON_ROUTINE_PAREN_SYNTAX.has(name)) ||
         (schema === "pg_catalog" && NOT_A_ROUTINE_CALL.has(name)) ||
         (schema === "auth" && TRUSTED_AUTH_ROUTINES.has(name));
-      if (trustedBuiltin) continue;
+      // A caller may add an exact unqualified routine identity only after it
+      // has independently proved pg_catalog resolves before user schemas. The
+      // event-trigger capture uses this for PostgreSQL's read-only DDL metadata
+      // helpers and binds the routine search_path into the manifest hash.
+      if (trustedBuiltin || (!schema && trustedUnqualifiedRoutines.has(name))) continue;
       out.add(name);
     }
   }
@@ -1256,7 +1283,12 @@ function unknownCallsIn(codeLower, defined) {
  */
 export function applyTimeWriteTargets(
   sql,
-  { knownOperators = [], knownCasts = [], knownViews = [] } = {},
+  {
+    knownOperators = [],
+    knownCasts = [],
+    knownViews = [],
+    trustedUnqualifiedRoutines = [],
+  } = {},
 ) {
   const { code, literals, routines, unsupportedDoBody } = applyTimeCode(sql || "");
   const top = targetsFromCode(code, literals);
@@ -1378,6 +1410,8 @@ export function applyTimeWriteTargets(
       for (const t of inner.tables) top.tables.add(t);
       top.dynamicWrites.push(...inner.dynamicWrites);
       if (inner.unresolved) top.unresolved = true;
+      if (inner.eventTriggerChange) top.eventTriggerChange = true;
+      if (inner.searchPathChange) top.searchPathChange = true;
       if (inner.unsupportedRoutineIdentity) top.unsupportedRoutineIdentity = true;
       if (parsed.unsupportedDoBody) top.unresolved = true;
       defineRoutines(parsed.routines);
@@ -1492,6 +1526,8 @@ export function applyTimeWriteTargets(
         for (const t of inner.tables) top.tables.add(t);
         top.dynamicWrites.push(...inner.dynamicWrites);
         if (inner.unresolved) top.unresolved = true;
+        if (inner.eventTriggerChange) top.eventTriggerChange = true;
+        if (inner.searchPathChange) top.searchPathChange = true;
         if (inner.unsupportedRoutineIdentity) top.unsupportedRoutineIdentity = true;
         if (r.unresolved) top.unresolved = true;
         foldLiterals(inner, r.literals);
@@ -1520,7 +1556,11 @@ export function applyTimeWriteTargets(
   const bodies = [...seen].flatMap((n) => (byName.get(n) || []).map((r) => r.code));
   const scan = [code, ...execCodes, ...bodies].join("\n;\n").toLowerCase();
   const unknownCalls = [...new Set([
-    ...unknownCallsIn(scan, new Set(byName.keys())),
+    ...unknownCallsIn(
+      scan,
+      new Set(byName.keys()),
+      new Set(trustedUnqualifiedRoutines.map((name) => String(name).toLowerCase())),
+    ),
     ...unknownTriggerFns,
     ...unknownOperatorFns,
     ...unknownCastFns,
@@ -1533,6 +1573,8 @@ export function applyTimeWriteTargets(
     tables: top.tables,
     dynamicWrites: top.dynamicWrites,
     unresolved: top.unresolved,
+    eventTriggerChange: top.eventTriggerChange,
+    searchPathChange: top.searchPathChange,
     unsupportedRoutineIdentity: top.unsupportedRoutineIdentity,
     unknownCalls,
     definedRoutines: [...byName.keys()],

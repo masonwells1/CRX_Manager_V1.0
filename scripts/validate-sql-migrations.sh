@@ -233,7 +233,7 @@ const m = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
 const registry = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const ok = (n) => typeof n === 'string' && /^[a-z0-9_]+\$/.test(n);
 const sourceOk = (n) => typeof n === 'string' && /^[a-z0-9_]+(?:\.[a-z0-9_]+)?\$/.test(n);
-if (!m._meta || m._meta.format_version !== 3 ||
+if (!m._meta || m._meta.format_version !== 4 ||
     m._meta.generator !== 'scripts/generate-trigger-fanout.mjs' ||
     m._meta.capture_method !== 'supabase-cli-db-query-linked' ||
     m._meta.source_project !== 'rhyzpcqhnizqbxphqdkr' ||
@@ -276,7 +276,54 @@ for (const [src, names] of Object.entries(m.reachable_routines)) {
     }
   }
 }
+if (!Array.isArray(m.event_triggers)) {
+  throw new Error('trigger fan-out manifest has no event-trigger state');
+}
+for (const trigger of m.event_triggers) {
+  const keys = Object.keys(trigger || {}).sort();
+  if (JSON.stringify(keys) !== JSON.stringify([
+    'effect', 'enabled', 'enabled_mode', 'event', 'has_sql_body', 'language', 'name',
+    'routine_config', 'routine_hash', 'routine_name', 'routine_oid', 'routine_schema',
+  ]) || typeof trigger.enabled !== 'boolean' ||
+      typeof trigger.enabled_mode !== 'string' || !/^[ODRA]$/.test(trigger.enabled_mode) ||
+      trigger.enabled !== (trigger.enabled_mode !== 'D') ||
+      !ok(trigger.name) || !ok(trigger.event) || !ok(trigger.routine_name) ||
+      !ok(trigger.routine_schema) || !ok(trigger.language) ||
+      !Array.isArray(trigger.routine_config) ||
+      trigger.routine_config.some((entry) => typeof entry !== 'string' || /[\r\n\0]/.test(entry)) ||
+      typeof trigger.routine_oid !== 'string' || !/^\d+$/.test(trigger.routine_oid) ||
+      typeof trigger.has_sql_body !== 'boolean' ||
+      !trigger.effect || typeof trigger.effect !== 'object' || Array.isArray(trigger.effect) ||
+      JSON.stringify(Object.keys(trigger.effect).sort()) !== JSON.stringify([
+        'dynamic_write_count', 'safe', 'session_catalog_required', 'tables', 'targets',
+        'unknown_calls', 'unresolved', 'unsupported_routine_identity',
+      ]) || typeof trigger.effect.safe !== 'boolean' ||
+      typeof trigger.effect.session_catalog_required !== 'boolean' ||
+      typeof trigger.effect.unresolved !== 'boolean' ||
+      typeof trigger.effect.unsupported_routine_identity !== 'boolean' ||
+      !Number.isInteger(trigger.effect.dynamic_write_count) || trigger.effect.dynamic_write_count < 0 ||
+      !Array.isArray(trigger.effect.unknown_calls) || !Array.isArray(trigger.effect.targets) ||
+      !Array.isArray(trigger.effect.tables) ||
+      trigger.effect.safe !== (!trigger.effect.session_catalog_required &&
+        !trigger.effect.unresolved &&
+        !trigger.effect.unsupported_routine_identity && trigger.effect.dynamic_write_count === 0 &&
+        trigger.effect.unknown_calls.length === 0 && trigger.effect.targets.length === 0 &&
+        trigger.effect.tables.length === 0) ||
+      typeof trigger.routine_hash !== 'string' || !/^[0-9a-f]{64}$/.test(trigger.routine_hash)) {
+    throw new Error('trigger fan-out manifest has invalid event-trigger evidence');
+  }
+}
 const out = [];
+out.push('v:event-state');
+for (const trigger of m.event_triggers) {
+  if (!trigger.enabled || trigger.effect.safe) continue;
+  const noWriteProof = !trigger.effect.unresolved &&
+    !trigger.effect.unsupported_routine_identity && trigger.effect.dynamic_write_count === 0 &&
+    trigger.effect.unknown_calls.length === 0 && trigger.effect.targets.length === 0 &&
+    trigger.effect.tables.length === 0;
+  if (trigger.effect.session_catalog_required && noWriteProof) out.push('c:' + trigger.name);
+  else out.push('g:' + trigger.name);
+}
 for (const n of capturedSources) out.push('s:' + n);
 for (const n of opaque) out.push('o:' + n);
 for (const [src, rows] of Object.entries(m.fanout || {})) {
@@ -291,7 +338,28 @@ process.stdout.write(out.join('\n'));
 TRIGGER_FANOUT_SCANNED=$(printf '%s\n' "$TRIGGER_FANOUT_RAW" | sed -n 's/^s://p')
 TRIGGER_FANOUT_OPAQUE=$(printf '%s\n' "$TRIGGER_FANOUT_RAW" | sed -n 's/^o://p')
 TRIGGER_FANOUT_PAIRS=$(printf '%s\n' "$TRIGGER_FANOUT_RAW" | sed -n 's/^e://p')
+TRIGGER_FANOUT_EVENT_STATE=$(printf '%s\n' "$TRIGGER_FANOUT_RAW" | sed -n 's/^v://p')
+TRIGGER_FANOUT_ENABLED_EVENTS=$(printf '%s\n' "$TRIGGER_FANOUT_RAW" | sed -n 's/^g://p')
+TRIGGER_FANOUT_SESSION_EVENTS=$(printf '%s\n' "$TRIGGER_FANOUT_RAW" | sed -n 's/^c://p')
 TRIGGER_FANOUT_SOURCES_PADDED="|$(printf '%s\n' "$TRIGGER_FANOUT_SCANNED" | tr '\n' '|')"
+
+# Event triggers fire database-wide on DDL, with no relation to use as a fan-out
+# source. Missing state and any enabled live entry whose bound routine lacks a
+# complete no-write proof are therefore global violations, not per-table
+# warnings. Local CREATE/ALTER/DROP EVENT TRIGGER DDL is separately reported
+# through the shared analyzer below.
+if [ "$TRIGGER_FANOUT_EVENT_STATE" != "event-state" ]; then
+  echo "VIOLATION: $TRIGGER_FANOUT_MANIFEST"
+  echo "  Linked event-trigger evidence is missing or unreadable; DDL effects are unknown."
+  echo ""
+  VIOLATIONS=$((VIOLATIONS + 1))
+elif [ -n "$TRIGGER_FANOUT_ENABLED_EVENTS" ]; then
+  echo "VIOLATION: $TRIGGER_FANOUT_MANIFEST"
+  echo "  Enabled PostgreSQL event trigger(s) make migration DDL effects unbounded: $(printf '%s' "$TRIGGER_FANOUT_ENABLED_EVENTS" | tr '\n' ' ')"
+  echo "  Disable/remove them through a separately reviewed path and regenerate the linked manifest."
+  echo ""
+  VIOLATIONS=$((VIOLATIONS + 1))
+fi
 
 # ---- MATERIAL BEFORE-VALUES PER TABLE (Codex High, round 15) ---------------
 # An UPDATE names the columns it assigns, so the approved-set digest can be
@@ -1324,10 +1392,13 @@ EXEMPT_STALE=""
 # the shared apply-time analyzer once for the complete scan set and refuse any
 # file whose routine identity it cannot represent. One parser owns the boundary;
 # the Bash lane must not grow another almost-equivalent Unicode lexer.
-if ! UNSUPPORTED_ROUTINE_FILES=$(printf '%s\n' $ALL_SQL | node "$UNSUPPORTED_ROUTINE_SCANNER"); then
-  echo "ERROR: non-ASCII routine identity scan failed; refusing SQL validation."
+if ! UNSUPPORTED_CONSTRUCTS=$(printf '%s\n' $ALL_SQL | node "$UNSUPPORTED_ROUTINE_SCANNER"); then
+  echo "ERROR: shared unsupported-construct scan failed; refusing SQL validation."
   exit 1
 fi
+UNSUPPORTED_ROUTINE_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 == "routine-identity" { print $1 }')
+EVENT_TRIGGER_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 == "event-trigger" { print $1 }')
+EVENT_CATALOG_RISK_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 == "event-catalog-risk" { print $1 }')
 
 for file in $ALL_SQL; do
   # Strip SQL comments for pattern matching
@@ -1349,7 +1420,14 @@ for file in $ALL_SQL; do
     echo ""
     VIOLATIONS=$((VIOLATIONS + 1))
   fi
-
+  if [ -n "$EVENT_TRIGGER_FILES" ] &&
+     printf '%s\n' "$EVENT_TRIGGER_FILES" | grep -Fqx -- "$file"; then
+    echo "VIOLATION: $file"
+    echo "  PostgreSQL event-trigger DDL is unsupported: database-wide DDL effects are fail-closed."
+    echo "  Use a separately reviewed removal path; do not create, alter, or drop event triggers in an ordinary migration."
+    echo ""
+    VIOLATIONS=$((VIOLATIONS + 1))
+  fi
   # pg_get_functiondef exemption — scoped by name to specific already-applied
   # migrations that reference the catalog fn ONLY inside a read-only post-apply
   # verification DO block (a LIKE assertion that a patch landed), never to
@@ -3696,6 +3774,20 @@ process.stdout.write(out.join('\n'));
     echo "  References 'customer_name' — verify this is a joined alias, not a direct column."
     echo ""
     WARNINGS=$((WARNINGS + 1))
+  fi
+
+  # The ordinary migration diagnostics above are more specific. Report the
+  # session-catalog boundary last so it cannot hide the direct write/dynamic
+  # routine reason, but still before per-file hash reconciliation.
+  if [ "$MIG_IS_HISTORY" -eq 0 ] && [ -n "$TRIGGER_FANOUT_SESSION_EVENTS" ] &&
+     [ -n "$EVENT_CATALOG_RISK_FILES" ] &&
+     printf '%s\n' "$EVENT_CATALOG_RISK_FILES" | grep -Fqx -- "$file"; then
+    echo "VIOLATION: $file"
+    echo "  Session-dependent PostgreSQL event trigger helper cannot be bound safely for this migration."
+    echo "  The migration changes search_path or has an unresolved apply-time effect."
+    echo "  Affected live trigger(s): $(printf '%s' "$TRIGGER_FANOUT_SESSION_EVENTS" | tr '\n' ' ')"
+    echo ""
+    VIOLATIONS=$((VIOLATIONS + 1))
   fi
 
   # ----- hash-pinned exemption for THIS file (see SQL_AUDIT_EXEMPTIONS) -----

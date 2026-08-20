@@ -22,7 +22,7 @@ import {
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const OUT = path.join(HERE, 'trigger-fanout.json');
-export const TRIGGER_FANOUT_FORMAT = 3;
+export const TRIGGER_FANOUT_FORMAT = 4;
 export { TRIGGER_FANOUT_SQL };
 
 function fail(message) {
@@ -47,6 +47,45 @@ function uniqueNames(value, label) {
   return [...new Set(value.map((name) => bareName(name, label)))].sort();
 }
 
+const EVENT_METADATA_HELPERS = Object.freeze([
+  'pg_event_trigger_ddl_commands',
+  'pg_event_trigger_dropped_objects',
+  'pg_event_trigger_table_rewrite_oid',
+  'pg_event_trigger_table_rewrite_reason',
+]);
+
+function routineConfig(value) {
+  if (!Array.isArray(value) || value.some((entry) =>
+    typeof entry !== 'string' || /[\r\n\0]/.test(entry))) {
+    fail('event trigger routine_config is invalid');
+  }
+  const config = [...value].sort();
+  if (config.filter((entry) => /^search_path\s*=/.test(entry)).length > 1) {
+    fail('event trigger routine_config repeats search_path');
+  }
+  return config;
+}
+
+// PostgreSQL implicitly searches pg_catalog first unless it is explicitly
+// placed later in search_path. Event routines without a pinned search_path are
+// caller-dependent, so they do not receive this narrow builtin exemption.
+function eventCatalogBinding(config) {
+  const setting = [...config].reverse().find((entry) => /^search_path\s*=/.test(entry));
+  if (!setting) return 'session';
+  const schemas = setting.slice(setting.indexOf('=') + 1)
+    .split(',')
+    .map((entry) => entry.trim().replace(/^"(.*)"$/, '$1').toLowerCase())
+    .filter(Boolean);
+  const catalogIndex = schemas.indexOf('pg_catalog');
+  return catalogIndex === -1 || catalogIndex === 0 ? 'pinned' : 'unsafe';
+}
+
+function usesUnqualifiedEventMetadataHelper(source) {
+  const code = applyTimeCode(`DO $crx_event_helper$ ${source} $crx_event_helper$;`).code.toLowerCase();
+  return EVENT_METADATA_HELPERS.some((name) =>
+    new RegExp(`(?<![a-z0-9_.])${name}\\s*\\(`).test(code));
+}
+
 function routineDefinition(routine, index) {
   let tag = `$crx_fanout_${index}$`;
   while (routine.source.includes(tag)) tag = `$crx_fanout_${index}_x$`;
@@ -61,7 +100,9 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     fail('linked query returned an invalid trigger_fanout_capture envelope');
   }
-  const expectedKeys = ['captured_at', 'foreign_keys', 'routines', 'tables_scanned', 'triggers'];
+  const expectedKeys = [
+    'captured_at', 'event_triggers', 'foreign_keys', 'routines', 'tables_scanned', 'triggers',
+  ];
   if (JSON.stringify(Object.keys(payload).sort()) !== JSON.stringify(expectedKeys)) {
     fail('linked query returned an unexpected trigger_fanout_capture shape');
   }
@@ -77,8 +118,9 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
   }
   const tableSet = new Set(tablesScanned);
   if (!Array.isArray(payload.routines) || !Array.isArray(payload.triggers) ||
+      !Array.isArray(payload.event_triggers) ||
       !Array.isArray(payload.foreign_keys)) {
-    fail('routines, triggers, and foreign_keys must be arrays');
+    fail('routines, triggers, event_triggers, and foreign_keys must be arrays');
   }
 
   const routines = payload.routines.map((routine) => {
@@ -146,6 +188,85 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
     }
     return { onTable, routineName };
   });
+
+  // Event triggers are database-wide DDL hooks, not table fan-out edges. Bind
+  // their event, enabled mode, routine identity, language and body hash into the
+  // linked capture. Consumers refuse any enabled entry until DDL-event effects
+  // can be modeled as precisely as ordinary row triggers.
+  const eventTriggers = payload.event_triggers.map((trigger) => {
+    if (!trigger || typeof trigger !== 'object' || Array.isArray(trigger)) {
+      fail('event trigger is invalid');
+    }
+    const keys = Object.keys(trigger).sort();
+    if (JSON.stringify(keys) !== JSON.stringify([
+      'enabled', 'enabled_mode', 'event', 'has_sql_body', 'language', 'name',
+      'routine_config', 'routine_name', 'routine_oid', 'routine_schema', 'source',
+    ])) {
+      fail('event trigger has an unexpected shape');
+    }
+    if (typeof trigger.enabled !== 'boolean' ||
+        typeof trigger.enabled_mode !== 'string' || !/^[ODRA]$/.test(trigger.enabled_mode) ||
+        trigger.enabled !== (trigger.enabled_mode !== 'D')) {
+      fail('event trigger enabled state is invalid');
+    }
+    if (typeof trigger.routine_oid !== 'string' || !/^\d+$/.test(trigger.routine_oid) ||
+        typeof trigger.source !== 'string' || typeof trigger.has_sql_body !== 'boolean') {
+      fail('event trigger routine metadata is invalid');
+    }
+    const name = bareName(trigger.name, 'event trigger name');
+    const event = bareName(trigger.event, 'event trigger event');
+    const routineSchema = bareName(trigger.routine_schema, 'event trigger routine schema');
+    const routineName = bareName(trigger.routine_name, 'event trigger routine name');
+    const language = bareName(trigger.language, 'event trigger routine language');
+    const config = routineConfig(trigger.routine_config);
+    const catalogBinding = eventCatalogBinding(config);
+    const readablePlpgsqlBody = language === 'plpgsql' &&
+      !trigger.has_sql_body && Boolean(trigger.source.trim());
+    const sessionCatalogRequired =
+      readablePlpgsqlBody && catalogBinding === 'session' &&
+      usesUnqualifiedEventMetadataHelper(trigger.source);
+    const effect = applyTimeWriteTargets(
+      `DO $crx_event$ ${trigger.source} $crx_event$;`,
+      {
+        trustedUnqualifiedRoutines: catalogBinding !== 'unsafe'
+          ? EVENT_METADATA_HELPERS
+          : [],
+      },
+    );
+    const noWriteProof = readablePlpgsqlBody &&
+      !effect.unresolved && !effect.unsupportedRoutineIdentity &&
+      effect.unknownCalls.length === 0 && effect.dynamicWrites.length === 0 &&
+      effect.targets.size === 0 && effect.tables.size === 0;
+    const effectSummary = {
+      safe: noWriteProof && !sessionCatalogRequired,
+      session_catalog_required: sessionCatalogRequired,
+      unresolved: effect.unresolved || !readablePlpgsqlBody,
+      unsupported_routine_identity: effect.unsupportedRoutineIdentity,
+      unknown_calls: [...effect.unknownCalls].sort(),
+      targets: [...effect.targets].sort(),
+      tables: [...effect.tables].sort(),
+      dynamic_write_count: effect.dynamicWrites.length,
+    };
+    return {
+      name,
+      event,
+      enabled: trigger.enabled,
+      enabled_mode: trigger.enabled_mode,
+      routine_oid: trigger.routine_oid,
+      routine_schema: routineSchema,
+      routine_name: routineName,
+      routine_config: config,
+      language,
+      has_sql_body: trigger.has_sql_body,
+      effect: effectSummary,
+      routine_hash: sha256(JSON.stringify({
+        language,
+        has_sql_body: trigger.has_sql_body,
+        routine_config: config,
+        source: trigger.source,
+      })),
+    };
+  }).sort((a, b) => a.name.localeCompare(b.name) || a.routine_oid.localeCompare(b.routine_oid));
 
   const writeAction = new Set(['c', 'n', 'd']);
   const foreignKeys = payload.foreign_keys.map((foreignKey) => {
@@ -287,11 +408,12 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
       capture_method: 'supabase-cli-db-query-linked',
       source_project: projectId,
       scope:
-        'Transitive trigger and FK referential-action writes; unresolved calls or dynamic targets are opaque.',
+        'Transitive trigger and FK writes plus bound event-trigger state; unresolved effects are opaque.',
       bootstrap_policy: 'all-captured-sources-opaque-until-independent-attestation',
       regenerate: 'node scripts/generate-trigger-fanout.mjs',
     },
     tables_scanned: tablesScanned,
+    event_triggers: eventTriggers,
     opaque_on_tables: bootstrapOpaque,
     reachable_routines: Object.fromEntries(
       Object.entries(reachableRoutines).sort(([a], [b]) => a.localeCompare(b)),
@@ -332,7 +454,8 @@ function main() {
   const edgeCount = Object.values(manifest.fanout).reduce((count, rows) => count + rows.length, 0);
   process.stdout.write(
     `generate-trigger-fanout: wrote ${outPath}\n  ${manifest.tables_scanned.length} tables, ` +
-    `${edgeCount} cascade edges, ${manifest.opaque_on_tables.length} opaque source tables\n`,
+    `${edgeCount} cascade edges, ${manifest.opaque_on_tables.length} opaque source tables, ` +
+    `${manifest.event_triggers.length} event triggers\n`,
   );
 }
 

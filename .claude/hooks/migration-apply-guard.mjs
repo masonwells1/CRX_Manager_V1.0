@@ -60,6 +60,8 @@ function loadTrustedFanout(evidenceRoots) {
   const scanned = new Set();
   const opaque = new Set();
   const fanout = new Map();
+  const enabledEventTriggers = new Map();
+  const sessionDependentEventTriggers = new Map();
   const manifests = [];
   for (const root of evidenceRoots) {
     const manifestPath = path.join(root, "scripts", "trigger-fanout.json");
@@ -70,10 +72,63 @@ function loadTrustedFanout(evidenceRoots) {
     } catch (err) {
       throw new Error(`${manifestPath}: ${err?.message || err}`);
     }
-    if (parsed?._meta?.source_project !== CRX_PRODUCTION_REF ||
+    if (parsed?._meta?.format_version !== 4 ||
+        parsed?._meta?.source_project !== CRX_PRODUCTION_REF ||
         !Array.isArray(parsed?.tables_scanned) || !Array.isArray(parsed?.opaque_on_tables) ||
+        !Array.isArray(parsed?.event_triggers) ||
         !parsed?.fanout || typeof parsed.fanout !== "object" || Array.isArray(parsed.fanout)) {
       throw new Error(`${manifestPath}: invalid or unbound trigger fan-out manifest`);
+    }
+    for (const trigger of parsed.event_triggers) {
+      const keys = Object.keys(trigger || {}).sort();
+      if (JSON.stringify(keys) !== JSON.stringify([
+        "effect", "enabled", "enabled_mode", "event", "has_sql_body", "language", "name",
+        "routine_config", "routine_hash", "routine_name", "routine_oid", "routine_schema",
+      ]) ||
+          typeof trigger.enabled !== "boolean" ||
+          typeof trigger.enabled_mode !== "string" || !/^[ODRA]$/.test(trigger.enabled_mode) ||
+          trigger.enabled !== (trigger.enabled_mode !== "D") ||
+          typeof trigger.name !== "string" || !/^[a-z0-9_]+$/.test(trigger.name) ||
+          typeof trigger.event !== "string" || !/^[a-z0-9_]+$/.test(trigger.event) ||
+          typeof trigger.routine_oid !== "string" || !/^\d+$/.test(trigger.routine_oid) ||
+          typeof trigger.routine_schema !== "string" || !/^[a-z0-9_]+$/.test(trigger.routine_schema) ||
+          typeof trigger.routine_name !== "string" || !/^[a-z0-9_]+$/.test(trigger.routine_name) ||
+          typeof trigger.language !== "string" || !/^[a-z0-9_]+$/.test(trigger.language) ||
+          !Array.isArray(trigger.routine_config) ||
+          trigger.routine_config.some((entry) => typeof entry !== "string" || /[\r\n\0]/.test(entry)) ||
+          typeof trigger.has_sql_body !== "boolean" ||
+          !trigger.effect || typeof trigger.effect !== "object" || Array.isArray(trigger.effect) ||
+          JSON.stringify(Object.keys(trigger.effect).sort()) !== JSON.stringify([
+            "dynamic_write_count", "safe", "session_catalog_required", "tables", "targets",
+            "unknown_calls", "unresolved", "unsupported_routine_identity",
+          ]) ||
+          typeof trigger.effect.safe !== "boolean" ||
+          typeof trigger.effect.session_catalog_required !== "boolean" ||
+          typeof trigger.effect.unresolved !== "boolean" ||
+          typeof trigger.effect.unsupported_routine_identity !== "boolean" ||
+          !Number.isInteger(trigger.effect.dynamic_write_count) || trigger.effect.dynamic_write_count < 0 ||
+          !Array.isArray(trigger.effect.unknown_calls) || !Array.isArray(trigger.effect.targets) ||
+          !Array.isArray(trigger.effect.tables) ||
+          trigger.effect.safe !== (!trigger.effect.session_catalog_required &&
+            !trigger.effect.unresolved &&
+            !trigger.effect.unsupported_routine_identity && trigger.effect.dynamic_write_count === 0 &&
+            trigger.effect.unknown_calls.length === 0 && trigger.effect.targets.length === 0 &&
+            trigger.effect.tables.length === 0) ||
+          typeof trigger.routine_hash !== "string" || !/^[0-9a-f]{64}$/.test(trigger.routine_hash)) {
+        throw new Error(`${manifestPath}: invalid event-trigger evidence`);
+      }
+      if (trigger.enabled && !trigger.effect.safe) {
+        const key = `${trigger.name}\0${trigger.routine_oid}\0${trigger.routine_hash}`;
+        const hasNoWriteProof = !trigger.effect.unresolved &&
+          !trigger.effect.unsupported_routine_identity &&
+          trigger.effect.dynamic_write_count === 0 && trigger.effect.unknown_calls.length === 0 &&
+          trigger.effect.targets.length === 0 && trigger.effect.tables.length === 0;
+        if (trigger.effect.session_catalog_required && hasNoWriteProof) {
+          sessionDependentEventTriggers.set(key, trigger);
+        } else {
+          enabledEventTriggers.set(key, trigger);
+        }
+      }
     }
     for (const table of parsed.tables_scanned) {
       if (typeof table !== "string" || !table.trim()) throw new Error(`${manifestPath}: invalid scanned table`);
@@ -106,6 +161,8 @@ function loadTrustedFanout(evidenceRoots) {
     scanned,
     opaque,
     fanout: new Map([...fanout].map(([source, edges]) => [source, [...edges.values()]])),
+    enabledEventTriggers: [...enabledEventTriggers.values()],
+    sessionDependentEventTriggers: [...sessionDependentEventTriggers.values()],
     manifests,
   };
 }
@@ -588,6 +645,15 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
         `surface when live triggers or referential actions can rewrite another population. ` +
         `Refusing the apply; restore or regenerate scripts/trigger-fanout.json and retry.`);
     }
+    if (fanoutEvidence.enabledEventTriggers.length) {
+      out("block",
+        `ONE-SHOT REPLAY GUARD: linked production evidence contains enabled PostgreSQL event ` +
+        `trigger(s): ${fanoutEvidence.enabledEventTriggers.map((trigger) => trigger.name).join(", ")}. ` +
+        `Event triggers execute database-wide on DDL and these routine bodies do not have a ` +
+        `complete no-write static proof. Refusing every migration apply until the trigger(s) are ` +
+        `disabled/removed through a separately reviewed path and ` +
+        `node scripts/generate-trigger-fanout.mjs refreshes the linked capture.`);
+    }
 
     // Normalize for comparison: lowercase, strip comments, collapse whitespace.
     //
@@ -747,7 +813,17 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
       // A parse this module cannot handle must not silently mean "writes
       // nothing". Treat it as unresolvable so the semantic check below refuses
       // rather than waving the migration through.
-      submitted = { targets: new Set(), dynamicWrites: [], unresolved: true };
+      submitted = { targets: new Set(), dynamicWrites: [], unresolved: true, searchPathChange: true };
+    }
+    if (fanoutEvidence.sessionDependentEventTriggers.length &&
+        (submitted.searchPathChange || submitted.eventTriggerChange || submitted.unresolved)) {
+      out("block",
+        `ONE-SHOT REPLAY GUARD: linked production event trigger(s) ` +
+        `${fanoutEvidence.sessionDependentEventTriggers.map((trigger) => trigger.name).join(", ")} ` +
+        `use PostgreSQL catalog metadata helpers through the applying session's search_path. ` +
+        `This migration changes that path or has an unresolved apply-time effect, so the ` +
+        `catalog binding cannot be proved. Refusing the apply; remove the ambiguous construct or ` +
+        `pin and independently review the event-trigger routine before recapturing fan-out evidence.`);
     }
     const submittedFanout = expandThroughFanout(submitted, fanoutEvidence);
 

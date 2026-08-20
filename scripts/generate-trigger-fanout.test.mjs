@@ -49,6 +49,13 @@ const payload = {
     { on_table: 'self_source', routine_oid: '10', routine_name: 'self_sink_writer' },
     { on_table: 'fk_child', routine_oid: '11', routine_name: 'fk_child_writer' },
   ],
+  event_triggers: [
+    {
+      name: 'disabled_ddl_audit', event: 'ddl_command_end', enabled_mode: 'D', enabled: false,
+      routine_oid: '9001', routine_schema: 'public', routine_name: 'disabled_ddl_audit_fn',
+      routine_config: [], language: 'plpgsql', source: 'BEGIN RETURN; END;', has_sql_body: false,
+    },
+  ],
   foreign_keys: [
     {
       oid: '501', parent_schema: 'public', parent_table: 'fk_parent',
@@ -120,6 +127,86 @@ check('manifest binds source tables to transitive routine body hashes', () => {
   assert.deepEqual(manifest.reachable_routines.helper_source, ['helper_trigger', 'recompute_order']);
   assert.deepEqual(manifest.reachable_routines.fk_parent, ['fk_child_writer']);
   assert.match(manifest.routine_hashes.recompute_order, /^[0-9a-f]{64}$/);
+});
+check('manifest binds event-trigger enabled state and routine bodies', () => {
+  const manifest = buildTriggerFanoutManifest(payload);
+  assert.equal(manifest.event_triggers[0].enabled, false);
+  assert.equal(manifest.event_triggers[0].enabled_mode, 'D');
+  assert.equal(manifest.event_triggers[0].effect.safe, true);
+  assert.equal(manifest.event_triggers[0].effect.session_catalog_required, false);
+  assert.match(manifest.event_triggers[0].routine_hash, /^[0-9a-f]{64}$/);
+});
+check('contradictory event-trigger enabled state is refused', () => {
+  const changed = structuredClone(payload);
+  changed.event_triggers[0].enabled = true;
+  assert.throws(() => buildTriggerFanoutManifest(changed), /enabled state is invalid/);
+});
+check('catalog-first event metadata helpers are proven read-only', () => {
+  const changed = structuredClone(payload);
+  changed.event_triggers[0] = {
+    ...changed.event_triggers[0],
+    enabled: true,
+    enabled_mode: 'O',
+    routine_config: ['search_path=pg_catalog, extensions'],
+    source: 'BEGIN PERFORM * FROM pg_event_trigger_ddl_commands(); END;',
+  };
+  const entry = buildTriggerFanoutManifest(changed).event_triggers[0];
+  assert.equal(entry.effect.safe, true);
+  assert.deepEqual(entry.routine_config, ['search_path=pg_catalog, extensions']);
+});
+check('event helper trust requires a pinned catalog-first search path', () => {
+  const changed = structuredClone(payload);
+  changed.event_triggers[0] = {
+    ...changed.event_triggers[0],
+    enabled: true,
+    enabled_mode: 'O',
+    routine_config: ['search_path=public, pg_catalog'],
+    source: 'BEGIN PERFORM * FROM pg_event_trigger_ddl_commands(); END;',
+  };
+  const entry = buildTriggerFanoutManifest(changed).event_triggers[0];
+  assert.equal(entry.effect.safe, false);
+  assert.deepEqual(entry.effect.unknown_calls, ['pg_event_trigger_ddl_commands']);
+});
+check('an unpinned event helper is conditional on the applying session catalog path', () => {
+  const changed = structuredClone(payload);
+  changed.event_triggers[0] = {
+    ...changed.event_triggers[0],
+    enabled: true,
+    enabled_mode: 'O',
+    routine_config: [],
+    source: 'BEGIN PERFORM * FROM pg_event_trigger_dropped_objects(); END;',
+  };
+  const entry = buildTriggerFanoutManifest(changed).event_triggers[0];
+  assert.equal(entry.effect.safe, false);
+  assert.equal(entry.effect.session_catalog_required, true);
+  assert.deepEqual(entry.effect.unknown_calls, []);
+});
+check('fixed capture includes event-trigger catalog and routine configuration', () => {
+  assert.match(TRIGGER_FANOUT_SQL, /\bFROM pg_event_trigger\b/);
+  assert.match(TRIGGER_FANOUT_SQL, /\bp\.proconfig\b/);
+});
+check('unsupported or unreadable event-trigger bodies fail closed', () => {
+  const unsupported = structuredClone(payload);
+  unsupported.event_triggers[0].language = 'c';
+  unsupported.event_triggers[0].source = 'event_trigger_native_entrypoint';
+  let entry = buildTriggerFanoutManifest(unsupported).event_triggers[0];
+  assert.equal(entry.effect.safe, false);
+  assert.equal(entry.effect.unresolved, true);
+
+  const unreadable = structuredClone(payload);
+  unreadable.event_triggers[0].source = '';
+  unreadable.event_triggers[0].has_sql_body = true;
+  entry = buildTriggerFanoutManifest(unreadable).event_triggers[0];
+  assert.equal(entry.effect.safe, false);
+  assert.equal(entry.effect.unresolved, true);
+});
+check('ambiguous duplicate event search_path configuration is refused', () => {
+  const changed = structuredClone(payload);
+  changed.event_triggers[0].routine_config = [
+    'search_path=pg_catalog, public',
+    'search_path=public, pg_catalog',
+  ];
+  assert.throws(() => buildTriggerFanoutManifest(changed), /repeats search_path/);
 });
 check('unsupported trigger languages are opaque', () => {
   assert(buildTriggerFanoutManifest(payload).opaque_on_tables.includes('unsupported_source'));

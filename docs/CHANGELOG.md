@@ -27,6 +27,13 @@ migration safety harness; no app source, migration SQL, live database, or produc
   domain fails closed because its stored `CHECK` expressions execute at coercion time and may call a
   mutating routine that is absent from the cast site; defining the domain without using it remains
   deferred.
+- PostgreSQL event triggers are now part of the linked production trust root. The fixed capture binds
+  every `pg_event_trigger` enabled mode, event, routine identity, language, body, routine config, and
+  conservative no-write effect. An enabled trigger with any write, dynamic SQL, unknown call, or
+  unreadable effect blocks every apply. Supabase's six enabled catalog-watch triggers use only
+  PostgreSQL's read-only event metadata helpers; because their routines do not pin `search_path`, the
+  manifest records that session dependency and both guards refuse path-changing or unresolved
+  migrations. Local `CREATE`/`ALTER`/`DROP EVENT TRIGGER` statements fail closed.
 - Selecting an ordinary stored view now executes its cataloged query in the analysis closure. Same-
   file, nested, and older checked-in view definitions can no longer conceal a resident mutating
   routine behind `SELECT * FROM view`; defining a view without executing it remains deferred.
@@ -69,8 +76,8 @@ migration safety harness; no app source, migration SQL, live database, or produc
   were removed; nonexistent files no longer remain as apparent audit evidence.
 
 Focused proof: snapshot producer 14 assertions; applied-source containment pass (including forced
-worktree-enumeration failure); trigger fan-out producer 13 assertions; apply-time analyzer
-209 assertions; apply-time guard 276 assertions; approved-set validator 184 mutation cases.
+worktree-enumeration failure); trigger fan-out producer 21 assertions; apply-time analyzer
+219 assertions; apply-time guard 281 assertions; approved-set validator 188 mutation cases.
 Each new edge has a removal mutant that
 survives only when the load-bearing protection is deliberately deleted.
 

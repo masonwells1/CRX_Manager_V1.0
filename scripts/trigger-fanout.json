@@ -1,11 +1,11 @@
 {
   "_meta": {
-    "format_version": 3,
-    "captured_at": "2026-08-20T07:52:30.152672Z",
+    "format_version": 4,
+    "captured_at": "2026-08-20T13:55:54.967908Z",
     "generator": "scripts/generate-trigger-fanout.mjs",
     "capture_method": "supabase-cli-db-query-linked",
     "source_project": "rhyzpcqhnizqbxphqdkr",
-    "scope": "Transitive trigger and FK referential-action writes; unresolved calls or dynamic targets are opaque.",
+    "scope": "Transitive trigger and FK writes plus bound event-trigger state; unresolved effects are opaque.",
     "bootstrap_policy": "all-captured-sources-opaque-until-independent-attestation",
     "regenerate": "node scripts/generate-trigger-fanout.mjs"
   },
@@ -167,6 +167,146 @@
     "watchdog_flag_dismissals",
     "watchdog_flags",
     "write_offs"
+  ],
+  "event_triggers": [
+    {
+      "name": "issue_graphql_placeholder",
+      "event": "sql_drop",
+      "enabled": true,
+      "enabled_mode": "O",
+      "routine_oid": "16570",
+      "routine_schema": "extensions",
+      "routine_name": "set_graphql_placeholder",
+      "routine_config": [],
+      "language": "plpgsql",
+      "has_sql_body": false,
+      "effect": {
+        "safe": false,
+        "session_catalog_required": true,
+        "unresolved": false,
+        "unsupported_routine_identity": false,
+        "unknown_calls": [],
+        "targets": [],
+        "tables": [],
+        "dynamic_write_count": 0
+      },
+      "routine_hash": "739d79bed982e0f89833436908a738694a83e133cc9f7b4dd11e08539c26bbad"
+    },
+    {
+      "name": "issue_pg_cron_access",
+      "event": "ddl_command_end",
+      "enabled": true,
+      "enabled_mode": "O",
+      "routine_oid": "16547",
+      "routine_schema": "extensions",
+      "routine_name": "grant_pg_cron_access",
+      "routine_config": [],
+      "language": "plpgsql",
+      "has_sql_body": false,
+      "effect": {
+        "safe": false,
+        "session_catalog_required": true,
+        "unresolved": false,
+        "unsupported_routine_identity": false,
+        "unknown_calls": [],
+        "targets": [],
+        "tables": [],
+        "dynamic_write_count": 0
+      },
+      "routine_hash": "ddbf2e97c3c3c0c3c01082239f5e606d51703930efdb1dfdcc1696388f3c7a74"
+    },
+    {
+      "name": "issue_pg_graphql_access",
+      "event": "ddl_command_end",
+      "enabled": true,
+      "enabled_mode": "O",
+      "routine_oid": "16568",
+      "routine_schema": "extensions",
+      "routine_name": "grant_pg_graphql_access",
+      "routine_config": [],
+      "language": "plpgsql",
+      "has_sql_body": false,
+      "effect": {
+        "safe": false,
+        "session_catalog_required": true,
+        "unresolved": false,
+        "unsupported_routine_identity": false,
+        "unknown_calls": [],
+        "targets": [],
+        "tables": [],
+        "dynamic_write_count": 0
+      },
+      "routine_hash": "9796eb76412782f866d1ce31f551c1f0562d16ee65908d731ea446c62949bd25"
+    },
+    {
+      "name": "issue_pg_net_access",
+      "event": "ddl_command_end",
+      "enabled": true,
+      "enabled_mode": "O",
+      "routine_oid": "16549",
+      "routine_schema": "extensions",
+      "routine_name": "grant_pg_net_access",
+      "routine_config": [],
+      "language": "plpgsql",
+      "has_sql_body": false,
+      "effect": {
+        "safe": false,
+        "session_catalog_required": true,
+        "unresolved": false,
+        "unsupported_routine_identity": false,
+        "unknown_calls": [],
+        "targets": [],
+        "tables": [],
+        "dynamic_write_count": 0
+      },
+      "routine_hash": "812a98e7b16e8ca0c2fd85525366cdd1e8aec790c72c2c2f49259e8ee1ca4712"
+    },
+    {
+      "name": "pgrst_ddl_watch",
+      "event": "ddl_command_end",
+      "enabled": true,
+      "enabled_mode": "O",
+      "routine_oid": "16559",
+      "routine_schema": "extensions",
+      "routine_name": "pgrst_ddl_watch",
+      "routine_config": [],
+      "language": "plpgsql",
+      "has_sql_body": false,
+      "effect": {
+        "safe": false,
+        "session_catalog_required": true,
+        "unresolved": false,
+        "unsupported_routine_identity": false,
+        "unknown_calls": [],
+        "targets": [],
+        "tables": [],
+        "dynamic_write_count": 0
+      },
+      "routine_hash": "3e1cf6842a68658ad6272df88b57cd3ae62e0329554d8c6bbc01492902a7d1da"
+    },
+    {
+      "name": "pgrst_drop_watch",
+      "event": "sql_drop",
+      "enabled": true,
+      "enabled_mode": "O",
+      "routine_oid": "16560",
+      "routine_schema": "extensions",
+      "routine_name": "pgrst_drop_watch",
+      "routine_config": [],
+      "language": "plpgsql",
+      "has_sql_body": false,
+      "effect": {
+        "safe": false,
+        "session_catalog_required": true,
+        "unresolved": false,
+        "unsupported_routine_identity": false,
+        "unknown_calls": [],
+        "targets": [],
+        "tables": [],
+        "dynamic_write_count": 0
+      },
+      "routine_hash": "a22fd302d66354f505977cd2c83cfdbf8992724ce9a76195eefef0582bd1bf7d"
+    }
   ],
   "opaque_on_tables": [
     "accounting_periods",

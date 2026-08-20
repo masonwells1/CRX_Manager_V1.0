@@ -13,6 +13,7 @@ export function changedTriggerInputs(sqlFiles) {
   const triggerTables = new Set();
   const foreignKeyParents = new Set();
   let unparsedTriggerDefinition = false;
+  let eventTriggerChange = false;
   let unparsedRoutineDefinition = false;
   let unparsedForeignKeyDefinition = false;
   const ident = '(?:"(?:[^"]|"")*"|[a-z_][a-z0-9_$]*)';
@@ -27,6 +28,7 @@ export function changedTriggerInputs(sqlFiles) {
   };
   for (const file of sqlFiles) {
     const sql = readFileSync(file, 'utf8');
+    if (/\b(?:create|alter|drop)\s+event\s+trigger\b/i.test(sql)) eventTriggerChange = true;
     const routinePattern = new RegExp(
       `\\bcreate\\s+(?:or\\s+replace\\s+)?(?:function|procedure)\\s+${publicPrefix}(${ident})\\s*\\(`,
       'gi',
@@ -77,6 +79,7 @@ export function changedTriggerInputs(sqlFiles) {
     triggerTables,
     foreignKeyParents,
     unparsedTriggerDefinition,
+    eventTriggerChange,
     unparsedRoutineDefinition,
     unparsedForeignKeyDefinition,
   };
@@ -127,6 +130,13 @@ function manifestWeakeningSources(before, after) {
     if (routineOwners?.size) for (const source of routineOwners) weakened.add(source);
     else weakened.add(`__changed_unowned_routine_${name}`);
   }
+  // Introducing the first bound event-trigger capture strengthens an older or
+  // absent manifest. Once the field exists, any later state/body/config drift
+  // is stale and requires a fresh linked recapture.
+  if (Array.isArray(before.event_triggers) &&
+      JSON.stringify(before.event_triggers) !== JSON.stringify(after.event_triggers || [])) {
+    weakened.add('__event_trigger_state_changed__');
+  }
   return weakened;
 }
 
@@ -147,6 +157,7 @@ export function staleTriggerSources(before, after, changed) {
     if (!owners.length && !changed.triggerTables.size) add('__unmapped_trigger_routine__', name);
   }
   if (changed.unparsedTriggerDefinition) add('__unparsed_trigger_definition__', 'unknown');
+  if (changed.eventTriggerChange) add('__event_trigger_change__', 'database-wide');
   if (changed.unparsedRoutineDefinition) add('__unparsed_routine_definition__', 'unknown');
   if (changed.unparsedForeignKeyDefinition) add('__unparsed_foreign_key_definition__', 'unknown');
   for (const source of manifestWeakeningSources(before, after)) add(source, '__manifest_weakened__');

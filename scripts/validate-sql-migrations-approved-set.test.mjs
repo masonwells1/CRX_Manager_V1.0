@@ -2170,6 +2170,24 @@ const CASES = [
     sql: `SELECT CAST(1 AS public.money_checked_integer);\n`,
   },
   {
+    name: 'round-46: event-trigger DDL cannot hide a later database-wide money rewrite',
+    expect: 'violation',
+    mustReport: 'event-trigger DDL is unsupported',
+    sql:
+      `CREATE FUNCTION public.ddl_money_fix() RETURNS event_trigger LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = total_profit; END $$;\n` +
+      `CREATE EVENT TRIGGER ddl_money_replay ON ddl_command_end ` +
+      `EXECUTE FUNCTION public.ddl_money_fix();\n` +
+      `COMMENT ON TABLE public.order_items IS 'fires';\n`,
+  },
+  {
+    name: 'round-46 MUTANT: an unattached event-trigger routine remains deferred',
+    expect: 'silent',
+    sql:
+      `CREATE FUNCTION public.deferred_event_trigger_fn() RETURNS event_trigger LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = total_profit; END $$;\n`,
+  },
+  {
     name: 'round-39: selecting a stored view cannot hide its resident mutating routine',
     expect: 'violation',
     mustReport: 'view_select_replay_bridge',
@@ -2518,6 +2536,51 @@ function runTriggerFanoutFailsClosed() {
     const json = (o) => `${JSON.stringify(o, null, 2)}\n`;
     const orders = fanoutBlock('orders', 'total_profit');
 
+    const unsafeEvent = structuredClone(live);
+    unsafeEvent.event_triggers = [{
+      ...unsafeEvent.event_triggers[0],
+      effect: {
+        dynamic_write_count: 0,
+        safe: false,
+        session_catalog_required: false,
+        tables: [],
+        targets: [],
+        unknown_calls: ['resident_unknown_effect'],
+        unresolved: false,
+        unsupported_routine_identity: false,
+      },
+      enabled: true,
+      enabled_mode: 'O',
+      name: 'resident_ddl_money_replay',
+    }];
+    const unsafeResult = runWith(json(unsafeEvent), "COMMENT ON TABLE public.orders IS 'fires';\n");
+    if (!unsafeResult.out.includes('Enabled PostgreSQL event trigger(s) make migration DDL effects unbounded')) {
+      failures.push('  round-46 enabled live event trigger without no-write proof was not globally refused');
+    }
+
+    const conditionalEvent = structuredClone(live);
+    conditionalEvent.event_triggers = [{
+      ...conditionalEvent.event_triggers[0],
+      effect: {
+        dynamic_write_count: 0,
+        safe: false,
+        session_catalog_required: true,
+        tables: [],
+        targets: [],
+        unknown_calls: [],
+        unresolved: false,
+        unsupported_routine_identity: false,
+      },
+      enabled: true,
+      enabled_mode: 'O',
+      name: 'resident_unpinned_ddl_metadata_watch',
+      routine_config: [],
+    }];
+    expect('a session-dependent event helper refuses search_path-changing DDL',
+      json(conditionalEvent),
+      "SET LOCAL search_path = public, pg_catalog; COMMENT ON TABLE public.orders IS 'fires';\n",
+      'Session-dependent PostgreSQL event trigger helper');
+
     if (!live.fanout?.fields?.some((r) =>
       r.target === 'field_crop_history' && r.via === 'snapshot_field_crop_history')) {
       failures.push('  round-32 live fan-out is missing fields -> field_crop_history via snapshot_field_crop_history');
@@ -2595,7 +2658,8 @@ function runTriggerDefinitionRequiresFanoutRefresh() {
     const noChanges = {
       changedRoutines: new Set(), changedTriggerRoutines: new Set(), triggerTables: new Set(),
       foreignKeyParents: new Set(), unparsedTriggerDefinition: false,
-      unparsedRoutineDefinition: false, unparsedForeignKeyDefinition: false,
+      eventTriggerChange: false, unparsedRoutineDefinition: false,
+      unparsedForeignKeyDefinition: false,
     };
     const guttedInitial = structuredClone(baseManifest);
     guttedInitial.fanout = {};
@@ -2699,6 +2763,21 @@ function runTriggerDefinitionRequiresFanoutRefresh() {
     if (`${fkSafe.stdout || ''}\n${fkSafe.stderr || ''}`.includes(
       'Trigger fan-out evidence is stale for affected source(s): quoted_parent')) {
       failures.push('  round-34 FK parent opacity was still classified as stale');
+    }
+
+    // Event triggers have no source table. Any definition/change is a global
+    // graph input and must remain stale even if every table source is opaque.
+    writeFileSync(
+      join(dir, 'supabase', 'migrations', '20200102000000_trigger.sql'),
+      'CREATE EVENT TRIGGER ddl_probe ON ddl_command_end EXECUTE FUNCTION public.ddl_probe();\n',
+      'utf8',
+    );
+    const eventStale = runBash([SCRIPT, '--changed-only', `--base=${base}`], {
+      cwd: dir, encoding: 'utf8', env: envWithoutGit(),
+    });
+    const eventOut = `${eventStale.stdout || ''}\n${eventStale.stderr || ''}`;
+    if (!eventOut.includes('Trigger fan-out evidence is stale for affected source(s): __event_trigger_change__')) {
+      failures.push('  round-46 event-trigger DDL was not treated as a global stale graph input');
     }
 
     // Candidate-authored evidence may add detail, but it may not silently erase
@@ -2882,7 +2961,7 @@ function run() {
     console.error(out);
     process.exit(1);
   }
-  console.log(`✅ approved-set guard: ${CASES.length + 12} mutation cases behaved correctly`);
+  console.log(`✅ approved-set guard: ${CASES.length + 14} mutation cases behaved correctly`);
 }
 
 if (process.argv.includes('--staleness-only')) {

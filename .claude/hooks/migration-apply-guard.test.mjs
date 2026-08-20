@@ -1714,6 +1714,94 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(!isOneShotDeny(r),
       "round-45 MUTANT: removing the checked-in domain definition removes the catalog evidence");
 
+    // ROUND 46. Event triggers run database-wide on DDL and have no source
+    // relation to expand through the ordinary fan-out graph.
+    const eventTriggerAttack =
+      "CREATE FUNCTION public.ddl_money_fix() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN " +
+      "UPDATE public.orders SET total_profit = total_profit; END $$; " +
+      "CREATE EVENT TRIGGER ddl_money_replay ON ddl_command_end " +
+      "EXECUTE FUNCTION public.ddl_money_fix(); " +
+      "COMMENT ON TABLE public.order_items IS 'fires';";
+    r = apply("20990601000042_event_trigger_replay", eventTriggerAttack);
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-46: event-trigger DDL cannot hide a later database-wide money rewrite");
+
+    r = apply("20990601000043_event_trigger_routine_only",
+      "CREATE FUNCTION public.deferred_event_trigger_fn() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN " +
+      "UPDATE public.orders SET total_profit = total_profit; END $$;");
+    ok(!isOneShotDeny(r),
+      "round-46 MUTANT: removing the event-trigger attachment leaves its routine deferred");
+
+    const enabledEventManifest = structuredClone(FANOUT_FIXTURE);
+    enabledEventManifest.event_triggers = [{
+      effect: {
+        dynamic_write_count: 0,
+        safe: false,
+        session_catalog_required: false,
+        tables: [],
+        targets: [],
+        unknown_calls: ["resident_unknown_effect"],
+        unresolved: false,
+        unsupported_routine_identity: false,
+      },
+      enabled: true,
+      enabled_mode: "O",
+      event: "ddl_command_end",
+      has_sql_body: false,
+      language: "plpgsql",
+      name: "resident_ddl_money_replay",
+      routine_config: ["search_path=pg_catalog, public"],
+      routine_hash: "a".repeat(64),
+      routine_name: "resident_ddl_money_fix",
+      routine_oid: "9001",
+      routine_schema: "public",
+    }];
+    writeFileSync(path.join(tmp, "scripts", "trigger-fanout.json"), JSON.stringify(enabledEventManifest));
+    r = apply("20990601000044_live_event_trigger", "COMMENT ON TABLE public.orders IS 'fires';");
+    ok(isDeny(r) && r.stdout.includes("enabled PostgreSQL event trigger"),
+      "round-46: an enabled event trigger without no-write proof blocks migration apply");
+
+    const safeEventManifest = structuredClone(FANOUT_FIXTURE);
+    safeEventManifest.event_triggers = [{
+      ...enabledEventManifest.event_triggers[0],
+      effect: {
+        dynamic_write_count: 0,
+        safe: true,
+        session_catalog_required: false,
+        tables: [],
+        targets: [],
+        unknown_calls: [],
+        unresolved: false,
+        unsupported_routine_identity: false,
+      },
+      name: "resident_ddl_metadata_watch",
+      routine_hash: "b".repeat(64),
+      routine_name: "resident_ddl_metadata_watch_fn",
+    }];
+    writeFileSync(path.join(tmp, "scripts", "trigger-fanout.json"), JSON.stringify(safeEventManifest));
+    r = apply("20990601000045_safe_live_event_trigger", "COMMENT ON TABLE public.orders IS 'safe';");
+    ok(!r.stdout.includes("enabled PostgreSQL event trigger"),
+      "round-46 MUTANT: an enabled trigger with bound no-write proof does not wedge migrations");
+
+    const conditionalEventManifest = structuredClone(FANOUT_FIXTURE);
+    conditionalEventManifest.event_triggers = [{
+      ...safeEventManifest.event_triggers[0],
+      effect: {
+        ...safeEventManifest.event_triggers[0].effect,
+        safe: false,
+        session_catalog_required: true,
+      },
+      name: "resident_unpinned_ddl_metadata_watch",
+      routine_config: [],
+      routine_hash: "c".repeat(64),
+    }];
+    writeFileSync(path.join(tmp, "scripts", "trigger-fanout.json"), JSON.stringify(conditionalEventManifest));
+    r = apply("20990601000046_event_session_path",
+      "SET LOCAL search_path = public, pg_catalog; COMMENT ON TABLE public.orders IS 'fires';");
+    ok(isDeny(r) && r.stdout.includes("applying session's search_path"),
+      "round-47: session-dependent event helper plus search_path mutation is refused");
+    writeFileSync(path.join(tmp, "scripts", "trigger-fanout.json"), JSON.stringify(FANOUT_FIXTURE));
+
     // 6. Fail closed. The registry is tracked in git; unreadable or absent means
     //    the checkout is broken or the file was removed — the two states in
     //    which a silent pass is most dangerous.

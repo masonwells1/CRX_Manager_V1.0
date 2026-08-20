@@ -503,6 +503,14 @@ stores an expression that runs later when a value is cast to that domain, so the
 site does not expose any routine called by the CHECK. Both migration guards catalog same-file and
 older checked-in domains and fail closed when an apply-time `CAST(... AS domain)` or `::domain`
 invokes one. A domain definition without a coercion remains deferred.
+PostgreSQL event triggers are database-wide stored execution and therefore join the linked capture.
+The manifest binds each `pg_event_trigger` event/enabled mode to its routine identity, language, body,
+configuration, hash, and conservative effect. An enabled routine without a complete no-write proof is
+a global apply refusal. The fixed PostgreSQL event metadata helpers are accepted only as exact names
+under catalog-first resolution. A routine with no pinned `search_path` remains explicitly conditional
+on the applying session, so a migration that changes that path or has unresolved apply-time
+behavior is refused. Creating, altering, or dropping an event trigger in ordinary migration SQL also
+fails closed and invalidates the live manifest.
 
 ---
 

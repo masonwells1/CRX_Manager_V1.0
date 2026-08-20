@@ -55,6 +55,24 @@ WITH tables AS (
   JOIN pg_proc p ON p.oid = t.tgfoid
   WHERE NOT t.tgisinternal AND n.nspname = 'public'
   ORDER BY on_table, routine_name, routine_oid
+), event_triggers AS (
+  SELECT
+    e.evtname AS name,
+    e.evtevent AS event,
+    e.evtenabled AS enabled_mode,
+    (e.evtenabled <> 'D') AS enabled,
+    p.oid::text AS routine_oid,
+    n.nspname AS routine_schema,
+    p.proname AS routine_name,
+    l.lanname AS language,
+    COALESCE(p.proconfig, '{}'::text[]) AS routine_config,
+    COALESCE(p.prosrc, '') AS source,
+    (p.prosqlbody IS NOT NULL) AS has_sql_body
+  FROM pg_event_trigger e
+  JOIN pg_proc p ON p.oid = e.evtfoid
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+  JOIN pg_language l ON l.oid = p.prolang
+  ORDER BY e.evtname, p.oid
 ), foreign_keys AS (
   SELECT
     con.oid::text AS oid,
@@ -81,6 +99,7 @@ SELECT jsonb_build_object(
   'tables_scanned', COALESCE((SELECT jsonb_agg(tablename) FROM tables), '[]'::jsonb),
   'routines', COALESCE((SELECT jsonb_agg(to_jsonb(routines)) FROM routines), '[]'::jsonb),
   'triggers', COALESCE((SELECT jsonb_agg(to_jsonb(triggers)) FROM triggers), '[]'::jsonb),
+  'event_triggers', COALESCE((SELECT jsonb_agg(to_jsonb(event_triggers)) FROM event_triggers), '[]'::jsonb),
   'foreign_keys', COALESCE((SELECT jsonb_agg(to_jsonb(foreign_keys)) FROM foreign_keys), '[]'::jsonb)
 ) AS trigger_fanout_capture;
 `.trim();
