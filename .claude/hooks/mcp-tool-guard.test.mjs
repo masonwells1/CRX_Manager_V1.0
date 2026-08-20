@@ -76,6 +76,9 @@ for (const command of [
   "echo safe\nNODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
   "echo safe\r\nNODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
   "export SAFE=1 NODE_OPTIONS=--require=./preload.cjs; node scripts/ordinary-check.mjs",
+  'cmd /d /c "echo safe & set NODE_OPTIONS=--require=./preload.cjs & node scripts/ordinary-check.mjs"',
+  'powershell -NoProfile -Command "cmd /c \'set NODE_OPTIONS=--require=./preload.cjs & node scripts/ordinary-check.mjs\'"',
+  'bash -c "NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"',
 ]) {
   r = runHook({
     tool_name: "mcp__Desktop_Commander__start_process",

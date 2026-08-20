@@ -60,7 +60,9 @@ launched directly or through WSL and multi-call tools, plus Node preloads
 introduced through token-parsed assignment, `env`, or `command env` wrapper
 chains; empty/quoted assignments, multi-variable exports, LF/CRLF command
 boundaries, and `command --` are included, while quoted search text and
-terminal help/version modes remain data.
+terminal help/version modes remain data. Executable command-string bodies are
+recursively inspected for `cmd /c` or `/k`, PowerShell command modes, and POSIX
+shell `-c` wrappers.
 
 ### MCP Tool Guard (`.claude/hooks/`)
 Runs on Claude's `mcp__.*` PreToolUse matcher (narrowed 2026-08-18; still the `*` all-tools matcher in `.codex/hooks.json`). Added 2026-07-13 to close the "Desktop Commander blind spot": `bash-safety.mjs` only gates the `Bash|PowerShell` tool matcher, but Desktop Commander's MCP tools can run the exact same shell commands, or touch the exact same protected paths, without ever going through the Bash or Write/Edit matchers those other hooks are wired to.

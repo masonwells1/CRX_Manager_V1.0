@@ -412,10 +412,12 @@ function tokenizeShellWords(text) {
   const tokens = [];
   let current = "";
   let quote = "";
+  let sawQuoted = false;
   const push = () => {
     if (!current) return;
-    tokens.push({ value: current, control: false });
+    tokens.push({ value: current, control: false, sawQuoted });
     current = "";
+    sawQuoted = false;
   };
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index];
@@ -424,7 +426,10 @@ function tokenizeShellWords(text) {
       else current += char;
       continue;
     }
-    if (char === "\"" || char === "'") quote = char;
+    if (char === "\"" || char === "'") {
+      quote = char;
+      sawQuoted = true;
+    }
     else if (char === "\r" || char === "\n") {
       push();
       tokens.push({ value: "\n", control: true });
@@ -439,7 +444,7 @@ function tokenizeShellWords(text) {
   return tokens;
 }
 
-function nodeOptionsAssignmentMentioned(command) {
+function nodeOptionsAssignmentMentioned(command, depth = 0) {
   const tokens = tokenizeShellWords(String(command || ""));
   const assignmentName = (token) => /^([A-Za-z_]\w*)=/.exec(token?.value || "")?.[1]?.toLowerCase() || "";
   const executableName = (token) => String(token?.value || "").replace(/^@/, "").split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase();
@@ -462,6 +467,11 @@ function nodeOptionsAssignmentMentioned(command) {
     if (skipAssignments()) return true;
     while (cursor < segmentEnd) {
       const name = executableName(tokens[cursor]);
+      const inspectNestedCommand = (body) => {
+        if (!body) return false;
+        if (depth >= 4) return true;
+        return nodeOptionsAssignmentMentioned(body, depth + 1);
+      };
       if (name === "command") {
         cursor += 1;
         if (cursor < segmentEnd && /^-[vV]$/.test(tokens[cursor].value)) break;
@@ -490,6 +500,42 @@ function nodeOptionsAssignmentMentioned(command) {
         }
         if (skipAssignments()) return true;
         continue;
+      }
+      if (name === "cmd") {
+        for (let argumentIndex = cursor + 1; argumentIndex < segmentEnd; argumentIndex += 1) {
+          const argument = tokens[argumentIndex].value;
+          const commandSwitch = /^(?:\/[a-z](?::[a-z]+)?)*\/[ck](.*)$/i.exec(argument);
+          if (commandSwitch) {
+            const body = [commandSwitch[1], ...tokens.slice(argumentIndex + 1, segmentEnd).map((token) => token.value)]
+              .filter(Boolean)
+              .join(" ");
+            if (inspectNestedCommand(body)) return true;
+            break;
+          }
+        }
+      } else if (["powershell", "pwsh"].includes(name)) {
+        for (let argumentIndex = cursor + 1; argumentIndex < segmentEnd; argumentIndex += 1) {
+          const argument = tokens[argumentIndex].value;
+          const attached = /^(?:(?:(?:--?|\/)c|(?:--?|\/)co(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?|(?:--?|\/)cwa|(?:--?|\/)commandw[a-z]*):|--command=)(.+)$/i.exec(argument);
+          if (attached) {
+            if (inspectNestedCommand(attached[1])) return true;
+            break;
+          }
+          if (/^(?:(?:--?|\/)c|(?:--?|\/)co(?:m(?:m(?:a(?:n(?:d)?)?)?)?)?|(?:--?|\/)cwa|(?:--?|\/)commandw[a-z]*)$/i.test(argument)) {
+            const body = tokens.slice(argumentIndex + 1, segmentEnd).map((token) => token.value).join(" ");
+            if (inspectNestedCommand(body)) return true;
+            break;
+          }
+          if (/^(?:--?|\/)f(?:i(?:l(?:e)?)?)?/i.test(argument)) break;
+        }
+      } else if (["bash", "sh", "dash", "zsh", "ksh"].includes(name)) {
+        for (let argumentIndex = cursor + 1; argumentIndex < segmentEnd; argumentIndex += 1) {
+          if (/^-[A-Za-z]*c[A-Za-z]*$/.test(tokens[argumentIndex].value)) {
+            const body = tokens.slice(argumentIndex + 1, segmentEnd).map((token) => token.value).join(" ");
+            if (inspectNestedCommand(body)) return true;
+            break;
+          }
+        }
       }
       if (name === "export") {
         cursor += 1;

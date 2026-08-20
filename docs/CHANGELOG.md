@@ -13,7 +13,9 @@ All significant development milestones, in reverse chronological order.
   assignments or the `command` wrapper. The token-aware parser covers empty and
   quoted assignment values, `command -p`, the `command --` terminator, `env`
   options, multi-variable `export` commands, LF/CRLF command boundaries, and
-  nested `command env` chains without matching quoted search text.
+  nested `command env` chains. Executable command strings passed through
+  `cmd /c`, PowerShell command mode, or POSIX shell `-c` are recursively
+  inspected without matching the same spelling when it is quoted search text.
 - Regression coverage proves the new deny paths and preserves ordinary quoted
   searches plus terminal AWK help mode. Codex continues to consume the same
   `.claude/hooks/bash-safety-lib.mjs` implementation through its tracked hook

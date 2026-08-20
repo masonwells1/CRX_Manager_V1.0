@@ -298,12 +298,16 @@ ok(checkDangerousCommand("echo safe\nNODE_OPTIONS=--require=./preload.cjs node s
 ok(checkDangerousCommand("echo safe\r\nNODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "CRLF-delimited NODE_OPTIONS preload is denied");
 ok(checkDangerousCommand("export SAFE=1 NODE_OPTIONS=--require=./preload.cjs; node scripts/ordinary-check.mjs"), "later export operand NODE_OPTIONS preload is denied");
 ok(checkDangerousCommand("SAFE=1 export MODE=test NODE_OPTIONS=--require=./preload.cjs; node scripts/ordinary-check.mjs"), "assignment-prefixed later export operand NODE_OPTIONS preload is denied");
+ok(checkDangerousCommand('cmd /d /c "echo safe & set NODE_OPTIONS=--require=./preload.cjs & node scripts/ordinary-check.mjs"'), "cmd command-string NODE_OPTIONS preload is denied");
+ok(checkDangerousCommand('powershell -NoProfile -Command "cmd /c \'set NODE_OPTIONS=--require=./preload.cjs & node scripts/ordinary-check.mjs\'"'), "PowerShell command-string NODE_OPTIONS preload is denied");
+ok(checkDangerousCommand('bash -c "NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"'), "POSIX shell command-string NODE_OPTIONS preload is denied");
 ok(checkDangerousCommand("Set-Item Env:NODE_OPTIONS $PRELOAD"), "PowerShell Set-Item NODE_OPTIONS mutation is denied");
 ok(checkDangerousCommand("$env:NODE_OPTIONS = $PRELOAD"), "PowerShell env assignment to NODE_OPTIONS is denied");
 ok(checkDangerousCommand("[Environment]::SetEnvironmentVariable('NODE_OPTIONS', $PRELOAD)"), ".NET NODE_OPTIONS mutation is denied");
 ok(!checkDangerousCommand("rg -n 'NODE_OPTIONS=' docs"), "NODE_OPTIONS spelling used as quoted search data stays allowed");
 ok(!checkDangerousCommand("rg -n 'command env NODE_OPTIONS=' docs"), "wrapped NODE_OPTIONS spelling used as quoted search data stays allowed");
 ok(!checkDangerousCommand("rg -n 'SAFE= command -- env NODE_OPTIONS=' docs"), "complex wrapped NODE_OPTIONS spelling used as quoted search data stays allowed");
+ok(!checkDangerousCommand("rg -n 'cmd /c set NODE_OPTIONS=' docs"), "command-string NODE_OPTIONS spelling used as quoted search data stays allowed");
 ok(!checkDangerousCommand("rg -n 'Set-Item Env:NODE_OPTIONS' docs"), "PowerShell NODE_OPTIONS mutation spelling used as quoted search data stays allowed");
 
 // ── net-new: shell-redirect .env write (2026-07-13, shared with mcp-tool-guard) ──
