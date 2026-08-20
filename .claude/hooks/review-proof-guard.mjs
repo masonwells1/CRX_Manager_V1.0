@@ -30,15 +30,23 @@ import {
 //   * all three prefix components must be LITERAL — a glob anywhere in them
 //     (`.c*/w*/x/`, `.claude/worktrees/*/`) strips nothing and stays denied, so
 //     the carve-out can never be used as a wildcard dodge;
-//   * a separator after <name> is required, so `rm -rf .claude/worktrees` and
-//     `rm -rf .claude/worktrees/<name>` — which would take out every worktree's
-//     state dir, or one whole worktree — strip nothing and stay denied;
+//   * a separator after <name> AND a real descendant after that separator are
+//     both required, so `rm -rf .claude/worktrees`, `rm -rf .claude/worktrees/<name>`
+//     and — Codex gpt-5.6-sol review 2026-08-19, P1, a real hole in the first cut
+//     of this carve-out — the trailing-separator and whole-contents forms
+//     `rm -rf .claude/worktrees/<name>/` and `rm -rf .claude/worktrees/<name>/*`
+//     all strip nothing and stay denied. Without the descendant lookahead the
+//     prefix consumed the entire target, leaving a bare `rm -rf` that named no
+//     protected component: a whole worktree, including its own state dir, could
+//     be deleted. The lookahead also rejects a glob, a quote, and a command
+//     delimiter in the first descendant character, so only a genuine deeper path
+//     buys the exemption;
 //   * a `..` path segment anywhere in the text disables the strip entirely,
 //     because `.claude/worktrees/x/..` climbs back into the protected tree.
 // The preceding character is required to be a non-name character and is
 // preserved by the replacement, so `my.claude/worktrees/…` is not a prefix and
 // no verb/token can be spliced away. Nested worktrees strip to a fixed point.
-const WORKTREE_PREFIX_RE = /(^|[^\w.-])\.claude[\\/]worktrees[\\/]([^\\/\s"'*?[\]{}:;&|()<>]+)[\\/]/gi;
+const WORKTREE_PREFIX_RE = /(^|[^\w.-])\.claude[\\/]worktrees[\\/]([^\\/\s"'*?[\]{}:;&|()<>]+)[\\/](?=[^\\/\s"'*?[\]{};&|()<>])/gi;
 const DOTDOT_SEGMENT_RE = /(?:^|[\\/\s"'=:;&|()<>])\.\.(?:[\\/\s"'=:;&|()<>]|$)/;
 function stripWorktreePrefix(text) {
   let out = String(text ?? "");
@@ -281,9 +289,25 @@ const CD_ARG_RE = new RegExp(CD_SEG_RE.source, "g");
 // `.claude/<sep>worktrees/<sep><name>` with no glob, and only for the
 // destructive-verb view. An attached-flag form (`-Path:<root>`) is left alone —
 // fail closed. Replacement is length-preserving so offsets stay valid.
-const WORKTREE_ROOT_TAIL_RE = /(?:^|[^\w.-])\.claude[\\/]worktrees[\\/][^\\/\s"'*?[\]{}:;&|()<>]+$/i;
+// A trailing separator is tolerated (`cd <root>/`) — it still names the root.
+const WORKTREE_ROOT_TAIL_RE = /(?:^|[^\w.-])\.claude[\\/]worktrees[\\/][^\\/\s"'*?[\]{}:;&|()<>]+[\\/]?$/i;
+// cmd.exe accepts a switch or path GLUED to the verb (`cd/d X`, `cd.claude\…`).
+// The cd-verb regex's lookahead rejects a following `/`, `.` or `\`, so the
+// glued form leaves an EMPTY argument run and resolves no target. Hoisted to a
+// module-level declaration because BOTH the cd scanner and blankCdWorktreeRoots
+// need it: without it here, `cd/d <worktree-root> && del scratch.tmp` blanked
+// nothing and the destructive scan still saw `del` next to `.claude` — the
+// original worktree regression, surviving on the documented Windows path
+// (Codex gpt-5.6-sol review 2026-08-19, P2).
+function deglue(text) {
+  return String(text || "").replace(/(^|[;&|\r\n()"'\\\s])(cd|chdir)([/.\\])/gi, "$1$2 $3");
+}
 function blankCdWorktreeRoots(cmd) {
-  const text = String(cmd || "");
+  // Deglue FIRST so a cmd.exe `cd/d <root>` resolves a target at all. The
+  // deglued text is what this helper returns and what the destructive views are
+  // built from — inserting the space cannot hide a verb, a state-dir mention, or
+  // a redirect, and offsets stay consistent because blanking happens after.
+  const text = deglue(String(cmd || ""));
   let out = text;
   for (const match of text.matchAll(CD_CMD_RE)) {
     const runStart = match.index + match[0].length - match[1].length;
@@ -390,7 +414,6 @@ if (shellTool) {
   // the scan sees the verb and its target apart. Applied to BOTH views (raw and
   // quote-stripped) so a composed verb like `c"d".claude\...` — which becomes
   // `cd.claude\...` only after quotes are removed — is degluated there too.
-  const deglue = (t) => t.replace(/(^|[;&|\r\n()"'\\\s])(cd|chdir)([/.\\])/gi, "$1$2 $3");
   scanCdInvocations(deglue(spliced));
   scanCdInvocations(deglue(spliced.replace(/["']/g, "")));
 

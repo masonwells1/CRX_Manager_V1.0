@@ -213,6 +213,17 @@ for (const payload of [
   // once. The literal-name requirement is what stops it; pin it.
   { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/*/" } },
   { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-?/" } },
+  //       Codex gpt-5.6-sol review 2026-08-19 (P1) — a REAL hole in the first cut
+  //       of this carve-out, missed by the glob-name cases above: with a LITERAL
+  //       name and a trailing separator (or `/*`), the prefix consumed the whole
+  //       target and left a bare `rm -rf` naming no protected component, so a
+  //       whole worktree — including its own state dir — could be deleted. A real
+  //       descendant after the separator is now required.
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a/" } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf C:\\repo\\.claude\\worktrees\\wt-a\\" } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a/*" } },
+  { tool_name: "Bash", tool_input: { command: "mv .claude/worktrees/wt-a/ /tmp/x" } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a//" } },
   { tool_name: "Bash", tool_input: { command: "rm -rf .claude/w*/x/y" } },
   { tool_name: "Bash", tool_input: { command: "rm -rf .c*/worktrees/x/y" } },
   { tool_name: "Bash", tool_input: { command: "cd .claude/worktrees/wt* && rm -f x.tmp" } },
@@ -327,6 +338,17 @@ assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -f .claude/work
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd C:\\repo\\.claude\\worktrees\\wt-a && git status" } }).stdout, "");
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd .claude/worktrees/wt-a/di* && ls" } }).stdout, "");
 assert.equal(run({ tool_name: "Write", tool_input: { file_path: "C:\\repo\\.claude\\worktrees\\wt-a\\src\\foo.ts", content: "x" } }).stdout, "");
+// Codex gpt-5.6-sol review 2026-08-19 (P2): cmd.exe accepts a switch glued to the
+// verb, which leaves the cd parser with an empty argument run — so the worktree
+// root was never blanked and `del` next to `.claude` still denied, leaving the
+// original regression alive on the documented Windows path. blankCdWorktreeRoots
+// now deglues first. A trailing separator on the root is tolerated too.
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd/d C:\\repo\\.claude\\worktrees\\wt-a && del scratch.tmp" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "chdir/d C:\\repo\\.claude\\worktrees\\wt-a && del scratch.tmp" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd C:\\repo\\.claude\\worktrees\\wt-a\\ && rm scratch.tmp" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd .claude/worktrees/wt-a/ && rm scratch.tmp" } }).stdout, "");
+// …but degluing must not blank a cd that stops short of a worktree root.
+assert.match(run({ tool_name: "Bash", tool_input: { command: "cd/d C:\\repo\\.claude && del session-state" } }).stdout, /"permissionDecision":"deny"/);
 // Nested worktrees strip to a fixed point.
 assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -f .claude/worktrees/wt-a/.claude/worktrees/wt-b/tmp.txt" } }).stdout, "");
 // The ack valve still works from inside a worktree.
