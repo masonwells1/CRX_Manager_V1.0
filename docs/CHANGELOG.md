@@ -38,9 +38,15 @@ normally.) A guard that always answers UNKNOWN answers nothing.
   **confident zero** over pending SQL. The arm cleared exactly one worktree, so it was removed
   rather than iterated a third time; the lib carries a DELIBERATELY-ABSENT note stating that any
   re-add must parse a structurally anchored status field, never prose.
-- **`origin/main` is resolved once to an immutable sha** and every accounting read uses it
-  (Codex MEDIUM). Resolving the symbolic ref per read let a concurrent `git fetch` move the tree
-  mid-scan, so one phase could exempt against a different tree than another inspected.
+- **The exemption reads nothing of its own** (Codex HIGH, round 4). It consumes the exact
+  `origin/main` history text the caller's mainline discovery pass verified against, injected via
+  `readOriginMainHistory`. When the reader resolved `origin/main` independently, a concurrent
+  `git fetch` between the two phases meant mainline discovery could inspect commit A and report
+  no candidate while the exemption saw that candidate registered in commit B and suppressed
+  reconciliation — again a **confident zero** over pending SQL, reproduced by Codex. Both callers
+  (`scripts/fleet-status.mjs`, `.claude/hooks/worktree-awareness.mjs`) now read that history once
+  per run and share the same bytes with both phases, so the two cannot disagree about the
+  registry. A caller supplying no history exempts nothing.
 - **Not a relaxation.** An unreadable `origin/main` history exempts nothing and keeps the old
   conservative answer. Under-reporting — a confident zero over real pending migrations — is the
   dangerous direction, so every branch of this is pinned by tests and was mutation-tested,
@@ -57,11 +63,14 @@ normally.) A guard that always answers UNKNOWN answers nothing.
 
 **Proof:** the structural defect is gone — **19 of 19** worktrees UNKNOWN became **4 of 21**, and
 the four that remain are named, specific, and real (see below). All three mainline candidates are
-still listed by name — attributed, not hidden. 209 lib assertions pass, including the original
-rule's own UNKNOWN test, the tree-vs-history regression, the sha-pinning assertions, and an
-aggregate false-zero regression. A standalone end-to-end probe drives every phrasing Codex named
-(negated, future, qualified, qualified-negation, prose-only) through the real reader and gets
-UNKNOWN for all five, with a registered-candidate control that still exempts.
+still listed by name — attributed, not hidden. 211 lib assertions pass, including the original
+rule's own UNKNOWN test, the tree-vs-history regression, the cross-phase snapshot regression, and
+an aggregate false-zero regression. A standalone end-to-end probe drives all seven false-zero
+shapes Codex raised across four review rounds (negated, future, qualified, qualified-negation,
+prose-only, stale snapshot, no history) through the real reader and gets UNKNOWN for every one,
+plus a registered-candidate control that still exempts and an assertion that the reader issues no
+ref-resolving git call of its own. Both real consumers were run: `fleet-status.mjs` and the
+SessionStart hook, which agree.
 
 **Still open, and NOT a code defect.** Four checkouts are **70–104 commits behind `origin/main`**
 and still hold its older wording of rows 872–877/886. `main` has since re-worded those same rows —

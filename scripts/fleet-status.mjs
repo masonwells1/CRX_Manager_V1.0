@@ -153,9 +153,32 @@ function mergedLabel(sha) {
 //
 // The rule itself lives in the shared lib, not here, so this report and the SessionStart
 // banner cannot drift apart — the whole point of the 2026-07-29 fix is that they agree.
+
+// ONE read of origin/main's shared history for this whole run, shared by the per-worktree
+// exemption below and the mainline discovery pass further down. Codex HIGH on PR #437:
+// when those two phases each resolved `origin/main` independently, a concurrent fetch
+// between them let mainline inspect commit A and report nothing while the exemption saw a
+// candidate registered in commit B and suppressed reconciliation — a confident zero over a
+// pending migration. Reading once removes the divergence rather than narrowing the window.
+let originMainHistoryText; // undefined = not read yet, null = unavailable
+function originMainHistory() {
+  if (originMainHistoryText !== undefined) return originMainHistoryText;
+  if (!hasOriginMain) {
+    originMainHistoryText = null;
+    return originMainHistoryText;
+  }
+  try {
+    originMainHistoryText = git(["show", "origin/main:docs/reference/migration-history.md"], repoRoot, 5000);
+  } catch {
+    originMainHistoryText = null;
+  }
+  return originMainHistoryText;
+}
+
 const ownDraftPaths = createOwnDraftPathsReader({
   repoRoot,
   hasOriginMain,
+  readOriginMainHistory: originMainHistory,
   dirtyCount,
   exists: (wtPath, rel) => existsSync(path.join(wtPath, ...rel.split("/"))),
   readText: (wtPath, rel) => readTextSafe(path.join(wtPath, ...rel.split("/"))),
@@ -324,7 +347,9 @@ let mainlineParkedReason = hasOriginMain ? "" : "origin/main is unavailable";
 if (hasOriginMain) {
   try {
     const tree = git(["ls-tree", "-r", "--name-only", "origin/main", "--", ...draftPathspec()], repoRoot, 5000);
-    const history = git(["show", "origin/main:docs/reference/migration-history.md"], repoRoot, 5000);
+    // The SAME bytes the per-worktree exemption used — see originMainHistory() above.
+    const history = originMainHistory();
+    if (history === null) throw new Error("origin/main migration history is unreadable");
     const parkedPrefilter = originMainParkedMigrationPrefilter(
       () => git(ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS, repoRoot, 5000),
     );

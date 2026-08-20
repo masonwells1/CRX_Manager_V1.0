@@ -691,6 +691,10 @@ function fakeReader(responses, opts = {}) {
     exists: opts.exists || (() => true),
     readText: opts.readText || (() => ""),
     readHistory: opts.readHistory || (() => null),
+    // The caller supplies origin/main's history; the reader never resolves the ref itself.
+    // `responses.show` stands in for it so existing cases keep their familiar shape.
+    readOriginMainHistory: opts.readOriginMainHistory
+      || (() => (responses.show === undefined || responses.show === null ? null : responses.show.join("\n"))),
     sha256Text: opts.sha256Text || sha256Text,
     run: (args, cwd) => {
       calls.push({ cmd: args[0], args, cwd });
@@ -882,32 +886,43 @@ const MAINLINE_HISTORY_SETTLES_CANDIDATE = "| 886 | 20260101000000 | **APPLIED L
   eq(got.unknownReason, "", "a registered LOCAL CANDIDATE row exempts regardless of settlement words in its prose");
 }
 
-// origin/main is resolved ONCE to an immutable sha and every accounting read uses it, so a
-// concurrent fetch cannot move the tree mid-scan (Codex MEDIUM on PR #437).
+// CROSS-PHASE SNAPSHOT RACE (Codex HIGH on PR #437, reproduced).
+//
+// The exemption must read NOTHING of its own. When it resolved origin/main independently,
+// a concurrent `git fetch` between phases meant mainline discovery could inspect commit A
+// and report no candidate while the exemption saw that candidate registered in commit B
+// and suppressed reconciliation — a CONFIDENT ZERO over pending SQL.
+//
+// The reader now consumes exactly the text the caller's mainline pass verified. This pins
+// that: origin/main's history is fetched once from the injected reader, and the reader
+// never issues a ref-resolving git call of its own.
 {
+  let historyReads = 0;
   const { reader, calls } = fakeReader(
-    { "merge-base": ["base1"], diff: [], "ls-files": [], "rev-parse": ["c".repeat(40)], show: [MAINLINE_HISTORY_REGISTERS_CANDIDATE] },
+    { "merge-base": ["base1"], diff: [], "ls-files": [] },
     {
       readHistory: () => BRANCH_CANDIDATE_HISTORY,
+      readOriginMainHistory: () => { historyReads++; return MAINLINE_HISTORY_REGISTERS_CANDIDATE; },
       dirtyCount: (wtPath) => (wtPath === DIRTY_ENTRY.path ? 3 : 0),
     },
   );
-  reader(CLEAN_ENTRY);
+  const first = reader(CLEAN_ENTRY);
   reader(DIRTY_ENTRY);
-  const revParse = calls.filter((c) => c.cmd === "rev-parse");
-  eq(revParse.length, 1, "origin/main is resolved to a sha once per reader");
-  const showCall = calls.find((c) => c.cmd === "show");
-  ok(showCall.args[1].startsWith("c".repeat(40) + ":"), "the accounting read is pinned to the resolved sha, not symbolic origin/main");
+  eq(first.unknownReason, "", "the caller-supplied origin/main history drives the exemption");
+  eq(historyReads, 1, "origin/main's shared history is consumed once per reader, not per worktree");
+  eq(calls.filter((c) => c.cmd === "rev-parse").length, 0, "the reader never resolves origin/main itself");
+  eq(calls.filter((c) => c.cmd === "show").length, 0, "the reader never reads origin/main's history itself");
 }
 
-// An unresolvable origin/main exempts NOTHING — it must never buy a confident zero.
+// A caller that supplies no origin/main history exempts NOTHING — the fully conservative
+// pre-exemption behaviour, never a confident zero.
 {
   const { reader } = fakeReader(
-    { "merge-base": ["base1"], diff: [], "rev-parse": null, show: [MAINLINE_HISTORY_REGISTERS_CANDIDATE] },
-    { readHistory: () => BRANCH_CANDIDATE_HISTORY },
+    { "merge-base": ["base1"], diff: [] },
+    { readHistory: () => BRANCH_CANDIDATE_HISTORY, readOriginMainHistory: () => null },
   );
   const got = reader(CLEAN_ENTRY);
-  ok(got.unknownReason.includes("absent from this branch's own-draft diff"), "an unresolvable origin/main sha exempts nothing");
+  ok(got.unknownReason.includes("absent from this branch's own-draft diff"), "an absent origin/main history exempts nothing");
 }
 
 // THE MUTATION GUARD — Codex P1 on PR #437, reproduced and pinned.
@@ -960,7 +975,7 @@ const MAINLINE_HISTORY_SETTLES_CANDIDATE = "| 886 | 20260101000000 | **APPLIED L
   );
   reader(CLEAN_ENTRY);
   reader(DIRTY_ENTRY);
-  eq(calls.filter((c) => c.cmd === "show").length, 1, "origin/main's shared history is read once per reader, not once per worktree");
+  eq(calls.filter((c) => c.cmd === "show").length, 0, "the reader issues no origin/main read of its own — the caller supplies that text");
 }
 
 // A dirty worktree combines `diff` and `ls-files` before reconciliation; the exemption

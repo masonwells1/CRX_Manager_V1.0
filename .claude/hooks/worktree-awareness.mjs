@@ -146,9 +146,31 @@ function listDraftsRecursive(dir, prefix, depth = 4) {
 // (committed or not) plus anything still untracked. Returns null when the branch point is
 // unknown, and the caller then falls back to the full on-disk scan rather than hide work.
 // The rule itself lives in the shared lib so this and /fleet cannot drift apart.
+
+// ONE read of origin/main's shared history per run, shared by the per-worktree exemption
+// and mainlineParkedDiscovery() below. Codex HIGH on PR #437: two independent resolutions
+// of `origin/main` let a concurrent fetch put the phases on different commits, so mainline
+// could report nothing while the exemption suppressed reconciliation against a newer tree
+// — a confident zero over a pending migration.
+let originMainHistoryText; // undefined = not read yet, null = unavailable
+function originMainHistory() {
+  if (originMainHistoryText !== undefined) return originMainHistoryText;
+  if (!hasOriginMain) {
+    originMainHistoryText = null;
+    return originMainHistoryText;
+  }
+  try {
+    originMainHistoryText = git(["show", "origin/main:docs/reference/migration-history.md"]);
+  } catch {
+    originMainHistoryText = null;
+  }
+  return originMainHistoryText;
+}
+
 const ownDraftPaths = createOwnDraftPathsReader({
   repoRoot: projectDir,
   hasOriginMain,
+  readOriginMainHistory: originMainHistory,
   dirtyCount,
   exists: (wtPath, rel) => existsSync(path.join(wtPath, ...rel.split("/"))),
   readText: (wtPath, rel) => {
@@ -173,7 +195,9 @@ const ownDraftPaths = createOwnDraftPathsReader({
 function mainlineParkedDiscovery() {
   try {
     const tree = git(["ls-tree", "-r", "--name-only", "origin/main", "--", ...draftPathspec()]);
-    const history = git(["show", "origin/main:docs/reference/migration-history.md"]);
+    // The SAME bytes the per-worktree exemption used — see originMainHistory() above.
+    const history = originMainHistory();
+    if (history === null) throw new Error("origin/main migration history is unreadable");
     const parkedPrefilter = originMainParkedMigrationPrefilter(
       () => git(ORIGIN_MAIN_PARKED_MIGRATION_GREP_ARGS),
     );

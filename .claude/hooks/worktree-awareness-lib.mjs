@@ -735,6 +735,11 @@ export function createOwnDraftPathsReader({
   readHistory = () => null,
   sha256Text = null,
   hasOriginMain = true,
+  // MUST return the same origin/main `migration-history.md` text the caller's mainline
+  // discovery pass uses. Defaulting to null means "no exemption" — a caller that does not
+  // supply it gets the old, fully conservative reconciliation rather than a silent read
+  // of its own, which is what the cross-phase race was.
+  readOriginMainHistory = () => null,
 }) {
   // Where a worktree's branch left origin/main. Cached by HEAD sha — the ~30 frozen
   // snapshots share a handful of shas between them.
@@ -782,36 +787,28 @@ export function createOwnDraftPathsReader({
   //
   // One cached git read per process, because this runs inside the SessionStart hook's
   // budget across every worktree.
-  // Resolved ONCE to an immutable commit sha, then used for every accounting read.
-  // Codex MEDIUM on PR #437: resolving the symbolic `origin/main` per read lets a
-  // concurrent `git fetch` move it mid-scan, so one phase could exempt against a
-  // different tree than another phase inspects — a transient false-clean. Pinning the
-  // sha makes every read in this reader's lifetime describe the same tree.
-  let originMainShaResolved; // undefined = not resolved yet, null = unavailable
-  function originMainSha() {
-    if (originMainShaResolved !== undefined) return originMainShaResolved;
-    if (!hasOriginMain) {
-      originMainShaResolved = null;
-      return originMainShaResolved;
-    }
-    const out = run(["rev-parse", "origin/main^{commit}"], repoRoot);
-    const sha = out === null ? "" : String(out[0] || "").trim();
-    originMainShaResolved = /^[0-9a-f]{40}$/i.test(sha) ? sha : null;
-    return originMainShaResolved;
-  }
-
-  let originMainCandidates; // undefined = not read yet, null = unreadable
+  // The exemption reads NOTHING of its own. It reuses the EXACT origin/main history text
+  // the caller's mainline discovery pass verified against, supplied by
+  // `readOriginMainHistory` and memoized here so both phases see one immutable snapshot.
+  //
+  // Codex HIGH on PR #437, reproduced: an earlier version resolved origin/main
+  // independently. If a concurrent `git fetch` advanced the ref between the two phases,
+  // mainline discovery could inspect commit A and report no candidate while the exemption
+  // saw the candidate registered in commit B and suppressed reconciliation — a confident
+  // zero over pending SQL. Deriving the exemption from the already-verified mainline text
+  // makes that divergence impossible rather than merely unlikely: the two phases cannot
+  // disagree about a registry they read from the same bytes.
+  let originMainCandidates; // undefined = not computed, null = unusable
   function originMainRegisteredCandidates() {
     if (originMainCandidates !== undefined) return originMainCandidates;
-    const sha = originMainSha();
-    const lines = sha === null ? null : run(["show", `${sha}:docs/reference/migration-history.md`], repoRoot);
-    if (lines === null) {
-      // An unresolvable origin/main or unreadable shared history exempts NOTHING.
-      // "I cannot tell" keeps the old conservative answer; it must never buy a zero.
+    const text = hasOriginMain ? readOriginMainHistory() : null;
+    if (typeof text !== "string" || !text.trim()) {
+      // No usable shared history exempts NOTHING. "I cannot tell" keeps the old
+      // conservative answer; it must never buy a confident zero.
       originMainCandidates = null;
       return originMainCandidates;
     }
-    const parsed = localCandidateMigrationPathsFromHistory(lines.join("\n"));
+    const parsed = localCandidateMigrationPathsFromHistory(text);
     originMainCandidates = parsed.state === "known" ? parsed.paths : null;
     return originMainCandidates;
   }
