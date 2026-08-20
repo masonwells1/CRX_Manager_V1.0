@@ -89,6 +89,9 @@ All significant development milestones, in reverse chronological order.
   definitions and unknown commands targeting the provider fail closed for the
   same stateful boundary. Standalone
   CMD `set` and delayed-expansion mutations are denied as well.
+  PowerShell copy, move, and rename provider operations now inspect quoted
+  source/destination operands and their standard aliases, preventing a benign
+  environment item from being transferred into `NODE_OPTIONS` across MCP calls.
   Nested `eval`, `cmd /c`, PowerShell command-mode, and POSIX shell bodies now
   re-enter the complete runner policy, closing nested process-launcher, `watch`,
   and GNU Parallel compositions.

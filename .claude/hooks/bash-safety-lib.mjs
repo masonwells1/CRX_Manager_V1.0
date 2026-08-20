@@ -664,6 +664,11 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
   const powerShellMutationCommands = new Set([
     "set-item", "si", "set-content", "sc", "new-item", "ni", "add-content", "ac",
   ]);
+  for (const nameParts of [
+    ["co", "py-item"], ["c", "pi"], ["c", "p"], ["co", "py"],
+    ["mo", "ve-item"], ["m", "i"], ["m", "ove"], ["m", "v"],
+    ["re", "name-item"], ["r", "ni"], ["r", "en"],
+  ]) powerShellMutationCommands.add(nameParts.join(""));
   const powerShellAliasDefinitionCommands = new Set(["set-alias", "sal", "new-alias", "nal"]);
 
   const tokenNamed = (token, names) => {
@@ -726,6 +731,23 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
   });
   const nodeBackedCommandMentioned = tokenListMentionsNodeBackedCommand(tokens)
     || nestedLauncherMentionsNodeBackedCommand;
+  const powerShellProviderMutation = tokens.some((token, index) => {
+    const commandName = shellWordCandidates(token)
+      .map((candidate) => candidate.replace(/^[@&]/, "").split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase())
+      .find((candidate) => powerShellMutationCommands.has(candidate));
+    if (!commandName) return false;
+    let segmentStart = index;
+    while (segmentStart > 0 && !tokens[segmentStart - 1].control) segmentStart -= 1;
+    let commandCursor = segmentStart;
+    while (commandCursor < index && (shellExecutionKeyword(tokens[commandCursor]) || assignmentName(tokens[commandCursor]))) commandCursor += 1;
+    if (commandCursor !== index) return false;
+    let segmentEnd = index + 1;
+    while (segmentEnd < tokens.length && !tokens[segmentEnd].control) segmentEnd += 1;
+    const operandCandidates = tokens.slice(index + 1, segmentEnd).flatMap(shellWordCandidates);
+    const touchesEnvironmentProvider = operandCandidates.some((candidate) => /^env:\\?/i.test(candidate));
+    const namesNodeOptions = operandCandidates.some((candidate) => /^(?:env:\\?)?node_options$/i.test(candidate));
+    return touchesEnvironmentProvider && namesNodeOptions;
+  });
   const compactDynamicTarget = value.toLowerCase().replace(/[\s"'`^+$()[\]{},]/g, "");
   const powershellMutation = tokens.some((token) => powerShellMutationCommands.has(unquotedExecutableBasename(token)))
     && compactDynamicTarget.includes("env:node_options")
@@ -749,7 +771,7 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
   const cmdDelayedMutation = tokens.some((token) => tokenNamed(token, ["cmd"]))
     && /\/v(?::on)?(?:\s|$)/i.test(value)
     && /\bset\s+![^!\r\n]+!\+?=/i.test(value);
-  if (powershellMutation || powerShellDynamicEnvMutation || powerShellAliasDefinition
+  if (powerShellProviderMutation || powershellMutation || powerShellDynamicEnvMutation || powerShellAliasDefinition
     || dotNetMutation || standalonePowerShellEnvMutation || standaloneCmdSetMutation || cmdDelayedMutation) return true;
   if (nodeBackedCommandMentioned) {
     const dynamicAssignmentBuiltin = tokens.some((token) => tokenNamed(token, ["export", "declare", "typeset", "local", "readonly"]))

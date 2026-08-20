@@ -100,7 +100,10 @@ command position, but quoted search arguments remain data. Recursively inspected
 command bodies also recognize ordinary `$env:NODE_OPTIONS` assignments,
 environment-provider item/content cmdlets, their standard short aliases, aliases
 created inside the same command body, and .NET `SetEnvironmentVariable` calls
-before Node-backed runners. Those mutations are denied independently of whether
+before Node-backed runners. Copy, move, and rename provider operations and their
+PowerShell aliases inspect quoted source/destination operands too, so a safe
+environment item cannot be staged and later transferred into `NODE_OPTIONS`.
+Those mutations are denied independently of whether
 Node execution appears in the same payload. Dynamic provider targets such as
 `Env:$target` fail closed, and the protected producer itself is never allowed
 through `interact_with_process`; it must launch in a fresh process with no

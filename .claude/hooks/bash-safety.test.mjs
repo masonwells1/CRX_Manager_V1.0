@@ -407,6 +407,19 @@ const dynamicNodeOptionsGuardCases = [
   'cmd /v:on /c "set N=NODE_OPTIONS & set !N!=--require=./preload.cjs & b^un --version"',
   'pwsh -NoProfile -co "si Env:NODE_OPTIONS --require=./preload.cjs; n\\pm --version"',
 ];
+const powerShellProviderGuardCases = [
+  `${["Co", "py-Item"].join("")} Env:SAFE 'Env:NODE_OPTIONS'`,
+  `${["c", "pi"].join("")} 'Env:SAFE' 'Env:NODE_OPTIONS'`,
+  `${["c", "p"].join("")} Env:SAFE 'Env:NODE_OPTIONS'`,
+  `${["co", "py"].join("")} Env:SAFE 'Env:NODE_OPTIONS'`,
+  `${["Mo", "ve-Item"].join("")} Env:SAFE 'Env:NODE_OPTIONS'`,
+  `${["m", "i"].join("")} 'Env:SAFE' 'Env:NODE_OPTIONS'`,
+  `${["m", "ove"].join("")} Env:SAFE 'Env:NODE_OPTIONS'`,
+  `${["m", "v"].join("")} 'Env:SAFE' 'Env:NODE_OPTIONS'`,
+  `${["Re", "name-Item"].join("")} Env:SAFE 'NODE_OPTIONS'`,
+  `${["r", "ni"].join("")} 'Env:SAFE' 'NODE_OPTIONS'`,
+  `${["r", "en"].join("")} Env:SAFE 'NODE_OPTIONS'`,
+];
 for (const separator of [";", "|", "&"]) {
   ok(checkDangerousCommand(`Write-Output marker\x5c${separator} ${pythonCommand} -c \"print('opaque')\"`), `PowerShell backslash-prefixed ${separator} cannot hide an opaque interpreter`);
   ok(checkDangerousCommand(`Write-Output marker\x5c${separator} NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs`), `PowerShell backslash-prefixed ${separator} cannot hide a NODE_OPTIONS preload`);
@@ -422,6 +435,7 @@ for (const command of privilegeWrapperNodeOptionsCases) ok(checkDangerousCommand
 for (const command of watchRunnerGuardCases) ok(checkDangerousCommand(command), `watch runner cannot hide an opaque command: ${command}`);
 ok(!checkDangerousCommand(["busybox", "watch", "--help", awkCommand, opaqueAwkProgram].join(" ")), "terminal BusyBox watch help mode does not execute a trailing operand");
 for (const command of dynamicNodeOptionsGuardCases) ok(checkDangerousCommand(command), `dynamic NODE_OPTIONS construction fails closed: ${command}`);
+for (const command of powerShellProviderGuardCases) ok(checkDangerousCommand(command), `PowerShell provider operation cannot stage NODE_OPTIONS: ${command}`);
 for (const command of nestedParserGuardCases) ok(checkDangerousCommand(command), `nested or POSIX-escaped parser route is denied: ${command}`);
 for (const command of nestedParserGuardCases.slice(0, 2)) ok(maintenanceProducerCommandMentioned(command), `nested AWK launcher enters the producer gate: ${command}`);
 for (const command of indirectRunnerGuardCases) ok(checkDangerousCommand(command), `indirect or dynamic command runner fails closed: ${command}`);
@@ -685,6 +699,12 @@ for (const command of indirectRunnerGuardCases) {
   r = runHook({ tool_name: "Bash", tool_input: { command } });
   eq(r.status, 0, `bash-safety.mjs exits 0 after denying an indirect runner: ${command}`);
   ok(r.stdout.includes('"permissionDecision":"deny"'), `bash-safety.mjs denies an indirect runner: ${command}`);
+}
+
+for (const command of powerShellProviderGuardCases) {
+  r = runHook({ tool_name: "PowerShell", tool_input: { command } });
+  eq(r.status, 0, `bash-safety.mjs exits 0 after denying a provider mutation: ${command}`);
+  ok(r.stdout.includes('"permissionDecision":"deny"'), `bash-safety.mjs denies a provider mutation: ${command}`);
 }
 
 for (const command of nestedCompletePolicyGuardCases) {

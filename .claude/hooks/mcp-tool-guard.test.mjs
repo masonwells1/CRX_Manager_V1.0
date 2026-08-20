@@ -198,6 +198,13 @@ r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_i
 ok(isDeny(r), "a persistent-shell variable cannot stage the NODE_OPTIONS target for a later interaction");
 r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: persistentShellPid, input: `Set-Item "Env:$target" '--require=./preload.cjs'` } });
 ok(isDeny(r), "a later persistent interaction cannot use variable indirection for an environment-provider mutation");
+r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: persistentShellPid, input: "Set-Item Env:SAFE '--require=./preload.cjs'" } });
+ok(!isDeny(r), "a benign environment-provider item can be prepared without naming NODE_OPTIONS");
+const providerTransferCommand = `${["Co", "py-Item"].join("")} Env:SAFE 'Env:NODE_OPTIONS'`;
+r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: persistentShellPid, input: providerTransferCommand } });
+ok(isDeny(r), "a later persistent interaction cannot transfer a provider item into quoted Env:NODE_OPTIONS");
+r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_input: { pid: persistentShellPid, input: "node --version" } });
+ok(!isDeny(r), "benign Node remains allowed after the staged provider mutation was denied");
 const approvedProducerCommand = [
   "node", ["scripts/apply-live-testdata-maintenance-", "20260812.mjs"].join(""),
   ["--approved-by-", "mason=2026-08-12"].join(""),
