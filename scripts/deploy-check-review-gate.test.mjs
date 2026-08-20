@@ -50,9 +50,16 @@ const noCommandMatching = (cmds, re) => !cmds.some((c) => re.test(c));
 
 // Any shell expansion in a `contents/` path segment, not just the literal
 // <FILE> placeholder the first draft used: a later rewrite to contents/$f,
-// contents/${f}, contents/$(...), contents/`...`, or contents/"$f" would
-// reintroduce the same injection vector while passing a literal-only check.
-const EXPANSION_AFTER_CONTENTS = /contents\/[^\s]*(?:<[A-Za-z_]+>|\$|`|")/;
+// contents/${f}, contents/$(...), or contents/`...` would reintroduce the same
+// injection vector while passing a literal-only check.
+//
+// Deliberately NOT matching a bare double quote. An earlier revision did, which
+// false-positived on a perfectly safe literal such as
+// `gh api "repos/o/r/contents/README.md?ref=abc"` — the closing quote alone is
+// not an expansion. The quoted-expansion form `contents/"$f"` is still caught,
+// because the `$` alternative matches it. A guard that blocks safe commands gets
+// edited away, so precision here is what keeps it alive. (CodeRabbit, PR #441.)
+const EXPANSION_AFTER_CONTENTS = /contents\/[^\s]*(?:<[A-Za-z_]+>|\$|`)/;
 
 for (const [name, file] of SKILLS) {
   const cmds = bashCommands(readFileSync(file, "utf8"));
