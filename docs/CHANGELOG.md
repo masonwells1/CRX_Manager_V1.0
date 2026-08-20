@@ -88,6 +88,46 @@ skipped and why.
   that PR is what actually ships the change. (Commit SHAs are deliberately not cited here —
   this branch was rebased, and an earlier version of this entry cited a SHA that the rebase
   orphaned.)
+## 2026-08-20 — Worktree/review-proof-guard collision: documented, not fixed (5 review rounds, 8 holes)
+
+`review-proof-guard.mjs` denies destructive shell commands that NAME a path inside a **Claude-managed**
+worktree, because Claude creates them at `<repo>/.claude/worktrees/<name>/` and the guard protects any
+`.claude` path component. Codex worktrees live outside the repo and have no such collision. Bisected
+to `f3e06c52` (PR #423 round-3/5 hardening); `c64ea3d4` and `4b302050` are not implicated.
+
+**Impact is much smaller than first reported.** *For this collision*, the guard fires only when the
+command *spells out* the worktree path — the agent's shell already starts in the worktree, so
+`rm -f scratch.tmp`, `rm probe-dir/x.txt`, `mv a.txt b.txt` and `Write` (relative or absolute) all
+ran live in a worktree. That describes the collision, not the guard's whole matching rule: it also
+blocks commands naming `.claude`/`.claude/session-state` anywhere, with `rm`/`mv`/`git clean`/
+`rsync --delete`/`find -delete` as destructive verbs when the state directory is named. Two claims
+in the original report were wrong: the blocked `Write` to `stop-wrap-ack.json` came from a different
+hook, and `find … -delete` is blocked everywhere by a separate safety layer rather than by this
+guard. Note `rm -rf` and `git clean -f` never run anywhere in this repo — `permissions.deny` in
+`.claude/settings.json` refuses both before any hook sees them.
+
+**A fix was built and abandoned.** Five successive versions of a text-stripping carve-out were each
+reviewed by an independent `gpt-5.6-sol` high-effort pass. Every round found at least one real
+security hole — eight in total, each a different spelling of the same path (trailing separator,
+`../..`, `$var`, `/.`, `."."` quote-joining, an operand named `cd`, `%VAR:~0%`/`!VAR!`, caret
+escapes). Each round's suite was green over the next round's hole; mutation testing reached 14/15
+without surfacing round 5. Mason's call (2026-08-20): document, don't fix. **The guard is unchanged
+— zero behaviour change ships in this entry.**
+
+What landed: the workaround in `docs/reference/gotchas.md`; the full analysis and three ranked
+options (lead option: move worktrees out from under `.claude`) in `docs/manual/KNOWN_ISSUES.md`; and
+all eight holes pinned as denials in `review-proof-guard.test.mjs` — in every spelling, so the two
+cmd.exe expansion forms of the one finding are pinned separately — meaning a future carve-out attempt
+trips on them immediately. The cmd.exe exploits (`%VAR:~0%`, `!VAR!`, caret escapes) are pinned
+through the `cmd` tool name and a `cmd /c` form as well as Bash: those strings only carry their
+exploit semantics in cmd.exe, so a Bash-only tripwire would have stayed green while a future
+shell-specific carve-out opened the real route. Pinning both routes is deliberate — the guard must
+not decide by tool name, and the tests should fail if a change makes it do so.
+
+- **Files changed**: `.claude/hooks/review-proof-guard.test.mjs` (tests only), `docs/reference/gotchas.md`, `docs/manual/KNOWN_ISSUES.md`, `docs/CHANGELOG.md`
+- **Guard logic changed**: none
+- **Migrations touched**: none
+
 ## 2026-08-19 — Product data model: build plan revision 2 after independent Fable…
 
 Product data model: build plan revision 2 after independent Fable review (26 findings) and orchestration design; recorded owner decisions D-J (chemistry edits admin-only) and D-K (unlisted brand never blocks receiving) in DECISION_LOG. Planning only — nothing built, pushed, migrated, or applied.
