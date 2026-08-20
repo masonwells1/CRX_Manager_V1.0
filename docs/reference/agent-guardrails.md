@@ -48,7 +48,11 @@ the linked primary checkout, but the gitignored snapshot is written to the activ
 guard reads only verified active/primary locations and chooses the newest capture; the post-apply
 invalidator deletes every location the guard could choose. The one-shot comparison expands both the
 submitted and registered writes through `scripts/trigger-fanout.json`; an opaque relevant source is a
-deny, not an assumed empty cascade. Custom PostgreSQL operator definitions are cataloged across
+deny, not an assumed empty cascade. The one-shot registry is untrusted input: stems, metadata values,
+contained migration paths, override fields, and target project refs are strictly validated, registry
+prose is never reflected, and the only copy-ready authorization command is the fixed
+`scripts/write-one-shot-replay-override.mjs --migration <stem> --project <ref>` wrapper. Custom
+PostgreSQL operator definitions are cataloged across
 verified migration history; invoking one follows its backing routine through the same transitive
 write analysis, and a database-resident backing routine fails closed. Custom casts are cataloged and
 followed the same way for `CAST(... AS type)` and `::type`; implicit/assignment casts and unresolved

@@ -39,6 +39,29 @@ import {
 const REQUIRED_CODEX_MODEL = "gpt-5.6-sol";
 const REQUIRED_CODEX_EFFORT = "high";
 const CRX_PRODUCTION_REF = "rhyzpcqhnizqbxphqdkr";
+const MIGRATION_STEM_RE = /^\d{8}(?:\d{6})?_[A-Za-z0-9][A-Za-z0-9_-]{0,180}$/;
+const PROJECT_REF_RE = /^[a-z0-9][a-z0-9_-]{0,62}$/;
+
+function validMigrationStem(value) {
+  return typeof value === "string" && MIGRATION_STEM_RE.test(value);
+}
+
+function validProjectRef(value) {
+  return typeof value === "string" && PROJECT_REF_RE.test(value);
+}
+
+function validRegistryReason(value) {
+  return typeof value === "string" && value.length > 0 && value.length <= 2000 &&
+    !/[\u0000-\u001f\u007f]/.test(value);
+}
+
+function migrationSourcePath(root, stem) {
+  if (!validMigrationStem(stem)) throw new Error("invalid migration stem");
+  const migrationsDir = path.resolve(root, "supabase", "migrations");
+  const filePath = path.resolve(migrationsDir, `${stem}.sql`);
+  if (path.dirname(filePath) !== migrationsDir) throw new Error("migration path escaped its directory");
+  return filePath;
+}
 
 function out(decision, reason) {
   const payload = decision === "block"
@@ -343,10 +366,17 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
   // value could have pointed the operator at a different project's ledger, which
   // the snapshot format cannot detect. The apply call itself is authoritative.
   // (Codex P2, PR #354.)
-  const targetRef =
+  const targetRefRaw =
     (input.project_id || "").toString().trim() ||
     (process.env.SUPABASE_PROJECT_REF || "").toString().trim() ||
     CRX_PRODUCTION_REF;
+  if (!validProjectRef(targetRefRaw)) {
+    out("block",
+      `MIGRATION ORDER GUARD: the target project identifier is invalid. Project refs may contain ` +
+      `only lowercase ASCII letters, digits, underscores, and hyphens. Refusing the apply without ` +
+      `reflecting the supplied value.`);
+  }
+  const targetRef = targetRefRaw;
   const howTo =
     `Refresh it first (read-only):\n` +
     `  node scripts/refresh-applied-migrations.mjs\n` +
@@ -567,7 +597,7 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
     // a stem registered in either checkout counts — union is never laxer than
     // reading one path alone.
     const evidenceRoots = [...new Set(proofDirs.map((d) => path.resolve(d, "..", "..")))];
-    const oneShot = {};
+    const oneShot = Object.create(null);
     const registriesRead = [];
     for (const root of evidenceRoots) {
       const registryPath = path.join(root, "supabase", "baselines", "one-shot-migrations.json");
@@ -578,20 +608,26 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
         if (!map || typeof map !== "object" || Array.isArray(map)) {
           throw new Error("no plain `one_shot` map");
         }
-        // First checkout to register a stem wins the wording; the entry itself
-        // is what matters, and both spellings block identically.
+        // Registry keys become migration filenames, so they must be exact
+        // repository stems rather than caller-controlled path fragments. The
+        // prose value is validated as inert single-line metadata and is never
+        // reflected into hook output or executable instructions.
         for (const [stem, reason] of Object.entries(map)) {
-          if (!(stem in oneShot)) oneShot[stem] = reason;
+          if (!validMigrationStem(stem) || !validRegistryReason(reason)) {
+            throw new Error("invalid one-shot entry");
+          }
+          if (!(stem in oneShot)) oneShot[stem] = true;
         }
         registriesRead.push(registryPath);
-      } catch (err) {
+      } catch {
         // A registry that EXISTS but will not parse is the disagreement case:
         // one checkout claims containment and the other cannot be read to
         // confirm or deny it. Fail closed rather than fall back to the half
         // that happened to load.
         out("block",
           `ONE-SHOT REPLAY GUARD: the one-shot migration registry at ${registryPath} exists but ` +
-          `could not be read (${err?.message || err}). Without it there is no way to tell an ` +
+          `failed strict parsing or validation. Its contents are treated as untrusted and are not ` +
+          `echoed. Without a valid registry there is no way to tell an ` +
           `idempotent schema migration from a population-bound data repair, so this apply is ` +
           `refused. Restore the file from git (it is tracked) and retry.`);
       }
@@ -836,12 +872,12 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
       return appliedNames.some((n) => n.includes(stem) || (version && n.includes(version)));
     };
 
-    for (const [stem, reason] of Object.entries(oneShot)) {
+    for (const stem of Object.keys(oneShot)) {
       const version = (stem.match(/\d{14}/) || [])[0] || "";
       let matched = "";
       const sourceFiles = [];
       for (const root of evidenceRoots) {
-        const filePath = path.join(root, "supabase", "migrations", `${stem}.sql`);
+        const filePath = migrationSourcePath(root, stem);
         if (!existsSync(filePath)) continue;
         try {
           const sourceSql = readFileSync(filePath, "utf8");
@@ -1170,24 +1206,27 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
         if (overrideClaimed && !overrideWhy) {
           try {
             const ov = JSON.parse(raw);
-            const ovMigration = (ov?.migration || "").toString().trim();
-            const ovHash = (ov?.queryHash || "").toString().trim().toLowerCase();
-            const ovProject = (ov?.project || "").toString().trim().toLowerCase();
-            const ovIssued = Date.parse((ov?.issuedAt || "").toString().trim());
+            const ovMigration = typeof ov?.migration === "string" ? ov.migration.trim() : "";
+            const ovHash = typeof ov?.queryHash === "string" ? ov.queryHash.trim().toLowerCase() : "";
+            const ovProject = typeof ov?.project === "string" ? ov.project.trim() : "";
+            const issuedText = typeof ov?.issuedAt === "string" ? ov.issuedAt.trim() : "";
+            const ovIssued = Date.parse(issuedText);
             const ageMs = Number.isFinite(ovIssued) ? Date.now() - ovIssued : NaN;
 
-            if (ovMigration !== stem) {
-              overrideWhy = `it authorizes "${ovMigration || "(no migration named)"}", not "${stem}"`;
-            } else if (currentHash === "" || ovHash !== currentHash) {
+            if (!validMigrationStem(ovMigration)) {
+              overrideWhy = `its migration identifier is missing or invalid`;
+            } else if (ovMigration !== stem) {
+              overrideWhy = `it authorizes a different migration identifier`;
+            } else if (!/^[0-9a-f]{64}$/.test(ovHash) || currentHash === "" || ovHash !== currentHash) {
               overrideWhy = `its queryHash does not match the SQL being applied`;
-            } else if (!ovProject) {
+            } else if (!validProjectRef(ovProject)) {
               overrideWhy =
-                `it names no target project, so it cannot be shown to authorize a replay against ` +
-                `"${targetRef}" rather than some other database`;
-            } else if (ovProject !== targetRef.toLowerCase()) {
-              overrideWhy = `it authorizes project "${ovProject}", but this apply targets "${targetRef}"`;
-            } else if (!Number.isFinite(ovIssued)) {
-              overrideWhy = `its issuedAt is missing or unparseable, so its age cannot be checked`;
+                `its target project identifier is missing or invalid, so it cannot be shown to ` +
+                `authorize this database`;
+            } else if (ovProject !== targetRef) {
+              overrideWhy = `it authorizes a different target project`;
+            } else if (!Number.isFinite(ovIssued) || new Date(ovIssued).toISOString() !== issuedText) {
+              overrideWhy = `its issuedAt is missing or not a canonical ISO timestamp, so its age cannot be checked`;
             } else if (ageMs > OVERRIDE_MAX_AGE_MS || ageMs < -OVERRIDE_MAX_SKEW_MS) {
               overrideWhy =
                 `it was issued ${Math.round(ageMs / 60000)} minute(s) ago, outside the ` +
@@ -1195,8 +1234,8 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
             } else {
               overrideOk = true;
             }
-          } catch (err) {
-            overrideWhy = `it is not valid JSON (${err?.message || err})`;
+          } catch {
+            overrideWhy = `it is not valid JSON; its contents are not echoed`;
           }
         }
       }
@@ -1210,7 +1249,8 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
             `apply of a repair that has already run once.`
           : `The applied-migration ledger for this database does NOT contain it.`) +
         `\n\n` +
-        `Why it is registered: ${reason}\n\n` +
+        `Registry classification: population-bound one-shot data repair. Registry prose is ` +
+        `untrusted metadata and is intentionally not echoed by this security boundary.\n\n` +
         `Its authorization was bound to the live population at the time it was written — counts, not ` +
         `row identity. Running it against a database that never had it rewrites rows nobody approved; ` +
         `running it a SECOND time rewrites whatever the population has since become. After a restore, ` +
@@ -1221,11 +1261,10 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
           : ``) +
         `If this really is a deliberate, reviewed replay, bind the override to the exact SQL, ` +
         `this database, and this moment:\n` +
-        `  node -e "const c=require('node:crypto'),f=require('node:fs');` +
-        `const q=f.readFileSync('supabase/migrations/${stem}.sql','utf8');` +
-        `f.writeFileSync('.claude/session-state/one-shot-replay-override.json',` +
-        `JSON.stringify({migration:'${stem}',queryHash:c.createHash('sha256').update(q).digest('hex'),` +
-        `project:'${targetRef}',issuedAt:new Date().toISOString()}))"\n` +
+        `  node scripts/write-one-shot-replay-override.mjs --migration ${stem} --project ${targetRef}\n` +
+        `That fixed reviewed wrapper accepts only validated identifiers, resolves the migration ` +
+        `inside supabase/migrations, hashes its exact bytes, and refuses to overwrite an existing ` +
+        `authorization.\n` +
         `That override authorizes that exact text, on ${targetRef}, for the next ` +
         `${OVERRIDE_MAX_AGE_MS / 60000} minutes, for ONE apply attempt — it is deleted the moment ` +
         `the guard reads it, so a second attempt needs a second override. Get Mason's explicit OK ` +

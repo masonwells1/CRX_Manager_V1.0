@@ -913,14 +913,17 @@ three High findings. All closed:
     withhold registered one-shot data migrations. That is one path to an apply; the SQL file is
     still on disk, and an ordinary `apply_migration` against a restored or drifted database still
     saw it. `.claude/hooks/migration-apply-guard.mjs` now **refuses** any apply that matches a
-    registered one-shot whenever the target database's applied-migration ledger does not already
-    contain it, and quotes the registry's reason in the refusal. A ledger that *does* contain it is
-    by definition the population the migration was approved against, so the guard stays silent
-    there. The MCP `name` is caller-controlled, so a name match is only a convenience — the
+    registered one-shot on every apply attempt, including a repeat already present in the ledger.
+    Registry prose is untrusted metadata and is never echoed in the refusal. Stems, values, contained
+    SQL paths, override fields, and target project refs are strictly validated before use. The MCP
+    `name` is caller-controlled, so a name match is only a convenience — the
     normalized SQL body is checked against the registered file on disk, and renaming the migration
     does not get past it. The escape hatch is **digest-bound**: the override must carry the SHA-256
     of the exact SQL being applied, so it authorizes that text and nothing else; a name-keyed flag
-    would have been a wave-through for any body. A missing or unparseable registry denies the apply.
+    would have been a wave-through for any body. Operators create it only through the fixed reviewed
+    `scripts/write-one-shot-replay-override.mjs --migration <stem> --project <ref>` wrapper, which
+    refuses traversal, malformed identifiers, unregistered migrations, and overwrite of an existing
+    authorization. A missing or unparseable registry denies the apply.
 
 16. **Digest coverage was a union, so one table could stand in for all of them.** Round 7 required
     the digest to cover the rewritten tables and the assigned columns, but it pooled them and asked

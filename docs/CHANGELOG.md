@@ -41,6 +41,11 @@ migration safety harness; no app source, migration SQL, live database, or produc
   `setval(...)` calls plus `ALTER SEQUENCE ... RESTART`, identity-column restarts, and
   `TRUNCATE ... RESTART IDENTITY` fail closed; stored defaults, views, and uninvoked routine bodies
   remain deferred.
+- The one-shot registry is now an explicit untrusted-data boundary. Migration stems, metadata
+  values, resolved SQL paths, override contents, and target project refs are strictly validated;
+  registry prose is never echoed into hook instructions. The interpolated inline program was
+  replaced by `scripts/write-one-shot-replay-override.mjs`, which hashes only a contained registered
+  migration and refuses to overwrite an existing single-use authorization.
 - Selecting an ordinary stored view now executes its cataloged query in the analysis closure. Same-
   file, nested, and older checked-in view definitions can no longer conceal a resident mutating
   routine behind `SELECT * FROM view`; defining a view without executing it remains deferred.
