@@ -228,6 +228,16 @@ r = runHook({
 });
 ok(isDeny(r), "DC start_process cannot launch an opaque AWK program through WSL");
 
+for (const command of [
+  "Start-Process awk -ArgumentList '-f payload.awk' -Wait",
+  "Start-Process env -ArgumentList 'NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs' -Wait",
+  "saps awk -ArgumentList '-f payload.awk' -Wait",
+  "start env -ArgumentList 'NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs' -Wait",
+]) {
+  r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command } });
+  ok(isDeny(r), `DC start_process cannot use a PowerShell process launcher: ${command}`);
+}
+
 r = runHook({
   tool_name: "mcp__Desktop_Commander__start_process",
   tool_input: { command: "SAFE= command -- env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs" },

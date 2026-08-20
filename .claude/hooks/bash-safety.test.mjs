@@ -166,6 +166,10 @@ for (const command of [
   'pwsh "$env:OPT" "$env:PAYLOAD"',
   'pwsh @args',
   "Start-Process pwsh -ArgumentList '-" + "Encoded" + "Command','ZW5jb2RlZA==' -Wait",
+  "Start-Process awk -ArgumentList '-f payload.awk' -Wait",
+  "Start-Process env -ArgumentList 'NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs' -Wait",
+  "saps awk -ArgumentList '-f payload.awk' -Wait",
+  "start env -ArgumentList 'NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs' -Wait",
   "Write-Output payload | xargs pwsh --" + "Encoded" + "Command ZW5jb2RlZA==",
   'Write-Output payload | pwsh -Command -',
   "& ('no','de' -join '') ('--requ','ire' -join '') ./preload.cjs ('scripts/apply-live-testdata-maintenance-20260812','.mjs' -join '') ('--approved-by-','mason=2026-08-12' -join '')",
@@ -218,6 +222,7 @@ const nodeMentionAsData = "Select-String -Pattern 'node' | ForEach-Object { $_ }
 ok(!maintenanceProducerCommandMentioned(nodeMentionAsData), "Node mentioned as text is not classified as an invocation");
 eq(checkMaintenanceProducerInvocation(nodeMentionAsData), null, "Node text search stays outside the producer gate");
 ok(!checkDangerousCommand(nodeMentionAsData), "ordinary PowerShell Node text search stays allowed");
+ok(!checkDangerousCommand("rg -n 'Start-Process awk -ArgumentList payload' docs"), "PowerShell process-launch spelling used as quoted search data stays allowed");
 ok(!checkDangerousCommand("echo $PATH"), "ordinary environment-variable display stays allowed");
 ok(!checkDangerousCommand("Get-ChildItem *.mjs"), "ordinary non-Node file glob stays allowed");
 const wrappedNodeMentionAsData = 'Write-Output \'command node "$F"\'';

@@ -52,6 +52,9 @@ All significant development milestones, in reverse chronological order.
   name before a Node-backed command). The parser also tracks `set -a` and
   `set -o allexport` across command segments and fails closed if a Node-backed
   command is reached before `set +a` or `set +o allexport` disables the mode.
+  PowerShell `Start-Process` and its `saps`/`start` aliases fail closed in command
+  position even for static arguments, preventing them from launching an opaque
+  AWK program or a preload command outside wrapper traversal.
   Assignment-producing command/process substitutions and dynamic variable
   operands passed to `export`, `declare`, `typeset`, `local`, or `readonly`
   also fail closed before a Node-backed command. Active Bash nameref

@@ -306,7 +306,7 @@ export function maintenanceProducerCommandMentioned(command, depth = 0) {
       || executableNamed(token, "saps", true)
       || executableNamed(token, "start", true);
   };
-  if (dynamicSyntax && tokens.some(dynamicPowerShellProcessLauncher)) return true;
+  if (tokens.some(dynamicPowerShellProcessLauncher)) return true;
   const powerShellNodeOptionsMutation = (token, index, list) => {
     if (!invocationPosition(list, index)) return false;
     const cmdlet = ["set-item", "new-item", "set-content", "add-content", "clear-item", "remove-item"]

@@ -111,6 +111,8 @@ names fail closed before Node-backed executables. Bash `printf -v` and `read`
 variable targets are inspected too, including dynamic target names, and
 `set -a`/`set -o allexport` state is tracked across segments so a Node-backed
 command fails closed until `set +a`/`set +o allexport` disables it. Dynamic
+PowerShell process launchers (`Start-Process`, `saps`, and `start`) fail closed
+in command position for both static and dynamic arguments. Dynamic
 operands and command/process substitutions passed to `export`, `declare`,
 `typeset`, `local`, or `readonly` fail closed before Node-backed execution.
 Active `declare`/`typeset`/`local -n` nameref declarations fail closed there as
