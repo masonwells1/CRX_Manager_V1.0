@@ -158,10 +158,31 @@ Codex SQL gate, and is not in this PR. This PR still strictly improves on `main`
 the UI path that produces the bad data — but it is not a complete fix, and the record should
 not pretend otherwise.
 
+### Second round on `48b31982` — one new finding, partly taken
+
+CodeRabbit confirmed all three fixes above as addressed and closed those threads. It raised one
+more: **cents beyond 2^53**. `Number('9007199254740993')` has already rounded to `…992` by the
+time it returns, yet still reports as an integer — so the gate would admit a value that lost
+precision before any arithmetic ran.
+
+**Taken, in the cheap form.** The gate now uses `Number.isSafeInteger`, which refuses the whole
+unsafe range. One line, fails closed, covered by a test asserting the two checks disagree on
+exactly that value.
+
+**Declined, with reason: the full `bigint`-through-the-totals refactor it also asked for.**
+`centsTimesQuantity` already does the multiply in `BigInt` and is exact; the only `Number` in
+the path is the cents operand and the accumulator, and with the gate above every operand is now
+exactly representable. A total would have to exceed ~$90 trillion before the accumulator lost a
+cent. Converting the totals path and the RPC boundary to `bigint` is a real improvement but a
+heavy lift that would roughly double this PR's blast radius on a money path, which is the
+opposite of what a focused fix should do. Recorded as a follow-up instead of half-done.
+
 ## Still open
 
 - **Server-side enforcement of the unit invariant, and server-side job totals** — findings 4
   and 5 above. Migration work.
+- **Carry job totals as `bigint` end to end**, rather than `Number` with a safe-integer gate.
+  Correct as stated; deferred as scope. See the second-round note above.
 - **F06** — a reloaded rate line goes stale on an acreage change. Needs the driver persisted
   on `job_chemicals` (migration + `save_job`).
 - **F07 / F08** — stale rate on a quantity-driven `rate_unit` edit; a cross-product

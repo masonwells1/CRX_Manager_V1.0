@@ -1447,7 +1447,12 @@ export default function JobDetail() {
       const badCents = ([
         ['cost', c.cost_per_unit_cents],
         ['price', c.price_per_unit_cents],
-      ] as const).find(([, raw]) => !isExactDecimalText(raw) || !Number.isInteger(Number(raw)));
+      //
+      // isSAFEInteger, not isInteger: Number('9007199254740993') silently rounds to
+      // ...992 and still reports as an integer, so the looser check would admit a value
+      // that has already lost precision before any arithmetic runs. Refusing above 2^53
+      // keeps every cents amount that reaches the total exactly representable.
+      ] as const).find(([, raw]) => !isExactDecimalText(raw) || !Number.isSafeInteger(Number(raw)));
       if (badCents) {
         byIndex.set(i, `its ${badCents[0]} is blank, or is not a whole number of cents, and would not be billed correctly`);
       }

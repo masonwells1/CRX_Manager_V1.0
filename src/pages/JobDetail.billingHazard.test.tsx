@@ -331,6 +331,14 @@ describe('JobDetail — billing-hazard guard is wired, not just implemented', ()
     fireEvent.change(priceInput, { target: { value: '150.7' } });
 
     expect(await screen.findByText(/whole number of cents/i, {}, { timeout: 15000 })).toBeTruthy();
+
+    // Same gate, the other precision failure: a cents value past 2^53 is ALREADY rounded by
+    // the time Number() returns it, and reports as a whole integer. isSafeInteger refuses it.
+    expect(Number.isInteger(Number('9007199254740993'))).toBe(true);      // the looser check passes
+    expect(Number.isSafeInteger(Number('9007199254740993'))).toBe(false); // the real one does not
+    fireEvent.change(priceInput, { target: { value: '9007199254740993' } });
+    expect(await screen.findByText(/whole number of cents/i, {}, { timeout: 15000 })).toBeTruthy();
+
     const saveButtons = await screen.findAllByRole('button', { name: /save/i }, { timeout: 15000 });
     fireEvent.click(saveButtons.find((b) => !/recipe/i.test(b.textContent || '')) as HTMLElement);
     await waitFor(() => {
