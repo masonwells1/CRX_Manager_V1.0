@@ -154,22 +154,36 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    commit's content is exactly what lands. Three checks, all fail-closed:
 
    Each check **asserts** and fails closed — none of them merely prints a value for you to eyeball.
-   Substitute the reviewed SHA and the head SHA; both are 40-char hex from the GitHub API, never
-   PR-authored text. All three must print their marker:
+   Substitute the reviewed SHA, the head SHA, and the base SHA; all are 40-char hex from the GitHub
+   API, never PR-authored text. Take the base from the PR itself, and `git fetch origin` first so
+   the SHA exists locally:
+
+   ```bash
+   gh pr view <n> --repo masonwells1/CRX_Manager_V1.0 --json baseRefName,baseRefOid --jq '.'
+   ```
+
+   All three checks must print their marker:
 
    ```bash
    test "$(git rev-parse <HEAD>^1)" = "<REVIEWED_SHA>" && echo PARENT1_IS_REVIEWED_COMMIT
    ```
 
    ```bash
-   git merge-base --is-ancestor <HEAD>^2 origin/main && echo ANCESTOR_OF_MAIN
+   git merge-base --is-ancestor <HEAD>^2 <BASE_SHA> && echo ANCESTOR_OF_BASE
    ```
+
+   Bind that check to the PR's exact `baseRefOid`, **not** to `origin/main`. `origin/main` is only
+   as current as your last fetch, and it is the wrong ref entirely for a PR whose base is some other
+   branch — the check would then pass against a branch the PR is not merging into. `baseRefOid` is
+   the commit GitHub will actually merge onto, and it is the same base the merge guard binds its
+   Codex proof to. Verified live on PR #441, 2026-08-20: base `af96e9b3`, `db41b6e6` confirmed as
+   an ancestor of it.
 
    ```bash
    test "$(git merge-tree --write-tree <HEAD>^1 <HEAD>^2)" = "$(git rev-parse <HEAD>^{tree})" && echo MERGE_ADDED_NOTHING
    ```
 
-   `^1` must be the exact reviewed commit; `^2` must already be an ancestor of `main` (so it
+   `^1` must be the exact reviewed commit; `^2` must already be an ancestor of the PR's base (so it
    introduces nothing unreviewed); and a clean merge of those two parents must reproduce
    `<HEAD>^{tree}` exactly, proving the merge commit smuggled in no edits of its own. A silent
    command is a FAILED check, never a passed one — if any marker is missing, stop.

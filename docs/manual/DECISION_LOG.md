@@ -146,10 +146,16 @@ contributes no new PR changes, CodeRabbit replies "No files to review." and emit
 that SHA — a SHA-bound gate then cannot pass however often it is re-triggered. The supported
 fallback proves the merge commit contributed nothing of its own, in three checks that **assert**
 rather than print: `test "$(git rev-parse <HEAD>^1)" = "<REVIEWED_SHA>"`, `git merge-base
---is-ancestor <HEAD>^2 origin/main`, and `test "$(git merge-tree --write-tree <HEAD>^1 <HEAD>^2)" =
+--is-ancestor <HEAD>^2 <BASE_SHA>`, and `test "$(git merge-tree --write-tree <HEAD>^1 <HEAD>^2)" =
 "$(git rev-parse <HEAD>^{tree})"`. Each prints a marker on success and is silent on failure, so a
 silent command is a FAILED check. CodeRabbit flagged the first draft for printing values a human had
 to compare by eye, and was right — a gate that depends on someone noticing is not a gate.
+
+`<BASE_SHA>` is the PR's own `baseRefOid`, never `origin/main`. A local remote-tracking ref is only
+as current as the last fetch, and it is simply the wrong ref for a PR based on any other branch —
+the ancestry check would then pass against a branch the PR is not merging into. `baseRefOid` is the
+commit GitHub will actually merge onto, and is the same base the merge guard binds its Codex proof
+to. Verified on PR #441: base `af96e9b3`, with `db41b6e6` confirmed an ancestor of it.
 
 Both outcomes are proven on PR #441. **Passing:** head `d0341104`, parents `497621f1` / `db41b6e6`,
 both trees `fc59b0f4` — a genuine no-op merge. **Failing:** head `f19a0af9`, whose merge
