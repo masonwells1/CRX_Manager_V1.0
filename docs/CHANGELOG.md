@@ -2,6 +2,13 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-21 — Phase 3C containment tolerates rebuilt ignored `dist/` entries
+
+The private-artifact containment guard now handles the narrow race where Git lists an ignored,
+tool-owned generated file and the build removes it before the guard can inspect it. Only that
+`ENOENT` case is skipped; stable generated files still receive the normal private-content scan,
+and direct forbidden filenames still fail before any filesystem access.
+
 ## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (every worktree → 6 of 23)
 
 `node scripts/fleet-status.mjs` reported `PARKED STATE UNKNOWN` for **every** worktree — all 19 —
@@ -416,7 +423,6 @@ match. It now converts before comparing, and refuses rather than guessing when i
 - 10 new tests (43 in the file); the form split, the billing fallback, and the `oz/cwt` guard were each
   mutation-tested by reverting them and confirming exactly the expected test went red. Verified by
   driving the real module in a browser across all nine cases, including both MG shapes.
-
 ## 2026-08-19 — Blend-ticket total-volume check no longer adds quantities across different units
 
 `validateBlendMath` summed every product quantity regardless of unit, so a ticket holding
