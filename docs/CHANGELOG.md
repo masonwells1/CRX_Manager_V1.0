@@ -57,7 +57,11 @@ All significant development milestones, in reverse chronological order.
   recursively inspected, so a quoted AWK program cannot hide its opaque launch.
   Dynamic `NODE_OPTIONS` construction also fails closed before a Node-backed
   executable: POSIX `env` command substitutions, concatenated PowerShell
-  environment paths, and CMD delayed-expansion assignments are covered. Shell
+  environment paths, and CMD delayed-expansion assignments are covered. Native
+  PowerShell environment writes are recognized inside recursively inspected
+  `powershell`/`pwsh -Command` bodies too, including `$env:NODE_OPTIONS`,
+  environment-provider item/content cmdlets, and .NET
+  `SetEnvironmentVariable` calls before `node` or a Node-backed package runner. Shell
   parameter expansion in an `env` assignment name fails closed as well, so a
   constructed `${NAME}_OPTIONS` target cannot become `NODE_OPTIONS` at runtime.
   Escaped `find` action names are normalized before recognizing `-exec`,

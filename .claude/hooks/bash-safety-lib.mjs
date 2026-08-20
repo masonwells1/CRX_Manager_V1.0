@@ -565,11 +565,13 @@ function tokenizeShellWords(text) {
   let current = "";
   let quote = "";
   let sawQuoted = false;
+  let sawUnquoted = false;
   const push = () => {
     if (!current) return;
-    tokens.push({ value: current, control: false, sawQuoted });
+    tokens.push({ value: current, control: false, sawQuoted, sawUnquoted });
     current = "";
     sawQuoted = false;
+    sawUnquoted = false;
   };
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index];
@@ -580,11 +582,13 @@ function tokenizeShellWords(text) {
     }
     if (char === "\\" && index + 1 < text.length) {
       current += char + text[index + 1];
+      sawUnquoted = true;
       index += 1;
       continue;
     }
     if (char === "{" && text[index + 1] === "}") {
       current += "{}";
+      sawUnquoted = true;
       index += 1;
       continue;
     }
@@ -600,7 +604,10 @@ function tokenizeShellWords(text) {
     else if (/[;&|(){}<>]/.test(char)) {
       push();
       tokens.push({ value: char, control: true });
-    } else current += char;
+    } else {
+      current += char;
+      sawUnquoted = true;
+    }
   }
   push();
   return tokens;
@@ -640,6 +647,14 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
     .some((candidate) => /^node_options(?:\[[^\]]*\])?(?:\+?=|$)/i.test(candidate));
   const hasDynamicVariableName = (token) => shellWordCandidates(token)
     .some((candidate) => /(?:\$\{|\$[A-Za-z_]|`|![^!\r\n]+!|%[^%\r\n]+%)/.test(candidate));
+  const powerShellEnvNodeOptionsTarget = (token) => token?.sawUnquoted && shellWordCandidates(token)
+    .some((candidate) => /^\$env\s*:\s*node_options(?:\+?=|$)/i.test(candidate));
+  const unquotedExecutableBasename = (token) => {
+    if (!token?.sawUnquoted) return "";
+    return shellWordCandidates(token)
+      .map((candidate) => candidate.replace(/^&/, "").split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase())
+      .find(Boolean) || "";
+  };
   const shellExecutionKeywords = new Set(["if", "then", "elif", "else", "while", "until", "do", "!"]);
   const shellExecutionKeyword = (token) => !token?.sawQuoted && shellWordCandidates(token)
     .some((candidate) => shellExecutionKeywords.has(candidate.toLowerCase()));
@@ -679,6 +694,28 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
     while (segmentStart < tokens.length && tokens[segmentStart].control) segmentStart += 1;
     let segmentEnd = segmentStart;
     while (segmentEnd < tokens.length && !tokens[segmentEnd].control) segmentEnd += 1;
+    const segmentTokens = tokens.slice(segmentStart, segmentEnd);
+    if (nodeBackedCommandMentioned) {
+      for (let scan = 0; scan < segmentTokens.length; scan += 1) {
+        const token = segmentTokens[scan];
+        if (powerShellEnvNodeOptionsTarget(token)) {
+          const candidates = shellWordCandidates(token);
+          const attachedAssignment = candidates.some((candidate) => /^\$env\s*:\s*node_options\+?=/i.test(candidate));
+          const separatedAssignment = /^\+?=/.test(String(segmentTokens[scan + 1]?.value || ""));
+          if (attachedAssignment || separatedAssignment) return true;
+        }
+        const commandName = unquotedExecutableBasename(token);
+        if (/^(?:set|new|add)-(?:item|content)$/.test(commandName)) {
+          const targetTokens = segmentTokens.slice(scan + 1);
+          if (targetTokens.some((target) => target.sawUnquoted
+            && shellWordCandidates(target).some((candidate) => /^(?:env:|env:\\)node_options$/i.test(candidate)))) return true;
+        }
+        const unquotedDotNetMutation = token?.sawUnquoted && shellWordCandidates(token)
+          .some((candidate) => /setenvironmentvariable/i.test(candidate));
+        if (unquotedDotNetMutation && tokens.some((target) => shellWordCandidates(target)
+          .some((candidate) => /node_options/i.test(candidate)))) return true;
+      }
+    }
     let cursor = segmentStart;
 
     const skipAssignments = () => {
