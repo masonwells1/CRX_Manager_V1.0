@@ -63,11 +63,18 @@ Exempt mainline-known candidates from the per-worktree own-draft reconciliation.
 accountability should be required only for candidates that are **not** already on `origin/main`,
 because those are the ones the mainline path cannot see. Two shapes, either acceptable:
 
-1. **At the reader** — `createOwnDraftPathsReader`'s `readHistory`
-   (`scripts/fleet-status.mjs:162`) returns the whole `migration-history.md`. Have it return only
-   the rows **this branch added** since its branch point. That matches the function's own stated
-   contract — the comment at `worktree-awareness-lib.mjs:404` calls the registry "the branch's own
-   claim that pending SQL exists", which the full shared file is not.
+1. **At the reader** — `createOwnDraftPathsReader`'s `readHistory` returns the whole
+   `migration-history.md`. Have it return only the rows **this branch added** since its branch
+   point. That matches the function's own stated contract — the comment at
+   `worktree-awareness-lib.mjs:404` calls the registry "the branch's own claim that pending SQL
+   exists", which the full shared file is not.
+
+   **There are TWO construction sites and both must change**: `scripts/fleet-status.mjs:156` and
+   `.claude/hooks/worktree-awareness.mjs:149`. Each builds its own reader from the shared factory
+   at `worktree-awareness-lib.mjs:691`. Fixing only `fleet-status.mjs` repairs the report and
+   leaves the SessionStart banner reporting UNKNOWN forever — the exact drift the 2026-07-29
+   unification existed to prevent. Prefer putting the corrected `readHistory` behavior in the
+   shared lib so neither caller can define it differently again.
 2. **At the reconciliation** — pass `parkedDraftPathsFrom` a set of paths already accounted for
    elsewhere, and skip those in the loop at `worktree-awareness-lib.mjs:411`.
 

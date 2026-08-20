@@ -274,6 +274,15 @@ through as "unusual — warn the user", which turns a 100-gallon load into a neg
 non-numeric scale weight. Hard validation runs first; the plausibility warning only applies to
 values that already passed it.
 
+**Each field's hard domain ships in the migration that CREATES that field, not here.** Stating
+the rule in WP-2 while WP-1 creates, seeds, edits and does arithmetic with `concentration_value`
+and `canonical_fraction` leaves a live window in which impossible values can be written — and a
+constraint added later cannot be applied at all if WP-1 already admitted a row that violates it.
+So WP-1's migration carries the finite/strictly-positive CHECK for every numeric column it
+creates, WP-2's carries them for density and net weight, WP-3's for allocation quantities. This
+section defines the *rule*; the package that creates the column *enforces* it. Caught reviewing
+PR #435.
+
 **The brand slot is deferred to WP-3, not stubbed here *(finding 2 — this was a blocker)*.**
 Revision 2 said this function "ships now with the brand slot WP-3 populates", but
 `product_brands` is created in **WP-3** — the migration would reference a relation that does not
@@ -327,9 +336,16 @@ work that touches five)*:**
   delegates to (`supabase/migrations/20260726190515_section9_po_ap_high_remediation.sql`).
   Revision 2 omitted it. Change the wrapper without it and brand data is accepted by the UI and
   **dropped before inventory is written** *(finding 28)*.
-- **Existing call sites, all of which must keep working:**
-  `src/components/receiving/QuickReceivePanel.tsx`, `src/pages/PurchaseOrderDetail.tsx`, and the
-  offline replay path in `src/lib/offlineSync.ts`.
+- **Existing call sites — all five, and all must keep working.** Revision 3 listed three and was
+  wrong; the omission was caught reviewing PR #435 and confirmed by grepping `src/` for
+  `receive_po_items`:
+  `src/components/receiving/QuickReceivePanel.tsx:325`,
+  `src/components/receiving/ReceivingHubPanel.tsx:185` (the F5 inline receive),
+  `src/pages/InventoryPage.tsx:579`,
+  `src/pages/PurchaseOrderDetail.tsx:291`,
+  and the offline replay path in `src/lib/offlineSync.ts:414`.
+  **The builder re-runs that grep before starting WP-3** rather than trusting this list — a missed
+  caller is brand data silently dropped with a truck at the dock.
 - **Generated RPC types** in `src/types/index.ts`, plus the schema-registry fixture (R-10).
 
 **The receiving RPC keeps its current signature *(finding 3 — this was a blocker)*:** revision 2
