@@ -75,8 +75,31 @@ per-product cutover** (pilot set first, then widen) before it is detailed — se
 | **D-W** | Sol asked whether a cancelled EPA registration should refuse the sale when sell-through authorization cannot be confirmed (review finding 26) | **No — D-T stands unchanged. Mason, 2026-08-19: "Don't worry about it, let it be sold."** Warn loudly, never block. Sol's point that sell-through depends on the specific cancellation order was put to Mason and he accepted it as his call. **Do not add a sale-blocking gate, and do not re-open this.** |
 | **D-X** | Sol asked for the quality tier to move onto the sellable product with database-enforced cross-tier exclusion (review finding 19) | **No structural change. Mason, 2026-08-19: it only affects glufosinate and mesotrione — not worth the work for that edge case.** The safety property is kept at the display layer, where **D-O and D-P already carry it**: the tier is always shown, the tiers are never presented as interchangeable on matching actives alone, and the adjuvant bias against the premium product is stated on screen. That costs nothing extra and is the whole protection. **A builder must not add `sourcing_tier` to `products` or build cross-tier substitution rules.** |
 
-**Proof accounts (Mason, 2026-08-19; corrected after Sol's findings 4 and 31).** Acceptance
-proofs run under **Mason's own account** — he declined to create a separate non-admin test user.
+**Proof accounts (Mason, 2026-08-19; corrected after Sol's findings 4 and 31; non-admin path
+resolved 2026-08-20).** Acceptance proofs run under **Mason's own account** — he declined to
+create a *new* non-admin test user, and revision 3 left the non-admin proofs with no way to run.
+
+**No new account is needed: one already exists *(established reviewing PR #435 against live,
+read-only)*.** The live `profiles` table already holds a **test-named `sales_rep` account** that
+has been signed into before and whose email is confirmed. It is simply **deactivated**
+(`is_active = false`). This is the account R-2, R-11, WP-1 and WP-2's non-admin refusal proofs run
+under. It is not named here — this is a public repository, and the account is identified by role
+and test-name in the live table, not by address in a plan document.
+
+**Provisioning it is a BLOCKING PREREQUISITE of WP-1, not an optional convenience.** Two owner
+actions, both Mason's alone, because both touch a live credential:
+
+1. **Reactivate** the account (`is_active = true`) in user management — a live permissions change.
+2. **Set its password** via the app's password-reset path, and store it in CI as
+   `E2E_SALESREP_EMAIL` / `E2E_SALESREP_PASSWORD`. **Never in the repository, never in a plan
+   document, never in a commit message.**
+
+Until both are done, `E2E_SALESREP_EMAIL` / `E2E_SALESREP_PASSWORD` are unset and CI carries admin
+credentials only, so **every non-admin refusal proof is unexecutable and must be reported as such
+rather than silently passed under an admin session.** An admin session cannot demonstrate a
+D-J-restricted refusal — see directly below. **Deactivate the account again when Phase 1 closes**;
+a standing extra live login is the cost of this, and it should not outlive the proofs that need
+it.
 
 **Correcting revision 2's claim:** it said an admin session "cannot reveal a missing column
 grant." That is **false for direct writes.** Admin and non-admin app users both act through the
