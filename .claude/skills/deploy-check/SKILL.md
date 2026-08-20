@@ -136,6 +136,38 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    is **not** a review of what you are about to merge. Bind the proof to the **head SHA**. Nothing
    else counts — see "What never counts" below.
 
+   **Refresh a stale branch BEFORE requesting the review, never after.** If `mergeStateStatus` is
+   `BEHIND`, the merge guard refuses the merge outright (it requires `CLEAN`), so `gh pr
+   update-branch <n>` is not optional — and it creates a merge commit that MOVES the head, voiding
+   any review you already paid for. Order: check state → update-branch if behind → re-read the head
+   → only then `@coderabbitai review`. Reversing those two steps burns a review attempt against the
+   allowance for nothing. Learned on PR #441 and FarmRx #26, 2026-08-20.
+
+   ```bash
+   gh pr view <n> --repo masonwells1/CRX_Manager_V1.0 --json headRefOid,mergeStateStatus --jq '.'
+   ```
+
+   **The merge-only head has no stamp and never will.** When `update-branch` contributes no new PR
+   changes, CodeRabbit answers "No files to review." and emits no range line for that SHA, so a
+   SHA-bound gate can never pass no matter how often you re-trigger it. In that one case fall back
+   to **content identity**, which is stronger evidence than the stamp because it compares bytes
+   rather than names: confirm the compare against current `main` lists exactly the PR's own files,
+   then confirm each file's blob SHA at the head equals its blob SHA at the reviewed commit.
+
+   ```bash
+   gh api repos/masonwells1/CRX_Manager_V1.0/compare/<MAIN_SHA>...<HEAD> --jq '[.files[].filename]'
+   ```
+
+   ```bash
+   gh api "repos/masonwells1/CRX_Manager_V1.0/contents/<FILE>?ref=<HEAD>" --jq .sha
+   ```
+
+   Run the second against both `<HEAD>` and the reviewed SHA; identical blob hashes mean the
+   reviewed bytes are the merged bytes. Verified on FarmRx #26, 2026-08-20: the compare listed only
+   `.coderabbit.yaml`, blob `5b3a5240` identical at reviewed `9abaf18` and at head `3beb6407`. This
+   fallback applies **only** when the head moved solely by a no-op merge — a head carrying real new
+   commits still needs a real stamped review, and using it anywhere else is self-certifying.
+
    First capture the head, and capture it *before* requesting any review:
 
    ```bash
@@ -169,8 +201,14 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    A match on that endpoint therefore proves **identity only**; pair it with completion:
 
    ```bash
-   gh pr checks <n> --repo masonwells1/CRX_Manager_V1.0 | grep -i coderabbit
+   gh pr checks <n> --repo masonwells1/CRX_Manager_V1.0 --json name,bucket --jq '.[] | select(.name=="CodeRabbit") | .bucket'
    ```
+
+   Use that exact form, not `| grep -i coderabbit`: the grep prints the CodeRabbit row whether it
+   says `pass` or `pending`, so a human skimming for the word "coderabbit" reads a running review as
+   a finished one. This prints the bucket alone — `pass`, `fail`, or `pending` — and only `pass`
+   satisfies the gate. (`gh pr checks` exits 8 while any check is pending; that is the pending
+   signal, not an error. Verified live on PR #441, 2026-08-20.)
 
    The comments path passes only when the stamp names the head **and** the `CodeRabbit` check has
    settled (not `pending`). The reviews-endpoint path needs no such pairing — a review object only
@@ -190,9 +228,17 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    not supported with `--jq` or `--template`"), and piping to a standalone `jq` fails too because
    `jq` is not installed on this machine. Both were tested before this note was written.
 
-   **Re-read `headRefOid` immediately before merging.** If it moved after the review — a fix pushed
-   while you were reading — the proof no longer binds and the whole check repeats against the new
-   head.
+   **Re-read `headRefOid` immediately before merging**, and then make GitHub enforce it rather than
+   trusting that you looked:
+
+   ```bash
+   gh pr merge <n> --repo masonwells1/CRX_Manager_V1.0 --squash --match-head-commit <HEAD>
+   ```
+
+   `--match-head-commit <SHA>` is "Commit SHA that the pull request head must match to allow merge"
+   (gh manual). Without it, a push landing between your check and your merge is merged unreviewed
+   and nothing objects; with it, GitHub refuses the merge outright. Always pass it — the reviewed
+   SHA is the only SHA that may land.
 
    **What never counts as proof:** a green `CodeRabbit` status check (it read green on FarmRx PR #26
    while the head was *not* among the reviewed commits); a `submitted_at` newer than the final push
@@ -222,11 +268,22 @@ If blocked: List every issue that needs fixing first.
 - NEVER attempt to push directly to `main`; the ruleset blocks it and the attempt is a bug in the plan
 - NEVER merge a PR without reading CodeRabbit's review on it first
 - NEVER merge on the strength of a review that predates the final commit — auto-review pauses after
-  2 commits and rate limits can skip a run. Prove coverage by the review's `commit_id`, never by its
-  `submitted_at`. Re-trigger with `@coderabbitai review` and read the fresh review
+  2 commits and rate limits can skip a run. Prove coverage by matching the exact `headRefOid`
+  against the `between <base> and <head>` stamp in the review body, never by its `submitted_at`
+  (that field is only a filter for unsubmitted reviews, never evidence of which commit was read).
+  Re-trigger with `@coderabbitai review` and read the fresh review
+- ALWAYS merge with `--match-head-commit <HEAD>` naming the reviewed SHA, so GitHub — not your own
+  diligence — rejects the merge if the head moved after you checked
 - If no fresh review can be obtained (CodeRabbit down, rate limited past the window), the gate is
   **BLOCKED**, not satisfied by disclosure. Report it as blocked and get Mason's explicit OK to
   merge without it. Writing "the final commit went unreviewed" in a summary is a description of the
   gate failing, never a substitute for passing it — an escape hatch an agent can self-certify is
-  not a gate
+  not a gate. The **one** exception is the merge-only head documented in step 5, where CodeRabbit
+  itself reports "No files to review" and every merged byte is proven identical by blob SHA to a
+  reviewed commit; that is content identity, not disclosure, and it does not extend to a head
+  carrying any real new commit
+- If a local guard blocks the merge and its required proof harness does not exist in that repo (as
+  on FarmRx, which has no `scripts/write-codex-push-proof.mjs`), PARK and ask Mason. Never satisfy a
+  guard by borrowing another repo's proof script — CRX's reviews against CRX's rules and would mint
+  an official-looking verdict under the wrong rubric
 - Edge Function deploys and direct Vercel CLI deploys always need Mason's explicit approval; only the regular push-to-`main` path is covered by the standing authorization. Live migration applies need his in-chat OK in an interactive session — the one exception is a pre-authorized armed hands-free run passing migration-apply-guard's full proof + Codex gate (destructive migrations: never autonomous)

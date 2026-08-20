@@ -135,6 +135,36 @@ missed `src/components/blendtickets/`; a merge gate keyed on `submitted_at` that
 timestamp could satisfy). The fourth would have broken the repo. The difference was testing on the
 non-production repo before applying.
 
+**Refresh the branch before buying the review.** A PR that sits while `main` moves goes
+`mergeStateStatus: BEHIND`, and the merge guard requires `CLEAN` — so `gh pr update-branch` is
+mandatory, and it creates a merge commit that moves the head and voids any review already paid for.
+The order is: read state → update-branch if behind → re-read `headRefOid` → *then* request review.
+Both PRs in this session were reviewed first and updated second, wasting an attempt on each.
+
+**The merge-only head can never be stamped, and content identity is the answer.** When
+`update-branch` contributes no new PR changes, CodeRabbit replies "No files to review." and emits no
+range line for that SHA — a SHA-bound gate then cannot pass however often it is re-triggered. The
+supported fallback is narrow and evidence-based: prove the compare against current `main` lists
+exactly the PR's own files, and that each file's **blob SHA** at the head equals its blob SHA at the
+reviewed commit. Identical blobs mean the reviewed bytes are the merged bytes — stronger than a name
+match, since it compares content rather than labels. Verified on FarmRx #26: compare listed only
+`.coderabbit.yaml`, blob `5b3a5240` identical at reviewed `9abaf18` and at head `3beb6407`. This
+applies **only** to a no-op merge head; a head carrying any real new commit still needs a stamped
+review, and using it elsewhere is self-certification.
+
+**Make GitHub enforce the reviewed SHA.** Re-reading `headRefOid` before merging is a soft rule an
+agent can forget; `gh pr merge --match-head-commit <SHA>` is a hard one GitHub enforces, rejecting
+the merge if the head moved. It is now required on every merge — per Mason's standing preference for
+hard guards over more prose.
+
+**A guard whose proof harness is missing means PARK, not improvise.** The merge guard scans diff
+*content* for money patterns (`_cents`, `allocate_payment`), so `.coderabbit.yaml` trips it purely
+because its `path_instructions` name those identifiers to teach CodeRabbit what to flag — text, not
+effect, the same failure class as the live-data guard. On CRX the demanded Codex proof is available.
+On FarmRx it is not, and CRX's `scripts/write-codex-push-proof.mjs` must **not** be borrowed: its
+prompt reviews against CRX's red lines and would mint an official-looking verdict under the wrong
+rubric. FarmRx #26 is parked pending Mason's explicit OK.
+
 **Operative rules.** "Review limit reached" is a *temporary* state that refills, never evidence that
 a head went unreviewed — re-check before writing any such claim (see
 `docs/manual/KNOWN_ISSUES.md`). A review of an earlier commit is not a review of what is being
