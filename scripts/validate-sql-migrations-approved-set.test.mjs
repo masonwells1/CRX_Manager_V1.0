@@ -1992,6 +1992,41 @@ const CASES = [
       `DO ALSO SELECT public.existing_repair();\n` +
       `INSERT INTO scratch_probe(id) VALUES (1);\n`,
   },
+  {
+    name: 'round-37: a custom operator invocation cannot hide its mutating backing routine',
+    expect: 'violation',
+    mustReport: 'crxop_eq_eq_eq',
+    sql:
+      `CREATE FUNCTION public.operator_money_fix(integer, integer) RETURNS boolean LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = total_profit; RETURN true; END $$;\n` +
+      `CREATE OPERATOR === (PROCEDURE = public.operator_money_fix, LEFTARG = integer, RIGHTARG = integer);\n` +
+      `SELECT 1 === 1;\n`,
+  },
+  {
+    name: 'round-37 MUTANT: an uninvoked custom operator definition remains deferred',
+    expect: 'silent',
+    sql:
+      `CREATE FUNCTION public.operator_definition_only(integer, integer) RETURNS boolean LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = total_profit; RETURN true; END $$;\n` +
+      `CREATE OPERATOR !=== (PROCEDURE = public.operator_definition_only, LEFTARG = integer, RIGHTARG = integer);\n`,
+  },
+  {
+    name: 'round-37: a custom operator defined by an older migration is still recognized',
+    expect: 'violation',
+    mustReport: 'crxop_eq_eq_eq',
+    sql: `SELECT 2 === 2;\n`,
+  },
+  {
+    name: 'round-37: a custom operator inside an invoked wrapper is followed transitively',
+    expect: 'violation',
+    mustReport: 'operator_wrapper',
+    sql:
+      `CREATE FUNCTION public.operator_money_fix_2(integer, integer) RETURNS boolean LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = total_profit; RETURN true; END $$;\n` +
+      `CREATE OPERATOR <=> (PROCEDURE = public.operator_money_fix_2, LEFTARG = integer, RIGHTARG = integer);\n` +
+      `CREATE FUNCTION public.operator_wrapper() RETURNS boolean LANGUAGE sql AS $$ SELECT 1 <=> 1 $$;\n` +
+      `SELECT public.operator_wrapper();\n`,
+  },
 ];
 
 // A stamp no real migration uses, so these fixtures are never mistaken for

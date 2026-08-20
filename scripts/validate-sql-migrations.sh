@@ -570,16 +570,81 @@ AWK_STRIP_NOISE=$(cat <<'AWK_SN'
         }
         return out
       }
+      # Preserve PostgreSQL operator runs as safe identifier-shaped tokens.
+      # A custom operator dispatches to a routine without ever spelling
+      # `routine_name(...)`; dropping punctuation from the token stream made
+      # that invocation invisible. A lone `=` stays `=` because the approved-
+      # set parser uses it for assignments and comparisons.
+      function op_char_name(c) {
+        if (c == "+") return "plus"; if (c == "-") return "minus"
+        if (c == "*") return "star"; if (c == "/") return "slash"
+        if (c == "<") return "lt"; if (c == ">") return "gt"
+        if (c == "=") return "eq"; if (c == "~") return "tilde"
+        if (c == "!") return "bang"; if (c == "@") return "at"
+        if (c == "#") return "hash"; if (c == "%") return "pct"
+        if (c == "^") return "caret"; if (c == "&") return "amp"
+        if (c == "|") return "pipe"; if (c == "`") return "tick"
+        if (c == "?") return "q"
+        return "unknown"
+      }
+      function encode_operator_run(run,   out, i) {
+        out = "crxop"
+        for (i = 1; i <= length(run); i++) out = out "_" op_char_name(substr(run, i, 1))
+        return out
+      }
+      function protect_operators(s,   out, i, j, c, run, chars) {
+        out = ""; i = 1; chars = "+-*/<>=~!@#%^&|`?"
+        while (i <= length(s)) {
+          c = substr(s, i, 1)
+          if (index(chars, c) == 0) { out = out c; i++; continue }
+          run = c; j = i + 1
+          while (j <= length(s) && index(chars, substr(s, j, 1)) > 0) {
+            run = run substr(s, j, 1); j++
+          }
+          out = out (run == "=" ? " = " : " " encode_operator_run(run) " ")
+          i = j
+        }
+        return out
+      }
 AWK_SN
 )
+
+CUSTOM_OPERATORS_RE=""
+CUSTOM_OPERATORS_BUILT=false
+build_custom_operator_index() {
+  if [ "$CUSTOM_OPERATORS_BUILT" = true ]; then return 0; fi
+  CUSTOM_OPERATORS_BUILT=true
+  CUSTOM_OPERATORS_RE=$(find "$MIGRATION_DIR" -name '*.sql' -type f -print0 \
+    | xargs -0 awk '
+        '"$AWK_STRIP_NOISE"'
+        FNR == 1 { inblk = 0; instr = 0; estr = 0; inident = 0; saw_create = 0; want_operator = 0 }
+        {
+          line = protect_operators(strip_noise(tolower($0)))
+          gsub(/;/, " ; ", line)
+          gsub(/[^a-z0-9_.$;=]+/, " ", line)
+          n = split(line, part, / +/)
+          for (i = 1; i <= n; i++) {
+            token = part[i]; if (token == "") continue
+            if (token == ";") { saw_create = 0; want_operator = 0; continue }
+            if (token == "create") { saw_create = 1; continue }
+            if (saw_create && token == "operator") { want_operator = 1; continue }
+            if (want_operator && token ~ /^crxop_/) {
+              print token; saw_create = 0; want_operator = 0
+            }
+          }
+        }
+      ' 2>/dev/null | sort -u | tr '\n' '|' | sed 's/|$//')
+  return 0
+}
 
 MUTATING_FNS_RE=""
 MUTATING_FNS_BUILT=false
 build_mutating_fn_index() {
   if [ "$MUTATING_FNS_BUILT" = true ]; then return 0; fi
   MUTATING_FNS_BUILT=true
+  build_custom_operator_index
   MUTATING_FNS_RE=$(find "$MIGRATION_DIR" -name '*.sql' -type f -print0 \
-    | xargs -0 awk -v tables="$BUSINESS_ROW_TABLES" '
+    | xargs -0 awk -v tables="$BUSINESS_ROW_TABLES" -v customops="$CUSTOM_OPERATORS_RE" '
         '"$AWK_STRIP_NOISE"'
         # Per-file reset: an unterminated body — or an unterminated block comment
         # or string literal — must not leak into the next file.
@@ -633,6 +698,19 @@ build_mutating_fn_index() {
             # weld the pieces of a qualified name back together first.
             b = buf[f]
             gsub(/[ \t]*\.[ \t]*/, ".", b)
+            # A custom operator call is a routine dispatch written as
+            # punctuation. Treat a function body that uses any operator this
+            # migration corpus defines as mutating/opaque; the ordinary reverse
+            # call-graph closure below then propagates that classification
+            # through wrappers to any top-level call.
+            if (customops != "") {
+              ob = protect_operators(b)
+              gsub(/[^a-z0-9_]+/, " ", ob)
+              nop = split(ob, optok, / +/)
+              for (oi = 1; oi <= nop; oi++) {
+                if (optok[oi] ~ ("^(" customops ")$")) { print "M\t" f; break }
+              }
+            }
             # Every `name(` in the body is emitted as a call edge. Which of those
             # names is really a function is decided downstream by intersecting
             # with the F set, so a type modifier like `numeric(12,2)` or a
@@ -1275,6 +1353,7 @@ $MIG_BASENAME
     build_mutating_fn_index
     build_known_view_index
     SCAN_HITS=$(awk -v tables="$BUSINESS_ROW_TABLES" -v mutfns="$MUTATING_FNS_RE" \
+                    -v customops="$CUSTOM_OPERATORS_RE" \
                     -v regtables="$REGISTRY_TABLES" -v knownviews="$KNOWN_VIEWS_RE" '
       # ---- ONE SCANNER, ONE PASS (CodeRabbit Major, PR #364) -----------------
       # Shared with the mutating-function index since round 31 — see ONE LEXER,
@@ -1345,7 +1424,7 @@ $MIG_BASENAME
           }
           break
         }
-        line = top
+        line = protect_operators(top)
         # Normalize every non-identifier character to a space. This also strips
         # quotes, so "public"."orders" collapses to the token public.orders.
         # `;` `,` and `=` survive as tokens of their own: statement boundaries
@@ -1353,7 +1432,6 @@ $MIG_BASENAME
         # columns a SET clause actually assigns.
         gsub(/;/, " ; ", line)
         gsub(/,/, " , ", line)
-        gsub(/=/, " = ", line)
         gsub(/[^a-z0-9_.$;,=]+/, " ", line)
         n = split(line, t, / +/)
         for (i = 1; i <= n; i++) {
@@ -1430,6 +1508,15 @@ $MIG_BASENAME
       function stmt_head(p,   k) {
         for (k = p - 1; k >= 1; k--) { if (tok[k] == ";") return tok[k + 1] }
         return tok[1]
+      }
+      function operator_metadata_token(p,   k, h) {
+        h = stmt_head(p)
+        if (h == "drop" || h == "alter" || h == "comment") return 1
+        if (h != "create") return 0
+        for (k = p - 1; k >= 1 && tok[k] != ";"; k--) {
+          if (tok[k] == "operator") return 1
+        }
+        return 0
       }
       # Does a write to `t` fire a mutating trigger this migration attached?
       # (Codex High, round 28.) Reported on the `indirect` channel, which is
@@ -1648,6 +1735,18 @@ $MIG_BASENAME
           rulerel[rrel] = 1
         }
         for (i = 1; i <= ntok; i++) {
+          # A custom operator is a hidden routine call. Its punctuation token is
+          # indexed across the migration corpus above, so an invocation in this
+          # file cannot disappear merely because it lacks `routine_name(...)`.
+          # Defining/dropping/commenting the operator is metadata; using it in
+          # SELECT, DML, DO, CREATE INDEX, or another executing expression is
+          # an opaque indirect rewrite and is refused.
+          if (customops != "" && tok[i] ~ ("^(" customops ")$") &&
+              !operator_metadata_token(i) && !seenop[tok[i]]) {
+            seenop[tok[i]] = 1
+            printf "%d\t%s\t%s\t%s\t%s\t%s\n", tokln[i], tok[i], "indirect", "-", "-", raw[tokln[i]]
+            continue
+          }
           # Dynamic SQL: refused outright, no table needed. `EXECUTE FUNCTION`
           # / `EXECUTE PROCEDURE` (trigger bodies) and `... EXECUTE ON ...`
           # (privilege grants) are the non-dynamic uses of the keyword.

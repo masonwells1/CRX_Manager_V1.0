@@ -633,6 +633,7 @@ const NOT_A_CALL = /\b(function|procedure)\s+(?:if\s+(?:not\s+)?exists\s+)?(?:[a
 // which is the over-reporting direction this module always takes.
 const TRIGGER_STMT = /\bcreate\s+(?:or\s+replace\s+)?(?:constraint\s+)?trigger\s+/g;
 const RULE_STMT = /\bcreate\s+(?:or\s+replace\s+)?rule\s+/g;
+const OPERATOR_RUN = /[+\-*\/<>=~!@#%^&|`?]+/g;
 
 /**
  * `{ table, fn }` for every trigger this SQL attaches at apply time.
@@ -817,6 +818,36 @@ function runForEffectRegion(stmt) {
   return "";
 }
 
+/**
+ * Custom PostgreSQL operators defined by this SQL. An operator call does not
+ * look like `routine_name(...)`, but PostgreSQL dispatches it to the routine
+ * named by FUNCTION/PROCEDURE. Pair the two so operator syntax cannot hide a
+ * mutating routine from the ordinary transitive call graph.
+ */
+export function operatorDefinitions(code) {
+  const out = [];
+  for (const statement of String(code || "").toLowerCase().split(";")) {
+    const head = /\bcreate\s+operator\s+(?:[a-z_][a-z0-9_$]*\s*\.\s*)?([+\-*\/<>=~!@#%^&|`?]+)\s*\(/.exec(statement);
+    if (!head) continue;
+    const backing = /\b(?:function|procedure)\s*=\s*(?:[a-z_][a-z0-9_$]*\s*\.\s*)?([a-z_][a-z0-9_$]*)/.exec(statement);
+    out.push({ operator: head[1], fn: backing?.[1] || "" });
+  }
+  return out;
+}
+
+function operatorRunsOutsideDefinitions(code) {
+  const executable = String(code || "")
+    .split(";")
+    .filter((statement) => !/\bcreate\s+operator\b/i.test(statement))
+    .join(";");
+  return new Set(executable.match(OPERATOR_RUN) || []);
+}
+
+function invokedOperators(code, definitions) {
+  const runs = operatorRunsOutsideDefinitions(code);
+  return definitions.filter((definition) => runs.has(definition.operator));
+}
+
 /** Relations that receive a standing PostgreSQL rule in this migration. */
 export function ruleAttachments(code) {
   const s = (code || "").toLowerCase();
@@ -983,7 +1014,7 @@ function unknownCallsIn(codeLower, defined) {
  * `unknownCalls` names routines the migration executes for effect but does not
  * define; their bodies live in the database, not in this file.
  */
-export function applyTimeWriteTargets(sql) {
+export function applyTimeWriteTargets(sql, { knownOperators = [] } = {}) {
   const { code, literals, routines } = applyTimeCode(sql || "");
   const top = targetsFromCode(code, literals);
 
@@ -1005,6 +1036,22 @@ export function applyTimeWriteTargets(sql) {
     }
   };
   defineRoutines(routines);
+
+  const operators = [];
+  const operatorKeys = new Set();
+  const defineOperators = (list) => {
+    for (const definition of list) {
+      const operator = String(definition?.operator || "");
+      const fn = String(definition?.fn || "");
+      if (!operator) continue;
+      const key = `${operator}\0${fn}`;
+      if (operatorKeys.has(key)) continue;
+      operatorKeys.add(key);
+      operators.push({ operator, fn });
+    }
+  };
+  defineOperators(knownOperators);
+  defineOperators(operatorDefinitions(code));
 
   // ROUND 28. Triggers this migration attaches, and the ones a write has
   // already fired. A trigger whose relation is written runs its function, so
@@ -1048,6 +1095,7 @@ export function applyTimeWriteTargets(sql) {
       top.dynamicWrites.push(...inner.dynamicWrites);
       if (inner.unresolved) top.unresolved = true;
       defineRoutines(parsed.routines);
+      defineOperators(operatorDefinitions(parsed.code));
       attachments.push(...triggerAttachments(parsed.code));
       ruleTables.push(...ruleAttachments(parsed.code));
       execCodes.push(parsed.code);
@@ -1058,6 +1106,21 @@ export function applyTimeWriteTargets(sql) {
   const fired = new Set();
   const firedRules = new Set();
   const unknownTriggerFns = new Set();
+  const unknownOperatorFns = new Set();
+  const firedOperators = new Set();
+  const addOperatorInvocations = (sourceCode, into) => {
+    for (const definition of invokedOperators(sourceCode, operators)) {
+      const key = `${definition.operator}\0${definition.fn}`;
+      firedOperators.add(key);
+      if (!definition.fn) {
+        top.unresolved = true;
+      } else if (byName.has(definition.fn)) {
+        if (!seen.has(definition.fn)) into.add(definition.fn);
+      } else {
+        unknownOperatorFns.add(definition.fn);
+      }
+    }
+  };
   const fireAttached = (into) => {
     for (const table of ruleTables) {
       if (firedRules.has(table) || !top.tables.has(table)) continue;
@@ -1086,6 +1149,7 @@ export function applyTimeWriteTargets(sql) {
       for (const n of invokedRoutines(c.toLowerCase(), byName.keys())) {
         if (!seen.has(n)) into.add(n);
       }
+      addOperatorInvocations(c, into);
     }
   };
 
@@ -1093,6 +1157,7 @@ export function applyTimeWriteTargets(sql) {
   // set stops growing. `seen` also stops a recursive routine from looping.
   const seen = new Set();
   let frontier = invokedRoutines(code.toLowerCase(), byName.keys());
+  addOperatorInvocations(code, frontier);
   drainExec(frontier);
   fireAttached(frontier);
   while (frontier.size) {
@@ -1107,9 +1172,11 @@ export function applyTimeWriteTargets(sql) {
         top.dynamicWrites.push(...inner.dynamicWrites);
         if (inner.unresolved) top.unresolved = true;
         foldLiterals(inner, r.literals);
+        defineOperators(operatorDefinitions(r.code));
         for (const n of invokedRoutines(r.code.toLowerCase(), byName.keys())) {
           if (!seen.has(n)) next.add(n);
         }
+        addOperatorInvocations(r.code, next);
       }
     }
     drainExec(next);
@@ -1128,6 +1195,7 @@ export function applyTimeWriteTargets(sql) {
   const unknownCalls = [...new Set([
     ...unknownCallsIn(scan, new Set(byName.keys())),
     ...unknownTriggerFns,
+    ...unknownOperatorFns,
   ])];
 
   // `dynamicExec` is internal bookkeeping for the literal fold above and is not
@@ -1142,6 +1210,7 @@ export function applyTimeWriteTargets(sql) {
     invokedRoutines: [...seen],
     firedTriggers: [...fired],
     firedRules: [...firedRules],
+    invokedOperators: [...firedOperators],
   };
 }
 

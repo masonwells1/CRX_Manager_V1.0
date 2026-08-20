@@ -48,7 +48,9 @@ the linked primary checkout, but the gitignored snapshot is written to the activ
 guard reads only verified active/primary locations and chooses the newest capture; the post-apply
 invalidator deletes every location the guard could choose. The one-shot comparison expands both the
 submitted and registered writes through `scripts/trigger-fanout.json`; an opaque relevant source is a
-deny, not an assumed empty cascade.
+deny, not an assumed empty cascade. Custom PostgreSQL operator definitions are cataloged across
+verified migration history; invoking one follows its backing routine through the same transitive
+write analysis, and a database-resident backing routine fails closed.
 
 **Landing helper (not a hook): `scripts/land-pr.mjs <n>`.** Companion to `pr-merge-guard.mjs`, added 2026-08-08 after PR #345 stalled overnight: branch protection requires the PR branch to be up to date with `main`, so a sibling merge flips a fully green PR to `mergeStateStatus=BEHIND` and auto-merge never fires — and every watcher that polls only checks misses it. The helper watches STATE, runs `gh pr update-branch` whenever the PR falls behind (re-running if main moves again), and exits 0 only on MERGED. It deliberately NEVER merges: merging stays with the gated `gh pr merge` (arming `--auto` for non-risky diffs; for risky diffs the helper waits for green/current and prints the proof-and-merge steps). Do not add a merge call to it — that would bypass the merge gate.
 

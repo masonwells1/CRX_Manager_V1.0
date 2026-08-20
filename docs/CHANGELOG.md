@@ -4,8 +4,8 @@ All significant development milestones, in reverse chronological order.
 
 ## 2026-08-19 — PR #364 final replay-guard findings repaired
 
-Closed three exact-commit adversarial findings in the migration safety harness; no app source,
-migration SQL, live database, or production data changed.
+Closed the original three exact-commit findings and the follow-up custom-operator finding in the
+migration safety harness; no app source, migration SQL, live database, or production data changed.
 
 - Applied-ledger captures now belong to the active checkout that ran the read-only command. The
   apply guard accepts only verified active/primary checkout locations, selects the newest capture,
@@ -16,9 +16,12 @@ migration SQL, live database, or production data changed.
   scratch, temporary, infrastructure, non-public, or newly created tables into rewrites.
 - The apply-time one-shot replay guard now compares transitive live trigger/FK effects, not only
   directly named tables, and fails closed when the relevant live fan-out is opaque.
+- Custom PostgreSQL operators are treated as routine dispatches. Same-file definitions, invoked
+  wrappers, database-resident backing routines, and operators defined by older checked-in migrations
+  can no longer hide a money rewrite behind punctuation such as `SELECT 1 === 1`.
 
 Focused proof: snapshot producer 14 assertions; applied-source containment pass; apply-time guard
-236 assertions; approved-set validator 160 mutation cases. Each new edge has a removal mutant that
+240 assertions; approved-set validator 164 mutation cases. Each new edge has a removal mutant that
 survives only when the load-bearing protection is deliberately deleted.
 
 ## 2026-08-19 — Product data model: build plan revision 2 after independent Fable…
@@ -651,8 +654,8 @@ format change and a live ledger read. The registry already stores `_meta.applied
 stated blocker did not exist. Also corrected: `DECISION_LOG.md` called the purchase-order pair
 "converted" fifty lines before proving from live that it is not; the "mirror form" constraint shape
 was recommended on a precondition **zero** live instances meet, without noting that it fails open on
-a nullable cents column; "Both forms clear the gate" was withdrawn as a widening of a money gate that
-Mason never decided, and is now recorded as an open question for him; "none of those are constrained"
+a nullable cents column; an interim "open question" note about whether the live generated-mirror
+form clears the gate was superseded later on 2026-08-19 by Mason's approval recorded below; "none of those are constrained"
 was refuted by three live `*_cent_scale_chk` constraints; two deferred-column row counts still read
 as present-tense when live measures 0; and `rpc-functions.md` called `create_quote_version` "the
 only write path" when `service_role` and `postgres` retain direct write grants and bypass RLS.

@@ -26,7 +26,12 @@ import { flagActive } from "./autopilot-lib.mjs";
 import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
 import { sessionProofDirs } from "./codex-push-lib.mjs";
 import { checkMigrationOrdering } from "./migration-ordering-lib.mjs";
-import { applyTimeWriteTargets, overlappingTables } from "./apply-time-dml-lib.mjs";
+import {
+  applyTimeCode,
+  applyTimeWriteTargets,
+  operatorDefinitions,
+  overlappingTables,
+} from "./apply-time-dml-lib.mjs";
 
 const REQUIRED_CODEX_MODEL = "gpt-5.6-sol";
 const REQUIRED_CODEX_EFFORT = "high";
@@ -115,6 +120,34 @@ function expandThroughFanout(analysis, evidence) {
     }
   }
   return { targets, tables, opaqueSources };
+}
+
+function loadKnownOperators(evidenceRoots) {
+  const byKey = new Map();
+  for (const root of evidenceRoots) {
+    const migrationDir = path.join(root, "supabase", "migrations");
+    if (!existsSync(migrationDir)) continue;
+    let names;
+    try {
+      names = readdirSync(migrationDir).filter((name) => name.endsWith(".sql"));
+    } catch (err) {
+      throw new Error(`${migrationDir}: ${err?.message || err}`);
+    }
+    for (const name of names) {
+      const filePath = path.join(migrationDir, name);
+      let sql;
+      try {
+        sql = readFileSync(filePath, "utf8");
+      } catch (err) {
+        throw new Error(`${filePath}: ${err?.message || err}`);
+      }
+      if (!/\bcreate\s+operator\b/i.test(sql)) continue;
+      for (const definition of operatorDefinitions(applyTimeCode(sql).code)) {
+        byKey.set(`${definition.operator}\0${definition.fn}`, definition);
+      }
+    }
+  }
+  return [...byKey.values()];
 }
 
 let payload;
@@ -471,11 +504,13 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
     }
 
     let fanoutEvidence;
+    let knownOperators;
     try {
       fanoutEvidence = loadTrustedFanout(evidenceRoots);
+      knownOperators = loadKnownOperators(evidenceRoots);
     } catch (err) {
       out("block",
-        `ONE-SHOT REPLAY GUARD: trusted trigger/FK fan-out evidence could not be loaded ` +
+        `ONE-SHOT REPLAY GUARD: trusted trigger/FK or custom-operator evidence could not be loaded ` +
         `(${err?.message || err}). A directly named table is not the complete apply-time write ` +
         `surface when live triggers or referential actions can rewrite another population. ` +
         `Refusing the apply; restore or regenerate scripts/trigger-fanout.json and retry.`);
@@ -634,7 +669,7 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
     // see apply-time-dml-lib.mjs for why deferred routine bodies are excluded.
     let submitted = { targets: new Set(), dynamicWrites: [], unresolved: false };
     try {
-      submitted = applyTimeWriteTargets(migQuery);
+      submitted = applyTimeWriteTargets(migQuery, { knownOperators });
     } catch {
       // A parse this module cannot handle must not silently mean "writes
       // nothing". Treat it as unresolvable so the semantic check below refuses
@@ -664,7 +699,7 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
               `are removed. An empty or corrupted source has no replay identity. Refusing the ` +
               `apply; restore the tracked SQL file and retry.`);
           }
-          const registered = applyTimeWriteTargets(sourceSql);
+          const registered = applyTimeWriteTargets(sourceSql, { knownOperators });
           const registeredFanout = expandThroughFanout(registered, fanoutEvidence);
           const resolvedWrite = registered.targets.size > 0;
           const opaqueWrite = registered.unresolved || registered.dynamicWrites.length > 0 ||

@@ -713,4 +713,38 @@ eq(T(null), [], "a null body does not throw");
   }
 }
 
+// ---------------- ROUND 37: custom operators dispatch to routines too
+{
+  const definition =
+    'CREATE FUNCTION public.operator_money_fix(integer, integer) RETURNS boolean ' +
+    'LANGUAGE plpgsql AS $$ BEGIN UPDATE public.order_items SET total_price = total_price; ' +
+    'RETURN true; END $$; ' +
+    'CREATE OPERATOR === (PROCEDURE = public.operator_money_fix, ' +
+    'LEFTARG = integer, RIGHTARG = integer); ';
+
+  const invoked = applyTimeWriteTargets(`${definition} SELECT 1 === 1;`);
+  ok(invoked.targets.has('order_items.total_price'),
+    'round-37: invoking a custom operator folds in its mutating backing routine');
+  ok(invoked.invokedRoutines.includes('operator_money_fix'),
+    'round-37: the operator-backed routine joins the ordinary transitive call graph');
+
+  const definitionOnly = applyTimeWriteTargets(definition);
+  ok(!definitionOnly.targets.has('order_items.total_price'),
+    'round-37 MUTANT: defining but not invoking the operator remains deferred');
+
+  const wrapped = applyTimeWriteTargets(
+    `${definition} CREATE FUNCTION public.operator_wrapper() RETURNS boolean ` +
+    'LANGUAGE sql AS $$ SELECT 1 === 1 $$; SELECT public.operator_wrapper();',
+  );
+  ok(wrapped.targets.has('order_items.total_price'),
+    'round-37: an operator invocation inside an invoked wrapper is followed transitively');
+
+  const resident = applyTimeWriteTargets(
+    'CREATE OPERATOR === (PROCEDURE = public.resident_operator_fix, ' +
+    'LEFTARG = integer, RIGHTARG = integer); SELECT 1 === 1;',
+  );
+  ok(resident.unknownCalls.includes('resident_operator_fix'),
+    'round-37: an invoked operator with a database-resident backing routine fails closed');
+}
+
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

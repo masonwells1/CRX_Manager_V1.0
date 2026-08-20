@@ -1,11 +1,27 @@
 # Decision Log
 
-Last verified: 2026-08-18
+Last verified: 2026-08-20
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-08-20 — Custom PostgreSQL operators count as routine execution in migration guards
+
+**Source:** exact-SHA `gpt-5.6-sol` review of PR #364 after the trigger/FK replay repair.
+
+**Decision.** `CREATE OPERATOR` binds punctuation to a PostgreSQL routine, so an expression such as
+`SELECT 1 === 1` is a routine invocation even though it never spells `routine_name(...)`. Both
+migration guards preserve and catalog custom operator tokens, follow same-file and older checked-in
+definitions, and propagate operator calls through invoked wrappers. A backing routine that exists
+only in the database is unknown execution and fails closed against a registered one-shot repair.
+Defining an operator without invoking it remains deferred and does not by itself count as a write.
+
+**Operative rule.** Review execution semantics, not call spelling. Adding a new dispatch mechanism
+must either be modeled transitively or refused; punctuation is never evidence that no routine ran.
 
 ---
 
@@ -956,15 +972,14 @@ earlier draft of this paragraph left out, both of which change how it should be 
   currently a derived-mirror shape, and no conversion has happened anywhere on this schema for it to
   be preferred over.
 
-**Open, not settled: whether the mirror form clears the AGENTS.md gate.** The gate's wording is "an
-active **finite** whole-cent CHECK", and the mirror form carries no finiteness clause of its own;
-what rejects `NaN`/`Infinity` here is the generated column's cast, not the CHECK (see the note
-under the deferred table). It also does not follow the `<table>_<column>_whole_cents_chk` naming
-this entry sets out. A previous revision resolved this by asserting "Both forms clear the gate" —
-but that is a **widening of a gate**, it was written into an entry attributed to Mason's 2026-08-10
-instruction, and Mason did not decide it. It is withdrawn and recorded here as an open question for
-him. What is not in question either way: a money column with **neither** shape does not clear the
-gate.
+**Settled 2026-08-19: the live generated-mirror form clears the AGENTS.md gate.** The CHECK itself
+carries no explicit finiteness clause, but its generated bigint expression rejects `NaN` and both
+infinities before the row can exist; together, the generated mirror and validated equality CHECK
+enforce finite whole cents. Mason approved treating the purchase-order pair as the same legacy
+numeric-dollar compatibility exception as `orders.total_cost`, not as an incomplete conversion or
+tracked debt. The generated column is load-bearing: copying this CHECK onto a nullable hand-written
+cents column does **not** clear the gate. A money column with neither the full rounding form nor this
+generated-mirror form remains outside the approved exception.
 
 **Both halves are load-bearing — a `ROUND`-only constraint does NOT clear the gate.** PostgreSQL
 `numeric` deliberately does not use IEEE-754 NaN semantics: so values stay sortable and indexable,

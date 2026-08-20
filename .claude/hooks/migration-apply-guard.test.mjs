@@ -1426,6 +1426,37 @@ function armAutopilot(stateDir, hoursFromNow) {
     rmSync(heldLock, { recursive: true, force: true });
     rmSync(ovPath, { recursive: true, force: true });
 
+    // ROUND 37. PostgreSQL operators dispatch to their PROCEDURE/FUNCTION
+    // without spelling `routine_name(...)`. Before operator-aware analysis the
+    // body below produced targets=[], unresolved=false and walked around this
+    // registered orders repair.
+    const operatorDefinition =
+      "CREATE FUNCTION public.operator_money_fix(integer, integer) RETURNS boolean " +
+      "LANGUAGE plpgsql AS $$ BEGIN UPDATE public.orders SET total_profit = total_profit; " +
+      "RETURN true; END $$; " +
+      "CREATE OPERATOR === (PROCEDURE = public.operator_money_fix, " +
+      "LEFTARG = integer, RIGHTARG = integer); ";
+    r = apply("20990601000005_operator_replay", `${operatorDefinition} SELECT 1 === 1;`);
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-37: a custom operator invoking a hidden orders rewrite needs the one-shot override");
+
+    r = apply("20990601000006_operator_definition_only", operatorDefinition);
+    ok(!isOneShotDeny(r),
+      "round-37 MUTANT: removing the operator invocation leaves its routine body deferred");
+
+    const catalogPath = path.join(tmp, "supabase", "migrations", "20900101000000_operator_catalog.sql");
+    writeFileSync(catalogPath,
+      "CREATE OPERATOR <#> (PROCEDURE = public.resident_operator_money_fix, " +
+      "LEFTARG = integer, RIGHTARG = integer);\n");
+    r = apply("20990601000007_existing_operator_replay", "SELECT 1 <#> 1;");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-37: an older checked-in custom operator is cataloged and its resident routine fails closed");
+
+    rmSync(catalogPath, { force: true });
+    r = apply("20990601000008_existing_operator_mutant", "SELECT 1 <#> 1;");
+    ok(!isOneShotDeny(r),
+      "round-37 MUTANT: removing the checked-in operator definition removes the catalog evidence");
+
     // 6. Fail closed. The registry is tracked in git; unreadable or absent means
     //    the checkout is broken or the file was removed — the two states in
     //    which a silent pass is most dangerous.
