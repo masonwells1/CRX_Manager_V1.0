@@ -93,8 +93,9 @@ construction cannot hide `NODE_OPTIONS` before a Node-backed executable: POSIX
 `env` command substitutions, concatenated PowerShell environment paths, and CMD
 delayed-expansion assignments fail closed. Recursively inspected PowerShell
 command bodies also recognize ordinary `$env:NODE_OPTIONS` assignments,
-environment-provider item/content cmdlets, and .NET `SetEnvironmentVariable`
-calls before Node-backed runners. Recursively inspected CMD bodies fail closed
+environment-provider item/content cmdlets, their standard short aliases, aliases
+created inside the same command body, and .NET `SetEnvironmentVariable` calls
+before Node-backed runners. Recursively inspected CMD bodies fail closed
 when `call`/`@call`, an `if` condition, or a `for … do` body precedes an explicit
 `NODE_OPTIONS` assignment and Node-backed execution. Parameter-expanded `env` assignment
 names fail closed before Node-backed executables. Bash `printf -v` and `read`

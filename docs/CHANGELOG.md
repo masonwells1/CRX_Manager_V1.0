@@ -68,7 +68,10 @@ All significant development milestones, in reverse chronological order.
   environment paths, and CMD delayed-expansion assignments are covered. Native
   PowerShell environment writes are recognized inside recursively inspected
   `powershell`/`pwsh -Command` bodies too, including `$env:NODE_OPTIONS`,
-  environment-provider item/content cmdlets, and .NET
+  environment-provider item/content cmdlets, their standard short aliases, and
+  aliases created inside the same command body. Dynamic alias definitions fail
+  closed when they can target the environment provider before Node execution.
+  The parser also covers .NET
   `SetEnvironmentVariable` calls before `node` or a Node-backed package runner. Shell
   parameter expansion in an `env` assignment name fails closed as well, so a
   constructed `${NAME}_OPTIONS` target cannot become `NODE_OPTIONS` at runtime.

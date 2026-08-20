@@ -317,6 +317,12 @@ const shellBuiltinNodeOptionsCases = [
   `pwsh -NoProfile -Command "$env:NODE_OPTIONS = '--require=./preload.cjs'; npm --version"`,
   `powershell -NoProfile -Command "Set-Item Env:NODE_OPTIONS '--require=./preload.cjs'; npm --version"`,
   `powershell -NoProfile -Command "Set-Content -Path Env:\\NODE_OPTIONS -Value '--require=./preload.cjs'; npm --version"`,
+  `powershell -NoProfile -Command "si Env:NODE_OPTIONS '--require=./preload.cjs'; node scripts/ordinary-check.mjs"`,
+  `powershell -NoProfile -Command "sc -Path Env:\\NODE_OPTIONS -Value '--require=./preload.cjs'; npm --version"`,
+  `powershell -NoProfile -Command "ni Env:NODE_OPTIONS -Value '--require=./preload.cjs'; npm --version"`,
+  `powershell -NoProfile -Command "ac Env:NODE_OPTIONS '--require=./preload.cjs'; npm --version"`,
+  `powershell -NoProfile -Command "Set-Alias mutate Set-Item; mutate Env:NODE_OPTIONS '--require=./preload.cjs'; node scripts/ordinary-check.mjs"`,
+  `powershell -NoProfile -Command "sal mutate si; mutate Env:NODE_OPTIONS '--require=./preload.cjs'; npm --version"`,
   `pwsh -NoProfile -Command "[Environment]::SetEnvironmentVariable('NODE_OPTIONS','--require=./preload.cjs'); npm --version"`,
   `cmd /d /c "call set NODE_OPTIONS=--require=./preload.cjs & node scripts/ordinary-check.mjs"`,
   `cmd /d /c "@call set NODE_OPTIONS=--require=./preload.cjs & node scripts/ordinary-check.mjs"`,
@@ -464,6 +470,7 @@ ok(!checkDangerousCommand("rg -n 'command env NODE_OPTIONS=' docs"), "wrapped NO
 ok(!checkDangerousCommand("rg -n 'SAFE= command -- env NODE_OPTIONS=' docs"), "complex wrapped NODE_OPTIONS spelling used as quoted search data stays allowed");
 ok(!checkDangerousCommand("rg -n 'cmd /c set NODE_OPTIONS=' docs"), "command-string NODE_OPTIONS spelling used as quoted search data stays allowed");
 ok(!checkDangerousCommand("rg -n 'Set-Item Env:NODE_OPTIONS' docs"), "PowerShell NODE_OPTIONS mutation spelling used as quoted search data stays allowed");
+ok(!checkDangerousCommand("rg -n 'si Env:NODE_OPTIONS; Set-Alias mutate Set-Item' docs"), "PowerShell alias mutation spelling used as quoted search data stays allowed");
 ok(!checkDangerousCommand("printf -v SAFE %s ok; node scripts/ordinary-check.mjs"), "printf -v to an ordinary static variable remains allowed");
 ok(!checkDangerousCommand("read -p NODE_OPTIONS SAFE < input.txt; node scripts/ordinary-check.mjs"), "read prompt text is not mistaken for a variable target");
 ok(!checkDangerousCommand("set -a; set +a; node scripts/ordinary-check.mjs"), "disabling allexport before a Node-backed command remains allowed");
