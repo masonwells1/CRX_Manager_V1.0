@@ -43,7 +43,11 @@ All significant development milestones, in reverse chronological order.
   escape runs.
   Bash variable/export builtins are covered as well: `declare`, `typeset`,
   `local`, and `readonly` cannot assign or export `NODE_OPTIONS`, and `builtin`
-  is traversed into a wrapped `export` or declaration command.
+  is traversed into a wrapped `export` or declaration command. Bash variable
+  writers `printf -v` and `read` cannot target `NODE_OPTIONS` (or a dynamic
+  name before a Node-backed command). The parser also tracks `set -a` and
+  `set -o allexport` across command segments and fails closed if a Node-backed
+  command is reached before `set +a` or `set +o allexport` disables the mode.
   Nested command-string analysis reapplies the opaque-interpreter policy, keeps
   `env -S` option context inside split bodies, and evaluates both raw and
   POSIX-unescaped wrapper/assignment spellings.

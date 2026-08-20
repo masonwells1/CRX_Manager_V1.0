@@ -92,7 +92,10 @@ including recursively inspected quoted command bodies. Dynamic environment-name
 construction cannot hide `NODE_OPTIONS` before a Node-backed executable: POSIX
 `env` command substitutions, concatenated PowerShell environment paths, and CMD
 delayed-expansion assignments fail closed. Parameter-expanded `env` assignment
-names fail closed before Node-backed executables, and escaped `find` action names
+names fail closed before Node-backed executables. Bash `printf -v` and `read`
+variable targets are inspected too, including dynamic target names, and
+`set -a`/`set -o allexport` state is tracked across segments so a Node-backed
+command fails closed until `set +a`/`set +o allexport` disables it. Escaped `find` action names
 are normalized before matching `-exec`/`-execdir`/`-ok`/`-okdir`. A
 16,384-character budget denies oversized payloads before tokenization, and a
 512-token budget denies token-dense payloads before recursive runner analysis.

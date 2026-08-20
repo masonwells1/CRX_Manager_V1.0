@@ -626,7 +626,8 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
     "parallel", "sudo", "doas", "coproc", "time", "watch", "exec", "nohup", "nice", "timeout", "setsid", "stdbuf",
     "cmd", "powershell", "pwsh", "bash", "sh", "dash", "zsh", "ksh",
     "eval", "source", ".", "node", "nodejs", "export", "declare", "typeset",
-    "local", "readonly", "set", "setx",
+    "local", "readonly", "set", "setx", "printf", "read",
+    "npm", "npx", "pnpm", "yarn", "bun", "corepack",
   ]);
   const assignmentName = (token) => shellWordCandidates(token)
     .map((candidate) => /^([A-Za-z_]\w*)\+?=/.exec(candidate)?.[1]?.toLowerCase() || "")
@@ -637,6 +638,8 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
   const hasNodeOptionsAssignment = (token) => assignmentName(token) === "node_options";
   const namesNodeOptionsVariable = (token) => shellWordCandidates(token)
     .some((candidate) => /^node_options(?:\[[^\]]*\])?(?:\+?=|$)/i.test(candidate));
+  const hasDynamicVariableName = (token) => shellWordCandidates(token)
+    .some((candidate) => /(?:\$\{|\$[A-Za-z_]|`|![^!\r\n]+!|%[^%\r\n]+%)/.test(candidate));
   const shellExecutionKeywords = new Set(["if", "then", "elif", "else", "while", "until", "do", "!"]);
   const shellExecutionKeyword = (token) => !token?.sawQuoted && shellWordCandidates(token)
     .some((candidate) => shellExecutionKeywords.has(candidate.toLowerCase()));
@@ -670,6 +673,8 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
     if (dynamicPosixEnv || powershellMutation || dotNetMutation || cmdDelayedMutation) return true;
   }
 
+  let allexportEnabled = false;
+  const nodeBackedExecutables = new Set(["node", "nodejs", "npm", "npx", "pnpm", "yarn", "bun", "corepack"]);
   for (let segmentStart = 0; segmentStart < tokens.length;) {
     while (segmentStart < tokens.length && tokens[segmentStart].control) segmentStart += 1;
     let segmentEnd = segmentStart;
@@ -693,6 +698,7 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
         if (depth >= 4) return true;
         return nodeOptionsAssignmentMentioned(body, depth + 1);
       };
+      if (allexportEnabled && nodeBackedExecutables.has(name)) return true;
       if (name === "command") {
         cursor += 1;
         if (cursor < segmentEnd && /^-[vV]$/.test(tokens[cursor].value)) break;
@@ -1007,7 +1013,70 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
           if (namesNodeOptionsVariable(tokens[cursor])) return true;
           cursor += 1;
         }
-      } else if (["set", "setx"].includes(name)) {
+      } else if (name === "printf") {
+        cursor += 1;
+        while (cursor < segmentEnd) {
+          const argument = tokens[cursor].value;
+          if (argument === "--") break;
+          if (argument === "-v") {
+            const target = tokens[cursor + 1];
+            if (namesNodeOptionsVariable(target) || (nodeBackedCommandMentioned && hasDynamicVariableName(target))) return true;
+            break;
+          }
+          const attachedTarget = /^-v(.+)$/.exec(argument);
+          if (attachedTarget) {
+            const target = { ...tokens[cursor], value: attachedTarget[1] };
+            if (namesNodeOptionsVariable(target) || (nodeBackedCommandMentioned && hasDynamicVariableName(target))) return true;
+            break;
+          }
+          if (!argument.startsWith("-")) break;
+          cursor += 1;
+        }
+      } else if (name === "read") {
+        cursor += 1;
+        while (cursor < segmentEnd) {
+          const argument = tokens[cursor].value;
+          if (argument === "--") { cursor += 1; break; }
+          if (/^-[av]$/.test(argument)) {
+            const target = tokens[cursor + 1];
+            if (namesNodeOptionsVariable(target) || (nodeBackedCommandMentioned && hasDynamicVariableName(target))) return true;
+            cursor += 2;
+            continue;
+          }
+          const attachedTarget = /^-[av](.+)$/.exec(argument);
+          if (attachedTarget) {
+            const target = { ...tokens[cursor], value: attachedTarget[1] };
+            if (namesNodeOptionsVariable(target) || (nodeBackedCommandMentioned && hasDynamicVariableName(target))) return true;
+            cursor += 1;
+            continue;
+          }
+          if (/^-[dinNptu]$/.test(argument)) { cursor += 2; continue; }
+          if (/^-[dinNptu].+/.test(argument) || /^-[ers]+$/.test(argument)) { cursor += 1; continue; }
+          if (argument.startsWith("-")) { cursor += 1; continue; }
+          break;
+        }
+        while (cursor < segmentEnd) {
+          if (namesNodeOptionsVariable(tokens[cursor])
+            || (nodeBackedCommandMentioned && hasDynamicVariableName(tokens[cursor]))) return true;
+          cursor += 1;
+        }
+      } else if (name === "set") {
+        cursor += 1;
+        while (cursor < segmentEnd) {
+          const argument = tokens[cursor].value;
+          if (argument === "--") { cursor += 1; break; }
+          if (/^[+-]o$/.test(argument)) {
+            const optionName = String(tokens[cursor + 1]?.value || "").toLowerCase();
+            if (optionName === "allexport") allexportEnabled = argument.startsWith("-");
+            cursor += optionName ? 2 : 1;
+            continue;
+          }
+          if (hasNodeOptionsAssignment(tokens[cursor]) || argument.toLowerCase() === "node_options") return true;
+          if (/^-[^-]*a/.test(argument)) allexportEnabled = true;
+          else if (/^\+[^+]*a/.test(argument)) allexportEnabled = false;
+          cursor += 1;
+        }
+      } else if (name === "setx") {
         cursor += 1;
         while (cursor < segmentEnd && tokens[cursor].value.startsWith("-")) cursor += 1;
         if (hasNodeOptionsAssignment(tokens[cursor])) return true;
