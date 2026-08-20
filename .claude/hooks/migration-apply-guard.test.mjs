@@ -1490,6 +1490,38 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(!isOneShotDeny(r),
       "round-38 MUTANT: removing the checked-in cast definition removes the catalog evidence");
 
+    // ROUND 39. CREATE VIEW stores its query, but a later SELECT executes that
+    // stored expression. The two statements must be connected or a resident
+    // mutator can replay money work without ever appearing in the SELECT text.
+    const viewDefinition =
+      "CREATE FUNCTION public.view_money_fix() RETURNS integer " +
+      "LANGUAGE plpgsql AS $$ BEGIN UPDATE public.orders SET total_profit = total_profit; " +
+      "RETURN 1; END $$; " +
+      "CREATE VIEW public.money_replay_bridge AS SELECT public.view_money_fix(); ";
+    r = apply("20990601000013_view_replay",
+      `${viewDefinition} SELECT * FROM public.money_replay_bridge;`);
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-39: selecting a stored view with a hidden orders rewrite needs the one-shot override");
+
+    r = apply("20990601000014_view_definition_only", viewDefinition);
+    ok(!isOneShotDeny(r),
+      `round-39 MUTANT: removing the view SELECT leaves its stored expression deferred; got ${r.stdout}`);
+
+    const viewCatalogPath = path.join(tmp, "supabase", "migrations", "20900101000002_view_catalog.sql");
+    writeFileSync(viewCatalogPath,
+      "CREATE VIEW public.resident_money_bridge AS " +
+      "SELECT public.resident_view_money_fix();\n");
+    r = apply("20990601000015_existing_view_replay",
+      "SELECT * FROM public.resident_money_bridge;");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-39: an older checked-in view is cataloged and its resident routine fails closed");
+
+    rmSync(viewCatalogPath, { force: true });
+    r = apply("20990601000016_existing_view_mutant",
+      "SELECT * FROM public.resident_money_bridge;");
+    ok(!isOneShotDeny(r),
+      "round-39 MUTANT: removing the checked-in view definition removes the catalog evidence");
+
     // 6. Fail closed. The registry is tracked in git; unreadable or absent means
     //    the checkout is broken or the file was removed — the two states in
     //    which a silent pass is most dangerous.

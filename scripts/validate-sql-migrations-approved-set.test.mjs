@@ -2066,6 +2066,25 @@ const CASES = [
       `AS $$ SELECT 'run'::text::public.cast_sink_2 $$;\n` +
       `SELECT public.cast_wrapper();\n`,
   },
+  {
+    name: 'round-39: selecting a stored view cannot hide its resident mutating routine',
+    expect: 'violation',
+    mustReport: 'view_select_replay_bridge',
+    sql:
+      `CREATE VIEW public.replay_bridge AS SELECT public.existing_repair();\n` +
+      `SELECT * FROM public.replay_bridge;\n`,
+  },
+  {
+    name: 'round-39 MUTANT: defining but not selecting a view remains deferred',
+    expect: 'silent',
+    sql: `CREATE VIEW public.definition_only_bridge AS SELECT public.existing_repair();\n`,
+  },
+  {
+    name: 'round-39: selecting a view defined by an older migration also fails closed',
+    expect: 'violation',
+    mustReport: 'view_select_replay_bridge',
+    sql: `SELECT * FROM public.replay_bridge;\n`,
+  },
 ];
 
 // A stamp no real migration uses, so these fixtures are never mistaken for

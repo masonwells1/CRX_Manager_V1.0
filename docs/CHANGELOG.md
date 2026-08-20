@@ -23,6 +23,9 @@ migration safety harness; no app source, migration SQL, live database, or produc
   execution follows the backing routine across same-file, wrapper, and older-catalog definitions;
   implicit/assignment casts and `WITH INOUT` shapes fail closed when their runtime effect cannot be
   resolved statically.
+- Selecting an ordinary stored view now executes its cataloged query in the analysis closure. Same-
+  file, nested, and older checked-in view definitions can no longer conceal a resident mutating
+  routine behind `SELECT * FROM view`; defining a view without executing it remains deferred.
 - Post-apply invalidation always deletes the already-resolved active worktree snapshot even if Git
   worktree enumeration fails, so a transient Git failure cannot leave evidence that becomes stale-but-
   trusted on the next apply.
@@ -33,8 +36,8 @@ migration safety harness; no app source, migration SQL, live database, or produc
   were removed; nonexistent files no longer remain as apparent audit evidence.
 
 Focused proof: snapshot producer 14 assertions; applied-source containment pass (including forced
-worktree-enumeration failure); apply-time analyzer 176 assertions; apply-time guard
-244 assertions; approved-set validator 168 mutation cases. Each new edge has a removal mutant that
+worktree-enumeration failure); apply-time analyzer 181 assertions; apply-time guard
+248 assertions; approved-set validator 171 mutation cases. Each new edge has a removal mutant that
 survives only when the load-bearing protection is deliberately deleted.
 
 ## 2026-08-19 — Product data model: build plan revision 2 after independent Fable…

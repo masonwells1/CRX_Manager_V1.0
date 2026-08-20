@@ -52,7 +52,10 @@ deny, not an assumed empty cascade. Custom PostgreSQL operator definitions are c
 verified migration history; invoking one follows its backing routine through the same transitive
 write analysis, and a database-resident backing routine fails closed. Custom casts are cataloged and
 followed the same way for `CAST(... AS type)` and `::type`; implicit/assignment casts and unresolved
-`WITH INOUT` dispatches deny because static analysis cannot prove their runtime routine effects. Invalidation always includes the
+`WITH INOUT` dispatches deny because static analysis cannot prove their runtime routine effects.
+Ordinary stored-view definitions are cataloged too: selecting a same-file, nested, or older checked-in
+view follows its stored query, while the Bash validator conservatively refuses any repository-known
+view execution whose live expression cannot be proven harmless. Invalidation always includes the
 already-resolved active checkout independently of `git worktree list`, so an enumeration failure cannot
 leave its snapshot stale-but-trusted. Changed-only SQL validation reads raw NUL-delimited Git paths and
 requires migration basenames to use an 8- or 14-digit timestamp plus ASCII letters, digits, underscores,

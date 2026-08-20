@@ -1881,6 +1881,24 @@ $MIG_BASENAME
           rulerel[rrel] = 1
         }
         for (i = 1; i <= ntok; i++) {
+          # Selecting from an ordinary view executes its stored query. The
+          # migration corpus tells us the object is a view but cannot prove the
+          # live definition is still byte-identical or free of resident routine
+          # calls, so executing any repo-known/same-file view fails closed.
+          # CREATE VIEW ... AS SELECT FROM another_view remains deferred because
+          # cast_expression_runs() excludes ordinary view definitions.
+          if ((tok[i] == "from" || tok[i] == "join" || tok[i] == "table") &&
+              cast_expression_runs(i)) {
+            vname = tok[i + 1]
+            gsub(/"/, "", vname); sub(/^.*\./, "", vname)
+            if (vname != "" &&
+                ((knownviews != "" && vname ~ ("^(" knownviews ")$")) || made_view[vname]) &&
+                !seenviewread[vname]) {
+              seenviewread[vname] = 1
+              printf "%d\t%s\t%s\t%s\t%s\t%s\n", tokln[i], "view_select_" vname, "indirect", "-", "-", raw[tokln[i]]
+              continue
+            }
+          }
           # Explicit custom casts dispatch to their backing routines without a
           # conventional `name(...)` call. Recognize both `expr::target` and
           # `CAST(expr AS target)` against every target type defined anywhere

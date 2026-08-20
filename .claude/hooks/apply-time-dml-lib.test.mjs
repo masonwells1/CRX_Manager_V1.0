@@ -791,4 +791,44 @@ eq(T(null), [], "a null body does not throw");
     'round-38: implicit custom casts conservatively fail closed on executable expressions');
 }
 
+// ---------------- ROUND 39: selecting a stored view executes its query
+{
+  const resident = applyTimeWriteTargets(
+    'CREATE VIEW public.replay_bridge AS SELECT public.existing_repair(); ' +
+    'SELECT * FROM public.replay_bridge;',
+  );
+  ok(resident.unknownCalls.includes('existing_repair'),
+    'round-39: selecting a same-file view follows its stored resident routine call');
+
+  const definitionOnly = applyTimeWriteTargets(
+    'CREATE VIEW public.replay_bridge AS SELECT public.existing_repair();',
+  );
+  ok(!definitionOnly.unknownCalls.includes('existing_repair'),
+    'round-39 MUTANT: defining but not selecting the view remains deferred');
+
+  const sameFile = applyTimeWriteTargets(
+    'CREATE FUNCTION public.view_money_fix() RETURNS integer LANGUAGE plpgsql AS $$ ' +
+    'BEGIN UPDATE public.order_items SET total_price = total_price; RETURN 1; END $$; ' +
+    'CREATE VIEW public.money_bridge AS SELECT public.view_money_fix(); ' +
+    'SELECT * FROM public.money_bridge;',
+  );
+  ok(sameFile.targets.has('order_items.total_price'),
+    'round-39: a selected view folds in its same-file mutating routine body');
+
+  const catalog = applyTimeWriteTargets(
+    'SELECT * FROM public.catalog_bridge;',
+    { knownViews: [{ name: 'catalog_bridge', query: 'select public.catalog_view_fix()' }] },
+  );
+  ok(catalog.unknownCalls.includes('catalog_view_fix'),
+    'round-39: a cataloged older view follows its stored resident routine call');
+
+  const nested = applyTimeWriteTargets(
+    'CREATE VIEW public.inner_bridge AS SELECT public.nested_view_fix(); ' +
+    'CREATE VIEW public.outer_bridge AS SELECT * FROM public.inner_bridge; ' +
+    'SELECT * FROM public.outer_bridge;',
+  );
+  ok(nested.unknownCalls.includes('nested_view_fix'),
+    'round-39: selected views are followed transitively through nested views');
+}
+
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

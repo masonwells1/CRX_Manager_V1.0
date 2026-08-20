@@ -32,6 +32,7 @@ import {
   castDefinitions,
   operatorDefinitions,
   overlappingTables,
+  viewDefinitions,
 } from "./apply-time-dml-lib.mjs";
 
 const REQUIRED_CODEX_MODEL = "gpt-5.6-sol";
@@ -176,6 +177,34 @@ function loadKnownCasts(evidenceRoots) {
           `${definition.source}\0${definition.target}\0${definition.fn}\0${definition.context}`,
           definition,
         );
+      }
+    }
+  }
+  return [...byKey.values()];
+}
+
+function loadKnownViews(evidenceRoots) {
+  const byKey = new Map();
+  for (const root of evidenceRoots) {
+    const migrationDir = path.join(root, "supabase", "migrations");
+    if (!existsSync(migrationDir)) continue;
+    let names;
+    try {
+      names = readdirSync(migrationDir).filter((name) => name.endsWith(".sql"));
+    } catch (err) {
+      throw new Error(`${migrationDir}: ${err?.message || err}`);
+    }
+    for (const name of names) {
+      const filePath = path.join(migrationDir, name);
+      let sql;
+      try {
+        sql = readFileSync(filePath, "utf8");
+      } catch (err) {
+        throw new Error(`${filePath}: ${err?.message || err}`);
+      }
+      if (!/\bcreate\s+(?:or\s+replace\s+)?(?:(?:temp|temporary|recursive)\s+)*view\b/i.test(sql)) continue;
+      for (const definition of viewDefinitions(applyTimeCode(sql).code)) {
+        byKey.set(`${definition.name}\0${definition.query}`, definition);
       }
     }
   }
@@ -538,13 +567,15 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
     let fanoutEvidence;
     let knownOperators;
     let knownCasts;
+    let knownViews;
     try {
       fanoutEvidence = loadTrustedFanout(evidenceRoots);
       knownOperators = loadKnownOperators(evidenceRoots);
       knownCasts = loadKnownCasts(evidenceRoots);
+      knownViews = loadKnownViews(evidenceRoots);
     } catch (err) {
       out("block",
-        `ONE-SHOT REPLAY GUARD: trusted trigger/FK, custom-operator, or custom-cast evidence could not be loaded ` +
+        `ONE-SHOT REPLAY GUARD: trusted trigger/FK, custom-operator, custom-cast, or stored-view evidence could not be loaded ` +
         `(${err?.message || err}). A directly named table is not the complete apply-time write ` +
         `surface when live triggers or referential actions can rewrite another population. ` +
         `Refusing the apply; restore or regenerate scripts/trigger-fanout.json and retry.`);
@@ -703,7 +734,7 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
     // see apply-time-dml-lib.mjs for why deferred routine bodies are excluded.
     let submitted = { targets: new Set(), dynamicWrites: [], unresolved: false };
     try {
-      submitted = applyTimeWriteTargets(migQuery, { knownOperators, knownCasts });
+      submitted = applyTimeWriteTargets(migQuery, { knownOperators, knownCasts, knownViews });
     } catch {
       // A parse this module cannot handle must not silently mean "writes
       // nothing". Treat it as unresolvable so the semantic check below refuses
@@ -733,7 +764,7 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
               `are removed. An empty or corrupted source has no replay identity. Refusing the ` +
               `apply; restore the tracked SQL file and retry.`);
           }
-          const registered = applyTimeWriteTargets(sourceSql, { knownOperators, knownCasts });
+          const registered = applyTimeWriteTargets(sourceSql, { knownOperators, knownCasts, knownViews });
           const registeredFanout = expandThroughFanout(registered, fanoutEvidence);
           const resolvedWrite = registered.targets.size > 0;
           const opaqueWrite = registered.unresolved || registered.dynamicWrites.length > 0 ||

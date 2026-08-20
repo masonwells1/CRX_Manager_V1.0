@@ -665,14 +665,18 @@ export function triggerAttachments(code) {
 
 function invokedRoutines(codeLower, defined) {
   const found = new Set();
-  for (const name of defined) {
-    const re = new RegExp(`(^|[^A-Za-z0-9_.])((?:[a-z0-9_]+\\.)?)${name}\\s*\\(`, "g");
-    let mm;
-    while ((mm = re.exec(codeLower)) !== null) {
-      const nameStart = mm.index + mm[1].length + mm[2].length;
-      if (NOT_A_CALL.test(codeLower.slice(0, nameStart))) continue;
-      found.add(name);
-      break;
+  for (const raw of String(codeLower || "").split(";")) {
+    const executable = runForEffectRegion(raw.trim());
+    if (!executable) continue;
+    for (const name of defined) {
+      const re = new RegExp(`(^|[^A-Za-z0-9_.])((?:[a-z0-9_]+\\.)?)${name}\\s*\\(`, "g");
+      let mm;
+      while ((mm = re.exec(executable)) !== null) {
+        const nameStart = mm.index + mm[1].length + mm[2].length;
+        if (NOT_A_CALL.test(executable.slice(0, nameStart))) continue;
+        found.add(name);
+        break;
+      }
     }
   }
   return found;
@@ -930,6 +934,36 @@ export function ruleAttachments(code) {
   return [...new Set(out)];
 }
 
+/** Ordinary (non-materialized) view definitions and their stored query text. */
+export function viewDefinitions(code) {
+  const out = [];
+  for (const statement of String(code || "").split(";")) {
+    const normalized = statement.toLowerCase().replace(/"/g, "");
+    const head = /\bcreate\s+(?:or\s+replace\s+)?(?:(?:temp|temporary|recursive)\s+)*view\s+(?:if\s+not\s+exists\s+)?(?:[a-z_][a-z0-9_$]*\s*\.\s*)?([a-z_][a-z0-9_$]*)\b/.exec(normalized);
+    if (!head || /\bcreate\s+(?:or\s+replace\s+)?materialized\s+view\b/.test(normalized)) continue;
+    const tail = normalized.slice((head.index || 0) + head[0].length);
+    const as = /\bas\s+/.exec(tail);
+    out.push({ name: head[1], query: as ? tail.slice(as.index + as[0].length).trim() : "" });
+  }
+  return out;
+}
+
+function invokedViews(code, definitions) {
+  const names = new Set(definitions.map((definition) => definition.name).filter(Boolean));
+  if (!names.size) return [];
+  const found = new Set();
+  for (const statement of String(code || "").split(";")) {
+    const region = runForEffectRegion(statement.trim().toLowerCase().replace(/"/g, ""));
+    if (!region) continue;
+    const relation = /\b(?:from|join|update|into|table)\s+(?:only\s+)?(?:[a-z_][a-z0-9_$]*\s*\.\s*)?([a-z_][a-z0-9_$]*)\b/g;
+    let match;
+    while ((match = relation.exec(region)) !== null) {
+      if (names.has(match[1])) found.add(match[1]);
+    }
+  }
+  return definitions.filter((definition) => found.has(definition.name));
+}
+
 // ROUND 29. The verbs that begin a statement PostgreSQL will run. Used to tell
 // a string literal that is SQL from one that is a comment, an error message or
 // a column default. Deliberately wider than the write verbs: a literal handed to
@@ -1078,7 +1112,10 @@ function unknownCallsIn(codeLower, defined) {
  * `unknownCalls` names routines the migration executes for effect but does not
  * define; their bodies live in the database, not in this file.
  */
-export function applyTimeWriteTargets(sql, { knownOperators = [], knownCasts = [] } = {}) {
+export function applyTimeWriteTargets(
+  sql,
+  { knownOperators = [], knownCasts = [], knownViews = [] } = {},
+) {
   const { code, literals, routines } = applyTimeCode(sql || "");
   const top = targetsFromCode(code, literals);
 
@@ -1134,6 +1171,22 @@ export function applyTimeWriteTargets(sql, { knownOperators = [], knownCasts = [
   defineCasts(knownCasts);
   defineCasts(castDefinitions(code));
 
+  const views = [];
+  const viewKeys = new Set();
+  const defineViews = (list) => {
+    for (const definition of list) {
+      const name = String(definition?.name || "").toLowerCase();
+      const query = String(definition?.query || "").toLowerCase();
+      if (!name) continue;
+      const key = `${name}\0${query}`;
+      if (viewKeys.has(key)) continue;
+      viewKeys.add(key);
+      views.push({ name, query });
+    }
+  };
+  defineViews(knownViews);
+  defineViews(viewDefinitions(code));
+
   // ROUND 28. Triggers this migration attaches, and the ones a write has
   // already fired. A trigger whose relation is written runs its function, so
   // the function joins the frontier exactly as an explicit call would; if its
@@ -1178,6 +1231,7 @@ export function applyTimeWriteTargets(sql, { knownOperators = [], knownCasts = [
       defineRoutines(parsed.routines);
       defineOperators(operatorDefinitions(parsed.code));
       defineCasts(castDefinitions(parsed.code));
+      defineViews(viewDefinitions(parsed.code));
       attachments.push(...triggerAttachments(parsed.code));
       ruleTables.push(...ruleAttachments(parsed.code));
       execCodes.push(parsed.code);
@@ -1192,6 +1246,8 @@ export function applyTimeWriteTargets(sql, { knownOperators = [], knownCasts = [
   const unknownCastFns = new Set();
   const firedOperators = new Set();
   const firedCasts = new Set();
+  const firedViews = new Set();
+  const foldedViewQueries = new Set();
   const addOperatorInvocations = (sourceCode, into) => {
     for (const definition of invokedOperators(sourceCode, operators)) {
       const key = `${definition.operator}\0${definition.fn}`;
@@ -1215,6 +1271,18 @@ export function applyTimeWriteTargets(sql, { knownOperators = [], knownCasts = [
         if (!seen.has(definition.fn)) into.add(definition.fn);
       } else {
         unknownCastFns.add(definition.fn);
+      }
+    }
+  };
+  const addViewInvocations = (sourceCode) => {
+    for (const definition of invokedViews(sourceCode, views)) {
+      const key = `${definition.name}\0${definition.query}`;
+      firedViews.add(key);
+      if (!definition.query) {
+        top.unresolved = true;
+      } else if (!foldedViewQueries.has(key)) {
+        foldedViewQueries.add(key);
+        execCodes.push(definition.query);
       }
     }
   };
@@ -1248,6 +1316,7 @@ export function applyTimeWriteTargets(sql, { knownOperators = [], knownCasts = [
       }
       addOperatorInvocations(c, into);
       addCastInvocations(c, into);
+      addViewInvocations(c);
     }
   };
 
@@ -1257,6 +1326,7 @@ export function applyTimeWriteTargets(sql, { knownOperators = [], knownCasts = [
   let frontier = invokedRoutines(code.toLowerCase(), byName.keys());
   addOperatorInvocations(code, frontier);
   addCastInvocations(code, frontier);
+  addViewInvocations(code);
   drainExec(frontier);
   fireAttached(frontier);
   while (frontier.size) {
@@ -1273,11 +1343,13 @@ export function applyTimeWriteTargets(sql, { knownOperators = [], knownCasts = [
         foldLiterals(inner, r.literals);
         defineOperators(operatorDefinitions(r.code));
         defineCasts(castDefinitions(r.code));
+        defineViews(viewDefinitions(r.code));
         for (const n of invokedRoutines(r.code.toLowerCase(), byName.keys())) {
           if (!seen.has(n)) next.add(n);
         }
         addOperatorInvocations(r.code, next);
         addCastInvocations(r.code, next);
+        addViewInvocations(r.code);
       }
     }
     drainExec(next);
@@ -1314,6 +1386,7 @@ export function applyTimeWriteTargets(sql, { knownOperators = [], knownCasts = [
     firedRules: [...firedRules],
     invokedOperators: [...firedOperators],
     invokedCasts: [...firedCasts],
+    invokedViews: [...firedViews],
   };
 }
 
