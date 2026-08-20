@@ -5,7 +5,9 @@
 import assert from "node:assert/strict";
 import {
   classifyWorktree, classifyBranch, planCleanup, normPath,
+  meaningfulDirt, isIgnorableDirtLine, IGNORABLE_DIRT_PATH,
   PROTECTED_BRANCHES, HARNESS_MARKER, ACTIVE_WINDOW_MS,
+  ledgerHasEntries, ledgerKeepsWorktree,
 } from "./worktree-cleanup-lib.mjs";
 
 let pass = 0;
@@ -45,6 +47,14 @@ eq(classifyWorktree({ ...finished, locked: true }, ctx).reason, "locked", "locke
 
 // 5. dirty (uncommitted work)
 eq(classifyWorktree({ ...finished, dirty: true }, ctx).reason, "dirty", "dirty → keep");
+
+// 5b. unresolved applied-source ledger (a live apply with no committed source
+//     yet — Opus review 2026-08-19). Merged+clean can't see the gitignored
+//     ledger, so it needs its own gate; sweeping would destroy the only record.
+eq(classifyWorktree({ ...finished, hasAppliedLedgerEntries: true }, ctx).reason, "applied-ledger",
+  "unresolved applied-source ledger → keep even when merged+clean");
+eq(classifyWorktree({ ...finished, hasAppliedLedgerEntries: false }, ctx).action, "remove",
+  "resolved/absent ledger → still removable when finished");
 
 // 6. unmerged (real un-shipped commits)
 eq(classifyWorktree({ ...finished, merged: false }, ctx).reason, "unmerged", "unmerged → keep");
@@ -111,6 +121,57 @@ ok(plan.keep.every((k) => typeof k.reason === "string" && k.reason), "every kept
 // invariant: nothing unmerged is EVER in a remove list
 const allRemoved = [...plan.removeWorktrees, ...plan.removeBranches];
 ok(allRemoved.every((x) => x.merged === true), "SAFETY: no unmerged item is ever removed");
+
+// ── Ignorable-dirt filter (2026-08-18: settings.local.json noise) ──
+ok(IGNORABLE_DIRT_PATH === ".claude/settings.local.json", "ignorable path stable");
+ok(isIgnorableDirtLine(" M .claude/settings.local.json"), "unstaged modify of the harness file is ignorable");
+ok(isIgnorableDirtLine("M  .claude/settings.local.json"), "staged modify is ignorable");
+ok(isIgnorableDirtLine("?? .claude/settings.local.json"), "untracked copy is ignorable");
+ok(isIgnorableDirtLine(" M .claude\\settings.local.json\r"), "backslashes + CR normalize");
+ok(!isIgnorableDirtLine(" M .claude/settings.json"), "the SHARED settings.json is real dirt");
+ok(!isIgnorableDirtLine(" M src/settings.local.json"), "same basename elsewhere is real dirt");
+ok(!isIgnorableDirtLine("R  .claude/settings.local.json -> src/x.ts"), "renames stay real dirt");
+ok(!isIgnorableDirtLine(" M .claude/settings.local.json.bak"), "suffixed lookalike is real dirt");
+eq(meaningfulDirt(" M .claude/settings.local.json\n"), [], "sole harness-file dirt → clean for cleanup");
+eq(meaningfulDirt(" M .claude/settings.local.json\n M src/app.ts\n"), [" M src/app.ts"],
+  "harness file + real work → only the real work counts");
+eq(meaningfulDirt(""), [], "empty porcelain → clean");
+eq(meaningfulDirt("?? supabase/migrations/x.sql"), ["?? supabase/migrations/x.sql"],
+  "an untracked migration is ALWAYS real dirt");
+
+// ── ledgerHasEntries — the applied-ledger gate's shape rules (round 4) ──
+// Only an object row with a non-empty string name (the recorder's one shape)
+// counts as a real entry; junk rows alone must not pin a worktree forever.
+ok(ledgerHasEntries(JSON.stringify([{ name: "add_widget_flag", ts: "2026-08-18T00:00:00Z" }])),
+  "a real recorder entry counts");
+ok(ledgerHasEntries(JSON.stringify([{ bogus: true }, { name: "real_one" }])),
+  "one real entry among junk still counts");
+ok(!ledgerHasEntries(JSON.stringify([])), "an empty ledger has no entries");
+ok(!ledgerHasEntries(JSON.stringify([{ bogus: true }, { name: 123 }, { name: "  " }, null])),
+  "junk-only rows (no name / non-string / blank) do not count");
+ok(!ledgerHasEntries(JSON.stringify({ name: "not-an-array" })), "a non-array ledger has no entries");
+assert.throws(() => ledgerHasEntries("{not json"), "unparseable text throws — the caller decides");
+pass++;
+
+// ── ledgerKeepsWorktree — the read-result → keep decision (CodeRabbit 2026-08-19) ──
+// Fail toward KEEP on any doubt: ENOENT (truly absent) is the ONLY case that
+// lets a worktree be swept; unreadable or malformed keeps it.
+ok(!ledgerKeepsWorktree({ readError: Object.assign(new Error("no such file"), { code: "ENOENT" }) }),
+  "absent ledger (ENOENT) → does NOT keep (sweepable)");
+ok(ledgerKeepsWorktree({ readError: Object.assign(new Error("permission denied"), { code: "EACCES" }) }),
+  "present-but-unreadable (EACCES) → KEEP");
+ok(ledgerKeepsWorktree({ readError: Object.assign(new Error("is a directory"), { code: "EISDIR" }) }),
+  "present-but-unreadable (EISDIR) → KEEP");
+ok(ledgerKeepsWorktree({ readError: new Error("mystery I/O") }),
+  "read error with NO code → present, cause unknown → KEEP");
+ok(ledgerKeepsWorktree({ rawText: "{not json" }),
+  "malformed ledger text → contents unknown → KEEP");
+ok(ledgerKeepsWorktree({ rawText: JSON.stringify([{ name: "add_widget_flag" }]) }),
+  "readable ledger WITH a real entry → KEEP");
+ok(!ledgerKeepsWorktree({ rawText: JSON.stringify([]) }),
+  "readable EMPTY ledger → no entries → does NOT keep");
+ok(!ledgerKeepsWorktree({ rawText: JSON.stringify([{ bogus: true }]) }),
+  "readable junk-only ledger → no real entry → does NOT keep");
 
 // normPath sanity
 eq(normPath("C:\\A\\B\\"), "c:/a/b", "normPath lowercases + forward-slashes + strips trailing");

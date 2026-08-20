@@ -24,7 +24,7 @@ If either is missing, ask one short question.
 node scripts/post-agent-review-to-pr.mjs --pr <number> --file <path> --dry-run
 ```
 
-Review the generated comment text. If it contains secrets or sensitive customer information, stop and sanitize first.
+Review the generated comment text. If it contains secrets or sensitive customer information, stop and sanitize first. `CRX_Manager_V1.0` is a PUBLIC repo — also strip live financial values (pricing, costs, profit), customer names, and real record IDs before posting; review/audit files often embed live-DB evidence containing exactly that.
 
 ## Step 3 - Post Only With Current Confirmation
 

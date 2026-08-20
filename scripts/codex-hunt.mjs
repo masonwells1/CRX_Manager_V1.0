@@ -17,6 +17,8 @@
  *   length limit, however large the slice's file list grows.
  *
  * HARDENED INVOCATION — `codex exec` with:
+ *   --model gpt-5.3-codex-spark : pin the cheap read-only hunter model; the
+ *       gate/glance steps use overnight-codex-gate.mjs (gpt-5.6-sol) instead.
  *   --ignore-user-config : do NOT load ~/.codex/config.toml. That strips the
  *       Supabase / Vercel / GitHub / Sentry marketplace plugins off this run.
  *       Auth still resolves from CODEX_HOME, so the model still works.
@@ -78,7 +80,9 @@ function resolveCodex() {
 const codex = resolveCodex()
 // Prompt goes on STDIN (codex reads instructions from stdin when no positional
 // prompt is given), so there is no argv length limit.
-const args = ['exec', '--ignore-user-config', '--sandbox', 'read-only', '--ephemeral', '-C', repoRoot]
+// Model is pinned to the read-only spark hunter — `--ignore-user-config` drops any
+// workstation default, so an unpinned run would fall to the CLI's built-in model.
+const args = ['exec', '--ignore-user-config', '--model', 'gpt-5.3-codex-spark', '--sandbox', 'read-only', '--ephemeral', '-C', repoRoot]
 
 const res = spawnSync(codex, args, {
   input: prompt,                         // prompt via stdin — no argv length cap

@@ -1,13 +1,23 @@
 # Line-ending policy for the agent-workflow surface (Mason, 2026-07-13).
 #
-# `scripts/check-agent-workflows.mjs` regenerates the Codex adapter files under
-# `.agents/` from the `.claude/` sources and compares them byte-for-byte. The
-# generator emits Unix (LF) line endings. On Windows checkouts, `core.autocrlf=true`
-# was rewriting these files to CRLF, so the check reported them "stale" (identical
-# text, different line endings) and blocked every commit. Pinning both the sources
-# it reads and the targets it writes to LF makes the check deterministic on every
-# platform. Keep the sources and targets on the SAME ending or the mirror check
-# fails the other direction.
+# `scripts/sync-agent-workflows.mjs` regenerates the Codex adapter files under
+# `.agents/` from the `.claude/` sources and compares them; its `--write` path
+# emits Unix (LF) line endings for every file it writes.
+# `scripts/check-agent-workflows.mjs` and `scripts/agent-health-check.mjs` both
+# reach that same comparison rather than implementing their own.
+#
+# Why the pin exists: on Windows checkouts `core.autocrlf=true` was rewriting
+# these files to CRLF, so the check reported them "stale" (identical text,
+# different line endings) and blocked every commit. Pinning both the sources the
+# generator reads and the targets it writes to LF keeps the committed form
+# canonical on every platform.
+#
+# The pin is not the only defense, because it governs what Git stores, not what
+# sits on disk. A file can be CRLF in the working tree and still hash identically
+# to its LF blob, which makes it invisible to `git diff`. Both mirror comparisons
+# therefore ignore line endings — the generator since 2026-07-16 (#147),
+# `agent-health` since 2026-08-19 — via `scripts/normalize-eol.mjs`. A mismatch in
+# any OTHER byte is still a real failure.
 .agents/**          text eol=lf
 .claude/skills/**   text eol=lf
 .claude/commands/** text eol=lf
@@ -25,6 +35,21 @@ supabase/migrations/20260723193312_product_families_return_policy_foundation.sql
 supabase/migrations/20260729222311_bind_save_field_actor.sql text eol=lf
 scripts/smoke/fixtures/phase3-live-unapply-credit-memo.sql text eol=lf
 
+# The six migrations applied live on 2026-08-12 whose files were recovered from
+# the applying sessions' transcripts and landed afterwards. Same rule, same
+# reason, and here it is load-bearing in a way that is easy to miss: these bytes
+# were verified LF against live pg_proc.prosrc after the fact, and the recovered
+# text md5-matches the live function bodies exactly. A Windows checkout under
+# core.autocrlf=true would rewrite them to CRLF, and a from-scratch rebuild would
+# then install bodies that no longer hash to what production actually runs — the
+# very drift these files exist to close.
+supabase/migrations/20260812010000_blend_ticket_order_header_runtime_assert.sql text eol=lf
+supabase/migrations/20260812011000_restore_quote_version_whole_cent_money.sql text eol=lf
+supabase/migrations/20260812115235_snapshot_cost_reporting.sql text eol=lf
+supabase/migrations/20260812115236_quote_items_cost_at_quote_snapshot.sql text eol=lf
+supabase/migrations/20260812115237_enforce_below_cost_admin_approval.sql text eol=lf
+supabase/migrations/20260812115238_repair_historical_order_line_cents.sql text eol=lf
+
 # Wave A. Not yet applied, but the same rule applies for the same reason, and
 # here it binds BEFORE the first apply rather than after: each of these pins an
 # md5 of a function body this file itself installs, so the bytes Git hands the
@@ -41,6 +66,25 @@ scripts/.staging-migrations/20260813030000_reject_non_finite_money_and_quantitie
 scripts/.staging-migrations/20260813040000_clamp_negative_commission_remainder.sql text eol=lf
 scripts/.staging-migrations/20260813050000_guard_job_commission_split_immutable.sql text eol=lf
 scripts/.staging-migrations/20260813060000_require_completed_delivery_before_invoice_post.sql text eol=lf
+
+# CRX-SEC-1. This one pins no md5, but it is pinned for the apply path: the
+# migration-apply-guard proof binds a hash of the exact bytes handed to the
+# applier, so a CRLF checkout would mint a proof that no longer matches the file
+# under review.
+supabase/migrations/20260813080000_lock_quote_versions_writes_to_rpc.sql text eol=lf
+
+# Draw-down price-tier split. Pinned for two reasons: its preflight compares the
+# live function body against an md5 computed on LF bytes, and the
+# migration-apply-guard proof binds a hash of the exact bytes handed to the
+# applier, so a CRLF checkout would abort the preflight or mint a proof that no
+# longer matches the file under review.
+supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql text eol=lf
+
+# Its cutover barrier precursor, pinned for the same two reasons. The md5 it
+# compares against (970960d8490b63b972bc8c60fe207a5b) was reproduced exactly
+# from LF bytes on a throwaway PostgreSQL 17.10 server; the CRLF form of the
+# same body hashes differently, so a CRLF checkout would abort the preflight.
+supabase/migrations/20260816110000_draw_down_cutover_barrier.sql text eol=lf
 
 # Generated clean-rebuild baselines are hash-verified release artifacts.
 supabase/baselines/*.sql  text eol=lf

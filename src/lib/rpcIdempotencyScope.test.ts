@@ -251,6 +251,24 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // migration 20260810150000 is the first to CREATE the function under its
   // post-rename name (the rename itself defined no function body on disk).
   _convert_quote_to_order_owner_impl: ['convert_quote_to_order'],
+  // Direct EXECUTE is revoked from anon/authenticated/service_role. This IS the
+  // original public draw_down_quote body: migration 20260812115237 renamed it
+  // with `ALTER FUNCTION ... RENAME TO
+  // _draw_down_quote_below_cost_impl_20260810` and created a thin public
+  // wrapper that declares the below-cost context and forwards p_idempotency_key
+  // to it, so both layers use the one 'draw_down_quote' cache namespace on
+  // purpose — a replay through the wrapper must find the result the impl saved.
+  // Giving the impl its own namespace would strand that cache and let a retried
+  // draw create a second order. The shape is pre-existing and unchanged; it
+  // entered this test's scope only because migration 20260816120000 is the
+  // first to CREATE the function under its post-rename name (the rename itself
+  // defined no function body on disk).
+  _draw_down_quote_below_cost_impl_20260810: ['draw_down_quote'],
+  // Direct EXECUTE is revoked. This is the idempotent implementation behind
+  // the public restore_quote_version wrapper; both intentionally use the one
+  // public restore_quote_version cache namespace so a replay through the
+  // wrapper reaches the result that the implementation saved.
+  _restore_quote_version_owner_impl: ['restore_quote_version'],
   // Owner-only implementation used by the public standalone/group posting
   // wrappers; all layers intentionally share the public post_invoice cache.
   _post_invoice_impl_20260714: ['post_invoice'],
@@ -267,6 +285,27 @@ const INTERNAL_OPERATION_REFERENCES: Record<string, string[]> = {
   // both intentionally share the wrapper's single 'save_field_app_split_invoice' cache
   // namespace, exactly like the save_purchase_order pair above.
   _save_field_app_split_invoice_impl: ['save_field_app_split_invoice'],
+  // Direct EXECUTE is revoked from anon/authenticated/service_role (postflight
+  // in mig 20260721014858 asserts it). This IS the original public
+  // complete_delivery body: migration 20260716173342 renamed it with
+  // `ALTER FUNCTION ... RENAME TO _complete_delivery_authorized_impl` and
+  // created a new public wrapper that authorizes and then delegates, so both
+  // layers use the one 'complete_delivery' cache namespace on purpose — a
+  // replay through the wrapper must find the result the impl saved. Giving the
+  // impl its own namespace would strand that cache and let a retried
+  // completion invoice the same delivery twice. The shape is pre-existing and
+  // unchanged; it entered this test's scope only because migration
+  // 20260817120000 is the first to CREATE the function under its post-rename
+  // name (the rename itself defined no function body on disk).
+  _complete_delivery_authorized_impl: ['complete_delivery'],
+  // Direct EXECUTE is revoked from anon/authenticated/service_role (same
+  // postflight). Implementation half of the public
+  // create_invoice_for_unbilled_delivery RPC, which delegates to it
+  // (mig 20260721014858); both layers intentionally share that one cache
+  // namespace. Pre-existing and unchanged — mig 20260817120000 re-emits the
+  // body only to consume the order line's allocated cents instead of
+  // re-extending price x quantity.
+  _create_invoice_for_unbilled_delivery_impl_20260718: ['create_invoice_for_unbilled_delivery'],
   // Restore the Wave A alias exemption when its drafts are promoted from
   // scripts/.staging-migrations/.
 };
@@ -457,7 +496,9 @@ describe('Idempotency operation literals in latest disk migrations', () => {
 
   it('regression guard: restore_quote_version lookup stays scoped to its own operation', () => {
     // Codex 2026-06-08 LOW — the lookup originally filtered on the key only.
-    const def = defs.get('restore_quote_version');
+    // The public wrapper now delegates, so pin the lookup in the private
+    // implementation that owns the idempotency SQL rather than the wrapper.
+    const def = defs.get('_restore_quote_version_owner_impl');
     expect(def).toBeDefined();
     expect(def!.body).toMatch(/operation\s*=\s*'restore_quote_version'/i);
   });

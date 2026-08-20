@@ -259,7 +259,21 @@ invisible and unwritable to `authenticated` until someone adds it to that list. 
 PostgREST `permission denied for column …` on a field that plainly exists — reads like an app bug,
 is actually a missing grant. **Any `ALTER TABLE … ADD COLUMN` on a column-carved table must ship a
 `GRANT` for the new column in the same migration.** Tables in this state today:
-`public.application_services`.
+`public.application_services` **and `public.products`**.
+
+**`public.products` (verified live 2026-08-18).** `authenticated` has **no** table-level
+`INSERT` or `UPDATE` — `has_table_privilege('authenticated','public.products','UPDATE')` is
+**false** — and **27 of its 48 columns** instead carry explicit column-level `INSERT`/`UPDATE`
+grants, a consequence of the phase-3 product-governance work
+(`20260723193312_product_families_return_policy_foundation.sql` and successors). `SELECT`
+remains table-wide. This entry previously listed only `application_services` and was stale.
+
+Any work adding columns to `products` — the 2026-08-18 product data model plan adds density,
+nickname, formulation type, safener and registration status among others — must ship
+`GRANT INSERT(col), UPDATE(col) ON public.products TO authenticated` in the same migration.
+**Verify by editing the field through the running app as an ordinary authenticated user:**
+service-role access bypasses column grants entirely and will show a working save on a column
+no real user can write.
 
 Two more consequences worth knowing before you carve a column out:
 
@@ -269,6 +283,85 @@ Two more consequences worth knowing before you carve a column out:
 - A `SECURITY DEFINER` function owned by `postgres` reads the column **as postgres**, so revoking
   from `authenticated` does not reach it. That is what keeps the money engine working — and equally,
   it means a SECDEF function is a live bypass of the carve-out unless it gates internally.
+
+---
+
+## A green CodeRabbit check does not mean a review happened (2026-08-17)
+
+`AGENTS.md` makes reading CodeRabbit's review a standing pre-merge step. The check row is **not**
+evidence that step is satisfiable. On PR #411, `gh pr checks` reported:
+
+```text
+CodeRabbit	pass	0		Review completed
+```
+
+while CodeRabbit's own comment on the same PR said:
+
+> **Review failed** — An error occurred during the review process. Please try again later.
+
+The review was attempted and did not complete — no findings were ever submitted — and the status
+text asserted the opposite. PR #402 showed a milder version of the same thing — check green, body
+reading "Review rate limited". Read the **comment body**, never the check row:
+
+```bash
+PR_NUMBER=411
+REPO="masonwells1/CRX_Manager_V1.0"
+gh pr view "$PR_NUMBER" --repo "$REPO" --json reviews,comments
+```
+
+Zero `reviews` plus a `coderabbitai` comment containing "Review failed" or "rate limited" means no
+CodeRabbit review was submitted, so the advisory gate produced nothing to read. Say so rather than
+treating green as clean. Re-request one with a `@coderabbitai review` comment on the PR; on #411
+that turned the failure into a real 6-finding review. This is also a live argument
+against promoting CodeRabbit to a merge-blocking required check (the "hard-block soon" half of the
+2026-07-30 decision) until the green-on-failure case is understood — as a required check it would
+pass while doing nothing.
+
+---
+
+## The `Vercel` required status can take an hour — or a minute (2026-08-17)
+
+`Vercel` is one of three required checks in the `protect-main` ruleset, so a PR sits at `BLOCKED`
+until it posts. **How long that takes is wildly variable**, which is the whole point of this entry.
+Three measurements, all on PR #411, all the same branch and same day:
+
+| Commit | authored (UTC) | `Vercel` status posted | delay |
+|---|---|---|---|
+| `711aecfb` | 13:42:32 | 14:51:03 | **~69 min** |
+| `8b1e86f8` | 15:23:22 | 16:19:32 | **~56 min** |
+| `0a15eab4` | 16:56:51 | 17:06:02 | **~9 min** |
+
+Do not read a fast one as normal or a slow one as broken. The two slow samples landed in a window
+where GitHub's own infrastructure was visibly congested — the CodeQL job on this PR failed the same
+afternoon on repeated `429 Too Many Requests` fetching `github/codeql-action` — so treat the delay
+as queue depth, not as a property of the commit or of how the branch was created.
+
+Operationally: **do not start diagnosing a missing `Vercel` status until at least an hour has
+passed.** Waiting is free and is the correct action; the two slow samples both arrived on their own,
+and three consecutive 10-minute polls on `711aecfb` saw nothing before it turned up. An hour is an
+escalation threshold chosen to sit past the worst observed wait, not a published SLA.
+
+Everything below was a wrong turn on this PR, recorded so nobody repeats it. The absence was read
+as a causal failure of creating the remote ref through the GitHub API first (the fix
+`new-branch-push-scans-full-history` prescribes for the unbounded pre-push containment scan). Two
+signals looked like a fingerprint — the deployment lacked `meta.repoPushedAt`, and
+`repos/.../deployments?sha=` was empty. Neither held: the status arrived anyway, on that exact
+commit, with no push event of its own. A close/reopen and an extra pushed commit were both spent
+chasing it and neither was what fixed anything.
+
+Confirm the build independently instead of inferring from GitHub. A `READY` deployment for the SHA
+proves only that **the Vercel deployment finished** — it says nothing about whether the other
+required checks passed, so read those separately rather than concluding the PR is healthy:
+
+```bash
+REPO="masonwells1/CRX_Manager_V1.0"
+SHA="711aecfb"
+gh api "repos/$REPO/commits/$SHA/status" --jq '[.statuses[].context]'
+```
+
+Cross-check the SHA against Vercel's own `list_deployments` for project
+`prj_cp2ZVn0RueHHYXCxNkTD0YwCBET6` (team `team_jQyqY8P8Kt3qEoT5hg5zlmpT`) and read
+`state` + `meta.githubCommitSha`. Never work around a late status by relaxing the required check.
 
 ---
 

@@ -1,0 +1,515 @@
+# Product Data Model — Build Plan and Handoff Contract
+
+**Date:** 2026-08-19 · **Revision 2** (folds in the Fable adversarial review, 26 findings, and
+two owner decisions taken 2026-08-19)
+**Branch:** `claude/product-data-storage-58ba26` — local commits only, nothing pushed
+**Intended executor:** Codex **`sol`** (`gpt-5.6-sol`, high reasoning effort)
+**Reviewer of record:** Claude **Opus 5** — per-package gate plus a final coverage audit
+**Design source of truth:** `docs/plans/2026-08-18-product-data-model-MASTER-RECORD.md`
+(43 issues, every decision, and why) and `…-PRD.md` (numbered requirements + acceptance)
+
+This file is the **executable** layer. The master record says *what is wrong and why*; this
+says *what gets built, in what order, by whom, and what proof ends each step.* Where the two
+disagree, the master record wins on reasoning and this file wins on sequencing.
+
+> **Revision 2 changelog.** Two claims in revision 1 were **wrong** and are corrected below:
+> (a) the "no feature-flag system exists" finding was false — see §0; (b) R-3 asserted
+> `docs/reference/gotchas.md` was stale, but the `public.products` column-carve entry was
+> already added on 2026-08-18 (`gotchas.md:264-273`). Also added: a backup gate, a live-data
+> proof protocol, the scale-weight surface, negative-path acceptances, WP-4's storage columns,
+> the receiving escape hatch, the chemistry role model, and §8 orchestration.
+
+---
+
+## 0. Eleven decisions closed, plus one corrected finding
+
+The master record left nine questions open that a builder cannot proceed past without
+inventing an answer, and the Fable review surfaced two more that are Mason's to make. All are
+now decided.
+
+### CORRECTED FINDING — this repo *does* have a feature-flag precedent
+
+Revision 1 claimed `feature_flag`, `featureFlag`, `FEATURE_FLAG` and `rollout` appear zero
+times in `src/` and `supabase/migrations/`. **That was false.**
+`supabase/migrations/20260722064814_wells_cost_basis_rollout_gate.sql` is a rollout gate, and
+`supplier_cost_basis_enabled` is an `app_settings` switch referenced in eight places across
+`20260722015019_supplier_cost_basis_phase2.sql`.
+
+The conclusion still stands — `app_settings` plus a typed parse helper is the right pattern,
+and `src/lib/labelGuardrailSetting.ts` is the right shape (safe default, never invent the
+dangerous value). But the missed precedent is **richer than the one adopted**: the Wells gate
+supports a **per-product** rollout table, not just a global on/off. **Phase 2 must evaluate
+per-product cutover** (pilot set first, then widen) before it is detailed — see D-F.
+
+### The eleven decisions
+
+| # | Question | Decision | Closes |
+|---|---|---|---|
+| **D-A** | `ae_fraction` cannot express fertilizer oxide→elemental (PRD 1.10b) | **Generalize to `canonical_fraction` + `fraction_basis`** (`acid_equivalent` \| `elemental`). Glyphosate IPA salt → parent acid, 0.741, basis `acid_equivalent`. P₂O₅ → parent P, 0.436, basis `elemental`. **Three rules govern its use, and Sol must implement all three:** (1) the fraction applies **only** when the concentration's own `basis` is the form's basis (`active_ingredient` or `oxide`) — never when the concentration is **already** stated as `acid_equivalent` or `elemental`; (2) **one canonical shape**: a concentration always attaches to the **specific form row**, never to the parent; (3) `canonical_fraction` is **nullable**, and NULL means *search-merge only, no numeric conversion — refuse the calculation*. Rule 3 is what makes the isomer case representable (`Gen Dual R Moc` racemic vs `Gen Dual S Moc` S-metolachlor share a search parent and have **no** valid fraction) | B-24, PRD 1.10b |
+| **D-B** | Specific gravity: normalize on write or convert on read? | **Normalize to `lb_per_gal` on write**, retaining the entered value and unit for audit. **The constant is pinned to a single named export: `WATER_LB_PER_GAL = 8.345404`.** Builder and verifier must use the same one, and the WP-2 proof states its tolerance explicitly | PRD 1.20 |
+| **D-C** | Do the workbook's rate columns ship writable? | **Read-only from the start.** The workbook never becomes a fourth write path Phase 2 must unwind | C-32, open 13 |
+| **D-D** | Absent workbook row = delete or ignore? | **Ignore.** Deletion requires an explicit `__delete` marker column set `true` on the row being removed | Open 8 |
+| **D-E** | The child tables have no concurrency token | **New `products.product_data_version`**, bumped by every ingredient / density / brand write, and revoked from direct app write. Not `pricing_version` — bumping that from a chemistry edit fires false conflicts in the pricing workbook. **Honest scope (Fable F-9): a bump-only counter does not by itself prevent a lost update.** The WP-1 RPCs therefore accept **`p_expected_data_version`** and reject a stale one, so the guard is compare-and-set, not advisory | Open 8 |
+| **D-F** | Phase 2 rollback (C-38) | **`app_settings` key `product_rate_source_mode`**, values `legacy` (default) \| `rates_table`, parse helper mirroring `labelGuardrailSetting.ts`. **Honest scope (Fable F-2) — this is a read-path switch, not a rollback:** it changes which mechanism supplies a rate. It does **not** undo a wrong re-derived value (correct the `product_rates` row — fast, but a different action), the revoked write grants, or the deleted unit aliases. **Phase 2 must state what `legacy` mode reads once the T-11 mirror exists**, since the mirror projects the same re-derived row. **Phase 2 must also evaluate the per-product Wells rollout pattern** for a pilot-first cutover | C-38, open 10 |
+| **D-G** | Seed-treatment rate basis (C-40) | **Add `per_cwt_seed` and `per_seed_unit` to the `product_rates.basis` CHECK on day one.** `per_unit` keeps its narrow meaning: *per each* | C-40, open 9 |
+| **D-H** | How much brand back-fill is mechanical? | **Human-reviewed always.** A parenthetical parser may *propose* into the D-I queue; nothing it produces is written unreviewed. "(Full pallets)" and "(New Formulation of Resicore XL)" are in that 129 and are not brands | Open 14 |
+| **D-I** | Where does machine-sourced data land first? | **The `product_label_drafts` propose-review-commit shape** — status, confidence, `reviewed_by`, `run_idempotency_key`. EPA seeding, parsed brand proposals, and crew-entered new brands (D-K) all use it | T-18, open 14 |
+| **D-J** *(Mason, 2026-08-19)* | Who may edit chemistry, concentrations and density? | **Admins only.** Everyone reads; only admin accounts write. Density drives scale weights and ingredients drive comparisons — a wrong value reaches a real mixer. Every change is audited regardless. Sol implements this as the RLS policy on all three new tables and on the density columns; it does **not** invent a policy | Fable F-24 |
+| **D-K** *(Mason, 2026-08-19)* | A load arrives with a brand not on the product's list — what can the crew do? | **Type it in free-hand and finish receiving.** The typed name is captured on the receipt immediately and lands in the D-I review queue as a **proposed** brand. It is **never** written to the permanent brand list unreviewed, and receiving is **never** blocked. This replaces revision 1's hard requirement, which could strand a truck at the dock | Fable F-7 |
+
+### Eleven more owner decisions, taken 2026-08-19 so Sol never has to ask
+
+| # | Question | Decision |
+|---|---|---|
+| **D-L** | Typed ingredient data vs a later EPA lookup that disagrees | **Mason's typed value wins and stays live.** The EPA version is stored beside it and **flagged as a difference** for review. A lookup never silently overwrites hand-entered data |
+| **D-M** | Density differs between label, SDS and supplier | **Trust order: safety data sheet → label → supplier.** The SDS is the regulated document where density is a required precise figure; labels round it and suppliers quote nominal specs. A `measured` value Mason recorded himself still outranks all three (it is the most specific evidence for his actual drums) |
+| **D-N** | How is the ingredient/density entry screen built, given 33–56 hours of owner typing | **Built for speed.** Keyboard-driven: tab between fields, **save-and-advance to the next product without the mouse**, recent values suggested. This is a scope addition to WP-1 and is deliberate — it buys back hours of Mason's own time |
+| **D-O** | What actually differs between `Gen Liberty` and `Gen Liberty: Higher Quality` | **Mason's words:** *"same chemistry better manufacturer and usually higher surfactant loads, AI ingredient same but everything else is higher quality, it also costs more."* **Consequence: the tiers are NOT clean substitutes.** The active ingredients match, but the inerts genuinely differ — the premium version carries more built-in surfactant. Any grouping, family match or comparison must show the tier and must never present them as interchangeable on the strength of matching actives alone |
+| **D-P** | How the comparison tool handles adjuvant, given D-O | **Show it as a note; do not price it.** Mason's earlier exclusion of adjuvant cost stands, but wherever a total appears the tool states when one product carries built-in surfactant and the other would need it added. **The stated bias runs against the premium product** — this must be visible, not buried |
+| **D-Q** | When WP-3's receiving change goes live | **As soon as it is proven** — no staged rollout, no waiting for a quiet day. The D-K escape hatch is what makes this safe: the crew is never blocked, so an unfamiliar step cannot stop a truck |
+| **D-R** | The 13 blank SKUs | **Mason assigns them.** WP-0 presents the 13 with names and vendors; he types the real part numbers. **No auto-generated placeholders** — a generated SKU is a number no supplier can look up |
+| **D-S** | Who approves a crew-proposed brand into the permanent list | **Admins only**, matching D-J. A brand carries an EPA number that reaches customer paperwork |
+| **D-T** | A product's EPA registration is reported **cancelled** | **Warn loudly, keep selling.** A clear banner on the product and a warning when it is added to a quote — but nothing is blocked. Cancelled registrations commonly allow existing stock to be sold through, and blocking would strand inventory Mason can legally move |
+| **D-U** | A package is proven and waiting on Mason's apply approval while he is unreachable | **Prepare the next package; apply nothing.** The build keeps writing and reviewing ahead so progress does not stall on his availability, but **every live database change still waits for his yes.** This is not hands-free mode and autopilot is not armed |
+| **D-V** | Is the comparison tool's ~2026-09-18 target real | **Yes.** Phases sequence to hit it. **If it comes under pressure, protect the quality of the Phase 2 rate review — 573 owner-reviewed values, no bulk auto-rewrite — and raise the slip with Mason.** Never rush the one phase that can put wrong quantities on customer paperwork |
+
+**Proof accounts (Mason, 2026-08-19).** Acceptance proofs run under **Mason's own account**. He
+declined to create a separate non-admin test user. Because an admin session **cannot** reveal a
+missing column grant (C-25), every migration package additionally runs a **direct privilege
+check** — `has_column_privilege('authenticated', 'public.products', '<col>', 'INSERT'/'UPDATE')`
+for each new column, and the equivalent on new tables — recorded in the PR alongside the
+behavioral proof. R-2's intent is met by the pair; neither half alone is sufficient.
+
+---
+
+## 1. Readiness verdict
+
+**The design is ready to build once revision 2's changes are in. The handoff is blocked on
+things that are not technical.**
+
+| Blocker | State | Who clears it |
+|---|---|---|
+| **Codex credits are at zero** | Sol cannot execute, and the `gpt-5.6-sol` adversarial gate cannot run | **Mason** |
+| **Supabase connector scope in the Codex app** | `.codex/config.toml` targets `rhyzpcqhnizqbxphqdkr` with `read_only=false`; the OAuth grant was recorded dead (`invalid_grant`) 2026-08-14 | **Mason** |
+| **The database backup is 10 days old** | `backups/LATEST-OK.json` = `2026-08-09`, 156 tables, 9,927 rows. Prior cadence was 4–6 days, so the schedule has degraded. **The Supabase org is on the free plan — there is no point-in-time recovery, so this file is the only restore path.** WP-0 mutates live rows | **Prerequisite** — see §7 |
+| **The parked-migration scan is fail-closed** | `scripts/fleet-status.mjs` reports `PARKED STATE UNKNOWN`. This build adds three migrations to a queue that cannot currently be counted | **Prerequisite** — see §7 |
+| **The plan documents exist only as unpushed local commits** | Sol starting from `origin/main` cannot read them | **Prerequisite** — see §7 |
+
+### One consequence of Sol executing, stated plainly
+
+`AGENTS.md` requires a fresh, separate, exact-SHA adversarial proof pinned to `gpt-5.6-sol` at
+high effort for risky diffs. If Sol also **writes** the diff, that gate is the same model
+reviewing its own work in a new session — the letter of the contract, not its intent. The
+2026-07-30 decision accepted that tradeoff deliberately (independence comes from a separate
+ephemeral read-only process plus SHA binding). **Mason's requested Opus review is an
+additional layer on top, not a replacement.** Both run.
+
+---
+
+## 2. Standing rules for this build
+
+| # | Rule | Why |
+|---|---|---|
+| **R-1** | **No migration package ships without the screen surface that proves it.** A migration whose only proof is a test is not accepted | `products` is column-carved. A missing `GRANT` renders a field that silently fails to save, and **service-role testing cannot see it** |
+| **R-2** | **Every acceptance runs in the running app as a normal authenticated user** — never service role, never "the tests pass". **The account is a named non-admin test user; for D-J-restricted writes, a named admin test user.** Acceptable evidence is a screenshot **plus** the console state **plus** a read-back `SELECT`. Authenticated REST calls are *not* a substitute for the app | C-25; Verification Standard |
+| **R-3** | **Every new `products` column ships `GRANT INSERT(col), UPDATE(col)` in the same migration** — *for columns intended for direct app writes only* (see R-10). **Verify** the `gotchas.md` `public.products` entry is current; do not assume it is stale — it was corrected 2026-08-18 | C-25 |
+| **R-4** | **Search merges forms; math never does.** Searching and grouping go through `canonical_ingredient_id`; every calculation uses the **specific** ingredient row | B-8, C-33 |
+| **R-5** | **Existing code is not evidence of an existing workflow. Count the rows first.** | C-29 — the lot/tote chain is fully built and holds zero rows |
+| **R-6** | **Warn on entry, refuse on use.** An unusual density warns and saves. A scale weight with no density **refuses** — never water, never a default | D-5 |
+| **R-7** | **Never hard-delete a business entity** — products, brands, or any record with foreign-key history. Deactivate or re-identify. *Child chemistry rows may be removed* (WP-1's remove action, D-D's `__delete` marker); the audit trail captures the removal | T-17; scoped per Fable F-22 |
+| **R-8** | **One package, one pull request.** | Keeps each approval gate readable |
+| **R-9** | **Proofs never damage live business data.** Acceptance runs use designated test rows — the deactivated `1A TEST PRODUCT` or `[E2E]`-prefixed products and POs. Receiving proofs use `[E2E]` POs and are voided and cleaned afterwards. Any value written to a real product during a proof is reverted, and the revert is shown | Fable F-5. `receive_po_items` moves real inventory |
+| **R-10** | **Every migration package's definition of done includes:** `src/types/index.ts` updated, `.claude/schema-registry.json` refreshed from live introspection, and `npm run typecheck && npm run lint && npm run build && npm run test` green | Fable F-20. The registry powers the hooks guarding the *next* migration |
+| **R-11** | **Every enforcement claim needs a negative proof.** Not just "it saves" — also "the wrong role **cannot** save", "an idempotency-key replay does **not** double-write", "the `lb_per_lb` CHECK **rejects**", "a second quoting default is **rejected**" | Fable F-17 |
+| **R-12** | **A fresh verified backup precedes every live write** — WP-0's first row edit and every migration apply. No PITR exists | Fable F-6 |
+
+---
+
+## 3. Work packages — Phase 0 and Phase 1
+
+Strictly ordered. A builder who starts on screens builds them against tables that then change
+shape.
+
+---
+
+### WP-0 · Data hygiene — **no migration**
+
+**Builds:** re-SKU one `9768NR` row (both stay active and orderable); resolve 13 blank SKUs; 3
+duplicate name groups; deactivate `1A TEST PRODUCT`; trim 13 whitespace-only
+`epa_registration` values **to NULL** (not empty string — empty still counts as non-NULL and
+recreates B-22's miscount); classify 11 blank `product_form` rows.
+
+**Order that matters:** for the 11 blank forms, check each row's units **first** —
+`validate_product_units` case-sensitively matches against `unit_conversions` and will reject a
+form that disagrees.
+
+**Before any write:** a proposal file listing every affected row, its current value, intended
+value, and foreign-key references, for Mason's per-class sign-off. **Fresh backup first
+(R-12).**
+
+**Proof:** every SKU identifies exactly one sellable; nothing hard-deleted; every historical
+reference still resolves (before/after `SELECT`s attached to the PR).
+
+**Closes:** A-5, C-26 (Phase 0 half), T-16, T-17, PRD 0.1–0.3a.
+**Gates:** Mason approves **each class**. No migration, but **Opus checkpoint 1 still applies**
+— it reviews the proposal file and the before/after evidence. This is the only package that
+edits live rows on day one, so it is not the one to leave unreviewed *(Fable F-15)*.
+
+---
+
+### WP-1 · Ingredient core + editor — **migration**
+
+**Tables:** `active_ingredients` (name, CAS, EPA code, `canonical_ingredient_id` self-FK,
+`canonical_fraction` **nullable**, `fraction_basis`); `product_active_ingredients` (product,
+ingredient, nullable `concentration_value`, `concentration_unit`, `basis`, `source`,
+`verified_by`, `verified_at`); `ingredient_moa_codes` (ingredient, `scheme` required, `code`).
+
+**Columns added to `products` — including WP-4's storage, which revision 1 omitted entirely
+*(Fable F-1)*:** `label_url`, `label_accepted_date`, `epa_product_status`,
+`epa_is_cancelled`, `product_data_version`. WP-4 writes into these; it must not add columns
+inside a no-migration package.
+
+**Constraints:** `concentration_unit` ∈ `lb_per_gal`, `percent_w_w`, `cfu_per_ml`, `cfu_per_g`
+— **`lb_per_lb` rejected**. `basis` ∈ `acid_equivalent`, `active_ingredient`, `oxide`,
+`elemental`. Nullable concentration means *present, amount unknown*.
+
+**Also in this migration:** RLS + policies implementing **D-J (admins write, all read)**;
+`updated_at` + trigger on every new table; `p_idempotency_key` **and
+`p_expected_data_version`** on every mutating RPC (D-E); the audit trail following the
+`cost_history` precedent; `product_data_version` revoked from direct app write.
+
+**Also builds:** the ingredient section on `ProductDetail` (add, edit, remove; unit and basis
+pickers; herbicide MOA numeric global code only), and a **coverage banner** on the ingredient
+search surface — "N of 604 products have ingredient data" — so that during the fill window a
+partial result never reads as a complete one *(Fable F-25)*.
+
+**Fast-entry mode (D-N).** The editor is keyboard-driven: tab between fields, **save-and-advance
+to the next product without touching the mouse**, and suggest recently-used ingredients and
+units. This is deliberate added scope — Mason personally faces 33–56 hours of entry, and the
+screen is the lever on that number.
+
+**Seed as the proof case:** glyphosate parent acid plus three salt forms. Fractions
+**IPA 0.741, potassium 0.816, DMA 0.789** (revision 1 said 0.78 — wrong). Each seeded row
+records its `source`, and Mason confirms them against a real label before they are trusted for
+math.
+
+**Proof (R-2, R-9, R-11):** as a **normal user**, open an `[E2E]` product, add three
+ingredients with different bases, save, reload — all three persist. Change a concentration;
+see the prior value and its author. Search "glyphosate" → **every** salt form.
+**Negative:** a non-admin user's chemistry write is **refused** (D-J); an idempotency-key
+replay does **not** double-write; `lb_per_lb` is **rejected**; a stale
+`p_expected_data_version` is **rejected**.
+
+**Closes:** A-1, B-8 (mechanism), B-9, B-23, B-24, C-37, T-2 (as amended by D-A), T-3, T-9,
+T-10, D-17, PRD 1.1, 1.1a, 1.2, 1.5, 1.6, 1.7, **1.10, 1.10c** *(nutrient rows and total-N,
+unowned in revision 1 — Fable F-11)*, 1.12, 1.14, 1.16.
+**Gates:** RLS review + migration-drift review · exact-SHA `gpt-5.6-sol` proof · Opus
+checkpoint 1 · **Mason's in-chat OK to apply live** · R-10 · R-12.
+
+---
+
+### WP-2 · Density, net weight, and the scale-weight surface — **migration**
+
+**Adds to `products` (R-3 grants where directly written):** `density_value`, `density_unit`,
+`density_source`, `density_entered_value`, `density_entered_unit` (D-B audit), dry **net weight
+per purchase unit**, `formulation_type`, `safener`, `nickname`.
+
+**Write mechanism, previously unstated *(Fable F-10)*:** density is **RPC-only** — no direct
+column `GRANT`. The RPC bumps `product_data_version` and writes the audit row. A direct column
+grant would let any `.update()` bypass both. R-3 therefore applies to columns intended for
+direct writes; density is not one.
+
+**Builds the surface WP-2's own proof requires *(Fable F-4)* —** revision 1 asked Sol to
+"request a scale weight" with nothing in the app that produces one. WP-2 ships a
+**scale-weight readout** on the product screen: enter a volume, get the weight, see **which
+density was used**, or see an explicit refusal naming the product whose density is missing.
+(`blendMathValidator.ts` remains out of scope — it is warning-text only and tracked
+separately.)
+
+**Rules:** warn band ≈ 6.5–14 lb/gal, **warn never reject** (crop oils and MSOs run 7.6–7.8, so
+an 8–12 floor is a defect); specific gravity normalizes on write against
+`WATER_LB_PER_GAL = 8.345404`; the **density precedence function** ships now with the brand
+slot WP-3 populates, and always displays which density it used.
+
+**Proof (R-2, R-9, R-11):** on `[E2E]` rows — enter 7.7 lb/gal on a crop-oil product, it saves
+with a warning. Enter a specific gravity and the equivalent lb/gal on two products → identical
+weight **within a stated tolerance**. Request a weight with no density → **refusal**, no number
+produced. A `% w/w` product converts to lb/gal via its density (this proves B-11, which
+revision 1 claimed without testing). A dry product's net weight per purchase unit produces a
+correct weight. Formulation type and safener are visible on the product screen (C-33).
+**Negative:** a non-admin density write is refused; a direct `.update()` on `density_value`
+fails.
+
+**Closes:** B-10, B-11, C-25 (first live exercise), C-27, C-33 (capture half), T-5, T-8, D-5,
+PRD 1.3, 1.3a, 1.11, 1.18, 1.19, 1.20.
+**Gates:** as WP-1. **Safety-critical — review at the money tier.**
+
+---
+
+### WP-3 · Brand layer, receiving capture, split loads — **migration**
+
+**Full schema surface, enumerated before handoff *(Fable F-14 — revision 1 named one table for
+work that touches five)*:**
+- **`product_brands`** — `brand_name`, its own `epa_registration`, manufacturer, `label_url`,
+  `density_value` (the WP-2 override), `is_currently_sourced`, `sourcing_tier` (C-43).
+- **`receiving_records`** — `brand_id`, plus snapshot `brand_name_snapshot` /
+  `brand_epa_snapshot`, plus `proposed_brand_name` for D-K.
+- **A new brand-allocation child table** — keyed to the delivery/application **line**, holding
+  brand, quantity and unit, with its own RLS. This is what split loads need and revision 1 did
+  not name.
+- **`delivery_items` / application-record tables** — snapshot columns.
+- **`receive_po_items`** — RPC signature change.
+
+**Behavior:** brand selection is **required once a spec has brand rows** *except* via **D-K**:
+the crew may type an unlisted brand free-hand, receiving completes immediately, and the typed
+name enters the D-I review queue as a proposed brand. It is never written to the permanent
+brand list unreviewed. A spec with no brand rows does not block receiving.
+
+**Snapshots:** records store brand name and EPA number **at write time** and never dereference
+the brand row later, so correcting a typo cannot rewrite history.
+
+**Hands off:** `receiving_records.lot_number`, `delivery_items.tote_number`,
+`invoice_items.tote_number`, `blend_ticket_products`, `application_record_lots`,
+`blend_tickets` — not extended, not deleted, never a condition of brand behavior (R-5).
+
+**Proof (R-2, R-9, R-11):** on `[E2E]` POs, voided and cleaned afterwards — receive with **no
+lot and no tote** → brand recorded, reaches paperwork. Split 30/15 across two brands → both
+brands, both EPA numbers, both quantities, still no lot or tote. Change a brand's EPA
+afterwards → the existing record still shows the old one. **Type an unlisted brand → receiving
+completes and a proposal appears in the queue** (D-K). **The brand-density override actually
+runs *(Fable F-3)*:** receive with a brand carrying a density override, request a scale weight,
+observe **the brand's** density used and displayed; remove the override, observe fallback to
+spec density. **Negative:** a non-admin cannot create a permanent brand row.
+
+**Closes:** B-16 (brand half — see §6), B-17, C-28, C-29, C-43 (capture half), D-13, D-14,
+D-15, T-6, T-7, PRD 1.9, 1.9a, 1.9a-i, 1.9a-ii, 1.9a-iii, 1.9a-iv, 1.9b.
+**Gates:** as WP-1. **This changes the crew's daily routine** — the D-K escape hatch is what
+keeps a truck from stranding at the dock.
+
+---
+
+### WP-4 · EPA auto-seed through propose-review-commit — **no migration**
+
+**Builds:** the EPA lookup persists what it currently fetches and discards — ingredients mapped
+to canonical acids, label URL, accepted date, `productStatus`, `isCancelled` — **into the
+columns WP-1 created**. Everything lands as **proposed** in the D-I shape; nothing writes to
+live ingredient tables until Mason approves.
+
+**Conflict rule (D-L):** where a lookup disagrees with a value Mason typed, **his value stays
+live** and the EPA version is stored beside it, flagged as a difference. A lookup never
+overwrites hand-entered data.
+
+**Cancelled registrations (D-T):** a cancelled registration produces a **loud banner on the
+product and a warning when it is added to a quote** — but nothing is blocked. Existing stock is
+commonly still legal to sell through.
+
+**Scope, honestly:** fills roughly **287** products. **317 have no usable EPA number, and ~123
+of those are real pesticides** that cannot auto-seed until someone types the number in first.
+
+**Deliberate pull-forward:** PRD 4.1 moves from Phase 4 to here — same fetch, splitting it
+would run the lookup twice.
+
+**Proof (R-2):** run the lookup on a real product with a known EPA number → ingredients appear
+as proposals under the right **canonical** ingredient; approve → committed; a cancelled
+registration is visible in the app without re-running the lookup.
+
+**Closes:** B-8 (seeding half), B-22 (surfaced), D-23, T-18, PRD 1.4, 1.13, 4.1.
+**Gates:** no schema change → RLS review only. **Bulk commit of proposals is a bulk live write
+→ Mason's approval + R-12.**
+
+---
+
+### WP-5 · Copy-from-sibling and searchable nickname — **no migration**
+
+**Builds:** copy ingredients / density / brands from a packaging sibling in one action; nickname
+searchable on Products and in the QuoteBuilder picker.
+
+**Proof (R-2):** type "Generic Callisto" → found. Copy from a sibling → the Bulk row carries the
+same chemistry, and editing one afterwards does not change the other.
+
+**Closes:** B-18 (entry half), PRD 1.8, 1.9c, 1.15.
+**Gates:** no migration. Standard review + R-10.
+
+---
+
+## 4. The rest of the sequence — planned, not yet handed off
+
+| Phase | Package | Already decided |
+|---|---|---|
+| **1b** | Product Data Workbook | Extend existing machinery. Separate `Ingredients` / `Crop Uses` tabs, never delimited strings. Rate columns read-only (D-C). Absent row = ignore (D-D). Concurrency via `product_data_version` compare-and-set (D-E) |
+| **2** | Rate correction + unit standardization | **Highest risk.** `product_rates` child table with low/high/recommended, one per-acre quoting default enforced by the database. Old columns become a trigger-synced read-only mirror with app writes revoked (T-11, C-42). All **three** write paths updated together (C-31). Blank-unit rejection as a database CHECK with the hardcoded `'oz'` removed (`FieldAppChemicalEntry.tsx:305`). Remap spellings **first**, delete aliases second, change no conversion factor in the same change. All 37 per-100-gallon rows reviewed. Seed bases from day one (D-G). Behind `product_rate_source_mode` — **and evaluate the per-product Wells rollout gate for a pilot-first cutover** (D-F). **573 re-derived values reviewed by Mason, never bulk-rewritten.** Must state what `legacy` mode reads once the mirror exists |
+| **3** | Comparison tool *(target ≈ 2026-09-18)* | Search through the canonical id (R-4); Halex GT at 4 pt must reproduce the sheet exactly — 33.44 oz / 3.34 oz / 1.09 pt; coverage gaps surfaced loudly; cost **and** customer price with selectable tier; adjuvant-exclusion note wherever a total appears; money parses to whole cents; RUP never shown as verified (B-21); `ingredient_map` retirement also touches the RLS contract fixture, generated types and the schema registry (C-36) |
+| **4** | Adjuvants, crop/timing, note boxes | Crop **and** timing as pairs. Required-vs-recommended adjuvant. **Filling `quoting_notes` changes what 444 products auto-fill onto new quotes** — preview before/after first (B-19) |
+| **5** | Families and packaging variants | Derived and **proposed**, never typed. Exclude zero-ingredient products. **Respect the sourcing tier** (C-43). Family-drift check. Match on the **specific** ingredient row (R-4) |
+| **7** | Retire `unit_size` | Late for **breadth, not money** (C-41): 50+ files, a workbook column, function bodies to re-emit. `inventory_unit` becomes required in the same migration |
+| **8** | Product images | Copied into CRX storage, not linked |
+| **Parked** | Label rate / REI / PHI · required fields on create · RUP correction · density backfill · per-crop rates | Mason's calls, on record |
+| **Tracked outside** | `blendMathValidator.ts` sums gallons and pounds (C-39) | Becomes **fixable** once WP-2 lands. Raise as its own ticket |
+
+---
+
+## 5. The Opus review gate
+
+### Checkpoint 1 — every package, before it lands
+
+Opus reads the diff and the proof evidence, and answers:
+
+1. Does every issue this package claims to close actually get closed? **Reconcile the closes
+   list against the proof list** — revision 1 had packages claiming closures their proofs never
+   demonstrated *(Fable F-18)*.
+2. Does the proof show behavior **running as a normal user**, or a test?
+3. Are the CRX hard rules satisfied — RLS in the same migration, idempotency enforced,
+   `SET search_path`, column grants, no floating-point money, `assertRpcResult` /
+   `checkMutationResult`, `ConfirmModal` not `confirm()`, **plus R-10 (types, registry,
+   typecheck, build)**?
+4. Does the diff touch anything outside its package (R-8)?
+
+**Opus does not only read the evidence — it independently re-runs at least one positive and one
+negative read-only check per package** *(Fable F-16)*. Reading an attachment cannot catch
+overstated evidence, and that is a known failure class in this project.
+
+**Applies to every package including WP-0**, migration or not.
+**Verdict:** `PASS` / `PASS WITH FINDINGS` / `BLOCK`. A `BLOCK` becomes the next Sol fix-spec
+verbatim — capped at 3 rounds; only a finding surviving 3 rounds reaches Mason, with both
+positions.
+
+This is **in addition to** the `gpt-5.6-sol` exact-SHA gate.
+
+### Checkpoint 2 — end of Phase 1
+
+Full coverage audit at **xhigh** against §6, plus the PRD-requirement cross-check (the matrix is
+issue-keyed, so PRD-only requirements like 1.10 are otherwise invisible — *Fable F-11*).
+
+### Checkpoint 3 — end of project
+
+The same audit across all phases, plus the eight end-to-end tests run live and observed.
+
+### The scoresheet
+
+`docs/plans/2026-08-19-product-data-model-COVERAGE.md`. **Sol fills evidence; Opus sets
+verdicts; Sol never grades its own work.**
+
+**Enforcement honesty:** the Sol proof is HARD (the `migration-apply-guard` hook physically
+requires it). The Opus checkpoint is currently **process, not enforced** — acceptable while
+every apply is interactive and Mason sees the verdict first; it would need hardening before any
+hands-free run. See §8.
+
+---
+
+## 6. Coverage matrix — all 43 issues
+
+`WP-n` = a package in §3. `Ph-n` = a later phase. Full evidence tracking lives in COVERAGE.md.
+
+| Issue | Severity | Closed by | Proof |
+|---|---|---|---|
+| A-1 Ingredients not stored | BLOCKER | **WP-1** | Three ingredients persist, as a normal user |
+| A-2 Family/variant/return unwritable | HIGH | **Ph-5** · return deferred | Families written for the first time |
+| A-3 `unit_size` duplicates `inventory_unit` | MEDIUM | **Ph-7** | 50+ files migrated |
+| A-4 Unit spellings inconsistent | MEDIUM | **Ph-2** | Quote total identical before/after the remap |
+| A-5 Duplicates, blanks, a test row | MEDIUM | **WP-0** | One SKU = one sellable; all FKs resolve |
+| A-6 Label rate / REI / PHI empty | HIGH | **PARKED** | — |
+| A-7 No required fields on create | MEDIUM | **PARKED** | — |
+| B-8 Same name, different substance | BLOCKER | **WP-1** + WP-4 + Ph-3 + Ph-5 | One search returns every salt form |
+| B-9 Acid equivalent vs salt weight | BLOCKER | **WP-1** (D-A, three rules) | 5.4# and 5.5# compare on one basis |
+| B-10 Density does not exist | BLOCKER | **WP-2** | Saved, re-read; missing density refuses |
+| B-11 Liquid and dry chains disconnected | BLOCKER | **WP-2** | A `% w/w` product converts via its density |
+| B-12 "Each" stored as an ounce | MEDIUM | **Ph-2** | The 8 affected products identified first |
+| B-13 Rates from ranges, no rule | HIGH | **Ph-2** | 573 reviewed by Mason, none auto-rewritten |
+| B-14 Two kinds of rate, one field | HIGH | **Ph-2** | MSO XL stores both rates |
+| B-15 Blank rate unit → ounces | HIGH | **Ph-2** | CHECK rejects through all three write paths |
+| B-16 Name carrying five facts | HIGH | **WP-3 + WP-1 — mechanism half only** | Brand list lives in rows. **The name strings still carry all five facts; name↔row drift is unaddressed and needs its own check** *(Fable F-18)* |
+| B-17 No per-brand EPA number | HIGH | **WP-3** | Two brands, one spec, separate numbers |
+| B-18 Siblings typed twice | HIGH | **WP-5** + Ph-5 | Bulk inherits in one action |
+| B-19 Note box empty | MEDIUM | **Ph-4** | Before/after previewed before mass-fill |
+| B-20 Spreadsheet has no math | HIGH | **Ph-3** | Halex GT: 33.44 / 3.34 / 1.09 |
+| B-21 RUP count wrong | HIGH | **PARKED**; Ph-3 shows unverified | Never rendered as fact |
+| B-22 A third can't auto-seed | HIGH | **WP-4** | The ~123 are listed |
+| B-23 Biologicals fit neither unit | MEDIUM | **WP-1** | All 9 store a real CFU figure |
+| B-24 Oxide vs elemental | MEDIUM | **WP-1** (D-A) | P₂O₅ and P distinguishable and convertible |
+| C-25 `products` permission-carved | BLOCKER | **R-3**, first exercised WP-2 | A new column edits through the app as a normal user |
+| C-26 Unit-cleanup order | BLOCKER | **WP-0** + Ph-2 | Every affected product still saves |
+| C-27 Density in two places | BLOCKER | **WP-2** + **WP-3 proof** | Each weight shows which density it used — **both branches exercised** |
+| C-28 Brands vs families | HIGH | **WP-3** + Ph-5 | Both ship; overlap flagged |
+| C-29 Lot/tote chain unused | BLOCKER | **WP-3** (R-5) | Receiving with no lot and no tote works |
+| C-30 Rate field in 83 files | HIGH | **Ph-2** (T-11) | Every reader still renders a rate |
+| C-31 Three write paths | HIGH | **Ph-2** | All three write through the RPC |
+| C-32 Workbook/rate collision | HIGH | **D-C** → Ph-1b | Rate columns ship read-only |
+| C-33 Same ingredients ≠ interchangeable | HIGH | **WP-2** + Ph-3/Ph-5 | Safened and unsafened visibly differ |
+| C-34 Return risk backwards | HIGH | **DEFERRED** | — |
+| C-35 Return guard behind delegation | MEDIUM | `gotchas.md` (WP-2 PR) | A builder grepping public functions isn't misled |
+| C-36 `ingredient_map` footprint | MEDIUM | **Ph-3** | Fixture, types, registry updated |
+| C-37 No audit trail | HIGH | **WP-1** | Prior value and author shown |
+| C-38 No rollback story | MEDIUM | **D-F** → Ph-2 | Honest scope stated; not a data rollback |
+| C-39 Blend math adds gallons to pounds | MEDIUM | **Tracked outside** | Own ticket |
+| C-40 Seed treatments, no basis | MEDIUM | **D-G** → Ph-2 | Enum carries both seed bases |
+| C-41 `unit_size` overstated | — | **Ph-7** | Rationale corrected |
+| C-42 Governance stronger than claimed | — | Reused in D-E, D-F, Ph-2 | Direct writes fail; RPC is the only path |
+| C-43 Same ingredients, different products | HIGH | **WP-3** + Ph-5 + Ph-3 | `Gen Liberty` and `Gen Liberty: Higher Quality` never merge |
+
+---
+
+## 7. Prerequisites and approval gates
+
+### Before anything starts
+
+| # | Prerequisite | Who |
+|---|---|---|
+| 1 | **Restore Codex credits** | Mason |
+| 2 | **Confirm the Codex-app Supabase connector** scope | Mason |
+| 3 | **Fresh verified backup** — `/backup-db`, confirm `backups/LATEST-OK.json` re-stamps. No PITR exists | Prerequisite |
+| 4 | **Repair the parked-migration scan** until `fleet-status.mjs` stops reporting `PARKED STATE UNKNOWN` | Prerequisite |
+| 5 | **Land the plan documents** — push this branch, PR, merge (docs-only, standing policy) so every session and worktree shares the contract, then cut the build worktree from `main` | Prerequisite, needs Mason's OK to push |
+| 6 | **Write the mission doc and ledger** (§8) | Prerequisite |
+
+### Handoff mechanics *(Fable F-13)*
+
+Sol works **in the build worktree cut from `main` after prerequisite 5**. Until that lands, the
+plan documents exist only as unpushed local commits and a session starting from `origin/main`
+cannot read them.
+
+### Standing gates
+
+Sol stops and gets Mason's explicit OK **in that session** before: applying any live migration ·
+any bulk write to live product rows (WP-0, WP-4's commit) · pushing, opening a PR, merging, or
+deploying · deleting anything.
+
+`main` is protected: branch → PR → checks green (Vercel required) → resolve CodeRabbit → merge.
+A merge to `main` deploys production.
+
+---
+
+## 8. Orchestration
+
+**Full design: `2026-08-19-product-data-model-ORCHESTRATION.md`** — session topology, the
+fifteen-step gate chain for WP-1, the apply-before-merge ordering decision, the collision
+preflight, and the must-build list. Operational summary:
+
+**Topology.** One Claude orchestrator session in a dedicated worktree, running packages
+serially, started each sitting with `/run-loop docs/loops/product-data-model-loop-2026-08.md`.
+Sol builds per-package as a headless ephemeral process via
+`node scripts/codex-build.mjs <spec> --model gpt-5.6-sol --effort high`, which pins model and
+effort and **strips Sol's Supabase, GitHub and Vercel tools** — so the builder physically cannot
+reach live systems. Every consequential action (commit, PR, apply) stays on the hook-guarded
+orchestrator side. **Exactly one session owns database writes.**
+
+**Per-package chain.** Ground → spec → Sol builds → deterministic floor (typecheck/lint/build/
+test) → reviewer fan-out (`rls-security-reviewer`, `migration-drift-reviewer`,
+`typescript-types-drift-reviewer`, `compliance-reviewer`) → behavioral proof as a normal user →
+**Opus checkpoint 1** → exact-SHA Sol proof via `scripts/write-apply-proofs.mjs` (hash-bound,
+30-minute expiry, hand-writing blocked by `review-proof-guard.mjs`) → docs + commit → PR →
+Vercel + CodeRabbit → **Mason's apply OK** → apply → smoke → registry refresh → merge → verify
+live.
+
+**Must build before starting:** `docs/loops/product-data-model-loop-2026-08.md` (the mission
+doc — `scripts/validate-mission-doc.mjs` refuses to launch without its five slots) and
+`docs/loops/product-data-model-ledger.md` (the per-cycle status board, modeled on
+`structure-wave-2-ledger.md`). COVERAGE.md tracks *issues*; the ledger tracks *cycles*. Both are
+needed and they reference each other.
+
+**Nice to have later:** a hard Opus-checkpoint proof wired into `migration-apply-guard.mjs`; a
+COVERAGE-drift check in `npm run check:docs`; a scripted non-admin authenticated smoke so R-2
+proofs are repeatable rather than manual.
+
+---
+
+**Nothing in this plan is built until Mason says go.**
