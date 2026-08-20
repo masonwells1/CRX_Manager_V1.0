@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
@@ -7,13 +8,17 @@ const CUTOVER_PATH =
   'supabase/migrations/20260816110000_draw_down_cutover_barrier.sql';
 const TIER_SPLIT_PATH =
   'supabase/migrations/20260816120000_draw_down_split_order_lines_by_price_tier.sql';
+const ALLOCATED_CENTS_PATH =
+  'supabase/migrations/20260817120000_carry_allocated_line_cents_through_lifecycle.sql';
 const SMOKE_PATH =
   'scripts/smoke/smoke-draw-down-quote-intent-binding.sql';
 
 const migrationSql = readFileSync(MIGRATION_PATH, 'utf8').replace(/\r\n/g, '\n');
 const cutoverSql = readFileSync(CUTOVER_PATH, 'utf8').replace(/\r\n/g, '\n');
 const tierSplitSql = readFileSync(TIER_SPLIT_PATH, 'utf8').replace(/\r\n/g, '\n');
+const allocatedCentsSql = readFileSync(ALLOCATED_CENTS_PATH, 'utf8').replace(/\r\n/g, '\n');
 const smokeSql = readFileSync(SMOKE_PATH, 'utf8').replace(/\r\n/g, '\n');
+const quoteBuilder = readFileSync('src/pages/QuoteBuilder.tsx', 'utf8').replace(/\r\n/g, '\n');
 const smokeSpecs = JSON.parse(readFileSync('scripts/smoke/smoke-specs.json', 'utf8'));
 
 function expectOrdered(source: string, markers: string[]): void {
@@ -23,6 +28,15 @@ function expectOrdered(source: string, markers: string[]): void {
     expect(next, `${marker} is missing`).toBeGreaterThan(cursor);
     cursor = next;
   }
+}
+
+function functionBodySha256(source: string, name: string): string {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = source.match(new RegExp(
+    `CREATE OR REPLACE FUNCTION public\\.${escaped}\\([\\s\\S]*?AS \\$function\\$(\\n[\\s\\S]*?\\n)\\$function\\$;`,
+  ));
+  expect(match, `${name} body is missing`).not.toBeNull();
+  return createHash('sha256').update(match![1], 'utf8').digest('hex');
 }
 
 describe('draw_down_quote actor and intent binding migration', () => {
@@ -45,6 +59,26 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(cutoverSql).toContain('_draw_down_quote_below_cost_impl_20260810');
     expect(tierSplitSql).toContain('-- TIERSPLIT<<< emit one order line per booked price tier.');
     expect(tierSplitSql).toContain('quote_item_id       -- PROVENANCE');
+  });
+
+  it('pins the exact reviewed tier-split and allocated-cent lifecycle bodies', () => {
+    for (const [source, functionName] of [
+      [tierSplitSql, '_draw_down_quote_below_cost_impl_20260810'],
+      [allocatedCentsSql, '_allocated_cumulative_cents'],
+      [allocatedCentsSql, '_allocated_delivery_cents'],
+      [allocatedCentsSql, '_complete_delivery_authorized_impl'],
+      [allocatedCentsSql, '_create_invoice_for_unbilled_delivery_impl_20260718'],
+      [allocatedCentsSql, '_close_undelivered_order_remainder_20260718'],
+    ] as const) {
+      const expectedHash = functionBodySha256(source, functionName);
+      expect(migrationSql).toContain(expectedHash);
+    }
+    expect(migrationSql).toContain(
+      'DRAW_DOWN_INTENT_PREFLIGHT: reviewed pricing/lifecycle prerequisite body drifted',
+    );
+    expect(migrationSql).toContain(
+      'DRAW_DOWN_INTENT_POSTFLIGHT: reviewed pricing/lifecycle prerequisite body changed',
+    );
   });
 
   it('fails closed before replay and preserves cross-representative coverage', () => {
@@ -78,11 +112,43 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(fingerprintBlock).toContain("'draws', v_canonical_draws");
     expect(fingerprintBlock).not.toContain('p_below_cost_reason');
     expect(migrationSql).toContain('trim_scale((d.value ->> \'quantity\')::numeric)');
+    expect(migrationSql).toContain("'NaN'::numeric");
+    expect(migrationSql).toContain("'Infinity'::numeric");
+    expect(migrationSql).toContain(
+      "RAISE EXCEPTION\n      'BOOKING_QUANTITY_INVALID: draw quantity must be finite';",
+    );
     expect(migrationSql).toContain('ORDER BY d.ordinality');
     expect(migrationSql).toContain("'draw_down_quote',\n    v_actor,\n    v_fingerprint");
     expect(migrationSql).toContain("NULLIF(v_replay -> 'result' ->> 'order_id', '') IS NULL");
     expect(migrationSql).toContain('SET request_fingerprint = v_fingerprint,\n         request_actor_id = v_actor');
     expect(migrationSql).toContain("RAISE EXCEPTION 'IDEMPOTENCY_RECEIPT_MISSING';");
+  });
+
+  it('retires rejected draw keys and gives the operator a safe recovery path', () => {
+    const drawStart = quoteBuilder.indexOf('const handleDrawDown = async () => {');
+    const drawEnd = quoteBuilder.indexOf('const handleConvertToOrder = async () => {', drawStart);
+    const drawHandler = quoteBuilder.slice(drawStart, drawEnd);
+
+    expect(drawStart).toBeGreaterThan(-1);
+    expect(drawEnd).toBeGreaterThan(drawStart);
+    expect(quoteBuilder).toContain(
+      "import { getIdempotencyBindingRejection, getIdempotencyMismatchResult } from '../lib/idempotency';",
+    );
+    expect(drawHandler).toContain('const bindingRejection = getIdempotencyBindingRejection(error);');
+    const rejectionHandler = drawHandler.slice(drawHandler.indexOf('if (bindingRejection) {'));
+    expectOrdered(rejectionHandler, [
+      'if (bindingRejection) {',
+      'drawDownIdem.resetKey();',
+      "getIdempotencyMismatchResult(error, 'draw_down_quote')",
+      'if (committedOrderId) {',
+      'navigate(`/orders/${committedOrderId}`);',
+      'await openDrawDownModal();',
+    ]);
+    expect(drawHandler).toContain('const authError = rpcAuthErrorMessage(error);');
+    expect(drawHandler).toContain('Only active administrators and sales representatives can draw down bookings.');
+    expect(drawHandler).toContain('RpcErrorCodes.BOOKING_QUANTITY_INVALID');
+    expect(drawHandler).not.toContain("toast('error', 'IDEMPOTENCY_INTENT_MISMATCH'");
+    expect(drawHandler).not.toContain("toast('error', 'IDEMPOTENCY_ACTOR_MISMATCH'");
   });
 
   it('keeps the private chain private and exposes only the reviewed wrapper', () => {
@@ -93,8 +159,9 @@ describe('draw_down_quote actor and intent binding migration', () => {
       'GRANT EXECUTE ON FUNCTION public._draw_down_quote_intent_impl_20260819(uuid, jsonb, uuid, text, text)\n  TO postgres;',
     );
     expect(migrationSql).toContain(
-      'GRANT EXECUTE ON FUNCTION public.draw_down_quote(uuid, jsonb, uuid, text, text)\n  TO authenticated, service_role;',
+      'GRANT EXECUTE ON FUNCTION public.draw_down_quote(uuid, jsonb, uuid, text, text)\n  TO authenticated;',
     );
+    expect(migrationSql).toContain("has_function_privilege('service_role', v_wrapper, 'EXECUTE')");
     expect(migrationSql).toContain('SECURITY DEFINER\nSET search_path = public, pg_temp');
     expect(migrationSql).toContain("pg_get_userbyid(p.proowner) = 'postgres'");
   });

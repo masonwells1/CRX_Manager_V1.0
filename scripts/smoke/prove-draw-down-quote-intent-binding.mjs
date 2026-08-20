@@ -32,9 +32,24 @@ const SHARED_HELPER_PATH = path.join(
   'migrations',
   '20260811130000_bind_commission_payout_idempotency_to_intent.sql',
 );
+const TIER_SPLIT_PATH = path.join(
+  ROOT,
+  'supabase',
+  'migrations',
+  '20260816120000_draw_down_split_order_lines_by_price_tier.sql',
+);
+const ALLOCATED_CENTS_PATH = path.join(
+  ROOT,
+  'supabase',
+  'migrations',
+  '20260817120000_carry_allocated_line_cents_through_lifecycle.sql',
+);
 
 const ACTOR_A = '11111111-1111-1111-1111-111111111111';
 const ACTOR_B = '22222222-2222-2222-2222-222222222222';
+const ACTOR_ADMIN = '33333333-3333-3333-3333-333333333333';
+const ACTOR_INACTIVE = '44444444-4444-4444-4444-444444444444';
+const ACTOR_MISSING = '55555555-5555-5555-5555-555555555555';
 const QUOTE_A = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1';
 const QUOTE_B = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2';
 const QUOTE_DELETED = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa3';
@@ -106,6 +121,33 @@ function extractSharedHelper() {
   return source.slice(start, end);
 }
 
+function extractFunctionStatement(source, name) {
+  const starts = [
+    `CREATE OR REPLACE FUNCTION public.${name}(`,
+    `CREATE FUNCTION public.${name}(`,
+  ].map((marker) => source.indexOf(marker)).filter((index) => index >= 0);
+  const start = Math.min(...starts);
+  const bodyStart = source.indexOf('AS $function$', start);
+  const endMarker = '\n$function$;';
+  const end = source.indexOf(endMarker, bodyStart);
+  assert.ok(Number.isFinite(start) && start >= 0 && bodyStart > start && end > bodyStart,
+    `could not extract ${name}`);
+  return source.slice(start, end + endMarker.length);
+}
+
+function extractReviewedPrerequisites() {
+  const tierSplit = readFileSync(TIER_SPLIT_PATH, 'utf8').replace(/\r\n/g, '\n');
+  const allocatedCents = readFileSync(ALLOCATED_CENTS_PATH, 'utf8').replace(/\r\n/g, '\n');
+  return [
+    extractFunctionStatement(tierSplit, '_draw_down_quote_below_cost_impl_20260810'),
+    extractFunctionStatement(allocatedCents, '_allocated_cumulative_cents'),
+    extractFunctionStatement(allocatedCents, '_allocated_delivery_cents'),
+    extractFunctionStatement(allocatedCents, '_complete_delivery_authorized_impl'),
+    extractFunctionStatement(allocatedCents, '_create_invoice_for_unbilled_delivery_impl_20260718'),
+    extractFunctionStatement(allocatedCents, '_close_undelivered_order_remainder_20260718'),
+  ].join('\n\n');
+}
+
 const FIXTURE = `
 DO $roles$
 BEGIN
@@ -155,7 +197,9 @@ CREATE TABLE public.proof_effects (
 
 INSERT INTO public.profiles(id, role, is_active) VALUES
   ('${ACTOR_A}', 'sales_rep', true),
-  ('${ACTOR_B}', 'sales_rep', true);
+  ('${ACTOR_B}', 'sales_rep', true),
+  ('${ACTOR_ADMIN}', 'admin', true),
+  ('${ACTOR_INACTIVE}', 'sales_rep', false);
 INSERT INTO public.quotes(id, created_by, deleted_at) VALUES
   ('${QUOTE_A}', '${ACTOR_B}', NULL),
   ('${QUOTE_B}', '${ACTOR_B}', NULL),
@@ -265,14 +309,22 @@ GRANT EXECUTE ON FUNCTION public.draw_down_quote(uuid, jsonb, uuid, text, text)
   TO authenticated, service_role;
 `;
 
-function callSql({ actor = ACTOR_A, quote = QUOTE_A, quantity = '1', key, delay = false }) {
+function callSql({
+  actor = ACTOR_A,
+  performedBy = actor,
+  quote = QUOTE_A,
+  quantity = '1',
+  key,
+  delay = false,
+}) {
+  const performedBySql = performedBy === null ? 'NULL' : `'${performedBy}'::uuid`;
   return `
 SELECT set_config('request.jwt.claim.sub', '${actor}', false);
 SELECT set_config('crx.proof_delay', '${delay ? 'on' : 'off'}', false);
 SELECT 'RESULT=' || public.draw_down_quote(
   '${quote}'::uuid,
   jsonb_build_array(jsonb_build_object('product_id', '${PRODUCT}'::uuid, 'quantity', ${quantity})),
-  '${actor}'::uuid,
+  ${performedBySql},
   '${key}',
   NULL
 )::text;
@@ -286,7 +338,53 @@ function resultId(run) {
 function bootstrap(db, migration) {
   psql(FIXTURE, { db });
   psql(extractSharedHelper(), { db });
+  psql(extractReviewedPrerequisites(), { db });
   psql(migration, { db });
+  const standIn = extractFunctionStatement(
+    FIXTURE,
+    '_draw_down_quote_below_cost_impl_20260810',
+  ).replace(/^CREATE FUNCTION/, 'CREATE OR REPLACE FUNCTION');
+  psql(standIn, { db });
+}
+
+function proveAuthorization(db) {
+  const admin = psql(`BEGIN;${callSql({ actor: ACTOR_ADMIN, key: 'draw-admin' })}ROLLBACK;`, {
+    db,
+    tuples: true,
+  });
+  assert.ok(resultId(admin), 'active admin could not draw a colleague booking');
+
+  const authMissing = psql(`
+SELECT public.draw_down_quote(
+  '${QUOTE_A}'::uuid,
+  jsonb_build_array(jsonb_build_object('product_id', '${PRODUCT}'::uuid, 'quantity', 1)),
+  NULL,
+  'draw-no-auth',
+  NULL
+);`, { db, allowFailure: true, tuples: true });
+  assert.notEqual(authMissing.status, 0, 'missing auth was accepted');
+  assert.match(authMissing.stderr, /AUTH_REQUIRED/);
+
+  const actorMismatch = psql(callSql({
+    actor: ACTOR_A,
+    performedBy: ACTOR_B,
+    key: 'draw-actor-param-mismatch',
+  }), { db, allowFailure: true, tuples: true });
+  assert.notEqual(actorMismatch.status, 0, 'mismatched p_performed_by was accepted');
+  assert.match(actorMismatch.stderr, /ACTOR_MISMATCH/);
+
+  for (const [actor, label] of [
+    [ACTOR_INACTIVE, 'inactive profile'],
+    [ACTOR_MISSING, 'missing profile'],
+  ]) {
+    const refused = psql(callSql({ actor, key: `draw-${label.replace(' ', '-')}` }), {
+      db,
+      allowFailure: true,
+      tuples: true,
+    });
+    assert.notEqual(refused.status, 0, `${label} was accepted`);
+    assert.match(refused.stderr, /INSUFFICIENT_ROLE/);
+  }
 }
 
 function proveSequential(db) {
@@ -326,6 +424,14 @@ SELECT 'RESULT=' || public.draw_down_quote(
   assert.notEqual(deleted.status, 0, 'soft-deleted quote reached replay/work');
   assert.match(deleted.stderr, /Quote not found/);
 
+  const nonFinite = psql(callSql({ quantity: "'NaN'", key: 'draw-non-finite' }), {
+    db,
+    allowFailure: true,
+    tuples: true,
+  });
+  assert.notEqual(nonFinite.status, 0, 'non-finite draw quantity was accepted');
+  assert.match(nonFinite.stderr, /BOOKING_QUANTITY_INVALID/);
+
   assert.equal(value('SELECT count(*) FROM public.proof_effects;', db), '1');
   assert.equal(
     value("SELECT count(*) FROM public.idempotency_keys WHERE idempotency_key='draw-sequential' AND request_actor_id IS NOT NULL AND request_fingerprint IS NOT NULL;", db),
@@ -338,6 +444,10 @@ SELECT 'RESULT=' || public.draw_down_quote(
   assert.equal(
     value("SELECT has_function_privilege('authenticated', 'public.draw_down_quote(uuid,jsonb,uuid,text,text)', 'EXECUTE');", db),
     't',
+  );
+  assert.equal(
+    value("SELECT has_function_privilege('service_role', 'public.draw_down_quote(uuid,jsonb,uuid,text,text)', 'EXECUTE');", db),
+    'f',
   );
 }
 
@@ -392,8 +502,26 @@ function proveMutation(migration) {
   console.log('MUTATION_DETECTED: removing draw quantities from identity replays stale success');
 }
 
+function provePrerequisiteBodyGuard(migration) {
+  psql('CREATE DATABASE draw_prerequisite_mutant;');
+  const db = 'draw_prerequisite_mutant';
+  psql(FIXTURE, { db });
+  psql(extractSharedHelper(), { db });
+  const reviewed = extractReviewedPrerequisites();
+  psql(reviewed, { db });
+  const mutated = extractFunctionStatement(
+    readFileSync(TIER_SPLIT_PATH, 'utf8').replace(/\r\n/g, '\n'),
+    '_draw_down_quote_below_cost_impl_20260810',
+  ).replace('-- TIERSPLIT<<<', '-- MUTATED TIERSPLIT<<<');
+  psql(mutated, { db });
+  const blocked = psql(migration, { db, allowFailure: true });
+  assert.notEqual(blocked.status, 0, 'drifted pricing body passed the prerequisite hash gate');
+  assert.match(blocked.stderr, /reviewed pricing\/lifecycle prerequisite body drifted/);
+  console.log('MUTATION_DETECTED: drifted tier-split body is refused before wrapping');
+}
+
 async function main() {
-  for (const file of [MIGRATION_PATH, SHARED_HELPER_PATH]) {
+  for (const file of [MIGRATION_PATH, SHARED_HELPER_PATH, TIER_SPLIT_PATH, ALLOCATED_CENTS_PATH]) {
     assert.ok(existsSync(file), `missing checked-in proof input: ${file}`);
   }
   const migration = readFileSync(MIGRATION_PATH, 'utf8');
@@ -420,14 +548,18 @@ async function main() {
     }
 
     bootstrap('postgres', migration);
+    proveAuthorization('postgres');
     proveSequential('postgres');
     await proveConcurrency('postgres');
     proveMutation(migration);
+    provePrerequisiteBodyGuard(migration);
 
     console.log('DRAW_DOWN_INTENT_BINDING_PROOF_OK');
     console.log('  migration applied verbatim with preflight/postflight');
-    console.log('  exact replay, changed quantity, changed actor, deleted quote: PASS');
+    console.log('  admin/rep allow, missing/inactive/auth/actor refusals: PASS');
+    console.log('  exact replay, changed/non-finite quantity, changed receipt actor, deleted quote: PASS');
     console.log('  different-intent and same-intent concurrent key races: PASS');
+    console.log('  exact pricing/lifecycle prerequisite hashes and drift mutation: PASS');
     console.log('  network: none; storage: tmpfs; live Supabase: untouched');
   } finally {
     docker(['rm', '-f', CONTAINER], { allowFailure: true });

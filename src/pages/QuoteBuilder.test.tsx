@@ -116,7 +116,10 @@ vi.mock('../lib/db', () => ({
   checkMutationResult: vi.fn(),
   assertRpcResult: vi.fn((d) => d),
   hasRpcCode: (error: { message?: string }, code: string) => error.message?.includes(code) ?? false,
-  RpcErrorCodes: { QUOTE_STALE_WRITE: 'QUOTE_STALE_WRITE', CUSTOMER_STALE_WRITE: 'CUSTOMER_STALE_WRITE', COMMISSION_SPLIT_CONFLICT: 'COMMISSION_SPLIT_CONFLICT', IDEMPOTENCY_PAYLOAD_CONFLICT: 'IDEMPOTENCY_PAYLOAD_CONFLICT' },
+  RpcErrorCodes: { AUTH_REQUIRED: 'AUTH_REQUIRED', ACTOR_MISMATCH: 'ACTOR_MISMATCH', INSUFFICIENT_ROLE: 'INSUFFICIENT_ROLE', BOOKING_QUANTITY_INVALID: 'BOOKING_QUANTITY_INVALID', QUOTE_STALE_WRITE: 'QUOTE_STALE_WRITE', CUSTOMER_STALE_WRITE: 'CUSTOMER_STALE_WRITE', COMMISSION_SPLIT_CONFLICT: 'COMMISSION_SPLIT_CONFLICT', IDEMPOTENCY_PAYLOAD_CONFLICT: 'IDEMPOTENCY_PAYLOAD_CONFLICT' },
+  rpcAuthErrorMessage: (error: { message?: string }) => error.message === 'AUTH_REQUIRED' || error.message === 'ACTOR_MISMATCH'
+    ? 'Your sign-in could not be verified. Refresh the page and try again.'
+    : null,
   sanitizeError: vi.fn((e: unknown) => (e as Error)?.message || 'Error'),
 }));
 

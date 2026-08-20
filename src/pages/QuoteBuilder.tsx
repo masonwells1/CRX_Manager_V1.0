@@ -38,7 +38,7 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useAuth } from '../contexts/AuthContext';
 import { useBelowCostApproval } from '../contexts/BelowCostApprovalContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
-import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { supabase, supabaseUntyped, assertRpcResult, checkMutationResult, hasRpcCode, rpcAuthErrorMessage, RpcErrorCodes } from '../lib/db';
 import {
   convertQuoteToOrderWithRowVersion,
   createQuoteVersionWithRowVersion,
@@ -47,6 +47,7 @@ import {
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { getIdempotencyBindingRejection, getIdempotencyMismatchResult } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { formatUSD, formatCents } from '../lib/money';
 import { isBelowCostApprovalHandledError, withBelowCostReason } from '../lib/belowCostApproval';
@@ -2424,6 +2425,46 @@ export default function QuoteBuilder() {
         setDrawing(false);
         return;
       }
+
+      // A retained draw key is bound to one actor and one exact set of draw
+      // quantities. A binding refusal performed no work for THIS request and
+      // makes that key permanently unusable, so retire it before the operator
+      // tries again. If the receipt identifies an earlier committed order,
+      // open that order rather than suggesting a second draw.
+      const bindingRejection = getIdempotencyBindingRejection(error);
+      if (bindingRejection) {
+        drawDownIdem.resetKey();
+        const committedResult = bindingRejection === 'intent'
+          ? getIdempotencyMismatchResult(error, 'draw_down_quote')
+          : null;
+        const committedOrderId = typeof committedResult?.order_id === 'string'
+          && committedResult.order_id.length > 0
+          ? committedResult.order_id
+          : null;
+
+        if (committedOrderId) {
+          setShowDrawModal(false);
+          toast('warning', 'An earlier attempt with this retry already created an order. No new draw was made — opening that order now.');
+          navigate(`/orders/${committedOrderId}`);
+          setDrawing(false);
+          return;
+        }
+
+        if (bindingRejection !== 'intent') {
+          Sentry.captureException(error instanceof Error ? error : new Error(String(error)), {
+            tags: { source: 'critical_action', action: `draw_down_quote_${bindingRejection}_mismatch` },
+          });
+        }
+        await openDrawDownModal();
+        toast('warning', bindingRejection === 'actor'
+          ? 'That retry belongs to another signed-in user, so nothing new was drawn. The booking balance was reloaded; try again.'
+          : bindingRejection === 'receipt'
+            ? 'The database could not confirm this retry outcome, so nothing was drawn now. The booking balance was reloaded; check Orders before drawing again.'
+            : 'That retry was already used, so nothing new was drawn. The booking balance was reloaded; check Orders before drawing again.');
+        setDrawing(false);
+        return;
+      }
+
       Sentry.captureException(error, { tags: { source: 'critical_action', action: 'draw_down_quote' } });
       const errObj = error as Record<string, unknown> | null;
       const errMsg = (error instanceof Error ? error.message : null)
@@ -2433,7 +2474,12 @@ export default function QuoteBuilder() {
       // Friendly mapping for the booking guards — UX parity with the convert
       // path (2026-06-10 error-prevention review §3 LOW). BOOKING_PARTIALLY_DRAWN
       // can't fire here: draw_down_quote IS the partial path.
-      if (hasRpcCode(error, RpcErrorCodes.BOOKING_OVERDRAWN)) {
+      const authError = rpcAuthErrorMessage(error);
+      if (authError) {
+        toast('error', authError);
+      } else if (hasRpcCode(error, RpcErrorCodes.INSUFFICIENT_ROLE)) {
+        toast('error', 'Only active administrators and sales representatives can draw down bookings.');
+      } else if (hasRpcCode(error, RpcErrorCodes.BOOKING_OVERDRAWN)) {
         // The server message already names the product and remaining balance
         // (e.g. another draw landed from a second tab) — surface it as-is.
         toast('error', errMsg);
@@ -2441,6 +2487,8 @@ export default function QuoteBuilder() {
         toast('error', 'This booking is closed — only sent or revised quotes can be drawn down.');
       } else if (hasRpcCode(error, RpcErrorCodes.EMPTY_DRAW)) {
         toast('warning', 'Enter a quantity for at least one product');
+      } else if (hasRpcCode(error, RpcErrorCodes.BOOKING_QUANTITY_INVALID)) {
+        toast('error', errMsg);
       } else if (hasRpcCode(error, RpcErrorCodes.BOOKED_PRICE_REQUIRED)) {
         // Server message names the product and says what to fix — surface as-is.
         toast('error', errMsg);

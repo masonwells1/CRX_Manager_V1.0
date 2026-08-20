@@ -39,6 +39,21 @@ DECLARE
   v_money_impl regprocedure := to_regprocedure(
     'public._draw_down_quote_below_cost_impl_20260810(uuid,jsonb,uuid,text)'
   );
+  v_alloc_cumulative regprocedure := to_regprocedure(
+    'public._allocated_cumulative_cents(uuid,numeric)'
+  );
+  v_alloc_delivery regprocedure := to_regprocedure(
+    'public._allocated_delivery_cents(uuid,numeric,uuid)'
+  );
+  v_complete_delivery regprocedure := to_regprocedure(
+    'public._complete_delivery_authorized_impl(uuid,text,uuid,jsonb,text,text,text,timestamptz)'
+  );
+  v_backfill_invoice regprocedure := to_regprocedure(
+    'public._create_invoice_for_unbilled_delivery_impl_20260718(uuid,uuid,text)'
+  );
+  v_close_remainder regprocedure := to_regprocedure(
+    'public._close_undelivered_order_remainder_20260718(uuid,uuid)'
+  );
   v_src text;
 BEGIN
   IF (SELECT count(*)
@@ -58,9 +73,41 @@ BEGIN
 
   IF v_intent_helper IS NULL
      OR v_money_impl IS NULL
+     OR v_alloc_cumulative IS NULL
+     OR v_alloc_delivery IS NULL
+     OR v_complete_delivery IS NULL
+     OR v_backfill_invoice IS NULL
+     OR v_close_remainder IS NULL
      OR to_regprocedure('extensions.digest(bytea,text)') IS NULL THEN
     RAISE EXCEPTION
-      'DRAW_DOWN_INTENT_PREFLIGHT: intent helper, digest, or tier-split money implementation is missing';
+      'DRAW_DOWN_INTENT_PREFLIGHT: intent helper, digest, reviewed tier-split money implementation, or allocated-cent lifecycle prerequisite is missing';
+  END IF;
+
+  -- These exact pg_proc.prosrc hashes bind the wrapper to the reviewed bodies
+  -- installed by apply-order steps 2 and 3. Signature-only checks are unsafe:
+  -- the pre-tier weighted-average implementation used the same signature, and
+  -- a partial apply without allocated-cent lifecycle propagation could bill a
+  -- tier-split order differently from its stored line totals.
+  IF (SELECT encode(extensions.digest(convert_to(p.prosrc, 'UTF8'), 'sha256'), 'hex')
+        FROM pg_proc p WHERE p.oid = v_money_impl)
+       IS DISTINCT FROM 'd676cb3121925c17ac38d5a651c5ee842743b3072ec4d32516cbf61b9650f06a'
+     OR (SELECT encode(extensions.digest(convert_to(p.prosrc, 'UTF8'), 'sha256'), 'hex')
+           FROM pg_proc p WHERE p.oid = v_alloc_cumulative)
+       IS DISTINCT FROM '5cb6b4e7683213d878d76f0a1dbfa99757780331142f01fb36147d4008ce8f2b'
+     OR (SELECT encode(extensions.digest(convert_to(p.prosrc, 'UTF8'), 'sha256'), 'hex')
+           FROM pg_proc p WHERE p.oid = v_alloc_delivery)
+       IS DISTINCT FROM '1df1d230c19e5d129038b1e5dfbca30db0b369ea5a91a22f19dd98cc53129142'
+     OR (SELECT encode(extensions.digest(convert_to(p.prosrc, 'UTF8'), 'sha256'), 'hex')
+           FROM pg_proc p WHERE p.oid = v_complete_delivery)
+       IS DISTINCT FROM '0e889bb6e0bc998d2833081e8e6f8e801e032595e7360e09d4f594e13ed7ad24'
+     OR (SELECT encode(extensions.digest(convert_to(p.prosrc, 'UTF8'), 'sha256'), 'hex')
+           FROM pg_proc p WHERE p.oid = v_backfill_invoice)
+       IS DISTINCT FROM '6543165d2c7cb6acbffd222adb28fee9b66278338ec401f6b2f19537c8aebcaa'
+     OR (SELECT encode(extensions.digest(convert_to(p.prosrc, 'UTF8'), 'sha256'), 'hex')
+           FROM pg_proc p WHERE p.oid = v_close_remainder)
+       IS DISTINCT FROM '17ee638cd57c97ec5f3bec0a33f8b7d6ebac7f99ccd93e83802b14007a62be9f' THEN
+    RAISE EXCEPTION
+      'DRAW_DOWN_INTENT_PREFLIGHT: reviewed pricing/lifecycle prerequisite body drifted; refusing a partial or unreviewed apply';
   END IF;
 
   IF NOT EXISTS (
@@ -212,6 +259,20 @@ BEGIN
     RAISE EXCEPTION 'EMPTY_DRAW: no draw lines supplied';
   END IF;
 
+  IF EXISTS (
+    SELECT 1
+      FROM jsonb_array_elements(p_draws) AS d(value)
+     WHERE (d.value ->> 'quantity') IS NOT NULL
+       AND (d.value ->> 'quantity')::numeric IN (
+         'NaN'::numeric,
+         'Infinity'::numeric,
+         '-Infinity'::numeric
+       )
+  ) THEN
+    RAISE EXCEPTION
+      'BOOKING_QUANTITY_INVALID: draw quantity must be finite';
+  END IF;
+
   SELECT COALESCE(
            jsonb_agg(
              jsonb_build_object(
@@ -304,7 +365,7 @@ COMMENT ON FUNCTION public.draw_down_quote(uuid, jsonb, uuid, text, text) IS
 REVOKE ALL ON FUNCTION public.draw_down_quote(uuid, jsonb, uuid, text, text)
   FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.draw_down_quote(uuid, jsonb, uuid, text, text)
-  TO authenticated, service_role;
+  TO authenticated;
 
 DO $postflight$
 DECLARE
@@ -313,6 +374,24 @@ DECLARE
   );
   v_private regprocedure := to_regprocedure(
     'public._draw_down_quote_intent_impl_20260819(uuid,jsonb,uuid,text,text)'
+  );
+  v_money_impl regprocedure := to_regprocedure(
+    'public._draw_down_quote_below_cost_impl_20260810(uuid,jsonb,uuid,text)'
+  );
+  v_alloc_cumulative regprocedure := to_regprocedure(
+    'public._allocated_cumulative_cents(uuid,numeric)'
+  );
+  v_alloc_delivery regprocedure := to_regprocedure(
+    'public._allocated_delivery_cents(uuid,numeric,uuid)'
+  );
+  v_complete_delivery regprocedure := to_regprocedure(
+    'public._complete_delivery_authorized_impl(uuid,text,uuid,jsonb,text,text,text,timestamptz)'
+  );
+  v_backfill_invoice regprocedure := to_regprocedure(
+    'public._create_invoice_for_unbilled_delivery_impl_20260718(uuid,uuid,text)'
+  );
+  v_close_remainder regprocedure := to_regprocedure(
+    'public._close_undelivered_order_remainder_20260718(uuid,uuid)'
   );
   v_outer_src text;
   v_private_src text;
@@ -323,9 +402,37 @@ BEGIN
        WHERE n.nspname = 'public'
          AND p.proname = 'draw_down_quote') <> 1
      OR v_wrapper IS NULL
-     OR v_private IS NULL THEN
+     OR v_private IS NULL
+     OR v_money_impl IS NULL
+     OR v_alloc_cumulative IS NULL
+     OR v_alloc_delivery IS NULL
+     OR v_complete_delivery IS NULL
+     OR v_backfill_invoice IS NULL
+     OR v_close_remainder IS NULL THEN
     RAISE EXCEPTION
-      'DRAW_DOWN_INTENT_POSTFLIGHT: wrapper chain is missing or overloaded';
+      'DRAW_DOWN_INTENT_POSTFLIGHT: wrapper chain or reviewed pricing/lifecycle prerequisite is missing';
+  END IF;
+
+  IF (SELECT encode(extensions.digest(convert_to(p.prosrc, 'UTF8'), 'sha256'), 'hex')
+        FROM pg_proc p WHERE p.oid = v_money_impl)
+       IS DISTINCT FROM 'd676cb3121925c17ac38d5a651c5ee842743b3072ec4d32516cbf61b9650f06a'
+     OR (SELECT encode(extensions.digest(convert_to(p.prosrc, 'UTF8'), 'sha256'), 'hex')
+           FROM pg_proc p WHERE p.oid = v_alloc_cumulative)
+       IS DISTINCT FROM '5cb6b4e7683213d878d76f0a1dbfa99757780331142f01fb36147d4008ce8f2b'
+     OR (SELECT encode(extensions.digest(convert_to(p.prosrc, 'UTF8'), 'sha256'), 'hex')
+           FROM pg_proc p WHERE p.oid = v_alloc_delivery)
+       IS DISTINCT FROM '1df1d230c19e5d129038b1e5dfbca30db0b369ea5a91a22f19dd98cc53129142'
+     OR (SELECT encode(extensions.digest(convert_to(p.prosrc, 'UTF8'), 'sha256'), 'hex')
+           FROM pg_proc p WHERE p.oid = v_complete_delivery)
+       IS DISTINCT FROM '0e889bb6e0bc998d2833081e8e6f8e801e032595e7360e09d4f594e13ed7ad24'
+     OR (SELECT encode(extensions.digest(convert_to(p.prosrc, 'UTF8'), 'sha256'), 'hex')
+           FROM pg_proc p WHERE p.oid = v_backfill_invoice)
+       IS DISTINCT FROM '6543165d2c7cb6acbffd222adb28fee9b66278338ec401f6b2f19537c8aebcaa'
+     OR (SELECT encode(extensions.digest(convert_to(p.prosrc, 'UTF8'), 'sha256'), 'hex')
+           FROM pg_proc p WHERE p.oid = v_close_remainder)
+       IS DISTINCT FROM '17ee638cd57c97ec5f3bec0a33f8b7d6ebac7f99ccd93e83802b14007a62be9f' THEN
+    RAISE EXCEPTION
+      'DRAW_DOWN_INTENT_POSTFLIGHT: reviewed pricing/lifecycle prerequisite body changed';
   END IF;
 
   SELECT p.prosrc
@@ -386,7 +493,7 @@ BEGIN
 
   IF has_function_privilege('anon', v_wrapper, 'EXECUTE')
      OR NOT has_function_privilege('authenticated', v_wrapper, 'EXECUTE')
-     OR NOT has_function_privilege('service_role', v_wrapper, 'EXECUTE')
+     OR has_function_privilege('service_role', v_wrapper, 'EXECUTE')
      OR has_function_privilege('anon', v_private, 'EXECUTE')
      OR has_function_privilege('authenticated', v_private, 'EXECUTE')
      OR has_function_privilege('service_role', v_private, 'EXECUTE')

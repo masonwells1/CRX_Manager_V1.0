@@ -17,6 +17,17 @@ private function and adds a small public wrapper in front of it. The preserved c
 cutover lock, below-cost approval, exact quote-tier price/cost/profit calculation, commissions,
 inventory prebooking and draw ledger. Active admins and sales reps can still cover another rep's
 live booking; actor binding is not an ownership restriction. Soft-deleted quotes remain hidden.
+Preflight and postflight now SHA-256-pin the exact reviewed tier-split implementation and all five
+allocated-cent lifecycle bodies from the two preceding migrations, so a signature-compatible old
+pricing body or partial three-file apply is refused before the wrapper can land.
+
+The draw modal now consumes the shared intent-binding recovery contract. A permanently refused key
+is retired instead of trapping the operator until reload; when the mismatch receipt proves an order
+already committed, the page opens that exact order rather than offering another draw. Ambiguous
+receipt/actor cases reload the booking balance and explain the next step, and auth/role failures are
+shown in plain English. Non-finite quantities fail closed with `BOOKING_QUANTITY_INVALID`. The new
+public wrapper is executable only by `authenticated`; the unusable `service_role` grant is removed
+because the wrapper requires an authenticated user id and no service caller exists.
 
 Added a focused Vitest contract and container-only rollback smoke covering exact replay, changed
 quantity, changed actor, cross-representative success, one $10 sale / $5 cost / $5 profit order,
@@ -25,13 +36,15 @@ one inventory reservation, one draw-ledger row, and a bound receipt. This migrat
 does not authorize applying it.**
 
 `node scripts/smoke/prove-draw-down-quote-intent-binding.mjs` applied the migration verbatim on a
-network-isolated PostgreSQL 17 container and passed its own preflight/postflight, exact replay,
-changed-quantity, changed-actor, deleted-quote, ACL, same-key same-intent concurrency and same-key
-different-intent concurrency checks. Its preserved implementation is an effect-recording stand-in,
-because this migration renames that body without changing it; the full-schema rollback chain owns
-the exact line/header money and inventory assertions. Mutation proof is non-vacuous: removing draw
-quantities from the fingerprint reproduced stale success and emitted `MUTATION_DETECTED`. The
-container used `--network none` and tmpfs; production was untouched.
+network-isolated PostgreSQL 17 container. It first installs the exact reviewed pricing and lifecycle
+prerequisite bodies so both hash gates execute, applies this migration verbatim, then swaps in an
+effect-recording stand-in only for exercising the new wrapper; the full-schema rollback chain owns
+the exact line/header money and inventory assertions. It passes admin/rep authorization, inactive,
+missing-profile, unauthenticated and actor-parameter refusals, exact replay, changed/non-finite
+quantity, changed receipt actor, deleted quote, ACL, and both same-key concurrency cases. Mutation
+proof is non-vacuous: removing draw quantities reproduced stale success, while drifting the pinned
+tier-split body was refused before wrapping. The container used `--network none` and tmpfs;
+production was untouched.
 
 ## 2026-08-19 — Product data model: build plan revision 2 after independent Fable…
 
