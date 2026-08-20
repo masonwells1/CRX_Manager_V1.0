@@ -453,6 +453,10 @@ const harmlessShellNodeOptionsCases = [
   "export -n NODE_OPTIONS; npm --version",
   "export -pn NODE_OPTIONS; npm --version",
 ];
+const posixLineContinuationGuardCases = [
+  ["NODE_\\", "OPTIONS=--require=./preload.cjs npm --version"].join("\n"),
+  ["NODE_\\", "OPTIONS=--require=./preload.cjs npm --version"].join("\r\n"),
+];
 for (const separator of [";", "|", "&"]) {
   ok(checkDangerousCommand(`Write-Output marker\x5c${separator} ${pythonCommand} -c \"print('opaque')\"`), `PowerShell backslash-prefixed ${separator} cannot hide an opaque interpreter`);
   ok(checkDangerousCommand(`Write-Output marker\x5c${separator} NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs`), `PowerShell backslash-prefixed ${separator} cannot hide a NODE_OPTIONS preload`);
@@ -470,6 +474,7 @@ ok(!checkDangerousCommand(["busybox", "watch", "--help", awkCommand, opaqueAwkPr
 for (const command of dynamicNodeOptionsGuardCases) ok(checkDangerousCommand(command), `dynamic NODE_OPTIONS construction fails closed: ${command}`);
 for (const command of powerShellProviderGuardCases) ok(checkDangerousCommand(command), `PowerShell provider operation cannot stage NODE_OPTIONS: ${command}`);
 for (const command of powerShellAliasGuardCases) ok(checkDangerousCommand(command), `PowerShell alias parameter form cannot hide a mutation-capable target: ${command}`);
+for (const command of posixLineContinuationGuardCases) ok(checkDangerousCommand(command), `POSIX line continuation cannot hide NODE_OPTIONS: ${JSON.stringify(command)}`);
 for (const command of nestedParserGuardCases) ok(checkDangerousCommand(command), `nested or POSIX-escaped parser route is denied: ${command}`);
 for (const command of nestedParserGuardCases.slice(0, 2)) ok(maintenanceProducerCommandMentioned(command), `nested AWK launcher enters the producer gate: ${command}`);
 for (const command of indirectRunnerGuardCases) ok(checkDangerousCommand(command), `indirect or dynamic command runner fails closed: ${command}`);
@@ -757,6 +762,11 @@ for (const command of powerShellAliasGuardCases) {
   r = runHook({ tool_name: "PowerShell", tool_input: { command } });
   eq(r.status, 0, `bash-safety.mjs exits 0 after denying an alias mutation: ${command}`);
   ok(r.stdout.includes('"permissionDecision":"deny"'), `bash-safety.mjs denies an alias mutation: ${command}`);
+}
+for (const command of posixLineContinuationGuardCases) {
+  r = runHook({ tool_name: "Bash", tool_input: { command } });
+  eq(r.status, 0, `bash-safety.mjs exits 0 after denying a continued NODE_OPTIONS name: ${JSON.stringify(command)}`);
+  ok(r.stdout.includes('"permissionDecision":"deny"'), `bash-safety.mjs denies a continued NODE_OPTIONS name: ${JSON.stringify(command)}`);
 }
 for (const command of powerShellProviderReadCases) {
   r = runHook({ tool_name: "PowerShell", tool_input: { command } });

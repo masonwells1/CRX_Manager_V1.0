@@ -176,6 +176,10 @@ const dynamicNodeOptionsGuardCases = [
   'cmd /v:on /c "set N=NODE_OPTIONS & set !N!=--require=./preload.cjs & b^un --version"',
   'pwsh -NoProfile -co "si Env:NODE_OPTIONS --require=./preload.cjs; n\\pm --version"',
 ];
+const posixLineContinuationGuardCases = [
+  ["NODE_\\", "OPTIONS=--require=./preload.cjs npm --version"].join("\n"),
+  ["NODE_\\", "OPTIONS=--require=./preload.cjs npm --version"].join("\r\n"),
+];
 
 // ── tools NOT in the Desktop Commander mutating set pass straight through ──
 let r = runHook({ tool_name: "Read", tool_input: { file_path: "src/App.tsx" } });
@@ -321,6 +325,7 @@ for (const command of [
   ...xargsGuardCases,
   ...shellBuiltinNodeOptionsCases,
   ...dynamicNodeOptionsGuardCases,
+  ...posixLineContinuationGuardCases,
   ...nestedParserGuardCases,
   ...indirectRunnerGuardCases,
 ]) {

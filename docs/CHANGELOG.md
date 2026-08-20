@@ -90,7 +90,9 @@ All significant development milestones, in reverse chronological order.
   fail closed. Ordinary read-only aliases and alias spellings used as text
   remain allowed. Bash `export -p` inspection and `export -n` remediation of a
   bare `NODE_OPTIONS` name remain allowed, while assignments in either mode are
-  still denied.
+  still denied. POSIX backslash-newline and backslash-CRLF continuations are
+  removed before every shared shell-safety parse, so a continued variable,
+  executable, migration path, or production command cannot bypass the guard.
   Environment-provider and .NET `NODE_OPTIONS` mutations are denied even when
   no Node command appears in the same payload, closing staged mutations across
   persistent MCP shell interactions. Dynamic environment-provider targets fail
