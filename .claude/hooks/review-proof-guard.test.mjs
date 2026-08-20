@@ -188,6 +188,44 @@ for (const payload of [
   { tool_name: "mcp__filesystem__move_file", tool_input: { source: "/tmp/x.json", destination: ".claude/session-state/stop-wrap-ack.json" } },
   { tool_name: "mcp__filesystem__delete_file", tool_input: { path: ".claude/session-state/stop-wrap-ack.json" } },
   { tool_name: "Write", tool_input: { file_path: ".claude/session-state/STOP-WRAP-ACK.JSON", content: "{}" } },
+  // Round 9 — the worktree carve-out must never become a dodge. Agent worktrees
+  // live at .claude/worktrees/<name>/, so a LITERAL prefix of that exact shape is
+  // stripped before the state-dir predicates run. Everything below must still deny:
+  //   (a) a worktree's OWN review state, protected in its own right;
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a/.claude/session-state" } },
+  { tool_name: "Bash", tool_input: { command: 'printf "[]" > C:\\repo\\.claude\\worktrees\\wt-a\\.claude\\session-state\\applied-source-ledger.json' } },
+  { tool_name: "Write", tool_input: { file_path: "C:\\repo\\.claude\\worktrees\\wt-a\\.claude\\session-state\\applied-source-ledger.json", content: "[]" } },
+  { tool_name: "Bash", tool_input: { command: "cd .claude/worktrees/wt-a/.claude/session-state && ls" } },
+  { tool_name: "Bash", tool_input: { command: "mv .claude/worktrees/wt-a/.claude/session-state /tmp/x" } },
+  { tool_name: "Bash", tool_input: { command: "find .claude/worktrees/wt-a/.claude/session-state -delete" } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a/.claude" } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a/.claude/hooks" } },
+  //   (b) the worktrees container and a whole worktree ROOT — no trailing
+  //       separator means no strip, so both still take the deny;
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees" } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a" } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf C:\\repo\\.claude\\worktrees\\wt-a" } },
+  //   (c) a glob in ANY of the three prefix components — the carve-out requires
+  //       all three literal, so a wildcard can never buy the exemption;
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/*/.claude/session-state" } },
+  // A globbed name with a trailing separator and NOTHING after it would strip to
+  // a bare `rm -rf` if globs were admitted — i.e. every worktree's state dir at
+  // once. The literal-name requirement is what stops it; pin it.
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/*/" } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-?/" } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/w*/x/y" } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf .c*/worktrees/x/y" } },
+  { tool_name: "Bash", tool_input: { command: "cd .claude/worktrees/wt* && rm -f x.tmp" } },
+  //   (d) a `..` segment climbs back out of the worktree, so it disables the
+  //       strip entirely (fail closed);
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a/../session-state" } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a/.." } },
+  //   (e) a worktree path must not launder a SECOND, protected operand;
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a/tmp .claude/session-state" } },
+  //   (f) blanking a cd target is scoped to a worktree ROOT only: a cd that stops
+  //       at `.claude`, or any verb whose own target is protected, still denies.
+  { tool_name: "Bash", tool_input: { command: "cd C:\\repo\\.claude\\worktrees\\wt-a && rm -rf .claude/session-state" } },
+  { tool_name: "Bash", tool_input: { command: "cd C:\\repo\\.claude\\worktrees\\wt-a\\.claude && rm -rf session-state" } },
 ]) {
   const result = run(payload);
   assert.equal(result.status, 0);
@@ -270,5 +308,28 @@ assert.equal(run({ tool_name: "mcp__filesystem__move_file", tool_input: { source
 assert.equal(run({ tool_name: "Write", tool_input: { file_path: ".claude/session-state/stop-wrap-ack.json", content: '{"signature":"x"}' } }).stdout, "");
 assert.equal(run({ tool_name: "Edit", tool_input: { file_path: "C:\\repo\\.claude\\session-state\\stop-wrap-ack.json" } }).stdout, "");
 assert.equal(run({ tool_name: "mcp__filesystem__write_file", tool_input: { path: ".claude/session-state/stop-wrap-ack.json" } }).stdout, "");
+
+// Round 9 regression (bisected to f3e06c52): agent worktrees are created at
+// <repo>/.claude/worktrees/<name>/, so EVERY file inside one carries a `.claude`
+// component. The round-3/5 hardening protected a `.claude` component wherever it
+// appeared, which denied every ordinary rm / mv / redirect / find -delete inside
+// all 17 worktrees — an agent working there could not delete its own temp file.
+// Ordinary worktree-internal work must be ALLOWED again.
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd C:\\repo\\.claude\\worktrees\\wt-a && touch guard-probe.tmp && rm guard-probe.tmp" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -f C:\\repo\\.claude\\worktrees\\wt-a\\guard-probe.tmp" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -f .claude/worktrees/wt-a/guard-probe.tmp" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a/node_modules/.cache" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "mv .claude/worktrees/wt-a/a.txt .claude/worktrees/wt-a/b.txt" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd C:\\repo\\.claude\\worktrees\\wt-a && find . -maxdepth 1 -name '*.tmp' -delete" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "git clean -fd .claude/worktrees/wt-a/src" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "printf 'x' > .claude/worktrees/wt-a/notes.txt" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -f .claude/worktrees/wt-a/dist/*.js" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd C:\\repo\\.claude\\worktrees\\wt-a && git status" } }).stdout, "");
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "cd .claude/worktrees/wt-a/di* && ls" } }).stdout, "");
+assert.equal(run({ tool_name: "Write", tool_input: { file_path: "C:\\repo\\.claude\\worktrees\\wt-a\\src\\foo.ts", content: "x" } }).stdout, "");
+// Nested worktrees strip to a fixed point.
+assert.equal(run({ tool_name: "Bash", tool_input: { command: "rm -f .claude/worktrees/wt-a/.claude/worktrees/wt-b/tmp.txt" } }).stdout, "");
+// The ack valve still works from inside a worktree.
+assert.equal(run({ tool_name: "Write", tool_input: { file_path: "C:\\repo\\.claude\\worktrees\\wt-a\\.claude\\session-state\\stop-wrap-ack.json", content: '{"signature":"x"}' } }).stdout, "");
 
 console.log("OK - review proof guard checks passed.");

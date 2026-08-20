@@ -2,6 +2,17 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-19 — Fix: review-proof-guard blocked all ordinary file work inside worktrees
+
+`review-proof-guard.mjs` denied every destructive or overwriting shell command and file-tool write against ANY path inside a git worktree. Agent worktrees are created at `<repo>/.claude/worktrees/<name>/`, so every file in one carries a `.claude` path component, and the round-3/5 hardening protects a `.claude` component wherever it appears. Reproduced (`cd <worktree> && touch x.tmp && rm x.tmp` denied) and bisected to `f3e06c52` — the two later ack-valve commits (`c64ea3d4`, `4b302050`) are not implicated. Impact: 17 worktrees; an agent working in one could not delete a temp file, `git clean`, or clear the untracked files the stop hook kept reporting.
+
+Fix: strip a LITERAL `.claude/worktrees/<name>/` prefix, then run the same state-dir predicates on the remainder — a worktree's own `.claude/session-state` stays protected in its own right, and no other check is relaxed. Narrow and fail-closed: all three prefix components must be literal (a glob anywhere strips nothing), a trailing separator is required (so `rm -rf .claude/worktrees` and `rm -rf .claude/worktrees/<name>` stay denied), and a `..` segment disables the strip entirely. Separately, naming a worktree ROOT as a `cd` destination no longer poisons every verb after it — a positional cd target that is exactly a worktree root is blanked in the destructive-verb view only, where `scanCdInvocations` already adjudicates it with the same predicate.
+
+Proof: 61-case expectation matrix green; guard suite green; live in this worktree — `touch`/`rm` of a temp file now succeeds, and `cd .claude/session-state` is still denied. Mutation-tested 6/7 (the surviving mutant is equivalent — blanking every cd target loses no deny). No database, money, or production behavior touched; agent tooling only.
+
+- **Files changed**: `.claude/hooks/review-proof-guard.mjs`, `.claude/hooks/review-proof-guard.test.mjs`, `docs/reference/agent-guardrails.md`, `docs/CHANGELOG.md`
+- **Migrations touched**: none
+
 ## 2026-08-19 — Product data model: build plan revision 2 after independent Fable…
 
 Product data model: build plan revision 2 after independent Fable review (26 findings) and orchestration design; recorded owner decisions D-J (chemistry edits admin-only) and D-K (unlisted brand never blocks receiving) in DECISION_LOG. Planning only — nothing built, pushed, migrated, or applied.

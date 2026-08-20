@@ -13,6 +13,43 @@ import {
   reviewStateDirectoryMentioned,
 } from "./codex-push-lib.mjs";
 
+// ── Worktree carve-out ──────────────────────────────────────────────────────
+// Agent worktrees are created at <repo>/.claude/worktrees/<name>/, so EVERY
+// file inside one carries a `.claude` path component that has nothing to do
+// with the review-state directory. The round-3/5 hardening (f3e06c52) protects
+// a `.claude` component wherever it appears, which turned every ordinary
+// rm / mv / find -delete / redirect inside any worktree into a review-proof
+// denial — a full stop for agents working there (regression reproduced and
+// bisected 2026-08-19).
+//
+// Fix: strip a LITERAL `.claude/worktrees/<name>/` prefix, then run the very
+// same state-dir predicates on the remainder. A worktree's OWN
+// `.claude/session-state` therefore stays protected in its own right, and no
+// other check is relaxed. The carve-out is deliberately narrow and fail-closed
+// on anything it cannot resolve statically:
+//   * all three prefix components must be LITERAL — a glob anywhere in them
+//     (`.c*/w*/x/`, `.claude/worktrees/*/`) strips nothing and stays denied, so
+//     the carve-out can never be used as a wildcard dodge;
+//   * a separator after <name> is required, so `rm -rf .claude/worktrees` and
+//     `rm -rf .claude/worktrees/<name>` — which would take out every worktree's
+//     state dir, or one whole worktree — strip nothing and stay denied;
+//   * a `..` path segment anywhere in the text disables the strip entirely,
+//     because `.claude/worktrees/x/..` climbs back into the protected tree.
+// The preceding character is required to be a non-name character and is
+// preserved by the replacement, so `my.claude/worktrees/…` is not a prefix and
+// no verb/token can be spliced away. Nested worktrees strip to a fixed point.
+const WORKTREE_PREFIX_RE = /(^|[^\w.-])\.claude[\\/]worktrees[\\/]([^\\/\s"'*?[\]{}:;&|()<>]+)[\\/]/gi;
+const DOTDOT_SEGMENT_RE = /(?:^|[\\/\s"'=:;&|()<>])\.\.(?:[\\/\s"'=:;&|()<>]|$)/;
+function stripWorktreePrefix(text) {
+  let out = String(text ?? "");
+  if (DOTDOT_SEGMENT_RE.test(out)) return out;
+  for (let prev = null; prev !== out; ) {
+    prev = out;
+    out = out.replace(WORKTREE_PREFIX_RE, "$1");
+  }
+  return out;
+}
+
 function deny(reason) {
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
@@ -117,7 +154,7 @@ const command = String(input.command ?? input.cmd ?? "");
 // of the raw-only scans; the cd scanner already ran over a quote-stripped view,
 // these matchers did not).
 function shellCommandViews(cmd) {
-  const base = decodeAnsiCQuotes(String(cmd || "")).replace(/[\\`]\r?\n/g, "");
+  const base = stripWorktreePrefix(decodeAnsiCQuotes(String(cmd || "")).replace(/[\\`]\r?\n/g, ""));
   const stripQuotes = (v) => v.replace(/["']/g, "");
   const dropBackslash = (v) => v.replace(/\\(.)/g, "$1");
   return [base, stripQuotes(base), dropBackslash(base), dropBackslash(stripQuotes(base))];
@@ -150,7 +187,7 @@ const shellTool = input.command != null || input.cmd != null ||
 // Deny targets that enter the state dir, either directly or as a component
 // step (`cd .claude` then `cd session-state` must not assemble the cwd).
 function cdTargetEntersStateDir(target) {
-  const t = String(target || "").replace(/\\/g, "/").replace(/\/+$/, "");
+  const t = stripWorktreePrefix(String(target || "")).replace(/\\/g, "/").replace(/\/+$/, "");
   if (/\.claude\/session-state/i.test(t)) return true;
   const parts = t.split("/").filter(Boolean);
   if (parts.some((p) => /^session-state$/i.test(p))) return true;
@@ -190,7 +227,7 @@ function globSegCouldTargetProtected(seg) {
 // glob that could expand to one. Catches a globbed ANCESTOR (`.clau*/session-state`
 // carries a literal `session-state` segment) without needing a literal `.claude`.
 function segmentsHitStateDir(value) {
-  const segs = String(value || "").replace(/\\/g, "/").split(/[\s"'=:/(){}|;&<>]+/);
+  const segs = stripWorktreePrefix(String(value || "")).replace(/\\/g, "/").split(/[\s"'=:/(){}|;&<>]+/);
   return segs.some((s) => /^\.claude$/i.test(s) || /^session-state$/i.test(s) || globSegCouldTargetProtected(s));
 }
 // A redirect (`>`/`>>`) whose target enters the state dir truncates/overwrites a
@@ -229,6 +266,43 @@ const CD_CMD_RE = new RegExp(
   "gi"
 );
 const CD_ARG_RE = new RegExp(CD_SEG_RE.source, "g");
+
+// A worktree ROOT carries no trailing separator, so stripWorktreePrefix leaves
+// it intact on purpose — `rm -rf .claude/worktrees/<name>` takes out that
+// worktree's own state dir and must stay denied. But the destructive test is
+// deliberately coarse (a destructive verb ANYWHERE plus a state-dir mention
+// ANYWHERE), so merely NAMING the root as a `cd` destination poisoned every
+// following verb: `cd <worktree-root> && rm scratch.tmp` denied. A cd
+// DESTINATION is not a destruction target, and scanCdInvocations already
+// adjudicates every cd target independently (entering a state dir denies there,
+// unresolvable targets fail closed), so blanking a cd target that is exactly a
+// worktree root removes only a duplicate signal. Scoped hard: only a positional
+// cd/pushd/Set-Location target, only when the token ENDS in a literal
+// `.claude/<sep>worktrees/<sep><name>` with no glob, and only for the
+// destructive-verb view. An attached-flag form (`-Path:<root>`) is left alone —
+// fail closed. Replacement is length-preserving so offsets stay valid.
+const WORKTREE_ROOT_TAIL_RE = /(?:^|[^\w.-])\.claude[\\/]worktrees[\\/][^\\/\s"'*?[\]{}:;&|()<>]+$/i;
+function blankCdWorktreeRoots(cmd) {
+  const text = String(cmd || "");
+  let out = text;
+  for (const match of text.matchAll(CD_CMD_RE)) {
+    const runStart = match.index + match[0].length - match[1].length;
+    for (const seg of match[1].matchAll(CD_ARG_RE)) {
+      const token = seg[0].replace(/["']/g, "");
+      if (token === "--" || /^\/d$/i.test(token)) continue;
+      if (token.startsWith("-")) {
+        if (/^-[^:=]*[:=](.+)$/.test(token)) break;
+        continue;
+      }
+      if (WORKTREE_ROOT_TAIL_RE.test(token)) {
+        const start = runStart + seg.index;
+        out = out.slice(0, start) + "_".repeat(seg[0].length) + out.slice(start + seg[0].length);
+      }
+      break;
+    }
+  }
+  return out;
+}
 
 // Statically decode ANSI-C `$'...'` quoting: `cd $'\x2eclaude/...'` executes
 // with the escapes resolved, so the scan must see the resolved bytes too
@@ -307,7 +381,7 @@ if (shellTool) {
   //      `c"d"` / `"cd"` — which the shell joins back into `cd` — are seen as
   //      the verb they execute as. (Opus review 2026-08-19, round 2.)
   // Windows `\`-separated paths survive both views: only quotes are stripped.
-  const spliced = decodeAnsiCQuotes(command).replace(/[\\`]\r?\n/g, "");
+  const spliced = stripWorktreePrefix(decodeAnsiCQuotes(command).replace(/[\\`]\r?\n/g, ""));
   // cmd.exe accepts cd/chdir GLUED to a switch or path — `cd/d X`, `cd\dir`,
   // `cd.claude\session-state`, `chdir/d X`. Without a separating space the
   // cd-verb regex (whose lookahead rejects a following `.`/`-`) never fires, so
@@ -365,7 +439,7 @@ if (shellTool) {
   // mention must appear in the SAME view, so test per-view; the raw (base) view
   // still covers Windows `\`-separated paths, where the backslash is a real
   // separator and dropping it would corrupt the path.
-  const destructiveViews = shellCommandViews(command);
+  const destructiveViews = shellCommandViews(blankCdWorktreeRoots(command));
   const hitsDestructiveVerb = (v) =>
     DESTRUCTIVE_VERB_RE.test(v) || FIND_TRAVERSAL_DELETE_RE.test(v) || GIT_CLEAN_RE.test(v) || RSYNC_DELETE_RE.test(v);
   // namesStateDir now also matches a component-aware / glob-obscured reference
