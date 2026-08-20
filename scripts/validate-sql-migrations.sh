@@ -738,9 +738,9 @@ build_mutating_fn_index() {
           # before anything reads one, so both halves see the same spelling.
           gsub(/[ \t]*\.[ \t]*/, ".", l)
           if (!infn) {
-            if (l !~ /create[ \t]+(or[ \t]+replace[ \t]+)?function[ \t]/) next
+            if (l !~ /create[ \t]+(or[ \t]+replace[ \t]+)?(function|procedure)[ \t]/) next
             f = l
-            sub(/^.*create[ \t]+(or[ \t]+replace[ \t]+)?function[ \t]+/, "", f)
+            sub(/^.*create[ \t]+(or[ \t]+replace[ \t]+)?(function|procedure)[ \t]+/, "", f)
             sub(/[^a-z0-9_.$].*$/, "", f)
             sub(/^public\./, "", f)
             if (f == "") next
@@ -763,7 +763,7 @@ build_mutating_fn_index() {
         }
         END {
           for (f in buf) {
-            # ROUND 30. Records, not verdicts. `F` names a function this batch
+            # ROUND 30. Records, not verdicts. `F` names a routine this batch
             # defines, `M` one whose own body mutates, `C` a call edge. The
             # transitive closure runs downstream over every batch at once.
             print "F\t" f
@@ -811,7 +811,7 @@ build_mutating_fn_index() {
               }
             }
             # Every `name(` in the body is emitted as a call edge. Which of those
-            # names is really a function is decided downstream by intersecting
+            # names is really a routine is decided downstream by intersecting
             # with the F set, so a type modifier like `numeric(12,2)` or a
             # builtin simply has no F record to match and drops out.
             e = b
@@ -860,9 +860,9 @@ build_mutating_fn_index() {
           callersOf.get(p[2]).add(p[1]);
         }
       }
-      // A function that calls a mutating function is itself mutating. Walk the
+      // A function or procedure that calls a mutating routine is itself mutating. Walk the
       // call graph BACKWARDS from every known mutator, marking callers, to
-      // whatever depth the wrapping goes. Only defined functions are marked, so
+      // whatever depth the wrapping goes. Only defined routines are marked, so
       // an edge to a builtin or a type modifier leads nowhere.
       //
       // Indented deliberately: a line starting with `}` in column 0 sits inside
@@ -1500,7 +1500,7 @@ $MIG_BASENAME
         # Drop quoting BEFORE normalizing, so "public"."orders" survives as one
         # dotted token instead of splitting into public . orders.
         gsub(/"/, "", line)
-        # Function-body mode, bounded by DOLLAR QUOTES — not by the LANGUAGE
+        # Routine-body mode, bounded by DOLLAR QUOTES — not by the LANGUAGE
         # marker, which round 9 used and which is wrong in both directions.
         # CRX writes functions LANGUAGE-first:
         #
@@ -1534,7 +1534,7 @@ $MIG_BASENAME
         rest = line
         while (rest != "") {
           if (!infn) {
-            if (!match(rest, /create[ \t]+(or[ \t]+replace[ \t]+)?function/)) {
+            if (!match(rest, /create[ \t]+(or[ \t]+replace[ \t]+)?(function|procedure)/)) {
               top = top " " rest
               break
             }
@@ -2166,12 +2166,12 @@ $MIG_BASENAME
         if (!pending) next
         # A dollar quote opens the body: this is the shape we want, stand down.
         if (line ~ /\$[a-z0-9_]*\$/) { pending = 0; awaitq = 0; next }
-        if (line ~ /(^|[^a-z0-9_])as[ \t]*'"'"'/) {
+        if (line ~ /(^|[^a-z0-9_])as[ \t]*(e|u&)?'"'"'/) {
           printf "%d\t%s\n", FNR, $0; pending = 0; awaitq = 0; next
         }
         # `AS` at end of line, body opens on the next one.
         if (line ~ /(^|[^a-z0-9_])as[ \t]*$/) { awaitq = 1; next }
-        if (awaitq && line ~ /^[ \t]*'"'"'/) {
+        if (awaitq && line ~ /^[ \t]*(e|u&)?'"'"'/) {
           printf "%d\t%s\n", FNR, $0; pending = 0; awaitq = 0; next
         }
         if (awaitq && line ~ /[^ \t]/) { awaitq = 0 }
@@ -2218,13 +2218,13 @@ $MIG_BASENAME
 
     if [ -n "$INDIRECT_HITS" ]; then
       echo "VIOLATION: $file"
-      echo "  Top-level call to a function whose body is an unbindable rewrite:"
+      echo "  Top-level call to a routine whose body is an unbindable rewrite:"
       printf '%s\n' "$INDIRECT_HITS" | while IFS=$'\t' read -r n_ln n_fn n_kind n_cols n_var n_raw; do
         echo "    line $n_ln: $n_fn() — its body writes a protected table, or"
         echo "              builds SQL at runtime so no guard can see what it writes"
       done
       echo "  Calling it makes this migration a one-shot rewrite, but the rows it"
-      echo "  touches are decided by the function's own runtime predicates — or by"
+      echo "  touches are decided by the routine's own runtime predicates — or by"
       echo "  a string assembled while it runs — so no digest can be shown to cover"
       echo "  them. Inline the DML here, written out literally, so it can be read"
       echo "  and bound to an approved set."

@@ -40,6 +40,10 @@ migration safety harness; no app source, migration SQL, live database, or produc
   `pg_catalog.round(...)` and `auth.uid()` identities remain trusted. Quoted lowercase routine
   names now coalesce with PostgreSQL's unquoted identity, so defining `public."round"(...)` and
   invoking `round(...)` cannot hide a same-file mutator.
+- The Bash approved-set validator now treats functions and procedures as one routine graph,
+  including transitive wrappers, and refuses plain, escape, or Unicode single-quoted routine
+  bodies that its write scanners cannot inspect. Its 180-case mutation suite and the 199-case
+  apply-time analyzer suite are both wired into a required CI step.
 - Linked trigger/FK capture now preserves schema-qualified non-public parents whose referential
   actions write public children. The 2026-08-20 production capture records `auth.users` as an
   opaque source with its transitive public cascades, so infrastructure-schema exemptions can no
@@ -55,7 +59,7 @@ migration safety harness; no app source, migration SQL, live database, or produc
 
 Focused proof: snapshot producer 14 assertions; applied-source containment pass (including forced
 worktree-enumeration failure); trigger fan-out producer 13 assertions; apply-time analyzer
-199 assertions; apply-time guard 267 assertions; approved-set validator 176 mutation cases.
+199 assertions; apply-time guard 267 assertions; approved-set validator 180 mutation cases.
 Each new edge has a removal mutant that
 survives only when the load-bearing protection is deliberately deleted.
 

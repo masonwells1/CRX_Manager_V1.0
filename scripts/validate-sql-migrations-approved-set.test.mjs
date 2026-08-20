@@ -1672,6 +1672,44 @@ const CASES = [
       `SELECT public._fix2();\n`,
   },
   {
+    name: 'an escape-string function body cannot hide a protected rewrite',
+    expect: 'violation',
+    mustReport: 'single-quoted string',
+    sql:
+      `CREATE FUNCTION public._escape_fix() RETURNS void LANGUAGE plpgsql AS ` +
+      `E'BEGIN UPDATE public.orders SET total_profit = 0; END;';\n` +
+      `SELECT public._escape_fix();\n`,
+  },
+  {
+    name: 'a Unicode-string procedure body cannot hide a protected rewrite',
+    expect: 'violation',
+    mustReport: 'single-quoted string',
+    sql:
+      `CREATE PROCEDURE public._unicode_fix() LANGUAGE plpgsql AS ` +
+      `U&'BEGIN UPDATE public.orders SET total_profit = 0; END;';\n` +
+      `CALL public._unicode_fix();\n`,
+  },
+  {
+    name: 'a called dollar-quoted procedure that rewrites protected rows is indirect',
+    expect: 'violation',
+    mustReport: 'Top-level call to a routine',
+    sql:
+      `CREATE PROCEDURE public._procedure_fix() LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = 0; END;\n$$;\n` +
+      `CALL public._procedure_fix();\n`,
+  },
+  {
+    name: 'a dollar-quoted procedure wrapper inherits a function mutator transitively',
+    expect: 'violation',
+    mustReport: 'Top-level call to a routine',
+    sql:
+      `CREATE FUNCTION public._inner_fix() RETURNS void LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = 0; END;\n$$;\n` +
+      `CREATE PROCEDURE public._procedure_wrapper() LANGUAGE plpgsql AS $$\n` +
+      `BEGIN PERFORM public._inner_fix(); END;\n$$;\n` +
+      `CALL public._procedure_wrapper();\n`,
+  },
+  {
     name: 'round-40: a plain-string DO block cannot hide direct protected DML',
     expect: 'violation',
     mustReport: 'non-dollar-quoted single-quoted string',

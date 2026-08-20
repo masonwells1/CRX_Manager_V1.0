@@ -259,6 +259,11 @@ jobs:
       - name: Guard-hook regression tests (safety net must not regress)
         run: npm run test:correction-guards
 
+      - name: Migration replay analyzer mutation tests
+        run: |
+          node .claude/hooks/apply-time-dml-lib.test.mjs
+          node scripts/validate-sql-migrations-approved-set.test.mjs
+
       - name: Phase 3C private-artifact regression tests
         run: npm run test:supplier-pricing-phase3c-packet
 

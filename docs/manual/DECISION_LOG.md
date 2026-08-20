@@ -484,6 +484,10 @@ resolve a public overload; trust requires an exact `pg_catalog` call or one of t
 `auth.uid/jwt/role` identities. A quoted lowercase name has the same PostgreSQL identity as its
 unquoted spelling, so `public."round"(...)` and `round(...)` are deliberately coalesced while a
 genuinely case-sensitive quoted name remains distinct.
+The Bash approved-set lane applies the same fail-closed boundary to functions and procedures:
+dollar-quoted bodies participate in one transitive mutating-routine graph, while plain, escape,
+and Unicode single-quoted routine bodies are refused because the validator cannot inspect them.
+Both focused analyzer suites run in a required CI step.
 
 ---
 
