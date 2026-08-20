@@ -380,35 +380,41 @@ not the guard's complete matching rule: `review-proof-guard` independently block
 `.claude` or `.claude/session-state` anywhere, and treats `rm`/`mv`/`git clean`/`rsync --delete`
 and friends as destructive verbs. See the guard row in `agent-guardrails.md` for the full rule.)
 
-Examples, all verified against the live hook stack:
+Every ✅ row below was **executed live in a worktree** while writing this page — not reasoned about,
+not checked against one hook. The ❌ rows were reproduced the same way.
 
 | | |
 |---|---|
 | ❌ `rm -f C:\CRX_Manager\.claude\worktrees\wt-a\scratch.tmp` | denied by `review-proof-guard` |
 | ❌ `cd C:\CRX_Manager\.claude\worktrees\wt-a && rm scratch.tmp` | denied by `review-proof-guard` |
-| ✅ `rm -f scratch.tmp` | allowed |
-| ✅ `rm -rf node_modules/.cache` | allowed |
-| ✅ `mv a.txt b.txt` | allowed |
-| ✅ `Write` to a worktree file (relative **or** absolute) | allowed |
+| ✅ `rm -f scratch.tmp` | ran |
+| ✅ `rm probe-dir/x.txt` (nested relative) | ran |
+| ✅ `mv a.txt b.txt` | ran |
+| ✅ `Write` to a worktree file (relative **or** absolute) | ran |
 
-Three things that look like this bug but are not — each is a **different guard**, so relative paths
+Four things that look like this bug but are not — each is a **different layer**, so relative paths
 do not help:
 
-- **`git clean -f`/`-fd`/`-fdx` is blocked everywhere**, in worktrees and out, by
-  `bash-safety-lib.mjs` (`Blocked \`git clean -f\``). `review-proof-guard` allows it once the path
-  is relative, but the command still does not run. Review with `git clean -n` first, then delete
-  the specific files. *(An earlier draft of this page listed `git clean -fd` as an allowed
-  workaround — that was wrong, caught in review of PR #434: it had been tested against
-  `review-proof-guard` alone rather than the whole hook stack.)*
-- **`find … -delete` is blocked everywhere** by a separate safety layer, with the message
-  "Blocked `find ... -delete`". Not `review-proof-guard`, and not `bash-safety-lib.mjs` either —
+- **`rm -rf` never runs at all.** `.claude/settings.json` lists `Bash(rm -rf:*)` and `Bash(rm -fr:*)`
+  in `permissions.deny`, so it is refused before any hook sees it, worktree or not. Use a targeted
+  `rm <file>` or `rm -r <dir>`.
+- **`git clean -f`/`-fd`/`-fdx` is blocked everywhere**, in worktrees and out — twice over: by
+  `permissions.deny` (`Bash(git clean -f:*)`) and by `bash-safety-lib.mjs`. `review-proof-guard`
+  allows it once the path is relative, but the command still does not run. Review with
+  `git clean -n` first, then delete the specific files.
+- **`find … -delete` is blocked everywhere** by a separate safety layer, with a message beginning
+  "Blocked". Not `review-proof-guard`, and not `bash-safety-lib.mjs` either —
   that library allows it. Run the `find` without `-delete`, review the matches, then delete.
 - **A blocked `Write` to `.claude/session-state/stop-wrap-ack.json` is a different hook.**
   `review-proof-guard` deliberately allows that write — it is the designed session-end
   acknowledgment valve.
 
 **Lesson worth keeping:** verifying a command against ONE hook does not tell you whether the command
-runs. Several guards sit on every Bash call. Test the real command, or say which guard you tested.
+runs. A Bash call passes through `permissions.deny` in `.claude/settings.json`, then several
+PreToolUse hooks, then the harness's own safety layer — any one of them can refuse it. **Run the
+command; do not reason about it.** This page's first two drafts each claimed a command was "allowed"
+after checking a single guard (`git clean -fd`, then `rm -rf`); both were wrong and both were caught
+in review of PR #434, which is why every ✅ above is now something that was actually executed.
 
 **Do not "fix" this by stripping the worktree prefix out of the command text.** That was attempted
 on 2026-08-19/20 and abandoned after five independent `gpt-5.6-sol` review rounds found eight real

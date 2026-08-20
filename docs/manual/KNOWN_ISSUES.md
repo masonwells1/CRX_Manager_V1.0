@@ -47,24 +47,29 @@ commits `c64ea3d4` and `4b302050` are not implicated.
 
 **Actual impact is much smaller than first reported.** *For this collision*, the guard fires only
 when the command *spells out* the worktree path — the agent's shell already starts inside the
-worktree, so relative commands avoid it: `rm -f scratch.tmp`, `rm -rf node_modules/.cache`,
-`mv a.txt b.txt` and `Write` (relative or absolute) are **allowed**, while
+worktree, so relative commands avoid it: `rm -f scratch.tmp`, `rm probe-dir/x.txt`,
+`mv a.txt b.txt` and `Write` (relative or absolute) all **ran live in a worktree**, while
 `rm -f <full-worktree-path>\file` and `cd <full-worktree-path> && rm file` are denied. That is a
 statement about the worktree collision, **not** the guard's complete matching rule — the guard
 independently blocks commands naming `.claude` or `.claude/session-state` anywhere, and treats
-`rm`/`mv`/`git clean`/`rsync --delete`/`find … -delete` as destructive verbs; the full rule is the
+`rm`/`mv`/`git clean`/`rsync --delete`, and `find` paired with `-delete`/`-exec`, as destructive
+verbs *when the command also names the state directory*; the full rule is the
 `review-proof-guard.mjs` row in `docs/reference/agent-guardrails.md`.
 
-Three lookalikes are **different guards**, so relative paths do not help: `git clean -f/-fd/-fdx` is
-blocked everywhere by `bash-safety-lib.mjs`; `find … -delete` is blocked everywhere by a separate
-safety layer (not this guard, and not `bash-safety-lib.mjs` — that library allows it); and the
-blocked `Write` to `stop-wrap-ack.json` in the original report came from a different hook (this
-guard deliberately allows that write — it is the designed acknowledgment valve).
+Four lookalikes are **different layers**, so relative paths do not help: `rm -rf`/`rm -fr` never run
+at all (`permissions.deny` in `.claude/settings.json`); `git clean -f/-fd/-fdx` is blocked twice
+over, by `permissions.deny` and by `bash-safety-lib.mjs`; a bare `find … -delete` is blocked by a
+separate safety layer independent of the state-dir rule above (not `bash-safety-lib.mjs` — that
+library allows it); and the blocked `Write` to `stop-wrap-ack.json` in the original report came from
+a different hook (this guard deliberately allows that write — it is the designed acknowledgment
+valve).
 
-**Correction, PR #434 review:** an earlier draft of this entry and of `gotchas.md` listed
-`git clean -fd src` as an allowed workaround. It is not — it had been tested against
-`review-proof-guard` alone rather than the whole hook stack. Verifying a command against ONE hook
-does not tell you whether the command runs; several guards sit on every Bash call.
+**Correction, PR #434 review (twice).** Successive drafts of this entry and of `gotchas.md` listed
+`git clean -fd src`, then `rm -rf node_modules/.cache`, as allowed workarounds. Both were wrong, and
+both were wrong the same way: verified against `review-proof-guard` alone rather than the whole
+stack — `permissions.deny`, then the PreToolUse hooks, then the harness's own safety layer, any of
+which can refuse a command. Every example is now something that was actually executed in a worktree.
+**Run the command; do not reason about it.**
 
 **Workaround (use this):** never name the worktree path in a destructive shell command. Recorded in
 `docs/reference/gotchas.md`.

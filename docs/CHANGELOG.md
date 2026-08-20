@@ -76,12 +76,14 @@ worktree, because worktrees live at `<repo>/.claude/worktrees/<name>/` and the g
 
 **Impact is much smaller than first reported.** *For this collision*, the guard fires only when the
 command *spells out* the worktree path — the agent's shell already starts in the worktree, so
-`rm -f scratch.tmp`, `rm -rf node_modules/.cache`, `mv a.txt b.txt` and `Write` (relative or
-absolute) are allowed. That describes the collision, not the guard's whole matching rule: it also
+`rm -f scratch.tmp`, `rm probe-dir/x.txt`, `mv a.txt b.txt` and `Write` (relative or absolute) all
+ran live in a worktree. That describes the collision, not the guard's whole matching rule: it also
 blocks commands naming `.claude`/`.claude/session-state` anywhere, with `rm`/`mv`/`git clean`/
-`rsync --delete`/`find … -delete` as destructive verbs. Two claims in the original report were
-wrong: the blocked `Write` to `stop-wrap-ack.json` came from a different hook, and `find … -delete`
-is blocked everywhere by a separate safety layer rather than by this guard.
+`rsync --delete`/`find -delete` as destructive verbs when the state directory is named. Two claims
+in the original report were wrong: the blocked `Write` to `stop-wrap-ack.json` came from a different
+hook, and `find … -delete` is blocked everywhere by a separate safety layer rather than by this
+guard. Note `rm -rf` and `git clean -f` never run anywhere in this repo — `permissions.deny` in
+`.claude/settings.json` refuses both before any hook sees them.
 
 **A fix was built and abandoned.** Five successive versions of a text-stripping carve-out were each
 reviewed by an independent `gpt-5.6-sol` high-effort pass. Every round found at least one real
