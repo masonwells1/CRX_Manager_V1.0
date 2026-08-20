@@ -81,8 +81,11 @@ migration safety harness; no app source, migration SQL, live database, or produc
 - Dollar-quoted text on `COMMENT ON FUNCTION` is no longer misregistered as that function's body.
   A following call now remains bound to the real database-resident routine (or fails closed when its
   effect is unknown), while a comment without an invocation remains ordinary metadata.
+- Failed linked Supabase captures no longer echo raw child-process output into errors. Database
+  routine source, CLI stderr, and spawn diagnostics are withheld while the exit status and refusal to
+  write evidence remain visible.
 
-Focused proof: snapshot producer 15 assertions; applied-source containment pass (including forced
+Focused proof: snapshot producer 16 assertions; applied-source containment pass (including forced
 worktree-enumeration failure); trigger fan-out producer 22 assertions; apply-time analyzer
 224 assertions; apply-time guard 285 assertions; approved-set validator 190 mutation cases.
 Each new edge has a removal mutant that

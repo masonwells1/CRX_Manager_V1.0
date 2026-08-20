@@ -217,6 +217,35 @@ check('caller-supplied SQL is refused before the linked query executes', () => {
   }
 });
 
+check('a failed linked query never echoes database or process diagnostic text', () => {
+  const dir = linkedFixture();
+  const markers = [
+    'DATABASE_ROUTINE_SOURCE_MUST_NOT_ECHO',
+    'DATABASE_STDERR_MUST_NOT_ECHO',
+    'SPAWN_ERROR_MUST_NOT_ECHO',
+  ];
+  try {
+    assert.throws(() => runLinkedRead({
+      projectRoot: dir,
+      linkedRoot: dir,
+      queryId: 'applied_migrations',
+      run: () => ({
+        status: 1,
+        stdout: markers[0],
+        stderr: markers[1],
+        error: new Error(markers[2]),
+      }),
+    }), (error) => {
+      assert.match(error.message, /exit 1/);
+      assert.match(error.message, /diagnostic output was withheld/);
+      assert.equal(markers.some((marker) => error.message.includes(marker)), false);
+      return true;
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 check('a different linked project cannot be relabeled as production', () => {
   const dir = linkedFixture('abcdefghijklmnopqrst');
   try {

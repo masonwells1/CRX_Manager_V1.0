@@ -223,13 +223,9 @@ export function runLinkedRead(options = {}) {
     },
   );
   if (result.error || result.status !== 0) {
-    const diagnostic = String(result.error?.message || result.stderr || result.stdout || '')
-      .replace(/[\r\n]+/g, ' ')
-      .trim()
-      .slice(0, 500);
     fail(
-      `Supabase CLI read-only linked capture failed (exit ${result.status ?? 'unknown'})` +
-      `${diagnostic ? `: ${diagnostic}` : ''}; no evidence was written`,
+      `Supabase CLI read-only linked capture failed (exit ${result.status ?? 'unknown'}); ` +
+      'diagnostic output was withheld; no evidence was written',
     );
   }
   assertHarmlessSupabaseStderr(result.stderr);
