@@ -2,6 +2,141 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-20 — Merged main's zero-width unit fix into the blend-ticket rate/unit…
+
+Merged main's zero-width unit fix into the blend-ticket rate/unit check, keeping main's delete-don't-space normalizer and re-applying the unit-aware rate arm on top of it. Found that the fix does not reach the money path: rateBaseUnit, which every billing-related unit lookup routes through, still leaves zero-width characters intact, so a unit pasted from a PDF can silently skip the rate check or fire a false 'this ticket will fail when you invoice it' alarm. Main's 5 zero-width regression tests were displaced by the merge and still need porting to the new warning shape. 77 tests green and typecheck clean; nothing pushed, no migration, no edge function.
+
+> **CORRECTION, same day, after the PR #439 review.** Two claims in the paragraph above are wrong and
+> the fix they describe was reverted before merge. (1) The "false alarm" was **true**: live
+> `normalize_rate_unit` is `lower(btrim(...))`, `btrim` strips outer spaces only, so the database
+> really does refuse `m<ZWSP>g` and the invoice really would fail — confirmed by reading live
+> `pg_proc.prosrc`. (2) Stripping zero-width inside `rateBaseUnit` was therefore backwards: that
+> function predicts the server, and making it more permissive turns an accurate early warning into a
+> ticket that fails at invoicing instead. Raised as `CRX-MONEY-PARITY-001` by gpt-5.6-sol. The strip
+> is reverted, the parity contract is now pinned by tests that fail if it is re-added, and the real
+> remaining fix is a migration hardening the SQL with the client relaxed in the same change. See the
+> OPEN entry in `docs/manual/KNOWN_ISSUES.md`.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `25e5f9a3 Merge branch 'claude/blend-unit-rebuild-step1' into claude/blend-ticket-rate-unit-check-ccbba2`
+  - `91051d74 feat(blend): tier the math warnings so "couldn't check" reads differently`
+  - `c4f24e06 Merge branch 'claude/loving-hofstadter-6b1f5e' into claude/blend-unit-rebuild-step1`
+  - `4a3ebe40 fix(blend): delete the wrong total-volume equation, add three true ones`
+  - `7b4cf67c Merge branch 'claude/loving-hofstadter-6b1f5e' into claude/blend-unit-rebuild-step1`
+  - `b22d14e1 fix(blend): make the per-acre rate check unit-aware on a billing path`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
+## 2026-08-19 — Blend-ticket warnings are tiered, so "couldn't check" stops looking like "you're wrong"
+
+`validateBlendMath` returned `string[]`, and both callers rendered every entry in the same amber
+"Math Validation Warnings" block. After the total-volume rebuild the **common** entry on a real
+ticket is a "could not be checked" note, so rendering it identically to a genuine error is exactly
+how a banner gets trained into wallpaper — the main risk an adversarial review raised against the
+whole redesign.
+
+- The return type is now `BlendMathWarning[]`, each carrying `level: 'mismatch' | 'unchecked'`.
+  `mismatch` means a comparison **ran and disagreed**; `unchecked` means one **could not run** and
+  nothing is known to be wrong.
+- Both callers render two blocks: amber and alerted for `mismatch`, quiet grey headed "Not
+  automatically checked" for `unchecked`.
+- The predicted **invoice failure** is classified `mismatch`, not `unchecked`, even though no
+  comparison disagreed — `create_invoice_from_blend_ticket` will hard-raise on that line, so it is
+  a real problem rather than an unverified one.
+- Each of the 12 warning sites was classified individually rather than by pattern-matching its
+  message text, and the tier of each is now pinned by its own test: promoting an `unchecked` to a
+  `mismatch` relights the permanent banner and must fail loudly.
+- **Closed a real coverage gap:** both caller test files mock the validator away, so *nothing* had
+  ever verified a warning reaching the screen. Two tests now render the real component and assert
+  the tiers stay visually distinct; mutation-tested by collapsing the two blocks back into one and
+  confirming the quiet-note test goes red.
+
+41 validator tests, 77 across the three affected suites.
+
+
+## 2026-08-19 — The blend-ticket total-volume check was the wrong equation; replaced with three true ones
+
+Mason confirmed on 2026-08-19 that a blend ticket's total volume is **"everything in the sprayer,
+so water + product"**. The products are therefore meant to come to *far less* than the total — a
+1,000 gal tank might carry 50 gal of actual product. `sum(product quantities) ≈ total_volume` was
+never a true statement about a spray ticket, so unit-converting it would only have made a false
+alarm more precise. **The equality check is deleted, not fixed.** Three statements that are
+actually true replace it:
+
+- **The tank equation.** The header's own `application_rate` × `total_acres` is the finished tank,
+  with water on both sides cancelling. Runs only when the free-text rate parses unambiguously.
+  **`parseApplicationRate` deliberately declines** a range, a sum of two terms, a bare number or
+  prose rather than taking the first number it sees — a confident guess about operator intent is
+  the exact bug class this rebuild exists to remove. In practice this means the tank check often
+  will not run at all; that is a bonus check, not the primary one.
+- **A dry blend's parts must equal its whole.** A total in a weight unit means no water (Mason,
+  2026-08-19), so products are converted into the ticket's unit and compared for equality. If any
+  product is not in a comparable weight unit the check says it was abandoned, rather than quietly
+  comparing a subset — dropping a row would break the claim rather than soften it.
+- **A spray tank can never hold more product than its total.** One-sided, so it cannot false-alarm
+  whatever the water volume happens to be, and it still works on a ticket mixing liquid and dry.
+
+**Net effect, stated plainly: most spray tickets now carry no total-volume check at all.** Before,
+they carried a noisy wrong one. This is the deliberate trade — a check that lies is worse than no
+check — and it was raised with Mason rather than presented as an upgrade.
+
+- **Banner fatigue was designed against.** A dry product sitting in a liquid tank is the ordinary
+  case, not an anomaly, and is silently excluded from the bound rather than warned about. Only a
+  quantity with **no unit at all** — a real data gap, and the hole three separate reviews found —
+  still produces a message.
+- `application_rate` was added to `TicketData` and to **both callers' effect dependency arrays**;
+  omitting it would have frozen the warning at whatever it was before the operator typed.
+- The obsolete tests that encoded the deleted equation were removed rather than adjusted to pass.
+  35 tests; the tank equation, the dry equality and the spray bound were each mutation-tested by
+  disabling them and confirming exactly the expected test went red. Verified by driving the real
+  module in a browser across all ten cases, including both dry-blend shapes and a scanned-ticket
+  shape.
+
+
+## 2026-08-19 — Blend-ticket rate check is unit-aware, and it guards a billing path
+
+**Correction to the entry below: this file is not display-only.** `create_invoice_from_blend_ticket`
+bills each line from `rate_per_acre` and its unit — never from `quantity` (verified against live
+`pg_proc`). A rate recorded in the wrong unit becomes a wrong invoice, not just a wrong number on
+screen. Earlier notes calling `blendMathValidator` "warning text only, severity low" were describing
+its output, not the fields it validates, and understated the risk.
+
+The per-acre rate check was completely unit-blind: it compared `quantity` against
+`rate_per_acre × total_acres` without ever looking at `unit` or `rate_per_acre_unit`. A product
+dosed at 2 gal/ac over 100 acres and entered as `200 oz` — a 128× error — was reported as a perfect
+match. It now converts before comparing, and refuses rather than guessing when it cannot.
+
+- **Conversion goes through `fieldAppPricedQuantity`** (`src/lib/chemCalculator.ts`), which mirrors
+  the live SQL `field_app_priced_quantity` the invoice bills through. Using `unit_conversions.factor_oz`
+  instead was considered and rejected: it knows grams and milligrams that billing cannot price, so the
+  warning and the invoice would disagree about the same line.
+- **`oz` is read by the product's form** — a weight ounce for a dry product, a fluid ounce for a
+  liquid, matching both the server and Mason's 2026-08-19 answer. A null form is treated as liquid,
+  as the server does.
+- **A blank line rate unit falls back to the product's own `rate_unit`,** mirroring billing's
+  `COALESCE(NULLIF(btrim(rate_per_acre_unit), ''), p.rate_unit)`. Refusing instead would have gone
+  silent on recipe-applied rows, which *always* arrive with a blank rate unit, and which bill anyway.
+- **New invoice pre-flight warning.** When a line's rate unit cannot reach the unit the product is
+  sold in, `create_invoice_from_blend_ticket` hard-raises `BLEND_TICKET_UNIT_UNCONVERTIBLE`. That is
+  now surfaced while the ticket is open instead of surfacing weeks later at invoicing.
+- **MG is deliberately supported.** No MG size exists anywhere, but the pricing function returns the
+  quantity untouched when the rate unit already equals the sold unit. All 3 live MG products are
+  MG-rated and MG-sold, so they price correctly through that identity path. MG only fails when paired
+  with a different sold unit — which is exactly what the pre-flight warning now catches.
+- **Per-acre suffix stripping is done here rather than reusing `baseUnitOfRate`,** which splits on the
+  first `/` unconditionally and so reads `oz/cwt` as `oz`. The live `normalize_rate_unit` keeps a
+  non-acre denominator whole so it can never match a bare unit. The existing helper's behaviour fails
+  in the dangerous direction — silent on screen, hard error at billing — so this file mirrors the
+  server instead. **The same divergence exists in `chemCalculator` itself, which the job chemical grid
+  uses; recorded as an open issue rather than changed here.**
+- **Callers now pass the catalog product's form and units** (`ManualTicketCreate.tsx`,
+  `BlendTicketDetail.tsx`). The fields are required on `ProductData`, so the compiler forces any future
+  caller to supply them rather than silently weakening the check on a billing path.
+- 10 new tests (43 in the file); the form split, the billing fallback, and the `oz/cwt` guard were each
+  mutation-tested by reverting them and confirming exactly the expected test went red. Verified by
+  driving the real module in a browser across all nine cases, including both MG shapes.
+
+
 ## 2026-08-19 — Blend-ticket total-volume check no longer adds quantities across different units
 
 `validateBlendMath` summed every product quantity regardless of unit, so a ticket holding
@@ -67,6 +202,46 @@ skipped and why.
   that PR is what actually ships the change. (Commit SHAs are deliberately not cited here —
   this branch was rebased, and an earlier version of this entry cited a SHA that the rebase
   orphaned.)
+## 2026-08-20 — Worktree/review-proof-guard collision: documented, not fixed (5 review rounds, 8 holes)
+
+`review-proof-guard.mjs` denies destructive shell commands that NAME a path inside a **Claude-managed**
+worktree, because Claude creates them at `<repo>/.claude/worktrees/<name>/` and the guard protects any
+`.claude` path component. Codex worktrees live outside the repo and have no such collision. Bisected
+to `f3e06c52` (PR #423 round-3/5 hardening); `c64ea3d4` and `4b302050` are not implicated.
+
+**Impact is much smaller than first reported.** *For this collision*, the guard fires only when the
+command *spells out* the worktree path — the agent's shell already starts in the worktree, so
+`rm -f scratch.tmp`, `rm probe-dir/x.txt`, `mv a.txt b.txt` and `Write` (relative or absolute) all
+ran live in a worktree. That describes the collision, not the guard's whole matching rule: it also
+blocks commands naming `.claude`/`.claude/session-state` anywhere, with `rm`/`mv`/`git clean`/
+`rsync --delete`/`find -delete` as destructive verbs when the state directory is named. Two claims
+in the original report were wrong: the blocked `Write` to `stop-wrap-ack.json` came from a different
+hook, and `find … -delete` is blocked everywhere by a separate safety layer rather than by this
+guard. Note `rm -rf` and `git clean -f` never run anywhere in this repo — `permissions.deny` in
+`.claude/settings.json` refuses both before any hook sees them.
+
+**A fix was built and abandoned.** Five successive versions of a text-stripping carve-out were each
+reviewed by an independent `gpt-5.6-sol` high-effort pass. Every round found at least one real
+security hole — eight in total, each a different spelling of the same path (trailing separator,
+`../..`, `$var`, `/.`, `."."` quote-joining, an operand named `cd`, `%VAR:~0%`/`!VAR!`, caret
+escapes). Each round's suite was green over the next round's hole; mutation testing reached 14/15
+without surfacing round 5. Mason's call (2026-08-20): document, don't fix. **The guard is unchanged
+— zero behaviour change ships in this entry.**
+
+What landed: the workaround in `docs/reference/gotchas.md`; the full analysis and three ranked
+options (lead option: move worktrees out from under `.claude`) in `docs/manual/KNOWN_ISSUES.md`; and
+all eight holes pinned as denials in `review-proof-guard.test.mjs` — in every spelling, so the two
+cmd.exe expansion forms of the one finding are pinned separately — meaning a future carve-out attempt
+trips on them immediately. The cmd.exe exploits (`%VAR:~0%`, `!VAR!`, caret escapes) are pinned
+through the `cmd` tool name and a `cmd /c` form as well as Bash: those strings only carry their
+exploit semantics in cmd.exe, so a Bash-only tripwire would have stayed green while a future
+shell-specific carve-out opened the real route. Pinning both routes is deliberate — the guard must
+not decide by tool name, and the tests should fail if a change makes it do so.
+
+- **Files changed**: `.claude/hooks/review-proof-guard.test.mjs` (tests only), `docs/reference/gotchas.md`, `docs/manual/KNOWN_ISSUES.md`, `docs/CHANGELOG.md`
+- **Guard logic changed**: none
+- **Migrations touched**: none
+
 ## 2026-08-19 — Product data model: build plan revision 2 after independent Fable…
 
 Product data model: build plan revision 2 after independent Fable review (26 findings) and orchestration design; recorded owner decisions D-J (chemistry edits admin-only) and D-K (unlisted brand never blocks receiving) in DECISION_LOG. Planning only — nothing built, pushed, migrated, or applied.

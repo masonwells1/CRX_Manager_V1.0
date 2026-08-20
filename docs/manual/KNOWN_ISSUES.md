@@ -34,6 +34,78 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN (WONTFIX for now) 2026-08-20 — `review-proof-guard` denies destructive shell commands that NAME a worktree path
+
+**Severity: LOW — cosmetic, with a zero-cost workaround. Mason chose "document, don't fix"
+(2026-08-20) after five review rounds found the fix more dangerous than the bug.**
+
+**Scope: Claude-managed worktrees only.** Claude creates them at `<repo>/.claude/worktrees/<name>/`;
+Codex worktrees live outside the repo (`~/.codex/worktrees/…`) and have no such collision — see the
+Claude-only list in `scripts/agent-manifest-parity.mjs`. The guard is wired for both agents, but only
+a Claude worktree path trips it this way, and the `permissions.deny` layer referenced below is
+Claude-side (Codex is governed by `.codex/hooks.json`).
+
+Every file inside a Claude worktree carries a `.claude` path component. `review-proof-guard.mjs`
+protects any `.claude` component and cannot distinguish the repo's review state from an ordinary
+scratch file under a worktree.
+Introduced by `f3e06c52` (PR #423 round-3/5 hardening) — bisected, not guessed; the later ack-valve
+commits `c64ea3d4` and `4b302050` are not implicated.
+
+**Actual impact is much smaller than first reported.** *For this collision*, the guard fires only
+when the command *spells out* the worktree path — the agent's shell already starts inside the
+worktree, so relative commands avoid it: `rm -f scratch.tmp`, `rm probe-dir/x.txt`,
+`mv a.txt b.txt` and `Write` (relative or absolute) all **ran live in a worktree**, while
+`rm -f <full-worktree-path>\file` and `cd <full-worktree-path> && rm file` are denied. That is a
+statement about the worktree collision, **not** the guard's complete matching rule — the guard
+independently blocks commands naming `.claude` or `.claude/session-state` anywhere, and treats
+`rm`/`mv`/`git clean`/`rsync --delete`, and `find` paired with `-delete`/`-exec`, as destructive
+verbs *when the command also names the state directory*; the full rule is the
+`review-proof-guard.mjs` row in `docs/reference/agent-guardrails.md`.
+
+Four lookalikes are **different layers**, so relative paths do not help: `rm -rf`/`rm -fr` never run
+at all (`permissions.deny` in `.claude/settings.json`); `git clean -f/-fd/-fdx` is blocked twice
+over, by `permissions.deny` and by `bash-safety-lib.mjs`; a bare `find … -delete` is blocked by a
+separate safety layer independent of the state-dir rule above (not `bash-safety-lib.mjs` — that
+library allows it); and the blocked `Write` to `stop-wrap-ack.json` in the original report came from
+a different hook (this guard deliberately allows that write — it is the designed acknowledgment
+valve).
+
+**Correction, PR #434 review (twice).** Successive drafts of this entry and of `gotchas.md` listed
+`git clean -fd src`, then `rm -rf node_modules/.cache`, as allowed workarounds. Both were wrong, and
+both were wrong the same way: verified against `review-proof-guard` alone rather than the whole
+stack — `permissions.deny`, then the PreToolUse hooks, then the harness's own safety layer, any of
+which can refuse a command. Every example is now something that was actually executed in a worktree.
+**Run the command; do not reason about it.**
+
+**Workaround (use this):** never name the worktree path in a destructive shell command. Recorded in
+`docs/reference/gotchas.md`.
+
+**Do not attempt a text-stripping carve-out.** Five successive versions were built on 2026-08-19/20
+and each was reviewed by an independent `gpt-5.6-sol` high-effort pass. **Every round found at least
+one real hole — eight in total**, each a different spelling of the same path: a trailing separator
+consuming the whole target; `../..` traversal after the reference was blanked; a `$var` descendant;
+a `/.` dot alias; `."."` quote-joined traversal; an *operand* named `cd`; cmd.exe `%VAR:~0%` and
+`!VAR!`; and cmd.exe caret escapes `.^.`. All eight reached the repo's own review state, the
+applied-source ledger, or a whole worktree's state directory. Each round's test suite was green over
+the next round's hole, and mutation testing reached 14/15 without surfacing round 5. The root lesson:
+**rewriting command text inside a security guard is the wrong mechanism** — the guard reasons over
+shell text, and shell text has unbounded ways to spell one path. All eight spellings are now pinned
+as denials in `review-proof-guard.test.mjs`, so a future attempt trips on them immediately.
+
+**If this is ever worth fixing properly, ranked by risk:**
+1. **Move worktrees out from under `.claude`** (e.g. `<repo>/../crx-worktrees/`). The collision
+   disappears and no carve-out is needed — a configuration change, not security logic. *Unverified
+   prerequisite:* the worktree location may be set by the Claude Code harness rather than repo
+   config; check that first. Also touches `worktree-awareness.mjs`, `worktree-cleanup`, `fleet`, and
+   needs the live worktrees drained.
+2. **Strict allowlist** — apply a carve-out only when the whole command matches a deliberately
+   boring grammar (one verb, literal paths, no quotes/globs/`$`/`%`/`!`/backtick/caret/dot-segments).
+   Fail-closed by construction; a survivor is a false positive, not a hole.
+3. **Resolve real paths** — tokenize, `path.resolve()` against cwd, compare against the protected
+   directories actually on disk. The correct answer and the largest rewrite of a live security guard.
+
+---
+
 ## OPEN 2026-08-19 — the per-product rate check in `blendMathValidator.ts` is still unit-blind
 
 **Severity: LOW, warning text only, currently unreachable (0 rows in `blend_tickets` and
@@ -67,6 +139,95 @@ Three things a fix must handle that the total-volume arm did not:
 
 **Not started.** No migration, no live state, no money path. Fix alongside the next blend-ticket
 change rather than on its own.
+
+---
+
+## OPEN 2026-08-20 — a zero-width character in a rate unit makes a ticket un-invoiceable, and only the SQL can fix it
+
+**Severity: LOW-MED, currently unreachable (0 rows in `blend_tickets` and `blend_ticket_products` on
+live, verified read-only 2026-08-19).** Raised as `CRX-MONEY-PARITY-001` by gpt-5.6-sol on
+[PR #439](https://github.com/masonwells1/CRX_Manager_V1.0/pull/439) and then confirmed directly
+against live `pg_proc.prosrc`.
+
+**The finding, and the wrong turn that produced it.** [PR #426](https://github.com/masonwells1/CRX_Manager_V1.0/pull/426)
+taught `normalizeUnit` to **delete** zero-width characters, so `g<ZWSP>al` reads as `gal`. That is
+correct and stays: `normalizeUnit` only ever compares two client-side strings.
+
+A first pass at PR #439 extended the same strip to `rateBaseUnit` on the theory that the money path
+had been left unprotected. **That was backwards**, and the review caught it. `rateBaseUnit` is not a
+client-side comparator — it is a *prediction of the server*, and the server does not close these up:
+
+```
+normalize_rate_unit := lower(btrim(COALESCE(p_unit,''))) + a CASE over known spellings
+```
+
+`btrim` strips **outer spaces only**. Live therefore returns `m<ZWSP>g` intact, matches no size
+table, and `create_invoice_from_blend_ticket` raises `BLEND_TICKET_UNIT_UNCONVERTIBLE`. Stripping
+zero-width client-side made the preflight **more permissive than the database it predicts**, turning
+an accurate early warning into a silent ticket that fails weeks later at invoicing. The strip was
+reverted before merge; the parity contract is now pinned by tests in
+`describe('zero-width characters must not out-run the database')`, which go red if anyone re-adds it.
+
+**So the remaining real defect is server-side.** An operator who pastes a rate unit out of a PDF gets
+a correct-looking ticket that the database will refuse, and the warning naming the offending unit
+shows two strings that look identical on screen. Nothing misbills — the RPC fails closed — but the
+ticket cannot be invoiced until the unit is retyped.
+
+**The fix is a migration, not a client change:** harden `normalize_rate_unit` to delete
+U+200B/200C/200D (and decide the BOM and interior-whitespace cases at the same time), then relax
+`rateBaseUnit` **in the same change** so the two never drift. Doing either side alone re-creates this
+bug in one direction or the other.
+
+Three adjacent parity gaps to settle in that same migration rather than piecemeal:
+
+- JS `.trim()` strips the BOM (U+FEFF) and tabs; PostgreSQL `btrim` does not. Pre-existing, predates
+  PR #439. (gpt-5.6-sol MED #2.)
+- The live CASE lists `'fl oz'` with a single space; neither side collapses interior whitespace, so
+  `'fl  oz'` matches nothing on either side. Consistent today, but by accident rather than design.
+- **The invoice pre-flight stays silent when the rate unit or the sold unit is blank**, although the
+  SQL calls its converter regardless and `normalize_rate_unit` returns NULL for an empty string, so
+  live refuses that line too (gpt-5.6-sol MED #1). Warning on blank was **tried and deliberately
+  reverted** on PR #439: client-side, an empty string does not reliably mean "the catalog has no
+  unit" — it equally means *this caller never resolved the catalog row*, since the pages filter
+  `allProducts` to `is_active` and an inactive product is simply absent. A live read on 2026-08-20
+  says the innocent reading dominates: **0 of 595** active products lack a sold unit (25 lack a rate
+  unit). Warning on blank would therefore mostly emit false "not recorded" notes from load gaps —
+  the wallpaper effect the two-tier design exists to prevent. The real fix is to tell
+  `validateBlendMath` whether the catalog row RESOLVED, instead of inferring it from an empty
+  string; until then the server's fail-closed refusal is the backstop.
+
+**Fixed on PR #439, not deferred:** gpt-5.6-sol MED #3 — the unit-family sets listed only US
+spellings, so a total in `kg`, `g`, `l`, `ml` or their long forms matched neither family, ran no
+total check at all, and said nothing about it. That was a silent hole and a regression against the
+older same-unit sum comparison. The sets now track the live `normalize_rate_unit` CASE, and a total
+unit that still belongs to no family earns an explicit `unchecked` note naming the unit.
+
+**Not started.** No migration written, no live state, and a live apply would need Mason's explicit
+approval plus a migration review.
+
+---
+
+## OPEN 2026-08-19 — `baseUnitOfRate` reads `oz/cwt` as `oz`; the database refuses it
+
+**Severity: MED, money path, not yet reproduced on live data.** `baseUnitOfRate`
+(`src/lib/chemCalculator.ts`) strips a per-acre suffix by splitting on the first `/`
+unconditionally, so any non-acre denominator collapses to its numerator: `oz/cwt` → `oz`.
+
+The live `normalize_rate_unit` does the opposite. When a denominator other than acres is present it
+returns the **whole string**, precisely so it cannot match a bare unit and the conversion refuses.
+
+So for a rate unit like `oz/cwt` the client says "convertible, priced fine" while
+`create_invoice_from_blend_ticket` raises `BLEND_TICKET_UNIT_UNCONVERTIBLE`. That is the dangerous
+direction: nothing on screen, a hard failure at billing.
+
+`baseUnitOfRate` is **not** confined to blend tickets — it is used by the job chemical grid, in code
+whose own comments describe it as a P1 money fix. Whether any live rate unit actually carries a
+non-acre denominator has **not** been checked, so the real-world exposure is unknown.
+
+`blendMathValidator.ts` deliberately does its own suffix stripping rather than reuse this helper, and
+documents why at `rateBaseUnit`. That sidesteps the problem for blend tickets only.
+
+**Not started.** Investigate live `rate_unit` values first; a fix without that is speculative.
 
 ---
 
