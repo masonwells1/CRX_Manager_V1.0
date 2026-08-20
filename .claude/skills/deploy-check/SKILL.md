@@ -149,24 +149,38 @@ If ready, state the remaining landing steps explicitly — this skill does **not
 
    **The merge-only head has no stamp and never will.** When `update-branch` contributes no new PR
    changes, CodeRabbit answers "No files to review." and emits no range line for that SHA, so a
-   SHA-bound gate can never pass no matter how often you re-trigger it. In that one case fall back
-   to **content identity**, which is stronger evidence than the stamp because it compares bytes
-   rather than names: confirm the compare against current `main` lists exactly the PR's own files,
-   then confirm each file's blob SHA at the head equals its blob SHA at the reviewed commit.
+   SHA-bound gate can never pass no matter how often you re-trigger it. In that one case, prove
+   **tree identity** instead — that the merge commit contributed nothing of its own, so the reviewed
+   commit's content is exactly what lands. Three checks, all fail-closed:
 
    ```bash
-   gh api repos/masonwells1/CRX_Manager_V1.0/compare/<MAIN_SHA>...<HEAD> --jq '[.files[].filename]'
+   git rev-parse <HEAD>^1 <HEAD>^2 <HEAD>^{tree}
    ```
 
    ```bash
-   gh api "repos/masonwells1/CRX_Manager_V1.0/contents/<FILE>?ref=<HEAD>" --jq .sha
+   git merge-base --is-ancestor <HEAD>^2 origin/main && echo ANCESTOR_OF_MAIN
    ```
 
-   Run the second against both `<HEAD>` and the reviewed SHA; identical blob hashes mean the
-   reviewed bytes are the merged bytes. Verified on FarmRx #26, 2026-08-20: the compare listed only
-   `.coderabbit.yaml`, blob `5b3a5240` identical at reviewed `9abaf18` and at head `3beb6407`. This
-   fallback applies **only** when the head moved solely by a no-op merge — a head carrying real new
-   commits still needs a real stamped review, and using it anywhere else is self-certifying.
+   ```bash
+   git merge-tree --write-tree <HEAD>^1 <HEAD>^2
+   ```
+
+   It passes only if **all three** hold: `^1` is the exact reviewed commit; `^2` is already an
+   ancestor of `main` (so it introduces nothing unreviewed); and `merge-tree` prints a tree ID
+   **identical** to `<HEAD>^{tree}`, meaning a clean merge of those two parents reproduces the head
+   byte-for-byte and the merge commit smuggled in no edits of its own. Verified live on PR #441,
+   2026-08-20: parents `497621f1` / `db41b6e6`, both trees `fc59b0f4`.
+
+   Compare **trees, never filenames**. An earlier draft of this fallback listed changed filenames
+   and compared per-file blob hashes; Codex flagged it as BLOCKED on two counts and was right on
+   both. A blob hash says nothing about file **mode or type**, so a mode-only commit could turn a
+   regular file into a symlink and still pass; and substituting a PR-controlled `<FILE>` into a
+   shell command is a command-injection vector on a public repo, where any fork can choose the
+   filename. `<HEAD>^{tree}` covers every path, mode, type, and object ID in one comparison and
+   interpolates no attacker-controlled text.
+
+   This applies **only** when the head moved solely by a no-op merge — a head carrying any real new
+   commit still needs a real stamped review, and using it anywhere else is self-certifying.
 
    First capture the head, and capture it *before* requesting any review:
 
@@ -279,9 +293,17 @@ If blocked: List every issue that needs fixing first.
   merge without it. Writing "the final commit went unreviewed" in a summary is a description of the
   gate failing, never a substitute for passing it — an escape hatch an agent can self-certify is
   not a gate. The **one** exception is the merge-only head documented in step 5, where CodeRabbit
-  itself reports "No files to review" and every merged byte is proven identical by blob SHA to a
-  reviewed commit; that is content identity, not disclosure, and it does not extend to a head
-  carrying any real new commit
+  itself reports "No files to review" and the three tree-identity checks pass; that is deterministic
+  proof, not disclosure, and it does not extend to a head carrying any real new commit
+- **Two different gates, only one of them waivable.** Mason may approve a merge without a CodeRabbit
+  review because AGENTS.md makes CodeRabbit *advisory* — "it comments and does not block". That
+  approval is the owner exercising his own policy, not an agent waiving a gate, and only he can give
+  it. The exact-SHA adversarial proof on risky money/RLS/migration diffs is a different thing
+  entirely and is **not waivable by anyone, including Mason's in-chat say-so** — it is satisfied by
+  a clean machine verdict or the change parks. Never let approval of the first be read as approval
+  of the second. (Codex read these as one gate on PR #441 and called the Mason-approval path a
+  blocker; that specific point is declined — the two gates are distinct in AGENTS.md — but the
+  wording is now explicit so the misreading cannot recur.)
 - If a local guard blocks the merge and its required proof harness does not exist in that repo (as
   on FarmRx, which has no `scripts/write-codex-push-proof.mjs`), PARK and ask Mason. Never satisfy a
   guard by borrowing another repo's proof script — CRX's reviews against CRX's rules and would mint

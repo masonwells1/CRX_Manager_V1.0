@@ -141,16 +141,32 @@ mandatory, and it creates a merge commit that moves the head and voids any revie
 The order is: read state → update-branch if behind → re-read `headRefOid` → *then* request review.
 Both PRs in this session were reviewed first and updated second, wasting an attempt on each.
 
-**The merge-only head can never be stamped, and content identity is the answer.** When
-`update-branch` contributes no new PR changes, CodeRabbit replies "No files to review." and emits no
-range line for that SHA — a SHA-bound gate then cannot pass however often it is re-triggered. The
-supported fallback is narrow and evidence-based: prove the compare against current `main` lists
-exactly the PR's own files, and that each file's **blob SHA** at the head equals its blob SHA at the
-reviewed commit. Identical blobs mean the reviewed bytes are the merged bytes — stronger than a name
-match, since it compares content rather than labels. Verified on FarmRx #26: compare listed only
-`.coderabbit.yaml`, blob `5b3a5240` identical at reviewed `9abaf18` and at head `3beb6407`. This
-applies **only** to a no-op merge head; a head carrying any real new commit still needs a stamped
-review, and using it elsewhere is self-certification.
+**The merge-only head can never be stamped, and tree identity is the answer.** When `update-branch`
+contributes no new PR changes, CodeRabbit replies "No files to review." and emits no range line for
+that SHA — a SHA-bound gate then cannot pass however often it is re-triggered. The supported
+fallback proves the merge commit contributed nothing of its own, in three fail-closed checks: `^1`
+is the exact reviewed commit, `^2` is already an ancestor of `main`, and `git merge-tree
+--write-tree ^1 ^2` reproduces `<HEAD>^{tree}` exactly. Verified live on PR #441: parents `497621f1`
+/ `db41b6e6`, both trees `fc59b0f4`. This applies **only** to a no-op merge head; a head carrying
+any real new commit still needs a stamped review, and using it elsewhere is self-certification.
+
+**Compare trees, never filenames — the first draft of that fallback was unsafe.** It listed changed
+filenames and compared per-file blob hashes; Codex returned BLOCKED on two counts and was right on
+both. A blob hash is silent about file **mode and type**, so a mode-only commit could swap a regular
+file for a symlink and still pass. Worse, substituting a PR-controlled `<FILE>` into a shell command
+is a command-injection vector on a **public** repo, where any fork chooses its own filenames and the
+command runs with the reviewer's `gh` credentials. `<HEAD>^{tree}` settles every path, mode, type,
+and object ID in a single comparison and interpolates no attacker-controlled text. General rule: a
+verification step must never interpolate PR-controlled strings into a shell command.
+
+**Two different gates, and only one of them is waivable.** Codex's third finding — that permitting a
+Mason-approved merge without a CodeRabbit review contradicts the no-waiver rule — is **declined**,
+because it conflates two distinct gates. AGENTS.md makes CodeRabbit explicitly *advisory* ("it
+comments and does not block"), so Mason approving a merge without it is the owner applying his own
+settled policy, not an agent waiving anything; only he can give that approval. The exact-SHA
+adversarial proof on risky money/RLS/migration diffs is the hard gate and is **not waivable by
+anyone** — clean machine verdict or the change parks. The skill now states both explicitly so the
+two cannot be read as one.
 
 **Make GitHub enforce the reviewed SHA.** Re-reading `headRefOid` before merging is a soft rule an
 agent can forget; `gh pr merge --match-head-commit <SHA>` is a hard one GitHub enforces, rejecting
