@@ -75,12 +75,26 @@ per-product cutover** (pilot set first, then widen) before it is detailed — se
 | **D-W** | Sol asked whether a cancelled EPA registration should refuse the sale when sell-through authorization cannot be confirmed (review finding 26) | **No — D-T stands unchanged. Mason, 2026-08-19: "Don't worry about it, let it be sold."** Warn loudly, never block. Sol's point that sell-through depends on the specific cancellation order was put to Mason and he accepted it as his call. **Do not add a sale-blocking gate, and do not re-open this.** |
 | **D-X** | Sol asked for the quality tier to move onto the sellable product with database-enforced cross-tier exclusion (review finding 19) | **No structural change. Mason, 2026-08-19: it only affects glufosinate and mesotrione — not worth the work for that edge case.** The safety property is kept at the display layer, where **D-O and D-P already carry it**: the tier is always shown, the tiers are never presented as interchangeable on matching actives alone, and the adjuvant bias against the premium product is stated on screen. That costs nothing extra and is the whole protection. **A builder must not add `sourcing_tier` to `products` or build cross-tier substitution rules.** |
 
-**Proof accounts (Mason, 2026-08-19).** Acceptance proofs run under **Mason's own account**. He
-declined to create a separate non-admin test user. Because an admin session **cannot** reveal a
-missing column grant (C-25), every migration package additionally runs a **direct privilege
-check** — `has_column_privilege('authenticated', 'public.products', '<col>', 'INSERT'/'UPDATE')`
-for each new column, and the equivalent on new tables — recorded in the PR alongside the
-behavioral proof. R-2's intent is met by the pair; neither half alone is sufficient.
+**Proof accounts (Mason, 2026-08-19; corrected after Sol's findings 4 and 31).** Acceptance
+proofs run under **Mason's own account** — he declined to create a separate non-admin test user.
+
+**Correcting revision 2's claim:** it said an admin session "cannot reveal a missing column
+grant." That is **false for direct writes.** Admin and non-admin app users both act through the
+single database role `authenticated`, and the product screen writes directly
+(`src/pages/ProductDetail.tsx:436`), so a missing grant fails for Mason too. What an admin
+session *does* mask is **application-level authorization** — a profile admin cannot show that a
+non-admin is correctly refused by a D-J-restricted `SECURITY DEFINER` RPC. Keep the two proofs
+separate and do not conflate them.
+
+**Every migration package ships an expected-privilege matrix, not a bare check *(finding 4 —
+this was a blocker)*.** Recording `has_column_privilege(...)` for each new column proves nothing
+on its own: it never states which columns are *supposed* to be writable, and a single accidental
+table-level grant makes every column check pass while quietly letting any authenticated user
+edit chemistry. Each package therefore records, per new column, **the expected `INSERT` and
+`UPDATE` result — true or false — and asserts table-level `INSERT`/`UPDATE` on `products` remain
+false.** A result that differs from the expectation fails the package, in either direction.
+Alongside it, prove the behavior four ways: **direct write denied, RPC denied to the wrong role,
+RPC allowed to the right role, and the value read back.**
 
 ---
 
@@ -115,7 +129,8 @@ additional layer on top, not a replacement.** Both run.
 | **R-1** | **No migration package ships without the screen surface that proves it.** A migration whose only proof is a test is not accepted | `products` is column-carved. A missing `GRANT` renders a field that silently fails to save, and **service-role testing cannot see it** |
 | **R-2** | **Every acceptance runs in the running app as a normal authenticated user** — never service role, never "the tests pass". **The account is a named non-admin test user; for D-J-restricted writes, a named admin test user.** Acceptable evidence is a screenshot **plus** the console state **plus** a read-back `SELECT`. Authenticated REST calls are *not* a substitute for the app | C-25; Verification Standard |
 | **R-3** | **Every new `products` column ships `GRANT INSERT(col), UPDATE(col)` in the same migration** — *for columns intended for direct app writes only* (see R-10). **Verify** the `gotchas.md` `public.products` entry is current; do not assume it is stale — it was corrected 2026-08-18 | C-25 |
-| **R-4** | **Search merges forms; math never does.** Searching and grouping go through `canonical_ingredient_id`; every calculation uses the **specific** ingredient row | B-8, C-33 |
+| **R-4** | **Search merges forms; math never does.** Searching and grouping go through `canonical_ingredient_id`; every calculation uses the **specific** ingredient row. **A concentration is never stored on a canonical parent** — see WP-4 | B-8, C-33 |
+| **R-4a** | **One conversion function, and it can refuse.** *(Sol finding 6 — was a blocker.)* "`canonical_fraction` is NULL means refuse to calculate" was prose with nothing enforcing it. Every conversion goes through **one function whose return type is either a validated number or a refusal reason** — never a bare nullable number a caller can coalesce. Every comparison and scale-weight consumer calls it. **`?? 1`, `COALESCE(fraction, 1)`, and omitting the multiplication are defects**, and a mutation test must prove NULL cannot surface as `1.0` or as any displayed quantity. The racemic-vs-S-metolachlor pair is the case to test: same search parent, no valid numeric conversion between them | D-A |
 | **R-5** | **Existing code is not evidence of an existing workflow. Count the rows first.** | C-29 — the lot/tote chain is fully built and holds zero rows |
 | **R-6** | **Warn on entry, refuse on use.** An unusual density warns and saves. A scale weight with no density **refuses** — never water, never a default | D-5 |
 | **R-7** | **Never hard-delete a business entity** — products, brands, or any record with foreign-key history. Deactivate or re-identify. *Child chemistry rows may be removed* (WP-1's remove action, D-D's `__delete` marker); the audit trail captures the removal | T-17; scoped per Fable F-22 |
@@ -202,6 +217,23 @@ see the prior value and its author. Search "glyphosate" → **every** salt form.
 replay does **not** double-write; `lb_per_lb` is **rejected**; a stale
 `p_expected_data_version` is **rejected**.
 
+**Every mathematical branch this package claims closed needs its own positive and negative case
+*(finding 27)*.** Revision 2's proof exercised generic entry, search, and one invalid basis, then
+claimed the whole conversion surface. Add, each proved rather than asserted: a **salt form**
+converting through its fraction; an **already-acid-equivalent** value passing through
+untouched, not multiplied twice; **P₂O₅ → elemental P** (get this wrong and the displayed
+elemental quantity is ~2.29× too high); the **NULL-fraction isomer** case refusing under R-4a and
+producing no number at all; a **percentage outside 0–100** rejected; and a **biological unit
+(CFU)** refused rather than silently treated as a weight.
+
+**Shared-ingredient edits must invalidate every product that depends on them *(finding 17)*.**
+`canonical_fraction` lives on a shared ingredient row while `product_data_version` is
+product-scoped, so editing a fraction leaves every linked product's version untouched and a
+stale workbook saves cleanly against new chemistry. Either bump and audit **all** linked products
+atomically when a shared mathematical field changes, or include an ingredient-version hash in the
+compare-and-set. Prove it: edit a fraction with a stale product page open, and show the save
+**refused**.
+
 **Closes:** A-1, B-8 (mechanism), B-9, B-23, B-24, C-37, T-2 (as amended by D-A), T-3, T-9,
 T-10, D-17, PRD 1.1, 1.1a, 1.2, 1.5, 1.6, 1.7, **1.10, 1.10c** *(nutrient rows and total-N,
 unowned in revision 1 — Fable F-11)*, 1.12, 1.14, 1.16.
@@ -230,8 +262,37 @@ separately.)
 
 **Rules:** warn band ≈ 6.5–14 lb/gal, **warn never reject** (crop oils and MSOs run 7.6–7.8, so
 an 8–12 floor is a defect); specific gravity normalizes on write against
-`WATER_LB_PER_GAL = 8.345404`; the **density precedence function** ships now with the brand
-slot WP-3 populates, and always displays which density it used.
+`WATER_LB_PER_GAL = 8.345404`; the **density precedence function** always displays which density
+it used.
+
+**Hard domain first, soft warning second *(finding 8 — this was a blocker)*.** "Warn, never
+reject" governs values that are *implausible*, not values that are *impossible*. Density,
+concentration, `canonical_fraction`, net weight and allocation quantities are each **rejected
+outright by the database unless finite and strictly positive**, and `canonical_fraction` must
+additionally fall in a valid range. Revision 2 had `-8`, `0`, `NaN` and infinity all sailing
+through as "unusual — warn the user", which turns a 100-gallon load into a negative, zero, or
+non-numeric scale weight. Hard validation runs first; the plausibility warning only applies to
+values that already passed it.
+
+**The brand slot is deferred to WP-3, not stubbed here *(finding 2 — this was a blocker)*.**
+Revision 2 said this function "ships now with the brand slot WP-3 populates", but
+`product_brands` is created in **WP-3** — the migration would reference a relation that does not
+exist. WP-2 therefore ships the precedence function over **spec and measured density only**.
+**WP-3 owns replacing it** with the brand-aware version, in a named migration, and **re-running
+this package's density proof afterwards.** Without that explicit obligation a stub silently
+survives and spec density quietly outranks the brand density it was supposed to lose to.
+
+**Precedence is enforced on write, not only on read *(finding 14)*.** A read-time precedence
+function does not stop a lower-trust supplier import from overwriting the one stored current
+density. Source candidates are stored with their provenance and the commit RPC enforces the D-M
+ranking: a lower-ranked candidate stays a **proposal** unless Mason explicitly approves it over
+the higher-ranked value. Otherwise a measured 10.2 lb/gal is quietly replaced by a supplier's
+8.34 and a 100-gallon scale ticket drops from 1,020 lb to 834 lb.
+
+**Dry products need a normalized package weight, not a bare number *(finding 25)*.** Define the
+field explicitly: normalized net weight **per purchase unit**, its unit, the package count and
+basis, and its provenance. A case of four 10-lb bags must not be readable as a 10-lb package.
+A missing net weight **refuses** a scale weight under R-6, exactly as a missing density does.
 
 **Proof (R-2, R-9, R-11):** on `[E2E]` rows — enter 7.7 lb/gal on a crop-oil product, it saves
 with a warning. Enter a specific gravity and the equivalent lb/gal on two products → identical
@@ -259,8 +320,43 @@ work that touches five)*:**
 - **A new brand-allocation child table** — keyed to the delivery/application **line**, holding
   brand, quantity and unit, with its own RLS. This is what split loads need and revision 1 did
   not name.
-- **`delivery_items` / application-record tables** — snapshot columns.
-- **`receive_po_items`** — RPC signature change.
+- **`delivery_items` / application-record tables** — snapshot columns. **Name the exact relations
+  before handoff**; "application-record tables" is not an enumeration *(finding 28)*.
+- **`receive_po_items`** — **the public signature does NOT change.** See below.
+- **`_section9_receive_po_items_serialized`** — the internal function the public wrapper
+  delegates to (`supabase/migrations/20260726190515_section9_po_ap_high_remediation.sql`).
+  Revision 2 omitted it. Change the wrapper without it and brand data is accepted by the UI and
+  **dropped before inventory is written** *(finding 28)*.
+- **Existing call sites, all of which must keep working:**
+  `src/components/receiving/QuickReceivePanel.tsx`, `src/pages/PurchaseOrderDetail.tsx`, and the
+  offline replay path in `src/lib/offlineSync.ts`.
+- **Generated RPC types** in `src/types/index.ts`, plus the schema-registry fixture (R-10).
+
+**The receiving RPC keeps its current signature *(finding 3 — this was a blocker)*:** revision 2
+called for a `receive_po_items` signature change. PostgreSQL cannot replace a function's input
+signature in place, so that migration must drop the old signature or create an overload — and
+because **this plan applies migrations before the PR merges**, there is a window where the live
+database no longer offers the signature the deployed app and any queued offline action still
+call. The result is a failed receive with a truck at the dock. **Instead: keep the existing
+four-argument signature and carry brand data inside the existing `p_items` payload.** That is
+purely additive and safe to apply ahead of the merge. If a future package genuinely needs the
+signature changed, it reverses the order — compatible code merges first, migration second,
+cleanup third — and says so explicitly.
+
+**Brand allocations must conserve quantity *(finding 7 — this was a blocker)*:** splitting a
+line across brands is written by **one atomic RPC** that locks the parent line, converts every
+allocation to a single unit, and requires the allocations to be positive, finite, and to sum
+**exactly** to the parent line quantity. It accepts and enforces `p_idempotency_key`. Without
+this, a 45-gallon delivery split 30/10 leaves the invoice saying 45 while the scale ticket and
+regulatory paperwork say 40, and a replay silently doubles both allocations.
+
+**A brand's density may only override a spec density when the record says which brand shipped
+*(finding 15)*.** Receiving Brand A does not establish that a later delivery drawn from pooled
+inventory used Brand A. Brand density therefore applies **only** where the delivery or
+application line carries an explicit brand or receipt allocation. **Never infer the brand from
+the most recent receipt** — with 100 gal of Brand A at 8.3 lb/gal and 100 of Brand B at 10.2 in
+stock, guessing prints a 100-gallon load as 830 lb when it is really 1,020. With no explicit
+allocation, fall back to spec density and say so on screen.
 
 **Behavior:** brand selection is **required once a spec has brand rows** *except* via **D-K**:
 the crew may type an unlisted brand free-hand, receiving completes immediately, and the typed
@@ -281,7 +377,21 @@ afterwards → the existing record still shows the old one. **Type an unlisted b
 completes and a proposal appears in the queue** (D-K). **The brand-density override actually
 runs *(Fable F-3)*:** receive with a brand carrying a density override, request a scale weight,
 observe **the brand's** density used and displayed; remove the override, observe fallback to
-spec density. **Negative:** a non-admin cannot create a permanent brand row.
+spec density.
+
+**Additional proofs added after Sol's review:** the **old four-argument call still succeeds**
+against the migrated database, and a **queued offline receive replays successfully** — both run
+against the applied migration *before* the code merges, because that is the window the
+apply-before-merge order creates *(finding 3)*. **Inventory is genuinely reversed, not merely
+hidden** *(finding 13)*: after voiding the `[E2E]` PO, show the inventory balance, the inventory
+transaction count, the receipt state and the brand allocations all back to their starting values
+— voiding a PO does not by itself reverse the movements `receive_po_items` created, so a proof
+that only checks the PO disappeared from the screen leaves real stock inflated.
+
+**Negative:** a non-admin cannot create a permanent brand row. Allocations that sum to **less
+than** the line quantity are rejected; allocations that sum to **more** are rejected; a
+**unit-mismatched** allocation is rejected; a **replayed** allocation with the same idempotency
+key does not double-write *(finding 7)*.
 
 **Closes:** B-16 (brand half — see §6), B-17, C-28, C-29, C-43 (capture half), D-13, D-14,
 D-15, T-6, T-7, PRD 1.9, 1.9a, 1.9a-i, 1.9a-ii, 1.9a-iii, 1.9a-iv, 1.9b.
@@ -290,20 +400,48 @@ keeps a truck from stranding at the dock.
 
 ---
 
-### WP-4 · EPA auto-seed through propose-review-commit — **no migration**
+### WP-4 · EPA auto-seed through propose-review-commit — **migration**
 
-**Builds:** the EPA lookup persists what it currently fetches and discards — ingredients mapped
-to canonical acids, label URL, accepted date, `productStatus`, `isCancelled` — **into the
-columns WP-1 created**. Everything lands as **proposed** in the D-I shape; nothing writes to
-live ingredient tables until Mason approves.
+> **Revision 3 — this package was rewritten after Sol's review (findings 1, 5, 12).** Revision 2
+> said "no migration" and told the builder to map EPA ingredients "to canonical acids." Both were
+> wrong. The text below replaces them; do not restore the earlier wording.
+
+**Builds:** the EPA lookup persists what it currently fetches and discards — ingredient rows,
+label URL, accepted date, `productStatus`, `isCancelled` — **into the columns WP-1 created**.
+Everything lands as **proposed** in the D-I shape; nothing writes to live ingredient tables
+until Mason approves.
+
+**Where a concentration attaches — the rule that makes this package safe (R-4, D-A):** an EPA
+label states a concentration for a **specific chemical form** — "5.4 lb glyphosate IPA salt per
+gallon", not "5.4 lb glyphosate". The importer therefore **resolves or creates the specific form
+row and attaches the concentration there.** `canonical_ingredient_id` is used **only** to group
+and find that row; it never receives a concentration.
+
+**Why this is the single most dangerous line in the whole build:** attach 5.4 to the canonical
+acid and every downstream calculation reads it as acid equivalent. The true figure is
+`5.4 × 0.741 = 4.0014`. The system then believes each gallon carries ~35% more active than it
+does and quotes roughly 26 gallons too few on a 100-gallon job — silently, with nothing on
+screen looking wrong. **A proof that does not show the stored foreign key pointing at the
+specific form row has not proved this package.**
+
+**Why this needs a migration *(finding 1)*:** the existing `product_label_drafts` queue and its
+`create_label_draft` / `commit_label_draft` functions carry fixed arguments for signal word, REI,
+PHI, EPA number and label rate. They have **nowhere to put** ingredient rows, specific-form ids,
+concentration basis, brand proposals, label URL/date, cancellation state, or a typed-versus-EPA
+conflict. A builder handed "no migration" either silently drops those fields or bypasses review
+and writes straight to live chemistry. **This package extends the queue and its RPC contract with
+a typed, versioned payload plus a purpose discriminator**, and proves every planned field
+survives propose → review → commit intact.
 
 **Conflict rule (D-L):** where a lookup disagrees with a value Mason typed, **his value stays
 live** and the EPA version is stored beside it, flagged as a difference. A lookup never
 overwrites hand-entered data.
 
-**Cancelled registrations (D-T):** a cancelled registration produces a **loud banner on the
-product and a warning when it is added to a quote** — but nothing is blocked. Existing stock is
-commonly still legal to sell through.
+**Cancelled registrations (D-T, reaffirmed as D-W):** a cancelled registration produces a **loud
+banner on the product and a warning when it is added to a quote** — but nothing is blocked.
+Sol's finding 26 argued this should fail closed when sell-through authorization cannot be
+confirmed; **Mason declined it on 2026-08-19 (D-W) and it is settled.** Do not add a
+sale-blocking gate and do not re-open this from the review document.
 
 **Scope, honestly:** fills roughly **287** products. **317 have no usable EPA number, and ~123
 of those are real pesticides** that cannot auto-seed until someone types the number in first.
@@ -311,13 +449,23 @@ of those are real pesticides** that cannot auto-seed until someone types the num
 **Deliberate pull-forward:** PRD 4.1 moves from Phase 4 to here — same fetch, splitting it
 would run the lookup twice.
 
-**Proof (R-2):** run the lookup on a real product with a known EPA number → ingredients appear
-as proposals under the right **canonical** ingredient; approve → committed; a cancelled
-registration is visible in the app without re-running the lookup.
+**Proof (R-2, R-9, R-11) — rewritten after finding 12, which had this package approving EPA data
+onto a *real* catalog product with no negative case:** run the lookup on an **`[E2E]` clone
+carrying a real EPA number**, never a live product. Approve the proposal, then **read back the
+stored row and show `ingredient_id` pointing at the specific chemical-form row, not the canonical
+parent** — this is the acceptance that closes the 35% failure above. Show the committed
+concentration and its basis. A cancelled registration is visible in the app without re-running
+the lookup. Revert the clone and show the revert.
+
+**Negative cases, all required:** a typed value that conflicts with the lookup **keeps Mason's
+value live** (D-L) and does not overwrite; a lower-priority source does not displace a
+higher-priority one; an unknown chemical form is **refused into the queue rather than guessed
+into the canonical parent**; a malformed or non-finite concentration is refused; nothing at all
+is written to live chemistry before approval.
 
 **Closes:** B-8 (seeding half), B-22 (surfaced), D-23, T-18, PRD 1.4, 1.13, 4.1.
-**Gates:** no schema change → RLS review only. **Bulk commit of proposals is a bulk live write
-→ Mason's approval + R-12.**
+**Gates:** schema change → full migration review (RLS + drift). **Bulk commit of proposals is a
+bulk live write → Mason's approval + R-12.**
 
 ---
 
@@ -326,8 +474,18 @@ registration is visible in the app without re-running the lookup.
 **Builds:** copy ingredients / density / brands from a packaging sibling in one action; nickname
 searchable on Products and in the QuoteBuilder picker.
 
-**Proof (R-2):** type "Generic Callisto" → found. Copy from a sibling → the Bulk row carries the
-same chemistry, and editing one afterwards does not change the other.
+**Eligibility is enforced, not assumed *(finding 18)*.** "Copy from a packaging sibling" must
+define what a sibling *is* in the database: same formulation, same safener, same quality tier,
+same manufacturer. Copying across any of those erases a real difference — pulling from
+`Gen Liberty` into `Gen Liberty: Higher Quality` silently misrepresents the premium product's
+surfactant load, which D-O says must never be presented as equivalent. The copy runs in **one
+transaction with an expected version for both source and target**, so a source edited mid-copy
+aborts instead of blending two states.
+
+**Proof (R-2, R-11):** type "Generic Callisto" → found. Copy from a sibling → the Bulk row
+carries the same chemistry, and editing one afterwards does not change the other.
+**Negative:** a cross-tier copy is **refused**; a cross-formulation copy is **refused**; a copy
+against a stale source version is **refused**.
 
 **Closes:** B-18 (entry half), PRD 1.8, 1.9c, 1.15.
 **Gates:** no migration. Standard review + R-10.

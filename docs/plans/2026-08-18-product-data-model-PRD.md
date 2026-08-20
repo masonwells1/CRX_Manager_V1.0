@@ -65,8 +65,14 @@ computed, and therefore never recalculate when a cost changes.
 
 ## 3. Non-goals
 
-- No pricing, margin, or cost changes. No change to how quotes, orders, invoices, or
-  inventory calculate anything.
+- No pricing, margin, or cost changes. **Pricing and money rules are unchanged.**
+  **[REV3 — corrected after Sol finding 23.]** This previously read "no change to how quotes,
+  orders, invoices, or inventory calculate anything", which flatly contradicts Phase 2: Phase 2
+  deliberately rewires **which rate those consumers read**. Taken literally, the old wording
+  tells a builder to leave an invoice reader on legacy `products.rate_per_acre` while quoting
+  moves to `product_rates` — so a quote and its own invoice compute different quantities. The
+  precise rule: **money rules stay the same, and every rate-source reader moves together**, with
+  proven equivalent output through the cutover.
 - Not normalizing `products.vendor` into a foreign key (settled out of scope, 2026-07-16
   supplier pricing plan).
 - Rates that vary by crop — real, deliberately deferred.
@@ -249,7 +255,7 @@ A builder who starts on screens will build them against tables that then change 
 | # | Requirement | Acceptance |
 |---|---|---|
 | 1.1 | Active ingredients stored per product with concentration value, unit, and an explicit `acid_equivalent` vs `active_ingredient` basis | Open a product in the running app, add three ingredients, save, reload — all three persist with basis intact |
-| 1.1a | **`active_ingredients` carries `canonical_ingredient_id` (self-FK) and `ae_fraction`.** EPA salt-form names (`glyphosate, isopropylamine salt` etc.) are seeded as rows pointing at the parent acid; all search and grouping goes through the canonical id | Seed the three glyphosate salt forms; one search for "glyphosate" returns **every** product carrying any of them |
+| 1.1a | **`active_ingredients` carries `canonical_ingredient_id` (self-FK) and `canonical_fraction`.** EPA salt-form names (`glyphosate, isopropylamine salt` etc.) are seeded as rows pointing at the parent acid; all search and grouping goes through the canonical id | Seed the three glyphosate salt forms; one search for "glyphosate" returns **every** product carrying any of them |
 | 1.2 | Mode-of-action codes in an **`ingredient_moa_codes` child table** (`active_ingredient_id`, `scheme`, `code`) — not scalar columns. Herbicides use the **numeric global HRAC code only** | An ingredient with two codes stores both; a product with ≥4 codes renders all of them, scheme-labeled |
 | 1.3 | Product density stored with value, unit, and source (`label`/`sds`/`supplier`/`measured`/`assumed`) | Density saved and re-read on a real product |
 | 1.3a | **Density validation is a warn band (~6.5–14 lb/gal), never a hard reject.** Required only for liquid products with weight-basis concentrations or liquid↔dry comparison — not a 604-row mandatory backfill | Enter 7.7 lb/gal (a real crop-oil density): saves, with at most a warning. **A hard 8–12 reject is a defect** |
@@ -268,7 +274,7 @@ A builder who starts on screens will build them against tables that then change 
 | **1.9c** | **[REV3] Brand entry must not re-create the packaging-sibling double-entry problem.** "Ag Saver 5.4" would otherwise be typed separately onto the 2.5 Gal, Bulk and 265G rows — the exact drift this plan solves for ingredients in 1.8/1.13. Either extend the copy-from-sibling action to cover brand rows, or model brands as an entity table plus a product-brand junction | Adding a brand to one packaging sibling makes it available on the others without retyping. (Note: a brand legitimately does **not** cross specs — "Ag Saver 5.4" and a 4-lb spec are different products and correctly share no brand row) |
 | **1.10** | **Complete fertilizer analysis** storable: primary macros (N, P₂O₅, K₂O), secondary macros (Ca, Mg, S) and micronutrients (B, Cl, Co, Cu, Fe, Mn, Mo, Ni, Zn), as `percent_w_w` | A liquid fertilizer stores a full guaranteed analysis, saves and re-reads. Combined with density it yields pounds of nutrient actually applied |
 | **1.10a** | **[REV3] Add `cfu_per_ml` and `cfu_per_g` as concentration units.** Round 2 left this an either/or; it is now decided. "Complete analysis" with 9 biological products unstorable is self-contradictory, and forcing a colony-forming-unit count into a percentage column is a data defect | The 9 biological products store their labelled CFU figure in a CFU unit. No biological carries a nonsense percentage |
-| **1.10b** | **[REV3] Nutrient basis must be expressible.** Guaranteed analysis reports phosphorus and potassium on an **oxide** basis (P₂O₅, K₂O); agronomic math frequently needs **elemental** P and K (×0.436 and ×0.830). This is structurally the same problem as acid equivalent versus salt weight, which 1.1a already solves with `canonical_ingredient_id` + `ae_fraction` — but the `basis` column's proposed values (`acid_equivalent` \| `active_ingredient`) cannot express "oxide" | Either a nutrient basis value is added, or the PRD states explicitly that oxide→elemental rides the existing canonical/fraction mechanism. A build that silently treats P₂O₅ as elemental P is a defect |
+| **1.10b** | **[REV3] Nutrient basis must be expressible.** Guaranteed analysis reports phosphorus and potassium on an **oxide** basis (P₂O₅, K₂O); agronomic math frequently needs **elemental** P and K (×0.436 and ×0.830). This is structurally the same problem as acid equivalent versus salt weight, which 1.1a already solves with `canonical_ingredient_id` + `canonical_fraction` — but the `basis` column's proposed values (`acid_equivalent` \| `active_ingredient`) cannot express "oxide" | Either a nutrient basis value is added, or the PRD states explicitly that oxide→elemental rides the existing canonical/fraction mechanism. A build that silently treats P₂O₅ as elemental P is a defect |
 | **1.10c** | **[REV3] Total nitrogen only — Mason, 2026-08-18.** Asked whether recommendations need nitrogen split into ammoniacal / urea / nitrate forms as labels break them out, Mason chose total N. The schema should not *forbid* the breakdown later, but no requirement to enter it ships now | A fertilizer stores a single total-N figure. Adding form-level detail later does not require re-entering the analyses captured now |
 | **1.11** | **Formulation type and safener** captured, because identical ingredients at identical concentrations are not always interchangeable (SC vs EC vs OD; safened vs unsafened s-metolachlor) | A safened and an unsafened product with identical ingredient rows are visibly distinguishable |
 | **1.12** | `concentration_value` nullability is stated explicitly, so *ingredient present, amount unknown* is distinguishable from *ingredient missing* | A product with a known ingredient and unknown amount saves, and Phase 3 can tell the two cases apart |
@@ -295,7 +301,7 @@ weight of everything for scales and mixer."* Therefore:
 - **`"5.4#"` is an ingredient concentration, not a density.** It is pounds of glyphosate salt
   per gallon; the product itself is roughly 10.2 lb/gal. Conflating them produces scale
   weights wrong by about half. The 5.4 vs 5.5 pair in the live catalog is also an
-  `ae_fraction` case — 5.5# products are the potassium salt, 5.4# the IPA salt.
+  `canonical_fraction` case — 5.5# products are the potassium salt, 5.4# the IPA salt.
 - **Phase 1 is done when the mechanism works, not when the catalog is full.** Mason parked
   the backfill (*"Let's wait on that for now I don't have time"*). Acceptance is: one product
   can be given a density and read back, and a missing density blocks a weight rather than
@@ -343,7 +349,7 @@ wrongly re-derived number.
 | 3.1 | Search products by active ingredient, **resolved through `canonical_ingredient_id`** | Searching glyphosate returns products carrying **any** salt form, not a partial list |
 | 3.2 | Search/filter by mode-of-action group | Group filter returns the expected set |
 | 3.3 | Build-from-generics cost comparison, read-only, no writes | **Halex GT at 4 pt reproduces the owner's sheet: 33.44 oz generic Roundup, 3.34 oz generic Callisto, 1.09 pt generic Dual** |
-| 3.4 | Mixed weight/volume products compared correctly using density **and `ae_fraction`** — density alone converts `% w/w` to lb *salt*/gal, not to acid equivalent | A `% w/w` salt-basis product compares correctly against a `lb ae/gal` product |
+| 3.4 | Mixed weight/volume products compared correctly using density **and `canonical_fraction`** — density alone converts `% w/w` to lb *salt*/gal, not to acid equivalent | A `% w/w` salt-basis product compares correctly against a `lb ae/gal` product |
 | 3.5 | **Coverage gaps surfaced loudly, never silently dropped.** If no stocked generic carries one of the branded product's ingredients, the tool says so instead of omitting it from the total | Reproduce the "Resicore REV" case: the tool reports the missing ingredient rather than pricing an incomplete rebuild as complete |
 | 3.6 | Unverified concentrations visibly marked using the existing `source` / `verified_at` fields | An unverified number is presented as unverified, not as fact |
 | 3.7 | Money math parses to whole cents before arithmetic — no binary floating-point rounding (2026-08-10 decision) | Cost figures are exact |
@@ -480,7 +486,7 @@ transfer to the executing session.
 
 1. ~~Fable adversarial review in flight.~~ **RESOLVED 2026-08-18.** Verdict: architecture
    sound, no redesign. Four substantive amendments folded in above — canonical
-   ingredient + `ae_fraction`, `product_rates` child table, corrected density warn band,
+   ingredient + `canonical_fraction`, `product_rates` child table, corrected density warn band,
    re-ordered phases. Full change list: plan §9.
 2. ~~Schema sections provisional.~~ **RESOLVED** — §6 Phase 1 is final.
 3. Restricted-use product count is known wrong (2 recorded, owner says materially more).

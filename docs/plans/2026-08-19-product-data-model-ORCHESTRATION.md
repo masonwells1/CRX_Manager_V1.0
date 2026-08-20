@@ -77,6 +77,37 @@ Merging first would deploy code referencing tables that do not exist yet, which 
 parked-RPC caller failure this project has already hit. Any package whose migration is *not*
 additive re-opens this ordering explicitly rather than inheriting it.
 
+**The additivity claim is a gate, not an assumption *(Sol finding 3).*** Revision 2 asserted it
+and was wrong: WP-3 called for a `receive_po_items` signature change, which PostgreSQL cannot
+perform in place, so the live database would have stopped offering the signature the deployed
+app and queued offline actions still call — a failed receive with a truck at the dock. WP-3 has
+been rewritten to keep its signature. **Before step 13, audit the migration statement by
+statement** and confirm every one is additive: no changed CHECK constraint, no dropped default,
+no new NOT NULL on an existing column, no replaced function signature. **One non-additive
+statement reverses the order for that package** — compatible code merges first, migration
+second, cleanup third.
+
+### Three gate defects to fix before cycle 1
+
+**Applying changes the branch after it was reviewed *(finding 9).*** Step 13 renames the
+migration file to its assigned stamp and regenerates the schema registry — tracked changes
+produced *after* CodeRabbit, Vercel and the commit review ran. Merging then either omits them or
+pushes an unreviewed head. **Fix:** after apply, commit and push the rename and registry
+changes, then re-run the exact-head review, CodeRabbit and the required checks before step 14.
+
+**The "exact-SHA" proof is not exact-SHA *(finding 10).*** `scripts/write-apply-proofs.mjs`
+hashes the **migration file**, not the commit; it never sees UI consumers, generated types, or
+RPC call sites. SQL can stay byte-identical while a later TypeScript edit introduces exactly the
+`?? 1` that R-4a forbids, and the proof still validates. **Fix:** keep the migration-content
+proof for the apply gate, and separately require the repository's exact-HEAD push proof after
+the final commit. They answer different questions; neither substitutes for the other.
+
+**The proof expires before it is used *(finding 11).*** Proofs live 30 minutes, but step 9 mints
+one before commit, PR, Vercel, CodeRabbit and the human gate — a sequence that routinely exceeds
+that. The apply guard then rejects a stale proof, and whoever is mid-cycle feels pressure to
+weaken the gate. **Fix:** run the adversarial review early if useful, but **mint the apply proof
+immediately after Mason's approval and immediately before the live apply.**
+
 ---
 
 ## 4. The independence problem
