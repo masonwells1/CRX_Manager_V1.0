@@ -82,6 +82,14 @@ something this change closed. Never add a positive pattern to a `.coderabbit.yam
 it on FarmRx first and confirming a real source file still appears under "Files selected for
 processing".
 
+**A green CodeRabbit check is not proof the head was reviewed.** On FarmRx PR #26 the `CodeRabbit`
+status check read **pass** while the three reviewed commits were `358e3a8`, `cc28976`, and
+`ae0e6b1` — not the head, `9abaf18`. Worse, a *clean* incremental review creates **no review object
+at all**: CodeRabbit replies "Review finished" and records nothing, so the head SHA never appears in
+`/pulls/<n>/reviews`. The deploy-check gate therefore treats the SHA lookup as a fast path, and
+falls back to "green check **plus** a 'Review finished' reply newer than the final push" before
+concluding a head went unreviewed. The gate errs toward blocking, which is the safe direction.
+
 **Reviewer advice is a hypothesis, not a patch.** Three of this session's review findings were
 correct and fixed (`.codex/**` wrongly excluded — it holds the hand-maintained
 `production-action-guard.mjs`, not generated mirrors; a blend glob that matched only filenames and

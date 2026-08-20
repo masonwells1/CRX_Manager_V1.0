@@ -143,14 +143,38 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    ```
 
    ```bash
-   gh api --paginate repos/masonwells1/CRX_Manager_V1.0/pulls/<n>/reviews --jq '[.[] | select(.user.login=="coderabbitai[bot]" and .submitted_at != null and .state != "DISMISSED") | .commit_id] | unique'
+   gh api --paginate repos/masonwells1/CRX_Manager_V1.0/pulls/<n>/reviews --jq '.[] | select(.user.login=="coderabbitai[bot]" and .submitted_at != null and .state != "DISMISSED") | .commit_id'
    ```
 
    `--paginate` matters: reviews come back 30 per page, and on a long-lived PR the relevant one can
    sit past page 1, so an unpaginated lookup can report "never reviewed" for a PR that was. The
-   `submitted_at`/`DISMISSED` filters keep a pending or withdrawn review from counting as coverage.
+   filter emits **one SHA per line and aggregates nothing**, which is deliberate: `--paginate` runs
+   the `--jq` expression once per page, so any `[...]`/`unique` wrapper would return page-local
+   results. Streaming one SHA per line makes page boundaries irrelevant.
 
-   The head SHA must appear in that list. If it does not, comment `@coderabbitai review` on the PR
+   Do **not** "fix" this with `--slurp` — CodeRabbit recommended exactly that on PR #441 and the
+   command does not run: `gh` rejects `--slurp` together with `--jq` ("the `--slurp` option is not
+   supported with `--jq` or `--template`"), and piping to a standalone `jq` is not an option either
+   because `jq` is not installed on this machine. Both were tested before this note was written.
+   The `submitted_at`/`DISMISSED` filters keep a pending or withdrawn review from counting as
+   coverage.
+
+   **A clean review leaves no record here.** When CodeRabbit finishes an incremental review with
+   zero findings it does not create a review object, so the head SHA never appears in that list —
+   observed on FarmRx PR #26 at commit `9abaf18`, where it replied "Review finished" and the
+   `CodeRabbit` check went green with no matching review. Treat the SHA lookup as the *fast path*:
+   if the head SHA is present, the gate passes. If it is absent, the gate is not yet failed —
+   confirm with **both** of these before concluding it went unreviewed:
+
+   ```bash
+   gh pr checks <n> --repo masonwells1/CRX_Manager_V1.0 | grep -i coderabbit
+   ```
+
+   a green `CodeRabbit` check **plus** a CodeRabbit "Review finished" reply timestamped after the
+   final push means the head was reviewed and had nothing to report. A green check *alone* does not
+   — on FarmRx it read green while three earlier commits, not the head, were the reviewed ones.
+
+   If neither holds, comment `@coderabbitai review` on the PR
    (that runs **one** incremental review of the current commit; `@coderabbitai resume` is a
    different command that restarts automatic review), wait for it to complete, and read it
    before merging. "Review rate limited" is temporary and refills — re-check rather than treating
