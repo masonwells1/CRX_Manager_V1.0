@@ -55,8 +55,9 @@ public wrapper is executable only by `authenticated`; the unusable `service_role
 because the wrapper requires an authenticated user id and no service caller exists.
 
 The re-review closed the remaining release-proof gaps. The idempotency-key advisory lock is now
-taken before the quote row lock, preventing two cross-quote requests for one key from deadlocking;
-the shared helper re-takes that lock reentrantly before reading the receipt. The money path now
+taken before the quote row lock, aligning draw-down with `save_quote`, `convert_quote_to_order`,
+`create_quote_version` and `restore_quote_version`; draw-down was the only lock-order inversion.
+The shared helper re-takes that lock reentrantly before reading the receipt. The money path now
 requires a 1-200 character printable-ASCII retry key, so
 a direct keyless PostgREST call cannot double-create an order, inventory prebooking or ledger row.
 At apply time the migration takes the existing draw-cutover key exclusively, draining legacy calls
