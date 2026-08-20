@@ -144,11 +144,19 @@ Both PRs in this session were reviewed first and updated second, wasting an atte
 **The merge-only head can never be stamped, and tree identity is the answer.** When `update-branch`
 contributes no new PR changes, CodeRabbit replies "No files to review." and emits no range line for
 that SHA — a SHA-bound gate then cannot pass however often it is re-triggered. The supported
-fallback proves the merge commit contributed nothing of its own, in three fail-closed checks: `^1`
-is the exact reviewed commit, `^2` is already an ancestor of `main`, and `git merge-tree
---write-tree ^1 ^2` reproduces `<HEAD>^{tree}` exactly. Verified live on PR #441: parents `497621f1`
-/ `db41b6e6`, both trees `fc59b0f4`. This applies **only** to a no-op merge head; a head carrying
-any real new commit still needs a stamped review, and using it elsewhere is self-certification.
+fallback proves the merge commit contributed nothing of its own, in three checks that **assert**
+rather than print: `test "$(git rev-parse <HEAD>^1)" = "<REVIEWED_SHA>"`, `git merge-base
+--is-ancestor <HEAD>^2 origin/main`, and `test "$(git merge-tree --write-tree <HEAD>^1 <HEAD>^2)" =
+"$(git rev-parse <HEAD>^{tree})"`. Each prints a marker on success and is silent on failure, so a
+silent command is a FAILED check. CodeRabbit flagged the first draft for printing values a human had
+to compare by eye, and was right — a gate that depends on someone noticing is not a gate.
+
+Both outcomes are proven on PR #441. **Passing:** head `d0341104`, parents `497621f1` / `db41b6e6`,
+both trees `fc59b0f4` — a genuine no-op merge. **Failing:** head `f19a0af9`, whose merge
+hand-resolved a conflict in this very file; the tree assertion refused it, exactly as intended. This
+applies **only** to a no-op merge head; a head carrying any real new commit — or any human edit made
+during conflict resolution — still needs a stamped review, and using it elsewhere is
+self-certification.
 
 **Compare trees, never filenames — the first draft of that fallback was unsafe.** It listed changed
 filenames and compared per-file blob hashes; Codex returned BLOCKED on two counts and was right on

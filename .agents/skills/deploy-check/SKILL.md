@@ -153,8 +153,12 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    **tree identity** instead — that the merge commit contributed nothing of its own, so the reviewed
    commit's content is exactly what lands. Three checks, all fail-closed:
 
+   Each check **asserts** and fails closed — none of them merely prints a value for you to eyeball.
+   Substitute the reviewed SHA and the head SHA; both are 40-char hex from the GitHub API, never
+   PR-authored text. All three must print their marker:
+
    ```bash
-   git rev-parse <HEAD>^1 <HEAD>^2 <HEAD>^{tree}
+   test "$(git rev-parse <HEAD>^1)" = "<REVIEWED_SHA>" && echo PARENT1_IS_REVIEWED_COMMIT
    ```
 
    ```bash
@@ -162,14 +166,19 @@ If ready, state the remaining landing steps explicitly — this skill does **not
    ```
 
    ```bash
-   git merge-tree --write-tree <HEAD>^1 <HEAD>^2
+   test "$(git merge-tree --write-tree <HEAD>^1 <HEAD>^2)" = "$(git rev-parse <HEAD>^{tree})" && echo MERGE_ADDED_NOTHING
    ```
 
-   It passes only if **all three** hold: `^1` is the exact reviewed commit; `^2` is already an
-   ancestor of `main` (so it introduces nothing unreviewed); and `merge-tree` prints a tree ID
-   **identical** to `<HEAD>^{tree}`, meaning a clean merge of those two parents reproduces the head
-   byte-for-byte and the merge commit smuggled in no edits of its own. Verified live on PR #441,
-   2026-08-20: parents `497621f1` / `db41b6e6`, both trees `fc59b0f4`.
+   `^1` must be the exact reviewed commit; `^2` must already be an ancestor of `main` (so it
+   introduces nothing unreviewed); and a clean merge of those two parents must reproduce
+   `<HEAD>^{tree}` exactly, proving the merge commit smuggled in no edits of its own. A silent
+   command is a FAILED check, never a passed one — if any marker is missing, stop.
+
+   Both outcomes were verified live on PR #441, 2026-08-20. **Passing:** head `d0341104`, parents
+   `497621f1` / `db41b6e6`, both trees `fc59b0f4` — a true no-op merge. **Failing:** head
+   `f19a0af9`, whose merge hand-resolved a `DECISION_LOG.md` conflict; `MERGE_ADDED_NOTHING` did not
+   print and the check correctly refused it. That is the whole point — a merge commit carrying human
+   edits is not a no-op merge and must go back through a normal stamped review.
 
    Compare **trees, never filenames**. An earlier draft of this fallback listed changed filenames
    and compared per-file blob hashes; Codex flagged it as BLOCKED on two counts and was right on
