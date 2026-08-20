@@ -132,7 +132,10 @@ a hostile at-limit repeated-runner payload and require completion in under 1.5
 seconds.
 Nested `eval`, `cmd /c`, PowerShell command-mode, and POSIX shell bodies re-enter
 the complete runner policy, including PowerShell process launchers, `watch`, and
-GNU Parallel, instead of receiving a reduced recursive subset.
+GNU Parallel, instead of receiving a reduced recursive subset. The caller's
+recursion depth is preserved across that re-entry; a real-hook 450-level nested
+`eval` regression remains below both parser budgets and must deny in under 1.5
+seconds, comfortably inside the 15-second configured timeout.
 
 Codex's hook adapter resolves and launches the requested hook under
 `.claude/hooks/`, through which Codex uses the shared classifier. Codex also has

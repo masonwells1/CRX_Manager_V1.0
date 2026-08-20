@@ -544,7 +544,7 @@ export function maintenanceProducerCommandMentioned(command, depth = 0) {
       }
       return false;
     }
-    if (analyzeTokens(tokens, 0)) return true;
+    if (analyzeTokens(tokens, depth)) return true;
   }
   const nodeScript = /\bnode(?:\.exe)?\s+(?:"([^"]*)"|'([^']*)'|([^\s;&|]+))/i.exec(value);
   const scriptPath = nodeScript?.[1] || nodeScript?.[2] || nodeScript?.[3] || "";

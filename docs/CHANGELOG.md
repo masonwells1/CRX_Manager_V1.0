@@ -94,7 +94,9 @@ All significant development milestones, in reverse chronological order.
   environment item from being transferred into `NODE_OPTIONS` across MCP calls.
   Nested `eval`, `cmd /c`, PowerShell command-mode, and POSIX shell bodies now
   re-enter the complete runner policy, closing nested process-launcher, `watch`,
-  and GNU Parallel compositions.
+  and GNU Parallel compositions. Recursive re-entry preserves its depth instead
+  of restarting at zero; a 450-level below-budget `eval` regression must deny in
+  under 1.5 seconds against the configured 15-second hook timeout.
   The parser also covers .NET
   `SetEnvironmentVariable` calls before `node` or a Node-backed package runner. Shell
   parameter expansion in an `env` assignment name fails closed as well, so a

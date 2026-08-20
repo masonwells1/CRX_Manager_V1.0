@@ -20,6 +20,7 @@ import {
   resolveNpmScriptChain,
   readPackageScripts,
   SECURITY_COMMAND_CHAR_BUDGET,
+  SECURITY_COMMAND_TOKEN_BUDGET,
 } from "./bash-safety-lib.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -645,6 +646,16 @@ const hostileRunnerElapsedMs = Number(process.hrtime.bigint() - hostileRunnerSta
 eq(hostileRunnerResult.status, 0, "bash-safety.mjs exits 0 after an at-budget hostile runner payload");
 ok(hostileRunnerResult.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs denies an at-budget hostile runner payload");
 ok(hostileRunnerElapsedMs < 1_500, `at-budget hostile runner denial stays well below the 5s hook timeout (actual ${hostileRunnerElapsedMs.toFixed(0)}ms)`);
+
+const nestedEvalCommand = `${`${evalCommand} `.repeat(450)}${hostileRunnerTail}`;
+ok(nestedEvalCommand.length <= SECURITY_COMMAND_CHAR_BUDGET, "nested eval fixture stays within the character budget");
+ok(nestedEvalCommand.trim().split(/\s+/).length <= SECURITY_COMMAND_TOKEN_BUDGET, "nested eval fixture stays within the token budget");
+const nestedEvalStartedAt = process.hrtime.bigint();
+const nestedEvalResult = runHook({ tool_name: "Bash", tool_input: { command: nestedEvalCommand } });
+const nestedEvalElapsedMs = Number(process.hrtime.bigint() - nestedEvalStartedAt) / 1_000_000;
+eq(nestedEvalResult.status, 0, "bash-safety.mjs exits 0 after a below-budget nested eval payload");
+ok(nestedEvalResult.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs denies a below-budget nested eval payload");
+ok(nestedEvalElapsedMs < 1_500, `nested eval denial stays well below the 15s hook timeout (actual ${nestedEvalElapsedMs.toFixed(0)}ms)`);
 
 r = runHook({ tool_name: "Bash", tool_input: { command: "git push --force origin main" } });
 eq(r.status, 0, "bash-safety.mjs exits 0 on dangerous command");
