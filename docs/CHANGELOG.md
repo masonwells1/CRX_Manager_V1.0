@@ -2,6 +2,36 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-20 — Blend-ticket unit fields are now dropdowns instead of free text,…
+
+Blend-ticket unit fields are now dropdowns instead of free text, removing the cause of the unit bug class rather than warning about it. Built by headless Codex (gpt-5.6-sol) from a Claude-authored spec, with Claude reviewing the diff and running every check; Codex never touched git, the live database, or a deploy. A shared UnitSelect offers only units the live unit_conversions table carries, filtered to the product's form, and grandfathers an odd saved value so opening an old ticket can never silently blank it. The product form is resolved from each row's current product_id rather than a joined object captured at load. Applying a recipe now pre-selects the product's catalog rate unit instead of saving blank, so the ticket shows the unit it will actually bill in. Proved in a real browser through Vite, not only under vitest; 107 tests green; blendMathValidator deliberately untouched. No schema change, no migration, no edge function.
+
+Review round 2 (CodeRabbit Major, confirmed against source): the picker made a failed
+`unit_conversions` load *unrecoverable* — the list is empty, so the only option is the disabled
+`--` and the operator can no longer type a unit the way free text allowed, while the save still
+persisted the blank. Both screens now surface the failed load (an error banner on manual create,
+a toast on the detail page) and refuse a save that left a unit blank because the list never
+arrived. The block is deliberately narrow: it fires only when the list is empty *and* a row is
+actually missing a unit, so a deliberate blank on a healthy list still saves as before. Both
+guards are mutation-tested — reverting either turns its regression test red. Two existing test
+harnesses returned `[]` for `unit_conversions`, which read as a failed fetch to the new guard;
+they now return the fixture, matching live, where the table is never empty.
+
+Review round 3 (CodeRabbit Minor, also confirmed): that first guard read an empty array as the
+failure signal, but an empty array means three different things — the request is still in
+flight, it failed, or the table really is empty — and only one of them is "refresh the page". A
+fast operator could be told to refresh for a request that was about to succeed. Both screens now
+carry an explicit `pending | loaded | failed` state and route it through one shared
+`blockedUnitSaveMessage()` in `src/lib/units.ts`, so the message names the state that is actually
+true. Verified by calling the shipped function in a real browser through Vite, not only under
+vitest.
+
+- **Commits this session** (git log origin/main..HEAD):
+  - `5beda01a feat(blend): pick units from a list instead of typing them`
+  - `fix(blend): surface a failed unit load and block the blank-unit save it causes`
+- **Migrations touched** (git diff --name-only origin/main...HEAD):
+  - none
+
 ## 2026-08-19 — draw-down retries are bound to the actor and exact booking intent
 
 Pending migration `20260819232000_bind_draw_down_receipts_to_intent.sql` closes the stale-receipt
@@ -122,6 +152,7 @@ The protected merged-main verification pipeline passed ESLint, TypeScript type c
 production build, 336 test files with 4,634 tests passed and 123 intentionally skipped, agent
 workflow/guard regressions, documentation drift checks, and private-artifact containment. Focused
 post-review migration/RPC contract checks passed 102/102 before the full pipeline reran.
+
 ## 2026-08-20 — Merged main's zero-width unit fix into the blend-ticket rate/unit…
 
 Merged main's zero-width unit fix into the blend-ticket rate/unit check, keeping main's delete-don't-space normalizer and re-applying the unit-aware rate arm on top of it. Found that the fix does not reach the money path: rateBaseUnit, which every billing-related unit lookup routes through, still leaves zero-width characters intact, so a unit pasted from a PDF can silently skip the rate check or fire a false 'this ticket will fail when you invoice it' alarm. Main's 5 zero-width regression tests were displaced by the merge and still need porting to the new warning shape. 77 tests green and typecheck clean; nothing pushed, no migration, no edge function.
