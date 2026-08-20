@@ -86,12 +86,19 @@ describe('ManualTicketCreate retry-safe atomic creation', () => {
   };
   let uuidIndex: number;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     window.sessionStorage.clear();
     for (const mock of [
       mocks.from, mocks.rpc, mocks.lookup, mocks.captureException,
       mocks.getKey, mocks.resetKey,
     ]) mock.mockReset();
+    // validateBlendMath was NOT in that list, so a `mockReturnValue` set by one of
+    // the two warning-tier tests below leaked into every test that ran after it —
+    // every later render came up carrying a stale warning banner. There is no global
+    // clearMocks in the vitest config, so it has to be reset explicitly.
+    const { validateBlendMath } = await import('../../lib/blendMathValidator');
+    vi.mocked(validateBlendMath).mockReset();
+    vi.mocked(validateBlendMath).mockReturnValue([]);
     mocks.idemState.current = null;
     mocks.idemState.sequence = 0;
     mocks.authState.profileId = 'user-1';
@@ -133,6 +140,9 @@ describe('ManualTicketCreate retry-safe atomic creation', () => {
     ]);
     render(<ManualTicketCreate {...defaultProps} />);
     expect(await screen.findByText('Math Validation Warnings')).toBeTruthy();
+    // Assert the message itself, not just the heading — otherwise this passes even
+    // if the warning text never reaches the screen.
+    expect(screen.getByText(/Total volume \(250 gal\) is wrong/)).toBeTruthy();
     expect(screen.queryByText('Not automatically checked')).toBeNull();
   });
 
@@ -143,6 +153,7 @@ describe('ManualTicketCreate retry-safe atomic creation', () => {
     ]);
     render(<ManualTicketCreate {...defaultProps} />);
     expect(await screen.findByText('Not automatically checked')).toBeTruthy();
+    expect(screen.getByText(/a product has a quantity but no unit/)).toBeTruthy();
     expect(screen.queryByText('Math Validation Warnings')).toBeNull();
   });
 

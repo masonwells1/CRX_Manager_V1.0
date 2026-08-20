@@ -426,21 +426,34 @@ export function BlendTicketDetail() {
     };
     // The rate check guards a billing path: create_invoice_from_blend_ticket prices
     // each line from rate_per_acre and its unit, falling back to the product's own
-    // rate_unit when the line leaves it blank. The joined catalog row carries the
-    // units the invoice will actually use, so hand them over rather than letting the
-    // check guess.
-    const productData = products.map(p => ({
-      product_name: p.product_name,
-      quantity: p.quantity,
-      unit: p.unit,
-      rate_per_acre: p.rate_per_acre,
-      rate_per_acre_unit: p.rate_per_acre_unit,
-      product_form: p.product?.product_form ?? null,
-      product_rate_unit: p.product?.rate_unit ?? null,
-      product_inventory_unit: p.product?.inventory_unit || p.product?.unit_size || null,
-    }));
+    // rate_unit when the line leaves it blank. Hand the catalog row's units over so
+    // the warning and the invoice agree about the line.
+    //
+    // Resolve that row from `allProducts` by the line's CURRENT product_id, never from
+    // the `p.product` joined at load time. The picker writes `product_id` and
+    // `product_name` only (see the SearchableSelect below), so `p.product` still
+    // describes the PREVIOUS product after a switch — and is `undefined` outright on a
+    // newly added line, which silently disabled billing's own rate-unit fallback.
+    // `ManualTicketCreate` already resolves it this way; this matches it.
+    const productData = products.map(p => {
+      // `allProducts` is filtered to is_active, so a line pointing at a retired
+      // product keeps the row joined at load time rather than losing its units.
+      const catalog = allProducts.find((candidate) => candidate.id === p.product_id);
+      return {
+        product_name: p.product_name,
+        quantity: p.quantity,
+        unit: p.unit,
+        rate_per_acre: p.rate_per_acre,
+        rate_per_acre_unit: p.rate_per_acre_unit,
+        product_form: catalog ? (catalog.product_form ?? null) : (p.product?.product_form ?? null),
+        product_rate_unit: catalog ? (catalog.rate_unit ?? null) : (p.product?.rate_unit ?? null),
+        product_inventory_unit: catalog
+          ? (catalog.inventory_unit || catalog.unit_size || null)
+          : (p.product?.inventory_unit || p.product?.unit_size || null),
+      };
+    });
     setWarnings(validateBlendMath(ticketData, productData));
-  }, [products, formData.total_acres, formData.total_volume, formData.total_volume_unit, formData.application_rate]);
+  }, [products, allProducts, formData.total_acres, formData.total_volume, formData.total_volume_unit, formData.application_rate]);
 
   // Track dirty state from form changes
   useEffect(() => {

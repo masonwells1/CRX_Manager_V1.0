@@ -288,16 +288,31 @@ export function validateBlendMath(
         }
       }
 
-      // Invoice pre-flight. `create_invoice_from_blend_ticket` hard-raises
-      // BLEND_TICKET_UNIT_UNCONVERTIBLE when a billable line's rate unit cannot be
-      // converted to the unit the product is sold in. Catching it here turns an error
-      // discovered weeks later at invoicing into a note while the ticket is open.
-      const soldUnit = rateBaseUnit(product.product_inventory_unit);
-      if (rateUnit !== '' && soldUnit !== '' && fieldAppPricedQuantity(1, rateUnit, soldUnit, form) === null) {
-        mismatch(
-          `${name}: the rate unit (${rateUnit}) can't be converted to the unit this product is sold in (${soldUnit}), so this ticket will fail when you invoice it.`
-        );
-      }
+    }
+  }
+
+  // Invoice pre-flight. `create_invoice_from_blend_ticket` hard-raises
+  // BLEND_TICKET_UNIT_UNCONVERTIBLE when a billable line's rate unit cannot be
+  // converted to the unit the product is sold in. Catching it here turns an error
+  // discovered weeks later at invoicing into a note while the ticket is open.
+  //
+  // This runs in its OWN loop, deliberately outside the acres block above. Whether a
+  // rate unit can reach the sold unit is a property of the product row alone — it does
+  // not depend on `total_acres` being filled in yet, nor on a quantity having been
+  // entered. Leaving it nested meant a half-filled ticket reported nothing and then
+  // failed at billing, which is the exact surprise this check exists to prevent.
+  // Still gated on a real rate, so a blank new row stays quiet.
+  for (const product of products) {
+    if (!product.rate_per_acre || product.rate_per_acre <= 0) continue;
+    const name = product.product_name || 'Unnamed product';
+    const form = product.product_form?.trim().toLowerCase() === 'dry' ? 'dry' : 'liquid';
+    const lineRateUnit = (product.rate_per_acre_unit ?? '').trim();
+    const rateUnit = rateBaseUnit(lineRateUnit !== '' ? lineRateUnit : product.product_rate_unit);
+    const soldUnit = rateBaseUnit(product.product_inventory_unit);
+    if (rateUnit !== '' && soldUnit !== '' && fieldAppPricedQuantity(1, rateUnit, soldUnit, form) === null) {
+      mismatch(
+        `${name}: the rate unit (${rateUnit}) can't be converted to the unit this product is sold in (${soldUnit}), so this ticket will fail when you invoice it.`
+      );
     }
   }
 

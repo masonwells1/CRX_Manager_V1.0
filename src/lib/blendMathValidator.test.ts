@@ -418,6 +418,44 @@ describe('validateBlendMath', () => {
       expect(warnings.some((w) => w.message.includes('fail when you invoice it'))).toBe(true);
     });
 
+    // Whether a rate unit can reach the sold unit is a property of the product row
+    // alone. These pin that the pre-flight does not hide behind a half-filled header,
+    // which is precisely when an operator is still able to fix the unit.
+    it('predicts the invoice failure even before total acres is entered', () => {
+      const warnings = validateBlendMath(
+        { total_acres: null, total_volume: null, total_volume_unit: null, application_rate: null },
+        [{
+          product_name: 'Post spray', quantity: 200, unit: 'MG', rate_per_acre: 2, rate_per_acre_unit: 'MG',
+          product_form: 'dry', product_rate_unit: 'MG', product_inventory_unit: 'lb',
+        }]
+      );
+      expect(warnings.some((w) => w.message.includes('fail when you invoice it'))).toBe(true);
+    });
+
+    it('predicts the invoice failure even before a quantity is entered', () => {
+      const warnings = validateBlendMath(
+        { total_acres: 100, total_volume: null, total_volume_unit: null, application_rate: null },
+        [{
+          product_name: 'Post spray', quantity: 0, unit: 'MG', rate_per_acre: 2, rate_per_acre_unit: 'MG',
+          product_form: 'dry', product_rate_unit: 'MG', product_inventory_unit: 'lb',
+        }]
+      );
+      expect(warnings.some((w) => w.message.includes('fail when you invoice it'))).toBe(true);
+    });
+
+    it('stays quiet on a blank new row that has no rate yet', () => {
+      // The other half of the contract: running the pre-flight outside the acres
+      // block must not make an untouched row start shouting.
+      const warnings = validateBlendMath(
+        { total_acres: null, total_volume: null, total_volume_unit: null, application_rate: null },
+        [{
+          product_name: '', quantity: 0, unit: null, rate_per_acre: null, rate_per_acre_unit: null,
+          product_form: null, product_rate_unit: null, product_inventory_unit: 'lb',
+        }]
+      );
+      expect(warnings).toHaveLength(0);
+    });
+
     it('keeps the plain numeric comparison when no unit is recorded on either side', () => {
       const warnings = validateBlendMath(
         { total_acres: 100, total_volume: null, total_volume_unit: null, application_rate: null },
@@ -446,6 +484,7 @@ describe('validateBlendMath', () => {
     describe('zero-width characters must not out-run the database', () => {
       const ZWSP = String.fromCharCode(0x200b);
       const ZWNJ = String.fromCharCode(0x200c);
+      const ZWJ = String.fromCharCode(0x200d);
       const BOM = String.fromCharCode(0xfeff);
 
       it('refuses a zero-width RATE unit, exactly as the database will', () => {
@@ -464,6 +503,17 @@ describe('validateBlendMath', () => {
         const warnings = validateBlendMath(
           { total_acres: 100, total_volume: null, total_volume_unit: null, application_rate: null },
           [{ product_name: 'A', quantity: 25600, unit: `o${ZWNJ}z`, rate_per_acre: 2, rate_per_acre_unit: 'gal', ...liquid }]
+        );
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0].level).toBe('unchecked');
+      });
+
+      // U+200D completes the set `ZERO_WIDTH` names (200B/200C/200D/FEFF), so the
+      // joiner gets the same refusal as its two siblings.
+      it('refuses a zero-width JOINER the same way', () => {
+        const warnings = validateBlendMath(
+          { total_acres: 100, total_volume: null, total_volume_unit: null, application_rate: null },
+          [{ product_name: 'A', quantity: 25600, unit: 'oz', rate_per_acre: 2, rate_per_acre_unit: `g${ZWJ}al`, ...liquid }]
         );
         expect(warnings).toHaveLength(1);
         expect(warnings[0].level).toBe('unchecked');
