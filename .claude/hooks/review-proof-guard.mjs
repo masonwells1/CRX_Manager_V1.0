@@ -48,9 +48,27 @@ import {
 // no verb/token can be spliced away. Nested worktrees strip to a fixed point.
 const WORKTREE_PREFIX_RE = /(^|[^\w.-])\.claude[\\/]worktrees[\\/]([^\\/\s"'*?[\]{}:;&|()<>]+)[\\/](?=["']?[^\\/\s"'*?[\]{};&|()<>])/gi;
 const DOTDOT_SEGMENT_RE = /(?:^|[\\/\s"'=:;&|()<>])\.\.(?:[\\/\s"'=:;&|()<>]|$)/;
+// Shell expansion makes the descendant statically unreadable, and an unreadable
+// descendant can BE the protected path: with `target=.claude/session-state` in
+// the environment, `mv .claude/worktrees/wt-a/$target /tmp/x` strips to
+// `mv $target /tmp/x` and the destructive scan sees nothing protected — while the
+// pre-carve-out guard denied it on the outer `.claude` (Codex gpt-5.6-sol review
+// round 3, 2026-08-19 — the third real hole this carve-out opened; the round-2
+// `..` fix did not cover it because `$` is not `..`). A first-character check is
+// not enough either: `…/wt-a/sub/$x` hides the traversal one segment deeper. So
+// this fails closed on the WHOLE text, exactly like the `..` switch — the same
+// fail-closed stance scanCdInvocations already takes on unresolvable cd targets.
+// Cost: a worktree command that also uses a variable ANYWHERE keeps the old
+// denial. That is the safe direction, and rare next to a destructive verb.
+const EXPANSION_RE = /[$`]|%[A-Za-z_][A-Za-z0-9_]*%/;
+// Both switches gate the strip AND the cd-root blanking: either one alone leaves
+// the other path able to erase the last protected reference before it is checked.
+function carveOutDisabled(text) {
+  return DOTDOT_SEGMENT_RE.test(text) || EXPANSION_RE.test(text);
+}
 function stripWorktreePrefix(text) {
   let out = String(text ?? "");
-  if (DOTDOT_SEGMENT_RE.test(out)) return out;
+  if (carveOutDisabled(out)) return out;
   for (let prev = null; prev !== out; ) {
     prev = out;
     out = out.replace(WORKTREE_PREFIX_RE, "$1");
@@ -328,7 +346,7 @@ function blankCdWorktreeRoots(cmd) {
   // destructive scan had to go on, so the `..` guard never got a chance to fire
   // (Codex gpt-5.6-sol re-review 2026-08-19, P1 — a real hole this carve-out
   // opened; the pre-carve-out guard denied it on the cd root's `.claude`).
-  if (DOTDOT_SEGMENT_RE.test(text)) return text;
+  if (carveOutDisabled(text)) return text;
   let out = text;
   for (const match of text.matchAll(CD_CMD_RE)) {
     const runStart = match.index + match[0].length - match[1].length;

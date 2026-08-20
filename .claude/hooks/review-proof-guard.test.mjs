@@ -245,6 +245,25 @@ for (const payload of [
   { tool_name: "Bash", tool_input: { command: 'rm -rf .claude/worktrees/wt-a/".claude"/session-state' } },
   { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a/'.claude'/session-state" } },
   { tool_name: "Bash", tool_input: { command: 'rm -rf .claude/worktrees/wt-a/"*"' } },
+  //   (g) shell expansion makes the descendant statically unreadable, and an
+  //       unreadable descendant can BE the protected path — with
+  //       `target=.claude/session-state` in the environment,
+  //       `mv .claude/worktrees/wt-a/$target /tmp/x` strips to `mv $target /tmp/x`
+  //       and nothing protected is left to match, while the pre-carve-out guard
+  //       denied it on the outer `.claude` (Codex gpt-5.6-sol review round 3 — the
+  //       third real hole this carve-out opened). Fails closed on the whole text,
+  //       like the `..` switch; a first-character check would miss `…/sub/$x`.
+  { tool_name: "Bash", tool_input: { command: "mv .claude/worktrees/wt-a/$target /tmp/x" } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a/${X}" } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a/sub/$x" } },
+  { tool_name: "Bash", tool_input: { command: 'mv .claude/worktrees/wt-a/"$target" /tmp/x' } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a/$(cat f)" } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a/`cat f`" } },
+  { tool_name: "Bash", tool_input: { command: "rm -rf .claude\\worktrees\\wt-a\\%TARGET%" } },
+  //       …and the same switch gates the cd-root blanking, or the cd path erases
+  //       the last protected reference before the strip's switch is ever reached.
+  { tool_name: "Bash", tool_input: { command: "cd C:\\repo\\.claude\\worktrees\\wt-a && rm -rf $target" } },
+  { tool_name: "Bash", tool_input: { command: "cd .claude/worktrees/wt-a && mv ${X} /tmp/x" } },
   //   (e) a worktree path must not launder a SECOND, protected operand;
   { tool_name: "Bash", tool_input: { command: "rm -rf .claude/worktrees/wt-a/tmp .claude/session-state" } },
   //   (f) blanking a cd target is scoped to a worktree ROOT only: a cd that stops
