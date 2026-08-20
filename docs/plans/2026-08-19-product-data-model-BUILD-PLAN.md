@@ -367,34 +367,37 @@ PRD 1.3, 1.3a, 1.11, 1.18, 1.19, 1.20.
 
 ---
 
-## Open owner decisions — WP-3, WP-4 and WP-5 cannot be handed to a builder until these settle
+## Settled owner decisions — the three conflicts PR #435 surfaced, all closed 2026-08-20
 
-*Raised reviewing PR #435, 2026-08-20. Each is a genuine conflict between two things the plan
-corpus already says, not a wording problem. A builder handed either instruction can satisfy one
-document only by violating the other, so these are Mason's to settle, not a reviewer's to patch.*
+*Raised reviewing PR #435 on 2026-08-20 as genuine conflicts between two things the plan corpus
+already said — a builder could satisfy one document only by violating the other. **All three were
+put to Mason the same day and all three are now settled.** The resolutions below are binding on
+every package; the sections that follow have been rewritten to match. Do not re-open these from
+the review document.*
 
-1. **Where do application brand snapshots go — and is the application workflow live at all?**
-   The only structurally correct product-line relation, `application_record_lots`, holds **0 rows**
-   and is ruled dormant by PRD 1.9a-iv. `application_records` holds **1 row**; its products sit in
-   a `product_data` jsonb array. `delivery_items` holds **400** and is unambiguous. **Options:**
-   (a) snapshot only into the `product_data` array elements and leave the lot chain alone;
-   (b) adopt the lot chain — a separate decision PRD 1.9a-iv says is Mason's and outside this plan;
-   (c) scope WP-3 to deliveries now and defer applications. **Recommend (a)** — it captures brand
-   on the path that actually runs, without reviving dormant infrastructure.
+1. **The application workflow is not currently in use — brand capture follows the delivery path.**
+   *(Mason, 2026-08-20.)* Asked directly whether applications are live, he answered no. The live
+   numbers agree: `application_record_lots` holds **0 rows**, `application_records` holds **1**,
+   `delivery_items` holds **400**. **Resolution:** `delivery_items` carries the brand snapshot.
+   `application_records` carries it **inside each `product_data` array element**, so the capture
+   exists whenever applications are adopted, without inventing a new relation. **The lot/tote
+   chain stays untouched** — PRD 1.9a-iv holds, and nothing in this plan revives it. WP-3's proof
+   runs on the **delivery** path; the application path ships the column shape and is not exercised.
 
-2. **May WP-5's copy RPC refuse a cross-tier copy?** WP-5 requires the database to enforce
-   same-tier eligibility. **D-X — Mason's settled 2026-08-19 decision — says tier protection stays
-   at the display layer and "a builder must not add `sourcing_tier` to `products` or build
-   cross-tier substitution rules."** These cannot both hold. **Options:** drop the RPC's cross-tier
-   refusal and keep D-X as-is, or revise D-X with a new decision. **Recommend dropping the RPC
-   restriction** — D-X is recent, deliberate, and reasoned; a copy tool is a weak reason to reopen it.
+2. **WP-5's copy RPC does not enforce tier — D-X stands unchanged.** *(Mason, 2026-08-20.)*
+   Asked whether to drop the database restriction or reopen D-X, he chose to **drop the
+   restriction.** Tier protection stays exactly where D-X put it: the display layer. **The copy
+   RPC must not read, compare, or refuse on `sourcing_tier`, and must not add it to `products`.**
+   The eligibility the RPC *does* enforce is formulation and safener — those are chemistry, not
+   commercial tier. A cross-tier copy is **permitted** and the tier remains visible on screen.
 
-3. **WP-4's `purpose` discriminator breaks a live caller.** `handleCreateSampleDraft`
-   (`src/pages/LabelReview.tsx:370-382`) calls `create_label_draft` today with **no purpose
-   argument**. Constraining `purpose` to `epa_label_seed` either breaks that call during the
-   apply-before-merge window or silently misclassifies manual drafts into the EPA commit path.
-   **Needs a `manual` purpose value and a backward-compatible default before WP-4 applies** —
-   a technical fix, but it changes WP-4's contract, so it is recorded here rather than patched in.
+3. **WP-4 gains a `manual` purpose with a backward-compatible default.** *(Mason, 2026-08-20 —
+   "sounds good".)* `handleCreateSampleDraft` (`src/pages/LabelReview.tsx:370-382`) calls
+   `create_label_draft` today with **no purpose argument**, so a discriminator constrained to
+   `epa_label_seed` would break that live caller during the apply-before-merge window, or
+   silently route manual drafts through the EPA commit path. **Resolution:** `purpose` accepts
+   `manual` and `epa_label_seed`, and **defaults to `manual`** when the argument is absent, which
+   is exactly what today's callers mean. See the WP-4 payload contract.
 
 ---
 
@@ -413,9 +416,10 @@ work that touches five)*:**
   application lines are created later. So the table keys on **`receiving_record_id`**, holding
   `product_id`, `brand_id`, `quantity`, `unit`, with its own RLS in the same migration and
   `p_idempotency_key`-backed writes. The 30/15 split load is persisted here at receipt time, and
-  reversal identifies the rows by this key. **Define how these allocations propagate forward** to
-  `delivery_items` and `application_record_lots` when those lines are later created — the
-  propagation rule is part of WP-3, not an afterthought.
+  reversal identifies the rows by this key. **Define how these allocations propagate forward to
+  `delivery_items`** when those lines are later created — the propagation rule is part of WP-3,
+  not an afterthought. **Deliveries are the only forward target**: applications are not in use and
+  the lot chain stays dormant *(Mason, 2026-08-20)*, so there is no second propagation path here.
 - **The relations carrying snapshot columns, enumerated and verified against the migrations that
   create them *(finding 28, closed reviewing PR #435)*.** "Application-record tables" was not an
   enumeration — but neither is a list that assumes a product reference the table does not have.
@@ -423,22 +427,23 @@ work that touches five)*:**
   - **`delivery_items`** — has `product_id`
     (`20260206172436_create_full_schema_v2.sql:326-334`). Takes `brand_name_snapshot` /
     `brand_epa_snapshot` directly.
-  - **`application_record_lots` — UNRESOLVED, do not build against this until Mason settles it.**
-    Structurally it looks ideal: it has `product_id` **and** `source_receiving_record_id`
-    (`20260622170000_application_record_lots.sql:36-48`). **But it holds 0 rows on live**
-    (counted read-only 2026-08-20), and PRD 1.9a-iv explicitly rules the lot/tote chain
-    *existing but dormant — leave it alone, do not build on or extend it*. Routing application
-    brand snapshots here would attach them to a table nothing writes, so application paperwork
-    would carry no brand at all. An earlier revision of this list did exactly that and was wrong.
-    **The open question is not a naming detail — it is whether the application workflow is in use
-    at all** (`application_records` holds 1 row; `delivery_items` holds 400). See §"Open owner
-    decisions" — this blocks the application half of WP-3, not the delivery half.
+  - **NOT `application_record_lots` — settled, do not build against it.** Structurally it looks
+    ideal: it has `product_id` **and** `source_receiving_record_id`
+    (`20260622170000_application_record_lots.sql:36-48`). **But it holds 0 rows on live** (counted
+    read-only 2026-08-20), and PRD 1.9a-iv rules the lot/tote chain *existing but dormant — leave
+    it alone*. An earlier revision of this list routed application brand snapshots here and was
+    **wrong**: it would have attached brand to a table nothing writes, so application paperwork
+    would carry no brand at all. **Mason settled on 2026-08-20 that the application workflow is
+    not currently in use and the lot chain stays untouched.** Leave this table entirely alone.
   - **`application_records`** — has **no singular product reference.** Products live in a
     `product_data` **jsonb array** (`20260214220000_application_records_table.sql:28-30`), each
     element already carrying `product_id`, `product_name` and `epa_registration`. The brand
     snapshot therefore goes **inside each array element**, beside the existing per-product fields.
     A single snapshot pair on the header is ambiguous the moment an application covers two
-    products, and silently overwritten on the second.
+    products, and silently overwritten on the second. **This ships the shape, not a live path** —
+    applications are not currently in use (1 row), so the capture is there for whenever they are
+    adopted. **WP-3's behavioral proof runs on the delivery path**, which is the one that carries
+    real volume; the application path is not exercised and must not be claimed as proved.
   - **Not `application_record_fields`** — it is a record↔field join carrying only
     `application_record_id`, `field_id` and `acres`
     (`20260430150000_field_app_workflow_phase2.sql:36-43`). It has no product, so a brand snapshot
@@ -584,7 +589,8 @@ and commit while the implementation still "matches the plan". The queue extensio
 | Field | Type | Null? | Notes |
 |---|---|---|---|
 | `payload_version` | `int` | no | Starts at `1`. `create_label_draft` **rejects** an unknown version rather than coercing it |
-| `purpose` | `text` | no | Discriminator, CHECK-constrained to `epa_label_seed` for this package. A new purpose is a new CHECK member in a later migration, never free text |
+| `purpose` | `text` | no | Discriminator, CHECK-constrained to `manual` or `epa_label_seed`. **Defaults to `manual`** — see the compatibility note below. A new purpose is a new CHECK member in a later migration, never free text |
+| `source_product_data_version` | `int` | no | The product's `product_data_version` **at proposal time**. `commit_label_draft` refuses the commit if the product has moved on since — see below |
 | `ingredients[]` | `jsonb` array | no (may be empty) | Each element carries `concentration_value` `numeric`, `concentration_unit`, `basis`, `source`, and **exactly one** of: `ingredient_id` — an existing specific chemical-form row, **never the canonical parent** — or `proposed_form` (see below) |
 | `proposed_form` | `jsonb` | yes | Only on elements with no `ingredient_id`. Carries the form's `name`, `cas` if the label states one, and `canonical_ingredient_id` — the parent it groups under. **This is a proposal, not a row** |
 | `label_url` | `text` | yes | |
@@ -595,6 +601,29 @@ and commit while the implementation still "matches the plan". The queue extensio
 | `conflicts[]` | `jsonb` array | no (may be empty) | Each element names the field, Mason's live value and the EPA value. **Populating this never overwrites the live value** (D-L) |
 
 Nullable means *the label genuinely may not state it*. It never means "the importer may drop it."
+
+**`purpose` must not break the manual draft path that is already live *(Mason, 2026-08-20)*.**
+`handleCreateSampleDraft` (`src/pages/LabelReview.tsx:370-382`) calls `create_label_draft` today
+with `p_product_id`, `p_source_note`, `p_confidence`, `p_status` and `p_idempotency_key` — and
+**no purpose**. Because this plan applies migrations *before* the PR merges, there is a window
+where the new function is live and the old caller is still deployed. A required
+`epa_label_seed`-only discriminator therefore breaks that caller outright, and defaulting it to
+`epa_label_seed` is worse — it silently relabels hand-entered drafts as EPA proposals and routes
+them through the EPA commit path. **So `purpose` defaults to `manual`**, which is precisely what
+an argument-less legacy call means. The new argument is optional and additive; the old
+five-argument call keeps working unchanged, and **the WP-4 proof exercises it** against the
+applied migration before the code merges.
+
+**A stale proposal is refused at commit, not merged blindly *(caught reviewing PR #435)*.** The
+gap: if an admin edits a product's chemistry after an EPA proposal is created but before Mason
+approves it, the draft's `conflicts[]` describes a product state that no longer exists — so
+committing it can overwrite newer typed chemistry with older EPA values, defeating both **D-E**'s
+compare-and-set rule and **D-L**'s typed-value precedence. Storing
+`source_product_data_version` at proposal time closes it: **`commit_label_draft` compares it to
+the product's current `product_data_version` and refuses the commit if it has moved**, sending the
+proposal back to be re-derived against current chemistry rather than silently winning. Prove it:
+create a proposal, edit the product's chemistry, then attempt the commit and show it **refused**
+with the live typed value intact.
 
 **An unknown chemical form is staged, not created on sight, and not refused *(corrected reviewing
 PR #435)*.** An earlier draft of this contract stored only an existing `ingredient_id`, which left
@@ -671,11 +700,23 @@ chemistry.** Two gates, not one. R-12 (fresh backup) applies to both.
 **Builds:** copy ingredients / density / brands from a packaging sibling in one action; nickname
 searchable on Products and in the QuoteBuilder picker.
 
-**Eligibility is enforced, not assumed *(finding 18)*.** "Copy from a packaging sibling" must
-define what a sibling *is* in the database: same formulation, same safener, same quality tier,
-same manufacturer. Copying across any of those erases a real difference — pulling from
-`Gen Liberty` into `Gen Liberty: Higher Quality` silently misrepresents the premium product's
-surfactant load, which D-O says must never be presented as equivalent. The copy runs in **one
+**Eligibility is enforced, not assumed *(finding 18, narrowed by Mason's 2026-08-20 decision)*.**
+"Copy from a packaging sibling" must define what a sibling *is* in the database: **same
+formulation, same safener, same manufacturer.** Copying across any of those erases a real chemical
+difference.
+
+**Quality tier is deliberately NOT in that list *(Mason, 2026-08-20)*.** Revision 3 required the
+RPC to refuse cross-tier copies, which directly contradicted **D-X** — his settled 2026-08-19
+decision that tier protection stays at the display layer and that *"a builder must not add
+`sourcing_tier` to `products` or build cross-tier substitution rules."* Asked to choose, he
+**dropped the database restriction and left D-X standing.** So: **the copy RPC must not read,
+compare, or refuse on `sourcing_tier`.** A `Gen Liberty` → `Gen Liberty: Higher Quality` copy is
+**permitted**. The protection that matters is unchanged and lives where D-O and D-P already put
+it — the tier is always shown, the two are never presented as interchangeable on matching actives
+alone, and the adjuvant bias is stated on screen. Copying chemistry between tiers does not assert
+they are equivalent; presenting them as substitutes would, and nothing here does that.
+
+The copy runs in **one
 transaction with an expected version for both source and target**, so a source edited mid-copy
 aborts instead of blending two states.
 
@@ -703,7 +744,10 @@ on an unchanged source** is the ordinary second copy and is allowed.
 
 **Proof (R-2, R-11):** type "Generic Callisto" → found. Copy from a sibling → the Bulk row
 carries the same chemistry, and editing one afterwards does not change the other.
-**Negative:** a cross-tier copy is **refused**; a cross-formulation copy is **refused**; a copy
+**Negative:** a cross-formulation copy is **refused**; a cross-safener copy is **refused**; a
+**cross-tier copy succeeds** and the tier stays visible and distinct on both products afterwards
+*(this is the D-X behavior, proved positively — an earlier revision required a refusal here)*;
+a copy
 against a stale source version is **refused**.
 
 **Closes:** B-18 (entry half), PRD 1.8, 1.9c, 1.15.
