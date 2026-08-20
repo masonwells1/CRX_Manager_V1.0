@@ -282,6 +282,10 @@ modeled precisely; cursor code inside an uninvoked routine definition remains de
 Non-ASCII routine definitions and apply-time calls are unsupported and fail closed. Both guards use
 the shared apply-time analyzer for that decision, preventing an unquoted Unicode identity from being
 truncated out of one routine graph while ordinary non-ASCII literal data remains allowed.
+Domain coercions also fail closed. A PostgreSQL domain's stored CHECK expression executes when a
+value is cast into the domain, so same-file and checked-in domain definitions join the custom-cast
+catalog and any apply-time `CAST(... AS domain)` or `::domain` is treated as opaque execution. Merely
+defining the domain remains deferred.
 
 **A trigger rewrite is still a rewrite (round 31).** Every rule above proves a repair
 rewrote exactly the rows it hashed — for the table the `UPDATE` names. Triggers were

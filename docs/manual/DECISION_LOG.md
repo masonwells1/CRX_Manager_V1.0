@@ -498,6 +498,11 @@ indexes intentionally use an ASCII canonical token language. A non-ASCII routine
 apply-time call therefore fails closed rather than being truncated. The Bash validator consumes the
 same shared analyzer result, so the two guards cannot drift into different Unicode identity rules;
 ordinary non-ASCII string data remains outside this refusal.
+PostgreSQL domain coercion is another stored-execution boundary. `CREATE DOMAIN ... CHECK (...)`
+stores an expression that runs later when a value is cast to that domain, so the apply-time cast
+site does not expose any routine called by the CHECK. Both migration guards catalog same-file and
+older checked-in domains and fail closed when an apply-time `CAST(... AS domain)` or `::domain`
+invokes one. A domain definition without a coercion remains deferred.
 
 ---
 

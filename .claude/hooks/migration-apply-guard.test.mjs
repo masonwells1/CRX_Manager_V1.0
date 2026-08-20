@@ -1682,6 +1682,38 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(isDeny(r) && isOneShotDeny(r),
       "round-44: a database-resident Unicode routine call fails the replay guard closed");
 
+    // ROUND 45. A PostgreSQL domain is a user-defined type whose stored CHECK
+    // expression runs during coercion. The cast site does not spell the CHECK's
+    // routine call, so catalog the domain as opaque executable coercion.
+    const domainDefinition =
+      "CREATE FUNCTION public.domain_money_fix(integer) RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN " +
+      "UPDATE public.orders SET total_profit = total_profit; RETURN true; END $$; " +
+      "CREATE DOMAIN public.money_checked_integer AS integer " +
+      "CHECK (public.domain_money_fix(VALUE)); ";
+    r = apply("20990601000038_domain_replay",
+      domainDefinition + "SELECT 1::public.money_checked_integer;");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-45: domain coercion cannot hide its stored mutating CHECK expression");
+
+    r = apply("20990601000039_domain_definition_only", domainDefinition);
+    ok(!isOneShotDeny(r),
+      "round-45 MUTANT: removing the domain coercion leaves its CHECK expression deferred");
+
+    const domainCatalogPath = path.join(tmp, "supabase", "migrations", "20900101000003_domain_catalog.sql");
+    writeFileSync(domainCatalogPath,
+      "CREATE DOMAIN public.resident_money_domain AS integer " +
+      "CHECK (public.resident_domain_money_fix(VALUE));\n");
+    r = apply("20990601000040_existing_domain_replay",
+      "SELECT CAST(1 AS public.resident_money_domain);");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-45: an older checked-in domain is cataloged and fails closed when coerced");
+
+    rmSync(domainCatalogPath, { force: true });
+    r = apply("20990601000041_existing_domain_mutant",
+      "SELECT CAST(1 AS public.resident_money_domain);");
+    ok(!isOneShotDeny(r),
+      "round-45 MUTANT: removing the checked-in domain definition removes the catalog evidence");
+
     // 6. Fail closed. The registry is tracked in git; unreadable or absent means
     //    the checkout is broken or the file was removed — the two states in
     //    which a silent pass is most dangerous.

@@ -2146,6 +2146,30 @@ const CASES = [
       `SELECT public.cast_wrapper();\n`,
   },
   {
+    name: 'round-45: domain coercion cannot hide a stored mutating CHECK expression',
+    expect: 'violation',
+    mustReport: 'money_checked_integer',
+    sql:
+      `CREATE FUNCTION public.domain_money_fix(integer) RETURNS boolean LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = total_profit; RETURN true; END $$;\n` +
+      `CREATE DOMAIN public.money_checked_integer AS integer CHECK (public.domain_money_fix(VALUE));\n` +
+      `SELECT 1::public.money_checked_integer;\n`,
+  },
+  {
+    name: 'round-45 MUTANT: an uninvoked domain definition remains deferred',
+    expect: 'silent',
+    sql:
+      `CREATE FUNCTION public.domain_definition_only(integer) RETURNS boolean LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = total_profit; RETURN true; END $$;\n` +
+      `CREATE DOMAIN public.definition_only_domain AS integer CHECK (public.domain_definition_only(VALUE));\n`,
+  },
+  {
+    name: 'round-45: a domain defined by another migration is still recognized',
+    expect: 'violation',
+    mustReport: 'money_checked_integer',
+    sql: `SELECT CAST(1 AS public.money_checked_integer);\n`,
+  },
+  {
     name: 'round-39: selecting a stored view cannot hide its resident mutating routine',
     expect: 'violation',
     mustReport: 'view_select_replay_bridge',

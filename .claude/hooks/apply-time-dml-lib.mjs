@@ -966,14 +966,27 @@ function bareCastType(type) {
 }
 
 /**
- * Custom PostgreSQL casts defined by this SQL. WITH FUNCTION dispatches to an
- * ordinary routine without spelling a conventional call; WITH INOUT dispatches
- * through type I/O routines whose identities are not present in the statement,
- * so its invocation is represented with an empty backing function and refused.
+ * Custom PostgreSQL casts and domains defined by this SQL. WITH FUNCTION
+ * dispatches to an ordinary routine without spelling a conventional call;
+ * WITH INOUT dispatches through type I/O routines whose identities are not
+ * present in the statement. A domain cast evaluates its stored CHECK
+ * expressions, whose live routine identities likewise cannot be proven from
+ * the cast site. Those opaque coercions use an empty backing function and are
+ * refused only when an apply-time expression actually invokes them.
  */
 export function castDefinitions(code) {
   const out = [];
   for (const statement of String(code || "").toLowerCase().split(";")) {
+    if (/\bcreate\s+domain\b/.test(statement)) {
+      const header = /\bcreate\s+domain\s+(?:if\s+not\s+exists\s+)?((?:[a-z_][a-z0-9_$]*\s*\.\s*)?[a-z_][a-z0-9_$]*)\b/.exec(statement.replace(/"/g, ""));
+      out.push({
+        source: "",
+        target: header ? normalizeCastType(header[1]) : "",
+        fn: "",
+        context: "domain",
+      });
+      continue;
+    }
     if (!/\bcreate\s+cast\b/.test(statement)) continue;
     const header = /\bcreate\s+cast\s*\(\s*([a-z_][a-z0-9_$]*(?:\s*\.\s*[a-z_][a-z0-9_$]*)?(?:\s*\[\s*\])?)\s+as\s+([a-z_][a-z0-9_$]*(?:\s*\.\s*[a-z_][a-z0-9_$]*)?(?:\s*\[\s*\])?)\s*\)/.exec(statement.replace(/"/g, ""));
     const backing = /\bwith\s+function\s+(?:[a-z_][a-z0-9_$]*\s*\.\s*)?([a-z_][a-z0-9_$]*)\s*\(/.exec(statement.replace(/"/g, ""));
@@ -1007,7 +1020,7 @@ function invokedCasts(code, definitions) {
     // Type resolution for implicit and assignment casts requires the live
     // catalog. Any executable expression can select one, so conservatively
     // follow/refuse its backing routine rather than pretending it did not run.
-    if (definition.context !== "explicit") return true;
+    if (definition.context !== "explicit" && definition.context !== "domain") return true;
     const target = bareCastType(definition.target);
     if (!target) return true;
     const escaped = target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

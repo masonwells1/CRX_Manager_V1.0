@@ -179,7 +179,7 @@ function loadKnownCasts(evidenceRoots) {
       } catch (err) {
         throw new Error(`${filePath}: ${err?.message || err}`);
       }
-      if (!/\bcreate\s+cast\b/i.test(sql)) continue;
+      if (!/\bcreate\s+(?:cast|domain)\b/i.test(sql)) continue;
       for (const definition of castDefinitions(applyTimeCode(sql).code)) {
         byKey.set(
           `${definition.source}\0${definition.target}\0${definition.fn}\0${definition.context}`,
@@ -583,7 +583,7 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
       knownViews = loadKnownViews(evidenceRoots);
     } catch (err) {
       out("block",
-        `ONE-SHOT REPLAY GUARD: trusted trigger/FK, custom-operator, custom-cast, or stored-view evidence could not be loaded ` +
+        `ONE-SHOT REPLAY GUARD: trusted trigger/FK, custom-operator, custom-cast/domain, or stored-view evidence could not be loaded ` +
         `(${err?.message || err}). A directly named table is not the complete apply-time write ` +
         `surface when live triggers or referential actions can rewrite another population. ` +
         `Refusing the apply; restore or regenerate scripts/trigger-fanout.json and retry.`);

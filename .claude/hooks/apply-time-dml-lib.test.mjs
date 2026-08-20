@@ -1000,4 +1000,30 @@ eq(T(null), [], "a null body does not throw");
     'round-44 MUTANT: non-ASCII data inside a string is not a routine identity');
 }
 
+// ---------------- ROUND 45: domain coercion executes stored CHECK expressions
+{
+  const definition =
+    'CREATE FUNCTION public.domain_money_fix(integer) RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.order_items SET total_price = total_price; RETURN true; END $$; ' +
+    'CREATE DOMAIN public.money_checked_integer AS integer ' +
+    'CHECK (public.domain_money_fix(VALUE)); ';
+
+  const invoked = applyTimeWriteTargets(
+    `${definition} SELECT 1::public.money_checked_integer;`,
+  );
+  ok(invoked.unresolved && invoked.invokedCasts.some((entry) => entry.includes('money_checked_integer')),
+    'round-45: casting to a same-file domain fails closed because its stored CHECK executes');
+
+  const definitionOnly = applyTimeWriteTargets(definition);
+  ok(!definitionOnly.unresolved,
+    'round-45 MUTANT: defining but not coercing through a domain remains deferred');
+
+  const resident = applyTimeWriteTargets(
+    'SELECT CAST(1 AS public.resident_money_domain);',
+    { knownCasts: [{ source: '', target: 'public.resident_money_domain', fn: '', context: 'domain' }] },
+  );
+  ok(resident.unresolved && resident.invokedCasts.some((entry) => entry.includes('resident_money_domain')),
+    'round-45: coercion through a checked-in resident domain fails closed');
+}
+
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

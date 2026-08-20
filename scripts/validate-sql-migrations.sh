@@ -667,14 +667,30 @@ build_custom_cast_index() {
   cast_index=$(find "$MIGRATION_DIR" -name '*.sql' -type f -print0 \
     | xargs -0 awk '
         '"$AWK_STRIP_NOISE"'
-        function inspect_cast(s,   flat,n,p,i,target,context) {
-          if (s !~ /create[ \t]+cast[ \t]*\(/) return
+        function inspect_cast(s,   flat,n,p,i,target,context,iscast,isdomain) {
+          iscast = (s ~ /create[ \t]+cast[ \t]*\(/)
+          isdomain = (s ~ /create[ \t]+domain[ \t]+/)
+          if (!iscast && !isdomain) return
           flat = s
           gsub(/"/, "", flat)
           gsub(/[ \t]*\.[ \t]*/, ".", flat)
           gsub(/[(),]/, " ", flat)
           n = split(flat, p, /[ \t\r\n]+/)
           target = ""
+          if (isdomain) {
+            for (i = 1; i < n; i++) {
+              if (p[i] == "domain") {
+                target = p[i + 1]
+                if (target == "if" && p[i + 2] == "not" && p[i + 3] == "exists") target = p[i + 4]
+                break
+              }
+            }
+            if (target == "") return
+            sub(/^.*\./, "", target)
+            print target "\tdomain"
+            return
+          }
+          if (!iscast) return
           for (i = 1; i < n; i++) {
             if (p[i] == "as") { target = p[i + 1]; break }
           }
