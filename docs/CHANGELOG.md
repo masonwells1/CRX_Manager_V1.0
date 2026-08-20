@@ -21,6 +21,15 @@ Preflight and postflight now SHA-256-pin the exact reviewed intent helper, prese
 new outer wrapper, tier-split implementation and all five allocated-cent lifecycle bodies. The helper
 must also remain the only overload, owned by `postgres`, `SECURITY DEFINER`, search-path-pinned and
 owner-only executable, so a signature-compatible drift or partial apply is refused fail-closed.
+The migration header records the separately approved emergency revert sequence: drain draws under
+the cutover lock, drop only the new public wrapper, rename the preserved private wrapper back, and
+restore its prior grants. It also warns that this intentionally restores the stale-receipt risk and
+must never be approximated with `CREATE OR REPLACE`.
+
+All five registered smoke chains that create booking draws now supply unique per-run retry keys.
+Their fixtures also follow the current governed pricing, immutable cost-snapshot, row-version, and
+quote-line identity contracts. The network-isolated restored-schema prover executes all five after
+the candidate and confirms each reaches `SMOKE_PASS_ROLLBACK`.
 
 The draw modal now consumes the shared intent-binding recovery contract. A permanently refused key
 is retired instead of trapping the operator until reload; when the mismatch receipt proves an order

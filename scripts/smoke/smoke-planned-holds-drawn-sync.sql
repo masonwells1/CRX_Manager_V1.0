@@ -49,7 +49,13 @@ AS $helper$
 DECLARE
   v_result jsonb;
 BEGIN
-  IF to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint)') IS NOT NULL THEN
+  IF to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)') IS NOT NULL THEN
+    EXECUTE
+      'SELECT public.restore_quote_version($1, $2, $3, $4, $5, NULL)'
+      INTO v_result
+      USING p_quote_id, p_version_id, p_performed_by, p_idempotency_key, p_expected_row_version;
+    RETURN v_result;
+  ELSIF to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint)') IS NOT NULL THEN
     EXECUTE
       'SELECT public.restore_quote_version($1, $2, $3, $4, $5)'
       INTO v_result
@@ -98,6 +104,7 @@ DO $smoke$
 DECLARE
   v_admin uuid; v_cust uuid; v_pa uuid; v_pb uuid; v_q uuid;
   v_s1 uuid; v_s2 uuid; v_res jsonb; v_ver uuid; v_quote_version bigint;
+  v_pa_early_item uuid; v_pa_late_item uuid; v_pb_early_item uuid;
   v_pa_total numeric; v_pb_total numeric; v_cnt int;
   v_e1 date; v_e2 date;
   v_payload jsonb; v_sections jsonb;
@@ -111,10 +118,42 @@ BEGIN
   PERFORM set_config('request.jwt.claim.sub', v_admin::text, true);
 
   INSERT INTO customers (farm_name) VALUES ('[SMOKE] PHS Farm ' || sfx) RETURNING id INTO v_cust;
-  -- Hold quantities do not need a pricing mutation; use pricing-free shells
-  -- so this focused hold proof respects the governed product-pricing path.
+  -- Establish real governed costs so the quote-cost snapshot trigger remains
+  -- enabled while this rollback-only hold proof exercises booking draws.
   INSERT INTO products (product_name, unit_size) VALUES ('[SMOKE] PHS A ' || sfx, 'gal') RETURNING id INTO v_pa;
   INSERT INTO products (product_name, unit_size) VALUES ('[SMOKE] PHS B ' || sfx, 'gal') RETURNING id INTO v_pb;
+  v_res := preview_product_pricing_changes(
+    'product_page', NULL,
+    jsonb_build_array(
+      jsonb_build_object(
+        'product_id', v_pa,
+        'row_version', (SELECT pricing_version FROM products WHERE id = v_pa),
+        'pricing_mode', 'margin_driven',
+        'new_cost', '6.00',
+        'tier1_margin_percent', '20',
+        'tier2_margin_percent', '25',
+        'tier3_margin_percent', '30',
+        'change_reason', 'Rollback smoke planned-holds fixture A'
+      ),
+      jsonb_build_object(
+        'product_id', v_pb,
+        'row_version', (SELECT pricing_version FROM products WHERE id = v_pb),
+        'pricing_mode', 'margin_driven',
+        'new_cost', '6.00',
+        'tier1_margin_percent', '20',
+        'tier2_margin_percent', '25',
+        'tier3_margin_percent', '30',
+        'change_reason', 'Rollback smoke planned-holds fixture B'
+      )
+    ),
+    v_admin, 'smk-phds-price-preview-' || sfx
+  );
+  PERFORM apply_product_pricing_change_set(
+    (v_res->>'change_set_id')::uuid,
+    v_res->>'request_fingerprint',
+    v_admin,
+    'smk-phds-price-apply-' || sfx
+  );
 
   INSERT INTO quotes (quote_number, customer_id, created_by, status, is_planned, commission_split)
   VALUES ('[SMOKE] PHS-' || sfx, v_cust, v_admin, 'sent', true, '{"splits": []}'::jsonb) RETURNING id INTO v_q;
@@ -124,6 +163,12 @@ BEGIN
   VALUES (v_q, v_s1, v_pa, 10, 6, 300, 'gal', 0, 'units_direct'),
          (v_q, v_s2, v_pa, 10, 6, 200, 'gal', 0, 'units_direct'),
          (v_q, v_s1, v_pb, 8, 4, 100, 'gal', 1, 'units_direct');
+  SELECT id INTO v_pa_early_item FROM quote_items
+  WHERE quote_id = v_q AND section_id = v_s1 AND product_id = v_pa;
+  SELECT id INTO v_pa_late_item FROM quote_items
+  WHERE quote_id = v_q AND section_id = v_s2 AND product_id = v_pa;
+  SELECT id INTO v_pb_early_item FROM quote_items
+  WHERE quote_id = v_q AND section_id = v_s1 AND product_id = v_pb;
 
   -- (a) create_planned_holds: full reservation, per-item expiry
   v_res := create_planned_holds(v_q, v_admin, NULL);
@@ -140,7 +185,7 @@ BEGIN
   END IF;
 
   -- (b) draw 250: existing FIFO decrement keeps invariant between saves
-  v_res := draw_down_quote(v_q, jsonb_build_array(jsonb_build_object('product_id', v_pa, 'quantity', 250)), v_admin, NULL);
+  v_res := draw_down_quote(v_q, jsonb_build_array(jsonb_build_object('product_id', v_pa, 'quantity', 250)), v_admin, 'smk-phds-draw-' || sfx);
   SELECT COALESCE(SUM(quantity) FILTER (WHERE product_id = v_pa), 0) INTO v_pa_total
   FROM inventory_holds WHERE source_id = v_q AND is_active = true;
   IF v_pa_total <> 250 THEN
@@ -166,10 +211,10 @@ BEGIN
   v_payload := jsonb_build_object('quote_number', '[SMOKE] PHS-' || sfx, 'customer_id', v_cust, 'status', 'sent', 'tier', 1);
   v_sections := jsonb_build_array(
     jsonb_build_object('section_name', 'Early', 'sort_order', 0, 'items', jsonb_build_array(
-      jsonb_build_object('product_id', v_pa, 'calc_mode', 'units_direct', 'total_units_needed', 200, 'price_per_unit', 10, 'current_cost', 6, 'sort_order', 0),
-      jsonb_build_object('product_id', v_pb, 'calc_mode', 'units_direct', 'total_units_needed', 100, 'price_per_unit', 8, 'current_cost', 4, 'sort_order', 1))),
+      jsonb_build_object('id', v_pa_early_item, 'product_id', v_pa, 'calc_mode', 'units_direct', 'total_units_needed', 200, 'price_per_unit', 10, 'current_cost', 6, 'sort_order', 0),
+      jsonb_build_object('id', v_pb_early_item, 'product_id', v_pb, 'calc_mode', 'units_direct', 'total_units_needed', 100, 'price_per_unit', 8, 'current_cost', 4, 'sort_order', 1))),
     jsonb_build_object('section_name', 'Late', 'sort_order', 1, 'items', jsonb_build_array(
-      jsonb_build_object('product_id', v_pa, 'calc_mode', 'units_direct', 'total_units_needed', 200, 'price_per_unit', 10, 'current_cost', 6, 'sort_order', 0))));
+      jsonb_build_object('id', v_pa_late_item, 'product_id', v_pa, 'calc_mode', 'units_direct', 'total_units_needed', 200, 'price_per_unit', 10, 'current_cost', 6, 'sort_order', 0))));
   SELECT (to_jsonb(q)->>'row_version')::bigint
   INTO v_quote_version
   FROM quotes q
@@ -179,6 +224,22 @@ BEGIN
   IF v_res->>'status' IS DISTINCT FROM 'saved' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (d) save_quote returned %', v_res;
   END IF;
+  SELECT qi.id INTO v_pa_early_item FROM quote_items qi
+  JOIN quote_sections qs ON qs.id = qi.section_id
+  WHERE qi.quote_id = v_q AND qs.section_name = 'Early' AND qi.product_id = v_pa;
+  SELECT qi.id INTO v_pa_late_item FROM quote_items qi
+  JOIN quote_sections qs ON qs.id = qi.section_id
+  WHERE qi.quote_id = v_q AND qs.section_name = 'Late' AND qi.product_id = v_pa;
+  SELECT qi.id INTO v_pb_early_item FROM quote_items qi
+  JOIN quote_sections qs ON qs.id = qi.section_id
+  WHERE qi.quote_id = v_q AND qs.section_name = 'Early' AND qi.product_id = v_pb;
+  v_sections := jsonb_set(
+    jsonb_set(
+      jsonb_set(v_sections, '{0,items,0,id}', to_jsonb(v_pa_early_item)),
+      '{0,items,1,id}', to_jsonb(v_pb_early_item)
+    ),
+    '{1,items,0,id}', to_jsonb(v_pa_late_item)
+  );
   SELECT COALESCE(SUM(quantity) FILTER (WHERE product_id = v_pa), 0),
          COALESCE(SUM(quantity) FILTER (WHERE product_id = v_pb), 0)
   INTO v_pa_total, v_pb_total
@@ -203,6 +264,22 @@ BEGIN
   WHERE q.id = v_q;
   v_payload := v_payload || jsonb_build_object('row_version_expected', v_quote_version);
   v_res := save_quote(v_q, v_payload, v_sections, v_admin, NULL);
+  SELECT qi.id INTO v_pa_early_item FROM quote_items qi
+  JOIN quote_sections qs ON qs.id = qi.section_id
+  WHERE qi.quote_id = v_q AND qs.section_name = 'Early' AND qi.product_id = v_pa;
+  SELECT qi.id INTO v_pa_late_item FROM quote_items qi
+  JOIN quote_sections qs ON qs.id = qi.section_id
+  WHERE qi.quote_id = v_q AND qs.section_name = 'Late' AND qi.product_id = v_pa;
+  SELECT qi.id INTO v_pb_early_item FROM quote_items qi
+  JOIN quote_sections qs ON qs.id = qi.section_id
+  WHERE qi.quote_id = v_q AND qs.section_name = 'Early' AND qi.product_id = v_pb;
+  v_sections := jsonb_set(
+    jsonb_set(
+      jsonb_set(v_sections, '{0,items,0,id}', to_jsonb(v_pa_early_item)),
+      '{0,items,1,id}', to_jsonb(v_pb_early_item)
+    ),
+    '{1,items,0,id}', to_jsonb(v_pa_late_item)
+  );
   SELECT COALESCE(SUM(quantity) FILTER (WHERE product_id = v_pa), 0) INTO v_pa_total
   FROM inventory_holds WHERE source_id = v_q AND is_active = true;
   IF v_pa_total <> 200 THEN
@@ -215,6 +292,22 @@ BEGIN
   IF v_res->>'status' IS DISTINCT FROM 'restored' THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (e) restore returned %', v_res;
   END IF;
+  SELECT qi.id INTO v_pa_early_item FROM quote_items qi
+  JOIN quote_sections qs ON qs.id = qi.section_id
+  WHERE qi.quote_id = v_q AND qs.section_name = 'Early' AND qi.product_id = v_pa;
+  SELECT qi.id INTO v_pa_late_item FROM quote_items qi
+  JOIN quote_sections qs ON qs.id = qi.section_id
+  WHERE qi.quote_id = v_q AND qs.section_name = 'Late' AND qi.product_id = v_pa;
+  SELECT qi.id INTO v_pb_early_item FROM quote_items qi
+  JOIN quote_sections qs ON qs.id = qi.section_id
+  WHERE qi.quote_id = v_q AND qs.section_name = 'Early' AND qi.product_id = v_pb;
+  v_sections := jsonb_set(
+    jsonb_set(
+      jsonb_set(v_sections, '{0,items,0,id}', to_jsonb(v_pa_early_item)),
+      '{0,items,1,id}', to_jsonb(v_pb_early_item)
+    ),
+    '{1,items,0,id}', to_jsonb(v_pa_late_item)
+  );
   SELECT COALESCE(SUM(quantity) FILTER (WHERE product_id = v_pa), 0) INTO v_pa_total
   FROM inventory_holds WHERE source_id = v_q AND is_active = true;
   IF v_pa_total <> 150 THEN

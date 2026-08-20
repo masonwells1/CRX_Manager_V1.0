@@ -10,6 +10,29 @@
 -- until a separate migration-review/apply session and Mason's explicit in-chat
 -- approval. The repository PR may merge without applying it.
 --
+-- EMERGENCY REVERT PLAN (documentation only; do not run from this PR): create
+-- a separately reviewed rollback migration and obtain live-apply approval.
+-- Pause booking draws, then execute this sequence in one transaction so the
+-- existing cutover key drains in-flight draws before either public body moves:
+--
+--   BEGIN;
+--   SELECT pg_catalog.pg_advisory_xact_lock(20260816, 1);
+--   DROP FUNCTION public.draw_down_quote(uuid, jsonb, uuid, text, text);
+--   ALTER FUNCTION public._draw_down_quote_intent_impl_20260819(uuid, jsonb, uuid, text, text)
+--     RENAME TO draw_down_quote;
+--   REVOKE ALL ON FUNCTION public.draw_down_quote(uuid, jsonb, uuid, text, text)
+--     FROM PUBLIC, anon, authenticated, service_role;
+--   GRANT EXECUTE ON FUNCTION public.draw_down_quote(uuid, jsonb, uuid, text, text)
+--     TO authenticated, service_role;
+--   COMMIT;
+--
+-- Verify the restored body hash and ACL before resuming draws. This deliberately
+-- restores the pre-intent retry behavior and its stale-receipt risk; keep draws
+-- paused until every receipt created by this wrapper has expired unless the
+-- separately approved incident plan explicitly accepts that temporary risk.
+-- Never use CREATE OR REPLACE for this revert: the preserved private wrapper is
+-- the reviewed cutover/below-cost body and must be renamed back byte-for-byte.
+--
 -- OPERATOR CONSEQUENCE: draw retry receipts live for 24 hours, and this file
 -- refuses while any pre-wrapper draw_down_quote receipt remains retryable.
 -- Before the eventual governed apply, plan a deliberate 24-hour freeze with no

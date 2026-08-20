@@ -16,6 +16,16 @@ const SMOKE_PATH =
   'scripts/smoke/smoke-draw-down-quote-intent-binding.sql';
 const PROVER_PATH =
   'scripts/smoke/prove-draw-down-quote-intent-binding.mjs';
+const KEYED_DRAW_SMOKES = [
+  ['scripts/smoke/smoke-draw-ledger-reversal.sql', [
+    'smk-dlr-s1-first-', 'smk-dlr-s1-redraw-', 'smk-dlr-s2-first-',
+    'smk-dlr-s2-final-', 'smk-dlr-s2-redraw-',
+  ]],
+  ['scripts/smoke/smoke-order-draw-lock.sql', ['smk-odl-first-', 'smk-odl-final-']],
+  ['scripts/smoke/smoke-save-quote-drawn-guard.sql', ['smk-sqdg-first-', 'smk-sqdg-final-']],
+  ['scripts/smoke/smoke-restore-version-drawn-guard.sql', ['smk-rvdg-first-', 'smk-rvdg-final-']],
+  ['scripts/smoke/smoke-planned-holds-drawn-sync.sql', ['smk-phds-draw-']],
+] as const;
 
 const migrationSql = readFileSync(MIGRATION_PATH, 'utf8');
 const cutoverSql = readFileSync(CUTOVER_PATH, 'utf8');
@@ -301,5 +311,32 @@ describe('draw_down_quote actor and intent binding migration', () => {
     expect(proverSource).toContain('repeatable-read execution is refused before the legacy-receipt scan');
     expect(proverSource).toContain('exclusive cutover lock drains and detects');
     expect(proverSource).toContain('restoreFullSchemaAndRunSmoke();');
+  });
+
+  it('keeps every registered post-cutover draw smoke on unique retry keys', () => {
+    for (const [path, drawKeys] of KEYED_DRAW_SMOKES) {
+      const source = readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
+      expect(proverSource).toContain(path.slice(path.lastIndexOf('/') + 1));
+      expect(source.match(/\bdraw_down_quote\(/g), path).toHaveLength(drawKeys.length);
+      for (const drawKey of drawKeys) {
+        expect(source, `${path} is missing ${drawKey}`).toContain(`'${drawKey}`);
+      }
+    }
+    expect(proverSource).toContain('FULL_SCHEMA_KEYED_DRAW_SMOKES_PASS');
+  });
+
+  it('documents the exact rename-based emergency revert without executing it', () => {
+    expect(migrationSql).toContain('-- EMERGENCY REVERT PLAN (documentation only; do not run from this PR)');
+    expectOrdered(migrationSql, [
+      '--   BEGIN;',
+      '--   SELECT pg_catalog.pg_advisory_xact_lock(20260816, 1);',
+      '--   DROP FUNCTION public.draw_down_quote(uuid, jsonb, uuid, text, text);',
+      '--     RENAME TO draw_down_quote;',
+      '--   REVOKE ALL ON FUNCTION public.draw_down_quote(uuid, jsonb, uuid, text, text)',
+      '--   GRANT EXECUTE ON FUNCTION public.draw_down_quote(uuid, jsonb, uuid, text, text)',
+      '--   COMMIT;',
+    ]);
+    expect(migrationSql).toContain('restores the pre-intent retry behavior and its stale-receipt risk');
+    expect(migrationSql).toContain('Never use CREATE OR REPLACE for this revert');
   });
 });

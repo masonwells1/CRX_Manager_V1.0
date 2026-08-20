@@ -8,7 +8,7 @@
  * effect-recording stand-in mutation-tests the new wrapper's parsing, auth,
  * receipt binding and key-race behavior. A second database restores the
  * supported full schema, replays every ledger-selected migration through this
- * candidate, then executes the checked-in rollback smoke against the REAL
+ * candidate, then executes the checked-in rollback smokes against the REAL
  * pricing, cost, profit, commission, inventory and draw-ledger implementation.
  */
 
@@ -62,6 +62,13 @@ const SMOKE_PATH = path.join(
   'smoke',
   'smoke-draw-down-quote-intent-binding.sql',
 );
+const KEYED_DRAW_SMOKE_PATHS = [
+  'smoke-draw-ledger-reversal.sql',
+  'smoke-order-draw-lock.sql',
+  'smoke-save-quote-drawn-guard.sql',
+  'smoke-restore-version-drawn-guard.sql',
+  'smoke-planned-holds-drawn-sync.sql',
+].map((file) => path.join(ROOT, 'scripts', 'smoke', file));
 
 const ACTOR_A = '11111111-1111-1111-1111-111111111111';
 const ACTOR_B = '22222222-2222-2222-2222-222222222222';
@@ -72,6 +79,7 @@ const QUOTE_A = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1';
 const QUOTE_B = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2';
 const QUOTE_DELETED = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa3';
 const PRODUCT = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+const FULL_SCHEMA_SMOKE_ADMIN = '66666666-6666-6666-6666-666666666666';
 
 function docker(args, { input, allowFailure = false } = {}) {
   const result = spawnSync('docker', args, {
@@ -259,6 +267,41 @@ function restoreFullSchemaAndRunSmoke() {
     `FULL_SCHEMA_DRAW_SMOKE_PASS baseline=${baselineHighWater} replayed=${migrations.length} `
       + 'money_commission_inventory=SMOKE_PASS_ROLLBACK',
   );
+
+  psql(`
+INSERT INTO auth.users (id, email, raw_user_meta_data, created_at, updated_at)
+VALUES (
+  '${FULL_SCHEMA_SMOKE_ADMIN}'::uuid,
+  'draw-intent-registered-smokes@example.invalid',
+  '{"full_name":"[SMOKE] Registered Draw Admin","role":"admin"}'::jsonb,
+  now(),
+  now()
+);
+INSERT INTO public.profiles (id, email, full_name, role, is_active)
+VALUES (
+  '${FULL_SCHEMA_SMOKE_ADMIN}'::uuid,
+  'draw-intent-registered-smokes@example.invalid',
+  '[SMOKE] Registered Draw Admin',
+  'admin',
+  true
+)
+ON CONFLICT (id) DO UPDATE
+  SET email = EXCLUDED.email,
+      full_name = EXCLUDED.full_name,
+      role = EXCLUDED.role,
+      is_active = true;`);
+
+  for (const smokePath of KEYED_DRAW_SMOKE_PATHS) {
+    const keyedSmoke = psql(readFileSync(smokePath, 'utf8'), { allowFailure: true });
+    const keyedOutput = `${keyedSmoke.stdout}\n${keyedSmoke.stderr}`;
+    assert.notEqual(keyedSmoke.status, 0, `${path.basename(smokePath)} unexpectedly committed`);
+    assert.match(
+      keyedOutput,
+      /SMOKE_PASS_ROLLBACK/,
+      `${path.basename(smokePath)} did not reach its terminal marker:\n${keyedOutput}`,
+    );
+  }
+  console.log(`FULL_SCHEMA_KEYED_DRAW_SMOKES_PASS count=${KEYED_DRAW_SMOKE_PATHS.length}`);
 }
 
 function concurrentCall(sql, db = 'postgres') {
@@ -959,6 +1002,7 @@ async function main() {
     TIER_SPLIT_PATH,
     ALLOCATED_CENTS_PATH,
     SMOKE_PATH,
+    ...KEYED_DRAW_SMOKE_PATHS,
   ]) {
     assert.ok(existsSync(file), `missing checked-in proof input: ${file}`);
   }
@@ -1008,7 +1052,7 @@ async function main() {
     console.log('  single-transaction apply guard: PASS');
     console.log('  read-committed isolation guard and stale-snapshot refusal: PASS');
     console.log('  exclusive cutover drain plus unexpired legacy receipt refusal: PASS');
-    console.log('  restored full schema + real money/commission/inventory rollback smoke: PASS');
+    console.log('  restored full schema + real money/commission/inventory rollback smokes: PASS');
     console.log('  network: none; storage: tmpfs; live Supabase: untouched');
   } finally {
     docker(['rm', '-f', CONTAINER], { allowFailure: true });

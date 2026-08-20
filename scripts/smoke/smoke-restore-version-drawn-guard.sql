@@ -43,7 +43,13 @@ AS $helper$
 DECLARE
   v_result jsonb;
 BEGIN
-  IF to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint)') IS NOT NULL THEN
+  IF to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint,text)') IS NOT NULL THEN
+    EXECUTE
+      'SELECT public.restore_quote_version($1, $2, $3, $4, $5, NULL)'
+      INTO v_result
+      USING p_quote_id, p_version_id, p_performed_by, p_idempotency_key, p_expected_row_version;
+    RETURN v_result;
+  ELSIF to_regprocedure('public.restore_quote_version(uuid,uuid,uuid,text,bigint)') IS NOT NULL THEN
     EXECUTE
       'SELECT public.restore_quote_version($1, $2, $3, $4, $5)'
       INTO v_result
@@ -135,6 +141,39 @@ BEGIN
   VALUES ('[SMOKE] Restore Guard B ' || v_suffix, 'gal')
   RETURNING id INTO v_prod_b;
 
+  v_res := preview_product_pricing_changes(
+    'product_page', NULL,
+    jsonb_build_array(
+      jsonb_build_object(
+        'product_id', v_prod_a,
+        'row_version', (SELECT pricing_version FROM products WHERE id = v_prod_a),
+        'pricing_mode', 'margin_driven',
+        'new_cost', '6.00',
+        'tier1_margin_percent', '20',
+        'tier2_margin_percent', '25',
+        'tier3_margin_percent', '30',
+        'change_reason', 'Rollback smoke restore guard fixture A'
+      ),
+      jsonb_build_object(
+        'product_id', v_prod_b,
+        'row_version', (SELECT pricing_version FROM products WHERE id = v_prod_b),
+        'pricing_mode', 'margin_driven',
+        'new_cost', '6.00',
+        'tier1_margin_percent', '20',
+        'tier2_margin_percent', '25',
+        'tier3_margin_percent', '30',
+        'change_reason', 'Rollback smoke restore guard fixture B'
+      )
+    ),
+    v_admin, 'smk-rvdg-price-preview-' || v_suffix
+  );
+  PERFORM apply_product_pricing_change_set(
+    (v_res->>'change_set_id')::uuid,
+    v_res->>'request_fingerprint',
+    v_admin,
+    'smk-rvdg-price-apply-' || v_suffix
+  );
+
   INSERT INTO quotes (quote_number, customer_id, created_by, status, commission_split)
   VALUES ('[SMOKE] RVG-' || v_suffix, v_customer, v_admin, 'sent', '{"splits": []}'::jsonb)
   RETURNING id INTO v_q;
@@ -156,8 +195,10 @@ BEGIN
   END IF;
 
   -- V2: snapshot that books ONLY product B (drawn product A absent)
-  UPDATE quote_items SET product_id = v_prod_b, total_units_needed = 400
-  WHERE quote_id = v_q;
+  DELETE FROM quote_items WHERE quote_id = v_q;
+  INSERT INTO quote_items (quote_id, section_id, product_id,
+    price_per_unit, current_cost, total_units_needed, unit_size)
+  VALUES (v_q, v_sec, v_prod_b, 10, 6, 400, 'gal');
   PERFORM pg_temp.create_quote_version_smoke(
     v_q, v_admin, 'presented', NULL,
     (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q)
@@ -166,8 +207,10 @@ BEGIN
   ORDER BY version_number DESC LIMIT 1;
 
   -- V3: snapshot @ A=400 (legal: >= the 200 that will be drawn)
-  UPDATE quote_items SET product_id = v_prod_a, total_units_needed = 400
-  WHERE quote_id = v_q;
+  DELETE FROM quote_items WHERE quote_id = v_q;
+  INSERT INTO quote_items (quote_id, section_id, product_id,
+    price_per_unit, current_cost, total_units_needed, unit_size)
+  VALUES (v_q, v_sec, v_prod_a, 10, 6, 400, 'gal');
   PERFORM pg_temp.create_quote_version_smoke(
     v_q, v_admin, 'presented', NULL,
     (SELECT (to_jsonb(q)->>'row_version')::bigint FROM public.quotes q WHERE q.id = v_q)
@@ -182,7 +225,7 @@ BEGIN
   UPDATE quote_items SET total_units_needed = 500 WHERE quote_id = v_q;
   v_res := draw_down_quote(v_q,
     jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'quantity', 200)),
-    v_admin, NULL);
+    v_admin, 'smk-rvdg-first-' || v_suffix);
   IF (v_res->>'fully_drawn')::boolean IS DISTINCT FROM false THEN
     RAISE EXCEPTION 'SMOKE_FAIL: setup draw 200/500 reported fully_drawn: %', v_res;
   END IF;
@@ -262,7 +305,7 @@ BEGIN
 
   v_res := draw_down_quote(v_q,
     jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'quantity', 200)),
-    v_admin, NULL);
+    v_admin, 'smk-rvdg-final-' || v_suffix);
   IF (v_res->>'fully_drawn')::boolean IS DISTINCT FROM true THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (c) draw to 400/400 not reported fully drawn: %', v_res;
   END IF;
