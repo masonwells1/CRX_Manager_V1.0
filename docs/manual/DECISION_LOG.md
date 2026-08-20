@@ -189,6 +189,20 @@ fewer wasted review attempts.
 
 ---
 
+## 2026-08-20 — Draw-down intent cutover keeps the 24-hour zero-receipt freeze
+
+**Source:** Engineering fail-closed design choice, 2026-08-20. The 24-hour freeze window still
+requires Mason's scheduling approval before any separately authorized live apply.
+**Decision:** Keep the pending draw-down intent migration's fail-closed requirement that no
+unexpired legacy draw receipt exists before cutover; because receipts live for 24 hours, schedule a
+deliberate 24-hour no-successful-draw window before any separately authorized apply.
+**Why:** The shared retry helper would refuse each legacy receipt safely, but a planned off-season or
+weekend freeze gives the wrapper a clean invariant and removes ambiguity from a money/inventory cutover.
+**What this forbids/implies:** do not weaken the zero-receipt preflight to avoid the wait. Verify zero
+read-only, keep draws paused through commit, and obtain separate live-apply authority; this PR applies nothing.
+
+---
+
 ## 2026-08-19 — The purchase-order "mirror" CHECK clears the money gate, as a closed two-column exception
 
 **Source:** Mason's in-chat decision, 2026-08-19, answering the question PR #420 recorded as open in

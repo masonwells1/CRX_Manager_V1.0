@@ -1457,10 +1457,10 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'delete_prepay_credit',
   'delete_purchase_order',
   'dismiss_watchdog_flag',
-  // Public below-cost wrapper; the replay pair lives in its private impl. See
-  // its delegated note in IDEMPOTENCY_BODY_EXEMPT below. (No quoted word may
-  // appear in a comment inside this array: rpcFixtureLiveDiff.test.ts extracts
-  // entries by regex over the whole literal and would read it as an RPC name.)
+  // Public intent wrapper owns the actor/fingerprint replay claim and forwards
+  // the same key through the private pricing chain. (No quoted word may appear
+  // in a comment inside this array: rpcFixtureLiveDiff.test.ts extracts entries
+  // by regex over the whole literal and would read it as an RPC name.)
   'draw_down_quote',
   'duplicate_quote',
   'edit_delivery',
@@ -1662,18 +1662,6 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   // _impl has no `authenticated` EXECUTE, so the wrapper is the only reachable
   // entry point.
   batch_apply_prepayments: 'delegated',
-  // Verified against the live body 2026-08-15: the public wrapper is two
-  // statements — PERFORM _begin_below_cost_money_write('draw_down_quote', ...)
-  // to declare the below-cost operation context and authorize, then RETURN
-  // _draw_down_quote_below_cost_impl_20260810(p_quote_id, p_draws,
-  // p_performed_by, p_idempotency_key). It forwards the key and deliberately
-  // holds no replay logic of its own; the impl owns the canonical
-  // check_idempotency/save_idempotency pair under the one 'draw_down_quote'
-  // namespace, so a replay through the wrapper finds what the impl saved.
-  // Duplicating the check here would record the same key twice. The impl has no
-  // anon/authenticated/service_role EXECUTE — asserted by the postflight in
-  // migration 20260816120000 — so the wrapper is the only reachable entry point.
-  draw_down_quote: 'delegated',
   // Required-key wrappers fail closed before delegating to the preserved,
   // directly non-executable implementations that own replay and mutation.
   create_invoice_for_unbilled_delivery: 'delegated',
@@ -1804,8 +1792,81 @@ function latestFunctionBody(rpc: string): string | null {
   return null;
 }
 
+function stripSqlCommentsAndStrings(sql: string): string {
+  let executable = '';
+
+  for (let i = 0; i < sql.length;) {
+    if (sql.startsWith('--', i)) {
+      const newline = sql.indexOf('\n', i + 2);
+      if (newline === -1) break;
+      executable += '\n';
+      i = newline + 1;
+      continue;
+    }
+
+    if (sql.startsWith('/*', i)) {
+      let depth = 1;
+      i += 2;
+      while (i < sql.length && depth > 0) {
+        if (sql.startsWith('/*', i)) {
+          depth += 1;
+          i += 2;
+        } else if (sql.startsWith('*/', i)) {
+          depth -= 1;
+          i += 2;
+        } else {
+          i += 1;
+        }
+      }
+      executable += ' ';
+      continue;
+    }
+
+    if (sql[i] === "'") {
+      const escapeBackslashes = i > 0
+        && /[Ee]/.test(sql[i - 1])
+        && (i === 1 || !/[A-Za-z0-9_$]/.test(sql[i - 2]));
+      i += 1;
+      while (i < sql.length) {
+        if (sql[i] === "'" && sql[i + 1] === "'") {
+          i += 2;
+        } else if (escapeBackslashes && sql[i] === '\\' && i + 1 < sql.length) {
+          i += 2;
+        } else if (sql[i] === "'") {
+          i += 1;
+          break;
+        } else {
+          i += 1;
+        }
+      }
+      executable += ' ';
+      continue;
+    }
+
+    if (sql[i] === '$') {
+      const delimiter = sql.slice(i).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/)?.[0];
+      if (delimiter) {
+        const closing = sql.indexOf(delimiter, i + delimiter.length);
+        if (closing === -1) break;
+        executable += ' ';
+        i = closing + delimiter.length;
+        continue;
+      }
+    }
+
+    executable += sql[i];
+    i += 1;
+  }
+
+  return executable;
+}
+
 function bodyUsesIdempotency(body: string): boolean {
-  return /idempotency_keys|check_idempotency|save_idempotency|_claim_bound_lifecycle_idempotency|_bind_completed_lifecycle_idempotency/i.test(body);
+  const executableBody = stripSqlCommentsAndStrings(body);
+  // Dynamic SQL containing an idempotency operation is deliberately not
+  // credited: this gate requires a statically reviewable helper/table use.
+  return /\b(?:public\.)?(?:check_idempotency_intent|check_idempotency|save_idempotency|_claim_bound_lifecycle_idempotency|_bind_completed_lifecycle_idempotency)\s*\(/i.test(executableBody)
+    || /\b(?:from|join|into|update|delete\s+from|merge\s+into)\s+(?:public\.)?idempotency_keys\b/i.test(executableBody);
 }
 
 /**
@@ -2167,36 +2228,37 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
     expect(IDEMPOTENCY_BODY_EXEMPT.save_invoice).toBe('delegated');
   });
 
-  // The generic body scan skips draw_down_quote because it is marked
-  // 'delegated', so without this the forwarding is asserted only in prose
-  // (adversarial review 2026-08-16, non-blocking follow-up). Assert the chain
-  // for real: the wrapper hands the caller's key straight to the private
-  // implementation, and the implementation owns the replay pair.
-  it('draw_down_quote forwards the caller key to the implementation that owns replay', () => {
+  // The 20260819232000 public wrapper now owns actor+intent replay and receipt
+  // binding, then forwards the same key through the preserved cutover/below-
+  // cost wrapper to the tier-split implementation that saves the receipt.
+  it('draw_down_quote binds replay intent and forwards one key through the private pricing chain', () => {
     const files = getMigrationFiles();
-    const wrapper = files.find(
-      ({ name }) => name === '20260812115237_enforce_below_cost_admin_approval.sql'
+    const intentWrapper = files.find(
+      ({ name }) => name === '20260819232000_bind_draw_down_receipts_to_intent.sql'
+    )?.content;
+    const cutoverWrapper = files.find(
+      ({ name }) => name === '20260816110000_draw_down_cutover_barrier.sql'
     )?.content;
     const implementationSource = files.find(
       ({ name }) => name === '20260816120000_draw_down_split_order_lines_by_price_tier.sql'
     )?.content;
 
-    expect(wrapper).toBeDefined();
+    expect(intentWrapper).toBeDefined();
+    expect(cutoverWrapper).toBeDefined();
     expect(implementationSource).toBeDefined();
 
-    // The public entry point is the ONLY reachable one: the original body was
-    // renamed to the private implementation and stripped of every direct grant.
-    expect(wrapper).toContain('RENAME TO _draw_down_quote_below_cost_impl_20260810');
-    expect(wrapper).toMatch(
-      /REVOKE ALL ON FUNCTION public\._draw_down_quote_below_cost_impl_20260810\(uuid, jsonb, uuid, text\) FROM PUBLIC, anon, authenticated, service_role/
+    expect(intentWrapper).toContain('RENAME TO _draw_down_quote_intent_impl_20260819');
+    expect(intentWrapper).toContain('public.check_idempotency_intent(');
+    expect(intentWrapper).toContain('SET request_fingerprint = v_fingerprint');
+    expect(intentWrapper).toContain('request_actor_id = v_actor');
+    expect(intentWrapper).toMatch(
+      /REVOKE ALL ON FUNCTION public\._draw_down_quote_intent_impl_20260819[\s\S]*FROM PUBLIC, anon, authenticated, service_role/
     );
 
-    // The wrapper declares the key and forwards it verbatim as the 4th
-    // argument — it must not drop it, rename it, or substitute NULL.
-    expect(wrapper).toMatch(
-      /CREATE FUNCTION public\.draw_down_quote\([\s\S]*p_idempotency_key text DEFAULT NULL/
+    expect(intentWrapper).toMatch(
+      /v_result := public\._draw_down_quote_intent_impl_20260819\([\s\S]*p_idempotency_key[\s\S]*p_below_cost_reason/
     );
-    expect(wrapper).toMatch(
+    expect(cutoverWrapper).toMatch(
       /RETURN public\._draw_down_quote_below_cost_impl_20260810\(\s*p_quote_id, p_draws, p_performed_by, p_idempotency_key\s*\)/
     );
 
@@ -2209,7 +2271,8 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
     expect(implementationSource).toContain(
       "PERFORM save_idempotency(p_idempotency_key, 'draw_down_quote', v_result)"
     );
-    expect(IDEMPOTENCY_BODY_EXEMPT.draw_down_quote).toBe('delegated');
+    expect(IDEMPOTENCY_BODY_EXEMPT).not.toHaveProperty('draw_down_quote');
+    expect(bodyUsesIdempotency(latestFunctionBody('draw_down_quote') as string)).toBe(true);
   });
 
   // CRX-RLS-001 (adversarial review 2026-08-16): quotes are soft-deleted by
@@ -2494,9 +2557,78 @@ function latestMigrationFunctionBodies(): Map<string, string> {
 }
 
 function stripSqlComments(body: string): string {
-  return body
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/--[^\r\n]*/g, ' ');
+  let sql = '';
+
+  for (let i = 0; i < body.length;) {
+    if (body.startsWith('--', i)) {
+      const newline = body.indexOf('\n', i + 2);
+      if (newline === -1) break;
+      sql += '\n';
+      i = newline + 1;
+      continue;
+    }
+
+    if (body.startsWith('/*', i)) {
+      let depth = 1;
+      i += 2;
+      while (i < body.length && depth > 0) {
+        if (body.startsWith('/*', i)) {
+          depth += 1;
+          i += 2;
+        } else if (body.startsWith('*/', i)) {
+          depth -= 1;
+          i += 2;
+        } else {
+          i += 1;
+        }
+      }
+      sql += ' ';
+      continue;
+    }
+
+    if (body[i] === "'") {
+      const escapeBackslashes = i > 0
+        && /[Ee]/.test(body[i - 1])
+        && (i === 1 || !/[A-Za-z0-9_$]/.test(body[i - 2]));
+      sql += body[i];
+      i += 1;
+      while (i < body.length) {
+        sql += body[i];
+        if (body[i] === "'" && body[i + 1] === "'") {
+          sql += body[i + 1];
+          i += 2;
+        } else if (escapeBackslashes && body[i] === '\\' && i + 1 < body.length) {
+          sql += body[i + 1];
+          i += 2;
+        } else if (body[i] === "'") {
+          i += 1;
+          break;
+        } else {
+          i += 1;
+        }
+      }
+      continue;
+    }
+
+    if (body[i] === '$') {
+      const delimiter = body.slice(i).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/)?.[0];
+      if (delimiter) {
+        const closing = body.indexOf(delimiter, i + delimiter.length);
+        if (closing === -1) {
+          sql += body.slice(i);
+          break;
+        }
+        sql += body.slice(i, closing + delimiter.length);
+        i = closing + delimiter.length;
+        continue;
+      }
+    }
+
+    sql += body[i];
+    i += 1;
+  }
+
+  return sql;
 }
 
 /** Direct data-changing statements. Transaction/control keywords are excluded. */
@@ -2633,8 +2765,9 @@ const MIGRATION_ONLY_RPCS_WITH_IDEMPOTENCY = new Set<string>([
   // Private implementation behind the public draw_down_quote RPC, so it is
   // absent from the generated types by design. It declares p_idempotency_key
   // text and owns the canonical check_idempotency/save_idempotency pair for the
-  // 'draw_down_quote' operation (the public wrapper holds none of its own and
-  // forwards the key straight through) — the test below re-asserts all three.
+  // 'draw_down_quote' operation. The new public wrapper separately owns the
+  // actor/fingerprint replay check and receipt binding, then forwards the same
+  // key through this implementation — the test above re-asserts the full chain.
   // Pre-apply-window entry: it enters the inventory because migration
   // 20260816120000 is the FIRST on-disk CREATE of this function under its
   // post-rename name. 20260812115237 renamed the original public body with
@@ -2727,6 +2860,26 @@ const MUTATOR_INVENTORY_EXEMPT: Record<string, string> = {
 
 
 describe('Idempotency coverage drift (generated-types driven, fail-closed)', () => {
+  it('requires executable idempotency usage rather than comments or string literals', () => {
+    expect(bodyUsesIdempotency(`
+      BEGIN
+        PERFORM public.check_idempotency_intent(p_idempotency_key);
+      END
+    `)).toBe(true);
+    expect(bodyUsesIdempotency('SELECT result FROM public.idempotency_keys')).toBe(true);
+    expect(bodyUsesIdempotency('INSERT INTO public.idempotency_keys (key) VALUES (p_idempotency_key)')).toBe(true);
+    expect(bodyUsesIdempotency(`RAISE NOTICE 'C:\\'; PERFORM check_idempotency(p_idempotency_key, 'example');`)).toBe(true);
+
+    expect(bodyUsesIdempotency(`
+      BEGIN
+        -- PERFORM public.check_idempotency_intent(p_idempotency_key);
+        /* outer comment /* INSERT INTO public.idempotency_keys; */ still a comment */
+        RAISE NOTICE 'save_idempotency(p_idempotency_key)';
+        PERFORM audit_log($message$check_idempotency(p_idempotency_key)$message$);
+      END
+    `)).toBe(false);
+  });
+
   it('classifies wrappers that mutate only by calling another function', () => {
     const syntheticBodies = new Map([
       ['internal_writer', 'BEGIN INSERT INTO public.example(id) VALUES (1); END'],
@@ -2737,6 +2890,12 @@ describe('Idempotency coverage drift (generated-types driven, fail-closed)', () 
       'client_wrapper',
       'internal_writer',
     ]);
+  });
+
+  it('does not let comment markers inside SQL strings hide later mutations', () => {
+    expect(functionBodyMutates(`RAISE NOTICE 'a--b'; INSERT INTO public.example(id) VALUES (1);`)).toBe(true);
+    expect(functionBodyMutates(`RAISE NOTICE $message$a--b$message$; UPDATE public.example SET id = 2;`)).toBe(true);
+    expect(functionBodyMutates('-- INSERT INTO public.example(id) VALUES (1);')).toBe(false);
   });
 
   it('every generated direct or indirect mutating RPC is classified even when it omits p_idempotency_key', () => {
