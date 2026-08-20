@@ -87,7 +87,11 @@ Recursive command-string bodies reapply opaque-interpreter detection, split
 `env -S` bodies retain their option context, and POSIX-escaped wrapper and
 assignment names are checked alongside their raw spellings.
 Static `eval` bodies are inspected recursively, while dynamic evaluation and
-source operations fail closed; GNU Parallel is parsed as an indirect runner.
+source operations fail closed; GNU Parallel is parsed as an indirect runner,
+including recursively inspected quoted command bodies. Dynamic environment-name
+construction cannot hide `NODE_OPTIONS` before a Node-backed executable: POSIX
+`env` command substitutions, concatenated PowerShell environment paths, and CMD
+delayed-expansion assignments fail closed.
 
 Codex's hook adapter resolves and launches the requested hook under
 `.claude/hooks/`, through which Codex uses the shared classifier. Codex also has

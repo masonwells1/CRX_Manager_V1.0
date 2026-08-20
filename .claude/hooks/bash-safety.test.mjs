@@ -333,9 +333,15 @@ const parallelCommand = ["para", "llel"].join("");
 const indirectRunnerGuardCases = [
   `${evalCommand} 'export NODE_OPTIONS=--require=./preload.cjs'; node scripts/ordinary-check.mjs`,
   `${parallelCommand} -- env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs`,
+  `${parallelCommand} -- '${awkCommand} "BEGIN { cmd = decode(); system(cmd) }"' ::: x`,
   `${evalCommand} \"$loader\"`,
   `${sourceCommand} ./setup.sh`,
   `${evalCommand} '${awkCommand} -f payload.awk'`,
+];
+const dynamicNodeOptionsGuardCases = [
+  "env $(printf NODE_OPTIONS=--require=./preload.cjs) npm --version",
+  'powershell -Command "Set-Item (\'Env:NO\' + \'DE_OPTIONS\') \'--require=./preload.cjs\'; npm --version"',
+  'cmd /v:on /c "set N=NODE_OPTIONS & set !N!=--require=./preload.cjs & npm --version"',
 ];
 for (const separator of [";", "|", "&"]) {
   ok(checkDangerousCommand(`Write-Output marker\x5c${separator} ${pythonCommand} -c \"print('opaque')\"`), `PowerShell backslash-prefixed ${separator} cannot hide an opaque interpreter`);
@@ -352,7 +358,11 @@ for (const command of watchRunnerGuardCases) ok(checkDangerousCommand(command), 
 ok(!checkDangerousCommand(["busybox", "watch", "--help", awkCommand, opaqueAwkProgram].join(" ")), "terminal BusyBox watch help mode does not execute a trailing operand");
 for (const command of nestedParserGuardCases) ok(checkDangerousCommand(command), `nested or POSIX-escaped parser route is denied: ${command}`);
 for (const command of nestedParserGuardCases.slice(0, 2)) ok(maintenanceProducerCommandMentioned(command), `nested AWK launcher enters the producer gate: ${command}`);
+for (const command of dynamicNodeOptionsGuardCases) ok(checkDangerousCommand(command), `dynamic NODE_OPTIONS construction fails closed: ${command}`);
 for (const command of indirectRunnerGuardCases) ok(checkDangerousCommand(command), `indirect or dynamic command runner fails closed: ${command}`);
+ok(!checkDangerousCommand(`${parallelCommand} -- 'echo safe' ::: x`), "a quoted benign Parallel command body stays allowed");
+ok(!checkDangerousCommand("env $(printf SAFE=1) echo ok"), "dynamic env construction without a Node-backed executable stays allowed");
+ok(!checkDangerousCommand("rg -n 'env $(printf NODE_OPTIONS=x) npm' docs"), "dynamic NODE_OPTIONS spelling used as quoted search data stays allowed");
 for (const command of [
   "wsl awk 'BEGIN { cmd = decode(); system(cmd) }'",
   "wsl -d docker-desktop -- awk 'BEGIN { cmd = decode(); system(cmd) }'",

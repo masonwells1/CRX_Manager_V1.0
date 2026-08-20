@@ -49,7 +49,11 @@ All significant development milestones, in reverse chronological order.
   POSIX-unescaped wrapper/assignment spellings.
   Static `eval` bodies are recursively parsed; dynamic evaluation and sourced
   scripts fail closed, and GNU Parallel is treated as an indirect command
-  runner rather than ordinary argument text.
+  runner rather than ordinary argument text. Quoted Parallel command bodies are
+  recursively inspected, so a quoted AWK program cannot hide its opaque launch.
+  Dynamic `NODE_OPTIONS` construction also fails closed before a Node-backed
+  executable: POSIX `env` command substitutions, concatenated PowerShell
+  environment paths, and CMD delayed-expansion assignments are covered.
 - Regression coverage proves the new deny paths and preserves ordinary quoted
   searches plus terminal AWK help mode. The Codex shell/MCP hook adapter consumes
   the shared `.claude/hooks/bash-safety-lib.mjs` implementation directly. Codex

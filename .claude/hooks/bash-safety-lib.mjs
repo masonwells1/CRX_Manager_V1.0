@@ -370,6 +370,23 @@ export function maintenanceProducerCommandMentioned(command, depth = 0) {
     return true;
   };
   if (tokens.some(opaqueInlineInterpreterInvocation)) return true;
+  const nestedParallelCommand = (token, index, list) => {
+    if (!executableNamed(token, "parallel", true) || !invocationPosition(list, index)) return false;
+    let segmentEnd = index + 1;
+    while (segmentEnd < list.length && !list[segmentEnd].control) segmentEnd += 1;
+    const remaining = list.slice(index + 1, segmentEnd);
+    const terminator = remaining.findIndex((entry) => normalizeShellOption(entry.value) === "--");
+    const optionTokens = terminator >= 0 ? remaining.slice(0, terminator) : remaining;
+    if (optionTokens.some((entry) => /^--(?:help|version)$/.test(normalizeShellOption(entry.value)))) return false;
+    const bodyTokens = terminator >= 0 ? remaining.slice(terminator + 1) : remaining;
+    for (const entry of bodyTokens.filter((candidate) => candidate.sawQuoted)) {
+      if (depth >= 4 || maintenanceProducerCommandMentioned(entry.value, depth + 1)) return true;
+    }
+    if (terminator < 0) return false;
+    const body = bodyTokens.map((entry) => entry.value).join(" ");
+    return Boolean(body) && (depth >= 4 || maintenanceProducerCommandMentioned(body, depth + 1));
+  };
+  if (tokens.some(nestedParallelCommand)) return true;
   const nestedWatchCommand = (token, index, list) => {
     if (!executableNamed(token, "watch", true) || !invocationPosition(list, index)) return false;
     let segmentEnd = index + 1;
@@ -616,6 +633,30 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
   const shellExecutionKeywords = new Set(["if", "then", "elif", "else", "while", "until", "do", "!"]);
   const shellExecutionKeyword = (token) => !token?.sawQuoted && shellWordCandidates(token)
     .some((candidate) => shellExecutionKeywords.has(candidate.toLowerCase()));
+
+  const tokenNamed = (token, names) => {
+    if (!token || token.control || (token.sawQuoted && !/[\\/]/.test(token.value))) return false;
+    return shellWordCandidates(token).some((candidate) => {
+      const basename = candidate.replace(/^@/, "").split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase();
+      return names.includes(basename);
+    });
+  };
+  const nodeBackedCommandMentioned = /\b(?:node|nodejs|npm|npx|pnpm|yarn|bun|corepack)(?:\.exe|\.cmd)?\b/i.test(value);
+  if (nodeBackedCommandMentioned) {
+    const dynamicPosixEnv = tokens.some((token) => tokenNamed(token, ["env"]))
+      && /(?:\$\(|`[^`]*`|<\()/s.test(value);
+    const compactDynamicTarget = value.toLowerCase().replace(/[\s"'`^+()[\]{},]/g, "");
+    const powershellMutation = /\b(?:set|new|add|clear|remove)-(?:item|content)\b/i.test(value)
+      && compactDynamicTarget.includes("env:node_options")
+      && /(?:\+|\s-join(?:\s|$)|\$\(|@\()/i.test(value);
+    const dotNetMutation = /setenvironmentvariable/i.test(value)
+      && compactDynamicTarget.includes("setenvironmentvariablenode_options")
+      && /(?:\+|\s-join(?:\s|$)|\$\(|@\()/i.test(value);
+    const cmdDelayedMutation = tokens.some((token) => tokenNamed(token, ["cmd"]))
+      && /\/v(?::on)?(?:\s|$)/i.test(value)
+      && /\bset\s+![^!\r\n]+!\+?=/i.test(value);
+    if (dynamicPosixEnv || powershellMutation || dotNetMutation || cmdDelayedMutation) return true;
+  }
 
   for (let segmentStart = 0; segmentStart < tokens.length;) {
     while (segmentStart < tokens.length && tokens[segmentStart].control) segmentStart += 1;

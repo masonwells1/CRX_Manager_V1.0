@@ -94,9 +94,15 @@ const parallelCommand = ["para", "llel"].join("");
 const indirectRunnerGuardCases = [
   `${evalCommand} 'export NODE_OPTIONS=--require=./preload.cjs'; node scripts/ordinary-check.mjs`,
   `${parallelCommand} -- env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs`,
+  `${parallelCommand} -- '${awkCommand} "BEGIN { cmd = decode(); system(cmd) }"' ::: x`,
   `${evalCommand} \"$loader\"`,
   `${sourceCommand} ./setup.sh`,
   `${evalCommand} '${awkCommand} -f payload.awk'`,
+];
+const dynamicNodeOptionsGuardCases = [
+  "env $(printf NODE_OPTIONS=--require=./preload.cjs) npm --version",
+  'powershell -Command "Set-Item (\'Env:NO\' + \'DE_OPTIONS\') \'--require=./preload.cjs\'; npm --version"',
+  'cmd /v:on /c "set N=NODE_OPTIONS & set !N!=--require=./preload.cjs & npm --version"',
 ];
 
 // ── tools NOT in the Desktop Commander mutating set pass straight through ──
@@ -172,6 +178,7 @@ for (const command of [
   ...xargsGuardCases,
   ...shellBuiltinNodeOptionsCases,
   ...nestedParserGuardCases,
+  ...dynamicNodeOptionsGuardCases,
   ...indirectRunnerGuardCases,
 ]) {
   r = runHook({
