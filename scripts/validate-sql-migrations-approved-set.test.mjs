@@ -1710,6 +1710,33 @@ const CASES = [
       `CALL public._procedure_wrapper();\n`,
   },
   {
+    name: 'a database-qualified SELECT cannot hide a same-file mutating function',
+    expect: 'violation',
+    mustReport: 'Top-level call to a routine',
+    sql:
+      `CREATE FUNCTION public._dbq_select_fix() RETURNS void LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = total_profit; END;\n$$;\n` +
+      `SELECT postgres.public._dbq_select_fix();\n`,
+  },
+  {
+    name: 'a database-qualified CALL cannot hide a same-file mutating procedure',
+    expect: 'violation',
+    mustReport: 'Top-level call to a routine',
+    sql:
+      `CREATE PROCEDURE public._dbq_call_fix() LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = total_profit; END;\n$$;\n` +
+      `CALL postgres.public._dbq_call_fix();\n`,
+  },
+  {
+    name: 'a database-qualified PERFORM cannot hide a same-file mutating helper',
+    expect: 'violation',
+    mustReport: 'Top-level call to a routine',
+    sql:
+      `CREATE FUNCTION public._dbq_perform_fix() RETURNS void LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = total_profit; END;\n$$;\n` +
+      `DO $$ BEGIN PERFORM postgres.public._dbq_perform_fix(); END $$;\n`,
+  },
+  {
     name: 'a Unicode-named procedure cannot hide a protected rewrite',
     expect: 'violation',
     mustReport: 'Unsupported non-ASCII routine identity',

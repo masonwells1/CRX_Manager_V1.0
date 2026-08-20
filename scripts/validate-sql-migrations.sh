@@ -2076,7 +2076,11 @@ $MIG_BASENAME
           # else counts, including inside a DO block, which is exactly where a
           # `PERFORM _fix()` bypass would sit.
           callee = tok[i]
-          sub(/^public\./, "", callee)
+          # PostgreSQL accepts database.schema.routine() when the database
+          # qualifier names the current database. Strip every qualifier before
+          # comparing with the bare mutating-routine index; limiting this to a
+          # leading public. lets postgres.public._fix() execute unseen.
+          sub(/^([a-z0-9_]+\.)+/, "", callee)
           if (mutfns != "" && callee ~ ("^(" mutfns ")$") && !seenfn[callee]) {
             h = stmt_head(i)
             if (h != "grant" && h != "revoke" && h != "comment" && h != "drop" &&

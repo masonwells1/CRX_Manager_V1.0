@@ -1128,4 +1128,40 @@ eq(T(null), [], "a null body does not throw");
     'round-47 MUTANT: write words inside NOTICE data are not an event catalog risk');
 }
 
+// ---------------- ROUND 49: current-database-qualified routine calls
+{
+  const body = 'UPDATE public.order_items SET total_price = total_price;';
+  const cases = [
+    [
+      'SELECT',
+      `CREATE FUNCTION public.dbq_select_fix() RETURNS void LANGUAGE plpgsql AS $$ BEGIN ${body} END $$; ` +
+        'SELECT postgres.public.dbq_select_fix();',
+    ],
+    [
+      'CALL',
+      `CREATE PROCEDURE public.dbq_call_fix() LANGUAGE plpgsql AS $$ BEGIN ${body} END $$; ` +
+        'CALL postgres.public.dbq_call_fix();',
+    ],
+    [
+      'PERFORM',
+      `CREATE FUNCTION public.dbq_perform_fix() RETURNS void LANGUAGE plpgsql AS $$ BEGIN ${body} END $$; ` +
+        'DO $$ BEGIN PERFORM postgres.public.dbq_perform_fix(); END $$;',
+    ],
+  ];
+  for (const [verb, sql] of cases) {
+    ok(has(sql, 'order_items.total_price'),
+      `round-49: ${verb} with database.schema qualification follows a same-file mutator`);
+  }
+
+  const resident = applyTimeWriteTargets('SELECT postgres.public.resident_money_repair();');
+  ok(resident.unknownCalls.includes('resident_money_repair') || resident.unresolved,
+    'round-49: a database-qualified resident routine fails closed');
+
+  const definitionOnly =
+    `CREATE FUNCTION public.dbq_metadata_only() RETURNS void LANGUAGE plpgsql AS $$ BEGIN ${body} END $$; ` +
+    'DROP FUNCTION postgres.public.dbq_metadata_only();';
+  ok(!has(definitionOnly, 'order_items.total_price'),
+    'round-49 MUTANT: database-qualified routine metadata remains deferred');
+}
+
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

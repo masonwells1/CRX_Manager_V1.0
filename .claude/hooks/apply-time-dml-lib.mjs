@@ -735,7 +735,7 @@ function targetsFromCode(code, literals) {
 // `DROP FUNCTION IF EXISTS f()` puts two words between the keyword and the
 // name, and reading that as a call charged a plain drop-and-redefine — the most
 // ordinary shape in this repository — for the body it was replacing.
-const NOT_A_CALL = /\b(function|procedure)\s+(?:if\s+(?:not\s+)?exists\s+)?(?:[a-z0-9_]+\.)?$/;
+const NOT_A_CALL = /\b(function|procedure)\s+(?:if\s+(?:not\s+)?exists\s+)?(?:[a-z0-9_]+\.)*$/;
 
 // ROUND 28. A TRIGGER IS A STANDING INVOCATION.
 //
@@ -787,7 +787,7 @@ export function triggerAttachments(code) {
     if (on.hit !== "on") continue;
     const rel = readRelation(body, on.end);
     if (!rel || (NON_RELATION_KEYWORDS.has(rel.table) && !rel.quoted)) continue;
-    const fn = /\bexecute\s+(?:function|procedure)\s+(?:[a-z0-9_]+\s*\.\s*)?([a-z0-9_]+)/.exec(body);
+    const fn = /\bexecute\s+(?:function|procedure)\s+(?:[a-z0-9_]+\s*\.\s*)*([a-z0-9_]+)/.exec(body);
     if (!fn) continue;
     out.push({ table: rel.table, fn: fn[1] });
   }
@@ -804,7 +804,7 @@ function invokedRoutines(codeLower, defined) {
     const executable = runForEffectRegion(raw.trim());
     if (!executable) continue;
     for (const name of names) {
-      const re = new RegExp(`(^|[^A-Za-z0-9_.])((?:[a-z0-9_]+\\.)?)${name}\\s*\\(`, "g");
+      const re = new RegExp(`(^|[^A-Za-z0-9_.])((?:[a-z0-9_]+\\.)*)${name}\\s*\\(`, "g");
       let mm;
       while ((mm = re.exec(executable)) !== null) {
         const nameStart = mm.index + mm[1].length + mm[2].length;
@@ -1240,7 +1240,7 @@ const TRUSTED_AUTH_ROUTINES = new Set(["uid", "jwt", "role"]);
 // function's column alias (`… AS ta(attnum)`) both look exactly like a call, and
 // reading them as one charged two migrations for routines that do not exist.
 // `FROM` is deliberately absent: `SELECT * FROM do_the_repair()` IS a call.
-const NOT_A_CALL_HERE = /\b(insert\s+into|update|delete\s+from|merge\s+into|truncate(\s+table)?|copy|into|as|references|table)\s+(only\s+)?(if\s+(not\s+)?exists\s+)?(?:[a-z0-9_]+\.)?$/;
+const NOT_A_CALL_HERE = /\b(insert\s+into|update|delete\s+from|merge\s+into|truncate(\s+table)?|copy|into|as|references|table)\s+(only\s+)?(if\s+(not\s+)?exists\s+)?(?:[a-z0-9_]+\.)*$/;
 
 function unknownCallsIn(codeLower, defined, trustedUnqualifiedRoutines = new Set()) {
   const out = new Set();
@@ -1253,7 +1253,7 @@ function unknownCallsIn(codeLower, defined, trustedUnqualifiedRoutines = new Set
     // separator in front of it to match against. The very next call — the one
     // that mattered — was invisible, and only when it sat immediately inside
     // another call's parentheses, which is exactly where an argument sits.
-    const re = /(?<![a-z0-9_.])((?:[a-z0-9_]+\.)?)([a-z0-9_]+)\s*\(/g;
+    const re = /(?<![a-z0-9_.])((?:[a-z0-9_]+\.)*)([a-z0-9_]+)\s*\(/g;
     let mm;
     while ((mm = re.exec(stmt)) !== null) {
       const nameStart = mm.index + mm[1].length;

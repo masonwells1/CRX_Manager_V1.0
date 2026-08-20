@@ -1816,6 +1816,26 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(!isOneShotDeny(r),
       "round-48 control: routine metadata without an invocation remains effect-free");
 
+    // ROUND 49. PostgreSQL permits database.schema.routine() when the database
+    // qualifier names the current database. Both call scanners previously
+    // stopped after one qualifier, so these same-file repairs executed unseen.
+    const DBQ_REPAIR =
+      "UPDATE public.orders SET total_profit = total_profit WHERE id = ANY(ARRAY[1,2]);";
+    const databaseQualifiedCalls = [
+      ["select", `CREATE FUNCTION public.dbq_select_fix() RETURNS void LANGUAGE plpgsql ` +
+        `AS $$ BEGIN ${DBQ_REPAIR} END $$; SELECT postgres.public.dbq_select_fix();`],
+      ["call", `CREATE PROCEDURE public.dbq_call_fix() LANGUAGE plpgsql ` +
+        `AS $$ BEGIN ${DBQ_REPAIR} END $$; CALL postgres.public.dbq_call_fix();`],
+      ["perform", `CREATE FUNCTION public.dbq_perform_fix() RETURNS void LANGUAGE plpgsql ` +
+        `AS $$ BEGIN ${DBQ_REPAIR} END $$; ` +
+        `DO $$ BEGIN PERFORM postgres.public.dbq_perform_fix(); END $$;`],
+    ];
+    for (const [verb, sql] of databaseQualifiedCalls) {
+      r = apply(`20990601000049_db_qualified_${verb}`, sql);
+      ok(isDeny(r) && isOneShotDeny(r),
+        `round-49: database-qualified ${verb.toUpperCase()} cannot hide a one-shot rewrite`);
+    }
+
     // 6. Fail closed. The registry is tracked in git; unreadable or absent means
     //    the checkout is broken or the file was removed — the two states in
     //    which a silent pass is most dangerous.

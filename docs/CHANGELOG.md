@@ -84,10 +84,13 @@ migration safety harness; no app source, migration SQL, live database, or produc
 - Failed linked Supabase captures no longer echo raw child-process output into errors. Database
   routine source, CLI stderr, and spawn diagnostics are withheld while the exit status and refusal to
   write evidence remain visible.
+- Current-database-qualified routine calls now preserve their full invocation edge. Valid PostgreSQL
+  spellings such as `postgres.public.money_fix()` are followed for `SELECT`, `CALL`, and `PERFORM`
+  in both migration analyzers instead of disappearing after a second qualifier.
 
 Focused proof: snapshot producer 16 assertions; applied-source containment pass (including forced
 worktree-enumeration failure); trigger fan-out producer 22 assertions; apply-time analyzer
-224 assertions; apply-time guard 285 assertions; approved-set validator 190 mutation cases.
+229 assertions; apply-time guard 288 assertions; approved-set validator 193 mutation cases.
 Each new edge has a removal mutant that
 survives only when the load-bearing protection is deliberately deleted.
 
