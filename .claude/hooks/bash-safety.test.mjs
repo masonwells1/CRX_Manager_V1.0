@@ -451,6 +451,7 @@ const harmlessPowerShellAliasCases = [
 const harmlessShellNodeOptionsCases = [
   "export -p NODE_OPTIONS; npm --version",
   "export -n NODE_OPTIONS; npm --version",
+  "export -f NODE_OPTIONS; npm --version",
   "export -pn NODE_OPTIONS; npm --version",
 ];
 const posixLineContinuationGuardCases = [

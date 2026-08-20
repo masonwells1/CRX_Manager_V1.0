@@ -88,10 +88,11 @@ All significant development milestones, in reverse chronological order.
   unambiguous `-Name`/`-Value` parameter abbreviations and either parameter
   order are parsed before resolving that target, while unknown alias parameters
   fail closed. Ordinary read-only aliases and alias spellings used as text
-  remain allowed. Bash `export -p` inspection and `export -n` remediation of a
-  bare `NODE_OPTIONS` name remain allowed, while assignments in either mode are
-  still denied. POSIX backslash-newline and backslash-CRLF continuations are
-  removed before every shared shell-safety parse, so a continued variable,
+  remain allowed. Bash `export -p` inspection, `export -n` remediation, and
+  `export -f` function export of a bare `NODE_OPTIONS` name remain allowed,
+  while assignments in those modes are still denied. POSIX backslash-newline
+  and backslash-CRLF continuations are removed before every shared shell-safety
+  parse, so a continued variable,
   executable, migration path, or production command cannot bypass the guard.
   Environment-provider and .NET `NODE_OPTIONS` mutations are denied even when
   no Node command appears in the same payload, closing staged mutations across

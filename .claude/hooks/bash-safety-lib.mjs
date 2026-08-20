@@ -1204,7 +1204,7 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
         while (cursor < segmentEnd && tokens[cursor].value.startsWith("-")) {
           const option = tokens[cursor].value;
           if (option === "--") { cursor += 1; break; }
-          if (/^-[^-]*[np]/.test(option)) nonAssignmentMode = true;
+          if (/^-[^-]*[fnp]/.test(option)) nonAssignmentMode = true;
           cursor += 1;
         }
         while (cursor < segmentEnd) {
