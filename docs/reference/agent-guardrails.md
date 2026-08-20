@@ -95,7 +95,8 @@ construction cannot hide `NODE_OPTIONS` before a Node-backed executable: POSIX
 `env` command substitutions, concatenated PowerShell environment paths, and CMD
 delayed-expansion assignments fail closed. Node-backed runner names are matched
 after shell escape normalization, so POSIX backslashes and CMD carets cannot
-disguise a package runner. Recursively inspected PowerShell
+disguise a package runner. A quoted Node-backed name is executable when it is in
+command position, but quoted search arguments remain data. Recursively inspected PowerShell
 command bodies also recognize ordinary `$env:NODE_OPTIONS` assignments,
 environment-provider item/content cmdlets, their standard short aliases, aliases
 created inside the same command body, and .NET `SetEnvironmentVariable` calls

@@ -272,7 +272,8 @@ const findGroupOpen = "\x5c(";
 const findGroupClose = "\x5c)";
 const findTerminator = "\x5c;";
 const pythonCommand = ["py", "thon"].join("");
-const deepPowerShellBoundaryCommand = `Write-Output marker${"\\".repeat(20000)}; ${pythonCommand} -c \"print('opaque')\"`;
+const deepPowerShellBoundaryTail = `; ${pythonCommand} -c \"print('opaque')\"`;
+const deepPowerShellBoundaryCommand = `Write-Output marker${"\\".repeat(SECURITY_COMMAND_CHAR_BUDGET - deepPowerShellBoundaryTail.length - 200)}${deepPowerShellBoundaryTail}`;
 const xargsCommand = ["xar", "gs"].join("");
 const noRunIfEmptyOption = ["--no-run", "-if-empty"].join("");
 const awkCommand = ["aw", "k"].join("");
@@ -337,6 +338,8 @@ const shellBuiltinNodeOptionsCases = [
   `declare -n ref=NODE_OPTIONS; export ref; ref=--require=./preload.cjs; node scripts/ordinary-check.mjs`,
   `typeset -n ref=NODE_OPTIONS; ref=--require=./preload.cjs; npm --version`,
   `local -n ref="\$TARGET"; node scripts/ordinary-check.mjs`,
+  `declare -n ref=NODE_OPTIONS; export ref; ref=--require=./preload.cjs; "node" scripts/ordinary-check.mjs`,
+  `env NODE_OPTIONS=--require=./preload.cjs "npm" --version`,
 ];
 const privilegeWrapperNodeOptionsCases = [
   ["sudo", "NODE_OPTIONS=--require=./preload.cjs", "node", "scripts/ordinary-check.mjs"].join(" "),
@@ -387,6 +390,7 @@ for (const separator of [";", "|", "&"]) {
   ok(checkDangerousCommand(`Write-Output marker\x5c${separator} ${pythonCommand} -c \"print('opaque')\"`), `PowerShell backslash-prefixed ${separator} cannot hide an opaque interpreter`);
   ok(checkDangerousCommand(`Write-Output marker\x5c${separator} NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs`), `PowerShell backslash-prefixed ${separator} cannot hide a NODE_OPTIONS preload`);
 }
+ok(deepPowerShellBoundaryCommand.length <= SECURITY_COMMAND_CHAR_BUDGET, "deep PowerShell boundary fixture stays within the character budget");
 ok(maintenanceProducerCommandMentioned(deepPowerShellBoundaryCommand), "deep PowerShell boundary normalization fails closed without unbounded recursion");
 for (const command of xargsGuardCases) ok(checkDangerousCommand(command), `long no-run option cannot hide an xargs execution target: ${command}`);
 for (const command of shellGrammarGuardCases) ok(checkDangerousCommand(command), `shell grammar cannot hide an opaque execution target: ${command}`);
@@ -486,6 +490,7 @@ ok(!checkDangerousCommand(`rg -n 'pwsh -Command "$env:NODE_OPTIONS=x; npm --vers
 ok(!checkDangerousCommand(`rg -n 'call set NODE_OPTIONS=x & npm --version' docs`), "nested CMD mutation spelling used as quoted search data stays allowed");
 ok(!checkDangerousCommand(`rg -n 'export $(printf NODE_OPTIONS=x); npm --version' docs`), "dynamic export spelling used as quoted search data stays allowed");
 ok(!checkDangerousCommand(`rg -n 'declare -n ref=NODE_OPTIONS; node app.mjs' docs`), "nameref spelling used as quoted search data stays allowed");
+ok(!checkDangerousCommand(`rg -n '"node" app.mjs' docs`), "a quoted Node executable spelling used as search data stays allowed");
 
 // ── net-new: shell-redirect .env write (2026-07-13, shared with mcp-tool-guard) ──
 ok(checkDangerousCommand("echo SECRET=x > .env"), "shell-redirect write to .env blocked");
@@ -595,8 +600,9 @@ ok(oversizedResult.stdout.includes('"permissionDecision":"deny"'), "bash-safety.
 ok(oversizedElapsedMs < 1_500, `oversized wrapper denial stays well below the 5s hook timeout (actual ${oversizedElapsedMs.toFixed(0)}ms)`);
 
 const hostileRunnerTail = ["git", "push", "--force", "origin", "main"].join(" ");
-const hostileRunnerUnit = `${findCommand} . ${findExecOption} awk --help `;
+const hostileRunnerUnit = `${findCommand} . ${findExecOption} ${awkCommand} --help `;
 const hostileRunnerCommand = `${hostileRunnerUnit.repeat(Math.floor((SECURITY_COMMAND_CHAR_BUDGET - hostileRunnerTail.length) / hostileRunnerUnit.length))}${hostileRunnerTail}`;
+ok(hostileRunnerCommand.length <= SECURITY_COMMAND_CHAR_BUDGET, "hostile runner fixture stays within the character budget");
 const hostileRunnerStartedAt = process.hrtime.bigint();
 const hostileRunnerResult = runHook({ tool_name: "Bash", tool_input: { command: hostileRunnerCommand } });
 const hostileRunnerElapsedMs = Number(process.hrtime.bigint() - hostileRunnerStartedAt) / 1_000_000;

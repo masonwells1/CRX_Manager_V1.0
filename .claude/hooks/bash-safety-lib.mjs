@@ -598,12 +598,12 @@ function tokenizeShellWords(text) {
     }
     else if (char === "\r" || char === "\n") {
       push();
-      tokens.push({ value: "\n", control: true });
+      tokens.push({ value: "\n", control: true, sawQuoted: false, sawUnquoted: true });
       if (char === "\r" && text[index + 1] === "\n") index += 1;
     } else if (/\s/.test(char)) push();
     else if (/[;&|(){}<>]/.test(char)) {
       push();
-      tokens.push({ value: char, control: true });
+      tokens.push({ value: char, control: true, sawQuoted: false, sawUnquoted: true });
     } else {
       current += char;
       sawUnquoted = true;
@@ -676,8 +676,25 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
     return /(?:\$\{|\$[A-Za-z_]|`|![^!\r\n]+!|%[^%\r\n]+%)/.test(candidate.slice(0, equalsIndex));
   });
   const nodeBackedExecutables = new Set(["node", "nodejs", "npm", "npx", "pnpm", "yarn", "bun", "corepack"]);
-  const tokenListMentionsNodeBackedCommand = (list) => list.some((token) => token?.sawUnquoted
-    && nodeBackedExecutables.has(executableName(token)));
+  const nodeBackedRunnerWrappers = new Set([
+    "command", "builtin", "env", "wsl", "busybox", "toybox", "find", "xargs", "parallel",
+    "sudo", "doas", "coproc", "time", "watch", "exec", "nohup", "nice", "timeout", "setsid", "stdbuf",
+  ]);
+  const tokenListMentionsNodeBackedCommand = (list) => {
+    for (let start = 0; start < list.length;) {
+      while (start < list.length && list[start].control) start += 1;
+      let end = start;
+      while (end < list.length && !list[end].control) end += 1;
+      let cursor = start;
+      while (cursor < end && (shellExecutionKeyword(list[cursor]) || assignmentName(list[cursor]))) cursor += 1;
+      const commandName = executableName(list[cursor]);
+      if (nodeBackedExecutables.has(commandName)) return true;
+      if (nodeBackedRunnerWrappers.has(commandName)
+        && list.slice(cursor + 1, end).some((entry) => nodeBackedExecutables.has(executableName(entry)))) return true;
+      start = end + 1;
+    }
+    return false;
+  };
   const nestedLauncherMentionsNodeBackedCommand = tokens.some((token, index) => {
     if (!token?.sawUnquoted) return false;
     const launcher = executableName(token);

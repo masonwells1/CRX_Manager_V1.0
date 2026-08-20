@@ -70,7 +70,9 @@ All significant development milestones, in reverse chronological order.
   environment paths, and CMD delayed-expansion assignments are covered. Native
   Node-backed runner recognition uses tokenized shell-normalized executable
   names, so POSIX backslashes or CMD carets cannot disguise `npm`, `yarn`,
-  `bun`, or the other package runners during this check. Native
+  `bun`, or the other package runners during this check. Quoted executable names
+  are recognized when they occupy command position, while the same spelling in
+  quoted search data stays inert. Native
   PowerShell environment writes are recognized inside recursively inspected
   `powershell`/`pwsh -Command` bodies too, including `$env:NODE_OPTIONS`,
   environment-provider item/content cmdlets, their standard short aliases, and

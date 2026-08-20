@@ -31,6 +31,7 @@ const oversizedStartedAt = process.hrtime.bigint();
 const oversizedResult = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: oversizedWrapperCommand } });
 const oversizedElapsedMs = Number(process.hrtime.bigint() - oversizedStartedAt) / 1_000_000;
 ok(isDeny(oversizedResult), "DC start_process denies an oversized wrapper payload");
+ok(oversizedResult.status === 0, "mcp-tool-guard.mjs exits 0 after an oversized wrapper payload");
 ok(oversizedElapsedMs < 1_500, `DC oversized wrapper denial stays well below the 5s hook timeout (actual ${oversizedElapsedMs.toFixed(0)}ms)`);
 
 const findCommand = ["fi", "nd"].join("");
@@ -47,6 +48,7 @@ const timeCommand = ["ti", "me"].join("");
 const hostileRunnerTail = ["git", "push", "--force", "origin", "main"].join(" ");
 const hostileRunnerUnit = `${findCommand} . ${findExecOption} ${awkCommand} --help `;
 const hostileRunnerCommand = `${hostileRunnerUnit.repeat(Math.floor((SECURITY_COMMAND_CHAR_BUDGET - hostileRunnerTail.length) / hostileRunnerUnit.length))}${hostileRunnerTail}`;
+ok(hostileRunnerCommand.length <= SECURITY_COMMAND_CHAR_BUDGET, "DC hostile runner fixture stays within the character budget");
 const hostileRunnerStartedAt = process.hrtime.bigint();
 const hostileRunnerResult = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: hostileRunnerCommand } });
 const hostileRunnerElapsedMs = Number(process.hrtime.bigint() - hostileRunnerStartedAt) / 1_000_000;
@@ -111,6 +113,8 @@ const shellBuiltinNodeOptionsCases = [
   `declare -n ref=NODE_OPTIONS; export ref; ref=--require=./preload.cjs; node scripts/ordinary-check.mjs`,
   `typeset -n ref=NODE_OPTIONS; ref=--require=./preload.cjs; npm --version`,
   `local -n ref="\$TARGET"; node scripts/ordinary-check.mjs`,
+  `declare -n ref=NODE_OPTIONS; export ref; ref=--require=./preload.cjs; "node" scripts/ordinary-check.mjs`,
+  `env NODE_OPTIONS=--require=./preload.cjs "npm" --version`,
 ];
 const privilegeWrapperNodeOptionsCases = [
   ["sudo", "NODE_OPTIONS=--require=./preload.cjs", "node", "scripts/ordinary-check.mjs"].join(" "),
