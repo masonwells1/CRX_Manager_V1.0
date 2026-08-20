@@ -502,14 +502,14 @@ BEGIN
   IF (SELECT count(*) FROM orders WHERE id IN (v_draw_order_a, v_draw_order_b) AND status = 'cancelled') <> 2 THEN
     RAISE EXCEPTION 'SMOKE_FAIL: (e) both draw orders were not cancelled';
   END IF;
-  IF NOT EXISTS (
-    SELECT 1
+  IF (
+    SELECT count(DISTINCT oi.order_id)
     FROM order_items oi
     JOIN quote_items qi ON qi.id = oi.quote_item_id
     WHERE qi.quote_id = v_q
       AND oi.order_id IN (v_draw_order_a, v_draw_order_b)
-  ) THEN
-    RAISE EXCEPTION 'SMOKE_FAIL: (e) cancelled draw orders retained no stamped order_items, so the restore refusal would be vacuous';
+  ) <> 2 THEN
+    RAISE EXCEPTION 'SMOKE_FAIL: (e) both cancelled draw orders must retain stamped order_items, so the restore refusal is not vacuous';
   END IF;
 
   v_err := NULL;
