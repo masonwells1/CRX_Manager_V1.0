@@ -2490,7 +2490,7 @@ REVOKE ALL ON PROCEDURE public.test_proc(uuid) FROM PUBLIC, anon, authenticated,
 GRANT EXECUTE ON PROCEDURE public.test_proc(uuid) TO postgres;`
 );
 r = runHook(INTERNAL_ONLY_PROC);
-ok(!isDeny(r), "an internal procedure with every client role revoked keeps its caller-owned actor contract");
+ok(isDeny(r), "static client-role revokes cannot prove an unbound actor procedure is unreachable");
 
 r = runHook(`${INTERNAL_ONLY_PROC}
 GRANT EXECUTE ON PROCEDURE public.test_proc(uuid) TO authenticated;`);

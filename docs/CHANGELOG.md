@@ -31,13 +31,19 @@ Review finding AB-ACL-001 then proved that the same internal-helper exception
 trusted only statically parsed grants. A migration could revoke every browser
 role, create an unbound actor mutator, and later reopen it through
 `DO ... EXECUTE 'GRANT EXECUTE ... TO authenticated'`; a delayed `pg_cron`
-command had the same effect. Quoted routine-ACL commands after the explicit
-revoke now keep the routine under normal actor-binding review, including plain,
-dollar-quoted, and Unicode-escaped payloads, while direct trusted-principal
-grants remain compatible. Exact direct, assembled, and delayed regressions bring
-the focused hook suite to 404 assertions. Removing the new detector reopens the
-reported exploit and makes the regression fail, proving the clause is
-load-bearing.
+command had the same effect. The first repair rejected quoted re-grants, and its
+direct, assembled, and delayed regressions brought the focused suite to 404
+assertions.
+
+The renewed exact-head review found that parsing more statements still could
+not prove effective access: `CREATE OR REPLACE` preserves existing ACLs, default
+privileges can grant execute rights, and authenticated users may inherit access
+through roles that are not declared in the migration. The static internal-helper
+exception has therefore been removed. Every mutating `SECURITY DEFINER` routine
+with an actor parameter must bind that actor, or use the existing explicit
+manual-review exemption with catalog preconditions and postconditions. The
+former internal-only allow case now denies, while all 404 focused assertions
+remain green.
 
 ## 2026-08-13 — Actor-binding guard covers procedures and cron schema identity
 
