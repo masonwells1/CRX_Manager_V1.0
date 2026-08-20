@@ -179,6 +179,95 @@ change rather than on its own.
 
 ---
 
+## OPEN 2026-08-20 — a zero-width character in a rate unit makes a ticket un-invoiceable, and only the SQL can fix it
+
+**Severity: LOW-MED, currently unreachable (0 rows in `blend_tickets` and `blend_ticket_products` on
+live, verified read-only 2026-08-19).** Raised as `CRX-MONEY-PARITY-001` by gpt-5.6-sol on
+[PR #439](https://github.com/masonwells1/CRX_Manager_V1.0/pull/439) and then confirmed directly
+against live `pg_proc.prosrc`.
+
+**The finding, and the wrong turn that produced it.** [PR #426](https://github.com/masonwells1/CRX_Manager_V1.0/pull/426)
+taught `normalizeUnit` to **delete** zero-width characters, so `g<ZWSP>al` reads as `gal`. That is
+correct and stays: `normalizeUnit` only ever compares two client-side strings.
+
+A first pass at PR #439 extended the same strip to `rateBaseUnit` on the theory that the money path
+had been left unprotected. **That was backwards**, and the review caught it. `rateBaseUnit` is not a
+client-side comparator — it is a *prediction of the server*, and the server does not close these up:
+
+```
+normalize_rate_unit := lower(btrim(COALESCE(p_unit,''))) + a CASE over known spellings
+```
+
+`btrim` strips **outer spaces only**. Live therefore returns `m<ZWSP>g` intact, matches no size
+table, and `create_invoice_from_blend_ticket` raises `BLEND_TICKET_UNIT_UNCONVERTIBLE`. Stripping
+zero-width client-side made the preflight **more permissive than the database it predicts**, turning
+an accurate early warning into a silent ticket that fails weeks later at invoicing. The strip was
+reverted before merge; the parity contract is now pinned by tests in
+`describe('zero-width characters must not out-run the database')`, which go red if anyone re-adds it.
+
+**So the remaining real defect is server-side.** An operator who pastes a rate unit out of a PDF gets
+a correct-looking ticket that the database will refuse, and the warning naming the offending unit
+shows two strings that look identical on screen. Nothing misbills — the RPC fails closed — but the
+ticket cannot be invoiced until the unit is retyped.
+
+**The fix is a migration, not a client change:** harden `normalize_rate_unit` to delete
+U+200B/200C/200D (and decide the BOM and interior-whitespace cases at the same time), then relax
+`rateBaseUnit` **in the same change** so the two never drift. Doing either side alone re-creates this
+bug in one direction or the other.
+
+Three adjacent parity gaps to settle in that same migration rather than piecemeal:
+
+- JS `.trim()` strips the BOM (U+FEFF) and tabs; PostgreSQL `btrim` does not. Pre-existing, predates
+  PR #439. (gpt-5.6-sol MED #2.)
+- The live CASE lists `'fl oz'` with a single space; neither side collapses interior whitespace, so
+  `'fl  oz'` matches nothing on either side. Consistent today, but by accident rather than design.
+- **The invoice pre-flight stays silent when the rate unit or the sold unit is blank**, although the
+  SQL calls its converter regardless and `normalize_rate_unit` returns NULL for an empty string, so
+  live refuses that line too (gpt-5.6-sol MED #1). Warning on blank was **tried and deliberately
+  reverted** on PR #439: client-side, an empty string does not reliably mean "the catalog has no
+  unit" — it equally means *this caller never resolved the catalog row*, since the pages filter
+  `allProducts` to `is_active` and an inactive product is simply absent. A live read on 2026-08-20
+  says the innocent reading dominates: **0 of 595** active products lack a sold unit (25 lack a rate
+  unit). Warning on blank would therefore mostly emit false "not recorded" notes from load gaps —
+  the wallpaper effect the two-tier design exists to prevent. The real fix is to tell
+  `validateBlendMath` whether the catalog row RESOLVED, instead of inferring it from an empty
+  string; until then the server's fail-closed refusal is the backstop.
+
+**Fixed on PR #439, not deferred:** gpt-5.6-sol MED #3 — the unit-family sets listed only US
+spellings, so a total in `kg`, `g`, `l`, `ml` or their long forms matched neither family, ran no
+total check at all, and said nothing about it. That was a silent hole and a regression against the
+older same-unit sum comparison. The sets now track the live `normalize_rate_unit` CASE, and a total
+unit that still belongs to no family earns an explicit `unchecked` note naming the unit.
+
+**Not started.** No migration written, no live state, and a live apply would need Mason's explicit
+approval plus a migration review.
+
+---
+
+## OPEN 2026-08-19 — `baseUnitOfRate` reads `oz/cwt` as `oz`; the database refuses it
+
+**Severity: MED, money path, not yet reproduced on live data.** `baseUnitOfRate`
+(`src/lib/chemCalculator.ts`) strips a per-acre suffix by splitting on the first `/`
+unconditionally, so any non-acre denominator collapses to its numerator: `oz/cwt` → `oz`.
+
+The live `normalize_rate_unit` does the opposite. When a denominator other than acres is present it
+returns the **whole string**, precisely so it cannot match a bare unit and the conversion refuses.
+
+So for a rate unit like `oz/cwt` the client says "convertible, priced fine" while
+`create_invoice_from_blend_ticket` raises `BLEND_TICKET_UNIT_UNCONVERTIBLE`. That is the dangerous
+direction: nothing on screen, a hard failure at billing.
+
+`baseUnitOfRate` is **not** confined to blend tickets — it is used by the job chemical grid, in code
+whose own comments describe it as a P1 money fix. Whether any live rate unit actually carries a
+non-acre denominator has **not** been checked, so the real-world exposure is unknown.
+
+`blendMathValidator.ts` deliberately does its own suffix stripping rather than reuse this helper, and
+documents why at `rateBaseUnit`. That sidesteps the problem for blend tickets only.
+
+**Not started.** Investigate live `rate_unit` values first; a fix without that is speculative.
+
+---
+
 ## OPEN 2026-08-19 — blend-ticket unit fields are free text, so spellings drift
 
 **Severity: LOW, data-quality.** The `unit` and `rate_per_acre_unit` inputs on
