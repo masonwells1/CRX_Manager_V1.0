@@ -1,11 +1,25 @@
 # Decision Log
 
-Last verified: 2026-08-19
+Last verified: 2026-08-20
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-08-20 — Draw-down intent cutover keeps the 24-hour zero-receipt freeze
+
+**Source:** Engineering fail-closed design choice, 2026-08-20. The 24-hour freeze window still
+requires Mason's scheduling approval before any separately authorized live apply.
+**Decision:** Keep the pending draw-down intent migration's fail-closed requirement that no
+unexpired legacy draw receipt exists before cutover; because receipts live for 24 hours, schedule a
+deliberate 24-hour no-successful-draw window before any separately authorized apply.
+**Why:** The shared retry helper would refuse each legacy receipt safely, but a planned off-season or
+weekend freeze gives the wrapper a clean invariant and removes ambiguity from a money/inventory cutover.
+**What this forbids/implies:** do not weaken the zero-receipt preflight to avoid the wait. Verify zero
+read-only, keep draws paused through commit, and obtain separate live-apply authority; this PR applies nothing.
 
 ---
 
