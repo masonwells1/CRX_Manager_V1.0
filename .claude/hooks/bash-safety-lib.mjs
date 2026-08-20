@@ -1051,7 +1051,14 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
         }
       } else if (["declare", "typeset", "local", "readonly"].includes(name)) {
         cursor += 1;
-        while (cursor < segmentEnd && tokens[cursor].value.startsWith("-")) cursor += 1;
+        let namerefDeclaration = false;
+        while (cursor < segmentEnd && tokens[cursor].value.startsWith("-")) {
+          const option = tokens[cursor].value;
+          if (option === "--") { cursor += 1; break; }
+          if (/^-[^-]*n/.test(option) || option === "--nameref") namerefDeclaration = true;
+          cursor += 1;
+        }
+        if (namerefDeclaration && nodeBackedCommandMentioned) return true;
         while (cursor < segmentEnd) {
           if (namesNodeOptionsVariable(tokens[cursor])) return true;
           cursor += 1;

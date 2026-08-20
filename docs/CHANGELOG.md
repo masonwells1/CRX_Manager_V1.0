@@ -52,7 +52,10 @@ All significant development milestones, in reverse chronological order.
   command is reached before `set +a` or `set +o allexport` disables the mode.
   Assignment-producing command/process substitutions and dynamic variable
   operands passed to `export`, `declare`, `typeset`, `local`, or `readonly`
-  also fail closed before a Node-backed command.
+  also fail closed before a Node-backed command. Active Bash nameref
+  declarations (`declare`/`typeset`/`local -n`) fail closed in the same context,
+  because later export and assignment through an alias can mutate
+  `NODE_OPTIONS` without spelling it again.
   Nested command-string analysis reapplies the opaque-interpreter policy, keeps
   `env -S` option context inside split bodies, and evaluates both raw and
   POSIX-unescaped wrapper/assignment spellings.

@@ -326,6 +326,9 @@ const shellBuiltinNodeOptionsCases = [
   `export $(printf NODE_OPTIONS=--require=./preload.cjs); npm --version`,
   `declare -x "$(printf NODE_OPTIONS=--require=./preload.cjs)"; node scripts/ordinary-check.mjs`,
   `readonly "\${TARGET}=--require=./preload.cjs"; npm --version`,
+  `declare -n ref=NODE_OPTIONS; export ref; ref=--require=./preload.cjs; node scripts/ordinary-check.mjs`,
+  `typeset -n ref=NODE_OPTIONS; ref=--require=./preload.cjs; npm --version`,
+  `local -n ref="\$TARGET"; node scripts/ordinary-check.mjs`,
 ];
 const privilegeWrapperNodeOptionsCases = [
   ["sudo", "NODE_OPTIONS=--require=./preload.cjs", "node", "scripts/ordinary-check.mjs"].join(" "),
@@ -467,6 +470,7 @@ ok(!checkDangerousCommand("set -a; set +a; node scripts/ordinary-check.mjs"), "d
 ok(!checkDangerousCommand(`rg -n 'pwsh -Command "$env:NODE_OPTIONS=x; npm --version"' docs`), "nested PowerShell mutation spelling used as quoted search data stays allowed");
 ok(!checkDangerousCommand(`rg -n 'call set NODE_OPTIONS=x & npm --version' docs`), "nested CMD mutation spelling used as quoted search data stays allowed");
 ok(!checkDangerousCommand(`rg -n 'export $(printf NODE_OPTIONS=x); npm --version' docs`), "dynamic export spelling used as quoted search data stays allowed");
+ok(!checkDangerousCommand(`rg -n 'declare -n ref=NODE_OPTIONS; node app.mjs' docs`), "nameref spelling used as quoted search data stays allowed");
 
 // ── net-new: shell-redirect .env write (2026-07-13, shared with mcp-tool-guard) ──
 ok(checkDangerousCommand("echo SECRET=x > .env"), "shell-redirect write to .env blocked");

@@ -103,6 +103,8 @@ variable targets are inspected too, including dynamic target names, and
 command fails closed until `set +a`/`set +o allexport` disables it. Dynamic
 operands and command/process substitutions passed to `export`, `declare`,
 `typeset`, `local`, or `readonly` fail closed before Node-backed execution.
+Active `declare`/`typeset`/`local -n` nameref declarations fail closed there as
+well, preventing an alias from exporting or mutating `NODE_OPTIONS` indirectly.
 Escaped `find` action names
 are normalized before matching `-exec`/`-execdir`/`-ok`/`-okdir`. A
 16,384-character budget denies oversized payloads before tokenization, and a

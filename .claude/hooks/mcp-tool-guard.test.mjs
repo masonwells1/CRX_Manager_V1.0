@@ -100,6 +100,9 @@ const shellBuiltinNodeOptionsCases = [
   `export $(printf NODE_OPTIONS=--require=./preload.cjs); npm --version`,
   `declare -x "$(printf NODE_OPTIONS=--require=./preload.cjs)"; node scripts/ordinary-check.mjs`,
   `readonly "\${TARGET}=--require=./preload.cjs"; npm --version`,
+  `declare -n ref=NODE_OPTIONS; export ref; ref=--require=./preload.cjs; node scripts/ordinary-check.mjs`,
+  `typeset -n ref=NODE_OPTIONS; ref=--require=./preload.cjs; npm --version`,
+  `local -n ref="\$TARGET"; node scripts/ordinary-check.mjs`,
 ];
 const privilegeWrapperNodeOptionsCases = [
   ["sudo", "NODE_OPTIONS=--require=./preload.cjs", "node", "scripts/ordinary-check.mjs"].join(" "),
