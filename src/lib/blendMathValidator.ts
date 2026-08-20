@@ -365,15 +365,26 @@ export function validateBlendMath(
     //     gallon tank) — entirely normal on a real ticket, and warning about it
     //     every time is how a banner gets trained into wallpaper.
     let anyMissingUnit = false;
+    // The third case, split out from the second: a row that HAS a unit, is not the
+    // expected other-family exclusion, and still would not convert. That is an
+    // anomaly rather than a normal ticket, and on a spray tank it used to vanish in
+    // silence — it left `convertedSum` and said nothing, so a ticket could pass with
+    // a product quietly uncounted. Exactly the silent-skip this file exists to remove.
+    let anyUnexpectedUnconvertible = false;
     for (const p of products) {
       const qty = p.quantity || 0;
       if (qty === 0) continue;
       anyContributing = true;
-      if (normalizeUnit(p.unit) === null) anyMissingUnit = true;
+      const unitRecorded = normalizeUnit(p.unit) !== null;
+      if (!unitRecorded) anyMissingUnit = true;
       const form = p.product_form?.trim().toLowerCase() === 'dry' ? 'dry' : 'liquid';
       const converted = fieldAppPricedQuantity(qty, rateBaseUnit(p.unit), headerUnit, form);
       if (converted === null) {
         anyUnconvertible = true;
+        // Dry product in a spray tank is the ONE expected exclusion (pounds do not
+        // convert to gallons without a density), so it stays quiet. A row with no
+        // unit at all is already reported above and must not be counted twice.
+        if (unitRecorded && !(totalIsVolume && form === 'dry')) anyUnexpectedUnconvertible = true;
       } else {
         convertedSum += converted;
       }
@@ -400,15 +411,24 @@ export function validateBlendMath(
           `Total weight (${totalVolume} ${headerUnit}) doesn't match the products, which add up to ${convertedSum.toFixed(2)} ${headerUnit}`
         );
       }
-    } else if (anyContributing && totalIsVolume && convertedSum > totalVolume * (1 + TOLERANCE)) {
+    } else if (anyContributing && totalIsVolume) {
       // Spray tank: products may be far under the total (the rest is water), but
       // they can never be OVER it. One-sided, so it cannot false-alarm whatever the
       // water volume happens to be. Rows that could not be converted are simply
       // absent from the sum, which only makes the bound more forgiving, never
-      // wrong.
-      mismatch(
-        `The products add up to ${convertedSum.toFixed(2)} ${headerUnit}, which is more than the total volume of ${totalVolume} ${headerUnit}. A tank can't hold more product than its total.`
-      );
+      // wrong — but the operator still has to be TOLD a row sat out, or "no warning"
+      // reads as "checked and fine" when part of the ticket was never counted.
+      if (convertedSum > totalVolume * (1 + TOLERANCE)) {
+        // Excluded rows only ever lower the sum, so if what remains already exceeds
+        // the tank the mismatch is true regardless — say that, and only that.
+        mismatch(
+          `The products add up to ${convertedSum.toFixed(2)} ${headerUnit}, which is more than the total volume of ${totalVolume} ${headerUnit}. A tank can't hold more product than its total.`
+        );
+      } else if (anyUnexpectedUnconvertible) {
+        unchecked(
+          `Total volume not fully checked: a product's unit can't be compared to ${headerUnit}, so it isn't counted towards the total. Please verify the total by hand.`
+        );
+      }
     }
   }
 

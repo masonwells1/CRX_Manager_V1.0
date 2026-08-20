@@ -130,6 +130,48 @@ describe('validateBlendMath', () => {
         expect(warnings).toHaveLength(0);
       });
 
+      // Raised as a Major by CodeRabbit on PR #439: `anyUnconvertible` was computed
+      // and then never consulted in this branch, so a row that could not convert left
+      // the sum in total silence and "no warning" read as "checked and fine".
+      it('says so when a liquid row could not be counted towards the tank', () => {
+        const warnings = validateBlendMath(
+          { total_acres: null, total_volume: 1000, total_volume_unit: 'gal', application_rate: null },
+          [
+            { product_name: 'A', quantity: 30, unit: 'gal', rate_per_acre: null, rate_per_acre_unit: null, ...liq },
+            { product_name: 'B', quantity: 20, unit: 'furlong', rate_per_acre: null, rate_per_acre_unit: null, ...liq },
+          ]
+        );
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0].level).toBe('unchecked');
+        expect(warnings[0].message).toContain('not fully checked');
+      });
+
+      // The deliberate exclusion this must not undo: pounds of dry product in a
+      // gallon tank is an ordinary ticket, and warning every time is how the banner
+      // becomes wallpaper.
+      it('stays quiet about a DRY product sitting out of a liquid tank', () => {
+        const warnings = validateBlendMath(
+          { total_acres: null, total_volume: 1000, total_volume_unit: 'gal', application_rate: null },
+          [
+            { product_name: 'A', quantity: 30, unit: 'gal', rate_per_acre: null, rate_per_acre_unit: null, ...liq },
+            { product_name: 'B', quantity: 20, unit: 'lb', rate_per_acre: null, rate_per_acre_unit: null, ...dry },
+          ]
+        );
+        expect(warnings).toHaveLength(0);
+      });
+
+      it('does not report a row with no unit twice', () => {
+        const warnings = validateBlendMath(
+          { total_acres: null, total_volume: 1000, total_volume_unit: 'gal', application_rate: null },
+          [
+            { product_name: 'A', quantity: 30, unit: 'gal', rate_per_acre: null, rate_per_acre_unit: null, ...liq },
+            { product_name: 'B', quantity: 20, unit: null, rate_per_acre: null, rate_per_acre_unit: null, ...liq },
+          ]
+        );
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0].message).toContain('no unit');
+      });
+
       it('flags products that add up to more than the tank holds', () => {
         const warnings = validateBlendMath(
           { total_acres: null, total_volume: 100, total_volume_unit: 'gal', application_rate: null },
