@@ -352,21 +352,42 @@ work that touches five)*:**
   `density_value` (the WP-2 override), `is_currently_sourced`, `sourcing_tier` (C-43).
 - **`receiving_records`** — `brand_id`, plus snapshot `brand_name_snapshot` /
   `brand_epa_snapshot`, plus `proposed_brand_name` for D-K.
-- **`receiving_record_brand_allocations`** — the new brand-allocation child table, keyed to the
-  delivery/application **line** (`delivery_item_id` / `application_record_lot_id`), holding
-  `brand_id`, `quantity`, `unit`, and `p_idempotency_key`-backed writes, with its own RLS in the
-  same migration. This is what split loads need; revision 1 did not name it and revision 3 left it
-  unnamed. **The builder confirms this exact name against the live schema before creating it** —
-  if a relation by another name already serves this role, use that one and correct this line.
-- **The relations carrying snapshot columns, enumerated — "application-record tables" was not an
-  enumeration *(finding 28, closed reviewing PR #435)*.** Verified against
-  `.claude/schema-registry.json`: **`delivery_items`**, **`application_records`**,
-  **`application_record_fields`**, **`application_record_lots`**, and **`application_services`**.
-  Each takes `brand_name_snapshot` / `brand_epa_snapshot` alongside its existing product
-  reference. `application_record_lots` is the line-level relation the allocation table keys to,
-  so it takes the snapshot **and** the allocation FK. **The builder re-derives this list from the
-  live schema before starting WP-3** rather than trusting it — a relation missed here is a brand
-  that reads correctly today and blank on next season's reprint.
+- **`receiving_record_brand_allocations`** — the new brand-allocation child table. **Its parent is
+  the receipt, not a downstream line** *(corrected reviewing PR #435 — an earlier draft of this
+  list keyed it to `delivery_item_id` / `application_record_lot_id`, neither of which exists yet
+  at receiving time)*. `receive_po_items` creates a `receiving_records` row; deliveries and
+  application lines are created later. So the table keys on **`receiving_record_id`**, holding
+  `product_id`, `brand_id`, `quantity`, `unit`, with its own RLS in the same migration and
+  `p_idempotency_key`-backed writes. The 30/15 split load is persisted here at receipt time, and
+  reversal identifies the rows by this key. **Define how these allocations propagate forward** to
+  `delivery_items` and `application_record_lots` when those lines are later created — the
+  propagation rule is part of WP-3, not an afterthought.
+- **The relations carrying snapshot columns, enumerated and verified against the migrations that
+  create them *(finding 28, closed reviewing PR #435)*.** "Application-record tables" was not an
+  enumeration — but neither is a list that assumes a product reference the table does not have.
+  A brand snapshot is only meaningful at **product-line cardinality**:
+  - **`delivery_items`** — has `product_id`
+    (`20260206172436_create_full_schema_v2.sql:326-334`). Takes `brand_name_snapshot` /
+    `brand_epa_snapshot` directly.
+  - **`application_record_lots`** — has `product_id` **and** `source_receiving_record_id`
+    (`20260622170000_application_record_lots.sql:36-48`). This is the product-line relation for
+    applications; it takes the snapshot **and** is where receipt-time allocations propagate to.
+  - **`application_records`** — has **no singular product reference.** Products live in a
+    `product_data` **jsonb array** (`20260214220000_application_records_table.sql:28-30`), each
+    element already carrying `product_id`, `product_name` and `epa_registration`. The brand
+    snapshot therefore goes **inside each array element**, beside the existing per-product fields.
+    A single snapshot pair on the header is ambiguous the moment an application covers two
+    products, and silently overwritten on the second.
+  - **Not `application_record_fields`** — it is a record↔field join carrying only
+    `application_record_id`, `field_id` and `acres`
+    (`20260430150000_field_app_workflow_phase2.sql:36-43`). It has no product, so a brand snapshot
+    on it means nothing.
+  - **Not `application_services`** — it is the service *catalog* (name, rates, vehicle)
+    (`20260405000000_application_services.sql:11-22`), not an application record.
+
+  **The builder re-derives this list from the live schema before starting WP-3** rather than
+  trusting it — a relation missed here is a brand that reads correctly today and blank on next
+  season's reprint, and a relation wrongly included is a column nobody ever populates.
 - **`receive_po_items`** — **the public signature does NOT change.** See below.
 - **`_section9_receive_po_items_serialized`** — the internal function the public wrapper
   delegates to (`supabase/migrations/20260726190515_section9_po_ap_high_remediation.sql`).
@@ -503,7 +524,8 @@ and commit while the implementation still "matches the plan". The queue extensio
 |---|---|---|---|
 | `payload_version` | `int` | no | Starts at `1`. `create_label_draft` **rejects** an unknown version rather than coercing it |
 | `purpose` | `text` | no | Discriminator, CHECK-constrained to `epa_label_seed` for this package. A new purpose is a new CHECK member in a later migration, never free text |
-| `ingredients[]` | `jsonb` array | no (may be empty) | Each element: `ingredient_id` **(the specific chemical-form row, never the canonical parent)**, `concentration_value` `numeric`, `concentration_unit`, `basis`, `source` |
+| `ingredients[]` | `jsonb` array | no (may be empty) | Each element carries `concentration_value` `numeric`, `concentration_unit`, `basis`, `source`, and **exactly one** of: `ingredient_id` — an existing specific chemical-form row, **never the canonical parent** — or `proposed_form` (see below) |
+| `proposed_form` | `jsonb` | yes | Only on elements with no `ingredient_id`. Carries the form's `name`, `cas` if the label states one, and `canonical_ingredient_id` — the parent it groups under. **This is a proposal, not a row** |
 | `label_url` | `text` | yes | |
 | `label_accepted_date` | `date` | yes | |
 | `epa_product_status` | `text` | yes | |
@@ -513,10 +535,23 @@ and commit while the implementation still "matches the plan". The queue extensio
 
 Nullable means *the label genuinely may not state it*. It never means "the importer may drop it."
 
+**An unknown chemical form is staged, not created on sight, and not refused *(corrected reviewing
+PR #435)*.** An earlier draft of this contract stored only an existing `ingredient_id`, which left
+the importer two bad options for a form `active_ingredients` does not yet hold: create the row
+immediately — a write to live chemistry *before* Mason approves, breaking the proposal-only
+boundary this whole package rests on — or refuse it, which would mean WP-4 can only auto-seed
+products whose forms someone typed by hand in WP-1, gutting the ~287-product scope. Neither is
+acceptable. So the draft **carries the proposed form's identity and its canonical mapping** in
+`proposed_form`, and **the form row and its concentration are created together, atomically, during
+the approved commit.** The refusal that still stands is the one that matters: an unknown form is
+never **guessed into the canonical parent** — it is staged as its own proposal, or nothing.
+
 **`commit_label_draft` reads every field above by name and writes each to its mapped column** —
-`ingredients[]` into `product_active_ingredients` keyed on `ingredient_id`, the label and status
-fields into the `products` columns WP-1 created. **A field present in the payload with no mapped
-destination is a hard error, not a silent skip.**
+`ingredients[]` into `product_active_ingredients` keyed on `ingredient_id`, resolving each
+`proposed_form` into a new `active_ingredients` row **in the same transaction** first; the label
+and status fields into the `products` columns WP-1 created. **A field present in the payload with
+no mapped destination is a hard error, not a silent skip.** A commit that creates a form row but
+fails to attach its concentration must roll back both.
 
 **Round-trip assertion, required (R-9):** propose a draft populating **every** field above
 including both array fields, read it back after review, commit it, and assert field-by-field
@@ -550,9 +585,10 @@ the lookup. Revert the clone and show the revert.
 
 **Negative cases, all required:** a typed value that conflicts with the lookup **keeps Mason's
 value live** (D-L) and does not overwrite; a lower-priority source does not displace a
-higher-priority one; an unknown chemical form is **refused into the queue rather than guessed
-into the canonical parent**; a malformed or non-finite concentration is refused; nothing at all
-is written to live chemistry before approval.
+higher-priority one; an unknown chemical form is **staged as a `proposed_form` rather than guessed
+into the canonical parent** — and the proof shows the form row and its concentration appearing
+together only at commit, with nothing in `active_ingredients` beforehand; a malformed or
+non-finite concentration is refused; nothing at all is written to live chemistry before approval.
 
 **Closes:** B-8 (seeding half), B-22 (surfaced), D-23, T-18, PRD 1.4, 1.13, 4.1.
 **Gates:** schema change → full migration review (RLS + drift) · **Mason's in-chat OK to apply
@@ -593,6 +629,16 @@ accepts and actually enforces `p_idempotency_key text DEFAULT NULL`, ships its R
 the same migration, and sets `SET search_path = public, pg_temp`. Under a literal "no migration"
 gate the builder's only options were to abandon the atomicity guarantee or to bypass the gate;
 neither is acceptable.
+
+**What a NULL key means here must be stated, not left to the signature default *(caught reviewing
+PR #435)*.** `DEFAULT NULL` is the CRX signature convention; it is not a behavior spec, and
+"idempotent" is not proved by a signature. This RPC is **not** naturally state-idempotent — a
+second run re-copies chemistry and bumps `product_data_version` again, so a retried request
+without a key is a second real write. Therefore: **a key is required for this RPC.** A call
+arriving with `p_idempotency_key IS NULL` is **refused**, rather than silently executing an
+unreplayable copy. Prove all three: **same key replayed** returns the first result and writes
+nothing further and does not bump the version again; **missing key** is refused; **different key
+on an unchanged source** is the ordinary second copy and is allowed.
 
 **Proof (R-2, R-11):** type "Generic Callisto" → found. Copy from a sibling → the Bulk row
 carries the same chemistry, and editing one afterwards does not change the other.

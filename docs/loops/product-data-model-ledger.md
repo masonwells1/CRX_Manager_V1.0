@@ -18,12 +18,17 @@ apply/merge · 🚀 shipped and verified live · ⏸ parked
 
 ## Status board
 
+**Reading this board:** `none` means the package carries **no migration**. `—` means **required
+but not yet written** — the disk name and live version stamp get filled in when it exists. The two
+are not interchangeable; an earlier revision of this board used `none` for packages that do carry
+migrations, which is the defect corrected on 2026-08-20.
+
 | Package | Status | Migration (disk name → live version) | PR | Opus checkpoint | Mason's apply OK |
 |---|---|---|---|---|---|
 | WP-0 Data hygiene | ⬜ | none | — | — | *(per-class approval of the proposal file)* |
-| WP-1 Ingredient core + fast-entry editor | ⬜ | — | — | — | — |
-| WP-2 Density, net weight, scale-weight surface | ⬜ | — | — | — | — |
-| WP-3 Brand layer, receiving, split loads | ⬜ | — | — | — | — |
+| WP-1 Ingredient core + fast-entry editor | ⬜ | **required** — not yet written | — | — | **migration apply OK** |
+| WP-2 Density, net weight, scale-weight surface | ⬜ | **required** — not yet written | — | — | **migration apply OK** |
+| WP-3 Brand layer, receiving, split loads | ⬜ | **required** — not yet written | — | — | **migration apply OK** |
 | WP-4 EPA auto-seed | ⬜ | **required** — extends the `product_label_drafts` queue and the `create_label_draft` / `commit_label_draft` contract | — | — | **migration apply OK** *(plus bulk proposal creation and bulk commit — both are live writes)* |
 | WP-5 Copy-from-sibling, nickname search | ⬜ | **required** — atomic sibling-copy RPC with compare-and-set on both products | — | — | **migration apply OK** |
 

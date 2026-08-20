@@ -25,8 +25,15 @@ What is missing is paperwork, not capability: the mission doc and the ledger. Se
 
 **One orchestrator session at a time, in one dedicated worktree, running packages serially.**
 
-The build plan orders WP-1 → WP-2 → WP-3 strictly, so there is nothing to parallelize inside
-Phase 1. With 17 other worktrees already live, concurrency here is a cost, not a feature.
+The build plan orders WP-1 → WP-2 → WP-3 → WP-4 → WP-5 strictly, so there is nothing to
+parallelize inside Phase 1. With 17 other worktrees already live, concurrency here is a cost, not
+a feature.
+
+**All five packages carry migrations *(corrected reviewing PR #435)*.** An earlier sequence here
+named only WP-1 → WP-3, written when WP-4 and WP-5 were still "no migration" packages. Both
+became migration packages — WP-4 extends the `product_label_drafts` queue and its RPC contract,
+WP-5 adds the atomic sibling-copy RPC — so **every** package in this phase runs the full gate
+chain below, including its own apply gate. Nothing in Phase 1 skips it.
 
 | Role | Who | How |
 |---|---|---|
@@ -68,6 +75,8 @@ A checklist a person could follow. Every step names what runs and what must be t
 | 12 | **THE HUMAN GATE** — Mason's explicit in-chat OK to apply live | — | Shown: `/explain-migration` plain English, the Opus verdict, the Codex verdict, the proof, the rollback story |
 | 12a | **Mint the apply proof** — `node scripts/write-apply-proofs.mjs <migration>` | Hash-bound proof pair | **Runs here, not at step 9** — proofs live 30 minutes *(finding 11)* |
 | 13 | **Apply** via MCP (`migration-apply-guard.mjs` verifies the fresh proof pair or blocks) → smoke each new RPC → **B7 rename** the disk file to the assigned version stamp → `/regen-schema-registry` → `npm run db-sweeps` | Applied migration, refreshed registry | R-12: fresh backup first |
+| 13a | **Commit and push the post-apply changes** — the B7 rename and the regenerated schema registry are tracked files produced *after* every review in step 9–11 ran | Commit on the branch | These changes have never been reviewed by anything yet |
+| 13b | **Re-review the post-apply head** — fresh exact-HEAD review, a CodeRabbit pass, and the required checks green on the new head | Clean verdict + green checks | *(finding 9)* Merging without this either omits the rename/registry or ships an unreviewed head |
 | 14 | **Merge** the PR → deploys production → **re-run the step-7 proof against production** | Ledger row 🚀 with the live stamp | — |
 | 15 | **Next cycle** — the loop advances to WP-2 without asking | — | — |
 
@@ -96,6 +105,8 @@ migration file to its assigned stamp and regenerates the schema registry — tra
 produced *after* CodeRabbit, Vercel and the commit review ran. Merging then either omits them or
 pushes an unreviewed head. **Fix:** after apply, commit and push the rename and registry
 changes, then re-run the exact-head review, CodeRabbit and the required checks before step 14.
+**These are numbered steps 13a and 13b in the table above, not just a note here** — an executor
+following the numbered chain must not be able to walk from apply straight to merge.
 
 **The "exact-SHA" proof is not exact-SHA *(finding 10).*** `scripts/write-apply-proofs.mjs`
 hashes the **migration file**, not the commit; it never sees UI consumers, generated types, or
