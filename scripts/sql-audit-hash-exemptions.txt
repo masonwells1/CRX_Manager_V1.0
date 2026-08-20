@@ -46,3 +46,14 @@
 # landed in this branch's exact base or candidate tree. They were removed on
 # 2026-08-20: a hash pin for a nonexistent file is not evidence and must not be
 # retained as apparent audit state.
+
+# PR #364 bootstrap fan-out acknowledgement (live ledger recaptured 2026-08-20).
+# These three immutable migrations already exist on origin/main and are recorded
+# in the linked production migration ledger. Format-4 fan-out evidence marks all
+# captured sources opaque until an independent attestation exists, so the new
+# conservative check adds exactly one finding to each historical file. Pin that
+# finding to the exact LF-normalized bytes instead of raising the aggregate 61
+# baseline; any edit or any second finding in a file still fails closed.
+32dbf78a2efcd4c7e4f9f98fb7657ec472f6f6f0ff7a5cf811b7f028d21b9a08  20260812115236_quote_items_cost_at_quote_snapshot.sql  1  # quote_items fan-out intentionally opaque during bootstrap
+250e1bea81571eafc7402af7516d6a1833e778c70e03a359fa4be77bdeff49ba  20260812115237_enforce_below_cost_admin_approval.sql  1  # invoked repair routine is intentionally unbindable history
+7498b0befab4cd6355560cf9dc29c270a3e0098d2327d24d7eb7ab13d0d927ca  20260812115238_repair_historical_order_line_cents.sql  1  # order_items fan-out intentionally opaque during bootstrap

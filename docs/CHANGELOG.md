@@ -53,7 +53,7 @@ migration safety harness; no app source, migration SQL, live database, or produc
   invoking `round(...)` cannot hide a same-file mutator.
 - The Bash approved-set validator now treats functions and procedures as one routine graph,
   including transitive wrappers, and refuses plain, escape, or Unicode single-quoted routine
-  bodies that its write scanners cannot inspect. Its 188-case mutation suite and the 221-assertion
+  bodies that its write scanners cannot inspect. Its 190-case mutation suite and the 221-assertion
   apply-time analyzer suite are both wired into a required CI step.
 - Non-ASCII PostgreSQL routine identities now fail closed through one shared analyzer boundary.
   A valid define/call/drop sequence such as `public.修復()` can no longer be truncated out of the
@@ -74,10 +74,14 @@ migration safety harness; no app source, migration SQL, live database, or produc
   Git C-quoting can no longer turn an unusual changed or deleted migration name into a skipped file.
 - Five hash-exemption rows that named migrations absent from both the exact base and candidate trees
   were removed; nonexistent files no longer remain as apparent audit evidence.
+- The bootstrap manifest intentionally marks every captured trigger source opaque until an
+  independent attestation exists. Three immutable migrations already present on `origin/main` and
+  reconfirmed in the linked production ledger now carry one exact-byte hash exemption each for that
+  new historical finding. The aggregate baseline remains 61; an edit or a second finding still fails.
 
-Focused proof: snapshot producer 14 assertions; applied-source containment pass (including forced
-worktree-enumeration failure); trigger fan-out producer 21 assertions; apply-time analyzer
-219 assertions; apply-time guard 281 assertions; approved-set validator 188 mutation cases.
+Focused proof: snapshot producer 15 assertions; applied-source containment pass (including forced
+worktree-enumeration failure); trigger fan-out producer 22 assertions; apply-time analyzer
+221 assertions; apply-time guard 283 assertions; approved-set validator 190 mutation cases.
 Each new edge has a removal mutant that
 survives only when the load-bearing protection is deliberately deleted.
 

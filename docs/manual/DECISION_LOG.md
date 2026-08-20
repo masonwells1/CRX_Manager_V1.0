@@ -462,6 +462,10 @@ as executable, not schema-only. Because this is the first checked-in trigger fan
 there is no independently trusted base graph, every schema-registry table remains opaque even
 though the linked capture records its reviewable edges. Narrowing that bootstrap opacity requires
 an independently bound live-capture attestation; a candidate cannot self-assert the first trust root.
+When this stronger check newly flags immutable migration history, the aggregate baseline is not
+raised. A finding may be acknowledged only by the existing exact-byte exemption mechanism after
+the migration is confirmed present on `origin/main` and in the linked production ledger; the pin
+expires on any byte change and cannot absorb a second finding.
 PostgreSQL's complete identifier grammar is preserved through routine pairing; embedded dollar
 signs are canonicalized consistently rather than truncated by downstream regular expressions.
 

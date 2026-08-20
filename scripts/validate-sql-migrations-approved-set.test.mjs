@@ -2840,6 +2840,107 @@ function runTriggerDefinitionRequiresFanoutRefresh() {
   return failures;
 }
 
+/**
+ * PR #364 introduces a bootstrap fan-out artifact that deliberately marks all
+ * captured sources opaque until an independent attestation exists. Three
+ * immutable migrations already present on origin/main and in the linked live
+ * ledger therefore gain one new historical finding each. Their acknowledgments
+ * must stay exact-byte pins: a valid pin restores the aggregate baseline, while
+ * changing even one byte must immediately put that finding back in force.
+ *
+ * @returns {string[]} failure descriptions, empty when both properties hold
+ */
+function runBootstrapFanoutHashPins() {
+  const root = mkdtempSync(join(tmpdir(), 'crx-bootstrap-fanout-pins-'));
+  const failures = [];
+  const files = [
+    '20260812115236_quote_items_cost_at_quote_snapshot.sql',
+    '20260812115237_enforce_below_cost_admin_approval.sql',
+    '20260812115238_repair_historical_order_line_cents.sql',
+  ];
+  const supportFiles = [
+    // Later definitions are part of the repository-wide routine identity for
+    // the 20260812115237 call. Without them an isolated fixture would erase the
+    // very ambiguity the full CI audit acknowledges.
+    '20260816110000_draw_down_cutover_barrier.sql',
+    '20260816120000_draw_down_split_order_lines_by_price_tier.sql',
+  ];
+  try {
+    const scripts = join(root, 'scripts');
+    const migrations = join(root, 'supabase', 'migrations');
+    const baselines = join(root, 'supabase', 'baselines');
+    mkdirSync(scripts, { recursive: true });
+    mkdirSync(migrations, { recursive: true });
+    mkdirSync(baselines, { recursive: true });
+    mkdirSync(join(root, '.claude', 'hooks'), { recursive: true });
+
+    for (const file of [
+      'validate-sql-migrations.sh',
+      'check-trigger-fanout-staleness.mjs',
+      'find-unsupported-routine-identities.mjs',
+      'approved-set-grandfathered.txt',
+      'sql-audit-hash-exemptions.txt',
+      'trigger-fanout.json',
+    ]) {
+      copyFileSync(join(HERE, file), join(scripts, file));
+    }
+    copyFileSync(
+      join(HERE, '..', '.claude', 'hooks', 'apply-time-dml-lib.mjs'),
+      join(root, '.claude', 'hooks', 'apply-time-dml-lib.mjs'),
+    );
+    copyFileSync(
+      join(HERE, '..', '.claude', 'schema-registry.json'),
+      join(root, '.claude', 'schema-registry.json'),
+    );
+    copyFileSync(
+      join(HERE, '..', 'supabase', 'baselines', 'one-shot-migrations.json'),
+      join(baselines, 'one-shot-migrations.json'),
+    );
+    for (const file of [...files, ...supportFiles]) {
+      copyFileSync(join(HERE, '..', 'supabase', 'migrations', file), join(migrations, file));
+    }
+
+    const isolatedScript = join(scripts, 'validate-sql-migrations.sh');
+    const scan = () => {
+      const result = runBash([isolatedScript, '--max-violations=0'], {
+        cwd: root,
+        encoding: 'utf8',
+        env: envWithoutGit(),
+      });
+      return { result, out: `${result.stdout || ''}\n${result.stderr || ''}` };
+    };
+
+    const pinned = scan();
+    if (pinned.result.status !== 0) {
+      failures.push(
+        '  bootstrap fan-out findings are not reconciled by exact hash pins\n' +
+          pinned.out.split('\n').slice(-30).map((line) => `      | ${line}`).join('\n'),
+      );
+    }
+    for (const file of files) {
+      if (!pinned.out.includes(`above in ${file} are hash-pinned`)) {
+        const related = pinned.out.split('\n').filter((line) => line.includes(file));
+        failures.push(
+          `  bootstrap fan-out pin was not consumed for ${file}\n` +
+            related.map((line) => `      | ${line}`).join('\n'),
+        );
+      }
+    }
+
+    const mutated = join(migrations, files[0]);
+    writeFileSync(mutated, `${readFileSync(mutated, 'utf8')}\n-- mutation voids the exact-byte pin\n`, 'utf8');
+    const voided = scan();
+    if (voided.result.status === 0 ||
+        !voided.out.includes(`VIOLATION: supabase/migrations/${files[0]}`) ||
+        !voided.out.includes('Violation count (1) exceeds baseline (0)')) {
+      failures.push('  changing one byte did not void the bootstrap fan-out hash pin');
+    }
+  } finally {
+    removeFixtureTree(root);
+  }
+  return failures;
+}
+
 function run() {
   const dir = mkdtempSync(join(tmpdir(), 'crx-approved-set-'));
   const migrations = join(dir, 'supabase', 'migrations');
@@ -2953,6 +3054,7 @@ function run() {
   failures.push(...runChangedOnlyIgnoresManifests());
   failures.push(...runTriggerFanoutFailsClosed());
   failures.push(...runTriggerDefinitionRequiresFanoutRefresh());
+  failures.push(...runBootstrapFanoutHashPins());
 
   if (failures.length > 0) {
     console.error(`❌ approved-set guard: ${failures.length} case(s) behaved wrong\n`);
@@ -2961,10 +3063,17 @@ function run() {
     console.error(out);
     process.exit(1);
   }
-  console.log(`✅ approved-set guard: ${CASES.length + 14} mutation cases behaved correctly`);
+  console.log(`✅ approved-set guard: ${CASES.length + 16} mutation cases behaved correctly`);
 }
 
-if (process.argv.includes('--staleness-only')) {
+if (process.argv.includes('--bootstrap-pins-only')) {
+  const failures = runBootstrapFanoutHashPins();
+  if (failures.length) {
+    console.error(failures.join('\n'));
+    process.exit(1);
+  }
+  console.log('✅ bootstrap fan-out hash-pin mutations behaved correctly');
+} else if (process.argv.includes('--staleness-only')) {
   const failures = runTriggerDefinitionRequiresFanoutRefresh();
   if (failures.length) {
     console.error(failures.join('\n'));
