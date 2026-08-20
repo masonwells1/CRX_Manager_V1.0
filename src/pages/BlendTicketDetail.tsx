@@ -20,7 +20,7 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import { usePageMeta } from '../hooks/usePageMeta';
 import { useToast } from '../components/ui/Toast';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
-import { validateBlendMath } from '../lib/blendMathValidator';
+import { validateBlendMath, type BlendMathWarning } from '../lib/blendMathValidator';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday } from '../lib/dateUtils';
 import { useOCRThresholds } from '../hooks/useOCRThresholds';
@@ -53,7 +53,7 @@ export function BlendTicketDetail() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
-  const [warnings, setWarnings] = useState<string[]>([]);
+  const [warnings, setWarnings] = useState<BlendMathWarning[]>([]);
   const [showRawOcr, setShowRawOcr] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [fieldsDirty, setFieldsDirty] = useState(false);
@@ -422,16 +422,38 @@ export function BlendTicketDetail() {
       total_acres: formData.total_acres ? parseFloat(formData.total_acres) : null,
       total_volume: formData.total_volume ? parseFloat(formData.total_volume) : null,
       total_volume_unit: formData.total_volume_unit || null,
+      application_rate: formData.application_rate || null,
     };
-    const productData = products.map(p => ({
-      product_name: p.product_name,
-      quantity: p.quantity,
-      unit: p.unit,
-      rate_per_acre: p.rate_per_acre,
-      rate_per_acre_unit: p.rate_per_acre_unit,
-    }));
+    // The rate check guards a billing path: create_invoice_from_blend_ticket prices
+    // each line from rate_per_acre and its unit, falling back to the product's own
+    // rate_unit when the line leaves it blank. Hand the catalog row's units over so
+    // the warning and the invoice agree about the line.
+    //
+    // Resolve that row from `allProducts` by the line's CURRENT product_id, never from
+    // the `p.product` joined at load time. The picker writes `product_id` and
+    // `product_name` only (see the SearchableSelect below), so `p.product` still
+    // describes the PREVIOUS product after a switch — and is `undefined` outright on a
+    // newly added line, which silently disabled billing's own rate-unit fallback.
+    // `ManualTicketCreate` already resolves it this way; this matches it.
+    const productData = products.map(p => {
+      // `allProducts` is filtered to is_active, so a line pointing at a retired
+      // product keeps the row joined at load time rather than losing its units.
+      const catalog = allProducts.find((candidate) => candidate.id === p.product_id);
+      return {
+        product_name: p.product_name,
+        quantity: p.quantity,
+        unit: p.unit,
+        rate_per_acre: p.rate_per_acre,
+        rate_per_acre_unit: p.rate_per_acre_unit,
+        product_form: catalog ? (catalog.product_form ?? null) : (p.product?.product_form ?? null),
+        product_rate_unit: catalog ? (catalog.rate_unit ?? null) : (p.product?.rate_unit ?? null),
+        product_inventory_unit: catalog
+          ? (catalog.inventory_unit || catalog.unit_size || null)
+          : (p.product?.inventory_unit || p.product?.unit_size || null),
+      };
+    });
     setWarnings(validateBlendMath(ticketData, productData));
-  }, [products, formData.total_acres, formData.total_volume, formData.total_volume_unit]);
+  }, [products, allProducts, formData.total_acres, formData.total_volume, formData.total_volume_unit, formData.application_rate]);
 
   // Track dirty state from form changes
   useEffect(() => {
@@ -1908,14 +1930,27 @@ export function BlendTicketDetail() {
         </div>
       </Modal>
 
-      {warnings.length > 0 && (
+      {/* Two tiers, deliberately. A "couldn't check this" note is the COMMON case
+          on a real ticket, and rendering it in the same alarmed amber as a genuine
+          mismatch is how a banner gets trained into wallpaper. Only a comparison
+          that actually ran and disagreed gets the warning styling. */}
+      {warnings.some((w) => w.level === 'mismatch') && (
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 space-y-1">
           <div className="flex items-center gap-2 text-yellow-800 font-medium text-sm">
             <AlertCircle className="h-4 w-4" />
             Math Validation Warnings
           </div>
-          {warnings.map((w, i) => (
-            <p key={i} className="text-sm text-yellow-700 ml-6">- {w}</p>
+          {warnings.filter((w) => w.level === 'mismatch').map((w, i) => (
+            <p key={i} className="text-sm text-yellow-700 ml-6">- {w.message}</p>
+          ))}
+        </div>
+      )}
+
+      {warnings.some((w) => w.level === 'unchecked') && (
+        <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-1">
+          <div className="text-gray-600 font-medium text-sm">Not automatically checked</div>
+          {warnings.filter((w) => w.level === 'unchecked').map((w, i) => (
+            <p key={i} className="text-sm text-gray-500 ml-2">- {w.message}</p>
           ))}
         </div>
       )}
