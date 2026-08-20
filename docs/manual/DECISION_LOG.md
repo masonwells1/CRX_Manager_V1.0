@@ -488,6 +488,11 @@ The Bash approved-set lane applies the same fail-closed boundary to functions an
 dollar-quoted bodies participate in one transitive mutating-routine graph, while plain, escape,
 and Unicode single-quoted routine bodies are refused because the validator cannot inspect them.
 Both focused analyzer suites run in a required CI step.
+PL/pgSQL cursors are another deferred-execution boundary: a declaration can store a callable query
+that runs later through `OPEN`/`FETCH`. Until the static analyzer models that lifecycle precisely,
+cursor declarations and operations in executable code make the analysis unresolved. Routine bodies
+remain stripped until invoked, so merely defining a cursor-using routine does not trigger a replay
+refusal.
 
 ---
 

@@ -454,7 +454,16 @@ function targetsFromCode(code, literals) {
   // migration as unresolvable rather than as writing nothing.
   let unparsedUpsert = false;
   // Set anywhere the reader sees evidence of a write it cannot pin to a table.
-  let unresolved = false;
+  // ROUND 43. A bound cursor stores its query in DECLARE and executes that
+  // query later through OPEN/FETCH. Statement-by-statement call discovery does
+  // not currently pair those fragments, so treating a cursor body as quiet is
+  // a fail-open: `CURSOR FOR SELECT money_fix()` used to report no call and no
+  // write. Cursor syntax that reaches this function is executable code (routine
+  // definitions are stripped until invoked), so refuse it conservatively until
+  // cursor lifecycle analysis can prove the query's effects precisely.
+  const cursorConstruct =
+    /\bcursor(?:\s*\([^;]*\))?\s+for\b|\bopen\s+(?:"(?:[^"]|"")+"|[a-z_][a-z0-9_$]*)(?=\s|;|$)|\bfetch\b[^;]*\binto\b|\bmove\b[^;]*(?:\bfrom\b|\bin\b)\s*(?:"(?:[^"]|"")+"|[a-z_][a-z0-9_$]*)(?=\s|;|$)|\bclose\s+(?:"(?:[^"]|"")+"|[a-z_][a-z0-9_$]*)(?=\s|;|$)/.test(s);
+  let unresolved = cursorConstruct;
 
   WRITE_VERB.lastIndex = 0;
   let m;

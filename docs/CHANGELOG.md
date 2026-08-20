@@ -42,8 +42,11 @@ migration safety harness; no app source, migration SQL, live database, or produc
   invoking `round(...)` cannot hide a same-file mutator.
 - The Bash approved-set validator now treats functions and procedures as one routine graph,
   including transitive wrappers, and refuses plain, escape, or Unicode single-quoted routine
-  bodies that its write scanners cannot inspect. Its 180-case mutation suite and the 199-case
+  bodies that its write scanners cannot inspect. Its 180-case mutation suite and the 203-case
   apply-time analyzer suite are both wired into a required CI step.
+- PL/pgSQL cursor declarations and lifecycle operations now fail closed in executable regions.
+  `CURSOR FOR SELECT money_fix()` can no longer hide a same-file or database-resident mutator
+  behind `OPEN`/`FETCH`; defining a cursor-using routine without invoking it remains deferred.
 - Linked trigger/FK capture now preserves schema-qualified non-public parents whose referential
   actions write public children. The 2026-08-20 production capture records `auth.users` as an
   opaque source with its transitive public cascades, so infrastructure-schema exemptions can no
@@ -59,7 +62,7 @@ migration safety harness; no app source, migration SQL, live database, or produc
 
 Focused proof: snapshot producer 14 assertions; applied-source containment pass (including forced
 worktree-enumeration failure); trigger fan-out producer 13 assertions; apply-time analyzer
-199 assertions; apply-time guard 267 assertions; approved-set validator 180 mutation cases.
+203 assertions; apply-time guard 270 assertions; approved-set validator 180 mutation cases.
 Each new edge has a removal mutant that
 survives only when the load-bearing protection is deliberately deleted.
 

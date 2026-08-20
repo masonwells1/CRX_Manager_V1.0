@@ -276,6 +276,9 @@ coalesced; genuinely case-sensitive quoted names stay distinct.
 The Bash approved-set validator indexes dollar-quoted functions and procedures in the same
 transitive mutating-routine graph. Plain, `E`, and `U&` single-quoted routine bodies are refused,
 and both focused analyzer suites run in a required CI step.
+PL/pgSQL cursor queries do not disappear between their declaration and later `OPEN`/`FETCH`.
+Cursor constructs in executable code are conservatively unresolved until their lifecycle is
+modeled precisely; cursor code inside an uninvoked routine definition remains deferred.
 
 **A trigger rewrite is still a rewrite (round 31).** Every rule above proves a repair
 rewrote exactly the rows it hashed — for the table the `UPDATE` names. Triggers were

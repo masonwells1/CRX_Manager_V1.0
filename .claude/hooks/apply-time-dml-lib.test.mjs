@@ -946,4 +946,39 @@ eq(T(null), [], "a null body does not throw");
   'round-42 control: genuinely distinct quoted mixed-case identity does not coalesce');
 }
 
+// ---------------- ROUND 43: cursor execution cannot hide routine effects
+{
+  const sameFile = applyTimeWriteTargets(
+    'CREATE FUNCTION public.cursor_money_fix() RETURNS integer LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.orders SET total_profit = total_profit; RETURN 1; END $$; ' +
+    'DO $$ DECLARE c CURSOR FOR SELECT public.cursor_money_fix(); v integer; ' +
+    'BEGIN OPEN c; FETCH c INTO v; CLOSE c; END $$;',
+  );
+  ok(sameFile.targets.has('orders.total_profit') || sameFile.unresolved,
+    'round-43: opening/fetching a cursor cannot hide a same-file mutating routine');
+
+  const resident = applyTimeWriteTargets(
+    'DO $$ DECLARE c CURSOR FOR SELECT public.resident_cursor_money_fix(); v integer; ' +
+    'BEGIN OPEN c; FETCH c INTO v; CLOSE c; END $$;',
+  );
+  ok(resident.unknownCalls.includes('resident_cursor_money_fix') || resident.unresolved,
+    'round-43: opening/fetching a cursor over a database-resident routine fails closed');
+
+  const quotedCursor = applyTimeWriteTargets(
+    'DO $$ DECLARE "Money Cursor" refcursor; v integer; BEGIN ' +
+    'OPEN "Money Cursor" FOR SELECT public.resident_cursor_money_fix(); ' +
+    'FETCH "Money Cursor" INTO v; CLOSE "Money Cursor"; END $$;',
+  );
+  ok(quotedCursor.unresolved,
+    'round-43: a quoted unbound cursor opened over a callable query fails closed');
+
+  const definitionOnly = applyTimeWriteTargets(
+    'CREATE FUNCTION public.deferred_cursor_wrapper() RETURNS void LANGUAGE plpgsql AS $$ ' +
+    'DECLARE c CURSOR FOR SELECT public.resident_cursor_money_fix(); v integer; ' +
+    'BEGIN OPEN c; FETCH c INTO v; CLOSE c; END $$;',
+  );
+  ok(!definitionOnly.unresolved && definitionOnly.unknownCalls.length === 0,
+    'round-43 MUTANT: defining but not invoking a cursor-using routine remains deferred');
+}
+
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

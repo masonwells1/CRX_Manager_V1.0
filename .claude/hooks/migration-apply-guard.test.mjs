@@ -1648,6 +1648,29 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(!isOneShotDeny(r),
       "round-42 MUTANT: defining the quoted lowercase mutator without invoking it remains deferred");
 
+    const cursorMoneyFix =
+      "CREATE FUNCTION public.cursor_money_fix() RETURNS integer LANGUAGE plpgsql AS $$ BEGIN " +
+      "UPDATE public.orders SET total_profit = total_profit; RETURN 1; END $$; ";
+    r = apply("20990601000033_cursor_same_file",
+      cursorMoneyFix +
+      "DO $$ DECLARE c CURSOR FOR SELECT public.cursor_money_fix(); v integer; " +
+      "BEGIN OPEN c; FETCH c INTO v; CLOSE c; END $$;");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-43: a cursor cannot hide an invoked same-file money repair from the replay guard");
+
+    r = apply("20990601000034_cursor_resident",
+      "DO $$ DECLARE c CURSOR FOR SELECT public.resident_cursor_money_fix(); v integer; " +
+      "BEGIN OPEN c; FETCH c INTO v; CLOSE c; END $$;");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-43: a cursor over a database-resident routine fails the replay guard closed");
+
+    r = apply("20990601000035_cursor_deferred",
+      "CREATE FUNCTION public.deferred_cursor_wrapper() RETURNS integer LANGUAGE plpgsql AS $$ " +
+      "DECLARE c CURSOR FOR SELECT public.resident_cursor_money_fix(); v integer; " +
+      "BEGIN OPEN c; FETCH c INTO v; CLOSE c; RETURN 1; END $$;");
+    ok(!isOneShotDeny(r),
+      "round-43 MUTANT: defining but not invoking a cursor-using routine remains deferred");
+
     // 6. Fail closed. The registry is tracked in git; unreadable or absent means
     //    the checkout is broken or the file was removed — the two states in
     //    which a silent pass is most dangerous.
