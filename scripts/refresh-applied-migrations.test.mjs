@@ -11,7 +11,11 @@ import {
   captureAppliedMigrations,
   writeAppliedSnapshotAtomically,
 } from './refresh-applied-migrations.mjs';
-import { CRX_SUPABASE_PROJECT_ID, runLinkedRead } from './supabase-linked-read.mjs';
+import {
+  copyValidatedLinkedMetadata,
+  CRX_SUPABASE_PROJECT_ID,
+  runLinkedRead,
+} from './supabase-linked-read.mjs';
 // The two capture producers share the same linked-project trust boundary and
 // ship as one correction-guard test entry.
 import './generate-trigger-fanout.test.mjs';
@@ -255,6 +259,30 @@ check('an ABA relink cannot redirect the immutable linked query workdir', () => 
     assert.equal(result.projectId, CRX_SUPABASE_PROJECT_ID);
     assert.equal(result.linkedRoot, dir);
     assert.equal(existsSync(immutableRoot), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+check('validated linked metadata bytes stay pinned across a validation-to-write swap', () => {
+  const dir = linkedFixture();
+  const source = path.join(dir, 'supabase', '.temp', 'pooler-url');
+  const destination = path.join(dir, 'validated-pooler-url');
+  const approved =
+    `postgresql://postgres.${CRX_SUPABASE_PROJECT_ID}@${APPROVED_POOLER_HOST}:6543/postgres`;
+  const swapped =
+    `postgresql://postgres.${CRX_SUPABASE_PROJECT_ID}@example.invalid:6543/postgres`;
+  try {
+    writeFileSync(source, approved);
+    copyValidatedLinkedMetadata(
+      source,
+      destination,
+      'pooler-url',
+      CRX_SUPABASE_PROJECT_ID,
+      () => writeFileSync(source, swapped),
+    );
+    assert.equal(readFileSync(source, 'utf8'), swapped);
+    assert.equal(readFileSync(destination, 'utf8'), approved);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

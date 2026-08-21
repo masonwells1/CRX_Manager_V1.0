@@ -14,7 +14,9 @@ migration safety harness; no app source, migration SQL, live database, or produc
 - Linked Supabase evidence is now endpoint-bound as well as project-ref-bound. The immutable read
   workdir accepts only CRX's exact direct database host or an official Supabase pooler identity,
   refuses embedded credentials, unexpected ports/databases/TLS parameters, and arbitrary or
-  lookalike hosts before the CLI can run.
+  lookalike hosts before the CLI can run. Each metadata file is read once and those exact validated
+  bytes are written to the private workdir, so a concurrent relink cannot swap the source between
+  validation and copy.
 - Trigger, FK, rule, view, and event-trigger evidence now expires after 24 hours. The apply guard
   skips stale or materially future-dated manifests and requires at least one fresh linked-production
   capture, with the fixed no-argument regeneration command in its denial message.
@@ -157,7 +159,7 @@ migration safety harness; no app source, migration SQL, live database, or produc
   helper invoked from either spelling can no longer rewrite registered money rows and disappear
   behind a subsequent `DROP FUNCTION`; analyzer and apply-guard mutants cover both spellings.
 
-Focused proof: snapshot producer 22 assertions; applied-source containment pass (including forced
+Focused proof: snapshot producer 23 assertions; applied-source containment pass (including forced
 worktree-enumeration failure); trigger fan-out producer 22 assertions; apply-time analyzer
 278 assertions; apply-time guard 323 assertions; approved-set validator 205 mutation cases;
 one-shot override writer 25 assertions.

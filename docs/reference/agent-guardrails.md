@@ -54,7 +54,9 @@ submitted and registered writes through `scripts/trigger-fanout.json`; an opaque
 deny, not an assumed empty cascade. Linked database metadata is also a hard trust boundary: the
 private query workdir accepts only the exact CRX direct-database identity or an official Supabase
 pooler identity, with no embedded password, unexpected port/database, unsafe query parameter, or
-lookalike/arbitrary host. Live trigger/FK/rule/view/event-trigger evidence expires after 24 hours;
+lookalike/arbitrary host. Validation and private-workdir creation use one immutable in-memory read of
+each metadata file, so a concurrent relink cannot replace the source between a checked read and a
+second copy. Live trigger/FK/rule/view/event-trigger evidence expires after 24 hours;
 stale or materially future-dated manifests are skipped, and an apply requires at least one fresh
 capture regenerated with `node scripts/generate-trigger-fanout.mjs`. The one-shot registry is untrusted input: stems, metadata values,
 contained migration paths, override fields, and target project refs are strictly validated, registry

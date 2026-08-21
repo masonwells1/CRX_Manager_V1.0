@@ -229,6 +229,35 @@ export function validateLinkedDatabaseUrl(raw, expectedProjectId = CRX_SUPABASE_
   return parsed;
 }
 
+export function copyValidatedLinkedMetadata(
+  source,
+  destination,
+  name,
+  expectedProjectId = CRX_SUPABASE_PROJECT_ID,
+  onValidated = null,
+) {
+  // Read once. Validation and the private workdir must consume the same bytes;
+  // validating one read and then copyFileSync'ing the mutable source creates a
+  // relink race between those two filesystem operations.
+  const bytes = readFileSync(source);
+  if (name === 'linked-project.json') {
+    let metadata;
+    try {
+      metadata = JSON.parse(bytes.toString('utf8'));
+    } catch {
+      fail('linked Supabase metadata linked-project.json is invalid');
+    }
+    if (metadata?.ref !== expectedProjectId) {
+      fail('linked Supabase metadata linked-project.json does not match the expected project');
+    }
+  }
+  if (name === 'pooler-url') {
+    validateLinkedDatabaseUrl(bytes.toString('utf8'), expectedProjectId);
+  }
+  if (onValidated) onValidated({ name, source, destination });
+  writeFileSync(destination, bytes, { flag: 'wx' });
+}
+
 function createImmutableLinkedWorkdir(root, expectedProjectId) {
   const immutableRoot = mkdtempSync(path.join(tmpdir(), 'crx-linked-read-'));
   try {
@@ -252,21 +281,12 @@ function createImmutableLinkedWorkdir(root, expectedProjectId) {
     ]) {
       const source = path.join(sourceTemp, name);
       if (!existsSync(source)) continue;
-      if (name === 'linked-project.json') {
-        let metadata;
-        try {
-          metadata = JSON.parse(readFileSync(source, 'utf8'));
-        } catch {
-          fail('linked Supabase metadata linked-project.json is invalid');
-        }
-        if (metadata?.ref !== expectedProjectId) {
-          fail('linked Supabase metadata linked-project.json does not match the expected project');
-        }
-      }
-      if (name === 'pooler-url') {
-        validateLinkedDatabaseUrl(readFileSync(source, 'utf8'), expectedProjectId);
-      }
-      copyFileSync(source, path.join(immutableTemp, name));
+      copyValidatedLinkedMetadata(
+        source,
+        path.join(immutableTemp, name),
+        name,
+        expectedProjectId,
+      );
     }
     // This private workdir, rather than the shared checkout, is what --linked
     // reads. A concurrent `supabase link` can change and restore the checkout's
