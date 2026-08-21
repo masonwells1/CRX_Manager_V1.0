@@ -700,6 +700,17 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
       }, tmp);
       ok(isDeny(r), "MCP denies an implicit code loader: " + implicitLoaderCommand);
     }
+    for (const replacementMutationCommand of [
+      "git replace HEAD replacement",
+      "git update-ref refs/replace/deadbeef replacement",
+      "printf 'update refs/replace/deadbeef replacement\\n' | git update-ref --stdin",
+    ]) {
+      r = runHook({
+        tool_name: "mcp__Desktop_Commander__start_process",
+        tool_input: { command: replacementMutationCommand },
+      }, tmp);
+      ok(isDeny(r), "MCP denies Git replacement-object mutation: " + replacementMutationCommand);
+    }
     const inlineGitAliasCommand = "git -c 'alias.run=!node output/ignored-wrapper.mjs' run";
     r = runHook({
       tool_name: "mcp__Desktop_Commander__start_process",

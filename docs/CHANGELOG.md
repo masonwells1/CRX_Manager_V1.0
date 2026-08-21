@@ -147,7 +147,12 @@ All significant development milestones, in reverse chronological order.
   read-only commands no longer mistake a `scripts` input operand for a write target.
   Executor provenance now resolves the protected `main` SHA from the canonical
   GitHub repository with local/system Git configuration disabled; moving the
-  mutable local tracking ref cannot manufacture trust. Opaque package resolvers
+  mutable local tracking ref cannot manufacture trust. Local tree reads also
+  disable Git replacement objects and strip object-
+  store redirection variables. `git replace` and `refs/replace/**` updates are
+  denied, including opaque `git update-ref --stdin` batches; a replacement-
+  commit regression proves the authoritative SHA cannot be paired with a
+  substituted hostile tree. Opaque package resolvers
   and local package executables are denied because ignored `node_modules` bytes
   are outside exact-HEAD review and can change after manifest review. Installed-
   toolchain verification runs inside the reviewed commit/preflight gate instead.

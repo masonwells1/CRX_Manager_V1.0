@@ -333,6 +333,26 @@ for (const command of [
     eq(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo, reviewOptions), null, "a reviewed file-backed executor after -- is allowed on the reviewed main commit");
     eq(checkCommandDeep(trackedDirectRelative.replaceAll("/", "\\"), integrityRepo, reviewOptions), null, "a directly executed tracked script is allowed when exact HEAD is reviewed");
     ok(checkCommandDeep("npm run build", integrityRepo, reviewOptions)?.includes("mutable local package executable"), "a mutable ignored package shim is denied even when manifests are reviewed");
+    writeFileSync(trackedWrapperPath, wrapperSource);
+    eq(runIntegrityGit(["add", "--", trackedWrapperRelative]).status, 0, "replacement-object fixture stages the hostile wrapper");
+    const replacementTree = runIntegrityGit(["write-tree"]);
+    eq(replacementTree.status, 0, "replacement-object fixture writes its hostile tree");
+    const replacementCommit = runIntegrityGit(["commit-tree", replacementTree.stdout.trim(), "-p", "HEAD", "-m", "replacement tree"]);
+    eq(replacementCommit.status, 0, "replacement-object fixture writes its replacement commit");
+    eq(runIntegrityGit(["reset", "--", trackedWrapperRelative]).status, 0, "replacement-object fixture restores the real index");
+    eq(runIntegrityGit(["replace", "HEAD", replacementCommit.stdout.trim()]).status, 0, "replacement-object fixture installs a local replacement ref");
+    ok(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo, reviewOptions)?.includes("worktree bytes differ"), "a local replacement tree cannot make hostile wrapper bytes authoritative");
+    eq(runIntegrityGit(["replace", "-d", "HEAD"]).status, 0, "replacement-object fixture removes its local replacement ref");
+    writeFileSync(trackedWrapperPath, reviewedWrapperSource);
+    for (const replacementMutationCommand of [
+      "git replace HEAD replacement",
+      "git update-ref refs/replace/deadbeef replacement",
+      "printf 'update refs/replace/deadbeef replacement\\n' | git update-ref --stdin",
+    ]) {
+      ok(checkCommandDeep(replacementMutationCommand, integrityRepo, reviewOptions)?.includes("replacement-object mutation"), "Git replacement-object mutation is denied: " + replacementMutationCommand);
+      const replacementHookResult = runHook({ tool_name: "Bash", tool_input: { command: replacementMutationCommand } }, integrityRepo);
+      ok(replacementHookResult.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies Git replacement-object mutation: " + replacementMutationCommand);
+    }
     const shadowBootstrapPath = path.join(integrityRepo, "output", ...bootstrapRelative.split("/"));
     mkdirSync(path.dirname(shadowBootstrapPath), { recursive: true });
     writeFileSync(shadowBootstrapPath, "console.log('ignored shadow');\n");

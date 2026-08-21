@@ -142,6 +142,11 @@ protected-main blob. Protected-main identity comes from a sanitized
 `git ls-remote` call to the canonical GitHub repository, not the mutable local
 tracking ref or hook environment. Unit fixtures can inject a SHA only through a
 direct function argument that neither production hook entrypoint accepts.
+Local tree reads disable Git replacement objects, strip object-database and
+alternate-object environment redirects, and deny both `git replace` and
+`refs/replace/**` updates, including opaque `git update-ref --stdin` batches. A
+replacement-commit regression proves an attacker cannot keep the authoritative
+SHA while substituting a hostile wrapper tree.
 Package execution is recognized only in command position, so read-only
 arguments that mention `npx`, `npm exec`, or `vite` remain ordinary data. A real
 local package executable fails closed because ignored `node_modules` bytes are

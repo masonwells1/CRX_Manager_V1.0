@@ -135,7 +135,11 @@ function gitBlobHash(buffer) {
 function createReviewedExecutorInspector(cwd, options = {}) {
   const base = cwd || process.cwd();
   const gitEnv = { ...process.env };
-  for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"]) delete gitEnv[name];
+  for (const name of [
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_REPLACE_REF_BASE",
+  ]) delete gitEnv[name];
+  gitEnv.GIT_NO_REPLACE_OBJECTS = "1";
   let initialized = false;
   let root = "";
   let headSha = "";
@@ -148,7 +152,7 @@ function createReviewedExecutorInspector(cwd, options = {}) {
   const initialize = () => {
     if (initialized) return;
     initialized = true;
-    const rootResult = spawnSync("git", ["-C", base, "rev-parse", "--show-toplevel"], {
+    const rootResult = spawnSync("git", ["-C", base, "--no-replace-objects", "rev-parse", "--show-toplevel"], {
       encoding: "utf8",
       windowsHide: true,
       timeout: 1_500,
@@ -159,7 +163,7 @@ function createReviewedExecutorInspector(cwd, options = {}) {
       initializationError = "the repository root could not be verified";
       return;
     }
-    const headResult = spawnSync("git", ["-C", root, "rev-parse", "HEAD"], {
+    const headResult = spawnSync("git", ["-C", root, "--no-replace-objects", "rev-parse", "HEAD"], {
       encoding: "utf8",
       windowsHide: true,
       timeout: 1_500,
@@ -207,7 +211,7 @@ function createReviewedExecutorInspector(cwd, options = {}) {
       return;
     }
     for (const [ref, entries] of [[headSha, headEntries], [baseSha, mainEntries]]) {
-      const treeResult = spawnSync("git", ["-C", root, "ls-tree", "-r", "--full-tree", ref], {
+      const treeResult = spawnSync("git", ["-C", root, "--no-replace-objects", "ls-tree", "-r", "--full-tree", ref], {
         encoding: "utf8",
         windowsHide: true,
         timeout: 1_500,
@@ -2330,6 +2334,10 @@ function executionContextShiftReason(command, cwd, depth = 0) {
       break;
     }
     if (!subcommand) return null;
+    if (subcommand === "replace"
+      || (subcommand === "update-ref" && args.some((argument) => /^refs\/replace(?:\/|$)/i.test(argument) || /^--stdin(?:=|$)/i.test(argument)))) {
+      return "Blocked Git replacement-object mutation because provenance reads must use the canonical committed object graph.";
+    }
     if (!gitBuiltinCommands.has(subcommand)) {
       return "Blocked Git alias or external helper execution because it can launch an unreviewed executable.";
     }
