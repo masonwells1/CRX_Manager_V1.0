@@ -31,13 +31,16 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import {
   checkCommandDeep,
+  checkAskDeep,
   checkMigrationModify,
 } from "./bash-safety-lib.mjs";
 
 function out(decision, reason) {
   const payload = decision === "block"
     ? { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } }
-    : { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } };
+    : decision === "ask"
+      ? { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: reason } }
+      : { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } };
   process.stdout.write(JSON.stringify(payload));
   process.exit(0);
 }
@@ -111,6 +114,9 @@ try {
 
       const migReason = checkMigrationModify(text, cwd);
       if (migReason) out("block", `MCP TOOL GUARD (${toolName}): ${migReason}`);
+
+      const askReason = checkAskDeep(text, cwd);
+      if (askReason) out("ask", `MCP TOOL GUARD (${toolName}): ${askReason}`);
     }
     nothing();
   }

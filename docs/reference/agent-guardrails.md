@@ -68,7 +68,13 @@ multiple file-search actions retain their runner context. Executable command-str
 recursively inspected for `cmd /c` or `/k`, PowerShell command modes, and POSIX
 shell `-c` wrappers. Backslash-prefixed separators are evaluated under both
 POSIX and PowerShell semantics; normalization is bounded at the shared recursion
-limit and fails closed beyond it. Standard short and long `xargs` options are
+limit and fails closed beyond it. Backslash-LF and backslash-CRLF payloads are
+inspected in two views: a POSIX-continuation view with the pair removed and a
+PowerShell-boundary view that removes only the backslash while retaining the
+line break as a command separator. Deny and approval-required checks run over
+both views, including through MCP process tools; this prevents a dangerous
+second PowerShell line from disappearing into the preceding token during POSIX
+normalization. Standard short and long `xargs` options are
 consumed; GNU optional-argument long forms preserve the following executable
 unless their value is attached with `=`, and unknown option shapes fail closed
 when an opaque target remains. Empty quoted option values stay tokenized, so

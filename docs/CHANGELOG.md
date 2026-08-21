@@ -94,6 +94,14 @@ All significant development milestones, in reverse chronological order.
   and backslash-CRLF continuations are removed before every shared shell-safety
   parse, so a continued variable,
   executable, migration path, or production command cannot bypass the guard.
+  The same payload is also inspected with PowerShell line boundaries preserved:
+  PowerShell does not treat a trailing backslash as a continuation, so LF and
+  CRLF boundaries after one remain real command separators. This dual-view
+  check prevents a harmless first PowerShell line from absorbing a dangerous
+  force-push, hard-reset, production deployment, or Edge Function deployment
+  in the POSIX-normalized view. MCP process launches now propagate the shared
+  `ask` result too, so guarded production deployment commands cannot silently
+  pass through that route.
   Mutation-capable PowerShell commands also fail closed when computed operands
   precede a Node-backed executable, covering grouped values and arbitrary
   method-call expressions in direct, nested shell, and MCP process routes.

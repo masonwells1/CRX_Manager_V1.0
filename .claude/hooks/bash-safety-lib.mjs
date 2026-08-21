@@ -17,6 +17,11 @@ export const SECURITY_COMMAND_CHAR_BUDGET = 16_384;
 export const SECURITY_COMMAND_TOKEN_BUDGET = 512;
 const commandExceedsSecurityBudget = (command) => String(command || "").length > SECURITY_COMMAND_CHAR_BUDGET;
 const normalizePosixLineContinuations = (command) => String(command || "").replace(/\\\r?\n/g, "");
+const preservePowerShellLineBoundaries = (command) => String(command || "").replace(/\\(\r?\n)/g, "$1");
+const commandInspectionViews = (command) => [...new Set([
+  preservePowerShellLineBoundaries(command),
+  normalizePosixLineContinuations(command),
+])];
 
 const MAINTENANCE_PRODUCER_NAME = "apply-live-testdata-maintenance-20260812.mjs";
 const MAINTENANCE_PRODUCER_ALLOWED_COMMANDS = new Set([
@@ -29,6 +34,9 @@ const MAINTENANCE_PRODUCER_ALLOWED_COMMANDS = new Set([
 export function maintenanceProducerCommandMentioned(command, depth = 0) {
   const rawValue = String(command || "");
   if (commandExceedsSecurityBudget(rawValue)) return true;
+  const powerShellLineView = preservePowerShellLineBoundaries(rawValue);
+  if (powerShellLineView !== rawValue
+    && (depth >= 4 || maintenanceProducerCommandMentioned(powerShellLineView, depth + 1))) return true;
   const value = normalizePosixLineContinuations(rawValue);
   const powerShellBoundaryVariant = value.replace(/\\([;&|])/g, "$1");
   if (powerShellBoundaryVariant !== value
@@ -658,6 +666,9 @@ function tokenizeShellWords(text) {
 function nodeOptionsAssignmentMentioned(command, depth = 0) {
   const rawValue = String(command || "");
   if (commandExceedsSecurityBudget(rawValue)) return true;
+  const powerShellLineView = preservePowerShellLineBoundaries(rawValue);
+  if (powerShellLineView !== rawValue
+    && (depth >= 4 || nodeOptionsAssignmentMentioned(powerShellLineView, depth + 1))) return true;
   const value = normalizePosixLineContinuations(rawValue);
   const powerShellBoundaryVariant = value.replace(/\\([;&|])/g, "$1");
   if (powerShellBoundaryVariant !== value
@@ -1496,10 +1507,11 @@ export const ASK_CMD_CHECKS = [
 ];
 
 export function checkAskCommand(cmd) {
-  const text = normalizePosixLineContinuations(cmd);
-  if (!text) return null;
-  for (const [re, reason] of ASK_CMD_CHECKS) {
-    if (re.test(text)) return reason;
+  for (const text of commandInspectionViews(cmd)) {
+    if (!text) continue;
+    for (const [re, reason] of ASK_CMD_CHECKS) {
+      if (re.test(text)) return reason;
+    }
   }
   return null;
 }
@@ -1507,7 +1519,13 @@ export function checkAskCommand(cmd) {
 // Destructive raw SQL via psql/supabase CLI (kept as its own exported check
 // since the original file ran it as a second, independent condition).
 export function checkDestructiveSql(cmd) {
-  const text = normalizePosixLineContinuations(cmd);
+  const rawText = String(cmd || "");
+  const powerShellLineView = preservePowerShellLineBoundaries(rawText);
+  if (powerShellLineView !== rawText) {
+    const boundaryReason = checkDestructiveSql(powerShellLineView);
+    if (boundaryReason) return boundaryReason;
+  }
+  const text = normalizePosixLineContinuations(rawText);
   if (/\b(?:DROP\s+TABLE|DROP\s+SCHEMA|TRUNCATE)\b/i.test(text) && /(psql|supabase\s+sql|--?c\s)/i.test(text)) {
     return "Blocked destructive SQL via psql/supabase. Add a migration instead.";
   }
@@ -1519,20 +1537,21 @@ export function checkDestructiveSql(cmd) {
 // only — no npm-script resolution (see checkCommandDeep for that).
 export function checkDangerousCommand(cmd) {
   const rawText = String(cmd || "");
-  const text = normalizePosixLineContinuations(rawText);
-  if (!text) return null;
+  if (!rawText) return null;
   if (commandExceedsSecurityBudget(rawText)) {
     return `Blocked oversized command payload. Safety inspection is limited to ${SECURITY_COMMAND_CHAR_BUDGET} characters so the hook fails closed within its execution deadline.`;
   }
   const producerReason = checkMaintenanceProducerInvocation(rawText);
   if (producerReason) return producerReason;
-  if (nodeOptionsAssignmentMentioned(text)) {
+  if (nodeOptionsAssignmentMentioned(rawText)) {
     return "Blocked Node pre-execution loading. NODE_OPTIONS, require/import, and loader hooks can run code before a reviewed script's own safety checks.";
   }
-  for (const [re, reason] of DANGEROUS_CMD_CHECKS) {
-    if (re.test(text)) return reason;
+  for (const text of commandInspectionViews(rawText)) {
+    for (const [re, reason] of DANGEROUS_CMD_CHECKS) {
+      if (re.test(text)) return reason;
+    }
   }
-  return checkDestructiveSql(text);
+  return checkDestructiveSql(rawText);
 }
 
 // Bash-based modification of an EXISTING file under supabase/migrations/ (via
@@ -1544,20 +1563,21 @@ const MIGRATION_MODIFY_RES = [
 ];
 
 export function checkMigrationModify(cmd, cwd) {
-  const text = normalizePosixLineContinuations(cmd);
-  if (!text) return null;
   const base = cwd || process.cwd();
-  for (const re of MIGRATION_MODIFY_RES) {
-    re.lastIndex = 0;
-    let m;
-    while ((m = re.exec(text)) !== null) {
-      const target = m[1].replace(/^['"]|['"]$/g, "");
-      const abs = path.isAbsolute(target) ? target : path.resolve(base, target);
-      try {
-        if (existsSync(abs)) {
-          return `Blocked modification of existing migration file: ${target}. Existing migrations must never be edited — create a NEW migration that supersedes it.`;
-        }
-      } catch { /* ignore, fail open on this one path */ }
+  for (const text of commandInspectionViews(cmd)) {
+    if (!text) continue;
+    for (const re of MIGRATION_MODIFY_RES) {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        const target = m[1].replace(/^['"]|['"]$/g, "");
+        const abs = path.isAbsolute(target) ? target : path.resolve(base, target);
+        try {
+          if (existsSync(abs)) {
+            return `Blocked modification of existing migration file: ${target}. Existing migrations must never be edited — create a NEW migration that supersedes it.`;
+          }
+        } catch { /* ignore, fail open on this one path */ }
+      }
     }
   }
   return null;
@@ -1570,15 +1590,17 @@ export function checkMigrationModify(cmd, cwd) {
 // the same checks against the resolved text too.
 
 export function extractNpmRunNames(cmd) {
-  const names = [];
+  const names = new Set();
   // Accepts valid npm variants (Codex P1 2026-07-13 round 3): options before
   // and after the subcommand (`npm -s run x`, `npm run --silent x`) and the
   // `run-script` alias — option tokens must not be mistaken for script names.
   const re = /\bnpm\s+(?:-{1,2}[\w-]+(?:=\S+)?\s+)*(?:run|run-script)\s+(?:-{1,2}[\w-]+(?:=\S+)?\s+)*([\w:.-]+)/g;
-  let m;
-  const text = normalizePosixLineContinuations(cmd);
-  while ((m = re.exec(text)) !== null) names.push(m[1]);
-  return names;
+  for (const text of commandInspectionViews(cmd)) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) names.add(m[1]);
+  }
+  return [...names];
 }
 
 // Resolve one script name to an array of script-body texts: itself, plus every

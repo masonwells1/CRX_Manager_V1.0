@@ -13,6 +13,7 @@ import path from "node:path";
 import {
   checkMaintenanceProducerInvocation,
   checkDangerousCommand,
+  checkAskCommand,
   checkCommandDeep,
   checkMigrationModify,
   extractNpmRunNames,
@@ -475,6 +476,18 @@ const posixLineContinuationGuardCases = [
   ["NODE_\\", "OPTIONS=--require=./preload.cjs npm --version"].join("\n"),
   ["NODE_\\", "OPTIONS=--require=./preload.cjs npm --version"].join("\r\n"),
 ];
+const boundaryForcePush = ["git", "push", "--force", "origin", "main"].join(" ");
+const boundaryHardReset = ["git", "reset", "--hard", "HEAD~1"].join(" ");
+const boundaryProdDeploy = [["ver", "cel"].join(""), ["--", "prod"].join("")].join(" ");
+const boundaryEdgeDeploy = ["supabase", "functions", ["de", "ploy"].join(""), "guarded-function"].join(" ");
+const powerShellLineBoundaryDenyCases = ["\n", "\r\n"].flatMap((newline) => [
+  ["Write-Output x\\", boundaryForcePush].join(newline),
+  ["Write-Output x\\", boundaryHardReset].join(newline),
+]);
+const powerShellLineBoundaryAskCases = ["\n", "\r\n"].flatMap((newline) => [
+  ["Write-Output x\\", boundaryProdDeploy].join(newline),
+  ["Write-Output x\\", boundaryEdgeDeploy].join(newline),
+]);
 for (const separator of [";", "|", "&"]) {
   ok(checkDangerousCommand(`Write-Output marker\x5c${separator} ${pythonCommand} -c \"print('opaque')\"`), `PowerShell backslash-prefixed ${separator} cannot hide an opaque interpreter`);
   ok(checkDangerousCommand(`Write-Output marker\x5c${separator} NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs`), `PowerShell backslash-prefixed ${separator} cannot hide a NODE_OPTIONS preload`);
@@ -495,6 +508,8 @@ for (const command of powerShellAliasGuardCases) ok(checkDangerousCommand(comman
 for (const command of powerShellComputedMutationGuardCases) ok(checkDangerousCommand(command), `computed PowerShell mutation cannot stage a Node preload: ${command}`);
 for (const command of npmConfigNodeOptionsGuardCases) ok(checkDangerousCommand(command), `npm config NODE_OPTIONS cannot stage a lifecycle preload: ${command}`);
 for (const command of posixLineContinuationGuardCases) ok(checkDangerousCommand(command), `POSIX line continuation cannot hide NODE_OPTIONS: ${JSON.stringify(command)}`);
+for (const command of powerShellLineBoundaryDenyCases) ok(checkDangerousCommand(command), `PowerShell line boundary cannot hide a blocked command: ${JSON.stringify(command)}`);
+for (const command of powerShellLineBoundaryAskCases) ok(checkAskCommand(command), `PowerShell line boundary cannot hide an approval-gated command: ${JSON.stringify(command)}`);
 for (const command of nestedParserGuardCases) ok(checkDangerousCommand(command), `nested or POSIX-escaped parser route is denied: ${command}`);
 for (const command of nestedParserGuardCases.slice(0, 2)) ok(maintenanceProducerCommandMentioned(command), `nested AWK launcher enters the producer gate: ${command}`);
 for (const command of indirectRunnerGuardCases) ok(checkDangerousCommand(command), `indirect or dynamic command runner fails closed: ${command}`);
@@ -811,6 +826,16 @@ for (const command of posixLineContinuationGuardCases) {
   r = runHook({ tool_name: "Bash", tool_input: { command } });
   eq(r.status, 0, `bash-safety.mjs exits 0 after denying a continued NODE_OPTIONS name: ${JSON.stringify(command)}`);
   ok(r.stdout.includes('"permissionDecision":"deny"'), `bash-safety.mjs denies a continued NODE_OPTIONS name: ${JSON.stringify(command)}`);
+}
+for (const command of powerShellLineBoundaryDenyCases) {
+  r = runHook({ tool_name: "PowerShell", tool_input: { command } });
+  eq(r.status, 0, `bash-safety.mjs exits 0 after denying a PowerShell boundary bypass: ${JSON.stringify(command)}`);
+  ok(r.stdout.includes('"permissionDecision":"deny"'), `bash-safety.mjs denies a PowerShell boundary bypass: ${JSON.stringify(command)}`);
+}
+for (const command of powerShellLineBoundaryAskCases) {
+  r = runHook({ tool_name: "PowerShell", tool_input: { command } });
+  eq(r.status, 0, `bash-safety.mjs exits 0 after gating a PowerShell boundary deploy: ${JSON.stringify(command)}`);
+  ok(r.stdout.includes('"permissionDecision":"ask"'), `bash-safety.mjs asks for a PowerShell boundary deploy: ${JSON.stringify(command)}`);
 }
 for (const command of powerShellProviderReadCases) {
   r = runHook({ tool_name: "PowerShell", tool_input: { command } });

@@ -25,6 +25,7 @@ function runHook(payload, cwd) {
   });
 }
 function isDeny(r) { return r.stdout.includes('"permissionDecision":"deny"'); }
+function isAsk(r) { return r.stdout.includes('"permissionDecision":"ask"'); }
 
 const oversizedWrapperCommand = `echo ${"watch ".repeat(30_000)}; ${["git", "push", "--force", "origin", "main"].join(" ")}`;
 const oversizedStartedAt = process.hrtime.bigint();
@@ -181,6 +182,18 @@ const posixLineContinuationGuardCases = [
   ["NODE_\\", "OPTIONS=--require=./preload.cjs npm --version"].join("\n"),
   ["NODE_\\", "OPTIONS=--require=./preload.cjs npm --version"].join("\r\n"),
 ];
+const boundaryForcePush = ["git", "push", "--force", "origin", "main"].join(" ");
+const boundaryHardReset = ["git", "reset", "--hard", "HEAD~1"].join(" ");
+const boundaryProdDeploy = [["ver", "cel"].join(""), ["--", "prod"].join("")].join(" ");
+const boundaryEdgeDeploy = ["supabase", "functions", ["de", "ploy"].join(""), "guarded-function"].join(" ");
+const powerShellLineBoundaryDenyCases = ["\n", "\r\n"].flatMap((newline) => [
+  ["Write-Output x\\", boundaryForcePush].join(newline),
+  ["Write-Output x\\", boundaryHardReset].join(newline),
+]);
+const powerShellLineBoundaryAskCases = ["\n", "\r\n"].flatMap((newline) => [
+  ["Write-Output x\\", boundaryProdDeploy].join(newline),
+  ["Write-Output x\\", boundaryEdgeDeploy].join(newline),
+]);
 const powerShellComputedMutationGuardCases = [
   `Set-Item ("Env:NODE-XOPTIONS".Replace("-X","_")) ("--requXire=./preload.cjs".Replace("X","")); npm --version`,
   `Set-Content ("Env:NODE_OPTIONS".ToLower()) ("--require=./preload.cjs"); npm --version`,
@@ -198,6 +211,16 @@ eq(r.stdout.trim(), "", "non-mutating DC tool (list_directory) is silent (not ma
 // ── start_process / interact_with_process: dangerous command denied ───────
 r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: "git push --force origin main" } });
 ok(isDeny(r), "DC start_process with a force-push command is denied");
+for (const command of powerShellLineBoundaryDenyCases) {
+  r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command } });
+  eq(r.status, 0, `mcp-tool-guard exits 0 after denying a PowerShell boundary bypass: ${JSON.stringify(command)}`);
+  ok(isDeny(r), `DC start_process denies a PowerShell boundary bypass: ${JSON.stringify(command)}`);
+}
+for (const command of powerShellLineBoundaryAskCases) {
+  r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command } });
+  eq(r.status, 0, `mcp-tool-guard exits 0 after gating a PowerShell boundary deploy: ${JSON.stringify(command)}`);
+  ok(isAsk(r), `DC start_process asks for a PowerShell boundary deploy: ${JSON.stringify(command)}`);
+}
 for (const command of [
   "Set-Alias ll Get-ChildItem",
   "echo Set-Alias",
