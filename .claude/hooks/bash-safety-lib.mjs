@@ -38,40 +38,90 @@ const MAINTENANCE_PRODUCER_REPO_PATH = `scripts/${MAINTENANCE_PRODUCER_NAME}`;
 function shellGlobMatchesLiteral(pattern, literal) {
   const normalized = String(pattern || "")
     .replace(/^:\([^)]*\)/, "")
-    .replace(/\\/g, "/");
-  let source = "^";
+    .replace(/\\/g, "/")
+    .toLowerCase();
+  const target = String(literal || "").toLowerCase();
+  const tokens = [];
   for (let index = 0; index < normalized.length; index += 1) {
     const char = normalized[index];
     if (char === "*") {
-      if (normalized[index + 1] === "*" && normalized[index + 2] === "/") {
-        source += "(?:.*/)?";
-        index += 2;
+      let runEnd = index;
+      while (normalized[runEnd + 1] === "*") runEnd += 1;
+      if (runEnd > index && normalized[runEnd + 1] === "/") {
+        tokens.push({ type: "directories" });
+        index = runEnd + 1;
       } else {
-        if (normalized[index + 1] === "*") index += 1;
-        source += ".*";
+        tokens.push({ type: "star" });
+        index = runEnd;
       }
       continue;
     }
     if (char === "?") {
-      source += ".";
+      tokens.push({ type: "one" });
       continue;
     }
     if (char === "[") {
       const close = normalized.indexOf("]", index + 1);
       if (close < 0) return null;
       let body = normalized.slice(index + 1, close);
-      if (body.startsWith("!")) body = `^${body.slice(1)}`;
-      source += `[${body.replace(/\\/g, "\\\\")}]`;
+      let negated = false;
+      if (body.startsWith("!") || body.startsWith("^")) {
+        negated = true;
+        body = body.slice(1);
+      }
+      tokens.push({ type: "class", body, negated });
       index = close;
       continue;
     }
-    source += /[\\^$.*+?()[\]{}|]/.test(char) ? `\\${char}` : char;
+    tokens.push({ type: "literal", char });
   }
-  try {
-    return new RegExp(`${source}$`, "i").test(literal);
-  } catch {
-    return null;
+
+  const classMatches = (token, char) => {
+    let matched = false;
+    for (let index = 0; index < token.body.length; index += 1) {
+      const start = token.body[index];
+      if (index + 2 < token.body.length && token.body[index + 1] === "-") {
+        const end = token.body[index + 2];
+        if (start <= char && char <= end) matched = true;
+        index += 2;
+      } else if (start === char) {
+        matched = true;
+      }
+    }
+    return token.negated ? !matched : matched;
+  };
+
+  let states = new Uint8Array(target.length + 1);
+  states[0] = 1;
+  for (const token of tokens) {
+    const next = new Uint8Array(target.length + 1);
+    if (token.type === "star") {
+      const first = states.findIndex((state) => state === 1);
+      if (first >= 0) next.fill(1, first);
+    } else if (token.type === "directories") {
+      for (let position = 0; position <= target.length; position += 1) {
+        if (states[position]) next[position] = 1;
+      }
+      const first = states.findIndex((state) => state === 1);
+      if (first >= 0) {
+        for (let position = first; position < target.length; position += 1) {
+          if (target[position] === "/") next[position + 1] = 1;
+        }
+      }
+    } else {
+      for (let position = 0; position < target.length; position += 1) {
+        if (!states[position]) continue;
+        if (token.type === "one"
+          || (token.type === "literal" && token.char === target[position])
+          || (token.type === "class" && classMatches(token, target[position]))) {
+          next[position + 1] = 1;
+        }
+      }
+    }
+    states = next;
+    if (!states.includes(1)) return false;
   }
+  return states[target.length] === 1;
 }
 
 function gitBlobHash(buffer) {

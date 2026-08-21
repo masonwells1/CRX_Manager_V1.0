@@ -121,7 +121,10 @@ All significant development milestones, in reverse chronological order.
   current checkout or `HEAD` presence; retiring it requires a separate reviewed
   guard change. MCP mutations of the whole `scripts` directory are denied, and
   shell pathspecs are checked with glob semantics so wildcard spellings that
-  could match the producer cannot relocate or untrack it first. Content writers
+  could match the producer cannot relocate or untrack it first. The glob matcher
+  uses bounded state propagation rather than a generated regular expression, so
+  adversarial wildcard runs cannot exhaust the hook timeout; both hook entry
+  points have an actual-process timing regression. Content writers
   (PowerShell content cmdlets, in-place editors, truncation, and redirects) use
   the same path check. Every exact allowlisted launch independently hashes the
   worktree file as a Git blob and requires it to match `HEAD` before execution;

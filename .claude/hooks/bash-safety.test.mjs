@@ -794,6 +794,14 @@ eq(hostileRunnerResult.status, 0, "bash-safety.mjs exits 0 after an at-budget ho
 ok(hostileRunnerResult.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs denies an at-budget hostile runner payload");
 ok(hostileRunnerElapsedMs < 1_500, `at-budget hostile runner denial stays well below the 5s hook timeout (actual ${hostileRunnerElapsedMs.toFixed(0)}ms)`);
 
+const hostileGlobCommand = `${String.fromCharCode(99, 112)} ${"*".repeat(4_000)}never scratch; ${hostileRunnerTail}`;
+const hostileGlobStartedAt = process.hrtime.bigint();
+const hostileGlobResult = runHook({ tool_name: "Bash", tool_input: { command: hostileGlobCommand } });
+const hostileGlobElapsedMs = Number(process.hrtime.bigint() - hostileGlobStartedAt) / 1_000_000;
+eq(hostileGlobResult.status, 0, "bash-safety.mjs exits 0 after a hostile nonmatching glob");
+ok(hostileGlobResult.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs reaches the blocked tail after a hostile nonmatching glob");
+ok(hostileGlobElapsedMs < 1_500, `hostile glob denial stays well below the 15s hook timeout (actual ${hostileGlobElapsedMs.toFixed(0)}ms)`);
+
 const nestedEvalCommand = `${`${evalCommand} `.repeat(450)}${hostileRunnerTail}`;
 ok(nestedEvalCommand.length <= SECURITY_COMMAND_CHAR_BUDGET, "nested eval fixture stays within the character budget");
 ok(nestedEvalCommand.trim().split(/\s+/).length <= SECURITY_COMMAND_TOKEN_BUDGET, "nested eval fixture stays within the token budget");

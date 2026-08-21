@@ -55,6 +55,12 @@ const hostileRunnerResult = runHook({ tool_name: "mcp__Desktop_Commander__start_
 const hostileRunnerElapsedMs = Number(process.hrtime.bigint() - hostileRunnerStartedAt) / 1_000_000;
 ok(isDeny(hostileRunnerResult), "DC start_process denies an at-budget hostile runner payload");
 ok(hostileRunnerElapsedMs < 1_500, `DC at-budget hostile runner denial stays well below the 5s hook timeout (actual ${hostileRunnerElapsedMs.toFixed(0)}ms)`);
+const hostileGlobCommand = `${String.fromCharCode(99, 112)} ${"*".repeat(4_000)}never scratch; ${hostileRunnerTail}`;
+const hostileGlobStartedAt = process.hrtime.bigint();
+const hostileGlobResult = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: hostileGlobCommand } });
+const hostileGlobElapsedMs = Number(process.hrtime.bigint() - hostileGlobStartedAt) / 1_000_000;
+ok(isDeny(hostileGlobResult), "DC start_process reaches the blocked tail after a hostile nonmatching glob");
+ok(hostileGlobElapsedMs < 1_500, `DC hostile glob denial stays well below the 15s hook timeout (actual ${hostileGlobElapsedMs.toFixed(0)}ms)`);
 const shellGrammarGuardCases = [
   [timeCommand, awkCommand, opaqueAwkProgram].join(" "),
   ["SAFE+=1", awkCommand, opaqueAwkProgram].join(" "),
