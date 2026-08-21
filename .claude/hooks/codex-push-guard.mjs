@@ -11,7 +11,7 @@
 // Non-pushes and ordinary non-production pushes pass. Ambiguous push context,
 // force intent, and broad multi-ref modes fail closed.
 
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import {
@@ -671,8 +671,20 @@ for (const pushCmd of pushCommands) {
   // sessions burned hours on it. Still a denial — the guard genuinely cannot
   // read a repository that is not there — but one that names the real cause and
   // says explicitly not to route around the gate.
-  if (!existsSync(pushRepoDir)) {
-    deny(`CODEX GATE: this push names a repository directory that does not exist as this guard resolves it: ${pushRepoDir}. This is a PATH-SPELLING problem, not a policy refusal, and not a problem with git. This guard runs as a Windows process, so it can only translate the drive-letter form of a Git Bash path (\`/c/repo\` → \`C:\\repo\`); anything else depends on the MSYS mount table it cannot read. Re-run the push naming the repository with a Windows path, for example \`git -C C:\\CRX_Manager push origin <branch>\`. Do NOT work around this with a directory change, an inline PATH=, or an environment variable — those forms are separately denied, by design.`);
+  // statSync, not existsSync: a regular FILE passes an existence test, git
+  // cannot use one as `-C`, and letting it through here would skip this tailored
+  // diagnostic and land back on the generic "spawnSync git ENOENT" denial this
+  // whole change exists to stop being the answer (CodeRabbit, PR #445).
+  let pushRepoDirIsDirectory = false;
+  try { pushRepoDirIsDirectory = statSync(pushRepoDir).isDirectory(); } catch { pushRepoDirIsDirectory = false; }
+  if (!pushRepoDirIsDirectory) {
+    // The recovery command is spelled with FORWARD slashes on purpose. This
+    // denial is read inside Git Bash, where unquoted backslashes are escape
+    // characters: pasting `git -C C:\CRX_Manager …` hands git the
+    // drive-RELATIVE `C:CRX_Manager`, so the advice would fail again or act on
+    // a different checkout. `C:/CRX_Manager` is correct in Git Bash, PowerShell
+    // and cmd alike (Codex + CodeRabbit both flagged this on PR #445).
+    deny(`CODEX GATE: this push names a repository this guard cannot resolve to a real directory: ${pushRepoDir} — it does not exist, or is not a directory. This is a PATH-SPELLING problem, not a policy refusal, and not a problem with git. This guard runs as a Windows process, so it can only translate the drive-letter form of a Git Bash path (\`/c/repo\` becomes \`C:/repo\`); anything else depends on the MSYS mount table it cannot read. Re-run the push naming the repository with forward slashes, for example \`git -C C:/CRX_Manager push origin <branch>\` — use forward slashes, because Git Bash eats unquoted backslashes and would hand git a drive-relative path instead. Do NOT work around this with a directory change, an inline PATH=, or an environment variable — those forms are separately denied, by design.`);
   }
   let branch = "";
   try {

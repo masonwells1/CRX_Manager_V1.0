@@ -6,7 +6,7 @@ All significant development milestones, in reverse chronological order.
 
 Every `git -C /c/CRX_Manager … push` issued from the Bash tool was denied:
 
-```
+```text
 CODEX GATE: could not determine the repository/branch selected by this push, so it is denied.
 spawnSync git ENOENT
 ```
@@ -45,6 +45,17 @@ so the message reads as "find a fourth way around the gate" to the next agent. T
 - **`scripts/apply-live-testdata-maintenance-20260812.mjs` re-pinned.** It byte-anchors
   `codex-push-lib.mjs`; the identity transform it runs asserts the risky-path line for its own
   producer is present exactly once, and that line is untouched.
+
+**Review round (PR #445).** Two real defects in the new denial, both fixed and both mutation-tested:
+Codex and CodeRabbit independently flagged that the recovery command was spelled `C:\CRX_Manager`,
+and that message is read **inside Git Bash**, where an unquoted backslash is an escape character —
+pasting it hands git the drive-relative `C:CRX_Manager`, so the advice would fail again or act on a
+different checkout. It now uses `C:/CRX_Manager`, which is correct in Git Bash, PowerShell and cmd
+alike. Separately, the existence test used `existsSync`, which accepts a regular **file**; git cannot
+use one as `-C`, so that case fell straight back to the generic `spawnSync git ENOENT` denial this
+entry exists to retire. It now requires `statSync(...).isDirectory()`. A third finding — a malformed
+Markdown table row in `agent-guardrails.md` — is real but **pre-existing on `main`** (7 pipes before
+this change and 7 after, verified against `origin/main`), so it is not fixed here.
 
 Tests: `.claude/hooks/codex-push-lib.test.mjs` (in `test:correction-guards`).
 

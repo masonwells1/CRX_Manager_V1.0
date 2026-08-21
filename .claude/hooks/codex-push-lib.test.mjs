@@ -2374,15 +2374,31 @@ if (process.platform === "win32") {
       // names the real cause instead of blaming git.
       const untranslatable = runHook("git -C /usr/definitely-not-a-repo push origin main:refs/heads/feature");
       assert.equal(untranslatable.decision, "deny", "an untranslatable path still fails closed");
-      assert.match(untranslatable.reason, /does not exist as this guard resolves it/, "…and says the directory is missing");
+      assert.match(untranslatable.reason, /cannot resolve to a real directory/, "…and says the directory is unusable");
       assert.match(untranslatable.reason, /not a policy refusal/, "…and does not read as a policy refusal");
       assert.match(untranslatable.reason, /Do NOT work around this/, "…and forbids routing around the gate");
+      // The recovery command is READ INSIDE GIT BASH, where an unquoted
+      // backslash is an escape character: `git -C C:\CRX_Manager` hands git the
+      // drive-relative `C:CRX_Manager`, so advice spelled that way fails again
+      // or acts on a different checkout (Codex + CodeRabbit, PR #445).
+      assert.match(untranslatable.reason, /git -C C:\/CRX_Manager push origin/, "…and the recovery command uses forward slashes");
+      assert.doesNotMatch(untranslatable.reason, /git -C C:\\/, "…never the backslash form Git Bash would eat");
 
       // And a genuinely risky main-bound push spelled the MSYS way is still
       // gated: translating the path must not become a way past the proof gate.
       const mainPush = runHook(`git -C ${msysWork} push origin main`);
       assert.equal(mainPush.decision, "allow", "a non-app-repo main push is allowed (no risky diff, not the app repo)");
     }
+
+    // Platform-independent, so Linux CI covers it too: a path that EXISTS but is
+    // a regular FILE is not usable as `-C` either. existsSync accepts one; git
+    // does not — and without the isDirectory check the flow fell straight back
+    // to the generic `spawnSync git ENOENT` denial this change exists to retire
+    // (CodeRabbit, PR #445).
+    const notADirectory = runHook(`git -C ${path.join(work, "seed.txt")} push origin main:refs/heads/feature`);
+    assert.equal(notADirectory.decision, "deny", "a file named as the repository fails closed");
+    assert.match(notADirectory.reason, /cannot resolve to a real directory/, "…with the tailored diagnostic, not the generic one");
+    assert.doesNotMatch(notADirectory.reason, /spawnSync/, "…and never the raw spawn error");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
