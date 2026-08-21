@@ -1410,4 +1410,40 @@ eq(T(null), [], "a null body does not throw");
     'round-56: nested-body cap evidence propagates to the final apply-time result');
 }
 
+// -------- ROUND 57: invoked defaults use the ordinary coercion graph too
+{
+  const castDefault = applyTimeWriteTargets(
+    'CREATE FUNCTION public.round57_castfix(integer) RETURNS public.round57_money_box ' +
+    'LANGUAGE plpgsql AS $$ BEGIN UPDATE public.orders SET total_profit = total_profit; ' +
+    'RETURN NULL; END $$; ' +
+    'CREATE CAST (integer AS public.round57_money_box) ' +
+    'WITH FUNCTION public.round57_castfix(integer); ' +
+    'CREATE FUNCTION public.round57_wrapper(' +
+    'p public.round57_money_box DEFAULT 1::public.round57_money_box) ' +
+    'RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$; SELECT public.round57_wrapper();',
+  );
+  ok(castDefault.targets.has('orders.total_profit'),
+    'round-57: an invoked explicit-cast default follows its same-file mutating backing routine');
+
+  const definitionOnly = applyTimeWriteTargets(
+    'CREATE FUNCTION public.round57_deferred_castfix(integer) RETURNS public.round57_deferred_box ' +
+    'LANGUAGE plpgsql AS $$ BEGIN UPDATE public.orders SET total_profit = total_profit; ' +
+    'RETURN NULL; END $$; ' +
+    'CREATE CAST (integer AS public.round57_deferred_box) ' +
+    'WITH FUNCTION public.round57_deferred_castfix(integer); ' +
+    'CREATE FUNCTION public.round57_deferred_wrapper(' +
+    'p public.round57_deferred_box DEFAULT 1::public.round57_deferred_box) ' +
+    'RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$;',
+  );
+  ok(!definitionOnly.targets.has('orders.total_profit') && !definitionOnly.unresolved,
+    'round-57 MUTANT: defining but not invoking a cast-bearing default remains deferred');
+
+  const builtinCast = applyTimeWriteTargets(
+    'CREATE FUNCTION public.round57_builtin_default(p bigint DEFAULT 1::bigint) ' +
+    'RETURNS bigint LANGUAGE sql AS $$ SELECT p $$; SELECT public.round57_builtin_default();',
+  );
+  ok(!builtinCast.unresolved && builtinCast.targets.size === 0,
+    'round-57 MUTANT: an invoked builtin cast default remains statically analyzable');
+}
+
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

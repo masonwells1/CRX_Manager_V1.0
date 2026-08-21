@@ -54,11 +54,11 @@ const IDENT_CHAR = /[A-Za-z0-9_$\u0080-\uFFFF]/;
 const ROUTINE_CREATE_HEAD = /^create\s+(?:or\s+replace\s+)?(?:function|procedure)\b/;
 const ROUTINE_NAME_CAPTURE = /\b(?:function|procedure)\s+((?:[A-Za-z0-9_]+\s*\.\s*)*[A-Za-z0-9_]+)/;
 
-function routineHasCallableParameterDefault(statement) {
+function routineParameterDefaults(statement) {
   const named = ROUTINE_NAME_CAPTURE.exec(statement);
-  if (!named) return false;
+  if (!named) return [];
   const open = statement.indexOf("(", named.index + named[0].length);
-  if (open < 0) return false;
+  if (open < 0) return [];
 
   const parameters = [];
   let start = open + 1;
@@ -77,10 +77,9 @@ function routineHasCallableParameterDefault(statement) {
     }
   }
 
-  const call = /(?:^|[^A-Za-z0-9_$\u0080-\uFFFF])(?:[A-Za-z_\u0080-\uFFFF][A-Za-z0-9_$\u0080-\uFFFF]*\s*\.\s*)*[A-Za-z_\u0080-\uFFFF][A-Za-z0-9_$\u0080-\uFFFF]*\s*\(/;
-  return parameters.some((parameter) => {
+  return parameters.flatMap((parameter) => {
     const keyword = /\bdefault\b/.exec(parameter);
-    if (keyword) return call.test(parameter.slice(keyword.index + keyword[0].length));
+    if (keyword) return [parameter.slice(keyword.index + keyword[0].length)];
 
     let nested = 0;
     for (let i = 0; i < parameter.length; i += 1) {
@@ -91,10 +90,15 @@ function routineHasCallableParameterDefault(statement) {
       const before = parameter[i - 1] || "";
       const after = parameter[i + 1] || "";
       if ("<>!:".includes(before) || "=>".includes(after)) continue;
-      return call.test(parameter.slice(i + 1));
+      return [parameter.slice(i + 1)];
     }
-    return false;
+    return [];
   });
+}
+
+function routineHasCallableParameterDefault(statement) {
+  const call = /(?:^|[^A-Za-z0-9_$\u0080-\uFFFF])(?:[A-Za-z_\u0080-\uFFFF][A-Za-z0-9_$\u0080-\uFFFF]*\s*\.\s*)*[A-Za-z_\u0080-\uFFFF][A-Za-z0-9_$\u0080-\uFFFF]*\s*\(/;
+  return routineParameterDefaults(statement).some((expression) => call.test(expression));
 }
 
 // PostgreSQL quoted identifiers can legally contain comment markers, spaces,
@@ -233,6 +237,7 @@ export function applyTimeCode(sql, depth = 0) {
             literals: inner.literals,
             unresolved: inner.unsupportedDoBody,
             callableDefault: routineHasCallableParameterDefault(stmt),
+            defaultCode: routineParameterDefaults(stmt).map((expression) => `SELECT ${expression}`).join(";\n"),
           });
           // A routine defined inside this body is still defined by this file.
           routines.push(...inner.routines);
@@ -305,6 +310,7 @@ export function applyTimeCode(sql, depth = 0) {
             literals: inner.literals,
             unresolved: inner.unsupportedDoBody,
             callableDefault: routineHasCallableParameterDefault(head),
+            defaultCode: routineParameterDefaults(head).map((expression) => `SELECT ${expression}`).join(";\n"),
           });
           routines.push(...inner.routines);
           code += "''";
@@ -1717,6 +1723,17 @@ export function applyTimeWriteTargets(
         // if a default can call code, the invocation is unresolved rather than
         // silently treating the deferred header expression as inert.
         if (r.unresolved || r.callableDefault) top.unresolved = true;
+        // Defaults live in the routine header, not its body, but omitted
+        // arguments evaluate them at invocation time. Feed that executable
+        // expression through the same routine/operator/cast/view dispatch
+        // graph as the body. In particular, `1::custom_type` can invoke a
+        // user-defined cast function without looking like `name(...)`.
+        for (const n of invokedRoutines(r.defaultCode || "", new Set(byName.keys()))) {
+          if (!seen.has(n)) next.add(n);
+        }
+        addOperatorInvocations(r.defaultCode || "", next);
+        addCastInvocations(r.defaultCode || "", next);
+        addViewInvocations(r.defaultCode || "");
         foldLiterals(inner, r.literals);
         defineOperators(operatorDefinitions(r.code));
         defineCasts(castDefinitions(r.code));
@@ -1744,7 +1761,7 @@ export function applyTimeWriteTargets(
   // the top-level code, every literal executed as SQL, and every body folded in
   // above, because a defined helper may itself call something that only exists
   // in the database.
-  const bodies = [...seen].flatMap((n) => (byName.get(n) || []).map((r) => r.code));
+  const bodies = [...seen].flatMap((n) => (byName.get(n) || []).flatMap((r) => [r.code, r.defaultCode || ""]));
   const scan = [code, ...execCodes, ...bodies].join("\n;\n").toLowerCase();
   const unknownCalls = [...new Set([
     ...unknownCallsIn(
