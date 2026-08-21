@@ -322,7 +322,7 @@ for (const rule of m.rules) {
     'definition_hash', 'event', 'name', 'oid', 'relation',
   ]) || typeof rule.oid !== 'string' || !/^\d+$/.test(rule.oid) ||
       typeof rule.name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_$]*$/.test(rule.name) ||
-      !ok(rule.relation) || !/^(select|insert|update|delete)$/.test(rule.event) ||
+      !sourceOk(rule.relation) || !/^(select|insert|update|delete)$/.test(rule.event) ||
       typeof rule.definition_hash !== 'string' || !/^[0-9a-f]{64}$/.test(rule.definition_hash)) {
     throw new Error('trigger fan-out manifest has invalid rewrite-rule evidence');
   }
@@ -1642,6 +1642,14 @@ $MIG_BASENAME
           if (nrparts[1] == "" || nrparts[2] == "") continue
           rulerel[nrparts[2]] = 1
           if (nrparts[1] == "select") ruleselect[nrparts[2]] = 1
+          # The static SQL token pass below intentionally collapses relation
+          # schemas. Preserve the full captured identity above, but also seed
+          # the bare name so an unqualified reference that may resolve through
+          # search_path cannot evade a non-public stored rule.
+          nrdots = split(nrparts[2], nrsegments, ".")
+          nrbare = nrsegments[nrdots]
+          rulerel[nrbare] = 1
+          if (nrparts[1] == "select") ruleselect[nrbare] = 1
         }
       }
       {

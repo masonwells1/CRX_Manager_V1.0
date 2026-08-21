@@ -86,7 +86,10 @@ WITH tables AS (
   SELECT
     r.oid::text AS oid,
     r.rulename AS name,
-    c.relname AS relation,
+    CASE
+      WHEN n.nspname = 'public' THEN c.relname
+      ELSE n.nspname || '.' || c.relname
+    END AS relation,
     CASE r.ev_type
       WHEN '1' THEN 'select'
       WHEN '2' THEN 'update'
@@ -97,7 +100,8 @@ WITH tables AS (
   FROM pg_rewrite r
   JOIN pg_class c ON c.oid = r.ev_class
   JOIN pg_namespace n ON n.oid = c.relnamespace
-  WHERE n.nspname = 'public'
+  WHERE n.nspname !~ '^pg_'
+    AND n.nspname <> 'information_schema'
     AND r.ev_type IN ('1', '2', '3', '4')
   ORDER BY r.oid
 ), foreign_keys AS (

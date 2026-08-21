@@ -1405,6 +1405,19 @@ eq(T(null), [], "a null body does not throw");
   );
   ok(!notSelected.unresolved && notSelected.firedRules.length === 0,
     'round-57 MUTANT: a persisted rule that is not fired does not block unrelated SQL');
+
+  const crossSchema = applyTimeWriteTargets(
+    'SELECT * FROM auth.persisted_rule_probe;',
+    { knownRules: [{ table: 'auth.persisted_rule_probe', event: 'select' }] },
+  );
+  ok(crossSchema.unresolved && crossSchema.firedRules.includes('auth.persisted_rule_probe'),
+    'round-57: a catalog-known rule retains its non-public schema identity');
+  const unqualified = applyTimeWriteTargets(
+    'SELECT * FROM persisted_rule_probe;',
+    { knownRules: [{ table: 'auth.persisted_rule_probe', event: 'select' }] },
+  );
+  ok(unqualified.unresolved && unqualified.firedRules.includes('auth.persisted_rule_probe'),
+    'round-57: an unqualified relation may resolve through search_path to the auth rule');
 }
 
 // ---------------- ROUND 54: routine schemas are part of call identity

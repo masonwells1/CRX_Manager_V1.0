@@ -171,7 +171,8 @@ function loadTrustedFanout(evidenceRoots) {
       ]) ||
           typeof rule.oid !== "string" || !/^\d+$/.test(rule.oid) ||
           typeof rule.name !== "string" || !/^[A-Za-z_][A-Za-z0-9_$]*$/.test(rule.name) ||
-          typeof rule.relation !== "string" || !/^[a-z_][a-z0-9_$]*$/.test(rule.relation) ||
+          typeof rule.relation !== "string" ||
+            !/^[a-z_][a-z0-9_$]*(?:\.[a-z_][a-z0-9_$]*)?$/.test(rule.relation) ||
           typeof rule.event !== "string" ||
             !new Set(["select", "insert", "update", "delete"]).has(rule.event) ||
           typeof rule.definition_hash !== "string" ||

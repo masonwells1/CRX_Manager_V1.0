@@ -146,6 +146,16 @@ function manifestWeakeningSources(before, after) {
       JSON.stringify(before.event_triggers) !== JSON.stringify(after.event_triggers || [])) {
     weakened.add('__event_trigger_state_changed__');
   }
+  // A new captured rule is additional fail-closed evidence. Removing or
+  // changing an already bound OID/name/relation/event/definition hash can make
+  // later migration SQL look harmless, so a candidate-authored manifest is
+  // not allowed to erase that live catalog fact silently.
+  if (Array.isArray(before.rules)) {
+    const afterRules = new Set((after.rules || []).map((rule) => JSON.stringify(rule)));
+    if (before.rules.some((rule) => !afterRules.has(JSON.stringify(rule)))) {
+      weakened.add('__rewrite_rule_state_changed__');
+    }
+  }
   return weakened;
 }
 

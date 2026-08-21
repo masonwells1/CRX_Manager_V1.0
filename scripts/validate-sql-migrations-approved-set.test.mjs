@@ -2861,6 +2861,12 @@ function runTriggerDefinitionRequiresFanoutRefresh() {
     if (staleTriggerSources({}, opaqueInitial, noChanges).length) {
       failures.push('  round-35 an all-opaque first fan-out trust root did not fail closed cleanly');
     }
+    const removedRule = structuredClone(baseManifest);
+    removedRule.rules = removedRule.rules.slice(1);
+    if (!staleTriggerSources(baseManifest, removedRule, noChanges)
+      .includes('__rewrite_rule_state_changed__')) {
+      failures.push('  round-57 removing captured rewrite-rule evidence was not rejected');
+    }
     // This fixture has a committed base manifest, so it is testing ordinary
     // post-bootstrap weakening/refresh behavior rather than the all-opaque
     // first-trust-root rule exercised immediately above.
@@ -3215,9 +3221,13 @@ function runPersistedRuleAcrossMigrations() {
       failures.push('  round-57: checked-in linked manifest contains no SELECT rule fixture');
     } else {
       const liveCandidate = '29980101000002_fire_live_rule.sql';
+      const liveRelation = liveSelectRule.relation.includes('.')
+        ? liveSelectRule.relation
+        : `public.${liveSelectRule.relation}`;
+      const liveBareRelation = liveSelectRule.relation.split('.').pop();
       writeFileSync(
         join(migrations, liveCandidate),
-        `SELECT * FROM public.${liveSelectRule.relation};\n`,
+        `SELECT * FROM ${liveRelation};\n`,
       );
       const liveResult = runBash([SCRIPT, '--changed-only', `--base=${base}`], {
         cwd: dir,
@@ -3227,7 +3237,7 @@ function runPersistedRuleAcrossMigrations() {
       const liveOutput = `${liveResult.stdout || ''}\n${liveResult.stderr || ''}`;
       const liveBlock = blockFor(liveOutput, liveCandidate);
       if (classify(liveOutput, liveCandidate) !== 'violation' ||
-          !liveBlock.includes(`rule_on_select_${liveSelectRule.relation}`)) {
+          !liveBlock.includes(`rule_on_select_${liveBareRelation}`)) {
         failures.push(
           '  round-57: changed-only validation ignored a linked-live rewrite rule\n' +
             liveBlock.split('\n').map((line) => `      | ${line}`).join('\n'),

@@ -1,7 +1,7 @@
 {
   "_meta": {
     "format_version": 5,
-    "captured_at": "2026-08-21T11:13:21.772734Z",
+    "captured_at": "2026-08-21T13:04:35.582061Z",
     "generator": "scripts/generate-trigger-fanout.mjs",
     "capture_method": "supabase-cli-db-query-linked",
     "source_project": "rhyzpcqhnizqbxphqdkr",
@@ -310,11 +310,67 @@
   ],
   "rules": [
     {
+      "oid": "26470",
+      "name": "_RETURN",
+      "relation": "extensions.geography_columns",
+      "event": "select",
+      "definition_hash": "59e93638fb7b1bc64c1f2f7f257b2c080cc1d54f1acd2d5890d7e432c643eaf1"
+    },
+    {
+      "oid": "26610",
+      "name": "geometry_columns_delete",
+      "relation": "extensions.geometry_columns",
+      "event": "delete",
+      "definition_hash": "6f1ffc34a5f42b585b6512bc3137c1330dc46b934d7497ef8b1803ddecbd878e"
+    },
+    {
+      "oid": "26608",
+      "name": "geometry_columns_insert",
+      "relation": "extensions.geometry_columns",
+      "event": "insert",
+      "definition_hash": "b9950179cbf4d322f06919891ceda69b26e6af1465341a6d5f6ea111c65e6bd4"
+    },
+    {
+      "oid": "26606",
+      "name": "_RETURN",
+      "relation": "extensions.geometry_columns",
+      "event": "select",
+      "definition_hash": "0e925de225b46fdc172f42f3086080c1169a73f747583bdb67831e6e3d904f6e"
+    },
+    {
+      "oid": "26609",
+      "name": "geometry_columns_update",
+      "relation": "extensions.geometry_columns",
+      "event": "update",
+      "definition_hash": "d5d27ea7bd51d5b713ac7a16ecffd8d5e80940819b6f2da33ce3a485ba8bb5c2"
+    },
+    {
+      "oid": "16423",
+      "name": "_RETURN",
+      "relation": "extensions.pg_stat_statements",
+      "event": "select",
+      "definition_hash": "2064a19866dbd6a0e00653ca09d9eaaf887c3a362a5e50c4d0b8f2a1c119b902"
+    },
+    {
+      "oid": "16406",
+      "name": "_RETURN",
+      "relation": "extensions.pg_stat_statements_info",
+      "event": "select",
+      "definition_hash": "14a4af426df8558cf635cc7eda8a9f3103a11387d65ef0d2824ed3eba5c4aa35"
+    },
+    {
       "oid": "88285",
       "name": "_RETURN",
       "relation": "profile_public_view",
       "event": "select",
       "definition_hash": "69b77b333ee8d2868c64d4a454700ae5c0dc5ea90a3aaf91e9cf7595de750041"
+    },
+    {
+      "oid": "16624",
+      "name": "_RETURN",
+      "relation": "vault.decrypted_secrets",
+      "event": "select",
+      "definition_hash": "7ede5a87bee7f580eee5e120fa081e3f4e149017998422d0438e9943ff7a85bc"
     },
     {
       "oid": "40026",

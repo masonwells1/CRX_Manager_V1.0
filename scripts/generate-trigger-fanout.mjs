@@ -42,6 +42,14 @@ function relationName(schema, table, label) {
   return schemaName === 'public' ? tableName : `${schemaName}.${tableName}`;
 }
 
+function capturedRelationName(value, label) {
+  if (typeof value !== 'string' ||
+      !/^[a-z0-9_]+(?:\.[a-z0-9_]+)?$/.test(value)) {
+    fail(`${label} is not a lower-case relation identity: ${JSON.stringify(value)}`);
+  }
+  return value;
+}
+
 function uniqueNames(value, label) {
   if (!Array.isArray(value)) fail(`${label} must be an array`);
   return [...new Set(value.map((name) => bareName(name, label)))].sort();
@@ -302,7 +310,7 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
       fail('rule name is invalid');
     }
     const name = rule.name;
-    const relation = bareName(rule.relation, 'rule relation');
+    const relation = capturedRelationName(rule.relation, 'rule relation');
     const event = bareName(rule.event, 'rule event');
     if (!new Set(['select', 'insert', 'update', 'delete']).has(event)) {
       fail(`rule ${name} has an invalid event`);

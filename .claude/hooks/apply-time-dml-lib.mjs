@@ -1391,9 +1391,14 @@ function invokedRelations(code) {
   for (const statement of String(code || "").split(";")) {
     const region = runForEffectRegion(statement.trim().toLowerCase().replace(/"/g, ""));
     if (!region) continue;
-    const relation = /\b(?:from|join|using|table)\s+(?:only\s+)?(?:[a-z_][a-z0-9_$]*\s*\.\s*)?([a-z_][a-z0-9_$]*)\b/g;
+    const relation = /\b(?:from|join|using|table)\b/g;
     let match;
-    while ((match = relation.exec(region)) !== null) found.add(match[1]);
+    while ((match = relation.exec(region)) !== null) {
+      const parsed = readRelation(region, match.index + match[0].length);
+      if (parsed && !(NON_RELATION_KEYWORDS.has(parsed.table) && !parsed.quoted)) {
+        found.add(parsed.table);
+      }
+    }
   }
   return found;
 }
@@ -1689,7 +1694,7 @@ export function applyTimeWriteTargets(
     for (const definition of list) {
       const table = String(definition?.table || "").toLowerCase();
       const event = String(definition?.event || "").toLowerCase();
-      if (!/^[a-z_][a-z0-9_$]*$/.test(table) ||
+      if (!/^[a-z_][a-z0-9_$]*(?:\.[a-z_][a-z0-9_$]*)?$/.test(table) ||
           !new Set(["select", "insert", "update", "delete"]).has(event)) {
         top.unresolved = true;
         continue;
@@ -1815,9 +1820,19 @@ export function applyTimeWriteTargets(
   const fireAttached = (into) => {
     for (const rule of rules) {
       const key = `${rule.event}\0${rule.table}`;
+      const bareRuleTable = rule.table.split(".").pop();
+      const isQualifiedRule = bareRuleTable !== rule.table;
+      // An unqualified relation can resolve through search_path to a captured
+      // non-public rule. Without the live applying-session path, matching the
+      // bare name is the only fail-closed answer. Explicit schema matches still
+      // work through the full identity.
+      const readMatches = readRuleRelations.has(rule.table) ||
+        (isQualifiedRule && readRuleRelations.has(bareRuleTable));
+      const writeMatches = top.tables.has(rule.table) ||
+        (isQualifiedRule && top.tables.has(bareRuleTable));
       const firedByEvent = rule.event === "select"
-        ? readRuleRelations.has(rule.table)
-        : top.tables.has(rule.table);
+        ? readMatches
+        : writeMatches;
       if (firedRuleKeys.has(key) || !firedByEvent) continue;
       // A rule action can call a database-resident mutator or issue arbitrary
       // DML. Until rule actions are parsed as fully as routine bodies, firing

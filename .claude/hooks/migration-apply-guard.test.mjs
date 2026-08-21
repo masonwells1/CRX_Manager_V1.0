@@ -1477,6 +1477,21 @@ function armAutopilot(stateDir, hoursFromNow) {
       r = apply("20990601000190_r57_live_select", "SELECT * FROM public.live_rule_probe;");
       ok(isDeny(r) && isOneShotDeny(r),
         "round-57: a linked-live persisted rule fires in the candidate apply → denied");
+      liveRuleManifest.rules.push({
+        oid: "99002",
+        name: "cross_schema_repair",
+        relation: "auth.live_rule_probe",
+        event: "select",
+        definition_hash: "b".repeat(64),
+      });
+      writeFileSync(
+        path.join(tmp, "scripts", "trigger-fanout.json"),
+        `${JSON.stringify(liveRuleManifest, null, 2)}\n`,
+      );
+      r = apply("20990601000191_r57_cross_schema_live_select",
+        "SELECT * FROM auth.live_rule_probe;");
+      ok(isDeny(r) && isOneShotDeny(r),
+        "round-57: a linked-live non-public rule retains its schema and fires → denied");
       writeFileSync(
         path.join(tmp, "scripts", "trigger-fanout.json"),
         `${JSON.stringify(FANOUT_FIXTURE, null, 2)}\n`,

@@ -164,6 +164,12 @@ check('manifest binds persisted rewrite-rule identity and definition', () => {
   });
   assert.match(manifest.rules[0].definition_hash, /^[0-9a-f]{64}$/);
 });
+check('persisted rewrite rules retain non-public schema identity', () => {
+  const changed = structuredClone(payload);
+  changed.rules[0].relation = 'auth.rule_probe';
+  const manifest = buildTriggerFanoutManifest(changed);
+  assert.equal(manifest.rules[0].relation, 'auth.rule_probe');
+});
 check('contradictory event-trigger enabled state is refused', () => {
   const changed = structuredClone(payload);
   changed.event_triggers[0].enabled = true;
@@ -215,6 +221,8 @@ check('fixed capture includes event-trigger catalog and routine configuration', 
   assert.match(TRIGGER_FANOUT_SQL, /\bp\.proconfig\b/);
   assert.match(TRIGGER_FANOUT_SQL, /\bFROM pg_rewrite\b/);
   assert.match(TRIGGER_FANOUT_SQL, /\bpg_get_ruledef\b/);
+  assert.match(TRIGGER_FANOUT_SQL,
+    /rules AS \([\s\S]*?WHERE n\.nspname !~ '\^pg_'[\s\S]*?information_schema/);
 });
 check('invalid persisted rule capture is refused', () => {
   const changed = structuredClone(payload);

@@ -20,8 +20,9 @@ and old live-catalog evidence cannot prove what an apply will execute today.
 from the applying checkout, rerun `node scripts/refresh-applied-migrations.mjs` and
 `node scripts/generate-trigger-fanout.mjs` before the apply, then review both regenerated artifacts.
 Rewrite rules are executable persisted catalog state: the live capture and every earlier checked-in
-migration must seed their rule attachments into the candidate analysis, and a fired stored rule is
-refused until its action has a complete bounded-effect model.
+migration must seed their schema-qualified rule attachments into the candidate analysis. The linked
+capture covers non-system schemas, an already captured rule cannot be removed or changed silently,
+and a fired stored rule is refused until its action has a complete bounded-effect model.
 
 ---
 
