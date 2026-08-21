@@ -31,9 +31,17 @@ a feature.
 
 **All five packages carry migrations *(corrected reviewing PR #435)*.** An earlier sequence here
 named only WP-1 → WP-3, written when WP-4 and WP-5 were still "no migration" packages. Both
-became migration packages — WP-4 extends the `product_label_drafts` queue and its RPC contract,
-WP-5 adds the atomic sibling-copy RPC — so **every** package in this phase runs the full gate
-chain below, including its own apply gate. Nothing in Phase 1 skips it.
+became migration packages — **WP-4 adds only the `create_label_draft_proposal` RPC**, WP-5 adds
+the atomic sibling-copy RPC — so **every** package in this phase runs the full gate chain below,
+including its own apply gate. Nothing in Phase 1 skips it.
+
+**WP-4 does not touch the `product_label_drafts` queue schema — WP-1 owns it *(finding 5, fourth
+pass; this line said "WP-4 extends the queue and its RPC contract" and contradicted both the build
+plan and the ledger)*.** WP-3's D-K escape hatch needs the queue's typed payload, `purpose`
+discriminator and `proposed_brand_name`, and WP-3 applies **before** WP-4 — so the schema moved
+forward into WP-1. Three documents disagreeing about who owns one DDL change is how it gets
+written twice or not at all. **WP-1 owns the queue's shape; WP-4 adds only
+`create_label_draft_proposal` over it; `create_label_draft` is never modified by any package.**
 
 | Role | Who | How |
 |---|---|---|

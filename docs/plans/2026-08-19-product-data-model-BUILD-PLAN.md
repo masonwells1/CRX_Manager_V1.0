@@ -574,9 +574,25 @@ B in stock, a 20-gallon delivery allocated entirely to Brand A sums correctly an
 impossible. It prints the wrong EPA number on regulatory paperwork and, via the brand density
 override above, the wrong scale weight. **Brand-level available quantity is therefore tracked
 across receipt, delivery and reversal**, and an allocation that exceeds the brand's available
-quantity is refused in the database. **Proof:** receive 10 A / 90 B, attempt a 20-gallon
-all-Brand-A delivery, show it is refused; allocate 10 A / 10 B, show it succeeds; void it and
-show Brand A's available quantity returns to 10.
+quantity is refused in the database.
+
+**That balance is shared, so the lock must be on the balance, not on the line *(finding 2, fourth
+pass)*.** The allocation RPC locks the **parent delivery line**, which serializes two writers on
+the *same* line and does nothing about two writers on *different* lines drawing the same brand.
+Two 6-gallon deliveries against 10 available gallons of Brand A both read 10, both pass, and both
+commit — a 12-gallon draw on 10 gallons of stock, with regulatory paperwork naming a brand that
+was not there. This is the classic check-then-act race and it is invisible in single-user testing.
+**So the RPC takes a row lock on the brand-inventory balance row itself** (`SELECT … FOR UPDATE`
+on the `(product_id, brand_id)` balance, acquired **before** the availability check and held to
+commit), and the balance carries a non-negative CHECK as the backstop for any path that misses the
+lock. Lock ordering: parent line first, then balance rows in a deterministic order — ascending
+`brand_id` — so two concurrent split allocations cannot deadlock each other.
+
+**Proof:** receive 10 A / 90 B, attempt a 20-gallon all-Brand-A delivery, show it is refused;
+allocate 10 A / 10 B, show it succeeds; void it and show Brand A's available quantity returns
+to 10. **Concurrency case, required:** run two allocations against the same brand balance
+simultaneously from two sessions and show exactly one commits and the other is refused or blocks
+— never both. A sequential proof cannot detect this defect.
 
 **A brand's density may only override a spec density when the record says which brand shipped
 *(finding 15)*.** Receiving Brand A does not establish that a later delivery drawn from pooled
@@ -747,6 +763,22 @@ never happened. A crew-typed brand would have had no unambiguous commit route at
   fields — through the brand-commit path, **not** `commit_label_draft`. Rejecting it writes
   nothing and leaves the receiving record's snapshot untouched, because the snapshot already
   carries the typed name (PRD 1.9a-iii).
+- **"The brand-commit path" is not a specification — here is the RPC *(finding 6, fourth pass)*.**
+  Naming an undefined path is how a builder invents an unguarded one, and this call writes an EPA
+  number that reaches customer paperwork. **`commit_brand_proposal` is owned by WP-1**, alongside
+  the queue schema it resolves, because **WP-3 writes these proposals and applies before WP-4** —
+  the same reason the queue shape moved to WP-1. It is `SECURITY DEFINER` with
+  `SET search_path = public, pg_temp`; it resolves the actor from `auth.uid()` inside the function,
+  never from an argument; it is **admin-only per D-S**; and it accepts and enforces
+  `p_idempotency_key`. In **one transaction** it locks the proposal row `FOR UPDATE`, refuses if
+  the row is not still `pending` (so a double-approve cannot create a second brand), inserts the
+  `product_brands` row, writes an actor-bound audit row, and sets the queue row to `approved` with
+  the resulting `brand_id`. Rejection is the same RPC's refuse path: status `rejected`, audit row
+  written, no brand created. `EXECUTE` to `authenticated` only, never `anon`.
+  **Proof:** approve a proposal and show one brand row, one audit row and a resolved queue row;
+  **replay the same key** and show no second brand; **approve it again with a new key** and show
+  it is refused because the row is no longer pending; **call it as a non-admin** and show it is
+  refused with nothing written.
 - **WP-1's CHECK must include `brand_proposal` from the start.** WP-3 writes these rows, and
   WP-3 applies before WP-4; a CHECK that gains the third member only in WP-4 makes every D-K
   receive fail with a truck at the dock.
@@ -858,13 +890,33 @@ the prior effective row and promotes the new one. Mason's typed value stays effe
 (D-L); the EPA figure is visible beside it as a flagged difference and is **not** readable as
 chemistry until he approves the swap.
 
-**Proof:** commit a proposal that conflicts with a typed value, then query
-`product_active_ingredients` for that product and show **exactly one** effective row, still
-carrying Mason's number, with the EPA row present and marked proposed. Then approve the swap and
-show the count is **still exactly one**, now carrying the EPA number. **Run the same proof a
-second time with the two rows on *different* bases** — typed `acid_equivalent`, EPA
-`active_ingredient` — and show the index still refuses the second effective row. A proof that
-only exercises a same-basis conflict has not tested the failure this invariant exists to prevent.
+**A partial unique index gives *at most* one, not *exactly* one — and proposed rows must not be
+readable as chemistry *(finding 1, fourth pass)*.** Two gaps remain once the index is in place.
+First, the index permits **zero** effective rows: a state where an ingredient has only proposed
+rows reads as "this product contains no measured amount of this active", which a rate calculation
+will happily treat as nothing rather than as unknown. Second, `product_active_ingredients` is
+readable in full, so any consumer that forgets a `state = 'effective'` predicate silently reads
+proposed EPA chemistry as live — the same failure the invariant exists to prevent, arriving
+through a missing WHERE clause instead of a duplicate row. So:
+
+- **Reads go through an effective-only view or RPC**, and **direct SELECT on the base table is
+  revoked** for application roles. A consumer cannot forget a predicate it never writes.
+- **Every ingredient that has any row has exactly one effective row.** Promotion and retirement
+  happen in **one transaction** — the prior effective row is retired and the new one promoted
+  together, never as two statements — so no window exists in which the count is zero.
+- A proposal for an ingredient with **no** existing effective row is committed by promoting it
+  directly; it is never left proposed-only.
+
+**Proof:** commit a proposal that conflicts with a typed value, then query the **effective-only
+view** for that product and show **exactly one** row, still carrying Mason's number, with the EPA
+row present in the base table and marked proposed. Then approve the swap and show the count is
+**still exactly one**, now carrying the EPA number. **Run the same proof a second time with the
+two rows on *different* bases** — typed `acid_equivalent`, EPA `active_ingredient` — and show the
+index still refuses the second effective row. A proof that only exercises a same-basis conflict
+has not tested the failure this invariant exists to prevent. **Negative cases:** attempt a direct
+`SELECT` on `product_active_ingredients` as the application role and show it is **refused**; and
+attempt to retire the effective row without promoting a replacement in the same transaction and
+show the count never reaches zero.
 
 **Cancelled registrations (D-T, reaffirmed as D-W):** a cancelled registration produces a **loud
 banner on the product and a warning when it is added to a quote** — but nothing is blocked.

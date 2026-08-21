@@ -172,6 +172,32 @@ no memory of owner decisions and re-raises these every round:
 findings are owner decisions the reviewer will re-raise indefinitely. Judge the gate on whether
 the *remaining* findings are real, not on the token.
 
+**Fourth pass — prediction confirmed, four more fixed.** The gate re-raised **D-W and D-X
+verbatim** as findings 3 and 4, exactly as the paragraph above said it would. That is now
+measured behavior, not a guess. The other four were real and two of them were defects the third
+pass introduced:
+
+- **Ownership, again — ORCHESTRATION.md still said WP-4 extends the queue** while the build plan
+  and this ledger had been corrected. The third pass fixed two documents out of three. Now all
+  three state it identically.
+- **`brand_proposal` named an undefined "brand-commit path".** Naming a path without specifying
+  it is how a builder invents an unguarded one, and this call writes an EPA number that reaches
+  customer paperwork. Now `commit_brand_proposal`, owned by **WP-1** for the same
+  applies-before-WP-4 reason as the queue: `SECURITY DEFINER`, `auth.uid()` actor, admin-only per
+  D-S, idempotent, locks the proposal `FOR UPDATE` and refuses a non-pending row, with replay,
+  double-approve and non-admin refusal proofs.
+- **A partial unique index gives *at most* one effective row, not *exactly* one** — and proposed
+  rows sat in the fully readable chemistry table, so a consumer missing a `state = 'effective'`
+  predicate reads EPA proposals as live chemistry. Reads now go through an effective-only view
+  with direct base-table SELECT revoked, and promotion/retirement happen in one transaction so
+  the count never passes through zero.
+- **Brand balances could be overdrawn concurrently.** The allocation RPC locked the parent
+  delivery *line*, which does nothing about two different lines drawing the same brand: two
+  6-gallon deliveries against 10 available gallons both read 10 and both commit. The lock moves
+  to the balance row itself, taken before the availability check, with a deterministic
+  ascending-`brand_id` order to avoid deadlock and a non-negative CHECK as backstop. A
+  simultaneous-allocation proof is now required — a sequential proof cannot detect this.
+
 **Still open, and deliberately so:** findings 20, 21, 22, 24 all concern **Phase 2/3**
 comparison and rate-source behavior, which this loop does not build — they must be settled before
 Phase 2, not before WP-0. Finding 30 (parked-migration ownership) is blocker row 4 above and
