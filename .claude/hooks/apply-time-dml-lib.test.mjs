@@ -735,6 +735,7 @@ eq(T(null), [], "a null body does not throw");
   for (const [label, sql] of [
     ["IF condition", "DO $$ BEGIN IF public.wrapper() THEN NULL; END IF; END $$;"],
     ["ELSIF condition", "DO $$ BEGIN IF false THEN NULL; ELSIF public.wrapper() THEN NULL; END IF; END $$;"],
+    ["ELSEIF condition", "DO $$ BEGIN IF false THEN NULL; ELSEIF public.wrapper() THEN NULL; END IF; END $$;"],
     ["WHILE condition", "DO $$ BEGIN WHILE public.wrapper() LOOP EXIT; END LOOP; END $$;"],
     ["assignment RHS", "DO $$ DECLARE v boolean; BEGIN v := public.wrapper(); END $$;"],
     ["declaration initializer", "DO $$ DECLARE v boolean := public.wrapper(); BEGIN NULL; END $$;"],
@@ -752,6 +753,16 @@ eq(T(null), [], "a null body does not throw");
   ]) {
     ok(!refuses(sql), `round-32: ${label} remains deferred`);
   }
+
+  const branchRepair = (keyword) =>
+    "CREATE FUNCTION public.branch_money() RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN " +
+    "UPDATE public.order_items SET total_price = total_price; RETURN false; END $$; " +
+    `DO $$ BEGIN IF false THEN NULL; ${keyword} public.branch_money() THEN NULL; END IF; END $$;`;
+  const elsifTargets = T(branchRepair("ELSIF"));
+  eq(elsifTargets, ["order_items.total_price"],
+    "round-56: ELSIF evaluates its condition and follows the invoked money writer");
+  eq(T(branchRepair("ELSEIF")), elsifTargets,
+    "round-56: PostgreSQL ELSEIF has the same apply-time write identity as ELSIF");
 }
 
 // ---------------- ROUND 37: custom operators dispatch to routines too
@@ -1228,7 +1239,7 @@ eq(T(null), [], "a null body does not throw");
   for (const sql of cases) {
     const result = applyTimeWriteTargets(sql);
     ok(result.unresolved && result.sequenceMutation,
-      `round-51: persistent sequence mutation fails closed: ${sql.split(' ')[0]}`);
+      `round-51: persistent sequence mutation fails closed: ${sql}`);
   }
 
   const deferred = [
@@ -1241,7 +1252,7 @@ eq(T(null), [], "a null body does not throw");
   for (const sql of deferred) {
     const result = applyTimeWriteTargets(sql);
     ok(!result.sequenceMutation,
-      `round-51 MUTANT: deferred/read-only sequence expression stays non-mutating: ${sql.split(' ')[0]}`);
+      `round-51 MUTANT: deferred/read-only sequence expression stays non-mutating: ${sql}`);
   }
 }
 
@@ -1297,6 +1308,54 @@ eq(T(null), [], "a null body does not throw");
   ok(unqualified.targets.has('orders.total_profit') &&
       unqualified.unknownCalls.includes('search_path_money'),
     'round-54: unqualified resolution folds possible bodies but remains fail-closed without search-path proof');
+}
+
+// ---------------- ROUND 55: executable DDL and tolerant qualified identities
+{
+  const spacedDollar = applyTimeWriteTargets(
+    'CREATE FUNCTION public . spaced_money() RETURNS void LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.orders SET total_profit = total_profit; END $$; SELECT public.spaced_money();',
+  );
+  ok(spacedDollar.targets.has('orders.total_profit') &&
+      spacedDollar.invokedRoutines.includes('public.spaced_money'),
+    'round-55: whitespace around a routine schema separator preserves dollar-body identity');
+
+  const spacedString = applyTimeWriteTargets(
+    "CREATE FUNCTION public . spaced_string_money() RETURNS void LANGUAGE plpgsql AS 'BEGIN " +
+    "UPDATE public.order_items SET profit = profit; END'; SELECT public.spaced_string_money();",
+  );
+  ok(spacedString.targets.has('order_items.profit'),
+    'round-55: whitespace around a routine schema separator preserves string-body identity');
+
+  const installedTrigger = applyTimeWriteTargets(
+    'CREATE TABLE public.round55_scratch(id integer); ' +
+    'CREATE FUNCTION public.round55_sink() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.orders SET total_profit = total_profit; RETURN NEW; END $$; ' +
+    'CREATE PROCEDURE public.round55_install() LANGUAGE plpgsql AS $$ BEGIN ' +
+    'CREATE TRIGGER round55_t AFTER INSERT ON public.round55_scratch FOR EACH ROW ' +
+    'EXECUTE FUNCTION public.round55_sink(); END $$; ' +
+    'CALL public.round55_install(); INSERT INTO public.round55_scratch VALUES (1);',
+  );
+  ok(installedTrigger.targets.has('orders.total_profit'),
+    'round-55: a trigger attached by an invoked routine contributes its fired body');
+
+  const installedRule = applyTimeWriteTargets(
+    'CREATE TABLE public.round55_rule_source(id integer); ' +
+    'CREATE PROCEDURE public.round55_rule_install() LANGUAGE plpgsql AS $$ BEGIN ' +
+    'CREATE RULE round55_r AS ON SELECT TO public.round55_rule_source DO INSTEAD SELECT 1 AS id; ' +
+    'END $$; CALL public.round55_rule_install(); SELECT * FROM public.round55_rule_source;',
+  );
+  ok(installedRule.unresolved && installedRule.firedRules.includes('round55_rule_source'),
+    'round-55: a rule attached by an invoked routine fails closed when its relation is read');
+
+  const usingRule = applyTimeWriteTargets(
+    'CREATE TABLE public.round55_using_source(id integer); ' +
+    'CREATE RULE round55_using AS ON SELECT TO public.round55_using_source ' +
+    'DO INSTEAD SELECT 1 AS id; DELETE FROM public.round55_sink_table ' +
+    'USING public.round55_using_source WHERE true;',
+  );
+  ok(usingRule.unresolved && usingRule.firedRules.includes('round55_using_source'),
+    'round-55: DELETE or MERGE USING reads can fire standing SELECT rules');
 }
 
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

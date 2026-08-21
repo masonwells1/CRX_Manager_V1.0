@@ -3313,6 +3313,7 @@ $cascade_row"
                 for (i = 1; i <= m; i++) {
                   s = at[i]
                   callarg = 0
+                  looptarget = 0
                   if (match(s, /(^|[^a-z0-9_])call([^a-z0-9_]|$)/)) {
                     # Inspect only text after the procedure identity and its
                     # opening parenthesis. Otherwise `CALL v_ids(1)` mistakes
@@ -3322,9 +3323,15 @@ $cascade_row"
                     if (callopen > 0 && substr(calltail, callopen + 1) ~ ("(^|[^a-z0-9_])" var "([^a-z0-9_]|$)"))
                       callarg = 1
                   }
+                  # FOR and FOREACH assign into their loop target on every
+                  # iteration. That write-back can replace a captured proof
+                  # variable without spelling INTO, :=, =, or CALL.
+                  if (s ~ ("(^|[^a-z0-9_])foreach[ \t]+" var "([^a-z0-9_]|$)") ||
+                      s ~ ("(^|[^a-z0-9_])for[ \t]+" var "([^a-z0-9_]|$)"))
+                    looptarget = 1
                   if (s ~ ("into[ \t]+(strict[ \t]+)?" var "([^a-z0-9_]|$)") ||
                       s ~ (var "[ \t]*(\\[[^=]*\\][ \t]*)*:=") ||
-                      callarg)
+                      callarg || looptarget)
                     assigns++
                 }
                 if (assigns > 1) { print "reassigned\t" assigns; exit }

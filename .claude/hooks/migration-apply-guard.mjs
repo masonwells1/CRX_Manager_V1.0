@@ -35,25 +35,16 @@ import {
   routineIdentityChanges,
   viewDefinitions,
 } from "./apply-time-dml-lib.mjs";
+import {
+  migrationTimestampPrefix,
+  validMigrationStem,
+  validProjectRef,
+  validRegistryReason,
+} from "./guard-input-validation.mjs";
 
 const REQUIRED_CODEX_MODEL = "gpt-5.6-sol";
 const REQUIRED_CODEX_EFFORT = "high";
 const CRX_PRODUCTION_REF = "rhyzpcqhnizqbxphqdkr";
-const MIGRATION_STEM_RE = /^\d{8}(?:\d{6})?_[A-Za-z0-9][A-Za-z0-9_-]{0,180}$/;
-const PROJECT_REF_RE = /^[a-z0-9][a-z0-9_-]{0,62}$/;
-
-function validMigrationStem(value) {
-  return typeof value === "string" && MIGRATION_STEM_RE.test(value);
-}
-
-function validProjectRef(value) {
-  return typeof value === "string" && PROJECT_REF_RE.test(value);
-}
-
-function validRegistryReason(value) {
-  return typeof value === "string" && value.length > 0 && value.length <= 2000 &&
-    !/[\u0000-\u001f\u007f]/.test(value);
-}
 
 function migrationSourcePath(root, stem) {
   if (!validMigrationStem(stem)) throw new Error("invalid migration stem");
@@ -868,12 +859,14 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
     const submittedFanout = expandThroughFanout(submitted, fanoutEvidence);
 
     const ledgerHas = (stem) => {
-      const version = (stem.match(/\d{14}/) || [])[0];
+      const version = migrationTimestampPrefix(stem);
       return appliedNames.some((n) => n.includes(stem) || (version && n.includes(version)));
     };
 
     for (const stem of Object.keys(oneShot)) {
-      const version = (stem.match(/\d{14}/) || [])[0] || "";
+      // Both supported timestamp forms produce a real prefix or null. Never
+      // turn an 8-digit stem into the empty string and then use it as identity.
+      const version = migrationTimestampPrefix(stem);
       let matched = "";
       const sourceFiles = [];
       for (const root of evidenceRoots) {

@@ -2322,6 +2322,20 @@ const CASES = [
     mustReport: 'view_select_replay_bridge',
     sql: `SELECT * FROM public.replay_bridge;\n`,
   },
+  {
+    name: 'round-55: FOREACH cannot replace the captured proof-variable population',
+    expect: 'violation',
+    mustReport: 'assigned or passed to a possibly OUT/INOUT procedure',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\n` +
+      goodSetBlock().replace(
+        `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);`,
+        `  FOREACH v_ids SLICE 1 IN ARRAY ARRAY[ARRAY['00000000-0000-0000-0000-000000000001'::uuid]] LOOP\n` +
+          `    EXIT;\n  END LOOP;\n` +
+          `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);`,
+      ) +
+      `\n`,
+  },
 ];
 
 // A stamp no real migration uses, so these fixtures are never mistaken for

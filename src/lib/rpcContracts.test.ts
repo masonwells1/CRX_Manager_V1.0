@@ -10,18 +10,10 @@
  *   - Frontend passes a number where RPC expects a string
  *   - Missing required parameters
  */
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-
-// Reading every migration off disk is a one-time cost, but it lands inside
-// whichever test happens to call getMigrationFiles() first — and on a loaded
-// machine that alone can blow the 5s default per-test timeout. Pay it here,
-// once, on a clock that is allowed to be slow.
-beforeAll(() => {
-  getMigrationFiles();
-}, 120_000);
 
 // -------------------------------------------------------------------------
 // RPC parameter type definitions (must match SQL function signatures)
@@ -1768,15 +1760,6 @@ function getMigrationFiles(): { name: string; content: string }[] {
   return MIGRATION_FILES;
 }
 
-// The cache above made the scan O(files), but the FIRST caller still paid the
-// whole ~900-file disk read inside whichever test happened to reach it first,
-// on that test's 5s default budget. Under full-suite contention that still
-// flaked (seen blocking a commit on 2026-08-10). Warming it here moves the I/O
-// outside every per-test budget, where it can have a timeout that fits it.
-beforeAll(() => {
-  getMigrationFiles();
-}, 60_000);
-
 /**
  * Returns the body of the LATEST migration definition of `rpc`, or null if no
  * disk migration defines it by name (some functions live in consolidated files
@@ -1804,6 +1787,25 @@ function stripSqlCommentsAndStrings(sql: string): string {
   let executable = '';
 
   for (let i = 0; i < sql.length;) {
+    // Quoted identifiers are executable tokens, but deliberately untrusted for
+    // the canonical helper-name scan below. Consume them atomically so `--` or
+    // a helper-shaped name inside quotes cannot alter the surrounding lexer.
+    if (sql[i] === '"') {
+      i += 1;
+      while (i < sql.length) {
+        if (sql[i] === '"' && sql[i + 1] === '"') {
+          i += 2;
+        } else if (sql[i] === '"') {
+          i += 1;
+          break;
+        } else {
+          i += 1;
+        }
+      }
+      executable += ' ';
+      continue;
+    }
+
     if (sql.startsWith('--', i)) {
       const newline = sql.indexOf('\n', i + 2);
       if (newline === -1) break;
@@ -1852,7 +1854,12 @@ function stripSqlCommentsAndStrings(sql: string): string {
     }
 
     if (sql[i] === '$') {
-      const delimiter = sql.slice(i).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/)?.[0];
+      // PostgreSQL dollar tags are identifiers, including non-ASCII letters,
+      // and a delimiter cannot begin in the middle of repair$x$foo.
+      const precededByIdent = i > 0 && /[A-Za-z0-9_$\u0080-\uFFFF]/.test(sql[i - 1]);
+      const delimiter = precededByIdent
+        ? undefined
+        : sql.slice(i).match(/^\$(?:[A-Za-z_\u0080-\uFFFF][A-Za-z0-9_\u0080-\uFFFF]*)?\$/)?.[0];
       if (delimiter) {
         const closing = sql.indexOf(delimiter, i + delimiter.length);
         if (closing === -1) break;
@@ -1867,6 +1874,39 @@ function stripSqlCommentsAndStrings(sql: string): string {
   }
 
   return executable;
+}
+
+function assignedSqlCallArguments(
+  sql: string,
+  assignmentTarget: string,
+  callee: string,
+): string[] | null {
+  const executable = stripSqlCommentsAndStrings(sql);
+  const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const call = new RegExp(
+    `\\b${escape(assignmentTarget)}\\s*:=\\s*${escape(callee)}\\s*\\(`,
+    'i',
+  ).exec(executable);
+  if (!call) return null;
+  const open = executable.indexOf('(', call.index + call[0].length - 1);
+  let depth = 0;
+  let start = open + 1;
+  const args: string[] = [];
+  for (let i = open + 1; i < executable.length; i += 1) {
+    if (executable[i] === '(') depth += 1;
+    if (executable[i] === ')') {
+      if (depth === 0) {
+        args.push(executable.slice(start, i).replace(/\s+/g, ' ').trim());
+        return args;
+      }
+      depth -= 1;
+    }
+    if (executable[i] === ',' && depth === 0) {
+      args.push(executable.slice(start, i).replace(/\s+/g, ' ').trim());
+      start = i + 1;
+    }
+  }
+  return null;
 }
 
 function bodyUsesIdempotency(body: string): boolean {
@@ -2263,9 +2303,30 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
       /REVOKE ALL ON FUNCTION public\._draw_down_quote_intent_impl_20260819[\s\S]*FROM PUBLIC, anon, authenticated, service_role/
     );
 
-    expect(intentWrapper).toMatch(
-      /v_result := public\._draw_down_quote_intent_impl_20260819\([\s\S]*p_idempotency_key[\s\S]*p_below_cost_reason/
+    const expectedForwardedArgs = [
+      'p_quote_id',
+      'p_draws',
+      'p_performed_by',
+      'p_idempotency_key',
+      'p_below_cost_reason',
+    ];
+    const intentWrapperBody = (intentWrapper as string).match(
+      /CREATE FUNCTION public\.draw_down_quote\([\s\S]*?\bAS\s+\$function\$([\s\S]*?)\$function\$/i,
+    )?.[1];
+    expect(intentWrapperBody).toBeDefined();
+    const forwardsExactKey = (sql: string) => expect(
+      assignedSqlCallArguments(
+        sql,
+        'v_result',
+        'public._draw_down_quote_intent_impl_20260819',
+      ),
+    ).toEqual(expectedForwardedArgs);
+    forwardsExactKey(intentWrapperBody as string);
+    const missingKeyMutant = (intentWrapperBody as string).replace(
+      /(v_result\s*:=\s*public\._draw_down_quote_intent_impl_20260819\([\s\S]*?p_performed_by,\s*)p_idempotency_key,\s*(p_below_cost_reason)/i,
+      '$1$2',
     );
+    expect(() => forwardsExactKey(missingKeyMutant)).toThrow();
     expect(cutoverWrapper).toMatch(
       /RETURN public\._draw_down_quote_below_cost_impl_20260810\(\s*p_quote_id, p_draws, p_performed_by, p_idempotency_key\s*\)/
     );
@@ -2886,6 +2947,15 @@ describe('Idempotency coverage drift (generated-types driven, fail-closed)', () 
         PERFORM audit_log($message$check_idempotency(p_idempotency_key)$message$);
       END
     `)).toBe(false);
+
+    expect(bodyUsesIdempotency('SELECT "check_idempotency(";')).toBe(false);
+    expect(bodyUsesIdempotency('$é$PERFORM check_idempotency(p_idempotency_key);$é$')).toBe(false);
+    expect(bodyUsesIdempotency(
+      'PERFORM repair$x$foo(); PERFORM check_idempotency(p_idempotency_key);'
+    )).toBe(true);
+    expect(bodyUsesIdempotency(
+      'SELECT "x--y"; PERFORM check_idempotency(p_idempotency_key);'
+    )).toBe(true);
   });
 
   it('classifies wrappers that mutate only by calling another function', () => {

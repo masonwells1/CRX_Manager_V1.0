@@ -2,7 +2,7 @@
 // Mutation-focused tests for the applied-ledger capture.
 
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -15,6 +15,9 @@ import { CRX_SUPABASE_PROJECT_ID, runLinkedRead } from './supabase-linked-read.m
 // The two capture producers share the same linked-project trust boundary and
 // ship as one correction-guard test entry.
 import './generate-trigger-fanout.test.mjs';
+// The replay-authorization producer shares this evidence boundary. Importing
+// its suite keeps it in test:correction-guards and CI without a second process.
+import './write-one-shot-replay-override.test.mjs';
 
 const CAPTURED_AT = '2026-08-14T04:00:00.000000Z';
 const ROWS = [
@@ -291,6 +294,27 @@ check('mismatched copied pooler metadata is refused before query execution', () 
       run: () => { called = true; return { status: 0, stdout: '' }; },
     }), /linked Supabase metadata pooler-url does not match/);
     assert.equal(called, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+check('a private-workdir setup failure leaves no linked metadata directory behind', () => {
+  const dir = linkedFixture();
+  const before = new Set(readdirSync(tmpdir()).filter((name) => name.startsWith('crx-linked-read-')));
+  try {
+    // copyFileSync cannot copy a directory as config.toml. This exercises an
+    // ordinary filesystem throw rather than one of the explicit fail() paths.
+    mkdirSync(path.join(dir, 'supabase', 'config.toml'));
+    assert.throws(() => runLinkedRead({
+      projectRoot: dir,
+      linkedRoot: dir,
+      queryId: 'applied_migrations',
+      run: () => ({ status: 0, stdout: '' }),
+    }));
+    const leaked = readdirSync(tmpdir())
+      .filter((name) => name.startsWith('crx-linked-read-') && !before.has(name));
+    assert.deepEqual(leaked, []);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

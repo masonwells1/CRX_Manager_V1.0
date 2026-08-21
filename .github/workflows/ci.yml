@@ -173,7 +173,7 @@ jobs:
         # hash, and the changed-only scan rejects the migration on the PR that
         # introduces it, before any hash exists to record.
         run: |
-          set -uo pipefail
+          set -euo pipefail
           BASE="${{ github.event.pull_request.base.sha }}"
           if [ -z "$BASE" ]; then
             BASE="$(git merge-base origin/main HEAD)" || {

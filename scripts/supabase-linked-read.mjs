@@ -200,64 +200,67 @@ export function parseSupabaseJsonRows(stdout) {
 
 function createImmutableLinkedWorkdir(root, expectedProjectId) {
   const immutableRoot = mkdtempSync(path.join(tmpdir(), 'crx-linked-read-'));
-  const immutableSupabase = path.join(immutableRoot, 'supabase');
-  const immutableTemp = path.join(immutableSupabase, '.temp');
-  mkdirSync(immutableTemp, { recursive: true });
-  const configPath = path.join(root, 'supabase', 'config.toml');
-  if (existsSync(configPath)) {
-    copyFileSync(configPath, path.join(immutableSupabase, 'config.toml'));
-  }
-  const sourceTemp = path.join(root, 'supabase', '.temp');
-  for (const name of [
-    'cli-latest',
-    'gotrue-version',
-    'linked-project.json',
-    'pooler-url',
-    'postgres-version',
-    'rest-version',
-    'storage-migration',
-    'storage-version',
-  ]) {
-    const source = path.join(sourceTemp, name);
-    if (!existsSync(source)) continue;
-    if (name === 'linked-project.json') {
-      let metadata;
-      try {
-        metadata = JSON.parse(readFileSync(source, 'utf8'));
-      } catch {
-        rmSync(immutableRoot, { recursive: true, force: true });
-        fail('linked Supabase metadata linked-project.json is invalid');
-      }
-      if (metadata?.ref !== expectedProjectId) {
-        rmSync(immutableRoot, { recursive: true, force: true });
-        fail('linked Supabase metadata linked-project.json does not match the expected project');
-      }
+  try {
+    const immutableSupabase = path.join(immutableRoot, 'supabase');
+    const immutableTemp = path.join(immutableSupabase, '.temp');
+    mkdirSync(immutableTemp, { recursive: true });
+    const configPath = path.join(root, 'supabase', 'config.toml');
+    if (existsSync(configPath)) {
+      copyFileSync(configPath, path.join(immutableSupabase, 'config.toml'));
     }
-    if (name === 'pooler-url') {
-      let pooler;
-      try {
-        pooler = new URL(readFileSync(source, 'utf8').trim());
-      } catch {
-        rmSync(immutableRoot, { recursive: true, force: true });
-        fail('linked Supabase metadata pooler-url is invalid');
+    const sourceTemp = path.join(root, 'supabase', '.temp');
+    for (const name of [
+      'cli-latest',
+      'gotrue-version',
+      'linked-project.json',
+      'pooler-url',
+      'postgres-version',
+      'rest-version',
+      'storage-migration',
+      'storage-version',
+    ]) {
+      const source = path.join(sourceTemp, name);
+      if (!existsSync(source)) continue;
+      if (name === 'linked-project.json') {
+        let metadata;
+        try {
+          metadata = JSON.parse(readFileSync(source, 'utf8'));
+        } catch {
+          fail('linked Supabase metadata linked-project.json is invalid');
+        }
+        if (metadata?.ref !== expectedProjectId) {
+          fail('linked Supabase metadata linked-project.json does not match the expected project');
+        }
       }
-      const username = decodeURIComponent(pooler.username);
-      if (!['postgres:', 'postgresql:'].includes(pooler.protocol) ||
-          (username !== expectedProjectId && !username.endsWith(`.${expectedProjectId}`))) {
-        rmSync(immutableRoot, { recursive: true, force: true });
-        fail('linked Supabase metadata pooler-url does not match the expected project');
+      if (name === 'pooler-url') {
+        let pooler;
+        try {
+          pooler = new URL(readFileSync(source, 'utf8').trim());
+        } catch {
+          fail('linked Supabase metadata pooler-url is invalid');
+        }
+        const username = decodeURIComponent(pooler.username);
+        if (!['postgres:', 'postgresql:'].includes(pooler.protocol) ||
+            (username !== expectedProjectId && !username.endsWith(`.${expectedProjectId}`))) {
+          fail('linked Supabase metadata pooler-url does not match the expected project');
+        }
       }
+      copyFileSync(source, path.join(immutableTemp, name));
     }
-    copyFileSync(source, path.join(immutableTemp, name));
+    // This private workdir, rather than the shared checkout, is what --linked
+    // reads. A concurrent `supabase link` can change and restore the checkout's
+    // marker (an ABA race) without redirecting this already-pinned command.
+    writeFileSync(path.join(immutableTemp, 'project-ref'), `${expectedProjectId}\n`, {
+      encoding: 'utf8',
+      flag: 'wx',
+    });
+    return immutableRoot;
+  } catch (error) {
+    // Setup happens before runLinkedRead's query try/finally. Clean here too so
+    // a failed mkdir/copy/write cannot strand linked metadata in %TEMP%.
+    rmSync(immutableRoot, { recursive: true, force: true });
+    throw error;
   }
-  // This private workdir, rather than the shared checkout, is what --linked
-  // reads. A concurrent `supabase link` can change and restore the checkout's
-  // marker (an ABA race) without redirecting this already-pinned command.
-  writeFileSync(path.join(immutableTemp, 'project-ref'), `${expectedProjectId}\n`, {
-    encoding: 'utf8',
-    flag: 'wx',
-  });
-  return immutableRoot;
 }
 
 export function runLinkedRead(options = {}) {
