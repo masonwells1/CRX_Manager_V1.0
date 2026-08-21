@@ -455,6 +455,18 @@ for (const command of [
     ok(checkCommandDeep(`node -- ${ignoredWrapperRelative}`, integrityRepo, reviewOptions), "an ignored file-backed executor after -- is denied");
     ok(checkCommandDeep(ignoredDirectRelative.replaceAll("/", "\\"), integrityRepo, reviewOptions)?.includes("ignored or untracked"), "a directly executed ignored script is denied");
     ok(checkCommandDeep(`cmd /c ${ignoredDirectRelative.replaceAll("/", "\\")}`, integrityRepo, reviewOptions)?.includes("ignored or untracked"), "cmd dispatch cannot hide a directly executed ignored script");
+    for (const cmdBuiltinCommand of [
+      `cmd /c call ${ignoredDirectRelative.replaceAll("/", "\\")}`,
+      `cmd /c @call ${ignoredDirectRelative.replaceAll("/", "\\")}`,
+      `cmd /c if exist ${ignoredDirectRelative.replaceAll("/", "\\")} ${ignoredDirectRelative.replaceAll("/", "\\")}`,
+      `cmd /c if 1==1 call ${ignoredDirectRelative.replaceAll("/", "\\")}`,
+      `cmd /c for %A in (1) do ${ignoredDirectRelative.replaceAll("/", "\\")}`,
+    ]) {
+      const cmdBuiltinReason = checkCommandDeep(cmdBuiltinCommand, integrityRepo, reviewOptions);
+      ok(cmdBuiltinReason?.includes("ignored or untracked"), "CMD builtin traversal cannot hide an ignored executable: " + cmdBuiltinCommand + " reason=" + cmdBuiltinReason);
+      const cmdBuiltinHookResult = runHook({ tool_name: "Bash", tool_input: { command: cmdBuiltinCommand } }, integrityRepo);
+      ok(cmdBuiltinHookResult.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies a CMD builtin wrapper: " + cmdBuiltinCommand);
+    }
     ok(checkCommandDeep("cmd /c evil", integrityRepo, reviewOptions)?.includes("ignored or untracked"), "cmd current-directory PATHEXT resolution cannot hide a bare ignored wrapper");
     const bareCmdHookResult = runHook({ tool_name: "Bash", tool_input: { command: "cmd /c evil" } }, integrityRepo);
     ok(bareCmdHookResult.stdout.includes("Blocked file-backed interpreter"), "the Bash hook denies a bare current-directory CMD wrapper");

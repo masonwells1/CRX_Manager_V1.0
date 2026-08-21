@@ -179,7 +179,7 @@ function createReviewedExecutorInspector(cwd, options = {}) {
     const rootResult = spawnSync(gitExecutable, ["-C", base, "--no-replace-objects", "rev-parse", "--show-toplevel"], {
       encoding: "utf8",
       windowsHide: true,
-      timeout: 1_500,
+      timeout: 5_000,
       env: gitEnv,
     });
     root = String(rootResult.stdout || "").trim();
@@ -190,7 +190,7 @@ function createReviewedExecutorInspector(cwd, options = {}) {
     const headResult = spawnSync(gitExecutable, ["-C", root, "--no-replace-objects", "rev-parse", "HEAD"], {
       encoding: "utf8",
       windowsHide: true,
-      timeout: 1_500,
+      timeout: 5_000,
       env: gitEnv,
     });
     headSha = String(headResult.stdout || "").trim().toLowerCase();
@@ -231,7 +231,7 @@ function createReviewedExecutorInspector(cwd, options = {}) {
       const treeResult = spawnSync(gitExecutable, ["-C", root, "--no-replace-objects", "ls-tree", "-r", "--full-tree", ref], {
         encoding: "utf8",
         windowsHide: true,
-        timeout: 1_500,
+        timeout: 5_000,
         env: gitEnv,
       });
       if (treeResult.status !== 0) {
@@ -772,6 +772,44 @@ export function maintenanceProducerCommandMentioned(command, depth = 0, fileExec
       || /^(?:https?|file):/i.test(candidate)) return false;
     return fileExecutorInspector(candidate);
   };
+  const cmdBuiltinDispatchesReviewedExecutor = () => {
+    if (!fileExecutorInspector || depth >= 4) return false;
+    const hardBoundary = (token) => token?.control && /^(?:;|&|\||\n)$/.test(token.value);
+    const replay = (words, start) => {
+      const body = words.slice(start).map((token) => token.value).join(" ");
+      return Boolean(body) && maintenanceProducerCommandMentioned(body, depth + 1, fileExecutorInspector);
+    };
+    for (let segmentStart = 0; segmentStart < tokens.length;) {
+      while (segmentStart < tokens.length && hardBoundary(tokens[segmentStart])) segmentStart += 1;
+      let segmentEnd = segmentStart;
+      while (segmentEnd < tokens.length && !hardBoundary(tokens[segmentEnd])) segmentEnd += 1;
+      const words = tokens.slice(segmentStart, segmentEnd).filter((token) => !token.control);
+      const commandName = normalizeShellToken(words[0]?.value || "").replace(/^@/, "").toLowerCase();
+      if (commandName === "call") {
+        if (!String(words[1]?.value || "").startsWith(":" ) && replay(words, 1)) return true;
+      } else if (commandName === "if") {
+        let cursor = 1;
+        if (/^not$/i.test(words[cursor]?.value || "")) cursor += 1;
+        if (/^\/i$/i.test(words[cursor]?.value || "")) cursor += 1;
+        const mode = String(words[cursor]?.value || "").toLowerCase();
+        if (["defined", "exist", "errorlevel", "cmdextversion"].includes(mode)) cursor += 2;
+        else if (/==/.test(words[cursor]?.value || "")) cursor += 1;
+        else if (/^(?:equ|neq|lss|leq|gtr|geq)$/i.test(words[cursor + 1]?.value || "")) cursor += 3;
+        else return true;
+        if (/^@?call$/i.test(words[cursor]?.value || "")) cursor += 1;
+        if (replay(words, cursor)) return true;
+      } else if (commandName === "for") {
+        const doIndex = words.findIndex((token, index) => index > 0 && /^do$/i.test(token.value));
+        if (doIndex < 0) return true;
+        let cursor = doIndex + 1;
+        if (/^@?call$/i.test(words[cursor]?.value || "")) cursor += 1;
+        if (replay(words, cursor)) return true;
+      }
+      segmentStart = segmentEnd + 1;
+    }
+    return false;
+  };
+  if (cmdBuiltinDispatchesReviewedExecutor()) return true;
   if (tokens.some(directPathBackedInvocation)) return true;
   const opaqueImplicitLoaderInvocation = (token, index, list) => {
     if (!invocationPosition(list, index)) return false;

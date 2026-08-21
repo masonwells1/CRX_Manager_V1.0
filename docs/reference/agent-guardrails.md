@@ -179,7 +179,9 @@ On Windows, bare command names are checked against current-directory executable
 extensions before PATH lookup, so `cmd /c name` cannot hide `name.cmd` or
 `name.bat`. Command-local `PATH` or `PATHEXT` mutations fail closed before bare
 executable dispatch, including nested and unescaped CMD forms, so an ignored
-subdirectory cannot replace the reviewed command resolution. Static PowerShell
+subdirectory cannot replace the reviewed command resolution. Nested CMD
+`call`/`@call`, `if` command operands, and `for ... do` bodies are replayed
+through the exact-HEAD executor check. Static PowerShell
 alias definitions are provenance-checked and
 replayed through the full classifier, preventing an alias from hiding either a
 path-backed wrapper or an interpreter plus unsafe operand.

@@ -173,6 +173,8 @@ All significant development milestones, in reverse chronological order.
   Bare executable dispatch also fails closed after a command-local `PATH` or
   `PATHEXT` mutation, including nested and unescaped CMD forms; ignored
   subdirectories therefore cannot replace the reviewed executable resolution.
+  CMD `call`/`@call`, `if` command operands, and `for ... do` bodies are replayed
+  through the exact-HEAD executor check so builtins cannot hide ignored wrappers.
   A final exact-SHA review found that path identity also depends on the shell's
   effective directory: a preceding location change could verify the root script
   but execute an ignored shadow below the new directory. The shared Bash/MCP

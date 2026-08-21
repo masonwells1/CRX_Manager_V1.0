@@ -699,6 +699,19 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
       tool_input: { command: ignoredDirectRelative.replaceAll("/", "\\") },
     }, tmp);
     ok(isDeny(r) && r.stdout.includes("Blocked file-backed interpreter"), "MCP denies a directly executed ignored script");
+    for (const cmdBuiltinCommand of [
+      `cmd /c call ${ignoredDirectRelative.replaceAll("/", "\\")}`,
+      `cmd /c @call ${ignoredDirectRelative.replaceAll("/", "\\")}`,
+      `cmd /c if exist ${ignoredDirectRelative.replaceAll("/", "\\")} ${ignoredDirectRelative.replaceAll("/", "\\")}`,
+      `cmd /c if 1==1 call ${ignoredDirectRelative.replaceAll("/", "\\")}`,
+      `cmd /c for %A in (1) do ${ignoredDirectRelative.replaceAll("/", "\\")}`,
+    ]) {
+      r = runHook({
+        tool_name: "mcp__Desktop_Commander__start_process",
+        tool_input: { command: cmdBuiltinCommand },
+      }, tmp);
+      ok(isDeny(r) && r.stdout.includes("Blocked file-backed interpreter"), "MCP denies a CMD builtin wrapper: " + cmdBuiltinCommand);
+    }
     writeFileSync(path.join(tmp, "evil.cmd"), "@echo bare ignored wrapper\n");
     r = runHook({
       tool_name: "mcp__Desktop_Commander__start_process",
