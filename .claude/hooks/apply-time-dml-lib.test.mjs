@@ -647,6 +647,32 @@ eq(T(null), [], "a null body does not throw");
   ok(!escapedDefinitionOnly.unresolved,
     "round-60 MUTANT: the same plain-quoted body remains deferred until invocation");
 
+  for (const setting of ["E'off'", "U&'off'"]) {
+    const prefixedSetting = applyTimeWriteTargets(
+      `SET standard_conforming_strings = ${setting}; ` +
+      "CREATE FUNCTION public.round60_prefixed_setting() RETURNS void LANGUAGE plpgsql AS " +
+      "'BEGIN UPD\\101TE public.orders SET total_profit = total_profit; END'; " +
+      "SELECT public.round60_prefixed_setting();",
+    );
+    ok(prefixedSetting.unresolved,
+      `round-60: ${setting} also disables plain-body string trust`);
+  }
+
+  const continuedBody = applyTimeWriteTargets(
+    "CREATE FUNCTION public.round60_continued() RETURNS void LANGUAGE plpgsql AS " +
+    "'BEGIN UPD'\n'ATE public.orders SET total_profit = total_profit; END'; " +
+    "SELECT public.round60_continued();",
+  );
+  ok(continuedBody.unresolved,
+    "round-60: an invoked newline-continued routine body fails closed");
+
+  const continuedDefinitionOnly = applyTimeWriteTargets(
+    "CREATE FUNCTION public.round60_deferred_continued() RETURNS void LANGUAGE plpgsql AS " +
+    "'BEGIN UPD'\n'ATE public.orders SET total_profit = total_profit; END';",
+  );
+  ok(!continuedDefinitionOnly.unresolved,
+    "round-60 MUTANT: a continued body remains deferred until invocation");
+
   for (const [label, defaultSql] of [
     ["escape-string", "E'plain'"],
     ["dollar-quoted", "$q$plain$q$"],

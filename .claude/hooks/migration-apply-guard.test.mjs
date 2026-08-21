@@ -1036,6 +1036,27 @@ function armAutopilot(stateDir, hoursFromNow) {
       );
       ok(isDeny(r) && isOneShotDeny(r),
         "round-60: disabled standard strings cannot hide an invoked plain-body replay");
+
+      for (const [suffix, setting] of [["e", "E'off'"], ["u", "U&'off'"]]) {
+        r = apply(
+          `2099060100006${suffix === "e" ? "2" : "3"}_r60_prefixed_setting_${suffix}`,
+          `SET standard_conforming_strings = ${setting}; ` +
+          "CREATE FUNCTION public.tmp_prefixed_setting_fix() RETURNS void LANGUAGE plpgsql AS " +
+          "'BEGIN UPD\\101TE public.orders SET total_profit = total_profit; END'; " +
+          "SELECT public.tmp_prefixed_setting_fix();",
+        );
+        ok(isDeny(r) && isOneShotDeny(r),
+          `round-60: ${setting} cannot restore trust in an invoked plain-body replay`);
+      }
+
+      r = apply(
+        "20990601000064_r60_continued_body",
+        "CREATE FUNCTION public.tmp_continued_fix() RETURNS void LANGUAGE plpgsql AS " +
+        "'BEGIN UPD'\n'ATE public.orders SET total_profit = total_profit; END'; " +
+        "SELECT public.tmp_continued_fix();",
+      );
+      ok(isDeny(r) && isOneShotDeny(r),
+        "round-60: a newline-continued routine body cannot split away its protected write");
     }
 
     // …while the ordinary shape stays free. Every RPC migration in this

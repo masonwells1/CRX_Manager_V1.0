@@ -56,7 +56,40 @@ const ROUTINE_NAME_CAPTURE = /\b(?:function|procedure)\s+((?:[A-Za-z0-9_]+\s*\.\
 const DOLLAR_ROUTINE_BODY_HEAD = /\bas\s*$/;
 const QUOTED_ROUTINE_BODY_HEAD = /\bas\s*(?:e|u&)?$/;
 const DISABLES_STANDARD_CONFORMING_STRINGS =
-  /\bset\s+(?:(?:local|session)\s+)?standard_conforming_strings\s*(?:=|to)\s*(?:off|false|0|''(?=\s|;|$))/i;
+  /\bset\s+(?:(?:local|session)\s+)?standard_conforming_strings\s*(?:=|to)\s*(?:off|false|0|(?:e|u&)?''(?=\s|;|$))/i;
+
+function hasNewlineContinuedString(sql, start) {
+  let i = start;
+  let sawNewline = false;
+  while (i < sql.length) {
+    if (/\s/.test(sql[i])) {
+      if (sql[i] === "\n" || sql[i] === "\r") sawNewline = true;
+      i += 1;
+      continue;
+    }
+    if (sql[i] === "-" && sql[i + 1] === "-") {
+      i += 2;
+      while (i < sql.length && sql[i] !== "\n" && sql[i] !== "\r") i += 1;
+      continue;
+    }
+    if (sql[i] === "/" && sql[i + 1] === "*") {
+      let depth = 1;
+      i += 2;
+      while (i < sql.length && depth > 0) {
+        if (sql[i] === "\n" || sql[i] === "\r") sawNewline = true;
+        if (sql[i] === "/" && sql[i + 1] === "*") { depth += 1; i += 2; continue; }
+        if (sql[i] === "*" && sql[i + 1] === "/") { depth -= 1; i += 2; continue; }
+        i += 1;
+      }
+      continue;
+    }
+    break;
+  }
+  if (!sawNewline) return false;
+  return sql[i] === "'" ||
+    ((sql[i] === "e" || sql[i] === "E") && sql[i + 1] === "'") ||
+    ((sql[i] === "u" || sql[i] === "U") && sql[i + 1] === "&" && sql[i + 2] === "'");
+}
 
 function routineParameterDefaults(statement) {
   const named = ROUTINE_NAME_CAPTURE.exec(statement);
@@ -385,7 +418,12 @@ export function applyTimeCode(sql, depth = 0) {
             // escape alphabet. Until those PostgreSQL grammars are decoded,
             // their stored body is safe only while deferred; invocation must
             // fail closed rather than trust the raw literal bytes.
-            unresolved: unsafeRoutineLiteral || inner.unsupportedDoBody,
+            // PostgreSQL concatenates adjacent string constants when their
+            // separating whitespace contains a newline. This lexer stores one
+            // literal at a time, so an invoked continued body must be opaque
+            // instead of trusting only its first fragment.
+            unresolved: unsafeRoutineLiteral || inner.unsupportedDoBody ||
+              hasNewlineContinuedString(sql, i),
             plainQuotedBody: !unsafeRoutineLiteral,
             callableDefault: routineHasCallableParameterDefault(head),
             defaultCode: routineParameterDefaults(head).map((expression) => `SELECT ${expression}`).join(";\n"),

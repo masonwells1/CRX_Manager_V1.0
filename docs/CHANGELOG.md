@@ -19,8 +19,10 @@ migration safety harness; no app source, migration SQL, live database, or produc
   validation and copy.
 - Routine-body parsing now requires the literal to follow the routine's `AS` clause, so quoted
   parameter defaults cannot create a false opaque overload. Invoked plain-quoted bodies also fail
-  closed after `standard_conforming_strings` is disabled, preventing backslash escapes from hiding
-  a protected write while harmless uninvoked definitions remain deferred.
+  closed after `standard_conforming_strings` is disabled—including escape/Unicode-prefixed setting
+  values—and when PostgreSQL would concatenate a newline-continued second body literal, preventing
+  backslash or split-token escapes from hiding a protected write while harmless uninvoked
+  definitions remain deferred.
 - Trigger, FK, rule, view, and event-trigger evidence now expires after 24 hours. The apply guard
   skips stale or materially future-dated manifests and requires at least one fresh linked-production
   capture, with the fixed no-argument regeneration command in its denial message.
@@ -165,7 +167,7 @@ migration safety harness; no app source, migration SQL, live database, or produc
 
 Focused proof: snapshot producer 23 assertions; applied-source containment pass (including forced
 worktree-enumeration failure); trigger fan-out producer 22 assertions; apply-time analyzer
-282 assertions; apply-time guard 324 assertions; approved-set validator 205 mutation cases;
+286 assertions; apply-time guard 327 assertions; approved-set validator 205 mutation cases;
 one-shot override writer 25 assertions.
 Each new edge has a removal mutant that
 survives only when the load-bearing protection is deliberately deleted.
