@@ -164,6 +164,11 @@ command itself rather than an interpreter operand. Direct `.bat`, `.cmd`,
 byte-identical to exact HEAD, and independently reviewed on feature branches.
 Real Bash and MCP regressions deny ignored, worktree-modified, and locally
 committed but unreviewed direct executables.
+On Windows, bare command names are checked against current-directory executable
+extensions before PATH lookup, so `cmd /c name` cannot hide `name.cmd` or
+`name.bat`. Static PowerShell alias definitions are provenance-checked and
+replayed through the full classifier, preventing an alias from hiding either a
+path-backed wrapper or an interpreter plus unsafe operand.
 Alias definitions and unknown commands
 targeting `Env:NODE_OPTIONS` fail closed, as do standalone CMD mutations.
 Recursively inspected CMD bodies fail closed

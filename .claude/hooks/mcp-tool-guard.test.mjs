@@ -676,6 +676,19 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
       tool_input: { command: ignoredDirectRelative.replaceAll("/", "\\") },
     }, tmp);
     ok(isDeny(r) && r.stdout.includes("Blocked file-backed interpreter"), "MCP denies a directly executed ignored script");
+    writeFileSync(path.join(tmp, "evil.cmd"), "@echo bare ignored wrapper\n");
+    r = runHook({
+      tool_name: "mcp__Desktop_Commander__start_process",
+      tool_input: { command: "cmd /c evil" },
+    }, tmp);
+    ok(isDeny(r) && r.stdout.includes("Blocked file-backed interpreter"), "MCP denies a bare current-directory CMD wrapper resolved through PATHEXT");
+    const ignoredPowerShellRelative = "output/ignored-wrapper.ps1";
+    writeFileSync(path.join(tmp, ignoredPowerShellRelative), "Write-Output ignored\n");
+    r = runHook({
+      tool_name: "mcp__Desktop_Commander__start_process",
+      tool_input: { command: `Set-Alias x .\\${ignoredPowerShellRelative.replaceAll("/", "\\")}; x` },
+    }, tmp);
+    ok(isDeny(r) && r.stdout.includes("Blocked file-backed interpreter"), "MCP denies a static PowerShell alias to an ignored script");
     const inlineGitAliasCommand = "git -c 'alias.run=!node output/ignored-wrapper.mjs' run";
     r = runHook({
       tool_name: "mcp__Desktop_Commander__start_process",

@@ -179,6 +179,9 @@ All significant development milestones, in reverse chronological order.
   too, including `.bat`, `.cmd`, `.ps1`, shebang-style paths, and nested shell
   dispatch. Bash and MCP regressions cover ignored, worktree-modified, and
   locally committed but independently unreviewed direct executables.
+  Windows current-directory executable extension resolution is covered for bare
+  `cmd /c name` commands, and static PowerShell aliases are provenance-checked
+  and replayed through the full classifier before later alias invocation.
   Environment-provider and .NET `NODE_OPTIONS` mutations are denied even when
   no Node command appears in the same payload, closing staged mutations across
   persistent MCP shell interactions. Dynamic environment-provider targets fail

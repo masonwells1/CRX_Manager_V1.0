@@ -228,60 +228,82 @@ function createReviewedExecutorInspector(cwd, options = {}) {
 
   const inspect = (scriptPath) => {
     if (reason) return true;
-    initialize();
-    if (initializationError) {
-      reason = initializationError;
-      return true;
-    }
     const rawPath = String(scriptPath || "");
     if (!rawPath || /[*?\[\]{}$`]|[<>]\(|\$\(|\$\{|![^!\r\n]+!|%[^%\r\n]+%/.test(rawPath)) {
       reason = "the file-backed executor path is dynamic or missing";
       return true;
     }
-    const resolved = path.resolve(base, rawPath);
-    const relative = path.relative(root, resolved);
-    if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-      reason = "the file-backed executor is outside the repository";
+    let resolvedCandidates = [path.resolve(base, rawPath)];
+    if (process.platform === "win32" && !/[\\/]/.test(rawPath) && !/\.[A-Za-z0-9]+$/.test(rawPath)) {
+      try {
+        const bareName = rawPath.toLowerCase();
+        const executableExtensions = new Set([
+          "", ".com", ".exe", ".bat", ".cmd", ".ps1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".msc",
+          ...String(process.env.PATHEXT || "").toLowerCase().split(";").filter(Boolean),
+        ]);
+        resolvedCandidates = readdirSync(base, { withFileTypes: true })
+          .filter((entry) => {
+            if (!(entry.isFile() || entry.isSymbolicLink())) return false;
+            const parsed = path.parse(entry.name.toLowerCase());
+            return parsed.name === bareName && executableExtensions.has(parsed.ext);
+          })
+          .map((entry) => path.join(base, entry.name));
+      } catch {
+        return false;
+      }
+      if (resolvedCandidates.length === 0) return false;
+    }
+    initialize();
+    if (initializationError) {
+      reason = initializationError;
       return true;
     }
-    const repoPath = relative.split(path.sep).join("/");
-    const key = process.platform === "win32" ? repoPath.toLowerCase() : repoPath;
-    const expectedHeadBlob = headEntries.get(key);
-    if (!expectedHeadBlob) {
-      reason = "the file-backed executor is ignored or untracked at exact HEAD";
-      return true;
-    }
-    try {
-      if (gitBlobHash(readFileSync(resolved)) !== expectedHeadBlob) {
-        reason = "the file-backed executor worktree bytes differ from exact HEAD";
+    for (const resolved of resolvedCandidates) {
+      const relative = path.relative(root, resolved);
+      if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+        reason = "the file-backed executor is outside the repository";
         return true;
       }
-    } catch {
-      reason = "the file-backed executor is missing or unreadable";
+      const repoPath = relative.split(path.sep).join("/");
+      const key = process.platform === "win32" ? repoPath.toLowerCase() : repoPath;
+      const expectedHeadBlob = headEntries.get(key);
+      if (!expectedHeadBlob) {
+        reason = "the file-backed executor is ignored or untracked at exact HEAD";
+        return true;
+      }
+      try {
+        if (gitBlobHash(readFileSync(resolved)) !== expectedHeadBlob) {
+          reason = "the file-backed executor worktree bytes differ from exact HEAD";
+          return true;
+        }
+      } catch {
+        reason = "the file-backed executor is missing or unreadable";
+        return true;
+      }
+      if (headSha === baseSha) continue;
+      const bootstrapPath = ["scripts", ["write", "codex", "push", "proof.mjs"].join("-")].join("/");
+      if (repoPath === bootstrapPath && mainEntries.get(key) === expectedHeadBlob) continue;
+      try {
+        const proofName = [["codex", "review", headSha].join("-"), "json"].join(".");
+        const proof = JSON.parse(readFileSync(path.join(root, ".claude", "session-state", proofName), "utf8"));
+        const timestamp = Date.parse(proof?.timestamp);
+        const age = Date.now() - timestamp;
+        if (proof?.codex_ran === true
+          && proof?.verdict === "clean"
+          && proof?.model === "gpt-5.6-sol"
+          && proof?.reasoning_effort === "high"
+          && proof?.head_sha === headSha
+          && proof?.base_sha === baseSha
+          && Number.isFinite(timestamp)
+          && age >= 0
+          && age <= 30 * 60 * 1_000) continue;
+      } catch {
+        // Missing, malformed, stale, or inaccessible proof is handled below.
+      }
+      reason = "the feature-branch HEAD lacks a fresh exact-SHA independent review proof";
       return true;
     }
-    if (headSha === baseSha) return false;
-    const bootstrapPath = ["scripts", ["write", "codex", "push", "proof.mjs"].join("-")].join("/");
-    if (repoPath === bootstrapPath && mainEntries.get(key) === expectedHeadBlob) return false;
-    try {
-      const proofName = [["codex", "review", headSha].join("-"), "json"].join(".");
-      const proof = JSON.parse(readFileSync(path.join(root, ".claude", "session-state", proofName), "utf8"));
-      const timestamp = Date.parse(proof?.timestamp);
-      const age = Date.now() - timestamp;
-      if (proof?.codex_ran === true
-        && proof?.verdict === "clean"
-        && proof?.model === "gpt-5.6-sol"
-        && proof?.reasoning_effort === "high"
-        && proof?.head_sha === headSha
-        && proof?.base_sha === baseSha
-        && Number.isFinite(timestamp)
-        && age >= 0
-        && age <= 30 * 60 * 1_000) return false;
-    } catch {
-      // Missing, malformed, stale, or inaccessible proof is handled below.
-    }
-    reason = "the feature-branch HEAD lacks a fresh exact-SHA independent review proof";
-    return true;
+    return false;
   };
 
   return {
@@ -725,11 +747,51 @@ export function maintenanceProducerCommandMentioned(command, depth = 0, fileExec
     if (list[index - 1]?.control && /^[<>]$/.test(list[index - 1].value)) return false;
     const candidate = String(token.value || "").replace(/^&/, "");
     if (!candidate
-      || !(/[\\/]/.test(candidate) || /\.(?:bat|cmd|ps1|sh|bash|zsh|ksh|exe|com|mjs|cjs|js|py|pl|rb|php)$/i.test(candidate))
+      || !(process.platform === "win32" || /[\\/]/.test(candidate) || /\.(?:bat|cmd|ps1|sh|bash|zsh|ksh|exe|com|mjs|cjs|js|py|pl|rb|php)$/i.test(candidate))
       || /^(?:https?|file):/i.test(candidate)) return false;
     return fileExecutorInspector(candidate);
   };
   if (tokens.some(directPathBackedInvocation)) return true;
+  if (fileExecutorInspector) {
+    const staticPowerShellAliases = new Map();
+    for (let segmentStart = 0; segmentStart < tokens.length;) {
+      while (segmentStart < tokens.length && tokens[segmentStart].control) segmentStart += 1;
+      let segmentEnd = segmentStart;
+      while (segmentEnd < tokens.length && !tokens[segmentEnd].control) segmentEnd += 1;
+      const words = tokens.slice(segmentStart, segmentEnd);
+      let cursor = 0;
+      while (cursor < words.length && /^[A-Za-z_]\w*\+?=/.test(words[cursor].value)) cursor += 1;
+      const commandName = normalizeShellToken(words[cursor]?.value || "").replace(/^[@&]/, "").toLowerCase();
+      if (["set-alias", "sal", "new-alias", "nal"].includes(commandName)) {
+        const positionals = [];
+        let aliasName = "";
+        let aliasTarget = "";
+        let opaque = false;
+        for (let index = cursor + 1; index < words.length; index += 1) {
+          const argument = words[index].value;
+          const attachedName = /^-n(?:a(?:m(?:e)?)?)?(?::|=)(.+)$/i.exec(argument)?.[1];
+          const attachedValue = /^-v(?:a(?:l(?:u(?:e)?)?)?)?(?::|=)(.+)$/i.exec(argument)?.[1];
+          if (attachedName) { aliasName = attachedName; continue; }
+          if (attachedValue) { aliasTarget = attachedValue; continue; }
+          if (/^-n(?:a(?:m(?:e)?)?)?$/i.test(argument)) { aliasName = words[index + 1]?.value || ""; index += 1; continue; }
+          if (/^-v(?:a(?:l(?:u(?:e)?)?)?)?$/i.test(argument)) { aliasTarget = words[index + 1]?.value || ""; index += 1; continue; }
+          if (/^-(?:description|option|scope)$/i.test(argument)) { index += 1; continue; }
+          if (/^-(?:passthru|force|whatif|confirm|verbose|debug)$/i.test(argument)) continue;
+          if (argument.startsWith("-")) { opaque = true; continue; }
+          positionals.push(argument);
+        }
+        aliasName ||= positionals[0] || "";
+        aliasTarget ||= positionals[1] || "";
+        if (opaque || !aliasName || !aliasTarget || dynamicArgument(aliasName) || dynamicArgument(aliasTarget)) return true;
+        if (fileExecutorInspector(aliasTarget)) return true;
+        staticPowerShellAliases.set(aliasName.toLowerCase(), aliasTarget);
+      } else if (staticPowerShellAliases.has(commandName)) {
+        const resolved = [staticPowerShellAliases.get(commandName), ...words.slice(cursor + 1).map((entry) => entry.value)].join(" ");
+        if (depth >= 4 || maintenanceProducerCommandMentioned(resolved, depth + 1, fileExecutorInspector)) return true;
+      }
+      segmentStart = segmentEnd + 1;
+    }
+  }
   if (tokens.some((token, index, list) => token.control
     && token.value === "&"
     && list[index + 1]?.control
