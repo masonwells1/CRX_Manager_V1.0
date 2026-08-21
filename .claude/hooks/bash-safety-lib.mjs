@@ -111,6 +111,98 @@ function gitControlEnvironmentAssignmentReason(command) {
   return null;
 }
 
+const DANGEROUS_RUNTIME_ENV_NAME_RE = /^(?:NODE_OPTIONS|NPM_CONFIG_(?:USERCONFIG|GLOBALCONFIG|NODE_OPTIONS|SCRIPT_SHELL)|PYTHON(?:PATH|HOME|STARTUP|USERBASE|INSPECT))$/i;
+
+function runtimeExecutionSegments(command) {
+  const tokens = tokenizeShellWords(command);
+  const hardBoundary = (token) => token?.control && /^(?:;|&|\||\n)$/.test(token.value);
+  const executableName = (token) => String(token?.value || "")
+    .replace(/^@/, "")
+    .replace(/\\([^\\/])/g, "$1")
+    .replace(/\^([^^])/g, "$1")
+    .replace(/`([^`])/g, "$1")
+    .split(/[\\/]/)
+    .pop()
+    .replace(/\.(?:exe|cmd|bat|ps1)$/i, "")
+    .toLowerCase();
+  const wrappers = new Set(["command", "builtin", "env", "sudo", "doas", "exec", "nohup", "nice", "timeout", "wsl"]);
+  const segments = [];
+  for (let start = 0; start < tokens.length;) {
+    while (start < tokens.length && hardBoundary(tokens[start])) start += 1;
+    let end = start;
+    while (end < tokens.length && !hardBoundary(tokens[end])) end += 1;
+    const words = tokens.slice(start, end).filter((token) => !token.control);
+    let cursor = 0;
+    while (/^[A-Za-z_]\w*\+?=/.test(words[cursor]?.value || "")) cursor += 1;
+    while (wrappers.has(executableName(words[cursor]))) {
+      cursor += 1;
+      while (/^(?:-|[A-Za-z_]\w*\+?=)/.test(words[cursor]?.value || "")) cursor += 1;
+    }
+    if (words[cursor]) segments.push({ executable: executableName(words[cursor]), args: words.slice(cursor + 1).map((token) => token.value) });
+    start = end + 1;
+  }
+  return segments;
+}
+
+function runtimePreloadControlReason(command) {
+  const segments = runtimeExecutionSegments(command);
+  const runtimeNames = new Set(["node", "nodejs", "bun", "npm", "npx", "pnpm", "yarn", "corepack", "python", "python2", "python3", "py"]);
+  if (!segments.some((segment) => runtimeNames.has(segment.executable))) return null;
+  const inherited = Object.keys(process.env).find((name) => DANGEROUS_RUNTIME_ENV_NAME_RE.test(name));
+  if (inherited) return `Blocked runtime preload/search-path control because inherited ${inherited} is present.`;
+  const names = "(?:NODE_OPTIONS|NPM_CONFIG_(?:USERCONFIG|GLOBALCONFIG|NODE_OPTIONS|SCRIPT_SHELL)|PYTHON(?:PATH|HOME|STARTUP|USERBASE|INSPECT))";
+  const itemWriterNames = [[115, 101, 116], [110, 101, 119], [99, 111, 112, 121], [109, 111, 118, 101]]
+    .map((codes) => String.fromCharCode(...codes)).join("|");
+  const environmentSetterName = String.fromCharCode(83, 101, 116, 69, 110, 118, 105, 114, 111, 110, 109, 101, 110, 116, 86, 97, 114, 105, 97, 98, 108, 101);
+  const views = commandInspectionViews(command).flatMap((text) => [text, text.replace(/\^([^^])/g, "$1").replace(/`([^`])/g, "$1")]);
+  for (const text of views) {
+    const direct = new RegExp(`\\b${names}\\b\\s*=`, "i").test(text);
+    const provider = new RegExp(`(?:\\$?env:)${names}\\b[^\\r\\n;&|]*=`, "i").test(text);
+    const itemWriter = new RegExp(`\\b(?:${itemWriterNames})-item\\b[^\\r\\n;&|]*(?:env:)${names}\\b`, "i").test(text);
+    const apiWriter = new RegExp(`${environmentSetterName}\\s*\\(\\s*['\"]${names}['\"]`, "i").test(text);
+    if (direct || provider || itemWriter || apiWriter) {
+      return "Blocked runtime preload/search-path mutation. Node, npm, and Python startup controls can execute unreviewed code before an exact-HEAD entry script.";
+    }
+  }
+  return null;
+}
+
+function runtimeConfigurationReason(command, cwd) {
+  const segments = runtimeExecutionSegments(command);
+  const packageManagers = new Set(["npm", "npx", "pnpm", "yarn", "bun", "corepack"]);
+  const dangerousPackageFlags = ["userconfig", "globalconfig", ["node", "options"].join("-"), ["script", "shell"].join("-")];
+  let packageManagerSeen = false;
+  for (const { executable, args } of segments) {
+    if (packageManagers.has(executable)) {
+      packageManagerSeen = true;
+      if (args.some((argument) => dangerousPackageFlags.some((flag) => new RegExp(`^--${flag}(?:=|$)`, "i").test(argument)))) {
+        return "Blocked package-manager configuration override. User/global config and startup settings can preload unreviewed code.";
+      }
+    }
+    if (["python", "python2", "python3", "py"].includes(executable)) {
+      if (args.some((argument) => /^(?:--help|--version|-h|-V)$/.test(argument))) continue;
+      const shortOptions = args.filter((argument) => /^-[A-Za-z]+$/.test(argument)).join("");
+      if (!(shortOptions.includes("I") && shortOptions.includes("S"))) {
+        return "Blocked non-isolated Python startup. Reviewed Python scripts must use both -I and -S so search paths, user-site modules, and startup hooks cannot run first.";
+      }
+    }
+  }
+  if (!packageManagerSeen) return null;
+  const dangerousNpmKeys = [["node", "options"].join("-"), ["script", "shell"].join("-")];
+  for (const candidate of [path.join(cwd || process.cwd(), ".npmrc"), path.join(process.env.HOME || process.env.USERPROFILE || "", ".npmrc")]) {
+    if (!candidate || !existsSync(candidate)) continue;
+    try {
+      const content = readFileSync(candidate, "utf8");
+      if (dangerousNpmKeys.some((key) => new RegExp(`^\\s*${key}\\s*=`, "im").test(content))) {
+        return "Blocked executable npm configuration. Default package-manager startup settings can preload or redirect unreviewed code.";
+      }
+    } catch {
+      return "Blocked unreadable npm configuration while package execution is protected.";
+    }
+  }
+  return null;
+}
+
 const MAINTENANCE_PRODUCER_NAME = "apply-live-testdata-maintenance-20260812.mjs";
 const MAINTENANCE_PRODUCER_ALLOWED_COMMANDS = new Set([
   "node scripts/apply-live-testdata-maintenance-20260812.mjs --verify",
@@ -229,6 +321,7 @@ function createReviewedExecutorInspector(cwd, options = {}) {
   gitEnv.GIT_CONFIG_GLOBAL = process.platform === "win32" ? "NUL" : "/dev/null";
   gitEnv.GIT_TERMINAL_PROMPT = "0";
   gitEnv.GCM_INTERACTIVE = "never";
+  gitEnv.GIT_OPTIONAL_LOCKS = "0";
   let initialized = false;
   let root = "";
   let headSha = "";
@@ -237,6 +330,8 @@ function createReviewedExecutorInspector(cwd, options = {}) {
   const mainEntries = new Map();
   let initializationError = "";
   let reason = "";
+  let trackedTreeChecked = false;
+  let trackedTreeError = "";
 
   const initialize = () => {
     if (initialized) return;
@@ -323,6 +418,37 @@ function createReviewedExecutorInspector(cwd, options = {}) {
     }
   };
 
+  const verifyTrackedTreeExact = () => {
+    if (trackedTreeChecked) return trackedTreeError;
+    trackedTreeChecked = true;
+    const sharedArgs = [
+      "-C", root, "--no-replace-objects",
+      "-c", "core.autocrlf=true",
+      "-c", "core.fsmonitor=false",
+      "-c", "diff.external=",
+    ];
+    for (const args of [
+      [...sharedArgs, "diff-files", "--quiet", "--no-ext-diff", "--ignore-submodules=all", "--"],
+      [...sharedArgs, "diff-index", "--cached", "--quiet", "--no-ext-diff", "--ignore-submodules=all", headSha, "--"],
+    ]) {
+      const result = spawnSync(gitExecutable, args, {
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: 5_000,
+        env: gitEnv,
+      });
+      if (result.error || ![0, 1].includes(result.status)) {
+        trackedTreeError = "the complete tracked dependency tree could not be verified";
+        break;
+      }
+      if (result.status === 1) {
+        trackedTreeError = "the tracked dependency tree or index differs from exact HEAD";
+        break;
+      }
+    }
+    return trackedTreeError;
+  };
+
   const inspect = (scriptPath) => {
     if (reason) return true;
     const rawPath = String(scriptPath || "");
@@ -380,9 +506,18 @@ function createReviewedExecutorInspector(cwd, options = {}) {
       const bootstrapPath = ["scripts", ["write", "codex", "push", "proof.mjs"].join("-")].join("/");
       if (repoPath === bootstrapPath && mainEntries.get(key) === expectedHeadBlob) {
         const bootstrapReason = bootstrapGitSafetyReason(root, gitExecutable, gitEnv);
-        if (!bootstrapReason) continue;
-        reason = bootstrapReason;
+        if (bootstrapReason) {
+          reason = bootstrapReason;
+          return true;
+        }
+      }
+      const dependencyTreeReason = verifyTrackedTreeExact();
+      if (dependencyTreeReason) {
+        reason = dependencyTreeReason;
         return true;
+      }
+      if (repoPath === bootstrapPath && mainEntries.get(key) === expectedHeadBlob) {
+        continue;
       }
       if (headSha === baseSha) continue;
       try {
@@ -2564,6 +2699,10 @@ function executionContextShiftReason(command, cwd, depth = 0) {
 // (only if clean) every `npm run X` target's resolved script body, recursively.
 // Returns the first matching reason, or null.
 export function checkCommandDeep(cmd, cwd, options = {}) {
+  const runtimePreloadReason = runtimePreloadControlReason(cmd);
+  if (runtimePreloadReason) return runtimePreloadReason;
+  const runtimeConfigReason = runtimeConfigurationReason(cmd, cwd);
+  if (runtimeConfigReason) return runtimeConfigReason;
   const gitEnvironmentReason = gitControlEnvironmentAssignmentReason(cmd);
   if (gitEnvironmentReason) return gitEnvironmentReason;
   const contextShift = executionContextShiftReason(cmd, cwd);

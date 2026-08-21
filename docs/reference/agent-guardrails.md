@@ -129,13 +129,16 @@ producer launch is still denied unless an independent Git-blob hash of the
 worktree bytes matches exact `HEAD`. On a feature branch it also requires the
 fresh exact-head Sol review proof used by the production gate; this is the final boundary
 for fully dynamic targets that command-text inspection cannot resolve.
-File-backed interpreters also require their entry script to be repository-local,
-tracked and byte-identical at exact `HEAD`, plus that same independent proof when
-the head differs from protected `origin/main`. This blocks ignored, external,
-untracked, worktree-divergent, and unreviewed wrappers before they can launch the
-producer or a preload as an uninspected child; both Bash and MCP regressions use
-a real ignored spawning wrapper and cover Node's `--` option terminator before
-the script operand. A local commit alone remains denied; a regression proves the
+File-backed interpreters require their entry script to be repository-local,
+tracked and byte-identical at exact `HEAD`; the entire tracked worktree and
+index must also match that same commit so an unchanged entry cannot import a
+modified helper. The same independent proof is required when the head differs
+from protected `origin/main`. This blocks ignored, external, untracked,
+worktree-divergent, dependency-divergent, and unreviewed wrappers before they
+can launch the producer or a preload as an uninspected child; Bash and MCP
+regressions use a real ignored spawning wrapper, modify a helper imported by an
+unchanged reviewed entry, and cover Node's `--` option terminator before the
+script operand. A local commit alone remains denied; a regression proves the
 wrapper does not become trusted without fresh independent exact-SHA review. The
 proof producer is the only bootstrap exception and must still byte-match its
 protected-main blob. Protected-main identity comes from a sanitized
@@ -161,6 +164,14 @@ arguments that mention `npx`, `npm exec`, or `vite` remain ordinary data. A real
 local package executable fails closed because ignored `node_modules` bytes are
 not part of exact HEAD and can change after review; verification that needs the
 installed toolchain runs inside the repository's reviewed commit/preflight gate.
+Package-manager `--userconfig`/`--globalconfig` and startup-setting overrides
+are denied, as are inherited or command-local Node/npm/Python preload and
+search-path environment controls. Default npm config files fail closed when
+they contain executable `node-options` or `script-shell` settings. Reviewed
+Python script launches require both `-I` and `-S`, excluding environment search
+paths, user-site modules, and automatic site initialization before exact-HEAD
+code runs. Bash and MCP regressions cover npm user-config injection and an
+untracked Python `sitecustomize` preload.
 File-backed execution still fails closed if the canonical remote cannot be
 verified; no mutable on-disk SHA cache is trusted. Output-target parsing also
 recognizes adjacent redirects and Bash's

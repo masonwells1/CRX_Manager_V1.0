@@ -2,7 +2,7 @@
 
 All significant development milestones, in reverse chronological order.
 
-## 2026-08-21 — Harden the exact-review bootstrap and Windows protected paths
+## 2026-08-21 — Harden exact-review execution and Windows protected paths
 
 - The exact-review bootstrap now fails closed when bare Git resolves anywhere
   except the fixed trusted installation, when Git control environment overrides
@@ -14,6 +14,13 @@ All significant development milestones, in reverse chronological order.
   before protected-path matching. Windows 8.3 short names, junctions, and
   symlinked directory aliases can no longer disguise the protected maintenance
   producer from write, move, rename, copy, or delete checks.
+- Reviewed file-backed execution now requires the complete tracked worktree and
+  index to match exact `HEAD`, so an unchanged entry script cannot import a
+  locally modified helper. Runtime startup controls also fail closed: npm
+  user/global config overrides and executable npm startup settings are denied,
+  Node/npm/Python preload and search-path environment mutation is denied, and
+  reviewed Python scripts require `-I -S`. Bash and MCP regressions exercise a
+  modified imported helper, npm `--userconfig`, and Python `sitecustomize`.
 
 ## 2026-08-20 — Close the remaining PR #402 maintenance-command guard gaps
 

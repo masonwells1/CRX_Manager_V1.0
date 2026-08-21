@@ -32,6 +32,7 @@ import { gitLocalEnvironmentNames } from "./git-test-env.mjs";
 for (const name of gitLocalEnvironmentNames()) delete process.env[name];
 for (const name of Object.keys(process.env)) {
   if (/^GIT_(?:CONFIG(?:_.+)?|DIR|WORK_TREE|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|REPLACE_REF_BASE|COMMON_DIR|NAMESPACE|EXEC_PATH|EXTERNAL_DIFF|DIFF_OPTS)$/i.test(name)) delete process.env[name];
+  if (/^(?:NODE_OPTIONS|NPM_CONFIG_(?:USERCONFIG|GLOBALCONFIG|NODE_OPTIONS|SCRIPT_SHELL)|PYTHON(?:PATH|HOME|STARTUP|USERBASE|INSPECT))$/i.test(name)) delete process.env[name];
 }
 process.env.PATH = `${path.dirname(fixedTrustedGitExecutable())}${path.delimiter}${process.env.PATH || ""}`;
 
@@ -293,6 +294,12 @@ for (const command of [
     const integrityPath = path.join(integrityRepo, ...integrityRelativePath.split("/"));
     const trackedWrapperRelative = "scripts/reviewed-wrapper.mjs";
     const trackedWrapperPath = path.join(integrityRepo, ...trackedWrapperRelative.split("/"));
+    const importingWrapperRelative = "scripts/importing-wrapper.mjs";
+    const importingWrapperPath = path.join(integrityRepo, ...importingWrapperRelative.split("/"));
+    const importedHelperRelative = "scripts/imported-helper.mjs";
+    const importedHelperPath = path.join(integrityRepo, ...importedHelperRelative.split("/"));
+    const reviewedPythonRelative = "scripts/reviewed.py";
+    const reviewedPythonPath = path.join(integrityRepo, ...reviewedPythonRelative.split("/"));
     const trackedDirectRelative = "scripts/reviewed-direct.bat";
     const trackedDirectPath = path.join(integrityRepo, ...trackedDirectRelative.split("/"));
     const bootstrapRelative = ["scripts", ["write", "codex", "push", "proof.mjs"].join("-")].join("/");
@@ -315,6 +322,9 @@ for (const command of [
     mkdirSync(path.dirname(ignoredWrapperPath), { recursive: true });
     writeFileSync(integrityPath, "export const reviewed = true;\n");
     writeFileSync(trackedWrapperPath, reviewedWrapperSource);
+    writeFileSync(importingWrapperPath, 'import "./imported-helper.mjs";\nconsole.log("reviewed importer");\n');
+    writeFileSync(importedHelperPath, 'export const reviewed = true;\n');
+    writeFileSync(reviewedPythonPath, 'print("reviewed python")\n');
     writeFileSync(trackedDirectPath, "@echo reviewed direct wrapper\n");
     writeFileSync(bootstrapPath, "console.log('review bootstrap');\n");
     const packageManifest = ["package", "json"].join(".");
@@ -327,7 +337,7 @@ for (const command of [
       ["init", "--quiet"],
       ["config", "user.email", "guard-test@example.invalid"],
       ["config", "user.name", "Guard Test"],
-      ["add", "--", integrityRelativePath, trackedWrapperRelative, trackedDirectRelative, bootstrapRelative, packageManifest, ".gitignore"],
+      ["add", "--", integrityRelativePath, trackedWrapperRelative, importingWrapperRelative, importedHelperRelative, reviewedPythonRelative, trackedDirectRelative, bootstrapRelative, packageManifest, ".gitignore"],
       ["commit", "--quiet", "-m", "test fixture"],
       ["update-ref", "refs/remotes/origin/main", "HEAD"],
     ]) {
@@ -367,6 +377,31 @@ for (const command of [
     eq(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo, reviewOptions), null, "a reviewed file-backed executor is allowed when HEAD is the reviewed main commit");
     eq(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo, reviewOptions), null, "a reviewed file-backed executor after -- is allowed on the reviewed main commit");
     eq(checkCommandDeep(trackedDirectRelative.replaceAll("/", "\\"), integrityRepo, reviewOptions), null, "a directly executed tracked script is allowed when exact HEAD is reviewed");
+    eq(checkCommandDeep(`node ${importingWrapperRelative}`, integrityRepo, reviewOptions), null, "a reviewed importer is allowed while its tracked dependency tree exactly matches HEAD");
+    writeFileSync(importedHelperPath, 'throw new Error("hostile imported helper executed");\n');
+    ok(
+      checkCommandDeep(`node ${importingWrapperRelative}`, integrityRepo, reviewOptions)?.includes("tracked dependency tree"),
+      "a modified imported helper denies an unchanged reviewed entry script",
+    );
+    const importedHelperHookResult = runHook({ tool_name: "Bash", tool_input: { command: `node ${importingWrapperRelative}` } }, integrityRepo);
+    ok(importedHelperHookResult.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies an unchanged entry script with a modified imported helper");
+    eq(runIntegrityGit(["restore", "--worktree", "--", importedHelperRelative]).status, 0, "the imported helper fixture is restored byte-for-byte from reviewed HEAD");
+    for (const command of [
+      "npm --userconfig=output/evil.npmrc run build",
+      "NPM_CONFIG_USERCONFIG=output/evil.npmrc npm run build",
+      "$env:NPM_CONFIG_USERCONFIG='output/evil.npmrc'; npm run build",
+    ]) {
+      ok(checkCommandDeep(command, integrityRepo, reviewOptions)?.includes(command.startsWith("npm ") ? "configuration override" : "runtime preload/search-path mutation"), "npm startup configuration injection is denied: " + command);
+      const result = runHook({ tool_name: "Bash", tool_input: { command } }, integrityRepo);
+      ok(result.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies npm startup configuration injection: " + command);
+    }
+    mkdirSync(path.join(integrityRepo, "output"), { recursive: true });
+    writeFileSync(path.join(integrityRepo, "output", "sitecustomize.py"), 'raise RuntimeError("sitecustomize executed")\n');
+    ok(checkCommandDeep(`PYTHONPATH=output python ${reviewedPythonRelative}`, integrityRepo, reviewOptions)?.includes("runtime preload/search-path mutation"), "PYTHONPATH cannot preload an unreviewed sitecustomize module");
+    ok(checkCommandDeep(`python ${reviewedPythonRelative}`, integrityRepo, reviewOptions)?.includes("non-isolated Python startup"), "reviewed Python scripts require isolated startup");
+    eq(checkCommandDeep(`python -I -S ${reviewedPythonRelative}`, integrityRepo, reviewOptions), null, "an exact-HEAD Python script is allowed with isolated startup flags");
+    const pythonHookResult = runHook({ tool_name: "Bash", tool_input: { command: `PYTHONPATH=output python ${reviewedPythonRelative}` } }, integrityRepo);
+    ok(pythonHookResult.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies Python sitecustomize preloading");
     ok(checkCommandDeep("npm run build", integrityRepo, reviewOptions)?.includes("mutable local package executable"), "a mutable ignored package shim is denied even when manifests are reviewed");
     writeFileSync(trackedWrapperPath, wrapperSource);
     eq(runIntegrityGit(["add", "--", trackedWrapperRelative]).status, 0, "replacement-object fixture stages the hostile wrapper");

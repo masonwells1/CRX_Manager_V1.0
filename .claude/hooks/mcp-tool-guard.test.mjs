@@ -12,6 +12,13 @@ import os from "node:os";
 import path from "node:path";
 import { checkCommandDeep, SECURITY_COMMAND_CHAR_BUDGET } from "./bash-safety-lib.mjs";
 
+// npm injects its own config paths into child test processes. Clear all
+// runtime-startup controls so fixtures begin from the production hook's safe
+// baseline; dedicated cases below add hostile values back explicitly.
+for (const name of Object.keys(process.env)) {
+  if (/^(?:NODE_OPTIONS|NPM_CONFIG_(?:USERCONFIG|GLOBALCONFIG|NODE_OPTIONS|SCRIPT_SHELL)|PYTHON(?:PATH|HOME|STARTUP|USERBASE|INSPECT))$/i.test(name)) delete process.env[name];
+}
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0;
 function ok(c, m) { assert.ok(c, m); pass++; }
@@ -92,6 +99,17 @@ for (const command of [
   const result = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command } });
   eq(result.status, 0, `mcp-tool-guard exits 0 after Git control environment injection: ${command}`);
   ok(isDeny(result), `MCP start_process denies Git control environment injection: ${command}`);
+}
+for (const command of [
+  "npm --userconfig=output/evil.npmrc run agent-health",
+  "NPM_CONFIG_USERCONFIG=output/evil.npmrc npm run agent-health",
+  "$env:NPM_CONFIG_USERCONFIG='output/evil.npmrc'; npm run agent-health",
+  "PYTHONPATH=output python scripts/backup-via-rest.py",
+  "python scripts/backup-via-rest.py",
+]) {
+  const result = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command } });
+  eq(result.status, 0, `mcp-tool-guard exits 0 after runtime startup injection: ${command}`);
+  ok(isDeny(result), `MCP start_process denies runtime startup injection: ${command}`);
 }
 const shellBuiltinNodeOptionsCases = [
   ["NODE_OPTIONS+=--require=./preload.cjs", "node", "scripts/ordinary-check.mjs"].join(" "),
@@ -632,6 +650,8 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
   const producerRelative = ["scripts/apply-live-testdata-maintenance-", "20260812.mjs"].join("");
   const alternateRelative = "scripts/ignored-maintenance-copy.mjs";
   const trackedWrapperRelative = "scripts/reviewed-wrapper.mjs";
+  const importingWrapperRelative = "scripts/importing-wrapper.mjs";
+  const importedHelperRelative = "scripts/imported-helper.mjs";
   const trackedDirectRelative = "scripts/reviewed-direct.bat";
   const reviewedWrapperSource = "console.log('reviewed wrapper');\n";
   const wrapperSource = [
@@ -645,6 +665,8 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
     mkdirSync(path.join(tmp, "scripts"), { recursive: true });
     writeFileSync(path.join(tmp, producerRelative), "console.log('tracked producer');\n");
     writeFileSync(path.join(tmp, trackedWrapperRelative), reviewedWrapperSource);
+    writeFileSync(path.join(tmp, importingWrapperRelative), 'import "./imported-helper.mjs";\nconsole.log("reviewed importer");\n');
+    writeFileSync(path.join(tmp, importedHelperRelative), 'export const reviewed = true;\n');
     writeFileSync(path.join(tmp, trackedDirectRelative), "@echo reviewed direct wrapper\n");
     writeFileSync(path.join(tmp, ".gitignore"), "output/\n");
     const isolatedGitEnv = { ...process.env };
@@ -658,7 +680,7 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
       ["config", "user.email", "guard-test@example.invalid"],
       ["config", "user.name", "Guard Test"],
       ["config", "commit.gpgsign", "false"],
-      ["add", producerRelative, trackedWrapperRelative, trackedDirectRelative, ".gitignore"],
+      ["add", producerRelative, trackedWrapperRelative, importingWrapperRelative, importedHelperRelative, trackedDirectRelative, ".gitignore"],
       ["commit", "-m", "track producer"],
       ["update-ref", "refs/remotes/origin/main", "HEAD"],
     ]) {
@@ -670,6 +692,15 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
     eq(authoritativeResult.status, 0, "MCP wrapper fixture authoritative main SHA resolves");
     const reviewOptions = { authoritativeMainShaForTest: authoritativeResult.stdout.trim() };
     eq(checkCommandDeep(trackedDirectRelative.replaceAll("/", "\\"), tmp, reviewOptions), null, "direct injection allows a directly executed tracked script at reviewed HEAD");
+    eq(checkCommandDeep(`node ${importingWrapperRelative}`, tmp, reviewOptions), null, "direct injection allows an importer whose tracked dependency tree matches reviewed HEAD");
+    writeFileSync(path.join(tmp, importedHelperRelative), 'throw new Error("hostile imported helper executed");\n');
+    ok(checkCommandDeep(`node ${importingWrapperRelative}`, tmp, reviewOptions)?.includes("tracked dependency tree"), "direct injection denies an unchanged importer with a modified tracked helper");
+    r = runHook({
+      tool_name: "mcp__Desktop_Commander__start_process",
+      tool_input: { command: `node ${importingWrapperRelative}` },
+    }, tmp);
+    ok(isDeny(r), "MCP start_process denies an unchanged importer with a modified tracked helper");
+    eq(spawnSync("git", ["restore", "--worktree", "--", importedHelperRelative], { cwd: tmp, encoding: "utf8", env: isolatedGitEnv, windowsHide: true }).status, 0, "the MCP imported helper fixture is restored byte-for-byte from reviewed HEAD");
 
     const ignoredWrapperRelative = "output/ignored-wrapper.mjs";
     const ignoredMarkerPath = path.join(tmp, "output", "wrapper-executed.txt");
