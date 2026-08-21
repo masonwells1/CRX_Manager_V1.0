@@ -26,7 +26,7 @@
 // FAIL-OPEN, LOUD: any internal error here → allow, with a stderr warning. A
 // broken guard must never brick a session.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import {
   checkCommandDeep,
@@ -76,6 +76,24 @@ const protectedProducerRepoPath = `scripts/${protectedProducerName}`;
 // this guard and its regressions; producer tracking state cannot reopen the
 // persistent-process or signal routes by itself.
 const protectedProducerRetired = false;
+
+function canonicalizeThroughExistingAncestor(target) {
+  const original = path.resolve(target);
+  let current = original;
+  const missing = [];
+  while (true) {
+    try {
+      const canonical = realpathSync.native(current);
+      return path.resolve(canonical, ...missing.reverse());
+    } catch (error) {
+      if (!error || !["ENOENT", "ENOTDIR"].includes(error.code)) return original;
+      const parent = path.dirname(current);
+      if (parent === current) return original;
+      missing.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
 
 try {
   const producerProtectionActive = !protectedProducerRetired;
@@ -129,7 +147,12 @@ try {
       // The raw normalized form is also tested so a relative path that escapes
       // cwd upward (resolving OUTSIDE the repo) still matches on its raw shape.
       const abs = path.isAbsolute(targetRaw) ? path.resolve(targetRaw) : path.resolve(cwd, targetRaw);
-      const surfaces = [targetRaw.replace(/\\/g, "/"), abs.replace(/\\/g, "/")];
+      // Windows 8.3 aliases (for example APPLY-~1.MJS) and junction/symlink
+      // aliases must not turn one protected file into an unrecognized spelling.
+      // Canonicalize the deepest existing ancestor so this also protects a new
+      // destination nested below a short-name or linked directory.
+      const canonical = canonicalizeThroughExistingAncestor(abs);
+      const surfaces = [targetRaw, abs, canonical].map((value) => value.replace(/\\/g, "/"));
 
       const isEnv = surfaces.some((s) => /(^|\/)\.env(\.[\w-]+)?$/i.test(s));
       const isSettings = surfaces.some((s) => /(^|\/)\.claude\/settings\.json$/i.test(s));

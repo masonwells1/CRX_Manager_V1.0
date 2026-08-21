@@ -10,7 +10,7 @@
 // table — this is a pure extraction, plus one net-new pattern (shell-redirect writes
 // to .env, explicitly called for by the audit) and the npm-script-indirection helpers.
 
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
@@ -33,6 +33,82 @@ export function fixedTrustedGitExecutable() {
   const executable = candidates.find((candidate) => existsSync(candidate));
   if (!executable) throw new Error("A fixed trusted Git executable is required for executor provenance checks.");
   return executable;
+}
+
+const DANGEROUS_GIT_ENV_NAME_RE = /^GIT_(?:CONFIG(?:_.+)?|DIR|WORK_TREE|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|REPLACE_REF_BASE|COMMON_DIR|NAMESPACE|EXEC_PATH|EXTERNAL_DIFF|DIFF_OPTS)$/i;
+
+function resolvedBareGitExecutable(cwd) {
+  const directories = [cwd, ...String(process.env.PATH || "").split(path.delimiter).filter(Boolean)];
+  const names = process.platform === "win32"
+    ? String(process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean).map((extension) => `git${extension.toLowerCase()}`)
+    : ["git"];
+  for (const directory of directories) {
+    for (const name of names) {
+      const candidate = path.resolve(directory, name);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return "";
+}
+
+function sameExecutablePath(left, right) {
+  const normalize = (value) => {
+    const candidate = path.resolve(String(value || ""));
+    let resolved = candidate;
+    try { resolved = realpathSync.native(candidate); } catch { /* Missing candidates cannot equal the trusted executable. */ }
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  };
+  return normalize(left) === normalize(right);
+}
+
+function bootstrapGitSafetyReason(root, gitExecutable, gitEnv) {
+  const inherited = Object.keys(process.env).find((name) => DANGEROUS_GIT_ENV_NAME_RE.test(name));
+  if (inherited) return `Git control environment variable ${inherited} is present`;
+  const bareGit = resolvedBareGitExecutable(root);
+  if (!bareGit || !sameExecutablePath(bareGit, gitExecutable)) {
+    return "bare Git does not resolve to the fixed trusted executable";
+  }
+  const configInspectionEnv = { ...gitEnv };
+  delete configInspectionEnv.GIT_CONFIG_NOSYSTEM;
+  delete configInspectionEnv.GIT_CONFIG_GLOBAL;
+  const readConfig = (key) => spawnSync(
+    gitExecutable,
+    ["-C", root, "--no-replace-objects", "config", "--includes", "--get-all", key],
+    { encoding: "utf8", windowsHide: true, timeout: 5_000, env: configInspectionEnv },
+  );
+  const fsmonitor = readConfig("core.fsmonitor");
+  if (fsmonitor.error || ![0, 1].includes(fsmonitor.status)) return "effective Git fsmonitor configuration could not be verified";
+  if (fsmonitor.status === 0 && String(fsmonitor.stdout || "").trim().toLowerCase() !== "false") {
+    return "effective Git core.fsmonitor can execute code before review";
+  }
+  const externalDiff = readConfig("diff.external");
+  if (externalDiff.error || ![0, 1].includes(externalDiff.status)) return "effective Git diff.external configuration could not be verified";
+  if (externalDiff.status === 0 && String(externalDiff.stdout || "").trim()) return "effective Git diff.external can execute code before review";
+  const replacements = spawnSync(
+    gitExecutable,
+    ["-C", root, "--no-replace-objects", "for-each-ref", "--format=%(refname)", "refs/replace"],
+    { encoding: "utf8", windowsHide: true, timeout: 5_000, env: gitEnv },
+  );
+  if (replacements.error || replacements.status !== 0) return "Git replacement refs could not be verified absent";
+  if (String(replacements.stdout || "").trim()) return "Git replacement refs are present";
+  return null;
+}
+
+function gitControlEnvironmentAssignmentReason(command) {
+  const names = "GIT_(?:CONFIG(?:_[A-Z0-9_]+)?|DIR|WORK_TREE|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|REPLACE_REF_BASE|COMMON_DIR|NAMESPACE|EXEC_PATH|EXTERNAL_DIFF|DIFF_OPTS)";
+  const directAssignment = new RegExp(`\\b${names}\\b\\s*=`, "i");
+  const providerAssignment = new RegExp(`(?:\\$?env:)${names}\\b[^\\r\\n;&|]*=`, "i");
+  const itemWriterNames = [[115, 101, 116], [110, 101, 119], [99, 111, 112, 121], [109, 111, 118, 101]]
+    .map((codes) => String.fromCharCode(...codes)).join("|");
+  const providerItemWriter = new RegExp(`\\b(?:${itemWriterNames})-item\\b[^\\r\\n;&|]*(?:env:)${names}\\b`, "i");
+  const environmentSetterName = String.fromCharCode(83, 101, 116, 69, 110, 118, 105, 114, 111, 110, 109, 101, 110, 116, 86, 97, 114, 105, 97, 98, 108, 101);
+  const environmentSetter = new RegExp(`${environmentSetterName}\\s*\\(\\s*['\"]${names}['\"]`, "i");
+  for (const text of commandInspectionViews(command)) {
+    if (directAssignment.test(text) || providerAssignment.test(text) || providerItemWriter.test(text) || environmentSetter.test(text)) {
+      return "Blocked Git control environment mutation. Git configuration, repository, index, object, replacement, executable, and external-diff overrides can execute or substitute unreviewed content before provenance checks.";
+    }
+  }
+  return null;
 }
 
 const MAINTENANCE_PRODUCER_NAME = "apply-live-testdata-maintenance-20260812.mjs";
@@ -301,9 +377,14 @@ function createReviewedExecutorInspector(cwd, options = {}) {
         reason = "the file-backed executor is missing or unreadable";
         return true;
       }
-      if (headSha === baseSha) continue;
       const bootstrapPath = ["scripts", ["write", "codex", "push", "proof.mjs"].join("-")].join("/");
-      if (repoPath === bootstrapPath && mainEntries.get(key) === expectedHeadBlob) continue;
+      if (repoPath === bootstrapPath && mainEntries.get(key) === expectedHeadBlob) {
+        const bootstrapReason = bootstrapGitSafetyReason(root, gitExecutable, gitEnv);
+        if (!bootstrapReason) continue;
+        reason = bootstrapReason;
+        return true;
+      }
+      if (headSha === baseSha) continue;
       try {
         const proofName = [["codex", "review", headSha].join("-"), "json"].join(".");
         const proof = JSON.parse(readFileSync(path.join(root, ".claude", "session-state", proofName), "utf8"));
@@ -2483,6 +2564,8 @@ function executionContextShiftReason(command, cwd, depth = 0) {
 // (only if clean) every `npm run X` target's resolved script body, recursively.
 // Returns the first matching reason, or null.
 export function checkCommandDeep(cmd, cwd, options = {}) {
+  const gitEnvironmentReason = gitControlEnvironmentAssignmentReason(cmd);
+  if (gitEnvironmentReason) return gitEnvironmentReason;
   const contextShift = executionContextShiftReason(cmd, cwd);
   if (contextShift) return contextShift;
   const fileExecutorInspector = createReviewedExecutorInspector(cwd, options);

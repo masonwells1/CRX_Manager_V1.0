@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { chmodSync, existsSync, mkdtempSync, writeFileSync, mkdirSync, renameSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, writeFileSync, mkdirSync, renameSync, rmSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { checkCommandDeep, SECURITY_COMMAND_CHAR_BUDGET } from "./bash-safety-lib.mjs";
@@ -80,6 +80,19 @@ const xargsGuardCases = [
   [xargsCommand, "-E", "''", "-a", ["package", ".json"].join(""), awkCommand, opaqueAwkProgram].join(" "),
   [xargsCommand, "-E", "''", "-a", ["package", ".json"].join(""), "env", "NODE_OPTIONS=--require=./preload.cjs", "node", "scripts/ordinary-check.mjs"].join(" "),
 ];
+const gitEnvItemWriter = String.fromCharCode(83, 101, 116, 45, 73, 116, 101, 109);
+const gitEnvApiWriter = String.fromCharCode(83, 101, 116, 69, 110, 118, 105, 114, 111, 110, 109, 101, 110, 116, 86, 97, 114, 105, 97, 98, 108, 101);
+for (const command of [
+  "GIT_CONFIG_COUNT=1 git status",
+  "$env:GIT_CONFIG_COUNT = 1; git status",
+  "set GIT_CONFIG_COUNT=1 && git status",
+  `${gitEnvItemWriter} Env:GIT_CONFIG_COUNT 1; git status`,
+  `[Environment]::${gitEnvApiWriter}('GIT_CONFIG_COUNT', '1'); git status`,
+]) {
+  const result = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command } });
+  eq(result.status, 0, `mcp-tool-guard exits 0 after Git control environment injection: ${command}`);
+  ok(isDeny(result), `MCP start_process denies Git control environment injection: ${command}`);
+}
 const shellBuiltinNodeOptionsCases = [
   ["NODE_OPTIONS+=--require=./preload.cjs", "node", "scripts/ordinary-check.mjs"].join(" "),
   ["export", "NODE_OPTIONS+=--require=./preload.cjs", ";", "node", "scripts/ordinary-check.mjs"].join(" "),
@@ -817,6 +830,14 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
       }, tmp);
       ok(isDeny(r), `${fileTool} cannot affect the protected producer`);
     }
+    const aliasedScriptsDir = path.join(tmp, "SCRIPT~1");
+    symlinkSync(path.join(tmp, "scripts"), aliasedScriptsDir, process.platform === "win32" ? "junction" : "dir");
+    const aliasedProducerPath = path.join(aliasedScriptsDir, path.basename(producerRelative));
+    r = runHook({
+      tool_name: "mcp__filesystem__write_file",
+      tool_input: { path: aliasedProducerPath, content: "unreviewed" },
+    }, tmp);
+    ok(isDeny(r), "MCP canonicalizes a short-name or linked-directory alias before protecting the maintenance producer");
     for (const exclusionPath of [".gitignore", ".git/info/exclude", ".git/config", ".git/config.worktree", ".gitconfig", ".config/git/ignore"]) {
       r = runHook({ tool_name: "mcp__Desktop_Commander__write_file", tool_input: { path: exclusionPath } }, tmp);
       ok(isDeny(r), `MCP cannot edit Git exclusion control ${exclusionPath}`);

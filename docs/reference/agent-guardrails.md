@@ -142,6 +142,12 @@ protected-main blob. Protected-main identity comes from a sanitized
 `git ls-remote` call to the canonical GitHub repository, not the mutable local
 tracking ref or hook environment. Unit fixtures can inject a SHA only through a
 direct function argument that neither production hook entrypoint accepts.
+Before the bootstrap exception is granted, bare `git` must resolve to the fixed
+trusted installation; dangerous `GIT_CONFIG_*`, repository/index/object,
+replacement, executable-path, and external-diff environment overrides must be
+absent; effective `core.fsmonitor` and `diff.external` settings
+must be inert; and replacement refs must be absent. Command-local Git control
+environment assignments are denied through both Bash and MCP process routes.
 Local tree reads disable Git replacement objects, strip object-database and
 alternate-object environment redirects, and deny both `git replace` and
 `refs/replace/**` updates, including opaque `git update-ref --stdin` batches. A
@@ -185,6 +191,10 @@ through the exact-HEAD executor check. Static PowerShell
 alias definitions are provenance-checked and
 replayed through the full classifier, preventing an alias from hiding either a
 path-backed wrapper or an interpreter plus unsafe operand.
+MCP file-tool targets are resolved through the deepest existing ancestor before
+matching protected paths. This collapses Windows 8.3 short names, junctions,
+and symlink aliases back to the real producer path instead of treating the same
+file as an unprotected spelling.
 Implicit code loaders fail closed too, including PowerShell module/type loading,
 Make build files, Java archives/classes, .NET execution, and Windows script/DLL
 launchers. These commands can execute ignored inputs without placing that input

@@ -17,12 +17,23 @@ import {
   checkCommandDeep,
   checkMigrationModify,
   extractNpmRunNames,
+  fixedTrustedGitExecutable,
   maintenanceProducerCommandMentioned,
   resolveNpmScriptChain,
   readPackageScripts,
   SECURITY_COMMAND_CHAR_BUDGET,
   SECURITY_COMMAND_TOKEN_BUDGET,
 } from "./bash-safety-lib.mjs";
+import { gitLocalEnvironmentNames } from "./git-test-env.mjs";
+
+// Husky invokes this suite from a Git hook and exports repository/index
+// redirect variables. Disposable fixtures must not inherit those redirects,
+// and bootstrap-specific tests need to add hostile variables deliberately.
+for (const name of gitLocalEnvironmentNames()) delete process.env[name];
+for (const name of Object.keys(process.env)) {
+  if (/^GIT_(?:CONFIG(?:_.+)?|DIR|WORK_TREE|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|REPLACE_REF_BASE|COMMON_DIR|NAMESPACE|EXEC_PATH|EXTERNAL_DIFF|DIFF_OPTS)$/i.test(name)) delete process.env[name];
+}
+process.env.PATH = `${path.dirname(fixedTrustedGitExecutable())}${path.delimiter}${process.env.PATH || ""}`;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0;
@@ -366,8 +377,63 @@ for (const command of [
     eq(runIntegrityGit(["reset", "--", trackedWrapperRelative]).status, 0, "replacement-object fixture restores the real index");
     eq(runIntegrityGit(["replace", "HEAD", replacementCommit.stdout.trim()]).status, 0, "replacement-object fixture installs a local replacement ref");
     ok(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo, reviewOptions)?.includes("worktree bytes differ"), "a local replacement tree cannot make hostile wrapper bytes authoritative");
+    const replacementBootstrapReason = checkCommandDeep(["node", bootstrapRelative].join(" "), integrityRepo, reviewOptions);
+    ok(
+      replacementBootstrapReason?.includes("replacement refs are present"),
+      `the bootstrap is denied while a local Git replacement ref could substitute reviewed objects (actual: ${replacementBootstrapReason})`,
+    );
     eq(runIntegrityGit(["replace", "-d", "HEAD"]).status, 0, "replacement-object fixture removes its local replacement ref");
     writeFileSync(trackedWrapperPath, reviewedWrapperSource);
+    const hostileFsmonitor = path.join(integrityRepo, "output", process.platform === "win32" ? "fsmonitor.cmd" : "fsmonitor.sh");
+    writeFileSync(hostileFsmonitor, process.platform === "win32" ? "@echo off\r\n@exit /b 0\r\n" : "#!/bin/sh\nexit 0\n");
+    if (process.platform !== "win32") chmodSync(hostileFsmonitor, 0o755);
+    for (const [key, value, expected] of [
+      ["core.fsmonitor", hostileFsmonitor, "core.fsmonitor"],
+      ["diff.external", hostileFsmonitor, "diff.external"],
+    ]) {
+      eq(runIntegrityGit(["config", key, value]).status, 0, `hostile local ${key} fixture is installed`);
+      ok(
+        checkCommandDeep(["node", bootstrapRelative].join(" "), integrityRepo, reviewOptions)?.includes(expected),
+        `the bootstrap is denied while local Git ${key} could execute unreviewed code`,
+      );
+      eq(runIntegrityGit(["config", "--unset-all", key]).status, 0, `hostile local ${key} fixture is removed`);
+    }
+    const hostileGlobalHome = path.join(integrityRepo, "output", "hostile-git-home");
+    mkdirSync(hostileGlobalHome, { recursive: true });
+    writeFileSync(path.join(hostileGlobalHome, ".gitconfig"), `[core]\n\tfsmonitor = ${hostileFsmonitor.replaceAll("\\", "/")}\n`);
+    const originalHome = process.env.HOME;
+    const originalUserProfile = process.env.USERPROFILE;
+    process.env.HOME = hostileGlobalHome;
+    process.env.USERPROFILE = hostileGlobalHome;
+    ok(
+      checkCommandDeep(["node", bootstrapRelative].join(" "), integrityRepo, reviewOptions)?.includes("core.fsmonitor"),
+      "the bootstrap is denied when effective global Git configuration can execute an fsmonitor hook",
+    );
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = originalUserProfile;
+    const originalGitConfigCount = process.env.GIT_CONFIG_COUNT;
+    process.env.GIT_CONFIG_COUNT = "1";
+    ok(
+      checkCommandDeep(["node", bootstrapRelative].join(" "), integrityRepo, reviewOptions)?.includes("GIT_CONFIG_COUNT"),
+      "the bootstrap is denied when inherited Git configuration injection is present",
+    );
+    if (originalGitConfigCount === undefined) delete process.env.GIT_CONFIG_COUNT;
+    else process.env.GIT_CONFIG_COUNT = originalGitConfigCount;
+    const gitEnvItemWriter = String.fromCharCode(83, 101, 116, 45, 73, 116, 101, 109);
+    const gitEnvApiWriter = String.fromCharCode(83, 101, 116, 69, 110, 118, 105, 114, 111, 110, 109, 101, 110, 116, 86, 97, 114, 105, 97, 98, 108, 101);
+    for (const command of [
+      `GIT_CONFIG_COUNT=1 node ${bootstrapRelative}`,
+      `$env:GIT_CONFIG_COUNT = 1; node ${bootstrapRelative}`,
+      `set GIT_CONFIG_COUNT=1 && node ${bootstrapRelative}`,
+      `${gitEnvItemWriter} Env:GIT_CONFIG_COUNT 1; node ${bootstrapRelative}`,
+      `[Environment]::${gitEnvApiWriter}('GIT_CONFIG_COUNT', '1'); node ${bootstrapRelative}`,
+    ]) {
+      ok(checkCommandDeep(command, integrityRepo, reviewOptions)?.includes("Git control environment mutation"), `command-local Git configuration injection is denied: ${command}`);
+      const result = runHook({ tool_name: "Bash", tool_input: { command } }, integrityRepo);
+      ok(result.stdout.includes('"permissionDecision":"deny"'), `the Bash hook denies command-local Git configuration injection: ${command}`);
+    }
     for (const replacementMutationCommand of [
       "git replace HEAD replacement",
       "git update-ref refs/replace/deadbeef replacement",
@@ -438,6 +504,12 @@ for (const command of [
     ok(checkCommandDeep(trackedDirectRelative.replaceAll("/", "\\"), integrityRepo, reviewOptions)?.includes("fresh exact-SHA independent review proof"), "a directly executed script from an unreviewed local HEAD is denied");
     const localCommitHookResult = runHook({ tool_name: "Bash", tool_input: { command: `node -- ${trackedWrapperRelative}` } }, integrityRepo);
     ok(localCommitHookResult.stdout.includes("Blocked file-backed interpreter"), "the production Bash hook refuses a test environment local main substitution");
+    const featureBranchGitShim = writeGitShim(integrityRepo, localGitShimMarker);
+    ok(
+      checkCommandDeep(["node", bootstrapRelative].join(" "), integrityRepo, reviewOptions)?.includes("bare Git does not resolve"),
+      "the feature-branch bootstrap is denied while bare Git could resolve to a repository-local shim",
+    );
+    rmSync(featureBranchGitShim, { force: true });
     eq(checkCommandDeep(["node", bootstrapRelative].join(" "), integrityRepo, reviewOptions), null, "the reviewed byte-identical proof producer remains available to bootstrap feature-branch review");
     writeFileSync(trackedWrapperPath, reviewedWrapperSource);
     writeFileSync(ignoredWrapperPath, wrapperSource);

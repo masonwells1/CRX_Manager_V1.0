@@ -2,6 +2,19 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-21 — Harden the exact-review bootstrap and Windows protected paths
+
+- The exact-review bootstrap now fails closed when bare Git resolves anywhere
+  except the fixed trusted installation, when Git control environment overrides
+  are inherited or assigned in the command, when effective fsmonitor/external
+  diff configuration can execute code, or when replacement refs are present.
+  Bash and MCP regressions cover the command-local environment routes and the
+  bootstrap-specific repository state checks.
+- MCP file targets are canonicalized through their deepest existing ancestor
+  before protected-path matching. Windows 8.3 short names, junctions, and
+  symlinked directory aliases can no longer disguise the protected maintenance
+  producer from write, move, rename, copy, or delete checks.
+
 ## 2026-08-20 — Close the remaining PR #402 maintenance-command guard gaps
 
 - Stateful MCP protection is latched independently of mutable checkout or ref
