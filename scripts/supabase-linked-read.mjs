@@ -8,7 +8,16 @@
 // verify the link again before returning any rows.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 export const CRX_SUPABASE_PROJECT_ID = 'rhyzpcqhnizqbxphqdkr';
@@ -189,6 +198,68 @@ export function parseSupabaseJsonRows(stdout) {
   return parsed.rows;
 }
 
+function createImmutableLinkedWorkdir(root, expectedProjectId) {
+  const immutableRoot = mkdtempSync(path.join(tmpdir(), 'crx-linked-read-'));
+  const immutableSupabase = path.join(immutableRoot, 'supabase');
+  const immutableTemp = path.join(immutableSupabase, '.temp');
+  mkdirSync(immutableTemp, { recursive: true });
+  const configPath = path.join(root, 'supabase', 'config.toml');
+  if (existsSync(configPath)) {
+    copyFileSync(configPath, path.join(immutableSupabase, 'config.toml'));
+  }
+  const sourceTemp = path.join(root, 'supabase', '.temp');
+  for (const name of [
+    'cli-latest',
+    'gotrue-version',
+    'linked-project.json',
+    'pooler-url',
+    'postgres-version',
+    'rest-version',
+    'storage-migration',
+    'storage-version',
+  ]) {
+    const source = path.join(sourceTemp, name);
+    if (!existsSync(source)) continue;
+    if (name === 'linked-project.json') {
+      let metadata;
+      try {
+        metadata = JSON.parse(readFileSync(source, 'utf8'));
+      } catch {
+        rmSync(immutableRoot, { recursive: true, force: true });
+        fail('linked Supabase metadata linked-project.json is invalid');
+      }
+      if (metadata?.ref !== expectedProjectId) {
+        rmSync(immutableRoot, { recursive: true, force: true });
+        fail('linked Supabase metadata linked-project.json does not match the expected project');
+      }
+    }
+    if (name === 'pooler-url') {
+      let pooler;
+      try {
+        pooler = new URL(readFileSync(source, 'utf8').trim());
+      } catch {
+        rmSync(immutableRoot, { recursive: true, force: true });
+        fail('linked Supabase metadata pooler-url is invalid');
+      }
+      const username = decodeURIComponent(pooler.username);
+      if (!['postgres:', 'postgresql:'].includes(pooler.protocol) ||
+          (username !== expectedProjectId && !username.endsWith(`.${expectedProjectId}`))) {
+        rmSync(immutableRoot, { recursive: true, force: true });
+        fail('linked Supabase metadata pooler-url does not match the expected project');
+      }
+    }
+    copyFileSync(source, path.join(immutableTemp, name));
+  }
+  // This private workdir, rather than the shared checkout, is what --linked
+  // reads. A concurrent `supabase link` can change and restore the checkout's
+  // marker (an ABA race) without redirecting this already-pinned command.
+  writeFileSync(path.join(immutableTemp, 'project-ref'), `${expectedProjectId}\n`, {
+    encoding: 'utf8',
+    flag: 'wx',
+  });
+  return immutableRoot;
+}
+
 export function runLinkedRead(options = {}) {
   const {
   projectRoot,
@@ -208,33 +279,39 @@ export function runLinkedRead(options = {}) {
     linkedRoot || resolveLinkedProjectRoot(projectRoot, runGit, expectedProjectId),
     expectedProjectId,
   );
-  const result = run(
-    'supabase',
-    // `db query` uses the result-envelope flag, not the unrelated global
-    // `--output` status-variable formatter. The parser below is the response
-    // contract check and refuses any future CLI envelope drift.
-    ['db', 'query', '--linked', '--output-format', 'json', '--workdir', root, sql],
-    {
-      cwd: root,
-      encoding: 'utf8',
-      shell: false,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      maxBuffer,
-    },
-  );
-  if (result.error || result.status !== 0) {
-    fail(
-      `Supabase CLI read-only linked capture failed (exit ${result.status ?? 'unknown'}); ` +
-      'diagnostic output was withheld; no evidence was written',
+  const immutableRoot = createImmutableLinkedWorkdir(root, expectedProjectId);
+  try {
+    const result = run(
+      'supabase',
+      // `db query` uses the result-envelope flag, not the unrelated global
+      // `--output` status-variable formatter. The parser below is the response
+      // contract check and refuses any future CLI envelope drift.
+      ['db', 'query', '--linked', '--output-format', 'json', '--workdir', immutableRoot, sql],
+      {
+        cwd: immutableRoot,
+        encoding: 'utf8',
+        shell: false,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        maxBuffer,
+      },
     );
+    if (result.error || result.status !== 0) {
+      fail(
+        `Supabase CLI read-only linked capture failed (exit ${result.status ?? 'unknown'}); ` +
+        'diagnostic output was withheld; no evidence was written',
+      );
+    }
+    assertHarmlessSupabaseStderr(result.stderr);
+    // Keep the shared-root post-check as a loud signal that an operator changed
+    // the checkout link. Correctness no longer depends on it: the CLI already
+    // ran from immutableRoot, whose project-ref cannot participate in that ABA.
+    verifyLinkedProjectRoot(root, expectedProjectId);
+    return {
+      projectId: expectedProjectId,
+      linkedRoot: root,
+      rows: parseSupabaseJsonRows(result.stdout),
+    };
+  } finally {
+    rmSync(immutableRoot, { recursive: true, force: true });
   }
-  assertHarmlessSupabaseStderr(result.stderr);
-  // Close the link-change race: the same checkout must still identify the same
-  // project after the query returned.
-  verifyLinkedProjectRoot(root, expectedProjectId);
-  return {
-    projectId: expectedProjectId,
-    linkedRoot: root,
-    rows: parseSupabaseJsonRows(result.stdout),
-  };
 }

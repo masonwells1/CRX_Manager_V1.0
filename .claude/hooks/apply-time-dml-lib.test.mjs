@@ -168,9 +168,9 @@ eq(T("/* outer /* inner */ UPDATE order_items SET total_price = 1; */ SELECT 1;"
     "COMMENT ON FUNCTION public.money_fix() IS $note$harmless$note$; " +
     "SELECT public.money_fix();",
   );
-  ok(!commentedCall.definedRoutines.includes("money_fix"),
+  ok(!commentedCall.definedRoutines.includes("public.money_fix"),
     "round-48: a dollar-quoted COMMENT does not define the named routine");
-  ok(commentedCall.unknownCalls.includes("money_fix"),
+  ok(commentedCall.unknownCalls.includes("public.money_fix"),
     "round-48: the later resident routine call remains visible and unknown");
   const commentOnly = applyTimeWriteTargets(
     "COMMENT ON FUNCTION public.money_fix() IS $note$harmless$note$;",
@@ -280,11 +280,11 @@ eq(T(null), [], "a null body does not throw");
 // the narrow case worth flagging, and it measured at 16 of 881 migrations.
 {
   const r = applyTimeWriteTargets("CALL public.do_the_repair();");
-  eq([...r.unknownCalls], ["do_the_repair"], "round-24: a CALL of an undefined routine is reported");
+  eq([...r.unknownCalls], ["public.do_the_repair"], "round-24: a CALL of an undefined routine is reported");
   ok(r.targets.size === 0, "round-24: an unreadable call invents no specific target");
 
   const q = applyTimeWriteTargets("DO $$ BEGIN PERFORM public.some_helper(1); END $$;");
-  eq([...q.unknownCalls], ["some_helper"], "round-24: PERFORM of an undefined routine is reported");
+  eq([...q.unknownCalls], ["public.some_helper"], "round-24: PERFORM of an undefined routine is reported");
 
   const own = applyTimeWriteTargets(
     "CREATE FUNCTION public.mine() RETURNS void LANGUAGE plpgsql AS $$ BEGIN NULL; END; $$;\nCALL public.mine();");
@@ -311,7 +311,7 @@ eq(T(null), [], "a null body does not throw");
   ok(repro.targets.has("order_items.profit"),
     "round-28: firing an attached trigger charges the function's writes");
   ok(repro.targets.has("scratch.id"), "round-28: the INSERT itself is still reported");
-  eq([...repro.firedTriggers], ["scratch.tmp_fix"],
+  eq([...repro.firedTriggers], ["scratch.public.tmp_fix"],
     "round-28: the fired attachment is named, so the refusal can explain itself");
 
   // The false-positive boundary the review stated in the same breath. Creating
@@ -359,7 +359,7 @@ eq(T(null), [], "a null body does not throw");
     "CREATE TEMP TABLE scratch(id integer);\n" +
     "CREATE TRIGGER run_fix AFTER INSERT ON scratch FOR EACH ROW " +
     "EXECUTE FUNCTION public.existing_repair();\nINSERT INTO scratch(id) VALUES (1);");
-  ok(resident.unknownCalls.includes("existing_repair"),
+  ok(resident.unknownCalls.includes("public.existing_repair"),
     "round-28: an unreadable trigger function fails closed");
 }
 
@@ -379,12 +379,12 @@ eq(T(null), [], "a null body does not throw");
   const repro = applyTimeWriteTargets(`${FIX}\n${exec("'SELECT public.tmp_fix()'")}`);
   ok(repro.targets.has("order_items.profit"),
     "round-29: a routine called from literal SQL is charged with its writes");
-  ok(repro.invokedRoutines.includes("tmp_fix"),
+  ok(repro.invokedRoutines.includes("public.tmp_fix"),
     "round-29: the call is named, so the refusal can explain itself");
 
   // The same call to a body that lives in the database, which cannot be read.
   const resident = applyTimeWriteTargets(exec("'SELECT public.existing_repair()'"));
-  ok(resident.unknownCalls.includes("existing_repair"),
+  ok(resident.unknownCalls.includes("public.existing_repair"),
     "round-29: a database-resident routine called from literal SQL fails closed");
 
   // A type change rewrites every row; the USING expression is evaluated per row
@@ -509,7 +509,7 @@ eq(T(null), [], "a null body does not throw");
   // reported AND the wrapper is now named, so the refusal can explain itself.
   const repro = applyTimeWriteTargets(`${SCRATCH}INSERT INTO public.scratch VALUES (public.wrapper());`);
   ok(repro.targets.has("scratch.*"), "round-30: the INSERT's own write is still reported");
-  ok(repro.unknownCalls.includes("wrapper"),
+  ok(repro.unknownCalls.includes("public.wrapper"),
     "round-30: the resident routine is named in unknownCalls");
 
   // THE OTHER DIRECTION, AND THE REASON THIS IS AFFORDABLE. Reading operands
@@ -662,21 +662,21 @@ eq(T(null), [], "a null body does not throw");
     'CREATE TEMP TABLE scratch(v int); INSERT INTO scratch(v) VALUES (1); ' +
     'ALTER TABLE scratch ADD COLUMN probe int DEFAULT public.repair_orders();',
   );
-  ok(addedDefault.unknownCalls.includes('repair_orders'),
+  ok(addedDefault.unknownCalls.includes('public.repair_orders'),
     'round-35: ADD COLUMN DEFAULT names a resident routine evaluated for existing rows');
 
   const addedCheck = applyTimeWriteTargets(
     'CREATE TEMP TABLE scratch(v int); INSERT INTO scratch(v) VALUES (1); ' +
     'ALTER TABLE scratch ADD CONSTRAINT c CHECK (public.repair_orders());',
   );
-  ok(addedCheck.unknownCalls.includes('repair_orders'),
+  ok(addedCheck.unknownCalls.includes('public.repair_orders'),
     'round-35: an immediately validated CHECK names its resident routine');
 
   const generated = applyTimeWriteTargets(
     'CREATE TEMP TABLE scratch(v int); INSERT INTO scratch(v) VALUES (1); ' +
     'ALTER TABLE scratch ADD COLUMN probe int GENERATED ALWAYS AS (public.repair_orders()) STORED;',
   );
-  ok(generated.unknownCalls.includes('repair_orders'),
+  ok(generated.unknownCalls.includes('public.repair_orders'),
     'round-35: a stored generated column names its resident routine');
 
   ok(applyTimeWriteTargets(
@@ -686,13 +686,13 @@ eq(T(null), [], "a null body does not throw");
   const deferred = applyTimeWriteTargets(
     'ALTER TABLE public.orders ADD CONSTRAINT c CHECK (public.repair_orders()) NOT VALID;',
   );
-  ok(!deferred.unknownCalls.includes('repair_orders') && !deferred.unresolved,
+  ok(!deferred.unknownCalls.includes('public.repair_orders') && !deferred.unresolved,
     'round-35: a NOT VALID CHECK remains deferred');
 
   const setDefault = applyTimeWriteTargets(
     'ALTER TABLE public.orders ALTER COLUMN total_profit SET DEFAULT public.repair_orders();',
   );
-  ok(!setDefault.unknownCalls.includes('repair_orders') && !setDefault.unresolved,
+  ok(!setDefault.unknownCalls.includes('public.repair_orders') && !setDefault.unresolved,
     'round-35: SET DEFAULT changes future rows but does not evaluate existing rows');
 }
 
@@ -766,7 +766,7 @@ eq(T(null), [], "a null body does not throw");
   const invoked = applyTimeWriteTargets(`${definition} SELECT 1 === 1;`);
   ok(invoked.targets.has('order_items.total_price'),
     'round-37: invoking a custom operator folds in its mutating backing routine');
-  ok(invoked.invokedRoutines.includes('operator_money_fix'),
+  ok(invoked.invokedRoutines.includes('public.operator_money_fix'),
     'round-37: the operator-backed routine joins the ordinary transitive call graph');
 
   const definitionOnly = applyTimeWriteTargets(definition);
@@ -784,7 +784,7 @@ eq(T(null), [], "a null body does not throw");
     'CREATE OPERATOR === (PROCEDURE = public.resident_operator_fix, ' +
     'LEFTARG = integer, RIGHTARG = integer); SELECT 1 === 1;',
   );
-  ok(resident.unknownCalls.includes('resident_operator_fix'),
+  ok(resident.unknownCalls.includes('public.resident_operator_fix'),
     'round-37: an invoked operator with a database-resident backing routine fails closed');
 }
 
@@ -802,7 +802,7 @@ eq(T(null), [], "a null body does not throw");
   );
   ok(invoked.targets.has('order_items.total_price'),
     'round-38: invoking a custom cast folds in its mutating backing routine');
-  ok(invoked.invokedRoutines.includes('cast_money_fix'),
+  ok(invoked.invokedRoutines.includes('public.cast_money_fix'),
     'round-38: the cast-backed routine joins the ordinary transitive call graph');
 
   const definitionOnly = applyTimeWriteTargets(definition);
@@ -819,16 +819,16 @@ eq(T(null), [], "a null body does not throw");
 
   const resident = applyTimeWriteTargets(
     `SELECT CAST('run'::text AS public.resident_sink);`,
-    { knownCasts: [{ source: 'text', target: 'public.resident_sink', fn: 'resident_cast_fix', context: 'explicit' }] },
+    { knownCasts: [{ source: 'text', target: 'public.resident_sink', fn: 'public.resident_cast_fix', context: 'explicit' }] },
   );
-  ok(resident.unknownCalls.includes('resident_cast_fix'),
+  ok(resident.unknownCalls.includes('public.resident_cast_fix'),
     'round-38: an invoked catalog-resident cast backing routine fails closed');
 
   const implicit = applyTimeWriteTargets(
     'CREATE CAST (text AS public.implicit_sink) WITH FUNCTION public.resident_implicit_fix(text) AS IMPLICIT; ' +
     `SELECT 'expression whose live types need catalog resolution';`,
   );
-  ok(implicit.unknownCalls.includes('resident_implicit_fix'),
+  ok(implicit.unknownCalls.includes('public.resident_implicit_fix'),
     'round-38: implicit custom casts conservatively fail closed on executable expressions');
 }
 
@@ -838,13 +838,13 @@ eq(T(null), [], "a null body does not throw");
     'CREATE VIEW public.replay_bridge AS SELECT public.existing_repair(); ' +
     'SELECT * FROM public.replay_bridge;',
   );
-  ok(resident.unknownCalls.includes('existing_repair'),
+  ok(resident.unknownCalls.includes('public.existing_repair'),
     'round-39: selecting a same-file view follows its stored resident routine call');
 
   const definitionOnly = applyTimeWriteTargets(
     'CREATE VIEW public.replay_bridge AS SELECT public.existing_repair();',
   );
-  ok(!definitionOnly.unknownCalls.includes('existing_repair'),
+  ok(!definitionOnly.unknownCalls.includes('public.existing_repair'),
     'round-39 MUTANT: defining but not selecting the view remains deferred');
 
   const sameFile = applyTimeWriteTargets(
@@ -860,7 +860,7 @@ eq(T(null), [], "a null body does not throw");
     'SELECT * FROM public.catalog_bridge;',
     { knownViews: [{ name: 'catalog_bridge', query: 'select public.catalog_view_fix()' }] },
   );
-  ok(catalog.unknownCalls.includes('catalog_view_fix'),
+  ok(catalog.unknownCalls.includes('public.catalog_view_fix'),
     'round-39: a cataloged older view follows its stored resident routine call');
 
   const nested = applyTimeWriteTargets(
@@ -868,7 +868,7 @@ eq(T(null), [], "a null body does not throw");
     'CREATE VIEW public.outer_bridge AS SELECT * FROM public.inner_bridge; ' +
     'SELECT * FROM public.outer_bridge;',
   );
-  ok(nested.unknownCalls.includes('nested_view_fix'),
+  ok(nested.unknownCalls.includes('public.nested_view_fix'),
     'round-39: selected views are followed transitively through nested views');
 }
 
@@ -908,7 +908,7 @@ eq(T(null), [], "a null body does not throw");
   const readableCall = applyTimeWriteTargets(
     'DO $$ BEGIN PERFORM public.existing_repair(); END $$;',
   );
-  ok(readableCall.unknownCalls.includes('existing_repair') && !readableCall.unresolved,
+  ok(readableCall.unknownCalls.includes('public.existing_repair') && !readableCall.unresolved,
     'round-40 control: a dollar-quoted DO body still exposes resident routine calls');
 }
 
@@ -935,11 +935,11 @@ eq(T(null), [], "a null body does not throw");
     'round-41 MUTANT: exactly 500 harmless executable literals remain analyzable');
 
   const publicAuthOverload = applyTimeWriteTargets('SELECT public.is_admin(1);');
-  ok(publicAuthOverload.unknownCalls.includes('is_admin'),
+  ok(publicAuthOverload.unknownCalls.includes('public.is_admin'),
     'round-41: public.is_admin overload does not inherit a bare-name exemption');
 
   const publicBuiltinOverload = applyTimeWriteTargets('SELECT public.round(1);');
-  ok(publicBuiltinOverload.unknownCalls.includes('round'),
+  ok(publicBuiltinOverload.unknownCalls.includes('public.round'),
     'round-41: a public overload of a PostgreSQL builtin fails closed');
 
   const catalogBuiltin = applyTimeWriteTargets('SELECT pg_catalog.round(1.2);');
@@ -965,8 +965,8 @@ eq(T(null), [], "a null body does not throw");
   );
   ok(quotedLowerDefinition.targets.has('order_items.total_price'),
     'round-42: quoted lowercase definition and unquoted call share one PostgreSQL identity');
-  ok(quotedLowerDefinition.definedRoutines.includes('round') &&
-      quotedLowerDefinition.invokedRoutines.includes('round'),
+  ok(quotedLowerDefinition.definedRoutines.includes('public.round') &&
+      quotedLowerDefinition.invokedRoutines.includes('public.round'),
   'round-42: the coalesced identity participates in the ordinary transitive call graph');
 
   const quotedMixedCase = applyTimeWriteTargets(
@@ -994,7 +994,7 @@ eq(T(null), [], "a null body does not throw");
     'DO $$ DECLARE c CURSOR FOR SELECT public.resident_cursor_money_fix(); v integer; ' +
     'BEGIN OPEN c; FETCH c INTO v; CLOSE c; END $$;',
   );
-  ok(resident.unknownCalls.includes('resident_cursor_money_fix') || resident.unresolved,
+  ok(resident.unknownCalls.includes('public.resident_cursor_money_fix') || resident.unresolved,
     'round-43: opening/fetching a cursor over a database-resident routine fails closed');
 
   const quotedCursor = applyTimeWriteTargets(
@@ -1065,7 +1065,7 @@ eq(T(null), [], "a null body does not throw");
     'CHECK (public.domain_alter_money_fix(VALUE));',
   );
   ok(altered.targets.has('order_items.total_price') &&
-      altered.invokedRoutines.includes('domain_alter_money_fix'),
+      altered.invokedRoutines.includes('public.domain_alter_money_fix'),
     'round-53: ALTER DOMAIN ADD CHECK executes its readable validation routine over existing values');
 
   const deferredAlter = applyTimeWriteTargets(
@@ -1075,7 +1075,7 @@ eq(T(null), [], "a null body does not throw");
     'CHECK (public.domain_deferred_fix(VALUE)) NOT VALID;',
   );
   ok(!deferredAlter.unresolved && deferredAlter.targets.size === 0 &&
-      !deferredAlter.invokedRoutines.includes('domain_deferred_fix'),
+      !deferredAlter.invokedRoutines.includes('public.domain_deferred_fix'),
     'round-53 MUTANT: ALTER DOMAIN ADD CHECK NOT VALID remains deferred');
 
   const opaqueValidation = applyTimeWriteTargets(
@@ -1123,7 +1123,7 @@ eq(T(null), [], "a null body does not throw");
     'SELECT * FROM public.pg_event_trigger_ddl_commands();',
     { trustedUnqualifiedRoutines: ['pg_event_trigger_ddl_commands'] },
   );
-  ok(publicOverload.unknownCalls.includes('pg_event_trigger_ddl_commands'),
+  ok(publicOverload.unknownCalls.includes('public.pg_event_trigger_ddl_commands'),
     'round-47 MUTANT: explicit public overloads never inherit catalog-helper trust');
 
   const directPath = applyTimeWriteTargets(
@@ -1185,7 +1185,7 @@ eq(T(null), [], "a null body does not throw");
   }
 
   const resident = applyTimeWriteTargets('SELECT postgres.public.resident_money_repair();');
-  ok(resident.unknownCalls.includes('resident_money_repair') || resident.unresolved,
+  ok(resident.unknownCalls.includes('public.resident_money_repair') || resident.unresolved,
     'round-49: a database-qualified resident routine fails closed');
 
   const definitionOnly =
@@ -1265,6 +1265,38 @@ eq(T(null), [], "a null body does not throw");
     'round-52 MUTANT: defining an ON SELECT rule without reading it remains deferred');
   eq(definitionOnly.firedRules, [],
     'round-52 MUTANT: an unread ON SELECT rule is not reported as fired');
+}
+
+// ---------------- ROUND 54: routine schemas are part of call identity
+{
+  const collision = applyTimeWriteTargets(
+    'CREATE FUNCTION scratch.repair_money() RETURNS void LANGUAGE sql AS $$ SELECT 1 $$; ' +
+    'SELECT public.repair_money();',
+  );
+  ok(collision.definedRoutines.includes('scratch.repair_money') &&
+      !collision.invokedRoutines.includes('scratch.repair_money'),
+    'round-54 MUTANT: a same-bare-name definition in another schema does not satisfy the call');
+  ok(collision.unknownCalls.includes('public.repair_money'),
+    'round-54: the exact qualified database-resident routine remains unknown');
+
+  const exact = applyTimeWriteTargets(
+    'CREATE FUNCTION scratch.repair_money() RETURNS void LANGUAGE sql AS $$ SELECT 1 $$; ' +
+    'CREATE FUNCTION public.repair_money() RETURNS void LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.orders SET total_profit = total_profit; END $$; ' +
+    'SELECT public.repair_money();',
+  );
+  ok(exact.targets.has('orders.total_profit') &&
+      exact.invokedRoutines.includes('public.repair_money') &&
+      !exact.invokedRoutines.includes('scratch.repair_money'),
+    'round-54: a qualified call folds only the exact schema-qualified same-file body');
+
+  const unqualified = applyTimeWriteTargets(
+    'CREATE FUNCTION public.search_path_money() RETURNS void LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.orders SET total_profit = total_profit; END $$; SELECT search_path_money();',
+  );
+  ok(unqualified.targets.has('orders.total_profit') &&
+      unqualified.unknownCalls.includes('search_path_money'),
+    'round-54: unqualified resolution folds possible bodies but remains fail-closed without search-path proof');
 }
 
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

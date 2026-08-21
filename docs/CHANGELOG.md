@@ -74,7 +74,7 @@ migration safety harness; no app source, migration SQL, live database, or produc
   bodies that its write scanners cannot inspect. A `CALL` that receives the captured approval-set
   array is also treated as a possible `OUT`/`INOUT` write-back, so a procedure cannot replace the
   hashed ids with an unapproved same-length set before the protected write. Its 200-case mutation
-  suite and the 248-assertion
+  suite and the 252-assertion
   apply-time analyzer suite are both wired into a required CI step.
 - Non-ASCII PostgreSQL routine identities now fail closed through one shared analyzer boundary.
   A valid define/call/drop sequence such as `public.修復()` can no longer be truncated out of the
@@ -105,13 +105,20 @@ migration safety harness; no app source, migration SQL, live database, or produc
 - Failed linked Supabase captures no longer echo raw child-process output into errors. Database
   routine source, CLI stderr, and spawn diagnostics are withheld while the exit status and refusal to
   write evidence remain visible.
+- Linked Supabase reads now run from a fresh private workdir whose project-bearing metadata is
+  validated and pinned to the CRX project before the CLI starts. A concurrent relink of the shared
+  checkout—even away and back before the post-check—cannot redirect production evidence.
 - Current-database-qualified routine calls now preserve their full invocation edge. Valid PostgreSQL
   spellings such as `postgres.public.money_fix()` are followed for `SELECT`, `CALL`, and `PERFORM`
   in both migration analyzers instead of disappearing after a second qualifier.
+- Routine definitions, calls, trigger attachments, operators, and casts now retain canonical
+  `schema.routine` identity. A harmless `scratch.repair_money()` can no longer make an unknown
+  `public.repair_money()` look defined; unqualified calls remain unresolved unless resolution is
+  independently proven.
 
-Focused proof: snapshot producer 16 assertions; applied-source containment pass (including forced
+Focused proof: snapshot producer 19 assertions; applied-source containment pass (including forced
 worktree-enumeration failure); trigger fan-out producer 22 assertions; apply-time analyzer
-248 assertions; apply-time guard 307 assertions; approved-set validator 200 mutation cases;
+252 assertions; apply-time guard 310 assertions; approved-set validator 200 mutation cases;
 one-shot override writer 24 assertions.
 Each new edge has a removal mutant that
 survives only when the load-bearing protection is deliberately deleted.

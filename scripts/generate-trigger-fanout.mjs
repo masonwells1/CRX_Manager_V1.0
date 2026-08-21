@@ -169,7 +169,7 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
       .filter((routine) =>
         routine.has_sql_body || !routine.source.trim() ||
         !new Set(['plpgsql', 'sql']).has(routine.language))
-      .map((routine) => routine.name),
+      .map((routine) => `public.${routine.name}`),
   );
   const nonPublicEffectCallNames = new Set(
     routines
@@ -177,7 +177,7 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
         const code = applyTimeCode(`DO $crx_scan$ ${routine.source} $crx_scan$;`).code.toLowerCase();
         return /\b(?:perform|call)\s+(?!public\.)[a-z_][a-z0-9_$]*\s*\./.test(code);
       })
-      .map((routine) => routine.name),
+      .map((routine) => `public.${routine.name}`),
   );
   const definitions = routines.map(routineDefinition).join('\n');
 
@@ -333,7 +333,8 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
       directlyOpaque.add(trigger.onTable);
     }
     const dependencies = (directRoutineDependencies[trigger.onTable] ??= new Set());
-    for (const name of analysed.invokedRoutines) {
+    for (const identity of analysed.invokedRoutines) {
+      const name = identity.startsWith('public.') ? identity.slice('public.'.length) : identity;
       if (Object.hasOwn(allRoutineHashes, name)) dependencies.add(name);
     }
     for (const target of [...analysed.tables].sort()) {

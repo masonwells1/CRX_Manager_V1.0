@@ -255,7 +255,13 @@ check('capture invokes one fixed linked query and writes its result', () => {
       calls += 1;
       assert.equal(command, 'supabase');
       assert.equal(args.at(-1), TRIGGER_FANOUT_SQL);
-      assert.equal(options.cwd, dir);
+      const immutableRoot = args[args.indexOf('--workdir') + 1];
+      assert.notEqual(immutableRoot, dir);
+      assert.equal(options.cwd, immutableRoot);
+      assert.equal(
+        readFileSync(path.join(immutableRoot, 'supabase', '.temp', 'project-ref'), 'utf8').trim(),
+        CRX_SUPABASE_PROJECT_ID,
+      );
       return {
         status: 0,
         stdout: envelope([{ trigger_fanout_capture: payload }]),

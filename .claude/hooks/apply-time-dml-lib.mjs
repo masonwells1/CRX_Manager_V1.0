@@ -177,9 +177,9 @@ export function applyTimeCode(sql, depth = 0) {
           // it back in if this migration invokes it (round 24).
           code += " '' ";
           const named = /\b(?:function|procedure)\s+([A-Za-z0-9_.]+)/.exec(stmt);
-          const bare = named ? named[1].split(".").pop() : "";
-          if (bare) routines.push({
-            name: bare,
+          const identity = canonicalRoutineIdentity(named?.[1]);
+          if (identity) routines.push({
+            name: identity,
             code: inner.code,
             literals: inner.literals,
             unresolved: inner.unsupportedDoBody,
@@ -246,11 +246,11 @@ export function applyTimeCode(sql, depth = 0) {
       }
       if (ROUTINE_CREATE_HEAD.test(head)) {
         const named = /\b(?:function|procedure)\s+([A-Za-z0-9_.]+)/.exec(head);
-        const bare = named ? named[1].split(".").pop() : "";
-        if (bare) {
+        const identity = canonicalRoutineIdentity(named?.[1]);
+        if (identity) {
           const inner = applyTimeCode(lit, depth + 1);
           routines.push({
-            name: bare,
+            name: identity,
             code: inner.code,
             literals: inner.literals,
             unresolved: inner.unsupportedDoBody,
@@ -337,6 +337,23 @@ function readRelation(s, pos) {
     }
   }
   return { table: identity.value, quoted: identity.quoted, end: i };
+}
+
+function canonicalRoutineIdentity(value) {
+  const parts = String(value || "")
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .split(".")
+    .filter(Boolean);
+  if (!parts.length) return "";
+  // PostgreSQL accepts current_database.schema.routine() at a call site. The
+  // database component can only name the current database, so schema+routine
+  // is the canonical identity this analyzer needs to preserve.
+  return parts.slice(-2).join(".");
+}
+
+function routineBareName(identity) {
+  return canonicalRoutineIdentity(identity).split(".").pop() || "";
 }
 
 // Walk forward from `pos` at paren depth 0 until one of `stops` appears as a
@@ -788,8 +805,9 @@ const OPERATOR_RUN = /[+\-*\/<>=~!@#%^&|`?]+/g;
 /**
  * `{ table, fn }` for every trigger this SQL attaches at apply time.
  *
- * `table` is the relation the trigger fires on and `fn` the bare name of its
- * function; both are schema-stripped to match the rest of this module.
+ * `table` is the relation the trigger fires on and `fn` is the canonical
+ * schema-qualified function identity. The relation remains schema-stripped to
+ * match the protected-table inventory; routine schemas must not collide.
  */
 export function triggerAttachments(code) {
   const s = (code || "").toLowerCase();
@@ -806,9 +824,9 @@ export function triggerAttachments(code) {
     if (on.hit !== "on") continue;
     const rel = readRelation(body, on.end);
     if (!rel || (NON_RELATION_KEYWORDS.has(rel.table) && !rel.quoted)) continue;
-    const fn = /\bexecute\s+(?:function|procedure)\s+(?:[a-z0-9_]+\s*\.\s*)*([a-z0-9_]+)/.exec(body);
+    const fn = /\bexecute\s+(?:function|procedure)\s+((?:[a-z0-9_]+\s*\.\s*)*[a-z0-9_]+)/.exec(body);
     if (!fn) continue;
-    out.push({ table: rel.table, fn: fn[1] });
+    out.push({ table: rel.table, fn: canonicalRoutineIdentity(fn[1]) });
   }
   return out;
 }
@@ -817,19 +835,26 @@ function invokedRoutines(codeLower, defined) {
   // Callers commonly pass Map#keys(), which is a one-shot iterator. Reusing it
   // for each executable statement would exhaust it after the first statement
   // and silently miss calls in every later statement.
-  const names = [...defined];
+  const identities = [...defined].map(canonicalRoutineIdentity).filter(Boolean);
   const found = new Set();
   for (const raw of String(codeLower || "").split(";")) {
     const executable = runForEffectRegion(raw.trim());
     if (!executable) continue;
-    for (const name of names) {
-      const re = new RegExp(`(^|[^A-Za-z0-9_.])((?:[a-z0-9_]+\\.)*)${name}\\s*\\(`, "g");
-      let mm;
-      while ((mm = re.exec(executable)) !== null) {
-        const nameStart = mm.index + mm[1].length + mm[2].length;
-        if (NOT_A_CALL.test(executable.slice(0, nameStart))) continue;
-        found.add(name);
-        break;
+    const re = /(?<![a-z0-9_.])((?:[a-z0-9_]+\s*\.\s*)*[a-z0-9_]+)\s*\(/g;
+    let mm;
+    while ((mm = re.exec(executable)) !== null) {
+      if (NOT_A_CALL.test(executable.slice(0, mm.index))) continue;
+      const called = canonicalRoutineIdentity(mm[1]);
+      if (!called) continue;
+      if (called.includes(".")) {
+        if (identities.includes(called)) found.add(called);
+        continue;
+      }
+      // An unqualified call can resolve to any same-file definition with this
+      // bare name. Fold every candidate body, but unknownCallsIn deliberately
+      // keeps the call unresolved because search_path was not proven.
+      for (const identity of identities) {
+        if (routineBareName(identity) === called) found.add(identity);
       }
     }
   }
@@ -1031,8 +1056,8 @@ export function operatorDefinitions(code) {
   for (const statement of String(code || "").toLowerCase().split(";")) {
     const head = /\bcreate\s+operator\s+(?:[a-z_][a-z0-9_$]*\s*\.\s*)?([+\-*\/<>=~!@#%^&|`?]+)\s*\(/.exec(statement);
     if (!head) continue;
-    const backing = /\b(?:function|procedure)\s*=\s*(?:[a-z_][a-z0-9_$]*\s*\.\s*)?([a-z_][a-z0-9_$]*)/.exec(statement);
-    out.push({ operator: head[1], fn: backing?.[1] || "" });
+    const backing = /\b(?:function|procedure)\s*=\s*((?:[a-z_][a-z0-9_$]*\s*\.\s*)*[a-z_][a-z0-9_$]*)/.exec(statement);
+    out.push({ operator: head[1], fn: canonicalRoutineIdentity(backing?.[1]) });
   }
   return out;
 }
@@ -1085,7 +1110,7 @@ export function castDefinitions(code) {
     }
     if (!/\bcreate\s+cast\b/.test(statement)) continue;
     const header = /\bcreate\s+cast\s*\(\s*([a-z_][a-z0-9_$]*(?:\s*\.\s*[a-z_][a-z0-9_$]*)?(?:\s*\[\s*\])?)\s+as\s+([a-z_][a-z0-9_$]*(?:\s*\.\s*[a-z_][a-z0-9_$]*)?(?:\s*\[\s*\])?)\s*\)/.exec(statement.replace(/"/g, ""));
-    const backing = /\bwith\s+function\s+(?:[a-z_][a-z0-9_$]*\s*\.\s*)?([a-z_][a-z0-9_$]*)\s*\(/.exec(statement.replace(/"/g, ""));
+    const backing = /\bwith\s+function\s+((?:[a-z_][a-z0-9_$]*\s*\.\s*)*[a-z_][a-z0-9_$]*)\s*\(/.exec(statement.replace(/"/g, ""));
     const inout = /\bwith\s+inout\b/.test(statement);
     const context = /\bas\s+(implicit|assignment)\b/.exec(statement)?.[1] || "explicit";
     if (!header || (!backing && !inout)) {
@@ -1098,7 +1123,7 @@ export function castDefinitions(code) {
     out.push({
       source: normalizeCastType(header[1]),
       target: normalizeCastType(header[2]),
-      fn: backing?.[1] || "",
+      fn: canonicalRoutineIdentity(backing?.[1]),
       context,
     });
   }
@@ -1330,15 +1355,20 @@ function unknownCallsIn(codeLower, defined, trustedUnqualifiedRoutines = new Set
     // separator in front of it to match against. The very next call — the one
     // that mattered — was invisible, and only when it sat immediately inside
     // another call's parentheses, which is exactly where an argument sits.
-    const re = /(?<![a-z0-9_.])((?:[a-z0-9_]+\.)*)([a-z0-9_]+)\s*\(/g;
+    const re = /(?<![a-z0-9_.])((?:[a-z0-9_]+\s*\.\s*)*)([a-z0-9_]+)\s*\(/g;
     let mm;
     while ((mm = re.exec(stmt)) !== null) {
       const nameStart = mm.index + mm[1].length;
       const before = stmt.slice(0, nameStart);
       if (NOT_A_CALL.test(before) || NOT_A_CALL_HERE.test(before)) continue;
-      const schema = mm[1].replace(/\.$/, "");
+      const schema = mm[1].replace(/\s+/g, "").replace(/\.$/, "");
       const name = mm[2];
-      if (defined.has(name)) continue;
+      const identity = canonicalRoutineIdentity(schema ? `${schema}.${name}` : name);
+      // Only an explicitly qualified call can be proven to select an exact
+      // same-file definition. An unqualified call remains unresolved even when
+      // a same-bare-name definition exists: PostgreSQL overload/search_path
+      // resolution may choose a resident routine in another schema.
+      if (schema && defined.has(identity)) continue;
       // A bare builtin name is not a grant of trust to public.<same_name>.
       // Only unqualified calls, explicit pg_catalog calls, and the three fixed
       // Supabase auth helpers may use the builtin exemption. A schema-qualified
@@ -1352,7 +1382,7 @@ function unknownCallsIn(codeLower, defined, trustedUnqualifiedRoutines = new Set
       // event-trigger capture uses this for PostgreSQL's read-only DDL metadata
       // helpers and binds the routine search_path into the manifest hash.
       if (trustedBuiltin || (!schema && trustedUnqualifiedRoutines.has(name))) continue;
-      out.add(name);
+      out.add(identity);
     }
   }
   return out;
@@ -1405,7 +1435,7 @@ export function applyTimeWriteTargets(
   const defineOperators = (list) => {
     for (const definition of list) {
       const operator = String(definition?.operator || "");
-      const fn = String(definition?.fn || "");
+      const fn = canonicalRoutineIdentity(definition?.fn);
       if (!operator) continue;
       const key = `${operator}\0${fn}`;
       if (operatorKeys.has(key)) continue;
@@ -1422,7 +1452,7 @@ export function applyTimeWriteTargets(
     for (const definition of list) {
       const source = normalizeCastType(definition?.source);
       const target = normalizeCastType(definition?.target);
-      const fn = String(definition?.fn || "");
+      const fn = canonicalRoutineIdentity(definition?.fn);
       const context = String(definition?.context || "explicit");
       const key = `${source}\0${target}\0${fn}\0${context}`;
       if (castKeys.has(key)) continue;

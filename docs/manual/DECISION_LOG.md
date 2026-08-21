@@ -449,8 +449,11 @@ reintroduce a `read_only=true` assertion without a fresh owner decision.
 
 **Decision.** An evidence producer may not label caller-supplied JSON as production evidence.
 The applied-migration snapshot and trigger fan-out manifest now run fixed read-only queries
-through the linked Supabase CLI, verify the linked project before and after the query, validate
-the CLI envelope, and stamp the database clock returned by that query. Their consumers reject
+through the linked Supabase CLI, verify the linked project, copy only bounded linked metadata into
+a fresh private workdir, validate every project-bearing copy against the CRX project, and execute
+the CLI from that immutable workdir before verifying the shared link again. This closes a concurrent
+away-and-back relink race that before/after checks alone cannot observe. The producers validate
+the CLI envelope and stamp the database clock returned by that query. Their consumers reject
 missing or mismatched provenance. The shared helper exposes named built-in queries, not arbitrary
 SQL. Trigger fan-out follows public helper routines, trigger-to-trigger cascades, and foreign-key
 referential actions transitively; dynamic SQL, unresolved calls, unsupported routine languages
@@ -502,6 +505,11 @@ resolve a public overload; trust requires an exact `pg_catalog` call or one of t
 `auth.uid/jwt/role` identities. A quoted lowercase name has the same PostgreSQL identity as its
 unquoted spelling, so `public."round"(...)` and `round(...)` are deliberately coalesced while a
 genuinely case-sensitive quoted name remains distinct.
+Routine schemas are likewise identity, not decoration. Definitions, direct calls, trigger
+attachments, custom operators, and custom casts retain canonical `schema.routine` names through
+the transitive graph. An explicit call folds only an exact same-schema definition; an unqualified
+call may fold every possible same-file body conservatively but stays unresolved unless catalog-first
+or other `search_path` resolution is independently proven.
 The Bash approved-set lane applies the same fail-closed boundary to functions and procedures:
 dollar-quoted bodies participate in one transitive mutating-routine graph, while plain, escape,
 and Unicode single-quoted routine bodies are refused because the validator cannot inspect them.

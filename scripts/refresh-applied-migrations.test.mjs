@@ -2,7 +2,7 @@
 // Mutation-focused tests for the applied-ledger capture.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -84,12 +84,19 @@ check('captures rows only through the verified linked project and writes atomica
   const dir = linkedFixture();
   try {
     let calls = 0;
+    let immutableRoot = '';
     const run = (command, args, options) => {
       calls += 1;
       assert.equal(command, 'supabase');
       assert.deepEqual(args.slice(0, 5), ['db', 'query', '--linked', '--output-format', 'json']);
       assert.equal(args.at(-1), APPLIED_MIGRATIONS_SQL);
-      assert.equal(options.cwd, dir);
+      immutableRoot = args[args.indexOf('--workdir') + 1];
+      assert.notEqual(immutableRoot, dir);
+      assert.equal(options.cwd, immutableRoot);
+      assert.equal(
+        readFileSync(path.join(immutableRoot, 'supabase', '.temp', 'project-ref'), 'utf8').trim(),
+        CRX_SUPABASE_PROJECT_ID,
+      );
       return {
         status: 0,
         stdout: envelope([{ migration_ledger: { captured_at: CAPTURED_AT, applied: ROWS } }]),
@@ -98,6 +105,7 @@ check('captures rows only through the verified linked project and writes atomica
     };
     const result = captureAppliedMigrations({ projectDir: dir, linkedRoot: dir, run });
     assert.equal(calls, 1);
+    assert.equal(existsSync(immutableRoot), false);
     assert.deepEqual(JSON.parse(readFileSync(result.outPath, 'utf8')), result.snapshot);
     assert.equal(result.snapshot.project_id, CRX_SUPABASE_PROJECT_ID);
   } finally {
@@ -191,6 +199,98 @@ check('a project-link change during the query is refused before writing evidence
     assert.throws(() => readFileSync(
       path.join(dir, '.claude', 'session-state', 'applied-migrations.json'),
     ));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+check('an ABA relink cannot redirect the immutable linked query workdir', () => {
+  const dir = linkedFixture();
+  let immutableRoot = '';
+  try {
+    const sharedTemp = path.join(dir, 'supabase', '.temp');
+    writeFileSync(
+      path.join(sharedTemp, 'linked-project.json'),
+      JSON.stringify({ ref: CRX_SUPABASE_PROJECT_ID }),
+    );
+    writeFileSync(path.join(sharedTemp, 'pooler-url'),
+      `postgresql://postgres.${CRX_SUPABASE_PROJECT_ID}@example.invalid:6543/postgres`);
+    const result = runLinkedRead({
+      projectRoot: dir,
+      linkedRoot: dir,
+      queryId: 'applied_migrations',
+      run: (command, args, options) => {
+        assert.equal(command, 'supabase');
+        immutableRoot = args[args.indexOf('--workdir') + 1];
+        assert.equal(options.cwd, immutableRoot);
+        const immutableRef = path.join(immutableRoot, 'supabase', '.temp', 'project-ref');
+        const immutableLinked = path.join(immutableRoot, 'supabase', '.temp', 'linked-project.json');
+        const immutablePooler = path.join(immutableRoot, 'supabase', '.temp', 'pooler-url');
+        const sharedRef = path.join(sharedTemp, 'project-ref');
+        assert.equal(readFileSync(immutableRef, 'utf8').trim(), CRX_SUPABASE_PROJECT_ID);
+        writeFileSync(sharedRef, 'abcdefghijklmnopqrst');
+        writeFileSync(path.join(sharedTemp, 'linked-project.json'),
+          JSON.stringify({ ref: 'abcdefghijklmnopqrst' }));
+        writeFileSync(path.join(sharedTemp, 'pooler-url'),
+          'postgresql://postgres.abcdefghijklmnopqrst@example.invalid:6543/postgres');
+        writeFileSync(sharedRef, CRX_SUPABASE_PROJECT_ID);
+        writeFileSync(path.join(sharedTemp, 'linked-project.json'),
+          JSON.stringify({ ref: CRX_SUPABASE_PROJECT_ID }));
+        writeFileSync(path.join(sharedTemp, 'pooler-url'),
+          `postgresql://postgres.${CRX_SUPABASE_PROJECT_ID}@example.invalid:6543/postgres`);
+        assert.equal(readFileSync(immutableRef, 'utf8').trim(), CRX_SUPABASE_PROJECT_ID);
+        assert.equal(readFileSync(immutableLinked, 'utf8').includes(CRX_SUPABASE_PROJECT_ID), true);
+        assert.equal(readFileSync(immutablePooler, 'utf8').includes(CRX_SUPABASE_PROJECT_ID), true);
+        return {
+          status: 0,
+          stdout: envelope([{ migration_ledger: { captured_at: CAPTURED_AT, applied: ROWS } }]),
+          stderr: '',
+        };
+      },
+    });
+    assert.equal(result.projectId, CRX_SUPABASE_PROJECT_ID);
+    assert.equal(result.linkedRoot, dir);
+    assert.equal(existsSync(immutableRoot), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+check('mismatched copied linked metadata is refused before query execution', () => {
+  const dir = linkedFixture();
+  try {
+    writeFileSync(
+      path.join(dir, 'supabase', '.temp', 'linked-project.json'),
+      JSON.stringify({ ref: 'abcdefghijklmnopqrst' }),
+    );
+    let called = false;
+    assert.throws(() => runLinkedRead({
+      projectRoot: dir,
+      linkedRoot: dir,
+      queryId: 'applied_migrations',
+      run: () => { called = true; return { status: 0, stdout: '' }; },
+    }), /linked Supabase metadata linked-project\.json does not match/);
+    assert.equal(called, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+check('mismatched copied pooler metadata is refused before query execution', () => {
+  const dir = linkedFixture();
+  try {
+    writeFileSync(
+      path.join(dir, 'supabase', '.temp', 'pooler-url'),
+      'postgresql://postgres.abcdefghijklmnopqrst@example.invalid:6543/postgres',
+    );
+    let called = false;
+    assert.throws(() => runLinkedRead({
+      projectRoot: dir,
+      linkedRoot: dir,
+      queryId: 'applied_migrations',
+      run: () => { called = true; return { status: 0, stdout: '' }; },
+    }), /linked Supabase metadata pooler-url does not match/);
+    assert.equal(called, false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

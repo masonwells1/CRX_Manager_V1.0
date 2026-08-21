@@ -784,6 +784,27 @@ function armAutopilot(stateDir, hoursFromNow) {
       { force: true },
     );
 
+    // ROUND 54. Routine schemas are part of identity. A harmless definition in
+    // scratch must not make a same-bare-name public resident routine look
+    // readable; that resident body may contain the protected money rewrite.
+    const COLLISION_DEFINITION =
+      "CREATE FUNCTION scratch.repair_money() RETURNS void LANGUAGE sql AS $$ SELECT 1 $$; ";
+    r = apply("20990601000054_cross_schema_collision",
+      `${COLLISION_DEFINITION}SELECT public.repair_money();`);
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-54: a cross-schema same-name definition cannot hide a resident public routine");
+
+    r = apply("20990601000054_exact_scratch_control",
+      `${COLLISION_DEFINITION}SELECT scratch.repair_money();`);
+    ok(!isOneShotDeny(r),
+      "round-54 MUTANT: the exact harmless scratch routine remains analyzable");
+
+    r = apply("20990601000054_unqualified_collision",
+      "CREATE FUNCTION public.search_path_money() RETURNS void LANGUAGE sql AS $$ SELECT 1 $$; " +
+      "SELECT search_path_money();");
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-54: an unqualified call stays unresolved without proven search_path binding");
+
     // ROUND 31. The review asked for parenthesized predicates to be canonicalized
     // before the text comparison — `WHERE (id = 2)` reads differently from
     // `WHERE id = 2` and applies identically. Normalizing them is the round-24

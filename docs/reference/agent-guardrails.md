@@ -44,7 +44,10 @@ These mostly run when Claude Code tries to Write or Edit a file — they refuse 
 
 **Applied-ledger checkout scope (2026-08-19).** Run `node scripts/refresh-applied-migrations.mjs`
 from the checkout that will perform the apply. The fixed read-only query still resolves and verifies
-the linked primary checkout, but the gitignored snapshot is written to the active checkout. The apply
+the linked primary checkout, then runs the CLI from a fresh private workdir whose copied
+project-bearing metadata is validated against the CRX project. A concurrent away-and-back relink of
+the shared checkout therefore cannot redirect the captured rows. The gitignored snapshot is written
+to the active checkout. The apply
 guard reads only verified active/primary locations and chooses the newest capture; the post-apply
 invalidator deletes every location the guard could choose. The one-shot comparison expands both the
 submitted and registered writes through `scripts/trigger-fanout.json`; an opaque relevant source is a
@@ -57,7 +60,10 @@ when a different reviewed migration overlaps the protected table, the current-qu
 authorization to that new file's exact bytes. Custom
 PostgreSQL operator definitions are cataloged across
 verified migration history; invoking one follows its backing routine through the same transitive
-write analysis, and a database-resident backing routine fails closed. Custom casts are cataloged and
+write analysis, and a database-resident backing routine fails closed. Routine definitions, calls,
+trigger attachments, operators, and casts retain canonical `schema.routine` identity, so a
+same-bare-name definition in another schema cannot suppress a resident call; unqualified calls fail
+closed unless resolution is independently proven. Custom casts are cataloged and
 followed the same way for `CAST(... AS type)` and `::type`; implicit/assignment casts and unresolved
 `WITH INOUT` dispatches deny because static analysis cannot prove their runtime routine effects.
 Ordinary stored-view definitions are cataloged too: selecting a same-file, nested, or older checked-in
