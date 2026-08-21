@@ -468,7 +468,15 @@ work that touches five)*:**
     element already carrying `product_id`, `product_name` and `epa_registration`. The brand
     snapshot therefore goes **inside each array element**, beside the existing per-product fields.
     A single snapshot pair on the header is ambiguous the moment an application covers two
-    products, and silently overwritten on the second. **This ships the shape, not a live path** —
+    products, and silently overwritten on the second. **And within each element it is an
+    allocation *array*, not one scalar pair *(P2, second pass)*:** moving the snapshot into the
+    element fixes the product association but a singular snapshot still cannot express PRD
+    1.9a-ii — an application drawing 30 gallons of one brand and 15 of another has two brands and
+    two quantities for **one** product. So each `product_data` element carries
+    `brand_allocations[]`, each entry holding `brand_name_snapshot`, `brand_epa_snapshot` and a
+    quantity, summing to that element's quantity. Shipping the singular form because the workflow
+    is dormant does not avoid the defect; it postpones it to adoption day and guarantees a
+    migration of historical rows that never captured the second brand. **This ships the shape, not a live path** —
     applications are not currently in use (1 row), so the capture is there for whenever they are
     adopted. **WP-3's behavioral proof runs on the delivery path**, which is the one that carries
     real volume; the application path is not exercised and must not be claimed as proved.
@@ -517,6 +525,44 @@ allocation to a single unit, and requires the allocations to be positive, finite
 this, a 45-gallon delivery split 30/10 leaves the invoice saying 45 while the scale ticket and
 regulatory paperwork say 40, and a replay silently doubles both allocations.
 
+**Conservation checked only inside the allocation RPC is not conservation *(blocker S-03,
+exact-snapshot Codex review of PR #435, second pass)*.** The allocation RPC owns the *child*
+write, but nothing stops the *parent* moving underneath it afterwards. Deliveries are already
+created, edited and voided by four other RPCs, every one of which can change or remove a line
+quantity without ever calling the allocation RPC — verified by grepping `src/` on 2026-08-20:
+
+| RPC | Call site | What it does to the parent |
+|---|---|---|
+| `create_delivery_with_items` | `src/pages/NewDelivery.tsx:418` | creates lines |
+| `create_quick_delivery` | `src/components/deliveries/QuickDeliveryModal.tsx:377` | creates lines |
+| `edit_delivery` | `src/pages/DeliveryDetail.tsx:543` | **changes or replaces line quantities** |
+| `void_delivery` | `src/pages/DeliveryDetail.tsx:611` | reverses the whole delivery |
+
+Edit a 45-gallon line already split 30/15 down to 20 gallons and the allocations still say 45.
+The invoice, the inventory draw and the regulatory paperwork then disagree, and the EPA snapshot
+on the paperwork names brands in quantities that were never shipped. **So conservation is
+enforced on the parent side too, in PostgreSQL:** a constraint trigger on `delivery_items` (and
+on `receiving_records`) re-checks the allocation sum on **every** parent insert, update and
+delete, so a lifecycle RPC that moves a quantity either fixes the allocations in the same
+transaction or fails. Direct client writes to both allocation tables are **revoked** — they are
+reachable only through actor-bound, idempotent RPCs. **The builder re-runs that grep before
+starting WP-3**; a lifecycle path missed here is a silent provenance defect, not a crash.
+
+**Proof (negative cases, R-11):** with a line split 30/15, call `edit_delivery` to change the
+line to 20 and show the transaction **fails** rather than leaving a 45-gallon allocation on a
+20-gallon line; then void the delivery and show the allocations reverse with it; then replay the
+allocation RPC with the same idempotency key and show the quantities do not double.
+
+**Shipped allocations are bounded by what was actually received *(P1, second pass)*.** Summing
+to the delivery line is necessary but not sufficient: with 10 gallons of Brand A and 90 of Brand
+B in stock, a 20-gallon delivery allocated entirely to Brand A sums correctly and is still
+impossible. It prints the wrong EPA number on regulatory paperwork and, via the brand density
+override above, the wrong scale weight. **Brand-level available quantity is therefore tracked
+across receipt, delivery and reversal**, and an allocation that exceeds the brand's available
+quantity is refused in the database. **Proof:** receive 10 A / 90 B, attempt a 20-gallon
+all-Brand-A delivery, show it is refused; allocate 10 A / 10 B, show it succeeds; void it and
+show Brand A's available quantity returns to 10.
+
 **A brand's density may only override a spec density when the record says which brand shipped
 *(finding 15)*.** Receiving Brand A does not establish that a later delivery drawn from pooled
 inventory used Brand A. Brand density therefore applies **only** where the delivery or
@@ -542,9 +588,16 @@ lot and no tote** → brand recorded, reaches paperwork. Split 30/15 across two 
 brands, both EPA numbers, both quantities, still no lot or tote. Change a brand's EPA
 afterwards → the existing record still shows the old one. **Type an unlisted brand → receiving
 completes and a proposal appears in the queue** (D-K). **The brand-density override actually
-runs *(Fable F-3)*:** receive with a brand carrying a density override, request a scale weight,
-observe **the brand's** density used and displayed; remove the override, observe fallback to
-spec density.
+runs *(Fable F-3)* — and the proof must select the shipped brand first *(P1, second pass)*:**
+an earlier revision requested the scale weight immediately after receiving, which contradicts the
+rule three paragraphs above — a receipt does not establish which brand later shipped. That proof
+could only pass by inferring the brand from the most recent receipt, the exact 830-vs-1,020 lb
+defect the rule forbids. **So the proof runs on a delivery line carrying an explicit brand
+allocation:** receive a brand with a density override, **create a delivery line and allocate it
+to that brand**, then request a scale weight and observe **the brand's** density used and
+displayed; remove the override and observe fallback to spec density. **Then run the negative
+case:** a delivery line with **no** allocation must fall back to spec density and say so on
+screen — never silently borrow the receipt's brand.
 
 **Additional proofs added after Sol's review:** the **old four-argument call still succeeds**
 against the migrated database, and a **queued offline receive replays successfully** — both run
@@ -606,9 +659,25 @@ specific form row has not proved this package.**
 PHI, EPA number and label rate. They have **nowhere to put** ingredient rows, specific-form ids,
 concentration basis, brand proposals, label URL/date, cancellation state, or a typed-versus-EPA
 conflict. A builder handed "no migration" either silently drops those fields or bypasses review
-and writes straight to live chemistry. **This package extends the queue and its RPC contract with
-a typed, versioned payload plus a purpose discriminator**, and proves every planned field
-survives propose → review → commit intact.
+and writes straight to live chemistry.
+
+**But WP-4 does NOT own the queue schema — WP-1 does *(blocker S-02, exact-snapshot Codex review
+of PR #435, second pass)*.** An earlier revision said "this package extends the queue and its RPC
+contract", contradicting WP-1 above, which moved the queue extension forward precisely because
+**WP-3 needs it and the apply order runs WP-4 after WP-3.** Two execution documents disagreeing
+about who owns a schema change is how the change gets built twice or not at all. The split is
+exactly this, and nothing in a later section may restate it differently:
+
+- **WP-1's migration** adds the typed versioned payload column, the `purpose` discriminator, and
+  `proposed_brand_name` to `product_label_drafts`. WP-1 owns the queue's *shape*.
+- **WP-4's migration** adds **only** the EPA-specific RPC, `create_label_draft_proposal`, on top
+  of that shape. It adds no queue columns.
+- **`create_label_draft` is never modified — by any package.** It is an eleven-parameter
+  signature (`20260629210000_product_label_drafts.sql:122-132`) with a deployed caller; PostgreSQL
+  cannot add a parameter in place, so touching it either drops the live signature or creates an
+  overload. Both break `handleCreateSampleDraft` while the old frontend is still deployed.
+
+WP-4 proves every planned field survives propose → review → commit intact.
 
 **The payload contract, stated exactly — "typed, versioned payload" is not a contract *(closed
 reviewing PR #435)*.** Prose a builder cannot fail is prose that lets data vanish between propose
@@ -616,8 +685,8 @@ and commit while the implementation still "matches the plan". The queue extensio
 
 | Field | Type | Null? | Notes |
 |---|---|---|---|
-| `payload_version` | `int` | no | Starts at `1`. `create_label_draft` **rejects** an unknown version rather than coercing it |
-| `purpose` | `text` | no | Discriminator, CHECK-constrained to `manual` or `epa_label_seed`. **Defaults to `manual`** — see the compatibility note below. A new purpose is a new CHECK member in a later migration, never free text |
+| `payload_version` | `int` | no | Starts at `1`. Validated by a **CHECK constraint in WP-1's migration** and re-checked by `create_label_draft_proposal`, which **rejects** an unknown version rather than coercing it. **Not** by `create_label_draft`, which is never modified |
+| `purpose` | `text` | no | Discriminator, CHECK-constrained to `manual`, `epa_label_seed` or `brand_proposal`. **Defaults to `manual`** — see the compatibility note below. A new purpose is a new CHECK member in a later migration, never free text |
 | `source_product_data_version` | `int` | no | The product's `product_data_version` **at proposal time**. `commit_label_draft` refuses the commit if the product has moved on since — see below |
 | `ingredients[]` | `jsonb` array | no (may be empty) | Each element carries `concentration_value` `numeric`, `concentration_unit`, `basis`, `source`, and **exactly one** of: `ingredient_id` — an existing specific chemical-form row, **never the canonical parent** — or `proposed_form` (see below) |
 | `proposed_form` | `jsonb` | yes | Only on elements with no `ingredient_id`. Carries the form's `name`, `cas` if the label states one, and `canonical_ingredient_id` — the parent it groups under. **This is a proposal, not a row** |
@@ -629,6 +698,24 @@ and commit while the implementation still "matches the plan". The queue extensio
 | `conflicts[]` | `jsonb` array | no (may be empty) | Each element names the field, Mason's live value and the EPA value. **Populating this never overwrites the live value** (D-L) |
 
 Nullable means *the label genuinely may not state it*. It never means "the importer may drop it."
+
+**`brand_proposal` is a third purpose, and it exists because D-K needs one *(blocker S-02,
+second pass)*.** WP-3's escape hatch drops a crew-typed brand name into this same queue, but an
+earlier revision offered only `manual` and `epa_label_seed`. Neither fits: `manual` routes the
+row through the legacy hand-entered **label** path — which commits signal word, REI, PHI and
+chemistry that a brand proposal does not carry — and `epa_label_seed` asserts an EPA lookup that
+never happened. A crew-typed brand would have had no unambiguous commit route at all. So:
+
+- A `brand_proposal` row carries `proposed_brand_name` plus, optionally, an EPA number read off
+  the jug; its `ingredients[]` array is **empty** and stays empty.
+- It is reviewed in the same D-I queue and shown as a *proposed brand*, never as a label draft.
+- Committing it writes **one `product_brands` row and nothing else** — no chemistry, no label
+  fields — through the brand-commit path, **not** `commit_label_draft`. Rejecting it writes
+  nothing and leaves the receiving record's snapshot untouched, because the snapshot already
+  carries the typed name (PRD 1.9a-iii).
+- **WP-1's CHECK must include `brand_proposal` from the start.** WP-3 writes these rows, and
+  WP-3 applies before WP-4; a CHECK that gains the third member only in WP-4 makes every D-K
+  receive fail with a truck at the dock.
 
 **`purpose` must not break the manual draft path that is already live *(Mason, 2026-08-20)*.**
 `handleCreateSampleDraft` (`src/pages/LabelReview.tsx:370-382`) calls `create_label_draft` today
@@ -719,8 +806,16 @@ one active is the same class of error as the ~35% one this package exists to pre
 deferred this to Phase 2 as review finding 16, but **WP-4 performs the live write in Phase 1**, so
 Phase 2 is too late.
 
-**The invariant:** exactly **one effective row per `(product_id, ingredient_id, basis)`**, enforced
-by a partial unique index on the effective rows — not by convention. Every
+**The invariant:** exactly **one effective row per `(product_id, ingredient_id)` — `basis` is
+NOT part of the key *(blocker S-01, exact-snapshot Codex review of PR #435, second pass)*.**
+An earlier revision keyed the index `(product_id, ingredient_id, basis)`, which reopens the very
+defect it was written to close: a typed **4.0 lb acid-equivalent/gal** row and an EPA **5.4 lb
+salt (active-ingredient)/gal** row have *different* bases, so both stay effective and a consumer
+can sum them to 9.4 — nonsense chemistry, and the same silent ~35% class of error as D-A. Acid
+equivalent, active ingredient, oxide and elemental are **alternate representations of one
+concentration, never additive quantities.** The index is therefore partial-unique on the
+effective rows over `(product_id, ingredient_id)` alone, and the chosen basis is an attribute of
+that single row. Enforced by the index — not by convention. Every
 `product_active_ingredients` row therefore carries an explicit **effective / proposed** state;
 there is no implicit "the newest one wins" and no nullable third state. `commit_label_draft`
 **never** creates a second effective row: where an effective row already exists for that key, the
@@ -732,7 +827,10 @@ chemistry until he approves the swap.
 **Proof:** commit a proposal that conflicts with a typed value, then query
 `product_active_ingredients` for that product and show **exactly one** effective row, still
 carrying Mason's number, with the EPA row present and marked proposed. Then approve the swap and
-show the count is **still exactly one**, now carrying the EPA number.
+show the count is **still exactly one**, now carrying the EPA number. **Run the same proof a
+second time with the two rows on *different* bases** — typed `acid_equivalent`, EPA
+`active_ingredient` — and show the index still refuses the second effective row. A proof that
+only exercises a same-basis conflict has not tested the failure this invariant exists to prevent.
 
 **Cancelled registrations (D-T, reaffirmed as D-W):** a cancelled registration produces a **loud
 banner on the product and a warning when it is added to a quote** — but nothing is blocked.

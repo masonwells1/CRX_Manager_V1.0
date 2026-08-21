@@ -29,7 +29,7 @@ migrations, which is the defect corrected on 2026-08-20.
 | WP-1 Ingredient core + fast-entry editor | ⬜ | **required** — not yet written | — | — | **migration apply OK** |
 | WP-2 Density, net weight, scale-weight surface | ⬜ | **required** — not yet written | — | — | **migration apply OK** |
 | WP-3 Brand layer, receiving, split loads | ⬜ | **required** — not yet written | — | — | **migration apply OK** |
-| WP-4 EPA auto-seed | ⬜ | **required** — extends the `product_label_drafts` queue and the `create_label_draft` / `commit_label_draft` contract | — | — | **migration apply OK** *(plus bulk proposal creation and bulk commit — both are live writes)* |
+| WP-4 EPA auto-seed | ⬜ | **required** — adds **only** the `create_label_draft_proposal` RPC. The `product_label_drafts` queue schema is **WP-1's**, and `create_label_draft` is never modified | — | — | **migration apply OK** *(plus bulk proposal creation and bulk commit — both are live writes)* |
 | WP-5 Copy-from-sibling, nickname search | ⬜ | **required** — atomic sibling-copy RPC with compare-and-set on both products | — | — | **migration apply OK** |
 
 **Apply order is the package order.** WP-1 → WP-2 → WP-3 → **WP-4** → **WP-5**, no reordering:
@@ -45,6 +45,10 @@ listed as `none` in both documents:
 - **WP-4** — revision 2 said "no migration"; revision 3 replaced that after Sol's finding 1,
   because the existing `product_label_drafts` queue has nowhere to put ingredient rows,
   specific-form ids, concentration basis, brand proposals, label URL/date or cancellation state.
+  **The queue *schema* work then moved to WP-1** — WP-3's D-K escape hatch needs it and WP-3
+  applies first — so WP-4's migration adds only the `create_label_draft_proposal` RPC over that
+  shape *(corrected 2026-08-20, blocker S-02 of the exact-snapshot Codex review of PR #435: this
+  row and the build plan had disagreed about who owns the change)*.
 - **WP-5** — the sibling copy must move ingredients, density and brands atomically while
   comparing expected versions on **both** products. That is not expressible as a sequence of
   browser/PostgREST writes, and no sibling-copy RPC exists yet.
@@ -116,6 +120,30 @@ answered inside WP-4 as a database invariant: exactly one effective row per
 `(product_id, ingredient_id, basis)`, enforced by a partial unique index, with EPA conflicts held
 as proposed/audit data until an atomic approval retires the prior effective row. **Findings 20,
 21, 22 and 24 remain genuinely Phase 2/3 and stay deferred.**
+
+**Second pass of the exact-snapshot review — three more blockers, all fixed 2026-08-20.** The
+merge gate re-ran against the pushed snapshot and returned `BLOCKERS`. All three were
+contradictions the first pass introduced or left standing, not new scope:
+
+- **S-01** — the "one effective concentration" invariant was keyed
+  `(product_id, ingredient_id, basis)`, so a typed acid-equivalent row and an EPA
+  active-ingredient row **both stayed effective** and could be summed. Bases are alternate
+  representations, never additive. Re-keyed to `(product_id, ingredient_id)`, with a
+  differing-basis negative proof added.
+- **S-02** — this ledger and the build plan **disagreed about who owns the queue schema.** WP-1
+  owns the shape; WP-4 adds only `create_label_draft_proposal`; `create_label_draft` is never
+  modified. A third `purpose`, `brand_proposal`, was also added — D-K's crew-typed brand had no
+  unambiguous commit route between `manual` and `epa_label_seed`.
+- **S-03** — allocation conservation was checked only inside the allocation RPC, while
+  `create_delivery_with_items`, `create_quick_delivery`, `edit_delivery` and `void_delivery` can
+  all move a parent line without it. Now enforced by constraint trigger on the parent, with
+  direct allocation writes revoked, plus brand-level available-quantity bounds so a delivery
+  cannot allocate more of a brand than was received.
+
+Two further findings from the same pass were fixed with them: the brand-density proof now selects
+the shipped brand through a delivery allocation instead of inferring it from the receipt, and
+`application_records.product_data` elements carry a `brand_allocations[]` array rather than one
+scalar snapshot pair.
 
 **Still open, and deliberately so:** findings 20, 21, 22, 24 all concern **Phase 2/3**
 comparison and rate-source behavior, which this loop does not build — they must be settled before
