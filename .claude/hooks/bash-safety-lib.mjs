@@ -141,7 +141,7 @@ function gitControlEnvironmentAssignmentReason(command) {
   return null;
 }
 
-const DANGEROUS_RUNTIME_ENV_NAME_RE = /^(?:NODE_OPTIONS|NPM_CONFIG_(?:USERCONFIG|GLOBALCONFIG|NODE_OPTIONS|SCRIPT_SHELL)|PYTHON(?:PATH|HOME|STARTUP|USERBASE|INSPECT))$/i;
+const DANGEROUS_RUNTIME_ENV_NAME_RE = /^(?:NODE_OPTIONS|NPM_CONFIG_(?:USERCONFIG|GLOBALCONFIG|NODE_OPTIONS|SCRIPT_SHELL|EDITOR|SHELL)|PYTHON(?:PATH|HOME|STARTUP|USERBASE|INSPECT))$/i;
 
 function runtimeExecutionSegments(command) {
   const tokens = tokenizeShellWords(command);
@@ -182,7 +182,7 @@ function runtimePreloadControlReason(command) {
   if (!segments.some((segment) => runtimeNames.has(segment.executable) || indirectRuntimeHosts.has(segment.executable)) && !pathBackedWrapper) return null;
   const inherited = Object.keys(process.env).find((name) => DANGEROUS_RUNTIME_ENV_NAME_RE.test(name));
   if (inherited) return `Blocked runtime preload/search-path control because inherited ${inherited} is present.`;
-  const names = "(?:NODE_OPTIONS|NPM_CONFIG_(?:USERCONFIG|GLOBALCONFIG|NODE_OPTIONS|SCRIPT_SHELL)|PYTHON(?:PATH|HOME|STARTUP|USERBASE|INSPECT)|HOME|USERPROFILE|XDG_CONFIG_HOME|COMSPEC|SHELL)";
+  const names = "(?:NODE_OPTIONS|NPM_CONFIG_(?:USERCONFIG|GLOBALCONFIG|NODE_OPTIONS|SCRIPT_SHELL|EDITOR|SHELL)|PYTHON(?:PATH|HOME|STARTUP|USERBASE|INSPECT)|HOME|USERPROFILE|XDG_CONFIG_HOME|COMSPEC|SHELL)";
   const itemWriterNames = [[115, 101, 116], [110, 101, 119], [99, 111, 112, 121], [109, 111, 118, 101]]
     .map((codes) => String.fromCharCode(...codes)).join("|");
   const environmentSetterName = String.fromCharCode(83, 101, 116, 69, 110, 118, 105, 114, 111, 110, 109, 101, 110, 116, 86, 97, 114, 105, 97, 98, 108, 101);
@@ -202,7 +202,7 @@ function runtimePreloadControlReason(command) {
 function runtimeConfigurationReason(command, cwd) {
   const segments = runtimeExecutionSegments(command);
   const packageManagers = new Set(["npm", "npx", "pnpm", "yarn", "bun", "corepack"]);
-  const dangerousPackageFlags = ["userconfig", "globalconfig", ["node", "options"].join("-"), ["script", "shell"].join("-")];
+  const dangerousPackageFlags = ["userconfig", "globalconfig", ["node", "options"].join("-"), ["script", "shell"].join("-"), "editor", "shell"];
   let packageManagerSeen = false;
   for (const { executable, args } of segments) {
     if (packageManagers.has(executable)) {
@@ -2595,7 +2595,20 @@ function npmDependencyLifecycleReason(command) {
   ].map((codes) => String.fromCharCode(...codes)));
   for (const { executable, args } of runtimeExecutionSegments(command)) {
     if (executable !== "npm") continue;
-    const action = args.map((argument) => argument.toLowerCase()).find((argument) => unsafeActions.has(argument)) || "";
+    const lowerArgs = args.map((argument) => argument.toLowerCase());
+    const action = lowerArgs.find((argument) => unsafeActions.has(argument)) || "";
+    if (lowerArgs.includes("config") && lowerArgs.includes("edit")) {
+      return "Blocked npm config edit because it launches an arbitrary editor outside exact-HEAD review.";
+    }
+    if (lowerArgs.some((argument) => ["explore", "edit"].includes(argument))) {
+      return "Blocked npm package exploration/editing because it launches ignored package code or an arbitrary editor outside exact-HEAD review.";
+    }
+    const executableConfigKeys = new Set(["editor", "shell", "script-shell", "node-options"]);
+    const configMutation = lowerArgs.includes("config") && lowerArgs.some((argument) => ["set", "add"].includes(argument));
+    const setAliasMutation = lowerArgs.includes("set") && !lowerArgs.includes("config");
+    if ((configMutation || setAliasMutation) && lowerArgs.some((argument) => executableConfigKeys.has(argument.split("=")[0]))) {
+      return "Blocked persisted executable npm configuration. Editors, shells, and Node startup options must not dispatch unreviewed code.";
+    }
     if (unsafeActions.has(action)) {
       return "Blocked npm dependency and lifecycle execution outside the reviewed tree because it can run ignored package scripts.";
     }

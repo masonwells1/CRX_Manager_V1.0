@@ -457,6 +457,18 @@ for (const command of [
       const result = runHook({ tool_name: "Bash", tool_input: { command } }, integrityRepo);
       ok(result.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies unreviewed npm dependency lifecycle execution: " + command);
     }
+    for (const command of [
+      "npm config edit --editor output/evil.cmd",
+      "npm explore vite -- vite --config=output/evil.ts",
+      "npm --editor=output/evil.cmd edit vite",
+      "npm --shell=output/evil.cmd explore vite",
+      "npm config set editor output/evil.cmd",
+      "NPM_CONFIG_EDITOR=output/evil.cmd npm config get cache",
+    ]) {
+      ok(checkCommandDeep(command, integrityRepo, reviewOptions), "npm arbitrary editor/shell and ignored-package execution is denied: " + command);
+      const result = runHook({ tool_name: "Bash", tool_input: { command } }, integrityRepo);
+      ok(result.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies npm arbitrary program dispatch: " + command);
+    }
     const trackedWrapperBlob = runIntegrityGit(["rev-parse", `HEAD:${trackedWrapperRelative}`]);
     eq(trackedWrapperBlob.status, 0, "the tracked-wrapper blob resolves for the mode-substitution regression");
     eq(

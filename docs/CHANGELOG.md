@@ -50,6 +50,12 @@ All significant development milestones, in reverse chronological order.
   well as blob IDs and validates filesystem types from the reviewed mode, so a
   regular tracked script cannot be staged as a same-blob symlink and redirected
   to unreviewed bytes. Bash and MCP regressions cover both bypasses.
+- npm subcommands and options that dispatch arbitrary programs now fail
+  closed. Package exploration/editing, `config edit`, editor/shell overrides,
+  and persisted executable npm configuration cannot launch ignored editors,
+  shells, or `node_modules` code outside exact-HEAD inspection. Bash and MCP
+  regressions cover the demonstrated `config edit` and `explore` routes plus
+  sibling option/config forms.
 - Bootstrap tree verification now compares the exact index and worktree bytes
   directly, without invoking Git's worktree conversion/filter pipeline. It
   rejects executable clean/smudge/process filters, external attribute files,

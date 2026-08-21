@@ -179,6 +179,11 @@ arguments that mention `npx`, `npm exec`, or `vite` remain ordinary data. A real
 local package executable fails closed because ignored `node_modules` bytes are
 not part of exact HEAD and can change after review; verification that needs the
 installed toolchain runs inside the repository's reviewed commit/preflight gate.
+npm package exploration/editing and `config edit` are denied because they launch
+ignored package code or an arbitrary editor. `--editor`, `--shell`, matching
+environment overrides, and persisted editor/shell/Node-startup configuration
+also fail closed, preventing these subcommands from becoming alternate process
+dispatchers outside exact-HEAD inspection.
 Package-manager `--userconfig`/`--globalconfig` and startup-setting overrides
 are denied, as are inherited or command-local Node/npm/Python preload and
 search-path environment controls. Default npm config files fail closed when

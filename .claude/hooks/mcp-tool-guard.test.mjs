@@ -778,6 +778,18 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
     }, tmp);
     ok(isDeny(r), "MCP start_process denies a reviewed script that can spawn ignored package code");
     ok(!existsSync(ignoredPackageMarker), "the MCP-denied child runner never executes the ignored package shim");
+    for (const command of [
+      "npm config edit --editor output/evil.cmd",
+      "npm explore vite -- vite --config=output/evil.ts",
+      "npm --editor=output/evil.cmd edit vite",
+      "npm --shell=output/evil.cmd explore vite",
+      "npm config set editor output/evil.cmd",
+      "NPM_CONFIG_EDITOR=output/evil.cmd npm config get cache",
+    ]) {
+      ok(checkCommandDeep(command, tmp, reviewOptions), "direct injection denies npm arbitrary program dispatch: " + command);
+      r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command } }, tmp);
+      ok(isDeny(r), "MCP denies npm arbitrary program dispatch: " + command);
+    }
     const alternateHome = path.join(tmp, "output", "alternate-home");
     const alternateHomeMarker = path.join(tmp, "output", "alternate-home-shell-executed.txt");
     mkdirSync(alternateHome, { recursive: true });
