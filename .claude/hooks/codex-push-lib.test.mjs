@@ -2337,6 +2337,13 @@ assert.deepEqual(msysArgConversionNamesInEnvironment({ MSYS_NO_PATHCONV: "1" }),
 // Present-but-empty still counts: an empty exclusion list is a value MSYS reads.
 assert.deepEqual(msysArgConversionNamesInEnvironment({ MSYS_ARG_CONV_EXCL: "" }), ["MSYS_ARG_CONV_EXCL"], "an empty value is still set");
 assert.deepEqual(msysArgConversionNamesInEnvironment({ PATH: "/usr/bin" }), [], "unrelated variables are ignored");
+// MSYS2_ENV_CONV_EXCL excludes ENVIRONMENT VARIABLES from conversion, not
+// command-line arguments, so it cannot change how `-C /c/repo` is read. It was
+// in the first draft of this list and refused pushes over a setting with no
+// bearing on the risk (CodeRabbit checked it against the MSYS2 docs, PR #445).
+// This assertion exists to stop it being re-added on a plausible-sounding hunch.
+assert.deepEqual(msysArgConversionNamesInEnvironment({ MSYS2_ENV_CONV_EXCL: "*" }), [], "environment-variable conversion is a different mechanism and is not refused");
+assert.deepEqual(commandNamesMsysArgConversion("MSYS2_ENV_CONV_EXCL='*' git -C /c/r push origin main"), [], "…in the command text either");
 
 assert.deepEqual(commandNamesMsysArgConversion("MSYS2_ARG_CONV_EXCL='*' git -C /c/r push origin main"), ["MSYS2_ARG_CONV_EXCL"], "an inline assignment is caught");
 assert.deepEqual(commandNamesMsysArgConversion("export MSYS_NO_PATHCONV=1; git -C /c/r push origin main"), ["MSYS_NO_PATHCONV"], "…and one set in an earlier segment");

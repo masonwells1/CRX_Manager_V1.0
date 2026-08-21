@@ -215,10 +215,16 @@ export function msysPathToWindows(value, platform = process.platform) {
 // reimplementing MSYS's matcher, so the names are REFUSED rather than
 // interpreted — but only when the push actually names a path the translation
 // would change, so an unrelated shell setting cannot block ordinary pushes.
+// DELIBERATELY ABSENT: `MSYS2_ENV_CONV_EXCL`. It excludes ENVIRONMENT VARIABLES
+// from conversion, not command-line arguments — a different mechanism that
+// cannot change how `-C /c/repo` is read (msys2.org/docs/filesystem-paths).
+// Listing it here refused pushes over a setting with no bearing on this risk,
+// which contradicts the scoping directly below; removed after CodeRabbit
+// checked it against the MSYS2 documentation on PR #445. Do not re-add it
+// without evidence that it affects ARGUMENT conversion.
 export const MSYS_ARG_CONVERSION_ENV = [
   "MSYS2_ARG_CONV_EXCL",
   "MSYS_ARG_CONV_EXCL",
-  "MSYS2_ENV_CONV_EXCL",
   "MSYS_NO_PATHCONV",
 ];
 

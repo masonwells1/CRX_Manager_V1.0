@@ -72,7 +72,23 @@ separately noted the allow-cases all used a non-app repo; there is now a fixture
 app remote and a risky `supabase/migrations/` diff asserting the translated path is **still** gated,
 for the identical reason as the native spelling.
 
-Tests: `.claude/hooks/codex-push-lib.test.mjs` (in `test:correction-guards`).
+**Third review round (PR #445) — the first fix covered only half the callers.** Codex flagged that
+`.codex/hooks/production-action-guard.mjs` is a **second** caller of the now-translating
+`gitPushCwd` and had none of the conversion-control refusal, so the identical fail-open survived on
+the Codex side: `gateMainChange()` would classify remotes, risky diff and proof from the wrong
+checkout. Wiring one of two callers is not a fix. The Codex guard now applies the same refusal and
+has its own tests. Separately, CodeRabbit checked `MSYS2_ENV_CONV_EXCL` against the MSYS2
+documentation: it excludes **environment variables** from conversion, not command-line arguments, so
+it cannot affect how `-C /c/repo` is read. It was removed from the refusal list — keeping it meant
+refusing pushes over a setting with no bearing on the risk, contradicting the scoping rule one line
+below it — and a test now pins its absence so it is not re-added on a plausible-sounding hunch.
+
+The Codex-side test asserts the denial **reason**, not just that the push was blocked: a main-bound
+push in that fixture is already denied for want of a proof, so a `blocked === true` assertion would
+have passed with the new check deleted. It also asserts an otherwise-**allowed** feature push is
+blocked, which only this check can do.
+
+Tests: `.claude/hooks/codex-push-lib.test.mjs` and `.codex/hooks/production-action-guard.test.mjs`.
 
 ## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (every worktree → 6 of 23)
 
