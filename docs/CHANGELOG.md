@@ -97,6 +97,9 @@ All significant development milestones, in reverse chronological order.
   Mutation-capable PowerShell commands also fail closed when computed operands
   precede a Node-backed executable, covering grouped values and arbitrary
   method-call expressions in direct, nested shell, and MCP process routes.
+  Linux `taskset` affinity wrappers are traversed to their child command, so
+  CPU pinning cannot hide a staged `NODE_OPTIONS` preload from Bash or MCP
+  process guards.
   Environment-provider and .NET `NODE_OPTIONS` mutations are denied even when
   no Node command appears in the same payload, closing staged mutations across
   persistent MCP shell interactions. Dynamic environment-provider targets fail

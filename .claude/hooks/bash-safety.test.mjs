@@ -131,6 +131,7 @@ for (const command of [
   'F=$(decode); P=$(decode); S=$(decode); T=$(decode); nohup node --no-warnings "$F" "$P" "$S" "$T"',
   'F=$(decode); P=$(decode); S=$(decode); T=$(decode); nice node --no-warnings "$F" "$P" "$S" "$T"',
   'F=$(decode); P=$(decode); S=$(decode); T=$(decode); timeout 5 node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); taskset -c 0 node --no-warnings "$F" "$P" "$S" "$T"',
   'F=$(decode); P=$(decode); S=$(decode); T=$(decode); setsid node --no-warnings "$F" "$P" "$S" "$T"',
   'F=$(decode); P=$(decode); S=$(decode); T=$(decode); stdbuf -o0 node --no-warnings "$F" "$P" "$S" "$T"',
   'F=$(decode); P=$(decode); S=$(decode); T=$(decode); (node --no-warnings "$F" "$P" "$S" "$T")',
@@ -510,7 +511,7 @@ const decoderToShellAsData = "rg -n 'base64 -d | sh' docs";
 ok(!maintenanceProducerCommandMentioned(decoderToShellAsData), "decoder-to-shell spelling used as quoted search data is not classified as an invocation");
 eq(checkMaintenanceProducerInvocation(decoderToShellAsData), null, "decoder-to-shell search data stays outside the producer gate");
 ok(!checkDangerousCommand(decoderToShellAsData), "ordinary decoder-to-shell text search stays allowed");
-for (const terminalWrapperCommand of ["env --help pwsh /EncodedCommand", "timeout --help pwsh /EncodedCommand"]) {
+for (const terminalWrapperCommand of ["env --help pwsh /EncodedCommand", "timeout --help pwsh /EncodedCommand", "taskset --help env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"]) {
   ok(!maintenanceProducerCommandMentioned(terminalWrapperCommand), `terminal wrapper mode is not classified as execution: ${terminalWrapperCommand}`);
   eq(checkMaintenanceProducerInvocation(terminalWrapperCommand), null, `terminal wrapper mode stays outside the producer gate: ${terminalWrapperCommand}`);
   ok(!checkDangerousCommand(terminalWrapperCommand), `terminal wrapper mode stays allowed: ${terminalWrapperCommand}`);
@@ -533,6 +534,9 @@ for (const command of [
   "nohup env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
   "nice -n 5 env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
   "timeout 5s env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  "taskset -c 0 env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  "taskset --cpu-list 0 env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  "taskset 0x1 env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
   "setsid env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
   "stdbuf -oL env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
   "timeout -vk 1s 5s env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
