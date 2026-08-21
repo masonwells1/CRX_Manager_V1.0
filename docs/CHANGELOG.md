@@ -100,6 +100,9 @@ All significant development milestones, in reverse chronological order.
   Linux `taskset` affinity wrappers are traversed to their child command, so
   CPU pinning cannot hide a staged `NODE_OPTIONS` preload from Bash or MCP
   process guards.
+  Linux `ionice` command mode is traversed with its value-taking options, and
+  npm's `NPM_CONFIG_NODE_OPTIONS` environment spelling is protected alongside
+  direct `NODE_OPTIONS` across Bash, PowerShell, CMD, and MCP process routes.
   Environment-provider and .NET `NODE_OPTIONS` mutations are denied even when
   no Node command appears in the same payload, closing staged mutations across
   persistent MCP shell interactions. Dynamic environment-provider targets fail

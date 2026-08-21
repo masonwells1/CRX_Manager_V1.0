@@ -132,6 +132,7 @@ for (const command of [
   'F=$(decode); P=$(decode); S=$(decode); T=$(decode); nice node --no-warnings "$F" "$P" "$S" "$T"',
   'F=$(decode); P=$(decode); S=$(decode); T=$(decode); timeout 5 node --no-warnings "$F" "$P" "$S" "$T"',
   'F=$(decode); P=$(decode); S=$(decode); T=$(decode); taskset -c 0 node --no-warnings "$F" "$P" "$S" "$T"',
+  'F=$(decode); P=$(decode); S=$(decode); T=$(decode); ionice -c 3 node --no-warnings "$F" "$P" "$S" "$T"',
   'F=$(decode); P=$(decode); S=$(decode); T=$(decode); setsid node --no-warnings "$F" "$P" "$S" "$T"',
   'F=$(decode); P=$(decode); S=$(decode); T=$(decode); stdbuf -o0 node --no-warnings "$F" "$P" "$S" "$T"',
   'F=$(decode); P=$(decode); S=$(decode); T=$(decode); (node --no-warnings "$F" "$P" "$S" "$T")',
@@ -447,6 +448,14 @@ const powerShellComputedMutationGuardCases = [
   `Set-Content ("Env:NODE_OPTIONS".ToLower()) ("--require=./preload.cjs"); npm --version`,
   `pwsh -NoProfile -Command "Set-Item ('Env:NODE-XOPTIONS'.Replace('-X','_')) ('--requXire=./preload.cjs'.Replace('X','')); npm --version"`,
 ];
+const npmConfigNodeOptionsGuardCases = [
+  "npm_config_node_options=--require=./preload.cjs npm run ordinary",
+  "env NPM_CONFIG_NODE_OPTIONS=--require=./preload.cjs npm run ordinary",
+  "export NPM_CONFIG_NODE_OPTIONS=--require=./preload.cjs; npm run ordinary",
+  "Set-Item Env:NPM_CONFIG_NODE_OPTIONS --require=./preload.cjs; npm run ordinary",
+  "$env:NPM_CONFIG_NODE_OPTIONS='--require=./preload.cjs'; npm run ordinary",
+  'cmd /c "set NPM_CONFIG_NODE_OPTIONS=--require=./preload.cjs & npm run ordinary"',
+];
 const harmlessPowerShellAliasCases = [
   "Set-Alias ll Get-ChildItem",
   "echo Set-Alias",
@@ -482,6 +491,7 @@ for (const command of dynamicNodeOptionsGuardCases) ok(checkDangerousCommand(com
 for (const command of powerShellProviderGuardCases) ok(checkDangerousCommand(command), `PowerShell provider operation cannot stage NODE_OPTIONS: ${command}`);
 for (const command of powerShellAliasGuardCases) ok(checkDangerousCommand(command), `PowerShell alias parameter form cannot hide a mutation-capable target: ${command}`);
 for (const command of powerShellComputedMutationGuardCases) ok(checkDangerousCommand(command), `computed PowerShell mutation cannot stage a Node preload: ${command}`);
+for (const command of npmConfigNodeOptionsGuardCases) ok(checkDangerousCommand(command), `npm config NODE_OPTIONS cannot stage a lifecycle preload: ${command}`);
 for (const command of posixLineContinuationGuardCases) ok(checkDangerousCommand(command), `POSIX line continuation cannot hide NODE_OPTIONS: ${JSON.stringify(command)}`);
 for (const command of nestedParserGuardCases) ok(checkDangerousCommand(command), `nested or POSIX-escaped parser route is denied: ${command}`);
 for (const command of nestedParserGuardCases.slice(0, 2)) ok(maintenanceProducerCommandMentioned(command), `nested AWK launcher enters the producer gate: ${command}`);
@@ -511,7 +521,7 @@ const decoderToShellAsData = "rg -n 'base64 -d | sh' docs";
 ok(!maintenanceProducerCommandMentioned(decoderToShellAsData), "decoder-to-shell spelling used as quoted search data is not classified as an invocation");
 eq(checkMaintenanceProducerInvocation(decoderToShellAsData), null, "decoder-to-shell search data stays outside the producer gate");
 ok(!checkDangerousCommand(decoderToShellAsData), "ordinary decoder-to-shell text search stays allowed");
-for (const terminalWrapperCommand of ["env --help pwsh /EncodedCommand", "timeout --help pwsh /EncodedCommand", "taskset --help env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"]) {
+for (const terminalWrapperCommand of ["env --help pwsh /EncodedCommand", "timeout --help pwsh /EncodedCommand", "taskset --help env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs", "ionice --help env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"]) {
   ok(!maintenanceProducerCommandMentioned(terminalWrapperCommand), `terminal wrapper mode is not classified as execution: ${terminalWrapperCommand}`);
   eq(checkMaintenanceProducerInvocation(terminalWrapperCommand), null, `terminal wrapper mode stays outside the producer gate: ${terminalWrapperCommand}`);
   ok(!checkDangerousCommand(terminalWrapperCommand), `terminal wrapper mode stays allowed: ${terminalWrapperCommand}`);
@@ -537,6 +547,9 @@ for (const command of [
   "taskset -c 0 env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
   "taskset --cpu-list 0 env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
   "taskset 0x1 env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  "ionice -c 3 env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  "ionice --class idle env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  "ionice -c3 -n7 env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
   "setsid env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
   "stdbuf -oL env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
   "timeout -vk 1s 5s env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
@@ -778,6 +791,12 @@ for (const command of powerShellComputedMutationGuardCases) {
   r = runHook({ tool_name: command.startsWith("pwsh") ? "Bash" : "PowerShell", tool_input: { command } });
   eq(r.status, 0, `bash-safety.mjs exits 0 after denying a computed PowerShell mutation: ${command}`);
   ok(r.stdout.includes('"permissionDecision":"deny"'), `bash-safety.mjs denies a computed PowerShell mutation: ${command}`);
+}
+for (const command of npmConfigNodeOptionsGuardCases) {
+  const toolName = /^(?:Set-Item|\$env:)/i.test(command) ? "PowerShell" : "Bash";
+  r = runHook({ tool_name: toolName, tool_input: { command } });
+  eq(r.status, 0, `bash-safety.mjs exits 0 after denying an npm config NODE_OPTIONS preload: ${command}`);
+  ok(r.stdout.includes('"permissionDecision":"deny"'), `bash-safety.mjs denies an npm config NODE_OPTIONS preload: ${command}`);
 }
 for (const command of posixLineContinuationGuardCases) {
   r = runHook({ tool_name: "Bash", tool_input: { command } });

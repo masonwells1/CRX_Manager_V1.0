@@ -150,7 +150,7 @@ export function maintenanceProducerCommandMentioned(command, depth = 0) {
         cursor += 1;
         const directCommandNames = [
           "command", "time", "exec", "env", "find", "xargs", "parallel", "sudo", "doas",
-          "wsl", "busybox", "toybox", "nohup", "nice", "timeout", "taskset", "setsid", "stdbuf",
+          "wsl", "busybox", "toybox", "nohup", "nice", "timeout", "taskset", "ionice", "setsid", "stdbuf",
         ];
         const directCommand = directCommandNames.some((name) => executableNamed(list[cursor], name, true));
         if (cursor < index && !directCommand && /^[A-Za-z_]\w*$/.test(normalizeShellToken(list[cursor].value))) cursor += 1;
@@ -252,6 +252,19 @@ export function maintenanceProducerCommandMentioned(command, depth = 0) {
         cursor += 1;
         if (cursor < index && /^(?:--help|--version|--list|--list-full|--install)$/.test(normalizeShellOption(list[cursor].value))) return false;
         if (cursor < index && list[cursor].value === "--") cursor += 1;
+      } else if (named("ionice")) {
+        cursor += 1;
+        let processMode = false;
+        while (cursor < index && list[cursor].value.startsWith("-")) {
+          const argument = normalizeShellOption(list[cursor].value);
+          if (/^(?:--help|--version|-h|-V)$/.test(argument)) return false;
+          if (argument === "--") { cursor += 1; break; }
+          if (/^(?:-p|-P|-u|--pid|--pgid|--uid)$/.test(argument)) processMode = true;
+          if (/^(?:-c|-n|-p|-P|-u|--class|--classdata|--pid|--pgid|--uid)$/.test(argument)) { cursor += 2; continue; }
+          if (/^(?:-[cnpPu].+|--(?:class|classdata|pid|pgid|uid)=.+|-t|--ignore)$/.test(argument)) { cursor += 1; continue; }
+          return true;
+        }
+        if (processMode || cursor >= index) return false;
       } else if (named("taskset")) {
         cursor += 1;
         let pidMode = false;
@@ -328,7 +341,7 @@ export function maintenanceProducerCommandMentioned(command, depth = 0) {
       .some((name) => executableNamed(token, name, true));
     if (!cmdlet) return false;
     for (let cursor = index + 1; cursor < list.length && !list[cursor].control; cursor += 1) {
-      if (/^env:\\?node_options$/i.test(normalizeShellToken(list[cursor].value))) return true;
+      if (/^env:\\?(?:node_options|npm_config_node_options)$/i.test(normalizeShellToken(list[cursor].value))) return true;
     }
     return false;
   };
@@ -649,7 +662,7 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
   };
   const recognizedExecutables = new Set([
     "command", "builtin", "env", "wsl", "busybox", "toybox", "find", "xargs",
-    "parallel", "sudo", "doas", "coproc", "time", "watch", "exec", "nohup", "nice", "timeout", "taskset", "setsid", "stdbuf",
+    "parallel", "sudo", "doas", "coproc", "time", "watch", "exec", "nohup", "nice", "timeout", "taskset", "ionice", "setsid", "stdbuf",
     "cmd", "powershell", "pwsh", "bash", "sh", "dash", "zsh", "ksh",
     "eval", "source", ".", "node", "nodejs", "export", "declare", "typeset",
     "local", "readonly", "set", "setx", "printf", "read",
@@ -661,13 +674,15 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
   const executableName = (token) => shellWordCandidates(token)
     .map((candidate) => candidate.replace(/^@/, "").split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase())
     .find((candidate) => recognizedExecutables.has(candidate)) || "";
-  const hasNodeOptionsAssignment = (token) => assignmentName(token) === "node_options";
+  const nodeOptionsNames = new Set(["node_options", "npm_config_node_options"]);
+  const isNodeOptionsName = (name) => nodeOptionsNames.has(String(name || "").toLowerCase());
+  const hasNodeOptionsAssignment = (token) => isNodeOptionsName(assignmentName(token));
   const namesNodeOptionsVariable = (token) => shellWordCandidates(token)
-    .some((candidate) => /^node_options(?:\[[^\]]*\])?(?:\+?=|$)/i.test(candidate));
+    .some((candidate) => /^(?:node_options|npm_config_node_options)(?:\[[^\]]*\])?(?:\+?=|$)/i.test(candidate));
   const hasDynamicVariableName = (token) => shellWordCandidates(token)
     .some((candidate) => /(?:\$\{|\$[A-Za-z_]|`|![^!\r\n]+!|%[^%\r\n]+%)/.test(candidate));
   const powerShellEnvNodeOptionsTarget = (token) => token?.sawUnquoted && shellWordCandidates(token)
-    .some((candidate) => /^\$env\s*:\s*node_options(?:\+?=|$)/i.test(candidate));
+    .some((candidate) => /^\$env\s*:\s*(?:node_options|npm_config_node_options)(?:\+?=|$)/i.test(candidate));
   const unquotedExecutableBasename = (token) => {
     if (!token?.sawUnquoted) return "";
     return shellWordCandidates(token)
@@ -709,7 +724,7 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
   const nodeBackedExecutables = new Set(["node", "nodejs", "npm", "npx", "pnpm", "yarn", "bun", "corepack"]);
   const nodeBackedRunnerWrappers = new Set([
     "command", "builtin", "env", "wsl", "busybox", "toybox", "find", "xargs", "parallel",
-    "sudo", "doas", "coproc", "time", "watch", "exec", "nohup", "nice", "timeout", "taskset", "setsid", "stdbuf",
+    "sudo", "doas", "coproc", "time", "watch", "exec", "nohup", "nice", "timeout", "taskset", "ionice", "setsid", "stdbuf",
   ]);
   const tokenListMentionsNodeBackedCommand = (list) => {
     for (let start = 0; start < list.length;) {
@@ -768,7 +783,7 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
     while (segmentEnd < tokens.length && !tokens[segmentEnd].control) segmentEnd += 1;
     const operandCandidates = tokens.slice(index + 1, segmentEnd).flatMap(shellWordCandidates);
     const touchesEnvironmentProvider = operandCandidates.some((candidate) => /^env:\\?/i.test(candidate));
-    const namesNodeOptions = operandCandidates.some((candidate) => /^(?:env:\\?)?node_options$/i.test(candidate));
+    const namesNodeOptions = operandCandidates.some((candidate) => /^(?:env:\\?)?(?:node_options|npm_config_node_options)$/i.test(candidate));
     return touchesEnvironmentProvider && namesNodeOptions;
   });
   const powerShellMutationCommandInPosition = tokens.some((token, index) => {
@@ -784,7 +799,7 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
     && /(?:\(|\$\{|\$[A-Za-z_]|@\(|\s-join(?:\s|$)|\+)/i.test(value);
   const compactDynamicTarget = value.toLowerCase().replace(/[\s"'`^+$()[\]{},]/g, "");
   const powershellMutation = tokens.some((token) => powerShellMutationCommands.has(unquotedExecutableBasename(token)))
-    && compactDynamicTarget.includes("env:node_options")
+    && ["env:node_options", "env:npm_config_node_options"].some((target) => compactDynamicTarget.includes(target))
     && /(?:\+|\s-join(?:\s|$)|\$\(|@\()/i.test(value);
   const powerShellDynamicEnvMutation = tokens.some((token) => powerShellMutationCommands.has(unquotedExecutableBasename(token)))
     && /(?:env:|env:\\)\s*\$(?:\(|\{?[A-Za-z_])/i.test(value);
@@ -844,10 +859,11 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
     return powerShellMutationCommands.has(targetBasename);
   });
   const dotNetMutation = /setenvironmentvariable/i.test(value)
-    && compactDynamicTarget.includes("setenvironmentvariablenode_options");
+    && ["setenvironmentvariablenode_options", "setenvironmentvariablenpm_config_node_options"]
+      .some((target) => compactDynamicTarget.includes(target));
   const standalonePowerShellEnvMutation = tokens.some((target, index) => {
     if (!target?.sawUnquoted || !shellWordCandidates(target)
-      .some((candidate) => /^(?:\$env:node_options(?:\+?=)?|(?:env:|env:\\)node_options)$/i.test(candidate))) return false;
+      .some((candidate) => /^(?:\$env:(?:node_options|npm_config_node_options)(?:\+?=)?|(?:env:|env:\\)(?:node_options|npm_config_node_options))$/i.test(candidate))) return false;
     let segmentStart = index;
     while (segmentStart > 0 && !tokens[segmentStart - 1].control) segmentStart -= 1;
     const segmentCommand = unquotedExecutableBasename(tokens[segmentStart]);
@@ -886,7 +902,7 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
         const token = segmentTokens[scan];
         if (powerShellEnvNodeOptionsTarget(token)) {
           const candidates = shellWordCandidates(token);
-          const attachedAssignment = candidates.some((candidate) => /^\$env\s*:\s*node_options\+?=/i.test(candidate));
+          const attachedAssignment = candidates.some((candidate) => /^\$env\s*:\s*(?:node_options|npm_config_node_options)\+?=/i.test(candidate));
           const separatedAssignment = /^\+?=/.test(String(segmentTokens[scan + 1]?.value || ""));
           if (attachedAssignment || separatedAssignment) return true;
         }
@@ -894,7 +910,7 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
         if (powerShellMutationCommands.has(commandName)) {
           const targetTokens = segmentTokens.slice(scan + 1);
           if (targetTokens.some((target) => target.sawUnquoted
-            && shellWordCandidates(target).some((candidate) => /^(?:env:|env:\\)node_options$/i.test(candidate)))) return true;
+            && shellWordCandidates(target).some((candidate) => /^(?:env:|env:\\)(?:node_options|npm_config_node_options)$/i.test(candidate)))) return true;
         }
         const unquotedDotNetMutation = token?.sawUnquoted && shellWordCandidates(token)
           .some((candidate) => /setenvironmentvariable/i.test(candidate));
@@ -1157,6 +1173,25 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
         if (skipAssignments()) return true;
         continue;
       }
+      if (name === "ionice") {
+        cursor += 1;
+        let terminalMode = false;
+        let processMode = false;
+        while (cursor < segmentEnd && tokens[cursor].value.startsWith("-")) {
+          const argument = tokens[cursor].value;
+          if (/^(?:--help|--version|-h|-V)$/.test(argument)) { terminalMode = true; break; }
+          if (argument === "--") { cursor += 1; break; }
+          if (/^(?:-p|-P|-u|--pid|--pgid|--uid)$/.test(argument)) processMode = true;
+          if (/^(?:-c|-n|-p|-P|-u|--class|--classdata|--pid|--pgid|--uid)$/.test(argument)) { cursor += 2; continue; }
+          if (/^(?:-[cnpPu].+|--(?:class|classdata|pid|pgid|uid)=.+|-t|--ignore)$/.test(argument)) { cursor += 1; continue; }
+          if (tokens.slice(cursor + 1, segmentEnd).some(hasNodeOptionsAssignment)) return true;
+          terminalMode = true;
+          break;
+        }
+        if (terminalMode || processMode || cursor >= segmentEnd) break;
+        if (skipAssignments()) return true;
+        continue;
+      }
       if (name === "taskset") {
         cursor += 1;
         let terminalMode = false;
@@ -1327,7 +1362,7 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
             cursor += optionName ? 2 : 1;
             continue;
           }
-          if (hasNodeOptionsAssignment(tokens[cursor]) || argument.toLowerCase() === "node_options") return true;
+          if (hasNodeOptionsAssignment(tokens[cursor]) || isNodeOptionsName(argument)) return true;
           if (/^-[^-]*a/.test(argument)) allexportEnabled = true;
           else if (/^\+[^+]*a/.test(argument)) allexportEnabled = false;
           cursor += 1;
@@ -1336,7 +1371,7 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
         cursor += 1;
         while (cursor < segmentEnd && tokens[cursor].value.startsWith("-")) cursor += 1;
         if (hasNodeOptionsAssignment(tokens[cursor])) return true;
-        if (String(tokens[cursor]?.value || "").toLowerCase() === "node_options") return true;
+        if (isNodeOptionsName(tokens[cursor]?.value)) return true;
       }
       break;
     }
