@@ -550,6 +550,8 @@ for (const command of [
   "ionice -c 3 env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
   "ionice --class idle env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
   "ionice -c3 -n7 env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  'taskset --unknown bash -c "export NODE_OPTIONS=--require=./preload.cjs; node scripts/ordinary-check.mjs"',
+  'ionice --unknown bash -c "export NODE_OPTIONS=--require=./preload.cjs; node scripts/ordinary-check.mjs"',
   "setsid env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
   "stdbuf -oL env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
   "timeout -vk 1s 5s env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",

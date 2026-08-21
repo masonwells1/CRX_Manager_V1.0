@@ -318,6 +318,8 @@ for (const command of [
   "ionice -c 3 env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
   "ionice --class idle env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
   "ionice -c3 -n7 env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs",
+  'taskset --unknown bash -c "export NODE_OPTIONS=--require=./preload.cjs; node scripts/ordinary-check.mjs"',
+  'ionice --unknown bash -c "export NODE_OPTIONS=--require=./preload.cjs; node scripts/ordinary-check.mjs"',
   "npm_config_node_options=--require=./preload.cjs npm run ordinary",
   "env NPM_CONFIG_NODE_OPTIONS=--require=./preload.cjs npm run ordinary",
   "Set-Item Env:NPM_CONFIG_NODE_OPTIONS --require=./preload.cjs; npm run ordinary",

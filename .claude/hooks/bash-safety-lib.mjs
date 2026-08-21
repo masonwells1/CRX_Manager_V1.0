@@ -1184,7 +1184,11 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
           if (/^(?:-p|-P|-u|--pid|--pgid|--uid)$/.test(argument)) processMode = true;
           if (/^(?:-c|-n|-p|-P|-u|--class|--classdata|--pid|--pgid|--uid)$/.test(argument)) { cursor += 2; continue; }
           if (/^(?:-[cnpPu].+|--(?:class|classdata|pid|pgid|uid)=.+|-t|--ignore)$/.test(argument)) { cursor += 1; continue; }
-          if (tokens.slice(cursor + 1, segmentEnd).some(hasNodeOptionsAssignment)) return true;
+          const remaining = tokens.slice(cursor + 1, segmentEnd).map((token) => token.value).join(" ");
+          const remainingAfterValue = tokens.slice(cursor + 2, segmentEnd).map((token) => token.value).join(" ");
+          if (tokens.slice(cursor + 1, segmentEnd).some(hasNodeOptionsAssignment)
+            || inspectNestedCommand(remaining)
+            || inspectNestedCommand(remainingAfterValue)) return true;
           terminalMode = true;
           break;
         }
@@ -1202,7 +1206,11 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
           if (argument === "--") { cursor += 1; break; }
           if (/^(?:-p|--pid)$/.test(argument) || /^-[ac]*p[ac]*$/.test(argument)) pidMode = true;
           if (/^(?:-[acp]+|--(?:all-tasks|cpu-list|pid))$/.test(argument)) { cursor += 1; continue; }
-          if (tokens.slice(cursor + 1, segmentEnd).some(hasNodeOptionsAssignment)) return true;
+          const remaining = tokens.slice(cursor + 1, segmentEnd).map((token) => token.value).join(" ");
+          const remainingAfterValue = tokens.slice(cursor + 2, segmentEnd).map((token) => token.value).join(" ");
+          if (tokens.slice(cursor + 1, segmentEnd).some(hasNodeOptionsAssignment)
+            || inspectNestedCommand(remaining)
+            || inspectNestedCommand(remainingAfterValue)) return true;
           terminalMode = true;
           break;
         }
