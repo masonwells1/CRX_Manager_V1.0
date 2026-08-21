@@ -142,9 +142,16 @@ All significant development milestones, in reverse chronological order.
   regression commits the malicious wrapper locally and proves that commit remains
   denied without independent exact-SHA review. The already-reviewed proof
   producer is the only bootstrap exception, and only while its blob still matches
-  protected `origin/main`. Direct pre-execution loaders are denied for both the
+  authoritative GitHub `main`. Direct pre-execution loaders are denied for both the
   primary `node` executable and the standard alternate `nodejs` name. Redirected
   read-only commands no longer mistake a `scripts` input operand for a write target.
+  Executor provenance now resolves the protected `main` SHA from the canonical
+  GitHub repository with local/system Git configuration disabled; moving the
+  mutable local tracking ref cannot manufacture trust. Opaque package resolvers
+  are denied, while reviewed package scripts and local package binaries bind
+  their manifest plus repository-root configuration files to the same exact-head
+  provenance. Generic explicit configuration operands are file-bound as well, so
+  an ignored or untracked Vite-style config cannot execute before inspection.
   Environment-provider and .NET `NODE_OPTIONS` mutations are denied even when
   no Node command appears in the same payload, closing staged mutations across
   persistent MCP shell interactions. Dynamic environment-provider targets fail

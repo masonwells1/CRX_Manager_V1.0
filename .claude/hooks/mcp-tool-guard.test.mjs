@@ -304,6 +304,7 @@ r = runHook({ tool_name: "mcp__Desktop_Commander__interact_with_process", tool_i
 ok(isDeny(r), "the protected producer cannot run inside a persistent interactive process");
 {
   const integrityRepo = mkdtempSync(path.join(os.tmpdir(), "mcp-producer-integrity-"));
+  const previousAuthoritativeMainSha = process.env.CRX_HOOK_TEST_AUTHORITATIVE_MAIN_SHA;
   try {
     const integrityRelativePath = ["scripts/apply-live-testdata-maintenance-", "20260812.mjs"].join("");
     const integrityPath = path.join(integrityRepo, ...integrityRelativePath.split("/"));
@@ -322,6 +323,9 @@ ok(isDeny(r), "the protected producer cannot run inside a persistent interactive
       const result = spawnSync("git", args, { cwd: integrityRepo, encoding: "utf8", windowsHide: true, env: integrityGitEnv });
       eq(result.status, 0, `MCP producer integrity fixture command succeeds: git ${args[0]}`);
     }
+    const authoritativeResult = spawnSync("git", ["rev-parse", "HEAD"], { cwd: integrityRepo, encoding: "utf8", windowsHide: true, env: integrityGitEnv });
+    eq(authoritativeResult.status, 0, "MCP producer fixture authoritative main SHA resolves");
+    process.env.CRX_HOOK_TEST_AUTHORITATIVE_MAIN_SHA = authoritativeResult.stdout.trim();
     const integrityCommand = ["node", integrityRelativePath, "--verify"].join(" ");
     r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: integrityCommand } }, integrityRepo);
     eq(r.status, 0, "mcp-tool-guard exits 0 after allowing an exact reviewed producer launch");
@@ -330,6 +334,8 @@ ok(isDeny(r), "the protected producer cannot run inside a persistent interactive
     r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: integrityCommand } }, integrityRepo);
     ok(isDeny(r), "MCP exact producer launch is denied when worktree bytes differ from exact HEAD");
   } finally {
+    if (previousAuthoritativeMainSha === undefined) delete process.env.CRX_HOOK_TEST_AUTHORITATIVE_MAIN_SHA;
+    else process.env.CRX_HOOK_TEST_AUTHORITATIVE_MAIN_SHA = previousAuthoritativeMainSha;
     rmSync(integrityRepo, { recursive: true, force: true });
   }
 }
@@ -435,9 +441,13 @@ for (const command of [
 }
 
 // ── start_process: benign command allowed (silent) ─────────────────────────
-r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: "npm run build" } });
+r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: "git status --short" } });
 eq(r.status, 0, "DC start_process benign command exits 0");
-eq(r.stdout.trim(), "", "DC start_process with npm run build is silent (allowed)");
+eq(r.stdout.trim(), "", "DC start_process with a benign Git status read is silent (allowed)");
+r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: ["n", "px vite"].join("") } });
+ok(isDeny(r), "DC denies an opaque package resolver");
+r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: ["vite --con", "fig output/ignored-config.mjs"].join("") } });
+ok(isDeny(r), "DC denies an untracked explicit package configuration file");
 r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: "rg -n pattern scripts > out.txt" } });
 eq(r.status, 0, "DC redirected read-only scripts search exits 0");
 eq(r.stdout.trim(), "", "DC redirected read-only scripts search is silent (allowed)");
@@ -570,6 +580,7 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
 {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "mcpguard-producer-head-"));
   const externalExecutorDir = mkdtempSync(path.join(os.tmpdir(), "mcpguard-external-executor-"));
+  const previousAuthoritativeMainSha = process.env.CRX_HOOK_TEST_AUTHORITATIVE_MAIN_SHA;
   const producerRelative = ["scripts/apply-live-testdata-maintenance-", "20260812.mjs"].join("");
   const alternateRelative = "scripts/ignored-maintenance-copy.mjs";
   const trackedWrapperRelative = "scripts/reviewed-wrapper.mjs";
@@ -591,6 +602,7 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
       "GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_PREFIX",
       "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     ]) delete isolatedGitEnv[variableName];
+    let localRefMoveArgs = null;
     for (const args of [
       ["init"],
       ["config", "user.email", "guard-test@example.invalid"],
@@ -600,9 +612,13 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
       ["commit", "-m", "track producer"],
       ["update-ref", "refs/remotes/origin/main", "HEAD"],
     ]) {
+      if (args.length === 3 && String(args[1]).includes("refs/remotes")) localRefMoveArgs = args;
       const gitResult = spawnSync("git", args, { cwd: tmp, encoding: "utf8", env: isolatedGitEnv, windowsHide: true });
       eq(gitResult.status, 0, `temporary producer repository setup succeeds: git ${args[0]}`);
     }
+    const authoritativeResult = spawnSync("git", ["rev-parse", "HEAD"], { cwd: tmp, encoding: "utf8", env: isolatedGitEnv, windowsHide: true });
+    eq(authoritativeResult.status, 0, "MCP wrapper fixture authoritative main SHA resolves");
+    process.env.CRX_HOOK_TEST_AUTHORITATIVE_MAIN_SHA = authoritativeResult.stdout.trim();
 
     const ignoredWrapperRelative = "output/ignored-wrapper.mjs";
     const ignoredMarkerPath = path.join(tmp, "output", "wrapper-executed.txt");
@@ -624,6 +640,7 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
     for (const args of [
       ["add", trackedWrapperRelative],
       ["commit", "-m", "local-only malicious wrapper"],
+      localRefMoveArgs,
     ]) {
       const gitResult = spawnSync("git", args, { cwd: tmp, encoding: "utf8", env: isolatedGitEnv, windowsHide: true });
       eq(gitResult.status, 0, `local-only malicious wrapper commit succeeds for the MCP regression: git ${args[0]}`);
@@ -632,7 +649,7 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
       tool_name: "mcp__Desktop_Commander__start_process",
       tool_input: { command: `node -- ${trackedWrapperRelative}` },
     }, tmp);
-    ok(isDeny(r) && r.stdout.includes("fresh exact-SHA independent review proof"), "MCP denies a locally committed wrapper without independent review proof");
+    ok(isDeny(r) && r.stdout.includes("fresh exact-SHA independent review proof"), "MCP denies a locally committed wrapper even after the mutable local tracking ref moves");
     writeFileSync(path.join(tmp, trackedWrapperRelative), reviewedWrapperSource);
     const externalExecutorPath = path.join(externalExecutorDir, "external-wrapper.mjs");
     writeFileSync(externalExecutorPath, wrapperSource);
@@ -676,6 +693,8 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
     }, tmp);
     ok(isDeny(r), "persistent input remains denied after the exact producer blob is restored");
   } finally {
+    if (previousAuthoritativeMainSha === undefined) delete process.env.CRX_HOOK_TEST_AUTHORITATIVE_MAIN_SHA;
+    else process.env.CRX_HOOK_TEST_AUTHORITATIVE_MAIN_SHA = previousAuthoritativeMainSha;
     rmSync(tmp, { recursive: true, force: true });
     rmSync(externalExecutorDir, { recursive: true, force: true });
   }

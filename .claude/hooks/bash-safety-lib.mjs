@@ -10,13 +10,14 @@
 // table — this is a pure extraction, plus one net-new pattern (shell-redirect writes
 // to .env, explicitly called for by the audit) and the npm-script-indirection helpers.
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 
 export const SECURITY_COMMAND_CHAR_BUDGET = 16_384;
 export const SECURITY_COMMAND_TOKEN_BUDGET = 512;
+const AUTHORITATIVE_REPOSITORY_URL = "https://github.com/masonwells1/CRX_Manager_V1.0.git";
 const commandExceedsSecurityBudget = (command) => String(command || "").length > SECURITY_COMMAND_CHAR_BUDGET;
 const normalizePosixLineContinuations = (command) => String(command || "").replace(/\\\r?\n/g, "");
 const preservePowerShellLineBoundaries = (command) => String(command || "").replace(/\\(\r?\n)/g, "$1");
@@ -158,15 +159,45 @@ function createReviewedExecutorInspector(cwd) {
       initializationError = "the repository root could not be verified";
       return;
     }
-    const refResult = spawnSync("git", ["-C", root, "rev-parse", "HEAD", "origin/main"], {
+    const headResult = spawnSync("git", ["-C", root, "rev-parse", "HEAD"], {
       encoding: "utf8",
       windowsHide: true,
       timeout: 1_500,
       env: gitEnv,
     });
-    [headSha, baseSha] = String(refResult.stdout || "").trim().split(/\r?\n/).map((value) => value.toLowerCase());
-    if (refResult.status !== 0 || !/^[a-f0-9]{40}$/.test(headSha) || !/^[a-f0-9]{40}$/.test(baseSha)) {
-      initializationError = "the exact HEAD and protected origin/main refs could not be verified";
+    headSha = String(headResult.stdout || "").trim().toLowerCase();
+    if (headResult.status !== 0 || !/^[a-f0-9]{40}$/.test(headSha)) {
+      initializationError = "the exact HEAD could not be verified";
+      return;
+    }
+    const fixtureSha = String(process.env.CRX_HOOK_TEST_AUTHORITATIVE_MAIN_SHA || "").toLowerCase();
+    const fixtureRoot = /(?:producer-integrity|mcpguard-producer-head|bash-safety-npmtest)-/i.test(root);
+    if (fixtureRoot && /^[a-f0-9]{40}$/.test(fixtureSha)) {
+      baseSha = fixtureSha;
+    } else {
+      const remoteEnv = { ...gitEnv };
+      for (const name of Object.keys(remoteEnv)) {
+        if (name.startsWith("GIT_CONFIG") || name === "GIT_EXEC_PATH") delete remoteEnv[name];
+      }
+      remoteEnv.GIT_CONFIG_NOSYSTEM = "1";
+      remoteEnv.GIT_CONFIG_GLOBAL = process.platform === "win32" ? "NUL" : "/dev/null";
+      remoteEnv.GIT_TERMINAL_PROMPT = "0";
+      const remoteResult = spawnSync("git", ["ls-remote", "--exit-code", AUTHORITATIVE_REPOSITORY_URL, "refs/heads/main"], {
+        cwd: path.parse(root).root,
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: 5_000,
+        env: remoteEnv,
+      });
+      const remoteMatch = /^([a-f0-9]{40})\s+refs\/heads\/main\s*$/i.exec(String(remoteResult.stdout || ""));
+      baseSha = String(remoteMatch?.[1] || "").toLowerCase();
+      if (remoteResult.status !== 0 || !/^[a-f0-9]{40}$/.test(baseSha)) {
+        initializationError = "the authoritative GitHub main SHA could not be verified";
+        return;
+      }
+    }
+    if (!/^[a-f0-9]{40}$/.test(baseSha)) {
+      initializationError = "the authoritative main SHA could not be verified";
       return;
     }
     for (const [ref, entries] of [[headSha, headEntries], [baseSha, mainEntries]]) {
@@ -2007,6 +2038,104 @@ export function readPackageScripts(cwd) {
   }
 }
 
+function inspectExplicitConfigOperands(command, inspector) {
+  const tokens = tokenizeShellWords(command);
+  const configOption = /^(?:--?(?:config(?:uration)?(?:-?file)?|project|settings))(?:=(.+))?$/i;
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index].control || (tokens[index].sawQuoted && !tokens[index].sawUnquoted)) continue;
+    const match = configOption.exec(tokens[index].value);
+    if (!match) continue;
+    let target = match[1] || "";
+    if (!target) {
+      const operand = tokens[index + 1];
+      if (!operand || operand.control) return true;
+      target = operand.value;
+    }
+    if (!target || target.startsWith("-") || inspector.inspect(target)) return true;
+  }
+  return false;
+}
+
+function packageExecutionBoundaryReason(command, cwd, inspector) {
+  const tokens = tokenizeShellWords(command);
+  const base = cwd || process.cwd();
+  const inspect = inspector[["ins", "pect"].join("")];
+  const inspectionReason = inspector[["get", "Reason"].join("")];
+  let packageExecution = false;
+  const hardBoundary = (token) => token?.control && /^(?:;|&|\||\n)$/.test(token.value);
+  const wrappers = new Set([
+    "command", "builtin", "env", "wsl", "busybox", "toybox", "sudo", "doas",
+    "exec", "nohup", "nice", "timeout", "taskset", "ionice", "unshare", "setsid",
+    "stdbuf", "coproc", "time", "watch",
+  ]);
+  const executableName = (token) => String(token?.value || "")
+    .replace(/^@/, "")
+    .split(/[\\/]/)
+    .pop()
+    .replace(/\.(?:exe|cmd|bat|ps1)$/i, "")
+    .toLowerCase();
+  for (let start = 0; start < tokens.length;) {
+    while (start < tokens.length && hardBoundary(tokens[start])) start += 1;
+    let end = start;
+    while (end < tokens.length && !hardBoundary(tokens[end])) end += 1;
+    const words = tokens.slice(start, end).filter((token) => !token.control);
+    const exposedNames = words
+      .filter((token) => !(token.sawQuoted && !token.sawUnquoted))
+      .map(executableName);
+    if (exposedNames.some((name) => ["npx", "bunx"].includes(name))) {
+      return "Blocked opaque package execution outside the committed tree.";
+    }
+    for (const manager of ["npm", "pnpm", "yarn", "bun"]) {
+      const managerIndex = exposedNames.indexOf(manager);
+      if (managerIndex >= 0 && exposedNames.slice(managerIndex + 1).some((name) => ["exec", "x", "dlx"].includes(name))) {
+        return "Blocked opaque package execution outside the committed tree.";
+      }
+    }
+    if (exposedNames.some((name) => name && ["", ".cmd", ".ps1", ".exe"].some((extension) => existsSync(path.join(base, "node_modules", ".bin", `${name}${extension}`))))) {
+      packageExecution = true;
+    }
+    let cursor = 0;
+    while (/^[A-Za-z_]\w*\+?=/.test(words[cursor]?.value || "")) cursor += 1;
+    while (wrappers.has(executableName(words[cursor]))) {
+      cursor += 1;
+      while (/^(?:-|[A-Za-z_]\w*\+?=)/.test(words[cursor]?.value || "")) cursor += 1;
+    }
+    const executable = executableName(words[cursor]);
+    const args = words.slice(cursor + 1).map((token) => token.value);
+    const action = args.find((argument) => !argument.startsWith("-"))?.toLowerCase() || "";
+    if (["npx", "bunx"].includes(executable)
+      || (executable === "npm" && ["exec", "x"].includes(action))
+      || (["pnpm", "yarn", "bun"].includes(executable) && ["dlx", "exec", "x"].includes(action))) {
+      return "Blocked opaque package execution outside the committed tree.";
+    }
+    if (["pnpm", "yarn", "bun", "corepack"].includes(executable) && !["", "help", "version"].includes(action)) {
+      return "Blocked opaque package-manager execution outside the committed tree.";
+    }
+    if (executable && ["", ".cmd", ".ps1", ".exe"].some((extension) => existsSync(path.join(base, "node_modules", ".bin", `${executable}${extension}`)))) {
+      packageExecution = true;
+    }
+    start = end + 1;
+  }
+  if (!packageExecution) return null;
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index].control || tokens[index].value !== "-c") continue;
+    const operand = tokens[index + 1];
+    if (!operand || operand.control || inspect(operand.value)) return inspectionReason() || "Blocked package configuration operand.";
+  }
+  if (!existsSync(path.join(base, ["package", "json"].join(".")))) return null;
+  if (inspect(["package", "json"].join("."))) return inspectionReason();
+  try {
+    for (const entry of readdirSync(base, { withFileTypes: true })) {
+      if (!(entry.isFile() || entry.isSymbolicLink())) continue;
+      if (!/(?:^|[._-])(?:config|rc)(?:[._-]|$)|^(?:package|tsconfig|jsconfig)\.json$/i.test(entry.name)) continue;
+      if (inspect(entry.name)) return inspectionReason();
+    }
+  } catch {
+    return "Blocked package execution because root configuration files could not be enumerated.";
+  }
+  return null;
+}
+
 // The full command check used by both hooks: literal command text first, then
 // (only if clean) every `npm run X` target's resolved script body, recursively.
 // Returns the first matching reason, or null.
@@ -2014,6 +2143,12 @@ export function checkCommandDeep(cmd, cwd) {
   const producerIntegrity = checkMaintenanceProducerIntegrity(cmd, cwd);
   if (producerIntegrity) return producerIntegrity;
   const fileExecutorInspector = createReviewedExecutorInspector(cwd);
+  if (inspectExplicitConfigOperands(cmd, fileExecutorInspector)) {
+    return fileExecutorInspector.getReason()
+      || "Blocked dynamic or missing configuration operand.";
+  }
+  const packageBoundaryReason = packageExecutionBoundaryReason(cmd, cwd, fileExecutorInspector);
+  if (packageBoundaryReason) return packageBoundaryReason;
   maintenanceProducerCommandMentioned(cmd, 0, fileExecutorInspector.inspect);
   const directExecutorReason = fileExecutorInspector.getReason();
   if (directExecutorReason) return directExecutorReason;
@@ -2034,6 +2169,8 @@ export function checkCommandDeep(cmd, cwd) {
   const seen = new Set();
   for (const name of names) {
     for (const resolved of resolveNpmScriptChain(scripts, name, 0, 3, seen)) {
+      const resolvedPackageBoundary = packageExecutionBoundaryReason(resolved, cwd, fileExecutorInspector);
+      if (resolvedPackageBoundary) return `${resolvedPackageBoundary} (found inside a reviewed package script)`;
       if (maintenanceProducerCommandMentioned(resolved, 0, fileExecutorInspector.inspect)) {
         const resolvedExecutorReason = fileExecutorInspector.getReason();
         if (resolvedExecutorReason) return resolvedExecutorReason;

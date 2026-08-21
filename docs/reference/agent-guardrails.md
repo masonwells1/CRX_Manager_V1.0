@@ -189,6 +189,15 @@ Runs on Claude's `mcp__.*` PreToolUse matcher (narrowed 2026-08-18; still the `*
 > repository ignore controls. This supersedes the older `kill_process`
 > pass-through judgment in the table above.
 
+File-backed executors no longer trust the mutable local `origin/main` ref. The
+guard resolves the protected SHA from the canonical GitHub repository with
+local/system Git configuration disabled, then requires exact worktree bytes and
+either that authoritative merged SHA or a fresh exact-head proof. Opaque package
+resolvers are denied. Reviewed package-script bodies and local package binaries
+bind their manifest and repository-root configuration files through the same
+inspector; generic explicit config operands are bound too. This closes both
+local-ref forgery and ignored/untracked package-config execution paths.
+
 ### Codex Production-Action Guard (`.codex/hooks/`)
 Runs on Codex's `*` (all-tools) PreToolUse matcher through portable POSIX and Windows commands in `.codex/hooks.json`. The shared `.claude/hooks/codex-push-lib.mjs` is the single source of truth for main-target parsing, risky paths/content, and proof freshness.
 

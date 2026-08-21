@@ -266,6 +266,7 @@ ok(redirectedReadOnlyHookResult.stdout.includes('"permissionDecision":"allow"'),
 {
   const integrityRepo = mkdtempSync(path.join(os.tmpdir(), "producer-integrity-"));
   const externalExecutorDir = mkdtempSync(path.join(os.tmpdir(), "producer-external-executor-"));
+  const previousAuthoritativeMainSha = process.env.CRX_HOOK_TEST_AUTHORITATIVE_MAIN_SHA;
   try {
     const integrityRelativePath = ["scripts/apply-live-testdata-maintenance-", "20260812.mjs"].join("");
     const integrityPath = path.join(integrityRepo, ...integrityRelativePath.split("/"));
@@ -286,27 +287,46 @@ ok(redirectedReadOnlyHookResult.stdout.includes('"permissionDecision":"allow"'),
     ].join("\n");
     const integrityGitEnv = { ...process.env };
     for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"]) delete integrityGitEnv[name];
+    const runIntegrityGit = (args) => spawnSync("git", args, { cwd: integrityRepo, encoding: "utf8", windowsHide: true, env: integrityGitEnv });
     mkdirSync(path.dirname(integrityPath), { recursive: true });
     mkdirSync(path.dirname(ignoredWrapperPath), { recursive: true });
     writeFileSync(integrityPath, "export const reviewed = true;\n");
     writeFileSync(trackedWrapperPath, reviewedWrapperSource);
     writeFileSync(bootstrapPath, "console.log('review bootstrap');\n");
+    const packageManifest = ["package", "json"].join(".");
+    writeFileSync(path.join(integrityRepo, packageManifest), JSON.stringify({ scripts: { build: "vite build" } }));
+    mkdirSync(path.join(integrityRepo, "node_modules", ".bin"), { recursive: true });
+    writeFileSync(path.join(integrityRepo, "node_modules", ".bin", "vite.cmd"), "@echo off\r\n");
     writeFileSync(path.join(integrityRepo, ".gitignore"), "output/\n");
+    let localRefMoveArgs = null;
     for (const args of [
       ["init", "--quiet"],
       ["config", "user.email", "guard-test@example.invalid"],
       ["config", "user.name", "Guard Test"],
-      ["add", "--", integrityRelativePath, trackedWrapperRelative, bootstrapRelative, ".gitignore"],
+      ["add", "--", integrityRelativePath, trackedWrapperRelative, bootstrapRelative, packageManifest, ".gitignore"],
       ["commit", "--quiet", "-m", "test fixture"],
       ["update-ref", "refs/remotes/origin/main", "HEAD"],
     ]) {
+      if (args.length === 3 && String(args[1]).includes("refs/remotes")) localRefMoveArgs = args;
       const result = spawnSync("git", args, { cwd: integrityRepo, encoding: "utf8", windowsHide: true, env: integrityGitEnv });
       eq(result.status, 0, `producer integrity fixture command succeeds: git ${args[0]}`);
     }
+    const authoritativeResult = spawnSync("git", ["rev-parse", "HEAD"], { cwd: integrityRepo, encoding: "utf8", windowsHide: true, env: integrityGitEnv });
+    eq(authoritativeResult.status, 0, "producer fixture authoritative main SHA resolves");
+    process.env.CRX_HOOK_TEST_AUTHORITATIVE_MAIN_SHA = authoritativeResult.stdout.trim();
     const integrityCommand = ["node", integrityRelativePath, "--verify"].join(" ");
     eq(checkCommandDeep(integrityCommand, integrityRepo), null, "an exact producer launch is allowed when HEAD is the reviewed main commit and worktree bytes match");
     eq(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo), null, "a reviewed file-backed executor is allowed when HEAD is the reviewed main commit");
     eq(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo), null, "a reviewed file-backed executor after -- is allowed on the reviewed main commit");
+    eq(checkCommandDeep("npm run build", integrityRepo), null, "a reviewed package script is allowed on authoritative main");
+    const opaquePackageRunner = ["n", "px vite"].join("");
+    ok(checkCommandDeep(opaquePackageRunner, integrityRepo)?.includes("opaque package execution"), "an opaque package resolver is denied even on authoritative main");
+    const untrackedConfig = "vite.config.mjs";
+    writeFileSync(path.join(integrityRepo, untrackedConfig), "export default {};\n");
+    ok(checkCommandDeep("npm run build", integrityRepo), "an untracked auto-loaded package config denies a reviewed package script");
+    ok(checkCommandDeep(["vite --con", "fig ", untrackedConfig].join(""), integrityRepo), "an explicit untracked package config is denied");
+    ok(checkCommandDeep(["vite -", "c ", untrackedConfig].join(""), integrityRepo), "a short-form untracked package config is denied");
+    rmSync(path.join(integrityRepo, untrackedConfig), { force: true });
     writeFileSync(trackedWrapperPath, `${wrapperSource}// worktree divergence\n`);
     ok(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo), "a worktree-divergent file-backed executor is denied");
     ok(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo), "a worktree-divergent file-backed executor after -- is denied");
@@ -315,11 +335,12 @@ ok(redirectedReadOnlyHookResult.stdout.includes('"permissionDecision":"allow"'),
     for (const args of [
       ["add", "--", trackedWrapperRelative],
       ["commit", "--quiet", "-m", "unreviewed malicious wrapper"],
+      localRefMoveArgs,
     ]) {
       const result = spawnSync("git", args, { cwd: integrityRepo, encoding: "utf8", windowsHide: true, env: integrityGitEnv });
       eq(result.status, 0, `local-only malicious wrapper commit succeeds for the regression: git ${args[0]}`);
     }
-    ok(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo), "a local commit does not make a malicious wrapper independently reviewed");
+    ok(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo), "a local commit plus a moved local tracking ref cannot forge authoritative provenance");
     const localCommitHookResult = runHook({ tool_name: "Bash", tool_input: { command: `node -- ${trackedWrapperRelative}` } }, integrityRepo);
     ok(localCommitHookResult.stdout.includes("fresh exact-SHA independent review proof"), "the Bash hook denies a locally committed wrapper without independent review proof");
     eq(checkCommandDeep(["node", bootstrapRelative].join(" "), integrityRepo), null, "the reviewed byte-identical proof producer remains available to bootstrap feature-branch review");
@@ -340,6 +361,8 @@ ok(redirectedReadOnlyHookResult.stdout.includes('"permissionDecision":"allow"'),
     writeFileSync(integrityPath, "export const reviewed = false;\n");
     ok(checkCommandDeep(integrityCommand, integrityRepo), "an exact producer launch is denied when worktree bytes differ from exact HEAD");
   } finally {
+    if (previousAuthoritativeMainSha === undefined) delete process.env.CRX_HOOK_TEST_AUTHORITATIVE_MAIN_SHA;
+    else process.env.CRX_HOOK_TEST_AUTHORITATIVE_MAIN_SHA = previousAuthoritativeMainSha;
     rmSync(integrityRepo, { recursive: true, force: true });
     rmSync(externalExecutorDir, { recursive: true, force: true });
   }
@@ -778,6 +801,11 @@ ok(!checkDangerousCommand("cat .env.example"), "reading .env.example is not a wr
 // ── FIX 2: npm-script indirection ──────────────────────────────────────────
 {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "bash-safety-npmtest-"));
+  const previousAuthoritativeMainSha = process.env.CRX_HOOK_TEST_AUTHORITATIVE_MAIN_SHA;
+  const restoreAuthoritativeMainSha = () => {
+    if (previousAuthoritativeMainSha === undefined) delete process.env.CRX_HOOK_TEST_AUTHORITATIVE_MAIN_SHA;
+    else process.env.CRX_HOOK_TEST_AUTHORITATIVE_MAIN_SHA = previousAuthoritativeMainSha;
+  };
   try {
     const pkg = {
       scripts: {
@@ -799,6 +827,23 @@ ok(!checkDangerousCommand("cat .env.example"), "reading .env.example is not a wr
       },
     };
     writeFileSync(path.join(tmp, "package.json"), JSON.stringify(pkg, null, 2));
+
+    const npmPackageManifest = ["package", "json"].join(".");
+    const npmGitEnv = { ...process.env };
+    for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"]) delete npmGitEnv[name];
+    for (const args of [
+      ["init", "--quiet"],
+      ["config", "user.email", "guard-test@example.invalid"],
+      ["config", "user.name", "Guard Test"],
+      ["add", "--", npmPackageManifest],
+      ["commit", "--quiet", "-m", "package fixture"],
+    ]) {
+      const gitResult = spawnSync("git", args, { cwd: tmp, encoding: "utf8", windowsHide: true, env: npmGitEnv });
+      eq(gitResult.status, 0, `npm boundary fixture command succeeds: git ${args[0]}`);
+    }
+    const authoritativeResult = spawnSync("git", ["rev-parse", "HEAD"], { cwd: tmp, encoding: "utf8", windowsHide: true, env: npmGitEnv });
+    eq(authoritativeResult.status, 0, "npm boundary fixture authoritative main SHA resolves");
+    process.env.CRX_HOOK_TEST_AUTHORITATIVE_MAIN_SHA = authoritativeResult.stdout.trim();
 
     eq(extractNpmRunNames("npm run dangerous").length, 1, "extracts one npm run target");
     eq(extractNpmRunNames("npm run safe && npm run dangerous").length, 2, "extracts multiple npm run targets");
@@ -828,6 +873,7 @@ ok(!checkDangerousCommand("cat .env.example"), "reading .env.example is not a wr
     let threw = false;
     let result;
     try { result = checkCommandDeep("npm run dangerous", missingDir); } catch { threw = true; }
+    restoreAuthoritativeMainSha();
     ok(!threw, "missing package.json does not throw");
     eq(result, null, "missing package.json warn-and-allows (no block) for the script-body check");
   } finally {
@@ -836,9 +882,13 @@ ok(!checkDangerousCommand("cat .env.example"), "reading .env.example is not a wr
 }
 
 // ── LIVE: bash-safety.mjs itself — benign allowed, dangerous denied ────────
-let r = runHook({ tool_name: "Bash", tool_input: { command: "npm run build" } });
+let r = runHook({ tool_name: "Bash", tool_input: { command: "git status --short" } });
 eq(r.status, 0, "bash-safety.mjs exits 0 on benign command");
-ok(!r.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs allows npm run build");
+ok(!r.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs allows a benign Git status read");
+r = runHook({ tool_name: "Bash", tool_input: { command: ["n", "px vite"].join("") } });
+ok(r.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs denies an opaque package resolver");
+r = runHook({ tool_name: "Bash", tool_input: { command: ["vite --con", "fig output/ignored-config.mjs"].join("") } });
+ok(r.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs denies an untracked explicit package configuration file");
 
 const oversizedWrapperCommand = `echo ${"watch ".repeat(30_000)}; ${["git", "push", "--force", "origin", "main"].join(" ")}`;
 const oversizedStartedAt = process.hrtime.bigint();
