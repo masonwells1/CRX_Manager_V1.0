@@ -82,9 +82,16 @@ causes are environmental — the Claude/Codex CLIs are not installed in the revi
 schema-registry high-water warning predates this branch and involves no file it touches.
 
 Tests: `.claude/hooks/codex-push-lib.test.mjs` and `.codex/hooks/production-action-guard.test.mjs`
-(both in `test:correction-guards` / `test:agent-workflows`). `scripts/apply-live-testdata-maintenance-20260812.mjs`
-re-pinned for `codex-push-lib.mjs`; the risky-path anchor its identity transform asserts is untouched
-and still present exactly once. The Codex guard ends this round byte-identical to `origin/main`.
+(both in `test:correction-guards` / `test:agent-workflows`).
+
+**Both protected guard sources changed, and both are re-pinned in
+`scripts/apply-live-testdata-maintenance-20260812.mjs`.** `.claude/hooks/codex-push-lib.mjs` moves to
+`ba23fbc8…`. `.codex/hooks/production-action-guard.mjs` moves `05499cfe… → 3596cb33…` (input) and
+`0f3a62cf… → ac5a592c…` (transformed output) because it gained the same outright MSYS-path refusal —
+it is a **second caller** of the shared resolution, and a security-relevant change in its own right,
+not an incidental edit. Both changes are purely additive and leave every transform anchor untouched
+and present exactly once: the risky-path line in the push library, and the matcher, the
+`PROTECTED_HARNESS_FRAGMENT_RE` constant and the maintenance execution gate in the Codex guard.
 
 ## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (every worktree → 6 of 23)
 

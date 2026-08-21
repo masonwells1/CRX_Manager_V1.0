@@ -78,11 +78,11 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // PROTECTED_HARNESS_FRAGMENT_RE constant, and the maintenance execution gate
   // — are untouched and still present exactly once.
   codexGuard: "3596cb33e2474600756cc23c430c168517a2a078",
-  pushLib: "b76b650510dddf7f08df67f40bc00c65e26079fd",
+  pushLib: "ba23fbc86eaafaf61dee9a343e4e00cf03fbc6a4",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "ac5a592c71bff79f29db5a05503f0e2afc63cc09",
-  pushLib: "b76b650510dddf7f08df67f40bc00c65e26079fd",
+  pushLib: "ba23fbc86eaafaf61dee9a343e4e00cf03fbc6a4",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

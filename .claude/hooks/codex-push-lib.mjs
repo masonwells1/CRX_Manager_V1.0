@@ -182,13 +182,12 @@ function splitShellArgs(value) {
 // (2026-08-19, 2026-08-20) hunted PATH before handing the push to Mason. It was
 // never PATH: the guard was looking in a directory that was never there.
 //
-// Only the built-in drive-letter form is translated. `/usr/bin`, `/tmp`, `/` and
-// friends depend on the MSYS mount table, which these guards cannot read and
-// must not guess at — those keep resolving as before and keep failing closed,
-// which is the right answer for a repository this guard cannot locate.
-// DETECTION ONLY — this deliberately does NOT resolve the path, and nothing may
-// make it do so. Four review rounds on PR #445 killed the translating version,
-// each finding the same class of defect in a different context:
+// DETECTION ONLY — this deliberately does NOT resolve or rewrite the path, and
+// nothing may make it do so. Five review rounds on PR #445 rejected every
+// version that tried to make sense of this shape rather than refuse it: the
+// first four killed the translation, the fifth killed the weaker "refuse only
+// when the literal path happens to be missing" form. Each found the same class
+// of defect in a new context:
 //
 //   1. Git Bash converts `/c/repo` to `C:\repo` at exec time, so translating
 //      matched git THERE …
@@ -197,7 +196,9 @@ function splitShellArgs(value) {
 //   3. …and a PowerShell or cmd invocation NEVER converts, so git resolves
 //      `C:\c\repo` there too — while the guard had translated to `C:\repo`;
 //   4. …and the Claude-side guard is not even told which shell invoked it, so
-//      it cannot condition the translation on the one fact that decides it.
+//      it cannot condition the translation on the one fact that decides it;
+//   5. …and refusing the shape only when the literal `C:\c\repo` does NOT exist
+//      is luck, not a guarantee — a checkout living there restores the hole.
 //
 // Every one of those is the SAME failure: the guard inspects a different
 // repository than the push touches, so an innocuous checkout's remotes, diff
@@ -205,12 +206,11 @@ function splitShellArgs(value) {
 // never have that property, and modelling another program's path semantics
 // correctly in every invocation context is not a thing this guard can promise.
 //
-// So it does not try. An MSYS-shaped path resolves the way node resolves it —
-// `C:\c\repo`, which does not exist — and the guard REFUSES with a message that
-// names the real cause and the one spelling that works everywhere (`C:/repo`,
-// correct in Git Bash, PowerShell and cmd alike). A refusal the reader can fix
-// in five seconds beats a translation that is right in three contexts and
-// silently wrong in a fourth.
+// So it does not try. Both guards REFUSE an MSYS-shaped `-C` outright — before
+// resolving or stat-ing anything — with a message naming the one spelling that
+// works everywhere (`C:/repo`, identical in Git Bash, PowerShell and cmd). A
+// refusal the reader can fix in five seconds beats a translation that is right
+// in four contexts and silently wrong in a fifth.
 export function looksLikeMsysPath(value, platform = process.platform) {
   if (platform !== "win32") return false;
   // A single leading slash only: `//server/share` is a UNC path, not a mount.
@@ -229,32 +229,17 @@ export function pushNamesMsysPath(cmd, platform = process.platform) {
   return false;
 }
 
-// MSYS argument conversion is the mechanism that makes `git -C /c/repo` mean
-// `C:\repo`, and msysPathToWindows above mirrors it so the guard reads the
-// directory git will actually use. Git Bash lets that conversion be switched
-// OFF — `MSYS2_ARG_CONV_EXCL`, `MSYS_ARG_CONV_EXCL`, `MSYS_NO_PATHCONV` — and
-// then git receives `/c/repo` LITERALLY and resolves it as a rooted path on the
-// current drive, i.e. `C:\c\repo`. The guard's translation and git's behaviour
-// would disagree, and a guard that inspects a DIFFERENT repository than the
-// push touches is the one failure shape a destination gate must never have.
-//
-// Reproduced 2026-08-21 (Codex P1 on PR #445):
-//   MSYS2_ARG_CONV_EXCL='*' git -C /c/CRX_Manager rev-parse --show-toplevel
-//     → fatal: cannot change to '/c/CRX_Manager': No such file or directory
-//   git -C /c/CRX_Manager rev-parse --show-toplevel
-//     → C:/CRX_Manager
-//
-// Deciding what an exclusion list does to one specific argument would mean
-// reimplementing MSYS's matcher, so the names are REFUSED rather than
-// interpreted — but only when the push actually names a path the translation
-// would change, so an unrelated shell setting cannot block ordinary pushes.
 // DELIBERATELY ABSENT: any check on MSYS argument-conversion controls
 // (`MSYS2_ARG_CONV_EXCL`, `MSYS_NO_PATHCONV`, …). An earlier draft refused
-// pushes when those were set, because they decided whether the translation
-// above was correct. With the translation gone there is nothing for them to
-// invalidate — the guard resolves `-C` exactly as node does, in every shell —
-// so refusing on them would be pure over-refusal. Do not re-add them unless a
-// translation comes back, which it should not.
+// pushes when those were set, because they decided whether the translation was
+// correct. With the translation gone and the MSYS shape refused outright, there
+// is nothing left for them to invalidate — the guard resolves `-C` exactly as
+// node does, in every shell — so refusing on them would be pure over-refusal.
+// (For the record, since the reproduction is easy to lose:
+// `MSYS2_ARG_CONV_EXCL='*' git -C /c/CRX_Manager rev-parse` fails with
+// `cannot change to '/c/CRX_Manager'`, while the same command without it
+// resolves to `C:/CRX_Manager` — which is what made point 2 above real.)
+// Do not re-add them unless a translation comes back, which it should not.
 
 // Resolve the repository directory selected by one or more `git -C` options.
 // Git applies repeated -C values from left to right, so preserve that behavior.
