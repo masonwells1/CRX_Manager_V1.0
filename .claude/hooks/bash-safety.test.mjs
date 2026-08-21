@@ -257,6 +257,12 @@ const unrelatedScriptMutation = [
   "scripts/ordinary-tool.mjs",
 ].join(" ");
 ok(!maintenanceProducerCommandMentioned(unrelatedScriptMutation), "a specific unrelated script path stays outside the producer gate");
+const redirectedReadOnlyScriptsInput = "rg -n pattern scripts > out.txt";
+ok(!maintenanceProducerCommandMentioned(redirectedReadOnlyScriptsInput), "a redirected read-only command does not treat its scripts input as a producer mutation");
+ok(!checkDangerousCommand(redirectedReadOnlyScriptsInput), "a redirected read-only scripts search stays allowed");
+const redirectedReadOnlyHookResult = runHook({ tool_name: "Bash", tool_input: { command: redirectedReadOnlyScriptsInput } });
+eq(redirectedReadOnlyHookResult.status, 0, "the Bash hook exits 0 for a redirected read-only scripts search");
+ok(redirectedReadOnlyHookResult.stdout.includes('"permissionDecision":"allow"'), "the Bash hook allows a redirected read-only scripts search");
 {
   const integrityRepo = mkdtempSync(path.join(os.tmpdir(), "producer-integrity-"));
   const externalExecutorDir = mkdtempSync(path.join(os.tmpdir(), "producer-external-executor-"));
@@ -667,6 +673,10 @@ ok(!maintenanceProducerCommandMentioned(terminalWrapperAfterOption), "terminal w
 eq(checkMaintenanceProducerInvocation(terminalWrapperAfterOption), null, "terminal wrapper mode after an option stays outside the producer gate");
 ok(!checkDangerousCommand(terminalWrapperAfterOption), "terminal wrapper mode after an option stays allowed");
 ok(checkDangerousCommand("node --require ./preload.cjs scripts/ordinary-check.mjs"), "Node require preload is denied");
+ok(checkDangerousCommand('nodejs "--import=data:text/javascript;base64,ZXhwb3J0IHt9" scripts/ordinary-check.mjs'), "nodejs import preload is denied before a reviewed script can run");
+const nodejsPreloadHookResult = runHook({ tool_name: "Bash", tool_input: { command: 'nodejs "--import=data:text/javascript;base64,ZXhwb3J0IHt9" scripts/ordinary-check.mjs' } });
+eq(nodejsPreloadHookResult.status, 0, "the Bash hook exits 0 after denying a nodejs import preload");
+ok(nodejsPreloadHookResult.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies a nodejs import preload");
 ok(checkDangerousCommand("NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "NODE_OPTIONS preload is denied");
 ok(checkDangerousCommand("FOO=1 NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "prefixed NODE_OPTIONS preload is denied");
 ok(checkDangerousCommand("command env NODE_OPTIONS=--require=./preload.cjs node scripts/ordinary-check.mjs"), "command-wrapped env NODE_OPTIONS preload is denied");

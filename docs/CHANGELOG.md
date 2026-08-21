@@ -129,7 +129,7 @@ All significant development milestones, in reverse chronological order.
   the same path check. Every exact allowlisted launch independently hashes the
   worktree file as a Git blob and requires it to match exact `HEAD` before
   execution. On a feature branch, execution additionally requires the fresh,
-  exact-head independent Sol review proof used by the production gate;
+  exact-head-independent Sol review proof used by the production gate;
   that final binding also covers a writer whose target is fully dynamic and
   therefore cannot be resolved safely from command text alone. File-backed
   interpreter entry points are bound to that same exact-head proof while
@@ -142,7 +142,9 @@ All significant development milestones, in reverse chronological order.
   regression commits the malicious wrapper locally and proves that commit remains
   denied without independent exact-SHA review. The already-reviewed proof
   producer is the only bootstrap exception, and only while its blob still matches
-  protected `origin/main`.
+  protected `origin/main`. Direct pre-execution loaders are denied for both the
+  primary `node` executable and the standard alternate `nodejs` name. Redirected
+  read-only commands no longer mistake a `scripts` input operand for a write target.
   Environment-provider and .NET `NODE_OPTIONS` mutations are denied even when
   no Node command appears in the same payload, closing staged mutations across
   persistent MCP shell interactions. Dynamic environment-provider targets fail

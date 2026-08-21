@@ -267,9 +267,7 @@ function maintenanceProducerPathMutationMentioned(command) {
   const value = String(command || "");
   const word = (codes) => String.fromCharCode(...codes);
   const versionControl = word([103, 105, 116]);
-  const pathMutators = [
-    `${versionControl}\\s+${word([114, 109])}`,
-    `${versionControl}\\s+${word([109, 118])}`,
+  const directPathMutators = [
     word([114, 109]),
     word([109, 118]),
     word([99, 112]),
@@ -305,29 +303,89 @@ function maintenanceProducerPathMutationMentioned(command) {
     word([101, 100]),
     word([101, 120]),
   ];
-  const namedMutator = new RegExp(`\\b(?:${pathMutators.join("|")})\\b`, "i").test(value);
+  const pathMutators = [
+    `${versionControl}\\s+${word([114, 109])}`,
+    `${versionControl}\\s+${word([109, 118])}`,
+    ...directPathMutators,
+  ];
+  const mutatorPattern = new RegExp(`\\b(?:${pathMutators.join("|")})\\b`, "i");
+  const namedMutator = mutatorPattern.test(value);
   const redirectedWrite = /(?:^|[\s\d])>{1,2}(?![&])/.test(value);
   if (!namedMutator && !redirectedWrite) return false;
 
-  for (const token of tokenizeShellWords(value)) {
-    if (token.control) continue;
-    const candidate = token.value
+  const tokens = tokenizeShellWords(value);
+  const normalizedCandidate = (token) => {
+    if (!token || token.control) return "";
+    return token.value
       .replace(/^:\([^)]*\)/, "")
       .replace(/\\/g, "/")
       .replace(/^\.\//, "")
       .replace(/\/$/, "")
       .replace(/^(?:of|output)=/i, "");
-    if (!candidate || candidate.startsWith("-")) continue;
+  };
+  const candidateTargetsProducer = (token) => {
+    const candidate = normalizedCandidate(token);
+    if (!candidate || candidate.startsWith("-")) return false;
     if (candidate.toLowerCase() === "scripts" || candidate.toLowerCase().endsWith("/scripts")) return true;
     if (/[*?\[\]{}()]/.test(candidate)
       && /(?:scripts|apply-live-testdata-maintenance|\.mjs(?:$|[^a-z0-9]))/i.test(candidate)) return true;
     const repoMatch = shellGlobMatchesLiteral(candidate, MAINTENANCE_PRODUCER_REPO_PATH);
     const nameMatch = shellGlobMatchesLiteral(candidate, MAINTENANCE_PRODUCER_NAME);
     if (repoMatch === true || nameMatch === true) return true;
-    if ((repoMatch === null || nameMatch === null)
-      && /(?:scripts|apply-live-testdata-maintenance)/i.test(candidate)) return true;
+    return (repoMatch === null || nameMatch === null)
+      && /(?:scripts|apply-live-testdata-maintenance)/i.test(candidate);
+  };
+
+  // A redirect mutates only its target operand. Do not classify an input
+  // directory as a protected writer target merely because output goes elsewhere.
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (!tokens[index].control || tokens[index].value !== ">") continue;
+    let targetIndex = index + 1;
+    while (tokens[targetIndex]?.control && tokens[targetIndex].value === ">") targetIndex += 1;
+    if (candidateTargetsProducer(tokens[targetIndex])) return true;
   }
-  return false;
+  if (!namedMutator) return false;
+
+  const basename = (token) => String(token?.value || "")
+    .replace(/^@/, "")
+    .split(/[\\/]/)
+    .pop()
+    .replace(/\.exe$/i, "")
+    .toLowerCase();
+  const mutatorNames = new Set(directPathMutators.map((name) => name.toLowerCase()));
+  const wrappers = new Set([
+    "command", "builtin", "env", "wsl", "busybox", "toybox", "sudo", "doas",
+    "exec", "nohup", "nice", "timeout", "taskset", "ionice", "unshare", "setsid",
+    "stdbuf", "coproc", "time", "watch",
+  ]);
+  const segmentHasMutator = (segment) => {
+    const words = segment.filter((token) => !token.control);
+    let cursor = 0;
+    while (/^[A-Za-z_]\w*\+?=/.test(words[cursor]?.value || "")) cursor += 1;
+    const first = basename(words[cursor]);
+    if (first === versionControl
+      && words.slice(cursor + 1).some((token) => [word([114, 109]), word([109, 118])].includes(basename(token)))) return true;
+    if (mutatorNames.has(first)) return true;
+    if (!wrappers.has(first)) return false;
+    return words.slice(cursor + 1).some((token, index, rest) => {
+      const name = basename(token);
+      if (mutatorNames.has(name)) return true;
+      return name === versionControl
+        && rest.slice(index + 1).some((entry) => [word([114, 109]), word([109, 118])].includes(basename(entry)));
+    });
+  };
+  const inspectSegment = (segment) => segmentHasMutator(segment)
+    && segment.some(candidateTargetsProducer);
+  let segment = [];
+  for (const token of tokens) {
+    if (token.control && /^(?:;|&|\||\n)$/.test(token.value)) {
+      if (inspectSegment(segment)) return true;
+      segment = [];
+      continue;
+    }
+    segment.push(token);
+  }
+  return inspectSegment(segment);
 }
 
 export function maintenanceProducerCommandMentioned(command, depth = 0, fileExecutorInspector = null) {
@@ -1744,7 +1802,7 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
 // original bash-safety.mjs inline table (2026-07 extraction), plus one addition
 // marked below.
 export const DANGEROUS_CMD_CHECKS = [
-  [/\bnode(?:\.exe)?\b[^\r\n;&|]*(?:--require(?:=|\s)|(?:^|\s)-r(?:\s|\S)|--import(?:=|\s)|--(?:experimental-)?loader(?:=|\s))/i, "Blocked Node pre-execution loading. NODE_OPTIONS, require/import, and loader hooks can run code before a reviewed script's own safety checks."],
+  [/\bnode(?:js)?(?:\.exe)?\b[^\r\n;&|]*(?:--require(?:=|\s)|(?:^|\s)-r(?:\s|\S)|--import(?:=|\s)|--(?:experimental-)?loader(?:=|\s))/i, "Blocked Node pre-execution loading. NODE_OPTIONS, require/import, and loader hooks can run code before a reviewed script's own safety checks."],
   [/\bgit\b[^\r\n;&|]*\bpush\b[^\r\n;&|]*(?:--force(?:-with-lease)?(?:=\S+)?\b|--force-if-includes\b|(?:^|\s)-[A-Za-z]*f[A-Za-z]*\b|(?:^|\s)\+\S+)/, "Blocked force push. Force pushing any branch requires Mason's explicit approval."],
   // Tolerate intervening git options (`git -C <path> reset --hard`, `git -c x=y clean -fd`)
   // — the adjacent-words-only spellings were bypassable (Codex P1, PR #352).

@@ -182,7 +182,8 @@ Runs on Claude's `mcp__.*` PreToolUse matcher (narrowed 2026-08-18; still the `*
 |------|----------------|
 | `mcp-tool-guard.mjs` (+ shared `bash-safety-lib.mjs`) | Desktop Commander `start_process`/`interact_with_process`: the extracted command/input text against the SAME dangerous-command + migration-modify patterns `bash-safety.mjs` enforces (shared table, so a fix landed in one hook is a fix landed in both). Desktop Commander `write_file`/`edit_block`/`move_file`/`create_directory`: denies a target path that is `.env*`, an EXISTING file under `supabase/migrations/`, `.claude/settings.json`, or any `.claude/hooks/*.mjs` file — message: "use the native Edit/Write tools so the guard hooks can inspect this change." `kill_process`/`set_config_value` are matched by the tool-name regex but not specifically gated (no command/path signal to check against these patterns; `set_config_value` already requires "ask" approval in `settings.json`) — a deliberate, documented judgment call, not an oversight |
 
-> **2026-08-20 correction:** while the reviewed maintenance-executor protection
+> **Current behavior (2026-08-20 correction; the table's older pass-through
+> clause is historical):** while the reviewed maintenance-executor protection
 > is latched, persistent-process input and process-signal tools are denied even
 > when its worktree path is absent. File tools also deny that executor path and
 > repository ignore controls. This supersedes the older `kill_process`

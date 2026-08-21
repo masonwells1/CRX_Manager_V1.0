@@ -53,12 +53,14 @@ ok(hostileRunnerCommand.length <= SECURITY_COMMAND_CHAR_BUDGET, "DC hostile runn
 const hostileRunnerStartedAt = process.hrtime.bigint();
 const hostileRunnerResult = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: hostileRunnerCommand } });
 const hostileRunnerElapsedMs = Number(process.hrtime.bigint() - hostileRunnerStartedAt) / 1_000_000;
+eq(hostileRunnerResult.status, 0, "mcp-tool-guard exits 0 after denying an at-budget hostile runner payload");
 ok(isDeny(hostileRunnerResult), "DC start_process denies an at-budget hostile runner payload");
 ok(hostileRunnerElapsedMs < 1_500, `DC at-budget hostile runner denial stays well below the 5s hook timeout (actual ${hostileRunnerElapsedMs.toFixed(0)}ms)`);
 const hostileGlobCommand = `${String.fromCharCode(99, 112)} ${"*".repeat(4_000)}never scratch; ${hostileRunnerTail}`;
 const hostileGlobStartedAt = process.hrtime.bigint();
 const hostileGlobResult = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: hostileGlobCommand } });
 const hostileGlobElapsedMs = Number(process.hrtime.bigint() - hostileGlobStartedAt) / 1_000_000;
+eq(hostileGlobResult.status, 0, "mcp-tool-guard exits 0 after denying a hostile nonmatching glob");
 ok(isDeny(hostileGlobResult), "DC start_process reaches the blocked tail after a hostile nonmatching glob");
 ok(hostileGlobElapsedMs < 1_500, `DC hostile glob denial stays well below the 15s hook timeout (actual ${hostileGlobElapsedMs.toFixed(0)}ms)`);
 const shellGrammarGuardCases = [
@@ -322,6 +324,7 @@ ok(isDeny(r), "the protected producer cannot run inside a persistent interactive
     }
     const integrityCommand = ["node", integrityRelativePath, "--verify"].join(" ");
     r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: integrityCommand } }, integrityRepo);
+    eq(r.status, 0, "mcp-tool-guard exits 0 after allowing an exact reviewed producer launch");
     ok(!isDeny(r), "MCP exact producer launch is allowed when HEAD is the reviewed main commit and worktree bytes match");
     writeFileSync(integrityPath, "export const reviewed = false;\n");
     r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: integrityCommand } }, integrityRepo);
@@ -422,6 +425,7 @@ for (const command of [
   ...powerShellComputedMutationGuardCases,
   ...nestedParserGuardCases,
   ...indirectRunnerGuardCases,
+  'nodejs "--import=data:text/javascript;base64,ZXhwb3J0IHt9" scripts/ordinary-check.mjs',
 ]) {
   r = runHook({
     tool_name: "mcp__Desktop_Commander__start_process",
@@ -434,6 +438,9 @@ for (const command of [
 r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: "npm run build" } });
 eq(r.status, 0, "DC start_process benign command exits 0");
 eq(r.stdout.trim(), "", "DC start_process with npm run build is silent (allowed)");
+r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: "rg -n pattern scripts > out.txt" } });
+eq(r.status, 0, "DC redirected read-only scripts search exits 0");
+eq(r.stdout.trim(), "", "DC redirected read-only scripts search is silent (allowed)");
 
 // ── write_file / edit_block / move_file: protected paths denied ────────────
 r = runHook({ tool_name: "mcp__Desktop_Commander__write_file", tool_input: { path: ".env" } });
