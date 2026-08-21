@@ -440,6 +440,21 @@ work that touches five)*:**
     inference wrong. A single scalar `brand_name_snapshot` pair on `delivery_items` cannot hold
     two brands and must not be relied on for split lines.
 
+  **An allocation's brand must belong to the parent line's product — enforced in the database
+  *(blocker 4, third pass)*.** Both children carry an independent `brand_id`, and quantity
+  conservation says nothing about *which* brand. Nothing so far stops a delivery line for
+  Product X being allocated to a brand of Product Y that happens to have stock: the sums balance,
+  the available-quantity check passes, and the paperwork prints another product's EPA number and
+  another product's density. So each allocation table carries the parent's `product_id` as a
+  stored column, with a **composite foreign key** binding `(product_id, brand_id)` to
+  `product_brands(product_id, id)` — a unique constraint on that pair exists for the purpose — and
+  a trigger keeping the stored `product_id` equal to the parent line's. **Scalar and allocation
+  forms are mutually exclusive, also in the database:** where any allocation row exists for a
+  line, the scalar `brand_name_snapshot` / `brand_epa_snapshot` pair on that line must be NULL, so
+  a reader cannot find two disagreeing answers. **Proof:** allocate a delivery line for Product X
+  to a Product Y brand and show the insert is **refused**; then set a scalar snapshot on a line
+  that already has allocations and show that is refused too.
+
   **Both** carry `brand_name_snapshot` / `brand_epa_snapshot` **on the allocation row itself**
   (PRD 1.9a-iii: snapshot at write time, never dereference `product_brands` later — otherwise
   correcting one brand's EPA number silently rewrites historical spray records). Both ship RLS in
@@ -676,6 +691,25 @@ exactly this, and nothing in a later section may restate it differently:
   signature (`20260629210000_product_label_drafts.sql:122-132`) with a deployed caller; PostgreSQL
   cannot add a parameter in place, so touching it either drops the live signature or creates an
   overload. Both break `handleCreateSampleDraft` while the old frontend is still deployed.
+- **Therefore every new payload column is NULLABLE or DEFAULTED, and its NOT-NULL force comes
+  from a *purpose-conditional* CHECK, never a column constraint *(blocker 1, third pass)*.**
+  This is the direct consequence of the two rules above and an earlier revision missed it: the
+  payload table below marks `payload_version`, `purpose`, `source_product_data_version`,
+  `ingredients[]`, `conflicts[]` and `epa_is_cancelled` as *not null*, while
+  `create_label_draft`'s existing `INSERT`
+  (`20260629210000_product_label_drafts.sql:181`) supplies **none** of them and cannot be changed
+  to. Column-level NOT NULL would make WP-1's migration break every manual draft the moment it
+  applies — and it applies **before** the PR merges, so the live app would start failing with no
+  deploy to blame. The constraint is written as
+  `CHECK (purpose <> 'epa_label_seed' OR (payload_version IS NOT NULL AND ...))`: strict for the
+  purposes the new RPCs create, permissive for `manual` rows the legacy path still writes.
+
+**WP-1's proof must exercise the legacy path, not just the new one *(blocker 1, third pass)*.**
+Proving `create_label_draft_proposal` creates a row proves nothing about the caller that is
+already deployed. After WP-1's migration applies: call **`create_label_draft` with exactly
+today's five named arguments** and show it still succeeds with `purpose = 'manual'`; then
+**commit that draft through `commit_label_draft`** and show the existing manual review flow
+completes unchanged. A create-only proof would have shipped a migration that breaks commit.
 
 WP-4 proves every planned field survives propose → review → commit intact.
 
@@ -911,6 +945,21 @@ the same migration, and sets `SET search_path = public, pg_temp`. Under a litera
 gate the builder's only options were to abandon the atomicity guarantee or to bypass the gate;
 neither is acceptable.
 
+**Its authorization boundary must be explicit — idempotency, grants and `search_path` are not an
+auth model *(blocker 5, third pass)*.** This RPC overwrites a product's authoritative chemistry
+and density in one call, which makes it one of the most destructive write paths in the package,
+and an earlier revision never said who may run it. Stated now: it is **`SECURITY DEFINER` with
+`SET search_path = public, pg_temp`**, it **resolves the actor from `auth.uid()` inside the
+function** and never from a caller-supplied argument (actor forgery is the B7/B8/B9 class), it
+**refuses any caller who is not an admin** — matching **D-J** and **D-S**, since a copy can
+rewrite the EPA data that reaches customer paperwork — and it **writes an actor-bound audit row**
+naming source product, target product, both expected versions and the fields copied. `EXECUTE` is
+granted to `authenticated` only, never to `anon`, and revoked on any internal helper so a helper
+never becomes the privilege boundary. **Negative proof, required:** call it as a **non-admin** and
+show it is refused with nothing written — the target's `product_data_version` unchanged. A proof
+that only exercises Mason's admin session cannot detect a missing check, which is exactly why the
+proof-accounts protocol above exists.
+
 **What a NULL key means here must be stated, not left to the signature default *(caught reviewing
 PR #435)*.** `DEFAULT NULL` is the CRX signature convention; it is not a behavior spec, and
 "idempotent" is not proved by a signature. This RPC is **not** naturally state-idempotent — a
@@ -1095,13 +1144,29 @@ effort and **strips Sol's Supabase, GitHub and Vercel tools** — so the builder
 reach live systems. Every consequential action (commit, PR, apply) stays on the hook-guarded
 orchestrator side. **Exactly one session owns database writes.**
 
-**Per-package chain.** Ground → spec → Sol builds → deterministic floor (typecheck/lint/build/
-test) → reviewer fan-out (`rls-security-reviewer`, `migration-drift-reviewer`,
-`typescript-types-drift-reviewer`, `compliance-reviewer`) → behavioral proof as a normal user →
-**Opus checkpoint 1** → exact-SHA Sol proof via `scripts/write-apply-proofs.mjs` (hash-bound,
-30-minute expiry, hand-writing blocked by `review-proof-guard.mjs`) → docs + commit → PR →
-Vercel + CodeRabbit → **Mason's apply OK** → apply → smoke → registry refresh → merge → verify
-live.
+**Per-package chain — a summary of the numbered table in
+`docs/plans/2026-08-19-product-data-model-ORCHESTRATION.md`, which is AUTHORITATIVE where the two
+differ *(blocker 6, third pass)*.** An earlier revision of this paragraph collapsed **three
+different proofs into one** — it named `write-apply-proofs.mjs` as an "exact-SHA proof" and placed
+it before commit and PR. An executor following this summary would mint the *apply* proof before
+there was a commit to bind it to, then push an unreviewed head, or reach the apply with a proof
+already past its 30-minute life. The three are distinct and none substitutes for another:
+
+- **Step 9 — the adversarial verdict.** A separate ephemeral `gpt-5.6-sol` high-effort review of
+  the diff. Not hash-bound, not a proof file.
+- **Step 10a — the exact-HEAD push proof.** Minted on the final commit, *after* docs + commit and
+  *before* the first push, or the push guard blocks it. Re-minted at **13b** on the post-apply
+  head, because the 10a proof is bound to the old SHA and is void there.
+- **Step 12a — the apply proof** (`scripts/write-apply-proofs.mjs`, hash-bound, 30-minute
+  expiry, hand-writing blocked by `review-proof-guard.mjs`). Minted **after Mason's human gate at
+  step 12**, immediately before the apply — never at step 9 *(finding 11)*.
+
+So: ground → spec → Sol builds → deterministic floor (typecheck/lint/build/test) → reviewer
+fan-out (`rls-security-reviewer`, `migration-drift-reviewer`, `typescript-types-drift-reviewer`,
+`compliance-reviewer`) → behavioral proof as a normal user → **Opus checkpoint 1** → **Codex
+adversarial verdict** → docs + commit → **exact-HEAD push proof** → PR → Vercel + CodeRabbit →
+**Mason's apply OK** → **mint the apply proof** → apply → smoke → registry refresh → commit,
+re-mint, push (13a–13c) → merge → verify live.
 
 **Must build before starting:** `docs/loops/product-data-model-loop-2026-08.md` (the mission
 doc — `scripts/validate-mission-doc.mjs` refuses to launch without its five slots) and

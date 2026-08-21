@@ -145,6 +145,33 @@ the shipped brand through a delivery allocation instead of inferring it from the
 `application_records.product_data` elements carry a `brand_allocations[]` array rather than one
 scalar snapshot pair.
 
+**Third pass — four more fixed, two dismissed as settled owner decisions.** Fixed: every new
+`product_label_drafts` payload column is nullable/defaulted with a *purpose-conditional* CHECK, so
+WP-1's migration cannot break the deployed `create_label_draft` caller, and WP-1's proof now
+exercises the legacy create **and commit** path; brand allocations carry the parent's
+`product_id` under a composite foreign key so a line for one product cannot be allocated to
+another product's brand, with scalar-versus-allocation exclusivity enforced too; WP-5's copy RPC
+gained an explicit authorization boundary (`SECURITY DEFINER`, `auth.uid()` admin check,
+actor-bound audit, non-admin refusal proof); and the build plan's per-package chain no longer
+collapses the step-9 adversarial verdict, the step-10a exact-HEAD push proof and the step-12a
+apply proof into one "exact-SHA proof" placed before commit — ORCHESTRATION.md is now named
+authoritative where the two differ.
+
+**Dismissed — and they will keep coming back, so do not re-fix them.** The adversarial gate has
+no memory of owner decisions and re-raises these every round:
+
+- **"Cancelled EPA registrations fail open"** → **D-W.** Mason, 2026-08-19: *"Don't worry about
+  it, let it be sold."* Sol's sell-through argument was put to him and he accepted it as his
+  call. Do not add a sale-blocking gate.
+- **"Cross-tier sibling copying is permitted"** → **D-X**, reaffirmed by Mason on **2026-08-20**
+  when he was asked whether to drop the database restriction or reopen D-X and chose to **drop
+  the restriction**. Tier protection stays at the display layer (D-O, D-P). A builder must not
+  add `sourcing_tier` to `products` or build cross-tier substitution rules.
+
+**This means `CODEX_PROOF_VERDICT: CLEAN` may be unreachable for this PR**, since two of its
+findings are owner decisions the reviewer will re-raise indefinitely. Judge the gate on whether
+the *remaining* findings are real, not on the token.
+
 **Still open, and deliberately so:** findings 20, 21, 22, 24 all concern **Phase 2/3**
 comparison and rate-source behavior, which this loop does not build — they must be settled before
 Phase 2, not before WP-0. Finding 30 (parked-migration ownership) is blocker row 4 above and
