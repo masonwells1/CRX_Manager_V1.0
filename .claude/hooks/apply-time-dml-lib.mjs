@@ -504,6 +504,11 @@ function targetsFromCode(code, literals) {
   // lifecycle model exists; a routine that merely RETURNS event_trigger stays
   // deferred unless an EVENT TRIGGER statement attaches it.
   const eventTriggerChange = /\b(?:create|alter|drop)\s+event\s+trigger\b/.test(s);
+  // VALIDATE CONSTRAINT replays a stored domain CHECK over existing values.
+  // The expression is absent from this statement, so its resident routine
+  // effects cannot be recovered statically and the validation must fail closed.
+  const domainConstraintValidation = s.split(";").some((statement) =>
+    /^\s*alter\s+domain\b[\s\S]*\bvalidate\s+constraint\b/.test(statement));
   // An unpinned event-trigger routine resolves unqualified pg_catalog helpers
   // through the applying session's search_path. Any executable search-path
   // mutation (including set_config, whose string operands were lexed out) is a
@@ -530,7 +535,8 @@ function targetsFromCode(code, literals) {
   }) || /\balter\s+sequence\b[^;]*\brestart\b/.test(s) ||
     /\btruncate\b[^;]*\brestart\s+identity\b/.test(s) ||
     /\balter\s+table\b[^;]*\balter\s+(?:column\s+)?[a-z0-9_]+\s+restart\b/.test(s);
-  let unresolved = cursorConstruct || eventTriggerChange || unsupportedRoutineIdentity || sequenceMutation;
+  let unresolved = cursorConstruct || eventTriggerChange || domainConstraintValidation ||
+    unsupportedRoutineIdentity || sequenceMutation;
 
   WRITE_VERB.lastIndex = 0;
   let m;
@@ -730,6 +736,7 @@ function targetsFromCode(code, literals) {
     unresolved: unresolved || unparsedUpsert,
     dynamicExec,
     eventTriggerChange,
+    domainConstraintValidation,
     sequenceMutation,
     searchPathChange,
     unsupportedRoutineIdentity,
@@ -954,6 +961,13 @@ function runForEffectRegion(stmt) {
     if (check && !/\bnot\s+valid\b/.test(rest)) {
       return rest.slice(check.index + check[0].lastIndexOf("check"));
     }
+    return "";
+  }
+  if (/^alter\s+domain\b/.test(rest)) {
+    // ADD CONSTRAINT without NOT VALID immediately checks every existing
+    // domain value. Its CHECK expression therefore executes at apply time.
+    const check = /\bcheck\s*\(/.exec(rest);
+    if (check && !/\bnot\s+valid\b/.test(rest)) return rest.slice(check.index);
     return "";
   }
 
@@ -1485,6 +1499,7 @@ export function applyTimeWriteTargets(
       top.dynamicWrites.push(...inner.dynamicWrites);
       if (inner.unresolved) top.unresolved = true;
       if (inner.eventTriggerChange) top.eventTriggerChange = true;
+      if (inner.domainConstraintValidation) top.domainConstraintValidation = true;
       if (inner.sequenceMutation) top.sequenceMutation = true;
       if (inner.searchPathChange) top.searchPathChange = true;
       if (inner.unsupportedRoutineIdentity) top.unsupportedRoutineIdentity = true;
@@ -1612,6 +1627,7 @@ export function applyTimeWriteTargets(
         top.dynamicWrites.push(...inner.dynamicWrites);
         if (inner.unresolved) top.unresolved = true;
         if (inner.eventTriggerChange) top.eventTriggerChange = true;
+        if (inner.domainConstraintValidation) top.domainConstraintValidation = true;
         if (inner.sequenceMutation) top.sequenceMutation = true;
         if (inner.searchPathChange) top.searchPathChange = true;
         if (inner.unsupportedRoutineIdentity) top.unsupportedRoutineIdentity = true;
@@ -1660,6 +1676,7 @@ export function applyTimeWriteTargets(
     dynamicWrites: top.dynamicWrites,
     unresolved: top.unresolved,
     eventTriggerChange: top.eventTriggerChange,
+    domainConstraintValidation: top.domainConstraintValidation,
     sequenceMutation: top.sequenceMutation,
     searchPathChange: top.searchPathChange,
     unsupportedRoutineIdentity: top.unsupportedRoutineIdentity,

@@ -1763,6 +1763,28 @@ $MIG_BASENAME
         for (k = p - 1; k >= 1; k--) { if (tok[k] == ";") return tok[k + 1] }
         return tok[1]
       }
+      # ALTER DOMAIN ... ADD CHECK (...) NOT VALID stores the expression for
+      # future rows but does not scan existing domain values while this
+      # migration applies. A routine named inside that CHECK is therefore a
+      # definition, not a top-level invocation. Keep the immediate-validation
+      # spelling (the same statement without NOT VALID) executable, and keep a
+      # later ALTER DOMAIN ... VALIDATE CONSTRAINT fail-closed in the shared
+      # apply-time analyzer.
+      function deferred_domain_check(p,   s,e,k,checkp,sawnotvalid) {
+        for (s = p - 1; s >= 1 && tok[s] != ";"; s--) { }
+        s++
+        if (tok[s] != "alter" || tok[s + 1] != "domain") return 0
+        checkp = 0; sawnotvalid = 0
+        for (e = s; e <= ntok && tok[e] != ";"; e++) {
+          if (tok[e] == "check" && checkp == 0) checkp = e
+          if (tok[e] == "not" && tok[e + 1] == "valid") sawnotvalid = 1
+        }
+        if (!sawnotvalid || checkp == 0 || p <= checkp) return 0
+        for (k = s + 2; k < checkp; k++) {
+          if (tok[k] == "add") return 1
+        }
+        return 0
+      }
       function operator_metadata_token(p,   k, h) {
         h = stmt_head(p)
         if (h == "drop" || h == "alter" || h == "comment") return 1
@@ -2094,7 +2116,8 @@ $MIG_BASENAME
           # comparing with the bare mutating-routine index; limiting this to a
           # leading public. lets postgres.public._fix() execute unseen.
           sub(/^([a-z0-9_]+\.)+/, "", callee)
-          if (mutfns != "" && callee ~ ("^(" mutfns ")$") && !seenfn[callee]) {
+          if (mutfns != "" && callee ~ ("^(" mutfns ")$") && !seenfn[callee] &&
+              !deferred_domain_check(i)) {
             h = stmt_head(i)
             if (h != "grant" && h != "revoke" && h != "comment" && h != "drop" &&
                 h != "create" &&

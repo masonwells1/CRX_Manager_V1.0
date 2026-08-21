@@ -1057,6 +1057,32 @@ eq(T(null), [], "a null body does not throw");
   );
   ok(resident.unresolved && resident.invokedCasts.some((entry) => entry.includes('resident_money_domain')),
     'round-45: coercion through a checked-in resident domain fails closed');
+
+  const altered = applyTimeWriteTargets(
+    'CREATE FUNCTION public.domain_alter_money_fix(integer) RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.order_items SET total_price = total_price; RETURN true; END $$; ' +
+    'ALTER DOMAIN public.existing_money_domain ADD CONSTRAINT current_money_ok ' +
+    'CHECK (public.domain_alter_money_fix(VALUE));',
+  );
+  ok(altered.targets.has('order_items.total_price') &&
+      altered.invokedRoutines.includes('domain_alter_money_fix'),
+    'round-53: ALTER DOMAIN ADD CHECK executes its readable validation routine over existing values');
+
+  const deferredAlter = applyTimeWriteTargets(
+    'CREATE FUNCTION public.domain_deferred_fix(integer) RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.order_items SET total_price = total_price; RETURN true; END $$; ' +
+    'ALTER DOMAIN public.existing_money_domain ADD CONSTRAINT future_money_ok ' +
+    'CHECK (public.domain_deferred_fix(VALUE)) NOT VALID;',
+  );
+  ok(!deferredAlter.unresolved && deferredAlter.targets.size === 0 &&
+      !deferredAlter.invokedRoutines.includes('domain_deferred_fix'),
+    'round-53 MUTANT: ALTER DOMAIN ADD CHECK NOT VALID remains deferred');
+
+  const opaqueValidation = applyTimeWriteTargets(
+    'ALTER DOMAIN public.existing_money_domain VALIDATE CONSTRAINT historical_money_ok;',
+  );
+  ok(opaqueValidation.unresolved && opaqueValidation.domainConstraintValidation,
+    'round-53: ALTER DOMAIN VALIDATE CONSTRAINT fails closed because its stored CHECK is absent');
 }
 
 // ---------------- ROUND 46: database-wide event triggers fail closed

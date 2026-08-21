@@ -25,8 +25,9 @@ migration safety harness; no app source, migration SQL, live database, or produc
   resolved statically.
 - PostgreSQL domains now join that coercion catalog. Casting through a same-file or older checked-in
   domain fails closed because its stored `CHECK` expressions execute at coercion time and may call a
-  mutating routine that is absent from the cast site; defining the domain without using it remains
-  deferred.
+  mutating routine that is absent from the cast site. `ALTER DOMAIN ... ADD CONSTRAINT CHECK` now
+  analyzes the validation expression that runs over existing values, while an opaque
+  `ALTER DOMAIN ... VALIDATE CONSTRAINT` fails closed; `ADD ... NOT VALID` remains deferred.
 - PostgreSQL event triggers are now part of the linked production trust root. The fixed capture binds
   every `pg_event_trigger` enabled mode, event, routine identity, language, body, routine config, and
   conservative no-write effect. An enabled trigger with any write, dynamic SQL, unknown call, or
@@ -44,8 +45,10 @@ migration safety harness; no app source, migration SQL, live database, or produc
 - The one-shot registry is now an explicit untrusted-data boundary. Migration stems, metadata
   values, resolved SQL paths, override contents, and target project refs are strictly validated;
   registry prose is never echoed into hook instructions. The interpolated inline program was
-  replaced by `scripts/write-one-shot-replay-override.mjs`, which hashes only a contained registered
-  migration and refuses to overwrite an existing single-use authorization.
+  replaced by `scripts/write-one-shot-replay-override.mjs`, which binds the registered one-shot
+  classification to the exact contained migration file being applied and refuses to overwrite an
+  existing single-use authorization. A different reviewed repair on the same protected table can
+  now name its own `--query-migration` instead of receiving an override hashed from historical SQL.
 - Selecting an ordinary stored view now executes its cataloged query in the analysis closure. Same-
   file, nested, and older checked-in view definitions can no longer conceal a resident mutating
   routine behind `SELECT * FROM view`; defining a view without executing it remains deferred.
@@ -70,8 +73,8 @@ migration safety harness; no app source, migration SQL, live database, or produc
   including transitive wrappers, and refuses plain, escape, or Unicode single-quoted routine
   bodies that its write scanners cannot inspect. A `CALL` that receives the captured approval-set
   array is also treated as a possible `OUT`/`INOUT` write-back, so a procedure cannot replace the
-  hashed ids with an unapproved same-length set before the protected write. Its 197-case mutation
-  suite and the 245-assertion
+  hashed ids with an unapproved same-length set before the protected write. Its 200-case mutation
+  suite and the 248-assertion
   apply-time analyzer suite are both wired into a required CI step.
 - Non-ASCII PostgreSQL routine identities now fail closed through one shared analyzer boundary.
   A valid define/call/drop sequence such as `public.修復()` can no longer be truncated out of the
@@ -108,7 +111,8 @@ migration safety harness; no app source, migration SQL, live database, or produc
 
 Focused proof: snapshot producer 16 assertions; applied-source containment pass (including forced
 worktree-enumeration failure); trigger fan-out producer 22 assertions; apply-time analyzer
-245 assertions; apply-time guard 304 assertions; approved-set validator 197 mutation cases.
+248 assertions; apply-time guard 307 assertions; approved-set validator 200 mutation cases;
+one-shot override writer 24 assertions.
 Each new edge has a removal mutant that
 survives only when the load-bearing protection is deliberately deleted.
 ## 2026-08-20 — Blend-ticket unit fields are now dropdowns instead of free text,…

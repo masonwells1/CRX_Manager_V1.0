@@ -2262,6 +2262,30 @@ const CASES = [
     sql: `SELECT CAST(1 AS public.money_checked_integer);\n`,
   },
   {
+    name: 'round-53: ALTER DOMAIN ADD CHECK cannot hide an apply-time money mutator',
+    expect: 'violation',
+    mustReport: 'domain_alter_money_fix',
+    sql:
+      `CREATE FUNCTION public.domain_alter_money_fix(integer) RETURNS boolean LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = total_profit; RETURN true; END $$;\n` +
+      `ALTER DOMAIN public.existing_money_domain ADD CONSTRAINT current_money_ok ` +
+      `CHECK (public.domain_alter_money_fix(VALUE));\n`,
+  },
+  {
+    name: 'round-53 MUTANT: ALTER DOMAIN ADD CHECK NOT VALID remains deferred',
+    expect: 'silent',
+    sql:
+      `CREATE FUNCTION public.domain_deferred_money_fix(integer) RETURNS boolean LANGUAGE plpgsql AS $$\n` +
+      `BEGIN UPDATE public.orders SET total_profit = total_profit; RETURN true; END $$;\n` +
+      `ALTER DOMAIN public.existing_money_domain ADD CONSTRAINT future_money_ok ` +
+      `CHECK (public.domain_deferred_money_fix(VALUE)) NOT VALID;\n`,
+  },
+  {
+    name: 'round-53: ALTER DOMAIN VALIDATE CONSTRAINT fails closed on its stored CHECK',
+    expect: 'violation',
+    sql: `ALTER DOMAIN public.existing_money_domain VALIDATE CONSTRAINT historical_money_ok;\n`,
+  },
+  {
     name: 'round-46: event-trigger DDL cannot hide a later database-wide money rewrite',
     expect: 'violation',
     mustReport: 'event-trigger DDL is unsupported',

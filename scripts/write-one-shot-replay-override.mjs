@@ -69,27 +69,41 @@ export function readOneShotRegistry(projectDir) {
   return stems;
 }
 
-export function buildOverride({ projectDir, migration, project, now = new Date() }) {
+export function buildOverride({
+  projectDir,
+  migration,
+  queryMigration = migration,
+  project,
+  now = new Date(),
+}) {
   const stem = validateMigrationStem(migration);
+  const queryStem = validateMigrationStem(queryMigration);
   const projectRef = validateProjectRef(project);
   const registered = readOneShotRegistry(projectDir);
   if (!registered.has(stem)) {
     throw new Error('migration is not registered as a one-shot data repair');
   }
-  const sourcePath = migrationPath(projectDir, stem);
-  if (!existsSync(sourcePath)) throw new Error('registered migration SQL is missing');
+  const sourcePath = migrationPath(projectDir, queryStem);
+  if (!existsSync(sourcePath)) throw new Error('query migration SQL is missing');
   const query = readFileSync(sourcePath, 'utf8');
   const issuedAt = now.toISOString();
   return {
     migration: stem,
+    queryMigration: queryStem,
     queryHash: createHash('sha256').update(query).digest('hex'),
     project: projectRef,
     issuedAt,
   };
 }
 
-export function writeOverride({ projectDir, migration, project, now = new Date() }) {
-  const payload = buildOverride({ projectDir, migration, project, now });
+export function writeOverride({
+  projectDir,
+  migration,
+  queryMigration = migration,
+  project,
+  now = new Date(),
+}) {
+  const payload = buildOverride({ projectDir, migration, queryMigration, project, now });
   const stateDir = path.resolve(projectDir, '.claude', 'session-state');
   mkdirSync(stateDir, { recursive: true });
   const outputPath = path.join(stateDir, 'one-shot-replay-override.json');
@@ -106,16 +120,26 @@ export function parseArgs(argv) {
   for (let i = 0; i < argv.length; i += 2) {
     const flag = argv[i];
     const value = argv[i + 1];
-    if (!['--migration', '--project'].includes(flag) || value === undefined || values.has(flag)) {
-      throw new Error('usage: write-one-shot-replay-override --migration <stem> --project <ref>');
+    if (!['--migration', '--query-migration', '--project'].includes(flag) ||
+        value === undefined || values.has(flag)) {
+      throw new Error(
+        'usage: write-one-shot-replay-override --migration <registered-stem> ' +
+        '[--query-migration <current-query-stem>] --project <ref>',
+      );
     }
     values.set(flag, value);
   }
-  if (values.size !== 2) {
-    throw new Error('usage: write-one-shot-replay-override --migration <stem> --project <ref>');
+  if (!values.has('--migration') || !values.has('--project') || values.size > 3) {
+    throw new Error(
+      'usage: write-one-shot-replay-override --migration <registered-stem> ' +
+      '[--query-migration <current-query-stem>] --project <ref>',
+    );
   }
   return {
     migration: validateMigrationStem(values.get('--migration')),
+    queryMigration: values.has('--query-migration')
+      ? validateMigrationStem(values.get('--query-migration'))
+      : undefined,
     project: validateProjectRef(values.get('--project')),
   };
 }
@@ -123,9 +147,10 @@ export function parseArgs(argv) {
 function main() {
   const projectDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const args = parseArgs(process.argv.slice(2));
-  const { outputPath } = writeOverride({ projectDir, ...args });
+  const { outputPath, payload } = writeOverride({ projectDir, ...args });
   process.stdout.write(
     `Wrote one single-use replay authorization to ${outputPath}. ` +
+    `It hashes the exact bytes of supabase/migrations/${payload.queryMigration}.sql. ` +
     `It is valid for the next guarded apply attempt only.\n`,
   );
 }

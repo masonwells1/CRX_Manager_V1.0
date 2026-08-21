@@ -1207,6 +1207,9 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
           try {
             const ov = JSON.parse(raw);
             const ovMigration = typeof ov?.migration === "string" ? ov.migration.trim() : "";
+            const ovQueryMigration = typeof ov?.queryMigration === "string"
+              ? ov.queryMigration.trim()
+              : "";
             const ovHash = typeof ov?.queryHash === "string" ? ov.queryHash.trim().toLowerCase() : "";
             const ovProject = typeof ov?.project === "string" ? ov.project.trim() : "";
             const issuedText = typeof ov?.issuedAt === "string" ? ov.issuedAt.trim() : "";
@@ -1217,6 +1220,8 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
               overrideWhy = `its migration identifier is missing or invalid`;
             } else if (ovMigration !== stem) {
               overrideWhy = `it authorizes a different migration identifier`;
+            } else if (ovQueryMigration && !validMigrationStem(ovQueryMigration)) {
+              overrideWhy = `its query migration identifier is invalid`;
             } else if (!/^[0-9a-f]{64}$/.test(ovHash) || currentHash === "" || ovHash !== currentHash) {
               overrideWhy = `its queryHash does not match the SQL being applied`;
             } else if (!validProjectRef(ovProject)) {
@@ -1241,6 +1246,37 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
       }
       if (overrideOk) continue;
 
+      // The wrapper must hash the SQL being applied, not automatically the
+      // historical registered source. A different reviewed repair can overlap
+      // the same protected table and therefore need this override while having
+      // entirely different bytes. Prefer an exact file-backed current query;
+      // if none of the verified checkouts contains those bytes, require the
+      // operator to save/review the SQL as a migration before authorizing it.
+      let overrideQueryStem = "";
+      for (const candidateStem of [...new Set([migName, stem])]) {
+        if (!validMigrationStem(candidateStem) || !currentHash) continue;
+        const exactSource = evidenceRoots.some((root) => {
+          try {
+            const candidatePath = migrationSourcePath(root, candidateStem);
+            return existsSync(candidatePath) &&
+              createHash("sha256").update(readFileSync(candidatePath, "utf8")).digest("hex") === currentHash;
+          } catch {
+            return false;
+          }
+        });
+        if (exactSource) {
+          overrideQueryStem = candidateStem;
+          break;
+        }
+      }
+      const overrideInstruction = overrideQueryStem
+        ? `  node scripts/write-one-shot-replay-override.mjs --migration ${stem} ` +
+          `--query-migration ${overrideQueryStem} --project ${targetRef}\n`
+        : `  First save the exact reviewed SQL as a timestamped file under supabase/migrations, ` +
+          `then run:\n` +
+          `  node scripts/write-one-shot-replay-override.mjs --migration ${stem} ` +
+          `--query-migration <current-query-stem> --project ${targetRef}\n`;
+
       out("block",
         `ONE-SHOT REPLAY GUARD: this apply matches ${matched}, which is registered as a one-shot ` +
         `DATA migration in supabase/baselines/one-shot-migrations.json. ` +
@@ -1261,9 +1297,9 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
           : ``) +
         `If this really is a deliberate, reviewed replay, bind the override to the exact SQL, ` +
         `this database, and this moment:\n` +
-        `  node scripts/write-one-shot-replay-override.mjs --migration ${stem} --project ${targetRef}\n` +
+        overrideInstruction +
         `That fixed reviewed wrapper accepts only validated identifiers, resolves the migration ` +
-        `inside supabase/migrations, hashes its exact bytes, and refuses to overwrite an existing ` +
+        `inside supabase/migrations, hashes the current query file's exact bytes, and refuses to overwrite an existing ` +
         `authorization.\n` +
         `That override authorizes that exact text, on ${targetRef}, for the next ` +
         `${OVERRIDE_MAX_AGE_MS / 60000} minutes, for ONE apply attempt — it is deleted the moment ` +

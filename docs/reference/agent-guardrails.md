@@ -51,7 +51,10 @@ submitted and registered writes through `scripts/trigger-fanout.json`; an opaque
 deny, not an assumed empty cascade. The one-shot registry is untrusted input: stems, metadata values,
 contained migration paths, override fields, and target project refs are strictly validated, registry
 prose is never reflected, and the only copy-ready authorization command is the fixed
-`scripts/write-one-shot-replay-override.mjs --migration <stem> --project <ref>` wrapper. Custom
+`scripts/write-one-shot-replay-override.mjs --migration <registered-stem> --query-migration <current-query-stem> --project <ref>`
+wrapper. The two stems may be identical for a literal replay;
+when a different reviewed migration overlaps the protected table, the current-query stem binds the
+authorization to that new file's exact bytes. Custom
 PostgreSQL operator definitions are cataloged across
 verified migration history; invoking one follows its backing routine through the same transitive
 write analysis, and a database-resident backing routine fails closed. Custom casts are cataloged and

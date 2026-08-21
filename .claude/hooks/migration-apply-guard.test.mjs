@@ -13,6 +13,7 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync, existsSync
 import os from "node:os";
 import path from "node:path";
 import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
+import { writeOverride as writeReplayOverride } from "../../scripts/write-one-shot-replay-override.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FANOUT_FIXTURE = JSON.parse(readFileSync(
@@ -749,6 +750,39 @@ function armAutopilot(stateDir, hoursFromNow) {
     r = apply("20990601000011_different_population", "UPDATE public.orders SET total_profit = 1 WHERE id = 999;");
     ok(isDeny(r) && isOneShotDeny(r),
       "round-23: the same apply-time write target is a replay even on a different row set");
+
+    // ROUND 53. The official writer used to hash only the historical registered
+    // file. A new reviewed repair on the same table is intentionally caught by
+    // the table-level replay boundary, but its bytes differ, so the documented
+    // override could never match currentHash and could not release the apply.
+    // Bind the authorization to the current query migration while keeping the
+    // registered stem as the one-shot classification it clears.
+    const CURRENT_QUERY_STEM = "20990601000013_current_query_override";
+    const CURRENT_QUERY_SQL = "UPDATE public.orders SET total_profit = 7 WHERE id = 999;";
+    writeFileSync(
+      path.join(tmp, "supabase", "migrations", `${CURRENT_QUERY_STEM}.sql`),
+      CURRENT_QUERY_SQL,
+    );
+    const currentAuthorization = writeReplayOverride({
+      projectDir: tmp,
+      migration: STEM,
+      queryMigration: CURRENT_QUERY_STEM,
+      project: "x",
+      now: new Date(),
+    });
+    ok(currentAuthorization.payload.queryHash === sha(CURRENT_QUERY_SQL) &&
+      currentAuthorization.payload.queryMigration === CURRENT_QUERY_STEM,
+    "round-53: the fixed writer binds the override to the current reviewed query file");
+    r = apply(CURRENT_QUERY_STEM, CURRENT_QUERY_SQL);
+    ok(!isDeny(r),
+      "round-53: a current-query-bound override releases the reviewed apply");
+    r = apply(CURRENT_QUERY_STEM, CURRENT_QUERY_SQL);
+    ok(isDeny(r) && isOneShotDeny(r),
+      "round-53: the current-query-bound override releases exactly one apply attempt");
+    rmSync(
+      path.join(tmp, "supabase", "migrations", `${CURRENT_QUERY_STEM}.sql`),
+      { force: true },
+    );
 
     // ROUND 31. The review asked for parenthesized predicates to be canonicalized
     // before the text comparison — `WHERE (id = 2)` reads differently from

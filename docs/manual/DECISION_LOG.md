@@ -525,6 +525,9 @@ stores an expression that runs later when a value is cast to that domain, so the
 site does not expose any routine called by the CHECK. Both migration guards catalog same-file and
 older checked-in domains and fail closed when an apply-time `CAST(... AS domain)` or `::domain`
 invokes one. A domain definition without a coercion remains deferred.
+`ALTER DOMAIN ... ADD CONSTRAINT CHECK` also executes that readable expression over existing values
+unless it says `NOT VALID`, so its calls join the same transitive analysis. A later
+`ALTER DOMAIN ... VALIDATE CONSTRAINT` carries no expression to inspect and therefore fails closed.
 PostgreSQL event triggers are database-wide stored execution and therefore join the linked capture.
 The manifest binds each `pg_event_trigger` event/enabled mode to its routine identity, language, body,
 configuration, hash, and conservative effect. An enabled routine without a complete no-write proof is
@@ -929,9 +932,12 @@ three High findings. All closed:
     does not get past it. The escape hatch is **digest-bound**: the override must carry the SHA-256
     of the exact SQL being applied, so it authorizes that text and nothing else; a name-keyed flag
     would have been a wave-through for any body. Operators create it only through the fixed reviewed
-    `scripts/write-one-shot-replay-override.mjs --migration <stem> --project <ref>` wrapper, which
-    refuses traversal, malformed identifiers, unregistered migrations, and overwrite of an existing
-    authorization. A missing or unparseable registry denies the apply.
+    `scripts/write-one-shot-replay-override.mjs --migration <registered-stem> --query-migration <current-query-stem> --project <ref>`
+    wrapper, which refuses traversal,
+    malformed identifiers, unregistered one-shot classifications, missing query files, and overwrite
+    of an existing authorization. The registered stem says which replay boundary is being cleared;
+    the query stem supplies the exact reviewed SQL bytes being authorized. A missing or unparseable
+    registry denies the apply.
 
 16. **Digest coverage was a union, so one table could stand in for all of them.** Round 7 required
     the digest to cover the rewritten tables and the assigned columns, but it pooled them and asked
