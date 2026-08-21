@@ -3167,6 +3167,79 @@ function runBootstrapFanoutHashPins() {
   return failures;
 }
 
+function runPersistedRuleAcrossMigrations() {
+  const dir = mkdtempSync(join(tmpdir(), 'crx-persisted-rule-'));
+  const failures = [];
+  const git = (...args) =>
+    spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], {
+      cwd: dir,
+      encoding: 'utf8',
+      env: envWithoutGit(),
+    });
+  try {
+    const migrations = join(dir, 'supabase', 'migrations');
+    mkdirSync(migrations, { recursive: true });
+    writeFileSync(
+      join(migrations, '29980101000000_install_rule.sql'),
+      'CREATE TABLE public.persisted_rule_probe(id integer);\n' +
+        'CREATE RULE persisted_repair AS ON SELECT TO public.persisted_rule_probe ' +
+        'DO INSTEAD SELECT public.existing_repair() AS id;\n',
+    );
+    git('init');
+    git('add', '.');
+    git('commit', '-m', 'base with persisted rule');
+    const base = (git('rev-parse', 'HEAD').stdout || '').trim();
+    const candidate = '29980101000001_fire_persisted_rule.sql';
+    writeFileSync(
+      join(migrations, candidate),
+      'SELECT * FROM public.persisted_rule_probe;\n',
+    );
+    const result = runBash([SCRIPT, '--changed-only', `--base=${base}`], {
+      cwd: dir,
+      encoding: 'utf8',
+      env: envWithoutGit(),
+    });
+    const output = `${result.stdout || ''}\n${result.stderr || ''}`;
+    const block = blockFor(output, candidate);
+    if (classify(output, candidate) !== 'violation' ||
+        !block.includes('rewrite rule installed by an earlier migration')) {
+      failures.push(
+        '  round-57: changed-only validation lost an earlier migration rewrite rule\n' +
+          block.split('\n').map((line) => `      | ${line}`).join('\n'),
+      );
+    }
+
+    const manifest = JSON.parse(readFileSync(join(HERE, 'trigger-fanout.json'), 'utf8'));
+    const liveSelectRule = (manifest.rules || []).find((rule) => rule.event === 'select');
+    if (!liveSelectRule) {
+      failures.push('  round-57: checked-in linked manifest contains no SELECT rule fixture');
+    } else {
+      const liveCandidate = '29980101000002_fire_live_rule.sql';
+      writeFileSync(
+        join(migrations, liveCandidate),
+        `SELECT * FROM public.${liveSelectRule.relation};\n`,
+      );
+      const liveResult = runBash([SCRIPT, '--changed-only', `--base=${base}`], {
+        cwd: dir,
+        encoding: 'utf8',
+        env: envWithoutGit(),
+      });
+      const liveOutput = `${liveResult.stdout || ''}\n${liveResult.stderr || ''}`;
+      const liveBlock = blockFor(liveOutput, liveCandidate);
+      if (classify(liveOutput, liveCandidate) !== 'violation' ||
+          !liveBlock.includes(`rule_on_select_${liveSelectRule.relation}`)) {
+        failures.push(
+          '  round-57: changed-only validation ignored a linked-live rewrite rule\n' +
+            liveBlock.split('\n').map((line) => `      | ${line}`).join('\n'),
+        );
+      }
+    }
+  } finally {
+    removeFixtureTree(dir);
+  }
+  return failures;
+}
+
 function run() {
   const dir = mkdtempSync(join(tmpdir(), 'crx-approved-set-'));
   const migrations = join(dir, 'supabase', 'migrations');
@@ -3281,6 +3354,7 @@ function run() {
   failures.push(...runTriggerFanoutFailsClosed());
   failures.push(...runTriggerDefinitionRequiresFanoutRefresh());
   failures.push(...runBootstrapFanoutHashPins());
+  failures.push(...runPersistedRuleAcrossMigrations());
 
   if (failures.length > 0) {
     console.error(`❌ approved-set guard: ${failures.length} case(s) behaved wrong\n`);
@@ -3289,7 +3363,7 @@ function run() {
     console.error(out);
     process.exit(1);
   }
-  console.log(`✅ approved-set guard: ${CASES.length + 16} mutation cases behaved correctly`);
+  console.log(`✅ approved-set guard: ${CASES.length + 18} mutation cases behaved correctly`);
 }
 
 if (process.argv.includes('--bootstrap-pins-only')) {
@@ -3306,6 +3380,13 @@ if (process.argv.includes('--bootstrap-pins-only')) {
     process.exit(1);
   }
   console.log('✅ trigger fan-out staleness mutations behaved correctly');
+} else if (process.argv.includes('--persisted-rule-only')) {
+  const failures = runPersistedRuleAcrossMigrations();
+  if (failures.length) {
+    console.error(failures.join('\n'));
+    process.exit(1);
+  }
+  console.log('✅ persisted rewrite-rule cross-migration mutation behaved correctly');
 } else {
   run();
 }

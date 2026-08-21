@@ -32,6 +32,7 @@ import {
   castDefinitions,
   operatorDefinitions,
   overlappingTables,
+  ruleAttachments,
   routineIdentityChanges,
   viewDefinitions,
 } from "./apply-time-dml-lib.mjs";
@@ -81,6 +82,7 @@ function loadTrustedFanout(evidenceRoots) {
   const enabledEventTriggers = new Map();
   const sessionDependentEventTriggers = new Map();
   const allEnabledEventTriggers = new Map();
+  const persistedRules = new Map();
   const manifests = [];
   const expiredManifests = [];
   for (const root of evidenceRoots) {
@@ -92,11 +94,11 @@ function loadTrustedFanout(evidenceRoots) {
     } catch (err) {
       throw new Error(`${manifestPath}: ${err?.message || err}`);
     }
-    if (parsed?._meta?.format_version !== 4 ||
+    if (parsed?._meta?.format_version !== 5 ||
         parsed?._meta?.source_project !== CRX_PRODUCTION_REF ||
         typeof parsed?._meta?.captured_at !== "string" ||
         !Array.isArray(parsed?.tables_scanned) || !Array.isArray(parsed?.opaque_on_tables) ||
-        !Array.isArray(parsed?.event_triggers) ||
+        !Array.isArray(parsed?.event_triggers) || !Array.isArray(parsed?.rules) ||
         !parsed?.fanout || typeof parsed.fanout !== "object" || Array.isArray(parsed.fanout)) {
       throw new Error(`${manifestPath}: invalid or unbound trigger fan-out manifest`);
     }
@@ -162,6 +164,25 @@ function loadTrustedFanout(evidenceRoots) {
         }
       }
     }
+    for (const rule of parsed.rules) {
+      const keys = Object.keys(rule || {}).sort();
+      if (JSON.stringify(keys) !== JSON.stringify([
+        "definition_hash", "event", "name", "oid", "relation",
+      ]) ||
+          typeof rule.oid !== "string" || !/^\d+$/.test(rule.oid) ||
+          typeof rule.name !== "string" || !/^[A-Za-z_][A-Za-z0-9_$]*$/.test(rule.name) ||
+          typeof rule.relation !== "string" || !/^[a-z_][a-z0-9_$]*$/.test(rule.relation) ||
+          typeof rule.event !== "string" ||
+            !new Set(["select", "insert", "update", "delete"]).has(rule.event) ||
+          typeof rule.definition_hash !== "string" ||
+            !/^[0-9a-f]{64}$/.test(rule.definition_hash)) {
+        throw new Error(`${manifestPath}: invalid rewrite-rule evidence`);
+      }
+      persistedRules.set(
+        `${rule.event}\0${rule.relation}\0${rule.oid}\0${rule.definition_hash}`,
+        { table: rule.relation, event: rule.event },
+      );
+    }
     for (const table of parsed.tables_scanned) {
       if (typeof table !== "string" || !table.trim()) throw new Error(`${manifestPath}: invalid scanned table`);
       scanned.add(table.toLowerCase());
@@ -205,6 +226,7 @@ function loadTrustedFanout(evidenceRoots) {
     enabledEventTriggers: [...enabledEventTriggers.values()],
     sessionDependentEventTriggers: [...sessionDependentEventTriggers.values()],
     allEnabledEventTriggers: [...allEnabledEventTriggers.values()],
+    rules: [...persistedRules.values()],
     manifests,
   };
 }
@@ -231,10 +253,11 @@ function expandThroughFanout(analysis, evidence) {
   return { targets, tables, opaqueSources };
 }
 
-function loadKnownDefinitions(evidenceRoots) {
+function loadKnownDefinitions(evidenceRoots, currentMigration = "") {
   const operatorsByKey = new Map();
   const castsByKey = new Map();
   const viewsByKey = new Map();
+  const rulesByKey = new Map();
   for (const root of evidenceRoots) {
     const migrationDir = path.join(root, "supabase", "migrations");
     if (!existsSync(migrationDir)) continue;
@@ -255,7 +278,8 @@ function loadKnownDefinitions(evidenceRoots) {
       const hasOperators = /\bcreate\s+operator\b/i.test(sql);
       const hasCasts = /\bcreate\s+(?:cast|domain)\b/i.test(sql);
       const hasViews = /\bcreate\s+(?:or\s+replace\s+)?(?:(?:temp|temporary|recursive)\s+)*view\b/i.test(sql);
-      if (!hasOperators && !hasCasts && !hasViews) continue;
+      const hasRules = /\bcreate\s+(?:or\s+replace\s+)?rule\b/i.test(sql);
+      if (!hasOperators && !hasCasts && !hasViews && !hasRules) continue;
 
       // The lexer is the expensive part. Each migration is read and reduced to
       // apply-time code once, then every catalog extractor consumes that same
@@ -279,12 +303,22 @@ function loadKnownDefinitions(evidenceRoots) {
           viewsByKey.set(`${definition.name}\0${definition.query}`, definition);
         }
       }
+      // A rule stored by an EARLIER migration remains executable catalog state
+      // when the candidate applies. Do not seed later filenames: PostgreSQL has
+      // not installed those yet, and treating future rules as live would create
+      // a false availability failure.
+      if (hasRules && (!currentMigration || name < `${currentMigration}.sql`)) {
+        for (const definition of ruleAttachments(code)) {
+          rulesByKey.set(`${definition.event}\0${definition.table}`, definition);
+        }
+      }
     }
   }
   return {
     operators: [...operatorsByKey.values()],
     casts: [...castsByKey.values()],
     views: [...viewsByKey.values()],
+    rules: [...rulesByKey.values()],
   };
 }
 
@@ -660,12 +694,14 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
     let knownOperators;
     let knownCasts;
     let knownViews;
+    let knownRules;
     try {
       fanoutEvidence = loadTrustedFanout(evidenceRoots);
-      const knownDefinitions = loadKnownDefinitions(evidenceRoots);
+      const knownDefinitions = loadKnownDefinitions(evidenceRoots, migName);
       knownOperators = knownDefinitions.operators;
       knownCasts = knownDefinitions.casts;
       knownViews = knownDefinitions.views;
+      knownRules = [...fanoutEvidence.rules, ...knownDefinitions.rules];
     } catch (err) {
       out("block",
         `ONE-SHOT REPLAY GUARD: trusted trigger/FK, custom-operator, custom-cast/domain, or stored-view evidence could not be loaded ` +
@@ -836,7 +872,10 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
     // see apply-time-dml-lib.mjs for why deferred routine bodies are excluded.
     let submitted = { targets: new Set(), dynamicWrites: [], unresolved: false };
     try {
-      submitted = applyTimeWriteTargets(migQuery, { knownOperators, knownCasts, knownViews });
+      submitted = applyTimeWriteTargets(
+        migQuery,
+        { knownOperators, knownCasts, knownViews, knownRules },
+      );
     } catch {
       // A parse this module cannot handle must not silently mean "writes
       // nothing". Treat it as unresolvable so the semantic check below refuses
@@ -902,7 +941,10 @@ const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
               `are removed. An empty or corrupted source has no replay identity. Refusing the ` +
               `apply; restore the tracked SQL file and retry.`);
           }
-          const registered = applyTimeWriteTargets(sourceSql, { knownOperators, knownCasts, knownViews });
+          const registered = applyTimeWriteTargets(
+            sourceSql,
+            { knownOperators, knownCasts, knownViews, knownRules },
+          );
           const registeredFanout = expandThroughFanout(registered, fanoutEvidence);
           const resolvedWrite = registered.targets.size > 0;
           const opaqueWrite = registered.unresolved || registered.dynamicWrites.length > 0 ||

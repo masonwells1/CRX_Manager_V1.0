@@ -57,6 +57,12 @@ const payload = {
       routine_config: [], language: 'plpgsql', source: 'BEGIN RETURN; END;', has_sql_body: false,
     },
   ],
+  rules: [
+    {
+      oid: '8001', name: '_RETURN', relation: 'rule_probe', event: 'select',
+      definition: 'CREATE RULE "_RETURN" AS ON SELECT TO public.rule_probe DO INSTEAD SELECT 1;',
+    },
+  ],
   foreign_keys: [
     {
       oid: '501', parent_schema: 'public', parent_table: 'fk_parent',
@@ -150,6 +156,14 @@ check('manifest binds event-trigger enabled state and routine bodies', () => {
   assert.equal(manifest.event_triggers[0].effect.session_catalog_required, false);
   assert.match(manifest.event_triggers[0].routine_hash, /^[0-9a-f]{64}$/);
 });
+check('manifest binds persisted rewrite-rule identity and definition', () => {
+  const manifest = buildTriggerFanoutManifest(payload);
+  assert.deepEqual(manifest.rules[0], {
+    oid: '8001', name: '_RETURN', relation: 'rule_probe', event: 'select',
+    definition_hash: manifest.rules[0].definition_hash,
+  });
+  assert.match(manifest.rules[0].definition_hash, /^[0-9a-f]{64}$/);
+});
 check('contradictory event-trigger enabled state is refused', () => {
   const changed = structuredClone(payload);
   changed.event_triggers[0].enabled = true;
@@ -162,7 +176,8 @@ check('catalog-first event metadata helpers are proven read-only', () => {
     enabled: true,
     enabled_mode: 'O',
     routine_config: ['search_path=pg_catalog, extensions'],
-    source: 'BEGIN PERFORM * FROM pg_event_trigger_ddl_commands(); END;',
+    source: "BEGIN PERFORM jsonb_build_object('version', version(), 'part', split_part('a.b', '.', 1)) " +
+      'FROM pg_event_trigger_ddl_commands(); END;',
   };
   const entry = buildTriggerFanoutManifest(changed).event_triggers[0];
   assert.equal(entry.effect.safe, true);
@@ -198,6 +213,13 @@ check('an unpinned event helper is conditional on the applying session catalog p
 check('fixed capture includes event-trigger catalog and routine configuration', () => {
   assert.match(TRIGGER_FANOUT_SQL, /\bFROM pg_event_trigger\b/);
   assert.match(TRIGGER_FANOUT_SQL, /\bp\.proconfig\b/);
+  assert.match(TRIGGER_FANOUT_SQL, /\bFROM pg_rewrite\b/);
+  assert.match(TRIGGER_FANOUT_SQL, /\bpg_get_ruledef\b/);
+});
+check('invalid persisted rule capture is refused', () => {
+  const changed = structuredClone(payload);
+  changed.rules[0].definition = '';
+  assert.throws(() => buildTriggerFanoutManifest(changed), /rule identity or definition is invalid/);
 });
 check('unsupported or unreadable event-trigger bodies fail closed', () => {
   const unsupported = structuredClone(payload);

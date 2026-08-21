@@ -1588,6 +1588,7 @@ export function applyTimeWriteTargets(
     knownOperators = [],
     knownCasts = [],
     knownViews = [],
+    knownRules = [],
     trustedUnqualifiedRoutines = [],
   } = {},
 ) {
@@ -1682,7 +1683,25 @@ export function applyTimeWriteTargets(
   // body is not in this file it joins the unknown calls instead, because
   // nothing here can say what a database-resident body writes.
   const attachments = triggerAttachments(code);
-  const rules = ruleAttachments(code);
+  const rules = [];
+  const ruleKeys = new Set();
+  const defineRules = (list) => {
+    for (const definition of list) {
+      const table = String(definition?.table || "").toLowerCase();
+      const event = String(definition?.event || "").toLowerCase();
+      if (!/^[a-z_][a-z0-9_$]*$/.test(table) ||
+          !new Set(["select", "insert", "update", "delete"]).has(event)) {
+        top.unresolved = true;
+        continue;
+      }
+      const key = `${event}\0${table}`;
+      if (ruleKeys.has(key)) continue;
+      ruleKeys.add(key);
+      rules.push({ table, event });
+    }
+  };
+  defineRules(knownRules);
+  defineRules(ruleAttachments(code));
   const readRuleRelations = invokedRelations(code);
 
   // ROUND 29. A string literal handed to EXECUTE is SQL, and the only thing this
@@ -1737,7 +1756,7 @@ export function applyTimeWriteTargets(
       defineCasts(castDefinitions(parsed.code));
       defineViews(viewDefinitions(parsed.code));
       attachments.push(...triggerAttachments(parsed.code));
-      rules.push(...ruleAttachments(parsed.code));
+      defineRules(ruleAttachments(parsed.code));
       for (const relation of invokedRelations(parsed.code)) readRuleRelations.add(relation);
       execCodes.push(parsed.code);
       foldLiterals(inner, parsed.literals);
@@ -1886,7 +1905,7 @@ export function applyTimeWriteTargets(
         // DDL inside an invoked routine executes now just like literal dynamic
         // SQL. Preserve its trigger/rule graph edges before firing attachments.
         attachments.push(...triggerAttachments(r.code));
-        rules.push(...ruleAttachments(r.code));
+        defineRules(ruleAttachments(r.code));
         for (const n of invokedRoutines(r.code.toLowerCase(), new Set(byName.keys()))) {
           if (!seen.has(n)) next.add(n);
         }

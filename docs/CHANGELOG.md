@@ -26,6 +26,12 @@ migration safety harness; no app source, migration SQL, live database, or produc
 - Trigger, FK, rule, view, and event-trigger evidence now expires after 24 hours. The apply guard
   skips stale or materially future-dated manifests and requires at least one fresh linked-production
   capture, with the fixed no-argument regeneration command in its denial message.
+- Persisted PostgreSQL rewrite rules now cross migration boundaries instead of disappearing after
+  their defining file. The linked capture binds every live public rule relation, event, OID, and
+  definition hash; the apply guard also catalogs rules from earlier checked-in migrations, and the
+  changed-only SQL validator uses that same prior-file catalog. Firing any stored rule remains
+  fail-closed until its action can be modeled completely. A two-migration mutation and a live-rule
+  manifest mutation prove both trust paths are load-bearing.
 - The approved-set SQL validator now sends plain `INSERT` sources through the checked-in live
   trigger/FK fan-out graph. Existing public business-table cascades are protected without turning
   scratch, temporary, infrastructure, non-public, or newly created tables into rewrites.
@@ -170,8 +176,8 @@ migration safety harness; no app source, migration SQL, live database, or produc
   behind a subsequent `DROP FUNCTION`; analyzer and apply-guard mutants cover both spellings.
 
 Focused proof: snapshot producer 23 assertions; applied-source containment pass (including forced
-worktree-enumeration failure); trigger fan-out producer 22 assertions; apply-time analyzer
-288 assertions; apply-time guard 328 assertions; approved-set validator 205 mutation cases;
+worktree-enumeration failure); trigger fan-out producer 24 assertions; apply-time analyzer
+291 assertions; apply-time guard 331 assertions; approved-set validator 207 mutation cases;
 one-shot override writer 25 assertions.
 Each new edge has a removal mutant that
 survives only when the load-bearing protection is deliberately deleted.

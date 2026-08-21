@@ -233,7 +233,7 @@ const m = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
 const registry = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const ok = (n) => typeof n === 'string' && /^[a-z0-9_]+\$/.test(n);
 const sourceOk = (n) => typeof n === 'string' && /^[a-z0-9_]+(?:\.[a-z0-9_]+)?\$/.test(n);
-if (!m._meta || m._meta.format_version !== 4 ||
+if (!m._meta || m._meta.format_version !== 5 ||
     m._meta.generator !== 'scripts/generate-trigger-fanout.mjs' ||
     m._meta.capture_method !== 'supabase-cli-db-query-linked' ||
     m._meta.source_project !== 'rhyzpcqhnizqbxphqdkr' ||
@@ -313,6 +313,20 @@ for (const trigger of m.event_triggers) {
     throw new Error('trigger fan-out manifest has invalid event-trigger evidence');
   }
 }
+if (!Array.isArray(m.rules)) {
+  throw new Error('trigger fan-out manifest has no rewrite-rule state');
+}
+for (const rule of m.rules) {
+  const keys = Object.keys(rule || {}).sort();
+  if (JSON.stringify(keys) !== JSON.stringify([
+    'definition_hash', 'event', 'name', 'oid', 'relation',
+  ]) || typeof rule.oid !== 'string' || !/^\d+$/.test(rule.oid) ||
+      typeof rule.name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_$]*$/.test(rule.name) ||
+      !ok(rule.relation) || !/^(select|insert|update|delete)$/.test(rule.event) ||
+      typeof rule.definition_hash !== 'string' || !/^[0-9a-f]{64}$/.test(rule.definition_hash)) {
+    throw new Error('trigger fan-out manifest has invalid rewrite-rule evidence');
+  }
+}
 const out = [];
 out.push('v:event-state');
 for (const trigger of m.event_triggers) {
@@ -326,6 +340,7 @@ for (const trigger of m.event_triggers) {
 }
 for (const n of capturedSources) out.push('s:' + n);
 for (const n of opaque) out.push('o:' + n);
+for (const rule of m.rules) out.push('q:' + rule.event + ' ' + rule.relation);
 for (const [src, rows] of Object.entries(m.fanout || {})) {
   if (!sourceOk(src)) continue;
   for (const r of rows || []) {
@@ -341,6 +356,7 @@ TRIGGER_FANOUT_PAIRS=$(printf '%s\n' "$TRIGGER_FANOUT_RAW" | sed -n 's/^e://p')
 TRIGGER_FANOUT_EVENT_STATE=$(printf '%s\n' "$TRIGGER_FANOUT_RAW" | sed -n 's/^v://p')
 TRIGGER_FANOUT_ENABLED_EVENTS=$(printf '%s\n' "$TRIGGER_FANOUT_RAW" | sed -n 's/^g://p')
 TRIGGER_FANOUT_SESSION_EVENTS=$(printf '%s\n' "$TRIGGER_FANOUT_RAW" | sed -n 's/^c://p')
+TRIGGER_FANOUT_RULES=$(printf '%s\n' "$TRIGGER_FANOUT_RAW" | sed -n 's/^q://p' | tr '\n' '|')
 TRIGGER_FANOUT_SOURCES_PADDED="|$(printf '%s\n' "$TRIGGER_FANOUT_SCANNED" | tr '\n' '|')"
 
 # Event triggers fire database-wide on DDL, with no relation to use as a fan-out
@@ -1399,6 +1415,7 @@ fi
 UNSUPPORTED_ROUTINE_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 == "routine-identity" { print $1 }')
 EVENT_TRIGGER_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 == "event-trigger" { print $1 }')
 EVENT_CATALOG_RISK_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 == "event-catalog-risk" { print $1 }')
+PERSISTED_RULE_FILES=$(printf '%s\n' "$UNSUPPORTED_CONSTRUCTS" | awk -F '\t' '$2 == "persisted-rule" { print $1 }')
 
 for file in $ALL_SQL; do
   # Strip SQL comments for pattern matching
@@ -1425,6 +1442,14 @@ for file in $ALL_SQL; do
     echo "VIOLATION: $file"
     echo "  PostgreSQL event-trigger DDL is unsupported: database-wide DDL effects are fail-closed."
     echo "  Use a separately reviewed removal path; do not create, alter, or drop event triggers in an ordinary migration."
+    echo ""
+    VIOLATIONS=$((VIOLATIONS + 1))
+  fi
+  if [ -n "$PERSISTED_RULE_FILES" ] &&
+     printf '%s\n' "$PERSISTED_RULE_FILES" | grep -Fqx -- "$file"; then
+    echo "VIOLATION: $file"
+    echo "  This migration fires a PostgreSQL rewrite rule installed by an earlier migration."
+    echo "  Stored rule actions are executable catalog state and are refused until their effects are fully modeled."
     echo ""
     VIOLATIONS=$((VIOLATIONS + 1))
   fi
@@ -1604,11 +1629,21 @@ $MIG_BASENAME
                     -v customops="$CUSTOM_OPERATORS_RE" \
                     -v customcasts="$CUSTOM_CAST_TARGETS_RE" \
                     -v regtables="$REGISTRY_TABLES" -v knownviews="$KNOWN_VIEWS_RE" \
-                    -v fanouts="$TRIGGER_FANOUT_SOURCES_PADDED" '
+                    -v fanouts="$TRIGGER_FANOUT_SOURCES_PADDED" \
+                    -v knownrules="$TRIGGER_FANOUT_RULES" '
       # ---- ONE SCANNER, ONE PASS (CodeRabbit Major, PR #364) -----------------
       # Shared with the mutating-function index since round 31 — see ONE LEXER,
       # SHARED above for why this is a variable and not a second copy.
       '"$AWK_STRIP_NOISE"'
+      BEGIN {
+        nknownrules = split(knownrules, knownrule, "|")
+        for (nri = 1; nri <= nknownrules; nri++) {
+          split(knownrule[nri], nrparts, " ")
+          if (nrparts[1] == "" || nrparts[2] == "") continue
+          rulerel[nrparts[2]] = 1
+          if (nrparts[1] == "select") ruleselect[nrparts[2]] = 1
+        }
+      }
       {
         raw[FNR] = $0
         line = strip_noise(tolower($0))

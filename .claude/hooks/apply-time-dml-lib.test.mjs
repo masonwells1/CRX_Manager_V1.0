@@ -1388,6 +1388,25 @@ eq(T(null), [], "a null body does not throw");
     'round-52 MUTANT: an unread ON SELECT rule is not reported as fired');
 }
 
+// ---------------- ROUND 57: persisted rules survive migration boundaries
+{
+  const selected = applyTimeWriteTargets(
+    'SELECT * FROM public.persisted_rule_probe;',
+    { knownRules: [{ table: 'persisted_rule_probe', event: 'select' }] },
+  );
+  ok(selected.unresolved,
+    'round-57: selecting a relation with a catalog-known ON SELECT rule fails closed');
+  eq(selected.firedRules, ['persisted_rule_probe'],
+    'round-57: the persisted fired rule relation is named');
+
+  const notSelected = applyTimeWriteTargets(
+    'SELECT 1;',
+    { knownRules: [{ table: 'persisted_rule_probe', event: 'select' }] },
+  );
+  ok(!notSelected.unresolved && notSelected.firedRules.length === 0,
+    'round-57 MUTANT: a persisted rule that is not fired does not block unrelated SQL');
+}
+
 // ---------------- ROUND 54: routine schemas are part of call identity
 {
   const collision = applyTimeWriteTargets(

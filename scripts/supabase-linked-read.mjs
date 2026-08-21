@@ -82,6 +82,24 @@ WITH tables AS (
   JOIN pg_namespace n ON n.oid = p.pronamespace
   JOIN pg_language l ON l.oid = p.prolang
   ORDER BY e.evtname, p.oid
+), rules AS (
+  SELECT
+    r.oid::text AS oid,
+    r.rulename AS name,
+    c.relname AS relation,
+    CASE r.ev_type
+      WHEN '1' THEN 'select'
+      WHEN '2' THEN 'update'
+      WHEN '3' THEN 'insert'
+      WHEN '4' THEN 'delete'
+    END AS event,
+    pg_get_ruledef(r.oid, true) AS definition
+  FROM pg_rewrite r
+  JOIN pg_class c ON c.oid = r.ev_class
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = 'public'
+    AND r.ev_type IN ('1', '2', '3', '4')
+  ORDER BY r.oid
 ), foreign_keys AS (
   SELECT
     con.oid::text AS oid,
@@ -109,6 +127,7 @@ SELECT jsonb_build_object(
   'routines', COALESCE((SELECT jsonb_agg(to_jsonb(routines)) FROM routines), '[]'::jsonb),
   'triggers', COALESCE((SELECT jsonb_agg(to_jsonb(triggers)) FROM triggers), '[]'::jsonb),
   'event_triggers', COALESCE((SELECT jsonb_agg(to_jsonb(event_triggers)) FROM event_triggers), '[]'::jsonb),
+  'rules', COALESCE((SELECT jsonb_agg(to_jsonb(rules)) FROM rules), '[]'::jsonb),
   'foreign_keys', COALESCE((SELECT jsonb_agg(to_jsonb(foreign_keys)) FROM foreign_keys), '[]'::jsonb)
 ) AS trigger_fanout_capture;
 `.trim();

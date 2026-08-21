@@ -24,6 +24,7 @@ const FANOUT_FIXTURE = JSON.parse(readFileSync(
 FANOUT_FIXTURE._meta.captured_at = new Date().toISOString();
 FANOUT_FIXTURE.opaque_on_tables = [];
 FANOUT_FIXTURE.fanout = {};
+FANOUT_FIXTURE.event_triggers = [];
 let pass = 0;
 function ok(c, m) { assert.ok(c, m); pass++; }
 function eq(a, b, m) { assert.equal(a, b, m); pass++; }
@@ -268,7 +269,8 @@ function armAutopilot(stateDir, hoursFromNow) {
     // 1. No proof → deny (existing behavior).
     r = runHook(call(BENIGN_SQL), tmp);
     ok(isDeny(r), "no proof file → apply denied");
-    ok(r.stdout.includes("MIGRATION APPLY GUARD"), "deny message names the guard");
+    ok(r.stdout.includes("MIGRATION APPLY GUARD"),
+      `deny message names the guard: ${r.stdout || r.stderr}`);
 
     // 2. Valid proof, unarmed, benign → allow.
     writeProof(stateDir, BENIGN_SQL);
@@ -1434,6 +1436,52 @@ function armAutopilot(stateDir, hoursFromNow) {
         "CREATE RULE benign AS ON INSERT TO scratch_rule DO ALSO SELECT 1;");
       ok(!isOneShotDeny(r), "round-33: defining but not firing a rule remains deferred");
 
+      // ROUND 57. Rule actions persist in PostgreSQL after their defining
+      // migration completes. A later migration must therefore inherit both
+      // repository-history and linked-live rule attachments before it scans a
+      // SELECT/write that can fire the stored action.
+      const historicalRulePath = path.join(
+        tmp,
+        "supabase",
+        "migrations",
+        "20990601000187_r57_rule_catalog.sql",
+      );
+      writeFileSync(
+        historicalRulePath,
+        "CREATE TABLE public.persisted_rule_probe(id integer);\n" +
+        "CREATE RULE persisted_repair AS ON SELECT TO public.persisted_rule_probe " +
+        "DO INSTEAD SELECT public.existing_repair() AS id;\n",
+      );
+      r = apply("20990601000188_r57_later_select",
+        "SELECT * FROM public.persisted_rule_probe;");
+      ok(isDeny(r) && isOneShotDeny(r),
+        "round-57: a rule installed by an earlier migration survives into a later apply → denied");
+      rmSync(historicalRulePath, { force: true });
+      r = apply("20990601000189_r57_history_mutant",
+        "SELECT * FROM public.persisted_rule_probe;");
+      ok(!isOneShotDeny(r),
+        "round-57 MUTANT: removing the earlier rule definition removes the cross-file deny");
+
+      const liveRuleManifest = structuredClone(FANOUT_FIXTURE);
+      liveRuleManifest.rules.push({
+        oid: "99001",
+        name: "live_repair",
+        relation: "live_rule_probe",
+        event: "select",
+        definition_hash: "a".repeat(64),
+      });
+      writeFileSync(
+        path.join(tmp, "scripts", "trigger-fanout.json"),
+        `${JSON.stringify(liveRuleManifest, null, 2)}\n`,
+      );
+      r = apply("20990601000190_r57_live_select", "SELECT * FROM public.live_rule_probe;");
+      ok(isDeny(r) && isOneShotDeny(r),
+        "round-57: a linked-live persisted rule fires in the candidate apply → denied");
+      writeFileSync(
+        path.join(tmp, "scripts", "trigger-fanout.json"),
+        `${JSON.stringify(FANOUT_FIXTURE, null, 2)}\n`,
+      );
+
       // ROUND 29 (Codex High). A string handed to EXECUTE is SQL, and the
       // analyzer only ever scanned one for a bare DML verb. A call is not a DML
       // verb, so this reached the database with unresolved false, no targets and
@@ -1444,7 +1492,7 @@ function armAutopilot(stateDir, hoursFromNow) {
         `${FIX.replace("RETURNS trigger", "RETURNS void").replace("  RETURN NEW;\n", "")}\n` +
         "DO $do$ BEGIN EXECUTE 'SELECT public.tmp_fix()'; END $do$;");
       ok(isDeny(r) && isOneShotDeny(r),
-        "round-29: a routine called from literal SQL replays the registered repair → denied");
+        `round-29: a routine called from literal SQL replays the registered repair → denied: ${r.stdout || r.stderr}`);
 
       r = apply("20990601000191_r29_literal_retype",
         "DO $do$ BEGIN EXECUTE 'ALTER TABLE public.order_items ALTER COLUMN profit " +

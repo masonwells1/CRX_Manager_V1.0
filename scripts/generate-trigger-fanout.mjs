@@ -22,7 +22,7 @@ import {
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const OUT = path.join(HERE, 'trigger-fanout.json');
-export const TRIGGER_FANOUT_FORMAT = 4;
+export const TRIGGER_FANOUT_FORMAT = 5;
 export { TRIGGER_FANOUT_SQL };
 
 function fail(message) {
@@ -52,6 +52,12 @@ const EVENT_METADATA_HELPERS = Object.freeze([
   'pg_event_trigger_dropped_objects',
   'pg_event_trigger_table_rewrite_oid',
   'pg_event_trigger_table_rewrite_reason',
+]);
+const EVENT_READONLY_BUILTINS = Object.freeze([
+  'jsonb_build_array',
+  'jsonb_build_object',
+  'split_part',
+  'version',
 ]);
 
 function routineConfig(value) {
@@ -111,7 +117,7 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
     fail('linked query returned an invalid trigger_fanout_capture envelope');
   }
   const expectedKeys = [
-    'captured_at', 'event_triggers', 'foreign_keys', 'routines', 'tables_scanned', 'triggers',
+    'captured_at', 'event_triggers', 'foreign_keys', 'routines', 'rules', 'tables_scanned', 'triggers',
   ];
   if (JSON.stringify(Object.keys(payload).sort()) !== JSON.stringify(expectedKeys)) {
     fail('linked query returned an unexpected trigger_fanout_capture shape');
@@ -129,8 +135,8 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
   const tableSet = new Set(tablesScanned);
   if (!Array.isArray(payload.routines) || !Array.isArray(payload.triggers) ||
       !Array.isArray(payload.event_triggers) ||
-      !Array.isArray(payload.foreign_keys)) {
-    fail('routines, triggers, event_triggers, and foreign_keys must be arrays');
+      !Array.isArray(payload.foreign_keys) || !Array.isArray(payload.rules)) {
+    fail('routines, triggers, event_triggers, rules, and foreign_keys must be arrays');
   }
 
   const routines = payload.routines.map((routine) => {
@@ -239,7 +245,7 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
       `DO $crx_event$ ${trigger.source} $crx_event$;`,
       {
         trustedUnqualifiedRoutines: catalogBinding !== 'unsafe'
-          ? EVENT_METADATA_HELPERS
+          ? [...EVENT_METADATA_HELPERS, ...EVENT_READONLY_BUILTINS]
           : [],
       },
     );
@@ -277,6 +283,39 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
       })),
     };
   }).sort((a, b) => a.name.localeCompare(b.name) || a.routine_oid.localeCompare(b.routine_oid));
+
+  // Rewrite rules are persisted executable catalog state. Their actions can
+  // call resident mutators, and a rule created by an older migration can fire
+  // while a later migration is applying. Bind the exact live definition into
+  // the capture; the guard conservatively treats a fired rule as unresolved.
+  const rules = payload.rules.map((rule) => {
+    if (!rule || typeof rule !== 'object' || Array.isArray(rule) ||
+        JSON.stringify(Object.keys(rule).sort()) !==
+          JSON.stringify(['definition', 'event', 'name', 'oid', 'relation'])) {
+      fail('rule has an unexpected shape');
+    }
+    if (typeof rule.oid !== 'string' || !/^\d+$/.test(rule.oid) ||
+        typeof rule.definition !== 'string' || !rule.definition.trim()) {
+      fail('rule identity or definition is invalid');
+    }
+    if (typeof rule.name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_$]*$/.test(rule.name)) {
+      fail('rule name is invalid');
+    }
+    const name = rule.name;
+    const relation = bareName(rule.relation, 'rule relation');
+    const event = bareName(rule.event, 'rule event');
+    if (!new Set(['select', 'insert', 'update', 'delete']).has(event)) {
+      fail(`rule ${name} has an invalid event`);
+    }
+    return {
+      oid: rule.oid,
+      name,
+      relation,
+      event,
+      definition_hash: sha256(rule.definition),
+    };
+  }).sort((a, b) => a.relation.localeCompare(b.relation) ||
+    a.event.localeCompare(b.event) || a.name.localeCompare(b.name) || a.oid.localeCompare(b.oid));
 
   const writeAction = new Set(['c', 'n', 'd']);
   const foreignKeys = payload.foreign_keys.map((foreignKey) => {
@@ -419,12 +458,13 @@ export function buildTriggerFanoutManifest(payload, projectId = CRX_SUPABASE_PRO
       capture_method: 'supabase-cli-db-query-linked',
       source_project: projectId,
       scope:
-        'Transitive trigger and FK writes plus bound event-trigger state; unresolved effects are opaque.',
+        'Transitive trigger and FK writes plus bound event-trigger and rewrite-rule state; unresolved effects are opaque.',
       bootstrap_policy: 'all-captured-sources-opaque-until-independent-attestation',
       regenerate: 'node scripts/generate-trigger-fanout.mjs',
     },
     tables_scanned: tablesScanned,
     event_triggers: eventTriggers,
+    rules,
     opaque_on_tables: bootstrapOpaque,
     reachable_routines: Object.fromEntries(
       Object.entries(reachableRoutines).sort(([a], [b]) => a.localeCompare(b)),

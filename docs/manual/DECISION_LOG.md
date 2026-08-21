@@ -19,6 +19,9 @@ and old live-catalog evidence cannot prove what an apply will execute today.
 **What this forbids/implies:** never weaken the endpoint allowlist or apply with expired evidence;
 from the applying checkout, rerun `node scripts/refresh-applied-migrations.mjs` and
 `node scripts/generate-trigger-fanout.mjs` before the apply, then review both regenerated artifacts.
+Rewrite rules are executable persisted catalog state: the live capture and every earlier checked-in
+migration must seed their rule attachments into the candidate analysis, and a fired stored rule is
+refused until its action has a complete bounded-effect model.
 
 ---
 
