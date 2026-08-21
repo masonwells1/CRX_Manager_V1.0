@@ -147,7 +147,12 @@ command position, so read-only arguments that mention `npx`, `npm exec`, or
 `vite` remain ordinary data. Real package and file-backed execution still fails
 closed if the canonical remote cannot be verified; no mutable on-disk SHA cache
 is trusted. Output-target parsing also recognizes adjacent redirects and Bash's
-`>|` noclobber override before selecting the protected target.
+`>|` noclobber override before selecting the protected target. Because relative
+executor identity also depends on the effective directory, the shared Bash/MCP
+classifier denies file-backed or package execution after `cd`,
+`Set-Location`/`Push-Location`, a nested directory-changing shell body,
+or recognized wrapper/package working-directory options. A directory change
+followed only by a Git read remains allowed.
 Alias definitions and unknown commands
 targeting `Env:NODE_OPTIONS` fail closed, as do standalone CMD mutations.
 Recursively inspected CMD bodies fail closed

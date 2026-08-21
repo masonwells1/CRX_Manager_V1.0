@@ -2140,10 +2140,136 @@ function packageExecutionBoundaryReason(command, cwd, inspector) {
   return null;
 }
 
+function executionContextShiftReason(command, cwd, depth = 0) {
+  if (depth > 4) return "Blocked executor after an unresolved nested working-directory change.";
+  const tokens = tokenizeShellWords(command);
+  const base = cwd || process.cwd();
+  const hardBoundary = (token) => token?.control && /^(?:;|&|\||\n)$/.test(token.value);
+  const executableName = (token) => String(token?.value || "")
+    .replace(/^@/, "")
+    .split(/[\\/]/)
+    .pop()
+    .replace(/\.(?:exe|cmd|bat|ps1)$/i, "")
+    .toLowerCase();
+  const locationCommands = new Set([
+    "cd", "chdir", "set-location", "sl", "push-location", "pop-location", "pushd", "popd",
+  ]);
+  const transparentWrappers = new Set([
+    "command", "builtin", "env", "sudo", "doas", "exec", "nohup", "nice", "timeout",
+    "taskset", "ionice", "unshare", "setsid", "stdbuf", "wsl", "busybox", "toybox",
+    "find", "parallel", "start-process", "saps", "start",
+  ]);
+  const reviewedExecutors = new Set([
+    "node", "nodejs", "bun", "deno", "npm", "npx", "pnpm", "yarn", "corepack",
+    "python", "python2", "python3", "py", "perl", "ruby", "php",
+    "bash", "sh", "dash", "zsh", "ksh", "powershell", "pwsh", "cmd",
+  ]);
+  const localPackageBinary = (name) => Boolean(name)
+    && ["", ".cmd", ".ps1", ".exe"].some((extension) =>
+      existsSync(path.join(base, "node_modules", ".bin", name + extension))
+    );
+  const namesReviewedExecutor = (words, cursor) => {
+    const commandName = executableName(words[cursor]);
+    if (reviewedExecutors.has(commandName) || localPackageBinary(commandName)) return true;
+    if (!transparentWrappers.has(commandName)) return false;
+    return words.slice(cursor + 1).some((token) => {
+      if (token.sawQuoted && !token.sawUnquoted) return false;
+      const name = executableName(token);
+      return reviewedExecutors.has(name) || localPackageBinary(name);
+    });
+  };
+  const changesContextInsideSegment = (words, cursor) => {
+    const commandName = executableName(words[cursor]);
+    const optionValues = words.slice(cursor + 1)
+      .filter((token) => !(token.sawQuoted && !token.sawUnquoted))
+      .map((token) => token.value);
+    if (commandName === "env"
+      && optionValues.some((value) => /^(?:-C|--chdir)(?:=|$)/.test(value))) return true;
+    if (["sudo", "doas"].includes(commandName)
+      && optionValues.some((value) => /^(?:-D|--chdir)(?:=|$)/.test(value))) return true;
+    if (commandName === "wsl"
+      && optionValues.some((value) => /^--cd(?:=|$)/i.test(value))) return true;
+    if (commandName === "find"
+      && optionValues.some((value) => /^-(?:execdir|okdir)$/i.test(value))) return true;
+    if (commandName === "parallel"
+      && optionValues.some((value) => /^--(?:workdir|wd)(?:=|$)/i.test(value))) return true;
+    if (commandName === "npm"
+      && optionValues.some((value) => /^--prefix(?:=|$)/i.test(value))) return true;
+    if (commandName === "pnpm"
+      && optionValues.some((value) => /^(?:-c|--dir|--directory)(?:=|$)/i.test(value))) return true;
+    if (["yarn", "bun", "deno"].includes(commandName)
+      && optionValues.some((value) => /^--cwd(?:=|$)/i.test(value))) return true;
+    if (["powershell", "pwsh", "start-process", "saps"].includes(commandName)
+      && optionValues.some((value) => /^-(?:workingdirectory|wd)(?::|=|$)/i.test(value))) return true;
+    if (commandName === "start"
+      && optionValues.some((value) => /^\/D(?::|$)/.test(value))) return true;
+    return false;
+  };
+  const nestedBody = (words, cursor) => {
+    const commandName = executableName(words[cursor]);
+    const args = words.slice(cursor + 1);
+    if (["bash", "sh", "dash", "zsh", "ksh"].includes(commandName)) {
+      const optionIndex = args.findIndex((token) => /^-[a-z]*c[a-z]*$/i.test(token.value));
+      return optionIndex >= 0 ? args[optionIndex + 1]?.value || "" : "";
+    }
+    if (["powershell", "pwsh"].includes(commandName)) {
+      const optionIndex = args.findIndex((token) =>
+        /^(?:(?:--?|\/)c|(?:--?|\/)command(?:w(?:ithargs)?)?)(?::|=|$)/i.test(token.value)
+      );
+      if (optionIndex < 0) return "";
+      const attached = args[optionIndex].value.replace(
+        /^(?:(?:--?|\/)c|(?:--?|\/)command(?:w(?:ithargs)?)?)(?::|=)?/i,
+        ""
+      );
+      return attached || args[optionIndex + 1]?.value || "";
+    }
+    if (commandName === "cmd") {
+      const optionIndex = args.findIndex((token) => /^(?:\/[a-z](?::[a-z]+)?)*\/[ck]/i.test(token.value));
+      if (optionIndex < 0) return "";
+      const attached = args[optionIndex].value.replace(/^(?:\/[a-z](?::[a-z]+)?)*\/[ck]/i, "");
+      return attached || args[optionIndex + 1]?.value || "";
+    }
+    return "";
+  };
+
+  let contextShifted = false;
+  for (let start = 0; start < tokens.length;) {
+    while (start < tokens.length && hardBoundary(tokens[start])) start += 1;
+    let end = start;
+    while (end < tokens.length && !hardBoundary(tokens[end])) end += 1;
+    const words = tokens.slice(start, end).filter((token) => !token.control);
+    let cursor = 0;
+    while (/^[A-Za-z_]\w*\+?=/.test(words[cursor]?.value || "")) cursor += 1;
+    while (["command", "builtin"].includes(executableName(words[cursor]))) {
+      cursor += 1;
+      while (words[cursor]?.value?.startsWith("-")) cursor += 1;
+    }
+    const commandName = executableName(words[cursor]);
+    if (locationCommands.has(commandName)) {
+      contextShifted = true;
+      start = end + 1;
+      continue;
+    }
+    const shiftedHere = changesContextInsideSegment(words, cursor);
+    if ((contextShifted || shiftedHere) && namesReviewedExecutor(words, cursor)) {
+      return "Blocked file-backed or package executor after a working-directory change; the verified path could differ from the executed path.";
+    }
+    const body = nestedBody(words, cursor);
+    if (body) {
+      const nestedReason = executionContextShiftReason(body, base, depth + 1);
+      if (nestedReason) return nestedReason;
+    }
+    start = end + 1;
+  }
+  return null;
+}
+
 // The full command check used by both hooks: literal command text first, then
 // (only if clean) every `npm run X` target's resolved script body, recursively.
 // Returns the first matching reason, or null.
 export function checkCommandDeep(cmd, cwd, options = {}) {
+  const contextShift = executionContextShiftReason(cmd, cwd);
+  if (contextShift) return contextShift;
   const fileExecutorInspector = createReviewedExecutorInspector(cwd, options);
   const producerIntegrity = maintenanceProducerIntegrityReason(cmd, fileExecutorInspector);
   if (producerIntegrity) return producerIntegrity;

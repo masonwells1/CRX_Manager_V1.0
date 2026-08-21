@@ -458,6 +458,27 @@ for (const command of ["rg -n npx docs", "git log --grep npm --grep exec", "echo
   eq(r.status, 0, "DC read-only package-name argument exits 0: " + command);
   ok(!isDeny(r), "DC treats package-tool names in read-only arguments as data: " + command);
 }
+const reviewBootstrapRelative = ["scripts", ["write", "codex", "push", "proof.mjs"].join("-")].join("/");
+for (const command of [
+  "cd output && node " + reviewBootstrapRelative,
+  "Set-Location output; node " + reviewBootstrapRelative,
+  "Push-Location output; node " + reviewBootstrapRelative,
+  "env --chdir=output node " + reviewBootstrapRelative,
+  "sudo --chdir=output node " + reviewBootstrapRelative,
+  "wsl --cd output node " + reviewBootstrapRelative,
+  "pwsh -WorkingDirectory output -File " + reviewBootstrapRelative,
+  "Start-Process node -WorkingDirectory output -ArgumentList " + reviewBootstrapRelative,
+  ["fi", "nd"].join("") + " output " + ["-ex", "ecdir"].join("") + " node " + reviewBootstrapRelative + " {} ;",
+  "parallel --workdir output node " + reviewBootstrapRelative + " ::: one",
+  "npm --prefix output run build",
+]) {
+  r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command } });
+  eq(r.status, 0, "DC shifted-executor denial exits 0: " + command);
+  ok(isDeny(r), "DC denies an executor whose effective working directory differs from the verified root: " + command);
+}
+r = runHook({ tool_name: "mcp__Desktop_Commander__start_process", tool_input: { command: "cd output && git status --short" } });
+eq(r.status, 0, "DC directory-shifted Git read exits 0");
+ok(!isDeny(r), "DC allows a directory change followed only by a Git read");
 for (const target of [
   ["scripts/apply-live-testdata-maintenance-", "20260812.mjs"].join(""),
   ["scripts/apply-live-testdata-maintenance-", "2026081[2].mjs"].join(""),

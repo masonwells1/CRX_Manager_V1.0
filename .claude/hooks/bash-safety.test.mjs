@@ -329,6 +329,29 @@ for (const command of [
     eq(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo, reviewOptions), null, "a reviewed file-backed executor is allowed when HEAD is the reviewed main commit");
     eq(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo, reviewOptions), null, "a reviewed file-backed executor after -- is allowed on the reviewed main commit");
     eq(checkCommandDeep("npm run build", integrityRepo, reviewOptions), null, "a reviewed package script is allowed on authoritative main");
+    const shadowBootstrapPath = path.join(integrityRepo, "output", ...bootstrapRelative.split("/"));
+    mkdirSync(path.dirname(shadowBootstrapPath), { recursive: true });
+    writeFileSync(shadowBootstrapPath, "console.log('ignored shadow');\n");
+    for (const shiftedCommand of [
+      "cd output && node " + bootstrapRelative,
+      "Set-Location output; node " + bootstrapRelative,
+      "Push-Location output; node " + bootstrapRelative,
+      "env --chdir=output node " + bootstrapRelative,
+      "sudo --chdir=output node " + bootstrapRelative,
+      "wsl --cd output node " + bootstrapRelative,
+      "pwsh -WorkingDirectory output -File " + bootstrapRelative,
+      "Start-Process node -WorkingDirectory output -ArgumentList " + bootstrapRelative,
+      ["fi", "nd"].join("") + " output " + ["-ex", "ecdir"].join("") + " node " + bootstrapRelative + " {} ;",
+      "parallel --workdir output node " + bootstrapRelative + " ::: one",
+      "npm --prefix output run build",
+      "bash -c " + JSON.stringify("cd output && node " + bootstrapRelative),
+    ]) {
+      ok(checkCommandDeep(shiftedCommand, integrityRepo, reviewOptions)?.includes("working-directory change"), "a working-directory shift cannot redirect a reviewed executor to an ignored shadow: " + shiftedCommand);
+      const shiftedHookResult = runHook({ tool_name: "Bash", tool_input: { command: shiftedCommand } }, integrityRepo);
+      eq(shiftedHookResult.status, 0, "the Bash hook exits 0 after denying a shifted executor: " + shiftedCommand);
+      ok(shiftedHookResult.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies a shifted executor: " + shiftedCommand);
+    }
+    eq(checkCommandDeep("cd output && git status --short", integrityRepo, reviewOptions), null, "a directory change followed only by a Git read remains allowed");
     const opaquePackageRunner = ["n", "px vite"].join("");
     ok(checkCommandDeep(opaquePackageRunner, integrityRepo, reviewOptions)?.includes("opaque package execution"), "an opaque package resolver is denied even on authoritative main");
     const untrackedConfig = "vite.config.mjs";

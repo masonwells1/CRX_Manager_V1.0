@@ -163,6 +163,14 @@ All significant development milestones, in reverse chronological order.
   That lookup intentionally fails closed for a real file-backed/package executor
   when GitHub cannot be reached; it is not persisted in a mutable local cache,
   which would recreate the local trust-forgery boundary this change removes.
+  A final exact-SHA review found that path identity also depends on the shell's
+  effective directory: a preceding location change could verify the root script
+  but execute an ignored shadow below the new directory. The shared Bash/MCP
+  classifier now denies file-backed or package execution after `cd`,
+  `Set-Location`/`Push-Location`, nested command bodies, or a wrapper/package
+  working-directory option; location changes followed only by a Git read remain
+  allowed. Real-hook regressions create the ignored shadow and exercise POSIX,
+  PowerShell, nested-shell, wrapper-option, package-prefix, and MCP routes.
   Environment-provider and .NET `NODE_OPTIONS` mutations are denied even when
   no Node command appears in the same payload, closing staged mutations across
   persistent MCP shell interactions. Dynamic environment-provider targets fail
