@@ -602,6 +602,32 @@ eq(T(null), [], "a null body does not throw");
   eq([...comment.targets].length, 0, "round-31: a COMMENT's text writes nothing");
 }
 
+// -------- ROUND 59: escape-string routine bodies are opaque when invoked
+{
+  const escaped = applyTimeWriteTargets(
+    "CREATE FUNCTION public.round59_escape() RETURNS void LANGUAGE plpgsql AS " +
+    "E'BEGIN\\nUPD\\101TE public.order_items SET total_price = total_price;\\nEND'; " +
+    "SELECT public.round59_escape();",
+  );
+  ok(escaped.unresolved,
+    "round-59: an invoked E-string routine body fails closed instead of trusting raw escapes");
+
+  const unicode = applyTimeWriteTargets(
+    "CREATE FUNCTION public.round59_unicode() RETURNS void LANGUAGE plpgsql AS " +
+    "U&'BEGIN UPD\\0041TE public.order_items SET total_price = total_price; END'; " +
+    "SELECT public.round59_unicode();",
+  );
+  ok(unicode.unresolved,
+    "round-59: an invoked U&-string routine body fails closed instead of trusting Unicode escapes");
+
+  const definitionsOnly = applyTimeWriteTargets(
+    "CREATE FUNCTION public.round59_deferred_e() RETURNS void LANGUAGE plpgsql AS E'BEGIN NULL; END'; " +
+    "CREATE FUNCTION public.round59_deferred_u() RETURNS void LANGUAGE plpgsql AS U&'BEGIN NULL; END';",
+  );
+  ok(!definitionsOnly.unresolved,
+    "round-59 MUTANT: defining an escape-string routine without invoking it remains deferred");
+}
+
 // ------------------------------------- ROUND 33: rules and quoted routines
 {
   const quoted = applyTimeWriteTargets(

@@ -301,10 +301,23 @@ export function applyTimeCode(sql, depth = 0) {
 
     // 'string literal' — kept aside; `''` escapes an embedded quote.
     if (ch === "'") {
+      const escapePrefixed = i > 0 && /[eE]/.test(sql[i - 1]) &&
+        (i < 2 || !IDENT_CHAR.test(sql[i - 2]));
+      const unicodePrefixed = i > 1 && /[uU]/.test(sql[i - 2]) && sql[i - 1] === "&" &&
+        (i < 3 || !IDENT_CHAR.test(sql[i - 3]));
+      const unsafeRoutineLiteral = escapePrefixed || unicodePrefixed;
       let lit = "";
       i += 1;
       while (i < n) {
         if (sql[i] === "'" && sql[i + 1] === "'") { lit += "'"; i += 2; continue; }
+        if (escapePrefixed && sql[i] === "\\" && i + 1 < n) {
+          // Preserve the escape bytes only to locate the real closing quote.
+          // We deliberately do not decode PostgreSQL's octal/hex/Unicode
+          // semantics; an invoked routine using them is marked unresolved.
+          lit += sql.slice(i, i + 2);
+          i += 2;
+          continue;
+        }
         if (sql[i] === "'") { i += 1; break; }
         lit += sql[i];
         i += 1;
@@ -348,7 +361,11 @@ export function applyTimeCode(sql, depth = 0) {
             name: identity,
             code: inner.code,
             literals: inner.literals,
-            unresolved: inner.unsupportedDoBody,
+            // E'...' can spell UPDATE as UPD\101TE, and U&'...' has its own
+            // escape alphabet. Until those PostgreSQL grammars are decoded,
+            // their stored body is safe only while deferred; invocation must
+            // fail closed rather than trust the raw literal bytes.
+            unresolved: unsafeRoutineLiteral || inner.unsupportedDoBody,
             callableDefault: routineHasCallableParameterDefault(head),
             defaultCode: routineParameterDefaults(head).map((expression) => `SELECT ${expression}`).join(";\n"),
           });

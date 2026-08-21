@@ -1012,6 +1012,20 @@ function armAutopilot(stateDir, hoursFromNow) {
         r = apply(`20990601${String(50 + idx++).padStart(6, "0")}_r24`, sql);
         ok(isDeny(r) && isOneShotDeny(r), `round-24: ${label} → denied`);
       }
+
+      for (const [label, sql] of [
+        ["an E-string body whose octal escape spells UPDATE",
+         "CREATE FUNCTION public.tmp_escape_fix() RETURNS void LANGUAGE plpgsql AS " +
+         "E'BEGIN\\nUPD\\101TE public.orders SET total_profit = total_profit;\\nEND'; " +
+         "SELECT public.tmp_escape_fix();"],
+        ["a U&-string body whose Unicode escape spells UPDATE",
+         "CREATE FUNCTION public.tmp_unicode_fix() RETURNS void LANGUAGE plpgsql AS " +
+         "U&'BEGIN UPD\\0041TE public.orders SET total_profit = total_profit; END'; " +
+         "SELECT public.tmp_unicode_fix();"],
+      ]) {
+        r = apply(`20990601${String(56 + idx++).padStart(6, "0")}_r59`, sql);
+        ok(isDeny(r) && isOneShotDeny(r), `round-59: ${label} → denied`);
+      }
     }
 
     // …while the ordinary shape stays free. Every RPC migration in this

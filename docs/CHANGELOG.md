@@ -86,6 +86,9 @@ migration safety harness; no app source, migration SQL, live database, or produc
 - Parameter-default splitting now understands array brackets plus quoted and commented text. A
   callable expression after the comma in `DEFAULT ARRAY[1, money_fix()]` stays inside the invoked
   default instead of being mistaken for the next parameter and disappearing from analysis.
+- Escape- and Unicode-string routine bodies are now opaque when invoked. PostgreSQL can decode
+  `UPD\\101TE` or `UPD\\0041TE` into `UPDATE`; the apply guard refuses those `E'...'` / `U&'...'`
+  bodies instead of trusting their undecoded bytes, while definition-only migrations stay deferred.
 - Crossing the nested-body analysis depth now propagates explicit unresolved evidence instead of
   returning empty code. Resource limits are denial boundaries throughout the apply-time analyzer.
 - The Bash approved-set validator now treats functions and procedures as one routine graph,
@@ -156,7 +159,7 @@ migration safety harness; no app source, migration SQL, live database, or produc
 
 Focused proof: snapshot producer 22 assertions; applied-source containment pass (including forced
 worktree-enumeration failure); trigger fan-out producer 22 assertions; apply-time analyzer
-275 assertions; apply-time guard 321 assertions; approved-set validator 205 mutation cases;
+278 assertions; apply-time guard 323 assertions; approved-set validator 205 mutation cases;
 one-shot override writer 25 assertions.
 Each new edge has a removal mutant that
 survives only when the load-bearing protection is deliberately deleted.
