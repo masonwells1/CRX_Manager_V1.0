@@ -110,6 +110,7 @@ const shellBuiltinNodeOptionsCases = [
   `Set-Alias -Name mutate -Value Set-Item`,
   `Set-Alias -Name mutate Set-Item`,
   `Set-Alias -Name:mutate Set-Item`,
+  `Set-Alias mutate ([string]::Concat("Set-","Item")); mutate ([string]::Concat("Env:NO","DE_OPTIONS")) "--require=./preload.cjs"; npm --version`,
   `New-Alias mutate Set-Item`,
   `nal mutate si`,
   `mutate Env:NODE_OPTIONS '--require=./preload.cjs'`,

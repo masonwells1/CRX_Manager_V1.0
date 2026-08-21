@@ -97,6 +97,8 @@ All significant development milestones, in reverse chronological order.
   Mutation-capable PowerShell commands also fail closed when computed operands
   precede a Node-backed executable, covering grouped values and arbitrary
   method-call expressions in direct, nested shell, and MCP process routes.
+  PowerShell alias definitions likewise reject computed command targets, so a
+  dynamically assembled mutation alias cannot stage a computed preload path.
   Linux `taskset` affinity wrappers are traversed to their child command, so
   CPU pinning cannot hide a staged `NODE_OPTIONS` preload from Bash or MCP
   process guards.

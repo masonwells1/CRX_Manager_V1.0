@@ -442,6 +442,7 @@ const powerShellAliasGuardCases = [
   "New-Alias -N mutate -V Set-Item",
   "New-Alias -Val:Set-Item -Nam:mutate",
   "Set-Alias -Name mutate -Unknown Set-Item",
+  'Set-Alias mutate ([string]::Concat("Set-","Item")); mutate ([string]::Concat("Env:NO","DE_OPTIONS")) "--require=./preload.cjs"; npm --version',
 ];
 const powerShellComputedMutationGuardCases = [
   `Set-Item ("Env:NODE-XOPTIONS".Replace("-X","_")) ("--requXire=./preload.cjs".Replace("X","")); npm --version`,

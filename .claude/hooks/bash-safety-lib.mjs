@@ -855,6 +855,8 @@ function nodeOptionsAssignmentMentioned(command, depth = 0) {
     }
     if (unrecognizedParameter) return true;
     const aliasTarget = explicitValue || positionals[explicitName ? 0 : 1] || "";
+    if (!aliasTarget && ["(", "{"].includes(tokens[segmentEnd]?.value)) return true;
+    if (aliasTarget && !/^[@&]?(?:[A-Za-z]:)?[A-Za-z0-9_.:/\\-]+$/.test(aliasTarget)) return true;
     const targetBasename = aliasTarget.replace(/^[@&]/, "").split(/[\\/]/).pop().replace(/\.exe$/i, "").toLowerCase();
     return powerShellMutationCommands.has(targetBasename);
   });
