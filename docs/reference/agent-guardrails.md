@@ -63,7 +63,9 @@ verified migration history; invoking one follows its backing routine through the
 write analysis, and a database-resident backing routine fails closed. Routine definitions, calls,
 trigger attachments, operators, and casts retain canonical `schema.routine` identity, so a
 same-bare-name definition in another schema cannot suppress a resident call; unqualified calls fail
-closed unless resolution is independently proven. Custom casts are cataloged and
+closed unless resolution is independently proven. Whitespace around a schema separator is accepted,
+and trigger/rule attachments created inside an invoked routine join the graph before its writes and
+reads are fired. `USING` relations count as reads for stored SELECT rules. Custom casts are cataloged and
 followed the same way for `CAST(... AS type)` and `::type`; implicit/assignment casts and unresolved
 `WITH INOUT` dispatches deny because static analysis cannot prove their runtime routine effects.
 Ordinary stored-view definitions are cataloged too: selecting a same-file, nested, or older checked-in
@@ -83,6 +85,12 @@ or drop any enabled captured event-trigger routine. That second check binds the 
 schema/name/OID/body hash, including non-public schemas such as `extensions`. Executable
 `nextval(...)` / `setval(...)` and sequence/identity restart DDL are persistent mutations and fail
 closed; merely storing a sequence expression for later execution does not.
+Captured approval-set arrays also cannot be `FOR`/`FOREACH` loop targets; iteration writes the target
+and therefore invalidates the hashed population. Shared stem/project/reason validation keeps the
+override producer and guard aligned, including explicit 8- and 14-digit timestamp identities. The
+private linked workdir is removed after setup exceptions as well as after queries. Supabase CLI
+2.109.1 help and the successful 971-row production capture confirm that `db query` result envelopes
+use `--output-format json`; the similarly named `--output` flag formats status variables instead.
 
 **Landing helper (not a hook): `scripts/land-pr.mjs <n>`.** Companion to `pr-merge-guard.mjs`, added 2026-08-08 after PR #345 stalled overnight: branch protection requires the PR branch to be up to date with `main`, so a sibling merge flips a fully green PR to `mergeStateStatus=BEHIND` and auto-merge never fires — and every watcher that polls only checks misses it. The helper watches STATE, runs `gh pr update-branch` whenever the PR falls behind (re-running if main moves again), and exits 0 only on MERGED. It deliberately NEVER merges: merging stays with the gated `gh pr merge` (arming `--auto` for non-risky diffs; for risky diffs the helper waits for green/current and prints the proof-and-merge steps). Do not add a merge call to it — that would bypass the merge gate.
 
@@ -257,7 +265,7 @@ and the action list is walked FORWARDS from each `ALTER` — reading backwards f
 word `TYPE` fires on a column literally named `type`, which is a real false positive
 the round-29 tests caught. `SET`/`DROP NOT NULL`, `SET`/`DROP DEFAULT`, `ALTER
 CONSTRAINT` and `ADD COLUMN` stay silent, as does a retype of a table the migration
-itself created. Measured cost across all 882 migrations is zero: every one of the
+itself created. Measured cost across all 889 migrations is zero: every one of the
 thirteen `ALTER COLUMN` usages in the repository is a NOT NULL or DEFAULT change.
 
 **A routine runs wherever a statement runs it (round 30).** Both money guards were
@@ -284,7 +292,7 @@ view body, a policy predicate, a column `DEFAULT` — is still quiet, because st
 is not running. Reading operands reaches builtins no scan had touched before, so the
 PostgreSQL and PostGIS names the corpus actually calls from one are listed
 explicitly rather than by an `st_`/`pg_` prefix rule, which anyone could name
-themselves into. Measured over all 884 migrations, **one** file changes
+themselves into. Measured over all 889 migrations, **one** file changes
 classification and it is a genuine apply-time reach; it was already `unresolved`, so
 the cost is zero new prompts.
 
@@ -363,7 +371,7 @@ SQL, so a wrapper that merely `PERFORM`s a mutator was never indexed and a top-l
 call to it demanded no digest. The index now closes over the call graph — the awk
 pass emits `F`/`M`/`C` records and a downstream `node` step walks backwards from
 every known mutator, marking callers to any depth. The closure runs downstream on
-purpose: `find … | xargs` may split the 884-file list across several awk processes,
+purpose: `find … | xargs` may split the 889-file list across several awk processes,
 and a closure computed per batch would silently lose every edge whose two ends
 landed in different batches. It spreads out of KNOWN mutators only, so calling a
 helper that writes nothing protected stays free. Measured: 12 functions join the

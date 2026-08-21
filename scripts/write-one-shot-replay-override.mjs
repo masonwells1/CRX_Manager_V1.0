@@ -8,27 +8,28 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-
-const MIGRATION_STEM_RE = /^\d{8}(?:\d{6})?_[A-Za-z0-9][A-Za-z0-9_-]{0,180}$/;
-const PROJECT_REF_RE = /^[a-z0-9][a-z0-9_-]{0,62}$/;
+import {
+  validMigrationStem,
+  validProjectRef,
+  validRegistryReason,
+} from '../.claude/hooks/guard-input-validation.mjs';
 
 export function validateMigrationStem(value) {
-  if (typeof value !== 'string' || !MIGRATION_STEM_RE.test(value)) {
+  if (!validMigrationStem(value)) {
     throw new Error('migration must be a validated 8- or 14-digit timestamp stem');
   }
   return value;
 }
 
 export function validateProjectRef(value) {
-  if (typeof value !== 'string' || !PROJECT_REF_RE.test(value)) {
+  if (!validProjectRef(value)) {
     throw new Error('project must contain only lowercase ASCII letters, digits, underscores, or hyphens');
   }
   return value;
 }
 
-function validateRegistryReason(value) {
-  if (typeof value !== 'string' || value.length === 0 || value.length > 2000 ||
-      /[\u0000-\u001f\u007f]/.test(value)) {
+function requireRegistryReason(value) {
+  if (!validRegistryReason(value)) {
     throw new Error('one-shot registry contains an invalid metadata value');
   }
 }
@@ -63,7 +64,7 @@ export function readOneShotRegistry(projectDir) {
   const stems = new Set();
   for (const [stem, reason] of Object.entries(map)) {
     validateMigrationStem(stem);
-    validateRegistryReason(reason);
+    requireRegistryReason(reason);
     stems.add(stem);
   }
   return stems;

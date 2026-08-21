@@ -16,8 +16,8 @@ import {
 
 let pass = 0;
 const ok = (condition, message) => { assert.ok(condition, message); pass += 1; };
-const rejects = (fn, message) => {
-  assert.throws(fn, undefined, message);
+const rejects = (fn, expected, message) => {
+  assert.throws(fn, expected, message);
   pass += 1;
 };
 
@@ -40,15 +40,15 @@ try {
 
   ok(validateMigrationStem(stem) === stem, 'valid migration stem accepted');
   ok(validateProjectRef(project) === project, 'valid project ref accepted');
-  rejects(() => validateMigrationStem('../outside'), 'path traversal stem rejected');
-  rejects(() => validateMigrationStem("20990101000000_x');process.exit();//"), 'quote/code injection stem rejected');
-  rejects(() => validateMigrationStem('20990101000000_bad\nname'), 'control-character stem rejected');
-  rejects(() => validateProjectRef("x';process.exit()//"), 'quote/code injection project rejected');
-  rejects(() => validateProjectRef('project\nref'), 'control-character project rejected');
+  rejects(() => validateMigrationStem('../outside'), /validated 8- or 14-digit/, 'path traversal stem rejected');
+  rejects(() => validateMigrationStem("20990101000000_x');process.exit();//"), /validated 8- or 14-digit/, 'quote/code injection stem rejected');
+  rejects(() => validateMigrationStem('20990101000000_bad\nname'), /validated 8- or 14-digit/, 'control-character stem rejected');
+  rejects(() => validateProjectRef("x';process.exit()//"), /project must contain only/, 'quote/code injection project rejected');
+  rejects(() => validateProjectRef('project\nref'), /project must contain only/, 'control-character project rejected');
 
   const resolved = migrationPath(root, stem);
   ok(path.dirname(resolved) === path.resolve(migrationDir), 'migration resolves inside the migration directory');
-  rejects(() => migrationPath(root, '../../outside'), 'resolved path traversal is rejected');
+  rejects(() => migrationPath(root, '../../outside'), /validated 8- or 14-digit/, 'resolved path traversal is rejected');
 
   const registered = readOneShotRegistry(root);
   ok(registered.has(stem) && !JSON.stringify([...registered]).includes(promptText),
@@ -87,6 +87,7 @@ try {
   pass += 1;
   rejects(
     () => writeOverride({ projectDir: root, migration: stem, project, now }),
+    { code: 'EEXIST' },
     'existing authorization is never overwritten',
   );
 
@@ -104,10 +105,12 @@ try {
     { migration: stem, queryMigration: queryStem, project },
   );
   pass += 1;
-  rejects(() => parseArgs(['--migration', stem]), 'missing project argument rejected');
+  rejects(() => parseArgs(['--migration', stem]), /usage: write-one-shot-replay-override/, 'missing project argument rejected');
   rejects(() => parseArgs(['--migration', stem, '--project', project, '--project', project]),
+    /usage: write-one-shot-replay-override/,
     'duplicate argument rejected');
   rejects(() => parseArgs(['--migration', stem, '--project', project, '--unknown', 'x']),
+    /usage: write-one-shot-replay-override/,
     'unknown argument rejected');
   rejects(
     () => buildOverride({
@@ -117,15 +120,18 @@ try {
       project,
       now,
     }),
+    /query migration SQL is missing/,
     'query migration must resolve to an existing contained SQL file',
   );
 
   writeFileSync(registryPath, JSON.stringify({ one_shot: { '../escape': 'reason' } }));
-  rejects(() => readOneShotRegistry(root), 'registry traversal key rejected');
+  rejects(() => readOneShotRegistry(root), /validated 8- or 14-digit/, 'registry traversal key rejected');
   writeFileSync(registryPath, JSON.stringify({ one_shot: { [stem]: 'bad\u0000reason' } }));
-  rejects(() => readOneShotRegistry(root), 'registry control-character value rejected');
+  rejects(() => readOneShotRegistry(root), /invalid metadata value/, 'registry control-character value rejected');
+  writeFileSync(registryPath, JSON.stringify({ one_shot: { [stem]: '   ' } }));
+  rejects(() => readOneShotRegistry(root), /invalid metadata value/, 'registry whitespace-only value rejected');
   writeFileSync(registryPath, JSON.stringify({ one_shot: { [stem]: 42 } }));
-  rejects(() => readOneShotRegistry(root), 'non-string registry value rejected');
+  rejects(() => readOneShotRegistry(root), /invalid metadata value/, 'non-string registry value rejected');
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

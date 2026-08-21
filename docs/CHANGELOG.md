@@ -73,8 +73,9 @@ migration safety harness; no app source, migration SQL, live database, or produc
   including transitive wrappers, and refuses plain, escape, or Unicode single-quoted routine
   bodies that its write scanners cannot inspect. A `CALL` that receives the captured approval-set
   array is also treated as a possible `OUT`/`INOUT` write-back, so a procedure cannot replace the
-  hashed ids with an unapproved same-length set before the protected write. Its 200-case mutation
-  suite and the 252-assertion
+  hashed ids with an unapproved same-length set before the protected write. `FOR` and `FOREACH`
+  loop targets now count as assignments too, so a loop cannot replace the captured array after the
+  digest. Its 205-case mutation suite and the 260-assertion
   apply-time analyzer suite are both wired into a required CI step.
 - Non-ASCII PostgreSQL routine identities now fail closed through one shared analyzer boundary.
   A valid define/call/drop sequence such as `public.修復()` can no longer be truncated out of the
@@ -115,10 +116,28 @@ migration safety harness; no app source, migration SQL, live database, or produc
   `schema.routine` identity. A harmless `scratch.repair_money()` can no longer make an unknown
   `public.repair_money()` look defined; unqualified calls remain unresolved unless resolution is
   independently proven.
+- Routine-definition capture accepts PostgreSQL whitespace around schema separators, and an invoked
+  routine that creates a trigger or rule contributes those attachments to the same apply-time graph.
+  Reads named by `DELETE ... USING` or `MERGE ... USING` can therefore fire stored SELECT rules.
+- The CI self-exemption check now uses `set -euo pipefail`, so either Git diff failing is a hard
+  failure rather than an empty touched-file set. Migration stem, project-ref, and registry-reason
+  validation is shared by the replay-override producer and apply guard; 8- and 14-digit stems both
+  retain a nonempty ledger identity.
+- Private linked-read setup cleans its temporary metadata directory after any mkdir/copy/write
+  exception. The `--output-format json` result-envelope contract was rechecked against Supabase CLI
+  2.109.1 help and a successful 971-row live read-only capture; `--output` is the unrelated status-
+  variable formatter.
+- RPC contract tests now lex quoted identifiers, Unicode dollar tags, tag-shaped identifier bytes,
+  and comment-like text through one PostgreSQL-aware scanner. The draw-down wrapper assertion parses
+  only the private call's balanced argument list and a mutation proves removing the forwarded
+  idempotency key fails.
+- Legal PL/pgSQL `ELSEIF` now follows the same evaluated-condition path as `ELSIF`. A temporary
+  helper invoked from either spelling can no longer rewrite registered money rows and disappear
+  behind a subsequent `DROP FUNCTION`; analyzer and apply-guard mutants cover both spellings.
 
-Focused proof: snapshot producer 19 assertions; applied-source containment pass (including forced
+Focused proof: snapshot producer 20 assertions; applied-source containment pass (including forced
 worktree-enumeration failure); trigger fan-out producer 22 assertions; apply-time analyzer
-252 assertions; apply-time guard 310 assertions; approved-set validator 200 mutation cases;
+260 assertions; apply-time guard 315 assertions; approved-set validator 201 mutation cases;
 one-shot override writer 24 assertions.
 Each new edge has a removal mutant that
 survives only when the load-bearing protection is deliberately deleted.

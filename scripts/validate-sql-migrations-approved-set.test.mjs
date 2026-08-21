@@ -1927,6 +1927,35 @@ const CASES = [
       `\n`,
   },
 
+  {
+    name: 'GET STACKED DIAGNOSTICS overwrites the compared digest after it is computed',
+    expect: 'violation',
+    mustReport: 'Assign the compared variable exactly once',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\n` +
+      goodSetBlock().replace(
+        `  IF actual IS DISTINCT FROM '${HEX}' THEN`,
+        `  BEGIN\n    RAISE EXCEPTION '%', repeat('a', 64);\n` +
+          `  EXCEPTION WHEN OTHERS THEN\n` +
+          `    GET STACKED DIAGNOSTICS actual = MESSAGE_TEXT;\n  END;\n` +
+          `  IF actual IS DISTINCT FROM '${HEX}' THEN`,
+      ) +
+      `\n`,
+  },
+  {
+    name: 'GET CURRENT DIAGNOSTICS overwrites the compared digest after it is computed',
+    expect: 'violation',
+    mustReport: 'Assign the compared variable exactly once',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\n` +
+      goodSetBlock().replace(
+        `  IF actual IS DISTINCT FROM '${HEX}' THEN`,
+        `  GET CURRENT DIAGNOSTICS actual = PG_CONTEXT;\n` +
+          `  IF actual IS DISTINCT FROM '${HEX}' THEN`,
+      ) +
+      `\n`,
+  },
+
   // ── round 19, F3: an abort that can never run ────────────────────────────
   // Both fail-closed checks walked physical lines, giving each line one depth.
   // A line that opened an IF and closed it again therefore changed nothing, so
@@ -1954,6 +1983,33 @@ const CASES = [
       goodSetBlock().replace(
         `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n`,
         `    IF false THEN RAISE EXCEPTION 'count'; END IF;\n`,
+      ) +
+      `\n`,
+  },
+
+  {
+    name: 'the digest mismatch RAISE is swallowed by a nested exception handler',
+    expect: 'violation',
+    mustReport: 'does not RAISE EXCEPTION inside its own IF block',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\n` +
+      goodSetBlock().replace(
+        `    RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n`,
+        `    BEGIN\n      RAISE EXCEPTION 'APPROVED_SET_DRIFTED: %', actual;\n` +
+          `    EXCEPTION WHEN OTHERS THEN NULL;\n    END;\n`,
+      ) +
+      `\n`,
+  },
+  {
+    name: 'the row-count RAISE is swallowed by a nested exception handler',
+    expect: 'violation',
+    mustReport: 'row count is never asserted against the approved set',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\n` +
+      goodSetBlock().replace(
+        `    RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n`,
+        `    BEGIN\n      RAISE EXCEPTION 'APPROVED_SET_COUNT: %', n;\n` +
+          `    EXCEPTION WHEN OTHERS THEN NULL;\n    END;\n`,
       ) +
       `\n`,
   },
@@ -2321,6 +2377,20 @@ const CASES = [
     expect: 'violation',
     mustReport: 'view_select_replay_bridge',
     sql: `SELECT * FROM public.replay_bridge;\n`,
+  },
+  {
+    name: 'round-55: FOREACH cannot replace the captured proof-variable population',
+    expect: 'violation',
+    mustReport: 'assigned or passed to a possibly OUT/INOUT procedure',
+    sql:
+      `-- APPROVED_SET_DIGEST: ${HEX}\n` +
+      goodSetBlock().replace(
+        `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);`,
+        `  FOREACH v_ids SLICE 1 IN ARRAY ARRAY[ARRAY['00000000-0000-0000-0000-000000000001'::uuid]] LOOP\n` +
+          `    EXIT;\n  END LOOP;\n` +
+          `  UPDATE public.orders SET total_profit = 0 WHERE id = ANY(v_ids);`,
+      ) +
+      `\n`,
   },
 ];
 

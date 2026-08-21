@@ -554,6 +554,18 @@ action even though the migration writes neither that relation nor the protected 
 the action. Both replay guards therefore track the rule event and fail closed when executable SQL
 reads the attached relation; creating the rule without reading it remains deferred.
 
+**2026-08-20 final-head follow-up.** PostgreSQL whitespace around a routine schema separator does
+not change identity, and trigger/rule DDL inside an invoked routine executes at apply time. The
+analyzer therefore accepts `public . routine`, folds attachments created by invoked bodies, and
+treats relations following `USING` as reads for rule firing. Approval-set variables may not be
+targets of `FOR` or `FOREACH`; loop iteration is assignment just like `INTO`, `:=`, or an OUT/INOUT
+`CALL`. Evidence-input validation is shared by the producer and consumer, and 8- or 14-digit
+migration stems always yield an explicit timestamp identity rather than an empty-string fallback.
+Private linked-read setup is cleaned on every setup exception. The result-envelope flag was
+verified against Supabase CLI 2.109.1 (`db query --help`) and by a successful 971-row read-only
+production capture: `--output-format json` is correct, while `--output` formats status variables.
+The CI exemption step uses `set -euo pipefail`, so a Git diff error cannot become an empty success.
+
 ---
 
 ## 2026-08-13 — Literal SQL is read as SQL, and a column type change is a whole-table rewrite

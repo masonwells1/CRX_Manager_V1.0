@@ -2906,7 +2906,8 @@ $cascade_row"
                   # is a constant the author typed. The comparison then passes
                   # no matter how far the population drifted.
                   if (s ~ ("into[ \t]+(strict[ \t]+)?" var "([^a-z0-9_]|$)") ||
-                      s ~ ("(^|[^a-z0-9_])" var "[ \t]*:=")) nassign++
+                      s ~ ("(^|[^a-z0-9_])" var "[ \t]*:=") ||
+                      s ~ ("get[ \t]+((current|stacked)[ \t]+)?diagnostics[ \t]+([^;]*,[ \t]*)?" var "[ \t]*:?=")) nassign++
                   if (s !~ /(md5|sha224|sha256|sha384|sha512|digest|encode)[ \t]*\(/) continue
                   if (s !~ ("into[ \t]+(strict[ \t]+)?" var "([^a-z0-9_]|$)") &&
                       s !~ (var "[ \t]*:=")) continue
@@ -3141,6 +3142,10 @@ $cascade_row"
                 #
                 # The branch falls straight through to the write. A LOOP or CASE
                 # opened inside the branch must now close before a RAISE counts.
+                # A nested BEGIN is equally unsafe: its EXCEPTION handler can
+                # swallow the RAISE and let the protected write continue. The
+                # accepted abort therefore has to be directly in the mismatch
+                # arm, outside every nested procedural block.
                 # A CASE *expression* ends with a bare END rather than END CASE,
                 # so one in this branch leaves the nesting open and the migration
                 # is reported: a false alarm, not a hole, and this branch is a
@@ -3151,6 +3156,11 @@ $cascade_row"
                   continue
                 }
                 if (w[i] == "loop" || w[i] == "case") { nested++; continue }
+                if (w[i] == "begin") { nested++; continue }
+                if (w[i] == "end" && w[i + 1] != "if" && w[i + 1] != "loop" && w[i + 1] != "case") {
+                  if (nested > 0) nested--
+                  continue
+                }
                 if (w[i] == "end" && w[i + 1] == "if") {
                   depth--
                   if (depth <= 0) exit
@@ -3313,6 +3323,7 @@ $cascade_row"
                 for (i = 1; i <= m; i++) {
                   s = at[i]
                   callarg = 0
+                  looptarget = 0
                   if (match(s, /(^|[^a-z0-9_])call([^a-z0-9_]|$)/)) {
                     # Inspect only text after the procedure identity and its
                     # opening parenthesis. Otherwise `CALL v_ids(1)` mistakes
@@ -3322,9 +3333,15 @@ $cascade_row"
                     if (callopen > 0 && substr(calltail, callopen + 1) ~ ("(^|[^a-z0-9_])" var "([^a-z0-9_]|$)"))
                       callarg = 1
                   }
+                  # FOR and FOREACH assign into their loop target on every
+                  # iteration. That write-back can replace a captured proof
+                  # variable without spelling INTO, :=, =, or CALL.
+                  if (s ~ ("(^|[^a-z0-9_])foreach[ \t]+" var "([^a-z0-9_]|$)") ||
+                      s ~ ("(^|[^a-z0-9_])for[ \t]+" var "([^a-z0-9_]|$)"))
+                    looptarget = 1
                   if (s ~ ("into[ \t]+(strict[ \t]+)?" var "([^a-z0-9_]|$)") ||
                       s ~ (var "[ \t]*(\\[[^=]*\\][ \t]*)*:=") ||
-                      callarg)
+                      callarg || looptarget)
                     assigns++
                 }
                 if (assigns > 1) { print "reassigned\t" assigns; exit }
@@ -3448,8 +3465,10 @@ $cascade_row"
               #
               # The mismatch arm is entered and nothing happens — the same shape
               # round 19 closed for `IF false THEN RAISE`, rebuilt out of a loop.
-              # So LOOP and CASE count as nesting too, and the RAISE has to sit
-              # outside all of it. A CASE *expression* closes with a bare END
+              # So LOOP, CASE, and nested BEGIN blocks count as nesting too,
+              # and the RAISE has to sit outside all of it. A nested BEGIN can
+              # catch its own RAISE in an EXCEPTION handler and continue. A
+              # CASE *expression* closes with a bare END
               # rather than END CASE, so one in this branch leaves the nesting
               # open and the migration is reported: a false alarm, not a hole,
               # and this branch is a single RAISE in every real repair.
@@ -3471,6 +3490,11 @@ $cascade_row"
                     continue
                   }
                   if (w[k] == "loop" || w[k] == "case") { nested++; continue }
+                  if (w[k] == "begin") { nested++; continue }
+                  if (w[k] == "end" && w[k + 1] != "if" && w[k + 1] != "loop" && w[k + 1] != "case") {
+                    if (nested > 0) nested--
+                    continue
+                  }
                   if (w[k] == "end" && w[k + 1] == "if") {
                     depth--
                     if (depth <= 0) return 0
@@ -3485,14 +3509,14 @@ $cascade_row"
                 return 0
               }
               # How many times is `v` assigned before line `stop`? Every form
-              # counts: the GET DIAGNOSTICS that measures it, a plain `:=`, and
-              # a SELECT ... INTO. Each match is blanked as it is counted so the
-              # `v :=` inside a GET DIAGNOSTICS is not counted twice.
+              # counts: every CURRENT/STACKED diagnostics target, a plain `:=`,
+              # and a SELECT ... INTO. Each diagnostics prefix is blanked as it
+              # is counted so its target is not counted again as plain syntax.
               function assign_count(v, stop,   j, c, na) {
                 na = 0
                 for (j = 1; j < stop; j++) {
                   c = ln[j]
-                  na += gsub(("get[ \t]+diagnostics[ \t]+(strict[ \t]+)?" v "[ \t]*:?=[ \t]*row_count"), " @ ", c)
+                  na += gsub(("get[ \t]+((current|stacked)[ \t]+)?diagnostics[ \t]+([^;]*,[ \t]*)?" v "[ \t]*:?=[^,;]*"), " @ ", c)
                   na += gsub(("(^|[^a-z0-9_])" v "[ \t]*:="), " @ ", c)
                   na += gsub(("into[ \t]+(strict[ \t]+)?" v "([^a-z0-9_]|$)"), " @ ", c)
                 }

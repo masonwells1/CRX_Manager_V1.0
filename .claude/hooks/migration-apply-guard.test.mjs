@@ -13,6 +13,7 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync, existsSync
 import os from "node:os";
 import path from "node:path";
 import { destructiveMigrationCheck } from "./live-testdata-lib.mjs";
+import { appliedLedgerHas, migrationTimestampPrefix } from "./guard-input-validation.mjs";
 import { writeOverride as writeReplayOverride } from "../../scripts/write-one-shot-replay-override.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -25,6 +26,21 @@ FANOUT_FIXTURE.fanout = {};
 let pass = 0;
 function ok(c, m) { assert.ok(c, m); pass++; }
 function eq(a, b, m) { assert.equal(a, b, m); pass++; }
+
+eq(migrationTimestampPrefix("20260207_gap_analysis_fixes"), "20260207",
+  "8-digit migration stems retain a real ledger identity");
+eq(migrationTimestampPrefix("20260821000000_guard_repair"), "20260821000000",
+  "14-digit migration stems retain their exact ledger identity");
+eq(migrationTimestampPrefix("invalid"), null,
+  "invalid stems never collapse into an empty-string ledger match");
+ok(appliedLedgerHas("20260821000000_guard_repair", ["20260821000000_guard_repair"]),
+  "a complete 14-digit stem is recognized in the applied ledger");
+ok(appliedLedgerHas("20260810_guard_repair", ["20260821000000_20260810_guard_repair"]),
+  "a complete 8-digit stem is recognized as a canonical ledger suffix");
+eq(appliedLedgerHas("20260810_guard_repair", ["20260810000000_other_repair"]), false,
+  "an 8-digit timestamp alone is never treated as migration identity");
+eq(appliedLedgerHas("20260821000000_guard_repair", ["prefix_20260821000000_guard_repair_suffix"]), false,
+  "an embedded stem without a ledger boundary is not treated as applied");
 
 // ── pure classifier: what counts as apply-time destruction ──────────────────
 ok(destructiveMigrationCheck("DROP TABLE customers;").destructive, "DROP TABLE is destructive");
@@ -804,6 +820,20 @@ function armAutopilot(stateDir, hoursFromNow) {
       "SELECT search_path_money();");
     ok(isDeny(r) && isOneShotDeny(r),
       "round-54: an unqualified call stays unresolved without proven search_path binding");
+
+    // ROUND 56. PostgreSQL accepts ELSEIF as an alias for ELSIF. Both spellings
+    // evaluate the condition, so a helper invoked there must contribute its
+    // protected write before the helper is dropped again.
+    for (const [idx, keyword] of ["ELSIF", "ELSEIF"].entries()) {
+      const helper = `conditional_money_${keyword.toLowerCase()}`;
+      r = apply(`2099060100005${6 + idx}_${keyword.toLowerCase()}_condition`,
+        `CREATE FUNCTION public.${helper}() RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN ` +
+        "UPDATE public.orders SET total_profit = 222 WHERE id = 999; RETURN false; END $$; " +
+        `DO $$ BEGIN IF false THEN NULL; ${keyword} public.${helper}() THEN NULL; END IF; END $$; ` +
+        `DROP FUNCTION public.${helper}();`);
+      ok(isDeny(r) && isOneShotDeny(r),
+        `round-56: ${keyword} condition dispatch reaches the registered money table`);
+    }
 
     // ROUND 31. The review asked for parenthesized predicates to be canonicalized
     // before the text comparison — `WHERE (id = 2)` reads differently from
@@ -2000,6 +2030,11 @@ function armAutopilot(stateDir, hoursFromNow) {
     ok(isDeny(r) && r.stdout.includes("failed strict parsing or validation") &&
       !r.stdout.includes("bad\ncontrol"),
     "round-52: control characters in registry metadata fail strict validation");
+
+    writeOneShotRegistry(tmp, { [STEM]: "   " });
+    r = apply("20990601000052_registry_blank_reason", BENIGN_SQL);
+    ok(isDeny(r) && r.stdout.includes("failed strict parsing or validation"),
+    "round-52: whitespace-only registry metadata fails strict validation");
 
     writeOneShotRegistry(tmp, { [STEM]: promptInjection });
     r = apply(STEM, ONE_SHOT_SQL);

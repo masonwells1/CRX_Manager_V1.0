@@ -52,6 +52,7 @@ const IDENT_CHAR = /[A-Za-z0-9_$\u0080-\uFFFF]/;
 // Keeping one shared predicate for dollar- and single-quoted forms prevents the
 // two legal body syntaxes from drifting apart.
 const ROUTINE_CREATE_HEAD = /^create\s+(?:or\s+replace\s+)?(?:function|procedure)\b/;
+const ROUTINE_NAME_CAPTURE = /\b(?:function|procedure)\s+((?:[A-Za-z0-9_]+\s*\.\s*)*[A-Za-z0-9_]+)/;
 
 // PostgreSQL quoted identifiers can legally contain comment markers, spaces,
 // punctuation, and doubled quotes. Feeding their raw contents back into the
@@ -176,7 +177,7 @@ export function applyTimeCode(sql, depth = 0) {
           // parsed now and filed under the routine's name so the caller can fold
           // it back in if this migration invokes it (round 24).
           code += " '' ";
-          const named = /\b(?:function|procedure)\s+([A-Za-z0-9_.]+)/.exec(stmt);
+          const named = ROUTINE_NAME_CAPTURE.exec(stmt);
           const identity = canonicalRoutineIdentity(named?.[1]);
           if (identity) routines.push({
             name: identity,
@@ -245,7 +246,7 @@ export function applyTimeCode(sql, depth = 0) {
         continue;
       }
       if (ROUTINE_CREATE_HEAD.test(head)) {
-        const named = /\b(?:function|procedure)\s+([A-Za-z0-9_.]+)/.exec(head);
+        const named = ROUTINE_NAME_CAPTURE.exec(head);
         const identity = canonicalRoutineIdentity(named?.[1]);
         if (identity) {
           const inner = applyTimeCode(lit, depth + 1);
@@ -952,7 +953,7 @@ const CONTROL_INTRO = /\b(?:then|else|loop|\bin)\s+/g;
 // migration applies. Definitions still return above without reaching this
 // branch, so stored CHECK/policy/view/default expressions remain quiet.
 const PLPGSQL_EVALUATED_EXPRESSION =
-  /^(?:if|elsif|while|case|for|foreach|assert|raise|return(?:\s+(?:next|query))?|exit\s+when|continue\s+when)\b|^[a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)?(?:\[[^\]]+\])?\s*(?::=|=(?!=))|^[a-z_][a-z0-9_]*\s+(?:constant\s+)?[a-z_][a-z0-9_.]*(?:(?:%type|%rowtype)|\s*\([^)]*\)|\s*\[\])*(?:\s+not\s+null)?\s*(?::=|default\b)/;
+  /^(?:if|elsif|elseif|while|case|for|foreach|assert|raise|return(?:\s+(?:next|query))?|exit\s+when|continue\s+when)\b|^[a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)?(?:\[[^\]]+\])?\s*(?::=|=(?!=))|^[a-z_][a-z0-9_]*\s+(?:constant\s+)?[a-z_][a-z0-9_.]*(?:(?:%type|%rowtype)|\s*\([^)]*\)|\s*\[\])*(?:\s+not\s+null)?\s*(?::=|default\b)/;
 
 function runForEffectRegion(stmt) {
   // PERFORM and CALL exist only as statement verbs, so wherever they appear in
@@ -1207,7 +1208,7 @@ function invokedRelations(code) {
   for (const statement of String(code || "").split(";")) {
     const region = runForEffectRegion(statement.trim().toLowerCase().replace(/"/g, ""));
     if (!region) continue;
-    const relation = /\b(?:from|join|table)\s+(?:only\s+)?(?:[a-z_][a-z0-9_$]*\s*\.\s*)?([a-z_][a-z0-9_$]*)\b/g;
+    const relation = /\b(?:from|join|using|table)\s+(?:only\s+)?(?:[a-z_][a-z0-9_$]*\s*\.\s*)?([a-z_][a-z0-9_$]*)\b/g;
     let match;
     while ((match = relation.exec(region)) !== null) found.add(match[1]);
   }
@@ -1666,6 +1667,10 @@ export function applyTimeWriteTargets(
         defineOperators(operatorDefinitions(r.code));
         defineCasts(castDefinitions(r.code));
         defineViews(viewDefinitions(r.code));
+        // DDL inside an invoked routine executes now just like literal dynamic
+        // SQL. Preserve its trigger/rule graph edges before firing attachments.
+        attachments.push(...triggerAttachments(r.code));
+        rules.push(...ruleAttachments(r.code));
         for (const n of invokedRoutines(r.code.toLowerCase(), new Set(byName.keys()))) {
           if (!seen.has(n)) next.add(n);
         }
