@@ -69,13 +69,19 @@ migration safety harness; no app source, migration SQL, live database, or produc
   `pg_catalog.round(...)` and `auth.uid()` identities remain trusted. Quoted lowercase routine
   names now coalesce with PostgreSQL's unquoted identity, so defining `public."round"(...)` and
   invoking `round(...)` cannot hide a same-file mutator.
+- Invoking a routine with a callable parameter default now fails closed. PostgreSQL evaluates an
+  omitted-argument default at call time, so same-file or database-resident money writers can no
+  longer hide in a deferred function header. Defining the routine without calling it remains
+  deferred, and constant defaults remain statically analyzable.
+- Crossing the nested-body analysis depth now propagates explicit unresolved evidence instead of
+  returning empty code. Resource limits are denial boundaries throughout the apply-time analyzer.
 - The Bash approved-set validator now treats functions and procedures as one routine graph,
   including transitive wrappers, and refuses plain, escape, or Unicode single-quoted routine
   bodies that its write scanners cannot inspect. A `CALL` that receives the captured approval-set
   array is also treated as a possible `OUT`/`INOUT` write-back, so a procedure cannot replace the
   hashed ids with an unapproved same-length set before the protected write. `FOR` and `FOREACH`
   loop targets now count as assignments too, so a loop cannot replace the captured array after the
-  digest. Its 205-case mutation suite and the 260-assertion
+  digest. Its 205-case mutation suite and the 267-assertion
   apply-time analyzer suite are both wired into a required CI step.
 - Non-ASCII PostgreSQL routine identities now fail closed through one shared analyzer boundary.
   A valid define/call/drop sequence such as `public.修復()` can no longer be truncated out of the

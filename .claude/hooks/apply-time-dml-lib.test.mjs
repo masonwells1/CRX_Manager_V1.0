@@ -1358,4 +1358,56 @@ eq(T(null), [], "a null body does not throw");
     'round-55: DELETE or MERGE USING reads can fire standing SELECT rules');
 }
 
+// ---------------- ROUND 56: invoked defaults and recursion caps fail closed
+{
+  const sameFileDefault = applyTimeWriteTargets(
+    'CREATE FUNCTION public.default_money_fix() RETURNS integer LANGUAGE plpgsql AS $$ BEGIN ' +
+    'UPDATE public.order_items SET profit = profit; RETURN 1; END $$; ' +
+    'CREATE FUNCTION public.default_wrapper(p integer DEFAULT public.default_money_fix()) ' +
+    'RETURNS integer LANGUAGE sql AS $$ SELECT p $$; SELECT public.default_wrapper();',
+  );
+  ok(sameFileDefault.unresolved,
+    'round-56: invoking a routine with a same-file callable default fails closed');
+
+  const residentDefault = applyTimeWriteTargets(
+    'CREATE FUNCTION public.resident_default_wrapper(' +
+    'p integer DEFAULT public.resident_money_fix()) RETURNS integer LANGUAGE sql AS $$ ' +
+    'SELECT p $$; SELECT public.resident_default_wrapper();',
+  );
+  ok(residentDefault.unresolved,
+    'round-56: invoking a routine with a database-resident callable default fails closed');
+
+  const equalsDefault = applyTimeWriteTargets(
+    'CREATE FUNCTION public.equals_default_wrapper(' +
+    'p integer = public.resident_money_fix()) RETURNS integer LANGUAGE sql AS $$ ' +
+    'SELECT p $$; SELECT public.equals_default_wrapper();',
+  );
+  ok(equalsDefault.unresolved,
+    'round-56: PostgreSQL equals-syntax callable defaults also fail closed');
+
+  const definitionOnly = applyTimeWriteTargets(
+    'CREATE FUNCTION public.deferred_default_wrapper(' +
+    'p integer DEFAULT public.resident_money_fix()) RETURNS integer LANGUAGE sql AS $$ SELECT p $$;',
+  );
+  ok(!definitionOnly.unresolved,
+    'round-56 MUTANT: defining but not invoking a callable default remains deferred');
+
+  const constantDefault = applyTimeWriteTargets(
+    'CREATE FUNCTION public.constant_default_wrapper(p integer DEFAULT 1) ' +
+    'RETURNS integer LANGUAGE sql AS $$ SELECT p $$; SELECT public.constant_default_wrapper();',
+  );
+  ok(!constantDefault.unresolved,
+    'round-56 MUTANT: an invoked constant default remains statically analyzable');
+
+  eq(applyTimeCode('SELECT 1;', 9).unsupportedDoBody, true,
+    'round-56: crossing the nested-body cap returns explicit unresolved evidence');
+
+  let nestedBody = 'SELECT 1;';
+  for (let depth = 0; depth < 10; depth += 1) {
+    nestedBody = `DO $d${depth}$ BEGIN ${nestedBody} END $d${depth}$;`;
+  }
+  ok(applyTimeWriteTargets(nestedBody).unresolved,
+    'round-56: nested-body cap evidence propagates to the final apply-time result');
+}
+
 console.log(`apply-time-dml-lib: ${pass} assertions passed`);

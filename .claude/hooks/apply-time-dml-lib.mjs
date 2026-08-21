@@ -54,6 +54,49 @@ const IDENT_CHAR = /[A-Za-z0-9_$\u0080-\uFFFF]/;
 const ROUTINE_CREATE_HEAD = /^create\s+(?:or\s+replace\s+)?(?:function|procedure)\b/;
 const ROUTINE_NAME_CAPTURE = /\b(?:function|procedure)\s+((?:[A-Za-z0-9_]+\s*\.\s*)*[A-Za-z0-9_]+)/;
 
+function routineHasCallableParameterDefault(statement) {
+  const named = ROUTINE_NAME_CAPTURE.exec(statement);
+  if (!named) return false;
+  const open = statement.indexOf("(", named.index + named[0].length);
+  if (open < 0) return false;
+
+  const parameters = [];
+  let start = open + 1;
+  let depth = 0;
+  for (let i = start; i < statement.length; i += 1) {
+    const ch = statement[i];
+    if (ch === "(") { depth += 1; continue; }
+    if (ch === ")") {
+      if (depth === 0) { parameters.push(statement.slice(start, i)); break; }
+      depth -= 1;
+      continue;
+    }
+    if (ch === "," && depth === 0) {
+      parameters.push(statement.slice(start, i));
+      start = i + 1;
+    }
+  }
+
+  const call = /(?:^|[^A-Za-z0-9_$\u0080-\uFFFF])(?:[A-Za-z_\u0080-\uFFFF][A-Za-z0-9_$\u0080-\uFFFF]*\s*\.\s*)*[A-Za-z_\u0080-\uFFFF][A-Za-z0-9_$\u0080-\uFFFF]*\s*\(/;
+  return parameters.some((parameter) => {
+    const keyword = /\bdefault\b/.exec(parameter);
+    if (keyword) return call.test(parameter.slice(keyword.index + keyword[0].length));
+
+    let nested = 0;
+    for (let i = 0; i < parameter.length; i += 1) {
+      const ch = parameter[i];
+      if (ch === "(") { nested += 1; continue; }
+      if (ch === ")") { nested = Math.max(0, nested - 1); continue; }
+      if (ch !== "=" || nested !== 0) continue;
+      const before = parameter[i - 1] || "";
+      const after = parameter[i + 1] || "";
+      if ("<>!:".includes(before) || "=>".includes(after)) continue;
+      return call.test(parameter.slice(i + 1));
+    }
+    return false;
+  });
+}
+
 // PostgreSQL quoted identifiers can legally contain comment markers, spaces,
 // punctuation, and doubled quotes. Feeding their raw contents back into the
 // syntax stream turns public."--now" into a line comment and erases both the
@@ -121,9 +164,14 @@ export function applyTimeCode(sql, depth = 0) {
   const literals = [];
   const routines = [];
   let unsupportedDoBody = false;
-  // Guard against a pathological nest; 8 is far past anything real.
-  if (typeof sql !== "string" || depth > 8) {
+  if (typeof sql !== "string") {
     return { code, literals, routines, unsupportedDoBody };
+  }
+  // Guard against a pathological nest; 8 is far past anything real. This is a
+  // denial boundary, never a silent truncation boundary: a deeper executable
+  // body may contain the only money write in the migration.
+  if (depth > 8) {
+    return { code, literals, routines, unsupportedDoBody: true };
   }
   const n = sql.length;
   let i = 0;
@@ -184,6 +232,7 @@ export function applyTimeCode(sql, depth = 0) {
             code: inner.code,
             literals: inner.literals,
             unresolved: inner.unsupportedDoBody,
+            callableDefault: routineHasCallableParameterDefault(stmt),
           });
           // A routine defined inside this body is still defined by this file.
           routines.push(...inner.routines);
@@ -255,6 +304,7 @@ export function applyTimeCode(sql, depth = 0) {
             code: inner.code,
             literals: inner.literals,
             unresolved: inner.unsupportedDoBody,
+            callableDefault: routineHasCallableParameterDefault(head),
           });
           routines.push(...inner.routines);
           code += "''";
@@ -1662,7 +1712,11 @@ export function applyTimeWriteTargets(
         if (inner.sequenceMutation) top.sequenceMutation = true;
         if (inner.searchPathChange) top.searchPathChange = true;
         if (inner.unsupportedRoutineIdentity) top.unsupportedRoutineIdentity = true;
-        if (r.unresolved) top.unresolved = true;
+        // PostgreSQL evaluates omitted-argument defaults when this routine is
+        // invoked. Argument binding is deliberately not reimplemented here;
+        // if a default can call code, the invocation is unresolved rather than
+        // silently treating the deferred header expression as inert.
+        if (r.unresolved || r.callableDefault) top.unresolved = true;
         foldLiterals(inner, r.literals);
         defineOperators(operatorDefinitions(r.code));
         defineCasts(castDefinitions(r.code));
