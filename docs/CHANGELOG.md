@@ -32,8 +32,15 @@ next agent. Two sessions read it that way.
   path-spelling problem and *not* a policy refusal, gives the one portable spelling
   (`git -C C:/CRX_Manager push origin <branch>` — correct in Git Bash, PowerShell and cmd alike, with
   forward slashes because Git Bash eats unquoted backslashes), and explicitly forbids the
-  workarounds. When the `-C` argument has the Git Bash shape it says so specifically and explains why
-  it was not rewritten.
+  workarounds.
+- **A Git Bash spelling is refused OUTRIGHT, before any existence check** — in this guard and in
+  `.codex/hooks/production-action-guard.mjs`, which shares the same resolution. Refusing it only
+  *because* `C:\c\repo` does not exist would be an accident, not a guarantee: if some checkout does
+  live there, Git Bash converts and pushes from `C:\repo` while the guard reads branch, remotes, diff
+  and proof from `C:\c\repo` — the innocuous one authorizing a risky push from the real one. That is
+  the same fail-open the translation kept producing, arriving by a different route (Codex P1, round
+  5). A test asserts the "does not exist" diagnostic is **absent** from that denial, which is what
+  proves the refusal ran before the filesystem was ever consulted.
 - **`statSync(...).isDirectory()`, not `existsSync`.** A regular file passes an existence test; git
   cannot use one as `-C`, and that case fell straight back to the generic denial this entry retires.
 
@@ -69,7 +76,10 @@ govern **environment variables**, not arguments — an over-refusal, removed.
 
 **Not fixed here:** CodeRabbit flagged a malformed Markdown table row in `agent-guardrails.md`. It is
 real but **pre-existing on `main`** (7 pipe characters on that row before this change and 7 after,
-verified against `origin/main`), so it does not belong in a push-gate PR.
+verified against `origin/main`), so it does not belong in a push-gate PR. CodeRabbit also reported
+`npm run agent-health` failing; it **passes locally** (`PASS with 1 warning(s)`) and its two cited
+causes are environmental — the Claude/Codex CLIs are not installed in the review sandbox, and the
+schema-registry high-water warning predates this branch and involves no file it touches.
 
 Tests: `.claude/hooks/codex-push-lib.test.mjs` and `.codex/hooks/production-action-guard.test.mjs`
 (both in `test:correction-guards` / `test:agent-workflows`). `scripts/apply-live-testdata-maintenance-20260812.mjs`

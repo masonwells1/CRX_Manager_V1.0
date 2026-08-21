@@ -355,11 +355,22 @@ try {
   // the translating version wrong in a different invocation context each time.
   if (process.platform === "win32") {
     const riskyMsys = `/${risky.repo[0].toLowerCase()}${risky.repo.slice(2).replace(/\\/g, "/")}`;
-    assert.equal(evaluateProductionAction({
+    const msysMain = evaluateProductionAction({
       toolName: "PowerShell",
       toolInput: { command: `git -C ${riskyMsys} push origin HEAD:main` },
       repoDir: projectRoot,
-    }).blocked, true, "an MSYS-shaped -C fails closed in the Codex guard");
+    });
+    assert.equal(msysMain.blocked, true, "an MSYS-shaped -C fails closed in the Codex guard");
+    assert.match(msysMain.reason, /Git Bash path/, "…for the path spelling, not incidentally for the proof gate");
+    // An otherwise-ALLOWED feature push is the independent witness: only this
+    // refusal can block it, so the assertion cannot pass with the check removed.
+    const msysFeature = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: `git -C ${riskyMsys} push origin feature/test` },
+      repoDir: projectRoot,
+    });
+    assert.equal(msysFeature.blocked, true, "…including a push that would otherwise be allowed");
+    assert.match(msysFeature.reason, /Git Bash path/, "…naming the spelling as the reason");
     // The portable spelling resolves identically in every shell, so it reaches
     // the real gate and is denied for the REAL reason — the missing proof.
     const portable = evaluateProductionAction({

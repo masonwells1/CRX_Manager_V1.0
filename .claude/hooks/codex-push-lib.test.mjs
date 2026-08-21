@@ -2393,12 +2393,16 @@ assert.equal(pushNamesMsysPath("git -C /c/repo push origin main", "linux"), fals
       const msysWork = `/${work[0].toLowerCase()}${work.slice(2).replace(/\\/g, "/")}`;
       const msysPush = runHook(`git -C ${msysWork} push origin main:refs/heads/feature`);
       assert.equal(msysPush.decision, "deny", "an MSYS -C path fails closed rather than being guessed at");
-      assert.match(msysPush.reason, /cannot resolve to a real directory/, "…with the tailored diagnostic");
-      assert.match(msysPush.reason, /Git Bash path/, "…which names the Git Bash shape specifically");
-      assert.match(msysPush.reason, /does NOT rewrite it/, "…and says why it is not translated");
-      // The resolved path it reports is node's own answer, so the reader can
-      // see exactly where the guard looked.
-      assert.match(msysPush.reason, /C:\\c\\/, "…and shows the literally-resolved directory");
+      assert.match(msysPush.reason, /Git Bash path/, "…naming the Git Bash shape specifically");
+      assert.match(msysPush.reason, /does not accept/, "…and refusing the spelling outright");
+      assert.match(msysPush.reason, /git -C C:\/CRX_Manager push origin/, "…and giving the portable spelling");
+      // The refusal is UNCONDITIONAL — it must not depend on the literal
+      // `C:\c\…` path happening not to exist. If it did, a checkout that DID
+      // live there would restore the fail-open: Git Bash would push from
+      // `C:\repo` while the guard read `C:\c\repo` (Codex P1, round 5).
+      // Proof that existence was never consulted: the "does not exist"
+      // diagnostic, which comes strictly later in the guard, is absent.
+      assert.doesNotMatch(msysPush.reason, /does not exist, or is not a directory/, "…before any existence check, so an existing C:\\c\\… cannot re-open the hole");
     }
 
     // Fail-closed with a usable message for any unreadable repository.

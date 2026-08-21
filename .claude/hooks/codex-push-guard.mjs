@@ -665,6 +665,16 @@ for (const pushCmd of pushCommands) {
   }
 
   const pushRepoDir = gitPushCwd(pushCmd, projectDir);
+  // Refused UNCONDITIONALLY, and deliberately BEFORE the existence check below.
+  // Relying on `C:\c\repo` not existing would be an accident, not a guarantee:
+  // if some checkout does live there, a Git Bash invocation converts and pushes
+  // from `C:\repo` while this guard reads branch, remotes, diff and proof from
+  // `C:\c\repo` — the innocuous one authorizing a risky push from the real one.
+  // That is the same fail-open the abandoned translation kept producing, so the
+  // shape is rejected outright rather than resolved (Codex P1, PR #445 round 5).
+  if (pushNamesMsysPath(pushCmd)) {
+    deny(`CODEX GATE: this push names the repository with a Git Bash path (\`-C /c/…\`), which this guard does not accept. What \`/c/repo\` means depends on which shell runs the command and on MSYS conversion settings the guard cannot read: Git Bash may hand git \`C:/repo\`, while PowerShell, cmd, and this guard all read the literal \`${pushRepoDir}\`. Since those can be two different checkouts, resolving it either way risks inspecting a different repository than the push touches — so it is refused, not guessed at. Re-run naming the repository with a drive letter and FORWARD slashes: \`git -C C:/CRX_Manager push origin <branch>\`. That one spelling means the same thing in Git Bash, PowerShell and cmd alike. Do NOT work around this with a directory change, an inline PATH=, or an environment variable — those forms are separately denied, by design.`);
+  }
   // A directory that does not exist is a DIAGNOSABLE condition, and separating
   // it out is the whole point: node reports a missing cwd and a missing
   // executable with the same `spawnSync git ENOENT` text, so the generic denial
@@ -685,10 +695,7 @@ for (const pushCmd of pushCommands) {
     // drive-RELATIVE `C:CRX_Manager`, so the advice would fail again or act on
     // a different checkout. `C:/CRX_Manager` is correct in Git Bash, PowerShell
     // and cmd alike (Codex + CodeRabbit both flagged this on PR #445).
-    const msysNote = pushNamesMsysPath(pushCmd)
-      ? ` The \`-C\` argument is a Git Bash path (\`/c/…\`). This guard resolves it exactly as node does — \`${pushRepoDir}\` — and deliberately does NOT rewrite it to \`C:/…\`, because whether git sees the rewritten form depends on which shell runs the command and on MSYS conversion settings the guard cannot read; a guard that guessed wrong would inspect a different repository than the push touches.`
-      : "";
-    deny(`CODEX GATE: this push names a repository this guard cannot resolve to a real directory: ${pushRepoDir} — it does not exist, or is not a directory. This is a PATH-SPELLING problem, not a policy refusal, and not a problem with git.${msysNote} Re-run the push naming the repository with a drive letter and FORWARD slashes, for example \`git -C C:/CRX_Manager push origin <branch>\` — that one spelling is correct in Git Bash, PowerShell and cmd alike, and forward slashes matter because Git Bash eats unquoted backslashes and would hand git a drive-relative path. Do NOT work around this with a directory change, an inline PATH=, or an environment variable — those forms are separately denied, by design.`);
+    deny(`CODEX GATE: this push names a repository this guard cannot resolve to a real directory: ${pushRepoDir} — it does not exist, or is not a directory. This is a PATH-SPELLING problem, not a policy refusal, and not a problem with git. Re-run the push naming the repository with a drive letter and FORWARD slashes, for example \`git -C C:/CRX_Manager push origin <branch>\` — that one spelling is correct in Git Bash, PowerShell and cmd alike, and forward slashes matter because Git Bash eats unquoted backslashes and would hand git a drive-relative path. Do NOT work around this with a directory change, an inline PATH=, or an environment variable — those forms are separately denied, by design.`);
   }
   let branch = "";
   try {

@@ -9,6 +9,7 @@ import {
   contentIsRisky,
   extractPatchDestinations,
   gitPushCwd,
+  pushNamesMsysPath,
   isGitPush,
   mainPushSource,
   proofSearchDirs,
@@ -732,6 +733,16 @@ export function evaluateProductionAction({
     }
     if (pushIsForced(segment)) {
       return denied("CODEX PRODUCTION GATE: force-pushing any branch rewrites shared history and requires Mason's explicit approval.");
+    }
+    // A Git Bash path spelling means different things in different shells:
+    // Git Bash may hand git `C:/repo` while this guard, PowerShell and cmd all
+    // read the literal `C:\c\repo`. If a checkout happens to exist at that
+    // literal path, gateMainChange below would classify remotes, risky diff and
+    // proof from the wrong one. This guard shares gitPushCwd with the
+    // Claude-side push guard and needs the identical refusal — wiring one of
+    // two callers is not a fix (Codex P1, PR #445 round 5).
+    if (pushNamesMsysPath(segment)) {
+      return denied("CODEX PRODUCTION GATE: this push names the repository with a Git Bash path (`-C /c/…`), which this guard does not accept — what it means depends on which shell runs the command, so resolving it either way risks inspecting a different repository than the push touches. Re-run naming the repository with a drive letter and forward slashes: `git -C C:/CRX_Manager push origin <branch>`.");
     }
     const pushRepoDir = gitPushCwd(segment, actionRepoDir);
     let currentBranch = requestedWorkingDir ? "" : normalize(branch).toLowerCase();

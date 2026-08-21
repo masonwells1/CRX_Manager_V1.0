@@ -69,11 +69,19 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // unresolvable path with a diagnostic naming the portable spelling. What
   // remains in the lib is detection used only to word that message. Same
   // risky-path anchor, still present exactly once, transform still identity.
-  codexGuard: "05499cfe34a3246b2400a22c343562fbd8fd0c33",
+  // codexGuard re-pinned 2026-08-21 (PR #445 round 5): it shares gitPushCwd
+  // with the Claude push guard, so it gained the same outright refusal of a Git
+  // Bash `-C /c/…` spelling — whose meaning depends on the invoking shell, and
+  // which would otherwise let the guard inspect a different repository than the
+  // push touches whenever a checkout exists at the literal `C:\c\…`. Purely
+  // additive (+11 lines); all three transform anchors — the matcher, the
+  // PROTECTED_HARNESS_FRAGMENT_RE constant, and the maintenance execution gate
+  // — are untouched and still present exactly once.
+  codexGuard: "3596cb33e2474600756cc23c430c168517a2a078",
   pushLib: "b76b650510dddf7f08df67f40bc00c65e26079fd",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "0f3a62cfc6cdacf5e43465d37c2ca67eaf914597",
+  codexGuard: "ac5a592c71bff79f29db5a05503f0e2afc63cc09",
   pushLib: "b76b650510dddf7f08df67f40bc00c65e26079fd",
 };
 
