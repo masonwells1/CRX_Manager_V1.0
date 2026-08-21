@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { unitOptionsForForm, isKnownUnit } from './units';
+import { unitOptionsForForm, isKnownUnit, blockedUnitSaveMessage } from './units';
 import type { UnitConversion } from '../types';
 
 const CONV = [
@@ -39,5 +39,35 @@ describe('isKnownUnit (grandfathering)', () => {
   it('true for a blank/undefined unit (nothing to grandfather)', () => {
     expect(isKnownUnit(CONV, 'liquid', '')).toBe(true);
     expect(isKnownUnit(CONV, 'liquid', null)).toBe(true);
+  });
+});
+
+// An empty conversion list means three different things — in flight, failed, and
+// genuinely empty — and only one of them is "refresh the page". Reading the empty
+// array as failure told an operator to refresh for a request that was about to
+// succeed, so the state is passed in rather than inferred.
+describe('blockedUnitSaveMessage', () => {
+  it('allows the save whenever every row already carries a unit', () => {
+    expect(blockedUnitSaveMessage('failed', [], false)).toBeNull();
+    expect(blockedUnitSaveMessage('pending', [], false)).toBeNull();
+    expect(blockedUnitSaveMessage('loaded', [], false)).toBeNull();
+  });
+  it('allows a deliberate blank unit once the list actually loaded', () => {
+    expect(blockedUnitSaveMessage('loaded', CONV, true)).toBeNull();
+  });
+  it('names the in-flight request instead of claiming the load failed', () => {
+    expect(blockedUnitSaveMessage('pending', [], true)).toBe(
+      'Units are still loading. Try saving again in a moment.',
+    );
+  });
+  it('blocks a blank unit the operator had no way to fill in', () => {
+    expect(blockedUnitSaveMessage('failed', [], true)).toBe(
+      'Units could not be loaded, so a unit is still blank. Refresh and retry before saving.',
+    );
+  });
+  it('separates a successful empty table from a failed request', () => {
+    expect(blockedUnitSaveMessage('loaded', [], true)).toBe(
+      'No units are set up yet, so a unit is still blank. Add unit conversions before saving.',
+    );
   });
 });

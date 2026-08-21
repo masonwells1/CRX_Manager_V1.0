@@ -25,8 +25,23 @@ What is missing is paperwork, not capability: the mission doc and the ledger. Se
 
 **One orchestrator session at a time, in one dedicated worktree, running packages serially.**
 
-The build plan orders WP-1 → WP-2 → WP-3 strictly, so there is nothing to parallelize inside
-Phase 1. With 17 other worktrees already live, concurrency here is a cost, not a feature.
+The build plan orders WP-1 → WP-2 → WP-3 → WP-4 → WP-5 strictly, so there is nothing to
+parallelize inside Phase 1. With 17 other worktrees already live, concurrency here is a cost, not
+a feature.
+
+**All five packages carry migrations *(corrected reviewing PR #435)*.** An earlier sequence here
+named only WP-1 → WP-3, written when WP-4 and WP-5 were still "no migration" packages. Both
+became migration packages — **WP-4 adds only the `create_label_draft_proposal` RPC**, WP-5 adds
+the atomic sibling-copy RPC — so **every** package in this phase runs the full gate chain below,
+including its own apply gate. Nothing in Phase 1 skips it.
+
+**WP-4 does not touch the `product_label_drafts` queue schema — WP-1 owns it *(finding 5, fourth
+pass; this line said "WP-4 extends the queue and its RPC contract" and contradicted both the build
+plan and the ledger)*.** WP-3's D-K escape hatch needs the queue's typed payload, `purpose`
+discriminator and `proposed_brand_name`, and WP-3 applies **before** WP-4 — so the schema moved
+forward into WP-1. Three documents disagreeing about who owns one DDL change is how it gets
+written twice or not at all. **WP-1 owns the queue's shape; WP-4 adds only
+`create_label_draft_proposal` over it; `create_label_draft` is never modified by any package.**
 
 | Role | Who | How |
 |---|---|---|
@@ -61,11 +76,16 @@ A checklist a person could follow. Every step names what runs and what must be t
 | 6 | **Reviewer fan-out**, all four in one message | Findings reports | BLOCKER/HIGH fixed; max 3 rounds |
 | 7 | **Behavioral proof (R-2, R-9, R-11)** — orchestrator drives the running app **as a normal user** on `[E2E]` rows, positive *and* negative cases | Screenshots + console + read-back `SELECT`s | A passing test is **not** acceptable |
 | 8 | **Opus checkpoint 1** (§4) | `docs/audits/<date>-opus-checkpoint-WP-1.md` + COVERAGE verdicts | `BLOCK` → back to step 4 |
-| 9 | **Codex adversarial gate** — `node scripts/write-apply-proofs.mjs <migration>` | Hash-bound proof pair | BLOCKER/HIGH → step 4 |
+| 9 | **Codex adversarial verdict** — a separate ephemeral `gpt-5.6-sol` high-effort review of the diff | Clean verdict | BLOCKER/HIGH → step 4 |
 | 10 | **Docs + commit** — `migration-history.md`, `gotchas.md` if touched, `CHANGELOG.md`, `check-doc-drift.mjs` | Commit on the branch | Husky re-runs the pipeline. **Never `--no-verify`** |
+| 10a | **Exact-HEAD push proof** on the final commit — the repository policy proof for a risky migration/RLS diff | Exact-SHA proof | Required *before* the first push, or the push guard blocks it |
 | 11 | **PR** — push branch, `gh pr create`, wait for the required **Vercel** check, read and resolve **CodeRabbit** | Open PR, checks green | `main` is push-protected |
 | 12 | **THE HUMAN GATE** — Mason's explicit in-chat OK to apply live | — | Shown: `/explain-migration` plain English, the Opus verdict, the Codex verdict, the proof, the rollback story |
+| 12a | **Mint the apply proof** — `node scripts/write-apply-proofs.mjs <migration>` | Hash-bound proof pair | **Runs here, not at step 9** — proofs live 30 minutes *(finding 11)* |
 | 13 | **Apply** via MCP (`migration-apply-guard.mjs` verifies the fresh proof pair or blocks) → smoke each new RPC → **B7 rename** the disk file to the assigned version stamp → `/regen-schema-registry` → `npm run db-sweeps` | Applied migration, refreshed registry | R-12: fresh backup first |
+| 13a | **Commit the post-apply changes** — the B7 rename and the regenerated schema registry are tracked files produced *after* every review in step 9–11 ran. **Commit only; do not push yet** | Commit on the branch | These changes have never been reviewed by anything yet |
+| 13b | **Mint the exact-HEAD proof on the new commit** — the step-10a proof is bound to the *old* SHA and is void here | Exact-SHA proof on the post-apply head | **Before the push, not after.** Pushing an unreviewed risky head violates the gate and the push guard may reject it |
+| 13c | **Push**, then let CodeRabbit and the required checks run on the post-apply head | Green checks + CodeRabbit read and resolved | *(finding 9)* Merging without this either omits the rename/registry or ships an unreviewed head |
 | 14 | **Merge** the PR → deploys production → **re-run the step-7 proof against production** | Ledger row 🚀 with the live stamp | — |
 | 15 | **Next cycle** — the loop advances to WP-2 without asking | — | — |
 
@@ -76,6 +96,47 @@ purely additive, so applying ahead of the code is harmless — the new tables si
 Merging first would deploy code referencing tables that do not exist yet, which is the
 parked-RPC caller failure this project has already hit. Any package whose migration is *not*
 additive re-opens this ordering explicitly rather than inheriting it.
+
+**The additivity claim is a gate, not an assumption *(Sol finding 3).*** Revision 2 asserted it
+and was wrong: WP-3 called for a `receive_po_items` signature change, which PostgreSQL cannot
+perform in place, so the live database would have stopped offering the signature the deployed
+app and queued offline actions still call — a failed receive with a truck at the dock. WP-3 has
+been rewritten to keep its signature. **Before step 13, audit the migration statement by
+statement** and confirm every one is additive: no changed CHECK constraint, no dropped default,
+no new NOT NULL on an existing column, no replaced function signature. **One non-additive
+statement reverses the order for that package** — compatible code merges first, migration
+second, cleanup third.
+
+### Three gate defects to fix before cycle 1
+
+**Applying changes the branch after it was reviewed *(finding 9).*** Step 13 renames the
+migration file to its assigned stamp and regenerates the schema registry — tracked changes
+produced *after* CodeRabbit, Vercel and the commit review ran. Merging then either omits them or
+pushes an unreviewed head. **Fix:** after apply, commit and push the rename and registry
+changes, then re-run the exact-head review, CodeRabbit and the required checks before step 14.
+**These are numbered steps 13a–13c in the table above, not just a note here** — an executor
+following the numbered chain must not be able to walk from apply straight to merge. **Order
+matters inside them:** commit → mint the exact-HEAD proof on that new commit → push → checks. The
+step-10a proof is bound to the pre-apply SHA and does not carry over, so pushing before re-proving
+sends an unreviewed risky head at the push guard.
+
+**The "exact-SHA" proof is not exact-SHA *(finding 10).*** `scripts/write-apply-proofs.mjs`
+hashes the **migration file**, not the commit; it never sees UI consumers, generated types, or
+RPC call sites. SQL can stay byte-identical while a later TypeScript edit introduces exactly the
+`?? 1` that R-4a forbids, and the proof still validates. **Fix:** keep the migration-content
+proof for the apply gate, and separately require the repository's exact-HEAD push proof after
+the final commit **and before the first push** — step 10a in the table above. They answer
+different questions; neither substitutes for the other, and the branch must not reach its first
+push carrying only the migration-content hash.
+
+**The proof expires before it is used *(finding 11).*** Proofs live 30 minutes. Minting one
+before commit, PR, Vercel, CodeRabbit and the human gate spans a sequence that routinely exceeds
+that. The apply guard then rejects a stale proof, and whoever is mid-cycle feels pressure to
+weaken the gate. **Fix:** run the adversarial review early if useful, but **mint the apply proof
+immediately after Mason's approval and immediately before the live apply.** **The gate-chain
+table above is the authoritative sequence and already encodes this** — the adversarial verdict is
+step 9, the exact-HEAD push proof is step 10a, and `write-apply-proofs.mjs` runs at step 12a,
+after the human gate. Do not mint the apply proof at step 9.
 
 ---
 
@@ -138,7 +199,7 @@ another worktree.**
 |---|---|---|---|
 | 1 | **Mission doc** | `docs/loops/product-data-model-loop-2026-08.md` | `scripts/validate-mission-doc.mjs` refuses to launch a loop without five slots — Driver, Granularity, Worktree, Definition of done, Delivery gate. It is also the only place this build's contract binds a future session with no memory of this conversation |
 | 2 | **Ledger** | `docs/loops/product-data-model-ledger.md` | COVERAGE.md tracks *issues*; the ledger tracks *cycles* — per-package status, PR number, migration disk name and live version stamp, and the `PROOF — Ran: … · Saw: …` line. Model on `docs/loops/structure-wave-2-ledger.md`. Both are needed and they reference each other |
-| 3 | **Repair the parked scan** | — | `fleet-status.mjs` is in its fail-closed `PARKED STATE UNKNOWN` state. This build adds three migrations to a queue that cannot be counted |
+| 3 | **Repair the parked scan** | — | `fleet-status.mjs` is in its fail-closed `PARKED STATE UNKNOWN` state. This build adds **five** migrations — WP-1 through WP-5, each with its own apply gate — to a queue that cannot be counted *(count corrected 2026-08-20; WP-4 and WP-5 became migration packages after this line was written)* |
 | 4 | **Fresh backup** | — | `/backup-db`. Last good: 2026-08-09. Free plan, **no PITR** |
 | 5 | **Land the plan docs** | — | They are unpushed local commits; a session starting from `origin/main` cannot read the contract |
 

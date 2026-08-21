@@ -4,6 +4,7 @@ import { Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle, Link2, U
 import { supabase, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
+import { blockedUnitSaveMessage, type UnitLoadState } from '../lib/units';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { useAuth } from '../contexts/AuthContext';
@@ -24,8 +25,9 @@ import { validateBlendMath, type BlendMathWarning } from '../lib/blendMathValida
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday } from '../lib/dateUtils';
 import { useOCRThresholds } from '../hooks/useOCRThresholds';
-import type { BlendTicket, BlendTicketProduct, BlendTicketImage, BlendTicketToOrderItem, Customer, Product, Order, OrderItem, Field, Job } from '../types';
+import type { BlendTicket, BlendTicketProduct, BlendTicketImage, BlendTicketToOrderItem, Customer, Product, Order, OrderItem, Field, Job, UnitConversion } from '../types';
 import { ProductOptionDetails, productOptionLabel, type ProductOptionPresentationModel } from '../components/products/ProductOptionPresentation';
+import UnitSelect from '../components/blendtickets/UnitSelect';
 
 type PickerProduct = Product & ProductOptionPresentationModel;
 
@@ -49,6 +51,8 @@ export function BlendTicketDetail() {
   const [images, setImages] = useState<BlendTicketImage[]>([]);
   const [products, setProducts] = useState<BlendTicketProduct[]>([]);
   const [allProducts, setAllProducts] = useState<PickerProduct[]>([]);
+  const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
+  const [unitLoad, setUnitLoad] = useState<UnitLoadState>('pending');
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -418,6 +422,21 @@ export function BlendTicketDetail() {
   }, [id, loadTicketData]);
 
   useEffect(() => {
+    supabase.from('unit_conversions').select('*').order('unit').then(({ data, error }) => {
+      if (error) {
+        // The unit fields are pickers, not free text, so an empty list leaves the
+        // operator no way to enter a unit at all. Say so instead of failing quietly.
+        Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_unit_conversions' } });
+        setUnitLoad('failed');
+        toast('error', 'The Unit list could not be loaded. Refresh before changing any unit on this ticket.');
+        return;
+      }
+      setUnitConversions((data || []) as UnitConversion[]);
+      setUnitLoad('loaded');
+    });
+  }, [toast]);
+
+  useEffect(() => {
     const ticketData = {
       total_acres: formData.total_acres ? parseFloat(formData.total_acres) : null,
       total_volume: formData.total_volume ? parseFloat(formData.total_volume) : null,
@@ -480,6 +499,18 @@ export function BlendTicketDetail() {
     }
     if (contentLocked) {
       toast('error', 'Ticket details are locked after billing or order linkage.');
+      return;
+    }
+    // Only block when the missing list is actually costing the ticket a unit. A
+    // blank rate unit bills off the product's own rate_unit, but it should be a
+    // choice the operator made, not one a failed fetch made for them.
+    const unitBlock = blockedUnitSaveMessage(
+      unitLoad,
+      unitConversions,
+      products.some((p) => !p.unit || !p.rate_per_acre_unit),
+    );
+    if (unitBlock) {
+      toast('error', unitBlock);
       return;
     }
 
@@ -1416,7 +1447,12 @@ export function BlendTicketDetail() {
         </div>
 
         <div className="space-y-4">
-          {products.map((product, index) => (
+          {products.map((product, index) => {
+            const catalog = allProducts.find((candidate) => candidate.id === product.product_id);
+            const productForm = catalog
+              ? (catalog.product_form ?? null)
+              : (product.product?.product_form ?? null);
+            return (
             <div key={product.id} className={`grid grid-cols-12 gap-3 items-start p-4 rounded-lg ${
               !product.manually_corrected && product.confidence_score > 0 && product.confidence_score < 70
                 ? 'bg-yellow-50 border border-yellow-200'
@@ -1459,11 +1495,13 @@ export function BlendTicketDetail() {
                 <label className="block text-xs font-medium text-gray-700 mb-1">
                   Unit
                 </label>
-                <Input
-                  type="text"
+                <UnitSelect
+                  unitConversions={unitConversions}
+                  form={productForm}
                   value={product.unit || ''}
-                  onChange={(e) => updateProduct(index, 'unit', e.target.value)}
-                  placeholder="gal"
+                  onChange={(value) => updateProduct(index, 'unit', value)}
+                  disabled={contentLocked}
+                  ariaLabel={`Quantity unit for ${product.product_name || 'product'}`}
                 />
               </div>
 
@@ -1481,13 +1519,15 @@ export function BlendTicketDetail() {
 
               <div className="col-span-4 md:col-span-1">
                 <label className="block text-xs font-medium text-gray-700 mb-1">
-                  Rate Unit
+                  Rate unit (per acre)
                 </label>
-                <Input
-                  type="text"
+                <UnitSelect
+                  unitConversions={unitConversions}
+                  form={productForm}
                   value={product.rate_per_acre_unit || ''}
-                  onChange={(e) => updateProduct(index, 'rate_per_acre_unit', e.target.value)}
-                  placeholder="oz/ac"
+                  onChange={(value) => updateProduct(index, 'rate_per_acre_unit', value)}
+                  disabled={contentLocked}
+                  ariaLabel={`Rate unit per acre for ${product.product_name || 'product'}`}
                 />
               </div>
 
@@ -1549,7 +1589,8 @@ export function BlendTicketDetail() {
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
 
           {products.length === 0 && (
             <p className="text-center text-gray-500 py-8">
