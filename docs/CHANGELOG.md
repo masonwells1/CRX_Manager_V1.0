@@ -152,6 +152,17 @@ All significant development milestones, in reverse chronological order.
   their manifest plus repository-root configuration files to the same exact-head
   provenance. Generic explicit configuration operands are file-bound as well, so
   an ignored or untracked Vite-style config cannot execute before inspection.
+  Hosted exact-head review then closed the remaining redirect and test-fixture
+  edges: adjacent redirects and Bash's `>|` noclobber override now resolve the
+  actual following write target before classification; package-runner names are
+  interpreted only in executable position, so read-only searches that merely
+  mention `npx`, `npm exec`, or `vite` remain data; and no inherited environment
+  variable can replace the authoritative GitHub SHA. Temporary repositories use
+  direct function-argument injection in unit tests only, while the production
+  Bash and MCP entrypoints always perform the sanitized canonical-remote lookup.
+  That lookup intentionally fails closed for a real file-backed/package executor
+  when GitHub cannot be reached; it is not persisted in a mutable local cache,
+  which would recreate the local trust-forgery boundary this change removes.
   Environment-provider and .NET `NODE_OPTIONS` mutations are denied even when
   no Node command appears in the same payload, closing staged mutations across
   persistent MCP shell interactions. Dynamic environment-provider targets fail

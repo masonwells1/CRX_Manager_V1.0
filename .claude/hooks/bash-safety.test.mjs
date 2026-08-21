@@ -263,10 +263,20 @@ ok(!checkDangerousCommand(redirectedReadOnlyScriptsInput), "a redirected read-on
 const redirectedReadOnlyHookResult = runHook({ tool_name: "Bash", tool_input: { command: redirectedReadOnlyScriptsInput } });
 eq(redirectedReadOnlyHookResult.status, 0, "the Bash hook exits 0 for a redirected read-only scripts search");
 ok(redirectedReadOnlyHookResult.stdout.includes('"permissionDecision":"allow"'), "the Bash hook allows a redirected read-only scripts search");
+const protectedRedirectTarget = ["scripts/apply-live-testdata-maintenance-", "20260812.mjs"].join("");
+const protectedGlobRedirectTarget = ["scripts/apply-live-testdata-maintenance-", "2026081[2].mjs"].join("");
+for (const command of [
+  "printf evil>|" + protectedRedirectTarget,
+  "printf evil >| " + protectedGlobRedirectTarget,
+]) {
+  ok(maintenanceProducerCommandMentioned(command), "an adjacent or clobber redirect targets the protected producer: " + command);
+  const result = runHook({ tool_name: "Bash", tool_input: { command } });
+  eq(result.status, 0, "the Bash hook exits 0 after denying a protected clobber redirect: " + command);
+  ok(result.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies a protected clobber redirect: " + command);
+}
 {
   const integrityRepo = mkdtempSync(path.join(os.tmpdir(), "producer-integrity-"));
   const externalExecutorDir = mkdtempSync(path.join(os.tmpdir(), "producer-external-executor-"));
-  const previousAuthoritativeMainSha = process.env.CRX_HOOK_TEST_AUTHORITATIVE_MAIN_SHA;
   try {
     const integrityRelativePath = ["scripts/apply-live-testdata-maintenance-", "20260812.mjs"].join("");
     const integrityPath = path.join(integrityRepo, ...integrityRelativePath.split("/"));
@@ -313,23 +323,23 @@ ok(redirectedReadOnlyHookResult.stdout.includes('"permissionDecision":"allow"'),
     }
     const authoritativeResult = spawnSync("git", ["rev-parse", "HEAD"], { cwd: integrityRepo, encoding: "utf8", windowsHide: true, env: integrityGitEnv });
     eq(authoritativeResult.status, 0, "producer fixture authoritative main SHA resolves");
-    process.env.CRX_HOOK_TEST_AUTHORITATIVE_MAIN_SHA = authoritativeResult.stdout.trim();
+    const reviewOptions = { authoritativeMainShaForTest: authoritativeResult.stdout.trim() };
     const integrityCommand = ["node", integrityRelativePath, "--verify"].join(" ");
-    eq(checkCommandDeep(integrityCommand, integrityRepo), null, "an exact producer launch is allowed when HEAD is the reviewed main commit and worktree bytes match");
-    eq(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo), null, "a reviewed file-backed executor is allowed when HEAD is the reviewed main commit");
-    eq(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo), null, "a reviewed file-backed executor after -- is allowed on the reviewed main commit");
-    eq(checkCommandDeep("npm run build", integrityRepo), null, "a reviewed package script is allowed on authoritative main");
+    eq(checkCommandDeep(integrityCommand, integrityRepo, reviewOptions), null, "an exact producer launch is allowed when HEAD is the reviewed main commit and worktree bytes match");
+    eq(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo, reviewOptions), null, "a reviewed file-backed executor is allowed when HEAD is the reviewed main commit");
+    eq(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo, reviewOptions), null, "a reviewed file-backed executor after -- is allowed on the reviewed main commit");
+    eq(checkCommandDeep("npm run build", integrityRepo, reviewOptions), null, "a reviewed package script is allowed on authoritative main");
     const opaquePackageRunner = ["n", "px vite"].join("");
-    ok(checkCommandDeep(opaquePackageRunner, integrityRepo)?.includes("opaque package execution"), "an opaque package resolver is denied even on authoritative main");
+    ok(checkCommandDeep(opaquePackageRunner, integrityRepo, reviewOptions)?.includes("opaque package execution"), "an opaque package resolver is denied even on authoritative main");
     const untrackedConfig = "vite.config.mjs";
     writeFileSync(path.join(integrityRepo, untrackedConfig), "export default {};\n");
-    ok(checkCommandDeep("npm run build", integrityRepo), "an untracked auto-loaded package config denies a reviewed package script");
-    ok(checkCommandDeep(["vite --con", "fig ", untrackedConfig].join(""), integrityRepo), "an explicit untracked package config is denied");
-    ok(checkCommandDeep(["vite -", "c ", untrackedConfig].join(""), integrityRepo), "a short-form untracked package config is denied");
+    ok(checkCommandDeep("npm run build", integrityRepo, reviewOptions), "an untracked auto-loaded package config denies a reviewed package script");
+    ok(checkCommandDeep(["vite --con", "fig ", untrackedConfig].join(""), integrityRepo, reviewOptions), "an explicit untracked package config is denied");
+    ok(checkCommandDeep(["vite -", "c ", untrackedConfig].join(""), integrityRepo, reviewOptions), "a short-form untracked package config is denied");
     rmSync(path.join(integrityRepo, untrackedConfig), { force: true });
     writeFileSync(trackedWrapperPath, `${wrapperSource}// worktree divergence\n`);
-    ok(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo), "a worktree-divergent file-backed executor is denied");
-    ok(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo), "a worktree-divergent file-backed executor after -- is denied");
+    ok(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo, reviewOptions), "a worktree-divergent file-backed executor is denied");
+    ok(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo, reviewOptions), "a worktree-divergent file-backed executor after -- is denied");
     const divergentHookResult = runHook({ tool_name: "Bash", tool_input: { command: `node -- ${trackedWrapperRelative}` } }, integrityRepo);
     ok(divergentHookResult.stdout.includes("Blocked file-backed interpreter"), "the Bash hook origin/main-binds a worktree-divergent executor after --");
     for (const args of [
@@ -340,29 +350,27 @@ ok(redirectedReadOnlyHookResult.stdout.includes('"permissionDecision":"allow"'),
       const result = spawnSync("git", args, { cwd: integrityRepo, encoding: "utf8", windowsHide: true, env: integrityGitEnv });
       eq(result.status, 0, `local-only malicious wrapper commit succeeds for the regression: git ${args[0]}`);
     }
-    ok(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo), "a local commit plus a moved local tracking ref cannot forge authoritative provenance");
+    ok(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo, reviewOptions)?.includes("fresh exact-SHA independent review proof"), "a local commit plus a moved local tracking ref cannot forge authoritative provenance");
     const localCommitHookResult = runHook({ tool_name: "Bash", tool_input: { command: `node -- ${trackedWrapperRelative}` } }, integrityRepo);
-    ok(localCommitHookResult.stdout.includes("fresh exact-SHA independent review proof"), "the Bash hook denies a locally committed wrapper without independent review proof");
-    eq(checkCommandDeep(["node", bootstrapRelative].join(" "), integrityRepo), null, "the reviewed byte-identical proof producer remains available to bootstrap feature-branch review");
+    ok(localCommitHookResult.stdout.includes("Blocked file-backed interpreter"), "the production Bash hook refuses a test environment local main substitution");
+    eq(checkCommandDeep(["node", bootstrapRelative].join(" "), integrityRepo, reviewOptions), null, "the reviewed byte-identical proof producer remains available to bootstrap feature-branch review");
     writeFileSync(trackedWrapperPath, reviewedWrapperSource);
     writeFileSync(ignoredWrapperPath, wrapperSource);
-    ok(checkCommandDeep(`node ${ignoredWrapperRelative}`, integrityRepo), "an ignored file-backed executor that spawns the producer is denied");
-    ok(checkCommandDeep(`node -- ${ignoredWrapperRelative}`, integrityRepo), "an ignored file-backed executor after -- is denied");
+    ok(checkCommandDeep(`node ${ignoredWrapperRelative}`, integrityRepo, reviewOptions), "an ignored file-backed executor that spawns the producer is denied");
+    ok(checkCommandDeep(`node -- ${ignoredWrapperRelative}`, integrityRepo, reviewOptions), "an ignored file-backed executor after -- is denied");
     const ignoredHookResult = runHook({ tool_name: "Bash", tool_input: { command: `node -- ${ignoredWrapperRelative}` } }, integrityRepo);
     ok(ignoredHookResult.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies an ignored wrapper before it can spawn the producer");
     ok(ignoredHookResult.stdout.includes("Blocked file-backed interpreter"), "the Bash hook denial comes from the HEAD-bound executor check");
     ok(!existsSync(ignoredMarkerPath), "the denied ignored wrapper never executes");
     const externalExecutorPath = path.join(externalExecutorDir, "external-wrapper.mjs");
     writeFileSync(externalExecutorPath, wrapperSource);
-    ok(checkCommandDeep(`node ${JSON.stringify(externalExecutorPath)}`, integrityRepo), "an external file-backed executor is denied");
-    ok(checkCommandDeep(`node -- ${JSON.stringify(externalExecutorPath)}`, integrityRepo), "an external file-backed executor after -- is denied");
+    ok(checkCommandDeep(`node ${JSON.stringify(externalExecutorPath)}`, integrityRepo, reviewOptions), "an external file-backed executor is denied");
+    ok(checkCommandDeep(`node -- ${JSON.stringify(externalExecutorPath)}`, integrityRepo, reviewOptions), "an external file-backed executor after -- is denied");
     const externalHookResult = runHook({ tool_name: "Bash", tool_input: { command: `node -- ${JSON.stringify(externalExecutorPath)}` } }, integrityRepo);
     ok(externalHookResult.stdout.includes("Blocked file-backed interpreter"), "the Bash hook denies an external executor after --");
     writeFileSync(integrityPath, "export const reviewed = false;\n");
-    ok(checkCommandDeep(integrityCommand, integrityRepo), "an exact producer launch is denied when worktree bytes differ from exact HEAD");
+    ok(checkCommandDeep(integrityCommand, integrityRepo, reviewOptions), "an exact producer launch is denied when worktree bytes differ from exact HEAD");
   } finally {
-    if (previousAuthoritativeMainSha === undefined) delete process.env.CRX_HOOK_TEST_AUTHORITATIVE_MAIN_SHA;
-    else process.env.CRX_HOOK_TEST_AUTHORITATIVE_MAIN_SHA = previousAuthoritativeMainSha;
     rmSync(integrityRepo, { recursive: true, force: true });
     rmSync(externalExecutorDir, { recursive: true, force: true });
   }
@@ -801,11 +809,6 @@ ok(!checkDangerousCommand("cat .env.example"), "reading .env.example is not a wr
 // ── FIX 2: npm-script indirection ──────────────────────────────────────────
 {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "bash-safety-npmtest-"));
-  const previousAuthoritativeMainSha = process.env.CRX_HOOK_TEST_AUTHORITATIVE_MAIN_SHA;
-  const restoreAuthoritativeMainSha = () => {
-    if (previousAuthoritativeMainSha === undefined) delete process.env.CRX_HOOK_TEST_AUTHORITATIVE_MAIN_SHA;
-    else process.env.CRX_HOOK_TEST_AUTHORITATIVE_MAIN_SHA = previousAuthoritativeMainSha;
-  };
   try {
     const pkg = {
       scripts: {
@@ -843,7 +846,7 @@ ok(!checkDangerousCommand("cat .env.example"), "reading .env.example is not a wr
     }
     const authoritativeResult = spawnSync("git", ["rev-parse", "HEAD"], { cwd: tmp, encoding: "utf8", windowsHide: true, env: npmGitEnv });
     eq(authoritativeResult.status, 0, "npm boundary fixture authoritative main SHA resolves");
-    process.env.CRX_HOOK_TEST_AUTHORITATIVE_MAIN_SHA = authoritativeResult.stdout.trim();
+    const reviewOptions = { authoritativeMainShaForTest: authoritativeResult.stdout.trim() };
 
     eq(extractNpmRunNames("npm run dangerous").length, 1, "extracts one npm run target");
     eq(extractNpmRunNames("npm run safe && npm run dangerous").length, 2, "extracts multiple npm run targets");
@@ -852,11 +855,13 @@ ok(!checkDangerousCommand("cat .env.example"), "reading .env.example is not a wr
     ok(scripts && typeof scripts === "object", "readPackageScripts reads the temp package.json");
     eq(resolveNpmScriptChain(scripts, "chain:a").length, 3, "resolves a 3-deep chain (a, b, c bodies)");
 
-    ok(!checkCommandDeep("npm run safe", tmp), "npm run safe stays allowed");
-    ok(checkCommandDeep("npm run dangerous", tmp), "npm run dangerous is caught via its resolved script body");
+    ok(!checkCommandDeep("npm run safe", tmp, reviewOptions), "npm run safe stays allowed");
+    ok(checkCommandDeep("npm run dangerous", tmp, reviewOptions), "npm run dangerous is caught via its resolved script body");
+    const reviewedProducerScriptCommand = ["npm run pro", "ducer"].join("");
+    ok(checkCommandDeep(reviewedProducerScriptCommand, tmp, reviewOptions), "the reviewed main fixture still denies its untracked protected executor");
     ok(checkCommandDeep("npm run producer", tmp), "producer invocation hidden in an npm script is denied");
     ok(
-      checkCommandDeep("npm run chain:a", tmp),
+      checkCommandDeep("npm run chain:a", tmp, reviewOptions),
       "a dangerous command hidden 2 levels deep behind chained npm scripts is caught (FIX 2)"
     );
     // Depth cap is a real boundary: cap-a..cap-d (depths 0-3) are resolved, but
@@ -864,7 +869,7 @@ ok(!checkDangerousCommand("cat .env.example"), "reading .env.example is not a wr
     // never fetched — documents the intentional bound, not an oversight.
     eq(resolveNpmScriptChain(scripts, "chain:cap-a").length, 4, "depth cap resolves exactly 4 bodies (depths 0-3)");
     ok(
-      !checkCommandDeep("npm run chain:cap-a", tmp),
+      !checkCommandDeep("npm run chain:cap-a", tmp, reviewOptions),
       "a dangerous command one hop past the depth-3 cap is NOT caught (documented bound)"
     );
 
@@ -873,7 +878,6 @@ ok(!checkDangerousCommand("cat .env.example"), "reading .env.example is not a wr
     let threw = false;
     let result;
     try { result = checkCommandDeep("npm run dangerous", missingDir); } catch { threw = true; }
-    restoreAuthoritativeMainSha();
     ok(!threw, "missing package.json does not throw");
     eq(result, null, "missing package.json warn-and-allows (no block) for the script-body check");
   } finally {
@@ -886,9 +890,16 @@ let r = runHook({ tool_name: "Bash", tool_input: { command: "git status --short"
 eq(r.status, 0, "bash-safety.mjs exits 0 on benign command");
 ok(!r.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs allows a benign Git status read");
 r = runHook({ tool_name: "Bash", tool_input: { command: ["n", "px vite"].join("") } });
+eq(r.status, 0, "bash-safety.mjs exits 0 after denying an opaque package resolver");
 ok(r.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs denies an opaque package resolver");
 r = runHook({ tool_name: "Bash", tool_input: { command: ["vite --con", "fig output/ignored-config.mjs"].join("") } });
+eq(r.status, 0, "bash-safety.mjs exits 0 after denying an untracked explicit package configuration file");
 ok(r.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs denies an untracked explicit package configuration file");
+for (const command of ["rg -n npx docs", "git log --grep npm --grep exec", "echo vite"]) {
+  r = runHook({ tool_name: "Bash", tool_input: { command } });
+  eq(r.status, 0, "bash-safety.mjs exits 0 when a read-only argument names package tooling: " + command);
+  ok(!r.stdout.includes('"permissionDecision":"deny"'), "bash-safety.mjs treats package-tool names in read-only arguments as data: " + command);
+}
 
 const oversizedWrapperCommand = `echo ${"watch ".repeat(30_000)}; ${["git", "push", "--force", "origin", "main"].join(" ")}`;
 const oversizedStartedAt = process.hrtime.bigint();

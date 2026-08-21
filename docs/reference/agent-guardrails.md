@@ -138,7 +138,16 @@ a real ignored spawning wrapper and cover Node's `--` option terminator before
 the script operand. A local commit alone remains denied; a regression proves the
 wrapper does not become trusted without fresh independent exact-SHA review. The
 proof producer is the only bootstrap exception and must still byte-match its
-protected-main blob.
+protected-main blob. Protected-main identity comes from a sanitized
+`git ls-remote` call to the canonical GitHub repository, not the mutable local
+tracking ref or hook environment. Unit fixtures can inject a SHA only through a
+direct function argument that neither production hook entrypoint accepts.
+Package/config provenance checks run only after a package executor is found in
+command position, so read-only arguments that mention `npx`, `npm exec`, or
+`vite` remain ordinary data. Real package and file-backed execution still fails
+closed if the canonical remote cannot be verified; no mutable on-disk SHA cache
+is trusted. Output-target parsing also recognizes adjacent redirects and Bash's
+`>|` noclobber override before selecting the protected target.
 Alias definitions and unknown commands
 targeting `Env:NODE_OPTIONS` fail closed, as do standalone CMD mutations.
 Recursively inspected CMD bodies fail closed

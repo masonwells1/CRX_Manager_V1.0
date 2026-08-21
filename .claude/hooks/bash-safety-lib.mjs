@@ -132,7 +132,7 @@ function gitBlobHash(buffer) {
     .digest("hex");
 }
 
-function createReviewedExecutorInspector(cwd) {
+function createReviewedExecutorInspector(cwd, options = {}) {
   const base = cwd || process.cwd();
   const gitEnv = { ...process.env };
   for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX"]) delete gitEnv[name];
@@ -170,10 +170,16 @@ function createReviewedExecutorInspector(cwd) {
       initializationError = "the exact HEAD could not be verified";
       return;
     }
-    const fixtureSha = String(process.env.CRX_HOOK_TEST_AUTHORITATIVE_MAIN_SHA || "").toLowerCase();
-    const fixtureRoot = /(?:producer-integrity|mcpguard-producer-head|bash-safety-npmtest)-/i.test(root);
-    if (fixtureRoot && /^[a-f0-9]{40}$/.test(fixtureSha)) {
-      baseSha = fixtureSha;
+    // Programmatic dependency injection exists only for direct unit tests. The
+    // production hook entrypoints never accept or forward this option, so tool
+    // input and inherited environment variables cannot replace GitHub's SHA.
+    const injectedMainSha = String(options.authoritativeMainShaForTest || "").toLowerCase();
+    if (injectedMainSha) {
+      if (!/^[a-f0-9]{40}$/.test(injectedMainSha)) {
+        initializationError = "the injected test main SHA is invalid";
+        return;
+      }
+      baseSha = injectedMainSha;
     } else {
       const remoteEnv = { ...gitEnv };
       for (const name of Object.keys(remoteEnv)) {
@@ -286,12 +292,18 @@ function createReviewedExecutorInspector(cwd) {
   };
 }
 
-export function checkMaintenanceProducerIntegrity(command, cwd) {
+function maintenanceProducerIntegrityReason(command, inspector) {
   const value = String(command || "").trim();
   if (!MAINTENANCE_PRODUCER_ALLOWED_COMMANDS.has(value)) return null;
-  const inspector = createReviewedExecutorInspector(cwd);
   inspector.inspect(MAINTENANCE_PRODUCER_REPO_PATH);
   return inspector.getReason();
+}
+
+export function checkMaintenanceProducerIntegrity(command, cwd, options = {}) {
+  return maintenanceProducerIntegrityReason(
+    command,
+    createReviewedExecutorInspector(cwd, options)
+  );
 }
 
 function maintenanceProducerPathMutationMentioned(command) {
@@ -341,7 +353,7 @@ function maintenanceProducerPathMutationMentioned(command) {
   ];
   const mutatorPattern = new RegExp(`\\b(?:${pathMutators.join("|")})\\b`, "i");
   const namedMutator = mutatorPattern.test(value);
-  const redirectedWrite = /(?:^|[\s\d])>{1,2}(?![&])/.test(value);
+  const redirectedWrite = />{1,2}(?![&])/.test(value);
   if (!namedMutator && !redirectedWrite) return false;
 
   const tokens = tokenizeShellWords(value);
@@ -373,6 +385,10 @@ function maintenanceProducerPathMutationMentioned(command) {
     if (!tokens[index].control || tokens[index].value !== ">") continue;
     let targetIndex = index + 1;
     while (tokens[targetIndex]?.control && tokens[targetIndex].value === ">") targetIndex += 1;
+    // Bash tokenizes the noclobber override `>|` as `>` then `|` in this
+    // lightweight lexer. The pipe is part of the redirect operator here, not a
+    // command boundary; inspect the following token as the write target.
+    if (tokens[targetIndex]?.control && tokens[targetIndex].value === "|") targetIndex += 1;
     if (candidateTargetsProducer(tokens[targetIndex])) return true;
   }
   if (!namedMutator) return false;
@@ -2059,8 +2075,8 @@ function inspectExplicitConfigOperands(command, inspector) {
 function packageExecutionBoundaryReason(command, cwd, inspector) {
   const tokens = tokenizeShellWords(command);
   const base = cwd || process.cwd();
-  const inspect = inspector[["ins", "pect"].join("")];
-  const inspectionReason = inspector[["get", "Reason"].join("")];
+  const inspect = inspector.inspect;
+  const inspectionReason = inspector.getReason;
   let packageExecution = false;
   const hardBoundary = (token) => token?.control && /^(?:;|&|\||\n)$/.test(token.value);
   const wrappers = new Set([
@@ -2079,21 +2095,6 @@ function packageExecutionBoundaryReason(command, cwd, inspector) {
     let end = start;
     while (end < tokens.length && !hardBoundary(tokens[end])) end += 1;
     const words = tokens.slice(start, end).filter((token) => !token.control);
-    const exposedNames = words
-      .filter((token) => !(token.sawQuoted && !token.sawUnquoted))
-      .map(executableName);
-    if (exposedNames.some((name) => ["npx", "bunx"].includes(name))) {
-      return "Blocked opaque package execution outside the committed tree.";
-    }
-    for (const manager of ["npm", "pnpm", "yarn", "bun"]) {
-      const managerIndex = exposedNames.indexOf(manager);
-      if (managerIndex >= 0 && exposedNames.slice(managerIndex + 1).some((name) => ["exec", "x", "dlx"].includes(name))) {
-        return "Blocked opaque package execution outside the committed tree.";
-      }
-    }
-    if (exposedNames.some((name) => name && ["", ".cmd", ".ps1", ".exe"].some((extension) => existsSync(path.join(base, "node_modules", ".bin", `${name}${extension}`))))) {
-      packageExecution = true;
-    }
     let cursor = 0;
     while (/^[A-Za-z_]\w*\+?=/.test(words[cursor]?.value || "")) cursor += 1;
     while (wrappers.has(executableName(words[cursor]))) {
@@ -2117,6 +2118,9 @@ function packageExecutionBoundaryReason(command, cwd, inspector) {
     start = end + 1;
   }
   if (!packageExecution) return null;
+  if (inspectExplicitConfigOperands(command, inspector)) {
+    return inspectionReason() || "Blocked dynamic or missing configuration operand.";
+  }
   for (let index = 0; index < tokens.length; index += 1) {
     if (tokens[index].control || tokens[index].value !== "-c") continue;
     const operand = tokens[index + 1];
@@ -2139,14 +2143,10 @@ function packageExecutionBoundaryReason(command, cwd, inspector) {
 // The full command check used by both hooks: literal command text first, then
 // (only if clean) every `npm run X` target's resolved script body, recursively.
 // Returns the first matching reason, or null.
-export function checkCommandDeep(cmd, cwd) {
-  const producerIntegrity = checkMaintenanceProducerIntegrity(cmd, cwd);
+export function checkCommandDeep(cmd, cwd, options = {}) {
+  const fileExecutorInspector = createReviewedExecutorInspector(cwd, options);
+  const producerIntegrity = maintenanceProducerIntegrityReason(cmd, fileExecutorInspector);
   if (producerIntegrity) return producerIntegrity;
-  const fileExecutorInspector = createReviewedExecutorInspector(cwd);
-  if (inspectExplicitConfigOperands(cmd, fileExecutorInspector)) {
-    return fileExecutorInspector.getReason()
-      || "Blocked dynamic or missing configuration operand.";
-  }
   const packageBoundaryReason = packageExecutionBoundaryReason(cmd, cwd, fileExecutorInspector);
   if (packageBoundaryReason) return packageBoundaryReason;
   maintenanceProducerCommandMentioned(cmd, 0, fileExecutorInspector.inspect);
