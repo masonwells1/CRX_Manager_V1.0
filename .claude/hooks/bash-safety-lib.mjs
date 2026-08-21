@@ -2164,6 +2164,24 @@ function executionContextShiftReason(command, cwd, depth = 0) {
     "python", "python2", "python3", "py", "perl", "ruby", "php",
     "bash", "sh", "dash", "zsh", "ksh", "powershell", "pwsh", "cmd",
   ]);
+  const gitBuiltinCommands = new Set([
+    "add", "am", "annotate", "apply", "archive", "bisect", "blame", "branch", "bugreport", "bundle",
+    "cat-file", "check-attr", "check-ignore", "check-mailmap", "check-ref-format", "checkout", "checkout-index",
+    "cherry", "cherry-pick", "clean", "clone", "column", "commit", "commit-graph", "config", "count-objects",
+    "credential", "credential-cache", "credential-store", "describe", "diagnose", "diff", "diff-files", "diff-index",
+    "diff-tree", "difftool", "fast-export", "fast-import", "fetch", "fetch-pack", "filter-branch", "fmt-merge-msg",
+    "for-each-ref", "for-each-repo", "format-patch", "fsck", "gc", "get-tar-commit-id", "grep", "gui",
+    "hash-object", "help", "hook", "index-pack", "init", "init-db", "instaweb", "interpret-trailers", "log",
+    "ls-files", "ls-remote", "ls-tree", "mailinfo", "mailsplit", "maintenance", "merge", "merge-base", "merge-file",
+    "merge-index", "merge-one-file", "merge-tree", "mergetool", "mktag", "mktree", "multi-pack-index", ["m", "v"].join(""),
+    "name-rev", "notes", "pack-objects", "pack-redundant", "pack-refs", "patch-id", "prune", "prune-packed",
+    "pull", "push", "range-diff", "read-tree", "rebase", "reflog", "refs", "remote", "repack", "replace",
+    "request-pull", "rerere", "reset", "restore", "rev-list", "rev-parse", "revert", ["r", "m"].join(""), "scalar", "send-email",
+    "shortlog", "show", "show-branch", "show-index", "show-ref", "sparse-checkout", "stage", "stash", "status",
+    "stripspace", "submodule", "switch", "symbolic-ref", "tag", "unpack-file", "unpack-objects", "update-index",
+    "update-ref", "update-server-info", "upload-archive", "upload-pack", "var", "verify-commit", "verify-pack",
+    "verify-tag", "version", "web--browse", "whatchanged", "worktree", "write-tree",
+  ]);
   const localPackageBinary = (name) => Boolean(name)
     && ["", ".cmd", ".ps1", ".exe"].some((extension) =>
       existsSync(path.join(base, "node_modules", ".bin", name + extension))
@@ -2205,6 +2223,52 @@ function executionContextShiftReason(command, cwd, depth = 0) {
       && optionValues.some((value) => /^\/D(?::|$)/.test(value))) return true;
     return false;
   };
+  const gitExecutionReason = (words, cursor) => {
+    let gitCursor = executableName(words[cursor]) === "git" ? cursor : -1;
+    if (gitCursor < 0 && transparentWrappers.has(executableName(words[cursor]))) {
+      gitCursor = words.findIndex((token, index) => index > cursor
+        && !(token.sawQuoted && !token.sawUnquoted)
+        && executableName(token) === "git");
+    }
+    if (gitCursor < 0) return null;
+    const args = words.slice(gitCursor + 1).map((token) => token.value);
+    const aliasConfigNamed = (value) => /^alias\.[^=\s]+\s*(?:=|$)/i.test(String(value || "").trim());
+    for (let index = 0; index < args.length; index += 1) {
+      const argument = args[index];
+      if (/^(?:-c|--config-env)$/i.test(argument)) {
+        if (aliasConfigNamed(args[index + 1])) {
+          return "Blocked Git alias configuration because aliases can execute unreviewed shell commands.";
+        }
+        index += 1;
+        continue;
+      }
+      const attachedConfig = /^(?:-c|--config-env=)(.+)$/i.exec(argument)?.[1];
+      if (aliasConfigNamed(attachedConfig)) {
+        return "Blocked Git alias configuration because aliases can execute unreviewed shell commands.";
+      }
+    }
+    let subcommand = "";
+    for (let index = 0; index < args.length; index += 1) {
+      const argument = args[index];
+      if (/^(?:--help|--version|-h)$/i.test(argument)) return null;
+      if (/^(?:-c|-C|--config-env)$/i.test(argument)) { index += 1; continue; }
+      if (/^(?:--exec-path|--git-dir|--work-tree|--namespace|--super-prefix)$/i.test(argument)) { index += 1; continue; }
+      if (/^(?:--exec-path|--git-dir|--work-tree|--namespace|--super-prefix|--config-env)=/i.test(argument)) continue;
+      if (/^-[cC].+/.test(argument)) continue;
+      if (/^(?:--bare|--no-pager|--paginate|--literal-pathspecs|--no-literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs|--no-replace-objects|--no-optional-locks)$/i.test(argument)) continue;
+      if (argument.startsWith("-")) return "Blocked Git execution because its subcommand could not be resolved safely.";
+      subcommand = executableName({ value: argument });
+      break;
+    }
+    if (!subcommand) return null;
+    if (!gitBuiltinCommands.has(subcommand)) {
+      return "Blocked Git alias or external helper execution because it can launch an unreviewed executable.";
+    }
+    if (subcommand === "config" && args.some(aliasConfigNamed)) {
+      return "Blocked persisted Git alias configuration because aliases can execute unreviewed shell commands.";
+    }
+    return null;
+  };
   const nestedBody = (words, cursor) => {
     const commandName = executableName(words[cursor]);
     const args = words.slice(cursor + 1);
@@ -2245,6 +2309,8 @@ function executionContextShiftReason(command, cwd, depth = 0) {
       while (words[cursor]?.value?.startsWith("-")) cursor += 1;
     }
     const commandName = executableName(words[cursor]);
+    const gitReason = gitExecutionReason(words, cursor);
+    if (gitReason) return gitReason;
     if (locationCommands.has(commandName)) {
       contextShifted = true;
       start = end + 1;

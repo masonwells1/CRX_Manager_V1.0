@@ -666,6 +666,14 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
     ok(isDeny(r), "MCP start_process denies an ignored wrapper before it can spawn the producer");
     ok(r.stdout.includes("Blocked file-backed interpreter"), "the MCP denial comes from the HEAD-bound executor check");
     ok(!existsSync(ignoredMarkerPath), "the MCP-denied ignored wrapper never executes");
+    const inlineGitAliasCommand = "git -c 'alias.run=!node output/ignored-wrapper.mjs' run";
+    r = runHook({
+      tool_name: "mcp__Desktop_Commander__start_process",
+      tool_input: { command: inlineGitAliasCommand },
+    }, tmp);
+    ok(isDeny(r), "MCP start_process denies an inline Git shell alias before it can launch an ignored wrapper");
+    ok(r.stdout.includes("Blocked Git alias"), "the MCP inline Git alias denial comes from the executable boundary");
+    ok(!existsSync(ignoredMarkerPath), "the MCP-denied Git alias never executes its ignored wrapper");
     writeFileSync(path.join(tmp, trackedWrapperRelative), `${wrapperSource}// worktree divergence\n`);
     r = runHook({
       tool_name: "mcp__Desktop_Commander__start_process",

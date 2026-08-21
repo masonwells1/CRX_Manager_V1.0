@@ -352,6 +352,15 @@ for (const command of [
       ok(shiftedHookResult.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies a shifted executor: " + shiftedCommand);
     }
     eq(checkCommandDeep("cd output && git status --short", integrityRepo, reviewOptions), null, "a directory change followed only by a Git read remains allowed");
+    const inlineGitAliasCommand = "git -c 'alias.run=!node output/ignored-wrapper.mjs' run";
+    ok(checkCommandDeep(inlineGitAliasCommand, integrityRepo, reviewOptions)?.includes("Git alias"), "an inline Git shell alias cannot launch an ignored wrapper");
+    ok(checkCommandDeep("git -c 'alias.run = !node output/ignored-wrapper.mjs' run", integrityRepo, reviewOptions)?.includes("Git alias"), "whitespace before an inline Git alias value cannot evade the guard");
+    const inlineGitAliasHookResult = runHook({ tool_name: "Bash", tool_input: { command: inlineGitAliasCommand } }, integrityRepo);
+    eq(inlineGitAliasHookResult.status, 0, "the Bash hook exits 0 after denying an inline Git shell alias");
+    ok(inlineGitAliasHookResult.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies an inline Git shell alias");
+    ok(checkCommandDeep("git config alias.run '!node output/ignored-wrapper.mjs'", integrityRepo, reviewOptions)?.includes("persisted Git alias"), "persisted Git shell aliases are denied");
+    ok(checkCommandDeep("git run", integrityRepo, reviewOptions)?.includes("alias or external helper"), "unknown Git aliases and executable helpers fail closed");
+    eq(checkCommandDeep("git status --short", integrityRepo, reviewOptions), null, "an ordinary built-in Git read remains allowed");
     const opaquePackageRunner = ["n", "px vite"].join("");
     ok(checkCommandDeep(opaquePackageRunner, integrityRepo, reviewOptions)?.includes("opaque package execution"), "an opaque package resolver is denied even on authoritative main");
     const untrackedConfig = "vite.config.mjs";

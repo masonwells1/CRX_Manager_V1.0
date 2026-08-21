@@ -153,6 +153,11 @@ classifier denies file-backed or package execution after `cd`,
 `Set-Location`/`Push-Location`, a nested directory-changing shell body,
 or recognized wrapper/package working-directory options. A directory change
 followed only by a Git read remains allowed.
+Git cannot be used as an alternate executable dispatcher: inline `alias.*`
+configuration, persisted alias configuration, and invoked subcommands that are
+not known Git built-ins fail closed. This blocks `!` shell aliases and external
+`git-*` helpers from launching ignored wrappers outside exact-HEAD inspection;
+real Bash and MCP hook regressions exercise the hostile inline-alias command.
 Alias definitions and unknown commands
 targeting `Env:NODE_OPTIONS` fail closed, as do standalone CMD mutations.
 Recursively inspected CMD bodies fail closed

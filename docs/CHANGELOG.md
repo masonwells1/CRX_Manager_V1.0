@@ -171,6 +171,10 @@ All significant development milestones, in reverse chronological order.
   working-directory option; location changes followed only by a Git read remain
   allowed. Real-hook regressions create the ignored shadow and exercise POSIX,
   PowerShell, nested-shell, wrapper-option, package-prefix, and MCP routes.
+  Git dispatch is bound to the same reviewed-executor boundary: inline or
+  persisted `alias.*` configuration is denied, and invoked subcommands must be
+  known Git built-ins rather than aliases or external `git-*` helpers. Bash and
+  MCP regressions prove an inline `!node` alias cannot launch the ignored wrapper.
   Environment-provider and .NET `NODE_OPTIONS` mutations are denied even when
   no Node command appears in the same payload, closing staged mutations across
   persistent MCP shell interactions. Dynamic environment-provider targets fail
