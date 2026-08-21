@@ -34,6 +34,43 @@ This file consolidates (does not replace) the source documents it points to. If 
 
 ---
 
+## OPEN 2026-08-20 — the Phase 3C containment scanner walks `dist/`, so a concurrent rebuild refuses the push
+
+**Severity: MEDIUM. Not a containment hole — a false refusal.** The pre-push hook
+(`.husky/pre-push:7`) runs `scripts/check-supplier-pricing-phase3-private-artifacts.mjs`, which
+enumerates ignored files at
+`scripts/check-supplier-pricing-phase3-private-artifacts.mjs:1751-1752` and then stats and opens
+every candidate through `scanWorktreeCandidate` (line 1797). The repository's own top-level
+`dist/` build output is **not** excluded from that enumeration:
+
+- `worktreeContainerToolOwnedExcludePathspecs` (line 1683) excludes `dist/` **only** where it sits
+  nested under a registered worktree *container* directory — deliberately narrow, and it does not
+  cover the checkout's own `dist/`.
+- Line 1795 fully skips only `isOperatorOwnedIgnoredPath`. For `isToolOwnedIgnoredPath` (which is
+  what `dist/` is, line 72) line 1796 only sets `checkArchives = false` — the file is still
+  enumerated and still opened.
+
+`scanWorktreeCandidate` runs a whole pre-open sequence — `lstatSync`, `statSync`, `realpathSync`,
+`openSync`, then `fstatSync` (lines 605-686) — and **none** of it tolerates `ENOENT`. So if anything
+rewrites `dist/` between enumeration and the stat — a dev server, a `npm run build`, a parallel
+session in the same checkout — the scanner throws and the push is refused with a **misleading
+"containment failed"**, which reads as "a private packet leaked" when nothing leaked. Phase 3C's
+containment scan is ~98 seconds on its own, so the window is wide.
+
+**Verified from source 2026-08-20** (the call chain and the missing exclusion, cited above); the
+crash itself was **observed directly in an earlier session** and was not reproduced here. Nothing
+about this weakens containment: `dist/` files still get the structural-signature scan, and a
+force-added file becomes tracked and gets the full scan regardless.
+
+**Likely fix, not yet written and deliberately not bundled with the 2026-08-20 fleet-scan repair:**
+tolerate `ENOENT` across the **whole** pre-open sequence above — not just the `stat`/`open`
+boundary — for `source === 'ignored'` tool-owned paths, **and re-check that the path is still
+absent from the index before skipping it**. That re-check is the load-bearing half: the candidate
+list is collected before scanning, so "it vanished" and "it was force-added and is now tracked"
+are indistinguishable at scan time. Without it, "a file that vanished mid-scan cannot be a staged
+private packet" is an overclaim, not a guarantee. The alternative — widening the exclude pathspec —
+would stop scanning `dist/` altogether and is a real loss of coverage. Whoever picks this up should
+confirm which the containment charter actually wants before choosing.
 ## OPEN (WONTFIX for now) 2026-08-20 — `review-proof-guard` denies destructive shell commands that NAME a worktree path
 
 **Severity: LOW — cosmetic, with a zero-cost workaround. Mason chose "document, don't fix"
