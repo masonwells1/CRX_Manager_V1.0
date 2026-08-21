@@ -148,10 +148,9 @@ All significant development milestones, in reverse chronological order.
   Executor provenance now resolves the protected `main` SHA from the canonical
   GitHub repository with local/system Git configuration disabled; moving the
   mutable local tracking ref cannot manufacture trust. Opaque package resolvers
-  are denied, while reviewed package scripts and local package binaries bind
-  their manifest plus repository-root configuration files to the same exact-head
-  provenance. Generic explicit configuration operands are file-bound as well, so
-  an ignored or untracked Vite-style config cannot execute before inspection.
+  and local package executables are denied because ignored `node_modules` bytes
+  are outside exact-HEAD review and can change after manifest review. Installed-
+  toolchain verification runs inside the reviewed commit/preflight gate instead.
   Hosted exact-head review then closed the remaining redirect and test-fixture
   edges: adjacent redirects and Bash's `>|` noclobber override now resolve the
   actual following write target before classification; package-runner names are
@@ -182,6 +181,9 @@ All significant development milestones, in reverse chronological order.
   Windows current-directory executable extension resolution is covered for bare
   `cmd /c name` commands, and static PowerShell aliases are provenance-checked
   and replayed through the full classifier before later alias invocation.
+  Implicit code loaders now fail closed as well, covering PowerShell modules and
+  types, Make files, Java/.NET inputs, and Windows script/DLL launchers whose
+  executable content otherwise lives outside command-position inspection.
   Environment-provider and .NET `NODE_OPTIONS` mutations are denied even when
   no Node command appears in the same payload, closing staged mutations across
   persistent MCP shell interactions. Dynamic environment-provider targets fail

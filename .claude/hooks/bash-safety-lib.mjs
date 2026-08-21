@@ -752,6 +752,19 @@ export function maintenanceProducerCommandMentioned(command, depth = 0, fileExec
     return fileExecutorInspector(candidate);
   };
   if (tokens.some(directPathBackedInvocation)) return true;
+  const opaqueImplicitLoaderInvocation = (token, index, list) => {
+    if (!invocationPosition(list, index)) return false;
+    const name = normalizeShellToken(token.value).replace(/^[@&]/, "").split(/[\\/]/).pop().replace(/\.(?:exe|cmd|bat|ps1)$/i, "").toLowerCase();
+    const implicitLoaders = new Set([
+      "import-module", "ipmo", "add-type", "make", "gmake", "nmake", "java", "javaw", "dotnet",
+      "cscript", "wscript", "mshta", "rundll32", "regsvr32",
+    ]);
+    if (!implicitLoaders.has(name)) return false;
+    const args = [];
+    for (let cursor = index + 1; cursor < list.length && !list[cursor].control; cursor += 1) args.push(normalizeShellOption(list[cursor].value));
+    return !args.some((argument) => /^(?:--help|--version|-h|-v|\/?\?)$/i.test(argument));
+  };
+  if (tokens.some(opaqueImplicitLoaderInvocation)) return true;
   if (fileExecutorInspector) {
     const staticPowerShellAliases = new Map();
     for (let segmentStart = 0; segmentStart < tokens.length;) {
@@ -2193,23 +2206,7 @@ function packageExecutionBoundaryReason(command, cwd, inspector) {
   if (inspectExplicitConfigOperands(command, inspector)) {
     return inspectionReason() || "Blocked dynamic or missing configuration operand.";
   }
-  for (let index = 0; index < tokens.length; index += 1) {
-    if (tokens[index].control || tokens[index].value !== "-c") continue;
-    const operand = tokens[index + 1];
-    if (!operand || operand.control || inspect(operand.value)) return inspectionReason() || "Blocked package configuration operand.";
-  }
-  if (!existsSync(path.join(base, ["package", "json"].join(".")))) return null;
-  if (inspect(["package", "json"].join("."))) return inspectionReason();
-  try {
-    for (const entry of readdirSync(base, { withFileTypes: true })) {
-      if (!(entry.isFile() || entry.isSymbolicLink())) continue;
-      if (!/(?:^|[._-])(?:config|rc)(?:[._-]|$)|^(?:package|tsconfig|jsconfig)\.json$/i.test(entry.name)) continue;
-      if (inspect(entry.name)) return inspectionReason();
-    }
-  } catch {
-    return "Blocked package execution because root configuration files could not be enumerated.";
-  }
-  return null;
+  return "Blocked mutable local package executable outside the committed tree; ignored node_modules bytes cannot satisfy exact-HEAD review.";
 }
 
 function executionContextShiftReason(command, cwd, depth = 0) {

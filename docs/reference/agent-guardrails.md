@@ -142,11 +142,14 @@ protected-main blob. Protected-main identity comes from a sanitized
 `git ls-remote` call to the canonical GitHub repository, not the mutable local
 tracking ref or hook environment. Unit fixtures can inject a SHA only through a
 direct function argument that neither production hook entrypoint accepts.
-Package/config provenance checks run only after a package executor is found in
-command position, so read-only arguments that mention `npx`, `npm exec`, or
-`vite` remain ordinary data. Real package and file-backed execution still fails
-closed if the canonical remote cannot be verified; no mutable on-disk SHA cache
-is trusted. Output-target parsing also recognizes adjacent redirects and Bash's
+Package execution is recognized only in command position, so read-only
+arguments that mention `npx`, `npm exec`, or `vite` remain ordinary data. A real
+local package executable fails closed because ignored `node_modules` bytes are
+not part of exact HEAD and can change after review; verification that needs the
+installed toolchain runs inside the repository's reviewed commit/preflight gate.
+File-backed execution still fails closed if the canonical remote cannot be
+verified; no mutable on-disk SHA cache is trusted. Output-target parsing also
+recognizes adjacent redirects and Bash's
 `>|` noclobber override before selecting the protected target. Because relative
 executor identity also depends on the effective directory, the shared Bash/MCP
 classifier denies file-backed or package execution after `cd`,
@@ -169,6 +172,10 @@ extensions before PATH lookup, so `cmd /c name` cannot hide `name.cmd` or
 `name.bat`. Static PowerShell alias definitions are provenance-checked and
 replayed through the full classifier, preventing an alias from hiding either a
 path-backed wrapper or an interpreter plus unsafe operand.
+Implicit code loaders fail closed too, including PowerShell module/type loading,
+Make build files, Java archives/classes, .NET execution, and Windows script/DLL
+launchers. These commands can execute ignored inputs without placing that input
+in command position, so manifest-only inspection is not a sufficient boundary.
 Alias definitions and unknown commands
 targeting `Env:NODE_OPTIONS` fail closed, as do standalone CMD mutations.
 Recursively inspected CMD bodies fail closed

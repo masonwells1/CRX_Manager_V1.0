@@ -332,7 +332,7 @@ for (const command of [
     eq(checkCommandDeep(`node ${trackedWrapperRelative}`, integrityRepo, reviewOptions), null, "a reviewed file-backed executor is allowed when HEAD is the reviewed main commit");
     eq(checkCommandDeep(`node -- ${trackedWrapperRelative}`, integrityRepo, reviewOptions), null, "a reviewed file-backed executor after -- is allowed on the reviewed main commit");
     eq(checkCommandDeep(trackedDirectRelative.replaceAll("/", "\\"), integrityRepo, reviewOptions), null, "a directly executed tracked script is allowed when exact HEAD is reviewed");
-    eq(checkCommandDeep("npm run build", integrityRepo, reviewOptions), null, "a reviewed package script is allowed on authoritative main");
+    ok(checkCommandDeep("npm run build", integrityRepo, reviewOptions)?.includes("mutable local package executable"), "a mutable ignored package shim is denied even when manifests are reviewed");
     const shadowBootstrapPath = path.join(integrityRepo, "output", ...bootstrapRelative.split("/"));
     mkdirSync(path.dirname(shadowBootstrapPath), { recursive: true });
     writeFileSync(shadowBootstrapPath, "console.log('ignored shadow');\n");
@@ -403,6 +403,9 @@ for (const command of [
     writeFileSync(path.join(integrityRepo, ...ignoredPowerShellRelative.split("/")), "Write-Output ignored\n");
     const ignoredShebangRelative = "output/ignored-shebang";
     writeFileSync(path.join(integrityRepo, ...ignoredShebangRelative.split("/")), "#!/bin/sh\necho ignored\n");
+    writeFileSync(path.join(integrityRepo, "output", "ignored.psm1"), "Write-Output ignored\n");
+    writeFileSync(path.join(integrityRepo, "output", "ignored.mk"), "all:\n\t@echo ignored\n");
+    writeFileSync(path.join(integrityRepo, "output", "ignored.jar"), "ignored\n");
     writeFileSync(path.join(integrityRepo, "evil.cmd"), "@echo bare ignored wrapper\n");
     ok(checkCommandDeep(`node ${ignoredWrapperRelative}`, integrityRepo, reviewOptions), "an ignored file-backed executor that spawns the producer is denied");
     ok(checkCommandDeep(`node -- ${ignoredWrapperRelative}`, integrityRepo, reviewOptions), "an ignored file-backed executor after -- is denied");
@@ -418,6 +421,15 @@ for (const command of [
     ok(powerShellAliasHookResult.stdout.includes("Blocked file-backed interpreter"), "the Bash hook denies a static PowerShell alias to an ignored script");
     ok(checkCommandDeep(`./${ignoredShebangRelative}`, integrityRepo, reviewOptions)?.includes("ignored or untracked"), "a directly executed ignored shebang path is denied");
     ok(checkCommandDeep(`bash -c ${JSON.stringify(`./${ignoredShebangRelative}`)}`, integrityRepo, reviewOptions), "nested shell dispatch cannot hide a directly executed ignored shebang path");
+    for (const implicitLoaderCommand of [
+      "Import-Module output/ignored.psm1",
+      "make -f output/ignored.mk",
+      "java -jar output/ignored.jar",
+    ]) {
+      ok(checkCommandDeep(implicitLoaderCommand, integrityRepo, reviewOptions), "an implicit code loader fails closed: " + implicitLoaderCommand);
+      const loaderHookResult = runHook({ tool_name: "Bash", tool_input: { command: implicitLoaderCommand } }, integrityRepo);
+      ok(loaderHookResult.stdout.includes('"permissionDecision":"deny"'), "the Bash hook denies an implicit code loader: " + implicitLoaderCommand);
+    }
     const ignoredDirectHookResult = runHook({ tool_name: "Bash", tool_input: { command: ignoredDirectRelative.replaceAll("/", "\\") } }, integrityRepo);
     ok(ignoredDirectHookResult.stdout.includes("Blocked file-backed interpreter"), "the Bash hook denies a directly executed ignored script");
     const ignoredHookResult = runHook({ tool_name: "Bash", tool_input: { command: `node -- ${ignoredWrapperRelative}` } }, integrityRepo);

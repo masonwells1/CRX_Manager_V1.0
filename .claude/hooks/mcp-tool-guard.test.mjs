@@ -689,6 +689,17 @@ eq(r.stdout.trim(), "", "moving an unprotected directory is allowed (silent)");
       tool_input: { command: `Set-Alias x .\\${ignoredPowerShellRelative.replaceAll("/", "\\")}; x` },
     }, tmp);
     ok(isDeny(r) && r.stdout.includes("Blocked file-backed interpreter"), "MCP denies a static PowerShell alias to an ignored script");
+    for (const implicitLoaderCommand of [
+      "Import-Module output/ignored.psm1",
+      "make -f output/ignored.mk",
+      "java -jar output/ignored.jar",
+    ]) {
+      r = runHook({
+        tool_name: "mcp__Desktop_Commander__start_process",
+        tool_input: { command: implicitLoaderCommand },
+      }, tmp);
+      ok(isDeny(r), "MCP denies an implicit code loader: " + implicitLoaderCommand);
+    }
     const inlineGitAliasCommand = "git -c 'alias.run=!node output/ignored-wrapper.mjs' run";
     r = runHook({
       tool_name: "mcp__Desktop_Commander__start_process",
