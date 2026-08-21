@@ -139,6 +139,136 @@ All significant development milestones, in reverse chronological order.
   also has a separate generated maintenance-execution matcher owned by its
   checked-in generator; this change hardens the shared shell/MCP layer and does
   not implicitly regenerate that independent matcher.
+## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (every worktree → 6 of 23)
+
+`node scripts/fleet-status.mjs` reported `PARKED STATE UNKNOWN` for **every** worktree — all 19 —
+so the parked-migration count could not be read at all. That blocks stamping a new migration into
+a queue nobody can count, which is how two branches collide on the same schema.
+
+The check was unsatisfiable by construction. `parkedDraftPathsFrom` reconciled the
+`LOCAL CANDIDATE — NOT APPLIED` rows of `docs/reference/migration-history.md` against the branch's
+own-draft diff (`base..HEAD`) — but that history file is **shared, and arrives from `origin/main`**.
+An inherited candidate row naming SQL that also came with `origin/main`, with no net change since
+the branch point, does not appear in that diff. (`base..HEAD` is a *net* diff: a file touched and
+then reverted is likewise absent, while one genuinely changed **is** present and reconciles
+normally.) A guard that always answers UNKNOWN answers nothing.
+
+- **Fixed the check's domain, not by adding a bypass.** `createOwnDraftPathsReader` now exempts a
+  row **only when `origin/main`'s own shared history REGISTERS it as a LOCAL CANDIDATE** — because
+  then mainline discovery owns it and verifies its pin/header against the same immutable tree. One
+  rule, reading a structured registry. Everything else stays reconciled.
+- **"Exists on `origin/main`" is deliberately NOT sufficient**, and this is the sharp edge. A first
+  draft exempted any candidate whose SQL was present in `origin/main`'s tree; the Codex reviewer
+  raised it as a P1 on PR #437 and it reproduced. A branch may newly register an ordinary
+  already-committed migration as a LOCAL CANDIDATE via the supported SHA-pin form, changing only
+  `migration-history.md`. The SQL is then absent from `base..HEAD`, `origin/main`'s older history
+  does not list it, and its blob carries no parked header — so mainline discovery reports nothing
+  either, and `/fleet` would have **confidently hidden a genuinely pending migration**. Existing on
+  main is not the same as being *accounted for* by main. A dedicated test pins this.
+- **A second exemption arm — "`origin/main` records this migration as settled" — was tried twice
+  and CUT.** Codex blocked both attempts on PR #437, correctly. A bare substring test read
+  `NOT YET APPLIED LIVE` as settled (and `migration-history.md` really carries six such rows).
+  Rejecting an *adjacent* negator still read `will be applied live`, `not successfully applied
+  live` and `not considered superseded` as settled — and worse, row 887, which is genuinely
+  pending (`**LOCAL CANDIDATE — NOT APPLIED.**`), matched purely on later prose mentioning
+  "applied live" and a "superseded price". Every version could flip a conservative UNKNOWN into a
+  **confident zero** over pending SQL. The arm cleared exactly one worktree, so it was removed
+  rather than iterated a third time; the lib carries a DELIBERATELY-ABSENT note stating that any
+  re-add must parse a structurally anchored status field, never prose.
+- **One pinned `origin/main` object id for a whole scan.** Codex raised this same invariant three
+  times on PR #437, and the first two fixes each satisfied it in one component while another still
+  resolved the moving ref on its own — a narrower race is not a fixed one. `origin/main` is shared
+  with every concurrent session, so a `git fetch` landing mid-scan can put two phases on different
+  commits: if the fetch adds a SHA-pinned LOCAL CANDIDATE whose SQL carries no parked header, the
+  older history does not name it, the newer tree holds it, the grep never sees it, and mainline
+  discovery answers `known` while **omitting a pending migration**. Both consumers now resolve
+  `origin/main` to a single object id up front and pass it to every mainline read — history, tree,
+  grep, blobs, mtime, merge-base, and the fallback diff. The lib's readers take that id as an
+  argument defaulting to the symbolic name, so an unpinned caller keeps its previous behaviour.
+  Ten assertions pin it, and reverting any single call site to `origin/main` reddens them.
+- **The pin then broke the grep prefilter, and Codex caught that too.** `git grep <rev>` prefixes
+  every hit with `<rev>:`. The prefilter stripped the literal `origin/main:`, so pinning made the
+  prefix `<sha>:`, every hit came back malformed, `originMainForwardBlobPaths` rejected it, no SQL
+  was opened, and discovery answered `known` with **no paths** — a confident zero over a parked
+  migration, reintroduced inside the fix for confident zeroes. It now strips whatever revision was
+  actually searched and treats a hit missing that prefix as UNKNOWN rather than dropping it. Only
+  the function's two error paths had ever been tested; the success path had no coverage at all,
+  which is how it shipped. It has coverage now. **This one is latent in the current repo** — it
+  needs a parked migration on `main` with no `LOCAL CANDIDATE` history row, which does not exist
+  today — so the fleet run looks identical either way and does not prove it; the tests do.
+- **The exemption compares the row, not just the path.** Codex P2: matching on path alone let a
+  branch rewrite an existing mainline candidate row in place — swapping its SQL sha256 pin for a
+  different 64-hex value — and still report KNOWN, because the SQL file is untouched and the
+  SQL-only `base..HEAD` diff never names it. That branch's own history-to-SQL cross-reference was
+  invalid, and merging it would turn the mainline scan UNKNOWN. A row is exempt only when
+  `origin/main` registers the same path **and** the branch's pin still agrees with mainline's.
+  Absent on both sides counts as agreement; present on one side only, or differing, does not.
+- **A structural guard now enforces the pinning, because prose did not.** Codex raised the "one
+  snapshot per scan" invariant **four** times; each manual fix satisfied the call sites in view and
+  missed a sibling. The last was `mergedLabel()` in `fleet-status.mjs`, still on the symbolic ref
+  after its twin in the SessionStart hook was pinned — visible in my own grep output and skipped.
+  A test now scans both consumers and fails on any revision-consuming git subcommand
+  (`merge-base`, `ls-tree`, `show`, `log`, `diff`, `grep`, `cat-file`, `rev-list`) that names
+  `"origin/main"` instead of the pinned id. `rev-parse` is exempt — that is where the symbolic
+  name is correct — and display strings are not git arguments. Mutation-tested: reverting that one
+  call site reddens it by file and rule.
+- **The exemption reads nothing of its own** (Codex HIGH, round 4). It consumes the exact
+  `origin/main` history text the caller's mainline discovery pass verified against, injected via
+  `readOriginMainHistory`. When the reader resolved `origin/main` independently, a concurrent
+  `git fetch` between the two phases meant mainline discovery could inspect commit A and report
+  no candidate while the exemption saw that candidate registered in commit B and suppressed
+  reconciliation — again a **confident zero** over pending SQL, reproduced by Codex. Both callers
+  (`scripts/fleet-status.mjs`, `.claude/hooks/worktree-awareness.mjs`) now read that history once
+  per run and share the same bytes with both phases, so the two cannot disagree about the
+  registry. A caller supplying no history exempts nothing.
+- **Not a relaxation.** An unreadable `origin/main` history exempts nothing and keeps the old
+  conservative answer. Under-reporting — a confident zero over real pending migrations — is the
+  dangerous direction, so every branch of this is pinned by tests and was mutation-tested,
+  including an aggregate false-zero regression test reproducing Codex's exact scenario.
+- **One lib, both consumers.** `scripts/fleet-status.mjs` and the SessionStart banner share
+  `.claude/hooks/worktree-awareness-lib.mjs` by design (2026-07-29), so the change is in the lib.
+- **Real settled-row case.** `origin/main` row 886 records
+  `20260813080000_lock_quote_versions_writes_to_rpc.sql` `APPLIED LIVE` (live `list_migrations`
+  agrees) while a branch still carried it as a LOCAL CANDIDATE. That row even notes the file's own
+  `-- STATUS: NOT APPLIED` header is stale and deliberately uncorrected, because CRX never edits an
+  applied migration.
+- **Cost.** The ~840 KiB shared history is parsed once per worktree, and `origin/main`'s history is
+  read once per reader.
+
+**Proof:** the structural defect is gone — every worktree reported UNKNOWN before; **6 of 23** do
+now (measured 2026-08-20; the fleet churns, so treat the denominator as a snapshot). Those six are
+named, specific, and real (see below). Note the honest cost: **3 of the 6 come from this PR's own
+pin comparison** — an A/B at one moment measured 3 UNKNOWN with the comparison disabled and 6 with
+it enabled. Three branches carry a candidate row whose sha256 pin disagrees with `origin/main`'s.
+The scan cannot distinguish "this branch rewrote the pin" (the Codex P2 tampering case) from "this
+branch is stale and mainline changed the row underneath it", so it declines to answer for both.
+That is the fail-closed direction and it is deliberate, but it means this PR buys a smaller
+reduction than the structural fix alone would suggest. All mainline candidates are still listed by
+name — attributed, not hidden. 230 lib assertions pass, including the original
+rule's own UNKNOWN test, the tree-vs-history regression, the cross-phase snapshot regression, and
+an aggregate false-zero regression. A standalone end-to-end probe drives all seven false-zero
+shapes Codex raised across four review rounds (negated, future, qualified, qualified-negation,
+prose-only, stale snapshot, no history) through the real reader and gets UNKNOWN for every one,
+plus a registered-candidate control that still exempts and an assertion that the reader issues no
+ref-resolving git call of its own. Both real consumers were run: `fleet-status.mjs` and the
+SessionStart hook, which agree.
+
+**Still open, and NOT a code defect.** Of the six, three are the pin-disagreement cases described
+above. The others are stale checkouts — **70–104 commits behind `origin/main`**
+and still hold its older wording of rows 872–877/886. `main` has since re-worded those same rows —
+PR #393 restaged the Wave A drafts into `scripts/.staging-migrations/` ("PARKED DRAFT (STAGED)")
+and row 886 became "APPLIED LIVE" — so the stale copies still read "LOCAL CANDIDATE" for SQL those
+branches never touched. Nothing on those branches needs editing; they are simply stale, and the
+work they name is already counted via the staging-draft path. Until they are refreshed or retired,
+`/fleet` reports `PARKED STATE UNKNOWN` rather than a number — by design, because a confident zero
+over pending SQL is the worse failure.
+
+Scope: guard/reporting tooling only. No schema change, no migration, no live data, no money path.
+Diagnosis: `docs/reference/parked-migration-scan-unknown-diagnosis.md`. PR #437.
+
+Also filed (diagnosis only, deliberately not bundled): the Phase 3C containment scanner walks the
+repository's own gitignored `dist/` and opens each file with no `ENOENT` tolerance, so a concurrent
+rebuild refuses the push with a misleading "containment failed" — `docs/manual/KNOWN_ISSUES.md`.
 ## 2026-08-20 — Blend-ticket unit fields are now dropdowns instead of free text,…
 
 Blend-ticket unit fields are now dropdowns instead of free text, removing the cause of the unit bug class rather than warning about it. Built by headless Codex (gpt-5.6-sol) from a Claude-authored spec, with Claude reviewing the diff and running every check; Codex never touched git, the live database, or a deploy. A shared UnitSelect offers only units the live unit_conversions table carries, filtered to the product's form, and grandfathers an odd saved value so opening an old ticket can never silently blank it. The product form is resolved from each row's current product_id rather than a joined object captured at load. Applying a recipe now pre-selects the product's catalog rate unit instead of saving blank, so the ticket shows the unit it will actually bill in. Proved in a real browser through Vite, not only under vitest; 107 tests green; blendMathValidator deliberately untouched. No schema change, no migration, no edge function.
