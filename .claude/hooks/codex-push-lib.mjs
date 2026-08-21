@@ -169,16 +169,43 @@ function splitShellArgs(value) {
   return String(value || "").match(/"[^"]*"|'[^']*'|\S+/g)?.map(unquoteShellArg) || [];
 }
 
+// Git Bash hands git an MSYS path (`/c/repo`), and the MSYS runtime rewrites it
+// to `C:\repo` when it execs the process. These guards are plain WINDOWS
+// processes, so `path.resolve` reads the same text as a rooted path on the
+// current drive and produces `C:\c\repo` — a directory that does not exist.
+// Every git lookup then failed with a cwd error that spawnSync reports as
+//
+//   spawnSync git ENOENT
+//
+// which is textually identical to a MISSING GIT EXECUTABLE. The push guard's
+// denial therefore blamed git and read as a policy refusal, and two sessions
+// (2026-08-19, 2026-08-20) hunted PATH before handing the push to Mason. It was
+// never PATH: the guard was looking in a directory that was never there.
+//
+// Only the built-in drive-letter form is translated. `/usr/bin`, `/tmp`, `/` and
+// friends depend on the MSYS mount table, which these guards cannot read and
+// must not guess at — those keep resolving as before and keep failing closed,
+// which is the right answer for a repository this guard cannot locate.
+export function msysPathToWindows(value, platform = process.platform) {
+  const text = String(value ?? "");
+  if (platform !== "win32") return text;
+  // A single leading slash only: `//server/share` is a UNC path, not a mount.
+  const match = /^\/([A-Za-z])(?:\/(.*))?$/.exec(text);
+  if (!match) return text;
+  const rest = (match[2] || "").replace(/\//g, "\\");
+  return `${match[1].toUpperCase()}:\\${rest}`;
+}
+
 // Resolve the repository directory selected by one or more `git -C` options.
 // Git applies repeated -C values from left to right, so preserve that behavior.
 export function gitPushCwd(cmd, fallbackCwd) {
-  const base = path.resolve(fallbackCwd || process.cwd());
+  const base = path.resolve(msysPathToWindows(fallbackCwd || process.cwd()));
   const prefix = String(cmd || "").match(GIT_PUSH_PREFIX_RE)?.[1] || "";
   const optionRe = new RegExp(`(?:^|\\s)-C\\s+(${GIT_ARG})`, "g");
   let cwd = base;
   let match;
   while ((match = optionRe.exec(prefix)) !== null) {
-    cwd = path.resolve(cwd, unquoteShellArg(match[1]));
+    cwd = path.resolve(cwd, msysPathToWindows(unquoteShellArg(match[1])));
   }
   return cwd;
 }

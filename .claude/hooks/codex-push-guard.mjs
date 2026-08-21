@@ -664,6 +664,16 @@ for (const pushCmd of pushCommands) {
   }
 
   const pushRepoDir = gitPushCwd(pushCmd, projectDir);
+  // A directory that does not exist is a DIAGNOSABLE condition, and separating
+  // it out is the whole point: node reports a missing cwd and a missing
+  // executable with the same `spawnSync git ENOENT` text, so the generic denial
+  // below blamed git for a path problem and read as a policy refusal. Two
+  // sessions burned hours on it. Still a denial — the guard genuinely cannot
+  // read a repository that is not there — but one that names the real cause and
+  // says explicitly not to route around the gate.
+  if (!existsSync(pushRepoDir)) {
+    deny(`CODEX GATE: this push names a repository directory that does not exist as this guard resolves it: ${pushRepoDir}. This is a PATH-SPELLING problem, not a policy refusal, and not a problem with git. This guard runs as a Windows process, so it can only translate the drive-letter form of a Git Bash path (\`/c/repo\` → \`C:\\repo\`); anything else depends on the MSYS mount table it cannot read. Re-run the push naming the repository with a Windows path, for example \`git -C C:\\CRX_Manager push origin <branch>\`. Do NOT work around this with a directory change, an inline PATH=, or an environment variable — those forms are separately denied, by design.`);
+  }
   let branch = "";
   try {
     branch = git(["rev-parse", "--abbrev-ref", "HEAD"], pushRepoDir);

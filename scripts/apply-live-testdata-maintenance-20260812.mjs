@@ -52,12 +52,21 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // joined RISKY_PATH_RES so a Codex push touching it needs an exact-head
   // proof. The apply-live-testdata risky-path anchor this transform verifies is
   // still present exactly once; the transform is identity, so input == output.
+  // pushLib re-pinned 2026-08-21: `gitPushCwd` now translates the drive-letter
+  // form of a Git Bash MSYS path (`/c/repo` → `C:\repo`) before resolving it.
+  // These guards are Windows processes, so `path.resolve("/c/repo")` produced
+  // `C:\c\repo`, a directory that does not exist, and every git lookup failed
+  // with a cwd error node reports as `spawnSync git ENOENT` — indistinguishable
+  // from a missing git. The push guard blamed git and denied every Bash-tool
+  // push. The risky-path anchor this transform verifies (line 410 of the lib,
+  // the apply-live-testdata producer path) is untouched and still present
+  // exactly once; the transform remains identity, so input == output.
   codexGuard: "05499cfe34a3246b2400a22c343562fbd8fd0c33",
-  pushLib: "47ff790caa55c27d4f7ee29d43493d2b3389e62c",
+  pushLib: "2045ab3b62075c2099ab7c55b79ae4e5d390c100",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
   codexGuard: "0f3a62cfc6cdacf5e43465d37c2ca67eaf914597",
-  pushLib: "47ff790caa55c27d4f7ee29d43493d2b3389e62c",
+  pushLib: "2045ab3b62075c2099ab7c55b79ae4e5d390c100",
 };
 
 export function maintenanceProducerCommandMentioned(command) {

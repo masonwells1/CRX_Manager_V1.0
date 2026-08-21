@@ -12,6 +12,7 @@ import {
   claudeProofValid,
   contentIsRisky,
   gitPushCwd,
+  msysPathToWindows,
   gitSubcommandIsDynamic,
   mainPushIsForced,
   mainPushSource,
@@ -2269,6 +2270,119 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
       "allow",
       "the documented SSH keepalive workaround is a transport option, not a destination override",
     );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ── Git Bash MSYS paths in `-C` (2026-08-21) ────────────────────────────────
+// Observed 2026-08-19 and 2026-08-20: every `git -C /c/CRX_Manager … push` from
+// the Bash tool was denied with "could not determine the repository/branch
+// selected by this push. spawnSync git ENOENT". The bug was never PATH and never
+// git — `path.resolve` read `/c/CRX_Manager` as a rooted path on the current
+// drive and produced `C:\c\CRX_Manager`, which does not exist, and node reports
+// a missing cwd with the SAME ENOENT text as a missing executable.
+assert.equal(msysPathToWindows("/c/CRX_Manager", "win32"), "C:\\CRX_Manager", "drive-letter form translates");
+assert.equal(msysPathToWindows("/c/CRX_Manager/.claude/worktrees/x", "win32"), "C:\\CRX_Manager\\.claude\\worktrees\\x", "…including nested segments");
+assert.equal(msysPathToWindows("/d/repo", "win32"), "D:\\repo", "any drive letter, not just C");
+assert.equal(msysPathToWindows("/C/repo", "win32"), "C:\\repo", "an upper-case drive letter is the same mount");
+assert.equal(msysPathToWindows("/c", "win32"), "C:\\", "the bare drive is the drive root");
+assert.equal(msysPathToWindows("/c/", "win32"), "C:\\", "…with or without the trailing slash");
+// Everything below depends on the MSYS mount table, which the guard cannot read.
+// Guessing at it would make the guard inspect a DIFFERENT repository than the
+// push touches, so these are deliberately left alone and keep failing closed.
+assert.equal(msysPathToWindows("/usr/bin", "win32"), "/usr/bin", "a mount-table path is NOT guessed at");
+assert.equal(msysPathToWindows("/tmp/repo", "win32"), "/tmp/repo", "…nor is /tmp");
+assert.equal(msysPathToWindows("/", "win32"), "/", "…nor the MSYS root");
+assert.equal(msysPathToWindows("//server/share", "win32"), "//server/share", "a UNC path is not a drive mount");
+assert.equal(msysPathToWindows("C:\\already\\windows", "win32"), "C:\\already\\windows", "a Windows path is untouched");
+assert.equal(msysPathToWindows("relative/path", "win32"), "relative/path", "a relative path is untouched");
+// On a POSIX host `/c/x` is a real, ordinary absolute path and must stay one.
+assert.equal(msysPathToWindows("/c/CRX_Manager", "linux"), "/c/CRX_Manager", "no translation off Windows");
+assert.equal(msysPathToWindows("/usr/bin", "linux"), "/usr/bin", "…for any path");
+
+if (process.platform === "win32") {
+  assert.equal(
+    gitPushCwd("git -C /c/CRX_Manager push origin main", "C:\\anywhere"),
+    "C:\\CRX_Manager",
+    "gitPushCwd resolves an MSYS -C to the same directory the shell will hand git",
+  );
+  assert.equal(
+    gitPushCwd("git -C '/c/CRX_Manager' push origin main", "C:\\anywhere"),
+    "C:\\CRX_Manager",
+    "…quoted too",
+  );
+  // Repeated -C still applies left to right, and a relative second hop is
+  // resolved against the TRANSLATED first hop, not against `C:\c\…`.
+  assert.equal(
+    gitPushCwd("git -C /c/CRX_Manager -C sub push origin main", "C:\\anywhere"),
+    "C:\\CRX_Manager\\sub",
+    "repeated -C composes on the translated path",
+  );
+}
+
+// ── full-hook end-to-end: an MSYS -C path must not be denied ────────────────
+{
+  const HOOK = path.join(path.dirname(fileURLToPath(import.meta.url)), "codex-push-guard.mjs");
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "codex-push-msys-"));
+  const work = path.join(tmp, "work");
+  const dest = path.join(tmp, "dest.git");
+  const git = (args, cwd) => spawnSync("git", args, { cwd, encoding: "utf8", env: scratchHookEnvironment(cwd, process.env) });
+
+  const runHook = (command) => {
+    const res = spawnSync(process.execPath, [HOOK], {
+      input: JSON.stringify({ cwd: work, tool_input: { command } }),
+      encoding: "utf8",
+      env: scratchHookEnvironment(work, process.env),
+    });
+    assert.equal(res.status, 0, `guard exited ${res.status}: ${res.stderr}`);
+    const out = (res.stdout || "").trim();
+    if (!out) return { decision: "allow", reason: "" };
+    const hook = JSON.parse(out).hookSpecificOutput;
+    return { decision: hook.permissionDecision, reason: hook.permissionDecisionReason };
+  };
+
+  try {
+    mkdirSync(work, { recursive: true });
+    assert.equal(git(["init", "-q", "--bare", dest], tmp).status, 0, "bare init");
+    git(["init", "-q", "-b", "main"], work);
+    git(["config", "user.email", "test@example.com"], work);
+    git(["config", "user.name", "test"], work);
+    writeFileSync(path.join(work, "seed.txt"), "seed\n");
+    git(["add", "seed.txt"], work);
+    assert.equal(git(["commit", "-qm", "seed"], work).status, 0, "scratch commit");
+    // `origin` is a local bare repo, NOT the app repo, so an ordinary feature
+    // push reaches the end of the guard and is genuinely allowed.
+    git(["remote", "add", "origin", dest], work);
+
+    // Control: the Windows spelling was always fine.
+    assert.equal(
+      runHook(`git -C ${work} push origin main:refs/heads/feature`).decision,
+      "allow",
+      "control: a Windows -C path is allowed",
+    );
+
+    if (process.platform === "win32") {
+      // The regression. `C:\Users\…\Temp\x` → `/c/Users/…/Temp/x`, exactly what
+      // Git Bash passes and the MSYS runtime rewrites back at exec time.
+      const msysWork = `/${work[0].toLowerCase()}${work.slice(2).replace(/\\/g, "/")}`;
+      const observed = runHook(`git -C ${msysWork} push origin main:refs/heads/feature`);
+      assert.equal(observed.decision, "allow", `an MSYS -C path must not be denied (got: ${observed.reason})`);
+
+      // Fail-closed is preserved. A path this guard cannot translate is still a
+      // repository it cannot read, so it is still denied — but the denial now
+      // names the real cause instead of blaming git.
+      const untranslatable = runHook("git -C /usr/definitely-not-a-repo push origin main:refs/heads/feature");
+      assert.equal(untranslatable.decision, "deny", "an untranslatable path still fails closed");
+      assert.match(untranslatable.reason, /does not exist as this guard resolves it/, "…and says the directory is missing");
+      assert.match(untranslatable.reason, /not a policy refusal/, "…and does not read as a policy refusal");
+      assert.match(untranslatable.reason, /Do NOT work around this/, "…and forbids routing around the gate");
+
+      // And a genuinely risky main-bound push spelled the MSYS way is still
+      // gated: translating the path must not become a way past the proof gate.
+      const mainPush = runHook(`git -C ${msysWork} push origin main`);
+      assert.equal(mainPush.decision, "allow", "a non-app-repo main push is allowed (no risky diff, not the app repo)");
+    }
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

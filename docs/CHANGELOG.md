@@ -2,6 +2,52 @@
 
 All significant development milestones, in reverse chronological order.
 
+## 2026-08-21 — `spawnSync git ENOENT` was never about git: the push guard now reads a Git Bash path
+
+Every `git -C /c/CRX_Manager … push` issued from the Bash tool was denied:
+
+```
+CODEX GATE: could not determine the repository/branch selected by this push, so it is denied.
+spawnSync git ENOENT
+```
+
+Observed 2026-08-19 and again 2026-08-20; both times the push was handed to Mason to run in
+PowerShell, and the recorded diagnosis — "`which git` returns `/mingw64/bin/git`, a POSIX path a
+Windows Node process cannot exec" — was **wrong**. That diagnosis was investigated first this round
+and disproved: `execFileSync("git", …)` resolves fine from these processes.
+
+**The ENOENT was the working directory, not the executable.** Git Bash hands git an MSYS path
+(`/c/CRX_Manager`) and the MSYS runtime rewrites it to `C:\CRX_Manager` when it execs the process.
+These guards are plain Windows processes, so `gitPushCwd`'s `path.resolve` read the same text as a
+rooted path on the current drive and produced **`C:\c\CRX_Manager`** — a directory that has never
+existed. `spawnSync` reports a missing `cwd` with the **same `ENOENT` text** as a missing
+executable, so the guard blamed git, and its denial read as a policy refusal rather than a typo.
+That is the expensive part: the three obvious workarounds (an inline `PATH=` prefix, an absolute
+`git.exe`, `cd <repo> && git push`) are each independently denied by this same guard **by design**,
+so the message reads as "find a fourth way around the gate" to the next agent. Two sessions did.
+
+- **`msysPathToWindows()` in `codex-push-lib.mjs`**, applied inside `gitPushCwd` so all four call
+  sites — and the Codex-side guard that shares this library — agree by construction.
+- **Only the built-in drive-letter form is translated** (`/c/x` → `C:\x`, any letter, with or
+  without a trailing slash). `/usr/bin`, `/tmp`, `/`, and UNC `//server/share` depend on the MSYS
+  mount table, which the guard cannot read. Guessing at it would make the guard inspect a
+  **different repository than the push touches** — the one failure shape a destination guard must
+  never have — so those keep resolving as before and keep failing closed.
+- **Off Windows the function is identity**, so Linux and CI behaviour is unchanged.
+- **A directory that does not exist is now its own denial**, naming the resolved path, stating
+  plainly that it is a path-spelling problem and *not* a policy refusal, giving the Windows-path
+  spelling to use, and explicitly forbidding the workarounds. Still a denial — a repository the
+  guard cannot read is still ungated — but no longer a two-hour mystery.
+- **Proven by mutation.** Reverting the one translation call reproduces `C:\c\CRX_Manager` and the
+  exact original error; restoring it goes green. The end-to-end block drives the real hook over
+  stdin against a scratch repository with both path spellings, and asserts an untranslatable path
+  still fails closed with the new message.
+- **`scripts/apply-live-testdata-maintenance-20260812.mjs` re-pinned.** It byte-anchors
+  `codex-push-lib.mjs`; the identity transform it runs asserts the risky-path line for its own
+  producer is present exactly once, and that line is untouched.
+
+Tests: `.claude/hooks/codex-push-lib.test.mjs` (in `test:correction-guards`).
+
 ## 2026-08-20 — The parked-migration scan's UNKNOWN is no longer structural (every worktree → 6 of 23)
 
 `node scripts/fleet-status.mjs` reported `PARKED STATE UNKNOWN` for **every** worktree — all 19 —
