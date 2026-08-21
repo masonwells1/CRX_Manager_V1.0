@@ -672,8 +672,12 @@ for (const pushCmd of pushCommands) {
   // `C:\c\repo` — the innocuous one authorizing a risky push from the real one.
   // That is the same fail-open the abandoned translation kept producing, so the
   // shape is rejected outright rather than resolved (Codex P1, PR #445 round 5).
+  // EVERY slash-rooted spelling is refused, not just `/c/…`: MSYS maps `/tmp`
+  // and `/usr` somewhere else entirely, and unlike `C:\c\…` those literals are
+  // ordinary writable directories, so "it happens not to exist" protects
+  // nothing there (Codex P1, round 7).
   if (pushNamesMsysPath(pushCmd)) {
-    deny(`CODEX GATE: this push names the repository with a Git Bash path (\`-C /c/…\`), which this guard does not accept. What \`/c/repo\` means depends on which shell runs the command and on MSYS conversion settings the guard cannot read: Git Bash may hand git \`C:/repo\`, while PowerShell, cmd, and this guard all read the literal \`${pushRepoDir}\`. Since those can be two different checkouts, resolving it either way risks inspecting a different repository than the push touches — so it is refused, not guessed at. Re-run naming the repository with a drive letter and FORWARD slashes: \`git -C C:/CRX_Manager push origin <branch>\`. That one spelling means the same thing in Git Bash, PowerShell and cmd alike. Do NOT work around this with a directory change, an inline PATH=, or an environment variable — those forms are separately denied, by design.`);
+    deny(`CODEX GATE: this push names the repository with a Git Bash path (\`-C /…\`), which this guard does not accept. What a slash-rooted path means depends on which shell runs the command and on MSYS conversion settings the guard cannot read: Git Bash maps \`/c/repo\` to \`C:/repo\`, \`/tmp\` into your Windows temp folder and \`/usr\` inside the Git installation, while PowerShell, cmd, and this guard all read the literal \`${pushRepoDir}\`. Since those can be two different checkouts, resolving it either way risks inspecting a different repository than the push touches — so it is refused, not guessed at. Re-run naming the repository with a drive letter and FORWARD slashes: \`git -C C:/CRX_Manager push origin <branch>\`. That one spelling means the same thing in Git Bash, PowerShell and cmd alike. Do NOT work around this with a directory change, an inline PATH=, or an environment variable — those forms are separately denied, by design.`);
   }
   // A directory that does not exist is a DIAGNOSABLE condition, and separating
   // it out is the whole point: node reports a missing cwd and a missing

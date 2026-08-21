@@ -740,9 +740,12 @@ export function evaluateProductionAction({
     // literal path, gateMainChange below would classify remotes, risky diff and
     // proof from the wrong one. This guard shares gitPushCwd with the
     // Claude-side push guard and needs the identical refusal — wiring one of
-    // two callers is not a fix (Codex P1, PR #445 round 5).
+    // two callers is not a fix (Codex P1, PR #445 round 5). Every slash-rooted
+    // spelling is refused, not just `/c/…`: MSYS maps `/tmp` and `/usr`
+    // elsewhere, and those literals are ordinary writable directories on
+    // Windows, so nothing makes them fail loudly (Codex P1, round 7).
     if (pushNamesMsysPath(segment)) {
-      return denied("CODEX PRODUCTION GATE: this push names the repository with a Git Bash path (`-C /c/…`), which this guard does not accept — what it means depends on which shell runs the command, so resolving it either way risks inspecting a different repository than the push touches. Re-run naming the repository with a drive letter and forward slashes: `git -C C:/CRX_Manager push origin <branch>`.");
+      return denied("CODEX PRODUCTION GATE: this push names the repository with a Git Bash path (`-C /…`), which this guard does not accept — what a slash-rooted path means depends on which shell runs the command, so resolving it either way risks inspecting a different repository than the push touches. Re-run naming the repository with a drive letter and forward slashes: `git -C C:/CRX_Manager push origin <branch>`.");
     }
     const pushRepoDir = gitPushCwd(segment, actionRepoDir);
     let currentBranch = requestedWorkingDir ? "" : normalize(branch).toLowerCase();

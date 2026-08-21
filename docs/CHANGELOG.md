@@ -41,6 +41,15 @@ next agent. Two sessions read it that way.
   the same fail-open the translation kept producing, arriving by a different route (Codex P1, round
   5). A test asserts the "does not exist" diagnostic is **absent** from that denial, which is what
   proves the refusal ran before the filesystem was ever consulted.
+- **Every slash-rooted `-C` is refused, not only the `/c/…` drive form** (Codex P1, round 7). MSYS
+  maps its whole mount table, and the non-drive entries diverge *further* from what these guards
+  resolve — measured on this machine: `/tmp/x` reaches git as `C:\Users\<user>\AppData\Local\Temp\x`
+  but resolves here to `C:\tmp\x`; `/usr/x` reaches git inside the Git installation and resolves here
+  to `C:\usr\x`; `/` reaches git as `C:\Program Files\Git` and resolves here to `C:\`. The drive form
+  failed loudly only because `C:\c\…` happens never to exist — `C:\tmp` is an ordinary writable
+  directory, so a checkout can genuinely sit at one of those literals and be the repository the guard
+  inspects while git pushes from another. `//server/share` is kept out: MSYS and Node resolve a UNC
+  path identically, so refusing it would be pure over-refusal.
 - **`statSync(...).isDirectory()`, not `existsSync`.** A regular file passes an existence test; git
   cannot use one as `-C`, and that case fell straight back to the generic denial this entry retires.
 
@@ -65,7 +74,8 @@ Codex guard too) were themselves each found incomplete by the next round. Modell
 program's path semantics correctly in every invocation context is not something this guard can
 promise, so it stopped trying. A refusal the reader can fix in five seconds beats a translation that
 is right in three contexts and silently wrong in a fourth. `codex-push-lib.mjs` carries a
-DELIBERATELY-ABSENT note with this list; what remains is detection used only to word the message.
+DELIBERATELY-ABSENT note with this list; what remains is detection, which decides the refusal and
+words it — and never changes which directory is resolved.
 
 **Also from those rounds, and kept:** the recovery command uses forward slashes (Codex and CodeRabbit
 both flagged that `C:\CRX_Manager` is read *inside Git Bash*, where the unquoted backslash escapes
@@ -86,8 +96,8 @@ Tests: `.claude/hooks/codex-push-lib.test.mjs` and `.codex/hooks/production-acti
 
 **Both protected guard sources changed, and both are re-pinned in
 `scripts/apply-live-testdata-maintenance-20260812.mjs`.** `.claude/hooks/codex-push-lib.mjs` moves to
-`ba23fbc8…`. `.codex/hooks/production-action-guard.mjs` moves `05499cfe… → 3596cb33…` (input) and
-`0f3a62cf… → ac5a592c…` (transformed output) because it gained the same outright MSYS-path refusal —
+`e5a7dc2e…`. `.codex/hooks/production-action-guard.mjs` moves `05499cfe… → 8618556b…` (input) and
+`0f3a62cf… → 9b920c59…` (transformed output) because it gained the same outright MSYS-path refusal —
 it is a **second caller** of the shared resolution, and a security-relevant change in its own right,
 not an incidental edit. Both changes are purely additive and leave every transform anchor untouched
 and present exactly once: the risky-path line in the push library, and the matcher, the

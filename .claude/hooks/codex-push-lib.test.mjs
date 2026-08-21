@@ -2283,7 +2283,7 @@ assert.equal(pushNamesRefspec("git push --future-option origin main:refs/heads/f
 // git — `path.resolve` read `/c/CRX_Manager` as a rooted path on the current
 // drive and produced `C:\c\CRX_Manager`, which does not exist, and node reports
 // a missing cwd with the SAME ENOENT text as a missing executable.
-// The guard DETECTS the shape to explain itself, and deliberately does not
+// The guard DETECTS the shape in order to REFUSE it, and deliberately does not
 // translate it. Four review rounds on PR #445 killed the translating version:
 // Git Bash converts `/c/repo` at exec time, but that conversion can be switched
 // off, a PowerShell/cmd invocation never performs it at all, and the Claude-side
@@ -2295,9 +2295,22 @@ assert.equal(looksLikeMsysPath("/d/repo", "win32"), true, "any drive letter, not
 assert.equal(looksLikeMsysPath("/C/repo", "win32"), true, "an upper-case drive letter too");
 assert.equal(looksLikeMsysPath("/c", "win32"), true, "the bare drive");
 assert.equal(looksLikeMsysPath("/c/", "win32"), true, "…with a trailing slash");
-assert.equal(looksLikeMsysPath("/usr/bin", "win32"), false, "a mount-table path is not this shape");
-assert.equal(looksLikeMsysPath("/", "win32"), false, "…nor the MSYS root");
-assert.equal(looksLikeMsysPath("//server/share", "win32"), false, "a UNC path is not a drive mount");
+// EVERY slash-rooted spelling, not only the drive mounts. Measured on this
+// machine: MSYS hands git `C:\Users\<user>\AppData\Local\Temp\x` for `/tmp/x`,
+// `C:\Program Files\Git\usr\x` for `/usr/x` and `C:\Program Files\Git` for `/`,
+// while node resolves `C:\tmp\x`, `C:\usr\x` and `C:\`. Those are FURTHER apart
+// than the drive form, and — unlike `C:\c\…` — `C:\tmp` is an ordinary writable
+// directory, so nothing makes them fail loudly. A checkout at node's literal
+// `C:\tmp\risky` would have its remotes, diff and proof inspected while git
+// pushed from the MSYS-mapped one (Codex P1, PR #445 round 7).
+assert.equal(looksLikeMsysPath("/tmp/risky", "win32"), true, "a non-drive mount is just as ambiguous");
+assert.equal(looksLikeMsysPath("/usr/bin", "win32"), true, "…as is anything else in the mount table");
+assert.equal(looksLikeMsysPath("/", "win32"), true, "…and the MSYS root, which is the Git install dir");
+assert.equal(looksLikeMsysPath("/anything", "win32"), true, "…and any other slash-rooted value");
+// `//server/share` resolves to the same UNC share in MSYS and in node, so there
+// is no divergence to refuse and refusing it would be pure over-refusal.
+assert.equal(looksLikeMsysPath("//server/share", "win32"), false, "a UNC path is not a mount");
+assert.equal(looksLikeMsysPath("//server/share/repo", "win32"), false, "…nor is a path inside one");
 assert.equal(looksLikeMsysPath("C:/already/windows", "win32"), false, "a Windows path is not this shape");
 assert.equal(looksLikeMsysPath("relative/path", "win32"), false, "nor a relative one");
 // On a POSIX host `/c/x` is an ordinary absolute path with nothing to explain.
@@ -2323,14 +2336,17 @@ if (process.platform === "win32") {
   );
 }
 
-// pushNamesMsysPath drives the EXPLANATION in the denial, nothing else. It must
-// never be wired to a resolution decision — see the DELIBERATELY-ABSENT note in
-// codex-push-lib.mjs for the four ways that went wrong.
+// pushNamesMsysPath decides whether the push is REFUSED, and nothing else. It
+// must never be wired to a resolution decision — the resolved path stays exactly
+// what node makes of it; see the DELIBERATELY-ABSENT note in codex-push-lib.mjs
+// for the five ways translating it went wrong.
 if (process.platform === "win32") {
-  assert.equal(pushNamesMsysPath("git -C /c/repo push origin main"), true, "a drive-letter path is recognised for the diagnostic");
+  assert.equal(pushNamesMsysPath("git -C /c/repo push origin main"), true, "a drive-letter path is refused");
   assert.equal(pushNamesMsysPath("git -C '/c/repo' push origin main"), true, "…quoted too");
-  assert.equal(pushNamesMsysPath("git -C C:/repo push origin main"), false, "a Windows path needs no explanation");
-  assert.equal(pushNamesMsysPath("git -C /usr/repo push origin main"), false, "a mount-table path is a different shape");
+  assert.equal(pushNamesMsysPath("git -C C:/repo push origin main"), false, "a Windows path needs no refusal");
+  assert.equal(pushNamesMsysPath("git -C /usr/repo push origin main"), true, "a mount-table path is refused as well");
+  assert.equal(pushNamesMsysPath("git -C /tmp/repo push origin main"), true, "…including the temp mount");
+  assert.equal(pushNamesMsysPath("git -C //server/share push origin main"), false, "…but a UNC path is not a mount");
   assert.equal(pushNamesMsysPath("git push origin main"), false, "a push with no -C names nothing");
 }
 assert.equal(pushNamesMsysPath("git -C /c/repo push origin main", "linux"), false, "off Windows there is nothing to explain");
@@ -2403,10 +2419,23 @@ assert.equal(pushNamesMsysPath("git -C /c/repo push origin main", "linux"), fals
       // Proof that existence was never consulted: the "does not exist"
       // diagnostic, which comes strictly later in the guard, is absent.
       assert.doesNotMatch(msysPush.reason, /does not exist, or is not a directory/, "…before any existence check, so an existing C:\\c\\… cannot re-open the hole");
+      // The NON-drive mounts are the dangerous half of this, and they were the
+      // half the first matcher missed. `/tmp/x` reaches git as
+      // `C:\Users\<user>\AppData\Local\Temp\x` but resolves here to `C:\tmp\x`,
+      // which is an ordinary writable directory — so unlike `C:\c\…` it can
+      // easily hold a real checkout. Same refusal, same placement before the
+      // existence check (Codex P1, round 7).
+      for (const nonDrive of ["/tmp/definitely-not-a-repo", "/usr/definitely-not-a-repo", "/"]) {
+        const nonDrivePush = runHook(`git -C ${nonDrive} push origin main:refs/heads/feature`);
+        assert.equal(nonDrivePush.decision, "deny", `a non-drive MSYS -C (${nonDrive}) fails closed too`);
+        assert.match(nonDrivePush.reason, /Git Bash path/, `…for the spelling (${nonDrive}), not for the missing directory`);
+        assert.doesNotMatch(nonDrivePush.reason, /does not exist, or is not a directory/, `…still before any existence check (${nonDrive})`);
+      }
     }
 
-    // Fail-closed with a usable message for any unreadable repository.
-    const unreadable = runHook("git -C /usr/definitely-not-a-repo push origin main:refs/heads/feature");
+    // Fail-closed with a usable message for any unreadable repository. Spelled
+    // natively, since every slash-rooted spelling is refused earlier on Windows.
+    const unreadable = runHook(`git -C ${path.join(work, "definitely-not-a-repo").replace(/\\/g, "/")} push origin main:refs/heads/feature`);
     assert.equal(unreadable.decision, "deny", "an unreadable repository fails closed");
     assert.match(unreadable.reason, /cannot resolve to a real directory/, "…and says the directory is unusable");
     assert.match(unreadable.reason, /not a policy refusal/, "…and does not read as a policy refusal");

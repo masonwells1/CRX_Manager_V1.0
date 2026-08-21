@@ -211,14 +211,32 @@ function splitShellArgs(value) {
 // works everywhere (`C:/repo`, identical in Git Bash, PowerShell and cmd). A
 // refusal the reader can fix in five seconds beats a translation that is right
 // in four contexts and silently wrong in a fifth.
+// EVERY slash-rooted `-C` value is refused on Windows, not only the `/c/…`
+// drive-mount spelling. A later review round caught the narrower matcher: MSYS
+// rewrites all of its mount table, and the non-drive entries diverge FURTHER
+// from node than the drive ones do. Measured on this machine:
+//
+//     -C value          MSYS hands git                       node resolves
+//     /c/CRX_Manager    C:\CRX_Manager                       C:\c\CRX_Manager
+//     /tmp/x            C:\Users\<user>\AppData\Local\Temp\x C:\tmp\x
+//     /usr/x            C:\Program Files\Git\usr\x           C:\usr\x
+//     /                 C:\Program Files\Git                 C:\
+//
+// `C:\c\…` happening not to exist is what made the drive form fail loudly; a
+// checkout at node's literal `C:\tmp\risky` has no such luck, and the guard
+// would inspect ITS remotes, diff and proof while git pushed from the
+// MSYS-mapped directory — the exact wrong-checkout bypass this change closes.
 export function looksLikeMsysPath(value, platform = process.platform) {
   if (platform !== "win32") return false;
-  // A single leading slash only: `//server/share` is a UNC path, not a mount.
-  return /^\/[A-Za-z](?:\/|$)/.test(String(value ?? ""));
+  const text = String(value ?? "");
+  // A single leading slash only: `//server/share` is a UNC path, which both
+  // MSYS and node resolve to the same share, so it is not ambiguous.
+  return text.startsWith("/") && !text.startsWith("//");
 }
 
-// Does this push name a `-C` path in that shape? Used ONLY to make the denial
-// specific — never to change which directory is inspected.
+// Does this push name a `-C` path in that shape? This decides whether the push
+// is REFUSED — never which directory is inspected. `gitPushCwd` below stays
+// node's own resolution regardless of what this returns.
 export function pushNamesMsysPath(cmd, platform = process.platform) {
   const prefix = String(cmd || "").match(GIT_PUSH_PREFIX_RE)?.[1] || "";
   const optionRe = new RegExp(`(?:^|\\s)-C\\s+(${GIT_ARG})`, "g");

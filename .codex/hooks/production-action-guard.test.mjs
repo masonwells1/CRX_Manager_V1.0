@@ -371,6 +371,29 @@ try {
     });
     assert.equal(msysFeature.blocked, true, "…including a push that would otherwise be allowed");
     assert.match(msysFeature.reason, /Git Bash path/, "…naming the spelling as the reason");
+    // Non-drive mounts too. `/tmp` and `/usr` diverge FURTHER from node than the
+    // drive mounts do, and node's literals for them (`C:\tmp`, `C:\usr`) are
+    // ordinary writable directories, so a checkout can sit there and be the one
+    // this guard inspects while git pushes from elsewhere. Each case below is an
+    // otherwise-ALLOWED feature push, so only this refusal can block it
+    // (Codex P1, PR #445 round 7).
+    for (const nonDrive of ["/tmp/risky", "/usr/risky", "/"]) {
+      const nonDrivePush = evaluateProductionAction({
+        toolName: "PowerShell",
+        toolInput: { command: `git -C ${nonDrive} push origin feature/test` },
+        repoDir: projectRoot,
+      });
+      assert.equal(nonDrivePush.blocked, true, `a non-drive MSYS -C is refused too: ${nonDrive}`);
+      assert.match(nonDrivePush.reason, /Git Bash path/, `…naming the spelling as the reason: ${nonDrive}`);
+    }
+    // A UNC path means the same share to MSYS and to node, so refusing it would
+    // be over-refusal: it must reach the ordinary gates instead.
+    const unc = evaluateProductionAction({
+      toolName: "PowerShell",
+      toolInput: { command: "git -C //server/share/repo push origin feature/test" },
+      repoDir: projectRoot,
+    });
+    assert.doesNotMatch(String(unc.reason || ""), /Git Bash path/, "a UNC -C is not treated as an MSYS mount");
     // The portable spelling resolves identically in every shell, so it reaches
     // the real gate and is denied for the REAL reason — the missing proof.
     const portable = evaluateProductionAction({

@@ -67,8 +67,19 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // fail-open — the guard inspecting a different repository than the push
   // touches. It now resolves `-C` exactly as node does and REFUSES an
   // unresolvable path with a diagnostic naming the portable spelling. What
-  // remains in the lib is detection used only to word that message. Same
-  // risky-path anchor, still present exactly once, transform still identity.
+  // remains in the lib is detection, used to decide the REFUSAL and to word it —
+  // never to change which directory is resolved. Same risky-path anchor, still
+  // present exactly once, transform still identity.
+  // BOTH re-pinned again 2026-08-21 (PR #445 round 7): the matcher recognised
+  // only the drive mounts (`/c/…`). MSYS maps the whole mount table, and the
+  // non-drive entries diverge further — `/tmp/x` reaches git under the Windows
+  // temp folder and `/usr/x` inside the Git installation, while these guards
+  // resolve `C:\tmp\x` and `C:\usr\x`. Those literals are ordinary writable
+  // directories, so unlike `C:\c\…` a checkout can genuinely sit at one and be
+  // the repository the guard inspects while git pushes from another. Every
+  // slash-rooted `-C` is now refused, with `//server/share` kept out because
+  // MSYS and node resolve a UNC path identically. Both changes are additive,
+  // both risky-path anchors untouched and still present exactly once.
   // codexGuard re-pinned 2026-08-21 (PR #445 round 5): it shares gitPushCwd
   // with the Claude push guard, so it gained the same outright refusal of a Git
   // Bash `-C /c/…` spelling — whose meaning depends on the invoking shell, and
@@ -77,12 +88,12 @@ const EXPECTED_PROTECTED_INPUT_BLOBS = {
   // additive (+11 lines); all three transform anchors — the matcher, the
   // PROTECTED_HARNESS_FRAGMENT_RE constant, and the maintenance execution gate
   // — are untouched and still present exactly once.
-  codexGuard: "3596cb33e2474600756cc23c430c168517a2a078",
-  pushLib: "ba23fbc86eaafaf61dee9a343e4e00cf03fbc6a4",
+  codexGuard: "8618556b5b8886c6a74e2f8163dc814acc628601",
+  pushLib: "e5a7dc2ec988f309f31a0a81ec851214ca04595f",
 };
 const EXPECTED_PROTECTED_OUTPUT_BLOBS = {
-  codexGuard: "ac5a592c71bff79f29db5a05503f0e2afc63cc09",
-  pushLib: "ba23fbc86eaafaf61dee9a343e4e00cf03fbc6a4",
+  codexGuard: "9b920c59652dfccd2a5b727351bf833534a9e2ec",
+  pushLib: "e5a7dc2ec988f309f31a0a81ec851214ca04595f",
 };
 
 export function maintenanceProducerCommandMentioned(command) {
