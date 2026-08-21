@@ -198,6 +198,37 @@ export function parseSupabaseJsonRows(stdout) {
   return parsed.rows;
 }
 
+export function validateLinkedDatabaseUrl(raw, expectedProjectId = CRX_SUPABASE_PROJECT_ID) {
+  let parsed;
+  try {
+    parsed = new URL(String(raw || '').trim());
+  } catch {
+    fail('linked Supabase metadata pooler-url is invalid');
+  }
+  let username;
+  try {
+    username = decodeURIComponent(parsed.username);
+  } catch {
+    fail('linked Supabase metadata pooler-url is invalid');
+  }
+  const query = [...parsed.searchParams.entries()];
+  const safeTlsQuery = query.length === 0 ||
+    (query.length === 1 && query[0][0] === 'sslmode' &&
+      ['require', 'verify-full'].includes(query[0][1]));
+  const directHost = parsed.hostname === `db.${expectedProjectId}.supabase.co`;
+  const poolerHost = /^aws-\d+-[a-z0-9-]+\.pooler\.supabase\.com$/.test(parsed.hostname);
+  const directIdentity = directHost && username === 'postgres' &&
+    (parsed.port === '' || parsed.port === '5432');
+  const poolerIdentity = poolerHost && username === `postgres.${expectedProjectId}` &&
+    (parsed.port === '5432' || parsed.port === '6543');
+  if (!['postgres:', 'postgresql:'].includes(parsed.protocol) ||
+      parsed.password !== '' || parsed.pathname !== '/postgres' || parsed.hash !== '' ||
+      !safeTlsQuery || (!directIdentity && !poolerIdentity)) {
+    fail('linked Supabase metadata pooler-url is not an approved endpoint for the expected project');
+  }
+  return parsed;
+}
+
 function createImmutableLinkedWorkdir(root, expectedProjectId) {
   const immutableRoot = mkdtempSync(path.join(tmpdir(), 'crx-linked-read-'));
   try {
@@ -233,17 +264,7 @@ function createImmutableLinkedWorkdir(root, expectedProjectId) {
         }
       }
       if (name === 'pooler-url') {
-        let pooler;
-        try {
-          pooler = new URL(readFileSync(source, 'utf8').trim());
-        } catch {
-          fail('linked Supabase metadata pooler-url is invalid');
-        }
-        const username = decodeURIComponent(pooler.username);
-        if (!['postgres:', 'postgresql:'].includes(pooler.protocol) ||
-            (username !== expectedProjectId && !username.endsWith(`.${expectedProjectId}`))) {
-          fail('linked Supabase metadata pooler-url does not match the expected project');
-        }
+        validateLinkedDatabaseUrl(readFileSync(source, 'utf8'), expectedProjectId);
       }
       copyFileSync(source, path.join(immutableTemp, name));
     }

@@ -51,7 +51,12 @@ to the active checkout. The apply
 guard reads only verified active/primary locations and chooses the newest capture; the post-apply
 invalidator deletes every location the guard could choose. The one-shot comparison expands both the
 submitted and registered writes through `scripts/trigger-fanout.json`; an opaque relevant source is a
-deny, not an assumed empty cascade. The one-shot registry is untrusted input: stems, metadata values,
+deny, not an assumed empty cascade. Linked database metadata is also a hard trust boundary: the
+private query workdir accepts only the exact CRX direct-database identity or an official Supabase
+pooler identity, with no embedded password, unexpected port/database, unsafe query parameter, or
+lookalike/arbitrary host. Live trigger/FK/rule/view/event-trigger evidence expires after 24 hours;
+stale or materially future-dated manifests are skipped, and an apply requires at least one fresh
+capture regenerated with `node scripts/generate-trigger-fanout.mjs`. The one-shot registry is untrusted input: stems, metadata values,
 contained migration paths, override fields, and target project refs are strictly validated, registry
 prose is never reflected, and the only copy-ready authorization command is the fixed
 `scripts/write-one-shot-replay-override.mjs --migration <registered-stem> --query-migration <current-query-stem> --project <ref>`

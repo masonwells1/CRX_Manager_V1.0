@@ -1,11 +1,23 @@
 # Decision Log
 
-Last verified: 2026-08-20
+Last verified: 2026-08-21
 Update triggers: append when an architectural/policy/business decision is made or reversed.
 
 An ADR-style ("Architecture Decision Record") running log so future agents don't re-litigate
 settled calls. Newest first. Each entry is a decision, why it was made, and the operative
 rule it implies. This is a log of outcomes, not a design doc — see the cited source for detail.
+
+---
+
+## 2026-08-21 — Migration evidence is endpoint-bound and expires before apply
+
+**Source:** Exact-commit adversarial review of PR #364, 2026-08-21.
+**Decision:** Linked ledger reads accept only the expected CRX Supabase database identity, and
+captured trigger/FK/rule/view/event-trigger evidence is trusted for at most 24 hours.
+**Why:** A matching project name on an arbitrary host can fabricate evidence or receive credentials,
+and old live-catalog evidence cannot prove what an apply will execute today.
+**What this forbids/implies:** never weaken the endpoint allowlist or apply with an expired manifest;
+rerun `node scripts/generate-trigger-fanout.mjs` before the apply and review the regenerated artifact.
 
 ---
 

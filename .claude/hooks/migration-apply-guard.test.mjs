@@ -21,6 +21,7 @@ const FANOUT_FIXTURE = JSON.parse(readFileSync(
   path.join(__dirname, "..", "..", "scripts", "trigger-fanout.json"),
   "utf8",
 ));
+FANOUT_FIXTURE._meta.captured_at = new Date().toISOString();
 FANOUT_FIXTURE.opaque_on_tables = [];
 FANOUT_FIXTURE.fanout = {};
 let pass = 0;
@@ -273,6 +274,17 @@ function armAutopilot(stateDir, hoursFromNow) {
     writeProof(stateDir, BENIGN_SQL);
     r = runHook(call(BENIGN_SQL), tmp);
     ok(!isDeny(r), "valid proof + benign migration → allowed");
+
+    const staleFanout = structuredClone(FANOUT_FIXTURE);
+    staleFanout._meta.captured_at = new Date(Date.now() - 25 * 3600_000).toISOString();
+    writeFileSync(
+      path.join(tmp, "scripts", "trigger-fanout.json"),
+      JSON.stringify(staleFanout),
+    );
+    r = runHook(call(BENIGN_SQL), tmp);
+    ok(isDeny(r) && r.stdout.includes("captured within the last 24 hours"),
+      "stale trigger/event-trigger capture → apply denied");
+    writeOneShotRegistry(tmp);
 
     // 3. Proof whose queryHash doesn't match the transmitted SQL → deny.
     r = runHook(call(BENIGN_SQL + " -- edited after review"), tmp);

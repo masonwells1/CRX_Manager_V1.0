@@ -46,6 +46,8 @@ import {
 const REQUIRED_CODEX_MODEL = "gpt-5.6-sol";
 const REQUIRED_CODEX_EFFORT = "high";
 const CRX_PRODUCTION_REF = "rhyzpcqhnizqbxphqdkr";
+const TRIGGER_FANOUT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const TRIGGER_FANOUT_FUTURE_SKEW_MS = 5 * 60 * 1000;
 
 function migrationSourcePath(root, stem) {
   if (!validMigrationStem(stem)) throw new Error("invalid migration stem");
@@ -80,6 +82,7 @@ function loadTrustedFanout(evidenceRoots) {
   const sessionDependentEventTriggers = new Map();
   const allEnabledEventTriggers = new Map();
   const manifests = [];
+  const expiredManifests = [];
   for (const root of evidenceRoots) {
     const manifestPath = path.join(root, "scripts", "trigger-fanout.json");
     if (!existsSync(manifestPath)) continue;
@@ -91,10 +94,18 @@ function loadTrustedFanout(evidenceRoots) {
     }
     if (parsed?._meta?.format_version !== 4 ||
         parsed?._meta?.source_project !== CRX_PRODUCTION_REF ||
+        typeof parsed?._meta?.captured_at !== "string" ||
         !Array.isArray(parsed?.tables_scanned) || !Array.isArray(parsed?.opaque_on_tables) ||
         !Array.isArray(parsed?.event_triggers) ||
         !parsed?.fanout || typeof parsed.fanout !== "object" || Array.isArray(parsed.fanout)) {
       throw new Error(`${manifestPath}: invalid or unbound trigger fan-out manifest`);
+    }
+    const capturedAt = Date.parse(parsed._meta.captured_at);
+    const captureAge = Date.now() - capturedAt;
+    if (!Number.isFinite(capturedAt) || captureAge < -TRIGGER_FANOUT_FUTURE_SKEW_MS ||
+        captureAge > TRIGGER_FANOUT_MAX_AGE_MS) {
+      expiredManifests.push(manifestPath);
+      continue;
     }
     for (const trigger of parsed.event_triggers) {
       const keys = Object.keys(trigger || {}).sort();
@@ -177,7 +188,16 @@ function loadTrustedFanout(evidenceRoots) {
     }
     manifests.push(manifestPath);
   }
-  if (manifests.length === 0) throw new Error("no trigger-fanout.json in any verified checkout");
+  if (manifests.length === 0) {
+    if (expiredManifests.length) {
+      throw new Error(
+        `no trigger-fanout.json captured within the last 24 hours ` +
+        `(expired or future-dated: ${expiredManifests.join(", ")}); ` +
+        `run node scripts/generate-trigger-fanout.mjs and retry`,
+      );
+    }
+    throw new Error("no trigger-fanout.json in any verified checkout");
+  }
   return {
     scanned,
     opaque,

@@ -20,6 +20,7 @@ import './generate-trigger-fanout.test.mjs';
 import './write-one-shot-replay-override.test.mjs';
 
 const CAPTURED_AT = '2026-08-14T04:00:00.000000Z';
+const APPROVED_POOLER_HOST = 'aws-0-us-east-1.pooler.supabase.com';
 const ROWS = [
   { version: '20260727174805', name: 'deactivation_revokes_auth_access' },
   { version: '20260808150400', name: '20260808150400_round_money_to_whole_cents' },
@@ -217,7 +218,7 @@ check('an ABA relink cannot redirect the immutable linked query workdir', () => 
       JSON.stringify({ ref: CRX_SUPABASE_PROJECT_ID }),
     );
     writeFileSync(path.join(sharedTemp, 'pooler-url'),
-      `postgresql://postgres.${CRX_SUPABASE_PROJECT_ID}@example.invalid:6543/postgres`);
+      `postgresql://postgres.${CRX_SUPABASE_PROJECT_ID}@${APPROVED_POOLER_HOST}:6543/postgres`);
     const result = runLinkedRead({
       projectRoot: dir,
       linkedRoot: dir,
@@ -235,12 +236,12 @@ check('an ABA relink cannot redirect the immutable linked query workdir', () => 
         writeFileSync(path.join(sharedTemp, 'linked-project.json'),
           JSON.stringify({ ref: 'abcdefghijklmnopqrst' }));
         writeFileSync(path.join(sharedTemp, 'pooler-url'),
-          'postgresql://postgres.abcdefghijklmnopqrst@example.invalid:6543/postgres');
+          `postgresql://postgres.abcdefghijklmnopqrst@${APPROVED_POOLER_HOST}:6543/postgres`);
         writeFileSync(sharedRef, CRX_SUPABASE_PROJECT_ID);
         writeFileSync(path.join(sharedTemp, 'linked-project.json'),
           JSON.stringify({ ref: CRX_SUPABASE_PROJECT_ID }));
         writeFileSync(path.join(sharedTemp, 'pooler-url'),
-          `postgresql://postgres.${CRX_SUPABASE_PROJECT_ID}@example.invalid:6543/postgres`);
+          `postgresql://postgres.${CRX_SUPABASE_PROJECT_ID}@${APPROVED_POOLER_HOST}:6543/postgres`);
         assert.equal(readFileSync(immutableRef, 'utf8').trim(), CRX_SUPABASE_PROJECT_ID);
         assert.equal(readFileSync(immutableLinked, 'utf8').includes(CRX_SUPABASE_PROJECT_ID), true);
         assert.equal(readFileSync(immutablePooler, 'utf8').includes(CRX_SUPABASE_PROJECT_ID), true);
@@ -254,6 +255,54 @@ check('an ABA relink cannot redirect the immutable linked query workdir', () => 
     assert.equal(result.projectId, CRX_SUPABASE_PROJECT_ID);
     assert.equal(result.linkedRoot, dir);
     assert.equal(existsSync(immutableRoot), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+check('an arbitrary database host is refused before linked query execution', () => {
+  const dir = linkedFixture();
+  try {
+    writeFileSync(
+      path.join(dir, 'supabase', '.temp', 'pooler-url'),
+      `postgresql://postgres.${CRX_SUPABASE_PROJECT_ID}@example.invalid:6543/postgres`,
+    );
+    let called = false;
+    assert.throws(() => runLinkedRead({
+      projectRoot: dir,
+      linkedRoot: dir,
+      queryId: 'applied_migrations',
+      run: () => { called = true; return { status: 0, stdout: '' }; },
+    }), /not an approved endpoint/);
+    assert.equal(called, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+check('unsafe endpoint credentials, ports, databases, and parameters are refused', () => {
+  const dir = linkedFixture();
+  const metadataPath = path.join(dir, 'supabase', '.temp', 'pooler-url');
+  const username = `postgres.${CRX_SUPABASE_PROJECT_ID}`;
+  const unsafe = [
+    `postgresql://${username}:secret@${APPROVED_POOLER_HOST}:6543/postgres`,
+    `postgresql://${username}@${APPROVED_POOLER_HOST}:9999/postgres`,
+    `postgresql://${username}@${APPROVED_POOLER_HOST}:6543/other`,
+    `postgresql://${username}@${APPROVED_POOLER_HOST}:6543/postgres?sslmode=disable`,
+    `postgresql://${username}@${APPROVED_POOLER_HOST}.example.invalid:6543/postgres`,
+  ];
+  try {
+    for (const value of unsafe) {
+      writeFileSync(metadataPath, value);
+      let called = false;
+      assert.throws(() => runLinkedRead({
+        projectRoot: dir,
+        linkedRoot: dir,
+        queryId: 'applied_migrations',
+        run: () => { called = true; return { status: 0, stdout: '' }; },
+      }), /not an approved endpoint/);
+      assert.equal(called, false);
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -284,7 +333,7 @@ check('mismatched copied pooler metadata is refused before query execution', () 
   try {
     writeFileSync(
       path.join(dir, 'supabase', '.temp', 'pooler-url'),
-      'postgresql://postgres.abcdefghijklmnopqrst@example.invalid:6543/postgres',
+      `postgresql://postgres.abcdefghijklmnopqrst@${APPROVED_POOLER_HOST}:6543/postgres`,
     );
     let called = false;
     assert.throws(() => runLinkedRead({
@@ -292,7 +341,7 @@ check('mismatched copied pooler metadata is refused before query execution', () 
       linkedRoot: dir,
       queryId: 'applied_migrations',
       run: () => { called = true; return { status: 0, stdout: '' }; },
-    }), /linked Supabase metadata pooler-url does not match/);
+    }), /linked Supabase metadata pooler-url is not an approved endpoint/);
     assert.equal(called, false);
   } finally {
     rmSync(dir, { recursive: true, force: true });

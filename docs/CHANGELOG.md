@@ -11,6 +11,13 @@ migration safety harness; no app source, migration SQL, live database, or produc
   apply guard accepts only verified active/primary checkout locations, selects the newest capture,
   rejects ambiguous equal-time evidence, and the post-apply invalidator removes every copy that the
   guard could select.
+- Linked Supabase evidence is now endpoint-bound as well as project-ref-bound. The immutable read
+  workdir accepts only CRX's exact direct database host or an official Supabase pooler identity,
+  refuses embedded credentials, unexpected ports/databases/TLS parameters, and arbitrary or
+  lookalike hosts before the CLI can run.
+- Trigger, FK, rule, view, and event-trigger evidence now expires after 24 hours. The apply guard
+  skips stale or materially future-dated manifests and requires at least one fresh linked-production
+  capture, with the fixed no-argument regeneration command in its denial message.
 - The approved-set SQL validator now sends plain `INSERT` sources through the checked-in live
   trigger/FK fan-out graph. Existing public business-table cascades are protected without turning
   scratch, temporary, infrastructure, non-public, or newly created tables into rewrites.
@@ -147,10 +154,10 @@ migration safety harness; no app source, migration SQL, live database, or produc
   helper invoked from either spelling can no longer rewrite registered money rows and disappear
   behind a subsequent `DROP FUNCTION`; analyzer and apply-guard mutants cover both spellings.
 
-Focused proof: snapshot producer 20 assertions; applied-source containment pass (including forced
+Focused proof: snapshot producer 22 assertions; applied-source containment pass (including forced
 worktree-enumeration failure); trigger fan-out producer 22 assertions; apply-time analyzer
-260 assertions; apply-time guard 315 assertions; approved-set validator 201 mutation cases;
-one-shot override writer 24 assertions.
+275 assertions; apply-time guard 321 assertions; approved-set validator 205 mutation cases;
+one-shot override writer 25 assertions.
 Each new edge has a removal mutant that
 survives only when the load-bearing protection is deliberately deleted.
 
